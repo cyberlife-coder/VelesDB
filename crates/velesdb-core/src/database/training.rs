@@ -80,7 +80,9 @@ impl Database {
         sample_limit: Option<usize>,
     ) -> Result<Vec<Vec<f32>>> {
         let all_ids = collection.all_ids();
-        let points = collection.get(&all_ids);
+        // get_raw: PQ training only consumes vectors; TTL-expired points are
+        // still valid training samples and must not shrink the corpus.
+        let points = collection.get_raw(&all_ids);
         let mut vectors: Vec<Vec<f32>> = points
             .into_iter()
             .flatten()

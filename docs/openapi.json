@@ -2007,7 +2007,7 @@
           "points"
         ],
         "summary": "Set (or refresh) the durable TTL of a point.",
-        "description": "Persists `_veles_expires_at` in the point's payload so the expiry\nsurvives a restart. A `ttl_seconds` of `0` expires the point immediately.",
+        "description": "Persists `_veles_expires_at` in the point's payload so the expiry\nsurvives a restart. A `ttl_seconds` of `0` expires the point immediately.\nExpired points are excluded from all read surfaces (search/get/scroll/query);\nrefreshing an expired point returns 404; storage is reclaimed lazily.",
         "operationId": "set_point_ttl",
         "parameters": [
           {
@@ -3076,16 +3076,10 @@
         ],
         "properties": {
           "id": {
-            "oneOf": [
-              {
-                "type": "integer",
-                "format": "int64"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
+            "type": "integer",
+            "format": "int64",
+            "description": "Edge ID.",
+            "minimum": 0
           },
           "label": {
             "type": "string",
@@ -3095,28 +3089,16 @@
             "description": "Edge properties."
           },
           "source": {
-            "oneOf": [
-              {
-                "type": "integer",
-                "format": "int64"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
+            "type": "integer",
+            "format": "int64",
+            "description": "Source node ID.",
+            "minimum": 0
           },
           "target": {
-            "oneOf": [
-              {
-                "type": "integer",
-                "format": "int64"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
+            "type": "integer",
+            "format": "int64",
+            "description": "Target node ID.",
+            "minimum": 0
           }
         }
       },
@@ -3611,8 +3593,10 @@
         ],
         "properties": {
           "id": {
-            "type": "string",
-            "description": "Edge ID."
+            "type": "integer",
+            "format": "int64",
+            "description": "Edge ID.",
+            "minimum": 0
           },
           "label": {
             "type": "string",
@@ -3622,12 +3606,16 @@
             "description": "Edge properties."
           },
           "source": {
-            "type": "string",
-            "description": "Source node ID."
+            "type": "integer",
+            "format": "int64",
+            "description": "Source node ID.",
+            "minimum": 0
           },
           "target": {
-            "type": "string",
-            "description": "Target node ID."
+            "type": "integer",
+            "format": "int64",
+            "description": "Target node ID.",
+            "minimum": 0
           }
         }
       },
@@ -4034,8 +4022,10 @@
         ],
         "properties": {
           "id": {
-            "type": "string",
-            "description": "Node ID."
+            "type": "integer",
+            "format": "int64",
+            "description": "Node ID.",
+            "minimum": 0
           },
           "payload": {
             "description": "Node payload (if any)."
@@ -4462,16 +4452,14 @@
         "properties": {
           "bindings": {
             "type": "object",
+            "description": "Variable bindings from pattern matching.",
             "additionalProperties": {
-              "oneOf": [
-                {
-                  "type": "integer",
-                  "format": "int64"
-                },
-                {
-                  "type": "string"
-                }
-              ]
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
             }
           },
           "depth": {
@@ -4593,16 +4581,11 @@
           "node_ids": {
             "type": "array",
             "items": {
-              "oneOf": [
-                {
-                  "type": "integer",
-                  "format": "int64"
-                },
-                {
-                  "type": "string"
-                }
-              ]
-            }
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "List of node IDs (serialized as strings to preserve u64 precision in JS)."
           }
         }
       },
@@ -4614,8 +4597,10 @@
         ],
         "properties": {
           "node_id": {
-            "type": "string",
-            "description": "Node ID."
+            "type": "integer",
+            "format": "int64",
+            "description": "Node ID.",
+            "minimum": 0
           },
           "payload": {
             "description": "Stored payload (null if none)."
@@ -4695,16 +4680,11 @@
           "sources": {
             "type": "array",
             "items": {
-              "oneOf": [
-                {
-                  "type": "integer",
-                  "format": "int64"
-                },
-                {
-                  "type": "string"
-                }
-              ]
-            }
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Source node IDs to start traversal from (accepts strings or numbers so\nJS clients can send precision-safe u64 IDs above `Number.MAX_SAFE_INTEGER`)."
           }
         }
       },
@@ -4909,28 +4889,16 @@
             "description": "Relationship type label (e.g. `\"KNOWS\"`, `\"RELATED_TO\"`)."
           },
           "source": {
-            "oneOf": [
-              {
-                "type": "integer",
-                "format": "int64"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
+            "type": "integer",
+            "format": "int64",
+            "description": "Source point ID.",
+            "minimum": 0
           },
           "target": {
-            "oneOf": [
-              {
-                "type": "integer",
-                "format": "int64"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
+            "type": "integer",
+            "format": "int64",
+            "description": "Target point ID.",
+            "minimum": 0
           }
         }
       },
@@ -4942,8 +4910,10 @@
         ],
         "properties": {
           "edge_id": {
-            "type": "string",
-            "description": "Allocated edge ID."
+            "type": "integer",
+            "format": "int64",
+            "description": "Allocated edge ID.",
+            "minimum": 0
           }
         }
       },
@@ -4959,8 +4929,10 @@
         ],
         "properties": {
           "id": {
-            "type": "string",
-            "description": "Edge ID."
+            "type": "integer",
+            "format": "int64",
+            "description": "Edge ID.",
+            "minimum": 0
           },
           "properties": {
             "description": "Edge properties (null when empty)."
@@ -4970,12 +4942,16 @@
             "description": "Relationship type label."
           },
           "source": {
-            "type": "string",
-            "description": "Source point ID."
+            "type": "integer",
+            "format": "int64",
+            "description": "Source point ID.",
+            "minimum": 0
           },
           "target": {
-            "type": "string",
-            "description": "Target point ID."
+            "type": "integer",
+            "format": "int64",
+            "description": "Target point ID.",
+            "minimum": 0
           }
         }
       },
@@ -5363,22 +5339,19 @@
             "minimum": 0
           },
           "id": {
-            "type": "string",
-            "description": "Target node ID."
+            "type": "integer",
+            "format": "int64",
+            "description": "Target node ID.",
+            "minimum": 0
           },
           "path": {
             "type": "array",
             "items": {
-              "oneOf": [
-                {
-                  "type": "integer",
-                  "format": "int64"
-                },
-                {
-                  "type": "string"
-                }
-              ]
-            }
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Path of edge IDs taken to reach this node."
           }
         }
       },
@@ -5452,20 +5425,17 @@
           "path": {
             "type": "array",
             "items": {
-              "oneOf": [
-                {
-                  "type": "integer",
-                  "format": "int64"
-                },
-                {
-                  "type": "string"
-                }
-              ]
-            }
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Path taken (list of edge IDs)."
           },
           "target_id": {
-            "type": "string",
-            "description": "Target node ID reached."
+            "type": "integer",
+            "format": "int64",
+            "description": "Target node ID reached.",
+            "minimum": 0
           }
         }
       },
@@ -5516,16 +5486,10 @@
             "description": "Filter by relationship types (empty = all types)."
           },
           "source": {
-            "oneOf": [
-              {
-                "type": "integer",
-                "format": "int64"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
+            "type": "integer",
+            "format": "int64",
+            "description": "Source node ID to start traversal from.",
+            "minimum": 0
           },
           "strategy": {
             "type": "string",

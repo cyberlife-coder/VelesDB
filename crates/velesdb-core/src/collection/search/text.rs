@@ -2,6 +2,7 @@
 
 use super::resolve;
 use super::OrderedFloat;
+use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::{Point, SearchResult};
@@ -143,12 +144,16 @@ impl Collection {
 
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
+        let now_secs = now_unix_secs();
 
         Ok(bm25_results
             .into_iter()
             .filter_map(|(id, score)| {
                 let vector = vector_storage.retrieve(id).ok().flatten()?;
                 let payload = payload_storage.retrieve(id).ok().flatten();
+                if is_payload_expired(payload.as_ref(), now_secs) {
+                    return None;
+                }
 
                 // Apply filter - if no payload, filter fails
                 let payload_ref = payload.as_ref()?;
@@ -295,12 +300,18 @@ impl Collection {
     ) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
+        let now_secs = now_unix_secs();
 
         scored_ids
             .iter()
             .filter_map(|&(id, score)| {
-                let mut result =
-                    resolve::hydrate_point(id, score, &*vector_storage, &*payload_storage)?;
+                let mut result = resolve::hydrate_point(
+                    id,
+                    score,
+                    now_secs,
+                    &*vector_storage,
+                    &*payload_storage,
+                )?;
                 attach_rrf_components(&mut result, component_map);
                 Some(result)
             })
@@ -424,12 +435,16 @@ impl Collection {
     ) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
+        let now_secs = now_unix_secs();
 
         scored_ids
             .iter()
             .filter_map(|&(id, score)| {
                 let vector = vector_storage.retrieve(id).ok().flatten()?;
                 let payload = payload_storage.retrieve(id).ok().flatten();
+                if is_payload_expired(payload.as_ref(), now_secs) {
+                    return None;
+                }
                 let payload_ref = payload.as_ref()?;
                 if !filter.matches(payload_ref) {
                     return None;

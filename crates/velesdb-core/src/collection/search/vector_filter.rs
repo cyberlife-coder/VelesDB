@@ -9,6 +9,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 
+use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::search::resolve;
 use crate::collection::types::Collection;
 use crate::error::Result;
@@ -112,11 +113,15 @@ impl Collection {
     ) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
+        let now_secs = now_unix_secs();
 
         let mut results: Vec<SearchResult> = index_results
             .into_iter()
             .filter_map(|sr| {
                 let payload = payload_storage.retrieve(sr.id).ok().flatten();
+                if is_payload_expired(payload.as_ref(), now_secs) {
+                    return None;
+                }
                 let matches = match payload.as_ref() {
                     Some(p) => filter.matches(p),
                     None => filter.matches(&serde_json::Value::Null),

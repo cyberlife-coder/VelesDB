@@ -43,6 +43,8 @@ mod scroll;
 #[cfg(all(test, feature = "persistence"))]
 mod scroll_tests;
 mod statistics;
+#[cfg(all(test, feature = "persistence"))]
+mod ttl_read_tests;
 
 pub use crate::validation::{MAX_DIMENSION, MIN_DIMENSION};
 pub use index_management::IndexInfo;

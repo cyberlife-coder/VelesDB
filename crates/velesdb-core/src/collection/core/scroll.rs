@@ -3,6 +3,7 @@
 //! Provides `ScrollBatch` and `Collection::scroll_batch` for deterministic,
 //! ascending-ID iteration with optional payload filtering.
 
+use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::filter::Filter;
@@ -79,6 +80,7 @@ impl Collection {
 
         let payload_storage = self.payload_storage.read();
         let vector_storage = self.vector_storage.read();
+        let now_secs = now_unix_secs();
 
         let mut points = Vec::with_capacity(batch_size);
         for &id in candidate_ids {
@@ -88,6 +90,11 @@ impl Collection {
             if let Some(point) =
                 Self::build_point(id, is_metadata_only, &*payload_storage, &*vector_storage)
             {
+                // TTL-expired points are invisible; the scan keeps going until
+                // `batch_size` live points are collected (or ids run out).
+                if is_payload_expired(point.payload.as_ref(), now_secs) {
+                    continue;
+                }
                 if Self::passes_filter(&point, filter) {
                     points.push(point);
                 }

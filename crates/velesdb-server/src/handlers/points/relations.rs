@@ -23,6 +23,9 @@ use crate::AppState;
 
 use super::super::helpers::{error_response, get_collection_or_404};
 
+/// Reserved payload key carrying the durable expiry timestamp (epoch seconds).
+const EXPIRES_AT_KEY: &str = "_veles_expires_at";
+
 /// Request body for `POST /collections/{name}/relations`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RelateRequest {
@@ -258,6 +261,8 @@ pub async fn get_point_relations(
 ///
 /// Persists `_veles_expires_at` in the point's payload so the expiry
 /// survives a restart. A `ttl_seconds` of `0` expires the point immediately.
+/// Expired points are excluded from all read surfaces (search/get/scroll/query);
+/// refreshing an expired point returns 404; storage is reclaimed lazily.
 #[utoipa::path(
     patch,
     path = "/collections/{name}/points/{id}/ttl",
@@ -337,7 +342,7 @@ fn stamp_ttl(
     };
 
     obj.insert(
-        "_veles_expires_at".to_string(),
+        EXPIRES_AT_KEY.to_string(),
         serde_json::Value::from(expires_at),
     );
 

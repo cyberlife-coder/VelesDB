@@ -1323,6 +1323,8 @@ paths:
       description: |-
         Persists `_veles_expires_at` in the point's payload so the expiry
         survives a restart. A `ttl_seconds` of `0` expires the point immediately.
+        Expired points are excluded from all read surfaces (search/get/scroll/query);
+        refreshing an expired point returns 404; storage is reclaimed lazily.
       operationId: set_point_ttl
       parameters:
       - name: name
@@ -2023,28 +2025,25 @@ components:
       - label
       properties:
         id:
-          oneOf:
-          - type: integer
-            format: int64
-          - type: string
-          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
+          type: integer
+          format: int64
+          description: Edge ID.
+          minimum: 0
         label:
           type: string
           description: Edge label (relationship type).
         properties:
           description: Edge properties.
         source:
-          oneOf:
-          - type: integer
-            format: int64
-          - type: string
-          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
+          type: integer
+          format: int64
+          description: Source node ID.
+          minimum: 0
         target:
-          oneOf:
-          - type: integer
-            format: int64
-          - type: string
-          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
+          type: integer
+          format: int64
+          description: Target node ID.
+          minimum: 0
     AggregationResponse:
       type: object
       description: Response from `VelesQL` aggregation query execution.
@@ -2469,19 +2468,25 @@ components:
       - properties
       properties:
         id:
-          type: string
+          type: integer
+          format: int64
           description: Edge ID.
+          minimum: 0
         label:
           type: string
           description: Edge label (relationship type).
         properties:
           description: Edge properties.
         source:
-          type: string
+          type: integer
+          format: int64
           description: Source node ID.
+          minimum: 0
         target:
-          type: string
+          type: integer
+          format: int64
           description: Target node ID.
+          minimum: 0
     EdgesResponse:
       type: object
       description: Response containing edges.
@@ -2787,8 +2792,10 @@ components:
       - score
       properties:
         id:
-          type: string
+          type: integer
+          format: int64
           description: Node ID.
+          minimum: 0
         payload:
           description: Node payload (if any).
         score:
@@ -3114,11 +3121,13 @@ components:
       properties:
         bindings:
           type: object
+          description: Variable bindings from pattern matching.
           additionalProperties:
-            oneOf:
-            - type: integer
-              format: int64
-            - type: string
+            type: integer
+            format: int64
+            minimum: 0
+          propertyNames:
+            type: string
         depth:
           type: integer
           format: int32
@@ -3212,10 +3221,10 @@ components:
         node_ids:
           type: array
           items:
-            oneOf:
-            - type: integer
-              format: int64
-            - type: string
+            type: integer
+            format: int64
+            minimum: 0
+          description: List of node IDs (serialized as strings to preserve u64 precision in JS).
     NodePayloadResponse:
       type: object
       description: Response for a node payload retrieval.
@@ -3223,8 +3232,10 @@ components:
       - node_id
       properties:
         node_id:
-          type: string
+          type: integer
+          format: int64
           description: Node ID.
+          minimum: 0
         payload:
           description: Stored payload (null if none).
     NodeStatsResponse:
@@ -3300,10 +3311,12 @@ components:
         sources:
           type: array
           items:
-            oneOf:
-            - type: integer
-              format: int64
-            - type: string
+            type: integer
+            format: int64
+            minimum: 0
+          description: |-
+            Source node IDs to start traversal from (accepts strings or numbers so
+            JS clients can send precision-safe u64 IDs above `Number.MAX_SAFE_INTEGER`).
     PointRequest:
       type: object
       description: A point in an upsert request.
@@ -3467,17 +3480,15 @@ components:
           type: string
           description: Relationship type label (e.g. `"KNOWS"`, `"RELATED_TO"`).
         source:
-          oneOf:
-          - type: integer
-            format: int64
-          - type: string
-          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
+          type: integer
+          format: int64
+          description: Source point ID.
+          minimum: 0
         target:
-          oneOf:
-          - type: integer
-            format: int64
-          - type: string
-          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
+          type: integer
+          format: int64
+          description: Target point ID.
+          minimum: 0
     RelateResponse:
       type: object
       description: Response body for `POST /collections/{name}/relations`.
@@ -3485,8 +3496,10 @@ components:
       - edge_id
       properties:
         edge_id:
-          type: string
+          type: integer
+          format: int64
           description: Allocated edge ID.
+          minimum: 0
     RelationEdge:
       type: object
       description: A single relation edge in a response.
@@ -3498,19 +3511,25 @@ components:
       - properties
       properties:
         id:
-          type: string
+          type: integer
+          format: int64
           description: Edge ID.
+          minimum: 0
         properties:
           description: Edge properties (null when empty).
         rel_type:
           type: string
           description: Relationship type label.
         source:
-          type: string
+          type: integer
+          format: int64
           description: Source point ID.
+          minimum: 0
         target:
-          type: string
+          type: integer
+          format: int64
           description: Target point ID.
+          minimum: 0
     RelationsResponse:
       type: object
       description: Response body for `GET /collections/{name}/points/{id}/relations`.
@@ -3789,15 +3808,17 @@ components:
           description: Depth from source.
           minimum: 0
         id:
-          type: string
+          type: integer
+          format: int64
           description: Target node ID.
+          minimum: 0
         path:
           type: array
           items:
-            oneOf:
-            - type: integer
-              format: int64
-            - type: string
+            type: integer
+            format: int64
+            minimum: 0
+          description: Path of edge IDs taken to reach this node.
     StreamStatsEvent:
       type: object
       description: 'SSE event: Periodic statistics update.'
@@ -3853,13 +3874,15 @@ components:
         path:
           type: array
           items:
-            oneOf:
-            - type: integer
-              format: int64
-            - type: string
+            type: integer
+            format: int64
+            minimum: 0
+          description: Path taken (list of edge IDs).
         target_id:
-          type: string
+          type: integer
+          format: int64
           description: Target node ID reached.
+          minimum: 0
     TraversalStats:
       type: object
       description: Statistics from traversal operation.
@@ -3897,11 +3920,10 @@ components:
             type: string
           description: Filter by relationship types (empty = all types).
         source:
-          oneOf:
-          - type: integer
-            format: int64
-          - type: string
-          description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
+          type: integer
+          format: int64
+          description: Source node ID to start traversal from.
+          minimum: 0
         strategy:
           type: string
           description: 'Traversal strategy: "bfs" or "dfs".'

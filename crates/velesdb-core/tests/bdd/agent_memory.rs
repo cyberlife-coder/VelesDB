@@ -294,3 +294,59 @@ fn test_user_expires_at_metadata_is_not_interpreted_as_ttl() {
         "fact must survive reopen + auto_expire"
     );
 }
+
+// ============================================================================
+// Durable TTL — expired-but-unswept entries survive restart as reclaimable
+// ============================================================================
+
+/// Anti-leak guard (AM-1): an entry whose durable TTL elapsed before a restart
+/// must still be reclaimed by `auto_expire` after the reopen. The TTL cache is
+/// rebuilt from raw payload reads (`get_raw`); if the rebuild used the
+/// TTL-filtered `get`, the expired point would become invisible AND
+/// undeletable — a permanent storage leak.
+#[test]
+fn test_expired_ttl_is_reclaimed_by_auto_expire_after_reopen() {
+    // GIVEN a fact whose durable TTL expires immediately (refresh with ttl=0
+    // persists `_veles_expires_at = now`, it does not delete the point)
+    let dir = TempDir::new().expect("test: create temp dir");
+    {
+        let db = Arc::new(Database::open(dir.path()).expect("test: open database"));
+        let memory =
+            AgentMemory::with_dimension(Arc::clone(&db), 4).expect("test: create AgentMemory");
+        memory
+            .semantic()
+            .store(1, "ephemeral fact", &[1.0, 0.0, 0.0, 0.0])
+            .expect("store fact");
+        memory
+            .semantic()
+            .set_ttl_durable(1, 0)
+            .expect("persist immediate expiry");
+    }
+
+    // WHEN the database is reopened
+    let db = Arc::new(Database::open(dir.path()).expect("test: reopen database"));
+    let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).expect("test: reopen AgentMemory");
+
+    // THEN the entry is invisible on read surfaces but auto_expire reclaims it
+    assert!(
+        memory
+            .semantic()
+            .get(1)
+            .expect("get should succeed")
+            .is_none(),
+        "expired fact must be invisible after reopen"
+    );
+    let stats = memory.auto_expire().expect("auto_expire should succeed");
+    assert_eq!(
+        stats.semantic_expired, 1,
+        "auto_expire must reclaim the expired-but-unswept fact (storage leak guard)"
+    );
+    let collection = db
+        .get_vector_collection("_semantic_memory")
+        .expect("semantic collection exists");
+    assert_eq!(
+        collection.len(),
+        0,
+        "the expired point's storage must be physically reclaimed"
+    );
+}

@@ -114,7 +114,9 @@ pub(super) fn serialize_points(
     collection: &Collection,
     ids: &[u64],
 ) -> Result<Vec<u8>, AgentMemoryError> {
-    let points: Vec<_> = collection.get(ids).into_iter().flatten().collect();
+    // get_raw: snapshots must include expired-but-not-yet-swept points so a
+    // restore + auto_expire can still reclaim them (no storage leak).
+    let points: Vec<_> = collection.get_raw(ids).into_iter().flatten().collect();
     let id_set: HashSet<u64> = points.iter().map(|p| p.id).collect();
     // Only edges whose BOTH endpoints are part of the snapshot are
     // meaningful after a restore.
@@ -527,7 +529,10 @@ pub(super) fn rebuild_ttl_from_payloads(
 ) -> Result<(), AgentMemoryError> {
     let collection = get_collection(db, collection_name)?;
     let all_ids = collection.all_ids();
-    for point in collection.get(&all_ids).into_iter().flatten() {
+    // get_raw: the filtered `get` hides expired-but-not-yet-swept points, so
+    // using it here would drop their TTLs from the rebuilt map after a
+    // restart and `auto_expire` would never reclaim them (storage leak).
+    for point in collection.get_raw(&all_ids).into_iter().flatten() {
         let expiry = point
             .payload
             .as_ref()

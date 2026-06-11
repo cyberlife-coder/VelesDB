@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use axum::{
-    routing::{get, post},
+    routing::{get, patch, post},
     Router,
 };
 use std::sync::Arc;
@@ -15,8 +15,9 @@ use velesdb_server::{
     batch_search, bulk_delete_points, collection_sanity, compact_collection, create_collection,
     delete_collection, delete_point, explain, get_collection, get_collection_config, get_edges,
     get_node_degree, get_point, health_check, hybrid_search, list_collections, multi_query_search,
-    query, readiness_check, rebuild_index, search, search_ids, stream_upsert_points, text_search,
-    traverse_graph, upsert_points, vacuum_collection, AppState, OnboardingMetrics,
+    query, readiness_check, rebuild_index, scroll_points, search, search_ids, set_point_ttl,
+    stream_upsert_points, text_search, traverse_graph, upsert_points, vacuum_collection, AppState,
+    OnboardingMetrics,
 };
 
 fn base_routes() -> Router<Arc<AppState>> {
@@ -43,6 +44,8 @@ fn base_routes() -> Router<Arc<AppState>> {
             "/collections/{name}/points/{id}",
             get(get_point).delete(delete_point),
         )
+        .route("/collections/{name}/points/scroll", post(scroll_points))
+        .route("/collections/{name}/points/{id}/ttl", patch(set_point_ttl))
         .route("/collections/{name}/search", post(search))
         .route("/collections/{name}/search/batch", post(batch_search))
         .route("/collections/{name}/search/multi", post(multi_query_search))
@@ -52,6 +55,11 @@ fn base_routes() -> Router<Arc<AppState>> {
         .route("/query", post(query))
         .route("/aggregate", post(aggregate))
         .route("/query/explain", post(explain))
+        .merge(graph_and_maintenance_routes())
+}
+
+fn graph_and_maintenance_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route(
             "/collections/{name}/graph/edges",
             get(get_edges).post(add_edge),
