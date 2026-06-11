@@ -202,6 +202,15 @@ training function uses a **double-check locking** pattern: it first checks
 `rabitq_index` under a read lock, and if training is needed, re-checks
 under a write lock to prevent duplicate training from concurrent threads.
 
+`install_trained_rabitq()` (quantizer restore at open / `TRAIN QUANTIZER`
+live install) follows the same `rabitq_index → rabitq_store →
+training_buffer` order. It holds `rabitq_index.write()` for the whole
+re-encode so concurrent inserts cannot interleave store pushes, and it
+reads the `inner.vectors` snapshot **and releases it** before taking
+`rabitq_store.write()` — never waiting on the store lock while holding
+`vectors` (a search thread holds `rabitq_store.read()` while acquiring
+`inner.vectors.read()`).
+
 ### Store-Before-Index Ordering
 
 When training completes, the store is set BEFORE the index:

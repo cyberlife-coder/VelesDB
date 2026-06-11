@@ -118,28 +118,9 @@ impl HnswIndex {
             return Ok(0);
         }
 
-        // 2. Create new HNSW graph with auto-tuned parameters
-        let params = HnswParams::auto(self.dimension);
-        let new_inner = HnswInner::new(
-            self.metric,
-            params.max_connections,
-            count.max(1000), // max_elements with reasonable minimum
-            params.ef_construction,
-            self.dimension,
-        )
-        .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
-
-        // 3. Build HNSW insertion references (idx = sequential, matches graph allocation)
-        let refs_for_hnsw: Vec<(&[f32], usize)> = active_vectors
-            .iter()
-            .enumerate()
-            .map(|(idx, (_id, vec))| (vec.as_slice(), idx))
-            .collect();
-
-        // 4. Parallel insert into new HNSW
-        new_inner
-            .parallel_insert(&refs_for_hnsw)
-            .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
+        // 2-4. Rebuild a fresh inner index from the active vectors,
+        // preserving the backend storage mode and trained quantizer.
+        let new_inner = self.build_vacuum_replacement(&active_vectors)?;
 
         // 5. Atomic swap (replace old with new)
         {
@@ -174,5 +155,62 @@ impl HnswIndex {
         }
 
         Ok(count)
+    }
+
+    /// Builds the replacement inner index for [`Self::vacuum`].
+    ///
+    /// Creates a new graph with auto-tuned parameters, **preserving the
+    /// current backend storage mode** (a RaBitQ index must not silently
+    /// downgrade to the Standard f32 backend on vacuum), inserts the active
+    /// vectors, and re-installs the trained RaBitQ quantizer when present
+    /// (re-encodes the compacted vectors in NodeId order — without this, a
+    /// vacuumed RaBitQ index would fall back to f32 search until the next
+    /// collection open).
+    fn build_vacuum_replacement(
+        &self,
+        active_vectors: &[(u64, Vec<f32>)],
+    ) -> Result<HnswInner, VacuumError> {
+        let params = HnswParams::auto(self.dimension);
+        let target_mode = self.inner.read().storage_mode();
+        // Always rebuild through a Standard backend: inserting via a RaBitQ
+        // backend would lazily train a throwaway quantizer at the sample
+        // threshold (then re-encode everything a second time on install) —
+        // and would silently SELF-train an untrained collection from
+        // compaction order. The graph is promoted afterwards.
+        let new_inner = HnswInner::new_with_storage_mode(
+            self.metric,
+            params.max_connections,
+            active_vectors.len().max(1000), // max_elements with reasonable minimum
+            params.ef_construction,
+            self.dimension,
+            crate::StorageMode::Full,
+        )
+        .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
+
+        // Insertion references: idx = sequential, matches graph allocation.
+        let refs_for_hnsw: Vec<(&[f32], usize)> = active_vectors
+            .iter()
+            .enumerate()
+            .map(|(idx, (_id, vec))| (vec.as_slice(), idx))
+            .collect();
+
+        new_inner
+            .parallel_insert(&refs_for_hnsw)
+            .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
+
+        if target_mode != crate::StorageMode::RaBitQ {
+            return Ok(new_inner);
+        }
+        let new_inner = new_inner.promote_to_rabitq(self.dimension);
+        #[cfg(feature = "persistence")]
+        if let Some(rabitq) = self.inner.read().rabitq_quantizer() {
+            // Single encode pass with the carried-over quantizer; an
+            // untrained collection stays untrained (no state change).
+            new_inner
+                .install_trained_rabitq(rabitq)
+                .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
+        }
+
+        Ok(new_inner)
     }
 }

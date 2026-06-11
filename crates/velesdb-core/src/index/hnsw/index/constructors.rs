@@ -138,18 +138,23 @@ impl HnswIndex {
     }
 
     /// Internal constructor with vector storage toggle.
+    ///
+    /// Honours `params.storage_mode`: `RaBitQ` selects the binary-traversal
+    /// backend; every other mode uses the Standard f32 backend (SQ8/Binary
+    /// quantized caches live at the collection layer, not in this index).
     fn with_params_internal(
         dimension: usize,
         metric: DistanceMetric,
         params: HnswParams,
         enable_vector_storage: bool,
     ) -> Result<Self> {
-        let inner = HnswInner::new(
+        let inner = HnswInner::new_with_storage_mode(
             metric,
             params.max_connections,
             params.max_elements,
             params.ef_construction,
             dimension,
+            params.storage_mode,
         )?;
 
         let mappings = ShardedMappings::with_capacity(params.max_elements);
@@ -204,6 +209,10 @@ impl HnswIndex {
 
     /// Loads an HNSW index from disk.
     ///
+    /// Respects the persisted `meta.storage_mode` (a `RaBitQ` index reloads
+    /// with the `RaBitQ` backend) and, when the backend is `RaBitQ`, installs
+    /// the trained quantizer from `<path>/rabitq.idx` if present.
+    ///
     /// # Arguments
     ///
     /// * `path` - Path to the index directory
@@ -218,19 +227,57 @@ impl HnswIndex {
         _dimension: usize,
         _metric: DistanceMetric,
     ) -> std::result::Result<Self, std::io::Error> {
+        Self::load_inner(path.as_ref(), None)
+    }
+
+    /// Loads an HNSW index honouring a collection-level storage mode.
+    ///
+    /// The backend mode is the persisted `meta.storage_mode`, upgraded to
+    /// `RaBitQ` when `desired_mode` requests it. The upgrade covers the case
+    /// where `TRAIN QUANTIZER 'rabitq'` flipped the collection storage mode
+    /// AFTER the last index save (the persisted meta still says `Full`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file doesn't exist or is corrupted.
+    pub(crate) fn load_with_storage_mode<P: AsRef<Path>>(
+        path: P,
+        desired_mode: crate::StorageMode,
+    ) -> std::result::Result<Self, std::io::Error> {
+        Self::load_inner(path.as_ref(), Some(desired_mode))
+    }
+
+    /// Shared load pipeline for [`Self::load`] / [`Self::load_with_storage_mode`].
+    ///
+    /// When the resulting backend is `RaBitQ`, the trained quantizer persisted
+    /// at `<path>/rabitq.idx` is installed, re-encoding every loaded vector in
+    /// `NodeId` order — an O(n·d) cost at open, same class as gap recovery.
+    fn load_inner(
+        path: &Path,
+        desired_mode: Option<crate::StorageMode>,
+    ) -> std::result::Result<Self, std::io::Error> {
         use crate::index::hnsw::persistence;
 
-        let path = path.as_ref();
-
         let meta = persistence::load_meta(path)?;
+        let storage_mode = if desired_mode == Some(crate::StorageMode::RaBitQ) {
+            crate::StorageMode::RaBitQ
+        } else {
+            meta.storage_mode
+        };
 
         // Load HNSW graph (caller-specific — see persistence::load_sidecars).
-        let inner = HnswInner::file_load(path, "native_hnsw", meta.metric, meta.dimension)?;
+        let inner = HnswInner::file_load_with_storage_mode(
+            path,
+            "native_hnsw",
+            meta.metric,
+            meta.dimension,
+            storage_mode,
+        )?;
 
         // Mappings + vectors in one shared call (RF-DEDUP #448 Group C).
         let (mappings, vectors, enable_vector_storage) = persistence::load_sidecars(path, &meta)?;
 
-        Ok(Self {
+        let index = Self {
             dimension: meta.dimension,
             metric: meta.metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
@@ -240,7 +287,43 @@ impl HnswIndex {
             rerank_latency_target_us: AtomicU64::new(0),
             rerank_latency_ema_us: AtomicU64::new(0),
             io_holder: None,
-        })
+        };
+
+        #[cfg(feature = "persistence")]
+        index.install_persisted_rabitq(path)?;
+
+        Ok(index)
+    }
+
+    /// Installs `<path>/rabitq.idx` into the `RaBitQ` backend, when both exist.
+    ///
+    /// No-op for the Standard backend or when the file is absent.
+    #[cfg(feature = "persistence")]
+    fn install_persisted_rabitq(&self, path: &Path) -> std::io::Result<()> {
+        let inner = self.inner.read();
+        if inner.storage_mode() != crate::StorageMode::RaBitQ {
+            return Ok(());
+        }
+        let Some(rabitq) =
+            crate::quantization::RaBitQIndex::load(path).map_err(std::io::Error::other)?
+        else {
+            return Ok(());
+        };
+        // Warn-and-degrade like the collection-level restore: a stale or
+        // foreign rabitq.idx must not make the index un-openable — search
+        // stays on exact f32 distances instead.
+        if rabitq.dimension != self.dimension {
+            tracing::warn!(
+                rabitq_dim = rabitq.dimension,
+                index_dim = self.dimension,
+                "rabitq.idx dimension mismatch; quantizer not installed"
+            );
+            return Ok(());
+        }
+        inner
+            .install_trained_rabitq(std::sync::Arc::new(rabitq))
+            .map_err(std::io::Error::other)?;
+        Ok(())
     }
 
     /// Saves the HNSW index to disk.
@@ -266,7 +349,11 @@ impl HnswIndex {
         let new_gen = persistence::next_generation(path)?;
 
         // Dump the HNSW graph itself (caller-specific — see persistence::save_sidecars).
-        self.inner.read().file_dump(path, "native_hnsw")?;
+        let storage_mode = {
+            let inner = self.inner.read();
+            inner.file_dump(path, "native_hnsw")?;
+            inner.storage_mode()
+        };
 
         // Graph-generation marker is written IMMEDIATELY after the graph dump
         // and BEFORE the sidecars, so any crash after the graph rename leaves
@@ -275,7 +362,8 @@ impl HnswIndex {
         persistence::save_graph_generation(path, new_gen)?;
 
         // Mappings + vectors + meta in one shared call (RF-DEDUP #448 Group C).
-        // NativeHnsw exclusively uses StorageMode::Full for backward compat.
+        // The actual backend storage mode is persisted so save/load round-trips
+        // (a RaBitQ index reloads with the RaBitQ backend).
         persistence::save_sidecars(
             path,
             &self.mappings,
@@ -284,7 +372,7 @@ impl HnswIndex {
                 dimension: self.dimension,
                 metric: self.metric,
                 enable_vector_storage: self.enable_vector_storage,
-                storage_mode: crate::StorageMode::Full,
+                storage_mode,
                 // `save_sidecars` overwrites this with `new_gen` (#617).
                 generation: 0,
             },
@@ -325,5 +413,34 @@ impl HnswIndex {
     #[must_use]
     pub fn has_vector_storage(&self) -> bool {
         self.enable_vector_storage
+    }
+
+    /// Installs a trained `RaBitQ` quantizer into the live backend.
+    ///
+    /// Returns `Ok(true)` when the backend is `RaBitQ` and the quantizer was
+    /// installed (existing vectors re-encoded in `NodeId` order, O(n·d)),
+    /// `Ok(false)` when the backend is Standard (no-op).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-encoding a stored vector fails.
+    #[cfg(feature = "persistence")]
+    pub(crate) fn install_trained_rabitq(
+        &self,
+        rabitq: std::sync::Arc<crate::quantization::RaBitQIndex>,
+    ) -> crate::error::Result<bool> {
+        self.inner.read().install_trained_rabitq(rabitq)
+    }
+
+    /// Returns true when the backend is `RaBitQ` with a trained quantizer.
+    #[cfg(feature = "persistence")]
+    #[must_use]
+    pub(crate) fn is_rabitq_quantizer_trained(&self) -> bool {
+        self.inner.read().is_rabitq_quantizer_trained()
+    }
+
+    /// Returns `true` when this index runs the `RaBitQ` backend.
+    pub(crate) fn is_rabitq_backend(&self) -> bool {
+        self.inner.read().is_rabitq_backend()
     }
 }

@@ -19,7 +19,14 @@ La **quantization** permet de réduire la taille des vecteurs en mémoire tout e
 
 ## 🚀 SQ8 : Compression 4x
 
-### Comment ça marche ?
+> **Statut : cache non consommé par la recherche des collections.**
+> Une collection en mode `storage='sq8'` maintient un cache de vecteurs
+> quantifiés SQ8 à l'insertion, mais aucun chemin de recherche ne lit ce
+> cache aujourd'hui : les requêtes s'exécutent en pleine précision f32.
+> Choisir SQ8 au niveau collection AJOUTE donc de la mémoire au lieu d'en
+> réduire, en attendant un mode de stockage à mémoire réduite. Les
+> primitives SQ8 ci-dessous (`QuantizedVector`, distances SIMD) sont, elles,
+> pleinement fonctionnelles pour un usage programmatique direct.
 
 Chaque valeur `f32` (4 octets) est convertie en `u8` (1 octet) :
 
@@ -58,7 +65,12 @@ println!("Mémoire économisée: {}%",
 
 ## ⚡ Binary : Compression 32x
 
-### Comment ça marche ?
+> **Statut : cache non consommé par la recherche des collections.**
+> Comme SQ8 : le mode `storage='binary'` remplit un cache de vecteurs
+> binaires qu'aucun chemin de recherche ne lit (recherche en f32 pleine
+> précision). Pour une compression 32x effective dans le chemin de requête,
+> utiliser RaBitQ. Les primitives `BinaryQuantizedVector` restent
+> utilisables en direct.
 
 Chaque valeur `f32` devient **1 bit** :
 - Valeur ≥ 0 → 1
@@ -129,13 +141,22 @@ TRAIN QUANTIZER ON my_collection WITH (m=8, k=256)
 
 L'entrainement est **explicite** : il ne se declenche pas automatiquement. La collection doit contenir suffisamment de vecteurs (au minimum k vecteurs recommandes).
 
+**Persistance** : `TRAIN QUANTIZER` sauvegarde le codebook (`codebook.pq`,
+plus `rotation.opq` pour OPQ) dans le repertoire de la collection. A la
+reouverture, le codebook est recharge et le cache PQ est reconstruit en
+re-encodant tous les vecteurs stockes (cout O(n) a l'ouverture) — le
+rescoring ADC survit donc aux redemarrages. Note : le quantizer entraine
+paresseusement a l'insertion (mode `storage='pq'` sans `TRAIN QUANTIZER`)
+n'est PAS persiste ; seul `TRAIN QUANTIZER` ecrit le codebook sur disque.
+
 ### Entrainement via Rust
 
 ```rust
 use velesdb_core::quantization::ProductQuantizer;
 
 let pq = ProductQuantizer::train(&vectors, m, k)?;
-// Le quantizer est sauvegarde automatiquement sur disque
+// Persistance explicite (TRAIN QUANTIZER le fait automatiquement) :
+pq.save_codebook(collection_dir)?;
 ```
 
 ### OPQ (Optimized Product Quantization)
@@ -165,13 +186,17 @@ OPQ applique une rotation orthogonale aux vecteurs avant la quantification PQ. C
 
 ## RaBitQ : Randomized Binary Quantization (32x)
 
-> **Statut : non branché dans le chemin de requête des collections.**
-> `TRAIN QUANTIZER 'rabitq'` entraîne et persiste `rabitq.idx`, mais aucun
-> chemin de recherche de collection ne charge cet index aujourd'hui : les
-> recherches continuent sur les vecteurs f32 (les collections forcent le mode
-> de stockage `Full`). Le backend RaBitQ existe au niveau de l'API d'index
-> (`RaBitQPrecisionHnsw`) pour un usage programmatique direct. Les chiffres de
-> recall ci-dessous décrivent cette API, pas une requête `SELECT` standard.
+> **Statut : branché de bout en bout dans le chemin de requête des
+> collections, redémarrages compris.**
+> Une collection créée avec `storage='rabitq'` utilise le backend HNSW à
+> traversée binaire (`RaBitQPrecisionHnsw`). `TRAIN QUANTIZER` avec
+> `type=rabitq` entraîne le quantizer, le persiste dans `rabitq.idx` ET
+> l'installe immédiatement dans l'index vivant (ré-encodage O(n·d) des
+> vecteurs existants). À la réouverture, `rabitq.idx` est rechargé et les
+> vecteurs sont ré-encodés (coût O(n·d) à l'ouverture, même classe que la
+> gap recovery HNSW). Si la collection a été créée avec un autre mode de
+> stockage, l'entraînement persiste l'index et bascule la config ; le
+> backend RaBitQ prend effet à la prochaine ouverture.
 
 ### Comment ca marche ?
 
@@ -240,6 +265,11 @@ Apres:   [0b10100110, ...]      → 768 / 8 = 96 octets
 | **Haute compression + bon recall** | RaBitQ |
 | **Fingerprints/hashes** | Binary |
 | **Donnees correlees** | PQ + OPQ |
+
+> Note : ce tableau compare les methodes en tant que telles. Dans le chemin
+> de requete des collections, seuls **RaBitQ** et **PQ** sont branches
+> aujourd'hui (voir les encarts de statut ci-dessus) — les modes SQ8/Binary
+> y maintiennent des caches que la recherche ne consomme pas encore.
 
 ---
 
