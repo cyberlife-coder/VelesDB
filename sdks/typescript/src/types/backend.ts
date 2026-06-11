@@ -371,4 +371,16 @@ export interface IVelesDBBackend {
     collection: string,
     request: GraphSearchRequest
   ): Promise<GraphSearchResponse>;
+
+  /** Create a typed relation edge between two points. Returns the allocated edge ID. */
+  relate(collection: string, req: import('./graph').RelateRequest): Promise<import('./graph').RelateResponse>;
+
+  /** Remove a relation edge by ID. Returns `true` if removed. */
+  unrelate(collection: string, edgeId: import('./graph').GraphNodeId): Promise<boolean>;
+
+  /** List outgoing relation edges for a point. */
+  getRelations(collection: string, pointId: import('./graph').GraphNodeId): Promise<import('./graph').RelationsResponse>;
+
+  /** Durably set (or refresh) the TTL of a point. */
+  setTtlDurable(collection: string, pointId: import('./graph').GraphNodeId, ttlSeconds: number): Promise<void>;
 }

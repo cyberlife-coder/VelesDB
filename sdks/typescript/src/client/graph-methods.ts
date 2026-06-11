@@ -25,6 +25,9 @@ import type {
   GraphSearchResponse,
   MatchQueryOptions,
   MatchQueryResponse,
+  RelateRequest,
+  RelateResponse,
+  RelationsResponse,
 } from '../types';
 import { ValidationError } from '../types';
 import { requireNonEmptyString } from './validation';
@@ -196,4 +199,63 @@ export function graphSearch(
 ): Promise<GraphSearchResponse> {
   requireNonEmptyString(collection, 'Collection');
   return backend.graphSearch(collection, request);
+}
+
+/** Create a typed relation edge between two points. Returns the allocated edge ID. */
+export function relate(
+  backend: IVelesDBBackend,
+  collection: string,
+  req: RelateRequest
+): Promise<RelateResponse> {
+  requireNonEmptyString(collection, 'Collection');
+  if (!req.relType || typeof req.relType !== 'string') {
+    throw new ValidationError('Relation type is required and must be a string');
+  }
+  if (!isGraphNodeId(req.source) || !isGraphNodeId(req.target)) {
+    throw new ValidationError('Source and target must be numbers or strings');
+  }
+  return backend.relate(collection, req);
+}
+
+/** Remove a relation edge by ID. Returns `true` if removed. */
+export function unrelate(
+  backend: IVelesDBBackend,
+  collection: string,
+  edgeId: GraphNodeId
+): Promise<boolean> {
+  requireNonEmptyString(collection, 'Collection');
+  if (!isGraphNodeId(edgeId)) {
+    throw new ValidationError('Edge ID must be a number or string');
+  }
+  return backend.unrelate(collection, edgeId);
+}
+
+/** List outgoing relation edges for a point. */
+export function getRelations(
+  backend: IVelesDBBackend,
+  collection: string,
+  pointId: GraphNodeId
+): Promise<RelationsResponse> {
+  requireNonEmptyString(collection, 'Collection');
+  if (!isGraphNodeId(pointId)) {
+    throw new ValidationError('Point ID must be a number or string');
+  }
+  return backend.getRelations(collection, pointId);
+}
+
+/** Durably set (or refresh) the TTL of a point. */
+export function setTtlDurable(
+  backend: IVelesDBBackend,
+  collection: string,
+  pointId: GraphNodeId,
+  ttlSeconds: number
+): Promise<void> {
+  requireNonEmptyString(collection, 'Collection');
+  if (!isGraphNodeId(pointId)) {
+    throw new ValidationError('Point ID must be a number or string');
+  }
+  if (typeof ttlSeconds !== 'number' || ttlSeconds < 0) {
+    throw new ValidationError('ttlSeconds must be a non-negative number');
+  }
+  return backend.setTtlDurable(collection, pointId, ttlSeconds);
 }
