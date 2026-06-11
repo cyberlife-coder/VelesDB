@@ -159,6 +159,9 @@ in-place vector normalization using `_mm256_mul_ps`.
 - `simd_level()` caches `OnceLock<SimdLevel>` from `is_x86_feature_detected!`
 - Every `unsafe` call site is preceded by an `simd_level()` match arm
 - Dimension assertions are in the public API before any unsafe call
+- `DistanceEngine::dispatch` enforces `assert_eq!` (release mode included) on
+  both input lengths and the engine dimension: kernels are pre-resolved for a
+  fixed dimension, so a mismatched call would otherwise read out of bounds
 
 ### Module: `crates/velesdb-core/src/simd_native/reduction.rs`
 
