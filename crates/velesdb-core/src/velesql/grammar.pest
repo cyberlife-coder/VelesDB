@@ -1,5 +1,5 @@
 // VelesQL Grammar - SQL-like query language for VelesDB
-// Version 3.6.0 — FLUSH + ANALYZE, TRUNCATE, ALTER COLLECTION + DDL + graph mutations + DELETE FROM + multi-row INSERT + UPSERT
+// Version 3.10.0 — matches docs/VELESQL_SPEC.md (window functions, CONTAINS/CONTAINS_TEXT, GEO_DISTANCE/GEO_BBOX, @collection MATCH annotations, DDL + graph mutations + DML)
 
 // Whitespace and comments
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }

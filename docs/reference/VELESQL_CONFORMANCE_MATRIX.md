@@ -4,20 +4,20 @@ This document lists every VelesQL feature with its parser and executor status.
 A feature can be **Parsed** (the grammar + AST accept it) without being
 **Executed** (the query engine acts on it at runtime).
 
-> Last updated: 2026-05-01 (v3.9.0 / VelesDB v1.18.0)
+> Last updated: 2026-06-12 (v3.10.0 / VelesDB v1.18.0)
 
 ## Fully Supported (Parsed AND Executed)
 
 | Feature | Parser source | Executor source | Notes |
 |---------|--------------|-----------------|-------|
 | `SELECT *` / named columns | `grammar.pest:select_list` | `query_engine.rs` | Full support |
-| `SELECT DISTINCT` | `grammar.pest:distinct_kw` | `query_engine.rs` | EPIC-052 US-001 |
+| `SELECT DISTINCT` | `grammar.pest:distinct_modifier` | `query_engine.rs` | EPIC-052 US-001 |
 | `FROM <collection>` | `grammar.pest:from_clause` | `query_engine.rs` | Single collection |
 | `FROM <collection> AS <alias>` | `grammar.pest:from_clause` | `query_engine.rs` | BUG-8 fix |
 | `WHERE <condition>` | `grammar.pest:where_clause` | `search/query/` | Equality, comparison, logical |
-| `WHERE vector NEAR $v` | `grammar.pest:near_condition` | `search/query/planner.rs` | kNN via HNSW |
-| `WHERE vector SPARSE_NEAR $sv` | `grammar.pest:sparse_near` | `search/query/hybrid_sparse.rs` | SPLADE/BM42 |
-| `WHERE content MATCH 'term'` | `grammar.pest:match_condition` | `search/query/planner.rs` | BM25 full-text |
+| `WHERE vector NEAR $v` | `grammar.pest:vector_search` | `search/query/planner.rs` | kNN via HNSW |
+| `WHERE vector SPARSE_NEAR $sv` | `grammar.pest:sparse_vector_search` | `search/query/hybrid_sparse.rs` | SPLADE/BM42 |
+| `WHERE content MATCH 'term'` | `grammar.pest:match_expr` | `search/query/planner.rs` | BM25 full-text |
 | `ORDER BY field [ASC\|DESC]` | `ast/select.rs:SelectOrderBy` | `query_engine.rs` | Field + similarity() |
 | `ORDER BY similarity()` | `ast/select.rs:SimilarityOrderBy` | `query_engine.rs` | EPIC-051 |
 | `LIMIT n` | `grammar.pest:limit_clause` | `query_engine.rs` | |
@@ -33,11 +33,11 @@ A feature can be **Parsed** (the grammar + AST accept it) without being
 | `WITH (key=value)` hints | `ast/with_clause.rs:WithClause` | `query_engine.rs` | ef_search, mode, quantization |
 | `TRAIN QUANTIZER ON <coll>` | `ast/train.rs` | `database/training.rs` | PQ training |
 | `MATCH (a)-[r]->(b)` | `ast/mod.rs:MatchClause` | `search/query/match_exec.rs` | Graph traversal |
-| `similarity()` function | `grammar.pest:similarity_fn` | `search/query/` | In WHERE + ORDER BY |
-| `IN (list)` | `grammar.pest:in_condition` | `search/query/where_eval.rs` | Value list matching |
-| `BETWEEN x AND y` | `grammar.pest:between_condition` | `search/query/where_eval.rs` | Range filtering |
-| `LIKE` / `ILIKE` | `grammar.pest:like_condition` | `search/query/where_eval.rs` | Pattern matching |
-| `IS NULL` / `IS NOT NULL` | `grammar.pest:is_null_condition` | `search/query/where_eval.rs` | Null checks |
+| `similarity()` function | `grammar.pest:similarity_expr` | `search/query/` | In WHERE + ORDER BY |
+| `IN (list)` | `grammar.pest:in_expr` | `search/query/where_eval.rs` | Value list matching |
+| `BETWEEN x AND y` | `grammar.pest:between_expr` | `search/query/where_eval.rs` | Range filtering |
+| `LIKE` / `ILIKE` | `grammar.pest:like_expr` | `search/query/where_eval.rs` | Pattern matching |
+| `IS NULL` / `IS NOT NULL` | `grammar.pest:is_null_expr` | `search/query/where_eval.rs` | Null checks |
 | `NOW()` | `grammar.pest:temporal_expr` | `search/query/where_eval.rs` | EPIC-038; current Unix timestamp |
 | `INTERVAL` arithmetic | `ast/values.rs:IntervalValue` | `search/query/where_eval.rs` | EPIC-038; seconds, minutes, hours, days, weeks, months |
 | `INSERT INTO` | `ast/dml.rs:InsertStatement` | `database/query_engine.rs` | DML |
@@ -46,10 +46,10 @@ A feature can be **Parsed** (the grammar + AST accept it) without being
 | `UNION` / `UNION ALL` | `grammar.pest:set_operator`, `ast/mod.rs:CompoundQuery` | `search/query/set_operations.rs`, `database/query_engine.rs` | EPIC-040 US-006; dedup by point ID (UNION) or keep all (UNION ALL) |
 | `INTERSECT` | `grammar.pest:set_operator`, `ast/mod.rs:SetOperator::Intersect` | `search/query/set_operations.rs`, `database/query_engine.rs` | EPIC-040 US-006; keep only common point IDs |
 | `EXCEPT` | `grammar.pest:set_operator`, `ast/mod.rs:SetOperator::Except` | `search/query/set_operations.rs`, `database/query_engine.rs` | EPIC-040 US-006; remove right-side IDs from left |
-| `CREATE COLLECTION` | `grammar.pest:create_collection`, `ast/ddl.rs:CreateCollectionStatement` | `database/query_engine.rs` | DDL v3.3; vector, graph, metadata collections |
-| `DROP COLLECTION` | `grammar.pest:drop_collection`, `ast/ddl.rs:DropCollectionStatement` | `database/query_engine.rs` | DDL v3.3; with IF EXISTS support |
-| `INSERT EDGE` | `grammar.pest:insert_edge`, `ast/dml.rs:InsertEdgeStatement` | `database/query_engine.rs` | Graph mutation v3.3 |
-| `DELETE EDGE` | `grammar.pest:delete_edge`, `ast/dml.rs:DeleteEdgeStatement` | `database/query_engine.rs` | Graph mutation v3.3 |
+| `CREATE COLLECTION` | `grammar.pest:create_collection_stmt`, `ast/ddl.rs:CreateCollectionStatement` | `database/query_engine.rs` | DDL v3.3; vector, graph, metadata collections |
+| `DROP COLLECTION` | `grammar.pest:drop_collection_stmt`, `ast/ddl.rs:DropCollectionStatement` | `database/query_engine.rs` | DDL v3.3; with IF EXISTS support |
+| `INSERT EDGE` | `grammar.pest:insert_edge_stmt`, `ast/dml.rs:InsertEdgeStatement` | `database/query_engine.rs` | Graph mutation v3.3 |
+| `DELETE EDGE` | `grammar.pest:delete_edge_stmt`, `ast/dml.rs:DeleteEdgeStatement` | `database/query_engine.rs` | Graph mutation v3.3 |
 | Window functions (`ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`) with `OVER ([PARTITION BY ...] [ORDER BY ...])` | `grammar.pest:window_item`, `grammar.pest:over_clause` | `velesql/window_evaluator.rs` | VelesDB v1.13.0 (PR #629); evaluated after DISTINCT, before ORDER BY/LIMIT |
 
 ## Parsed but NOT Executed

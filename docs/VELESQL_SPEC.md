@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | **Last Updated**: 2026-06-03 (VelesDB v1.18.0)
+**Version**: 3.10.0 | **Last Updated**: 2026-06-12 (VelesDB v1.18.0)
 
 ---
 
@@ -3349,7 +3349,11 @@ FLUSH documents
 
 ---
 
-## EBNF Grammar (v3.6)
+## EBNF Grammar (v3.10.0)
+
+Derived from the executable PEG grammar
+[`crates/velesdb-core/src/velesql/grammar.pest`](../crates/velesdb-core/src/velesql/grammar.pest)
+(the source of truth — regenerate this annex whenever the grammar changes).
 
 ```ebnf
 (* ═══════════════════════════════════════════════════════ *)
@@ -3357,15 +3361,15 @@ FLUSH documents
 (* ═══════════════════════════════════════════════════════ *)
 
 query             = let_clause* (show_collections_stmt | describe_stmt
-                    | explain_stmt | flush_stmt
-                    | analyze_stmt | truncate_stmt | alter_collection_stmt
-                    | select_edges_stmt
-                    | match_query | compound_query | train_stmt
+                    | explain_stmt | analyze_stmt | truncate_stmt
+                    | alter_collection_stmt | flush_stmt
+                    | match_query | select_edges_stmt
+                    | compound_query | train_stmt
                     | create_index_stmt | create_collection_stmt
                     | drop_index_stmt | drop_collection_stmt
                     | insert_node_stmt | insert_edge_stmt
                     | delete_edge_stmt | delete_stmt
-                    | upsert_stmt | insert_stmt | update_stmt) [";"] ;
+                    | insert_stmt | upsert_stmt | update_stmt) [";"] ;
 
 (* ═══════════════════════════════════════════════════════ *)
 (* Introspection statements (v3.4)                        *)
@@ -3391,9 +3395,11 @@ match_query       = "MATCH" graph_pattern
 
 graph_pattern     = node_pattern (relationship_pattern node_pattern)* ;
 node_pattern      = "(" [node_spec] ")" ;
-node_spec         = [node_alias] [node_labels] [node_properties] ;
+node_spec         = [node_alias] [node_labels] [collection_annotation]
+                    [node_properties] ;
 node_alias        = identifier ;
 node_labels       = ":" label_name (":" label_name)* ;
+collection_annotation = "@" identifier ;
 node_properties   = "{" property ("," property)* "}" ;
 property          = identifier ":" property_value ;
 property_value    = string | float | integer | boolean | null | parameter ;
@@ -3437,17 +3443,28 @@ distinct_modifier = "DISTINCT" ;
 (* SELECT list *)
 select_list       = "*" | select_item ("," select_item)* ;
 select_item       = "similarity" "(" ")" ["AS" identifier]
+                  | window_item
                   | aggregate_function ["AS" identifier]
                   | qualified_wildcard
                   | column ["AS" identifier] ;
 qualified_wildcard = identifier "." "*" ;
 column            = identifier ("." identifier)* ;
 
-(* FROM clause *)
-from_clause       = identifier ["AS" identifier] ;
+(* Window functions (v1.13.0) *)
+window_item       = window_function_name "(" ")" "OVER" "(" over_clause ")"
+                    ["AS" identifier] ;
+window_function_name = "ROW_NUMBER" | "DENSE_RANK" | "RANK" ;
+over_clause       = [partition_by_clause] [window_order_by_clause] ;
+partition_by_clause = "PARTITION" "BY" column ("," column)* ;
+window_order_by_clause = "ORDER" "BY" window_order_by_item
+                         ("," window_order_by_item)* ;
+window_order_by_item = (order_by_similarity_bare | column) ["ASC" | "DESC"] ;
+
+(* FROM clause — alias with AS or bare (non-reserved identifier) *)
+from_clause       = identifier [["AS"] identifier] ;
 
 (* JOIN clause (v2.0) *)
-join_clause       = [join_type] "JOIN" identifier ["AS" identifier]
+join_clause       = [join_type] "JOIN" identifier [["AS"] identifier]
                     (on_clause | using_clause) ;
 join_type         = "LEFT" ["OUTER"]
                   | "RIGHT" ["OUTER"]
@@ -3476,6 +3493,10 @@ primary_expr      = "(" or_expr ")"
                   | between_expr
                   | like_expr
                   | is_null_expr
+                  | contains_text_expr
+                  | contains_expr
+                  | geo_distance_expr
+                  | geo_bbox_expr
                   | compare_expr ;
 
 not_expr          = "NOT" primary_expr ;
@@ -3511,6 +3532,19 @@ like_expr         = where_column ("ILIKE" | "LIKE") string ;
 is_null_expr      = where_column "IS" ["NOT"] "NULL" ;
 match_expr        = where_column "MATCH" string ;
 
+(* Array / substring containment *)
+contains_text_expr = where_column "CONTAINS_TEXT" string ;
+contains_expr     = where_column "CONTAINS" "ALL" "(" value ("," value)* ")"
+                  | where_column "CONTAINS" "ANY" "(" value ("," value)* ")"
+                  | where_column "CONTAINS" value ;
+
+(* Geospatial predicates *)
+geo_number        = float | integer ;
+geo_distance_expr = "GEO_DISTANCE" "(" column "," geo_number "," geo_number ")"
+                    compare_op geo_number ;
+geo_bbox_expr     = "GEO_BBOX" "(" column "," geo_number "," geo_number ","
+                    geo_number "," geo_number ")" ;
+
 (* ═══════════════════════════════════════════════════════ *)
 (* GROUP BY, HAVING (v2.0)                                *)
 (* ═══════════════════════════════════════════════════════ *)
@@ -3520,8 +3554,8 @@ group_by_clause   = "GROUP" "BY" column ("," column)* ;
 having_clause     = "HAVING" having_condition (("AND" | "OR") having_condition)* ;
 having_condition  = aggregate_function compare_op value ;
 
-aggregate_function = ("COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
-                     "(" ("*" | column) ")" ;
+aggregate_function = ("FIRST" | "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+                     "(" ("*" | "score" | column) ")" ;
 
 (* ═══════════════════════════════════════════════════════ *)
 (* ORDER BY (v2.0 + arithmetic v3.0)                      *)
@@ -3639,13 +3673,6 @@ truncate_stmt     = "TRUNCATE" ["COLLECTION"] identifier ;
 alter_collection_stmt = "ALTER" "COLLECTION" identifier "SET"
                         "(" create_option_list ")" ;
 flush_stmt        = "FLUSH" ["FULL"] [identifier] ;
-
-(* ═══════════════════════════════════════════════════════ *)
-(* Index management (v3.5)                                *)
-(* ═══════════════════════════════════════════════════════ *)
-
-create_index_stmt = "CREATE" "INDEX" "ON" identifier "(" identifier ")" ;
-drop_index_stmt   = "DROP" "INDEX" "ON" identifier "(" identifier ")" ;
 
 (* ═══════════════════════════════════════════════════════ *)
 (* UPSERT (v3.5)                                          *)
