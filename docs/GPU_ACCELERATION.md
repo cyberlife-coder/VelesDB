@@ -1,5 +1,7 @@
 # GPU Acceleration Guide
 
+> **Last updated**: 2026-06-12 (VelesDB v1.18.0)
+
 VelesDB supports optional GPU acceleration for batch vector operations via the `gpu` feature.
 
 ## Requirements
@@ -15,7 +17,12 @@ VelesDB supports optional GPU acceleration for batch vector operations via the `
 | Windows | DirectX 12 / Vulkan | Requires up-to-date drivers |
 | macOS | Metal | macOS 10.15+ |
 | Linux | Vulkan | Mesa 21.0+ or proprietary drivers |
-| WebAssembly | WebGPU | Chrome 113+ / Firefox 121+ |
+
+> **WebAssembly is not supported.** The `gpu` feature is not available in
+> `velesdb-wasm`: device initialization uses a background thread plus blocking
+> (`pollster`) device acquisition, neither of which exists on
+> `wasm32-unknown-unknown`. A WebGPU backend would require an async,
+> browser-specific init path and is not planned for the current release line.
 
 ## Installation
 
@@ -23,7 +30,7 @@ Enable the `gpu` feature in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-velesdb-core = { version = "1.14", features = ["gpu"] }
+velesdb-core = { version = "1.18", features = ["gpu"] }
 ```
 
 ## Usage
@@ -117,15 +124,22 @@ VelesDB automatically falls back to CPU SIMD when:
 - GPU feature is not enabled
 - Dataset is too small for GPU benefit
 
-```rust
-// Auto-selection based on workload
-use velesdb_core::index::trigram::gpu::TrigramComputeBackend;
+The CPU/GPU selection for trigram workloads is internal (a crate-private
+backend chooses based on document and pattern counts); from the public API you
+only need the availability checks:
 
-let backend = TrigramComputeBackend::auto_select(doc_count, pattern_count);
-match backend {
-    TrigramComputeBackend::CpuSimd => println!("Using CPU SIMD"),
-    #[cfg(feature = "gpu")]
-    TrigramComputeBackend::Gpu => println!("Using GPU"),
+```rust
+use velesdb_core::gpu::GpuAccelerator;
+use velesdb_core::index::trigram::gpu::GpuTrigramAccelerator;
+
+if GpuAccelerator::is_available() {
+    // GPU paths will be used for large batches; small batches stay on CPU SIMD.
+}
+
+// Trigram accelerator construction fails gracefully without a GPU:
+match GpuTrigramAccelerator::new() {
+    Ok(gpu) => { /* batch_search / batch_extract_trigrams available */ }
+    Err(_) => { /* CPU SIMD trigram path is used automatically */ }
 }
 ```
 
