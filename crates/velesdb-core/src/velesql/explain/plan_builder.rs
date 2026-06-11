@@ -16,7 +16,7 @@ use crate::collection::search::query::match_planner::{
     CollectionStats, MatchExecutionStrategy, MatchQueryPlanner,
 };
 use crate::collection::stats::CollectionStats as CoreCollectionStats;
-use crate::velesql::ast::{Condition, LetBinding, SelectStatement};
+use crate::velesql::ast::{Condition, LetBinding, SelectStatement, DEFAULT_SELECT_LIMIT};
 use crate::velesql::MatchClause;
 
 impl QueryPlan {
@@ -47,6 +47,21 @@ impl QueryPlan {
         indexed_fields: &HashSet<String>,
         stats: Option<&CoreCollectionStats>,
     ) -> Self {
+        Self::build_select_plan(stmt, indexed_fields, stats, true)
+    }
+
+    /// Shared SELECT plan construction.
+    ///
+    /// `implicit_limit` controls whether the engine default
+    /// [`DEFAULT_SELECT_LIMIT`] is surfaced as a Limit node when the statement
+    /// has no explicit LIMIT. Plain SELECT statements pass `true`; MATCH and
+    /// compound queries pass `false` (no implicit limit applies to them).
+    fn build_select_plan(
+        stmt: &SelectStatement,
+        indexed_fields: &HashSet<String>,
+        stats: Option<&CoreCollectionStats>,
+        implicit_limit: bool,
+    ) -> Self {
         let mut has_vector_search = false;
         let mut filter_conditions = Vec::new();
         let mut index_lookup = None;
@@ -63,6 +78,7 @@ impl QueryPlan {
             stmt,
             has_vector_search,
             stats,
+            implicit_limit,
         );
 
         let mut plan = Self::assemble_plan_with_stats(
@@ -91,7 +107,10 @@ impl QueryPlan {
         indexed_fields: &HashSet<String>,
         stats: Option<&CoreCollectionStats>,
     ) -> Self {
-        let mut plan = Self::from_select_with_stats(&query.select, indexed_fields, stats);
+        // MATCH and compound queries have no implicit default LIMIT.
+        let implicit_limit = query.match_clause.is_none() && query.compound.is_none();
+        let mut plan =
+            Self::build_select_plan(&query.select, indexed_fields, stats, implicit_limit);
         plan.let_bindings = Self::format_let_bindings(&query.let_bindings);
         plan
     }
@@ -121,7 +140,10 @@ impl QueryPlan {
 
         let mut nodes = vec![traversal];
         if let Some(limit) = match_clause.return_clause.limit {
-            nodes.push(PlanNode::Limit(LimitPlan { count: limit }));
+            nodes.push(PlanNode::Limit(LimitPlan {
+                count: limit,
+                is_default: false,
+            }));
         }
 
         let index_used = if has_similarity {
@@ -180,7 +202,8 @@ impl QueryPlan {
 
         if has_vector_search {
             index_used = Some(IndexType::Hnsw);
-            let candidates = u32::try_from(stmt.limit.unwrap_or(50)).unwrap_or(u32::MAX);
+            let candidates =
+                u32::try_from(stmt.limit.unwrap_or(DEFAULT_SELECT_LIMIT)).unwrap_or(u32::MAX);
             let ef_search = Self::resolve_ef_search(stmt);
             nodes.push(PlanNode::VectorSearch(VectorSearchPlan {
                 collection: stmt.from.clone(),
@@ -284,6 +307,7 @@ impl QueryPlan {
         stmt: &SelectStatement,
         has_vector_search: bool,
         stats: Option<&CoreCollectionStats>,
+        implicit_limit: bool,
     ) -> FilterStrategy {
         let mut filter_strategy = FilterStrategy::None;
 
@@ -298,7 +322,8 @@ impl QueryPlan {
             // comparison so it reflects the user's actual WITH clause instead
             // of a fixed k = 10.
             let ef_search = Self::resolve_ef_search(stmt);
-            let candidates = u32::try_from(stmt.limit.unwrap_or(50)).unwrap_or(u32::MAX);
+            let candidates =
+                u32::try_from(stmt.limit.unwrap_or(DEFAULT_SELECT_LIMIT)).unwrap_or(u32::MAX);
 
             filter_strategy = resolve_filter_strategy(
                 selectivity,
@@ -319,11 +344,24 @@ impl QueryPlan {
         if let Some(offset) = stmt.offset {
             nodes.push(PlanNode::Offset(OffsetPlan { count: offset }));
         }
-        if let Some(limit) = stmt.limit {
-            nodes.push(PlanNode::Limit(LimitPlan { count: limit }));
-        }
+        Self::push_limit_node(nodes, stmt, implicit_limit);
 
         filter_strategy
+    }
+
+    /// Pushes the Limit node for a statement.
+    ///
+    /// Without an explicit LIMIT, plain SELECT statements (`implicit_limit ==
+    /// true`) surface the engine default [`DEFAULT_SELECT_LIMIT`] so EXPLAIN
+    /// matches what execution actually returns. MATCH and compound queries
+    /// (`implicit_limit == false`) keep their unlimited semantics: no node.
+    fn push_limit_node(nodes: &mut Vec<PlanNode>, stmt: &SelectStatement, implicit_limit: bool) {
+        let (count, is_default) = match (stmt.limit, implicit_limit) {
+            (Some(limit), _) => (limit, false),
+            (None, true) => (DEFAULT_SELECT_LIMIT, true),
+            (None, false) => return,
+        };
+        nodes.push(PlanNode::Limit(LimitPlan { count, is_default }));
     }
 
     /// Analyzes a condition to extract vector search and filter info.

@@ -27,6 +27,8 @@ mod cross_collection;
 mod cross_collection_join_optimization;
 #[path = "bdd/ddl_lifecycle.rs"]
 mod ddl_lifecycle;
+#[path = "bdd/default_limit.rs"]
+mod default_limit;
 #[path = "bdd/dml_enhanced.rs"]
 mod dml_enhanced;
 #[path = "bdd/explain_analyze.rs"]

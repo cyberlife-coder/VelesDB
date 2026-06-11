@@ -2990,6 +2990,69 @@ async fn test_explain_endpoint() {
     assert!(json["features"].is_object());
 }
 
+#[tokio::test]
+async fn test_explain_select_without_limit_exposes_default_limit_step() {
+    let temp_dir = TempDir::new().unwrap();
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "explain_nolimit",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // SELECT without LIMIT: the engine default (10) must surface as a Limit step.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query/explain")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "SELECT * FROM explain_nolimit"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    let plan = json["plan"].as_array().unwrap();
+    let limit_step = plan
+        .iter()
+        .find(|step| step["operation"] == "Limit")
+        .expect("implicit default LIMIT must appear as a plan step");
+    assert_eq!(limit_step["estimated_rows"], 10);
+    let description = limit_step["description"].as_str().unwrap();
+    assert!(
+        description.contains("LIMIT 10 (default)"),
+        "description must flag the engine default: {description}"
+    );
+}
+
 // ============================================================================
 // GuardRails — rate limit (429)
 // ============================================================================

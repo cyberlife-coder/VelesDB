@@ -1316,7 +1316,20 @@ SELECT * FROM docs LIMIT 10
 SELECT * FROM docs LIMIT 10 OFFSET 20
 ```
 
-Always specify `LIMIT` for vector search queries to bound the result set.
+**Default LIMIT.** Unlike standard SQL, VelesQL applies `LIMIT 10` by default
+to every SELECT statement that has no explicit `LIMIT` clause — vector NEAR,
+sparse, scalar-filter, and hybrid forms alike. VelesQL is ANN-first: a SELECT
+is a top-k retrieval, so an unbounded default would defeat top-k vector search.
+`EXPLAIN` surfaces the implicit limit as `Limit: 10 (default)`.
+
+Exceptions (no implicit limit):
+
+- `MATCH ... RETURN` graph queries return all matching rows;
+- compound queries (`UNION` / `INTERSECT` / `EXCEPT`) evaluate their operands
+  exhaustively; only an explicit outer `LIMIT` caps the merged result.
+
+Always specify `LIMIT` explicitly — both to bound vector search and for
+exhaustive retrieval beyond the default 10 rows.
 
 ---
 
@@ -2766,7 +2779,7 @@ SELECT id AS `select` FROM docs
 
 | Feature | Default | Notes |
 |---------|---------|-------|
-| LIMIT | No limit (all results) | Always specify LIMIT for vector search |
+| LIMIT | 10 (every SELECT form) | Exceptions: `MATCH ... RETURN` and compound queries (UNION/INTERSECT/EXCEPT) have no default. Always specify LIMIT for exhaustive retrieval |
 | OFFSET | 0 | |
 | ORDER BY direction | ASC | Explicit DESC recommended for similarity |
 | metric (CREATE) | cosine | |

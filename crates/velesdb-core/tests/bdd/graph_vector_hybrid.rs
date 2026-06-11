@@ -192,6 +192,80 @@ fn test_showcase_bare_from_alias_near_match_executes() {
     assert_eq!(ids, as_ids, "bare alias must behave exactly like AS alias");
 }
 
+/// Creates a "documents" collection of 20 docs with decreasing similarity to
+/// `[1, 0, 0, 0]`, where ids 1..=16 cite id 20 (ids 17..=20 cite nothing).
+fn setup_documents_with_16_citing(db: &Database) {
+    db.create_vector_collection("documents", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create documents collection");
+    let vc = db
+        .get_vector_collection("documents")
+        .expect("test: get documents collection");
+    let points: Vec<Point> = (1..=20u8)
+        .map(|i| {
+            Point::new(
+                u64::from(i),
+                vec![1.0, f32::from(i) * 0.01, 0.0, 0.0],
+                Some(json!({"title": format!("doc-{i}")})),
+            )
+        })
+        .collect();
+    vc.upsert(points).expect("test: upsert documents");
+    for (edge_id, source) in (400u64..).zip(1u64..=16) {
+        let edge = GraphEdge::new(edge_id, source, 20, "CITES").expect("test: create edge");
+        vc.add_edge(edge).expect("test: add CITES edge");
+    }
+}
+
+/// GIVEN 20 documents of which 16 cite another document
+/// WHEN running showcase query #2 verbatim WITHOUT a LIMIT clause
+/// THEN exactly 10 rows come back (engine default LIMIT 10), and with an
+///      explicit `LIMIT 15` all 15 best citing docs come back — proving the
+///      MATCH anchor set is exhaustive and nothing was lost upstream of the
+///      final truncation.
+#[test]
+fn test_showcase_near_match_without_limit_defaults_to_10() {
+    let (_dir, db) = create_test_db();
+    setup_documents_with_16_citing(&db);
+
+    let sql = "SELECT doc.*, similarity() FROM documents doc \
+               WHERE vector NEAR $query AND MATCH (doc)-[:CITES]->(ref) \
+               ORDER BY similarity() DESC";
+    let mut params = std::collections::HashMap::new();
+    params.insert(
+        "query".to_string(),
+        json!([1.0_f32, 0.0_f32, 0.0_f32, 0.0_f32]),
+    );
+
+    let results =
+        execute_sql_with_params(&db, sql, &params).expect("showcase query #2 must execute");
+    assert_eq!(
+        results.len(),
+        10,
+        "no LIMIT clause: engine default LIMIT 10 must apply"
+    );
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        ids,
+        (1..=10u64).collect::<Vec<_>>(),
+        "the 10 most similar citing docs must be kept, in similarity order"
+    );
+
+    let with_limit = format!("{sql} LIMIT 15");
+    let results = execute_sql_with_params(&db, &with_limit, &params)
+        .expect("showcase query #2 with LIMIT 15 must execute");
+    assert_eq!(
+        results.len(),
+        15,
+        "LIMIT 15 must be filled: MATCH anchors are exhaustive, no upstream loss"
+    );
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        ids,
+        (1..=15u64).collect::<Vec<_>>(),
+        "rows 11..=15 must be the next most similar citing docs"
+    );
+}
+
 // =========================================================================
 // B. Completeness: graph MATCH without NEAR must scan past the ranked
 //    over-fetch window (regression: graph_overfetch_limit applied to

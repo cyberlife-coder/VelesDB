@@ -236,7 +236,8 @@ FLUSH FULL docs;
 
 | Limit | Default |
 |---|---|
-| Max results per query | 10 000 |
+| LIMIT when omitted (any SELECT) | 10 — no default for `MATCH ... RETURN` and UNION/INTERSECT/EXCEPT |
+| Max results per query | 100 000 |
 | Query timeout | configurable (`search.query_timeout_ms`) |
 | Max groups per GROUP BY | 10 000 |
 | Max payload size | configurable (`limits.max_payload_size`) |

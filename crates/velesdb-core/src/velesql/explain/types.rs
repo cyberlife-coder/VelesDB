@@ -100,6 +100,11 @@ pub struct FilterPlan {
 pub struct LimitPlan {
     /// Maximum number of results.
     pub count: u64,
+    /// `true` when the query has no explicit `LIMIT` clause and the engine
+    /// default ([`DEFAULT_SELECT_LIMIT`](crate::velesql::DEFAULT_SELECT_LIMIT))
+    /// applies.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_default: bool,
 }
 
 /// Offset plan details.

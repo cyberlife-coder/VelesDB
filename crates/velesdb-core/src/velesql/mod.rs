@@ -254,6 +254,8 @@ pub use ast::{
     WithClause,
     WithOption,
     WithValue,
+    // Implicit LIMIT contract (every SELECT without LIMIT)
+    DEFAULT_SELECT_LIMIT,
 };
 pub use graph_pattern::*;
 // Re-export match_clause parser functions for benchmarks

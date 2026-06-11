@@ -673,22 +673,28 @@ WITH (ef_search = 512);
 
 ```
 velesdb> \set mode balanced
-Search mode set to: Balanced (ef_search=128)
+mode = balanced
 
 velesdb> \set ef_search 256
-ef_search set to: 256
+ef_search = 256
 
 velesdb> \show
-┌─────────────────┬──────────┐
-│ Setting         │ Value    │
-├─────────────────┼──────────┤
-│ mode            │ Balanced │
-│ ef_search       │ 256      │
-│ default_limit   │ 10       │
-└─────────────────┴──────────┘
+
+Session Settings
+  mode = balanced
+  ef_search = 256
+  timeout_ms = 30000
+  rerank = true
+  max_results = 100
+  collection = (none)
 
 velesdb> SELECT * FROM products WHERE vector NEAR $v LIMIT 10;
 ```
+
+> Note : `max_results` est un réglage d'affichage du REPL. Indépendamment du
+> CLI, le moteur applique `LIMIT 10` par défaut à tout SELECT sans clause
+> `LIMIT` explicite (exceptions : `MATCH ... RETURN` et les requêtes
+> UNION/INTERSECT/EXCEPT, sans défaut).
 
 ---
 

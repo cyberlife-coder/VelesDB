@@ -39,11 +39,13 @@ impl Collection {
 
     /// Computes the effective `(limit, fetch_limit)` from a SELECT statement.
     ///
-    /// `limit` is the final row count requested by the user (capped at [`MAX_LIMIT`]).
+    /// `limit` is the final row count requested by the user (capped at [`MAX_LIMIT`]);
+    /// without an explicit LIMIT clause the engine default
+    /// [`DEFAULT_SELECT_LIMIT`](crate::velesql::DEFAULT_SELECT_LIMIT) applies.
     /// `fetch_limit` adds the OFFSET so that post-processing can skip rows and still
     /// return `limit` results.
     pub(super) fn compute_fetch_limit(stmt: &crate::velesql::SelectStatement) -> (usize, usize) {
-        let limit = usize::try_from(stmt.limit.unwrap_or(10))
+        let limit = usize::try_from(stmt.limit.unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT))
             .unwrap_or(MAX_LIMIT)
             .min(MAX_LIMIT);
         let offset_val = stmt
