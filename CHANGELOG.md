@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so rows are distinguishable by edge identity.
 
 ### Added
+- **GraphFirst anchored fetch — exhaustive hybrid retrieval**: `MATCH (...)`
+  predicates that are AND-required by a SELECT WHERE clause are now evaluated
+  FIRST; retrieval happens within their anchor sets and is exhaustive (a
+  matching row is returned no matter how it ranks globally). Covers
+  `vector NEAR` (exact scoring up to 10K anchors, bitmap-filtered HNSW
+  beyond), metadata-only, sparse-only (per-id index filter, exact at LIMIT),
+  and `NOT similarity()` shapes. Residual shapes (OR/NOT-wrapped predicates,
+  `similarity()` cascades, text/hybrid fusion) keep the bounded window,
+  now documented per shape. Anchor sets are evaluated once and shared with
+  the exact WHERE post-filter.
 - **Durable post-hoc TTL setters for agent memory**: Result-returning
   `set_semantic_ttl_durable` / `set_episodic_ttl_durable` /
   `set_procedural_ttl_durable` on `AgentMemory` (and `set_ttl_durable` on each

@@ -10,6 +10,13 @@ use crate::error::Result;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 
+/// Inverted-similarity threshold bundle for the NOT-similarity scan.
+struct NotSimilarityThreshold {
+    op: crate::velesql::CompareOp,
+    value: f32,
+    higher_is_better: bool,
+}
+
 impl Collection {
     /// Filter search results by similarity threshold.
     ///
@@ -87,16 +94,28 @@ impl Collection {
     ///
     /// **Performance Warning**: This requires scanning ALL documents.
     /// Always use with LIMIT for acceptable performance.
-    pub(crate) fn execute_not_similarity_query(
+    /// With `candidates` (GraphFirst anchor ids), only those ids are
+    /// scanned, so the fetch is exact at `limit` within the graph matches;
+    /// `None` scans the whole collection.
+    pub(crate) fn execute_not_similarity_query_over(
         &self,
         condition: &crate::velesql::Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
         limit: usize,
+        candidates: Option<&std::collections::HashSet<u64>>,
     ) -> Result<Vec<SearchResult>> {
         let (sim_field, sim_vec, sim_op, sim_threshold) =
             self.extract_not_similarity_condition(condition, params)?;
 
-        let total_count = self.vector_storage.read().ids().len();
+        let all_ids = match candidates {
+            Some(ids) => {
+                let mut sorted: Vec<u64> = ids.iter().copied().collect();
+                sorted.sort_unstable();
+                sorted
+            }
+            None => self.vector_storage.read().ids(),
+        };
+        let total_count = all_ids.len();
         Self::guard_not_similarity_scan(total_count)?;
         Self::warn_large_scan(total_count, limit);
 
@@ -109,39 +128,64 @@ impl Collection {
         #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
         let threshold_f32 = sim_threshold as f32;
         let mut results = Vec::new();
-        let all_ids = self.vector_storage.read().ids();
 
+        let threshold = NotSimilarityThreshold {
+            op: sim_op,
+            value: threshold_f32,
+            higher_is_better,
+        };
         for id in all_ids {
-            let Some(vector) = self.retrieve_vector_for_scan(id, &sim_field) else {
-                continue;
-            };
-            let score = self.compute_metric_score(&vector, &sim_vec);
-
-            let excluded = Self::compare_similarity(score, threshold_f32, sim_op, higher_is_better);
-            if excluded {
-                continue;
-            }
-
-            let payload = self.payload_storage.read().retrieve(id).ok().flatten();
-            if !Self::passes_metadata_filter(filter.as_ref(), payload.as_ref()) {
-                continue;
-            }
-
-            results.push(SearchResult::new(
-                Point {
-                    id,
-                    vector,
-                    payload,
-                    sparse_vectors: None,
-                },
-                score,
-            ));
-            if results.len() >= limit {
-                break;
+            if let Some(result) = self.eval_not_similarity_candidate(
+                id,
+                &sim_field,
+                &sim_vec,
+                &threshold,
+                filter.as_ref(),
+            ) {
+                results.push(result);
+                if results.len() >= limit {
+                    break;
+                }
             }
         }
 
         Ok(results)
+    }
+
+    /// Evaluates one candidate id for the NOT-similarity scan: returns the
+    /// hydrated result when it passes both the inverted similarity threshold
+    /// and the metadata filter.
+    fn eval_not_similarity_candidate(
+        &self,
+        id: u64,
+        sim_field: &str,
+        sim_vec: &[f32],
+        threshold: &NotSimilarityThreshold,
+        filter: Option<&crate::filter::Filter>,
+    ) -> Option<SearchResult> {
+        let vector = self.retrieve_vector_for_scan(id, sim_field)?;
+        let score = self.compute_metric_score(&vector, sim_vec);
+        if Self::compare_similarity(
+            score,
+            threshold.value,
+            threshold.op,
+            threshold.higher_is_better,
+        ) {
+            return None; // excluded by the NOT-similarity threshold
+        }
+        let payload = self.payload_storage.read().retrieve(id).ok().flatten();
+        if !Self::passes_metadata_filter(filter, payload.as_ref()) {
+            return None;
+        }
+        Some(SearchResult::new(
+            Point {
+                id,
+                vector,
+                payload,
+                sparse_vectors: None,
+            },
+            score,
+        ))
     }
 
     /// Compares a similarity score against a threshold using the given operator.

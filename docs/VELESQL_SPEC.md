@@ -935,17 +935,24 @@ WHERE category = 'tech' AND MATCH (ctx)-[:REL]->(x)
 LIMIT 10
 ```
 
-**Execution note (over-fetch window).** When a graph predicate is combined with
-a ranked fetch (`vector NEAR` or a `similarity()` threshold), the engine
-over-fetches vector candidates before applying the graph filter: it retrieves
-up to `max(LIMIT, min(LIMIT × 10, 10 000))` candidates and keeps those that
-satisfy the pattern. Rows that match the graph pattern but rank beyond this
-candidate window are not returned. If the graph filter is highly selective,
-increase `LIMIT` to widen the window. Without a ranked fetch (graph predicate
-alone, or combined with metadata filters only), the engine instead scans up to
-100 000 candidates in storage order before applying the graph filter: results
-are exhaustive for collections up to 100 000 points; beyond that bound,
-pattern-matching rows are not returned (unchanged from previous releases).
+**Execution note (GraphFirst anchored fetch).** When every `MATCH (...)`
+predicate is AND-required by the WHERE clause (not wrapped in `OR`/`NOT`),
+the engine evaluates the graph patterns FIRST and fetches *within* their
+anchor sets — retrieval is then **exhaustive**: a matching row is returned no
+matter how it ranks globally. This covers `vector NEAR` (anchor sets up to
+10 000 ids are scored exactly; larger ones go through the bitmap-filtered
+HNSW path), metadata-only fetches (the anchors are hydrated directly),
+sparse-only fetches (anchors feed the sparse index's per-id filter), and
+`NOT similarity()` scans (restricted to the anchors).
+
+**Execution note (over-fetch window, residual shapes).** Query shapes that
+cannot use the anchored fetch keep the windowed execution: graph predicates
+under `OR`/`NOT`, combinations with a `similarity()` threshold cascade, BM25
+text `MATCH` fusion, or hybrid dense+sparse fusion. There, a ranked fetch
+retrieves up to `max(LIMIT, min(LIMIT × 10, 10 000))` candidates and keeps
+those that satisfy the pattern (rows ranked beyond the window are not
+returned — increase `LIMIT` to widen it); unranked shapes scan up to 100 000
+candidates in storage order.
 
 ### Vector Search with Filters
 

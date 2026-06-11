@@ -39,6 +39,8 @@ mod explain_cost_calibrated;
 mod flush_operations;
 #[path = "bdd/geo_distance.rs"]
 mod geo_distance;
+#[path = "bdd/graph_anchor_prefilter.rs"]
+mod graph_anchor_prefilter;
 #[path = "bdd/graph_queries.rs"]
 mod graph_queries;
 #[path = "bdd/graph_vector_hybrid.rs"]

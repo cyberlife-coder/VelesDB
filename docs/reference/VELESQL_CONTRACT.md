@@ -72,13 +72,15 @@ Rules:
   `FROM`/`JOIN` clauses declare aliases, the anchor alias must be one of them.
   Violations fail validation with error code `V011`. When `FROM` has no alias,
   any anchor alias is accepted.
-- Execution note: combined with `vector NEAR` (or a `similarity()` threshold),
-  graph predicates are applied as a filter over an over-fetched candidate
-  window of `max(LIMIT, min(LIMIT × 10, 10 000))` ranked vector candidates;
-  pattern-matching rows ranked beyond that window are not returned. Without a
-  ranked fetch, the candidate scan is bounded at 100 000 points (storage
-  order); collections larger than that may miss pattern-matching rows beyond
-  the bound (unchanged from previous releases).
+- Execution note: graph predicates that are AND-required by the WHERE clause
+  take the GraphFirst anchored fetch — the pattern is evaluated first and
+  retrieval is exhaustive within its anchor set (NEAR, metadata-only,
+  sparse-only and `NOT similarity()` shapes). Residual shapes (predicates
+  under `OR`/`NOT`, `similarity()` cascades, BM25 text-`MATCH` fusion, hybrid
+  dense+sparse fusion) keep the windowed execution: a ranked fetch filters an
+  over-fetched window of `max(LIMIT, min(LIMIT × 10, 10 000))` candidates
+  (rows ranked beyond it are not returned); unranked shapes scan up to
+  100 000 points in storage order.
 
 Success response shape:
 
