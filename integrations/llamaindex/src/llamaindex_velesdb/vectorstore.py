@@ -373,9 +373,9 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         # is >= the first fixed release. Not a SQL engine — VelesQL only,
         # and collection_name is validated at construction ([a-zA-Z0-9_-]+).
         escaped = ref_doc_id.replace("'", "''")
-        query_str = (  # nosec B608  # identifier regex-validated; value quote-escaped + validate_query'd
-            f"SELECT * FROM {self.collection_name} "
-            f"WHERE ref_doc_id = '{escaped}' LIMIT {_REF_DOC_SCAN_BATCH}"
+        query_str = (
+            f"SELECT * FROM {self.collection_name} "  # nosec B608  # identifier regex-validated
+            f"WHERE ref_doc_id = '{escaped}' LIMIT {_REF_DOC_SCAN_BATCH}"  # nosec B608  # value quote-escaped + validate_query'd
         )
         validate_query(query_str)
         while True:
