@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-episodic-older-than"
+description = "Enables the episodic_older_than command without any pre-configured scope."
+commands.allow = ["episodic_older_than"]
+
+[[permission]]
+identifier = "deny-episodic-older-than"
+description = "Denies the episodic_older_than command without any pre-configured scope."
+commands.deny = ["episodic_older_than"]

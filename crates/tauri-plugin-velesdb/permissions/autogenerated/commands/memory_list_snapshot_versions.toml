@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-memory-list-snapshot-versions"
+description = "Enables the memory_list_snapshot_versions command without any pre-configured scope."
+commands.allow = ["memory_list_snapshot_versions"]
+
+[[permission]]
+identifier = "deny-memory-list-snapshot-versions"
+description = "Denies the memory_list_snapshot_versions command without any pre-configured scope."
+commands.deny = ["memory_list_snapshot_versions"]

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-episodic-recall-similar"
+description = "Enables the episodic_recall_similar command without any pre-configured scope."
+commands.allow = ["episodic_recall_similar"]
+
+[[permission]]
+identifier = "deny-episodic-recall-similar"
+description = "Denies the episodic_recall_similar command without any pre-configured scope."
+commands.deny = ["episodic_recall_similar"]

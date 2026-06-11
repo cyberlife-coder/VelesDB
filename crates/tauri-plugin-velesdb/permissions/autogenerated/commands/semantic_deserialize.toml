@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-semantic-deserialize"
+description = "Enables the semantic_deserialize command without any pre-configured scope."
+commands.allow = ["semantic_deserialize"]
+
+[[permission]]
+identifier = "deny-semantic-deserialize"
+description = "Denies the semantic_deserialize command without any pre-configured scope."
+commands.deny = ["semantic_deserialize"]
