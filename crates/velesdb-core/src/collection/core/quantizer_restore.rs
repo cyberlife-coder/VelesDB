@@ -46,6 +46,18 @@ impl Collection {
         let Some(mut pq) = ProductQuantizer::load_codebook(&self.path)? else {
             return Ok(());
         };
+        // Warn-and-degrade like the RaBitQ restore below: a stale or foreign
+        // codebook would fail to encode every vector (empty cache + silent
+        // f32 fallback), so reject it once here instead.
+        let dimension = self.config.read().dimension;
+        if pq.codebook.dimension != dimension {
+            tracing::warn!(
+                codebook_dim = pq.codebook.dimension,
+                collection_dim = dimension,
+                "codebook.pq dimension does not match the collection; quantizer not installed"
+            );
+            return Ok(());
+        }
         // codebook.pq serializes the rotation when trained via OPQ; the
         // standalone rotation.opq artifact covers codebooks saved without it.
         if pq.rotation.is_none() {

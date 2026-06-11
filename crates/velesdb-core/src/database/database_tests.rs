@@ -790,6 +790,48 @@ fn test_train_rabitq_survives_reopen_beyond_lazy_threshold() {
     );
 }
 
+/// A `codebook.pq` whose dimension does not match the collection must be
+/// rejected at open with a single warning (clean f32 fallback) instead of
+/// silently producing an empty PQ cache via per-vector encode failures.
+#[test]
+fn test_foreign_pq_codebook_dimension_rejected_on_open() {
+    let dir = tempdir().unwrap();
+    {
+        let db = Database::open(dir.path()).unwrap();
+        db.create_collection_with_options(
+            "pq_mismatch",
+            16,
+            DistanceMetric::Euclidean,
+            StorageMode::ProductQuantization,
+        )
+        .unwrap();
+        seed_sin_vectors(&db, "pq_mismatch", 16, 50);
+        assert_eq!(db.flush_all(), 0, "flush before reopen must succeed");
+
+        // Plant a foreign 32-dim codebook into the collection directory
+        // AFTER the flush so nothing overwrites it.
+        let coll = db.resolve_writable_collection("pq_mismatch").unwrap();
+        let foreign: Vec<Vec<f32>> = (0..64).map(|i| sin_vector(32, i)).collect();
+        let pq = crate::quantization::ProductQuantizer::train(&foreign, 4, 16).unwrap();
+        pq.save_codebook(coll.data_path()).unwrap();
+    }
+
+    let db = Database::open(dir.path()).unwrap();
+    let coll = db.resolve_writable_collection("pq_mismatch").unwrap();
+    assert!(
+        coll.pq_quantizer_read().is_none(),
+        "mismatched codebook must not be installed"
+    );
+    assert_eq!(
+        coll.pq_cache_len(),
+        0,
+        "no PQ cache must be rebuilt from a foreign codebook"
+    );
+    // Search keeps working on the exact f32 path.
+    let results = coll.search(&sin_vector(16, 7), 5).unwrap();
+    assert!(!results.is_empty(), "f32 fallback search must keep working");
+}
+
 /// A lazily-trained `RaBitQ` quantizer (1000-insert threshold, no explicit
 /// `TRAIN QUANTIZER`) must be persisted to `rabitq.idx` by the full flush and
 /// reinstalled on reopen, instead of silently degrading to f32 search

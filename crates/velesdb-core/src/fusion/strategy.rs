@@ -423,7 +423,11 @@ impl FusionStrategy {
     /// # Errors
     ///
     /// Returns [`FusionError::WeightCountMismatch`] if `weights.len()` ≠
-    /// `branches.len()`.
+    /// `branches.len()`, or [`FusionError::NegativeWeight`] if any weight is
+    /// negative or `k` ≤ 0. Validation runs here as well as in the
+    /// `weighted_rrf()` constructor so that direct enum-literal construction
+    /// cannot bypass it (same rationale as `fuse_weighted`) — `k = 0` with a
+    /// rank-0 hit would otherwise produce an infinite score.
     #[allow(clippy::cast_precision_loss)]
     // Reason: rank and k are small positive values; f32 is sufficient.
     fn fuse_weighted_rrf(
@@ -431,6 +435,10 @@ impl FusionStrategy {
         weights: &[f32],
         k: f32,
     ) -> Result<Vec<(u64, f32)>, FusionError> {
+        validate_non_negative(weights)?;
+        if k <= 0.0 {
+            return Err(FusionError::NegativeWeight { weight: k });
+        }
         if weights.len() != branches.len() {
             return Err(FusionError::WeightCountMismatch {
                 weights: weights.len(),

@@ -695,6 +695,29 @@ fn test_weighted_rrf_zero_k_rejected_at_construction() {
 }
 
 #[test]
+fn test_weighted_rrf_enum_literal_zero_k_rejected_at_fuse() {
+    // Direct enum-literal construction bypasses the `weighted_rrf()`
+    // constructor: fuse() must revalidate, or k=0 with a rank-0 hit would
+    // produce an infinite score.
+    let strategy = FusionStrategy::WeightedRRF {
+        weights: vec![1.0],
+        k: 0.0,
+    };
+    let err = strategy.fuse(vec![vec![(1u64, 0.9)]]).unwrap_err();
+    assert!(matches!(err, FusionError::NegativeWeight { .. }));
+}
+
+#[test]
+fn test_weighted_rrf_enum_literal_negative_weight_rejected_at_fuse() {
+    let strategy = FusionStrategy::WeightedRRF {
+        weights: vec![-0.5],
+        k: 60.0,
+    };
+    let err = strategy.fuse(vec![vec![(1u64, 0.9)]]).unwrap_err();
+    assert!(matches!(err, FusionError::NegativeWeight { .. }));
+}
+
+#[test]
 fn test_weighted_rrf_empty_branches_returns_empty() {
     let strategy = FusionStrategy::weighted_rrf(vec![], 60.0).unwrap();
     let fused = strategy.fuse(vec![]).unwrap();
