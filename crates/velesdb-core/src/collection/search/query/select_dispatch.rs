@@ -191,7 +191,6 @@ impl Collection {
         let execution_limit = main_select_execution_limit(extracted, limit);
         let search_opts = super::QuerySearchOptions::from_with_clause(stmt.with_clause.as_ref())
             .with_fusion(stmt.fusion_clause.clone());
-        let first_similarity = extracted.similarity_conditions.first().cloned();
         let (cbo_strategy, cbo_over_fetch) =
             self.compute_cbo_strategy(stmt, extracted.filter_condition.as_ref(), limit);
 
@@ -199,31 +198,82 @@ impl Collection {
         // evaluated FIRST so retrieval is exhaustive within the graph
         // matches instead of bounded by an over-fetch window. The cache
         // carries the computed anchor sets into the exact post-filter.
+        //
+        // When ORDER BY similarity() is present without a NEAR vector,
+        // fetch_anchor_candidates must see enough candidates to surface the
+        // most similar anchors — not just the first `limit` in insertion
+        // order. Over-fetch 10× (capped at 10 000) so ORDER BY can select
+        // the true top-k from the anchor set.
         let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
-        let anchored = self.try_anchored_fetch(stmt, params, extracted, limit, &mut graph_cache)?;
+        let anchor_fetch_limit = anchor_fetch_limit(stmt, extracted, limit);
+        let anchored = self.try_anchored_fetch(
+            stmt,
+            params,
+            extracted,
+            anchor_fetch_limit,
+            &mut graph_cache,
+        )?;
 
-        let mut results = match anchored {
-            Some(results) => results,
-            None => self
-                .dispatch_vector_query(
-                    extracted.vector_search.as_ref(),
-                    first_similarity.as_ref(),
-                    &extracted.similarity_conditions,
-                    extracted.filter_condition.as_ref(),
-                    execution_limit,
-                    skip_metadata_prefilter_for_graph_or,
-                    &search_opts,
-                    cbo_strategy,
-                    cbo_over_fetch,
-                )
-                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?,
-        };
+        let mut results = self.resolve_initial_results(
+            anchored,
+            stmt,
+            params,
+            extracted,
+            execution_limit,
+            skip_metadata_prefilter_for_graph_or,
+            &search_opts,
+            cbo_strategy,
+            cbo_over_fetch,
+            &mut graph_cache,
+        )?;
 
         if has_graph_predicates {
             results = self.post_filter_graph_where(stmt, params, results, &mut graph_cache)?;
         }
 
         Ok(results)
+    }
+
+    /// Resolves the initial result set from the anchored, hybrid-anchored,
+    /// or fallback vector-query path.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_initial_results(
+        &self,
+        anchored: Option<Vec<SearchResult>>,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        extracted: &ExtractedComponents,
+        execution_limit: usize,
+        skip_metadata_prefilter_for_graph_or: bool,
+        search_opts: &super::QuerySearchOptions,
+        cbo_strategy: crate::velesql::ExecutionStrategy,
+        cbo_over_fetch: usize,
+        graph_cache: &mut super::where_eval::GraphMatchEvalCache,
+    ) -> Result<Vec<SearchResult>> {
+        if let Some(results) = anchored {
+            return Ok(results);
+        }
+        // Anchored hybrid: graph MATCH + text MATCH + NEAR vector.
+        // The standard anchored path skips text-MATCH shapes; handle
+        // them here by restricting hybrid fusion to the anchor set so
+        // relevant anchors outside the global top-K are not missed.
+        let hybrid_anchored =
+            self.try_anchored_hybrid_fetch(stmt, params, extracted, execution_limit, graph_cache)?;
+        if let Some(r) = hybrid_anchored {
+            return Ok(r);
+        }
+        self.dispatch_vector_query(
+            extracted.vector_search.as_ref(),
+            extracted.similarity_conditions.first(),
+            &extracted.similarity_conditions,
+            extracted.filter_condition.as_ref(),
+            execution_limit,
+            skip_metadata_prefilter_for_graph_or,
+            search_opts,
+            cbo_strategy,
+            cbo_over_fetch,
+        )
+        .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())
     }
 
     /// Applies the exact WHERE post-filter when graph predicates are present,
@@ -292,6 +342,73 @@ impl Collection {
             )?,
         };
         Ok(Some(results))
+    }
+
+    /// Anchored hybrid fetch for the `(graph MATCH ∧ text MATCH ∧ NEAR)` shape.
+    ///
+    /// The standard `try_anchored_fetch` skips this shape (text MATCH shapes
+    /// keep their own fusion pipeline). This path bridges the gap: it computes
+    /// graph anchor IDs and runs hybrid RRF fusion restricted to those IDs,
+    /// so relevant anchors outside the global top-K are not silently missed.
+    ///
+    /// Returns `Ok(None)` when the shape does not apply or anchors are
+    /// unavailable (falls through to the regular dispatch).
+    fn try_anchored_hybrid_fetch(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        extracted: &ExtractedComponents,
+        limit: usize,
+        graph_cache: &mut super::where_eval::GraphMatchEvalCache,
+    ) -> Result<Option<Vec<SearchResult>>> {
+        let (Some(vector), Some(cond)) =
+            (extracted.vector_search.as_ref(), stmt.where_clause.as_ref())
+        else {
+            return Ok(None);
+        };
+        if extracted.graph_match_predicates.is_empty() {
+            return Ok(None);
+        }
+        let Some(text_query) = Self::extract_match_query(cond) else {
+            return Ok(None);
+        };
+        // Only AND-required graph predicates justify anchor restriction.
+        if !Self::graph_predicates_are_and_required(cond) {
+            return Ok(None);
+        }
+        let Some(anchor_ids) =
+            self.compute_required_anchor_ids(cond, params, &stmt.from_alias, graph_cache)?
+        else {
+            return Ok(None);
+        };
+
+        let vector_weight = stmt
+            .fusion_clause
+            .as_ref()
+            .and_then(|fc| fc.vector_weight)
+            .map(|w| {
+                #[allow(clippy::cast_possible_truncation)]
+                let w_f32 = w as f32;
+                w_f32
+            });
+        let rrf_k = stmt.fusion_clause.as_ref().and_then(|fc| fc.k);
+
+        let results = self.hybrid_search_with_anchors(
+            vector,
+            &text_query,
+            limit,
+            vector_weight,
+            rrf_k,
+            &anchor_ids,
+        )?;
+        Ok(Some(results))
+    }
+
+    /// Returns `true` when the condition tree has no top-level OR wrapping the
+    /// graph MATCH predicates — i.e., graph predicates are AND-required and
+    /// anchor restriction is exhaustive.
+    fn graph_predicates_are_and_required(cond: &crate::velesql::Condition) -> bool {
+        !Self::condition_contains_or(cond)
     }
 
     /// Analyzes JOIN pushdown opportunities (EPIC-031 US-006).
@@ -487,6 +604,18 @@ fn main_select_execution_limit(extracted: &ExtractedComponents, limit: usize) ->
 fn graph_overfetch_limit(limit: usize) -> usize {
     const GRAPH_OVERFETCH_CAP: usize = 10_000;
     limit.max(limit.saturating_mul(10).min(GRAPH_OVERFETCH_CAP))
+}
+
+fn anchor_fetch_limit(
+    stmt: &crate::velesql::SelectStatement,
+    extracted: &ExtractedComponents,
+    limit: usize,
+) -> usize {
+    if Collection::has_order_by_similarity(stmt) && extracted.vector_search.is_none() {
+        graph_overfetch_limit(limit)
+    } else {
+        limit
+    }
 }
 
 /// Injects evaluated LET binding values into each result's payload.

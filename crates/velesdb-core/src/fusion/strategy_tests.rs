@@ -624,3 +624,140 @@ fn test_rsf_ignores_extra_branches_beyond_two() {
         );
     }
 }
+
+// =============================================================================
+// WeightedRRF tests (EPIC-040)
+// =============================================================================
+
+#[test]
+fn test_weighted_rrf_basic_two_branches() {
+    let strategy = FusionStrategy::weighted_rrf(vec![0.7, 0.3], 60.0).unwrap();
+    // Branch 0: doc 1 rank 0, doc 2 rank 1
+    // Branch 1: doc 2 rank 0, doc 3 rank 1
+    let results = vec![
+        vec![(1u64, 0.9), (2u64, 0.8)],
+        vec![(2u64, 0.85), (3u64, 0.7)],
+    ];
+    let fused = strategy.fuse(results).unwrap();
+
+    // doc 1: 0.7/(0+60) = 0.01167
+    // doc 2: 0.7/(1+60) + 0.3/(0+60) = 0.01148 + 0.005 = 0.01648
+    // doc 3: 0.3/(1+60) = 0.00492
+    // Expected order: doc2 > doc1 > doc3
+    assert_eq!(fused[0].0, 2, "doc2 highest (appears in both branches)");
+    assert_eq!(fused[1].0, 1, "doc1 second");
+    assert_eq!(fused[2].0, 3, "doc3 last");
+}
+
+#[test]
+fn test_weighted_rrf_scores_use_zero_based_ranks() {
+    let strategy = FusionStrategy::weighted_rrf(vec![1.0], 60.0).unwrap();
+    let results = vec![vec![(10u64, 0.0), (20u64, 0.0), (30u64, 0.0)]];
+    let fused = strategy.fuse(results).unwrap();
+
+    // rank 0: 1.0/60  rank 1: 1.0/61  rank 2: 1.0/62
+    let score_10 = fused.iter().find(|(id, _)| *id == 10).unwrap().1;
+    let score_20 = fused.iter().find(|(id, _)| *id == 20).unwrap().1;
+    let score_30 = fused.iter().find(|(id, _)| *id == 30).unwrap().1;
+
+    assert!((score_10 - 1.0 / 60.0).abs() < 1e-6, "rank-0 score");
+    assert!((score_20 - 1.0 / 61.0).abs() < 1e-6, "rank-1 score");
+    assert!((score_30 - 1.0 / 62.0).abs() < 1e-6, "rank-2 score");
+}
+
+#[test]
+fn test_weighted_rrf_weight_count_mismatch_is_error() {
+    let strategy = FusionStrategy::weighted_rrf(vec![0.5, 0.5], 60.0).unwrap();
+    let results = vec![vec![(1u64, 0.9)]]; // 1 branch but 2 weights
+    let err = strategy.fuse(results).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            FusionError::WeightCountMismatch {
+                weights: 2,
+                branches: 1
+            }
+        ),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_weighted_rrf_negative_weight_rejected_at_construction() {
+    let err = FusionStrategy::weighted_rrf(vec![0.7, -0.3], 60.0).unwrap_err();
+    assert!(matches!(err, FusionError::NegativeWeight { .. }));
+}
+
+#[test]
+fn test_weighted_rrf_zero_k_rejected_at_construction() {
+    let err = FusionStrategy::weighted_rrf(vec![0.5, 0.5], 0.0).unwrap_err();
+    assert!(matches!(err, FusionError::NegativeWeight { .. }));
+}
+
+#[test]
+fn test_weighted_rrf_empty_branches_returns_empty() {
+    let strategy = FusionStrategy::weighted_rrf(vec![], 60.0).unwrap();
+    let fused = strategy.fuse(vec![]).unwrap();
+    assert!(fused.is_empty());
+}
+
+#[test]
+fn test_weighted_rrf_duplicate_ids_within_branch_use_best_rank() {
+    // Doc 99 appears twice in branch 0; only rank 0 should count.
+    let strategy = FusionStrategy::weighted_rrf(vec![1.0], 60.0).unwrap();
+    let results = vec![vec![(99u64, 0.9), (99u64, 0.1)]];
+    let fused = strategy.fuse(results).unwrap();
+    // Should appear once with score = 1.0/60 (rank 0)
+    assert_eq!(fused.len(), 1);
+    assert!((fused[0].1 - 1.0 / 60.0).abs() < 1e-6);
+}
+
+#[test]
+fn test_weighted_rrf_doc_absent_from_branch_contributes_zero() {
+    // Doc 5 only in branch 1, doc 7 only in branch 0.
+    let strategy = FusionStrategy::weighted_rrf(vec![0.6, 0.4], 60.0).unwrap();
+    let results = vec![vec![(7u64, 0.9)], vec![(5u64, 0.9)]];
+    let fused = strategy.fuse(results).unwrap();
+
+    let score_7 = fused.iter().find(|(id, _)| *id == 7).unwrap().1;
+    let score_5 = fused.iter().find(|(id, _)| *id == 5).unwrap().1;
+    // doc7: 0.6/60  doc5: 0.4/60  → doc7 wins
+    assert!((score_7 - 0.6 / 60.0).abs() < 1e-6);
+    assert!((score_5 - 0.4 / 60.0).abs() < 1e-6);
+    assert!(score_7 > score_5);
+}
+
+#[test]
+fn test_weighted_rrf_result_sorted_descending() {
+    let strategy = FusionStrategy::weighted_rrf(vec![0.5, 0.5], 60.0).unwrap();
+    let results = vec![
+        vec![(1u64, 0.9), (2u64, 0.8), (3u64, 0.7)],
+        vec![(3u64, 0.95), (1u64, 0.85), (2u64, 0.75)],
+    ];
+    let fused = strategy.fuse(results).unwrap();
+    for w in fused.windows(2) {
+        assert!(w[0].1 >= w[1].1, "results must be sorted descending");
+    }
+}
+
+#[test]
+fn test_weighted_rrf_unequal_weights_change_ranking() {
+    // With equal weights doc1 (rank 0 in both) > doc2.
+    // With heavy weight on branch 1 where doc2 is rank 0, ranking may change.
+    let equal = FusionStrategy::weighted_rrf(vec![0.5, 0.5], 60.0).unwrap();
+    let biased = FusionStrategy::weighted_rrf(vec![0.1, 0.9], 60.0).unwrap();
+    let results = vec![
+        vec![(1u64, 0.9), (2u64, 0.5)], // branch 0: doc1 best
+        vec![(2u64, 0.9), (1u64, 0.5)], // branch 1: doc2 best
+    ];
+    let fused_equal = equal.fuse(results.clone()).unwrap();
+    let fused_biased = biased.fuse(results).unwrap();
+
+    // Equal weights: both docs appear rank-0 in one branch, so scores are symmetric.
+    assert!(
+        (fused_equal[0].1 - fused_equal[1].1).abs() < f32::EPSILON,
+        "equal weights → equal scores"
+    );
+    // Biased toward branch 1 where doc2 is rank-0 → doc2 wins.
+    assert_eq!(fused_biased[0].0, 2, "biased toward branch 1 → doc2 wins");
+}

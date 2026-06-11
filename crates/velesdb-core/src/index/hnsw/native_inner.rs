@@ -136,6 +136,16 @@ impl NativeHnswInner {
         }
     }
 
+    /// Returns the VAMANA alpha used by this backend's graph.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[must_use]
+    pub(crate) fn alpha(&self) -> f32 {
+        match &self.backend {
+            HnswBackend::Standard(g) => g.get_alpha(),
+            HnswBackend::RaBitQ(p) => p.inner.get_alpha(),
+        }
+    }
+
     /// Installs a pre-trained `RaBitQ` quantizer into the `RaBitQ` backend,
     /// re-encoding every stored vector in `NodeId` order.
     ///

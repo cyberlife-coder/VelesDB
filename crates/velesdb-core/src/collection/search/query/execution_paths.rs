@@ -138,12 +138,8 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         if let Some(text_query) = Self::extract_match_query(cond) {
             let fusion = search_opts.fusion_clause.as_ref();
-            let vector_weight = fusion.and_then(|fc| fc.vector_weight).map(|w| {
-                // Reason: f64 → f32 for API compat; weight is clamped 0.0–1.0.
-                #[allow(clippy::cast_possible_truncation)]
-                let w_f32 = w as f32;
-                w_f32
-            });
+            #[allow(clippy::cast_possible_truncation)]
+            let vector_weight = fusion.and_then(|fc| fc.vector_weight).map(|w| w as f32);
             let rrf_k = fusion.and_then(|fc| fc.k);
             // Bug #474: Extract co-occurring metadata filters (e.g. `category = 'tech'`)
             // before calling hybrid_search. Without this, metadata conditions alongside
@@ -170,14 +166,47 @@ impl Collection {
         }
         if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
             let filter = crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
-            return match cbo_strategy {
-                crate::velesql::ExecutionStrategy::GraphFirst => {
-                    Ok(self.scan_and_score_by_vector(&filter, vector, execution_limit))
-                }
-                _ => self.search_with_filter_and_opts(vector, cbo_search_k, &filter, search_opts),
-            };
+            return self.dispatch_vector_with_strategy(
+                vector,
+                &filter,
+                cbo_strategy,
+                cbo_search_k,
+                execution_limit,
+                search_opts,
+            );
         }
         self.search_with_opts(vector, execution_limit, search_opts)
+    }
+
+    /// Dispatches a filtered vector query according to the CBO strategy
+    /// (GraphFirst, Parallel, or the default VectorFirst path).
+    fn dispatch_vector_with_strategy(
+        &self,
+        vector: &[f32],
+        filter: &crate::filter::Filter,
+        cbo_strategy: crate::velesql::ExecutionStrategy,
+        cbo_search_k: usize,
+        execution_limit: usize,
+        search_opts: &QuerySearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        match cbo_strategy {
+            crate::velesql::ExecutionStrategy::GraphFirst => {
+                Ok(self.scan_and_score_by_vector(filter, vector, execution_limit))
+            }
+            crate::velesql::ExecutionStrategy::Parallel => {
+                let graph_results = self.scan_and_score_by_vector(filter, vector, execution_limit);
+                let vector_results =
+                    self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts)?;
+                let higher = self.config.read().metric.higher_is_better();
+                Ok(merge_select_parallel_results(
+                    graph_results,
+                    vector_results,
+                    higher,
+                    execution_limit,
+                ))
+            }
+            _ => self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts),
+        }
     }
 
     /// Handles the metadata-only (`(None, None, Some(cond))`) query path.
@@ -481,4 +510,42 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         self.search_with_opts(vector, execution_limit, search_opts)
     }
+}
+
+/// Merges GraphFirst and VectorFirst `SearchResult` sets for the SELECT Parallel
+/// path (sequential execution, union semantics — best score wins per ID).
+fn merge_select_parallel_results(
+    graph: Vec<SearchResult>,
+    vector: Vec<SearchResult>,
+    higher_is_better: bool,
+    limit: usize,
+) -> Vec<SearchResult> {
+    let mut by_id: rustc_hash::FxHashMap<u64, SearchResult> =
+        rustc_hash::FxHashMap::with_capacity_and_hasher(
+            graph.len() + vector.len(),
+            rustc_hash::FxBuildHasher,
+        );
+    for r in graph.into_iter().chain(vector) {
+        by_id
+            .entry(r.point.id)
+            .and_modify(|existing| {
+                let better = if higher_is_better {
+                    r.score > existing.score
+                } else {
+                    r.score < existing.score
+                };
+                if better {
+                    *existing = r.clone();
+                }
+            })
+            .or_insert(r);
+    }
+    let mut merged: Vec<SearchResult> = by_id.into_values().collect();
+    if higher_is_better {
+        merged.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
+    } else {
+        merged.sort_unstable_by(|a, b| a.score.total_cmp(&b.score));
+    }
+    merged.truncate(limit);
+    merged
 }

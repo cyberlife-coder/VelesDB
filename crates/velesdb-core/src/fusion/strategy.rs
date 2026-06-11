@@ -18,6 +18,13 @@ pub enum FusionError {
         /// The negative weight value.
         weight: f32,
     },
+    /// Weight slice length does not match the number of result branches.
+    WeightCountMismatch {
+        /// Number of weights provided.
+        weights: usize,
+        /// Number of branches passed to fuse.
+        branches: usize,
+    },
 }
 
 impl std::fmt::Display for FusionError {
@@ -29,6 +36,10 @@ impl std::fmt::Display for FusionError {
             Self::NegativeWeight { weight } => {
                 write!(f, "Weights must be non-negative, got {weight:.4}")
             }
+            Self::WeightCountMismatch { weights, branches } => write!(
+                f,
+                "WeightedRRF requires one weight per branch: {weights} weights for {branches} branches",
+            ),
         }
     }
 }
@@ -89,6 +100,26 @@ pub enum FusionStrategy {
         /// Weight for the sparse branch.
         sparse_weight: f32,
     },
+
+    /// Weighted Reciprocal Rank Fusion with 0-based ranks.
+    ///
+    /// Score for document `d` = Σᵢ `weights[i] / (rank_i(d) + k)` where
+    /// `rank_i` is the 0-based position of `d` in branch `i`, and `k` is a
+    /// smoothing constant (default 60.0).  Documents absent from a branch
+    /// contribute nothing from that branch.
+    ///
+    /// Unlike [`FusionStrategy::RRF`] (which is unweighted and uses 1-based
+    /// ranks), this variant gives explicit per-branch control and is the
+    /// correct strategy for hybrid dense + text search where branches carry
+    /// different retrieval precision characteristics.
+    WeightedRRF {
+        /// Per-branch non-negative weights; must equal the number of branches
+        /// passed to [`FusionStrategy::fuse`].
+        weights: Vec<f32>,
+        /// Smoothing constant (default 60.0). Higher values dampen the
+        /// advantage of the top rank.
+        k: f32,
+    },
 }
 
 impl FusionStrategy {
@@ -96,6 +127,19 @@ impl FusionStrategy {
     #[must_use]
     pub fn rrf_default() -> Self {
         Self::RRF { k: 60 }
+    }
+
+    /// Creates a `WeightedRRF` strategy with validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any weight is negative or `k` ≤ 0.
+    pub fn weighted_rrf(weights: Vec<f32>, k: f32) -> Result<Self, FusionError> {
+        validate_non_negative(&weights)?;
+        if k <= 0.0 {
+            return Err(FusionError::NegativeWeight { weight: k });
+        }
+        Ok(Self::WeightedRRF { weights, k })
     }
 
     /// Creates a `RelativeScore` strategy with validation.
@@ -182,6 +226,7 @@ impl FusionStrategy {
                 dense_weight,
                 sparse_weight,
             } => Self::fuse_relative_score(&results, *dense_weight, *sparse_weight),
+            Self::WeightedRRF { weights, k } => Self::fuse_weighted_rrf(results, weights, *k),
         }
     }
 
@@ -366,6 +411,48 @@ impl FusionStrategy {
         }
 
         let mut fused: Vec<(u64, f32)> = all_ids.into_iter().collect();
+        Self::sort_descending(&mut fused);
+        Ok(fused)
+    }
+
+    /// Weighted 0-based RRF: Σᵢ `weight_i / (rank_i + k)`.
+    ///
+    /// Rank is 0-based (top result has rank 0). Duplicate document IDs within a
+    /// branch are deduplicated — only the best (lowest) rank is used.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FusionError::WeightCountMismatch`] if `weights.len()` ≠
+    /// `branches.len()`.
+    #[allow(clippy::cast_precision_loss)]
+    // Reason: rank and k are small positive values; f32 is sufficient.
+    fn fuse_weighted_rrf(
+        branches: Vec<Vec<(u64, f32)>>,
+        weights: &[f32],
+        k: f32,
+    ) -> Result<Vec<(u64, f32)>, FusionError> {
+        if weights.len() != branches.len() {
+            return Err(FusionError::WeightCountMismatch {
+                weights: weights.len(),
+                branches: branches.len(),
+            });
+        }
+
+        let mut doc_scores: HashMap<u64, f32> = HashMap::new();
+
+        for (branch, &weight) in branches.into_iter().zip(weights.iter()) {
+            // Deduplicate within branch: keep only the best (first) rank.
+            let mut best_rank: HashMap<u64, usize> = HashMap::new();
+            for (rank, (id, _)) in branch.into_iter().enumerate() {
+                best_rank.entry(id).or_insert(rank);
+            }
+            for (id, rank) in best_rank {
+                let contribution = weight / (rank as f32 + k);
+                *doc_scores.entry(id).or_insert(0.0) += contribution;
+            }
+        }
+
+        let mut fused: Vec<(u64, f32)> = doc_scores.into_iter().collect();
         Self::sort_descending(&mut fused);
         Ok(fused)
     }

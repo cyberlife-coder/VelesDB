@@ -148,13 +148,14 @@ impl HnswIndex {
         params: HnswParams,
         enable_vector_storage: bool,
     ) -> Result<Self> {
-        let inner = HnswInner::new_with_storage_mode(
+        let inner = HnswInner::new_with_options(
             metric,
             params.max_connections,
             params.max_elements,
             params.ef_construction,
             dimension,
             params.storage_mode,
+            params.alpha,
         )?;
 
         let mappings = ShardedMappings::with_capacity(params.max_elements);

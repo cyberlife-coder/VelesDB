@@ -7,6 +7,65 @@ use crate::error::Result;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
+use std::collections::HashSet;
+
+/// Resolves `(weight, text_weight, rrf_constant)` from optional caller inputs.
+///
+/// `vector_weight` defaults to 0.5; `rrf_k` defaults to 60.
+#[allow(clippy::cast_precision_loss)]
+fn resolve_rrf_params(vector_weight: Option<f32>, rrf_k: Option<u32>) -> (f32, f32, f32) {
+    let w = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
+    // u32→f32: RRF k is typically 1–1000, lossless below 2^24.
+    let k = rrf_k.unwrap_or(60).max(1) as f32;
+    (w, 1.0 - w, k)
+}
+
+/// Validates the query vector dimension and resolves RRF parameters.
+///
+/// Returns `(metric, weight, text_weight, rrf_constant)`.
+fn validated_hybrid_params(
+    config: &parking_lot::RwLockReadGuard<'_, crate::collection::types::CollectionConfig>,
+    vector_query: &[f32],
+    vector_weight: Option<f32>,
+    rrf_k: Option<u32>,
+) -> Result<(crate::DistanceMetric, f32, f32, f32)> {
+    validate_dimension_match(config.dimension, vector_query.len())?;
+    let metric = config.metric;
+    let (weight, text_weight, rrf_constant) = resolve_rrf_params(vector_weight, rrf_k);
+    Ok((metric, weight, text_weight, rrf_constant))
+}
+
+/// Fetches vector + BM25 candidates and fuses them with weighted RRF.
+///
+/// Returns `(fused_scores, component_map)`. Both branches use `overfetch_k`
+/// candidates to ensure the top-k fused results are drawn from a deep enough
+/// candidate pool.
+#[allow(clippy::too_many_arguments)] // All args come from validated_hybrid_params + overfetch_k.
+fn compute_hybrid_scored(
+    collection: &Collection,
+    vector_query: &[f32],
+    text_query: &str,
+    overfetch_k: usize,
+    metric: crate::DistanceMetric,
+    weight: f32,
+    text_weight: f32,
+    rrf_constant: f32,
+) -> (
+    rustc_hash::FxHashMap<u64, f32>,
+    rustc_hash::FxHashMap<u64, (f32, f32)>,
+) {
+    use crate::index::VectorIndex;
+    let raw = collection.index.search(vector_query, overfetch_k);
+    let vec_res = collection.merge_delta(raw, vector_query, overfetch_k, metric);
+    let text_res = collection.text_index.search(text_query, overfetch_k);
+    Collection::compute_rrf_scores_with_components(
+        &vec_res,
+        &text_res,
+        weight,
+        text_weight,
+        rrf_constant,
+    )
+}
 
 /// Attaches RRF component scores to a `SearchResult` from the component map.
 fn attach_rrf_components(
@@ -143,28 +202,17 @@ impl Collection {
         vector_weight: Option<f32>,
         rrf_k: Option<u32>,
     ) -> Result<Vec<SearchResult>> {
-        use crate::index::VectorIndex;
-
         let config = self.config.read();
-        validate_dimension_match(config.dimension, vector_query.len())?;
-        let metric = config.metric;
+        let (metric, weight, text_weight, rrf_constant) =
+            validated_hybrid_params(&config, vector_query, vector_weight, rrf_k)?;
         drop(config);
 
-        let weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
-        let text_weight = 1.0 - weight;
-        // Reason: RRF k is typically 1–1000; u32→f32 is lossless below 2^24.
-        #[allow(clippy::cast_precision_loss)]
-        let rrf_constant = rrf_k.unwrap_or(60).max(1) as f32;
-
-        let overfetch_k = k * 2;
-        let raw_vector_results = self.index.search(vector_query, overfetch_k);
-        let vector_results =
-            self.merge_delta(raw_vector_results, vector_query, overfetch_k, metric);
-        let text_results = self.text_index.search(text_query, k * 2);
-
-        let (fused_scores, component_map) = Self::compute_rrf_scores_with_components(
-            &vector_results,
-            &text_results,
+        let (fused_scores, component_map) = compute_hybrid_scored(
+            self,
+            vector_query,
+            text_query,
+            k * 2,
+            metric,
             weight,
             text_weight,
             rrf_constant,
@@ -181,11 +229,11 @@ impl Collection {
     ///
     /// Returns `(fused_scores, component_map)` where `component_map` maps each
     /// point ID to its individual `(vector_rrf, bm25_rrf)` contributions.
-    // TODO(EPIC-040): unify with fusion::FusionStrategy once it gains a weighted,
-    // 0-based RRF entry point. The current FusionStrategy::fuse_rrf is unweighted
-    // and 1-based (1/(k+rank+1)), whereas this hybrid uses per-branch weights and
-    // 0-based ranks (weight/(rank+k)); delegating today would change every fused
-    // score and break the hybrid_compositions regression guards.
+    // EPIC-040: FusionStrategy::WeightedRRF now provides the same weighted,
+    // 0-based entry point (weight/(rank+k)). This method keeps its one-pass
+    // implementation to build the fused-score map and per-component breakdown
+    // simultaneously, avoiding a second iteration over the branches for the
+    // score-explanation path.
     #[allow(clippy::cast_precision_loss)]
     fn compute_rrf_scores_with_components(
         vector_results: &[crate::scored_result::ScoredResult],
@@ -285,28 +333,18 @@ impl Collection {
         filter: &crate::filter::Filter,
         rrf_k: Option<u32>,
     ) -> Result<Vec<SearchResult>> {
-        use crate::index::VectorIndex;
-
         let config = self.config.read();
-        validate_dimension_match(config.dimension, vector_query.len())?;
-        let metric = config.metric;
+        let (metric, weight, text_weight, rrf_constant) =
+            validated_hybrid_params(&config, vector_query, vector_weight, rrf_k)?;
         drop(config);
 
-        let weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
-        let text_weight = 1.0 - weight;
-        // Reason: RRF k is typically 1–1000; u32→f32 is lossless below 2^24.
-        #[allow(clippy::cast_precision_loss)]
-        let rrf_constant = rrf_k.unwrap_or(60).max(1) as f32;
         let candidates_k = k.saturating_mul(4).max(k + 10);
-
-        let raw_vector_results = self.index.search(vector_query, candidates_k);
-        let vector_results =
-            self.merge_delta(raw_vector_results, vector_query, candidates_k, metric);
-        let text_results = self.text_index.search(text_query, candidates_k);
-
-        let (fused_scores, component_map) = Self::compute_rrf_scores_with_components(
-            &vector_results,
-            &text_results,
+        let (fused_scores, component_map) = compute_hybrid_scored(
+            self,
+            vector_query,
+            text_query,
+            candidates_k,
+            metric,
             weight,
             text_weight,
             rrf_constant,
@@ -323,6 +361,57 @@ impl Collection {
                 &component_map,
             ),
         )
+    }
+
+    /// Hybrid search restricted to `anchor_ids` in both vector and BM25 branches.
+    ///
+    /// Used when a graph MATCH predicate AND-requires anchor membership: RRF
+    /// fusion only considers points in the anchor set, so a relevant anchor
+    /// outside the global top-K is still surfaced.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match.
+    pub(crate) fn hybrid_search_with_anchors(
+        &self,
+        vector_query: &[f32],
+        text_query: &str,
+        k: usize,
+        vector_weight: Option<f32>,
+        rrf_k: Option<u32>,
+        anchor_ids: &HashSet<u64>,
+    ) -> Result<Vec<SearchResult>> {
+        let config = self.config.read();
+        validate_dimension_match(config.dimension, vector_query.len())?;
+        drop(config);
+
+        let (weight, text_weight, rrf_constant) = resolve_rrf_params(vector_weight, rrf_k);
+        let overfetch_k = k.saturating_mul(4).max(k + 10);
+        // Vector branch: restrict retrieval to anchor set.
+        let anchor_search =
+            self.search_near_with_anchor_ids(vector_query, anchor_ids, None, overfetch_k)?;
+        let vector_scored: Vec<crate::scored_result::ScoredResult> = anchor_search
+            .into_iter()
+            .map(|r| crate::scored_result::ScoredResult::new(r.point.id, r.score))
+            .collect();
+
+        // BM25 branch: over-fetch then restrict to anchor set.
+        let bm25_all = self.text_index.search(text_query, overfetch_k);
+        let text_results: Vec<(u64, f32)> = bm25_all
+            .into_iter()
+            .filter(|(id, _)| anchor_ids.contains(id))
+            .collect();
+
+        let (fused_scores, component_map) = Self::compute_rrf_scores_with_components(
+            &vector_scored,
+            &text_results,
+            weight,
+            text_weight,
+            rrf_constant,
+        );
+
+        let scored_ids = Self::top_k_from_scores(fused_scores, k);
+        Ok(self.resolve_scored_ids_with_components(&scored_ids, &component_map))
     }
 
     /// Resolves scored IDs with filter and optional per-component score breakdown.

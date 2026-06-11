@@ -176,10 +176,22 @@ pub enum QueryType {
 /// - `SELECT *` → `{id, field1, field2, ...}` (no vector)
 /// - `SELECT col1, col2` → `{col1, col2}`
 /// - `SELECT similarity() AS score, title` → `{score, title}`
+///
+/// ## MATCH-query extra fields
+///
+/// When the query contains a `MATCH` clause, each row may carry additional
+/// graph-specific fields:
+/// - `_edge_bindings` — map of alias → edge (id, source, target, label, properties)
+///   for every named relationship in the pattern.
+/// - `_edge_paths` — array of edge-ID arrays, one per matched path variable.
+///   Only present when the `MATCH` clause binds a path variable (`p = (…)-[…]->(…)`).
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct QueryResponse {
     /// Projected result rows. Shape depends on SELECT clause.
+    ///
+    /// MATCH queries may include `_edge_bindings` and `_edge_paths` fields
+    /// in each row — see the struct documentation for details.
     pub results: Vec<serde_json::Value>,
     /// Query execution time in milliseconds.
     pub timing_ms: f64,

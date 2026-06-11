@@ -47,6 +47,11 @@ pub(crate) fn recover_hnsw_gap(
     let hnsw_count = index.len();
 
     if storage_count == 0 || storage_count == hnsw_count {
+        tracing::debug!(
+            storage_count,
+            hnsw_count,
+            "gap recovery skipped — counts match, no scan needed"
+        );
         return Ok(0);
     }
 

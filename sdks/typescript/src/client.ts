@@ -19,6 +19,7 @@ import type {
   AddEdgeRequest,
   GetEdgesOptions,
   GraphEdge,
+  GraphNodeId,
   TraverseRequest,
   TraverseParallelRequest,
   TraverseResponse,
@@ -47,6 +48,9 @@ import type {
   MatchQueryOptions,
   MatchQueryResponse,
   StreamUpsertResponse,
+  RelateRequest,
+  RelateResponse,
+  RelationsResponse,
 } from './types';
 import type { FilterInput } from './filter';
 import type { CapabilityMap } from './capabilities';
@@ -427,6 +431,26 @@ export class VelesDB {
   async graphSearch(collection: string, request: GraphSearchRequest): Promise<GraphSearchResponse> {
     this.ensureInitialized();
     return graphMethods.graphSearch(this.backend, collection, request);
+  }
+
+  async relate(collection: string, req: RelateRequest): Promise<RelateResponse> {
+    this.ensureInitialized();
+    return graphMethods.relate(this.backend, collection, req);
+  }
+
+  async unrelate(collection: string, edgeId: GraphNodeId): Promise<boolean> {
+    this.ensureInitialized();
+    return graphMethods.unrelate(this.backend, collection, edgeId);
+  }
+
+  async getRelations(collection: string, pointId: GraphNodeId): Promise<RelationsResponse> {
+    this.ensureInitialized();
+    return graphMethods.getRelations(this.backend, collection, pointId);
+  }
+
+  async setTtlDurable(collection: string, pointId: GraphNodeId, ttlSeconds: number): Promise<void> {
+    this.ensureInitialized();
+    return graphMethods.setTtlDurable(this.backend, collection, pointId, ttlSeconds);
   }
 
   // ========================================================================

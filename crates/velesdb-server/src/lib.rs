@@ -58,10 +58,11 @@ pub use handlers::{
     aggregate, analyze_collection, batch_search, bulk_delete_points, collection_sanity,
     compact_collection, create_collection, create_index, delete_collection, delete_index,
     delete_point, explain, flush_collection, get_collection, get_collection_config,
-    get_collection_stats, get_guardrails, get_point, health_check, hybrid_search, is_empty,
-    list_collections, list_indexes, match_query, multi_query_search, query, readiness_check,
-    rebuild_index, scroll_points, search, search_ids, stream_insert, stream_upsert_points,
-    text_search, update_guardrails, upsert_points, vacuum_collection,
+    get_collection_stats, get_guardrails, get_point, get_point_relations, health_check,
+    hybrid_search, is_empty, list_collections, list_indexes, match_query, multi_query_search,
+    query, readiness_check, rebuild_index, relate_points, scroll_points, search, search_ids,
+    set_point_ttl, stream_insert, stream_upsert_points, text_search, unrelate_points,
+    update_guardrails, upsert_points, vacuum_collection,
 };
 
 pub use handlers::graph::{
@@ -160,7 +161,11 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::admin::rebuild_index,
         handlers::admin::vacuum_collection,
         handlers::admin::compact_collection,
-        handlers::points::bulk_delete_points
+        handlers::points::bulk_delete_points,
+        handlers::points::relations::relate_points,
+        handlers::points::relations::unrelate_points,
+        handlers::points::relations::get_point_relations,
+        handlers::points::relations::set_point_ttl
     ),
     components(
         schemas(
@@ -231,7 +236,12 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             handlers::match_query::MatchQueryResultItem,
             handlers::match_query::MatchQueryMeta,
             handlers::match_query::MatchQueryError,
-            handlers::points::BulkDeleteRequest
+            handlers::points::BulkDeleteRequest,
+            handlers::points::relations::RelateRequest,
+            handlers::points::relations::RelateResponse,
+            handlers::points::relations::RelationEdge,
+            handlers::points::relations::RelationsResponse,
+            handlers::points::relations::SetTtlRequest
         )
     )
 )]

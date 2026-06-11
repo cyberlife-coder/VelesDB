@@ -110,6 +110,10 @@ import {
   wasmUpsertNodePayload,
   wasmGraphSearch,
   wasmSparseSearchNamed,
+  wasmRelate,
+  wasmUnrelate,
+  wasmGetRelations,
+  wasmSetTtlDurable,
 } from './wasm-wave4-stubs';
 
 /**
@@ -444,6 +448,10 @@ export class WasmBackend implements IVelesDBBackend {
   async upsertNodePayload(c: string, id: number, p: Record<string, unknown>): Promise<void> { this.ensureInitialized(); return wasmUpsertNodePayload(c, id, p); }
   async graphSearch(c: string, r: import('../types').GraphSearchRequest): Promise<import('../types').GraphSearchResponse> { this.ensureInitialized(); return wasmGraphSearch(c, r); }
   async sparseSearchNamed(c: string, q: import('../types').SparseVector, idx: string, o?: import('../types').SparseSearchNamedOptions): Promise<import('../types').SearchResult[]> { this.ensureInitialized(); return wasmSparseSearchNamed(c, q, idx, o); }
+  async relate(c: string, req: import('../types').RelateRequest): Promise<import('../types').RelateResponse> { this.ensureInitialized(); return wasmRelate(c, req); }
+  async unrelate(c: string, edgeId: import('../types').GraphNodeId): Promise<boolean> { this.ensureInitialized(); return wasmUnrelate(c, edgeId); }
+  async getRelations(c: string, pointId: import('../types').GraphNodeId): Promise<import('../types').RelationsResponse> { this.ensureInitialized(); return wasmGetRelations(c, pointId); }
+  async setTtlDurable(c: string, pointId: import('../types').GraphNodeId, ttlSeconds: number): Promise<void> { this.ensureInitialized(); return wasmSetTtlDurable(c, pointId, ttlSeconds); }
 }
 
 // Node-only init helpers (`isNodeRuntime`, `loadWasmBytesNode`) live in

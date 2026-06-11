@@ -97,7 +97,7 @@ impl Collection {
     /// query). Larger anchor sets use the bitmap path with adaptive retry:
     /// at that density the window bias is negligible and exact scoring
     /// would cost more than it saves.
-    pub(super) fn search_near_with_anchor_ids(
+    pub(crate) fn search_near_with_anchor_ids(
         &self,
         vector: &[f32],
         anchor_ids: &HashSet<u64>,
