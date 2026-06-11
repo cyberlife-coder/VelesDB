@@ -225,7 +225,14 @@ impl Collection {
             tracing::debug!("dispatch_metadata_only: indexed path succeeded");
             return indexed;
         }
-        tracing::debug!("dispatch_metadata_only: indexed path returned None, trying BM25");
+        tracing::debug!("dispatch_metadata_only: indexed path returned None, trying mirror");
+
+        // ColumnStore payload mirror: typed columnar bitmap scan when no
+        // secondary index covers the condition. Built adaptively once enough
+        // full-scan debt accumulates (see collection/payload_mirror).
+        if let Some(mirror_results) = self.try_mirror_filter(&filter, execution_limit) {
+            return mirror_results;
+        }
 
         // Try BM25 text search for LIKE conditions before falling back to full scan.
         // When a LIKE pattern contains a word-like substring (e.g. `%google%`),
@@ -259,6 +266,34 @@ impl Collection {
         }
         // Too many bitmap hits — fall through to scan with early exit
         None
+    }
+
+    /// Attempts a `ColumnStore` payload-mirror scan for the filter.
+    ///
+    /// The mirror returns a candidate id superset from typed columnar
+    /// bitmaps; `scan_ids_with_filter` post-filters with the JSON filter,
+    /// so results are exactly those of the sequential scan path. Candidates
+    /// are hydrated in chunks so broad matches (e.g. `!=` over most rows)
+    /// stay memory-bounded and benefit from early exit at the limit.
+    ///
+    /// Returns `None` when the mirror is not built (insufficient scan debt),
+    /// or the condition is not answerable from columnar data.
+    fn try_mirror_filter(
+        &self,
+        filter: &crate::filter::Filter,
+        execution_limit: usize,
+    ) -> Option<Vec<SearchResult>> {
+        const HYDRATION_CHUNK: usize = 1024;
+        let candidate_ids = self.mirror_candidate_ids(&filter.condition)?;
+        let mut results = Vec::new();
+        for chunk in candidate_ids.chunks(HYDRATION_CHUNK) {
+            let remaining = execution_limit.saturating_sub(results.len());
+            if remaining == 0 {
+                break;
+            }
+            results.extend(self.scan_ids_with_filter(chunk, filter, remaining));
+        }
+        Some(results)
     }
 
     /// Attempts to accelerate a LIKE condition using the BM25 text index.

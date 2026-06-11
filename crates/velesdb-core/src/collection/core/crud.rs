@@ -54,7 +54,7 @@ impl Collection {
         // new in one atomic cycle. See `apply_histogram_replace_dedup`.
         self.apply_histogram_replace_dedup(&points, &old_payloads);
 
-        self.invalidate_caches_and_bump_generation();
+        self.bump_generation_with_mirror_upserts(&points);
         Ok(())
     }
 
@@ -450,7 +450,7 @@ impl Collection {
         // atomic cycle. See `apply_histogram_replace_dedup`.
         self.apply_histogram_replace_dedup(&points, &old_payloads_for_hist);
 
-        self.invalidate_caches_and_bump_generation();
+        self.bump_generation_with_mirror_upserts(&points);
         Ok(())
     }
 }

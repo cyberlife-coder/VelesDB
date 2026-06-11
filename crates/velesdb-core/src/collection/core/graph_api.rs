@@ -470,6 +470,10 @@ impl Collection {
         // Populate graph property indexes (EPIC-047).
         self.index_node_properties(node_id, payload);
 
+        // Node payload writes bypass the upsert mirror hooks — drop the
+        // payload mirror so it can never serve stale columnar data.
+        self.payload_mirror.invalidate();
+
         // Bump write generation so any cached plan for this collection is
         // invalidated on the next query (CACHE-01).
         self.write_generation

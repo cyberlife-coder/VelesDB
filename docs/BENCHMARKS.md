@@ -198,6 +198,11 @@ Local measurement (i9-14900KF, 10K vectors, 384D): upsert throughput ~808 vec/s 
 
 ## 6. ColumnStore Filtering
 
+Micro-benchmarks of the ColumnStore filtering API (`column_filter_benchmark`).
+This API serves `SELECT ... WHERE` metadata filtering through the adaptive
+per-collection payload mirror (`collection/payload_mirror`) and backs JOIN
+execution.
+
 #### String Equality Filter (`filter_eq_string`, measured 2026-03-19)
 
 | Scale | ColumnStore | JSON Scan | Speedup |

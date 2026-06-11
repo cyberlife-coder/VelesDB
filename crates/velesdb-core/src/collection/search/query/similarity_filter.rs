@@ -281,7 +281,20 @@ impl Collection {
             vector_ids
         };
 
-        Self::collect_filtered_scan(&*payload_storage, &*vector_storage, ids, filter, limit)
+        // Record rows actually visited as payload-mirror scan debt: once the
+        // debt exceeds one full-scan-equivalent, the next metadata query
+        // builds the columnar mirror and skips this fallback entirely.
+        let mut scanned: u64 = 0;
+        let counted_ids = ids.into_iter().inspect(|_| scanned += 1);
+        let results = Self::collect_filtered_scan(
+            &*payload_storage,
+            &*vector_storage,
+            counted_ids,
+            filter,
+            limit,
+        );
+        self.payload_mirror.add_scan_debt(scanned);
+        results
     }
 
     /// Shared scan body: iterates `ids`, hydrates each matching point, and

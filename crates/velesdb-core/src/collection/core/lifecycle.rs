@@ -101,6 +101,7 @@ impl Collection {
             edge_store: Arc::new(parts.edge_store),
             sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
+            payload_mirror: Arc::new(crate::collection::payload_mirror::PayloadMirror::default()),
             guard_rails: Arc::new(GuardRails::default()),
             query_planner: Arc::new(QueryPlanner::new()),
             query_cache: Arc::new(QueryCache::new(256)),
