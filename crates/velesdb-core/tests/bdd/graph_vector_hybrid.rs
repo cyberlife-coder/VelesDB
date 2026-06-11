@@ -363,6 +363,58 @@ fn test_metadata_and_graph_match_without_near_scans_beyond_overfetch_window() {
     }
 }
 
+/// GIVEN 25 anchors (> the former 10×LIMIT over-fetch window of 20) where
+///       similarity to the query INCREASES with the id — the most similar
+///       anchor has the LARGEST id
+/// WHEN running `MATCH ... ORDER BY similarity(vector, $q) DESC LIMIT 2` (no NEAR)
+/// THEN the most similar anchor (largest id) must be first: the anchored
+///      fetch hydrates ascending ids, so a bounded window would drop it
+///      before the downstream similarity sort ever sees it.
+#[test]
+fn test_orderby_similarity_without_near_scores_all_anchors() {
+    let (_dir, db) = create_test_db();
+    db.create_vector_collection("papers", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create papers collection");
+    let vc = db
+        .get_vector_collection("papers")
+        .expect("test: get papers collection");
+
+    // id 26 is the hub (no outgoing edge); ids 1..=25 all cite it.
+    // Similarity to [1,0,0,0] increases with id: id 25 is the most similar.
+    let mut points: Vec<Point> = (1..=25u8)
+        .map(|i| {
+            Point::new(
+                u64::from(i),
+                vec![1.0, f32::from(26 - i) * 0.05, 0.0, 0.0],
+                Some(json!({"title": format!("paper-{i}")})),
+            )
+        })
+        .collect();
+    points.push(Point::new(26, vec![0.0, 1.0, 0.0, 0.0], Some(json!({}))));
+    vc.upsert(points).expect("test: upsert papers corpus");
+    for (edge_id, source) in (500u64..).zip(1u64..=25) {
+        let edge = GraphEdge::new(edge_id, source, 26, "CITES").expect("test: create edge");
+        vc.add_edge(edge).expect("test: add CITES edge");
+    }
+
+    let sql = "SELECT * FROM papers AS p \
+               WHERE MATCH (p)-[:CITES]->(h) \
+               ORDER BY similarity(vector, $q) DESC LIMIT 2";
+    let mut params = std::collections::HashMap::new();
+    params.insert("q".to_string(), json!([1.0_f32, 0.0_f32, 0.0_f32, 0.0_f32]));
+
+    let results = execute_sql_with_params(&db, sql, &params)
+        .expect("MATCH + ORDER BY similarity() without NEAR must execute");
+
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        ids,
+        vec![25, 24],
+        "the most similar anchors (largest ids) must win: every anchor must \
+         be scored, not just the first window in ascending-id order"
+    );
+}
+
 // =========================================================================
 // C. Flagship: implicit anchor binding (V011 relaxation, guards G1/G2/G3)
 // =========================================================================

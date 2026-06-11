@@ -556,6 +556,10 @@ impl Collection {
     }
 }
 
+#[cfg(test)]
+#[path = "execution_paths_tests.rs"]
+mod execution_paths_tests;
+
 /// Merges GraphFirst and VectorFirst `SearchResult` sets for the SELECT Parallel
 /// path (sequential execution, union semantics — best score wins per ID).
 fn merge_select_parallel_results(
