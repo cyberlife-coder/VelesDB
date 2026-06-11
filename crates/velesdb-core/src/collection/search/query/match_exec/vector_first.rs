@@ -147,6 +147,7 @@ impl Collection {
         mr.projected = self.project_properties_with_score(
             &mr.bindings,
             &mr.edge_bindings,
+            &mr.edge_paths,
             &match_clause.return_clause,
             Some(candidate.score),
             payload_guard,
@@ -204,7 +205,7 @@ impl Collection {
             self.evaluate_where_condition(
                 node_id,
                 Some(&bindings),
-                None,
+                super::where_eval::EdgeAliasBindings::NONE,
                 cond,
                 params,
                 payload_guard,
@@ -253,7 +254,7 @@ impl Collection {
                 if self.evaluate_where_condition(
                     hit.target_id,
                     Some(&bindings),
-                    None,
+                    super::where_eval::EdgeAliasBindings::NONE,
                     cond,
                     params,
                     payload_guard,

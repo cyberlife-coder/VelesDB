@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING (VelesQL) — variable-length relationship aliases bind lists
+  (openCypher semantics)**: `MATCH (a)-[r:T*1..3]->(b)` now binds `r` to the
+  ordered LIST of traversed relationships instead of the last edge.
+  `RETURN r` projects the edge-id list, `RETURN r.prop` projects the
+  positional per-edge value list (previously a scalar — including for the
+  degenerate `*1..1` range), and `WHERE r.prop` uses ANY-element semantics
+  (previously last-edge). Fixed-length aliases (`-[r:T]->`) keep their scalar
+  behavior. Migration: queries templating a `*1..1` range that read `r.prop`
+  as a scalar must read element 0 of the projected list instead.
+- **MATCH row cardinality with aliased parallel edges**: result dedup now
+  includes relationship bindings, so two parallel edges between the same node
+  pair yield one row per ALIASED edge (previously they collapsed to one row).
+  Unaliased patterns (`-[:T]->`) keep the collapsed cardinality. Result
+  payloads now carry `_edge_bindings` / `_edge_paths` alongside `_bindings`
+  so rows are distinguishable by edge identity.
+
+### Added
+- **Durable post-hoc TTL setters for agent memory**: Result-returning
+  `set_semantic_ttl_durable` / `set_episodic_ttl_durable` /
+  `set_procedural_ttl_durable` on `AgentMemory` (and `set_ttl_durable` on each
+  subsystem) persist the expiry to the reserved `_veles_expires_at` payload
+  field so it survives a restart; refreshing an expired or missing id returns
+  `NotFound`. The in-memory `set_*_ttl` setters are now documented as volatile.
+- **ColumnStore in the SELECT WHERE path (#1075)**: adaptive per-collection
+  payload mirror compiles metadata filters to RoaringBitmap scans once
+  sequential-scan debt justifies the build; secondary indexes keep precedence.
+- **CI (#1076)**: full TypeScript SDK vitest suite on every PR; nightly 100K
+  recall@10 ≥ 0.95 gate (`perf-gate-e2e` schedule + manual dispatch).
+
 ## [1.18.0] — 2026-06-07
 
 ### Changed

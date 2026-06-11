@@ -138,19 +138,73 @@ impl AgentMemory {
         &self.procedural
     }
 
-    /// Sets TTL for a semantic memory entry.
+    /// Sets TTL for a semantic memory entry (in-memory only; lost on restart).
+    ///
+    /// Use [`Self::set_semantic_ttl_durable`] to persist the expiry.
     pub fn set_semantic_ttl(&self, id: u64, ttl_seconds: u64) {
         self.ttl.set_ttl(MemoryKind::Semantic, id, ttl_seconds);
     }
 
-    /// Sets TTL for an episodic memory entry.
+    /// Sets TTL for an episodic memory entry (in-memory only; lost on restart).
+    ///
+    /// Use [`Self::set_episodic_ttl_durable`] to persist the expiry.
     pub fn set_episodic_ttl(&self, id: u64, ttl_seconds: u64) {
         self.ttl.set_ttl(MemoryKind::Episodic, id, ttl_seconds);
     }
 
-    /// Sets TTL for a procedural memory entry.
+    /// Sets TTL for a procedural memory entry (in-memory only; lost on restart).
+    ///
+    /// Use [`Self::set_procedural_ttl_durable`] to persist the expiry.
     pub fn set_procedural_ttl(&self, id: u64, ttl_seconds: u64) {
         self.ttl.set_ttl(MemoryKind::Procedural, id, ttl_seconds);
+    }
+
+    /// Durably sets the TTL of an existing semantic fact: the expiry is
+    /// persisted to the reserved `_veles_expires_at` payload field and
+    /// survives a restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotFound` when no fact with `id` exists, or
+    /// `CollectionError` when persistence fails.
+    pub fn set_semantic_ttl_durable(
+        &self,
+        id: u64,
+        ttl_seconds: u64,
+    ) -> Result<(), AgentMemoryError> {
+        self.semantic.set_ttl_durable(id, ttl_seconds)
+    }
+
+    /// Durably sets the TTL of an existing episodic event: the expiry is
+    /// persisted to the reserved `_veles_expires_at` payload field and
+    /// survives a restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotFound` when no event with `id` exists, or
+    /// `CollectionError` when persistence fails.
+    pub fn set_episodic_ttl_durable(
+        &self,
+        id: u64,
+        ttl_seconds: u64,
+    ) -> Result<(), AgentMemoryError> {
+        self.episodic.set_ttl_durable(id, ttl_seconds)
+    }
+
+    /// Durably sets the TTL of an existing procedure: the expiry is
+    /// persisted to the reserved `_veles_expires_at` payload field and
+    /// survives a restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotFound` when no procedure with `id` exists, or
+    /// `CollectionError` when persistence fails.
+    pub fn set_procedural_ttl_durable(
+        &self,
+        id: u64,
+        ttl_seconds: u64,
+    ) -> Result<(), AgentMemoryError> {
+        self.procedural.set_ttl_durable(id, ttl_seconds)
     }
 
     /// Performs automatic expiration of entries that have exceeded their TTL.

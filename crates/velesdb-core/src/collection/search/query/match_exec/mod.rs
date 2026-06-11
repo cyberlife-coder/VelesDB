@@ -26,7 +26,14 @@ use crate::velesql::{GraphPattern, MatchClause};
 use std::collections::{HashMap, HashSet};
 
 /// Result of a MATCH query traversal.
+///
+/// Relationship aliases live in exactly one of two maps: fixed-length
+/// aliases in `edge_bindings` (scalar edge id), variable-length aliases in
+/// `edge_paths` (ordered edge-id list, possibly empty for zero-hop matches).
+/// Consumers resolving an alias must consult both (see
+/// `where_eval::MatchWhereCtx::edge_targets` for the canonical helper).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct MatchResult {
     /// Node ID that was matched.
     pub node_id: u64,
@@ -38,6 +45,11 @@ pub struct MatchResult {
     pub bindings: HashMap<String, u64>,
     /// Bound relationship aliases from the pattern (alias -> edge_id).
     pub edge_bindings: HashMap<String, u64>,
+    /// Variable-length relationship aliases (alias -> ordered edge-id list).
+    ///
+    /// openCypher list semantics: `MATCH (a)-[r*1..3]->(b)` binds `r` to the
+    /// LIST of traversed relationships, not a single edge.
+    pub edge_paths: HashMap<String, Vec<u64>>,
     /// Similarity score if combined with vector search.
     pub score: Option<f32>,
     /// Projected properties from RETURN clause (EPIC-058 US-007).
@@ -55,6 +67,7 @@ impl MatchResult {
             path,
             bindings: HashMap::new(),
             edge_bindings: HashMap::new(),
+            edge_paths: HashMap::new(),
             score: None,
             projected: HashMap::new(),
         }
@@ -174,7 +187,7 @@ struct TraversalCtx<'a> {
     limit: usize,
     iteration_count: &'a mut u32,
     reported_cardinality: &'a mut usize,
-    seen_bindings: &'a mut HashSet<Vec<(String, u64)>>,
+    seen_bindings: &'a mut HashSet<Vec<(u8, String, u64, u64)>>,
 }
 
 impl Collection {
@@ -339,7 +352,7 @@ impl Collection {
                 if !self.evaluate_where_condition(
                     *node_id,
                     Some(bindings),
-                    None,
+                    where_eval::EdgeAliasBindings::NONE,
                     where_clause,
                     ctx.params,
                     ctx.payload_guard,
@@ -356,6 +369,7 @@ impl Collection {
             result.bindings.clone_from(bindings);
             result.projected = self.project_properties(
                 bindings,
+                &HashMap::new(),
                 &HashMap::new(),
                 &ctx.match_clause.return_clause,
                 ctx.payload_guard,

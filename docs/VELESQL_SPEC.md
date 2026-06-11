@@ -1634,6 +1634,22 @@ configuration with a `Graph expansion exceeded: max=32` complexity error
 (surfaced directly by `Parser::parse`) — use an explicit bounded range such as
 `*1..32` instead.
 
+**Variable-length alias semantics (openCypher lists).** A relationship alias
+on a ranged pattern (`-[r:TYPE*1..3]->`) binds the **ordered list** of
+traversed relationships, not a single edge:
+
+- `RETURN r` projects the ordered edge-id list (e.g. `[100, 101]`).
+- `RETURN r.prop` projects the positional list of per-edge values
+  (missing properties yield `null`), like openCypher's `[rel IN r | rel.prop]`.
+- `WHERE r.prop = x` uses **ANY-element semantics**: the path matches when at
+  least one traversed edge satisfies the condition (openCypher's
+  `any(rel IN r WHERE rel.prop = x)`).
+- Distinct edge paths to the same target are distinct result rows, and
+  parallel edges between the same node pair yield one row per aliased edge.
+  **Anonymous relationships** (`-[:TYPE]->`) keep the collapsed cardinality —
+  bind an alias when parallel edges must be distinguished (a known divergence
+  from openCypher, which always counts one row per relationship).
+
 ### RETURN Clause
 
 Project fields from matched nodes and relationships:

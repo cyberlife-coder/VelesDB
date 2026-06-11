@@ -234,6 +234,28 @@ impl SemanticMemory {
         Ok(())
     }
 
+    /// Durably sets (or refreshes) the TTL of an existing fact.
+    ///
+    /// Unlike `AgentMemory::set_semantic_ttl` (in-memory map only, lost on
+    /// restart), this persists the expiry to the reserved `_veles_expires_at`
+    /// payload field, so it survives a restart. A `ttl_seconds` of 0 expires
+    /// the fact immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotFound` when no fact with `id` exists, or `CollectionError`
+    /// when persistence fails.
+    pub fn set_ttl_durable(&self, id: u64, ttl_seconds: u64) -> Result<(), AgentMemoryError> {
+        memory_helpers::set_ttl_durable(
+            &self.db,
+            &self.collection_name,
+            &self.ttl,
+            MemoryKind::Semantic,
+            id,
+            ttl_seconds,
+        )
+    }
+
     /// Queries semantic memory by vector similarity.
     ///
     /// # Errors

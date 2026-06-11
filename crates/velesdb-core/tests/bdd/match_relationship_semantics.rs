@@ -379,3 +379,326 @@ fn test_match_return_edge_property() {
         results[0].point.payload
     );
 }
+
+// =========================================================================
+// Parallel edges: edge-binding-aware dedup (audit 2026-06 follow-up)
+// =========================================================================
+
+/// GIVEN base: two nodes with TWO parallel `KNOWS` edges 1 -> 2 carrying
+/// different `since` properties.
+fn setup_parallel_edges_collection(db: &Database) {
+    db.create_vector_collection("parallel", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create parallel collection");
+    let vc = db
+        .get_vector_collection("parallel")
+        .expect("test: get parallel collection");
+
+    vc.upsert(vec![
+        Point::new(1, vec![1.0, 0.0, 0.0, 0.0], Some(json!({"name": "A"}))),
+        Point::new(2, vec![0.0, 1.0, 0.0, 0.0], Some(json!({"name": "B"}))),
+    ])
+    .expect("test: upsert nodes");
+
+    for (edge_id, since) in [(100u64, 2020), (101u64, 2024)] {
+        let mut props = HashMap::new();
+        props.insert("since".to_string(), json!(since));
+        let edge = GraphEdge::new(edge_id, 1, 2, "KNOWS")
+            .expect("test: create parallel edge")
+            .with_properties(props);
+        vc.add_edge(edge).expect("test: add parallel edge");
+    }
+}
+
+/// WHEN two parallel aliased edges connect the same node pair
+/// THEN MATCH returns one row per edge (not one collapsed row).
+#[test]
+fn test_parallel_edges_yield_one_row_per_edge() {
+    let (_dir, db) = create_test_db();
+    setup_parallel_edges_collection(&db);
+
+    let results = run_match(
+        &db,
+        "MATCH (a)-[r:KNOWS]->(b) RETURN r.since LIMIT 10",
+        "parallel",
+    );
+
+    assert_eq!(
+        results.len(),
+        2,
+        "two parallel KNOWS edges must yield two rows"
+    );
+    let mut sinces: Vec<i64> = results
+        .iter()
+        .filter_map(|r| {
+            r.point
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("r.since"))
+                .and_then(serde_json::Value::as_i64)
+        })
+        .collect();
+    sinces.sort_unstable();
+    assert_eq!(
+        sinces,
+        vec![2020, 2024],
+        "each row must project its own edge's property"
+    );
+}
+
+/// WHEN a parallel edge is filtered by an edge property
+/// THEN only the matching edge's row survives.
+#[test]
+fn test_parallel_edges_where_filters_per_edge() {
+    let (_dir, db) = create_test_db();
+    setup_parallel_edges_collection(&db);
+
+    let results = run_match(
+        &db,
+        "MATCH (a)-[r:KNOWS]->(b) WHERE r.since >= 2024 RETURN r.since LIMIT 10",
+        "parallel",
+    );
+
+    assert_eq!(results.len(), 1, "only the 2024 edge passes the filter");
+}
+
+// =========================================================================
+// Variable-length relationship aliases: list semantics (openCypher)
+// =========================================================================
+
+/// GIVEN base: a chain 1 -> 2 -> 3 (both `KNOWS`), node 1 labeled `Start`,
+/// edges carrying `{w: 10}` and `{w: 20}`.
+fn setup_chain_collection(db: &Database) {
+    db.create_vector_collection("chain", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create chain collection");
+    let vc = db
+        .get_vector_collection("chain")
+        .expect("test: get chain collection");
+
+    vc.upsert(vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            Some(json!({"_labels": ["Start"], "name": "A"})),
+        ),
+        Point::new(2, vec![0.0, 1.0, 0.0, 0.0], Some(json!({"name": "B"}))),
+        Point::new(3, vec![0.0, 0.0, 1.0, 0.0], Some(json!({"name": "C"}))),
+    ])
+    .expect("test: upsert chain nodes");
+
+    for (edge_id, src, dst, w) in [(100u64, 1u64, 2u64, 10), (101, 2, 3, 20)] {
+        let mut props = HashMap::new();
+        props.insert("w".to_string(), json!(w));
+        let edge = GraphEdge::new(edge_id, src, dst, "KNOWS")
+            .expect("test: create chain edge")
+            .with_properties(props);
+        vc.add_edge(edge).expect("test: add chain edge");
+    }
+}
+
+/// WHEN a variable-length alias is projected bare
+/// THEN it binds the LIST of traversed edge ids (openCypher list semantics).
+#[test]
+fn test_var_length_alias_projects_edge_id_list() {
+    let (_dir, db) = create_test_db();
+    setup_chain_collection(&db);
+
+    let results = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*2..2]->(c) RETURN r LIMIT 10",
+        "chain",
+    );
+
+    assert_eq!(results.len(), 1, "exactly one 2-hop path exists");
+    let projected = results[0]
+        .point
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("r"))
+        .cloned();
+    assert_eq!(
+        projected,
+        Some(json!([100, 101])),
+        "RETURN r on a var-length alias must project the ordered edge-id list"
+    );
+}
+
+/// WHEN a property is projected through a variable-length alias
+/// THEN the projection is the positional list of per-edge values.
+#[test]
+fn test_var_length_alias_projects_property_list() {
+    let (_dir, db) = create_test_db();
+    setup_chain_collection(&db);
+
+    let results = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*2..2]->(c) RETURN r.w LIMIT 10",
+        "chain",
+    );
+
+    assert_eq!(results.len(), 1);
+    let projected = results[0]
+        .point
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("r.w"))
+        .cloned();
+    assert_eq!(
+        projected,
+        Some(json!([10, 20])),
+        "RETURN r.w on a var-length alias must project the per-edge value list"
+    );
+}
+
+/// WHEN a WHERE references a var-length alias property
+/// THEN ANY-element semantics apply: one matching edge keeps the row.
+#[test]
+fn test_var_length_alias_where_uses_any_semantics() {
+    let (_dir, db) = create_test_db();
+    setup_chain_collection(&db);
+
+    let any_hit = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*2..2]->(c) WHERE r.w = 20 RETURN c LIMIT 10",
+        "chain",
+    );
+    assert_eq!(
+        any_hit.len(),
+        1,
+        "one traversed edge has w=20, so the path must match"
+    );
+
+    let no_hit = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*2..2]->(c) WHERE r.w = 99 RETURN c LIMIT 10",
+        "chain",
+    );
+    assert!(
+        no_hit.is_empty(),
+        "no traversed edge has w=99, so the path must not match"
+    );
+}
+
+/// WHEN distinct paths reach the same target through different edge lists
+/// THEN each path is a distinct row (the dedup key includes the edge list).
+#[test]
+fn test_var_length_distinct_paths_are_distinct_rows() {
+    let (_dir, db) = create_test_db();
+    setup_chain_collection(&db);
+    let vc = db
+        .get_vector_collection("chain")
+        .expect("test: get chain collection");
+    // Second 1 -> 2 edge: now TWO 2-hop paths reach node 3.
+    let mut props = HashMap::new();
+    props.insert("w".to_string(), json!(11));
+    let edge = GraphEdge::new(102, 1, 2, "KNOWS")
+        .expect("test: create second 1->2 edge")
+        .with_properties(props);
+    vc.add_edge(edge).expect("test: add second 1->2 edge");
+
+    let results = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*2..2]->(c) RETURN r LIMIT 10",
+        "chain",
+    );
+
+    assert_eq!(
+        results.len(),
+        2,
+        "two distinct 2-hop edge paths must yield two rows"
+    );
+}
+
+/// WHEN a filter-engine condition (IN) references a var-length alias
+/// THEN ANY-element semantics apply with the alias correctly stripped
+/// (review 2026-06-11 finding 1: IN/BETWEEN/LIKE/IS NULL previously
+/// resolved `r.w` as a nested path and matched nothing).
+#[test]
+fn test_var_length_alias_in_condition_uses_any_semantics() {
+    let (_dir, db) = create_test_db();
+    setup_chain_collection(&db);
+
+    let any_hit = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*2..2]->(c) WHERE r.w IN (20, 99) RETURN c LIMIT 10",
+        "chain",
+    );
+    assert_eq!(
+        any_hit.len(),
+        1,
+        "one traversed edge has w=20 → path matches"
+    );
+
+    let no_hit = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*2..2]->(c) WHERE r.w IN (98, 99) RETURN c LIMIT 10",
+        "chain",
+    );
+    assert!(no_hit.is_empty(), "no traversed edge is in the list");
+}
+
+/// IS NULL on a var-length alias property: every traversed edge HAS `w`,
+/// so `r.w IS NULL` must reject the path (no edge satisfies it) while
+/// `r.w IS NOT NULL` keeps it.
+#[test]
+fn test_var_length_alias_is_null_semantics() {
+    let (_dir, db) = create_test_db();
+    setup_chain_collection(&db);
+
+    let null_rows = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*2..2]->(c) WHERE r.w IS NULL RETURN c LIMIT 10",
+        "chain",
+    );
+    assert!(
+        null_rows.is_empty(),
+        "every traversed edge carries w → IS NULL matches no edge"
+    );
+
+    let not_null_rows = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*2..2]->(c) WHERE r.w IS NOT NULL RETURN c LIMIT 10",
+        "chain",
+    );
+    assert_eq!(
+        not_null_rows.len(),
+        1,
+        "edges carry w → IS NOT NULL matches"
+    );
+}
+
+/// Zero-hop variable-length matches bind the alias to an EMPTY list:
+/// RETURN r projects [], and WHERE on the alias matches nothing
+/// (ANY over an empty list is false) instead of degrading to node-payload
+/// resolution.
+#[test]
+fn test_var_length_zero_hop_binds_empty_list() {
+    let (_dir, db) = create_test_db();
+    setup_chain_collection(&db);
+
+    let results = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*0..1]->(c) RETURN r LIMIT 10",
+        "chain",
+    );
+    // Zero-hop row (c = a) plus the 1-hop row (c = node 2).
+    assert_eq!(results.len(), 2, "zero-hop and one-hop rows both match");
+    let projections: Vec<serde_json::Value> = results
+        .iter()
+        .filter_map(|r| r.point.payload.as_ref().and_then(|p| p.get("r")).cloned())
+        .collect();
+    assert!(
+        projections.contains(&serde_json::json!([])),
+        "the zero-hop row must project r as an empty list, got {projections:?}"
+    );
+
+    let filtered = run_match(
+        &db,
+        "MATCH (a:Start)-[r:KNOWS*0..1]->(c) WHERE r.w = 10 RETURN c LIMIT 10",
+        "chain",
+    );
+    assert_eq!(
+        filtered.len(),
+        1,
+        "only the 1-hop row can satisfy r.w = 10 (ANY over [] is false)"
+    );
+}

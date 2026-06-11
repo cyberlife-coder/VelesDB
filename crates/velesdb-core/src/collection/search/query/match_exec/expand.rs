@@ -23,7 +23,19 @@ struct Walk<'a, 't> {
     bindings: &'a mut HashMap<String, u64>,
     /// Bound relationship aliases (alias -> traversed edge id).
     edge_bindings: &'a mut HashMap<String, u64>,
+    /// Variable-length relationship aliases (alias -> ordered edge-id list).
+    edge_paths: &'a mut HashMap<String, Vec<u64>>,
     path: &'a mut Vec<u64>,
+}
+
+/// Backtracking record for an edge-alias binding made by `bind_edge_alias`.
+enum EdgeAliasSave {
+    /// The relationship has no alias — nothing to restore.
+    None,
+    /// Fixed-length alias: restore the previous scalar binding (if any).
+    Scalar(String, Option<u64>),
+    /// Variable-length alias: pop the edge id pushed onto the alias's list.
+    PathPushed(String),
 }
 
 impl Collection {
@@ -43,12 +55,22 @@ impl Collection {
             let mut path = Vec::new();
             let mut bindings = start_bindings.clone();
             let mut edge_bindings = HashMap::new();
+            // Pre-seed every variable-length alias with an empty list so a
+            // zero-hop match (`*0..N`) binds `[]` (openCypher) instead of
+            // silently degrading to node-alias resolution.
+            let mut edge_paths: HashMap<String, Vec<u64>> = pattern
+                .relationships
+                .iter()
+                .filter(|rel| rel.range.is_some())
+                .filter_map(|rel| rel.alias.clone().map(|alias| (alias, Vec::new())))
+                .collect();
             let mut walk = Walk {
                 pattern,
                 edge_store,
                 ctx: &mut *ctx,
                 bindings: &mut bindings,
                 edge_bindings: &mut edge_bindings,
+                edge_paths: &mut edge_paths,
                 path: &mut path,
             };
             self.expand_pattern(&mut walk, *start_id, 0)?;
@@ -125,31 +147,46 @@ impl Collection {
         Ok(())
     }
 
-    /// Binds the relationship alias (if any) to the traversed edge id so
+    /// Binds the relationship alias (if any) to the traversed edge so
     /// `WHERE r.prop` / `RETURN r.prop` resolve against the edge.
     ///
-    /// Returns the alias and its previous value for backtracking. For
-    /// variable-length relationships the alias tracks the most recently
-    /// traversed edge of that segment.
-    fn bind_edge_alias(
-        walk: &mut Walk<'_, '_>,
-        rel_idx: usize,
-        edge_id: u64,
-    ) -> Option<(String, Option<u64>)> {
-        let alias = walk.pattern.relationships[rel_idx].alias.clone()?;
+    /// Fixed-length aliases bind a single edge id. Variable-length aliases
+    /// (`[r*1..3]`) follow openCypher list semantics: each traversed hop is
+    /// appended to the alias's ordered edge-id list.
+    fn bind_edge_alias(walk: &mut Walk<'_, '_>, rel_idx: usize, edge_id: u64) -> EdgeAliasSave {
+        let rel = &walk.pattern.relationships[rel_idx];
+        let Some(alias) = rel.alias.clone() else {
+            return EdgeAliasSave::None;
+        };
+        if rel.range.is_some() {
+            // Entry pre-seeded in traverse_pattern; push this hop's edge.
+            walk.edge_paths
+                .entry(alias.clone())
+                .or_default()
+                .push(edge_id);
+            return EdgeAliasSave::PathPushed(alias);
+        }
         let previous = walk.edge_bindings.insert(alias.clone(), edge_id);
-        Some((alias, previous))
+        EdgeAliasSave::Scalar(alias, previous)
     }
 
     /// Restores a relationship alias binding saved by [`Self::bind_edge_alias`].
-    fn restore_edge_alias(walk: &mut Walk<'_, '_>, saved: Option<(String, Option<u64>)>) {
-        let Some((alias, previous)) = saved else {
-            return;
-        };
-        if let Some(edge_id) = previous {
-            walk.edge_bindings.insert(alias, edge_id);
-        } else {
-            walk.edge_bindings.remove(&alias);
+    fn restore_edge_alias(walk: &mut Walk<'_, '_>, saved: EdgeAliasSave) {
+        match saved {
+            EdgeAliasSave::None => {}
+            EdgeAliasSave::Scalar(alias, Some(edge_id)) => {
+                walk.edge_bindings.insert(alias, edge_id);
+            }
+            EdgeAliasSave::Scalar(alias, None) => {
+                walk.edge_bindings.remove(&alias);
+            }
+            EdgeAliasSave::PathPushed(alias) => {
+                // Pop only — the entry stays (pre-seeded; an empty list is
+                // the valid zero-hop binding).
+                if let Some(list) = walk.edge_paths.get_mut(&alias) {
+                    list.pop();
+                }
+            }
         }
     }
 
@@ -181,7 +218,10 @@ impl Collection {
             if !self.evaluate_where_condition(
                 node_id,
                 Some(&*walk.bindings),
-                Some(&*walk.edge_bindings),
+                super::where_eval::EdgeAliasBindings {
+                    scalar: Some(&*walk.edge_bindings),
+                    paths: Some(&*walk.edge_paths),
+                },
                 where_clause,
                 walk.ctx.params,
                 walk.ctx.payload_guard,
@@ -190,7 +230,7 @@ impl Collection {
             }
         }
 
-        let signature = Self::binding_signature(walk.bindings);
+        let signature = Self::binding_signature(walk.bindings, walk.edge_bindings, walk.edge_paths);
         if !walk.ctx.seen_bindings.insert(signature) {
             return Ok(());
         }
@@ -198,9 +238,11 @@ impl Collection {
         let mut result = MatchResult::new(node_id, walk.path.len() as u32, walk.path.clone());
         result.bindings.clone_from(walk.bindings);
         result.edge_bindings.clone_from(walk.edge_bindings);
+        result.edge_paths.clone_from(walk.edge_paths);
         result.projected = self.project_properties(
             walk.bindings,
             walk.edge_bindings,
+            walk.edge_paths,
             &walk.ctx.match_clause.return_clause,
             walk.ctx.payload_guard,
         );
@@ -304,10 +346,33 @@ impl Collection {
         AliasBinding::Inserted(alias.clone())
     }
 
-    fn binding_signature(bindings: &HashMap<String, u64>) -> Vec<(String, u64)> {
-        let mut signature: Vec<(String, u64)> =
-            bindings.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        signature.sort_by(|a, b| a.0.cmp(&b.0));
+    /// Dedup signature over node bindings, edge bindings, and edge paths.
+    ///
+    /// Edge bindings participate so parallel edges between the same node
+    /// pair yield distinct rows when the relationship is aliased (audit
+    /// 2026-06: parallel edges previously collapsed to one row). Entries are
+    /// structured `(namespace, alias, hop index, id)` tuples — node (0),
+    /// edge (1), path hop (2) — so alias namespaces cannot collide and no
+    /// per-row string formatting happens on this hot path.
+    fn binding_signature(
+        bindings: &HashMap<String, u64>,
+        edge_bindings: &HashMap<String, u64>,
+        edge_paths: &HashMap<String, Vec<u64>>,
+    ) -> Vec<(u8, String, u64, u64)> {
+        let mut signature: Vec<(u8, String, u64, u64)> = bindings
+            .iter()
+            .map(|(k, v)| (0, k.clone(), 0, *v))
+            .collect();
+        signature.extend(edge_bindings.iter().map(|(k, v)| (1, k.clone(), 0, *v)));
+        for (alias, edge_ids) in edge_paths {
+            signature.extend(
+                edge_ids
+                    .iter()
+                    .enumerate()
+                    .map(|(i, id)| (2, alias.clone(), i as u64, *id)),
+            );
+        }
+        signature.sort_unstable();
         signature
     }
 }

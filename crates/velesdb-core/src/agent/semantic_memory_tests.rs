@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod tests {
+    use super::super::error::AgentMemoryError;
     use super::super::semantic_memory::SemanticMemory;
     use super::super::ttl::{MemoryKind, MemoryTtl};
     use crate::Database;
@@ -667,6 +668,94 @@ mod tests {
         let mut map = serde_json::Map::new();
         map.insert(key.to_string(), value);
         map
+    }
+
+    /// `set_ttl_durable` on an existing fact persists the expiry: after a
+    /// reopen the TTL map is rebuilt from the payload and the fact expires.
+    #[test]
+    fn test_set_ttl_durable_survives_restart() {
+        let dir = tempdir().unwrap();
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+
+        {
+            let db = Arc::new(Database::open(dir.path()).unwrap());
+            let sm = make_semantic(Arc::clone(&db));
+            sm.store(1, "post-hoc expiring fact", &emb).unwrap();
+            // Post-hoc durable TTL: already elapsed (0 seconds).
+            sm.set_ttl_durable(1, 0).unwrap();
+        }
+
+        let (ttl, sm) = reopen_semantic(dir.path());
+
+        assert!(
+            ttl.get(MemoryKind::Semantic, 1).is_some(),
+            "durable post-hoc TTL must be rebuilt into the TTL map on reopen"
+        );
+        assert!(
+            ttl.is_expired(MemoryKind::Semantic, 1),
+            "a 0-second TTL must be expired after reopen"
+        );
+        assert!(
+            sm.get(1).unwrap().is_none(),
+            "expired fact must be invisible after reopen"
+        );
+    }
+
+    /// `set_ttl_durable` keeps the fact's existing metadata intact and only
+    /// adds the reserved expiry key.
+    #[test]
+    fn test_set_ttl_durable_preserves_existing_metadata() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+
+        let meta = meta_one("source", serde_json::json!("chat"));
+        sm.store_with_metadata(1, "fact with metadata", &emb, &meta)
+            .unwrap();
+        sm.set_ttl_durable(1, 3600).unwrap();
+
+        let fact = sm.get(1).unwrap().expect("fact still alive (1h TTL)");
+        assert_eq!(fact.0, "fact with metadata", "content preserved");
+        let results = sm.query(&emb, 5).unwrap();
+        assert!(results.iter().any(|r| r.0 == 1), "fact stays queryable");
+    }
+
+    /// `set_ttl_durable` on an expired-but-not-yet-swept id must surface
+    /// `NotFound` instead of resurrecting the dead fact with a fresh TTL
+    /// (expired entries are invisible on every read AND write surface).
+    #[test]
+    fn test_set_ttl_durable_expired_id_is_not_found() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+
+        sm.store(1, "fact to expire", &emb).unwrap();
+        sm.set_ttl_durable(1, 0).unwrap(); // expires immediately
+        assert!(sm.get(1).unwrap().is_none(), "fact invisible once expired");
+
+        let err = sm.set_ttl_durable(1, 3600).unwrap_err();
+        assert!(
+            matches!(err, AgentMemoryError::NotFound(_)),
+            "refreshing an expired id must not resurrect it, got: {err:?}"
+        );
+        assert!(sm.get(1).unwrap().is_none(), "fact must stay invisible");
+    }
+
+    /// `set_ttl_durable` on a missing id surfaces a `NotFound` error instead
+    /// of silently arming a TTL for a nonexistent fact.
+    #[test]
+    fn test_set_ttl_durable_missing_id_is_not_found() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        let err = sm.set_ttl_durable(999, 60).unwrap_err();
+        assert!(
+            matches!(err, AgentMemoryError::NotFound(_)),
+            "missing id must yield NotFound, got: {err:?}"
+        );
     }
 
     /// A user business field named `expires_at` (subscription, offer, token…)

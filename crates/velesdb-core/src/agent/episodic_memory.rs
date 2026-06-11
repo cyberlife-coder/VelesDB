@@ -183,6 +183,28 @@ impl EpisodicMemory {
         Ok(())
     }
 
+    /// Durably sets (or refreshes) the TTL of an existing event.
+    ///
+    /// Unlike `AgentMemory::set_episodic_ttl` (in-memory map only, lost on
+    /// restart), this persists the expiry to the reserved `_veles_expires_at`
+    /// payload field, so it survives a restart. A `ttl_seconds` of 0 expires
+    /// the event immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotFound` when no event with `event_id` exists, or
+    /// `CollectionError` when persistence fails.
+    pub fn set_ttl_durable(&self, event_id: u64, ttl_seconds: u64) -> Result<(), AgentMemoryError> {
+        memory_helpers::set_ttl_durable(
+            &self.db,
+            &self.collection_name,
+            &self.ttl,
+            MemoryKind::Episodic,
+            event_id,
+            ttl_seconds,
+        )
+    }
+
     /// Returns recent events, optionally filtered by a lower timestamp bound.
     ///
     /// # Errors
