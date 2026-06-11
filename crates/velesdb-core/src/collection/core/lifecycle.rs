@@ -166,15 +166,7 @@ impl Collection {
     ) -> Result<CollectionParts> {
         let vector_storage = Arc::new(RwLock::new(MmapStorage::new(&path, config.dimension)?));
         let payload_storage = Arc::new(RwLock::new(LogPayloadStorage::new(&path)?));
-        let index = if let Some(params) = hnsw_params {
-            Arc::new(HnswIndex::with_params(
-                config.dimension,
-                config.metric,
-                params,
-            )?)
-        } else {
-            Arc::new(HnswIndex::new(config.dimension, config.metric)?)
-        };
+        let index = Arc::new(Self::build_hnsw_index(&config, hnsw_params)?);
         let text_index = Arc::new(Bm25Index::new());
         Ok(CollectionParts::new_with_empty_indexes(
             path,
@@ -184,6 +176,23 @@ impl Collection {
             index,
             text_index,
         ))
+    }
+
+    /// Builds a fresh HNSW index for a collection, honouring the
+    /// collection-level storage mode.
+    ///
+    /// `config.storage_mode` is the source of truth for the index backend:
+    /// it overrides whatever `hnsw_params.storage_mode` carries so a
+    /// `RaBitQ` collection always gets the binary-traversal backend, even
+    /// when the params predate a `TRAIN QUANTIZER 'rabitq'` mode flip.
+    fn build_hnsw_index(
+        config: &CollectionConfig,
+        hnsw_params: Option<crate::index::hnsw::HnswParams>,
+    ) -> Result<HnswIndex> {
+        let mut params =
+            hnsw_params.unwrap_or_else(|| crate::index::hnsw::HnswParams::auto(config.dimension));
+        params.storage_mode = config.storage_mode;
+        HnswIndex::with_params(config.dimension, config.metric, params)
     }
 
     /// Rebuilds the BM25 full-text index from persisted payloads.
@@ -306,17 +315,28 @@ impl Collection {
             sparse_indexes,
         });
 
-        // Edge crash durability: replay the edge WAL on top of the loaded
-        // edge_store snapshot so edge mutations since the last flush survive
-        // a crash. No-op when edges.wal is absent (legacy / non-graph DBs).
         #[cfg(feature = "persistence")]
-        // Snapshot-loaded edges must re-enter the property indexes BEFORE the
-        // WAL replays (replay indexes its own ADDs — running the full pass
-        // after it would double-index the replayed edges).
-        collection.reindex_edge_properties_from_store();
-        collection.replay_edge_wal()?;
+        collection.run_post_open_hooks()?;
 
         Ok(collection)
+    }
+
+    /// Post-open hooks that need a fully assembled collection.
+    ///
+    /// 1. Edge property indexes: snapshot-loaded edges must re-enter the
+    ///    property indexes BEFORE the WAL replays (replay indexes its own
+    ///    ADDs — a full pass after it would double-index replayed edges).
+    /// 2. Edge crash durability: replay the edge WAL on top of the loaded
+    ///    `edge_store` snapshot so edge mutations since the last flush
+    ///    survive a crash. No-op when `edges.wal` is absent.
+    /// 3. Quantizer restore: reload persisted PQ codebook / `RaBitQ` index
+    ///    AFTER crash recovery so every recovered vector is re-encoded.
+    ///    O(n) over stored vectors — same cost class as gap recovery.
+    #[cfg(feature = "persistence")]
+    fn run_post_open_hooks(&self) -> Result<()> {
+        self.reindex_edge_properties_from_store();
+        self.replay_edge_wal()?;
+        self.restore_persisted_quantizers()
     }
 
     // create_graph_collection is in lifecycle_create.rs
@@ -325,21 +345,23 @@ impl Collection {
     ///
     /// When `hnsw.bin` is absent and `config.hnsw_params` is set, the
     /// persisted custom params are honoured so they survive collection reopen.
+    ///
+    /// Both branches honour `config.storage_mode`: the load path upgrades the
+    /// backend to `RaBitQ` when the collection mode requires it (and installs
+    /// `rabitq.idx` when present — see `HnswIndex::load_with_storage_mode`),
+    /// and the create path builds the backend from the collection mode.
     fn load_or_create_hnsw(
         path: &std::path::Path,
         config: &CollectionConfig,
     ) -> Result<Arc<HnswIndex>> {
         if path.join("hnsw.bin").exists() {
-            let idx = HnswIndex::load(path, config.dimension, config.metric)?;
+            let idx = HnswIndex::load_with_storage_mode(path, config.storage_mode)?;
             Ok(Arc::new(idx))
-        } else if let Some(params) = config.hnsw_params {
-            Ok(Arc::new(HnswIndex::with_params(
-                config.dimension,
-                config.metric,
-                params,
-            )?))
         } else {
-            Ok(Arc::new(HnswIndex::new(config.dimension, config.metric)?))
+            Ok(Arc::new(Self::build_hnsw_index(
+                config,
+                config.hnsw_params,
+            )?))
         }
     }
 

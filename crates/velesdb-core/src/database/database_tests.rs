@@ -631,6 +631,171 @@ fn test_execute_train_force_retrain_succeeds() {
     assert_eq!(payload["status"], serde_json::json!("trained"));
 }
 
+// ---------------------------------------------------------------------------
+// Quantizer wiring across restarts (RaBitQ + PQ persistence round-trips)
+// ---------------------------------------------------------------------------
+
+/// Builds a sinusoidal vector — spread-out distances, no symmetric ties,
+/// so brute-force/ANN top-k comparisons are stable.
+fn sin_vector(dim: usize, i: usize) -> Vec<f32> {
+    #[allow(clippy::cast_precision_loss)]
+    (0..dim)
+        .map(|d| ((i * dim + d) as f32 * 0.01).sin())
+        .collect()
+}
+
+/// Inserts `count` sinusoidal vectors (ids `0..count`) into a collection.
+fn seed_sin_vectors(db: &Database, name: &str, dim: usize, count: usize) {
+    let coll = db.get_vector_collection(name).unwrap();
+    let points: Vec<Point> = (0..count)
+        .map(|i| Point::new(i as u64, sin_vector(dim, i), Some(serde_json::json!({}))))
+        .collect();
+    coll.upsert(points).unwrap();
+}
+
+/// Brute-force Euclidean top-k ids over the seeded sinusoidal set.
+fn sin_brute_force_top_k(
+    query: &[f32],
+    dim: usize,
+    count: usize,
+    k: usize,
+) -> std::collections::HashSet<u64> {
+    let mut dists: Vec<(u64, f32)> = (0..count)
+        .map(|i| {
+            let v = sin_vector(dim, i);
+            let d: f32 = query.iter().zip(&v).map(|(a, b)| (a - b) * (a - b)).sum();
+            (i as u64, d)
+        })
+        .collect();
+    dists.sort_by(|a, b| a.1.total_cmp(&b.1));
+    dists.into_iter().take(k).map(|(id, _)| id).collect()
+}
+
+/// `TRAIN QUANTIZER 'rabitq'` on a collection created with `storage='rabitq'`
+/// must install the quantizer into the live backend (no restart needed).
+#[test]
+fn test_execute_train_rabitq_installs_into_live_backend() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection_with_options(
+        "rbq_live",
+        64,
+        DistanceMetric::Euclidean,
+        StorageMode::RaBitQ,
+    )
+    .unwrap();
+    seed_sin_vectors(&db, "rbq_live", 64, 300);
+
+    let coll = db.resolve_writable_collection("rbq_live").unwrap();
+    assert!(
+        !coll.is_rabitq_quantizer_trained(),
+        "300 inserts stay below the lazy-train threshold"
+    );
+
+    let query = Parser::parse("TRAIN QUANTIZER ON rbq_live WITH (m=4, type=rabitq)").unwrap();
+    db.execute_query(&query, &std::collections::HashMap::new())
+        .unwrap();
+
+    assert!(
+        coll.is_rabitq_quantizer_trained(),
+        "TRAIN must install the quantizer into the live RaBitQ backend"
+    );
+
+    let results = coll.search(&sin_vector(64, 42), 5).unwrap();
+    assert_eq!(
+        results.first().map(|r| r.point.id),
+        Some(42),
+        "self-query must return itself as top-1 through the RaBitQ path"
+    );
+}
+
+/// End-to-end restart wiring: create → insert → TRAIN 'rabitq' → reopen the
+/// Database → the trained quantizer must be restored from `rabitq.idx` and
+/// search must keep recall parity with brute force.
+#[test]
+fn test_train_rabitq_wiring_survives_reopen() {
+    let dir = tempdir().unwrap();
+    {
+        let db = Database::open(dir.path()).unwrap();
+        // Created with the default Full mode: TRAIN flips the config to
+        // RaBitQ and the backend takes effect at the reopen below.
+        db.create_collection("rbq_reopen", 64, DistanceMetric::Euclidean)
+            .unwrap();
+        seed_sin_vectors(&db, "rbq_reopen", 64, 300);
+        let query = Parser::parse("TRAIN QUANTIZER ON rbq_reopen WITH (m=4, type=rabitq)").unwrap();
+        db.execute_query(&query, &std::collections::HashMap::new())
+            .unwrap();
+        assert_eq!(db.flush_all(), 0, "flush before reopen must succeed");
+    }
+
+    let db = Database::open(dir.path()).unwrap();
+    let coll = db.resolve_writable_collection("rbq_reopen").unwrap();
+    assert_eq!(coll.config().storage_mode, StorageMode::RaBitQ);
+    assert!(
+        coll.is_rabitq_quantizer_trained(),
+        "rabitq.idx must be reloaded and installed on open"
+    );
+
+    // Recall parity with brute force (set overlap, not exact scores).
+    let query_vec = sin_vector(64, 42);
+    let results = coll.search(&query_vec, 10).unwrap();
+    assert_eq!(results.len(), 10);
+    let result_ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+    let brute_ids = sin_brute_force_top_k(&query_vec, 64, 300, 10);
+    let overlap = brute_ids.intersection(&result_ids).count();
+    assert!(
+        overlap >= 7,
+        "recall@10 vs brute force should be >= 0.7 after reopen, got {overlap}/10"
+    );
+}
+
+/// PQ persistence round-trip: the codebook saved by `TRAIN QUANTIZER` must be
+/// reloaded on open and the PQ cache rebuilt, so the ADC rescore path stays
+/// live after a restart.
+#[test]
+fn test_train_pq_codebook_and_cache_survive_reopen() {
+    let dir = tempdir().unwrap();
+    {
+        let db = Database::open(dir.path()).unwrap();
+        // storage='pq' from creation: inserts lazily train an in-memory
+        // quantizer after 128 points, but only TRAIN persists the codebook —
+        // force=true replaces the lazily trained one.
+        db.create_collection_with_options(
+            "pqc",
+            16,
+            DistanceMetric::Euclidean,
+            StorageMode::ProductQuantization,
+        )
+        .unwrap();
+        seed_sin_vectors(&db, "pqc", 16, 300);
+        let query = Parser::parse("TRAIN QUANTIZER ON pqc WITH (m=4, k=16, force=true)").unwrap();
+        db.execute_query(&query, &std::collections::HashMap::new())
+            .unwrap();
+        assert_eq!(db.flush_all(), 0, "flush before reopen must succeed");
+    }
+
+    let db = Database::open(dir.path()).unwrap();
+    let coll = db.resolve_writable_collection("pqc").unwrap();
+    assert_eq!(coll.config().storage_mode, StorageMode::ProductQuantization);
+    assert!(
+        coll.pq_quantizer_read().is_some(),
+        "codebook.pq must be reloaded on open"
+    );
+    assert_eq!(
+        coll.pq_cache_len(),
+        300,
+        "PQ cache must be rebuilt for every stored vector"
+    );
+
+    // ADC-rescored search still finds the self-query (PQ is lossy: top-10,
+    // not top-1).
+    let results = coll.search(&sin_vector(16, 42), 10).unwrap();
+    assert!(
+        results.iter().any(|r| r.point.id == 42),
+        "self-query must appear in PQ-rescored top-10 after reopen"
+    );
+}
+
 #[test]
 fn test_execute_train_with_sample_limit() {
     let dir = tempdir().unwrap();

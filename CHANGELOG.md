@@ -52,6 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`serialize`/`snapshot`) now capture relation edges and restore them
   (previously a restore silently wiped every relation). Older bare-array
   snapshots still load.
+- **RaBitQ wired end-to-end in the collection query path, restarts included**:
+  collections created with `storage = 'rabitq'` now build the binary-traversal
+  HNSW backend, and `TRAIN QUANTIZER … type = rabitq` installs the trained
+  quantizer into the live index in addition to persisting `rabitq.idx`. On
+  open, `rabitq.idx` is reloaded and every stored vector is re-encoded in
+  NodeId order (O(n·d), same cost class as gap recovery). Vacuum preserves the
+  RaBitQ backend and re-installs the trained quantizer instead of silently
+  downgrading to the Standard f32 backend.
 - **Durable post-hoc TTL setters for agent memory**: Result-returning
   `set_semantic_ttl_durable` / `set_episodic_ttl_durable` /
   `set_procedural_ttl_durable` on `AgentMemory` (and `set_ttl_durable` on each
@@ -63,6 +71,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequential-scan debt justifies the build; secondary indexes keep precedence.
 - **CI (#1076)**: full TypeScript SDK vitest suite on every PR; nightly 100K
   recall@10 ≥ 0.95 gate (`perf-gate-e2e` schedule + manual dispatch).
+
+### Fixed
+- **`TRAIN QUANTIZER 'rabitq'` trained an index nothing ever loaded**: the
+  persisted `rabitq.idx` had zero load-path callers, the persisted HNSW meta
+  hardcoded `StorageMode::Full` on save, and the collection load path ignored
+  the storage mode — so after a reopen a RaBitQ collection silently searched
+  f32 forever. `HnswIndex::save` now persists the actual backend mode and the
+  load/open paths honour the collection storage mode and restore the trained
+  quantizer.
+- **PQ persistence round-trip**: `Collection::open` now reloads the trained PQ
+  codebook (`codebook.pq`, plus `rotation.opq` for OPQ) and rebuilds the PQ
+  cache by re-encoding stored vectors (O(n) at open). Previously the codebook
+  saved by `TRAIN QUANTIZER` was never loaded, leaving the ADC rescore path
+  inert after a restart.
+- **Quantization docs honesty**: `docs/guides/QUANTIZATION.md` now states
+  precisely which modes are wired into the collection query path — RaBitQ and
+  PQ end-to-end; SQ8/Binary collection modes maintain caches that no search
+  path consumes (search stays full-precision f32), pending a reduced-memory
+  storage mode.
 
 ## [1.18.0] — 2026-06-07
 

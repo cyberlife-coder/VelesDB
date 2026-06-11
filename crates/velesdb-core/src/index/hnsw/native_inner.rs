@@ -46,31 +46,6 @@ pub struct NativeHnswInner {
 }
 
 impl NativeHnswInner {
-    /// Creates a new `NativeHnswInner` with the specified metric and parameters.
-    ///
-    /// Uses the default VAMANA alpha (1.2) for neighbor diversification.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if vector storage pre-allocation fails.
-    pub fn new(
-        metric: DistanceMetric,
-        max_connections: usize,
-        max_elements: usize,
-        ef_construction: usize,
-        dimension: usize,
-    ) -> crate::error::Result<Self> {
-        Self::new_with_options(
-            metric,
-            max_connections,
-            max_elements,
-            ef_construction,
-            dimension,
-            crate::StorageMode::Full,
-            DEFAULT_ALPHA,
-        )
-    }
-
     /// Creates a new `NativeHnswInner` with a specific storage mode.
     ///
     /// When `storage_mode` is [`StorageMode::RaBitQ`], the backend uses binary
@@ -79,7 +54,6 @@ impl NativeHnswInner {
     /// # Errors
     ///
     /// Returns an error if vector storage pre-allocation fails.
-    #[allow(dead_code)] // Reason: Convenience constructor — public API surface for callers
     pub fn new_with_storage_mode(
         metric: DistanceMetric,
         max_connections: usize,
@@ -159,6 +133,50 @@ impl NativeHnswInner {
         match &self.backend {
             HnswBackend::Standard(_) => crate::StorageMode::Full,
             HnswBackend::RaBitQ(_) => crate::StorageMode::RaBitQ,
+        }
+    }
+
+    /// Installs a pre-trained `RaBitQ` quantizer into the `RaBitQ` backend,
+    /// re-encoding every stored vector in `NodeId` order.
+    ///
+    /// Returns `Ok(true)` when installed, `Ok(false)` when the backend is
+    /// Standard (no-op — the wiring takes effect at the next open, once the
+    /// backend is rebuilt as `RaBitQ` from the collection storage mode).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-encoding a stored vector fails.
+    #[cfg(feature = "persistence")]
+    pub fn install_trained_rabitq(
+        &self,
+        rabitq: std::sync::Arc<crate::quantization::RaBitQIndex>,
+    ) -> crate::error::Result<bool> {
+        match &self.backend {
+            HnswBackend::Standard(_) => Ok(false),
+            HnswBackend::RaBitQ(precision) => {
+                precision.install_trained_rabitq(rabitq)?;
+                Ok(true)
+            }
+        }
+    }
+
+    /// Returns true when the backend is `RaBitQ` with a trained quantizer.
+    #[cfg(feature = "persistence")]
+    #[must_use]
+    pub fn is_rabitq_quantizer_trained(&self) -> bool {
+        matches!(&self.backend, HnswBackend::RaBitQ(precision) if precision.is_quantizer_trained())
+    }
+
+    /// Returns the trained `RaBitQ` quantizer, if any.
+    ///
+    /// Used by vacuum to carry the trained rotation over to the rebuilt
+    /// backend via [`Self::install_trained_rabitq`].
+    #[cfg(feature = "persistence")]
+    #[must_use]
+    pub fn rabitq_quantizer(&self) -> Option<std::sync::Arc<crate::quantization::RaBitQIndex>> {
+        match &self.backend {
+            HnswBackend::Standard(_) => None,
+            HnswBackend::RaBitQ(precision) => precision.trained_quantizer(),
         }
     }
 }
@@ -345,31 +363,12 @@ impl NativeHnswInner {
         }
     }
 
-    /// Loads the HNSW graph from files.
-    ///
-    /// When `storage_mode` is [`StorageMode::RaBitQ`], wraps the loaded graph
-    /// in a `RaBitQPrecisionHnsw`. The quantizer trains lazily after enough
-    /// new vectors are inserted.
-    ///
-    /// # Errors
-    ///
-    /// Returns `io::Error` if file operations fail or data is corrupted.
-    pub fn file_load(
-        path: &Path,
-        basename: &str,
-        metric: DistanceMetric,
-        dimension: usize,
-    ) -> std::io::Result<Self> {
-        let distance = CachedSimdDistance::new(metric, dimension);
-        let inner = NativeHnsw::file_load(path, basename, distance)?;
-
-        Ok(Self {
-            backend: HnswBackend::Standard(inner),
-            metric,
-        })
-    }
-
     /// Loads the HNSW graph with a specific storage mode.
+    ///
+    /// When `storage_mode` is [`crate::StorageMode::RaBitQ`], wraps the
+    /// loaded graph in a `RaBitQPrecisionHnsw`. The quantizer is NOT trained
+    /// here — callers restore a persisted quantizer via
+    /// [`Self::install_trained_rabitq`] or let it train lazily from inserts.
     ///
     /// # Errors
     ///

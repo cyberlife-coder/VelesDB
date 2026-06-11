@@ -2480,6 +2480,15 @@ TRAIN QUANTIZER ON my_collection WITH (m = 8, k = 256);
 - The collection must contain enough vectors (recommended: at least `k`).
 - Re-training overwrites the existing quantizer.
 - OPQ can be enabled via the `type` parameter.
+- Trained quantizers are persisted in the collection directory
+  (`codebook.pq` / `rotation.opq` for PQ/OPQ, `rabitq.idx` for RaBitQ) and
+  restored on database open: the PQ cache and RaBitQ encodings are rebuilt
+  by re-encoding the stored vectors (O(n) at open).
+- `type = rabitq` also installs the trained quantizer into the live index
+  when the collection was created with `storage = 'rabitq'`. For
+  collections created with another storage mode, training persists the
+  index and flips the collection's storage mode; the RaBitQ backend takes
+  effect at the next open.
 
 ---
 

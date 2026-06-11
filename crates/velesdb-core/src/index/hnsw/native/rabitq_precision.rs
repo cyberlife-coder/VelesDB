@@ -251,6 +251,92 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
         }
         Ok(())
     }
+
+    /// Returns the trained `RaBitQ` quantizer, if any.
+    ///
+    /// Used by vacuum/rebuild paths to carry the trained rotation over to a
+    /// freshly built backend via [`Self::install_trained_rabitq`].
+    #[must_use]
+    pub fn trained_quantizer(&self) -> Option<Arc<RaBitQIndex>> {
+        self.rabitq_index.read().clone()
+    }
+
+    /// Installs a pre-trained `RaBitQ` quantizer (e.g. loaded from
+    /// `rabitq.idx` or trained by `TRAIN QUANTIZER`) and re-encodes EVERY
+    /// vector currently in the graph into a fresh store.
+    ///
+    /// Replaces any previously installed quantizer/store (force-retrain
+    /// semantics). The store is rebuilt in `NodeId` order `0..len` because
+    /// `search_layer_rabitq` indexes the store by node id.
+    ///
+    /// # Cost
+    ///
+    /// O(n·d) — one rotation + encode per stored vector. At collection open
+    /// this is the same cost class as HNSW gap recovery.
+    ///
+    /// # Locking
+    ///
+    /// Holds `rabitq_index.write()` for the whole re-encode so concurrent
+    /// inserts (which take `rabitq_index.read()` first) cannot interleave
+    /// store pushes with the rebuild. Inside that critical section the
+    /// vectors snapshot is read and RELEASED before `rabitq_store.write()`
+    /// is taken, preserving the documented order
+    /// `rabitq_index → rabitq_store → training_buffer`
+    /// (see `docs/CONCURRENCY_MODEL.md` §RaBitQ) and never holding
+    /// `inner.vectors` while waiting on the store lock (a search thread
+    /// holds `rabitq_store.read()` while acquiring `inner.vectors.read()`).
+    ///
+    /// An insert that passed the untrained `rabitq_index` check but has not
+    /// reached `inner.insert` yet is not re-encoded; its node falls back to
+    /// exact f32 scoring during traversal — the same window that exists for
+    /// lazy `train_rabitq`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if encoding any stored vector fails (e.g. dimension
+    /// mismatch between the quantizer and this index).
+    pub fn install_trained_rabitq(&self, rabitq: Arc<RaBitQIndex>) -> crate::error::Result<()> {
+        let mut index_guard = self.rabitq_index.write();
+        let store = self.encode_all_in_node_order(&rabitq)?;
+
+        // Store MUST be visible before index — same ordering contract as
+        // train_rabitq (search checks the index first).
+        *self.rabitq_store.write() = Some(store);
+        *index_guard = Some(rabitq);
+
+        // Buffered pre-training vectors are already in `inner` and were
+        // re-encoded above; clear the buffer so it cannot retrain over the
+        // installed quantizer.
+        let mut buffer = self.training_buffer.lock();
+        buffer.clear();
+        buffer.shrink_to_fit();
+        Ok(())
+    }
+
+    /// Encodes every vector in `inner` (`NodeId` order `0..len`) into a
+    /// fresh [`RaBitQVectorStore`].
+    ///
+    /// The vectors read guard is dropped when this returns — callers must
+    /// not assume it is still held.
+    fn encode_all_in_node_order(
+        &self,
+        rabitq: &RaBitQIndex,
+    ) -> crate::error::Result<RaBitQVectorStore> {
+        let vectors_guard = self.inner.vectors.read();
+        let Some(vectors) = vectors_guard.as_ref() else {
+            return Ok(RaBitQVectorStore::new(self.dimension, 1000));
+        };
+        let count = vectors.len();
+        let mut store = RaBitQVectorStore::new(self.dimension, count + 1000);
+        for node_id in 0..count {
+            let Some(vector) = vectors.get(node_id) else {
+                break;
+            };
+            let encoded = rabitq.encode(vector)?;
+            store.push(&encoded.bits, encoded.correction);
+        }
+        Ok(store)
+    }
 }
 
 // --- Private training and search implementation ---

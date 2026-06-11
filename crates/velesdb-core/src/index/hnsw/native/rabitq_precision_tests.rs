@@ -138,6 +138,105 @@ fn test_rabitq_precision_insert_after_training() {
 }
 
 // =========================================================================
+// install_trained_rabitq (quantization wiring across restarts)
+// =========================================================================
+
+/// Builds `n` sinusoidal vectors of dimension `dim`.
+#[cfg(feature = "persistence")]
+fn sinusoidal_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {
+    (0..n)
+        .map(|i| {
+            (0..dim)
+                .map(|j| ((i * dim + j) as f32 * 0.01).sin())
+                .collect()
+        })
+        .collect()
+}
+
+/// Installing a pre-trained quantizer must encode every existing vector
+/// (store rebuilt in NodeId order) and activate RaBitQ search with recall
+/// parity against the f32 baseline.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_install_trained_rabitq_encodes_existing_vectors() {
+    use crate::quantization::RaBitQIndex;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    let (dim, n, k) = (64, 200, 10);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
+    let hnsw = RaBitQPrecisionHnsw::new(engine, dim, 16, 200, 1000).expect("test");
+
+    let vectors = sinusoidal_vectors(n, dim);
+    for v in &vectors {
+        hnsw.insert(v).expect("insert");
+    }
+    assert!(!hnsw.is_quantizer_trained(), "below lazy-train threshold");
+
+    let query = &vectors[42];
+    let baseline: HashSet<usize> = hnsw
+        .search(query, k, 100)
+        .iter()
+        .map(|&(id, _)| id)
+        .collect();
+
+    let rabitq = RaBitQIndex::train(&vectors, 42).expect("train");
+    hnsw.install_trained_rabitq(Arc::new(rabitq))
+        .expect("install");
+    assert!(hnsw.is_quantizer_trained());
+
+    let results = hnsw.search(query, k, 100);
+    assert_eq!(results.len(), k);
+    assert_eq!(results[0].0, 42, "self-query must return itself as top-1");
+
+    let ids: HashSet<usize> = results.iter().map(|&(id, _)| id).collect();
+    let overlap = baseline.intersection(&ids).count();
+    #[allow(clippy::cast_precision_loss)]
+    let recall = overlap as f64 / k as f64;
+    assert!(
+        recall >= 0.7,
+        "RaBitQ results should overlap f32 baseline (recall sanity), got {recall:.2}"
+    );
+}
+
+/// Inserts after install must stay aligned with NodeId order: the store was
+/// rebuilt for nodes `0..n`, so node `n` (first post-install insert) must be
+/// encoded at store position `n` and remain searchable.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_install_trained_rabitq_then_insert_keeps_alignment() {
+    use crate::quantization::RaBitQIndex;
+    use std::sync::Arc;
+
+    let (dim, n) = (64, 120);
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, dim);
+    let hnsw = RaBitQPrecisionHnsw::new(engine, dim, 16, 200, 1000).expect("test");
+
+    let vectors = sinusoidal_vectors(n + 30, dim);
+    for v in &vectors[..n] {
+        hnsw.insert(v).expect("insert");
+    }
+
+    let rabitq = RaBitQIndex::train(&vectors[..n], 42).expect("train");
+    hnsw.install_trained_rabitq(Arc::new(rabitq))
+        .expect("install");
+
+    for v in &vectors[n..] {
+        hnsw.insert(v).expect("post-install insert");
+    }
+    assert_eq!(hnsw.len(), n + 30);
+
+    // Self-query on a post-install vector: top-1 must be its own node id.
+    let target = n + 15;
+    let results = hnsw.search(&vectors[target], 5, 100);
+    assert_eq!(
+        results.first().map(|&(id, _)| id),
+        Some(target),
+        "post-install vector must be searchable at its node id"
+    );
+}
+
+// =========================================================================
 // Recall test (EPIC-055)
 // =========================================================================
 
