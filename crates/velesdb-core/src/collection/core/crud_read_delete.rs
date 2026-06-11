@@ -75,7 +75,7 @@ impl Collection {
         // collections; no-op for vector / metadata-only collections.
         self.cascade_delete_node_edges(ids)?;
 
-        self.invalidate_caches_and_bump_generation();
+        self.bump_generation_with_mirror_deletes(ids);
         Ok(())
     }
 

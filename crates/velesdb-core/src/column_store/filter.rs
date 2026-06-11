@@ -35,9 +35,26 @@ fn scan_int_column(
         .collect()
 }
 
-/// Scans an integer column, returning a `RoaringBitmap` of matching indices.
+/// Scans a typed column slice, returning a `RoaringBitmap` of indices where
+/// `predicate(val)` is true. Excludes deleted rows.
 ///
 /// Indices >= `u32::MAX` are safely skipped (not truncated).
+fn scan_cells_bitmap<T: Copy>(
+    cells: &[Option<T>],
+    deleted_rows: &rustc_hash::FxHashSet<usize>,
+    predicate: impl Fn(T) -> bool,
+) -> RoaringBitmap {
+    cells
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, v)| match v {
+            Some(val) if predicate(*val) && !deleted_rows.contains(&idx) => u32::try_from(idx).ok(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Scans an integer column, returning a `RoaringBitmap` of matching indices.
 fn scan_int_column_bitmap(
     store: &ColumnStore,
     column: &str,
@@ -46,15 +63,27 @@ fn scan_int_column_bitmap(
     let Some(TypedColumn::Int(col)) = store.columns.get(column) else {
         return RoaringBitmap::new();
     };
-    col.iter()
-        .enumerate()
-        .filter_map(|(idx, v)| match v {
-            Some(val) if predicate(*val) && !store.deleted_rows.contains(&idx) => {
-                u32::try_from(idx).ok()
-            }
-            _ => None,
-        })
-        .collect()
+    scan_cells_bitmap(col, &store.deleted_rows, predicate)
+}
+
+/// Scans a float column, returning a `RoaringBitmap` of matching indices.
+fn scan_float_column_bitmap(
+    store: &ColumnStore,
+    column: &str,
+    predicate: impl Fn(f64) -> bool,
+) -> RoaringBitmap {
+    let Some(TypedColumn::Float(col)) = store.columns.get(column) else {
+        return RoaringBitmap::new();
+    };
+    scan_cells_bitmap(col, &store.deleted_rows, predicate)
+}
+
+/// Scans a bool column, returning a `RoaringBitmap` of rows equal to `value`.
+fn scan_bool_column_bitmap(store: &ColumnStore, column: &str, value: bool) -> RoaringBitmap {
+    let Some(TypedColumn::Bool(col)) = store.columns.get(column) else {
+        return RoaringBitmap::new();
+    };
+    scan_cells_bitmap(col, &store.deleted_rows, |v| v == value)
 }
 
 /// Scans a string column for rows whose interned id matches `target_id`.
@@ -86,16 +115,7 @@ fn scan_string_column_bitmap(
     let Some(TypedColumn::String(col)) = store.columns.get(column) else {
         return RoaringBitmap::new();
     };
-    col.iter()
-        .enumerate()
-        .filter_map(|(idx, v)| {
-            if *v == Some(target_id) && !store.deleted_rows.contains(&idx) {
-                u32::try_from(idx).ok()
-            } else {
-                None
-            }
-        })
-        .collect()
+    scan_cells_bitmap(col, &store.deleted_rows, |id| id == target_id)
 }
 
 impl ColumnStore {
@@ -230,6 +250,26 @@ impl ColumnStore {
     #[must_use]
     pub fn filter_range_int_bitmap(&self, column: &str, low: i64, high: i64) -> RoaringBitmap {
         scan_int_column_bitmap(self, column, |v| v > low && v < high)
+    }
+
+    /// Filters a float column by an arbitrary predicate, returning a bitmap.
+    ///
+    /// Excludes deleted rows. Indices >= `u32::MAX` are safely skipped.
+    /// Used by the payload mirror, which stores all JSON numbers as `f64`
+    /// to mirror the JSON filter's numeric comparison semantics.
+    pub(crate) fn filter_float_bitmap(
+        &self,
+        column: &str,
+        predicate: impl Fn(f64) -> bool,
+    ) -> RoaringBitmap {
+        scan_float_column_bitmap(self, column, predicate)
+    }
+
+    /// Filters a bool column by equality, returning a bitmap.
+    ///
+    /// Excludes deleted rows. Indices >= `u32::MAX` are safely skipped.
+    pub(crate) fn filter_bool_eq_bitmap(&self, column: &str, value: bool) -> RoaringBitmap {
+        scan_bool_column_bitmap(self, column, value)
     }
 
     /// Combines two filter results using AND.

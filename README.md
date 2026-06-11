@@ -66,7 +66,7 @@ VelesDB removes the US provider from the chain entirely. One Rust binary, local-
 | Custom glue code + 3 query languages | **VelesQL** — one language for everything |
 | 3 deployments, 3 configs, 3 backups | **6 MB binary** — works offline, air-gapped |
 
-> *¹ ColumnStore filtering API micro-benchmark, integer equality: 130x at 100K rows, 55x at 10K rows — see [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md). `SELECT ... WHERE` metadata filtering currently runs on secondary indexes + JSON payload filters (see [2] below).*
+> *¹ ColumnStore filtering API micro-benchmark, integer equality: 130x at 100K rows, 55x at 10K rows — see [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md). `SELECT ... WHERE` metadata filtering uses secondary indexes when available, and an adaptive ColumnStore payload mirror for scan-heavy filters (see [2] below).*
 
 ---
 ## What is VelesDB?
@@ -80,7 +80,7 @@ VelesDB is a **local-first database for AI agents** that fuses three engines int
 | **ColumnStore** | Structured metadata filtering (typed columns) | **130x** faster than JSON scanning [2] |
 
 > [1] Reproduce: `python benchmarks/velesdb_benchmark.py --recall` (Python SDK path, 10K/384D, WAL fsync on, i9-14900KF reference machine). See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and [CHANGELOG v1.13.0](CHANGELOG.md).
-> [2] Reproduce: `cargo bench -p velesdb-core --bench column_filter_benchmark`. See [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md) — at 100K rows: ColumnStore 29.5 us vs JSON scan 3.84 ms (integer equality filter). Micro-benchmark of the ColumnStore filtering API; `SELECT ... WHERE` metadata filtering currently runs on secondary indexes + JSON payload filters (the ColumnStore engine backs JOIN execution).
+> [2] Reproduce: `cargo bench -p velesdb-core --bench column_filter_benchmark`. See [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md) — at 100K rows: ColumnStore 29.5 us vs JSON scan 3.84 ms (integer equality filter). Micro-benchmark of the ColumnStore filtering API, which now serves `SELECT ... WHERE` metadata filtering through a per-collection payload mirror (built adaptively for scan-heavy workloads) and backs JOIN execution; secondary indexes are used first when they cover the filter.
 
 All three are queried through **VelesQL** — a single SQL-like language with vector, graph, and columnar extensions:
 
@@ -395,9 +395,12 @@ filtering API is **130x faster** than JSON scanning at 100K rows
 JSON scan: 3.84 ms @ 100K    →    ColumnStore: 29.5 us @ 100K (130x faster)
 ```
 
-Today the ColumnStore engine backs `JOIN` execution. `SELECT ... WHERE`
-metadata filtering runs on secondary indexes + JSON payload filters, with
-pre-filter or post-filter chosen automatically by the query planner:
+The ColumnStore engine backs `JOIN` execution and serves `SELECT ... WHERE`
+metadata filtering through a per-collection payload mirror: top-level scalar
+payload fields are mirrored into typed columns, and filters compile to
+RoaringBitmap scans. The mirror is built adaptively — only after sequential
+scans have cost more than one full pass — so point lookups keep their fast
+path; secondary indexes are still consulted first when they cover the filter:
 
 ```sql
 SELECT * FROM products

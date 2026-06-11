@@ -193,7 +193,7 @@ impl Collection {
         // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
         // so only the final payload counts, then atomic decrement + increment.
         self.apply_histogram_replace_dedup(points, old_payloads);
-        self.invalidate_caches_and_bump_generation();
+        self.bump_generation_with_mirror_upserts(points);
         Ok(())
     }
 

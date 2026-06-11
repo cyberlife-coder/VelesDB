@@ -144,9 +144,9 @@ VelesDB core architecture is explicitly **hybrid by design**:
   - `WITH` (max_groups, group_limit)
 
 #### Filter Engine
-- ColumnStore-based filtering
+- ColumnStore-based filtering (adaptive per-collection payload mirror in the `SELECT ... WHERE` path)
 - RoaringBitmap for set operations
-- Up to 130x faster than JSON filtering
+- Up to 130x faster than JSON filtering (filtering-API micro-benchmark)
 
 #### Aggregation Engine (EPIC-017/018)
 - Streaming aggregation executor

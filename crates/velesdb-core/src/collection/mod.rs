@@ -23,6 +23,7 @@ pub mod graph;
 mod graph_collection;
 mod graph_collection_query;
 mod metadata_collection;
+pub(crate) mod payload_mirror;
 pub mod query_cost;
 pub mod search;
 pub mod stats;
