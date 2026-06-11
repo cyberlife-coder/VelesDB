@@ -70,7 +70,11 @@ fn core_routes() -> Router<Arc<AppState>> {
         // Maintenance endpoints
         .route("/collections/{name}/vacuum", post(vacuum_collection))
         .route("/collections/{name}/compact", post(compact_collection))
-        // Relation (graph edge) management on any collection type
+}
+
+/// Relation (graph edge) and durable TTL routes (any collection type).
+fn relation_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route("/collections/{name}/relations", post(relate_points))
         .route(
             "/collections/{name}/relations/{edge_id}",
@@ -148,5 +152,8 @@ fn graph_routes() -> Router<Arc<AppState>> {
 /// This is the single source of truth for route registration. Both
 /// the production binary and the OpenAPI conformance test consume it.
 pub fn api_routes() -> Router<Arc<AppState>> {
-    core_routes().merge(search_routes()).merge(graph_routes())
+    core_routes()
+        .merge(search_routes())
+        .merge(graph_routes())
+        .merge(relation_routes())
 }
