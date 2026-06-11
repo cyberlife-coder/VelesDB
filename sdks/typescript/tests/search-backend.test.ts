@@ -2,7 +2,8 @@
  * Search Backend Tests (#598)
  *
  * Covers `src/backends/search-backend.ts`: search, searchBatch,
- * textSearch, hybridSearch, multiQuerySearch, searchIds. Exercises
+ * textSearch, hybridSearch, multiQuerySearch, searchIds,
+ * sparseSearchNamed. Exercises
  * body shape (top_k, filter, include_vectors, fusion params), vector
  * normalisation (Float32Array → number[]), sparse-vector routing via
  * `transport.sparseToRest`, the `searchQualityToMode` integration, and
@@ -17,6 +18,7 @@ import {
   hybridSearch,
   multiQuerySearch,
   searchIds,
+  sparseSearchNamed,
   type SearchTransport,
 } from '../src/backends/search-backend';
 import type { TransportResponse } from '../src/backends/shared';
@@ -490,5 +492,71 @@ describe('searchIds', () => {
     await expect(searchIds(transport, 'missing', [0.1])).rejects.toThrow(
       CollectionNotFoundError
     );
+  });
+});
+
+describe('sparseSearchNamed', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('POSTs to /search with sparse_vectors keyed by index name (defaults)', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { results: [{ id: 1, score: 0.8 }] },
+    });
+
+    const result = await sparseSearchNamed(transport, 'docs', { 5: 0.9 }, 'splade');
+
+    const call = (transport.requestJson as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
+    expect(call[0]).toBe('POST');
+    expect(call[1]).toBe('/collections/docs/search');
+    const body = call[2] as Record<string, unknown>;
+    expect(body.sparse_vectors).toEqual({ splade: { 5: 0.9 } });
+    expect(body.sparse_index).toBe('splade');
+    expect(body.top_k).toBe(10);
+    expect(body.vector).toBeUndefined();
+    expect(result).toEqual([{ id: 1, score: 0.8 }]);
+  });
+
+  it('forwards k / filter / quality and a dense vector for hybrid mode', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { results: [] },
+    });
+
+    await sparseSearchNamed(transport, 'docs', { 5: 0.9 }, 'splade', {
+      k: 3,
+      filter: { a: 1 },
+      quality: 'accurate',
+      vector: new Float32Array([0.25]),
+    });
+
+    const body = (transport.requestJson as ReturnType<typeof vi.fn>).mock
+      .calls[0]![2] as Record<string, unknown>;
+    expect(body.top_k).toBe(3);
+    expect(body.filter).toEqual({ a: 1 });
+    expect(body.mode).toBe('accurate');
+    expect(body.vector).toEqual([0.25]);
+  });
+
+  it('returns [] when data.results is missing', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      { data: {} } as TransportResponse<unknown>
+    );
+
+    const result = await sparseSearchNamed(transport, 'docs', { 1: 1 }, 'idx');
+    expect(result).toEqual([]);
+  });
+
+  it('throws CollectionNotFoundError on VELES-002', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      typedError()
+    );
+
+    await expect(
+      sparseSearchNamed(transport, 'missing', { 1: 1 }, 'idx')
+    ).rejects.toThrow(CollectionNotFoundError);
   });
 });
