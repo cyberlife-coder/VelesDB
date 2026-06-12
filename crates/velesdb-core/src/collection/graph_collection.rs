@@ -330,6 +330,26 @@ impl GraphCollection {
         self.inner.store_node_payload(node_id, payload)
     }
 
+    /// Inserts or updates a node payload, optionally with an embedding vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage fails, the vector dimension is invalid, or
+    /// an embedding is supplied for a graph collection without embeddings.
+    pub fn upsert_node(
+        &self,
+        node_id: u64,
+        payload: &serde_json::Value,
+        vector: Option<Vec<f32>>,
+    ) -> Result<()> {
+        match vector {
+            Some(vector) => self
+                .inner
+                .upsert([Point::new(node_id, vector, Some(payload.clone()))]),
+            None => self.upsert_node_payload(node_id, payload),
+        }
+    }
+
     /// Inserts or updates node payload (properties).
     ///
     /// # Errors
@@ -406,6 +426,33 @@ mod tests {
         assert!(ids.contains(&10), "node 10 should be present");
         assert!(ids.contains(&20), "node 20 should be present");
         assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn test_upsert_node_with_embedding_is_searchable() {
+        let dir = tempdir().unwrap();
+        let col = GraphCollection::create(
+            dir.path().to_path_buf(),
+            "kg",
+            Some(4),
+            DistanceMetric::Cosine,
+            GraphSchema::schemaless(),
+        )
+        .unwrap();
+
+        col.upsert_node(
+            10,
+            &serde_json::json!({"name": "Alice"}),
+            Some(vec![1.0, 0.0, 0.0, 0.0]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            col.get_node_payload(10).unwrap(),
+            Some(serde_json::json!({"name": "Alice"}))
+        );
+        let results = col.search_by_embedding(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
+        assert_eq!(results[0].point.id, 10);
     }
 
     #[test]

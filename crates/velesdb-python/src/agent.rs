@@ -351,6 +351,14 @@ impl AgentMemory {
         py.allow_threads(|| self.core.load_snapshot_version(version).map_err(to_py_err))
     }
 
+    /// Alias for `load_snapshot_version`.
+    ///
+    /// Kept for older examples that used rollback-style naming.
+    #[pyo3(signature = (version))]
+    fn rollback(&self, py: Python<'_>, version: u64) -> PyResult<()> {
+        self.load_snapshot_version(py, version)
+    }
+
     /// Lists all available snapshot version numbers.
     fn list_snapshot_versions(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
         py.allow_threads(|| self.core.list_snapshot_versions().map_err(to_py_err))
