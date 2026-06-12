@@ -158,6 +158,12 @@ impl GraphStore {
         Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
+    /// Alias for `get_outgoing`.
+    #[pyo3(signature = (node_id))]
+    fn get_outgoing_edges(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
+        self.get_outgoing(py, node_id)
+    }
+
     /// Gets incoming edges to a node.
     #[pyo3(signature = (node_id))]
     fn get_incoming(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
@@ -170,6 +176,12 @@ impl GraphStore {
                 .collect::<Vec<_>>()
         });
         Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+    }
+
+    /// Alias for `get_incoming`.
+    #[pyo3(signature = (node_id))]
+    fn get_incoming_edges(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
+        self.get_incoming(py, node_id)
     }
 
     /// Gets outgoing edges filtered by label.
