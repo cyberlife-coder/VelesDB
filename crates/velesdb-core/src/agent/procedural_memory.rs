@@ -25,7 +25,7 @@ use super::memory_helpers;
 use super::reinforcement::{
     power_law_decay, FixedRate, ReinforcementContext, ReinforcementStrategy,
 };
-use super::ttl::MemoryTtl;
+use super::ttl::{MemoryKind, MemoryTtl};
 
 struct ProcedureState {
     name: String,
@@ -97,6 +97,8 @@ pub struct ProceduralMemory {
     /// ACT-R decay exponent `d` for passive confidence decay at recall time.
     /// `None` disables decay (default — backward-compatible behaviour).
     activation_decay_exponent: Option<f32>,
+    /// Edge-id allocator for [`Self::relate`] (seeded past existing edges).
+    next_edge_id: std::sync::atomic::AtomicU64,
 }
 
 impl ProceduralMemory {
@@ -130,6 +132,17 @@ impl ProceduralMemory {
     ) -> Result<Self, AgentMemoryError> {
         let (collection_name, dimension, stored_ids) =
             memory_helpers::init_tracked_memory(&db, Self::COLLECTION_NAME, dimension)?;
+        memory_helpers::rebuild_ttl_from_payloads(
+            &db,
+            &collection_name,
+            &ttl,
+            MemoryKind::Procedural,
+        )?;
+
+        let next_edge_id = memory_helpers::seed_edge_counter(&memory_helpers::get_collection(
+            &db,
+            &collection_name,
+        )?);
 
         Ok(Self {
             collection_name,
@@ -139,6 +152,7 @@ impl ProceduralMemory {
             reinforcement_strategy: Arc::new(FixedRate::default()),
             stored_ids,
             activation_decay_exponent: None,
+            next_edge_id,
         })
     }
 
@@ -177,6 +191,20 @@ impl ProceduralMemory {
         embedding: Option<&[f32]>,
         confidence: f32,
     ) -> Result<(), AgentMemoryError> {
+        self.learn_internal(procedure_id, name, steps, embedding, confidence, None)
+    }
+
+    /// Shared store path: persists the procedure, optionally with a durable
+    /// `_veles_expires_at` payload field (epoch seconds) for TTL'd procedures.
+    fn learn_internal(
+        &self,
+        procedure_id: u64,
+        name: &str,
+        steps: &[String],
+        embedding: Option<&[f32]>,
+        confidence: f32,
+        expires_at: Option<u64>,
+    ) -> Result<(), AgentMemoryError> {
         let vector = memory_helpers::resolve_embedding(self.dimension, embedding)?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
@@ -184,20 +212,18 @@ impl ProceduralMemory {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
 
-        let point = Point::new(
-            procedure_id,
-            vector,
-            Some(json!({
-                "name": name,
-                "steps": steps,
-                "confidence": confidence,
-                "usage_count": 0,
-                "created_at": now,
-                "last_used_at": now,
-                "success_count": 0,
-                "failure_count": 0
-            })),
-        );
+        let mut payload = json!({
+            "name": name,
+            "steps": steps,
+            "confidence": confidence,
+            "usage_count": 0,
+            "created_at": now,
+            "last_used_at": now,
+            "success_count": 0,
+            "failure_count": 0
+        });
+        memory_helpers::attach_expiry(&mut payload, expires_at);
+        let point = Point::new(procedure_id, vector, Some(payload));
 
         memory_helpers::upsert_points(&collection, vec![point])?;
         self.stored_ids.write().insert(procedure_id);
@@ -205,6 +231,16 @@ impl ProceduralMemory {
     }
 
     /// Learns a procedure and assigns a TTL for auto-expiration.
+    ///
+    /// A `ttl_seconds` of `0` means "expire immediately": the procedure is
+    /// eagerly removed (and any pre-existing point for `procedure_id` deleted),
+    /// harmonising the behaviour with `SemanticMemory::store_with_ttl`. The
+    /// embedding is still dimension-validated so callers get the same error
+    /// contract as a real learn.
+    ///
+    /// The expiry is persisted as a reserved `_veles_expires_at` (epoch
+    /// seconds) payload field, so the TTL survives a process restart: the
+    /// in-memory map is rebuilt from payloads when the collection is reopened.
     ///
     /// # Errors
     ///
@@ -218,9 +254,117 @@ impl ProceduralMemory {
         confidence: f32,
         ttl_seconds: u64,
     ) -> Result<(), AgentMemoryError> {
-        self.learn(procedure_id, name, steps, embedding, confidence)?;
-        self.ttl.set_ttl(procedure_id, ttl_seconds);
+        if ttl_seconds == 0 {
+            if let Some(emb) = embedding {
+                memory_helpers::validate_dimension(self.dimension, emb.len())?;
+            }
+            return self.delete(procedure_id);
+        }
+        let expires_at = MemoryTtl::now().saturating_add(ttl_seconds);
+        self.learn_internal(
+            procedure_id,
+            name,
+            steps,
+            embedding,
+            confidence,
+            Some(expires_at),
+        )?;
+        self.ttl
+            .set_expiry(MemoryKind::Procedural, procedure_id, expires_at);
         Ok(())
+    }
+
+    /// Durably sets (or refreshes) the TTL of an existing procedure.
+    ///
+    /// Unlike `AgentMemory::set_procedural_ttl` (in-memory map only, lost on
+    /// restart), this persists the expiry to the reserved `_veles_expires_at`
+    /// payload field, so it survives a restart. A `ttl_seconds` of 0 expires
+    /// the procedure immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotFound` when no procedure with `procedure_id` exists, or
+    /// `CollectionError` when persistence fails.
+    pub fn set_ttl_durable(
+        &self,
+        procedure_id: u64,
+        ttl_seconds: u64,
+    ) -> Result<(), AgentMemoryError> {
+        memory_helpers::set_ttl_durable(
+            &self.db,
+            &self.collection_name,
+            &self.ttl,
+            MemoryKind::Procedural,
+            procedure_id,
+            ttl_seconds,
+        )
+    }
+
+    /// Relates two live procedures with a typed, durable graph edge (e.g.
+    /// `DEPENDS_ON`, `REFINES`); see `SemanticMemory::relate` for semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotFound` when either endpoint is missing or expired, or
+    /// `CollectionError` when the edge write fails.
+    pub fn relate(
+        &self,
+        from_id: u64,
+        to_id: u64,
+        rel_type: &str,
+        properties: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<u64, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        for id in [from_id, to_id] {
+            memory_helpers::ensure_live(
+                &collection,
+                &self.collection_name,
+                &self.ttl,
+                MemoryKind::Procedural,
+                id,
+            )?;
+        }
+        let edge_id = memory_helpers::add_relation_edge(
+            &collection,
+            &self.next_edge_id,
+            (from_id, to_id),
+            rel_type,
+            properties,
+        )?;
+        // Close the check-then-add window: an endpoint deleted concurrently
+        // (its cascade may have run before our edge landed) must not leave a
+        // dangling, WAL-durable edge behind.
+        memory_helpers::verify_relation_endpoints(&collection, edge_id, (from_id, to_id))?;
+        Ok(edge_id)
+    }
+
+    /// Returns the outgoing relations of a procedure.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn relations(
+        &self,
+        id: u64,
+    ) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        // Expired entries are invisible on every read surface — edges whose
+        // target has expired (but is not yet swept) are hidden too.
+        Ok(collection
+            .get_outgoing_edges(id)
+            .into_iter()
+            .filter(|edge| !self.ttl.is_expired(MemoryKind::Procedural, edge.target()))
+            .collect())
+    }
+
+    /// Removes a relation edge created by [`Self::relate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn unrelate(&self, edge_id: u64) -> Result<bool, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        Ok(collection.remove_edge(edge_id))
     }
 
     /// Recalls matching procedures by vector similarity.
@@ -247,6 +391,7 @@ impl ProceduralMemory {
             query_embedding,
             k,
             &self.ttl,
+            MemoryKind::Procedural,
         )?;
 
         let now_secs = std::time::SystemTime::now()
@@ -318,20 +463,24 @@ impl ProceduralMemory {
             (state.success_count, state.failure_count + 1)
         };
 
-        let updated_point = Point::new(
-            procedure_id,
-            point.vector.clone(),
-            Some(json!({
-                "name": state.name,
-                "steps": state.steps,
-                "confidence": new_confidence,
-                "usage_count": state.usage_count + 1,
-                "created_at": state.created_at,
-                "last_used_at": now,
-                "success_count": new_success,
-                "failure_count": new_failure
-            })),
-        );
+        let mut payload = json!({
+            "name": state.name,
+            "steps": state.steps,
+            "confidence": new_confidence,
+            "usage_count": state.usage_count + 1,
+            "created_at": state.created_at,
+            "last_used_at": now,
+            "success_count": new_success,
+            "failure_count": new_failure
+        });
+        // Preserve the durable TTL field: reinforcing must not strip expiry.
+        let prior_expiry = point
+            .payload
+            .as_ref()
+            .and_then(|p| p.get(memory_helpers::EXPIRES_AT_KEY))
+            .and_then(serde_json::Value::as_u64);
+        memory_helpers::attach_expiry(&mut payload, prior_expiry);
+        let updated_point = Point::new(procedure_id, point.vector.clone(), Some(payload));
 
         memory_helpers::upsert_points(&collection, vec![updated_point])?;
 
@@ -400,7 +549,7 @@ impl ProceduralMemory {
         Ok(points
             .into_iter()
             .flatten()
-            .filter(|p| !self.ttl.is_expired(p.id))
+            .filter(|p| !self.ttl.is_expired(MemoryKind::Procedural, p.id))
             .filter_map(|p| extract_procedure_match(&p, 0.0))
             .collect())
     }
@@ -417,6 +566,7 @@ impl ProceduralMemory {
             id,
             &self.stored_ids,
             &self.ttl,
+            MemoryKind::Procedural,
         )
     }
 

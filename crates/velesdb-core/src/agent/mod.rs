@@ -1,7 +1,7 @@
 //! Agent Memory Patterns SDK (EPIC-010)
 //!
 //! Provides unified memory abstractions for AI agents, supporting:
-//! - **Semantic Memory**: Long-term knowledge stored as vector-graph
+//! - **Semantic Memory**: Long-term knowledge stored as vectors (graph linkage planned)
 //! - **Episodic Memory**: Temporal event sequences with context
 //! - **Procedural Memory**: Learned patterns and action sequences
 //!
@@ -19,16 +19,16 @@
 //! use velesdb_core::{Database, agent::AgentMemory};
 //!
 //! let db = Arc::new(Database::open("agent.db")?);
-//! let memory = AgentMemory::new(Arc::clone(&db))?;
+//! let memory = AgentMemory::new(Arc::clone(&db))?; // default dimension 384
 //!
 //! // Store semantic knowledge
-//! memory.semantic().store("Paris is the capital of France", embedding)?;
+//! memory.semantic().store(1, "Paris is the capital of France", &embedding)?;
 //!
-//! // Record an episode
-//! memory.episodic().record("User asked about French geography")?;
+//! // Record an episode (timestamp in epoch seconds, optional embedding)
+//! memory.episodic().record(2, "User asked about French geography", timestamp, Some(&embedding))?;
 //!
-//! // Learn a procedure
-//! memory.procedural().learn("answer_geography", steps)?;
+//! // Learn a procedure (steps, optional embedding, confidence)
+//! memory.procedural().learn(3, "answer_geography", &steps, Some(&embedding), 0.9)?;
 //! ```
 
 mod episodic_memory;
@@ -73,4 +73,4 @@ pub use snapshot::{
     SnapshotMetadata,
 };
 pub use temporal_index::{TemporalEntry, TemporalIndex, TemporalIndexStats};
-pub use ttl::{EvictionConfig, ExpireResult, MemoryTtl, TtlEntry};
+pub use ttl::{EvictionConfig, ExpireResult, MemoryKind, MemoryTtl, TtlEntry};

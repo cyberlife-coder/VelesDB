@@ -29,6 +29,11 @@
 //!   warning are recorded, and replay continues so later valid entries are
 //!   still recovered. Unknown opcodes mid-stream stop replay (the framing can
 //!   no longer be trusted).
+//!
+//! A bare `0x04` byte is the legacy compaction marker: versions prior to the
+//! WAL-truncating compaction protocol appended it after a successful
+//! compaction. It carries no payload and is skipped so post-compaction
+//! entries written by those versions are still recovered.
 
 use crate::storage::log_payload::crc32_hash;
 use crate::storage::sharded_index::ShardedIndex;
@@ -95,6 +100,11 @@ impl ReplayTarget<'_> {
 /// [`truncate_wal`]. Truncating before the mmap is durable would open a
 /// data-loss window (#898).
 ///
+/// Every id touched by an applied store or delete entry is appended to
+/// `touched_ids` (duplicates included) BEFORE the caller truncates the WAL,
+/// so the HNSW open-time reconciliation can detect stale index entries whose
+/// only witness was the just-truncated WAL.
+///
 /// # Returns
 ///
 /// Number of WAL entries successfully replayed.
@@ -106,6 +116,7 @@ pub(crate) fn replay_wal_to_index(
     mmap: &mut MmapMut,
     data_file: &File,
     next_offset: &mut usize,
+    touched_ids: &mut Vec<u64>,
 ) -> io::Result<usize> {
     let Some((mut reader, file_len)) = open_crc_wal(wal_path)? else {
         return Ok(0);
@@ -120,6 +131,7 @@ pub(crate) fn replay_wal_to_index(
         &mut target,
         next_offset,
         vector_size,
+        touched_ids,
     )
 }
 
@@ -159,6 +171,7 @@ fn open_crc_wal(wal_path: &Path) -> io::Result<Option<(BufReader<File>, u64)>> {
 ///
 /// Returns an error only for unrecoverable I/O failures; torn tail records (a
 /// crash mid-append) stop replay cleanly with the entries seen so far.
+#[allow(clippy::too_many_arguments)] // Mirrors the WAL entry frame: every field is required.
 fn drain_wal_entries(
     reader: &mut BufReader<File>,
     file_len: u64,
@@ -166,10 +179,19 @@ fn drain_wal_entries(
     target: &mut ReplayTarget<'_>,
     next_offset: &mut usize,
     vector_size: usize,
+    touched_ids: &mut Vec<u64>,
 ) -> io::Result<usize> {
     let mut replayed = 0usize;
-    while replay_one_entry(reader, file_len, index, target, next_offset, vector_size)?
-        .should_continue()
+    while replay_one_entry(
+        reader,
+        file_len,
+        index,
+        target,
+        next_offset,
+        vector_size,
+        touched_ids,
+    )?
+    .should_continue()
     {
         replayed += 1;
     }
@@ -189,8 +211,15 @@ fn is_crc_framed_wal(wal_path: &Path, file_len: u64) -> io::Result<bool> {
 
     let mut reader = BufReader::new(File::open(wal_path)?);
     let mut op = [0u8; 1];
-    if reader.read_exact(&mut op).is_err() {
-        return Ok(false);
+    // Skip leading legacy compaction markers (bare 0x04 bytes) so a WAL whose
+    // first real record sits behind a marker is still detected as CRC-framed.
+    loop {
+        if reader.read_exact(&mut op).is_err() {
+            return Ok(false);
+        }
+        if op[0] != 4 {
+            break;
+        }
     }
 
     match op[0] {
@@ -251,6 +280,7 @@ fn validate_first_delete_crc(reader: &mut BufReader<File>) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Replays one WAL entry.
+#[allow(clippy::too_many_arguments)] // Mirrors the WAL entry frame: every field is required.
 fn replay_one_entry(
     reader: &mut BufReader<File>,
     file_len: u64,
@@ -258,6 +288,7 @@ fn replay_one_entry(
     target: &mut ReplayTarget<'_>,
     next_offset: &mut usize,
     vector_size: usize,
+    touched_ids: &mut Vec<u64>,
 ) -> io::Result<EntryOutcome> {
     let pos = reader.stream_position()?;
     if pos >= file_len {
@@ -270,8 +301,22 @@ fn replay_one_entry(
     }
 
     match op[0] {
-        1 => replay_store(reader, file_len, index, target, next_offset, vector_size),
-        2 => replay_delete(reader, file_len, index),
+        1 => replay_store(
+            reader,
+            file_len,
+            index,
+            target,
+            next_offset,
+            vector_size,
+            touched_ids,
+        ),
+        2 => replay_delete(reader, file_len, index, touched_ids),
+        // Legacy compaction marker (no payload): written by pre-WAL-truncation
+        // versions after a successful compaction. Skip it and keep replaying so
+        // post-compaction entries are recovered; replaying the entries BEFORE
+        // the marker is convergent against the index those versions persisted
+        // (store records carry the full vector value, deletes replay in order).
+        4 => Ok(EntryOutcome::Applied),
         // Unknown opcode: framing is no longer trustworthy, so stop cleanly. If
         // bytes still follow the opcode this is mid-stream corruption — record
         // it for visibility, mirroring the CRC path; a trailing partial byte is
@@ -368,6 +413,7 @@ fn store_crc_matches(
 }
 
 /// Replays a store entry: validates CRC, writes data to mmap, updates index.
+#[allow(clippy::too_many_arguments)] // Mirrors the WAL entry frame: every field is required.
 fn replay_store(
     reader: &mut BufReader<File>,
     file_len: u64,
@@ -375,6 +421,7 @@ fn replay_store(
     target: &mut ReplayTarget<'_>,
     next_offset: &mut usize,
     vector_size: usize,
+    touched_ids: &mut Vec<u64>,
 ) -> io::Result<EntryOutcome> {
     let Some((id, data, crc_ok)) = read_store_entry(reader, file_len)? else {
         // Torn tail: stop cleanly, keeping prior entries.
@@ -397,6 +444,7 @@ fn replay_store(
 
     if data.len() == vector_size {
         apply_store_to_mmap(id, &data, index, target, next_offset, vector_size)?;
+        touched_ids.push(id);
     }
 
     Ok(EntryOutcome::Applied)
@@ -437,6 +485,7 @@ fn replay_delete(
     reader: &mut BufReader<File>,
     file_len: u64,
     index: &ShardedIndex,
+    touched_ids: &mut Vec<u64>,
 ) -> io::Result<EntryOutcome> {
     // op(1) already consumed; a delete needs id(8) + crc(4) to follow.
     let pos = reader.stream_position()?;
@@ -459,7 +508,9 @@ fn replay_delete(
     frame.extend_from_slice(&id_bytes);
 
     if crc32_hash(&frame) == u32::from_le_bytes(stored_crc) {
-        index.remove(u64::from_le_bytes(id_bytes));
+        let id = u64::from_le_bytes(id_bytes);
+        index.remove(id);
+        touched_ids.push(id);
         return Ok(EntryOutcome::Applied);
     }
 

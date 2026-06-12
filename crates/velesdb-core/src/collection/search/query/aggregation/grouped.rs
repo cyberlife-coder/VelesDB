@@ -61,7 +61,7 @@ impl Collection {
         let where_clause = stmt.where_clause.as_ref();
         let use_runtime = Self::needs_runtime_where_eval(where_clause);
         let needs_vector_eval = where_clause.is_some_and(Self::condition_requires_vector_eval);
-        let filter = Self::build_static_filter(where_clause, use_runtime, params);
+        let filter = Self::build_static_filter(where_clause, use_runtime, params)?;
         let (columns_vec, has_count_star) = Self::prepare_agg_columns(aggregations);
 
         let payload_storage = self.payload_storage.read();
@@ -110,18 +110,27 @@ impl Collection {
     }
 
     /// Builds a static `Filter` from the WHERE clause when runtime eval is not needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a WHERE parameter placeholder is missing from
+    /// `params` (never silently converts it to `NULL`).
     pub(super) fn build_static_filter(
         where_clause: Option<&crate::velesql::Condition>,
         use_runtime: bool,
         params: &HashMap<String, serde_json::Value>,
-    ) -> Option<crate::filter::Filter> {
+    ) -> Result<Option<crate::filter::Filter>> {
         if use_runtime {
-            return None;
+            return Ok(None);
         }
-        where_clause.map(|cond| {
-            let resolved = Self::resolve_condition_params(cond, params);
-            crate::filter::Filter::new(crate::filter::Condition::from(resolved))
-        })
+        where_clause
+            .map(|cond| {
+                let resolved = Self::resolve_condition_params(cond, params)?;
+                Ok(crate::filter::Filter::new(crate::filter::Condition::from(
+                    resolved,
+                )))
+            })
+            .transpose()
     }
 
     /// Extracts the list of columns to aggregate and whether COUNT(*) is present.

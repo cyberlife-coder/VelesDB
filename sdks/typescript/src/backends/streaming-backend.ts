@@ -12,7 +12,7 @@ import type {
   RestPointId,
   StreamUpsertResponse,
 } from '../types';
-import { BackpressureError, ConnectionError, VelesDBError } from '../types';
+import { BackpressureError, ConnectionError, ValidationError, VelesDBError } from '../types';
 import type { BaseTransport } from './shared';
 import {
   throwOnError,
@@ -154,6 +154,24 @@ export async function streamInsert(
 }
 
 /**
+ * Reject precision-critical string ids on the NDJSON bulk path.
+ *
+ * The `/points/stream` endpoint deserialises each line into core `Point`,
+ * whose id is a plain JSON-number u64 (no string-or-number deserialiser), so
+ * a string id (> 2^53-1, kept verbatim by `parseRestPointId`) must fail fast
+ * here instead of being forwarded and counted as `malformed` by the server.
+ */
+function requireSafeRangeId(restId: RestPointId): number {
+  if (typeof restId === 'string') {
+    throw new ValidationError(
+      `streamUpsertPoints requires ids in the JS safe integer range (0..${Number.MAX_SAFE_INTEGER}); ` +
+        `use upsert/upsertBatch for string ids above it. Received: ${restId}`
+    );
+  }
+  return restId;
+}
+
+/**
  * Batch upsert points via the NDJSON streaming endpoint.
  *
  * Sends all documents as a single `application/x-ndjson` POST to
@@ -176,7 +194,7 @@ export async function streamUpsertPoints(
   docs: VectorDocument[]
 ): Promise<StreamUpsertResponse> {
   const ndjsonLines = docs.map(doc => {
-    const restId = transport.parseRestPointId(doc.id);
+    const restId = requireSafeRangeId(transport.parseRestPointId(doc.id));
     const vector = toNumberArray(doc.vector);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

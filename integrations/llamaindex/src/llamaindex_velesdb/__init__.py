@@ -5,9 +5,17 @@ enabling high-performance semantic search in RAG applications.
 
 Example:
     >>> from llamaindex_velesdb import VelesDBVectorStore
-    >>> from llama_index.core import VectorStoreIndex
+    >>> from llama_index.core import StorageContext, VectorStoreIndex
     >>>
+    >>> # Index new documents into VelesDB (StorageContext is required —
+    >>> # from_documents() ignores a bare vector_store= keyword):
     >>> vector_store = VelesDBVectorStore(path="./data")
+    >>> storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    >>> index = VectorStoreIndex.from_documents(
+    ...     documents, storage_context=storage_context
+    ... )
+    >>>
+    >>> # Or attach to data already stored in VelesDB:
     >>> index = VectorStoreIndex.from_vector_store(vector_store)
 """
 
@@ -21,6 +29,7 @@ try:
     from llamaindex_velesdb.memory import (
         VelesDBSemanticMemory,
         VelesDBEpisodicMemory,
+        VelesDBChatMemory,
         VelesDBProceduralMemory,
     )
     _HAS_MEMORY = True
@@ -29,6 +38,7 @@ except ImportError as e:
     logging.getLogger(__name__).debug("Optional import failed: %s", e)
     VelesDBSemanticMemory = None  # type: ignore
     VelesDBEpisodicMemory = None  # type: ignore
+    VelesDBChatMemory = None  # type: ignore
     VelesDBProceduralMemory = None  # type: ignore
     _HAS_MEMORY = False
 
@@ -44,6 +54,7 @@ if _HAS_MEMORY:
     __all__.extend([
         "VelesDBSemanticMemory",
         "VelesDBEpisodicMemory",
+        "VelesDBChatMemory",
         "VelesDBProceduralMemory",
     ])
-__version__ = "1.18.0"
+__version__ = "2.0.0"

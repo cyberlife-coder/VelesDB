@@ -79,7 +79,12 @@ impl Collection {
             points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
         let sparse_batch = Self::collect_sparse_batch(points);
 
-        let count = if self.async_index_builder.is_some() {
+        // The V2 fast path writes vectors directly into the graph store and
+        // bypasses RaBitQPrecisionHnsw::insert — on a RaBitQ backend that
+        // would desynchronize the positional encoding store from the node
+        // ids. RaBitQ collections always take the standard path.
+        let use_v2 = self.async_index_builder.is_some() && !self.index.is_rabitq_backend();
+        let count = if use_v2 {
             self.upsert_bulk_v2_path(&vector_refs, points, &sparse_batch, fsync)?
         } else {
             self.upsert_bulk_standard_path(&vector_refs, points, &sparse_batch, fsync)?
@@ -193,7 +198,7 @@ impl Collection {
         // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
         // so only the final payload counts, then atomic decrement + increment.
         self.apply_histogram_replace_dedup(points, old_payloads);
-        self.invalidate_caches_and_bump_generation();
+        self.bump_generation_with_mirror_upserts(points);
         Ok(())
     }
 

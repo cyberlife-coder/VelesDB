@@ -4,11 +4,12 @@
 
 // Reason: Numeric casts in selectivity estimation are intentional:
 // - usize->f64 for selectivity ratios: values are small counts
-// - f64->usize for clamped oversampled k: result is bounded to [k+10, 10_000]
+// - f64->usize for clamped oversampled k: result is bounded to [min(k+10, 10_000), 10_000]
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 
+use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::search::resolve;
 use crate::collection::types::Collection;
 use crate::error::Result;
@@ -112,11 +113,15 @@ impl Collection {
     ) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
+        let now_secs = now_unix_secs();
 
         let mut results: Vec<SearchResult> = index_results
             .into_iter()
             .filter_map(|sr| {
                 let payload = payload_storage.retrieve(sr.id).ok().flatten();
+                if is_payload_expired(payload.as_ref(), now_secs) {
+                    return None;
+                }
                 let matches = match payload.as_ref() {
                     Some(p) => filter.matches(p),
                     None => filter.matches(&serde_json::Value::Null),
@@ -159,7 +164,16 @@ fn resolve_quality(
     })
 }
 
+/// Hard upper bound on the oversampled HNSW candidate budget.
+const OVERSAMPLE_CAP: f64 = 10_000.0;
+
 /// Computes the oversampled candidate count for filtered search.
+///
+/// The result is bounded to `[min(k + 10, 10_000), 10_000]`: the candidate
+/// budget saturates at the cap for any `k >= 9_990`, so callers requesting
+/// huge `k` (e.g. LIMIT close to `MAX_LIMIT`) get at most 10_000 candidates
+/// instead of panicking — `f64::clamp` asserts `min <= max`, and an
+/// unbounded lower bound of `k + 10` used to violate that for large `k`.
 pub(super) fn compute_oversampled_k(k: usize, filter: &crate::filter::Filter) -> usize {
     // Clamp to a tiny positive value so that a zero-selectivity filter (e.g. empty
     // IN clause) never produces NaN (0.0/0.0 when k=0) or Inf (k>0/0.0). Both would
@@ -169,9 +183,9 @@ pub(super) fn compute_oversampled_k(k: usize, filter: &crate::filter::Filter) ->
     #[allow(clippy::cast_precision_loss)]
     let k_f64 = k as f64;
     #[allow(clippy::cast_precision_loss)]
-    let lower = (k + 10) as f64;
+    let lower = ((k.saturating_add(10)) as f64).min(OVERSAMPLE_CAP);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let clamped = (k_f64 / selectivity).ceil().clamp(lower, 10_000.0) as usize;
+    let clamped = (k_f64 / selectivity).ceil().clamp(lower, OVERSAMPLE_CAP) as usize;
     clamped
 }
 

@@ -27,6 +27,8 @@ mod cross_collection;
 mod cross_collection_join_optimization;
 #[path = "bdd/ddl_lifecycle.rs"]
 mod ddl_lifecycle;
+#[path = "bdd/default_limit.rs"]
+mod default_limit;
 #[path = "bdd/dml_enhanced.rs"]
 mod dml_enhanced;
 #[path = "bdd/explain_analyze.rs"]
@@ -39,8 +41,12 @@ mod explain_cost_calibrated;
 mod flush_operations;
 #[path = "bdd/geo_distance.rs"]
 mod geo_distance;
+#[path = "bdd/graph_anchor_prefilter.rs"]
+mod graph_anchor_prefilter;
 #[path = "bdd/graph_queries.rs"]
 mod graph_queries;
+#[path = "bdd/graph_vector_hybrid.rs"]
+mod graph_vector_hybrid;
 #[path = "bdd/helpers.rs"]
 mod helpers;
 #[path = "bdd/hybrid_compositions.rs"]
@@ -51,6 +57,8 @@ mod index_management;
 mod introspection;
 #[path = "bdd/match_graph_first.rs"]
 mod match_graph_first;
+#[path = "bdd/match_relationship_semantics.rs"]
+mod match_relationship_semantics;
 #[path = "bdd/match_vector_first.rs"]
 mod match_vector_first;
 #[path = "bdd/operators.rs"]
@@ -71,5 +79,7 @@ mod vector_group_by;
 mod vector_search;
 #[path = "bdd/where_filters.rs"]
 mod where_filters;
+#[path = "bdd/where_params.rs"]
+mod where_params;
 #[path = "bdd/window_functions.rs"]
 mod window_functions;

@@ -178,28 +178,133 @@ impl AgentMemory {
     }
 
     /// Sets a TTL (in seconds) for a semantic memory entry.
+    ///
+    /// The TTL is namespaced to semantic memory: it can never expire an
+    /// episodic or procedural row that happens to share the same numeric id.
+    ///
+    /// Returns:
+    ///     ``True`` when `id` names a live semantic fact and the TTL was set;
+    ///     ``False`` when no such fact exists (the call is a no-op).
     #[pyo3(signature = (id, ttl_seconds))]
-    fn set_semantic_ttl(&self, id: u64, ttl_seconds: u64) {
-        self.core.set_semantic_ttl(id, ttl_seconds);
+    fn set_semantic_ttl(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<bool> {
+        let exists = py.allow_threads(|| self.core.semantic().get(id).map_err(to_py_err))?;
+        Ok(
+            self.apply_ttl(exists.is_some(), id, ttl_seconds, |c, i, t| {
+                c.set_semantic_ttl(i, t);
+            }),
+        )
     }
 
     /// Sets a TTL (in seconds) for an episodic memory entry.
+    ///
+    /// The TTL is namespaced to episodic memory (no cross-subsystem expiry).
+    ///
+    /// Returns:
+    ///     ``True`` when `id` names a live event and the TTL was set;
+    ///     ``False`` when no such event exists (the call is a no-op).
     #[pyo3(signature = (id, ttl_seconds))]
-    fn set_episodic_ttl(&self, id: u64, ttl_seconds: u64) {
-        self.core.set_episodic_ttl(id, ttl_seconds);
+    fn set_episodic_ttl(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<bool> {
+        let exists = py.allow_threads(|| {
+            self.core
+                .episodic()
+                .get_with_embedding(id)
+                .map_err(to_py_err)
+        })?;
+        Ok(
+            self.apply_ttl(exists.is_some(), id, ttl_seconds, |c, i, t| {
+                c.set_episodic_ttl(i, t);
+            }),
+        )
     }
 
     /// Sets a TTL (in seconds) for a procedural memory entry.
+    ///
+    /// The TTL is namespaced to procedural memory (no cross-subsystem expiry).
+    ///
+    /// Returns:
+    ///     ``True`` when `id` names a live procedure and the TTL was set;
+    ///     ``False`` when no such procedure exists (the call is a no-op).
     #[pyo3(signature = (id, ttl_seconds))]
-    fn set_procedural_ttl(&self, id: u64, ttl_seconds: u64) {
-        self.core.set_procedural_ttl(id, ttl_seconds);
+    fn set_procedural_ttl(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<bool> {
+        let exists = py.allow_threads(|| {
+            self.core
+                .procedural()
+                .list_all()
+                .map(|procs| procs.iter().any(|p| p.id == id))
+                .map_err(to_py_err)
+        })?;
+        Ok(self.apply_ttl(exists, id, ttl_seconds, |c, i, t| {
+            c.set_procedural_ttl(i, t);
+        }))
+    }
+
+    /// Durably sets the TTL (in seconds) of an existing semantic fact.
+    ///
+    /// Unlike `set_semantic_ttl` (in-memory map only, lost on restart), the
+    /// expiry is persisted to the reserved `_veles_expires_at` payload field
+    /// and survives a restart. A `ttl_seconds` of 0 expires the fact
+    /// immediately.
+    ///
+    /// Raises:
+    ///     KeyError: If no semantic fact with `id` exists.
+    #[pyo3(signature = (id, ttl_seconds))]
+    fn set_semantic_ttl_durable(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<()> {
+        py.allow_threads(|| {
+            self.core
+                .set_semantic_ttl_durable(id, ttl_seconds)
+                .map_err(to_py_err)
+        })
+    }
+
+    /// Durably sets the TTL (in seconds) of an existing episodic event.
+    ///
+    /// Unlike `set_episodic_ttl` (in-memory map only, lost on restart), the
+    /// expiry is persisted to the reserved `_veles_expires_at` payload field
+    /// and survives a restart. A `ttl_seconds` of 0 expires the event
+    /// immediately.
+    ///
+    /// Raises:
+    ///     KeyError: If no event with `id` exists.
+    #[pyo3(signature = (id, ttl_seconds))]
+    fn set_episodic_ttl_durable(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<()> {
+        py.allow_threads(|| {
+            self.core
+                .set_episodic_ttl_durable(id, ttl_seconds)
+                .map_err(to_py_err)
+        })
+    }
+
+    /// Durably sets the TTL (in seconds) of an existing procedure.
+    ///
+    /// Unlike `set_procedural_ttl` (in-memory map only, lost on restart), the
+    /// expiry is persisted to the reserved `_veles_expires_at` payload field
+    /// and survives a restart. A `ttl_seconds` of 0 expires the procedure
+    /// immediately.
+    ///
+    /// Raises:
+    ///     KeyError: If no procedure with `id` exists.
+    #[pyo3(signature = (id, ttl_seconds))]
+    fn set_procedural_ttl_durable(
+        &self,
+        py: Python<'_>,
+        id: u64,
+        ttl_seconds: u64,
+    ) -> PyResult<()> {
+        py.allow_threads(|| {
+            self.core
+                .set_procedural_ttl_durable(id, ttl_seconds)
+                .map_err(to_py_err)
+        })
     }
 
     /// Expires entries past their TTL and consolidates old episodes.
     ///
     /// Returns:
     ///     Dict with 'semantic_expired', 'episodic_expired', 'procedural_expired',
-    ///     'episodic_consolidated', 'procedural_evicted' counts.
+    ///     'episodic_consolidated', 'procedural_evicted' counts, plus a
+    ///     'consolidation_truncated' bool — True when consolidation hit the
+    ///     per-cycle cap and more old episodes remain (call auto_expire again
+    ///     to drain them).
     fn auto_expire(&self, py: Python<'_>) -> PyResult<PyObject> {
         let result = py.allow_threads(|| self.core.auto_expire().map_err(to_py_err))?;
         Ok(expire_result_to_dict(py, &result))
@@ -299,6 +404,22 @@ impl AgentMemory {
 }
 
 impl AgentMemory {
+    /// Shared TTL gate for the three namespaced `set_*_ttl` methods.
+    ///
+    /// Only sets the TTL (via `set`, which routes to the subsystem's own
+    /// `MemoryKind` namespace) when `exists` is true, so a TTL is never
+    /// registered against an id no subsystem holds. Returns whether the TTL
+    /// was applied.
+    fn apply_ttl<F>(&self, exists: bool, id: u64, ttl_seconds: u64, set: F) -> bool
+    where
+        F: FnOnce(&CoreAgentMemory, u64, u64),
+    {
+        if exists {
+            set(&self.core, id, ttl_seconds);
+        }
+        exists
+    }
+
     /// Shared driver for the three VelesQL memory bridges: converts params,
     /// runs the core query off the GIL, then builds result dicts.
     fn run_memory_query<F>(
@@ -340,6 +461,10 @@ fn expire_result_to_dict(py: Python<'_>, r: &velesdb_core::agent::ExpireResult) 
     let _ = dict.set_item(
         PyString::intern(py, "procedural_evicted"),
         r.procedural_evicted,
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "consolidation_truncated"),
+        r.consolidation_truncated,
     );
     dict.into()
 }
@@ -534,6 +659,46 @@ impl PyEpisodicMemory {
         })
     }
 
+    /// Record an event with a TTL in one durable call.
+    ///
+    /// The expiry is persisted to the reserved `_veles_expires_at` payload
+    /// field (like `SemanticMemory.store_with_ttl`), so the TTL survives a
+    /// restart. A `ttl_seconds` of 0 expires the event immediately.
+    ///
+    /// Args:
+    ///     event_id: Unique identifier
+    ///     description: Event description
+    ///     timestamp: Unix timestamp
+    ///     ttl_seconds: Time-to-live in seconds
+    ///     embedding: Optional embedding for similarity search
+    ///
+    /// Example:
+    ///     >>> memory.episodic.record_with_ttl(1, "transient", int(time.time()), 60)
+    #[pyo3(signature = (event_id, description, timestamp, ttl_seconds, embedding = None))]
+    fn record_with_ttl(
+        &self,
+        py: Python<'_>,
+        event_id: u64,
+        description: &str,
+        timestamp: i64,
+        ttl_seconds: u64,
+        embedding: Option<Vec<f32>>,
+    ) -> PyResult<()> {
+        let description_owned = description.to_string();
+        py.allow_threads(|| {
+            let emb_ref = embedding.as_deref();
+            self.inner()
+                .record_with_ttl(
+                    event_id,
+                    &description_owned,
+                    timestamp,
+                    emb_ref,
+                    ttl_seconds,
+                )
+                .map_err(to_py_err)
+        })
+    }
+
     /// Get recent events from episodic memory.
     ///
     /// Args:
@@ -668,6 +833,50 @@ impl PyProceduralMemory {
             let emb_ref = embedding.as_deref();
             self.inner()
                 .learn(procedure_id, &name_owned, &steps, emb_ref, confidence)
+                .map_err(to_py_err)
+        })
+    }
+
+    /// Learn a procedure with a TTL in one durable call.
+    ///
+    /// The expiry is persisted to the reserved `_veles_expires_at` payload
+    /// field (like `SemanticMemory.store_with_ttl`), so the TTL survives a
+    /// restart. A `ttl_seconds` of 0 expires the procedure immediately.
+    ///
+    /// Args:
+    ///     procedure_id: Unique identifier
+    ///     name: Human-readable name
+    ///     steps: List of action steps
+    ///     ttl_seconds: Time-to-live in seconds
+    ///     embedding: Optional embedding for similarity matching
+    ///     confidence: Initial confidence (0.0-1.0, default: 0.5)
+    ///
+    /// Example:
+    ///     >>> memory.procedural.learn_with_ttl(1, "greet", ["wave"], 3600)
+    #[allow(clippy::too_many_arguments)] // Reason: `py` is an injected PyO3 token, not a user-facing argument
+    #[pyo3(signature = (procedure_id, name, steps, ttl_seconds, embedding = None, confidence = 0.5))]
+    fn learn_with_ttl(
+        &self,
+        py: Python<'_>,
+        procedure_id: u64,
+        name: &str,
+        steps: Vec<String>,
+        ttl_seconds: u64,
+        embedding: Option<Vec<f32>>,
+        confidence: f32,
+    ) -> PyResult<()> {
+        let name_owned = name.to_string();
+        py.allow_threads(|| {
+            let emb_ref = embedding.as_deref();
+            self.inner()
+                .learn_with_ttl(
+                    procedure_id,
+                    &name_owned,
+                    &steps,
+                    emb_ref,
+                    confidence,
+                    ttl_seconds,
+                )
                 .map_err(to_py_err)
         })
     }

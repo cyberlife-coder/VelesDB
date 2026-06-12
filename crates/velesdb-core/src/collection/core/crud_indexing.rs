@@ -244,8 +244,31 @@ impl Collection {
     }
 
     /// Invalidates stats cache and bumps write generation.
+    ///
+    /// Also drops the payload mirror: any mutation path that does not
+    /// explicitly maintain the mirror must invalidate it so stale columnar
+    /// data can never serve queries (it is rebuilt lazily on demand).
     pub(super) fn invalidate_caches_and_bump_generation(&self) {
         *self.cached_stats.lock() = None;
+        self.payload_mirror.invalidate();
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Like [`Self::invalidate_caches_and_bump_generation`], but keeps the
+    /// payload mirror warm by applying the upserted points incrementally.
+    pub(super) fn bump_generation_with_mirror_upserts(&self, points: &[crate::point::Point]) {
+        *self.cached_stats.lock() = None;
+        self.payload_mirror.apply_upserts(points);
+        self.write_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Like [`Self::invalidate_caches_and_bump_generation`], but keeps the
+    /// payload mirror warm by tombstoning the deleted ids incrementally.
+    pub(super) fn bump_generation_with_mirror_deletes(&self, ids: &[u64]) {
+        *self.cached_stats.lock() = None;
+        self.payload_mirror.apply_deletes(ids);
         self.write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }

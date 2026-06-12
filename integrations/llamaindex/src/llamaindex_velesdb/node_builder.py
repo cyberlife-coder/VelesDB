@@ -38,10 +38,16 @@ def build_node_payload(node: BaseNode) -> dict:
         node: A LlamaIndex node with optional metadata.
 
     Returns:
-        Dict with ``text`` and ``node_id`` keys, plus scalar metadata fields.
+        Dict with ``text`` and ``node_id`` keys, plus ``ref_doc_id`` when the
+        node references a source document, plus scalar metadata fields.
     """
     node_id = node.node_id
     payload: dict = {"text": node.get_content(), "node_id": node_id}
+    # Persist the source-document id so delete(ref_doc_id) can find every
+    # chunk that belongs to the document.
+    ref_doc_id = getattr(node, "ref_doc_id", None)
+    if ref_doc_id is not None:
+        payload["ref_doc_id"] = ref_doc_id
     if hasattr(node, "metadata") and node.metadata:
         for key, value in node.metadata.items():
             if isinstance(value, (str, int, float, bool)):

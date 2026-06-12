@@ -3299,3 +3299,64 @@ mod full_scan_property_tests {
         }
     }
 }
+
+// =========================================================================
+// RaBitQ storage-mode save/load round-trip (quantization wiring)
+// =========================================================================
+
+/// `save` must persist the actual backend storage mode (not hardcoded Full)
+/// and `load` must rebuild the RaBitQ backend and install `rabitq.idx`.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_hnsw_save_load_roundtrips_rabitq_backend_and_quantizer() {
+    use crate::quantization::{RaBitQIndex, StorageMode};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dim = 32;
+    let mut params = HnswParams::auto(dim);
+    params.storage_mode = StorageMode::RaBitQ;
+    let index = HnswIndex::with_params(dim, DistanceMetric::Euclidean, params).expect("create");
+
+    let vectors: Vec<Vec<f32>> = (0..200)
+        .map(|i| {
+            (0..dim)
+                .map(|d| ((i * dim + d) as f32 * 0.01).sin())
+                .collect()
+        })
+        .collect();
+    for (i, v) in vectors.iter().enumerate() {
+        VectorIndex::insert(&index, i as u64, v);
+    }
+
+    // Persist a trained quantizer next to the index (what TRAIN QUANTIZER does).
+    RaBitQIndex::train(&vectors, 42)
+        .expect("train")
+        .save(dir.path())
+        .expect("save rabitq.idx");
+    index.save(dir.path()).expect("save index");
+
+    let loaded = HnswIndex::load(dir.path(), dim, DistanceMetric::Euclidean).expect("load");
+    assert!(
+        loaded.is_rabitq_quantizer_trained(),
+        "persisted storage mode + rabitq.idx must restore a trained RaBitQ backend"
+    );
+
+    let results = VectorIndex::search(&loaded, &vectors[42], 5);
+    assert_eq!(
+        results.first().map(|r| r.id),
+        Some(42),
+        "self-query must return itself as top-1 after reload"
+    );
+}
+
+#[test]
+fn test_with_params_propagates_alpha_to_native_graph() {
+    let params = HnswParams::auto(4).with_alpha(1.5);
+    let index = HnswIndex::with_params(4, crate::DistanceMetric::Cosine, params)
+        .expect("with_params must succeed with valid alpha");
+    let actual = index.inner.read().alpha();
+    assert!(
+        (actual - 1.5).abs() < f32::EPSILON,
+        "alpha 1.5 must propagate to native graph, got {actual}"
+    );
+}

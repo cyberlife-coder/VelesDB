@@ -172,6 +172,100 @@ impl AnyCollection {
     }
 
     // -------------------------------------------------------------------------
+    // Graph edge operations (shared across all collection types)
+    // -------------------------------------------------------------------------
+
+    /// Adds a graph edge.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the edge cannot be stored.
+    pub fn add_edge(&self, edge: crate::collection::graph::GraphEdge) -> Result<()> {
+        match self {
+            Self::Vector(c) => c.add_edge(edge),
+            Self::Graph(c) => c.add_edge(edge),
+            Self::Metadata(c) => c.inner.add_edge(edge),
+        }
+    }
+
+    /// Removes a graph edge by ID. Returns `true` if the edge existed.
+    #[must_use]
+    pub fn remove_edge(&self, edge_id: u64) -> bool {
+        match self {
+            Self::Vector(c) => c.remove_edge(edge_id),
+            Self::Graph(c) => c.remove_edge(edge_id),
+            Self::Metadata(c) => c.inner.remove_edge(edge_id),
+        }
+    }
+
+    /// Returns outgoing edges from a node.
+    #[must_use]
+    pub fn get_outgoing_edges(&self, node_id: u64) -> Vec<crate::collection::graph::GraphEdge> {
+        match self {
+            Self::Vector(c) => c.get_outgoing_edges(node_id),
+            Self::Graph(c) => c.get_outgoing(node_id),
+            Self::Metadata(c) => c.inner.get_outgoing_edges(node_id),
+        }
+    }
+
+    /// Returns the highest edge ID in the graph, if any.
+    #[must_use]
+    pub fn max_edge_id(&self) -> Option<u64> {
+        match self {
+            Self::Vector(c) => c.max_edge_id(),
+            Self::Graph(c) => c.inner.max_edge_id(),
+            Self::Metadata(c) => c.inner.max_edge_id(),
+        }
+    }
+
+    /// Returns `true` when an edge with `edge_id` exists.
+    #[must_use]
+    pub fn edge_exists(&self, edge_id: u64) -> bool {
+        match self {
+            Self::Vector(c) => c.edge_exists(edge_id),
+            Self::Graph(c) => c.inner.edge_exists(edge_id),
+            Self::Metadata(c) => c.inner.edge_exists(edge_id),
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Point retrieval (shared)
+    // -------------------------------------------------------------------------
+
+    /// Retrieves points by IDs, returning `None` for missing entries.
+    #[must_use]
+    pub fn get(&self, ids: &[u64]) -> Vec<Option<crate::point::Point>> {
+        match self {
+            Self::Vector(c) => c.get(ids),
+            Self::Graph(c) => c.get(ids),
+            Self::Metadata(c) => c.get(ids),
+        }
+    }
+
+    /// Upserts points (vector + payload).
+    ///
+    /// For graph collections the payload is stored via the node-payload path
+    /// (no vector update occurs since graph nodes have no embedding by default).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage fails.
+    pub fn upsert(&self, points: Vec<crate::point::Point>) -> Result<()> {
+        match self {
+            Self::Vector(c) => c.upsert(points),
+            Self::Graph(c) => {
+                for p in points {
+                    if let Some(payload) = p.payload.as_ref() {
+                        c.upsert_node_payload(p.id, payload)?;
+                    }
+                }
+                Ok(())
+            }
+            Self::Metadata(c) => c.upsert(points),
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Variant discriminants (`is_*`)
     // -------------------------------------------------------------------------
 

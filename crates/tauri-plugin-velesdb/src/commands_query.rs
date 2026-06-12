@@ -113,7 +113,7 @@ fn execute_tauri_aggregation(
 }
 
 /// Converts a `SearchResult` to a `HybridResult`.
-fn search_result_to_hybrid(r: &velesdb_core::SearchResult) -> HybridResult {
+pub(crate) fn search_result_to_hybrid(r: &velesdb_core::SearchResult) -> HybridResult {
     HybridResult {
         node_id: r.point.id,
         vector_score: Some(r.score),

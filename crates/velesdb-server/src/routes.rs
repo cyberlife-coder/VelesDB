@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 
@@ -16,10 +16,11 @@ use crate::{
     compact_collection, create_collection, create_index, delete_collection, delete_index,
     delete_point, explain, flush_collection, get_collection, get_collection_config,
     get_collection_stats, get_edge_count, get_edges, get_guardrails, get_node_degree,
-    get_node_edges, get_node_payload, get_point, graph_search, health_check, hybrid_search,
-    is_empty, list_collections, list_indexes, list_nodes, match_query, multi_query_search, query,
-    readiness_check, rebuild_index, remove_edge, scroll_points, search, search_ids, stream_insert,
-    stream_traverse, stream_upsert_points, text_search, traverse_graph, traverse_parallel,
+    get_node_edges, get_node_payload, get_point, get_point_relations, graph_search, health_check,
+    hybrid_search, is_empty, list_collections, list_indexes, list_nodes, match_query,
+    multi_query_search, query, readiness_check, rebuild_index, relate_points, remove_edge,
+    scroll_points, search, search_ids, set_point_ttl, stream_insert, stream_traverse,
+    stream_upsert_points, text_search, traverse_graph, traverse_parallel, unrelate_points,
     update_guardrails, upsert_node_payload, upsert_points, vacuum_collection, AppState,
 };
 
@@ -69,6 +70,21 @@ fn core_routes() -> Router<Arc<AppState>> {
         // Maintenance endpoints
         .route("/collections/{name}/vacuum", post(vacuum_collection))
         .route("/collections/{name}/compact", post(compact_collection))
+}
+
+/// Relation (graph edge) and durable TTL routes (any collection type).
+fn relation_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/collections/{name}/relations", post(relate_points))
+        .route(
+            "/collections/{name}/relations/{edge_id}",
+            delete(unrelate_points),
+        )
+        .route(
+            "/collections/{name}/points/{id}/relations",
+            get(get_point_relations),
+        )
+        .route("/collections/{name}/points/{id}/ttl", patch(set_point_ttl))
 }
 
 /// Search, text, hybrid, and index routes.
@@ -136,5 +152,11 @@ fn graph_routes() -> Router<Arc<AppState>> {
 /// This is the single source of truth for route registration. Both
 /// the production binary and the OpenAPI conformance test consume it.
 pub fn api_routes() -> Router<Arc<AppState>> {
-    core_routes().merge(search_routes()).merge(graph_routes())
+    let routes = core_routes()
+        .merge(search_routes())
+        .merge(graph_routes())
+        .merge(relation_routes());
+    #[cfg(feature = "prometheus")]
+    let routes = routes.route("/metrics", get(crate::prometheus_metrics));
+    routes
 }

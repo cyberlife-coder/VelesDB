@@ -1,8 +1,11 @@
 //! HNSW delta WAL for incremental graph mutation logging.
 //!
 //! Records edge additions, edge removals, and entry point changes as
-//! compact CRC32-framed entries. On recovery, replaying the delta WAL
-//! is O(delta) instead of rebuilding the entire graph O(N*M).
+//! compact CRC32-framed entries. Replaying the delta WAL is O(delta)
+//! instead of rebuilding the entire graph O(N*M).
+//!
+//! **Status:** standalone module — not currently wired into the production
+//! collection recovery path, which re-indexes stored vectors at open.
 //!
 //! ## Wire Format (CRC32-framed)
 //!

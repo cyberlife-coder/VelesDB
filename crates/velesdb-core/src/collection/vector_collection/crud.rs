@@ -155,4 +155,28 @@ impl VectorCollection {
     pub fn add_edge(&self, edge: crate::collection::GraphEdge) -> Result<()> {
         self.inner.add_edge(edge)
     }
+
+    /// Removes a graph edge by ID. Returns `true` if the edge existed.
+    #[must_use]
+    pub fn remove_edge(&self, edge_id: u64) -> bool {
+        self.inner.remove_edge(edge_id)
+    }
+
+    /// Returns outgoing edges from a node.
+    #[must_use]
+    pub fn get_outgoing_edges(&self, node_id: u64) -> Vec<crate::collection::GraphEdge> {
+        self.inner.get_outgoing_edges(node_id)
+    }
+
+    /// Returns the highest edge ID in the graph, if any.
+    #[must_use]
+    pub fn max_edge_id(&self) -> Option<u64> {
+        self.inner.max_edge_id()
+    }
+
+    /// Returns `true` when an edge with `edge_id` exists.
+    #[must_use]
+    pub fn edge_exists(&self, edge_id: u64) -> bool {
+        self.inner.edge_exists(edge_id)
+    }
 }

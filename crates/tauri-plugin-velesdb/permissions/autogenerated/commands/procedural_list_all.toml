@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-procedural-list-all"
+description = "Enables the procedural_list_all command without any pre-configured scope."
+commands.allow = ["procedural_list_all"]
+
+[[permission]]
+identifier = "deny-procedural-list-all"
+description = "Denies the procedural_list_all command without any pre-configured scope."
+commands.deny = ["procedural_list_all"]

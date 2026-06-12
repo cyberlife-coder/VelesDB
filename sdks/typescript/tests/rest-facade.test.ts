@@ -412,10 +412,8 @@ describe('RestBackend — agent memory facade delegation', () => {
   it('storeSemanticFact delegates', async () => {
     mockOk({});
     await backend.storeSemanticFact('docs', {
-      id: 'a',
-      subject: 's',
-      relation: 'r',
-      object: 'o',
+      id: 1,
+      text: 't',
       embedding: [0.1],
     });
     expect(mockFetch).toHaveBeenCalled();
@@ -430,9 +428,10 @@ describe('RestBackend — agent memory facade delegation', () => {
   it('recordEpisodicEvent delegates', async () => {
     mockOk({});
     await backend.recordEpisodicEvent('docs', {
-      id: 'e',
+      id: 2,
+      eventType: 'd',
       timestamp: 0,
-      description: 'd',
+      data: {},
       embedding: [0.1],
     });
     expect(mockFetch).toHaveBeenCalled();
@@ -447,9 +446,9 @@ describe('RestBackend — agent memory facade delegation', () => {
   it('storeProceduralPattern delegates', async () => {
     mockOk({});
     await backend.storeProceduralPattern('docs', {
-      id: 'p',
+      id: 3,
       name: 'n',
-      actions: [],
+      steps: [],
       embedding: [0.1],
     });
     expect(mockFetch).toHaveBeenCalled();

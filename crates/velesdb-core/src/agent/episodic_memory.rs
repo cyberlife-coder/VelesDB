@@ -11,7 +11,7 @@ use std::sync::Arc;
 use super::error::AgentMemoryError;
 use super::memory_helpers;
 use super::temporal_index::TemporalIndex;
-use super::ttl::MemoryTtl;
+use super::ttl::{MemoryKind, MemoryTtl};
 
 /// Episodic memory for storing event timelines with temporal context.
 ///
@@ -23,6 +23,8 @@ pub struct EpisodicMemory {
     dimension: usize,
     ttl: Arc<MemoryTtl>,
     temporal_index: Arc<TemporalIndex>,
+    /// Edge-id allocator for [`Self::relate`] (seeded past existing edges).
+    next_edge_id: std::sync::atomic::AtomicU64,
 }
 
 impl EpisodicMemory {
@@ -62,6 +64,17 @@ impl EpisodicMemory {
                 Self::rebuild_temporal_index(&collection.inner, &temporal_index);
             }
         }
+        memory_helpers::rebuild_ttl_from_payloads(
+            &db,
+            &collection_name,
+            &ttl,
+            MemoryKind::Episodic,
+        )?;
+
+        let next_edge_id = memory_helpers::seed_edge_counter(&memory_helpers::get_collection(
+            &db,
+            &collection_name,
+        )?);
 
         Ok(Self {
             collection_name,
@@ -69,6 +82,7 @@ impl EpisodicMemory {
             dimension: actual_dimension,
             ttl,
             temporal_index,
+            next_edge_id,
         })
     }
     fn rebuild_temporal_index(
@@ -105,17 +119,28 @@ impl EpisodicMemory {
         timestamp: i64,
         embedding: Option<&[f32]>,
     ) -> Result<(), AgentMemoryError> {
+        self.record_internal(event_id, description, timestamp, embedding, None)
+    }
+
+    /// Shared store path: persists the event, optionally with a durable
+    /// `_veles_expires_at` payload field (epoch seconds) for TTL'd records.
+    fn record_internal(
+        &self,
+        event_id: u64,
+        description: &str,
+        timestamp: i64,
+        embedding: Option<&[f32]>,
+        expires_at: Option<u64>,
+    ) -> Result<(), AgentMemoryError> {
         let vector = memory_helpers::resolve_embedding(self.dimension, embedding)?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
-        let point = Point::new(
-            event_id,
-            vector,
-            Some(json!({
-                "description": description,
-                "timestamp": timestamp
-            })),
-        );
+        let mut payload = json!({
+            "description": description,
+            "timestamp": timestamp
+        });
+        memory_helpers::attach_expiry(&mut payload, expires_at);
+        let point = Point::new(event_id, vector, Some(payload));
 
         memory_helpers::upsert_points(&collection, vec![point])?;
         self.temporal_index.insert(event_id, timestamp);
@@ -124,6 +149,17 @@ impl EpisodicMemory {
     }
 
     /// Stores an event and assigns a TTL for automatic expiration.
+    ///
+    /// A `ttl_seconds` of `0` means "expire immediately": rather than persisting
+    /// a live point that lingers until the next `auto_expire`, the event is
+    /// eagerly removed (and any pre-existing point for `event_id` deleted),
+    /// harmonising the behaviour with `SemanticMemory::store_with_ttl`. The
+    /// embedding is still dimension-validated so callers get the same error
+    /// contract as a real record.
+    ///
+    /// The expiry is persisted as a reserved `_veles_expires_at` (epoch
+    /// seconds) payload field, so the TTL survives a process restart: the
+    /// in-memory map is rebuilt from payloads when the collection is reopened.
     ///
     /// # Errors
     ///
@@ -136,9 +172,112 @@ impl EpisodicMemory {
         embedding: Option<&[f32]>,
         ttl_seconds: u64,
     ) -> Result<(), AgentMemoryError> {
-        self.record(event_id, description, timestamp, embedding)?;
-        self.ttl.set_ttl(event_id, ttl_seconds);
+        if ttl_seconds == 0 {
+            if let Some(emb) = embedding {
+                memory_helpers::validate_dimension(self.dimension, emb.len())?;
+            }
+            return self.delete(event_id);
+        }
+        let expires_at = MemoryTtl::now().saturating_add(ttl_seconds);
+        self.record_internal(
+            event_id,
+            description,
+            timestamp,
+            embedding,
+            Some(expires_at),
+        )?;
+        self.ttl
+            .set_expiry(MemoryKind::Episodic, event_id, expires_at);
         Ok(())
+    }
+
+    /// Durably sets (or refreshes) the TTL of an existing event.
+    ///
+    /// Unlike `AgentMemory::set_episodic_ttl` (in-memory map only, lost on
+    /// restart), this persists the expiry to the reserved `_veles_expires_at`
+    /// payload field, so it survives a restart. A `ttl_seconds` of 0 expires
+    /// the event immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotFound` when no event with `event_id` exists, or
+    /// `CollectionError` when persistence fails.
+    pub fn set_ttl_durable(&self, event_id: u64, ttl_seconds: u64) -> Result<(), AgentMemoryError> {
+        memory_helpers::set_ttl_durable(
+            &self.db,
+            &self.collection_name,
+            &self.ttl,
+            MemoryKind::Episodic,
+            event_id,
+            ttl_seconds,
+        )
+    }
+
+    /// Relates two live events with a typed, durable graph edge (e.g.
+    /// `CAUSED`, `FOLLOWED`); see `SemanticMemory::relate` for semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotFound` when either endpoint is missing or expired, or
+    /// `CollectionError` when the edge write fails.
+    pub fn relate(
+        &self,
+        from_id: u64,
+        to_id: u64,
+        rel_type: &str,
+        properties: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<u64, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        for id in [from_id, to_id] {
+            memory_helpers::ensure_live(
+                &collection,
+                &self.collection_name,
+                &self.ttl,
+                MemoryKind::Episodic,
+                id,
+            )?;
+        }
+        let edge_id = memory_helpers::add_relation_edge(
+            &collection,
+            &self.next_edge_id,
+            (from_id, to_id),
+            rel_type,
+            properties,
+        )?;
+        // Close the check-then-add window: an endpoint deleted concurrently
+        // (its cascade may have run before our edge landed) must not leave a
+        // dangling, WAL-durable edge behind.
+        memory_helpers::verify_relation_endpoints(&collection, edge_id, (from_id, to_id))?;
+        Ok(edge_id)
+    }
+
+    /// Returns the outgoing relations of an event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn relations(
+        &self,
+        id: u64,
+    ) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        // Expired entries are invisible on every read surface — edges whose
+        // target has expired (but is not yet swept) are hidden too.
+        Ok(collection
+            .get_outgoing_edges(id)
+            .into_iter()
+            .filter(|edge| !self.ttl.is_expired(MemoryKind::Episodic, edge.target()))
+            .collect())
+    }
+
+    /// Removes a relation edge created by [`Self::relate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn unrelate(&self, edge_id: u64) -> Result<bool, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        Ok(collection.remove_edge(edge_id))
     }
 
     /// Returns recent events, optionally filtered by a lower timestamp bound.
@@ -203,6 +342,7 @@ impl EpisodicMemory {
             query_embedding,
             k,
             &self.ttl,
+            MemoryKind::Episodic,
         )?;
 
         Ok(results
@@ -230,7 +370,7 @@ impl EpisodicMemory {
             return Ok(None);
         };
 
-        if self.ttl.is_expired(point.id) {
+        if self.ttl.is_expired(MemoryKind::Episodic, point.id) {
             return Ok(None);
         }
 
@@ -261,7 +401,7 @@ impl EpisodicMemory {
         memory_helpers::delete_from_collection(&collection, &[id])?;
 
         self.temporal_index.remove(id);
-        self.ttl.remove(id);
+        self.ttl.remove(MemoryKind::Episodic, id);
         Ok(())
     }
 
@@ -337,7 +477,7 @@ impl EpisodicMemory {
             .get(ids)
             .into_iter()
             .flatten()
-            .filter(|p| !ttl.is_expired(p.id))
+            .filter(|p| !ttl.is_expired(MemoryKind::Episodic, p.id))
             .filter_map(|p| {
                 let (desc, ts) = extract_event_fields(&p)?;
                 Some((p.id, desc, ts))

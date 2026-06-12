@@ -302,11 +302,25 @@ fn collect_condition_predicates(
     }
 }
 
-/// Merges two sets of `MatchResult`s by `node_id` (union semantics).
+/// Merges the GraphFirst and VectorFirst result sets (union semantics).
 ///
-/// When both sets contain the same `node_id`, the result with the *better*
-/// score is kept (higher for similarity metrics, lower for distance metrics).
-/// Results without a score use a sentinel that always loses to real scores.
+/// Graph rows are authoritative row identities: the pattern walker already
+/// deduplicates them by full binding signature, so every graph row — one per
+/// aliased parallel edge or distinct edge path — is kept. A vector row is
+/// node-level enrichment: when graph rows exist for its `node_id`, it merges
+/// its (similarity) score and missing data into **every** row of that node
+/// (the score describes the node's embedding, not one edge); otherwise it
+/// stands alone as the node's row (union). The better score wins per row
+/// (higher for similarity metrics, lower for distance metrics); rows without
+/// a score use a sentinel that always loses to real scores.
+///
+/// Audit 2026-06 F2: replacing whole entries dropped plan-specific data — a
+/// GraphFirst row's `r.*` projection/edge bindings were clobbered by the
+/// VectorFirst candidate for the same `node_id`. Enrichment keeps every
+/// graph row and only fills in (or score-overrides) what the vector row
+/// contributes. Review 2026-06-11: enrichment applies to ALL rows of the
+/// node group, so parallel-edge siblings rank by the same node score instead
+/// of one arbitrary row absorbing it.
 ///
 /// The merged output is sorted best-to-worst according to `higher_is_better`.
 fn merge_match_results(
@@ -316,26 +330,38 @@ fn merge_match_results(
 ) -> Vec<super::match_exec::MatchResult> {
     use std::collections::HashMap;
 
-    let mut by_node: HashMap<u64, super::match_exec::MatchResult> =
+    let mut by_node: HashMap<u64, Vec<super::match_exec::MatchResult>> =
         HashMap::with_capacity(graph_results.len() + vector_results.len());
-
-    for r in graph_results {
-        by_node.insert(r.node_id, r);
+    for row in graph_results {
+        by_node.entry(row.node_id).or_default().push(row);
     }
 
-    for r in vector_results {
-        upsert_better_score(&mut by_node, r, higher_is_better);
+    for candidate in vector_results {
+        match by_node.entry(candidate.node_id) {
+            std::collections::hash_map::Entry::Occupied(mut group) => {
+                for row in group.get_mut() {
+                    enrich_row(row, &candidate, higher_is_better);
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(vec![candidate]);
+            }
+        }
     }
 
-    let mut merged: Vec<super::match_exec::MatchResult> = by_node.into_values().collect();
+    let mut merged: Vec<super::match_exec::MatchResult> = by_node.into_values().flatten().collect();
     sort_match_results_by_score(&mut merged, higher_is_better);
     merged
 }
 
-/// Inserts `candidate` into `by_node`, keeping whichever entry has the better score.
-fn upsert_better_score(
-    by_node: &mut std::collections::HashMap<u64, super::match_exec::MatchResult>,
-    candidate: super::match_exec::MatchResult,
+/// Enriches one graph row with a vector candidate for the same node.
+///
+/// When the candidate's score is better, it replaces the row's score and its
+/// data takes priority on shared keys (e.g. a fresher `similarity()`
+/// projection); otherwise the candidate only fills keys the row lacks.
+fn enrich_row(
+    row: &mut super::match_exec::MatchResult,
+    candidate: &super::match_exec::MatchResult,
     higher_is_better: bool,
 ) {
     let worse_sentinel = if higher_is_better {
@@ -343,21 +369,38 @@ fn upsert_better_score(
     } else {
         f32::MAX
     };
-    match by_node.entry(candidate.node_id) {
-        std::collections::hash_map::Entry::Occupied(mut entry) => {
-            let new_score = candidate.score.unwrap_or(worse_sentinel);
-            let old_score = entry.get().score.unwrap_or(worse_sentinel);
-            let new_wins = if higher_is_better {
-                new_score > old_score
-            } else {
-                new_score < old_score
-            };
-            if new_wins {
-                entry.insert(candidate);
-            }
-        }
-        std::collections::hash_map::Entry::Vacant(entry) => {
-            entry.insert(candidate);
+    let candidate_score = candidate.score.unwrap_or(worse_sentinel);
+    let row_score = row.score.unwrap_or(worse_sentinel);
+    let candidate_wins = if higher_is_better {
+        candidate_score > row_score
+    } else {
+        candidate_score < row_score
+    };
+    if candidate_wins {
+        row.score = candidate.score;
+    }
+    merge_map(&mut row.projected, &candidate.projected, candidate_wins);
+    merge_map(&mut row.bindings, &candidate.bindings, candidate_wins);
+    merge_map(
+        &mut row.edge_bindings,
+        &candidate.edge_bindings,
+        candidate_wins,
+    );
+    merge_map(&mut row.edge_paths, &candidate.edge_paths, candidate_wins);
+}
+
+/// Copies `source` entries into `target`: overwriting on shared keys when
+/// `source_wins`, otherwise only filling keys the target lacks.
+fn merge_map<V: Clone>(
+    target: &mut std::collections::HashMap<String, V>,
+    source: &std::collections::HashMap<String, V>,
+    source_wins: bool,
+) {
+    for (key, value) in source {
+        if source_wins {
+            target.insert(key.clone(), value.clone());
+        } else {
+            target.entry(key.clone()).or_insert_with(|| value.clone());
         }
     }
 }
@@ -524,5 +567,112 @@ mod tests {
     fn test_merge_empty_inputs_euclidean() {
         let merged = merge_match_results(Vec::new(), Vec::new(), false);
         assert!(merged.is_empty());
+    }
+
+    // --- collision data merge (audit 2026-06 cluster F2, finding 5) ---
+
+    /// Builds a GraphFirst-style result: unscored, with edge projection data.
+    fn graph_mr_with_edge_data(node_id: u64) -> MatchResult {
+        let mut r = MatchResult::new(node_id, 1, vec![100]);
+        r.bindings.insert("b".to_string(), node_id);
+        r.edge_bindings.insert("r".to_string(), 100);
+        r.projected
+            .insert("r.since".to_string(), serde_json::json!(2020));
+        r
+    }
+
+    /// GIVEN a GraphFirst result carrying `r.since` projection + edge binding
+    ///   and a scored VectorFirst candidate for the same node without them
+    /// WHEN the candidate wins the score comparison
+    /// THEN the winning score is kept BUT the GraphFirst-only projection,
+    ///      edge bindings, and node bindings survive the merge.
+    #[test]
+    fn test_merge_collision_preserves_graph_edge_data() {
+        let graph = vec![graph_mr_with_edge_data(1)];
+        let vector = vec![mr(1, Some(0.9))];
+
+        let merged = merge_match_results(graph, vector, true);
+
+        assert_eq!(merged.len(), 1);
+        assert!(
+            (merged[0].score.expect("test: should have score") - 0.9).abs() < f32::EPSILON,
+            "the better (vector) score must win"
+        );
+        assert_eq!(
+            merged[0].projected.get("r.since"),
+            Some(&serde_json::json!(2020)),
+            "GraphFirst projection must survive the collision merge"
+        );
+        assert_eq!(
+            merged[0].edge_bindings.get("r"),
+            Some(&100),
+            "GraphFirst edge binding must survive the collision merge"
+        );
+        assert_eq!(
+            merged[0].bindings.get("b"),
+            Some(&1),
+            "GraphFirst node binding must survive the collision merge"
+        );
+    }
+
+    /// GIVEN a scored GraphFirst result that beats the vector candidate
+    /// WHEN the candidate loses the score comparison
+    /// THEN candidate-only data (e.g. its projection keys) still survives.
+    #[test]
+    fn test_merge_collision_preserves_loser_only_keys() {
+        let mut graph = graph_mr_with_edge_data(1);
+        graph.score = Some(0.95);
+        let mut vector = mr(1, Some(0.5));
+        vector
+            .projected
+            .insert("similarity()".to_string(), serde_json::json!(0.5));
+
+        let merged = merge_match_results(vec![graph], vec![vector], true);
+
+        assert_eq!(merged.len(), 1);
+        assert!(
+            (merged[0].score.expect("test: should have score") - 0.95).abs() < f32::EPSILON,
+            "the better (graph) score must win"
+        );
+        assert!(
+            merged[0].projected.contains_key("similarity()"),
+            "loser-only projection keys must survive the collision merge"
+        );
+        assert_eq!(
+            merged[0].projected.get("r.since"),
+            Some(&serde_json::json!(2020)),
+            "winner projection must be untouched"
+        );
+    }
+
+    /// GIVEN two parallel-edge graph rows for the same node (distinct edge
+    ///   bindings) and one scored vector candidate for that node
+    /// WHEN the Parallel strategy merges the result sets
+    /// THEN BOTH rows survive AND both carry the node-level score (review
+    ///      2026-06-11: enrichment must reach every row of the node group,
+    ///      not the first one found).
+    #[test]
+    fn test_merge_enriches_all_parallel_edge_rows() {
+        let mut g1 = graph_mr_with_edge_data(1);
+        g1.edge_bindings.insert("r".to_string(), 100);
+        let mut g2 = graph_mr_with_edge_data(1);
+        g2.edge_bindings.insert("r".to_string(), 101);
+        let vector = vec![mr(1, Some(0.9))];
+
+        let merged = merge_match_results(vec![g1, g2], vector, true);
+
+        assert_eq!(merged.len(), 2, "both parallel-edge rows must survive");
+        for row in &merged {
+            assert!(
+                (row.score.expect("test: enriched score") - 0.9).abs() < f32::EPSILON,
+                "every row of the node group must carry the node-level score"
+            );
+        }
+        let mut edge_ids: Vec<u64> = merged
+            .iter()
+            .filter_map(|r| r.edge_bindings.get("r").copied())
+            .collect();
+        edge_ids.sort_unstable();
+        assert_eq!(edge_ids, vec![100, 101], "edge identities must be distinct");
     }
 }

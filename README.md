@@ -8,7 +8,7 @@
   Your AI agents forget everything. VelesDB fixes that.
 </h3>
 <p align="center">
-  <strong>One 6 MB binary. Three engines. One query language. Zero cloud dependency.</strong><br/>
+  <strong>One ~9 MB binary. Three engines. One query language. Zero cloud dependency.</strong><br/>
   <em>Vector + Graph + ColumnStore — unified under <a href="docs/VELESQL_SPEC.md">VelesQL</a></em>
 </p>
 <p align="center">
@@ -19,7 +19,7 @@
   <a href="https://pypi.org/project/velesdb/"><img src="https://img.shields.io/pypi/v/velesdb.svg" alt="PyPI"></a>
   <a href="https://www.npmjs.com/package/@wiscale/velesdb-sdk"><img src="https://img.shields.io/npm/v/@wiscale/velesdb-sdk.svg" alt="npm"></a>
   <a href="https://app.codacy.com/gh/cyberlife-coder/VelesDB/dashboard"><img src="https://img.shields.io/codacy/coverage/58c73832dd294ba38144856ae69e9cf2?branch=main" alt="Codacy coverage"></a>
-  <img src="https://img.shields.io/badge/tests-8526_(Rust%2BTS%2BPy)-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-9k%2B_(Rust%2BTS%2BPy)-brightgreen" alt="Tests">
   <a href="https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-VelesDB_Core_1.0-blue" alt="License"></a>
   <a href="https://github.com/cyberlife-coder/VelesDB"><img src="https://img.shields.io/github/stars/cyberlife-coder/VelesDB?style=flat-square" alt="Stars"></a>
   <a href="https://img.shields.io/badge/contributors-welcome-brightgreen"><img src="https://img.shields.io/badge/contributors-welcome-brightgreen" alt="Contributors Welcome"></a>
@@ -38,7 +38,7 @@
 
 > **Every AI agent today stitches together 3 databases for memory — vectors for "what feels similar", a graph for "what is connected", and SQL for "what I know for sure". That's 3 deployments, 3 configs, 3 query languages, and a pile of glue code.**
 >
-> **VelesDB replaces all of that with a single Rust binary that fits on a floppy disk.**
+> **VelesDB replaces all of that with a single Rust binary — smaller than a single smartphone photo.**
 
 ---
 
@@ -62,16 +62,16 @@ VelesDB removes the US provider from the chain entirely. One Rust binary, local-
 |-------------------------------|------------------------|
 | pgvector for embeddings | **Vector Engine** — 450us p50 end-to-end (10K/384D, WAL ON, recall>=96%) |
 | Neo4j for knowledge graphs | **Graph Engine** — MATCH clause, BFS/DFS |
-| PostgreSQL/DuckDB for metadata | **ColumnStore** — 130x faster than JSON at 100K rows*¹ |
+| PostgreSQL/DuckDB for metadata | **Typed ColumnStore + secondary indexes** — filtering API 130x faster than JSON scanning at 100K rows*¹ |
 | Custom glue code + 3 query languages | **VelesQL** — one language for everything |
-| 3 deployments, 3 configs, 3 backups | **6 MB binary** — works offline, air-gapped |
+| 3 deployments, 3 configs, 3 backups | **~9 MB binary** — works offline, air-gapped |
 
-> *¹ measured on 100K rows; ratio holds within ±5% on 10K–1M rows*
+> *¹ ColumnStore filtering API micro-benchmark, integer equality: 130x at 100K rows, 55x at 10K rows — see [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md). `SELECT ... WHERE` metadata filtering uses secondary indexes when available, and an adaptive ColumnStore payload mirror for scan-heavy filters (see [2] below).*
 
 ---
 ## What is VelesDB?
 
-VelesDB is a **local-first database for AI agents** that fuses three engines into a single 6 MB binary:
+VelesDB is a **local-first database for AI agents** that fuses three engines into a single ~9 MB binary [3]:
 
 | Engine | What it does | Performance |
 |--------|-------------|-------------|
@@ -80,7 +80,8 @@ VelesDB is a **local-first database for AI agents** that fuses three engines int
 | **ColumnStore** | Structured metadata filtering (typed columns) | **130x** faster than JSON scanning [2] |
 
 > [1] Reproduce: `python benchmarks/velesdb_benchmark.py --recall` (Python SDK path, 10K/384D, WAL fsync on, i9-14900KF reference machine). See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and [CHANGELOG v1.13.0](CHANGELOG.md).
-> [2] Reproduce: `cargo bench -p velesdb-core --bench filter_benchmark`. See [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md) — at 100K rows: ColumnStore 29.5 us vs JSON scan 3.84 ms (integer equality filter).
+> [2] Reproduce: `cargo bench -p velesdb-core --bench column_filter_benchmark`. See [docs/BENCHMARKS.md § 6](docs/BENCHMARKS.md) — at 100K rows: ColumnStore 29.5 us vs JSON scan 3.84 ms (integer equality filter). Micro-benchmark of the ColumnStore filtering API, which now serves `SELECT ... WHERE` metadata filtering through a per-collection payload mirror (built adaptively for scan-heavy workloads) and backs JOIN execution; secondary indexes are used first when they cover the filter.
+> [3] Binary size: `velesdb-server`, stripped release build (9.1 MB stripped local build on Apple Silicon; the published v1.18.0 release artifact is 9.4 MB). Across platforms and binaries (CLI / server / migrate), v1.18.0 release artifacts span 6–13 MB.
 
 All three are queried through **VelesQL** — a single SQL-like language with vector, graph, and columnar extensions:
 
@@ -117,7 +118,17 @@ memory.procedural.learn(1, "answer_geography", steps, embedding, confidence=0.8)
 |---------|-----|
 | TTL / Auto-expiration | `store_with_ttl()`, `auto_expire()` |
 | Snapshots / Rollback | `snapshot()`, `load_latest_snapshot()` |
-| Reinforcement | `reinforce(success=True)` — 4 strategies |
+| Reinforcement | `reinforce(success=True)` — 6 strategies (strategy selection via the Rust API; Python uses the `FixedRate` default) |
+
+And because memories live in the same engine as the graph and the ColumnStore, one VelesQL statement recalls by similarity, graph context, and session — in a single query ([tested end-to-end](crates/velesdb-core/tests/bdd/graph_vector_hybrid.rs)):
+
+```sql
+SELECT memory.*, similarity() FROM agent_memory AS memory
+WHERE vector NEAR $embedding
+  AND MATCH (ctx)-[:RELATES_TO]->(fact)
+  AND session_id = $current_session
+ORDER BY similarity() DESC LIMIT 10
+```
 
 > **Full guide:** [docs/guides/AGENT_MEMORY.md](docs/guides/AGENT_MEMORY.md) | [Source code](crates/velesdb-core/src/agent/)
 
@@ -128,9 +139,9 @@ memory.procedural.learn(1, "answer_geography", steps, embedding, confidence=0.8)
 | | **VelesDB** | Chroma | Qdrant | pgvector |
 |---|---|---|---|---|
 | **Architecture** | Unified vector + graph + columnar | Vector only | Vector + payload | Vector extension for PostgreSQL |
-| **Metadata filtering** | **ColumnStore (130x vs JSON)** | JSON scan | JSON payload | SQL (PostgreSQL) |
+| **Metadata filtering** | **Typed ColumnStore [2] + secondary indexes** | JSON scan | JSON payload | SQL (PostgreSQL) |
 | **Deployment** | Embedded / Server / WASM / Mobile | Server (Python) | Server (Rust) | Requires PostgreSQL |
-| **Binary size** | 6 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
+| **Binary size** | ~9 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
 | **Search latency** | **450us** p50 (10K/384D, WAL ON, recall>=96%) | ~1-5ms | ~1-5ms (in-memory) | ~5-20ms |
 | **Graph support** | Native (MATCH clause) | No | No | No |
 | **Query language** | VelesQL (SQL + NEAR + MATCH) | Python API | JSON API / gRPC | SQL + operators |
@@ -279,7 +290,9 @@ Native HNSW index with SIMD-accelerated distance kernels. Sub-millisecond search
 | Search p50 (10K, 384D, WAL ON) | **450 us** |
 | SIMD Dot Product (768D, AVX2) | **21.7 ns** |
 | Recall@10 (Balanced) | **98.8%** |
-| Quantization | SQ8 (4x), PQ (32x), Binary (32x), RaBitQ (32x) |
+| Quantization | PQ (8–32x, config-dependent), RaBitQ (32x), SQ8 (4x)*³, Binary (32x)*³ |
+
+> *³ Query-path compression comes from **PQ** and **RaBitQ** — both are wired end-to-end into the collection search path, restarts included. The collection-level SQ8/Binary modes maintain caches that no search path reads yet (search stays full-precision f32 — SQ8 as a collection mode therefore *adds* memory); their quantization primitives remain available programmatically. See [docs/guides/QUANTIZATION.md](docs/guides/QUANTIZATION.md).
 
 > **Provenance of the canonical figures above:** Intel Core **i9-14900KF** (x86_64, AVX2), `velesdb_benchmark.py`. "End-to-end / p50" = the full production path (VelesQL → HNSW → **WAL ON** → payload hydration), median over the query set. "Index-only" figures (in the details below) exclude WAL and payload and run on a hot cache — they are not comparable to the end-to-end number. Per-machine figures vary; fresh Apple-Silicon measurements are given below.
 
@@ -330,7 +343,7 @@ All `cargo bench` commands below are run as `cargo bench -p velesdb-core --bench
 
 ### Distance Metrics
 
-5 metrics with SIMD acceleration (AVX-512, AVX2, NEON, WASM SIMD128):
+5 metrics with SIMD acceleration (AVX-512, AVX2, NEON; WASM currently uses the scalar fallback — SIMD128 kernels are planned):
 
 | Metric | What it measures | Use case | SIMD perf (768D)*² |
 |--------|-----------------|----------|------------------|
@@ -387,19 +400,26 @@ LIMIT 20
 
 ## ColumnStore Engine
 
-Typed columnar storage — the same approach DuckDB and ClickHouse use. **130x faster** than JSON scanning at 100K rows.
+Typed columnar storage — the same approach DuckDB and ClickHouse use. Its
+filtering API is **130x faster** than JSON scanning at 100K rows
+(micro-benchmark: `cargo bench -p velesdb-core --bench column_filter_benchmark`).
 
 ```
 JSON scan: 3.84 ms @ 100K    →    ColumnStore: 29.5 us @ 100K (130x faster)
 ```
+
+The ColumnStore engine backs `JOIN` execution and serves `SELECT ... WHERE`
+metadata filtering through a per-collection payload mirror: top-level scalar
+payload fields are mirrored into typed columns, and filters compile to
+RoaringBitmap scans. The mirror is built adaptively — only after sequential
+scans have cost more than one full pass — so point lookups keep their fast
+path; secondary indexes are still consulted first when they cover the filter:
 
 ```sql
 SELECT * FROM products
 WHERE vector NEAR $query AND in_stock = true AND price < 50.0
 LIMIT 10
 ```
-
-Pre-filter or post-filter automatically optimized by the query planner.
 
 ---
 
@@ -418,7 +438,7 @@ memory.procedural.learn(3, "handle_refund", steps, embedding, confidence=0.9)
 
 ### RAG with Metadata Filtering
 
-Vector search alone returns noise. VelesDB's ColumnStore filters eliminate irrelevant results 130x faster than JSON scanning.
+Vector search alone returns noise. VelesDB combines vector search with metadata filters (secondary indexes + planner-chosen pre/post-filtering) to eliminate irrelevant results.
 
 ```sql
 SELECT * FROM docs
@@ -444,10 +464,10 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 
 | Platform | Integration | Binary size |
 |----------|-------------|-------------|
-| Desktop (Tauri) | `tauri-plugin-velesdb` | 6 MB |
+| Desktop (Tauri) | `tauri-plugin-velesdb` | ~9 MB |
 | iOS (Swift) | UniFFI bindings | ~4 MB |
 | Android (Kotlin) | UniFFI bindings | ~4 MB |
-| Browser | WASM module | ~50 KB gzipped |
+| Browser | WASM module | ~430 KB gzipped |
 
 ---
 
@@ -462,6 +482,11 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | v1.12 — Cross-collection MATCH (graph/BM25/HNSW hybrids), Sprint 4 Phase B (TS SDK stability) | ✅ Shipped |
 | v1.13 — Pre-seed remediation: BM25 O(1) cold-start, sparse search 16× speedup, HNSW prefetch, EXPLAIN/CBO routing, VelesQL window functions, SIFT1M standardized harness | ✅ Shipped |
 | v1.14 — DX correctness: MSRV 1.89 alignment, Dockerfile auto-sync; **Haystack 2.x DocumentStore** completes the LangChain + LlamaIndex + Haystack Python RAG trio | ✅ Shipped |
+| v1.15 — ACT-R Phase 1 procedural learning, CBO calibration in `EXPLAIN ANALYZE`, Python auto-dimension + `SearchOptions` builder | ✅ Shipped |
+| v1.16 — `audit-2026q2` security-hardening wave (9 PRs), first-party embedding adapters (Python + TypeScript), multi-arch GHCR image | ✅ Shipped |
+| v1.17 — VelesQL error hints with did-you-mean suggestions, payload-WAL torn-tail crash recovery, OpenAPI id-type accuracy | ✅ Shipped |
+| v1.18 — Engine artifacts realigned to VelesDB Core License 1.0, agent-memory parity (Python/Tauri bindings, TS procedural recall) | ✅ Shipped |
+| v1.19 (next) — Agent-memory graph dimension (`relate()` API + the NEAR + MATCH flagship query verbatim), GraphFirst anchored retrieval, PQ/RaBitQ quantization wired end-to-end across restarts, durable TTL on every read path, `GET /metrics` by default | 🚧 In progress |
 
 > VelesDB Core is open-source. Enterprise features (distributed replication, managed cloud, RBAC) are available separately via [VelesDB Premium](https://velesdb.com).
 
@@ -474,7 +499,7 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | Domain | Component | Install |
 |--------|-----------|---------|
 | **Core** | [velesdb-core](crates/velesdb-core) — Vector + Graph + ColumnStore + VelesQL | `cargo add velesdb-core` |
-| **Server** | [velesdb-server](crates/velesdb-server) — REST API (46 endpoints, OpenAPI) | `cargo install velesdb-server` |
+| **Server** | [velesdb-server](crates/velesdb-server) — REST API (48 endpoints, OpenAPI) | `cargo install velesdb-server` |
 | **CLI** | [velesdb-cli](crates/velesdb-cli) — Interactive VelesQL REPL | `cargo install velesdb-cli` |
 | **Python** | [velesdb-python](crates/velesdb-python) — PyO3 bindings + NumPy | `pip install velesdb` |
 | **TypeScript** | [typescript-sdk](sdks/typescript) — Node.js & Browser SDK | `npm install @wiscale/velesdb-sdk` |
@@ -541,12 +566,12 @@ The container runs as a non-root `velesdb` user. Data persists via the named vol
 </details>
 
 <details>
-<summary>API Reference (46 REST endpoints)</summary>
+<summary>API Reference (48 REST endpoints)</summary>
 
 | Category | Key Endpoints |
 |----------|--------------|
 | **Collections** | `POST /collections`, `GET /collections`, `GET/DELETE /collections/{name}` |
-| **Points** | `/collections/{name}/points`, `/collections/{name}/points/scroll`, `/collections/{name}/stream/insert` |
+| **Points** | `/collections/{name}/points`, `/collections/{name}/points/scroll`, `/collections/{name}/stream/insert`, `/collections/{name}/points/{id}/relations`, `/collections/{name}/points/{id}/ttl`, `/collections/{name}/relations` |
 | **Search** | `/collections/{name}/search`, `/collections/{name}/search/batch`, `/collections/{name}/search/hybrid`, `/collections/{name}/search/text`, `/collections/{name}/search/multi`, `/collections/{name}/search/ids`, `/collections/{name}/match` |
 | **Graph** | `/collections/{name}/graph/edges`, `/collections/{name}/graph/edges/{id}`, `/collections/{name}/graph/edges/count`, `/collections/{name}/graph/traverse`, `/collections/{name}/graph/traverse/stream`, `/collections/{name}/graph/traverse/parallel`, `/collections/{name}/graph/nodes`, `/collections/{name}/graph/nodes/{id}/degree`, `/collections/{name}/graph/nodes/{id}/edges`, `/collections/{name}/graph/nodes/{id}/payload`, `/collections/{name}/graph/search` |
 | **Indexes** | `GET/POST /collections/{name}/indexes`, `DELETE /collections/{name}/indexes/{label}/{property}`, `/collections/{name}/index/rebuild` |
@@ -590,16 +615,16 @@ cd examples/ecommerce_recommendation && cargo run --release
 <details>
 <summary>Research Foundations</summary>
 
-VelesDB's performance is built on peer-reviewed research — every technique is implemented and production-active.
+VelesDB's performance is built on peer-reviewed research — five of the six techniques below are implemented and production-active in the engine; Dual-Precision (VSAG) ships as a public API with a benchmark harness, with engine integration tracked.
 
-| Technique | Paper |
-|-----------|-------|
-| HNSW | [Malkov & Yashunin, 2016](https://arxiv.org/abs/1603.09320) |
-| VAMANA / DiskANN | [Subramanya et al., 2019](https://arxiv.org/abs/1907.05024) |
-| RaBitQ | [Gao & Long, 2024](https://arxiv.org/abs/2405.12497) |
-| Dual-Precision (VSAG) | [Xu et al., 2025](https://arxiv.org/abs/2503.17911) |
-| Software Pipelining | [Jiang et al., 2025](https://arxiv.org/abs/2505.07621) |
-| PDX Layout | [Pirk et al., 2025](https://arxiv.org/abs/2503.04422) |
+| Technique | Paper | Status |
+|-----------|-------|--------|
+| HNSW | [Malkov & Yashunin, 2016](https://arxiv.org/abs/1603.09320) | Production-active |
+| VAMANA / DiskANN | [Subramanya et al., 2019](https://arxiv.org/abs/1907.05024) | Production-active (alpha pruning) |
+| RaBitQ | [Gao & Long, 2024](https://arxiv.org/abs/2405.12497) | Production-active (query path, restarts included) |
+| Dual-Precision (VSAG) | [Xu et al., 2025](https://arxiv.org/abs/2503.17911) | Public API + benchmark; engine integration tracked |
+| Software Pipelining | [Jiang et al., 2025](https://arxiv.org/abs/2505.07621) | Production-active (search pipeline) |
+| PDX Layout | [Pirk et al., 2025](https://arxiv.org/abs/2503.04422) | Production-active (columnar layout via `ANALYZE` reorder) |
 
 </details>
 

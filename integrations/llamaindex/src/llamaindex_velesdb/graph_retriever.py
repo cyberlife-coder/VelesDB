@@ -182,7 +182,9 @@ class GraphRetriever(BaseRetriever):
         self._fallback_on_timeout = fallback_on_timeout
         self._graph_collection: Any = None
 
-        if mode == "native":
+        # low_latency mode never traverses the graph, so it must not
+        # require a graph collection to exist (vector-only retrieval).
+        if mode == "native" and not low_latency:
             self._graph_collection = self._init_native_graph(
                 db_path, graph_collection_name
             )

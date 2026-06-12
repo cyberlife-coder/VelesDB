@@ -4,6 +4,7 @@
 //! sparse (optionally filtered) and dense searches in parallel, and fuses
 //! results using the requested fusion strategy.
 
+use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::search::resolve;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
@@ -166,17 +167,33 @@ impl Collection {
     // ------------------------------------------------------------------
 
     /// Execute a sparse-only search, optionally filtered by payload conditions.
-    ///
-    /// # Lock ordering
-    ///
-    /// `payload_storage(3)` is acquired before `sparse_indexes(9)` to respect
-    /// the canonical lock order defined in `docs/CONCURRENCY_MODEL.md`.
     pub(crate) fn execute_sparse_search(
         &self,
         svs: &SparseVectorSearch,
         params: &std::collections::HashMap<String, serde_json::Value>,
         filter_condition: Option<&Condition>,
         limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        self.execute_sparse_search_in_anchors(svs, params, filter_condition, limit, None)
+    }
+
+    /// Execute a sparse-only search, optionally filtered by payload
+    /// conditions and/or restricted to a GraphFirst anchor-id set.
+    ///
+    /// With `anchors`, the sparse index's per-id filter makes the fetch
+    /// exact at `limit` *within* the graph matches — no over-fetch window.
+    ///
+    /// # Lock ordering
+    ///
+    /// `payload_storage(3)` is acquired before `sparse_indexes(9)` to respect
+    /// the canonical lock order defined in `docs/CONCURRENCY_MODEL.md`.
+    pub(crate) fn execute_sparse_search_in_anchors(
+        &self,
+        svs: &SparseVectorSearch,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        filter_condition: Option<&Condition>,
+        limit: usize,
+        anchors: Option<&std::collections::HashSet<u64>>,
     ) -> Result<Vec<SearchResult>> {
         let query_vec = Self::resolve_sparse_vector(&svs.vector, params)?;
         let index_name = svs
@@ -189,22 +206,14 @@ impl Collection {
             .and_then(Self::extract_metadata_filter)
             .map(|cond| crate::filter::Filter::new(crate::filter::Condition::from(cond)));
 
-        // LOCK ORDER: payload_storage(3) before sparse_indexes(9).
-        let results = if let Some(ref filter) = metadata_filter {
-            let payload_storage = self.payload_storage.read(); // lock 3
-            let indexes = self.sparse_indexes.read(); // lock 9
-            let index = indexes
-                .get(index_name)
-                .ok_or_else(|| resolve::sparse_index_not_found(index_name))?;
-            let filter_fn = |id: u64| {
-                let payload = payload_storage.retrieve(id).ok().flatten();
-                let p = payload.as_ref().unwrap_or(&serde_json::Value::Null);
-                filter.matches(p)
-            };
-            let r = sparse_search_filtered(index, &query_vec, limit, Some(&filter_fn));
-            drop(indexes);
-            drop(payload_storage);
-            r
+        let results = if metadata_filter.is_some() || anchors.is_some() {
+            self.sparse_search_with_id_filter(
+                index_name,
+                &query_vec,
+                limit,
+                metadata_filter.as_ref(),
+                anchors,
+            )?
         } else {
             let indexes = self.sparse_indexes.read(); // lock 9 only (no payload needed)
             let index = indexes
@@ -216,6 +225,47 @@ impl Collection {
         };
 
         Ok(self.resolve_sparse_results(&results, limit))
+    }
+
+    /// Runs a sparse search with a per-id filter combining anchor membership
+    /// and the metadata payload filter.
+    ///
+    /// # Lock ordering
+    ///
+    /// `payload_storage(3)` is acquired before `sparse_indexes(9)` to respect
+    /// the canonical lock order defined in `docs/CONCURRENCY_MODEL.md`.
+    fn sparse_search_with_id_filter(
+        &self,
+        index_name: &str,
+        query_vec: &SparseVector,
+        limit: usize,
+        metadata_filter: Option<&crate::filter::Filter>,
+        anchors: Option<&std::collections::HashSet<u64>>,
+    ) -> Result<Vec<crate::sparse_index::ScoredDoc>> {
+        let payload_storage = metadata_filter.map(|_| self.payload_storage.read()); // lock 3
+        let indexes = self.sparse_indexes.read(); // lock 9
+        let index = indexes
+            .get(index_name)
+            .ok_or_else(|| resolve::sparse_index_not_found(index_name))?;
+        let filter_fn = |id: u64| {
+            if anchors.is_some_and(|a| !a.contains(&id)) {
+                return false;
+            }
+            match (metadata_filter, &payload_storage) {
+                (Some(filter), Some(storage)) => {
+                    let payload = storage.retrieve(id).ok().flatten();
+                    let p = payload.as_ref().unwrap_or(&serde_json::Value::Null);
+                    filter.matches(p)
+                }
+                _ => true,
+            }
+        };
+        Ok(sparse_search_filtered(
+            index,
+            query_vec,
+            limit,
+            Some(&filter_fn),
+        ))
     }
 
     // ------------------------------------------------------------------
@@ -428,6 +478,7 @@ impl Collection {
     ) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
+        let now_secs = now_unix_secs();
 
         let mut out = Vec::with_capacity(capacity_hint.min(limit));
         for (id, score) in pairs.take(limit) {
@@ -437,6 +488,9 @@ impl Collection {
                 .flatten()
                 .unwrap_or_default();
             let payload = payload_storage.retrieve(id).ok().flatten();
+            if is_payload_expired(payload.as_ref(), now_secs) {
+                continue;
+            }
             let point = Point {
                 id,
                 vector,

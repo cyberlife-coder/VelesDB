@@ -161,3 +161,7 @@ todo_analysis_report_updated.md
 
 # Local git worktrees (e.g. agent/worktree-isolated work)
 .worktrees/
+
+# Local analysis output (graphify) and REPL runtime artifacts
+graphify-out/
+test_repl_data/

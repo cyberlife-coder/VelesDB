@@ -41,6 +41,10 @@ on:
       - "crates/velesdb-python/**"
       - "benchmarks/velesdb_benchmark.py"
       - ".github/workflows/perf-gate-e2e.yml"
+  schedule:
+    # Nightly 100K-scale recall validation (the PR gate runs at 10K).
+    - cron: "17 3 * * *"
+  workflow_dispatch:
 
 concurrency:
   group: perf-gate-e2e-${{ github.ref }}
@@ -59,6 +63,9 @@ env:
 jobs:
   perf-gate:
     name: Recall ≥ 0.95 + p50 sanity floor (10K/384D)
+    # The 10K gate covers pushes, PRs, and manual dispatch; the nightly
+    # schedule only runs the 100K job below.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -153,3 +160,94 @@ jobs:
           name: perf-report-${{ github.sha }}
           path: perf-report.json
           retention-days: 30
+
+  # ===========================================================================
+  # Scheduled 100K-scale recall validation (QUALITY_BAR.md Gate 1 at scale)
+  #
+  # The PR gate above validates recall at 10K vectors. HNSW recall can degrade
+  # with index size in ways a 10K run cannot detect (entry-point drift, layer
+  # distribution, ef_search headroom), so this job re-validates recall@10 at
+  # 100K vectors nightly and on manual dispatch. Latency is reported but not
+  # gated: runner variance at this scale would produce false positives.
+  # ===========================================================================
+  recall-100k:
+    name: Scheduled Recall ≥ 0.95 (100K/384D)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+        with:
+          toolchain: "1.86"
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: "velesdb-perf-gate"
+
+      - name: Build velesdb-python (release wheel)
+        run: |
+          python -m pip install --upgrade pip "maturin>=1.7,<2" numpy
+          cd crates/velesdb-python
+          maturin build --release --interpreter python3.11
+          pip install --force-reinstall ../../target/wheels/velesdb-*.whl
+
+      - name: Run benchmark (100K vectors, 384D, --recall, --json)
+        run: |
+          python benchmarks/velesdb_benchmark.py \
+            --datasets 100000 \
+            --dimension 384 \
+            --recall \
+            --json \
+            --output perf-report-100k.json
+
+      - name: Gate report on recall@10
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          with open("perf-report-100k.json") as f:
+              report = json.load(f)
+
+          recall_min = float(os.environ["RECALL_MIN"])
+
+          hundred_k = next(
+              (r for r in report["results"] if r.get("num_vectors") == 100_000),
+              None,
+          )
+          if hundred_k is None:
+              sys.exit("FAIL: no 100K result block in report")
+
+          recall = report.get("recall", {}).get("recall_at_10_mean", 0.0)
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          lines = [
+              "## Scheduled Recall Gate — 100K / 384D / WAL ON",
+              "",
+              f"- recall@10: **{recall:.4f}** (gate: ≥ {recall_min})",
+              f"- search p50: {hundred_k['search_p50_us']} µs (informational, not gated)",
+              f"- search p99: {hundred_k['search_p99_us']} µs (informational, not gated)",
+              "",
+          ]
+          if summary_path:
+              with open(summary_path, "a") as s:
+                  s.write("\n".join(lines) + "\n")
+          for line in lines:
+              print(line)
+
+          if recall < recall_min:
+              sys.exit(f"FAIL: recall@10 {recall:.4f} < {recall_min} at 100K")
+          print("PASS")
+          PY
+
+      - name: Upload perf report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-report-100k-${{ github.sha }}
+          path: perf-report-100k.json
+          retention-days: 90

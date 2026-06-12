@@ -4,7 +4,7 @@ This document specifies the **explicit, enforceable thresholds** below which Vel
 
 These gates are not aspirational. They are enforced via CI workflows, scripts, and explicit pre-merge protocols. Each gate listed here links to its enforcement mechanism so that the gate can be inspected, contested, or extended publicly.
 
-> **Last updated:** 2026-05-31 — applies to v1.16.x and onward.
+> **Last updated:** 2026-06-12 — applies to v2.0.x and onward.
 
 ---
 
@@ -12,7 +12,7 @@ These gates are not aspirational. They are enforced via CI workflows, scripts, a
 
 | # | Gate | Threshold | Enforced by |
 |---|------|-----------|-------------|
-| 1 | **Recall@10** | ≥ 0.95 (10K local) ; ≥ 0.90 (100K CI) | `cargo test test_recall` + GitHub Actions `recall-quality` job |
+| 1 | **Recall@10** | ≥ 0.95 (10K, CI on search-path PRs) ; ≥ 0.90 (100K, manual `#[ignore]` test) | `cargo test test_recall` + `perf-gate-e2e.yml`; 100K floor run manually (see Gate 1) |
 | 2 | **End-to-end search latency p50** | ≤ 450 µs (10K/384D, WAL ON, recall ≥ 96%) | `python benchmarks/velesdb_benchmark.py --recall` + perf-smoke CI gate |
 | 3 | **No `.unwrap()` in production code** | Zero | `scripts/check_prod_unwraps.py` in CI |
 | 4 | **No `unsafe` without `// SAFETY:` comment** | Zero | `scripts/verify_unsafe_safety_template.py` in CI |
@@ -21,6 +21,8 @@ These gates are not aspirational. They are enforced via CI workflows, scripts, a
 | 7 | **Code duplication** | < 2% per language | jscpd in `scripts/local-ci.ps1` + Codacy |
 
 A pull request that breaks any of these gates **cannot be merged**. There are no waivers without a documented exception added to this file.
+
+**How "cannot be merged" is enforced:** both `develop` and `main` carry GitHub branch protection requiring the **`CI Success`** status check (the summary job that gates lint, tests, security/cargo-deny, WASM, OpenAPI drift, VelesQL conformance, perf-smoke and Python SDK tests); force pushes are disabled on both branches. Gates 5–6 are enforced by Codacy Cloud; the official register of per-file complexity exceptions (each with a written rationale) is [`.codacy.yml`](.codacy.yml) — the bar is ≤ 8 / ≤ 50 everywhere outside that explicit whitelist. Gate 7 runs in `scripts/local-ci.ps1` and Codacy rather than as a GitHub Actions job.
 
 ---
 
@@ -38,18 +40,27 @@ A pull request that breaks any of these gates **cannot be merged**. There are no
 
 - **CI (authoritative):**
   - [`.github/workflows/perf-gate-e2e.yml`](.github/workflows/perf-gate-e2e.yml) gates **recall@10 ≥ 0.95** on the 10K/384D benchmark for every PR touching the search hot path (also gates Gate 2's p50 — same workflow, single source of truth).
-  - The `recall-quality` job in the broader CI pipeline runs the 100K-vector ≥ 0.90 floor on pushes to `develop` and `main`.
+  - The 100K-vector ≥ 0.90 floor is a **manual** gate: the tests in
+    [`crates/velesdb-core/tests/scale_recall_100k.rs`](crates/velesdb-core/tests/scale_recall_100k.rs)
+    are `#[ignore]` (long-running) and are not wired into any CI workflow. Run them with:
+    ```bash
+    cargo test -p velesdb-core --test scale_recall_100k \
+        --features persistence -- --ignored --nocapture --test-threads=1
+    ```
   - The BDD suite enforces **per-metric recall coverage** via [`crates/velesdb-core/tests/bdd/recall_contract_multimetric.rs`](crates/velesdb-core/tests/bdd/recall_contract_multimetric.rs) (Cosine in `recall_contract.rs`, Euclidean and DotProduct in `recall_contract_multimetric.rs`) on every PR.
 
 - **Documented modes:**
 
-  | Mode | ef_search | Recall@10 (measured) |
-  |------|-----------|---------------------|
-  | Fast | 64 | 92.2% |
-  | Balanced (default) | 128 | 98.8% |
-  | Accurate | 512 | 100.0% |
+  | Mode | ef_search (base, current code) | Recall@10 (measured) |
+  |------|-------------------------------|---------------------|
+  | Fast | 96 (`max(96, k×3)`) | 92.2%* |
+  | Balanced (default) | 160 (`max(160, k×5)`) | 98.8%* |
+  | Accurate | 512 (`max(512, k×16)`) | 100.0% |
 
-  Source: `benchmarks/results/2026-02-20-phase-e-report.md`.
+  Source: `benchmarks/results/2026-02-20-phase-e-report.md`; base values from
+  `SearchQuality::ef_search` (`crates/velesdb-core/src/index/hnsw/params.rs`).
+  \* measured at the former Fast=64 / Balanced=128 settings — the current
+  higher bases can only match or improve those figures.
 
 **When this triggers:** any change to `index/hnsw/`, `simd_native/`, `quantization/`, `fusion/`, or result-conversion code in Python bindings.
 
@@ -181,7 +192,7 @@ These signals are tracked but do not block release individually:
 
 | Signal | Threshold | Enforcement |
 |--------|-----------|-------------|
-| Test count | ≥ 7000 (Rust + TS + Py) | Counted in CI summary |
+| Test count | ≥ 7000 (Rust + TS + Py) | Not automated — checked manually from local test runs (no CI job counts tests) |
 | BDD scenario coverage | All VelesQL syntax features | `crates/velesdb-core/tests/bdd/` |
 | Doctest compilation | All `pub fn` doctests compile | `cargo test --doc` in CI |
 | Promise contract sync | All numeric claims in README backed by benchmark commands | `scripts/check-promise-contract.py` in CI |

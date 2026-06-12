@@ -265,7 +265,7 @@ def _check_roadmap(root: Path) -> list[str]:
 
     Returns a list of formatted finding strings.
     """
-    roadmap_file = root / ".epics" / "ROADMAP-2026-STRATEGY.md"
+    roadmap_file = root / "ROADMAP.md"
     readme_file = root / "README.md"
 
     roadmap_text = _read_text(roadmap_file).lower()

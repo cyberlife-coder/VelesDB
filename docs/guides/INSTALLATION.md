@@ -60,10 +60,10 @@ entry.
 
 ```bash
 # Download
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v1.18.0/velesdb-1.18.0-amd64.deb
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v2.0.0/velesdb-2.0.0-amd64.deb
 
 # Install
-sudo dpkg -i velesdb-1.18.0-amd64.deb
+sudo dpkg -i velesdb-2.0.0-amd64.deb
 
 # Verify
 velesdb --version
@@ -160,13 +160,13 @@ GitHub Container Registry, so you don't need to build locally:
 
 ```bash
 # Pull a specific release (recommended for reproducibility)
-docker pull ghcr.io/cyberlife-coder/velesdb:1.18.0
+docker pull ghcr.io/cyberlife-coder/velesdb:2.0.0
 
 # ...or the latest stable release
 docker pull ghcr.io/cyberlife-coder/velesdb:latest
 
 docker run -d --name velesdb -p 8080:8080 -v velesdb_data:/data \
-  ghcr.io/cyberlife-coder/velesdb:1.18.0
+  ghcr.io/cyberlife-coder/velesdb:2.0.0
 ```
 
 ### Build locally
@@ -295,7 +295,7 @@ cargo install cargo-ndk
 cargo build --release --target aarch64-apple-ios -p velesdb-mobile
 
 # Generate Swift bindings
-cargo run --bin uniffi-bindgen generate \
+cargo run -p velesdb-mobile --bin uniffi-bindgen -- generate \
     --library target/aarch64-apple-ios/release/libvelesdb_mobile.a \
     --language swift \
     --out-dir bindings/swift
@@ -309,7 +309,7 @@ cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
     build --release -p velesdb-mobile
 
 # Generate Kotlin bindings
-cargo run --bin uniffi-bindgen generate \
+cargo run -p velesdb-mobile --bin uniffi-bindgen -- generate \
     --library target/aarch64-linux-android/release/libvelesdb_mobile.so \
     --language kotlin \
     --out-dir bindings/kotlin
@@ -337,7 +337,7 @@ val collection = db.getCollection("docs")!!
 val results = collection.search(embedding, 10u)
 ```
 
-📖 Full guide: [crates/velesdb-mobile/README.md](../crates/velesdb-mobile/README.md)
+📖 Full guide: [crates/velesdb-mobile/README.md](../../crates/velesdb-mobile/README.md)
 
 ---
 
@@ -425,4 +425,4 @@ docker run -v velesdb_data:/data velesdb
 - **[VelesQL Guide](../VELESQL_SPEC.md)** - SQL-like query language
 - **[API Reference](../reference/api-reference.md)** - REST API documentation
 - **[Benchmarks](../BENCHMARKS.md)** - Performance metrics
-- **[Examples](../examples/)** - Sample applications including Tauri RAG app
+- **[Examples](../../examples/)** - Sample applications including Tauri RAG app

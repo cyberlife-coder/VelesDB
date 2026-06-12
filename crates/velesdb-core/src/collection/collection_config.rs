@@ -89,8 +89,8 @@ pub struct CollectionConfig {
     /// Custom HNSW index parameters (M, `ef_construction`, etc.).
     ///
     /// When `Some`, these parameters are used to rebuild the HNSW index on
-    /// collection reopen if `hnsw.bin` does not yet exist (empty collection).
-    /// When `None`, the default `HnswParams::auto(dimension)` is used.
+    /// collection reopen if no persisted index exists yet (`native_meta.bin`
+    /// absent). When `None`, the default `HnswParams::auto(dimension)` is used.
     ///
     /// Backward compatible: old `config.json` files without this field
     /// deserialize to `None`.

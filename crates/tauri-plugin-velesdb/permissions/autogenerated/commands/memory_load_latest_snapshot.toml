@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-memory-load-latest-snapshot"
+description = "Enables the memory_load_latest_snapshot command without any pre-configured scope."
+commands.allow = ["memory_load_latest_snapshot"]
+
+[[permission]]
+identifier = "deny-memory-load-latest-snapshot"
+description = "Denies the memory_load_latest_snapshot command without any pre-configured scope."
+commands.deny = ["memory_load_latest_snapshot"]

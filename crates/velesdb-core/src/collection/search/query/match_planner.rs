@@ -95,15 +95,22 @@ impl MatchQueryPlanner {
             Self::is_similarity_on_start(match_clause, similarity_info.as_ref());
         let start_labels = Self::extract_start_labels(match_clause);
         let max_depth = Self::count_hops(match_clause);
+        // Audit 2026-06 F2: VectorFirst (alone or as a Parallel leg) validates
+        // candidates without binding relationship aliases, so `r.prop` would
+        // silently resolve against node payloads. Force GraphFirst whenever
+        // WHERE or RETURN references a relationship alias of the pattern.
+        let edge_alias_referenced = Self::references_relationship_alias(match_clause);
 
-        if has_similarity && similarity_on_start {
+        if has_similarity && similarity_on_start && !edge_alias_referenced {
             Self::plan_vector_first(match_clause, stats, similarity_info)
         } else if !has_similarity {
             MatchExecutionStrategy::GraphFirst {
                 start_labels,
                 max_depth,
             }
-        } else if Self::should_use_parallel(stats, similarity_info.as_ref()) {
+        } else if !edge_alias_referenced
+            && Self::should_use_parallel(stats, similarity_info.as_ref())
+        {
             Self::plan_parallel(
                 match_clause,
                 stats,
@@ -116,6 +123,58 @@ impl MatchQueryPlanner {
                 start_labels,
                 max_depth,
             }
+        }
+    }
+
+    /// Checks whether any WHERE leaf or RETURN/ORDER BY expression references
+    /// a relationship alias declared by the pattern (audit 2026-06 F2).
+    fn references_relationship_alias(match_clause: &MatchClause) -> bool {
+        let aliases: Vec<&str> = match_clause
+            .patterns
+            .iter()
+            .flat_map(|p| p.relationships.iter())
+            .filter_map(|r| r.alias.as_deref())
+            .collect();
+        if aliases.is_empty() {
+            return false;
+        }
+        let where_refs = match_clause
+            .where_clause
+            .as_ref()
+            .is_some_and(|cond| Self::condition_references_alias(cond, &aliases));
+        where_refs || Self::return_clause_references_alias(&match_clause.return_clause, &aliases)
+    }
+
+    /// Checks RETURN items and ORDER BY expressions for alias references.
+    fn return_clause_references_alias(
+        return_clause: &crate::velesql::ReturnClause,
+        aliases: &[&str],
+    ) -> bool {
+        let item_refs = return_clause
+            .items
+            .iter()
+            .any(|item| column_targets_alias(&item.expression, aliases));
+        let order_refs = return_clause.order_by.as_ref().is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| column_targets_alias(&item.expression, aliases))
+        });
+        item_refs || order_refs
+    }
+
+    /// Recursively checks WHERE leaves for columns targeting `aliases`.
+    fn condition_references_alias(condition: &Condition, aliases: &[&str]) -> bool {
+        match condition {
+            Condition::Comparison(cmp) => column_targets_alias(&cmp.column, aliases),
+            Condition::And(left, right) | Condition::Or(left, right) => {
+                Self::condition_references_alias(left, aliases)
+                    || Self::condition_references_alias(right, aliases)
+            }
+            Condition::Not(inner) | Condition::Group(inner) => {
+                Self::condition_references_alias(inner, aliases)
+            }
+            other => super::match_exec::where_eval::column_of_metadata_condition(other)
+                .is_some_and(|column| column_targets_alias(column, aliases)),
         }
     }
 
@@ -326,6 +385,13 @@ impl MatchQueryPlanner {
             }
         }
     }
+}
+
+/// Checks whether a column expression (`r.prop` or bare `r`) targets one of
+/// the pattern's relationship aliases (audit 2026-06 F2).
+fn column_targets_alias(column: &str, aliases: &[&str]) -> bool {
+    let prefix = column.split('.').next().unwrap_or(column);
+    aliases.contains(&prefix)
 }
 
 // Tests moved to match_planner_tests.rs per project rules

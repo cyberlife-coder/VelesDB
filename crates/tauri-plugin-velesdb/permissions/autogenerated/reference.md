@@ -28,11 +28,36 @@ Default permissions for VelesDB plugin - allows all database operations
 - `allow-train-pq`
 - `allow-stream-insert`
 - `allow-semantic-store`
+- `allow-semantic-store-with-ttl`
 - `allow-semantic-query`
+- `allow-semantic-delete`
+- `allow-semantic-dimension`
+- `allow-semantic-serialize`
+- `allow-semantic-deserialize`
 - `allow-episodic-record`
 - `allow-episodic-recent`
+- `allow-episodic-recall-similar`
+- `allow-episodic-older-than`
+- `allow-episodic-delete`
+- `allow-episodic-serialize`
+- `allow-episodic-deserialize`
 - `allow-procedural-learn`
 - `allow-procedural-recall`
+- `allow-procedural-reinforce`
+- `allow-procedural-list-all`
+- `allow-procedural-delete`
+- `allow-procedural-serialize`
+- `allow-procedural-deserialize`
+- `allow-memory-set-ttl`
+- `allow-memory-auto-expire`
+- `allow-memory-evict-low-confidence`
+- `allow-memory-snapshot`
+- `allow-memory-load-latest-snapshot`
+- `allow-memory-load-snapshot-version`
+- `allow-memory-list-snapshot-versions`
+- `allow-memory-query-semantic`
+- `allow-memory-query-episodic`
+- `allow-memory-query-procedural`
 - `allow-create-graph-collection`
 - `allow-add-edge`
 - `allow-get-edges`
@@ -289,6 +314,110 @@ Denies the drop_index command without any pre-configured scope.
 <tr>
 <td>
 
+`velesdb:allow-episodic-delete`
+
+</td>
+<td>
+
+Enables the episodic_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-episodic-delete`
+
+</td>
+<td>
+
+Denies the episodic_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-episodic-deserialize`
+
+</td>
+<td>
+
+Enables the episodic_deserialize command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-episodic-deserialize`
+
+</td>
+<td>
+
+Denies the episodic_deserialize command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-episodic-older-than`
+
+</td>
+<td>
+
+Enables the episodic_older_than command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-episodic-older-than`
+
+</td>
+<td>
+
+Denies the episodic_older_than command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-episodic-recall-similar`
+
+</td>
+<td>
+
+Enables the episodic_recall_similar command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-episodic-recall-similar`
+
+</td>
+<td>
+
+Denies the episodic_recall_similar command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `velesdb:allow-episodic-recent`
 
 </td>
@@ -334,6 +463,32 @@ Enables the episodic_record command without any pre-configured scope.
 <td>
 
 Denies the episodic_record command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-episodic-serialize`
+
+</td>
+<td>
+
+Enables the episodic_serialize command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-episodic-serialize`
+
+</td>
+<td>
+
+Denies the episodic_serialize command without any pre-configured scope.
 
 </td>
 </tr>
@@ -601,6 +756,266 @@ Denies the list_indexes command without any pre-configured scope.
 <tr>
 <td>
 
+`velesdb:allow-memory-auto-expire`
+
+</td>
+<td>
+
+Enables the memory_auto_expire command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-memory-auto-expire`
+
+</td>
+<td>
+
+Denies the memory_auto_expire command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-memory-evict-low-confidence`
+
+</td>
+<td>
+
+Enables the memory_evict_low_confidence command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-memory-evict-low-confidence`
+
+</td>
+<td>
+
+Denies the memory_evict_low_confidence command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-memory-list-snapshot-versions`
+
+</td>
+<td>
+
+Enables the memory_list_snapshot_versions command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-memory-list-snapshot-versions`
+
+</td>
+<td>
+
+Denies the memory_list_snapshot_versions command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-memory-load-latest-snapshot`
+
+</td>
+<td>
+
+Enables the memory_load_latest_snapshot command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-memory-load-latest-snapshot`
+
+</td>
+<td>
+
+Denies the memory_load_latest_snapshot command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-memory-load-snapshot-version`
+
+</td>
+<td>
+
+Enables the memory_load_snapshot_version command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-memory-load-snapshot-version`
+
+</td>
+<td>
+
+Denies the memory_load_snapshot_version command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-memory-query-episodic`
+
+</td>
+<td>
+
+Enables the memory_query_episodic command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-memory-query-episodic`
+
+</td>
+<td>
+
+Denies the memory_query_episodic command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-memory-query-procedural`
+
+</td>
+<td>
+
+Enables the memory_query_procedural command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-memory-query-procedural`
+
+</td>
+<td>
+
+Denies the memory_query_procedural command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-memory-query-semantic`
+
+</td>
+<td>
+
+Enables the memory_query_semantic command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-memory-query-semantic`
+
+</td>
+<td>
+
+Denies the memory_query_semantic command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-memory-set-ttl`
+
+</td>
+<td>
+
+Enables the memory_set_ttl command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-memory-set-ttl`
+
+</td>
+<td>
+
+Denies the memory_set_ttl command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-memory-snapshot`
+
+</td>
+<td>
+
+Enables the memory_snapshot command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-memory-snapshot`
+
+</td>
+<td>
+
+Denies the memory_snapshot command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `velesdb:allow-multi-query-search`
 
 </td>
@@ -620,6 +1035,58 @@ Enables the multi_query_search command without any pre-configured scope.
 <td>
 
 Denies the multi_query_search command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-procedural-delete`
+
+</td>
+<td>
+
+Enables the procedural_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-procedural-delete`
+
+</td>
+<td>
+
+Denies the procedural_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-procedural-deserialize`
+
+</td>
+<td>
+
+Enables the procedural_deserialize command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-procedural-deserialize`
+
+</td>
+<td>
+
+Denies the procedural_deserialize command without any pre-configured scope.
 
 </td>
 </tr>
@@ -653,6 +1120,32 @@ Denies the procedural_learn command without any pre-configured scope.
 <tr>
 <td>
 
+`velesdb:allow-procedural-list-all`
+
+</td>
+<td>
+
+Enables the procedural_list_all command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-procedural-list-all`
+
+</td>
+<td>
+
+Denies the procedural_list_all command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `velesdb:allow-procedural-recall`
 
 </td>
@@ -672,6 +1165,58 @@ Enables the procedural_recall command without any pre-configured scope.
 <td>
 
 Denies the procedural_recall command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-procedural-reinforce`
+
+</td>
+<td>
+
+Enables the procedural_reinforce command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-procedural-reinforce`
+
+</td>
+<td>
+
+Denies the procedural_reinforce command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-procedural-serialize`
+
+</td>
+<td>
+
+Enables the procedural_serialize command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-procedural-serialize`
+
+</td>
+<td>
+
+Denies the procedural_serialize command without any pre-configured scope.
 
 </td>
 </tr>
@@ -757,6 +1302,84 @@ Denies the search command without any pre-configured scope.
 <tr>
 <td>
 
+`velesdb:allow-semantic-delete`
+
+</td>
+<td>
+
+Enables the semantic_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-semantic-delete`
+
+</td>
+<td>
+
+Denies the semantic_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-semantic-deserialize`
+
+</td>
+<td>
+
+Enables the semantic_deserialize command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-semantic-deserialize`
+
+</td>
+<td>
+
+Denies the semantic_deserialize command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-semantic-dimension`
+
+</td>
+<td>
+
+Enables the semantic_dimension command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-semantic-dimension`
+
+</td>
+<td>
+
+Denies the semantic_dimension command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `velesdb:allow-semantic-query`
 
 </td>
@@ -783,6 +1406,32 @@ Denies the semantic_query command without any pre-configured scope.
 <tr>
 <td>
 
+`velesdb:allow-semantic-serialize`
+
+</td>
+<td>
+
+Enables the semantic_serialize command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-semantic-serialize`
+
+</td>
+<td>
+
+Denies the semantic_serialize command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `velesdb:allow-semantic-store`
 
 </td>
@@ -802,6 +1451,32 @@ Enables the semantic_store command without any pre-configured scope.
 <td>
 
 Denies the semantic_store command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-semantic-store-with-ttl`
+
+</td>
+<td>
+
+Enables the semantic_store_with_ttl command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-semantic-store-with-ttl`
+
+</td>
+<td>
+
+Denies the semantic_store_with_ttl command without any pre-configured scope.
 
 </td>
 </tr>

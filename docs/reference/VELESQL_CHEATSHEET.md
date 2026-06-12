@@ -1,7 +1,7 @@
 # VelesQL Cheat Sheet
 
 > **Date:** 2026-06-03
-> **VelesDB version:** 1.18.0
+> **VelesDB version:** 2.0.0
 > See the full specification in [`docs/VELESQL_SPEC.md`](../VELESQL_SPEC.md).
 
 > Every `sql` block below is **parsed** against the real grammar by an automated
@@ -139,6 +139,13 @@ RETURN dst LIMIT 100;
 SELECT * FROM docs
 WHERE category = 'tech' AND MATCH (d:Doc)-[:REL]->(x)
 LIMIT 10;
+
+-- With a FROM alias, the MATCH anchor reuses it — or, when no pattern alias
+-- matches a declared alias, the leftmost node binds implicitly to the FROM
+-- rows (validation rule V011)
+SELECT * FROM docs AS d
+WHERE category = 'tech' AND MATCH (d)-[:REL]->(x)
+LIMIT 10;
 ```
 
 ---
@@ -182,9 +189,10 @@ FROM items;
 ## Joins & set operations
 
 ```sql
--- INNER JOIN across collections (alias requires AS).
+-- INNER JOIN across collections (AS is optional: `docs d` == `docs AS d`).
 -- The joined (right) table must be matched on its primary key `id`.
 SELECT d.name, t.tag FROM docs AS d JOIN tags AS t ON d.tag_id = t.id;
+SELECT d.name, t.tag FROM docs d JOIN tags t ON d.tag_id = t.id;
 
 -- Set operations
 SELECT * FROM a UNION SELECT * FROM b;
@@ -230,10 +238,13 @@ FLUSH FULL docs;
 
 | Limit | Default |
 |---|---|
-| Max results per query | 10 000 |
+| LIMIT when omitted (any SELECT) | 10 — `MATCH ... RETURN` and UNION/INTERSECT/EXCEPT have no implicit limit (bounded by the 100 000-row ceiling below) |
+| Max results per query | 100 000 |
 | Query timeout | configurable (`search.query_timeout_ms`) |
 | Max groups per GROUP BY | 10 000 |
 | Max payload size | configurable (`limits.max_payload_size`) |
 
 > Reserved words: `vector` and `score` are language keywords, not free payload
-> field names. Table aliases require `AS` (`FROM docs AS d`, not `FROM docs d`).
+> field names. Table aliases accept both forms: `FROM docs AS d` and
+> `FROM docs d`. A bare alias may not be a clause keyword (`WHERE`, `LIMIT`,
+> `ORDER`, ...); quote it with backticks to use one anyway.

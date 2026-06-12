@@ -112,17 +112,20 @@ When multiple locks are needed, acquire them in this order:
 
 ### Global Lock Order (HNSW + Storage)
 
-For HNSW index operations that touch vector storage, columnar metadata,
-graph layers, and neighbor lists, the global lock acquisition order is:
+For HNSW index operations that touch the GPU snapshot cache, vector storage,
+the PDX columnar layout, graph layers, and neighbor lists, the global lock
+acquisition order is:
 
 ```
-vectors (rank 10) → columnar (rank 15) → layers (rank 20) → neighbors (rank 30)
+gpu_vectors_snapshot (rank 5) → vectors (rank 10) → columnar (rank 15)
+    → layers (rank 20) → neighbors (rank 30)
 ```
 
 | Lock | Rank | Component | Notes |
 |------|------|-----------|-------|
-| `vectors` | 10 | `ShardedVectors` / `ContiguousVectors` | Acquired first in upsert and search paths |
-| `columnar` | 15 | `ColumnStore` / typed columns | Metadata columns, acquired after vectors |
+| `gpu_vectors_snapshot` | 5 | GPU flat-vector snapshot cache (`Mutex`) | Acquired before `vectors` in the GPU path (`gpu` feature); writers release `vectors` before reacquiring it to invalidate |
+| `vectors` | 10 | `ShardedVectors` / `ContiguousVectors` | Acquired first among the core HNSW locks in upsert and search paths |
+| `columnar` | 15 | `ColumnarVectors` (PDX block-columnar layout of the HNSW vectors) | SIMD-parallel distance layout, acquired after vectors |
 | `layers` | 20 | HNSW layer structure (`RwLock`) | Global graph topology |
 | `neighbors` | 30 | Per-node neighbor lists (`RwLock`) | Fine-grained, acquired last |
 
@@ -198,6 +201,15 @@ Locks are released between acquisitions (not held simultaneously). The
 training function uses a **double-check locking** pattern: it first checks
 `rabitq_index` under a read lock, and if training is needed, re-checks
 under a write lock to prevent duplicate training from concurrent threads.
+
+`install_trained_rabitq()` (quantizer restore at open / `TRAIN QUANTIZER`
+live install) follows the same `rabitq_index → rabitq_store →
+training_buffer` order. It holds `rabitq_index.write()` for the whole
+re-encode so concurrent inserts cannot interleave store pushes, and it
+reads the `inner.vectors` snapshot **and releases it** before taking
+`rabitq_store.write()` — never waiting on the store lock while holding
+`vectors` (a search thread holds `rabitq_store.read()` while acquiring
+`inner.vectors.read()`).
 
 ### Store-Before-Index Ordering
 
@@ -446,20 +458,29 @@ ensure no data is lost.
 │  1. MmapStorage::new()                                                 │
 │     ├─ Load vectors.idx (ID → offset mapping)                          │
 │     ├─ Replay vectors.wal → restore writes since last flush_index()    │
+│     ├─ Record WAL-touched ids (drained by step 4, pass 3)              │
 │     └─ Truncate WAL after successful replay                            │
 │                                                                        │
 │  2. load_or_create_hnsw()                                              │
-│     └─ Load hnsw.bin (graph), native_mappings.bin, native_vectors.bin  │
+│     ├─ Gate: native_meta.bin present? (commit point, written LAST)     │
+│     ├─ Load native_hnsw.graph/.vectors/.gen, native_mappings.bin,      │
+│     │  native_vectors.bin — all generation-stamped (#617)              │
+│     └─ Load failure or config mismatch → empty index (rebuild below)   │
 │                                                                        │
 │  3. reconcile_point_count()                                            │
 │     └─ Set config.point_count = storage.len() (authoritative source)   │
 │                                                                        │
-│  4. run_crash_recovery()                                               │
-│     └─ recover_hnsw_gap(vector_storage, index, dimension)              │
-│        ├─ Early exit: if storage.len() == hnsw.len() → no gap          │
-│        ├─ find_gap_ids: storage.ids() \ index.mappings                 │
-│        ├─ retrieve_valid_vectors: load from mmap, validate dimension   │
-│        └─ reindex_vectors: insert_batch_parallel into HNSW             │
+│  4. recover_index_state() — 3-pass reconciliation                      │
+│     ├─ Pass 1 (gap): recover_hnsw_gap                                  │
+│     │  ├─ Early exit: if storage.len() == hnsw.len() → no gap          │
+│     │  ├─ find_gap_ids: storage.ids() \ index.mappings                 │
+│     │  ├─ retrieve_valid_vectors: load from mmap, validate dimension   │
+│     │  └─ reindex_vectors: insert_batch_parallel into HNSW             │
+│     ├─ Pass 2 (orphans): ids in index.mappings \ storage → remove      │
+│     ├─ Pass 3 (stale): WAL-touched ids on both sides — re-upsert when  │
+│     │  the indexed vector ≠ storage (storage is the source of truth)   │
+│     └─ Any pass mutated the index → index.save() before open returns  │
+│        (the WAL was truncated; the delta has no other witness)         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -493,12 +514,16 @@ This layer recovers vectors that were written to the WAL but not yet
 persisted to `vectors.idx` (the index file is only written by
 `flush_index()` or `flush_full()`, not by the fast `flush()` path).
 
-### Layer 2: HNSW Gap Detection
+### Layer 2: HNSW 3-Pass Reconciliation
 
 **Module**: `crates/velesdb-core/src/collection/core/recovery.rs`
 
-After storage is fully reconstructed (Layer 1), `Collection::open()` calls
-`run_crash_recovery()`, which invokes `recover_hnsw_gap()`:
+After storage is fully reconstructed (Layer 1) and the persisted HNSW
+index is loaded (or an empty one built when the load fails),
+`Collection::open()` calls `run_crash_recovery()`, which runs three
+passes against the storage state:
+
+**Pass 1 — gap** (`recover_hnsw_gap`):
 
 1. **Early exit heuristic**: If `storage.len() == 0` or
    `storage.len() == hnsw.len()`, returns 0 (no gap). This check is
@@ -517,6 +542,26 @@ After storage is fully reconstructed (Layer 1), `Collection::open()` calls
 4. **Re-indexing** (`reindex_vectors`): Batch-inserts all valid gap
    vectors into the HNSW graph via `insert_batch_parallel`. The re-index
    uses the same parallel rayon-based insertion as normal upserts.
+
+**Pass 2 — orphans** (`remove_orphan_ids`): ids present in
+`index.mappings` but absent from storage (a delete reached the vector
+WAL but not the next HNSW save) are soft-deleted from the index so the
+tombstone cannot resurface in search results.
+
+**Pass 3 — stale** (`reindex_stale_wal_ids`): for every id touched by
+the Layer-1 WAL replay that is present on both sides, the indexed
+sidecar vector is compared against the storage bytes; on mismatch the
+storage value is re-upserted (an upsert landed in the WAL after the
+last HNSW save). An index loaded without sidecar vector storage cannot
+be compared — when WAL-touched ids overlap its mappings it is replaced
+by an empty index and fully rebuilt by pass 1
+(`rebuild_if_unverifiable`).
+
+When any pass mutated the index, `Collection::open()` re-saves it
+before returning: the vector WAL was truncated during replay, so
+without a fresh save the reconciled delta would be undetectable after
+the next crash. For the same reason, `compact_vector_storage()` (which
+also truncates the WAL) re-saves the HNSW index after compaction.
 
 ### Gap Sources
 
@@ -581,18 +626,30 @@ the gap to zero for planned restarts.
 ### Persistence Format
 
 HNSW index persistence uses atomic write-tmp-fsync-rename for crash safety.
-Each save writes four files:
+Each save writes six files, every one stamped with the same monotonic
+`generation: u64` (#617) so a crash between two renames is detected on
+load. `native_meta.bin` is written LAST — its generation is the
+authoritative commit point that `load_sidecars` checks the other
+artefacts against, and its presence is the gate `load_or_create_hnsw`
+uses to attempt a load at all.
 
 | File | Contents | Format |
 |------|----------|--------|
-| `native_meta.bin` | Dimension, metric, vector storage flag, storage mode | postcard-serialized tuple |
-| `native_mappings.bin` | `id_to_idx`, `idx_to_id`, `next_idx` | postcard-serialized HashMaps |
-| `native_vectors.bin` | `Vec<(internal_idx, Vec<f32>)>` | postcard-serialized vector pairs |
-| `native_hnsw` (dir/file) | Graph structure (layers, edges, neighbors) | Custom binary via `file_dump` |
+| `native_hnsw.vectors` | Vector data in `NodeId` order | Custom binary via `file_dump` |
+| `native_hnsw.graph` | Graph structure (layers, neighbors) + params incl. VAMANA `alpha` (header v2) | Custom binary via `file_dump` |
+| `native_hnsw.gen` | Graph generation marker | postcard-serialized `u64` |
+| `native_mappings.bin` | `id_to_idx`, `idx_to_id`, `next_idx`, generation | postcard-serialized HashMaps |
+| `native_vectors.bin` | `Vec<(internal_idx, Vec<f32>)>`, generation | postcard-serialized vector pairs |
+| `native_meta.bin` | Dimension, metric, vector storage flag, storage mode, generation | postcard-serialized tuple |
 
 ### HNSW Delta WAL (Incremental Graph Logging)
 
 **Module**: `crates/velesdb-core/src/storage/hnsw_delta_wal.rs`
+
+> **Status**: standalone module, NOT wired into the open/flush path. The
+> recovery path described above (persisted graph load + 3-pass
+> reconciliation) does not read or write this WAL; it exists as
+> infrastructure for a future O(delta) graph recovery.
 
 In addition to the vector storage WAL, VelesDB provides an HNSW delta WAL
 that logs incremental graph mutations (edge additions, edge removals,
@@ -719,4 +776,4 @@ invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-
 
 ---
 
-*Last updated: 2026-04-09 (Storage compaction concurrency documentation)*
+*Last updated: 2026-06-12 (HNSW persisted-graph reload at open; storage compaction concurrency)*

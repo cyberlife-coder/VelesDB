@@ -116,6 +116,50 @@ export interface DegreeResponse {
 }
 
 // ============================================================================
+// Relation API Types (REST parity)
+// ============================================================================
+
+/** Request body for POST /collections/{name}/relations */
+export interface RelateRequest {
+  /** Source point ID */
+  source: GraphNodeId;
+  /** Target point ID */
+  target: GraphNodeId;
+  /** Relationship type label (e.g. "KNOWS", "RELATED_TO") */
+  relType: string;
+  /** Optional edge properties */
+  properties?: Record<string, unknown>;
+}
+
+/** Response from POST /collections/{name}/relations */
+export interface RelateResponse {
+  /** Allocated edge ID */
+  edgeId: GraphNodeId;
+}
+
+/** A single outgoing relation edge */
+export interface RelationEdge {
+  /** Edge ID */
+  id: GraphNodeId;
+  /** Source point ID */
+  source: GraphNodeId;
+  /** Target point ID */
+  target: GraphNodeId;
+  /** Relationship type label */
+  relType: string;
+  /** Edge properties */
+  properties?: Record<string, unknown>;
+}
+
+/** Response from GET /collections/{name}/points/{id}/relations */
+export interface RelationsResponse {
+  /** Outgoing relation edges */
+  edges: RelationEdge[];
+  /** Total count */
+  count: number;
+}
+
+// ============================================================================
 // Graph Collection Types (Phase 8)
 // ============================================================================
 

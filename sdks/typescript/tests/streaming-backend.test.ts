@@ -12,7 +12,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { streamUpsertPoints } from '../src/backends/streaming-backend';
-import { BackpressureError, ConnectionError, VelesDBError } from '../src/types';
+import { parseRestPointId } from '../src/backends/crud-backend';
+import { BackpressureError, ConnectionError, ValidationError, VelesDBError } from '../src/types';
 import { buildTransport } from './helpers/build-streaming-transport';
 
 const mockFetch = vi.fn();
@@ -66,6 +67,21 @@ describe('streamUpsertPoints', () => {
     expect(lines.length).toBe(2);
     expect(JSON.parse(lines[0]!)).toEqual({ id: 1, vector: [1.0, 0.0, 0.0], payload: { title: 'A' } });
     expect(JSON.parse(lines[1]!)).toEqual({ id: 2, vector: [0.0, 1.0, 0.0], payload: { title: 'B' } });
+  });
+
+  it('rejects string ids beyond 2^53 client-side (NDJSON Point ids are plain u64 numbers)', async () => {
+    // The /points/stream endpoint deserialises each line into core `Point`,
+    // whose id is a plain JSON-number u64 (no string-or-number deserialiser).
+    // A precision-critical string id must therefore fail fast here instead of
+    // being forwarded and silently counted as `malformed` by the server.
+    const transport = buildTransport({ parseRestPointId });
+
+    await expect(
+      streamUpsertPoints(transport, 'test-col', [
+        { id: '18446744073709551615', vector: [1.0, 0.0, 0.0] },
+      ])
+    ).rejects.toThrow(ValidationError);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it('should omit Authorization header when no apiKey', async () => {

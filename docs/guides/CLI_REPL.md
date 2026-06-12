@@ -1,49 +1,49 @@
 # 💻 CLI & REPL Reference
 
-*Version 1.18.0 — May 2026*
+*Version 2.0.0 — 2026-06-12*
 
-Guide complet pour l'interface en ligne de commande VelesDB et le REPL interactif.
+Complete guide to the VelesDB command-line interface and the interactive REPL.
 
 ---
 
-## Table des Matières
+## Table of Contents
 
 1. [Installation](#installation)
-2. [Commandes CLI](#commandes-cli)
-3. [REPL Interactif](#repl-interactif)
-4. [Commandes REPL](#commandes-repl)
+2. [CLI Commands](#cli-commands)
+3. [Interactive REPL](#interactive-repl)
+4. [REPL Commands](#repl-commands)
 5. [Session Settings](#session-settings)
-6. [Exemples](#exemples)
+6. [Examples](#examples)
 
 ---
 
 ## Installation
 
-### Depuis crates.io
+### From crates.io
 
 ```bash
 cargo install velesdb-cli
 ```
 
-### Depuis les sources
+### From source
 
 ```bash
 cargo build --release -p velesdb-cli
-# Binaire dans target/release/velesdb
+# Binary at target/release/velesdb
 ```
 
-### Vérification
+### Verification
 
 ```bash
 velesdb --version
-# velesdb 1.18.0
+# velesdb 2.0.0
 ```
 
 ---
 
-## Commandes CLI
+## CLI Commands
 
-### Vue d'ensemble
+### Overview
 
 ```bash
 velesdb [OPTIONS] <COMMAND>
@@ -60,18 +60,18 @@ Commands:
   help       Print help
 ```
 
-### Options globales
+### Global options
 
 | Option | Description |
 |--------|-------------|
-| `-h, --help` | Afficher l'aide |
-| `-V, --version` | Afficher la version |
-| `-v, --verbose` | Mode verbeux |
-| `-q, --quiet` | Mode silencieux |
+| `-h, --help` | Show help |
+| `-V, --version` | Show version |
+| `-v, --verbose` | Verbose mode |
+| `-q, --quiet` | Quiet mode |
 
 ### `velesdb repl`
 
-Lance le REPL interactif.
+Starts the interactive REPL.
 
 ```bash
 velesdb repl [OPTIONS] [PATH]
@@ -86,7 +86,7 @@ Options:
 
 ### `velesdb query`
 
-Exécute une requête VelesQL unique.
+Executes a single VelesQL query.
 
 ```bash
 velesdb query [OPTIONS] <PATH> <QUERY>
@@ -102,7 +102,7 @@ Options:
 
 ### `velesdb config`
 
-Gestion de la configuration.
+Configuration management.
 
 ```bash
 velesdb config <SUBCOMMAND>
@@ -115,9 +115,9 @@ Subcommands:
 
 ---
 
-## REPL Interactif
+## Interactive REPL
 
-### Démarrage
+### Startup
 
 ```bash
 velesdb repl ./my_database
@@ -129,39 +129,39 @@ velesdb repl ./my_database
 velesdb> _
 ```
 
-Le prompt change selon le contexte :
-- `velesdb>` — Mode normal
-- `velesdb[collection]>` — Collection sélectionnée
-- `velesdb (tx)>` — Transaction active (futur)
+The prompt changes depending on the context:
+- `velesdb>` — Normal mode
+- `velesdb[collection]>` — Collection selected
+- `velesdb (tx)>` — Active transaction (future)
 
-### Historique
+### History
 
-Les commandes sont sauvegardées dans `~/.velesdb_history` (Linux/macOS) ou `%APPDATA%\velesdb\history` (Windows).
+Commands are saved to `~/.velesdb_history` (Linux/macOS) or `%APPDATA%\velesdb\history` (Windows).
 
-### Autocomplétion
+### Autocompletion
 
-Le REPL supporte l'autocomplétion avec Tab :
-- Noms de collections
-- Commandes REPL
-- Mots-clés VelesQL
+The REPL supports Tab autocompletion for:
+- Collection names
+- REPL commands
+- VelesQL keywords
 
 ---
 
-## Commandes REPL
+## REPL Commands
 
-### Commandes existantes
+### Existing commands
 
-| Commande | Alias | Description |
+| Command | Alias | Description |
 |----------|-------|-------------|
-| `.help` | `.h` | Afficher l'aide |
-| `.quit` | `.exit`, `.q` | Quitter le REPL |
-| `.collections` | `.tables` | Lister les collections |
-| `.schema <name>` | | Afficher le schéma d'une collection |
-| `.timing on\|off` | | Activer/désactiver l'affichage du temps d'exécution |
+| `.help` | `.h` | Show help |
+| `.quit` | `.exit`, `.q` | Quit the REPL |
+| `.collections` | `.tables` | List collections |
+| `.schema <name>` | | Show a collection's schema |
+| `.timing on\|off` | | Enable/disable execution time display |
 
 ### Session commands
 
-#### `\set` — Configurer un paramètre de session
+#### `\set` — Configure a session setting
 
 ```
 \set <setting> <value>
@@ -169,14 +169,14 @@ Le REPL supporte l'autocomplétion avec Tab :
 
 | Setting | Values | Description |
 |---------|--------|-------------|
-| `mode` | `fast`, `balanced`, `accurate`, `perfect`, `adaptive` | Mode de recherche par défaut |
-| `ef_search` | 16-4096 | Valeur ef_search personnalisée |
-| `output_format` | `table`, `json`, `csv` | Format de sortie |
-| `timing` | `on`, `off` | Affichage du temps d'exécution |
-| `limit` | 1-10000 | Limite par défaut des résultats |
-| `timeout_ms` | 100-300000 | Timeout des requêtes |
+| `mode` | `fast`, `balanced`, `accurate`, `perfect`, `adaptive` | Default search mode |
+| `ef_search` | 16-4096 | Custom ef_search value |
+| `output_format` | `table`, `json`, `csv` | Output format |
+| `timing` | `on`, `off` | Execution time display |
+| `limit` | 1-10000 | Default result limit |
+| `timeout_ms` | 100-300000 | Query timeout |
 
-**Exemples :**
+**Examples:**
 
 ```
 velesdb> \set mode accurate
@@ -192,13 +192,13 @@ velesdb> \set timing on
 Timing: ON
 ```
 
-#### `\show` — Afficher les paramètres
+#### `\show` — Display settings
 
 ```
 \show [setting]
 ```
 
-**Sans argument** — affiche tous les paramètres :
+**Without an argument** — displays all settings:
 
 ```
 velesdb> \show
@@ -215,7 +215,7 @@ velesdb> \show
 └─────────────────┴─────────────┘
 ```
 
-**Avec argument** — affiche un paramètre spécifique :
+**With an argument** — displays a specific setting:
 
 ```
 velesdb> \show mode
@@ -225,27 +225,27 @@ velesdb> \show ef_search
 ef_search: 128 (from mode)
 ```
 
-#### `\reset` — Réinitialiser les paramètres
+#### `\reset` — Reset settings
 
 ```
 \reset [setting]
 ```
 
-**Sans argument** — réinitialise tous les paramètres :
+**Without an argument** — resets all settings:
 
 ```
 velesdb> \reset
 All settings reset to defaults.
 ```
 
-**Avec argument** — réinitialise un paramètre spécifique :
+**With an argument** — resets a specific setting:
 
 ```
 velesdb> \reset ef_search
 ef_search reset to: 128 (from mode=balanced)
 ```
 
-#### `\use` — Sélectionner une collection
+#### `\use` — Select a collection
 
 ```
 \use <collection_name>
@@ -258,7 +258,7 @@ Collection 'products' selected.
 velesdb[products]> SELECT * LIMIT 5;
 ```
 
-#### `\info` — Informations sur la base de données
+#### `\info` — Database information
 
 ```
 \info
@@ -269,7 +269,7 @@ velesdb> \info
 ┌─────────────────────┬────────────────────┐
 │ Property            │ Value              │
 ├─────────────────────┼────────────────────┤
-│ Version             │ 1.18.0              │
+│ Version             │ 2.0.0              │
 │ Data directory      │ ./data             │
 │ Collections         │ 3                  │
 │ Total vectors       │ 125,000            │
@@ -279,7 +279,7 @@ velesdb> \info
 └─────────────────────┴────────────────────┘
 ```
 
-#### `\bench` — Benchmark rapide
+#### `\bench` — Quick benchmark
 
 ```
 \bench <collection> [queries] [k]
@@ -305,44 +305,44 @@ Running 100 random searches with k=10...
 
 ## Session Settings
 
-### Hiérarchie de priorité
+### Priority hierarchy
 
-Les settings de session s'appliquent dans cet ordre (du plus haut au plus bas) :
+Session settings apply in this order (highest to lowest):
 
-1. **Query-time** — `WITH (mode = 'fast')` dans VelesQL
+1. **Query-time** — `WITH (mode = 'fast')` in VelesQL
 2. **Session** — `\set mode fast`
 3. **Environment** — `VELESDB_SEARCH_DEFAULT_MODE=fast`
 4. **Config file** — `velesdb.toml`
-5. **Defaults** — Valeurs hardcodées
+5. **Defaults** — Hardcoded values
 
-### Persistance
+### Persistence
 
-Les settings de session **ne sont pas persistés** entre les sessions REPL. Pour persister, utilisez :
-- Variables d'environnement
-- Fichier `velesdb.toml`
+Session settings are **not persisted** across REPL sessions. To persist them, use:
+- Environment variables
+- The `velesdb.toml` file
 
-### Settings disponibles
+### Available settings
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `mode` | enum | `balanced` | Mode de recherche |
-| `ef_search` | int | `null` | Override ef_search (null = utilise mode) |
-| `output_format` | enum | `table` | Format de sortie |
-| `timing` | bool | `false` | Afficher le temps d'exécution |
-| `limit` | int | `10` | Limite par défaut |
-| `timeout_ms` | int | `30000` | Timeout en ms |
-| `verbose` | bool | `false` | Mode verbeux |
+| `mode` | enum | `balanced` | Search mode |
+| `ef_search` | int | `null` | ef_search override (null = use mode) |
+| `output_format` | enum | `table` | Output format |
+| `timing` | bool | `false` | Display execution time |
+| `limit` | int | `10` | Default limit |
+| `timeout_ms` | int | `30000` | Timeout in ms |
+| `verbose` | bool | `false` | Verbose mode |
 
 ---
 
-## Exemples
+## Examples
 
-### Session typique
+### Typical session
 
 ```
 $ velesdb repl ./my_db
 
-VelesDB v1.18.0 - Interactive REPL
+VelesDB v2.0.0 - Interactive REPL
 Type \help for help, \quit to exit.
 
 velesdb> \show
@@ -379,18 +379,18 @@ velesdb[products]> \quit
 Goodbye!
 ```
 
-### Comparaison de recall
+### Recall comparison
 
 ```
 velesdb> \use test_collection
 velesdb[test_collection]> \set timing on
 
--- Mode Fast
+-- Fast mode
 velesdb[test_collection]> \set mode fast
 velesdb[test_collection]> SELECT * WHERE vector NEAR $v LIMIT 10;
 10 rows (0.8 ms)
 
--- Mode Perfect (bruteforce)
+-- Perfect mode (bruteforce)
 velesdb[test_collection]> \set mode perfect
 velesdb[test_collection]> SELECT * WHERE vector NEAR $v LIMIT 10;
 10 rows (48.3 ms)
@@ -431,7 +431,7 @@ velesdb> FLUSH FULL;
 {status: "flushed", full: true}
 ```
 
-### Export JSON
+### JSON export
 
 ```
 velesdb> \set output_format json
@@ -445,9 +445,9 @@ velesdb> SELECT * FROM products WHERE category = 'books' LIMIT 3;
 
 ---
 
-## Implémentation Rust
+## Rust Implementation
 
-### Structure SessionConfig
+### SessionConfig structure
 
 ```rust
 #[derive(Debug, Clone)]
@@ -478,7 +478,7 @@ impl Default for SessionConfig {
 }
 ```
 
-### Parsing des commandes
+### Command parsing
 
 ```rust
 fn parse_repl_command(line: &str) -> Option<ReplCommand> {
@@ -522,4 +522,4 @@ VelesDB CLI supports both backslash commands (`\help`, `\set`) and dot commands 
 
 ---
 
-*Documentation VelesDB v1.18.0 — Mai 2026*
+*VelesDB Documentation v2.0.0 — 2026-06-12*

@@ -24,7 +24,7 @@ pub(crate) struct GraphMatchEvalCache {
 }
 
 impl GraphMatchEvalCache {
-    fn get_or_compute(
+    pub(super) fn get_or_compute(
         &mut self,
         collection: &Collection,
         predicate: &GraphMatchPredicate,
@@ -124,6 +124,26 @@ impl Collection {
         from_aliases: &[String],
     ) -> Result<Vec<SearchResult>> {
         let mut cache = GraphMatchEvalCache::default();
+        self.apply_where_condition_to_results_with_cache(
+            results,
+            condition,
+            params,
+            from_aliases,
+            &mut cache,
+        )
+    }
+
+    /// Like [`Self::apply_where_condition_to_results`], reusing a caller's
+    /// evaluation cache — graph anchor sets computed by a GraphFirst
+    /// prefilter are not re-evaluated for the exact post-filter pass.
+    pub(crate) fn apply_where_condition_to_results_with_cache(
+        &self,
+        results: Vec<SearchResult>,
+        condition: &Condition,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        from_aliases: &[String],
+        cache: &mut GraphMatchEvalCache,
+    ) -> Result<Vec<SearchResult>> {
         let requires_vector = Self::condition_requires_vector_eval(condition);
         let mut filtered = Vec::with_capacity(results.len());
 
@@ -140,7 +160,7 @@ impl Collection {
                 vector,
                 params,
                 from_aliases,
-                &mut cache,
+                cache,
             )? {
                 filtered.push(result);
             }

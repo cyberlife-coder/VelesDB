@@ -15,11 +15,15 @@ import type {
   MatchQueryOptions,
   MatchQueryResponse,
   GraphEdge,
+  GraphNodeId,
   ListNodesResponse,
   GetNodeEdgesOptions,
   NodePayloadResponse,
   GraphSearchRequest,
   GraphSearchResponse,
+  RelateRequest,
+  RelateResponse,
+  RelationsResponse,
   SearchResult,
   SparseSearchNamedOptions,
   SparseVector,
@@ -95,4 +99,28 @@ export function wasmGraphSearch(
   _c: string, _r: GraphSearchRequest
 ): Promise<GraphSearchResponse> {
   return Promise.resolve(wasmNotSupported('Graph search'));
+}
+
+export function wasmRelate(
+  _c: string, _req: RelateRequest
+): Promise<RelateResponse> {
+  return Promise.resolve(wasmNotSupported('Relation edges'));
+}
+
+export function wasmUnrelate(
+  _c: string, _id: GraphNodeId
+): Promise<boolean> {
+  return Promise.resolve(wasmNotSupported('Relation edge removal'));
+}
+
+export function wasmGetRelations(
+  _c: string, _id: GraphNodeId
+): Promise<RelationsResponse> {
+  return Promise.resolve(wasmNotSupported('Relation edges'));
+}
+
+export function wasmSetTtlDurable(
+  _c: string, _id: GraphNodeId, _ttl: number
+): Promise<void> {
+  return Promise.resolve(wasmNotSupported('Durable TTL'));
 }

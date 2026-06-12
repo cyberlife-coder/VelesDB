@@ -39,11 +39,13 @@ impl Collection {
 
     /// Computes the effective `(limit, fetch_limit)` from a SELECT statement.
     ///
-    /// `limit` is the final row count requested by the user (capped at [`MAX_LIMIT`]).
+    /// `limit` is the final row count requested by the user (capped at [`MAX_LIMIT`]);
+    /// without an explicit LIMIT clause the engine default
+    /// [`DEFAULT_SELECT_LIMIT`](crate::velesql::DEFAULT_SELECT_LIMIT) applies.
     /// `fetch_limit` adds the OFFSET so that post-processing can skip rows and still
     /// return `limit` results.
     pub(super) fn compute_fetch_limit(stmt: &crate::velesql::SelectStatement) -> (usize, usize) {
-        let limit = usize::try_from(stmt.limit.unwrap_or(10))
+        let limit = usize::try_from(stmt.limit.unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT))
             .unwrap_or(MAX_LIMIT)
             .min(MAX_LIMIT);
         let offset_val = stmt
@@ -175,6 +177,56 @@ impl Collection {
         }
         self.guard_rails.circuit_breaker.record_success();
         Ok(())
+    }
+
+    /// Returns a copy of `stmt` with scalar WHERE parameter placeholders
+    /// resolved, or `None` when the statement has no WHERE clause.
+    ///
+    /// Resolving once at pipeline entry guarantees every downstream
+    /// conversion to a payload [`Filter`](crate::filter::Filter) sees bound
+    /// values: without this, `Value::Parameter` silently degrades to JSON
+    /// `null` in `filter::Condition::from`, returning 0 rows without error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a referenced parameter is missing or has an
+    /// unsupported type, mirroring the vector-parameter paths.
+    pub(super) fn resolve_stmt_where_params(
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Option<crate::velesql::SelectStatement>> {
+        let Some(cond) = stmt.where_clause.as_ref() else {
+            return Ok(None);
+        };
+        let resolved = Self::resolve_condition_params(cond, params)?;
+        let mut resolved_stmt = stmt.clone();
+        resolved_stmt.where_clause = Some(resolved);
+        Ok(Some(resolved_stmt))
+    }
+
+    /// Returns a copy of `query` with scalar WHERE parameter placeholders
+    /// resolved, or `None` when the query has no WHERE clause.
+    ///
+    /// Convenience wrapper around [`Self::resolve_stmt_where_params`] for
+    /// callers that thread a whole [`Query`](crate::velesql::Query) through
+    /// their pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a referenced parameter is missing or has an
+    /// unsupported type.
+    pub(super) fn resolve_query_where_params(
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Option<crate::velesql::Query>> {
+        Ok(
+            Self::resolve_stmt_where_params(&query.select, params)?.map(|select| {
+                crate::velesql::Query {
+                    select,
+                    ..query.clone()
+                }
+            }),
+        )
     }
 
     /// Extracts all query components from the SELECT statement's WHERE clause.

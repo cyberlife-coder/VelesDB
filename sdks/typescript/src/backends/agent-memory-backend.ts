@@ -13,9 +13,12 @@ import type {
   SemanticEntry,
   EpisodicEvent,
   ProceduralPattern,
+  EpisodicRecord,
 } from '../types';
 import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath } from './shared';
+import { parseRestPointId } from './crud-backend';
+import { scroll } from './scroll-backend';
 
 /** Minimal transport interface for agent memory operations. */
 export interface AgentMemoryTransport extends BaseTransport {
@@ -65,6 +68,28 @@ export function _resetIdState(): void {
 }
 
 // ---------------------------------------------------------------------------
+// String <-> u64 id boundary (inbound validation lives in `parseRestPointId`,
+// the single gate shared with the CRUD backend and the client layer)
+// ---------------------------------------------------------------------------
+
+/**
+ * Render a u64 point id as the canonical string boundary value.
+ *
+ * Ids are returned as decimal strings so values above
+ * `Number.MAX_SAFE_INTEGER` (2^53-1) survive the JavaScript boundary without
+ * precision loss — matching the project's documented string-id convention for
+ * u64 (see `/search/scroll`, graph node/edge ids).
+ */
+export function memoryIdToString(id: number | string): string {
+  return String(id);
+}
+
+/** Current unix time in **seconds** (floor of epoch-millis / 1000). */
+function nowUnixSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+// ---------------------------------------------------------------------------
 // Agent memory operations
 // ---------------------------------------------------------------------------
 
@@ -78,14 +103,16 @@ export async function storeSemanticFact(
     `${collectionPath(collection)}/points`,
     {
       points: [{
-        id: entry.id,
+        id: parseRestPointId(entry.id),
         vector: entry.embedding,
         payload: {
           // Caller metadata is spread first so the reserved keys below
-          // (`_memory_type`, `text`) always win and cannot be clobbered.
+          // (`_memory_type`, `content`) always win and cannot be clobbered.
           ...entry.metadata,
           _memory_type: 'semantic',
-          text: entry.text,
+          // `content` matches the core semantic store and the server/Python
+          // payload field (BREAKING: was `text` before this change).
+          content: entry.text,
         },
       }],
     }
@@ -107,8 +134,9 @@ export async function recordEpisodicEvent(
   transport: AgentMemoryTransport,
   collection: string,
   event: EpisodicEvent
-): Promise<number> {
-  const id = generateUniqueId();
+): Promise<string> {
+  const id = event.id !== undefined ? parseRestPointId(event.id) : generateUniqueId();
+  const timestamp = event.timestamp ?? nowUnixSeconds();
 
   const response = await transport.requestJson(
     'POST',
@@ -125,14 +153,16 @@ export async function recordEpisodicEvent(
           ...event.metadata,
           _memory_type: 'episodic',
           event_type: event.eventType,
-          timestamp: new Date().toISOString(),
+          // NUMERIC unix-seconds, mirroring the core episodic store so
+          // recallRecent/recallOlderThan can range-filter on it.
+          timestamp,
         },
       }],
     }
   );
 
   throwOnError(response);
-  return id;
+  return memoryIdToString(id);
 }
 
 export async function recallEpisodicEvents(
@@ -148,8 +178,8 @@ export async function storeProceduralPattern(
   transport: AgentMemoryTransport,
   collection: string,
   pattern: ProceduralPattern
-): Promise<number> {
-  const id = generateUniqueId();
+): Promise<string> {
+  const id = pattern.id !== undefined ? parseRestPointId(pattern.id) : generateUniqueId();
 
   const response = await transport.requestJson(
     'POST',
@@ -172,7 +202,7 @@ export async function storeProceduralPattern(
   );
 
   throwOnError(response);
-  return id;
+  return memoryIdToString(id);
 }
 
 export async function matchProceduralPatterns(
@@ -182,4 +212,73 @@ export async function matchProceduralPatterns(
   k = 5
 ): Promise<SearchResult[]> {
   return transport.searchVectors(collection, embedding, k, { _memory_type: 'procedural' });
+}
+
+// ---------------------------------------------------------------------------
+// Temporal recall (mirrors core EpisodicMemory::recent / older_than)
+// ---------------------------------------------------------------------------
+
+/**
+ * Map a scrolled point to an {@link EpisodicRecord} when it is an episodic
+ * event carrying a numeric timestamp; otherwise `undefined` (filtered out).
+ */
+function toEpisodicRecord(point: {
+  id: string | number;
+  payload?: Record<string, unknown>;
+}): EpisodicRecord | undefined {
+  const payload = point.payload ?? {};
+  if (payload._memory_type !== 'episodic') return undefined;
+  if (typeof payload.timestamp !== 'number') return undefined;
+  return { id: String(point.id), timestamp: payload.timestamp, payload };
+}
+
+/** Scroll every episodic event in the collection into memory. */
+async function scrollEpisodicRecords(
+  transport: AgentMemoryTransport,
+  collection: string
+): Promise<EpisodicRecord[]> {
+  const records: EpisodicRecord[] = [];
+  let cursor: string | number | null = null;
+  do {
+    const page = await scroll(transport, collection, {
+      cursor: cursor ?? undefined,
+      filter: { _memory_type: 'episodic' },
+    });
+    for (const point of page.points) {
+      const record = toEpisodicRecord(point);
+      if (record !== undefined) records.push(record);
+    }
+    cursor = page.nextCursor;
+  } while (cursor !== null && cursor !== undefined);
+  return records;
+}
+
+/**
+ * Recall episodic events most-recent-first, optionally bounded below by
+ * `since` (inclusive). Mirrors `EpisodicMemory::recent(since_timestamp)`.
+ */
+export async function recallRecentEvents(
+  transport: AgentMemoryTransport,
+  collection: string,
+  since?: number
+): Promise<EpisodicRecord[]> {
+  const records = await scrollEpisodicRecords(transport, collection);
+  return records
+    .filter((r) => since === undefined || r.timestamp >= since)
+    .sort((a, b) => b.timestamp - a.timestamp);
+}
+
+/**
+ * Recall episodic events strictly older than `before`, most-recent-first.
+ * Mirrors `EpisodicMemory::older_than(timestamp)`.
+ */
+export async function recallOlderThanEvents(
+  transport: AgentMemoryTransport,
+  collection: string,
+  before: number
+): Promise<EpisodicRecord[]> {
+  const records = await scrollEpisodicRecords(transport, collection);
+  return records
+    .filter((r) => r.timestamp < before)
+    .sort((a, b) => b.timestamp - a.timestamp);
 }

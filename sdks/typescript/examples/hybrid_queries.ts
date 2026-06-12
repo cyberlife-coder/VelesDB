@@ -1,227 +1,176 @@
 /**
- * Hybrid Query Examples for VelesDB TypeScript SDK
+ * Hybrid Query Example for the VelesDB TypeScript SDK
  *
- * Demonstrates vector similarity search combined with metadata filtering,
- * aggregations, and multi-model query patterns.
+ * End-to-end tour of the REST client against a running `velesdb-server`
+ * (default: http://localhost:8080):
  *
- * See docs/guides/USE_CASES.md for the 10 documented use cases.
+ *   1. Create a collection
+ *   2. Upsert documents with payloads
+ *   3. Hybrid VelesQL query — vector NEAR + full-text MATCH + payload
+ *      filter + ORDER BY similarity()
+ *   4. Relation edges — relate() / getRelations() / unrelate()
+ *   5. Agent memory — recordEvent / recallEvents / recallRecent +
+ *      durable TTL via setTtlDurable()
+ *
+ * Run with a live server:  npx tsx examples/hybrid_queries.ts
+ * Type-checked in CI via `npm run typecheck` (tsconfig.examples.json).
  */
 
-import { VelesDB, Collection, SearchResult } from '../src';
+import { VelesDB } from '../src';
+
+const SERVER_URL = process.env.VELESDB_URL ?? 'http://localhost:8080';
+const DIM = 128;
 
 /**
- * Generate a deterministic mock embedding for demo purposes.
+ * Deterministic mock embedding for demo purposes — replace with the output
+ * of a real embedding model (the vector length must equal the collection
+ * dimension).
  */
-function generateEmbedding(seed: number, dim: number = 128): number[] {
+function generateEmbedding(seed: number, dim: number = DIM): number[] {
   const embedding: number[] = [];
   for (let i = 0; i < dim; i++) {
     embedding.push(Math.sin(seed * 0.1 + i * 0.01));
   }
-  // Normalize
   const norm = Math.sqrt(embedding.reduce((sum, x) => sum + x * x, 0));
   return embedding.map((x) => x / norm);
 }
 
-/**
- * Use Case 1: Contextual RAG
- *
- * Find documents similar to a query with metadata filtering.
- */
-async function example1ContextualRag(collection: Collection): Promise<void> {
-  console.log('\n=== Use Case 1: Contextual RAG ===');
+/** 1 + 2 — create the collection and upsert documents with payloads. */
+async function seedArticles(db: VelesDB): Promise<void> {
+  console.log('\n=== 1. Create collection + upsert with payload ===');
 
-  const queryEmbedding = generateEmbedding(42);
+  await db.createCollection('articles', { dimension: DIM, metric: 'cosine' });
 
-  // VelesQL query
-  const velesql = `
-    SELECT id, title, category 
-    FROM documents 
-    WHERE similarity(embedding, $query) > 0.75 
-      AND category = 'ai'
-    ORDER BY similarity(embedding, $query) DESC
-    LIMIT 10
-  `;
-  console.log('VelesQL:', velesql.trim());
+  await db.upsertBatch('articles', [
+    {
+      id: 1,
+      vector: generateEmbedding(1),
+      payload: {
+        title: 'Vector database internals',
+        content: 'How a vector database builds HNSW graphs for fast search',
+        category: 'tech',
+      },
+    },
+    {
+      id: 2,
+      vector: generateEmbedding(2),
+      payload: {
+        title: 'Embedding models compared',
+        content: 'Choosing an embedding model for your vector database',
+        category: 'tech',
+      },
+    },
+    {
+      id: 3,
+      vector: generateEmbedding(3),
+      payload: {
+        title: 'Sourdough basics',
+        content: 'A starter guide to baking bread at home',
+        category: 'food',
+      },
+    },
+  ]);
 
-  // Programmatic API
-  const results = await collection.search(queryEmbedding, 20);
-  const filtered = results.filter(
-    (r) => r.score > 0.75 && r.payload?.category === 'ai'
-  );
-  console.log(`Found ${filtered.length} relevant AI documents`);
+  console.log('Upserted 3 articles');
 }
 
-/**
- * Use Case 5: Semantic Search with Filters
- *
- * Combine vector NEAR with multiple metadata filters.
- */
-async function example2SemanticSearchWithFilters(
-  collection: Collection
-): Promise<void> {
-  console.log('\n=== Use Case 5: Semantic Search with Filters ===');
+/** 3 — hybrid VelesQL: NEAR + MATCH + filter + ORDER BY similarity(). */
+async function hybridQuery(db: VelesDB): Promise<void> {
+  console.log('\n=== 2. Hybrid VelesQL query ===');
 
   const velesql = `
-    SELECT id, title, price 
-    FROM articles 
-    WHERE vector NEAR $query 
-      AND category IN ('technology', 'science') 
-      AND published_date >= '2024-01-01'
-    LIMIT 20
-    WITH (mode = 'balanced')
+    SELECT id, title, similarity() AS score
+    FROM articles
+    WHERE vector NEAR $q
+      AND content MATCH 'vector database'
+      AND category = 'tech'
+    ORDER BY similarity() DESC
+    LIMIT 5
   `;
   console.log('VelesQL:', velesql.trim());
 
-  const queryVec = generateEmbedding(100);
-  const results = await collection.search(queryVec, 50);
+  const response = await db.query('articles', velesql, {
+    q: generateEmbedding(1),
+  });
 
-  const filtered = results
-    .filter((r) => {
-      const cat = r.payload?.category as string;
-      return ['technology', 'science'].includes(cat);
-    })
-    .slice(0, 20);
-
-  console.log(`Found ${filtered.length} matching articles`);
-}
-
-/**
- * Use Case 4: Document Clustering with Aggregations
- *
- * Group similar documents by category.
- */
-async function example3Aggregations(collection: Collection): Promise<void> {
-  console.log('\n=== Use Case 4: Document Clustering ===');
-
-  const velesql = `
-    SELECT category, COUNT(*) 
-    FROM documents 
-    WHERE similarity(embedding, $query) > 0.6 
-    GROUP BY category 
-    ORDER BY COUNT(*) DESC
-  `;
-  console.log('VelesQL:', velesql.trim());
-
-  const queryVec = generateEmbedding(50);
-  const results = await collection.search(queryVec, 100);
-
-  // Manual aggregation
-  const counts = new Map<string, number>();
-  for (const r of results.filter((r) => r.score > 0.6)) {
-    const cat = (r.payload?.category as string) || 'unknown';
-    counts.set(cat, (counts.get(cat) || 0) + 1);
-  }
-
-  console.log('Category counts:');
-  for (const [cat, count] of counts.entries()) {
-    console.log(`  ${cat}: ${count}`);
+  if ('results' in response) {
+    for (const row of response.results) {
+      console.log(`  #${String(row.id)} ${String(row.title)} (score=${String(row.score)})`);
+    }
+    console.log(`Strategy: ${response.stats.strategy}, ${response.stats.executionTimeMs}ms`);
   }
 }
 
-/**
- * Use Case 6: Recommendation Engine
- *
- * Find similar items based on user preferences.
- */
-async function example4RecommendationEngine(
-  collection: Collection
-): Promise<void> {
-  console.log('\n=== Use Case 6: Recommendation Engine ===');
+/** 4 — typed relation edges between points. */
+async function relationEdges(db: VelesDB): Promise<void> {
+  console.log('\n=== 3. Relations: relate / getRelations / unrelate ===');
 
-  const velesql = `
-    SELECT id, name, category, price 
-    FROM items 
-    WHERE similarity(embedding, $user_preference) > 0.7 
-      AND category = 'electronics' 
-      AND price < 100
-    ORDER BY similarity(embedding, $user_preference) DESC
-    LIMIT 10
-  `;
-  console.log('VelesQL:', velesql.trim());
+  // relate() returns the allocated edge id (number | string — u64-safe).
+  const { edgeId } = await db.relate('articles', {
+    source: 1,
+    target: 2,
+    relType: 'CITES',
+    properties: { context: 'embedding section' },
+  });
+  console.log(`Created edge ${String(edgeId)}: 1 -[CITES]-> 2`);
 
-  const userPreference = generateEmbedding(42);
-  const results = await collection.search(userPreference, 30);
+  const { edges, count } = await db.getRelations('articles', 1);
+  console.log(`Point 1 has ${count} outgoing relation(s):`);
+  for (const edge of edges) {
+    console.log(`  ${String(edge.source)} -[${edge.relType}]-> ${String(edge.target)}`);
+  }
 
-  const recommendations = results
-    .filter((r) => {
-      const price = r.payload?.price as number;
-      const cat = r.payload?.category as string;
-      return price < 100 && cat === 'electronics';
-    })
-    .slice(0, 10);
-
-  console.log(`Generated ${recommendations.length} recommendations`);
+  const removed = await db.unrelate('articles', edgeId);
+  console.log(`Edge removed: ${removed}`);
 }
 
-/**
- * Use Case 10: Conversational Memory for AI Agents
- *
- * Retrieve relevant context from conversation history.
- */
-async function example5ConversationalMemory(
-  collection: Collection,
-  conversationId: string
-): Promise<void> {
-  console.log('\n=== Use Case 10: Conversational Memory ===');
+/** 5 — agent memory: episodic record/recall + durable TTL. */
+async function agentMemoryRecall(db: VelesDB): Promise<void> {
+  console.log('\n=== 4. Agent memory: record, recall, durable TTL ===');
 
-  const velesql = `
-    SELECT content, role, timestamp 
-    FROM messages 
-    WHERE conversation_id = $conv_id 
-      AND similarity(embedding, $current_query) > 0.6 
-    ORDER BY timestamp DESC 
-    LIMIT 10
-  `;
-  console.log('VelesQL:', velesql.trim());
+  // The backing collection must exist first — nothing auto-creates it.
+  await db.createCollection('agent_events', { dimension: DIM, metric: 'cosine' });
+  const memory = db.agentMemory({ dimension: DIM });
 
-  const currentQueryEmb = generateEmbedding(75);
-  const results = await collection.search(currentQueryEmb, 30);
+  // recordEvent returns the generated point id (string, u64-safe).
+  const eventId = await memory.recordEvent('agent_events', {
+    eventType: 'user_query',
+    data: { query: 'compare HNSW and IVF indexes' },
+    embedding: generateEmbedding(7),
+  });
+  console.log(`Recorded event ${eventId}`);
 
-  const relevantContext = results
-    .filter(
-      (r) => r.score > 0.6 && r.payload?.conversation_id === conversationId
-    )
-    .slice(0, 10);
+  // Similarity recall (SearchResult[]).
+  const similar = await memory.recallEvents('agent_events', generateEmbedding(7), 3);
+  console.log(`recallEvents found ${similar.length} similar event(s)`);
 
-  console.log(`Retrieved ${relevantContext.length} relevant messages for context`);
+  // Temporal recall (EpisodicRecord[], most-recent-first, no embedding needed).
+  const recent = await memory.recallRecent('agent_events');
+  console.log(`recallRecent found ${recent.length} event(s), newest ts=${recent[0]?.timestamp}`);
+
+  // Expire the event in one hour — persisted server-side, survives restarts.
+  await db.setTtlDurable('agent_events', eventId, 3600);
+  console.log(`Set 1h durable TTL on event ${eventId}`);
 }
 
-/**
- * Main function demonstrating all hybrid query examples.
- */
 async function main(): Promise<void> {
-  console.log('='.repeat(60));
-  console.log('VelesDB Hybrid Query Examples - TypeScript SDK');
-  console.log('='.repeat(60));
+  const db = new VelesDB({ backend: 'rest', url: SERVER_URL });
+  await db.init();
 
-  // Note: This is a demo - in real usage, you'd open a real database
-  console.log('\nNote: These examples show the query patterns.');
-  console.log('Replace with real VelesDB instance for actual usage.\n');
-
-  // Show VelesQL examples without executing (demo mode)
-  const mockCollection = {
-    search: async (_vec: number[], _k: number): Promise<SearchResult[]> => [],
-  } as Collection;
-
-  await example1ContextualRag(mockCollection);
-  await example2SemanticSearchWithFilters(mockCollection);
-  await example3Aggregations(mockCollection);
-  await example4RecommendationEngine(mockCollection);
-  await example5ConversationalMemory(mockCollection, 'conv_001');
-
-  console.log('\n' + '='.repeat(60));
-  console.log('See docs/guides/USE_CASES.md for all 10 use cases');
-  console.log('See docs/VELESQL_SPEC.md for complete VelesQL reference');
-  console.log('='.repeat(60));
+  try {
+    await seedArticles(db);
+    await hybridQuery(db);
+    await relationEdges(db);
+    await agentMemoryRecall(db);
+  } finally {
+    // Drop demo collections so the example is re-runnable.
+    await db.deleteCollection('articles').catch(() => undefined);
+    await db.deleteCollection('agent_events').catch(() => undefined);
+    await db.close();
+  }
 }
 
-// Run if executed directly
-main().catch(console.error);
-
-export {
-  example1ContextualRag,
-  example2SemanticSearchWithFilters,
-  example3Aggregations,
-  example4RecommendationEngine,
-  example5ConversationalMemory,
-};
+main().catch((error: unknown) => {
+  console.error('Example failed (is velesdb-server running?):', error);
+  process.exitCode = 1;
+});

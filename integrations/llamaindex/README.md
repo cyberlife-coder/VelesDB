@@ -23,7 +23,7 @@ pip install llama-index-vector-stores-velesdb
 ## Quick Start
 
 ```python
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
+from llama_index.core import SimpleDirectoryReader, StorageContext, VectorStoreIndex
 from llamaindex_velesdb import VelesDBVectorStore
 
 # Create vector store
@@ -33,11 +33,16 @@ vector_store = VelesDBVectorStore(
     metric="cosine",
 )
 
-# Load and index documents
+# Wrap it in a StorageContext. This step is required: from_documents()
+# ignores a bare vector_store= keyword and would silently index into an
+# in-memory store, leaving the VelesDB collection empty.
+storage_context = StorageContext.from_defaults(vector_store=vector_store)
+
+# Load and index documents — chunks are written to VelesDB
 documents = SimpleDirectoryReader("./data").load_data()
 index = VectorStoreIndex.from_documents(
     documents,
-    vector_store=vector_store,
+    storage_context=storage_context,
 )
 
 # Query
@@ -215,12 +220,6 @@ hits = vector_store.query_ids(query_embedding=embedding, top_k=50)
 # [{"id": "abc", "score": 0.92}, ...]
 ```
 
-### Server Mode: URL Validation
-
-When connecting to a remote `velesdb-server` via the `path` parameter as a URL,
-`validate_url` is called automatically during initialization to reject
-malformed URLs before any network request is issued.
-
 ### Hybrid Search (Vector + BM25)
 
 ```python
@@ -268,6 +267,63 @@ for row in results:
 > requires `Database`-level routing. For cross-collection MATCH, use the core
 > `velesdb.Database` API or the [REST server](https://github.com/cyberlife-coder/VelesDB)
 > directly. (Tracked in `docs/reference/ECOSYSTEM_PARITY.md`, action item #7.)
+
+## Graph Retrieval
+
+Three graph helpers ship with the package: `GraphLoader` (build a knowledge
+graph over stored nodes), `GraphRetriever` (vector seed + graph expansion)
+and `GraphQARetriever` (adds depth-based re-ranking). Native mode talks to
+the VelesDB graph layer directly — no server required. Create the graph
+collection once with the core API, then link the **VelesDB point IDs** of
+stored nodes (the hash of each LlamaIndex node id, via
+`velesdb_common.ids.stable_hash_id`):
+
+```python
+from llamaindex_velesdb import VelesDBVectorStore, GraphLoader
+
+vector_store = VelesDBVectorStore(path="./velesdb_data", collection_name="docs")
+vector_store._get_db().create_graph_collection("kg")  # once
+
+loader = GraphLoader(vector_store, graph_collection_name="kg")
+loader.add_edge(edge_id=1, source=source_id, target=target_id, label="RELATES_TO")
+edges = loader.get_edges(label="RELATES_TO")
+```
+
+`GraphRetriever` finds seed nodes by vector search, then expands the context
+through the graph:
+
+```python
+from llama_index.core import VectorStoreIndex
+from llamaindex_velesdb import GraphRetriever
+
+index = VectorStoreIndex.from_vector_store(vector_store)
+retriever = GraphRetriever(
+    index=index,
+    mode="native",
+    graph_collection_name="kg",
+    seed_k=3,        # initial vector hits
+    expand_k=10,     # max nodes after expansion
+    max_depth=2,     # BFS traversal depth
+)
+nodes = retriever.retrieve("What is VelesDB?")
+```
+
+`GraphQARetriever` re-ranks results by graph depth (seeds first) for Q&A:
+
+```python
+from llamaindex_velesdb import GraphQARetriever
+
+retriever = GraphQARetriever(
+    index=index,
+    mode="native",
+    graph_collection_name="kg",
+    rerank_by_depth=True,
+)
+nodes = retriever.retrieve("How are these concepts related?")
+```
+
+Pass `low_latency=True` to either retriever to skip graph expansion and
+return vector-only seeds (no graph collection required).
 
 ## Performance
 

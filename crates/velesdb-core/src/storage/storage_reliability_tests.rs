@@ -275,6 +275,49 @@ fn test_wal_replay_truncates_after_success() {
     );
 }
 
+#[test]
+fn test_legacy_compaction_marker_skipped_mid_stream() {
+    // Pre-fix versions appended a bare 0x04 byte to the WAL after compaction.
+    // Replay must skip it (no payload) and keep going, so post-compaction
+    // entries written by those versions are still recovered.
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let dim = 3;
+
+    let mut wal = crc_store_entry(1, &vec3_bytes([1.0, 2.0, 3.0]));
+    wal.push(4u8); // legacy compaction marker
+    wal.extend_from_slice(&crc_store_entry(2, &vec3_bytes([4.0, 5.0, 6.0])));
+    std::fs::write(path.join("vectors.wal"), &wal).unwrap();
+
+    let storage = MmapStorage::new(&path, dim).unwrap();
+    assert_eq!(storage.retrieve(1).unwrap(), Some(vec![1.0, 2.0, 3.0]));
+    assert_eq!(
+        storage.retrieve(2).unwrap(),
+        Some(vec![4.0, 5.0, 6.0]),
+        "entries after a legacy compaction marker must be replayed"
+    );
+}
+
+#[test]
+fn test_legacy_compaction_marker_leading_byte_detected() {
+    // A WAL whose first byte is the legacy marker must still be detected as
+    // CRC-framed so the entries behind the marker are recovered.
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let dim = 3;
+
+    let mut wal = vec![4u8];
+    wal.extend_from_slice(&crc_store_entry(7, &vec3_bytes([7.0, 8.0, 9.0])));
+    std::fs::write(path.join("vectors.wal"), &wal).unwrap();
+
+    let storage = MmapStorage::new(&path, dim).unwrap();
+    assert_eq!(
+        storage.retrieve(7).unwrap(),
+        Some(vec![7.0, 8.0, 9.0]),
+        "a leading legacy marker must not disable WAL replay"
+    );
+}
+
 // ===========================================================================
 // Issue #318: Windows atomic_replace crash-safety (.bak recovery)
 // ===========================================================================

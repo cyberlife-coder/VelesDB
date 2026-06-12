@@ -4,7 +4,7 @@
 mod tests {
     use super::super::episodic_memory::EpisodicMemory;
     use super::super::temporal_index::TemporalIndex;
-    use super::super::ttl::MemoryTtl;
+    use super::super::ttl::{MemoryKind, MemoryTtl};
     use crate::Database;
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -218,7 +218,11 @@ mod tests {
     fn test_record_with_ttl_zero_expires_immediately() {
         let dir = tempdir().unwrap();
         let db = Arc::new(Database::open(dir.path()).unwrap());
-        let ep = make_episodic(Arc::clone(&db));
+        // Build with an explicit shared TTL so the assertion can bypass TTL
+        // filtering and prove *physical* removal (not a shadow-persisted point).
+        let ttl = Arc::new(MemoryTtl::new());
+        let ep = EpisodicMemory::new(db, 4, Arc::clone(&ttl), Arc::new(TemporalIndex::new()))
+            .expect("EpisodicMemory::new failed");
 
         // TTL = 0 seconds: expired as soon as it's set.
         ep.record_with_ttl(42, "ephemeral", 1_000, None, 0).unwrap();
@@ -227,6 +231,14 @@ mod tests {
         assert!(
             events.iter().all(|e| e.0 != 42),
             "TTL-0 event must not appear in recent()"
+        );
+
+        // Clear the TTL entry: a merely TTL-hidden point would now resurface.
+        // get_with_embedding returning None proves the point was physically removed.
+        ttl.remove(MemoryKind::Episodic, 42);
+        assert!(
+            ep.get_with_embedding(42).unwrap().is_none(),
+            "TTL-0 event must be physically removed, not shadow-persisted"
         );
     }
 

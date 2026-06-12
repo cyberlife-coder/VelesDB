@@ -1,7 +1,8 @@
 /**
  * WASM Wave 4 Stubs Tests (S4-07)
  *
- * Verifies that the 12 server-only endpoints exposed as WASM stubs throw
+ * Verifies that the server-only endpoints exposed as WASM stubs (12 from
+ * Wave 4 plus the named sparse search and relation/TTL wrappers) throw
  * VelesDBError with code NOT_SUPPORTED and a message mentioning the
  * feature name + REST backend.
  *
@@ -97,6 +98,32 @@ const stubCases: StubCase[] = [
     call: () => wasmWaveFour.wasmGraphSearch('c', {} as GraphSearchRequest),
     feature: 'Graph search',
   },
+  {
+    name: 'wasmSparseSearchNamed',
+    call: () => wasmWaveFour.wasmSparseSearchNamed('c', { 1: 0.5 }, 'idx'),
+    feature: 'Named sparse index search',
+  },
+  {
+    name: 'wasmRelate',
+    call: () =>
+      wasmWaveFour.wasmRelate('c', { source: 1, target: 2, relType: 'R' }),
+    feature: 'Relation edges',
+  },
+  {
+    name: 'wasmUnrelate',
+    call: () => wasmWaveFour.wasmUnrelate('c', 1),
+    feature: 'Relation edge removal',
+  },
+  {
+    name: 'wasmGetRelations',
+    call: () => wasmWaveFour.wasmGetRelations('c', 1),
+    feature: 'Relation edges',
+  },
+  {
+    name: 'wasmSetTtlDurable',
+    call: () => wasmWaveFour.wasmSetTtlDurable('c', 1, 60),
+    feature: 'Durable TTL',
+  },
 ];
 
 describe.each(stubCases)('$name', ({ call, feature }) => {
@@ -115,7 +142,7 @@ describe.each(stubCases)('$name', ({ call, feature }) => {
 });
 
 describe('WASM Wave 4 stubs — coverage guard', () => {
-  it('exports exactly 12 stubs', () => {
-    expect(stubCases).toHaveLength(12);
+  it('exports exactly 17 stubs', () => {
+    expect(stubCases).toHaveLength(17);
   });
 });

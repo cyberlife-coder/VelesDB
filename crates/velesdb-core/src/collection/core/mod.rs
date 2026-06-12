@@ -32,6 +32,10 @@ mod lifecycle;
 mod lifecycle_create;
 #[cfg(test)]
 mod lifecycle_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod open_reload_tests;
+#[cfg(feature = "persistence")]
+mod quantizer_restore;
 mod recovery;
 #[cfg(all(test, feature = "persistence"))]
 mod recovery_tests;
@@ -39,6 +43,8 @@ mod scroll;
 #[cfg(all(test, feature = "persistence"))]
 mod scroll_tests;
 mod statistics;
+#[cfg(all(test, feature = "persistence"))]
+mod ttl_read_tests;
 
 pub use crate::validation::{MAX_DIMENSION, MIN_DIMENSION};
 pub use index_management::IndexInfo;

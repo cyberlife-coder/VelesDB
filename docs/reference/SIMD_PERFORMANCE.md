@@ -32,7 +32,7 @@ The `simd_native` module provides hand-tuned SIMD implementations using `core::a
 | **x86_64 AVX-512** | simd_native | 512-bit 2/4-acc | ~38-42ns |
 | **x86_64 AVX2** | simd_native | 256-bit 2/4-acc | ~40-82ns |
 | **aarch64** | simd_native | NEON 128-bit | ~60-100ns |
-| **WASM** | wide_simd | SIMD128 | ~80-120ns |
+| **WASM** | scalar fallback (SIMD128 planned) | Native Rust | see Fallback |
 | **Fallback** | Scalar | Native Rust | ~150-200ns |
 
 ### Tiered Dispatch Strategy (EPIC-077)

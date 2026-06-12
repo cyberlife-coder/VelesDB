@@ -34,8 +34,16 @@ pub struct HnswParams {
     pub ef_construction: usize,
     /// Initial capacity (grows automatically if exceeded).
     pub max_elements: usize,
-    /// Vector storage mode (Full, SQ8, or Binary).
-    /// SQ8 provides 4x memory reduction with ~1% recall loss.
+    /// Vector storage mode (Full, SQ8, Binary, PQ, or `RaBitQ`).
+    ///
+    /// `RaBitQ` selects the binary-traversal HNSW backend (32x bandwidth
+    /// reduction during graph traversal, f32 re-ranking), persisted and
+    /// restored across reopens. PQ enables the ADC rescore path once a
+    /// codebook is trained (`TRAIN QUANTIZER`). SQ8/Binary currently keep
+    /// quantized representations as an **additional** cache that no
+    /// production search path reads — selecting them adds memory rather
+    /// than reducing it; the 4x-reduction figure applies only to a backend
+    /// that stores quantized vectors *instead of* f32.
     #[serde(default)]
     pub storage_mode: StorageMode,
     /// VAMANA alpha for neighbor diversification (default: 1.2).

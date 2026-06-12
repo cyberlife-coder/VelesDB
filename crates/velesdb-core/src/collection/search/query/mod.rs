@@ -43,6 +43,7 @@ mod execution_paths;
 mod extraction;
 #[cfg(test)]
 mod extraction_tests;
+mod graph_prefilter;
 mod hybrid_sparse;
 #[cfg(test)]
 mod hybrid_sparse_tests;
@@ -192,6 +193,12 @@ impl Collection {
         if let Some(results) = self.try_dispatch_match(query, params, &ctx)? {
             return Ok(results);
         }
+
+        // Resolve scalar WHERE parameters once so every downstream conversion
+        // to a payload Filter sees bound values; a missing parameter errors
+        // here instead of silently degrading to NULL.
+        let resolved_query = Self::resolve_query_where_params(query, params)?;
+        let query = resolved_query.as_ref().unwrap_or(query);
 
         // Phase 2-3: SELECT extraction, early-return, dispatch, and finalization.
         self.execute_select_pipeline(query, params, &ctx)

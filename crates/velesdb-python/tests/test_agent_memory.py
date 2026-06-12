@@ -295,6 +295,114 @@ class TestTtlAndEviction:
         memory.set_episodic_ttl(2, 3600)
         memory.set_procedural_ttl(3, 3600)
 
+    def test_set_ttl_returns_true_for_existing_id(self, memory):
+        """set_*_ttl returns True when the id names a live entry."""
+        memory.semantic.store(1, "fact", [0.1, 0.2, 0.3, 0.4])
+        memory.episodic.record(2, "event", int(time.time()))
+        memory.procedural.learn(3, "proc", ["s1"])
+        assert memory.set_semantic_ttl(1, 3600) is True
+        assert memory.set_episodic_ttl(2, 3600) is True
+        assert memory.set_procedural_ttl(3, 3600) is True
+
+    def test_set_ttl_returns_false_for_unknown_id(self, memory):
+        """set_*_ttl returns False (no-op) for a non-existent id."""
+        assert memory.set_semantic_ttl(999, 3600) is False
+        assert memory.set_episodic_ttl(999, 3600) is False
+        assert memory.set_procedural_ttl(999, 3600) is False
+
+    def test_record_with_ttl_immediately_queryable(self, memory):
+        """episodic.record_with_ttl keeps the event visible before expiry."""
+        epi = memory.episodic
+        epi.record_with_ttl(1, "transient", int(time.time()), 3600)
+        assert [e["id"] for e in epi.recent(limit=10)] == [1]
+
+    def test_record_with_ttl_zero_expires(self, memory):
+        """episodic.record_with_ttl with a 0s TTL expires the event."""
+        epi = memory.episodic
+        epi.record_with_ttl(1, "already stale", int(time.time()), 0)
+        assert [e["id"] for e in epi.recent(limit=10)] == []
+
+    def test_learn_with_ttl_immediately_recallable(self, memory):
+        """procedural.learn_with_ttl keeps the procedure listed before expiry."""
+        proc = memory.procedural
+        proc.learn_with_ttl(1, "draft", ["s1"], 3600, [0.5, 0.5, 0.0, 0.0], 0.9)
+        assert [p["id"] for p in proc.list_all()] == [1]
+
+    def test_learn_with_ttl_zero_expires(self, memory):
+        """procedural.learn_with_ttl with a 0s TTL expires the procedure."""
+        proc = memory.procedural
+        proc.learn_with_ttl(1, "stale", ["s1"], 0)
+        assert proc.list_all() == []
+
+    def test_set_ttl_durable_expires_via_auto_expire(self, memory):
+        """set_*_ttl_durable(id, 0) makes each subsystem's entry expirable."""
+        memory.semantic.store(1, "fact", [0.1, 0.2, 0.3, 0.4])
+        memory.episodic.record(2, "event", int(time.time()))
+        memory.procedural.learn(3, "proc", ["s1"])
+        memory.set_semantic_ttl_durable(1, 0)
+        memory.set_episodic_ttl_durable(2, 0)
+        memory.set_procedural_ttl_durable(3, 0)
+        result = memory.auto_expire()
+        assert result["semantic_expired"] == 1
+        assert result["episodic_expired"] == 1
+        assert result["procedural_expired"] == 1
+
+    def test_set_ttl_durable_raises_keyerror_for_unknown_id(self, memory):
+        """set_*_ttl_durable raises KeyError for a non-existent id."""
+        with pytest.raises(KeyError):
+            memory.set_semantic_ttl_durable(999, 3600)
+        with pytest.raises(KeyError):
+            memory.set_episodic_ttl_durable(999, 3600)
+        with pytest.raises(KeyError):
+            memory.set_procedural_ttl_durable(999, 3600)
+
+    def test_set_ttl_durable_survives_new_handle(self, temp_db):
+        """A durable TTL is rebuilt from payloads by a fresh AgentMemory.
+
+        ``set_episodic_ttl_durable`` persists the expiry to the reserved
+        ``_veles_expires_at`` payload field; a second handle (own in-memory
+        TTL registry) must rebuild it and expire the event — proving the
+        durability contract end-to-end from Python.
+        """
+        mem1 = temp_db.agent_memory(dimension=4)
+        mem1.episodic.record(1, "mortal event", int(time.time()))
+        mem1.set_episodic_ttl_durable(1, 0)
+
+        mem2 = temp_db.agent_memory(dimension=4)
+        result = mem2.auto_expire()
+        assert result["episodic_expired"] == 1
+        assert mem2.episodic.recent(limit=10) == []
+
+    def test_set_ttl_namespaced_no_cross_subsystem_expiry(self, memory):
+        """A semantic TTL must not expire an episodic/procedural row of same id.
+
+        Stores three distinct entries under the SAME numeric id (5) across the
+        three subsystems, then sets an already-elapsed (0s) TTL on the semantic
+        one only. auto_expire must delete exactly the semantic row and leave the
+        episodic event and the procedure intact — proving the binding routes
+        through the namespaced ``(MemoryKind, id)`` core key.
+        """
+        now = int(time.time())
+        memory.semantic.store(5, "sem", [0.1, 0.2, 0.3, 0.4])
+        memory.episodic.record(5, "epi", now, [0.1, 0.2, 0.3, 0.4])
+        memory.procedural.learn(5, "proc", ["s1"], [0.1, 0.2, 0.3, 0.4], 0.9)
+
+        assert memory.set_semantic_ttl(5, 0) is True
+
+        result = memory.auto_expire()
+        assert result["semantic_expired"] == 1
+        assert result["episodic_expired"] == 0
+        assert result["procedural_expired"] == 0
+
+        # Episodic id 5 and procedural id 5 survive untouched.
+        epi_ids = [e["id"] for e in memory.episodic.recent(limit=10)]
+        proc_ids = [p["id"] for p in memory.procedural.list_all()]
+        assert 5 in epi_ids
+        assert 5 in proc_ids
+        # Semantic id 5 is gone.
+        sem_ids = [r["id"] for r in memory.semantic.query([0.1, 0.2, 0.3, 0.4], top_k=10)]
+        assert 5 not in sem_ids
+
     def test_auto_expire_returns_stats_dict(self, memory):
         """auto_expire returns a dict with the expected counter keys."""
         result = memory.auto_expire()
@@ -307,6 +415,9 @@ class TestTtlAndEviction:
         ):
             assert key in result
             assert isinstance(result[key], int)
+        # Truncation flag: True when consolidation hit the per-cycle cap and
+        # another auto_expire pass is needed to drain remaining old episodes.
+        assert result["consolidation_truncated"] is False
 
     def test_auto_expire_removes_expired_entry(self, memory):
         """set_semantic_ttl(0) + auto_expire deletes the entry from storage."""
@@ -324,6 +435,65 @@ class TestTtlAndEviction:
         ids = [p["id"] for p in memory.procedural.list_all()]
         assert 1 in ids
         assert 2 not in ids
+
+
+# =========================================================================
+# Surfaced-method smoke coverage (.pyi parity)
+# =========================================================================
+
+
+class TestSurfacedMethods:
+    """Smoke-exercise every method newly declared in the type stub.
+
+    Guards against the .pyi drifting from the binding: each call below maps to
+    a method that must exist on the wrapper and be invocable as typed.
+    """
+
+    def test_semantic_surface(self, memory):
+        """store_with_ttl / delete / serialize / deserialize / __repr__."""
+        sem = memory.semantic
+        sem.store_with_ttl(1, "ttl fact", [0.1, 0.2, 0.3, 0.4], 3600)
+        blob = sem.serialize()
+        assert isinstance(blob, (bytes, bytearray))
+        sem.delete(1)
+        sem.deserialize(blob)
+        assert "4" in repr(sem)
+
+    def test_episodic_surface(self, memory):
+        """older_than / delete / __repr__."""
+        now = int(time.time())
+        epi = memory.episodic
+        epi.record(1, "old", now - 7200)
+        epi.record(2, "new", now)
+        old = epi.older_than(before=now - 3600, limit=10)
+        assert [e["id"] for e in old] == [1]
+        epi.delete(2)
+        assert [e["id"] for e in epi.recent(limit=10)] == [1]
+        assert "4" in repr(epi)
+
+    def test_procedural_surface(self, memory):
+        """list_all / delete / __repr__."""
+        proc = memory.procedural
+        proc.learn(1, "a", ["s1"])
+        proc.learn(2, "b", ["s2"])
+        assert len(proc.list_all()) == 2
+        proc.delete(1)
+        assert [p["id"] for p in proc.list_all()] == [2]
+        assert "4" in repr(proc)
+
+    def test_agent_surface(self, temp_db):
+        """snapshot suite + auto_expire + evict + repr on one instance."""
+        with tempfile.TemporaryDirectory() as snap_dir:
+            mem = temp_db.agent_memory(dimension=4, snapshot_dir=snap_dir)
+            mem.semantic.store(1, "fact", [0.1, 0.2, 0.3, 0.4])
+            v = mem.snapshot()
+            assert v in mem.list_snapshot_versions()
+            assert mem.load_latest_snapshot() == v
+            mem.load_snapshot_version(v)
+            stats = mem.auto_expire()
+            assert isinstance(stats["semantic_expired"], int)
+            assert isinstance(mem.evict_low_confidence_procedures(0.5), int)
+            assert "4" in repr(mem)
 
 
 # =========================================================================

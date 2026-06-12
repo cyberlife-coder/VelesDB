@@ -17,8 +17,15 @@ export type SearchQuality = 'fast' | 'balanced' | 'accurate' | 'perfect' | 'auto
 /** Backend type for VelesDB connection */
 export type BackendType = 'wasm' | 'rest';
 
-/** Numeric point ID required by velesdb-server REST API (`u64`). */
-export type RestPointId = number;
+/**
+ * Point ID accepted by the velesdb-server REST API (`u64`).
+ *
+ * Ids within the JS safe-integer range are numbers; decimal-string ids above
+ * `Number.MAX_SAFE_INTEGER` (2^53-1) stay verbatim strings so the full u64
+ * range survives the JavaScript boundary without precision loss (the server
+ * deserialises both forms since #1004).
+ */
+export type RestPointId = number | string;
 
 /** Configuration options for VelesDB client */
 export interface VelesDBConfig {

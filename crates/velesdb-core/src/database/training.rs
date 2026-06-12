@@ -80,7 +80,9 @@ impl Database {
         sample_limit: Option<usize>,
     ) -> Result<Vec<Vec<f32>>> {
         let all_ids = collection.all_ids();
-        let points = collection.get(&all_ids);
+        // get_raw: PQ training only consumes vectors; TTL-expired points are
+        // still valid training samples and must not shrink the corpus.
+        let points = collection.get_raw(&all_ids);
         let mut vectors: Vec<Vec<f32>> = points
             .into_iter()
             .flatten()
@@ -168,7 +170,13 @@ impl Database {
         })))
     }
 
-    /// Trains a `RaBitQ` quantizer and persists it.
+    /// Trains a `RaBitQ` quantizer, persists it, and installs it into the
+    /// live index when the collection's HNSW backend is `RaBitQ`.
+    ///
+    /// For collections created with another storage mode the backend is
+    /// Standard: training still persists `rabitq.idx` and flips the config
+    /// below, and the wiring takes effect at the next open (the open path
+    /// rebuilds the backend from the storage mode and reloads `rabitq.idx`).
     fn train_rabitq(
         collection: &crate::collection::Collection,
         vectors: &[Vec<f32>],
@@ -179,6 +187,17 @@ impl Database {
 
         rbq.save(collection.data_path())
             .map_err(|e| Error::TrainingFailed(e.to_string()))?;
+
+        // Live install: re-encodes the collection's vectors (O(n·d)) so
+        // RaBitQ traversal activates without a restart.
+        let installed = collection
+            .install_rabitq_quantizer(std::sync::Arc::new(rbq))
+            .map_err(|e| Error::TrainingFailed(e.to_string()))?;
+        if !installed {
+            tracing::debug!(
+                "RaBitQ trained on a Standard-backend collection; takes effect at next open"
+            );
+        }
 
         // RaBitQ uses default oversampling of 4.
         Self::finalize_pq_config(collection, StorageMode::RaBitQ, 4)?;

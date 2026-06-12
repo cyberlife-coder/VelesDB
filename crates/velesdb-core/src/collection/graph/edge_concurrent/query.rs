@@ -128,6 +128,14 @@ impl ConcurrentEdgeStore {
 
     /// Checks if an edge with the given ID exists.
     #[must_use]
+    /// Returns the highest edge id in the store, if any.
+    ///
+    /// O(edges) over the id registry — no edge cloning.
+    pub fn max_edge_id(&self) -> Option<u64> {
+        self.edge_ids.read().keys().max().copied()
+    }
+
+    /// Returns `true` when an edge with `edge_id` exists.
     pub fn contains_edge(&self, edge_id: u64) -> bool {
         self.edge_ids.read().contains_key(&edge_id)
     }
@@ -280,13 +288,11 @@ impl ConcurrentEdgeStore {
             let observed = self
                 .pending_writes
                 .load(std::sync::atomic::Ordering::Acquire);
-            #[allow(unused_variables)]
             if let Err(e) = self.rebuild_snapshot() {
                 // Restore dirty flag so the next caller retries the rebuild.
                 self.csr_dirty
                     .store(true, std::sync::atomic::Ordering::Release);
-                #[cfg(debug_assertions)]
-                eprintln!("[velesdb] WARNING: lazy CSR snapshot rebuild failed: {e}");
+                tracing::warn!("lazy CSR snapshot rebuild failed: {e}");
                 return;
             }
             // Rebuild succeeded: subtract only the writes we accounted for, so

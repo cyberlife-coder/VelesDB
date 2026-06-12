@@ -27,7 +27,7 @@ jobs:
           path-to-signatures: signatures/cla.json
           path-to-document: https://github.com/cyberlife-coder/velesdb/blob/develop/CONTRIBUTING.md#contributor-license-agreement-cla
           branch: develop
-          allowlist: cyberlife-coder,dependabot[bot],github-actions[bot]
+          allowlist: cyberlife-coder,dependabot[bot],github-actions[bot],noreply@anthropic.com
           lock-pullrequest-aftermerge: false
           custom-notsigned-prcomment: |
             Thank you for your contribution to VelesDB!

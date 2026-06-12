@@ -2,9 +2,7 @@
 
 > **Difficulty: Intermediate** | Showcases: Hybrid search (dense + sparse), RRF fusion, Product Quantization, LlamaIndex VectorStore interface
 
-Example integration showing VelesDB as a hybrid dense+sparse vector store for LlamaIndex with Product Quantization (PQ) support.
-
-> **Note:** This is an example integration, not a published package. It demonstrates the integration pattern for building your own LlamaIndex-compatible VelesDB wrapper.
+Example showing VelesDB as a hybrid dense+sparse vector store for LlamaIndex with Product Quantization (PQ) support, using the published [`llama-index-vector-stores-velesdb`](../../integrations/llamaindex) connector — adopting VelesDB is a single dependency change.
 
 ## Why VelesDB for LlamaIndex?
 
@@ -19,7 +17,7 @@ VelesDB provides a single-engine solution for hybrid search that eliminates the 
 ## Prerequisites
 
 ```bash
-pip install velesdb llama-index-core
+pip install llama-index-vector-stores-velesdb
 ```
 
 ## Usage
@@ -32,12 +30,12 @@ The example uses synthetic embeddings (random vectors) so it runs without an emb
 
 ## What the Example Shows
 
-1. **`VelesDBVectorStore`** class implementing LlamaIndex's `BasePydanticVectorStore`
-2. **Node insertion** with both dense embeddings and sparse vectors
-3. **Product Quantization training** for memory-efficient storage (~8x compression)
-4. **Dense-only search** using embedding vectors
-5. **Sparse-only search** using keyword weights
-6. **Hybrid search** combining both signals via built-in RRF fusion
+1. **`llamaindex_velesdb.VelesDBVectorStore`** — the published LlamaIndex connector
+2. **Node insertion** with both dense embeddings and sparse vectors (`add(nodes, sparse_vectors=...)`)
+3. **Product Quantization training** via `train_pq` (~8x compression)
+4. **Dense-only search** via `query(VectorStoreQuery(...))`
+5. **Hybrid dense+sparse search** by passing `sparse_vector=` (RRF fusion)
+6. **Hybrid vector+BM25 search** via `hybrid_query`
 
 ## Product Quantization
 
@@ -48,41 +46,36 @@ The example demonstrates PQ training after inserting vectors:
 status = store.train_pq(m=8, k=256)
 ```
 
-PQ divides each vector into `m` sub-spaces and quantizes each with `k` centroids, reducing memory from `dim * 4 bytes` to `m * 1 byte` per vector (when k=256). This enables scaling to millions of vectors on modest hardware.
+PQ divides each vector into `m` sub-spaces and quantizes each with `k` centroids, reducing memory from `dim * 4 bytes` to `m * 1 byte` per vector (when k=256). This enables scaling to millions of vectors on modest hardware. Note: training needs at least `k` vectors — with the demo's 50 documents the engine reports this and the example continues uncompressed.
 
 ## Expected Output
 
 ```
-=== VelesDB + LlamaIndex Hybrid Search Demo ===
+Inserted 50 nodes
 
---- Inserting 5 documents ---
-Inserted 5 nodes
+=== Training Product Quantization ===
+  PQ training skipped (expected with small dataset): ...
 
---- Training Product Quantization ---
-PQ trained: 8 sub-quantizers, 256 centroids
-
---- Dense Search (3 results) ---
-  [1] node_xxx (score: 0.xxx)
+=== Dense-Only Search ===
+  [0.xxxx] Benchmarking with Criterion provides statistically rigorous measurements
   ...
 
---- Sparse Search (3 results) ---
-  [1] node_xxx (score: 0.xxx)
-  ...
+=== Hybrid Search (Dense + Sparse) ===
+  [0.xxxx] ...
 
---- Hybrid Search (RRF fusion, 3 results) ---
-  [1] node_xxx (score: 0.xxx)
-  ...
+=== Hybrid Search (Vector + BM25) ===
+  [0.xxxx] ...
 ```
 
 ## Adapting for Production
 
 ```python
-from llama_index.embeddings.openai import OpenAIEmbedding
+from llamaindex_velesdb import VelesDBVectorStore
 
-embed_model = OpenAIEmbedding()
 store = VelesDBVectorStore(
+    path="./data",
     collection_name="my_docs",
-    db_path="./data",
-    dimension=1536,  # Match your embedding model
 )
+# Provide nodes with embeddings from your model (OpenAI, HuggingFace, ...)
+store.add(nodes)
 ```

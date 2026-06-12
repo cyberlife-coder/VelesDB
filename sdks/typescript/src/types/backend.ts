@@ -35,6 +35,7 @@ import type {
   SemanticEntry,
   EpisodicEvent,
   ProceduralPattern,
+  EpisodicRecord,
 } from './agent';
 import type {
   ScrollRequest,
@@ -275,18 +276,36 @@ export interface IVelesDBBackend {
     k?: number
   ): Promise<SearchResult[]>;
 
-  /** Record an episodic event. Returns the generated point ID. */
-  recordEpisodicEvent(collection: string, event: EpisodicEvent): Promise<number>;
+  /**
+   * Record an episodic event. Returns the point ID as a string (u64
+   * precision preserved).
+   */
+  recordEpisodicEvent(collection: string, event: EpisodicEvent): Promise<string>;
 
-  /** Recall episodic events */
+  /** Recall episodic events by vector similarity. */
   recallEpisodicEvents(
     collection: string,
     embedding: number[],
     k?: number
   ): Promise<SearchResult[]>;
 
-  /** Store a procedural pattern. Returns the generated point ID. */
-  storeProceduralPattern(collection: string, pattern: ProceduralPattern): Promise<number>;
+  /**
+   * Recall episodic events most-recent-first, optionally bounded below by
+   * `since` (inclusive unix-seconds). Mirrors core `episodic.recent(since)`.
+   */
+  recallRecentEvents(collection: string, since?: number): Promise<EpisodicRecord[]>;
+
+  /**
+   * Recall episodic events strictly older than `before` (unix-seconds),
+   * most-recent-first. Mirrors core `episodic.older_than(before)`.
+   */
+  recallOlderThanEvents(collection: string, before: number): Promise<EpisodicRecord[]>;
+
+  /**
+   * Store a procedural pattern. Returns the point ID as a string (u64
+   * precision preserved).
+   */
+  storeProceduralPattern(collection: string, pattern: ProceduralPattern): Promise<string>;
 
   /** Match procedural patterns */
   matchProceduralPatterns(
@@ -352,4 +371,16 @@ export interface IVelesDBBackend {
     collection: string,
     request: GraphSearchRequest
   ): Promise<GraphSearchResponse>;
+
+  /** Create a typed relation edge between two points. Returns the allocated edge ID. */
+  relate(collection: string, req: import('./graph').RelateRequest): Promise<import('./graph').RelateResponse>;
+
+  /** Remove a relation edge by ID. Returns `true` if removed. */
+  unrelate(collection: string, edgeId: import('./graph').GraphNodeId): Promise<boolean>;
+
+  /** List outgoing relation edges for a point. */
+  getRelations(collection: string, pointId: import('./graph').GraphNodeId): Promise<import('./graph').RelationsResponse>;
+
+  /** Durably set (or refresh) the TTL of a point. */
+  setTtlDurable(collection: string, pointId: import('./graph').GraphNodeId, ttlSeconds: number): Promise<void>;
 }

@@ -155,6 +155,11 @@ impl EdgeStore {
     /// Pre-allocating reduces memory reallocation overhead when inserting many edges.
     /// With 10M edges, this can reduce peak memory usage by ~2x and improve insert throughput.
     ///
+    /// Note: when accessed through the sharded `ConcurrentEdgeStore`, an edge
+    /// whose endpoints hash to different shards is stored in **both** shards
+    /// (outgoing + incoming halves), which offsets part of that saving — with
+    /// many shards this applies to nearly all edges.
+    ///
     /// # Arguments
     ///
     /// * `expected_edges` - Expected number of edges to store

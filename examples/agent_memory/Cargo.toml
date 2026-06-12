@@ -1,0 +1,17 @@
+[package]
+name = "agent_memory_snapshot_ttl"
+version = "0.1.0"
+edition = "2021"
+description = "VelesDB Agent Memory: namespaced TTL, auto-expire, and snapshot round-trip"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "snapshot_ttl"
+path = "snapshot_ttl.rs"
+
+[dependencies]
+velesdb-core = { path = "../../crates/velesdb-core" }
+tempfile = "3.10"

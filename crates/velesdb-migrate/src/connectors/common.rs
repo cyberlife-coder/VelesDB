@@ -58,11 +58,39 @@ const ALLOWED_SCHEMES: &[&str] = &["http", "https", "redis", "rediss", "postgres
 /// Returns [`Error::Config`] with a message that includes the rejected
 /// input and the specific rule that failed.
 pub fn validate_url(input: &str) -> Result<()> {
+    let allow_private = std::env::var("VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS")
+        .ok()
+        .filter(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .is_some();
+    validate_url_with_policy(input, allow_private)
+}
+
+/// Policy-parameterised core of [`validate_url`]: `allow_private` bypasses
+/// checks (4) and (5) only, exactly like the environment escape hatch.
+///
+/// Taking the policy as a parameter keeps the function testable without
+/// mutating process-global environment state from tests.
+fn validate_url_with_policy(input: &str, allow_private: bool) -> Result<()> {
     // Delegate RFC 3986 parsing to the `url` crate.
     let parsed =
         url::Url::parse(input).map_err(|e| Error::Config(format!("Invalid URL '{input}': {e}")))?;
 
-    // (1) Scheme allowlist.
+    reject_scheme_and_userinfo(&parsed, input)?;
+    let host = require_host(&parsed, input)?;
+
+    // Local development escape hatch: bypass checks (4) and (5) only.
+    if allow_private {
+        return Ok(());
+    }
+
+    // (4) and (5) Private-range and reserved-hostname rejection.
+    reject_unsafe_host(&host, input)
+}
+
+/// Checks (1) and (2) documented on [`validate_url`]: scheme allowlist and
+/// userinfo rejection (credential smuggling / parser-confusion attacks where
+/// a crafted `user@host` component overrides the caller's intended target).
+fn reject_scheme_and_userinfo(parsed: &url::Url, input: &str) -> Result<()> {
     let scheme = parsed.scheme();
     if !ALLOWED_SCHEMES.contains(&scheme) {
         return Err(Error::Config(format!(
@@ -71,18 +99,17 @@ pub fn validate_url(input: &str) -> Result<()> {
             ALLOWED_SCHEMES.join(", ")
         )));
     }
-
-    // (2) Reject embedded userinfo to prevent credential smuggling and
-    //     parser-confusion attacks where a crafted `user@host` component
-    //     overrides the caller's intended target.
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(Error::Config(format!(
             "URL '{input}' must not contain userinfo (user:pass@host). \
              Pass credentials via the connector's explicit auth config."
         )));
     }
+    Ok(())
+}
 
-    // (3) Host presence and non-emptiness.
+/// Check (3) documented on [`validate_url`]: host presence and non-emptiness.
+fn require_host<'a>(parsed: &'a url::Url, input: &str) -> Result<url::Host<&'a str>> {
     let host = parsed
         .host()
         .ok_or_else(|| Error::Config(format!("URL '{input}' is missing a host component")))?;
@@ -93,18 +120,7 @@ pub fn validate_url(input: &str) -> Result<()> {
             )));
         }
     }
-
-    // Local development escape hatch: bypass checks (4) and (5) only.
-    let allow_private = std::env::var("VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS")
-        .ok()
-        .filter(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .is_some();
-    if allow_private {
-        return Ok(());
-    }
-
-    // (4) and (5) Private-range and reserved-hostname rejection.
-    reject_unsafe_host(&host, input)
+    Ok(host)
 }
 
 /// Rejects hosts that resolve to private, loopback, link-local, or
@@ -578,15 +594,16 @@ mod tests {
 
     #[test]
     fn test_validate_url_escape_hatch_permits_private_networks() {
-        std::env::set_var("VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS", "1");
-        assert!(validate_url("http://localhost:9200").is_ok());
-        assert!(validate_url("http://127.0.0.1:6379").is_ok());
-        assert!(validate_url("http://10.0.0.1").is_ok());
+        // Exercises the policy core directly: mutating the process-global
+        // environment from a test races sibling tests under the default
+        // parallel runner.
+        assert!(validate_url_with_policy("http://localhost:9200", true).is_ok());
+        assert!(validate_url_with_policy("http://127.0.0.1:6379", true).is_ok());
+        assert!(validate_url_with_policy("http://10.0.0.1", true).is_ok());
         // Scheme and userinfo checks remain active with the escape
         // hatch enabled — regression guard for defense-in-depth.
-        assert!(validate_url("http://user:pass@localhost").is_err());
-        assert!(validate_url("file:///etc/passwd").is_err());
-        std::env::remove_var("VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS");
+        assert!(validate_url_with_policy("http://user:pass@localhost", true).is_err());
+        assert!(validate_url_with_policy("file:///etc/passwd", true).is_err());
     }
 
     #[test]

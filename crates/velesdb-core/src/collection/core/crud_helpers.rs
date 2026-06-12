@@ -109,12 +109,17 @@ impl Collection {
                 let training: Vec<Vec<f32>> =
                     buffer.iter().map(|(_, vector)| vector.clone()).collect();
                 let num_centroids = 256usize.min(training.len().max(2));
-                *quantizer_guard = ProductQuantizer::train(
+                let trained = ProductQuantizer::train(
                     &training,
                     auto_num_subspaces(point.vector.len()),
                     num_centroids,
                 )
                 .ok();
+                #[cfg(feature = "persistence")]
+                if let Some(ref pq) = trained {
+                    let _ = pq.save_codebook(&self.path);
+                }
+                *quantizer_guard = trained;
                 backfill_samples = buffer.drain(..).collect();
             }
         }

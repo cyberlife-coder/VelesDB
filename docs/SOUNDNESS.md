@@ -1,17 +1,19 @@
 # VelesDB Soundness Documentation
 
 > **Purpose**: Enable Rust senior reviewers to audit unsafe code without reading the entire codebase.
-> **Last Updated**: 2026-04-09 (full production unsafe audit — 32 source files)
+> **Last Updated**: 2026-06-12 (full production unsafe audit — 34 source files;
+> inventory: `grep -rlE 'unsafe (\{|fn|impl)' crates/velesdb-core/src --include='*.rs'`,
+> test-only files excluded)
 
 ## Table of Contents
 
 1. [Overview](#overview)
 2. [SIMD Intrinsics](#simd-intrinsics)
 3. [Memory Allocation](#memory-allocation)
-4. [Memory Pool](#memory-pool)
-5. [Memory-Mapped I/O](#memory-mapped-io)
-6. [Pointer Operations](#pointer-operations)
-7. [HNSW Graph Unsafe Operations](#hnsw-graph-unsafe-operations)
+4. [Memory-Mapped I/O](#memory-mapped-io)
+5. [Pointer Operations](#pointer-operations)
+6. [HNSW Graph Unsafe Operations](#hnsw-graph-unsafe-operations)
+7. [API-Contract `unsafe` (No UB)](#api-contract-unsafe-no-ub)
 8. [Concurrency](#concurrency)
 9. [FFI Boundaries](#ffi-boundaries)
 10. [Soundness Checklist](#soundness-checklist)
@@ -28,18 +30,23 @@ VelesDB uses `unsafe` code in the following categories:
 | **SIMD (dispatch)** | Runtime feature detection + dispatch to ISA kernels | `simd_native/dispatch/` (`mod.rs`, `dot.rs`, `euclidean.rs`, `cosine.rs`, `hamming.rs`) |
 | **SIMD (reduction)** | Horizontal sum helpers for accumulator registers | `simd_native/reduction.rs` |
 | **SIMD (ADC)** | Asymmetric Distance Computation for PQ search | `simd_native/adc.rs` |
-| **SIMD (RaBitQ)** | AVX-512 VPOPCNTDQ for binary Hamming distance | `quantization/rabitq/` |
+| **SIMD (RaBitQ)** | AVX-512 VPOPCNTDQ for binary Hamming distance | `simd_native/x86_avx512.rs` (kernels consolidated; `quantization/rabitq*.rs` contains no `unsafe`) |
 | **SIMD (trigram)** | AVX2/AVX-512 trigram extraction | `index/trigram/simd.rs` |
+| **SIMD (bench helpers)** | Direct kernel calls behind runtime feature detection | `internal_bench.rs` |
 | **Prefetch (x86)** | Software prefetch hints (`_mm_prefetch`) | `simd_native/prefetch.rs`, `perf_optimizations.rs` |
 | **Prefetch (ARM64)** | Inline ASM `prfm` instructions | `simd_neon_prefetch.rs` |
-| **Alloc** | Custom aligned allocations + RAII | `perf_optimizations.rs`, `alloc_guard.rs`, `contiguous_ops.rs` |
-| **Memory pool** | `MaybeUninit` object pool for graph edges | `collection/graph/memory_pool/mod.rs` |
-| **Mmap** | Memory-mapped file I/O | `storage/mmap.rs`, `storage/mmap_capacity.rs`, `storage/guard.rs` |
+| **Alloc** | Custom aligned allocations + RAII | `perf_optimizations.rs`, `alloc_guard.rs`, `contiguous_ops.rs`, `contiguous_resize.rs` |
+| **Mmap** | Memory-mapped file I/O | `storage/mmap.rs`, `storage/mmap_capacity.rs`, `storage/mmap/wal_replay.rs`, `storage/guard.rs` |
 | **Pointers** | Raw pointer operations for performance | `storage/vector_bytes.rs`, `storage/compaction.rs` |
 | **HNSW unchecked** | `get_unchecked` on hot-path vector access | `index/hnsw/native/graph/neighbors.rs`, `search.rs`, `search_state.rs` |
 | **HNSW drop order** | `ManuallyDrop::drop` for field ordering | `index/hnsw/index/mod.rs`, `index/hnsw/index/vacuum.rs` |
 | **Send/Sync** | Manual `Send`/`Sync` impls | `index/hnsw/native_inner.rs`, `simd_native/dispatch/mod.rs` |
+| **API-contract marker** | `unsafe fn` flagging a logical (not memory) contract | `collection/any_collection.rs` |
 | **FFI** | Python (PyO3), WASM, Mobile bindings | `velesdb-python/`, `velesdb-wasm/`, `velesdb-mobile/` |
+
+> The former `MaybeUninit` graph-edge memory pool
+> (`collection/graph/memory_pool/`) has been **removed from the codebase**; its
+> section was dropped from this audit accordingly.
 
 ---
 
@@ -159,6 +166,9 @@ in-place vector normalization using `_mm256_mul_ps`.
 - `simd_level()` caches `OnceLock<SimdLevel>` from `is_x86_feature_detected!`
 - Every `unsafe` call site is preceded by an `simd_level()` match arm
 - Dimension assertions are in the public API before any unsafe call
+- `DistanceEngine::dispatch` enforces `assert_eq!` (release mode included) on
+  both input lengths and the engine dimension: kernels are pre-resolved for a
+  fixed dimension, so a mismatched call would otherwise read out of bounds
 
 ### Module: `crates/velesdb-core/src/simd_native/reduction.rs`
 
@@ -295,9 +305,27 @@ pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
 2. Bounds checking: `i + 34 <= len` before 32-byte access
 3. Prefetch addresses are within allocated buffer
 
+### Module: `crates/velesdb-core/src/internal_bench.rs`
+
+**Functions**: `cosine_avx2_2acc()`, `cosine_avx2_4acc()`, `cosine_avx512()` —
+hidden bench-only helpers that call the AVX2/AVX-512 cosine kernels directly
+(bypassing the dispatcher) for internal performance comparisons.
+
+**Invariants**:
+1. Each helper checks `is_x86_feature_detected!("avx2")` + `"fma"` (or
+   `"avx512f"`) immediately before the unsafe call and returns `None` when the
+   feature is absent
+2. The called kernels are the same `#[target_feature]` functions audited in
+   the `x86_avx2/` and `x86_avx512.rs` sections above; slice-length contracts
+   are identical
+3. The module is compiled into the production crate (`pub mod internal_bench`)
+   but is only reachable from benchmark harnesses
+
 ### RaBitQ SIMD (Binary Hamming Distance)
 
-**Module**: `crates/velesdb-core/src/quantization/rabitq/` (SIMD kernels)
+**Module**: `crates/velesdb-core/src/simd_native/x86_avx512.rs` (binary Hamming
+kernels; dispatched from `simd_native/dispatch/hamming.rs`. The
+`quantization/rabitq*.rs` files contain no `unsafe`.)
 
 **Function**: `hamming_binary_avx512_vpopcntdq()`
 
@@ -446,6 +474,27 @@ unsafe {
 unsafe { dealloc(self.data.as_ptr().cast::<u8>(), layout); }
 ```
 
+### Module: `crates/velesdb-core/src/contiguous_resize.rs`
+
+**Struct**: `ContiguousVectors` (impl block — capacity growth path)
+
+**Critical Operations**:
+1. `alloc_and_copy()` - allocates the new buffer via `AllocGuard::new_zeroed`
+   and migrates existing vectors with `ptr::copy_nonoverlapping`
+2. Resize epilogue - `dealloc` of the old buffer after the copy succeeds
+
+**Invariants**:
+1. Source (`src`) and destination (`new_data`) are distinct allocations, so
+   `copy_nonoverlapping` never aliases; both are `NonNull` and 64-byte aligned
+   by `Self::layout`
+2. `copy_size = count * dimension` is bounded by the old allocation
+   (`count <= capacity`) and by the new layout (`new_capacity > capacity`)
+3. `AllocGuard` provides panic-safety: if the copy panics, the guard frees the
+   new buffer; ownership transfers via `guard.into_raw()` only after success
+4. The old buffer is deallocated with the layout it was allocated with
+   (`old_layout` recomputed from `dimension`/`capacity`), and only after
+   `self.data` is about to be replaced — state update is all-or-nothing
+
 ### Module: `crates/velesdb-core/src/alloc_guard.rs`
 
 **Struct**: `AllocGuard` - RAII guard for raw allocations
@@ -482,57 +531,6 @@ impl Drop for AllocGuard {
 unsafe impl Send for AllocGuard {}
 // NOT Sync - concurrent access to raw memory is unsafe
 ```
-
----
-
-## Memory Pool
-
-### Module: `crates/velesdb-core/src/collection/graph/memory_pool/mod.rs`
-
-**Struct**: `MemoryPool<T>` - Free-list based object pool using `MaybeUninit<T>`
-
-**Critical Operations**:
-1. `grow()` / `grow_for_batch()` - `Vec::set_len()` on `MaybeUninit<T>` chunks
-2. `store()` - `drop_in_place` on previously initialized slot, then `MaybeUninit::write`
-3. `get()` - `MaybeUninit::assume_init_ref()` on initialized slots
-4. `deallocate()` - `drop_in_place` to run destructor before slot reuse
-5. `Drop for MemoryPool<T>` - `drop_in_place` on all initialized slots
-6. `prefetch()` - `_mm_prefetch` on slot pointers (x86_64)
-
-**Invariants**:
-1. `set_len(chunk_size)` is valid because `MaybeUninit<T>` has no initialization
-   requirement - capacity was allocated via `Vec::with_capacity`
-2. `assume_init_ref()` is called ONLY when `initialized.contains(&index)` is true,
-   meaning `store()` previously wrote a value at that slot
-3. `drop_in_place` is called ONLY when `initialized.remove(&index)` succeeds,
-   confirming the slot contains a valid `T`
-4. `Drop` iterates only the `initialized` set - never drops uninitialized memory
-5. `free_lookup: FxHashSet` prevents duplicate entries in the free list (idempotent dealloc)
-
-**Why It's Sound**:
-```rust
-// grow: SAFETY: `set_len` is valid because elements are `MaybeUninit<T>`.
-// - Condition 1: Capacity was allocated for `chunk_size` elements.
-// - Condition 2: `MaybeUninit<T>` has no initialization requirement.
-unsafe { chunk.set_len(self.chunk_size); }
-
-// get: SAFETY: `assume_init_ref` requires slot initialization.
-// - Condition 1: `initialized` set confirms `store()` initialized this slot.
-if chunk_idx < self.chunks.len() && self.initialized.contains(&index.0) {
-    Some(unsafe { self.chunks[chunk_idx][slot_idx].assume_init_ref() })
-}
-
-// deallocate: SAFETY: `drop_in_place` requires an initialized value.
-// - Condition 1: `initialized.remove(index)` confirms previous initialization.
-if self.initialized.remove(&index.0) {
-    unsafe { std::ptr::drop_in_place(self.chunks[chunk_idx][slot_idx].as_mut_ptr()); }
-}
-```
-
-**Forbidden Scenarios**:
-- Calling `assume_init_ref()` on a slot that was allocated but never `store()`-d
-- Calling `drop_in_place` on an uninitialized slot (would be UB)
-- Double-dropping a slot (prevented by `initialized` set tracking)
 
 ---
 
@@ -589,6 +587,32 @@ self.data_file.set_len(new_len)?;
 // - Condition 3: File remains open with read+write permissions.
 *mmap = unsafe { MmapMut::map_mut(&self.data_file)? };
 self.remap_epoch.fetch_add(1, Ordering::Release);
+```
+
+### Module: `crates/velesdb-core/src/storage/mmap/wal_replay.rs`
+
+**Struct**: `ReplayTarget` — grows the mmap during CRC-framed WAL replay so
+recovered vectors extending past the last flushed size are not dropped.
+
+**Critical Operation**: `ensure_capacity()` remaps via
+`unsafe { MmapMut::map_mut(self.data_file)? }` after growing the backing file.
+
+**Invariants**:
+1. `data_file.set_len(new_len)` is called BEFORE remapping
+   (`new_len = required_len + MIN_GROWTH`, mirroring the live growth floor),
+   so the file fully covers the new mapping range
+2. The old mmap is flushed (`mmap.flush()`) before the remap and dropped on
+   assignment
+3. `data_file` is the read+write handle that owns the file; replay runs during
+   `Collection::open`, before any concurrent reader exists, so no guard/epoch
+   coordination is needed on this path
+
+**Why It's Sound**:
+```rust
+self.data_file.set_len(new_len)?;
+// SAFETY: `set_len(new_len)` resized the backing file to fully cover the
+// mapping range before remapping; the old mapping is dropped on assign.
+*self.mmap = unsafe { MmapMut::map_mut(self.data_file)? };
 ```
 
 ### Module: `crates/velesdb-core/src/storage/guard.rs`
@@ -789,6 +813,33 @@ unsafe impl Send for NativeHnswInner {}
 // - Condition 2: Exposed APIs do not bypass synchronization primitives.
 unsafe impl Sync for NativeHnswInner {}
 ```
+
+---
+
+## API-Contract `unsafe` (No UB)
+
+### Module: `crates/velesdb-core/src/collection/any_collection.rs`
+
+**Function**: `AnyCollection::into_vector_unchecked()` — converts any
+collection variant (`Vector`/`Graph`/`Metadata`) into a `VectorCollection`
+without checking the variant.
+
+**Why it is marked `unsafe`**: violating the caller contract is **not**
+memory-unsafe and cannot cause UB. The marker flags a *logical* contract:
+calling vector-specific methods on a `VectorCollection` obtained from a
+`Graph` or `Metadata` variant yields logically unsound results (empty or
+misleading), because the underlying storage holds no homogeneous vector index.
+
+**Invariants (caller contract)**:
+1. Branch on `is_vector()` first and only invoke vector-specific methods on
+   the `Vector` variant, **or**
+2. Restrict usage to the surface shared by all three collection kinds
+   (`config`, `flush`, `diagnostics`, `name`, `point_count`,
+   `execute_query_str`) — this is what the Python/Mobile/Tauri bindings do.
+
+Prefer the safe, variant-checked `into_vector()` (returns `Result`) when the
+caller can branch. A type-safe refactor eliminating this method is tracked in
+`docs/ARCHITECTURE.md` (pre-seed audit finding F2.2).
 
 ---
 

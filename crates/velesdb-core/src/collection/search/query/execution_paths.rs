@@ -23,6 +23,14 @@ impl Collection {
     }
 
     /// Extracts and validates the anchor alias from the first node in a MATCH predicate.
+    ///
+    /// Mirrors the V011 anchor rule (`validation_anchor.rs`): an anchor alias
+    /// declared in FROM/JOIN binds explicitly; otherwise the leftmost node
+    /// binds implicitly to the FROM rows, guarded by G1 (a declared alias in
+    /// a non-anchor position) and G3 (no `@collection` override on the
+    /// anchor). G2 (implicit anchor shared across MATCH predicates) is
+    /// validation-only: it needs the whole WHERE tree, and every execution
+    /// path runs `QueryValidator::validate` before reaching this point.
     fn resolve_anchor_alias(
         predicate: &crate::velesql::GraphMatchPredicate,
         from_aliases: &[String],
@@ -39,15 +47,51 @@ impl Collection {
             )
         })?;
 
-        // BUG-8: Check anchor alias against ALL aliases visible in scope.
-        if !from_aliases.is_empty() && !from_aliases.iter().any(|a| a == &anchor_alias) {
+        // BUG-8: explicit anchor — or a bare FROM, where any anchor is accepted.
+        if from_aliases.is_empty() || from_aliases.iter().any(|a| a == &anchor_alias) {
+            return Ok(anchor_alias);
+        }
+        Self::check_implicit_anchor_guards(predicate, &anchor_alias, from_aliases)?;
+        // Implicit anchor: the leftmost node binds to the FROM rows.
+        Ok(anchor_alias)
+    }
+
+    /// Runtime G1/G3 guards for an anchor alias not declared in FROM/JOIN
+    /// (implicit binding candidate).
+    fn check_implicit_anchor_guards(
+        predicate: &crate::velesql::GraphMatchPredicate,
+        anchor_alias: &str,
+        from_aliases: &[String],
+    ) -> Result<()> {
+        // G1: a declared alias elsewhere in the pattern means the anchor must
+        // be that alias (the pattern direction is likely inverted).
+        let declared = predicate
+            .pattern
+            .nodes
+            .iter()
+            .skip(1)
+            .filter_map(|node| node.alias.as_deref())
+            .find(|alias| from_aliases.iter().any(|f| f == alias));
+        if let Some(declared) = declared {
             return Err(crate::error::Error::Config(format!(
-                "MATCH predicate anchor alias '{}' must match one of the FROM/JOIN aliases: {:?}",
-                anchor_alias, from_aliases
+                "MATCH predicate anchor alias '{anchor_alias}' must be the declared \
+                 FROM/JOIN alias '{declared}' used elsewhere in the pattern"
             )));
         }
-
-        Ok(anchor_alias)
+        // G3: a @collection anchor resolves outside the FROM collection and
+        // cannot bind implicitly to its rows.
+        if predicate
+            .pattern
+            .nodes
+            .first()
+            .is_some_and(|node| node.collection.is_some())
+        {
+            return Err(crate::error::Error::Config(format!(
+                "MATCH predicate anchor alias '{anchor_alias}' has a @collection \
+                 override; anchor on one of the FROM/JOIN aliases: {from_aliases:?}"
+            )));
+        }
+        Ok(())
     }
 
     /// Builds a `MatchClause` that returns all bindings for anchor evaluation.
@@ -138,12 +182,8 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         if let Some(text_query) = Self::extract_match_query(cond) {
             let fusion = search_opts.fusion_clause.as_ref();
-            let vector_weight = fusion.and_then(|fc| fc.vector_weight).map(|w| {
-                // Reason: f64 → f32 for API compat; weight is clamped 0.0–1.0.
-                #[allow(clippy::cast_possible_truncation)]
-                let w_f32 = w as f32;
-                w_f32
-            });
+            #[allow(clippy::cast_possible_truncation)]
+            let vector_weight = fusion.and_then(|fc| fc.vector_weight).map(|w| w as f32);
             let rrf_k = fusion.and_then(|fc| fc.k);
             // Bug #474: Extract co-occurring metadata filters (e.g. `category = 'tech'`)
             // before calling hybrid_search. Without this, metadata conditions alongside
@@ -170,14 +210,47 @@ impl Collection {
         }
         if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
             let filter = crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
-            return match cbo_strategy {
-                crate::velesql::ExecutionStrategy::GraphFirst => {
-                    Ok(self.scan_and_score_by_vector(&filter, vector, execution_limit))
-                }
-                _ => self.search_with_filter_and_opts(vector, cbo_search_k, &filter, search_opts),
-            };
+            return self.dispatch_vector_with_strategy(
+                vector,
+                &filter,
+                cbo_strategy,
+                cbo_search_k,
+                execution_limit,
+                search_opts,
+            );
         }
         self.search_with_opts(vector, execution_limit, search_opts)
+    }
+
+    /// Dispatches a filtered vector query according to the CBO strategy
+    /// (GraphFirst, Parallel, or the default VectorFirst path).
+    fn dispatch_vector_with_strategy(
+        &self,
+        vector: &[f32],
+        filter: &crate::filter::Filter,
+        cbo_strategy: crate::velesql::ExecutionStrategy,
+        cbo_search_k: usize,
+        execution_limit: usize,
+        search_opts: &QuerySearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        match cbo_strategy {
+            crate::velesql::ExecutionStrategy::GraphFirst => {
+                Ok(self.scan_and_score_by_vector(filter, vector, execution_limit))
+            }
+            crate::velesql::ExecutionStrategy::Parallel => {
+                let graph_results = self.scan_and_score_by_vector(filter, vector, execution_limit);
+                let vector_results =
+                    self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts)?;
+                let higher = self.config.read().metric.higher_is_better();
+                Ok(merge_select_parallel_results(
+                    graph_results,
+                    vector_results,
+                    higher,
+                    execution_limit,
+                ))
+            }
+            _ => self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts),
+        }
     }
 
     /// Handles the metadata-only (`(None, None, Some(cond))`) query path.
@@ -225,7 +298,14 @@ impl Collection {
             tracing::debug!("dispatch_metadata_only: indexed path succeeded");
             return indexed;
         }
-        tracing::debug!("dispatch_metadata_only: indexed path returned None, trying BM25");
+        tracing::debug!("dispatch_metadata_only: indexed path returned None, trying mirror");
+
+        // ColumnStore payload mirror: typed columnar bitmap scan when no
+        // secondary index covers the condition. Built adaptively once enough
+        // full-scan debt accumulates (see collection/payload_mirror).
+        if let Some(mirror_results) = self.try_mirror_filter(&filter, execution_limit) {
+            return mirror_results;
+        }
 
         // Try BM25 text search for LIKE conditions before falling back to full scan.
         // When a LIKE pattern contains a word-like substring (e.g. `%google%`),
@@ -259,6 +339,34 @@ impl Collection {
         }
         // Too many bitmap hits — fall through to scan with early exit
         None
+    }
+
+    /// Attempts a `ColumnStore` payload-mirror scan for the filter.
+    ///
+    /// The mirror returns a candidate id superset from typed columnar
+    /// bitmaps; `scan_ids_with_filter` post-filters with the JSON filter,
+    /// so results are exactly those of the sequential scan path. Candidates
+    /// are hydrated in chunks so broad matches (e.g. `!=` over most rows)
+    /// stay memory-bounded and benefit from early exit at the limit.
+    ///
+    /// Returns `None` when the mirror is not built (insufficient scan debt),
+    /// or the condition is not answerable from columnar data.
+    fn try_mirror_filter(
+        &self,
+        filter: &crate::filter::Filter,
+        execution_limit: usize,
+    ) -> Option<Vec<SearchResult>> {
+        const HYDRATION_CHUNK: usize = 1024;
+        let candidate_ids = self.mirror_candidate_ids(&filter.condition)?;
+        let mut results = Vec::new();
+        for chunk in candidate_ids.chunks(HYDRATION_CHUNK) {
+            let remaining = execution_limit.saturating_sub(results.len());
+            if remaining == 0 {
+                break;
+            }
+            results.extend(self.scan_ids_with_filter(chunk, filter, remaining));
+        }
+        Some(results)
     }
 
     /// Attempts to accelerate a LIKE condition using the BM25 text index.
@@ -446,4 +554,46 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         self.search_with_opts(vector, execution_limit, search_opts)
     }
+}
+
+#[cfg(test)]
+#[path = "execution_paths_tests.rs"]
+mod execution_paths_tests;
+
+/// Merges GraphFirst and VectorFirst `SearchResult` sets for the SELECT Parallel
+/// path (sequential execution, union semantics — best score wins per ID).
+fn merge_select_parallel_results(
+    graph: Vec<SearchResult>,
+    vector: Vec<SearchResult>,
+    higher_is_better: bool,
+    limit: usize,
+) -> Vec<SearchResult> {
+    let mut by_id: rustc_hash::FxHashMap<u64, SearchResult> =
+        rustc_hash::FxHashMap::with_capacity_and_hasher(
+            graph.len() + vector.len(),
+            rustc_hash::FxBuildHasher,
+        );
+    for r in graph.into_iter().chain(vector) {
+        by_id
+            .entry(r.point.id)
+            .and_modify(|existing| {
+                let better = if higher_is_better {
+                    r.score > existing.score
+                } else {
+                    r.score < existing.score
+                };
+                if better {
+                    *existing = r.clone();
+                }
+            })
+            .or_insert(r);
+    }
+    let mut merged: Vec<SearchResult> = by_id.into_values().collect();
+    if higher_is_better {
+        merged.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
+    } else {
+        merged.sort_unstable_by(|a, b| a.score.total_cmp(&b.score));
+    }
+    merged.truncate(limit);
+    merged
 }

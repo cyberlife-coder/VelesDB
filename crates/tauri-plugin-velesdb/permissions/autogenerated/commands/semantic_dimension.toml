@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-semantic-dimension"
+description = "Enables the semantic_dimension command without any pre-configured scope."
+commands.allow = ["semantic_dimension"]
+
+[[permission]]
+identifier = "deny-semantic-dimension"
+description = "Denies the semantic_dimension command without any pre-configured scope."
+commands.deny = ["semantic_dimension"]

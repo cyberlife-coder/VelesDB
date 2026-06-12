@@ -157,7 +157,7 @@ pub(super) fn batch_with_prefetch(
 pub fn warmup_simd_cache() {
     // Log detected SIMD level for diagnostics (skipped in WASM)
     #[cfg(feature = "persistence")]
-    eprintln!("[velesdb] SIMD dispatch: {:?} detected", simd_level());
+    tracing::info!("SIMD dispatch: {:?} detected", simd_level());
 
     let warmup_size = 768;
     let a: Vec<f32> = vec![0.01; warmup_size];
@@ -221,12 +221,16 @@ impl DistanceEngine {
         }
     }
 
-    /// Dispatches to a pre-resolved kernel with debug dimension checks.
+    /// Dispatches to a pre-resolved kernel with release-mode dimension checks.
+    ///
+    /// The kernels were resolved for `self.dimension` at construction time;
+    /// calling them with a different length would read out of bounds, so the
+    /// asserts must hold in release builds (same policy as `dot_product_native`).
     #[allow(clippy::inline_always)]
     #[inline(always)]
     fn dispatch(&self, kernel: fn(&[f32], &[f32]) -> f32, a: &[f32], b: &[f32]) -> f32 {
-        debug_assert_eq!(a.len(), b.len(), "Vector dimensions must match");
-        debug_assert_eq!(
+        assert_eq!(a.len(), b.len(), "Vector dimensions must match");
+        assert_eq!(
             a.len(),
             self.dimension,
             "Vector dimension mismatch with engine"

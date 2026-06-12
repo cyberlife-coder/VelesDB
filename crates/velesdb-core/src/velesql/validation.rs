@@ -1,8 +1,8 @@
 //! Query validation for VelesQL (EPIC-044 US-007).
 //!
 //! Type definitions (`ValidationError`, `ValidationErrorKind`, `ValidationConfig`,
-//! `ComplexityStats`) live in `validation_types.rs` to keep each file under
-//! the 500 NLOC limit.
+//! `ComplexityStats`) live in `validation_types.rs` and the V011 MATCH anchor
+//! rule in `validation_anchor.rs`, to keep each file under the 500 NLOC limit.
 
 use super::ast::{ArithmeticExpr, Condition, DmlStatement, OrderByExpr, Query, SelectColumns};
 use super::error::{ParseError, ParseErrorKind};
@@ -72,7 +72,12 @@ impl QueryValidator {
         }
         Self::validate_similarity_context(stmt)?;
         Self::validate_qualified_wildcards(stmt)?;
-        Self::validate_vector_group_by(stmt)
+        Self::validate_vector_group_by(stmt)?;
+        stmt.where_clause.as_ref().map_or(Ok(()), |condition| {
+            // V011 anchor rule (explicit and implicit binding, guards
+            // G1/G2/G3) lives in `validation_anchor.rs`.
+            super::validation_anchor::walk_graph_match_anchors(condition, &stmt.from_alias)
+        })
     }
 
     /// Validates that `similarity()` in SELECT or ORDER BY has a score context.
@@ -496,16 +501,17 @@ fn requires_select_validation(query: &Query) -> bool {
         && !query.is_admin_query()
 }
 
-/// Rejects subqueries appearing in any WHERE clause of the query.
+/// Rejects subqueries appearing in any WHERE or HAVING clause of the query.
 ///
 /// Subqueries are parsed but not yet executed: left unchecked, a predicate like
 /// `WHERE price > (SELECT AVG(price) FROM products)` silently evaluates to NULL,
 /// yielding wrong/empty results (or a silently no-op UPDATE) instead of an error.
+/// `HAVING COUNT(*) > (SELECT ...)` would likewise silently filter every group.
 fn reject_subqueries(query: &Query) -> Result<(), ValidationError> {
-    if where_clauses(query)
+    let in_where = where_clauses(query)
         .into_iter()
-        .any(Condition::has_subquery)
-    {
+        .any(Condition::has_subquery);
+    if in_where || query.has_having_subquery() {
         return Err(ValidationError::new(
             ValidationErrorKind::SubqueryNotExecutable,
             None,

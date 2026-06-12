@@ -10,14 +10,19 @@ import type {
   AddEdgeRequest,
   GetEdgesOptions,
   GraphEdge,
+  GraphNodeId,
   TraverseRequest,
   TraverseParallelRequest,
   TraverseResponse,
   DegreeResponse,
   GraphCollectionConfig,
+  RelateRequest,
+  RelateResponse,
+  RelationsResponse,
 } from '../types';
 import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath } from './shared';
+import { parseVelesError, EdgeNotFoundError } from '../errors';
 
 /** Minimal transport interface for graph operations. */
 export type GraphTransport = BaseTransport;
@@ -192,4 +197,109 @@ export async function traverseParallel(
   throwOnError(response, `Collection '${collection}'`);
 
   return toTraverseResponse(response.data!);
+}
+
+/** Wire shape of a RelateResponse from the server. */
+interface RelateWire {
+  edge_id: number | string;
+}
+
+/** Wire shape of a RelationEdge from the server. */
+interface RelationEdgeWire {
+  id: number | string;
+  source: number | string;
+  target: number | string;
+  rel_type: string;
+  properties?: Record<string, unknown>;
+}
+
+/** Wire shape of a RelationsResponse from the server. */
+interface RelationsWire {
+  edges: RelationEdgeWire[];
+  count: number;
+}
+
+/** Create a typed relation edge between two points. Returns the allocated edge ID. */
+export async function relate(
+  transport: GraphTransport,
+  collection: string,
+  req: RelateRequest
+): Promise<RelateResponse> {
+  const response = await transport.requestJson<RelateWire>(
+    'POST',
+    `${collectionPath(collection)}/relations`,
+    {
+      source: req.source,
+      target: req.target,
+      rel_type: req.relType,
+      properties: req.properties ?? {},
+    }
+  );
+
+  throwOnError(response, `Collection '${collection}'`);
+
+  return { edgeId: response.data!.edge_id };
+}
+
+/** Remove a relation edge by ID. Returns `true` if removed. */
+export async function unrelate(
+  transport: GraphTransport,
+  collection: string,
+  edgeId: GraphNodeId
+): Promise<boolean> {
+  const response = await transport.requestJson(
+    'DELETE',
+    `${collectionPath(collection)}/relations/${encodeURIComponent(String(edgeId))}`
+  );
+
+  if (response.error !== undefined) {
+    const { code, message } = response.error;
+    const err = parseVelesError(code, message);
+    if (err instanceof EdgeNotFoundError) { return false; }
+    if (code === 'NOT_FOUND') { return false; }
+    throwOnError(response, `Collection '${collection}'`);
+  }
+  return true;
+}
+
+/** List outgoing relation edges for a point. */
+export async function getRelations(
+  transport: GraphTransport,
+  collection: string,
+  pointId: GraphNodeId
+): Promise<RelationsResponse> {
+  const response = await transport.requestJson<RelationsWire>(
+    'GET',
+    `${collectionPath(collection)}/points/${encodeURIComponent(String(pointId))}/relations`
+  );
+
+  throwOnError(response, `Collection '${collection}'`);
+
+  const raw = response.data!;
+  return {
+    edges: raw.edges.map(e => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      relType: e.rel_type,
+      properties: e.properties,
+    })),
+    count: raw.count,
+  };
+}
+
+/** Durably set (or refresh) the TTL of a point. */
+export async function setTtlDurable(
+  transport: GraphTransport,
+  collection: string,
+  pointId: GraphNodeId,
+  ttlSeconds: number
+): Promise<void> {
+  const response = await transport.requestJson(
+    'PATCH',
+    `${collectionPath(collection)}/points/${encodeURIComponent(String(pointId))}/ttl`,
+    { ttl_seconds: ttlSeconds }
+  );
+
+  throwOnError(response, `Collection '${collection}'`);
 }

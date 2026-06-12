@@ -591,7 +591,10 @@ fn test_node_cost_calculations() {
     let vs_cost = QueryPlan::node_cost(&PlanNode::VectorSearch(vs_plan));
     assert!((vs_cost - 0.05).abs() < 1e-5);
 
-    let limit_cost = QueryPlan::node_cost(&PlanNode::Limit(LimitPlan { count: 10 }));
+    let limit_cost = QueryPlan::node_cost(&PlanNode::Limit(LimitPlan {
+        count: 10,
+        is_default: false,
+    }));
     assert!((limit_cost - 0.001).abs() < 1e-5);
 
     let ts_cost = QueryPlan::node_cost(&PlanNode::TableScan(TableScanPlan {
@@ -1211,5 +1214,93 @@ fn test_query_cost_estimator_with_feedback_overrides_ms_per_unit() {
     assert!(
         (default_est.estimated_latency_ms / feedback_est.estimated_latency_ms - 2.0).abs() < 0.01,
         "ratio should be 2.0 (0.1/0.05)"
+    );
+}
+
+// =========================================================================
+// Implicit default LIMIT contract: EXPLAIN must be honest about the
+// engine-side `DEFAULT_SELECT_LIMIT` applied to SELECT without LIMIT.
+// =========================================================================
+
+#[test]
+fn test_select_without_limit_exposes_default_limit_node() {
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "docs".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: None,
+        order_by: None,
+        limit: None,
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let plan = QueryPlan::from_select(&stmt);
+    let tree = plan.to_tree();
+    assert!(
+        tree.contains("Limit: 10 (default)"),
+        "implicit default LIMIT must surface in the plan: {tree}"
+    );
+
+    let json = plan.to_json().expect("JSON should serialize");
+    assert!(
+        json.contains("\"is_default\":true") || json.contains("\"is_default\": true"),
+        "default marker must serialize: {json}"
+    );
+}
+
+#[test]
+fn test_select_with_explicit_limit_has_no_default_marker() {
+    let stmt = SelectStatement {
+        distinct: crate::velesql::DistinctMode::None,
+        columns: SelectColumns::All,
+        from: "docs".to_string(),
+        from_alias: vec![],
+        joins: vec![],
+        where_clause: None,
+        order_by: None,
+        limit: Some(5),
+        offset: None,
+        with_clause: None,
+        group_by: None,
+        having: None,
+        fusion_clause: None,
+    };
+
+    let plan = QueryPlan::from_select(&stmt);
+    let tree = plan.to_tree();
+    assert!(tree.contains("Limit: 5"), "tree: {tree}");
+    assert!(
+        !tree.contains("(default)"),
+        "explicit LIMIT must not be flagged as default: {tree}"
+    );
+}
+
+#[test]
+fn test_match_query_plan_has_no_implicit_limit() {
+    let query =
+        crate::velesql::Parser::parse("MATCH (n:Item) RETURN n").expect("parse MATCH query");
+    let plan = QueryPlan::from_query(&query);
+    let tree = plan.to_tree();
+    assert!(
+        !tree.contains("Limit:"),
+        "MATCH without LIMIT has no implicit limit: {tree}"
+    );
+}
+
+#[test]
+fn test_compound_query_plan_has_no_implicit_limit() {
+    let query = crate::velesql::Parser::parse("SELECT * FROM a UNION SELECT * FROM b")
+        .expect("parse compound query");
+    let plan = QueryPlan::from_query(&query);
+    let tree = plan.to_tree();
+    assert!(
+        !tree.contains("Limit:"),
+        "compound queries without LIMIT have no implicit limit: {tree}"
     );
 }

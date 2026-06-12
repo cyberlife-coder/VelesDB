@@ -46,6 +46,7 @@ function buildBackend(): IVelesDBBackend {
     hybridSearch: vi.fn(() => Promise.resolve([])),
     multiQuerySearch: vi.fn(() => Promise.resolve([])),
     searchIds: vi.fn(() => Promise.resolve([])),
+    sparseSearchNamed: vi.fn(() => Promise.resolve([])),
 
     scroll: vi.fn(() => Promise.resolve({ points: [] })),
     trainPq: vi.fn(() => Promise.resolve('ok')),
@@ -75,6 +76,10 @@ function buildBackend(): IVelesDBBackend {
     getNodePayload: vi.fn(() => Promise.resolve({} as never)),
     upsertNodePayload: vi.fn(() => Promise.resolve()),
     graphSearch: vi.fn(() => Promise.resolve({} as never)),
+    relate: vi.fn(() => Promise.resolve({ edgeId: 1 })),
+    unrelate: vi.fn(() => Promise.resolve(true)),
+    getRelations: vi.fn(() => Promise.resolve({ edges: [], count: 0 })),
+    setTtlDurable: vi.fn(() => Promise.resolve()),
 
     addEdge: vi.fn(() => Promise.resolve()),
     getEdges: vi.fn(() => Promise.resolve([])),
@@ -96,6 +101,8 @@ function buildBackend(): IVelesDBBackend {
     recallEpisodicEvents: vi.fn(() => Promise.resolve([])),
     storeProceduralPattern: vi.fn(() => Promise.resolve()),
     matchProceduralPatterns: vi.fn(() => Promise.resolve([])),
+    recallRecentEvents: vi.fn(() => Promise.resolve([])),
+    recallOlderThanEvents: vi.fn(() => Promise.resolve([])),
   } as unknown as IVelesDBBackend;
 }
 
@@ -221,6 +228,22 @@ describe('VelesDB — search / admin / scroll delegations (search-methods.ts)', 
   it('searchIds delegates', async () => {
     await db.searchIds('c', [0.1], { k: 3 });
     expect(backend.searchIds).toHaveBeenCalledWith('c', [0.1], { k: 3 });
+  });
+
+  it('sparseSearchNamed validates collection + index name and delegates', async () => {
+    await db.sparseSearchNamed('c', { 1: 0.5 }, 'splade', { k: 3 });
+    expect(backend.sparseSearchNamed).toHaveBeenCalledWith(
+      'c',
+      { 1: 0.5 },
+      'splade',
+      { k: 3 }
+    );
+    await expect(db.sparseSearchNamed('', { 1: 0.5 }, 'splade')).rejects.toThrow(
+      ValidationError
+    );
+    await expect(db.sparseSearchNamed('c', { 1: 0.5 }, '')).rejects.toThrow(
+      ValidationError
+    );
   });
 
   it('query validates collection + string and delegates', async () => {
@@ -433,6 +456,83 @@ describe('VelesDB — graph delegations (graph-methods.ts)', () => {
       db.graphSearch('', { vector: [0.1], k: 5 })
     ).rejects.toThrow(ValidationError);
   });
+
+  it('traverseParallel rejects sources that are not numbers or strings', async () => {
+    await expect(
+      db.traverseParallel('c', { sources: [1, {} as never] })
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it('relate validates relType + ids and delegates', async () => {
+    await db.relate('c', { source: 1, target: '2', relType: 'KNOWS' });
+    expect(backend.relate).toHaveBeenCalledWith('c', {
+      source: 1,
+      target: '2',
+      relType: 'KNOWS',
+    });
+
+    await expect(
+      db.relate('', { source: 1, target: 2, relType: 'KNOWS' })
+    ).rejects.toThrow(ValidationError);
+    await expect(
+      db.relate('c', { source: 1, target: 2, relType: '' })
+    ).rejects.toThrow(ValidationError);
+    await expect(
+      db.relate('c', { source: {} as never, target: 2, relType: 'KNOWS' })
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it('unrelate validates edge id and delegates (string | number)', async () => {
+    await db.unrelate('c', 7);
+    expect(backend.unrelate).toHaveBeenCalledWith('c', 7);
+
+    await db.unrelate('c', '18446744073709551615');
+    expect(backend.unrelate).toHaveBeenCalledWith('c', '18446744073709551615');
+
+    await expect(db.unrelate('', 7)).rejects.toThrow(ValidationError);
+    await expect(db.unrelate('c', {} as never)).rejects.toThrow(
+      ValidationError
+    );
+  });
+
+  it('getRelations validates point id and delegates (string | number)', async () => {
+    await db.getRelations('c', 7);
+    expect(backend.getRelations).toHaveBeenCalledWith('c', 7);
+
+    await db.getRelations('c', '18446744073709551615');
+    expect(backend.getRelations).toHaveBeenCalledWith(
+      'c',
+      '18446744073709551615'
+    );
+
+    await expect(db.getRelations('', 7)).rejects.toThrow(ValidationError);
+    await expect(db.getRelations('c', {} as never)).rejects.toThrow(
+      ValidationError
+    );
+  });
+
+  it('setTtlDurable validates point id + ttlSeconds and delegates', async () => {
+    await db.setTtlDurable('c', 7, 3600);
+    expect(backend.setTtlDurable).toHaveBeenCalledWith('c', 7, 3600);
+
+    await db.setTtlDurable('c', '18446744073709551615', 0);
+    expect(backend.setTtlDurable).toHaveBeenCalledWith(
+      'c',
+      '18446744073709551615',
+      0
+    );
+
+    await expect(db.setTtlDurable('', 7, 60)).rejects.toThrow(ValidationError);
+    await expect(db.setTtlDurable('c', {} as never, 60)).rejects.toThrow(
+      ValidationError
+    );
+    await expect(db.setTtlDurable('c', 7, -1)).rejects.toThrow(
+      ValidationError
+    );
+    await expect(
+      db.setTtlDurable('c', 7, '60' as never)
+    ).rejects.toThrow(ValidationError);
+  });
 });
 
 describe('VelesDB — agent memory factory', () => {
@@ -454,5 +554,33 @@ describe('VelesDB — agent memory factory', () => {
     const result = await mem.deleteMemory('facts', 42);
     expect(backend.delete).toHaveBeenCalledWith('facts', 42);
     expect(result).toBe(true);
+  });
+
+  it('recallRecent delegates to backend.recallRecentEvents (with and without since)', async () => {
+    const { db, backend } = setup();
+    const mem = db.agentMemory();
+
+    await mem.recallRecent('events');
+    expect(backend.recallRecentEvents).toHaveBeenCalledWith(
+      'events',
+      undefined
+    );
+
+    await mem.recallRecent('events', 1_700_000_000);
+    expect(backend.recallRecentEvents).toHaveBeenCalledWith(
+      'events',
+      1_700_000_000
+    );
+  });
+
+  it('recallOlderThan delegates to backend.recallOlderThanEvents', async () => {
+    const { db, backend } = setup();
+    const mem = db.agentMemory();
+
+    await mem.recallOlderThan('events', 1_700_000_000);
+    expect(backend.recallOlderThanEvents).toHaveBeenCalledWith(
+      'events',
+      1_700_000_000
+    );
   });
 });

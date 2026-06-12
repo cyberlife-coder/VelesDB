@@ -60,6 +60,7 @@ impl Database {
 
     pub(super) fn build_update_filter(
         where_clause: Option<&crate::velesql::Condition>,
+        params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Option<crate::Filter>> {
         let Some(condition) = where_clause else {
             return Ok(None);
@@ -72,7 +73,10 @@ impl Database {
             ));
         }
 
-        let filter_condition = crate::collection::Collection::extract_metadata_filter(condition)
+        // Resolve parameter placeholders before the filter conversion, which
+        // would otherwise silently turn them into NULL (matching no rows).
+        let resolved = crate::collection::Collection::resolve_condition_params(condition, params)?;
+        let filter_condition = crate::collection::Collection::extract_metadata_filter(&resolved)
             .ok_or_else(|| {
                 Error::Query("UPDATE WHERE produced empty metadata filter".to_string())
             })?;

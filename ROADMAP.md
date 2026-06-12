@@ -4,7 +4,7 @@ This roadmap commits to **what we are building**, **why**, and **when**. It is u
 
 It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` issues but **not committed** until they reach a milestone here.
 
-> **Last updated:** 2026-06-05 — covers v1.18.0 (current) → v1.18.0 horizon.
+> **Last updated:** 2026-06-12 — covers v2.0.0 (current) → v1.19 horizon.
 
 ---
 
@@ -16,8 +16,8 @@ It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` i
 |---|------|------------------|--------|
 | 1 | [Haystack 2.x DocumentStore integration (#349)](https://github.com/cyberlife-coder/VelesDB/issues/349) | At least one BDD test passing in CI; published in `integrations/haystack/`; first community contribution merged | ✅ Shipped in v1.14.0 / v1.14.1 — PR [#672](https://github.com/cyberlife-coder/VelesDB/pull/672) by [@CrepuscularIRIS](https://github.com/CrepuscularIRIS); `pip install haystack-velesdb` live on PyPI |
 | 2 | [Onboarding time-to-first-search < 5 min (#379)](https://github.com/cyberlife-coder/VelesDB/issues/379) | Measured on clean Ubuntu/macOS/Windows; documented in `docs/quickstart/timing-results.md`; verified via reproducible Docker harness | ✅ Shipped in v1.13.7 (Phase 6) — median across 4 paths under 26 s; [`scripts/dx-timing/run_all.sh`](scripts/dx-timing/run_all.sh) reproduces it |
-| 3 | [CBO calibration loop (#469)](https://github.com/cyberlife-coder/VelesDB/issues/469) | `COST_UNIT_TO_MS` recalibrated from real query timings; method documented in `BENCHMARKS.md`; removes `KNOWN_LIMITATIONS.md #1` | ⚠️ Phase 2 shipped in v1.15.0 — empirical EMA reported in `EXPLAIN ANALYZE` output (PR [#784](https://github.com/cyberlife-coder/VelesDB/pull/784)); full `COST_UNIT_TO_MS` empirical pin and removal of `KNOWN_LIMITATIONS.md #1` carried to v1.17.0 |
-| 4 | [Python DataFrame + Polars integration (#429)](https://github.com/cyberlife-coder/VelesDB/issues/429) | `upsert_dataframe(df)` + `search().to_polars()` round-trip; one notebook in `examples/python/` | ❌ Not shipped — carried to v1.17.0 |
+| 3 | [CBO calibration loop (#469)](https://github.com/cyberlife-coder/VelesDB/issues/469) | `COST_UNIT_TO_MS` recalibrated from real query timings; method documented in `BENCHMARKS.md`; removes `KNOWN_LIMITATIONS.md #1` | ⚠️ Phase 2 shipped in v1.15.0 — empirical EMA reported in `EXPLAIN ANALYZE` output (PR [#784](https://github.com/cyberlife-coder/VelesDB/pull/784)); full `COST_UNIT_TO_MS` empirical pin and removal of `KNOWN_LIMITATIONS.md #1` carried forward (Horizon 4) |
+| 4 | [Python DataFrame + Polars integration (#429)](https://github.com/cyberlife-coder/VelesDB/issues/429) | `upsert_dataframe(df)` + `search().to_polars()` round-trip; one notebook in `examples/python/` | ❌ Not shipped — carried forward (Horizon 4) |
 | 5 | [PyO3 SearchOptions builder (#717)](https://github.com/cyberlife-coder/VelesDB/issues/717) | Replace the wide-kwarg `Collection.search` signature with a builder pattern + deprecation cycle; remove the `clippy::too_many_arguments` allow-list | ✅ Shipped in v1.15.0 — fluent `SearchOptions` builder exposed in Python SDK (PR [#761](https://github.com/cyberlife-coder/VelesDB/pull/761), closes #717) |
 
 **Also shipped in v1.14.x:** MSRV bump 1.83 → 1.89 (#714), Dockerfile auto-sync (#715), full Python RAG framework trio (Haystack via #672), doc consistency sweep (#722), `haystack-velesdb` PyPI publishing (#723), Haystack `DuplicatePolicy.SKIP` contract fix (#726), full v1.14.2 doc alignment + fictional MSI installer removed + 14-entry tooling extension (#730), Haystack runtime gaps closed — `@component` decorator on retriever example + Haystack-filter→VelesDB-filter translator + real-Haystack CI (#731).
@@ -34,19 +34,33 @@ It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` i
 |---|------|-----|--------|
 | 1 | [HNSW <30µs index-only target (#377)](https://github.com/cyberlife-coder/VelesDB/issues/377) | Push the index-only micro-bench from 55µs to <30µs to widen the headroom on the 450µs full-path number | ✅ Shipped in v1.15.0 — `ANALYZE` now triggers in-place HNSW node reorder when fragmentation exceeds threshold; 10K-probe recall@10 off-by-one fixed (PR [#785](https://github.com/cyberlife-coder/VelesDB/pull/785), closes #377) |
 | 2 | [SDK parity: TypeScript/LangChain/LlamaIndex (#380)](https://github.com/cyberlife-coder/VelesDB/issues/380) | Close the cross-language gap so any framework user gets the same API surface | ✅ Shipped in v1.15.0 — TypeScript REST backend gains `sparseIndexName` and RSF weights (PR [#779](https://github.com/cyberlife-coder/VelesDB/pull/779), closes #380) |
-| 3 | **Reproducible head-to-head benchmark vs Qdrant + Chroma + pgvector** (Docker Compose) | Pre-seed audit P0: turn marketing claims into proven numbers | ❌ Not shipped — carried to v1.17.0 |
-| 4 | **External `unsafe` audit** (SIMD module, Cure53 / independent Rust safety expert) | Required for "data sovereignty" enterprise positioning | ❌ Pending funding (~5-15 k€); carried to v1.17.0 |
-| 5 | **`velesdb-migrate` rework decision** (12,108 LOC, 9 connectors) | Workspace inflation without measured user base — decide keep / extract / archive based on crates.io download counts, GitHub stars attributable to migration tooling, opened issues count. See `docs/reference/KNOWN_LIMITATIONS.md` § 4 | ❌ Decision deferred — carried to v1.17.0 |
+| 3 | **Reproducible head-to-head benchmark vs Qdrant + Chroma + pgvector** (Docker Compose) | Pre-seed audit P0: turn marketing claims into proven numbers | ❌ Not shipped — carried forward (Horizon 4) |
+| 4 | **External `unsafe` audit** (SIMD module, Cure53 / independent Rust safety expert) | Required for "data sovereignty" enterprise positioning | ❌ Pending funding (~5-15 k€); carried forward (Horizon 4) |
+| 5 | **`velesdb-migrate` rework decision** (12,108 LOC, 9 connectors) | Workspace inflation without measured user base — decide keep / extract / archive based on crates.io download counts, GitHub stars attributable to migration tooling, opened issues count. See `docs/reference/KNOWN_LIMITATIONS.md` § 4 | ❌ Decision deferred — carried forward (Horizon 4) |
 
 **Also shipped in v1.16.0 (2026-05-30):** `audit-2026q2` security hardening wave (9 PRs: HNSW on-disk validation, WAL allocation caps, PQ hardening, parser DoS bounds, sparse/BM25 agent path, graph integrity, query/cache, config validation, rate limiter — PRs [#908](https://github.com/cyberlife-coder/VelesDB/pull/908)–[#916](https://github.com/cyberlife-coder/VelesDB/pull/916)); first-party Python + TypeScript embedding adapters (PR [#917](https://github.com/cyberlife-coder/VelesDB/pull/917)); multi-arch GHCR image with OIDC attestation; 9 typed Tauri guest-JS wrappers (PR [#928](https://github.com/cyberlife-coder/VelesDB/pull/928)); 44-PR dependency refresh (Docker base `rust 1.87→1.96`, `wgpu 29`, `redis 0.26→1.2`, `dashmap 5→6`, `uniffi 0.28→0.31`); VelesQL cheat sheet.
 
 ---
 
-## Horizon 3 — Next 3 months (v1.16.0 → v1.17.0)
+## Horizon 3 — ✅ Shipped (v1.16.0 → v1.18.0, released 2026-06-05 and 2026-06-07)
+
+### Theme: Correctness, licensing & agent-memory parity
+
+v1.17.0 and v1.18.0 shipped well ahead of the planned cadence and were dominated by correctness and parity work — none of the enterprise/DataFrame items originally penciled in for this horizon landed; all five carry forward to Horizon 4 below.
+
+**Shipped in v1.17.0 (2026-06-05):** VelesQL parser error hints with did-you-mean suggestions ([#987](https://github.com/cyberlife-coder/VelesDB/pull/987)); payload-WAL torn-tail crash recovery ([#1011](https://github.com/cyberlife-coder/VelesDB/pull/1011)); hybrid fusion weight validation ([#1013](https://github.com/cyberlife-coder/VelesDB/pull/1013)) and HNSW `alpha` boundary validation ([#1015](https://github.com/cyberlife-coder/VelesDB/pull/1015)); OpenAPI id-type accuracy plus a CI drift check on the committed spec; HNSW search probe-RNG contention removed ([#1001](https://github.com/cyberlife-coder/VelesDB/pull/1001)).
+
+**Shipped in v1.18.0 (2026-06-07):** engine-embedding artifacts realigned to VelesDB Core License 1.0 ([#1053](https://github.com/cyberlife-coder/VelesDB/pull/1053)); Python agent-memory bindings — TTL, snapshots, VelesQL bridges ([#1045](https://github.com/cyberlife-coder/VelesDB/pull/1045)); Tauri agent-memory commands ([#1046](https://github.com/cyberlife-coder/VelesDB/pull/1046)); agent-memory TTL & expiry hardening ([#1040](https://github.com/cyberlife-coder/VelesDB/pull/1040)/[#1043](https://github.com/cyberlife-coder/VelesDB/pull/1043)); TypeScript procedural recall fixed via required `embedding` ([#1039](https://github.com/cyberlife-coder/VelesDB/pull/1039)).
+
+---
+
+## Horizon 4 — Next (v1.18.0 → v1.19)
 
 ### Theme: Enterprise readiness & DataFrame ergonomics
 
-Carry-forward open items from Horizons 1–2 plus the first enterprise-readiness primitives.
+Carry-forward open items from Horizons 1–3 plus the first enterprise-readiness primitives.
+
+**Already queued for v1.19** (see `CHANGELOG.md` [Unreleased]): agent-memory graph dimension (`relate()` API — the flagship NEAR + MATCH agent-memory query runs verbatim), GraphFirst anchored hybrid retrieval, PQ/RaBitQ quantization wired end-to-end across restarts, durable TTL enforced on every read path, REST/TypeScript relations + TTL parity, `GET /metrics` served by default.
 
 **Committed scope:**
 
@@ -89,7 +103,7 @@ SIMD and GPU items that are part of the long-term roadmap but **explicitly on ho
 - Profiling on a real workload identifies one as a top-3 bottleneck
 - A community contributor opens a draft PR for one
 
-**What is NOT deferred** (already shipped in v1.13.x): AVX-512 / AVX2 / NEON kernels for f32/f16 cosine·dot·euclidean, WASM SIMD128, GPU SONG 3-stage pipeline (PR #626), GPU `search_auto` wiring (PR #638). Current SIMD coverage matrix in [`docs/reference/NATIVE_HNSW.md`](docs/reference/NATIVE_HNSW.md).
+**What is NOT deferred** (already shipped in v1.13.x): AVX-512 / AVX2 / NEON kernels for f32/f16 cosine·dot·euclidean, GPU SONG 3-stage pipeline (PR #626), GPU `search_auto` wiring (PR #638). WASM SIMD128 kernels remain planned (wasm32 currently uses the scalar fallback). Current SIMD coverage matrix in [`docs/reference/NATIVE_HNSW.md`](docs/reference/NATIVE_HNSW.md).
 
 ---
 
@@ -109,8 +123,8 @@ To make the roadmap meaningful, here is what is **out of scope** for the foresee
 
 ## Cadence
 
-- **Patch releases (v1.16.x):** as needed, 1-2x per month, no roadmap commitment
-- **Minor releases (v1.14, v1.15, v1.16, v1.17):** ~3 months apart, each with a public milestone and OKRs
+- **Patch releases (v1.18.x):** as needed, no roadmap commitment
+- **Minor releases (v1.14 → v1.18):** planned with a public milestone and OKRs; in practice the v1.14 → v1.18 line shipped at a weekly-to-biweekly cadence (2026-04-30 → 2026-06-07) as remediation and parity waves landed — expect minors to keep shipping when the milestone is done, not on a fixed calendar
 - **Major release (v2.0):** no committed timeline. Will only happen if we need a breaking API change. The `#[non_exhaustive]` discipline on public enums keeps this option open.
 
 ## How this roadmap is governed

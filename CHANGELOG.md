@@ -5,7 +5,230 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] — 2026-06-12
+
+A **major release**. Two correctness fixes to behavior shipped in 1.18.0 — the
+persisted HNSW graph is now reloaded at open instead of silently rebuilt, and
+durable point TTL is now enforced on every read path — ship alongside new
+graph/agent-memory capability and behavior-breaking changes to VelesQL and the
+distance engine. The major bump follows strict SemVer: the VelesQL query
+semantics below change results for existing queries.
+
+**Breaking — read before upgrading:**
+- **VelesQL variable-length relationship aliases bind LISTS** (openCypher
+  semantics): a `*1..3` alias projects a per-edge list; `*1..1` is no longer a
+  scalar — read element 0. Fixed-length `-[r:T]->` aliases are unchanged.
+- **MATCH row cardinality**: aliased parallel edges now yield one row per
+  aliased edge (previously collapsed); rows carry `_edge_bindings` /
+  `_edge_paths`. Unaliased `-[:T]->` patterns are unchanged.
+- **MATCH without `LIMIT`** now uses the 100 000-row ceiling (was a silent
+  cap of 100 rows).
+- **`DistanceEngine` dimension checks assert in release builds** (were
+  debug-only): a length mismatch panics instead of reading out of bounds
+  through the safe public API.
+
+Each item is detailed (and marked **BREAKING** where applicable) under the
+sections below.
+
+### Changed
+- **`DistanceEngine` dimension checks now assert in release builds** (were
+  debug-only): a length mismatch panics instead of reading out of bounds
+  through the safe public API.
+- **BREAKING (VelesQL) — variable-length relationship aliases bind lists
+  (openCypher semantics)**: `MATCH (a)-[r:T*1..3]->(b)` now binds `r` to the
+  ordered LIST of traversed relationships instead of the last edge.
+  `RETURN r` projects the edge-id list, `RETURN r.prop` projects the
+  positional per-edge value list (previously a scalar — including for the
+  degenerate `*1..1` range), and `WHERE r.prop` uses ANY-element semantics
+  (previously last-edge). Fixed-length aliases (`-[r:T]->`) keep their scalar
+  behavior. Migration: queries templating a `*1..1` range that read `r.prop`
+  as a scalar must read element 0 of the projected list instead.
+- **MATCH row cardinality with aliased parallel edges**: result dedup now
+  includes relationship bindings, so two parallel edges between the same node
+  pair yield one row per ALIASED edge (previously they collapsed to one row).
+  Unaliased patterns (`-[:T]->`) keep the collapsed cardinality. Result
+  payloads now carry `_edge_bindings` / `_edge_paths` alongside `_bindings`
+  so rows are distinguishable by edge identity.
+- **Implicit MATCH anchor binding (V011 relaxed)**: when a
+  `SELECT ... WHERE vector NEAR ... AND MATCH (...)` pattern does not
+  reference the FROM alias, the pattern's anchor node now binds to the FROM
+  alias implicitly; guards G1–G3 reject inverted, ambiguous, or multi-anchor
+  patterns with actionable errors naming both aliases. The flagship
+  agent-memory query — `SELECT memory.*, similarity() FROM agent_memory AS
+  memory WHERE vector NEAR $embedding AND MATCH (ctx)-[:RELATES_TO]->(fact)
+  AND session_id = $current_session ORDER BY similarity() DESC LIMIT 10` —
+  now runs verbatim, covered by end-to-end BDD tests.
+- **Implicit `LIMIT 10` is a documented contract**: a `SELECT` without a
+  `LIMIT` clause has always returned at most 10 rows; the default is now a
+  shared named constant, the VelesQL spec and guides state it, and `EXPLAIN`
+  displays the implicit limit instead of omitting it.
+- **Strict-schema node-type validation (#1082)**: `store_node_payload` on a
+  collection with a strict schema now rejects node payloads whose node type
+  is not declared in the schema (previously accepted silently).
+- **ColumnStore auto-vacuum triggers automatically**: the
+  PostgreSQL-inspired vacuum threshold is now wired into the delete path
+  (payload-mirror delete application), so tombstone compaction runs without
+  a manual `vacuum` call.
+- **Durable point TTL enforced on every read path**: `search`, `get`,
+  `scroll` and VelesQL `query` now all filter points whose
+  `_veles_expires_at` has passed; previously an expired point could still be
+  returned by some read paths until the next expiry sweep.
+
+### Added
+- **LangChain MMR + by-vector search** (`langchain-velesdb`):
+  `max_marginal_relevance_search`, `max_marginal_relevance_search_by_vector`
+  and `similarity_search_by_vector` are now implemented (previously raised
+  `NotImplementedError` from the base class), including
+  `as_retriever(search_type="mmr")`. `similarity_search_with_score` now
+  normalises cosine scores from `[-1, 1]` to `[0, 1]` on the dense path.
+- **GraphFirst anchored fetch — exhaustive hybrid retrieval**: `MATCH (...)`
+  predicates that are AND-required by a SELECT WHERE clause are now evaluated
+  FIRST; retrieval happens within their anchor sets and is exhaustive (a
+  matching row is returned no matter how it ranks globally). Covers
+  `vector NEAR` (exact scoring up to 10K anchors, bitmap-filtered HNSW
+  beyond), metadata-only, sparse-only (per-id index filter, exact at LIMIT),
+  and `NOT similarity()` shapes. Residual shapes (OR/NOT-wrapped predicates,
+  `similarity()` cascades, text/hybrid fusion) keep the bounded window,
+  now documented per shape. Anchor sets are evaluated once and shared with
+  the exact WHERE post-filter.
+- **Agent memory graph dimension — relate() API**: each memory subsystem
+  (semantic/episodic/procedural) gains `relate(from, to, rel_type, props)`,
+  `relations(id)` and `unrelate(edge_id)`. Relation edges are typed,
+  WAL-durable, reject expired/missing endpoints, and cascade away when a
+  memory is deleted — `MATCH (m)-[:RELATES_TO]->(f)` is now executable over
+  agent memory, completing the flagship NEAR + MATCH + scalar query
+  end-to-end. Under the hood, the graph dimension is now first-class on
+  every collection type: edge WAL durability, the flush-time snapshot +
+  WAL compaction, and delete-cascade are unconditional (previously gated to
+  graph collections — vector-collection edges silently vanished on restart
+  and the WAL never compacted); edge property indexes are rebuilt from the
+  snapshot on open (previously lost after compaction, graph collections
+  included); edge WAL appends are ordered with their store apply so replay
+  resolves id collisions exactly like live execution; and memory snapshots
+  (`serialize`/`snapshot`) now capture relation edges and restore them
+  (previously a restore silently wiped every relation). Older bare-array
+  snapshots still load.
+- **RaBitQ wired end-to-end in the collection query path, restarts included**:
+  collections created with `storage = 'rabitq'` now build the binary-traversal
+  HNSW backend, and `TRAIN QUANTIZER … type = rabitq` installs the trained
+  quantizer into the live index in addition to persisting `rabitq.idx`. On
+  open, `rabitq.idx` is reloaded and every stored vector is re-encoded in
+  NodeId order (O(n·d), same cost class as gap recovery). Vacuum preserves the
+  RaBitQ backend and re-installs the trained quantizer instead of silently
+  downgrading to the Standard f32 backend.
+- **Durable post-hoc TTL setters for agent memory**: Result-returning
+  `set_semantic_ttl_durable` / `set_episodic_ttl_durable` /
+  `set_procedural_ttl_durable` on `AgentMemory` (and `set_ttl_durable` on each
+  subsystem) persist the expiry to the reserved `_veles_expires_at` payload
+  field so it survives a restart; refreshing an expired or missing id returns
+  `NotFound`. The in-memory `set_*_ttl` setters are now documented as volatile.
+- **ColumnStore in the SELECT WHERE path (#1075)**: adaptive per-collection
+  payload mirror compiles metadata filters to RoaringBitmap scans once
+  sequential-scan debt justifies the build; secondary indexes keep precedence.
+- **CI (#1076)**: full TypeScript SDK vitest suite on every PR; nightly 100K
+  recall@10 ≥ 0.95 gate (`perf-gate-e2e` schedule + manual dispatch).
+- **WeightedRRF fusion strategy (#1082)**: reciprocal-rank fusion with
+  per-source weights and 0-based ranks; weights are revalidated on the
+  `fuse()` path like the other weighted strategies.
+- **REST + TypeScript SDK parity for relations and durable TTL (#1082)**:
+  `relate`/`unrelate`/`getRelations` and `setTtlDurable` are exposed over
+  REST (`POST /collections/{name}/relations` (create),
+  `GET /collections/{name}/points/{id}/relations`,
+  `/collections/{name}/relations/{edge_id}`,
+  `/collections/{name}/points/{id}/ttl`) and in `@wiscale/velesdb-sdk`, with
+  the OpenAPI spec regenerated and the SDK methods covered by tests.
+- **`GET /metrics` served by default**: the `prometheus` feature is now a
+  default feature (previously opt-in), so released binaries and the Docker
+  image expose the endpoint out of the box; documented in the OpenAPI spec; it
+  stays behind API-key auth whenever keys are configured.
+- **Release artifacts ship a `SHA256SUMS` file**; `install.sh` verifies the
+  downloaded archive against it.
+- **Python durable TTL for episodic and procedural memory**:
+  `set_episodic_ttl_durable` / `set_procedural_ttl_durable` bindings bring
+  the PyO3 SDK to parity with the Rust durable TTL setters.
+- **Agent-memory criterion benchmark**: `agent_memory_benchmark` (semantic
+  store/query/hybrid NEAR + MATCH, episodic record/recent, procedural recall
+  at 10K facts/events and 1K procedures, 384-dim) plus measured figures with provenance in the
+  agent-memory guide (Apple M5 Pro: `semantic.query` 55.5 µs at k=10,
+  `episodic.recent` 24.7 µs, NEAR + MATCH ~5.5 ms at 1,000 anchors, `store`
+  12.1 ms — fsync-dominated).
+- **Mobile `uniffi-bindgen` binary**: `velesdb-mobile` now ships the
+  documented `uniffi-bindgen` binary, and the Swift/Kotlin
+  bindings-generation flow it documents is verified.
+
+### Fixed
+- **Scalar `$param` equality in `WHERE` silently matched nothing** on v1.18.0
+  (e.g. `WHERE session_id = $current_session` returned zero rows while the
+  literal form matched) — fixed as part of the GraphFirst/WHERE evaluation
+  rework (#1082); covered by the flagship-query BDD test which binds both a
+  vector and a scalar parameter.
+- **Tauri plugin: 25 registered commands had no Tauri v2 permission** and were
+  unreachable from the webview (the extended AgentMemory surface shipped in
+  v1.18.0); all 63 commands now carry permissions and the sync test parses the
+  registration source as ground truth, so the gap cannot silently recur.
+- **`MATCH ... RETURN` without `LIMIT` silently capped results at 100**: the
+  default is now the server-wide 100 000-row ceiling, matching the documented
+  contract (pinned by a >100-row BDD test).
+- **Persisted HNSW graph was never reloaded at open**: `Collection::open` now
+  loads the serialized `index.hnsw` and reconciles it in 3 passes against the
+  vector store and WAL (stale entries dropped, missing vectors re-indexed,
+  a mutated index re-saved); previously the persisted graph was ignored and
+  the index was rebuilt by re-inserting every vector on every open.
+- **`HnswParams.alpha` never reached the native graph (#1082)**: the
+  configured diversification alpha is now propagated to the native graph
+  constructor and persists across restarts.
+- **Lazily-trained RaBitQ quantizer now persists at flush**: parity with PQ —
+  previously only an explicit `TRAIN QUANTIZER` persisted `rabitq.idx`, so a
+  lazily-trained quantizer vanished on restart.
+- **TTL expiry TOCTOU on the MATCH result path (#1082)**: the expiry
+  timestamp is snapshotted once before the result loop and expired points
+  are skipped inline, closing the window where a point could expire between
+  payload retrieval and the expiry check.
+- **Test suite compiles under `--no-default-features`**: the weekly
+  Miri/cargo-careful gate is unblocked (it could not build the suite before).
+- **`velesdb-migrate` test flakiness**: `validate_url` tests no longer mutate
+  process environment variables (a policy parameter is injected instead),
+  removing cross-test interference.
+- **LangChain test suite green in full runs** (`langchain-velesdb`): a
+  leaked module fake from `test_core_feature_parity` broke 17 unrelated
+  tests; `sys.modules` is now restored after the fixture loads.
+- **`TRAIN QUANTIZER 'rabitq'` trained an index nothing ever loaded**: the
+  persisted `rabitq.idx` had zero load-path callers, the persisted HNSW meta
+  hardcoded `StorageMode::Full` on save, and the collection load path ignored
+  the storage mode — so after a reopen a RaBitQ collection silently searched
+  f32 forever. `HnswIndex::save` now persists the actual backend mode and the
+  load/open paths honour the collection storage mode and restore the trained
+  quantizer.
+- **PQ persistence round-trip**: `Collection::open` now reloads the trained PQ
+  codebook (`codebook.pq`, plus `rotation.opq` for OPQ) and rebuilds the PQ
+  cache by re-encoding stored vectors (O(n) at open). Previously the codebook
+  saved by `TRAIN QUANTIZER` was never loaded, leaving the ADC rescore path
+  inert after a restart.
+- **Quantization docs honesty**: `docs/guides/QUANTIZATION.md` now states
+  precisely which modes are wired into the collection query path — RaBitQ and
+  PQ end-to-end; SQ8/Binary collection modes maintain caches that no search
+  path consumes (search stays full-precision f32), pending a reduced-memory
+  storage mode.
+- **LlamaIndex `delete(ref_doc_id)` was a silent no-op for chunked documents**
+  (`llama-index-vector-stores-velesdb`): it deleted only the hash of
+  `ref_doc_id`, never the chunks. Nodes now persist `ref_doc_id` in their
+  payload and `delete()` removes every matching chunk (paged scan past the
+  VelesQL LIMIT-10 default). The LlamaIndex Quick Start (README + docstrings)
+  now goes through `StorageContext` — the previously documented
+  `from_documents(..., vector_store=...)` call silently indexed into an
+  in-memory store, leaving the VelesDB collection empty.
+- **LangChain GraphRetriever `low_latency=True` required a graph collection**
+  it never used (`langchain-velesdb`, same fix in the LlamaIndex retriever);
+  vector-only mode now works without one.
+
+### Removed
+- **`server_url` parameter of both `VelesDBVectorStore` classes**
+  (`langchain-velesdb`, `llama-index-vector-stores-velesdb`): it was accepted
+  and validated but never used — no server mode exists in these connectors;
+  every operation runs against the embedded local database. Passing it now
+  raises `TypeError` instead of silently doing nothing, and the misleading
+  "Server Mode" README sections are gone. Use the REST API to talk to a
+  remote `velesdb-server`.
 
 ## [1.18.0] — 2026-06-07
 

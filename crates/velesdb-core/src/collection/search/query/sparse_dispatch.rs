@@ -18,21 +18,85 @@ impl Collection {
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<SearchResult>> {
         let has_graph_predicates = !extracted.graph_match_predicates.is_empty();
-        let execution_limit = if has_graph_predicates {
-            MAX_LIMIT
-        } else {
-            limit
-        };
+
+        // GraphFirst by anchor ids (sparse-only): AND-required MATCH
+        // predicates restrict the sparse fetch via the index's per-id
+        // filter, so retrieval is exact at `limit` within the graph matches
+        // instead of post-filtering a MAX_LIMIT window. Hybrid dense+sparse
+        // keeps the window: its fusion legs rank independently.
+        let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
+        let anchors = self.sparse_anchor_prefilter(stmt, params, extracted, &mut graph_cache)?;
 
         let mut results =
-            self.execute_sparse_or_hybrid(stmt, extracted, svs, params, execution_limit)?;
+            self.fetch_sparse_results(stmt, params, extracted, svs, limit, anchors.as_ref())?;
 
         if has_graph_predicates {
-            results = self.filter_by_graph_predicates(stmt, params, results)?;
+            results = self.filter_by_graph_predicates_with_cache(
+                stmt,
+                params,
+                results,
+                &mut graph_cache,
+            )?;
         }
 
         self.check_guardrails_and_record(ctx, results.len())?;
         self.finalize_sparse_results(stmt, params, results)
+    }
+
+    /// Fetches sparse/hybrid results: anchored exact fetch when a GraphFirst
+    /// anchor set is available, MAX_LIMIT window fetch otherwise.
+    fn fetch_sparse_results(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        extracted: &ExtractedComponents,
+        svs: &crate::velesql::SparseVectorSearch,
+        limit: usize,
+        anchors: Option<&std::collections::HashSet<u64>>,
+    ) -> Result<Vec<SearchResult>> {
+        let Some(anchor_ids) = anchors else {
+            let execution_limit = if extracted.graph_match_predicates.is_empty() {
+                limit
+            } else {
+                MAX_LIMIT
+            };
+            return self.execute_sparse_or_hybrid(stmt, extracted, svs, params, execution_limit);
+        };
+        self.execute_sparse_search_in_anchors(
+            svs,
+            params,
+            extracted.filter_condition.as_ref(),
+            limit,
+            Some(anchor_ids),
+        )
+        .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())
+    }
+
+    /// Computes the GraphFirst anchor set for a sparse-only fetch.
+    ///
+    /// Returns `None` for hybrid dense+sparse queries and for residual
+    /// conditions the in-fetch filter cannot cover (text MATCH,
+    /// similarity()) — those drop rows after the fetch and keep the window.
+    fn sparse_anchor_prefilter(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        extracted: &ExtractedComponents,
+        graph_cache: &mut super::where_eval::GraphMatchEvalCache,
+    ) -> Result<Option<std::collections::HashSet<u64>>> {
+        if extracted.graph_match_predicates.is_empty()
+            || extracted.vector_search.is_some()
+            || !extracted.similarity_conditions.is_empty()
+        {
+            return Ok(None);
+        }
+        let Some(cond) = stmt.where_clause.as_ref() else {
+            return Ok(None);
+        };
+        if Self::extract_match_query(cond).is_some() {
+            return Ok(None);
+        }
+        self.compute_required_anchor_ids(cond, params, &stmt.from_alias, graph_cache)
     }
 
     /// Executes either a sparse-only or hybrid dense+sparse search.
@@ -66,16 +130,25 @@ impl Collection {
         }
     }
 
-    /// Applies graph-predicate WHERE filtering to results.
-    fn filter_by_graph_predicates(
+    /// Applies graph-predicate WHERE filtering to results, reusing the
+    /// caller's evaluation cache so prefiltered anchor sets are not
+    /// re-evaluated.
+    fn filter_by_graph_predicates_with_cache(
         &self,
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
         results: Vec<SearchResult>,
+        cache: &mut super::where_eval::GraphMatchEvalCache,
     ) -> Result<Vec<SearchResult>> {
         match stmt.where_clause.as_ref() {
             Some(cond) => self
-                .apply_where_condition_to_results(results, cond, params, &stmt.from_alias)
+                .apply_where_condition_to_results_with_cache(
+                    results,
+                    cond,
+                    params,
+                    &stmt.from_alias,
+                    cache,
+                )
                 .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure()),
             None => Ok(results),
         }
@@ -99,9 +172,10 @@ impl Collection {
             let skip = usize::try_from(offset).unwrap_or(usize::MAX);
             results = results.into_iter().skip(skip).collect();
         }
-        let final_limit = usize::try_from(stmt.limit.unwrap_or(10))
-            .unwrap_or(MAX_LIMIT)
-            .min(MAX_LIMIT);
+        let final_limit =
+            usize::try_from(stmt.limit.unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT))
+                .unwrap_or(MAX_LIMIT)
+                .min(MAX_LIMIT);
         results.truncate(final_limit);
         self.guard_rails.circuit_breaker.record_success();
         Ok(results)

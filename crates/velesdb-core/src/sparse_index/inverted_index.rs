@@ -143,7 +143,7 @@ impl SparseInvertedIndex {
     /// Inserts a batch of sparse vectors while acquiring the mutable lock once.
     ///
     /// Acquires the write lock once for the entire slice, making this significantly
-    /// faster than calling [`insert`] per document in a parallel/bulk context.
+    /// faster than calling `insert` per document in a parallel/bulk context.
     /// Callers building a parallel bulk-import pipeline should chunk their input
     /// and call this method once per chunk rather than calling `insert` per document.
     ///

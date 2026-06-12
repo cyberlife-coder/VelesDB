@@ -37,9 +37,12 @@ call — it compounds quickly when you issue thousands of queries per second.
 
 ### Use `upsert_bulk_numpy()` for batch inserts
 
-`upsert_bulk_numpy()` uses a zero-copy path: the flat `f32` buffer from the numpy
-array is passed directly to the core engine, eliminating per-row `Vec<f32>`
-allocations. For 100 000 vectors at 768D this avoids ~293 MB of intermediate copies.
+`upsert_bulk_numpy()` reads the flat `f32` buffer from the numpy array in place
+(no per-row conversion), then makes **one** contiguous copy of it so the GIL can
+be released while the core engine inserts. This replaces 100 000 small per-row
+`Vec<f32>` allocations with a single bulk copy — far fewer allocator round-trips
+and Python-object conversions, though the transient copy itself still costs
+`n × dimension × 4` bytes (~293 MB for 100 000 × 768D) until the call returns.
 
 ```python
 import numpy as np
@@ -86,7 +89,7 @@ your data is shaped, not by intuition.
 |--------|-------------|-----------------|-------------|
 | `upsert([{...}, ...])` | List of point dicts | List + dict + Vec | Small ad-hoc inserts, payload-heavy data, < 100 points |
 | `upsert_bulk([{...}, ...])` | List of point dicts | Vec only (no per-row PyDict→struct) | Medium batches without numpy already in memory |
-| `upsert_bulk_numpy(arr, ids)` | numpy `(n, dim)` float32 + ids | **Zero-copy** flat buffer | Large numpy-native pipelines (embeddings, model output) |
+| `upsert_bulk_numpy(arr, ids)` | numpy `(n, dim)` float32 + ids | **One flat-buffer copy** (no per-row copies) | Large numpy-native pipelines (embeddings, model output) |
 
 **Throughput rule of thumb on a 384D collection** (i9-class CPU, fresh collection,
 no payload):
@@ -95,11 +98,12 @@ no payload):
 |--------|----------------|--------------------------------------|
 | `upsert` (list of dicts) | ~5 000 vec/s | +~600 MB (list + dict + Vec copies) |
 | `upsert_bulk` (list of dicts) | ~12 000 vec/s | +~300 MB (Vec copies only) |
-| `upsert_bulk_numpy` | ~17 000 vec/s | +~7 MB (zero-copy, only the per-batch ids vec) |
+| `upsert_bulk_numpy` | ~17 000 vec/s | + one transient flat-buffer copy (`n × dim × 4` bytes, ~293 MB per 100K @ 768D, freed when the call returns) |
 
-For a 100 000-vector batch at 768D, `upsert_bulk_numpy` saves roughly 293 MB of
-intermediate copies compared to the list-of-dicts paths. The savings grow
-linearly with `n × dimension`.
+Compared to the list-of-dicts paths, `upsert_bulk_numpy` eliminates all
+per-row Python-object conversions and `Vec` allocations; the remaining cost is
+a single bulk copy of the flat buffer (made so the GIL can be released during
+the insert). Chunking (below) bounds that transient copy.
 
 **Memory tuning when batches are very large (> 50 000):** chunk into 5 000-row
 sub-batches. The total throughput is identical (~17 000 vec/s) but peak RSS
@@ -372,7 +376,7 @@ for i, vec in enumerate(vectors):
 points = [{"id": i, "vector": vectors[i].tolist()} for i in range(N)]
 collection.upsert_bulk(points)
 
-# Fast: zero-copy path, GIL released for the entire insert
+# Fast: no per-row copies (single flat-buffer copy), GIL released for the insert
 ids = list(range(N))
 collection.upsert_bulk_numpy(vectors, ids)
 ```

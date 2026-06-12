@@ -1,11 +1,16 @@
-//! Crash recovery: gap detection between vector storage and HNSW index.
+//! Crash recovery: 3-pass reconciliation between vector storage and HNSW.
 //!
-//! On [`Collection::open()`](super::super::Collection::open), vectors may
-//! exist in storage but not in HNSW if a crash occurred between the storage
-//! write and the HNSW batch insert (deferred indexer gap, delta buffer gap,
-//! or normal insert gap).
+//! On [`Collection::open()`](super::super::Collection::open), the persisted
+//! HNSW index may disagree with the WAL-replayed vector storage in three
+//! ways, each handled by a dedicated pass in [`run_crash_recovery`]:
 //!
-//! This module detects such gaps and re-indexes the missing vectors.
+//! 1. **Gap**: vectors in storage but not in HNSW (crash between the storage
+//!    write and the HNSW batch insert — deferred indexer gap, delta buffer
+//!    gap, or normal insert gap).
+//! 2. **Orphans**: ids in HNSW but not in storage (delete reached the vector
+//!    WAL but not the next index save).
+//! 3. **Stale**: WAL-touched ids present on both sides whose indexed vector
+//!    no longer matches storage (upsert after the last index save).
 //!
 //! ## Known limitation
 //!
@@ -47,6 +52,11 @@ pub(crate) fn recover_hnsw_gap(
     let hnsw_count = index.len();
 
     if storage_count == 0 || storage_count == hnsw_count {
+        tracing::debug!(
+            storage_count,
+            hnsw_count,
+            "gap recovery skipped — counts match, no scan needed"
+        );
         return Ok(0);
     }
 
@@ -168,26 +178,43 @@ pub(super) fn reconcile_point_count(
     }
 }
 
-/// Runs crash recovery: detects vectors in storage but not in HNSW (gap
-/// from crash during deferred merge, delta drain, or normal insert).
+/// Runs the 3-pass crash reconciliation between vector storage and HNSW:
+///
+/// 1. **Gap** ([`recover_hnsw_gap`]): vectors in storage but not in HNSW
+///    (crash during deferred merge, delta drain, or normal insert).
+/// 2. **Orphans** ([`remove_orphan_ids`]): ids in HNSW but not in storage
+///    (crash after a delete reached the vector WAL but before the next
+///    index save).
+/// 3. **Stale** ([`reindex_stale_wal_ids`]): WAL-touched ids present on both
+///    sides whose indexed vector no longer matches storage (upsert after the
+///    last index save).
+///
+/// Returns `Ok(true)` when any pass mutated the index — the caller must then
+/// re-save it, because the vector WAL (the only other witness of the delta)
+/// was truncated during replay.
 #[cfg(feature = "persistence")]
 pub(super) fn run_crash_recovery(
     config: &CollectionConfig,
     vector_storage: &Arc<RwLock<MmapStorage>>,
     index: &Arc<HnswIndex>,
-) -> Result<()> {
+    wal_touched_ids: &[u64],
+) -> Result<bool> {
     if config.metadata_only || config.dimension == 0 {
-        return Ok(());
+        return Ok(false);
     }
     let recovered = recover_hnsw_gap(vector_storage, index, config.dimension)?;
-    if recovered > 0 {
+    let orphans = remove_orphan_ids(vector_storage, index);
+    let stale = reindex_stale_wal_ids(vector_storage, index, wal_touched_ids, config.dimension)?;
+    if recovered + orphans + stale > 0 {
         tracing::info!(
             collection = %config.name,
             recovered,
-            "Collection gap recovery completed on open"
+            orphans,
+            stale,
+            "Collection index reconciliation completed on open"
         );
     }
-    Ok(())
+    Ok(recovered + orphans + stale > 0)
 }
 
 /// No-op stub when persistence is disabled.
@@ -196,6 +223,94 @@ pub(super) fn run_crash_recovery(
     _config: &CollectionConfig,
     _vector_storage: &Arc<RwLock<MmapStorage>>,
     _index: &Arc<HnswIndex>,
-) -> Result<()> {
-    Ok(())
+    _wal_touched_ids: &[u64],
+) -> Result<bool> {
+    Ok(false)
+}
+
+/// Pass 2: removes ids present in the HNSW mappings but absent from storage.
+///
+/// Such orphans arise when a crash persists a delete to the vector WAL but
+/// not to the next HNSW save: on reopen the WAL replay removes the id from
+/// storage while the loaded index still maps it. Without this pass the
+/// tombstone would resurface in search results.
+#[cfg(feature = "persistence")]
+fn remove_orphan_ids(vector_storage: &Arc<RwLock<MmapStorage>>, index: &Arc<HnswIndex>) -> usize {
+    if index.is_empty() {
+        return 0;
+    }
+    let storage_ids: std::collections::HashSet<u64> =
+        vector_storage.read().ids().into_iter().collect();
+    // Collect before removing: mutating the sharded mappings while iterating
+    // them would deadlock on the shard lock.
+    let orphan_ids: Vec<u64> = index
+        .mappings
+        .iter()
+        .map(|(id, _)| id)
+        .filter(|id| !storage_ids.contains(id))
+        .collect();
+    for &id in &orphan_ids {
+        index.remove(id);
+    }
+    if !orphan_ids.is_empty() {
+        tracing::warn!(
+            orphans = orphan_ids.len(),
+            "Crash recovery: removed HNSW ids absent from vector storage"
+        );
+    }
+    orphan_ids.len()
+}
+
+/// Pass 3: re-upserts WAL-touched ids whose indexed vector is stale.
+///
+/// The WAL replay applied these writes to storage and then truncated the
+/// WAL, so storage is the source of truth. For every touched id present in
+/// both storage and the index, the indexed sidecar vector is compared to
+/// the storage bytes; on mismatch the storage value is re-upserted into the
+/// index (tombstoning the stale graph node).
+///
+/// The caller guarantees the index has sidecar vector storage when any
+/// touched id overlaps its mappings (see `rebuild_if_unverifiable`); an id
+/// whose sidecar vector is missing anyway is treated as stale.
+#[cfg(feature = "persistence")]
+fn reindex_stale_wal_ids(
+    vector_storage: &Arc<RwLock<MmapStorage>>,
+    index: &Arc<HnswIndex>,
+    wal_touched_ids: &[u64],
+    dimension: usize,
+) -> Result<usize> {
+    let storage = vector_storage.read();
+    let mut stale: Vec<(u64, Vec<f32>)> = Vec::new();
+    for &id in wal_touched_ids {
+        let Some(idx) = index.mappings.get_idx(id) else {
+            continue; // Not indexed (deleted id — already handled by pass 2).
+        };
+        match storage.retrieve(id) {
+            Ok(Some(v)) if v.len() == dimension => {
+                let matches = index
+                    .vectors
+                    .with_vector(idx, |indexed| indexed == v.as_slice())
+                    .unwrap_or(false);
+                if !matches {
+                    stale.push((id, v));
+                }
+            }
+            Ok(_) => {} // Absent or corrupt-dimension: pass 1/2 territory.
+            Err(e) => {
+                return Err(Error::Storage(format!(
+                    "failed to retrieve WAL-touched vector {id}: {e}"
+                )))
+            }
+        }
+    }
+    drop(storage);
+
+    let reindexed = reindex_vectors(index, &stale);
+    if reindexed > 0 {
+        tracing::warn!(
+            reindexed,
+            "Crash recovery: re-upserted stale WAL-touched vectors into HNSW"
+        );
+    }
+    Ok(reindexed)
 }

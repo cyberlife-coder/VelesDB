@@ -54,7 +54,9 @@ impl ColumnStore {
     ///
     /// # Arguments
     ///
-    /// * `_config` - Vacuum configuration (batch_size, sync options)
+    /// * `_config` - Vacuum configuration. **Currently ignored**: the vacuum
+    ///   runs as a single in-memory pass (`batch_size`, `sync`, and
+    ///   `yield_interval_ms` have no effect).
     ///
     /// # Returns
     ///

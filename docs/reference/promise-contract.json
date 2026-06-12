@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-05-01",
+  "last_updated": "2026-06-12",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
@@ -32,7 +32,7 @@
       "id": "core_readme_columnstore_claim",
       "file": "crates/velesdb-core/README.md",
       "must_contain": "ColumnStore filtering",
-      "validation_command": "cargo bench -p velesdb-core --bench filter_benchmark"
+      "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark"
     },
     {
       "id": "readme_simd_dot_product_latency",
@@ -94,7 +94,7 @@
       "id": "readme_columnstore_130x_claim",
       "file": "README.md",
       "must_contain": "130x faster",
-      "validation_command": "cargo bench -p velesdb-core --bench filter_benchmark",
+      "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark",
       "source": "README.md: JSON scan 3.84ms vs ColumnStore 29.5us at 100K rows",
       "last_updated": "2026-04-13"
     },
@@ -143,9 +143,33 @@
       "id": "readme_columnstore_speedup_baseline_rows",
       "file": "README.md",
       "must_contain": "100K rows",
-      "validation_command": "cargo bench -p velesdb-core --bench filter_benchmark",
-      "source": "README.md ColumnStore 130x speedup baseline. Footnote *¹ documents holding range (10K-1M rows within ±5%).",
-      "last_updated": "2026-05-01"
+      "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark",
+      "source": "README.md ColumnStore 130x speedup baseline. Footnote *¹ scopes the claim: filtering-API micro-benchmark, integer equality, 130x at 100K rows / 55x at 10K rows (docs/BENCHMARKS.md section 6); no 1M-row measurement exists. The filtering API serves SELECT WHERE via the adaptive payload mirror (collection/payload_mirror).",
+      "last_updated": "2026-06-10"
+    },
+    {
+      "id": "readme_binary_size_9mb",
+      "file": "README.md",
+      "must_contain": "One ~9 MB binary",
+      "validation_command": "cargo build --release -p velesdb-server && strip target/release/velesdb-server && du -h target/release/velesdb-server",
+      "source": "v1.18.0 stripped local builds on Apple Silicon: velesdb-server 9.1 MB, velesdb-cli 7.3 MB, velesdb-migrate 6.2 MB; v1.18.0 published release artifacts span 7.5-12.4 MB across platforms. README footnote [3] states the 7-13 MB provenance range.",
+      "last_updated": "2026-06-12"
+    },
+    {
+      "id": "readme_wasm_bundle_gzipped",
+      "file": "README.md",
+      "must_contain": "~430 KB gzipped",
+      "validation_command": "npm pack @wiscale/velesdb-wasm --dry-run  # published tarball (gzipped) ~426 KB",
+      "source": "@wiscale/velesdb-wasm v1.18.0 published npm package, ~426 KB gzipped. Replaces the former ~50 KB claim (never matched a published artifact).",
+      "last_updated": "2026-06-12"
+    },
+    {
+      "id": "readme_rest_endpoint_count",
+      "file": "README.md",
+      "must_contain": "48 REST endpoints",
+      "validation_command": "grep -cE \"^  /\" docs/openapi.yaml  # 48 paths (55 operations counting per-verb)",
+      "source": "docs/openapi.yaml on this branch: 48 paths / 55 operations, including the relations + TTL endpoints and GET /metrics. Endpoint count convention = OpenAPI paths.",
+      "last_updated": "2026-06-12"
     }
   ]
 }

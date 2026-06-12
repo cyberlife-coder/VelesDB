@@ -1,5 +1,9 @@
 # Core Wiring Debt
 
+> **Last updated**: 2026-06-12 — inventory re-verified against the code on
+> this date (entries 1, 2, 3, and 5 re-checked at their call sites; entry 4
+> is a qualitative single-source-of-truth cleanup and unchanged).
+
 This document lists configuration structures and subsystems that exist in
 `velesdb-core` but are **not yet fully wired** to the user-facing runtime.
 Each entry captures what exists, what is missing, why it has not been wired,
@@ -45,7 +49,8 @@ Every entry below names its target outcome explicitly.
   buffering writes and performing a single syscall at batch boundary.
 
 **What is missing**:
-- No call site uses `WalBatcher`. It is a dormant utility.
+- No call site uses `WalBatcher`. It is a dormant utility (re-verified
+  2026-06-12: still zero call sites outside `wal_batcher.rs`).
 
 **Why wiring is non-trivial**:
 - `LogPayloadStorage` uses a `RwLock<BufWriter<File>>` with offset tracking
@@ -89,9 +94,9 @@ associated with multi-tenant SaaS and high-ingestion pipelines.
   `VelesConfigOptions` dataclass. Exposing a no-op toggle would mislead
   users into believing the flag affects throughput.
 
-**Cross-reference**: the full enterprise plan lives in
-`.planning/WAVE3_B2_W2_WAL_REDESIGN.md` (internal investigation) and in
-the velesdb-premium backlog. The customer-facing framing is in
+**Cross-reference**: the full enterprise plan lives in an internal planning
+document (`WAVE3_B2_W2_WAL_REDESIGN`, not in this repository) and in the
+velesdb-premium backlog. The customer-facing framing is in
 `docs/guides/WRITE_CONCURRENCY.md`.
 
 **Future action in Community**: none. The `WalBatchConfig` struct remains
@@ -115,10 +120,9 @@ Enterprise tier ships.
 - `CollectionConfig` does NOT currently persist `AutoReindexConfig` to
   `config.json`. Serializing `Duration` via serde requires either a
   custom representation (seconds-as-u64) or a schema version bump.
-- Sprint 2 Wave 3 Commit 9 will wire `AutoReindexManager` as a
-  **runtime-only** attachment: users call
-  `VectorCollection::attach_auto_reindex(manager)` after opening the
-  collection. The manager is NOT restored on `Database::open`.
+- The runtime-only attachment **shipped** (re-verified 2026-06-12):
+  users call `VectorCollection::attach_auto_reindex(manager)` after opening
+  the collection. The manager is NOT restored on `Database::open`.
 
 **Why this is intentional**:
 - Keeping `AutoReindexManager` out of the persisted config avoids the
@@ -144,10 +148,11 @@ Community-scope enhancement; no enterprise angle.
 - The V2 bulk path in `crud_bulk.rs::upsert_bulk_v2_path` uses
   `async_index_builder` when configured.
 
-**What is missing**:
-- No public API to **configure** either subsystem via `VelesConfig`. The
-  only way to activate them is a direct construction of
-  `DeferredIndexer`/`AsyncIndexBuilder` and attachment via internal APIs.
+**What is missing** (re-verified 2026-06-12):
+- No way to **configure** either subsystem via `VelesConfig` (TOML). The
+  REST `POST /collections` request now accepts `deferred_indexing` and
+  `async_index_builder` objects (applied via `apply_advanced_config`), so
+  the gap is the embedded/TOML surface, not the server API.
 - No Python binding exposes a `DeferredIndexingOptions` or
   `AsyncIndexBuilderOptions` dataclass.
 
@@ -203,7 +208,8 @@ helper. Community-scope cleanup, not a feature.
   `Database::ensure_collection_name_available` and
   `enforce_vector_dimension_limit`.
 
-**What is missing**:
+**What is missing** (re-verified 2026-06-12 — the three fields are
+range-validated in `config_validation.rs` but still not enforced at runtime):
 - `max_vectors_per_collection` — would require instrumentation in the
   hot upsert path.
 - `max_payload_size` — would require a size check in `write_store_record`
@@ -217,8 +223,9 @@ helper. Community-scope cleanup, not a feature.
   remaining three fields add hot-path overhead and need benchmarks to
   validate the cost.
 
-**Future action**: Sprint 3 or Sprint 4 — wire the remaining three
-fields with benchmarks proving the hot-path cost is <1%. Community-scope.
+**Future action**: unscheduled Community-scope backlog item (not started as
+of 2026-06-12) — wire the remaining three fields with benchmarks proving the
+hot-path cost is <1%.
 
 ---
 
@@ -227,10 +234,10 @@ fields with benchmarks proving the hot-path cost is <1%. Community-scope.
 | Config | Wired? | Outcome | Effort | Target |
 |---|---|---|---|---|
 | `WalBatchConfig` | No | Transferred to velesdb-premium | 13-17 commits, 3-5 days | Enterprise tier |
-| `AutoReindexConfig` | Runtime-only | Partially wired via Commit 9 | 1 commit | Community (schema bump later) |
-| `deferred_indexing` / `async_index_builder` | Internal-only | RFC pending | Unscoped | Community (future sprint) |
+| `AutoReindexConfig` | Runtime-only | Partially wired (attachment API shipped) | 1 commit | Community (schema bump later) |
+| `deferred_indexing` / `async_index_builder` | REST-only (no TOML/Python) | RFC pending | Unscoped | Community (future sprint) |
 | `SearchConfig` global defaults | Partial | Consolidation cleanup | 1-2 commits | Community (future sprint) |
-| `LimitsConfig` (3/5 fields) | Partial | Hot-path instrumentation | 2-3 commits | Community (Sprint 3-4) |
+| `LimitsConfig` (3/5 fields) | Partial | Hot-path instrumentation | 2-3 commits | Community (backlog, unscheduled) |
 
 ## Conventions
 

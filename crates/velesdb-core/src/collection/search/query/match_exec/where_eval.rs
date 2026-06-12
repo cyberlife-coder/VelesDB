@@ -4,6 +4,7 @@
 //! Fix #492: metadata conditions (IN, BETWEEN, LIKE, IS NULL) are now evaluated
 //! against node payloads instead of being silently ignored by a catch-all arm.
 
+use crate::collection::graph::GraphEdge;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::filter;
@@ -100,6 +101,66 @@ pub(super) fn resolve_query_vector(
     }
 }
 
+/// Edge-alias bindings handed to WHERE evaluation: `scalar` holds
+/// fixed-length relationship aliases (alias -> edge id), `paths` holds
+/// variable-length aliases (alias -> ordered edge-id list).
+#[derive(Clone, Copy)]
+pub(crate) struct EdgeAliasBindings<'a> {
+    pub(crate) scalar: Option<&'a HashMap<String, u64>>,
+    pub(crate) paths: Option<&'a HashMap<String, Vec<u64>>>,
+}
+
+impl EdgeAliasBindings<'_> {
+    /// No edge aliases in scope (single-node patterns, candidate probes).
+    pub(crate) const NONE: EdgeAliasBindings<'static> = EdgeAliasBindings {
+        scalar: None,
+        paths: None,
+    };
+}
+
+/// Bundled per-node context for MATCH WHERE evaluation.
+///
+/// Groups the invariant evaluation state so the recursive condition walk
+/// stays within the argument-count and complexity limits (mirrors
+/// `WhereEvalCtx` in the SELECT-side `where_eval`).
+struct MatchWhereCtx<'a> {
+    node_id: u64,
+    bindings: Option<&'a HashMap<String, u64>>,
+    /// Bound relationship aliases (alias -> traversed edge id) so `r.prop`
+    /// resolves against the EDGE's properties (audit 2026-06 F).
+    edge_bindings: Option<&'a HashMap<String, u64>>,
+    /// Variable-length relationship aliases (alias -> ordered edge-id list).
+    /// `r.prop` over a list uses ANY-element semantics: the condition holds
+    /// when at least one traversed edge satisfies it.
+    edge_paths: Option<&'a HashMap<String, Vec<u64>>>,
+    params: &'a HashMap<String, serde_json::Value>,
+    payload_guard: &'a LogPayloadStorage,
+}
+
+impl MatchWhereCtx<'_> {
+    /// True when `alias` names a bound relationship alias of either kind
+    /// (fixed-length scalar or variable-length list). The single source of
+    /// truth for "is this an edge alias?" — every consumer must use it so
+    /// scalar and list aliases can never diverge.
+    fn is_edge_alias(&self, alias: &str) -> bool {
+        self.edge_bindings.is_some_and(|m| m.contains_key(alias))
+            || self.edge_paths.is_some_and(|m| m.contains_key(alias))
+    }
+
+    /// Resolves an alias-prefixed column to the edge ids it targets: one id
+    /// for a fixed-length alias, the ordered traversed list for a
+    /// variable-length alias (possibly empty for zero-hop matches).
+    ///
+    /// `None` means the column does not target an edge alias at all.
+    fn edge_targets(&self, column: &str) -> Option<Vec<u64>> {
+        let (alias, _) = column.split_once('.')?;
+        if let Some(&edge_id) = self.edge_bindings.and_then(|m| m.get(alias)) {
+            return Some(vec![edge_id]);
+        }
+        self.edge_paths.and_then(|m| m.get(alias).cloned())
+    }
+}
+
 impl Collection {
     /// Evaluates a WHERE condition against a node's payload (EPIC-045 US-002).
     ///
@@ -112,55 +173,51 @@ impl Collection {
     ///
     /// Fix #492: metadata conditions are now evaluated via the filter engine
     /// instead of being silently ignored by a catch-all arm.
+    ///
+    /// `edge_bindings` maps relationship aliases to traversed edge ids so
+    /// `r.prop` resolves against the EDGE's properties (audit 2026-06 F).
     pub(crate) fn evaluate_where_condition(
         &self,
         node_id: u64,
         bindings: Option<&HashMap<String, u64>>,
+        edges: EdgeAliasBindings<'_>,
         condition: &crate::velesql::Condition,
         params: &HashMap<String, serde_json::Value>,
         payload_guard: &LogPayloadStorage,
     ) -> Result<bool> {
+        let ctx = MatchWhereCtx {
+            node_id,
+            bindings,
+            edge_bindings: edges.scalar,
+            edge_paths: edges.paths,
+            params,
+            payload_guard,
+        };
+        self.eval_match_condition(&ctx, condition)
+    }
+
+    /// Recursively evaluates a single condition node of a MATCH WHERE tree.
+    fn eval_match_condition(
+        &self,
+        ctx: &MatchWhereCtx<'_>,
+        condition: &crate::velesql::Condition,
+    ) -> Result<bool> {
         use crate::velesql::Condition;
 
         match condition {
-            Condition::Comparison(cmp) => {
-                Self::evaluate_comparison_condition(node_id, bindings, cmp, params, payload_guard)
+            Condition::Comparison(cmp) => self.evaluate_comparison_condition(ctx, cmp),
+            Condition::And(left, right) => self.eval_match_and(ctx, left, right),
+            Condition::Or(left, right) => self.eval_match_or(ctx, left, right),
+            Condition::Not(inner) => Ok(!self.eval_match_condition(ctx, inner)?),
+            Condition::Group(inner) => self.eval_match_condition(ctx, inner),
+            Condition::Similarity(sim) => {
+                // Audit 2026-06 F2: resolve the alias prefix of the similarity
+                // field (e.g. `a.embedding`) against the bound node so the
+                // score is computed on the aliased node, not the traversal
+                // target. Unbound/bare fields keep the previous behaviour.
+                let target_id = resolve_target_id(&sim.field, ctx.bindings, ctx.node_id);
+                self.evaluate_similarity_condition(target_id, sim, ctx.params)
             }
-            Condition::And(left, right) => {
-                Ok(
-                    self.evaluate_where_condition(node_id, bindings, left, params, payload_guard)?
-                        && self.evaluate_where_condition(
-                            node_id,
-                            bindings,
-                            right,
-                            params,
-                            payload_guard,
-                        )?,
-                )
-            }
-            Condition::Or(left, right) => {
-                Ok(
-                    self.evaluate_where_condition(node_id, bindings, left, params, payload_guard)?
-                        || self.evaluate_where_condition(
-                            node_id,
-                            bindings,
-                            right,
-                            params,
-                            payload_guard,
-                        )?,
-                )
-            }
-            Condition::Not(inner) => Ok(!self.evaluate_where_condition(
-                node_id,
-                bindings,
-                inner,
-                params,
-                payload_guard,
-            )?),
-            Condition::Group(inner) => {
-                self.evaluate_where_condition(node_id, bindings, inner, params, payload_guard)
-            }
-            Condition::Similarity(sim) => self.evaluate_similarity_condition(node_id, sim, params),
             // Fix #492: metadata conditions converted to filter engine evaluation.
             Condition::In(_)
             | Condition::Between(_)
@@ -170,12 +227,7 @@ impl Collection {
             | Condition::ContainsText(_)
             | Condition::Contains(_)
             | Condition::GeoDistance(_)
-            | Condition::GeoBbox(_) => Self::evaluate_metadata_condition_for_node(
-                node_id,
-                bindings,
-                condition,
-                payload_guard,
-            ),
+            | Condition::GeoBbox(_) => self.evaluate_metadata_condition_for_node(ctx, condition),
             // VectorSearch, VectorFusedSearch, SparseVectorSearch, and GraphMatch
             // are handled separately in `execute_match_with_similarity`.
             Condition::VectorSearch(_)
@@ -185,27 +237,81 @@ impl Collection {
         }
     }
 
-    /// Evaluates a single comparison condition against a node's payload.
+    /// Evaluates AND with short-circuit: returns false immediately if left is false.
+    fn eval_match_and(
+        &self,
+        ctx: &MatchWhereCtx<'_>,
+        left: &crate::velesql::Condition,
+        right: &crate::velesql::Condition,
+    ) -> Result<bool> {
+        if !self.eval_match_condition(ctx, left)? {
+            return Ok(false);
+        }
+        self.eval_match_condition(ctx, right)
+    }
+
+    /// Evaluates OR with short-circuit: returns true immediately if left is true.
+    fn eval_match_or(
+        &self,
+        ctx: &MatchWhereCtx<'_>,
+        left: &crate::velesql::Condition,
+        right: &crate::velesql::Condition,
+    ) -> Result<bool> {
+        if self.eval_match_condition(ctx, left)? {
+            return Ok(true);
+        }
+        self.eval_match_condition(ctx, right)
+    }
+
+    /// Evaluates a single comparison condition against a node's payload,
+    /// or against the traversed edge's properties when the column alias is
+    /// a bound relationship alias (audit 2026-06 F).
     ///
     /// Uses the pre-acquired `payload_guard` instead of locking per-node.
     fn evaluate_comparison_condition(
-        node_id: u64,
-        bindings: Option<&HashMap<String, u64>>,
+        &self,
+        ctx: &MatchWhereCtx<'_>,
         cmp: &crate::velesql::Comparison,
-        params: &HashMap<String, serde_json::Value>,
-        payload_guard: &LogPayloadStorage,
     ) -> Result<bool> {
-        let target_id = resolve_target_id(&cmp.column, bindings, node_id);
+        // Relationship aliases resolve against edge properties with
+        // ANY-element semantics (openCypher's `any(rel IN r WHERE ...)`);
+        // a fixed-length alias is the one-element case.
+        if let Some(edge_ids) = ctx.edge_targets(&cmp.column) {
+            return self.any_edge(&edge_ids, |this, edge_id| {
+                this.evaluate_edge_comparison(edge_id, cmp, ctx.params)
+            });
+        }
 
-        let Some(target_payload) = payload_guard.retrieve(target_id).ok().flatten() else {
+        let target_id = resolve_target_id(&cmp.column, ctx.bindings, ctx.node_id);
+
+        let Some(target_payload) = ctx.payload_guard.retrieve(target_id).ok().flatten() else {
             return Ok(false);
         };
 
-        let column_path = strip_alias(&cmp.column, bindings);
+        let column_path = strip_alias(&cmp.column, &alias_in(ctx.bindings));
         let Some(actual) = Self::json_get_path(&target_payload, column_path) else {
             return Ok(false);
         };
 
+        let resolved_value = Self::resolve_where_param(&cmp.value, ctx.params)?;
+        Self::evaluate_comparison(cmp.operator, actual, &resolved_value)
+    }
+
+    /// Evaluates a comparison whose column refers to a bound relationship
+    /// alias (e.g. `r.since = 2020`) against the traversed edge's properties.
+    fn evaluate_edge_comparison(
+        &self,
+        edge_id: u64,
+        cmp: &crate::velesql::Comparison,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<bool> {
+        let Some(edge) = self.edge_store.get_edge(edge_id) else {
+            return Ok(false);
+        };
+        let property = cmp.column.split_once('.').map_or("", |(_, rest)| rest);
+        let Some(actual) = edge_property_path(&edge, property) else {
+            return Ok(false);
+        };
         let resolved_value = Self::resolve_where_param(&cmp.value, params)?;
         Self::evaluate_comparison(cmp.operator, actual, &resolved_value)
     }
@@ -218,26 +324,85 @@ impl Collection {
     /// is resolved to the correct node ID via bindings, and stripped before
     /// building the filter condition so the filter engine sees the bare field
     /// path.
-    #[allow(clippy::unnecessary_wraps)] // Consistent with other evaluate_* methods
     fn evaluate_metadata_condition_for_node(
-        node_id: u64,
-        bindings: Option<&HashMap<String, u64>>,
+        &self,
+        ctx: &MatchWhereCtx<'_>,
         condition: &crate::velesql::Condition,
-        payload_guard: &LogPayloadStorage,
     ) -> Result<bool> {
         // Fix #486: Resolve the target node ID from the condition's column
         // alias, mirroring what evaluate_comparison_condition does. Without
         // this, `WHERE a.category IN (...)` would evaluate against node_id
         // (the traversal target) instead of the node bound to alias `a`.
-        let target_id = column_of_metadata_condition(condition)
-            .map_or(node_id, |col| resolve_target_id(col, bindings, node_id));
+        let column = column_of_metadata_condition(condition);
 
-        let Some(payload) = payload_guard.retrieve(target_id).ok().flatten() else {
+        // Audit 2026-06 F: a relationship alias resolves against the EDGE's
+        // properties (ANY-element semantics; fixed-length = one element).
+        if let Some(edge_ids) = column.and_then(|col| ctx.edge_targets(col)) {
+            return self.any_edge(&edge_ids, |this, edge_id| {
+                this.evaluate_metadata_condition_for_edge(edge_id, condition, ctx)
+            });
+        }
+
+        let target_id = column.map_or(ctx.node_id, |col| {
+            resolve_target_id(col, ctx.bindings, ctx.node_id)
+        });
+
+        let Some(payload) = ctx.payload_guard.retrieve(target_id).ok().flatten() else {
             return Ok(false);
         };
 
-        let rewritten = rewrite_condition_aliases(condition.clone(), bindings);
-        let filter_cond: filter::Condition = rewritten.into();
+        let rewritten = rewrite_condition_aliases(condition.clone(), &alias_in(ctx.bindings));
+        // Resolve parameter placeholders (e.g. `IN ($a, $b)`) before the
+        // filter conversion, which would otherwise turn them into NULL.
+        let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
+        let filter_cond: filter::Condition = resolved.into();
+        Ok(filter_cond.matches(&payload))
+    }
+
+    /// ANY-element fold over a resolved edge-id list: true when at least one
+    /// edge satisfies `check` (false for an empty list, e.g. zero-hop
+    /// variable-length matches).
+    fn any_edge(
+        &self,
+        edge_ids: &[u64],
+        check: impl Fn(&Self, u64) -> Result<bool>,
+    ) -> Result<bool> {
+        for &edge_id in edge_ids {
+            if check(self, edge_id)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Mirrors `evaluate_metadata_condition_for_node` for relationship
+    /// aliases: runs the filter engine against the bound edge's properties.
+    fn evaluate_metadata_condition_for_edge(
+        &self,
+        edge_id: u64,
+        condition: &crate::velesql::Condition,
+        ctx: &MatchWhereCtx<'_>,
+    ) -> Result<bool> {
+        let Some(edge) = self.edge_store.get_edge(edge_id) else {
+            return Ok(false);
+        };
+        let payload = serde_json::Value::Object(
+            edge.properties()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        );
+        // Strip the alias against the FULL edge-alias namespace (scalar AND
+        // variable-length). Using only the scalar map here left var-length
+        // columns like `r.w` unstripped, so the filter engine resolved them
+        // as nested paths and every IN/BETWEEN/LIKE/IS NULL on a var-length
+        // alias silently matched nothing (review 2026-06-11 finding 1).
+        let rewritten =
+            rewrite_condition_aliases(condition.clone(), &|alias| ctx.is_edge_alias(alias));
+        // Resolve parameter placeholders before the filter conversion, which
+        // would otherwise turn them into NULL (same hardening as the node path).
+        let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
+        let filter_cond: filter::Condition = resolved.into();
         Ok(filter_cond.matches(&payload))
     }
 
@@ -363,7 +528,10 @@ impl Collection {
         })
     }
 
-    fn json_get_path<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    pub(super) fn json_get_path<'a>(
+        root: &'a serde_json::Value,
+        path: &str,
+    ) -> Option<&'a serde_json::Value> {
         if path.is_empty() {
             return Some(root);
         }
@@ -388,27 +556,43 @@ fn resolve_target_id(
         .unwrap_or(default_id)
 }
 
-/// Strips the alias prefix from a column path when the alias exists in bindings.
-fn strip_alias<'a>(column: &'a str, bindings: Option<&HashMap<String, u64>>) -> &'a str {
+/// Builds an alias-membership predicate over an optional node-bindings map.
+fn alias_in(bindings: Option<&HashMap<String, u64>>) -> impl Fn(&str) -> bool + '_ {
+    move |alias| bindings.is_some_and(|b| b.contains_key(alias))
+}
+
+/// Looks up a (possibly nested) property path on an edge's properties.
+pub(super) fn edge_property_path<'a>(
+    edge: &'a GraphEdge,
+    path: &str,
+) -> Option<&'a serde_json::Value> {
+    let (first, rest) = path.split_once('.').map_or((path, ""), |(f, r)| (f, r));
+    Collection::json_get_path(edge.property(first)?, rest)
+}
+
+/// Strips the alias prefix from a column path when `is_alias` accepts it.
+fn strip_alias<'a>(column: &'a str, is_alias: &dyn Fn(&str) -> bool) -> &'a str {
     match column.split_once('.') {
-        Some((alias, rest)) if bindings.and_then(|b| b.get(alias)).is_some() => rest,
+        Some((alias, rest)) if is_alias(alias) => rest,
         _ => column,
     }
 }
 
 /// Strips the alias prefix from a column name string.
 ///
-/// Returns the bare field path (e.g. `"n.category"` → `"category"`) when the
-/// prefix matches a bound alias, or the original string if no alias matches.
-fn strip_alias_owned(column: &str, bindings: Option<&HashMap<String, u64>>) -> String {
-    strip_alias(column, bindings).to_string()
+/// Returns the bare field path (e.g. `"n.category"` → `"category"`) when
+/// `is_alias` accepts the prefix, or the original string otherwise.
+fn strip_alias_owned(column: &str, is_alias: &dyn Fn(&str) -> bool) -> String {
+    strip_alias(column, is_alias).to_string()
 }
 
 /// Extracts the column name from a metadata condition variant.
 ///
 /// Returns `Some(&str)` for condition types that carry a `column` field.
 /// Non-metadata variants return `None`.
-fn column_of_metadata_condition(condition: &crate::velesql::Condition) -> Option<&str> {
+pub(in crate::collection::search::query) fn column_of_metadata_condition(
+    condition: &crate::velesql::Condition,
+) -> Option<&str> {
     use crate::velesql::Condition;
     match condition {
         Condition::In(ic) => Some(&ic.column),
@@ -432,45 +616,45 @@ fn column_of_metadata_condition(condition: &crate::velesql::Condition) -> Option
 /// caller dispatches them before reaching this function.
 fn rewrite_condition_aliases(
     condition: crate::velesql::Condition,
-    bindings: Option<&HashMap<String, u64>>,
+    is_alias: &dyn Fn(&str) -> bool,
 ) -> crate::velesql::Condition {
     use crate::velesql::Condition;
 
     match condition {
         Condition::In(mut ic) => {
-            ic.column = strip_alias_owned(&ic.column, bindings);
+            ic.column = strip_alias_owned(&ic.column, is_alias);
             Condition::In(ic)
         }
         Condition::Between(mut btw) => {
-            btw.column = strip_alias_owned(&btw.column, bindings);
+            btw.column = strip_alias_owned(&btw.column, is_alias);
             Condition::Between(btw)
         }
         Condition::Like(mut lk) => {
-            lk.column = strip_alias_owned(&lk.column, bindings);
+            lk.column = strip_alias_owned(&lk.column, is_alias);
             Condition::Like(lk)
         }
         Condition::IsNull(mut isn) => {
-            isn.column = strip_alias_owned(&isn.column, bindings);
+            isn.column = strip_alias_owned(&isn.column, is_alias);
             Condition::IsNull(isn)
         }
         Condition::Match(mut m) => {
-            m.column = strip_alias_owned(&m.column, bindings);
+            m.column = strip_alias_owned(&m.column, is_alias);
             Condition::Match(m)
         }
         Condition::ContainsText(mut ct) => {
-            ct.column = strip_alias_owned(&ct.column, bindings);
+            ct.column = strip_alias_owned(&ct.column, is_alias);
             Condition::ContainsText(ct)
         }
         Condition::Contains(mut c) => {
-            c.column = strip_alias_owned(&c.column, bindings);
+            c.column = strip_alias_owned(&c.column, is_alias);
             Condition::Contains(c)
         }
         Condition::GeoDistance(mut gd) => {
-            gd.column = strip_alias_owned(&gd.column, bindings);
+            gd.column = strip_alias_owned(&gd.column, is_alias);
             Condition::GeoDistance(gd)
         }
         Condition::GeoBbox(mut gb) => {
-            gb.column = strip_alias_owned(&gb.column, bindings);
+            gb.column = strip_alias_owned(&gb.column, is_alias);
             Condition::GeoBbox(gb)
         }
         // Non-metadata conditions pass through unchanged.

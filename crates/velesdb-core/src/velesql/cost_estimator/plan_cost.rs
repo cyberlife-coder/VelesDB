@@ -331,7 +331,10 @@ mod tests {
             estimated_rows: None,
             estimation_method: None,
         });
-        let limit = PlanNode::Limit(LimitPlan { count: 10 });
+        let limit = PlanNode::Limit(LimitPlan {
+            count: 10,
+            is_default: false,
+        });
 
         let c_scan = est.estimate_plan_cost(&scan).total();
         let c_filter = est.estimate_plan_cost(&filter).total();

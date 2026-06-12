@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 pytest.importorskip("velesdb")
+pytest.importorskip("llama_index")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -271,6 +272,36 @@ class TestEpisodicMemory:
         results = memory.recall(UNIT_EMBEDDING, top_k=1)
         assert isinstance(results, list)
 
+    def test_recent_is_chronological_oldest_first(self, tmp_db):
+        """recent() must return events oldest-first across multiple turns."""
+        from llamaindex_velesdb.memory import VelesDBEpisodicMemory
+
+        memory = VelesDBEpisodicMemory(db_path=tmp_db, dimension=SMALL_DIM)
+        memory.record_event("msg", {"text": "first"}, UNIT_EMBEDDING)
+        memory.record_event("msg", {"text": "second"}, OTHER_EMBEDDING)
+        memory.record_event("msg", {"text": "third"}, UNIT_EMBEDDING)
+
+        events = memory.recent(limit=10)
+        assert len(events) == 3
+        descriptions = [e["description"] for e in events]
+        # Oldest-first: "first" must precede "third" in the returned order.
+        assert descriptions.index(
+            next(d for d in descriptions if "first" in d)
+        ) < descriptions.index(
+            next(d for d in descriptions if "third" in d)
+        )
+        # Timestamps must be non-decreasing (chronological).
+        timestamps = [e["timestamp"] for e in events]
+        assert timestamps == sorted(timestamps)
+
+    def test_recent_invalid_limit_raises(self, tmp_db):
+        """recent() with limit < 1 must raise ValueError."""
+        from llamaindex_velesdb.memory import VelesDBEpisodicMemory
+
+        memory = VelesDBEpisodicMemory(db_path=tmp_db, dimension=SMALL_DIM)
+        with pytest.raises(ValueError, match="limit"):
+            memory.recent(limit=0)
+
 
 # ---------------------------------------------------------------------------
 # Procedural memory
@@ -356,6 +387,7 @@ class TestProceduralMemory:
         results = memory.recall(UNIT_EMBEDDING, top_k=1)
         assert len(results) >= 1
         first = results[0]
+        assert "id" in first
         assert "name" in first
         assert "steps" in first
         assert "confidence" in first
@@ -409,6 +441,37 @@ class TestProceduralMemory:
         with pytest.raises(KeyError, match="ghost"):
             memory.reinforce("ghost", success=True)
 
+    def test_reinforce_by_recalled_id_across_sessions(self, tmp_db):
+        """A procedure recalled in a NEW session (empty name map) can be
+        reinforced via the numeric id returned by recall()."""
+        import gc
+
+        from llamaindex_velesdb.memory import VelesDBProceduralMemory
+
+        # Session 1: learn and persist a procedure, then release the DB lock
+        # so a separate "session" can reopen the same path.
+        session1 = VelesDBProceduralMemory(db_path=tmp_db, dimension=SMALL_DIM)
+        session1.learn("deploy", ["build", "ship"], embedding=UNIT_EMBEDDING)
+        del session1
+        gc.collect()
+
+        # Session 2: fresh object → _name_to_id is empty, so name lookup
+        # would fail. The recalled id must still allow reinforcement.
+        session2 = VelesDBProceduralMemory(db_path=tmp_db, dimension=SMALL_DIM)
+        assert session2._name_to_id == {}
+        results = session2.recall(UNIT_EMBEDDING, top_k=1)
+        assert len(results) >= 1
+        recalled_id = results[0]["id"]
+        assert isinstance(recalled_id, int)
+
+        # Reinforcing by the recalled numeric id must NOT raise, even though
+        # the name was never learned in this session.
+        session2.reinforce(recalled_id, success=True)
+
+        # Reinforcing by name in session 2 must still raise (name unknown).
+        with pytest.raises(KeyError):
+            session2.reinforce("deploy", success=True)
+
     def test_clear_resets_name_registry(self, tmp_db):
         """clear empties _name_to_id so the name is no longer tracked."""
         from llamaindex_velesdb.memory import VelesDBProceduralMemory
@@ -446,6 +509,71 @@ class TestProceduralMemory:
 
 
 # ---------------------------------------------------------------------------
+# Chat memory (BaseMemory parity adapter)
+# ---------------------------------------------------------------------------
+
+
+class TestChatMemory:
+    """Tests for VelesDBChatMemory (LangChain-parity chat adapter)."""
+
+    def test_import(self):
+        """VelesDBChatMemory can be imported."""
+        from llamaindex_velesdb.memory import VelesDBChatMemory
+
+        assert VelesDBChatMemory is not None
+
+    def test_save_and_load_string_view(self, tmp_db):
+        """save_context then load_memory_variables returns a history string."""
+        from llamaindex_velesdb.memory import VelesDBChatMemory
+
+        memory = VelesDBChatMemory(db_path=tmp_db, dimension=SMALL_DIM)
+        memory.save_context({"input": "Hello"}, {"output": "Hi there"})
+        history = memory.load_memory_variables({})["history"]
+        assert "Human: Hello" in history
+        assert "AI: Hi there" in history
+
+    def test_history_is_chronological_across_turns(self, tmp_db):
+        """Multiple turns must render oldest-first (human before its AI reply,
+        earlier turns before later turns)."""
+        from llamaindex_velesdb.memory import VelesDBChatMemory
+
+        memory = VelesDBChatMemory(db_path=tmp_db, dimension=SMALL_DIM)
+        memory.save_context({"input": "first-q"}, {"output": "first-a"})
+        memory.save_context({"input": "second-q"}, {"output": "second-a"})
+
+        history = memory.load_memory_variables({})["history"]
+        positions = [history.index(tok) for tok in
+                     ("first-q", "first-a", "second-q", "second-a")]
+        assert positions == sorted(positions), (
+            f"chat history not chronological: {history!r}"
+        )
+
+    def test_clear_resets_counter(self, tmp_db):
+        """clear() resets the in-process message counter."""
+        from llamaindex_velesdb.memory import VelesDBChatMemory
+
+        memory = VelesDBChatMemory(db_path=tmp_db, dimension=SMALL_DIM)
+        before = memory._message_counter
+        memory.clear()
+        assert memory._message_counter != before
+
+    def test_load_history_returns_chat_messages(self, tmp_db):
+        """load_history yields LlamaIndex ChatMessage objects in order."""
+        pytest.importorskip("llama_index.core")
+        from llama_index.core.base.llms.types import MessageRole
+        from llamaindex_velesdb.memory import VelesDBChatMemory
+
+        memory = VelesDBChatMemory(db_path=tmp_db, dimension=SMALL_DIM)
+        memory.save_context({"input": "ping"}, {"output": "pong"})
+        messages = memory.load_history(limit=10)
+        assert len(messages) == 2
+        assert messages[0].role == MessageRole.USER
+        assert "ping" in str(messages[0].content)
+        assert messages[1].role == MessageRole.ASSISTANT
+        assert "pong" in str(messages[1].content)
+
+
+# ---------------------------------------------------------------------------
 # format_procedural_results helper
 # ---------------------------------------------------------------------------
 
@@ -454,15 +582,16 @@ class TestFormatProceduralResults:
     """Tests for the shared format_procedural_results helper."""
 
     def test_basic_formatting(self):
-        """format_procedural_results projects all four expected keys."""
+        """format_procedural_results projects all five expected keys."""
         from velesdb_common.memory import format_procedural_results
 
         raw = [
-            {"name": "proc1", "steps": ["a", "b"], "confidence": 0.9, "score": 0.85},
+            {"id": 3, "name": "proc1", "steps": ["a", "b"], "confidence": 0.9, "score": 0.85},
         ]
         formatted = format_procedural_results(raw)
         assert len(formatted) == 1
         result = formatted[0]
+        assert result["id"] == 3
         assert result["name"] == "proc1"
         assert result["steps"] == ["a", "b"]
         assert result["confidence"] == 0.9
@@ -479,8 +608,8 @@ class TestFormatProceduralResults:
         from velesdb_common.memory import format_procedural_results
 
         raw = [
-            {"name": "a", "steps": ["1"], "confidence": 0.8, "score": 0.9},
-            {"name": "b", "steps": ["2", "3"], "confidence": 0.6, "score": 0.7},
+            {"id": 1, "name": "a", "steps": ["1"], "confidence": 0.8, "score": 0.9},
+            {"id": 2, "name": "b", "steps": ["2", "3"], "confidence": 0.6, "score": 0.7},
         ]
         formatted = format_procedural_results(raw)
         assert len(formatted) == 2

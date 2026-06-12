@@ -5,6 +5,7 @@
 //! - `delete()` — point deletion (vector + metadata paths)
 //! - `len()`, `is_empty()`, `all_ids()` — collection-level accessors
 
+use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::Point;
@@ -12,8 +13,29 @@ use crate::storage::{PayloadStorage, VectorStorage};
 
 impl Collection {
     /// Retrieves points by their IDs.
+    ///
+    /// TTL-expired points (payload `_veles_expires_at <= now`) are returned
+    /// as `None`, like deleted points: expired-but-not-yet-swept entries are
+    /// invisible on every read surface. Internal maintenance paths that must
+    /// see them (TTL rebuild, snapshots, PQ training) use
+    /// [`get_raw`](Self::get_raw).
     #[must_use]
     pub fn get(&self, ids: &[u64]) -> Vec<Option<Point>> {
+        let now_secs = now_unix_secs();
+        self.get_raw(ids)
+            .into_iter()
+            .map(|point| point.filter(|p| !is_payload_expired(p.payload.as_ref(), now_secs)))
+            .collect()
+    }
+
+    /// Retrieves points by their IDs **without** the TTL-expiry filter.
+    ///
+    /// Expired-but-not-yet-swept points are returned as-is. This must stay
+    /// the backing read for `rebuild_ttl_from_payloads` (agent TTL cache) and
+    /// memory snapshots: filtering them out would hide unswept expired points
+    /// after a restart, so `auto_expire` could never reclaim their storage.
+    #[must_use]
+    pub(crate) fn get_raw(&self, ids: &[u64]) -> Vec<Option<Point>> {
         let config = self.config.read();
         let is_metadata_only = config.metadata_only;
         drop(config);
@@ -71,19 +93,20 @@ impl Collection {
 
         // Issue #900: deleting a node must cascade to its edges. Otherwise the
         // edge store retains dangling edges pointing at (or from) a node that
-        // no longer exists, silently corrupting the graph. Gated to graph
-        // collections; no-op for vector / metadata-only collections.
+        // no longer exists, silently corrupting the graph. First-class on
+        // every collection type (agent-memory relations live on vector
+        // collections); collections without edges return immediately.
         self.cascade_delete_node_edges(ids)?;
 
-        self.invalidate_caches_and_bump_generation();
+        self.bump_generation_with_mirror_deletes(ids);
         Ok(())
     }
 
     /// Removes every edge connected to each deleted node id (issue #900).
     ///
-    /// Only graph collections own a populated edge store; for vector and
-    /// metadata-only collections this is a cheap config check followed by an
-    /// early return.
+    /// First-class on every collection type: any collection whose edge store
+    /// holds edges cascades; empty stores (the common case) return after one
+    /// cheap emptiness check.
     ///
     /// # Lock ordering
     ///
@@ -96,7 +119,10 @@ impl Collection {
     /// other collection lock held — so taking them respects the documented
     /// ascending lock order and cannot deadlock.
     fn cascade_delete_node_edges(&self, ids: &[u64]) -> Result<()> {
-        if self.config.read().graph_schema.is_none() {
+        // Cascade whenever edges exist — the graph dimension is first-class
+        // on every collection type (agent-memory relations live on vector
+        // collections). Empty stores (the common case) return immediately.
+        if self.edge_store.is_empty() {
             return Ok(());
         }
         let mut removed_any = false;
@@ -107,6 +133,8 @@ impl Collection {
             if before > 0 {
                 // WAL-before-apply (crash durability): log the cascade remove
                 // before mutating the store so a crash replays the tombstone.
+                // The WAL lock spans append + apply (see `add_edge`).
+                let _wal_guard = self.edge_wal_lock.lock();
                 #[cfg(feature = "persistence")]
                 crate::collection::graph::edge_wal::wal_append_remove_node(
                     &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),

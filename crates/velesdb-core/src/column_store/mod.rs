@@ -5,7 +5,12 @@
 //!
 //! # Performance Goals
 //!
-//! - Maintain 50M+ items/sec throughput at 100k items (vs 19M/s with JSON)
+//! - Maintain 50M+ items/sec filter throughput at 100k items (vs 19M/s with
+//!   JSON) — measured by the `column_filter_benchmark` micro-benchmark of
+//!   this module's filtering API. The `SELECT ... WHERE` query path invokes
+//!   these typed filters through the per-collection payload mirror
+//!   (`collection::payload_mirror`), built adaptively for scan-heavy
+//!   workloads; the `ColumnStore` also backs JOIN execution.
 //! - Cache-friendly sequential memory access
 //! - Support for common filter operations: Eq, Gt, Lt, In, Range
 //!
@@ -165,6 +170,32 @@ impl ColumnStore {
             ColumnType::GeoPoint => TypedColumn::new_geopoint(0),
         };
         self.columns.insert(name.to_string(), column);
+    }
+
+    /// Adds a column after rows already exist, backfilling nulls so the new
+    /// column stays aligned with `row_count` (required by the per-collection
+    /// payload mirror, whose schema evolves as new fields appear).
+    pub(crate) fn add_column_backfilled(&mut self, name: &str, col_type: &ColumnType) {
+        self.add_column(name, col_type);
+        if let Some(column) = self.columns.get_mut(name) {
+            for _ in 0..self.row_count {
+                column.push_null();
+            }
+        }
+    }
+
+    /// Tombstones a row by index without requiring the primary-key machinery.
+    ///
+    /// Used by the payload mirror, which maps point ids to row indices
+    /// externally (`u64` ids do not fit the `i64` primary-key API).
+    pub(crate) fn tombstone_row(&mut self, row_idx: usize) {
+        if row_idx >= self.row_count {
+            return;
+        }
+        self.deleted_rows.insert(row_idx);
+        if let Ok(idx) = u32::try_from(row_idx) {
+            self.deletion_bitmap.insert(idx);
+        }
     }
 
     /// Returns the total number of rows in the store (including deleted/tombstoned rows).

@@ -6,7 +6,8 @@
 # IMPORTANT: This list MUST be kept in sync with:
 # - `src/lib.rs` invoke_handler registration
 # - `build.rs` COMMANDS array
-# - `src/commands_tests.rs` REGISTERED_COMMANDS array
+# The sync is enforced by the permission tests in `src/commands_tests.rs`,
+# which parse the `lib.rs` registration, the COMMANDS array, and this file.
 
 [default]
 description = "Default permissions for VelesDB plugin - allows all database operations"
@@ -42,11 +43,37 @@ permissions = [
     "allow-stream-insert",
     # AgentMemory (semantic, episodic, procedural)
     "allow-semantic-store",
+    "allow-semantic-store-with-ttl",
     "allow-semantic-query",
+    "allow-semantic-delete",
+    "allow-semantic-dimension",
+    "allow-semantic-serialize",
+    "allow-semantic-deserialize",
     "allow-episodic-record",
     "allow-episodic-recent",
+    "allow-episodic-recall-similar",
+    "allow-episodic-older-than",
+    "allow-episodic-delete",
+    "allow-episodic-serialize",
+    "allow-episodic-deserialize",
     "allow-procedural-learn",
     "allow-procedural-recall",
+    "allow-procedural-reinforce",
+    "allow-procedural-list-all",
+    "allow-procedural-delete",
+    "allow-procedural-serialize",
+    "allow-procedural-deserialize",
+    # AgentMemory TTL / eviction / snapshot-versioning / VelesQL parity
+    "allow-memory-set-ttl",
+    "allow-memory-auto-expire",
+    "allow-memory-evict-low-confidence",
+    "allow-memory-snapshot",
+    "allow-memory-load-latest-snapshot",
+    "allow-memory-load-snapshot-version",
+    "allow-memory-list-snapshot-versions",
+    "allow-memory-query-semantic",
+    "allow-memory-query-episodic",
+    "allow-memory-query-procedural",
     # Knowledge Graph
     "allow-create-graph-collection",
     "allow-add-edge",

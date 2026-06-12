@@ -1,5 +1,5 @@
 // VelesQL Grammar - SQL-like query language for VelesDB
-// Version 3.6.0 — FLUSH + ANALYZE, TRUNCATE, ALTER COLLECTION + DDL + graph mutations + DELETE FROM + multi-row INSERT + UPSERT
+// Version 3.10.0 — matches docs/VELESQL_SPEC.md (window functions, CONTAINS/CONTAINS_TEXT, GEO_DISTANCE/GEO_BBOX, @collection MATCH annotations, DDL + graph mutations + DML)
 
 // Whitespace and comments
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
@@ -222,11 +222,27 @@ select_stmt = {
 }
 
 // FROM clause with optional alias (EPIC-052 US-003: Self-JOIN support)
-// Supports: FROM table, FROM table AS alias
-// Note: "FROM table alias" without AS is intentionally NOT supported to avoid
-// ambiguity with JOIN keywords. Use "FROM table AS alias" syntax.
+// Supports: FROM table, FROM table AS alias, FROM table alias (bare form).
+// The bare alias is guarded by a negative lookahead on reserved clause
+// starters so a following keyword (WHERE, JOIN, UNION, ...) is never
+// swallowed as an alias. Quoting (`limit`) escapes the reservation.
 from_clause = { identifier ~ from_alias? }
-from_alias = { ^"AS" ~ identifier }
+from_alias = { (as_kw ~ identifier) | bare_alias }
+
+// Word-boundary-safe AS keyword: prevents "asset" from being parsed as
+// AS + "set" (same pattern as collection_kw / flush_full_kw).
+as_kw = @{ ^"AS" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// Bare (AS-less) table alias: any identifier that is not a reserved clause
+// keyword. Silent so its identifier surfaces directly in from_alias /
+// alias_clause pairs, keeping alias extraction identical for both forms.
+bare_alias = _{ !reserved_alias_kw ~ identifier }
+reserved_alias_kw = @{
+    (^"WHERE" | ^"GROUP" | ^"HAVING" | ^"ORDER" | ^"LIMIT" | ^"OFFSET"
+    | ^"WITH" | ^"USING" | ^"UNION" | ^"INTERSECT" | ^"EXCEPT" | ^"INNER"
+    | ^"LEFT" | ^"RIGHT" | ^"FULL" | ^"OUTER" | ^"JOIN" | ^"ON" | ^"AS")
+    ~ !(ASCII_ALPHANUMERIC | "_")
+}
 
 // DISTINCT modifier (EPIC-052 US-001)
 distinct_modifier = { ^"DISTINCT" }
@@ -258,7 +274,9 @@ join_type = { (^"LEFT" ~ ^"OUTER"?) | (^"RIGHT" ~ ^"OUTER"?) | (^"FULL" ~ ^"OUTE
 join_spec = { on_clause | using_clause }
 on_clause = { ^"ON" ~ join_condition }
 using_clause = { ^"USING" ~ "(" ~ identifier ~ ("," ~ identifier)* ~ ")" }
-alias_clause = { ^"AS" ~ identifier }
+// JOIN alias: AS form or bare form (same reserved-keyword guard as FROM;
+// ON / USING are reserved so the join_spec is never swallowed).
+alias_clause = { (as_kw ~ identifier) | bare_alias }
 join_condition = { column_ref ~ "=" ~ column_ref }
 column_ref = @{ identifier ~ "." ~ identifier }
 

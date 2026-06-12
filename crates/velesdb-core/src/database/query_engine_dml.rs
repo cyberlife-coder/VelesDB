@@ -106,7 +106,7 @@ impl Database {
         let collection = self.resolve_writable_collection(&stmt.table)?;
 
         let assignments = Self::resolve_update_assignments(stmt, params)?;
-        let filter = Self::build_update_filter(stmt.where_clause.as_ref())?;
+        let filter = Self::build_update_filter(stmt.where_clause.as_ref(), params)?;
 
         let all_ids = collection.all_ids();
         let rows = collection.get(&all_ids);

@@ -2,9 +2,7 @@
 
 > **Difficulty: Intermediate** | Showcases: Hybrid search (dense + sparse), RRF fusion, LangChain VectorStore interface
 
-Example integration showing VelesDB as a hybrid dense+sparse vector store for LangChain applications.
-
-> **Note:** This is an example integration, not a published package. It demonstrates the integration pattern for building your own LangChain-compatible VelesDB wrapper.
+Example showing VelesDB as a hybrid dense+sparse vector store for LangChain applications, using the published [`langchain-velesdb`](../../integrations/langchain) connector — adopting VelesDB is a single dependency change.
 
 ## Why VelesDB for LangChain?
 
@@ -20,7 +18,7 @@ VelesDB handles **dense + sparse + fusion in a single engine**:
 ## Prerequisites
 
 ```bash
-pip install velesdb langchain-core
+pip install langchain-velesdb
 ```
 
 ## Usage
@@ -29,32 +27,31 @@ pip install velesdb langchain-core
 python hybrid_search.py
 ```
 
-The example uses synthetic embeddings (random vectors) so it runs without an embedding model or API key. In production, replace the random vectors with a real embedding model (OpenAI, Sentence-Transformers, Cohere, etc.).
+The example uses deterministic synthetic embeddings so it runs without an embedding model or API key. In production, replace `DemoEmbeddings` with a real embedding model (OpenAI, Sentence-Transformers, Cohere, etc.).
 
 ## What the Example Shows
 
-1. **`VelesDBVectorStore`** class implementing LangChain's `VectorStore` interface
-2. **`add_texts`** with both dense embeddings and sparse vectors in one call
-3. **Dense-only search** using just embedding vectors
-4. **Sparse-only search** using just keyword weights
-5. **Hybrid search** combining both signals via VelesDB's built-in RRF fusion
+1. **`langchain_velesdb.VelesDBVectorStore`** — the published LangChain connector
+2. **`add_texts`** with metadata and sparse vectors in one call
+3. **Dense-only search** via `similarity_search_with_score`
+4. **Hybrid dense+sparse search** by passing `sparse_vector=` (RRF fusion)
+5. **Hybrid vector+BM25 search** via `hybrid_search`
 
 ## Expected Output
 
 ```
-=== VelesDB + LangChain Hybrid Search Demo ===
+Inserted 20 documents
 
---- Dense Search Results (3) ---
-  [1] Machine learning is ... (score: 0.xxx)
-  [2] Neural networks ...     (score: 0.xxx)
+=== Dense-Only Search ===
+  [0.xxxx] LangChain provides abstractions for building LLM applications
   ...
 
---- Sparse Search Results (3) ---
-  [1] ... (score: 0.xxx)
+=== Hybrid Search (Dense + Sparse) ===
+  [0.xxxx] Sub-millisecond latency is critical for real-time AI applications
   ...
 
---- Hybrid Search Results (RRF fusion, 3) ---
-  [1] ... (score: 0.xxx)
+=== Hybrid Search (Vector + BM25) ===
+  [0.xxxx] Hybrid search fuses dense and sparse signals for better recall
   ...
 ```
 
@@ -62,14 +59,14 @@ The example uses synthetic embeddings (random vectors) so it runs without an emb
 
 ```python
 from langchain_openai import OpenAIEmbeddings
+from langchain_velesdb import VelesDBVectorStore
 
 store = VelesDBVectorStore(
+    embedding=OpenAIEmbeddings(),
+    path="./data",
     collection_name="my_docs",
-    db_path="./data",
-    dimension=1536,  # Match your embedding model
-    embedding_function=OpenAIEmbeddings(),
 )
 
-# add_texts will auto-generate embeddings via the embedding function
+# add_texts auto-generates embeddings via the embedding model
 store.add_texts(["Document text here..."])
 ```

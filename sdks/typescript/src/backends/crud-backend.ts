@@ -25,19 +25,58 @@ import {
 /** Minimal transport interface for CRUD operations. */
 export type CrudTransport = BaseTransport;
 
+/** Largest value a u64 point id can take (`u64::MAX`). */
+const U64_MAX = 18446744073709551615n;
+
+/**
+ * Coerce a decimal-string id for the shared gate in {@link parseRestPointId}.
+ *
+ * Only a plain run of digits is accepted — no sign, whitespace, decimal
+ * point, exponent, or hex — so '' / '  ' / '1e3' / '0x10' map to `NaN`
+ * (rejected by the caller) instead of silently coercing (`Number('')` would
+ * otherwise become 0). Digit-strings within the JS safe-integer range become
+ * numbers; digit-strings in (2^53-1, u64::MAX] are returned verbatim so the
+ * exact decimal value survives the JavaScript boundary without precision
+ * loss. Digit-strings above `u64::MAX` map to `NaN` (rejected).
+ */
+function coerceDecimalStringId(id: string): number | string {
+  if (!/^\d+$/.test(id)) return NaN;
+  const big = BigInt(id);
+  if (big > U64_MAX) return NaN;
+  return big > BigInt(Number.MAX_SAFE_INTEGER) ? id : Number(id);
+}
+
+/**
+ * Single validation gate for REST point ids — used by the CRUD/streaming
+ * backends, the client layer (`validateRestPointId`) and the agent-memory
+ * helpers.
+ *
+ * Numeric ids must be non-negative integers within the JS safe-integer range.
+ * Decimal-string ids (e.g. the u64-safe strings returned by the agent-memory
+ * record/learn helpers) are coerced to numbers when exactly representable and
+ * kept as verbatim strings above 2^53-1: since #1004 the server deserialises
+ * point ids in request bodies from either JSON numbers or strings, and path
+ * params (`/points/{id}`) parse the full u64 range, so every id that
+ * `storeFact` / `recordEvent` / `learnProcedure` accepts round-trips through
+ * `get` / `delete` symmetrically.
+ */
 export function parseRestPointId(id: string | number): RestPointId {
+  const coerced = typeof id === 'string' ? coerceDecimalStringId(id) : id;
+  if (typeof coerced === 'string') {
+    // Precision-critical decimal string — keep it verbatim on the wire.
+    return coerced;
+  }
   if (
-    typeof id !== 'number' ||
-    !Number.isFinite(id) ||
-    id < 0 ||
-    !Number.isInteger(id) ||
-    id > Number.MAX_SAFE_INTEGER
+    !Number.isFinite(coerced) ||
+    coerced < 0 ||
+    !Number.isInteger(coerced) ||
+    coerced > Number.MAX_SAFE_INTEGER
   ) {
     throw new ValidationError(
-      `REST backend requires numeric u64-compatible IDs in JS safe integer range (0..${Number.MAX_SAFE_INTEGER}). Received: ${String(id)}`
+      `REST backend requires numeric u64-compatible IDs: a non-negative integer in the JS safe integer range (0..${Number.MAX_SAFE_INTEGER}) or a decimal string up to u64::MAX (${U64_MAX}). Received: ${String(id)}`
     );
   }
-  return id;
+  return coerced;
 }
 
 export function sparseVectorToRestFormat(sv: SparseVector): Record<string, number> {

@@ -8,6 +8,7 @@
 
 import type { VectorDocument, VelesDBConfig } from '../types';
 import { ValidationError } from '../types';
+import { parseRestPointId } from '../backends/crud-backend';
 
 /** Validate that a value is a non-empty string, throwing with the given label. */
 export function requireNonEmptyString(value: unknown, label: string): void {
@@ -52,17 +53,12 @@ export function validateDocument(doc: VectorDocument, config: VelesDBConfig): vo
 
 /** Validate that a document ID is a valid REST point ID when using REST backend. */
 export function validateRestPointId(id: string | number, config: VelesDBConfig): void {
-  if (
-    config.backend === 'rest' &&
-    (
-      typeof id !== 'number' ||
-      !Number.isInteger(id) ||
-      id < 0 ||
-      id > Number.MAX_SAFE_INTEGER
-    )
-  ) {
-    throw new ValidationError(
-      `REST backend requires numeric u64-compatible document IDs in JS safe integer range (0..${Number.MAX_SAFE_INTEGER})`
-    );
+  if (config.backend !== 'rest') {
+    return;
   }
+  // Delegate to the canonical backend gate so the id rules — non-negative
+  // integers in the JS safe-integer range, plus verbatim decimal strings up to
+  // u64::MAX — live in exactly one place (it throws `ValidationError` on a
+  // bad id).
+  parseRestPointId(id);
 }

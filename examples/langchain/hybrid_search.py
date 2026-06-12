@@ -1,239 +1,42 @@
 """
 VelesDB + LangChain: Hybrid Dense+Sparse Search Example
 
-Demonstrates VelesDB as a single-engine hybrid vector store for LangChain,
-combining dense (embedding) and sparse (BM25-style) search in one query
-without external glue code or multiple backends.
+Demonstrates the published ``langchain-velesdb`` connector as a
+single-engine hybrid vector store for LangChain — dense (embedding),
+fused dense+sparse, and vector+BM25 search in one query, without ad hoc
+glue code or multiple backends.
 
-Replace random vectors with real embeddings (OpenAI, Sentence-Transformers, etc.)
-for production use.
+Install:
+    pip install langchain-velesdb
+
+Replace the deterministic demo embeddings with real ones (OpenAI,
+Sentence-Transformers, etc.) for production use.
 """
 
 from __future__ import annotations
 
-import hashlib
 import random
 import shutil
-import uuid
-from typing import Any, Iterable, Optional
 
-import velesdb
-from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_core.vectorstores import VectorStore
+from langchain_velesdb import VelesDBVectorStore
 
 
-def _str_to_u64(s: str) -> int:
-    """Convert a string to a deterministic u64 ID for VelesDB.
+class DemoEmbeddings(Embeddings):
+    """Deterministic pseudo-random embeddings — replace with a real model."""
 
-    VelesDB's Rust binding expects ``id`` fields as ``u64``.  This helper
-    hashes the input string with SHA-256 and takes the first 8 bytes as a
-    little-endian unsigned integer, giving a collision-resistant mapping that
-    fits in a ``u64``.
-    """
-    return int.from_bytes(hashlib.sha256(s.encode()).digest()[:8], "little")
+    def __init__(self, dim: int) -> None:
+        self._dim = dim
 
+    def _vector(self, text: str) -> list[float]:
+        rng = random.Random(text)
+        return [rng.gauss(0, 1) for _ in range(self._dim)]
 
-class VelesDBVectorStore(VectorStore):
-    """LangChain VectorStore backed by VelesDB with hybrid dense+sparse search.
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self._vector(text) for text in texts]
 
-    VelesDB handles both dense vector similarity and sparse keyword matching
-    in a single engine, eliminating the need to combine separate systems.
-    """
-
-    def __init__(
-        self,
-        collection_name: str,
-        db_path: str = "./velesdb_data",
-        dimension: int = 768,
-        metric: str = "cosine",
-        embedding_function: Optional[Embeddings] = None,
-    ) -> None:
-        self._db = velesdb.Database(db_path)
-        self._collection = self._db.get_or_create_collection(
-            collection_name, dimension=dimension, metric=metric
-        )
-        self._embedding_function = embedding_function
-        self._dimension = dimension
-
-    @property
-    def embeddings(self) -> Optional[Embeddings]:
-        """Return the embedding function, if set."""
-        return self._embedding_function
-
-    def add_texts(
-        self,
-        texts: Iterable[str],
-        metadatas: Optional[list[dict]] = None,
-        embeddings: Optional[list[list[float]]] = None,
-        sparse_vectors: Optional[list[dict[int, float]]] = None,
-        ids: Optional[list[str]] = None,
-        **kwargs: Any,
-    ) -> list[str]:
-        """Add texts with optional dense embeddings and sparse vectors.
-
-        Args:
-            texts: Documents to insert.
-            metadatas: Per-document metadata dicts.
-            embeddings: Pre-computed dense vectors. If None and an embedding
-                function is set, embeddings are generated automatically.
-            sparse_vectors: Optional sparse vectors for hybrid search.
-                Each is a dict mapping dimension index to weight.
-            ids: Document IDs (arbitrary strings). Generated if not provided.
-                The original string ID is stored in the payload under
-                ``_original_id`` so it can be recovered from search results.
-
-        Returns:
-            List of original document IDs (strings).
-        """
-        text_list = list(texts)
-
-        # Generate embeddings if not provided
-        if embeddings is None and self._embedding_function is not None:
-            embeddings = self._embedding_function.embed_documents(text_list)
-
-        if embeddings is not None and len(embeddings) != len(text_list):
-            raise ValueError(
-                f"Number of embeddings ({len(embeddings)}) does not match "
-                f"number of texts ({len(text_list)})"
-            )
-
-        # Build point dicts
-        points = []
-        result_ids = []
-        for i, text in enumerate(text_list):
-            # Keep the original string ID for the caller and store it in
-            # the payload so it is recoverable from search results.
-            doc_id = ids[i] if ids else str(uuid.uuid4())
-            result_ids.append(doc_id)
-
-            # VelesDB requires u64 point IDs — hash the string ID.
-            point_id = _str_to_u64(doc_id)
-
-            payload: dict[str, Any] = {"text": text, "_original_id": doc_id}
-            if metadatas and i < len(metadatas):
-                payload.update(metadatas[i])
-
-            point: dict[str, Any] = {
-                "id": point_id,
-                "payload": payload,
-            }
-
-            if embeddings is not None:
-                point["vector"] = embeddings[i]
-
-            if sparse_vectors is not None and i < len(sparse_vectors):
-                point["sparse_vector"] = sparse_vectors[i]
-
-            points.append(point)
-
-        self._collection.upsert(points)
-        return result_ids
-
-    def similarity_search(
-        self,
-        query: str,
-        k: int = 4,
-        **kwargs: Any,
-    ) -> list[Document]:
-        """Search for documents similar to a query.
-
-        Supports dense-only, sparse-only, or hybrid search depending on
-        which vectors are provided in kwargs.
-
-        Args:
-            query: Query text (used with embedding function if available).
-            k: Number of results to return.
-            **kwargs: Optional ``query_embedding``, ``embedding``, or
-                ``sparse_vector`` for hybrid search.
-
-        Returns:
-            List of matching LangChain Document objects.
-        """
-        results_with_scores = self.similarity_search_with_score(query, k, **kwargs)
-        return [doc for doc, _score in results_with_scores]
-
-    def similarity_search_with_score(
-        self,
-        query: str,
-        k: int = 4,
-        **kwargs: Any,
-    ) -> list[tuple[Document, float]]:
-        """Search with relevance scores.
-
-        Args:
-            query: Query text.
-            k: Number of results.
-            **kwargs: Optional ``query_embedding``/``embedding`` and
-                ``sparse_vector``.
-
-        Returns:
-            List of (Document, score) tuples, highest score first.
-        """
-        # Resolve dense query embedding
-        query_embedding = kwargs.get("query_embedding") or kwargs.get("embedding")
-        if query_embedding is None and self._embedding_function is not None:
-            query_embedding = self._embedding_function.embed_query(query)
-
-        sparse_vector = kwargs.get("sparse_vector")
-
-        results = self._collection.search_request(
-            velesdb.SearchOptions(
-                vector=query_embedding,
-                sparse_vector=sparse_vector,
-                top_k=k,
-            )
-        )
-
-        docs_and_scores: list[tuple[Document, float]] = []
-        for result in results:
-            payload = result.get("payload", {})
-            text = payload.pop("text", "")
-            score = result.get("score", 0.0)
-            # Recover the original caller-visible string ID from the payload
-            # when available; fall back to the numeric u64 stored by VelesDB.
-            original_id = payload.pop("_original_id", str(result.get("id", "")))
-            payload["id"] = original_id
-            doc = Document(page_content=text, metadata=payload)
-            docs_and_scores.append((doc, score))
-
-        return docs_and_scores
-
-    @classmethod
-    def from_texts(
-        cls,
-        texts: list[str],
-        embedding: Optional[Embeddings] = None,
-        metadatas: Optional[list[dict]] = None,
-        collection_name: str = "langchain_collection",
-        db_path: str = "./velesdb_data",
-        dimension: int = 768,
-        metric: str = "cosine",
-        **kwargs: Any,
-    ) -> "VelesDBVectorStore":
-        """Create a VelesDBVectorStore from a list of texts.
-
-        Args:
-            texts: Documents to insert.
-            embedding: Embedding function for generating vectors.
-            metadatas: Per-document metadata.
-            collection_name: Name of the VelesDB collection.
-            db_path: Path to VelesDB data directory.
-            dimension: Vector dimensionality.
-            metric: Distance metric (cosine, euclidean, dot).
-
-        Returns:
-            Initialized VelesDBVectorStore with documents inserted.
-        """
-        store = cls(
-            collection_name=collection_name,
-            db_path=db_path,
-            dimension=dimension,
-            metric=metric,
-            embedding_function=embedding,
-        )
-        store.add_texts(texts, metadatas=metadatas, **kwargs)
-        return store
+    def embed_query(self, text: str) -> list[float]:
+        return self._vector(text)
 
 
 # ---------------------------------------------------------------------------
@@ -267,13 +70,8 @@ if __name__ == "__main__":
         "Offline-first databases work without cloud connectivity",
     ]
 
-    # Synthetic dense embeddings (replace with real model in production)
-    random.seed(42)
-    dense_vectors = [
-        [random.gauss(0, 1) for _ in range(DIM)] for _ in range(NUM_DOCS)
-    ]
-
     # Synthetic sparse vectors (simulating BM25-style term weights)
+    random.seed(42)
     sparse_vectors = [
         {random.randint(0, 9999): round(random.uniform(0.1, 3.0), 3) for _ in range(5)}
         for _ in range(NUM_DOCS)
@@ -283,51 +81,44 @@ if __name__ == "__main__":
 
     DB_PATH = "./demo_velesdb_data"
     try:
-        # -- Initialize store --
+        # -- Initialize store: the published connector, one dependency --
         store = VelesDBVectorStore(
+            embedding=DemoEmbeddings(DIM),
+            path=DB_PATH,
             collection_name="langchain_hybrid_demo",
-            db_path=DB_PATH,
-            dimension=DIM,
         )
 
-        # Insert documents with both dense and sparse vectors
+        # Insert documents with both dense embeddings and sparse vectors
         ids = store.add_texts(
             texts=documents,
-            embeddings=dense_vectors,
-            sparse_vectors=sparse_vectors,
             metadatas=metadatas,
+            sparse_vectors=sparse_vectors,
         )
         print(f"Inserted {len(ids)} documents\n")
 
         # -- Dense-only search --
-        query_dense = [random.gauss(0, 1) for _ in range(DIM)]
         print("=== Dense-Only Search ===")
-        results = store.similarity_search_with_score(
-            query="semantic search",
-            k=3,
-            query_embedding=query_dense,
-        )
-        for doc, score in results:
-            print(f"  [{score:.4f}] {doc.page_content[:80]}")
-
-        # -- Sparse-only search --
-        query_sparse = {42: 2.5, 100: 1.8, 7777: 0.9}
-        print("\n=== Sparse-Only Search ===")
-        results = store.similarity_search_with_score(
-            query="keyword matching",
-            k=3,
-            sparse_vector=query_sparse,
-        )
+        results = store.similarity_search_with_score("semantic search", k=3)
         for doc, score in results:
             print(f"  [{score:.4f}] {doc.page_content[:80]}")
 
         # -- Hybrid search (dense + sparse fused via RRF) --
+        query_sparse = {42: 2.5, 100: 1.8, 7777: 0.9}
         print("\n=== Hybrid Search (Dense + Sparse) ===")
         results = store.similarity_search_with_score(
-            query="hybrid retrieval",
+            "hybrid retrieval",
             k=5,
-            query_embedding=query_dense,
             sparse_vector=query_sparse,
+        )
+        for doc, score in results:
+            print(f"  [{score:.4f}] {doc.page_content[:80]}")
+
+        # -- Hybrid search (vector + BM25 full-text) --
+        print("\n=== Hybrid Search (Vector + BM25) ===")
+        results = store.hybrid_search(
+            "dense and sparse fusion",
+            k=5,
+            vector_weight=0.7,  # 70% vector, 30% BM25
         )
         for doc, score in results:
             print(f"  [{score:.4f}] {doc.page_content[:80]}")

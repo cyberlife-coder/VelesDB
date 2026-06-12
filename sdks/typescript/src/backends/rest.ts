@@ -20,6 +20,7 @@ import type {
   AddEdgeRequest,
   GetEdgesOptions,
   GraphEdge,
+  GraphNodeId,
   TraverseRequest,
   TraverseParallelRequest,
   TraverseResponse,
@@ -34,6 +35,7 @@ import type {
   CollectionConfigResponse,
   SemanticEntry,
   EpisodicEvent,
+  EpisodicRecord,
   ProceduralPattern,
   ScrollRequest,
   ScrollResponse,
@@ -49,6 +51,9 @@ import type {
   AggregateQueryOptions,
   AggregateResponse,
   StreamUpsertResponse,
+  RelateRequest,
+  RelateResponse,
+  RelationsResponse,
 } from '../types';
 import type { FilterInput } from '../filter';
 import type { CapabilityMap } from '../capabilities';
@@ -90,6 +95,8 @@ import {
   recallEpisodicEvents as _recallEpisodicEvents,
   storeProceduralPattern as _storeProceduralPattern,
   matchProceduralPatterns as _matchProceduralPatterns,
+  recallRecentEvents as _recallRecentEvents,
+  recallOlderThanEvents as _recallOlderThanEvents,
 } from './agent-memory-backend';
 import {
   search as _search, searchBatch as _searchBatch,
@@ -101,6 +108,8 @@ import {
   addEdge as _addEdge, getEdges as _getEdges,
   traverseGraph as _traverseGraph, traverseParallel as _traverseParallel,
   getNodeDegree as _getNodeDegree, createGraphCollection as _createGraphCollection,
+  relate as _relate, unrelate as _unrelate,
+  getRelations as _getRelations, setTtlDurable as _setTtlDurable,
 } from './graph-backend';
 import { query as _query, queryExplain as _queryExplain, collectionSanity as _collectionSanity } from './query-backend';
 import { scroll as _scroll } from './scroll-backend';
@@ -178,6 +187,10 @@ export class RestBackend implements IVelesDBBackend {
   async getNodePayload(c: string, id: number): Promise<NodePayloadResponse> { this.ensureInitialized(); return _getNodePayload(buildBaseTransport(this.httpConfig), c, id); }
   async upsertNodePayload(c: string, id: number, p: Record<string, unknown>): Promise<void> { this.ensureInitialized(); return _upsertNodePayload(buildBaseTransport(this.httpConfig), c, id, p); }
   async graphSearch(c: string, r: GraphSearchReq): Promise<GraphSearchResponse> { this.ensureInitialized(); return _graphSearch(buildBaseTransport(this.httpConfig), c, r); }
+  async relate(c: string, req: RelateRequest): Promise<RelateResponse> { this.ensureInitialized(); return _relate(buildCrudTransport(this.httpConfig), c, req); }
+  async unrelate(c: string, edgeId: GraphNodeId): Promise<boolean> { this.ensureInitialized(); return _unrelate(buildCrudTransport(this.httpConfig), c, edgeId); }
+  async getRelations(c: string, pointId: GraphNodeId): Promise<RelationsResponse> { this.ensureInitialized(); return _getRelations(buildCrudTransport(this.httpConfig), c, pointId); }
+  async setTtlDurable(c: string, pointId: GraphNodeId, ttlSeconds: number): Promise<void> { this.ensureInitialized(); return _setTtlDurable(buildCrudTransport(this.httpConfig), c, pointId, ttlSeconds); }
 
   // Search
   async search(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<SearchResult[]> { this.ensureInitialized(); return _search(buildSearchTransport(this.httpConfig), c, q, o); }
@@ -223,8 +236,10 @@ export class RestBackend implements IVelesDBBackend {
   // Agent Memory
   async storeSemanticFact(c: string, e: SemanticEntry): Promise<void> { this.ensureInitialized(); return _storeSemanticFact(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e); }
   async searchSemanticMemory(c: string, e: number[], k = 5): Promise<SearchResult[]> { this.ensureInitialized(); return _searchSemanticMemory(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e, k); }
-  async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<number> { this.ensureInitialized(); return _recordEpisodicEvent(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e); }
+  async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<string> { this.ensureInitialized(); return _recordEpisodicEvent(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e); }
   async recallEpisodicEvents(c: string, e: number[], k = 5): Promise<SearchResult[]> { this.ensureInitialized(); return _recallEpisodicEvents(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e, k); }
-  async storeProceduralPattern(c: string, p: ProceduralPattern): Promise<number> { this.ensureInitialized(); return _storeProceduralPattern(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, p); }
+  async recallRecentEvents(c: string, since?: number): Promise<EpisodicRecord[]> { this.ensureInitialized(); return _recallRecentEvents(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, since); }
+  async recallOlderThanEvents(c: string, before: number): Promise<EpisodicRecord[]> { this.ensureInitialized(); return _recallOlderThanEvents(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, before); }
+  async storeProceduralPattern(c: string, p: ProceduralPattern): Promise<string> { this.ensureInitialized(); return _storeProceduralPattern(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, p); }
   async matchProceduralPatterns(c: string, e: number[], k = 5): Promise<SearchResult[]> { this.ensureInitialized(); return _matchProceduralPatterns(buildAgentMemoryTransport(this.httpConfig, (col, emb, opts) => this.search(col, emb, opts)), c, e, k); }
 }

@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | **Last Updated**: 2026-06-03 (VelesDB v1.18.0)
+**Version**: 3.10.0 | **Last Updated**: 2026-06-12 (VelesDB v2.0.0)
 
 ---
 
@@ -84,6 +84,10 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 - Conformance test matrix: `docs/reference/VELESQL_CONFORMANCE_MATRIX.md`.
 - Recommended developer syntax for mixed filters:
   `SELECT ... FROM <collection> WHERE ... AND MATCH (...)`.
+  When `FROM` declares an alias, the MATCH anchor either reuses it or — when
+  no pattern alias matches a declared alias — binds implicitly to the FROM
+  rows (rule V011 — see
+  [Graph Match Predicate in WHERE](#graph-match-predicate-in-where)).
 
 ---
 
@@ -110,8 +114,8 @@ The SELECT statement is the primary way to query data from collections.
 ```sql
 [LET <name> = <expr> ...]
 SELECT [DISTINCT] <columns> [, <window_fn>() OVER (...) [AS <alias>] ...]
-FROM <collection> [AS <alias>]
-[JOIN <collection2> [AS <alias>] ON <condition> | USING (<column>)]
+FROM <collection> [[AS] <alias>]
+[JOIN <collection2> [[AS] <alias>] ON <condition> | USING (<column>)]
 [WHERE <conditions>]
 [GROUP BY <columns>]
 [HAVING <aggregate_condition>]
@@ -228,7 +232,11 @@ FROM docs WHERE vector NEAR $v ORDER BY similarity() DESC LIMIT 5
 ## FROM Clause
 
 Specify the source collection. An optional alias enables shorter column references
-and is required for self-joins.
+and is required for self-joins. The `AS` keyword is optional: `FROM documents d`
+and `FROM documents AS d` are strictly equivalent. A bare alias may not be a
+reserved clause keyword (`WHERE`, `GROUP`, `HAVING`, `ORDER`, `LIMIT`, `OFFSET`,
+`WITH`, `USING`, `UNION`, `INTERSECT`, `EXCEPT`, `INNER`, `LEFT`, `RIGHT`,
+`FULL`, `OUTER`, `JOIN`, `ON`, `AS`); quote it (`` `limit` ``) to use one anyway.
 
 ```sql
 -- Simple
@@ -236,6 +244,9 @@ SELECT * FROM my_collection
 
 -- With alias
 SELECT * FROM documents AS d
+
+-- Bare alias (no AS) — identical semantics
+SELECT * FROM documents d
 
 -- Alias used in column references
 SELECT d.title, d.category FROM documents AS d WHERE d.price > 50
@@ -251,8 +262,8 @@ Combine data from multiple collections.
 
 ```sql
 SELECT <columns>
-FROM <table1> [AS <alias1>]
-[INNER | LEFT | RIGHT | FULL] JOIN <table2> [AS <alias2>]
+FROM <table1> [[AS] <alias1>]
+[INNER | LEFT | RIGHT | FULL] JOIN <table2> [[AS] <alias2>]
   ON <alias1>.<col> = <alias2>.<col>
 ```
 
@@ -907,6 +918,69 @@ LIMIT 10
 This filters rows that participate in the specified graph pattern, combined with
 any other scalar conditions.
 
+**Anchor rule (V011) — explicit and implicit.** The first node of the pattern
+(the *anchor*) must carry an alias. The pattern binds to the FROM rows:
+
+- **Explicitly** — when the anchor alias is one of the aliases declared by
+  `FROM` or a `JOIN`, the pattern is anchored on the rows of that table.
+- **Implicitly** — when **no** alias in the pattern matches a declared alias,
+  the leftmost node binds to the FROM rows. Three guards apply:
+  - **G1**: if a pattern alias *does* match a declared alias, the anchor must
+    be that alias (catches inverted pattern directions);
+  - **G2**: the implicit anchor alias must not appear in another `MATCH`
+    predicate of the same WHERE clause — chain into a single pattern instead,
+    e.g. `MATCH (m)-[:R]->(f)-[:S]->(g)`;
+  - **G3**: the anchor node must not carry a `@collection` override (it would
+    resolve outside the FROM collection).
+- When `FROM` has no alias, any anchor alias is accepted.
+
+`NOT MATCH` applies the same rule uniformly (exact dual of the positive case).
+
+> **Note.** Implicit binding is *not* Cypher's existential MATCH semantics:
+> the leftmost node always binds to the candidate row. `MATCH (ctx)-[:R]->(f)`
+> keeps the rows that have an outgoing `R` edge — it does not test whether the
+> pattern exists *anywhere* in the graph.
+
+Violations are rejected at validation time with error code `V011`
+(`MATCH predicate anchor must be an alias declared in FROM/JOIN`):
+
+```sql
+-- OK: anchor 'd' matches the FROM alias (explicit)
+SELECT * FROM docs AS d
+WHERE category = 'tech' AND MATCH (d)-[:REL]->(x)
+LIMIT 10
+
+-- OK: no pattern alias matches 'd' — 'ctx' binds implicitly to the docs rows
+SELECT * FROM docs AS d
+WHERE category = 'tech' AND MATCH (ctx)-[:REL]->(x)
+LIMIT 10
+
+-- Rejected with V011 (G1): the FROM alias 'd' is in a non-anchor position;
+-- anchor the pattern on it instead, e.g. MATCH (d)-[:REL]->(w)
+SELECT * FROM docs AS d
+WHERE category = 'tech' AND MATCH (w)-[:REL]->(d)
+LIMIT 10
+```
+
+**Execution note (GraphFirst anchored fetch).** When every `MATCH (...)`
+predicate is AND-required by the WHERE clause (not wrapped in `OR`/`NOT`),
+the engine evaluates the graph patterns FIRST and fetches *within* their
+anchor sets — retrieval is then **exhaustive**: a matching row is returned no
+matter how it ranks globally. This covers `vector NEAR` (anchor sets up to
+10 000 ids are scored exactly; larger ones go through the bitmap-filtered
+HNSW path), metadata-only fetches (the anchors are hydrated directly),
+sparse-only fetches (anchors feed the sparse index's per-id filter), and
+`NOT similarity()` scans (restricted to the anchors).
+
+**Execution note (over-fetch window, residual shapes).** Query shapes that
+cannot use the anchored fetch keep the windowed execution: graph predicates
+under `OR`/`NOT`, combinations with a `similarity()` threshold cascade, BM25
+text `MATCH` fusion, or hybrid dense+sparse fusion. There, a ranked fetch
+retrieves up to `max(LIMIT, min(LIMIT × 10, 10 000))` candidates and keeps
+those that satisfy the pattern (rows ranked beyond the window are not
+returned — increase `LIMIT` to widen it); unranked shapes scan up to 100 000
+candidates in storage order.
+
 ### Vector Search with Filters
 
 Combine vector search with any number of metadata filters:
@@ -1269,7 +1343,22 @@ SELECT * FROM docs LIMIT 10
 SELECT * FROM docs LIMIT 10 OFFSET 20
 ```
 
-Always specify `LIMIT` for vector search queries to bound the result set.
+**Default LIMIT.** Unlike standard SQL, VelesQL applies `LIMIT 10` by default
+to every SELECT statement that has no explicit `LIMIT` clause — vector NEAR,
+sparse, scalar-filter, and hybrid forms alike. VelesQL is ANN-first: a SELECT
+is a top-k retrieval, so an unbounded default would defeat top-k vector search.
+`EXPLAIN` surfaces the implicit limit as `Limit: 10 (default)`.
+
+Exceptions (no implicit `LIMIT 10`):
+
+- `MATCH ... RETURN` graph queries return all matching rows, bounded only by
+  the server-wide ceiling of 100 000 rows per query;
+- compound queries (`UNION` / `INTERSECT` / `EXCEPT`) evaluate their operands
+  up to the same 100 000-row ceiling; only an explicit outer `LIMIT` caps the
+  merged result.
+
+Always specify `LIMIT` explicitly — both to bound vector search and for
+exhaustive retrieval beyond the default 10 rows.
 
 ---
 
@@ -1312,8 +1401,10 @@ Available variables: `vector_score`, `bm25_score`, `graph_score`, `sparse_score`
 
 ```sql
 -- RAG scoring: blend vector similarity with text relevance
+-- (the evaluated binding 'relevance' is injected into each row's payload;
+--  note that `SELECT *, expr` is not valid syntax — use `*` or an explicit list)
 LET relevance = 0.7 * vector_score + 0.3 * bm25_score
-SELECT *, relevance AS score
+SELECT *
 FROM documents
 WHERE vector NEAR $query AND content MATCH 'machine learning'
 ORDER BY relevance DESC
@@ -1572,18 +1663,41 @@ Relationships connect nodes with direction and optional type/range:
 -[r:TYPE1|TYPE2]->               -- Multiple relationship types
 -[*1..3]->                       -- Variable-length (1 to 3 hops)
 -[r:TYPE *2..5]->                -- Named with type and range
--[*]->                           -- Any length
 ```
 
 #### Range Specification
 
-| Syntax | Meaning |
-|--------|---------|
-| `*1..3` | Between 1 and 3 hops |
-| `*..5` | Up to 5 hops |
-| `*2..` | At least 2 hops |
-| `*3` | Exactly 3 hops |
-| `*` | Any number of hops |
+| Syntax | Meaning | Executable |
+|--------|---------|------------|
+| `*1..3` | Between 1 and 3 hops | Yes |
+| `*..5` | Up to 5 hops (lower bound defaults to 1) | Yes |
+| `*3` | Exactly 3 hops | Yes |
+| `*2..` | At least 2 hops, open-ended | Parses, **rejected at validation** |
+| `*` | Any number of hops | Parses, **rejected at validation** |
+
+**Hop bound.** The maximum hop count of any range is capped by the validator at
+`DEFAULT_MAX_GRAPH_EXPANSION = 32` (configurable via
+`ValidationConfig::max_graph_expansion`). Open-ended forms (`*`, `*2..`) map to
+an unbounded upper limit and are therefore always rejected under the default
+configuration with a `Graph expansion exceeded: max=32` complexity error
+(surfaced directly by `Parser::parse`) — use an explicit bounded range such as
+`*1..32` instead.
+
+**Variable-length alias semantics (openCypher lists).** A relationship alias
+on a ranged pattern (`-[r:TYPE*1..3]->`) binds the **ordered list** of
+traversed relationships, not a single edge:
+
+- `RETURN r` projects the ordered edge-id list (e.g. `[100, 101]`).
+- `RETURN r.prop` projects the positional list of per-edge values
+  (missing properties yield `null`), like openCypher's `[rel IN r | rel.prop]`.
+- `WHERE r.prop = x` uses **ANY-element semantics**: the path matches when at
+  least one traversed edge satisfies the condition (openCypher's
+  `any(rel IN r WHERE rel.prop = x)`).
+- Distinct edge paths to the same target are distinct result rows, and
+  parallel edges between the same node pair yield one row per aliased edge.
+  **Anonymous relationships** (`-[:TYPE]->`) keep the collapsed cardinality —
+  bind an alias when parallel edges must be distinguished (a known divergence
+  from openCypher, which always counts one row per relationship).
 
 ### RETURN Clause
 
@@ -1793,10 +1907,22 @@ estimated plan and actual execution statistics side-by-side. Unlike `EXPLAIN`
 > **Caution:** EXPLAIN ANALYZE executes the query. Use with care on write
 > queries (INSERT, UPDATE, DELETE) as they will modify data.
 
-#### Syntax
+#### Invocation
 
-```sql
-EXPLAIN ANALYZE <query>
+`EXPLAIN ANALYZE` is **not a parsed VelesQL statement** — the grammar only
+accepts `EXPLAIN <select-query>`. ANALYZE mode is requested at the API level:
+
+- REST: `POST /query/explain` with `"analyze": true` in the request body.
+- Rust API: `Database::explain_analyze_query(...)` /
+  `Collection::explain_analyze_query(...)`.
+
+```json
+POST /query/explain
+{
+  "query": "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
+  "params": { "v": [0.1, 0.2, 0.3] },
+  "analyze": true
+}
 ```
 
 #### Return Fields
@@ -1819,8 +1945,8 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `actual_rows` | u64 | Number of rows returned by execution |
 | `actual_time_ms` | f64 | Wall-clock execution time in milliseconds |
 | `loops` | u64 | Number of execution iterations (always 1) |
-| `nodes_visited` | u64 | Graph nodes visited (0 for non-MATCH queries) |
-| `edges_traversed` | u64 | Graph edges traversed (0 for non-MATCH queries) |
+| `nodes_visited` | u64 | For MATCH queries, currently set to the result row count (not a real traversal counter); 0 for non-MATCH queries |
+| `edges_traversed` | u64 | For MATCH queries, currently set to the result row count (not a real traversal counter); 0 for non-MATCH queries |
 
 **`feedback_calibration` fields (v1.15.0+, EXPLAIN ANALYZE only):**
 
@@ -1858,15 +1984,17 @@ When histogram data is available, `Filter` plan nodes include additional fields:
 
 #### Examples
 
-```sql
--- Analyze a vector search query
-EXPLAIN ANALYZE SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
+Queries to analyze are passed in the `query` field of `/query/explain` with
+`"analyze": true` (the `EXPLAIN` keyword itself must not be part of the string):
 
--- Analyze a filtered query
-EXPLAIN ANALYZE SELECT * FROM products WHERE category = 'tech' AND price > 50 LIMIT 20
+```json
+// Analyze a vector search query
+{ "query": "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
+  "params": { "v": [0.1, 0.2] }, "analyze": true }
 
--- Analyze a graph traversal
-EXPLAIN ANALYZE MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name LIMIT 10
+// Analyze a filtered query
+{ "query": "SELECT * FROM products WHERE category = 'tech' AND price > 50 LIMIT 20",
+  "analyze": true }
 ```
 
 After ≥ 10 vector queries against the same collection, the EMA feedback
@@ -2394,6 +2522,15 @@ TRAIN QUANTIZER ON my_collection WITH (m = 8, k = 256);
 - The collection must contain enough vectors (recommended: at least `k`).
 - Re-training overwrites the existing quantizer.
 - OPQ can be enabled via the `type` parameter.
+- Trained quantizers are persisted in the collection directory
+  (`codebook.pq` / `rotation.opq` for PQ/OPQ, `rabitq.idx` for RaBitQ) and
+  restored on database open: the PQ cache and RaBitQ encodings are rebuilt
+  by re-encoding the stored vectors (O(n) at open).
+- `type = rabitq` also installs the trained quantizer into the live index
+  when the collection was created with `storage = 'rabitq'`. For
+  collections created with another storage mode, training persists the
+  index and flips the collection's storage mode; the RaBitQ backend takes
+  effect at the next open.
 
 ---
 
@@ -2577,8 +2714,10 @@ parameterized vector search and `MATCH` normally.
 
 ### Divergences from standard SQL
 
-- **Table aliases require `AS`**: `FROM docs AS d`, not `FROM docs d` (the
-  no-`AS` form is intentionally rejected to avoid ambiguity with `JOIN`).
+- **Bare table aliases reserve clause keywords**: `FROM docs d` and
+  `FROM docs AS d` are both accepted and equivalent, but a bare alias may not
+  be a clause keyword (`WHERE`, `LIMIT`, `JOIN`, `UNION`, ...) — quote it with
+  backticks to use one anyway.
 - **`vector` and `score` are reserved keywords**, not free payload field names —
   `vector NEAR ...` and `score` in aggregates/ordering refer to the query vector
   and the computed similarity score.
@@ -2669,7 +2808,7 @@ SELECT id AS `select` FROM docs
 
 | Feature | Default | Notes |
 |---------|---------|-------|
-| LIMIT | No limit (all results) | Always specify LIMIT for vector search |
+| LIMIT | 10 (every SELECT form) | Exceptions: `MATCH ... RETURN` and compound queries (UNION/INTERSECT/EXCEPT) have no implicit `LIMIT 10` (bounded by the 100 000-row server ceiling). Always specify LIMIT for exhaustive retrieval |
 | OFFSET | 0 | |
 | ORDER BY direction | ASC | Explicit DESC recommended for similarity |
 | metric (CREATE) | cosine | |
@@ -2884,9 +3023,10 @@ SELECT * FROM docs
 WHERE vector NEAR $query AND content MATCH 'neural networks'
 LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
--- With custom scoring weights
+-- With custom scoring weights (the evaluated binding 'score' is injected
+-- into each row's payload; `SELECT *, expr` is not valid syntax)
 LET score = 0.7 * vector_score + 0.3 * bm25_score
-SELECT *, score AS relevance
+SELECT *
 FROM documents
 WHERE vector NEAR $query AND content MATCH 'transformer'
 ORDER BY score DESC
@@ -3131,11 +3271,13 @@ DESCRIBE documents
 
 -- View query execution plan without running
 EXPLAIN SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10
-
--- Run with instrumentation: get the plan + actual rows / time / per-node stats
--- (v1.15.0+: also returns feedback_calibration once the EMA loop is warm)
-EXPLAIN ANALYZE SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10
 ```
+
+For instrumented execution (plan + actual rows / time / per-node stats,
+plus `feedback_calibration` once the EMA loop is warm), use
+`POST /query/explain` with `"analyze": true` — see
+[EXPLAIN ANALYZE](#explain-analyze-v38) above (`EXPLAIN ANALYZE` is not a
+parsed statement).
 
 ### Window Functions
 
@@ -3147,9 +3289,10 @@ FROM articles
 WHERE vector NEAR $query
 LIMIT 50
 
--- Dense rank by an aggregated metric per author
+-- Dense rank per author by publication year (window ORDER BY accepts
+-- columns or similarity(), not aggregate expressions like COUNT(*))
 SELECT author, year, COUNT(*) AS papers,
-       DENSE_RANK() OVER (PARTITION BY author ORDER BY COUNT(*) DESC) AS productivity_rank
+       DENSE_RANK() OVER (PARTITION BY author ORDER BY year DESC) AS recency_rank
 FROM publications
 GROUP BY author, year
 ```
@@ -3208,7 +3351,11 @@ FLUSH documents
 
 ---
 
-## EBNF Grammar (v3.6)
+## EBNF Grammar (v3.10.0)
+
+Derived from the executable PEG grammar
+[`crates/velesdb-core/src/velesql/grammar.pest`](../crates/velesdb-core/src/velesql/grammar.pest)
+(the source of truth — regenerate this annex whenever the grammar changes).
 
 ```ebnf
 (* ═══════════════════════════════════════════════════════ *)
@@ -3216,15 +3363,15 @@ FLUSH documents
 (* ═══════════════════════════════════════════════════════ *)
 
 query             = let_clause* (show_collections_stmt | describe_stmt
-                    | explain_stmt | flush_stmt
-                    | analyze_stmt | truncate_stmt | alter_collection_stmt
-                    | select_edges_stmt
-                    | match_query | compound_query | train_stmt
+                    | explain_stmt | analyze_stmt | truncate_stmt
+                    | alter_collection_stmt | flush_stmt
+                    | match_query | select_edges_stmt
+                    | compound_query | train_stmt
                     | create_index_stmt | create_collection_stmt
                     | drop_index_stmt | drop_collection_stmt
                     | insert_node_stmt | insert_edge_stmt
                     | delete_edge_stmt | delete_stmt
-                    | upsert_stmt | insert_stmt | update_stmt) [";"] ;
+                    | insert_stmt | upsert_stmt | update_stmt) [";"] ;
 
 (* ═══════════════════════════════════════════════════════ *)
 (* Introspection statements (v3.4)                        *)
@@ -3250,9 +3397,11 @@ match_query       = "MATCH" graph_pattern
 
 graph_pattern     = node_pattern (relationship_pattern node_pattern)* ;
 node_pattern      = "(" [node_spec] ")" ;
-node_spec         = [node_alias] [node_labels] [node_properties] ;
+node_spec         = [node_alias] [node_labels] [collection_annotation]
+                    [node_properties] ;
 node_alias        = identifier ;
 node_labels       = ":" label_name (":" label_name)* ;
+collection_annotation = "@" identifier ;
 node_properties   = "{" property ("," property)* "}" ;
 property          = identifier ":" property_value ;
 property_value    = string | float | integer | boolean | null | parameter ;
@@ -3296,17 +3445,28 @@ distinct_modifier = "DISTINCT" ;
 (* SELECT list *)
 select_list       = "*" | select_item ("," select_item)* ;
 select_item       = "similarity" "(" ")" ["AS" identifier]
+                  | window_item
                   | aggregate_function ["AS" identifier]
                   | qualified_wildcard
                   | column ["AS" identifier] ;
 qualified_wildcard = identifier "." "*" ;
 column            = identifier ("." identifier)* ;
 
-(* FROM clause *)
-from_clause       = identifier ["AS" identifier] ;
+(* Window functions (v1.13.0) *)
+window_item       = window_function_name "(" ")" "OVER" "(" over_clause ")"
+                    ["AS" identifier] ;
+window_function_name = "ROW_NUMBER" | "DENSE_RANK" | "RANK" ;
+over_clause       = [partition_by_clause] [window_order_by_clause] ;
+partition_by_clause = "PARTITION" "BY" column ("," column)* ;
+window_order_by_clause = "ORDER" "BY" window_order_by_item
+                         ("," window_order_by_item)* ;
+window_order_by_item = (order_by_similarity_bare | column) ["ASC" | "DESC"] ;
+
+(* FROM clause — alias with AS or bare (non-reserved identifier) *)
+from_clause       = identifier [["AS"] identifier] ;
 
 (* JOIN clause (v2.0) *)
-join_clause       = [join_type] "JOIN" identifier ["AS" identifier]
+join_clause       = [join_type] "JOIN" identifier [["AS"] identifier]
                     (on_clause | using_clause) ;
 join_type         = "LEFT" ["OUTER"]
                   | "RIGHT" ["OUTER"]
@@ -3335,6 +3495,10 @@ primary_expr      = "(" or_expr ")"
                   | between_expr
                   | like_expr
                   | is_null_expr
+                  | contains_text_expr
+                  | contains_expr
+                  | geo_distance_expr
+                  | geo_bbox_expr
                   | compare_expr ;
 
 not_expr          = "NOT" primary_expr ;
@@ -3370,6 +3534,19 @@ like_expr         = where_column ("ILIKE" | "LIKE") string ;
 is_null_expr      = where_column "IS" ["NOT"] "NULL" ;
 match_expr        = where_column "MATCH" string ;
 
+(* Array / substring containment *)
+contains_text_expr = where_column "CONTAINS_TEXT" string ;
+contains_expr     = where_column "CONTAINS" "ALL" "(" value ("," value)* ")"
+                  | where_column "CONTAINS" "ANY" "(" value ("," value)* ")"
+                  | where_column "CONTAINS" value ;
+
+(* Geospatial predicates *)
+geo_number        = float | integer ;
+geo_distance_expr = "GEO_DISTANCE" "(" column "," geo_number "," geo_number ")"
+                    compare_op geo_number ;
+geo_bbox_expr     = "GEO_BBOX" "(" column "," geo_number "," geo_number ","
+                    geo_number "," geo_number ")" ;
+
 (* ═══════════════════════════════════════════════════════ *)
 (* GROUP BY, HAVING (v2.0)                                *)
 (* ═══════════════════════════════════════════════════════ *)
@@ -3379,8 +3556,8 @@ group_by_clause   = "GROUP" "BY" column ("," column)* ;
 having_clause     = "HAVING" having_condition (("AND" | "OR") having_condition)* ;
 having_condition  = aggregate_function compare_op value ;
 
-aggregate_function = ("COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
-                     "(" ("*" | column) ")" ;
+aggregate_function = ("FIRST" | "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+                     "(" ("*" | "score" | column) ")" ;
 
 (* ═══════════════════════════════════════════════════════ *)
 (* ORDER BY (v2.0 + arithmetic v3.0)                      *)
@@ -3498,13 +3675,6 @@ truncate_stmt     = "TRUNCATE" ["COLLECTION"] identifier ;
 alter_collection_stmt = "ALTER" "COLLECTION" identifier "SET"
                         "(" create_option_list ")" ;
 flush_stmt        = "FLUSH" ["FULL"] [identifier] ;
-
-(* ═══════════════════════════════════════════════════════ *)
-(* Index management (v3.5)                                *)
-(* ═══════════════════════════════════════════════════════ *)
-
-create_index_stmt = "CREATE" "INDEX" "ON" identifier "(" identifier ")" ;
-drop_index_stmt   = "DROP" "INDEX" "ON" identifier "(" identifier ")" ;
 
 (* ═══════════════════════════════════════════════════════ *)
 (* UPSERT (v3.5)                                          *)

@@ -136,6 +136,7 @@ impl CollectionType {
 //
 // Canonical order (acquire lower numbers first):
 //   1. config
+//   1b. payload_mirror   (held while acquiring 2 and 3 during the lazy build)
 //   2. vector_storage
 //   3. payload_storage
 //   4. sq8_cache / binary_cache / pq_cache  (any order among themselves)
@@ -236,12 +237,31 @@ pub(crate) struct Collection {
     /// Lock order position **8** is now managed internally by `ConcurrentEdgeStore`.
     pub(super) edge_store: Arc<ConcurrentEdgeStore>,
 
+    /// Serializes edge-WAL append + edge-store apply pairs so the WAL order
+    /// always equals the apply order (replay resolves id collisions exactly
+    /// like live execution) and concurrent appends cannot interleave one
+    /// entry's bytes.
+    ///
+    /// Lock order position: **7c** — acquired with no other collection lock
+    /// held; the edge store's internal `edge_ids → shards` chain is acquired
+    /// while holding it.
+    pub(super) edge_wal_lock: Arc<Mutex<()>>,
+
     /// Named sparse inverted indexes for sparse vector search (EPIC-062).
     /// Key is the sparse vector name (e.g., `""` for default, `"title"`, `"body"`).
     pub(super) sparse_indexes: Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>>,
 
     /// Secondary indexes for metadata payload fields.
     pub(super) secondary_indexes: Arc<RwLock<HashMap<String, SecondaryIndex>>>,
+
+    /// Columnar mirror of top-level scalar payload fields (`ColumnStore`).
+    ///
+    /// Lazily built when full-scan debt warrants it; consulted by
+    /// `dispatch_metadata_filter` before the JSON scan fallback.
+    /// Lock order position: **1b** — held while acquiring `vector_storage`
+    /// (2) and `payload_storage` (3) during the lazy build; mutation hooks
+    /// and queries acquire it with no other collection lock held.
+    pub(crate) payload_mirror: Arc<crate::collection::payload_mirror::PayloadMirror>,
 
     /// Guard-rails for query execution (EPIC-048).
     pub(crate) guard_rails: Arc<GuardRails>,

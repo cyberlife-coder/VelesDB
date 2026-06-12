@@ -34,6 +34,7 @@ import type {
   CollectionConfigResponse,
   SemanticEntry,
   EpisodicEvent,
+  EpisodicRecord,
   ProceduralPattern,
   ScrollRequest,
   ScrollResponse,
@@ -88,6 +89,8 @@ import {
   wasmSearchSemanticMemory,
   wasmRecordEpisodicEvent,
   wasmRecallEpisodicEvents,
+  wasmRecallRecentEvents,
+  wasmRecallOlderThanEvents,
   wasmStoreProceduralPattern,
   wasmMatchProceduralPatterns,
 } from './wasm-stubs';
@@ -107,6 +110,10 @@ import {
   wasmUpsertNodePayload,
   wasmGraphSearch,
   wasmSparseSearchNamed,
+  wasmRelate,
+  wasmUnrelate,
+  wasmGetRelations,
+  wasmSetTtlDurable,
 } from './wasm-wave4-stubs';
 
 /**
@@ -420,9 +427,11 @@ export class WasmBackend implements IVelesDBBackend {
   async searchIds(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<Array<{ id: number; score: number }>> { this.ensureInitialized(); return wasmSearchIds(c, q, o); }
   async storeSemanticFact(c: string, e: SemanticEntry): Promise<void> { this.ensureInitialized(); return wasmStoreSemanticFact(c, e); }
   async searchSemanticMemory(c: string, e: number[], k?: number): Promise<SearchResult[]> { this.ensureInitialized(); return wasmSearchSemanticMemory(c, e, k); }
-  async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<number> { this.ensureInitialized(); return wasmRecordEpisodicEvent(c, e); }
+  async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<string> { this.ensureInitialized(); return wasmRecordEpisodicEvent(c, e); }
   async recallEpisodicEvents(c: string, e: number[], k?: number): Promise<SearchResult[]> { this.ensureInitialized(); return wasmRecallEpisodicEvents(c, e, k); }
-  async storeProceduralPattern(c: string, p: ProceduralPattern): Promise<number> { this.ensureInitialized(); return wasmStoreProceduralPattern(c, p); }
+  async recallRecentEvents(c: string, since?: number): Promise<EpisodicRecord[]> { this.ensureInitialized(); return wasmRecallRecentEvents(c, since); }
+  async recallOlderThanEvents(c: string, before: number): Promise<EpisodicRecord[]> { this.ensureInitialized(); return wasmRecallOlderThanEvents(c, before); }
+  async storeProceduralPattern(c: string, p: ProceduralPattern): Promise<string> { this.ensureInitialized(); return wasmStoreProceduralPattern(c, p); }
   async matchProceduralPatterns(c: string, e: number[], k?: number): Promise<SearchResult[]> { this.ensureInitialized(); return wasmMatchProceduralPatterns(c, e, k); }
 
   // Wave 4 stubs
@@ -439,6 +448,10 @@ export class WasmBackend implements IVelesDBBackend {
   async upsertNodePayload(c: string, id: number, p: Record<string, unknown>): Promise<void> { this.ensureInitialized(); return wasmUpsertNodePayload(c, id, p); }
   async graphSearch(c: string, r: import('../types').GraphSearchRequest): Promise<import('../types').GraphSearchResponse> { this.ensureInitialized(); return wasmGraphSearch(c, r); }
   async sparseSearchNamed(c: string, q: import('../types').SparseVector, idx: string, o?: import('../types').SparseSearchNamedOptions): Promise<import('../types').SearchResult[]> { this.ensureInitialized(); return wasmSparseSearchNamed(c, q, idx, o); }
+  async relate(c: string, req: import('../types').RelateRequest): Promise<import('../types').RelateResponse> { this.ensureInitialized(); return wasmRelate(c, req); }
+  async unrelate(c: string, edgeId: import('../types').GraphNodeId): Promise<boolean> { this.ensureInitialized(); return wasmUnrelate(c, edgeId); }
+  async getRelations(c: string, pointId: import('../types').GraphNodeId): Promise<import('../types').RelationsResponse> { this.ensureInitialized(); return wasmGetRelations(c, pointId); }
+  async setTtlDurable(c: string, pointId: import('../types').GraphNodeId, ttlSeconds: number): Promise<void> { this.ensureInitialized(); return wasmSetTtlDurable(c, pointId, ttlSeconds); }
 }
 
 // Node-only init helpers (`isNodeRuntime`, `loadWasmBytesNode`) live in

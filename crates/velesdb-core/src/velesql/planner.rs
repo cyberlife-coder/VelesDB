@@ -35,17 +35,32 @@ pub use crate::velesql::cost_estimator::{Cost, CostEstimator, SelectivityMethod}
 pub use crate::velesql::query_stats::QueryStats;
 
 /// Execution strategy for hybrid queries.
+///
+/// This is the planner's *intent*; the executor realizes it only partially:
+/// on the SELECT path (`execution_paths.rs`), `GraphFirst` selects a
+/// full-scan-then-score realization for metadata filters and every other
+/// variant (including `Parallel`) is executed as `VectorFirst`. Graph
+/// predicates in SELECT WHERE that are AND-required take the GraphFirst
+/// anchored fetch (`graph_prefilter.rs`) independently of this strategy —
+/// anchor sets are evaluated first and retrieval is exhaustive within them;
+/// only OR/NOT-wrapped predicates remain post-filters over the fetch
+/// window. On the top-level MATCH path (`match_dispatch.rs`),
+/// `Parallel` runs `GraphFirst` and `VectorFirst` **sequentially** and merges
+/// the result sets (true parallelism is a future optimization).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExecutionStrategy {
     /// Execute vector search first, then filter by graph pattern.
     /// Best when graph filter is not very selective (>10% of data).
     VectorFirst,
-    /// Execute graph pattern first, then vector search on candidates.
-    /// Best when graph filter is very selective (<1% of data).
+    /// Intended: execute graph pattern first, then vector search on
+    /// candidates (selective filters, <1% of data). Realized on the SELECT
+    /// path as a full scan scored by vector similarity for metadata filters;
+    /// not realized for SELECT graph predicates (post-filter applies).
     GraphFirst,
-    /// Execute both in parallel and merge results.
-    /// Best for medium selectivity (1-10% of data).
+    /// Intended: execute both sides in parallel and merge (medium
+    /// selectivity, 1-10%). Realized as `VectorFirst` on the SELECT path and
+    /// as sequential GraphFirst + VectorFirst with a merge on the MATCH path.
     Parallel,
 }
 
@@ -210,7 +225,7 @@ impl QueryPlanner {
     ///
     /// Called after each vector query with the dataset size, ef_search used,
     /// and the actual wall-clock duration. The feedback loop adjusts
-    /// `ms_per_cost_unit` via EMA with α=0.05 after [`MIN_SAMPLES`] observations.
+    /// `ms_per_cost_unit` via EMA with α=0.05 after `MIN_SAMPLES` observations.
     pub fn record_cbo_feedback(&self, dataset_size: usize, ef_search: usize, actual_ms: f64) {
         self.cbo_feedback.record(dataset_size, ef_search, actual_ms);
     }

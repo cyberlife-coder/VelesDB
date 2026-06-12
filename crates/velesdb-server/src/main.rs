@@ -157,16 +157,7 @@ fn build_router(
     // Legacy unversioned routes with deprecation headers for backward compat
     let legacy = routes.layer(axum::middleware::from_fn(deprecation_header));
 
-    let api_router = versioned.merge(legacy);
-
-    #[cfg(feature = "prometheus")]
-    let api_router = {
-        use axum::routing::get;
-        use velesdb_server::prometheus_metrics;
-        api_router.route("/metrics", get(prometheus_metrics))
-    };
-
-    let api_router = api_router.with_state(state);
+    let api_router = versioned.merge(legacy).with_state(state);
 
     #[cfg(feature = "swagger-ui")]
     let api_router = {
