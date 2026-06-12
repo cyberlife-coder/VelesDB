@@ -290,7 +290,7 @@ jobs:
   # 4a. Publish to PyPI — Cross-platform wheels (REL-02)
   # ===========================================================================
   publish-pypi-wheels:
-    name: PyPI wheels ${{ matrix.target }}
+    name: PyPI wheels ${{ matrix.target }} ${{ matrix.manylinux }}
     runs-on: ${{ matrix.os }}
     needs: [validate, validate-all]
     if: |
@@ -301,14 +301,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # --- Linux glibc (manylinux2014 = glibc 2.17+) ---
           - { os: ubuntu-latest, target: x86_64, manylinux: auto }
           - { os: ubuntu-latest, target: aarch64, manylinux: auto }
-          - { os: macos-14, target: aarch64 }
-          # NOTE: macos-13 (x86_64) removed in v1.14.5 — GHA macos-13 runner availability
-          # is unreliable (one v1.14.4 release attempt stayed queued >9h). Intel Mac users
-          # should use the macos-14 (aarch64) wheel via Rosetta 2, or build from source.
-          # Re-add when self-hosted macos-13 runner is provisioned. See KNOWN_LIMITATIONS.md § 5.
+          # --- Linux musl (Alpine / python:*-alpine containers) ---
+          - { os: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2 }
+          - { os: ubuntu-latest, target: aarch64, manylinux: musllinux_1_2 }
+          # --- macOS: universal2 = arm64 + x86_64 in a single wheel (covers Intel Macs,
+          #     and avoids the unreliable macos-13 x86_64 runner — see KNOWN_LIMITATIONS.md § 5) ---
+          - { os: macos-14, target: universal2-apple-darwin }
+          # --- Windows ---
           - { os: windows-latest, target: x64 }
+          - { os: windows-latest, target: aarch64-pc-windows-msvc }
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -320,7 +324,9 @@ jobs:
         with:
           target: ${{ matrix.target }}
           working-directory: crates/velesdb-python
-          args: --release --out dist -i python3.10 python3.11
+          # abi3-py39: a single cp39-abi3 wheel covers Python 3.9+, and not pinning an
+          # interpreter keeps cross-compiled targets (universal2, win-arm64) reliable.
+          args: --release --out dist
           manylinux: ${{ matrix.manylinux || '' }}
       # gh-action-pypi-publish only runs on Linux; upload wheel directly on other OSes
       - name: Publish to PyPI (Linux)
@@ -337,6 +343,36 @@ jobs:
         run: |
           pip install twine
           twine upload --skip-existing -u __token__ crates/velesdb-python/dist/*
+
+  # ===========================================================================
+  # 4a-bis. Publish to PyPI — source distribution (build-from-source fallback)
+  # Covers any platform without a prebuilt wheel (PyPy, exotic/32-bit arches,
+  # older glibc) as long as a Rust toolchain is present. (REL-02)
+  # ===========================================================================
+  publish-pypi-sdist:
+    name: PyPI sdist
+    runs-on: ubuntu-latest
+    needs: [validate, validate-all]
+    if: |
+      needs.validate.outputs.is_prerelease == 'false' &&
+      (github.event_name == 'push' || inputs.publish_pypi)
+    environment: pypi
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+      - uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        with:
+          command: sdist
+          working-directory: crates/velesdb-python
+          args: --out dist
+      - name: Publish sdist to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        with:
+          packages-dir: crates/velesdb-python/dist/
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
 
   # ===========================================================================
   # 4b. Publish to PyPI — velesdb-common (must land before integrations)
