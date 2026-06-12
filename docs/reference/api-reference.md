@@ -2,7 +2,7 @@
 
 Complete REST API documentation for VelesDB.
 
-> **Last updated**: 2026-06-12 (VelesDB v1.18.0). The machine-readable source of
+> **Last updated**: 2026-06-12 (VelesDB v2.0.0). The machine-readable source of
 > truth is [`docs/openapi.yaml`](../openapi.yaml), regenerated from the server's
 > annotated handlers; this page is the human-readable companion.
 
@@ -57,7 +57,7 @@ Check server health status.
 ```json
 {
   "status": "ok",
-  "version": "1.18.0"
+  "version": "2.0.0"
 }
 ```
 

@@ -5,7 +5,30 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] — 2026-06-12
+
+A **major release**. Two correctness fixes to behavior shipped in 1.18.0 — the
+persisted HNSW graph is now reloaded at open instead of silently rebuilt, and
+durable point TTL is now enforced on every read path — ship alongside new
+graph/agent-memory capability and behavior-breaking changes to VelesQL and the
+distance engine. The major bump follows strict SemVer: the VelesQL query
+semantics below change results for existing queries.
+
+**Breaking — read before upgrading:**
+- **VelesQL variable-length relationship aliases bind LISTS** (openCypher
+  semantics): a `*1..3` alias projects a per-edge list; `*1..1` is no longer a
+  scalar — read element 0. Fixed-length `-[r:T]->` aliases are unchanged.
+- **MATCH row cardinality**: aliased parallel edges now yield one row per
+  aliased edge (previously collapsed); rows carry `_edge_bindings` /
+  `_edge_paths`. Unaliased `-[:T]->` patterns are unchanged.
+- **MATCH without `LIMIT`** now uses the 100 000-row ceiling (was a silent
+  cap of 100 rows).
+- **`DistanceEngine` dimension checks assert in release builds** (were
+  debug-only): a length mismatch panics instead of reading out of bounds
+  through the safe public API.
+
+Each item is detailed (and marked **BREAKING** where applicable) under the
+sections below.
 
 ### Changed
 - **`DistanceEngine` dimension checks now assert in release builds** (were
