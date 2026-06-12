@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: June 12, 2026 (VelesDB v1.18.0). Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
+*Last updated: June 12, 2026 (VelesDB v2.0.0). Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
 
 ---
 

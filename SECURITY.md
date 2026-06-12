@@ -4,10 +4,10 @@
 
 | Version | Supported |
 |---------|-----------|
-| 1.18.x  | Yes       |
+| 2.0.x   | Yes       |
+| 1.18.x  | Security fixes only |
 | 1.17.x  | Security fixes only |
-| 1.16.x  | Security fixes only |
-| < 1.16  | No        |
+| < 1.17  | No        |
 
 > VelesDB ships weekly; this table is updated at every minor release. The latest minor always receives full support, and the two previous minors receive security fixes.
 
