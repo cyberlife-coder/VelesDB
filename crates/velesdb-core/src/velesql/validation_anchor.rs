@@ -36,16 +36,19 @@ pub(super) fn walk_graph_match_anchors(
 /// G2 pre-pass: node aliases referenced by two or more distinct graph
 /// predicates of the WHERE tree.
 fn collect_shared_pattern_aliases(condition: &Condition) -> HashSet<String> {
-    let mut counts = HashMap::new();
+    let mut counts: HashMap<&str, usize> = HashMap::new();
     accumulate_pattern_aliases(condition, &mut counts);
     counts
         .into_iter()
-        .filter_map(|(alias, predicates)| (predicates >= 2).then_some(alias))
+        .filter_map(|(alias, predicates)| (predicates >= 2).then_some(alias.to_string()))
         .collect()
 }
 
 /// Counts, per node alias, how many graph predicates reference it.
-fn accumulate_pattern_aliases(condition: &Condition, counts: &mut HashMap<String, usize>) {
+/// Keys borrow from the AST nodes so no String allocations are needed during
+/// the counting phase; owned strings are produced only for aliases that make
+/// the final shared set.
+fn accumulate_pattern_aliases<'c>(condition: &'c Condition, counts: &mut HashMap<&'c str, usize>) {
     match condition {
         Condition::GraphMatch(predicate) => {
             let aliases: HashSet<&str> = predicate
@@ -55,7 +58,7 @@ fn accumulate_pattern_aliases(condition: &Condition, counts: &mut HashMap<String
                 .filter_map(|node| node.alias.as_deref())
                 .collect();
             for alias in aliases {
-                *counts.entry(alias.to_string()).or_insert(0) += 1;
+                *counts.entry(alias).or_insert(0) += 1;
             }
         }
         Condition::And(l, r) | Condition::Or(l, r) => {

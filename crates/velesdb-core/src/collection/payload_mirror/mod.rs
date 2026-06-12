@@ -107,11 +107,7 @@ impl MirrorState {
             return false;
         };
         let cells = self.collect_cells(payload);
-        let cell_refs: Vec<(&str, ColumnValue)> = cells
-            .iter()
-            .map(|(name, value)| (name.as_str(), value.clone()))
-            .collect();
-        self.store.push_row_unchecked(&cell_refs);
+        self.store.push_row_unchecked(&cells);
         self.row_ids.push(id);
         self.id_rows.insert(id, row_idx);
         self.live.insert(row_idx);
@@ -128,11 +124,15 @@ impl MirrorState {
 
     /// Extracts mirrored cells from a payload's top-level scalar fields.
     ///
+    /// Keys are borrowed directly from `payload` so the caller can pass the
+    /// result straight to `push_row_unchecked` without an intermediate Vec or
+    /// any `String` / `ColumnValue` clones.
+    ///
     /// Non-scalar values (arrays, objects, nulls) and dotted keys produce no
     /// cell — `push_row_unchecked` stores null for absent columns, matching
     /// the JSON filter's "missing field never matches" semantics. Cells whose
     /// type conflicts with the existing column are nulled by `push_typed`.
-    fn collect_cells(&mut self, payload: Option<&serde_json::Value>) -> Vec<(String, ColumnValue)> {
+    fn collect_cells<'p>(&mut self, payload: Option<&'p serde_json::Value>) -> Vec<(&'p str, ColumnValue)> {
         let Some(serde_json::Value::Object(map)) = payload else {
             return Vec::new();
         };
@@ -147,7 +147,7 @@ impl MirrorState {
                 continue;
             };
             if self.ensure_column(key, &col_type) {
-                cells.push((key.clone(), cell));
+                cells.push((key.as_str(), cell));
             }
         }
         cells
