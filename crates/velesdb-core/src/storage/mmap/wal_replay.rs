@@ -268,11 +268,7 @@ fn validate_first_delete_crc(reader: &mut BufReader<File>) -> bool {
         return false;
     }
 
-    let mut frame = Vec::with_capacity(1 + 8);
-    frame.push(2u8);
-    frame.extend_from_slice(&id_bytes);
-
-    crc32_hash(&frame) == u32::from_le_bytes(stored_crc)
+    delete_frame_crc(id_bytes) == u32::from_le_bytes(stored_crc)
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +393,16 @@ fn is_at_tail(reader: &mut BufReader<File>, file_len: u64) -> io::Result<bool> {
     Ok(reader.stream_position()? >= file_len)
 }
 
+/// Computes the CRC32 of a delete frame `[op=2, id...]` using a stack buffer —
+/// avoids a heap allocation for the single-use 9-byte frame.
+#[inline]
+fn delete_frame_crc(id_bytes: [u8; 8]) -> u32 {
+    let mut frame = [0u8; 9];
+    frame[0] = 2u8;
+    frame[1..].copy_from_slice(&id_bytes);
+    crc32_hash(&frame)
+}
+
 /// Computes the CRC32 of a store frame and compares it with `stored_crc`.
 fn store_crc_matches(
     id_bytes: [u8; 8],
@@ -503,11 +509,7 @@ fn replay_delete(
         return Ok(EntryOutcome::Stop);
     }
 
-    let mut frame = Vec::with_capacity(1 + 8);
-    frame.push(2u8);
-    frame.extend_from_slice(&id_bytes);
-
-    if crc32_hash(&frame) == u32::from_le_bytes(stored_crc) {
+    if delete_frame_crc(id_bytes) == u32::from_le_bytes(stored_crc) {
         let id = u64::from_le_bytes(id_bytes);
         index.remove(id);
         touched_ids.push(id);
