@@ -42,6 +42,11 @@ ignore = [
     # Re-evaluate at every numpy release; drop this ignore once numpy
     # supports pyo3 >= 0.29.
     { id = "RUSTSEC-2026-0176", reason = "pyo3 nth/nth_back OOB: code path unreachable from velesdb-python; patched pyo3 0.29 blocked upstream by numpy (max 0.28)" },
+    # `PyCFunction::new_closure` required `Send` but not `Sync`; velesdb-python
+    # never constructs a closure-backed PyCFunction (no `new_closure` call —
+    # verified by grep over crates/), so the data-race path is unreachable.
+    # Same upgrade constraint as 0176: fix is pyo3 >= 0.29, blocked by numpy.
+    { id = "RUSTSEC-2026-0177", reason = "pyo3 new_closure missing Sync bound: velesdb-python never calls PyCFunction::new_closure (verified by grep over crates/), path unreachable; patched pyo3 0.29 blocked upstream by numpy (max 0.28)" },
 
     # ── velesdb-cli transitive ────────────────────────────────────────
     { id = "RUSTSEC-2024-0384", reason = "instant: velesdb-cli transitive (clap/indicatif chain), unmaintained" },
