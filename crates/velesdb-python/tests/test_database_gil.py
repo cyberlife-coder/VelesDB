@@ -103,6 +103,55 @@ def test_create_graph_collection_roundtrip(temp_db) -> None:
     assert "gil_graph" in temp_db.list_collections()
 
 
+def test_get_graph_collection_roundtrip(temp_db) -> None:
+    """`get_graph_collection` opens a persistent graph collection."""
+    temp_db.create_graph_collection("gil_graph_get")
+
+    gc = temp_db.get_graph_collection("gil_graph_get")
+    assert gc is not None
+    assert temp_db.get_graph_collection("missing_graph") is None
+
+    gc.upsert_node_payload(1, {"name": "node"})
+    assert gc.get_node_payload(1) == {"name": "node"}
+
+
+def test_graph_collection_edge_aliases_and_payload(temp_db) -> None:
+    """Documented graph alternatives work on persistent graph collections."""
+    gc = temp_db.create_graph_collection("gil_graph_aliases")
+    gc.upsert_node_payload(10, {"name": "Alice"})
+    gc.add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})
+
+    assert gc.get_outgoing_edges(10) == gc.get_outgoing(10)
+    assert gc.get_incoming_edges(20) == gc.get_incoming(20)
+    assert gc.get_node_payload(10) == {"name": "Alice"}
+
+
+def test_graph_collection_legacy_methods_do_real_work(temp_db) -> None:
+    """Legacy graph call shapes are normalized to the persistent graph API."""
+    gc = temp_db.create_graph_collection("gil_graph_legacy", dimension=4)
+
+    gc.add_node(10, {"name": "Alice"}, vector=[1.0, 0.0, 0.0, 0.0])
+    gc.add_node(20, {"name": "Bob"})
+    gc.add_node(30, {"name": "Carol"})
+    gc.add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})
+    gc.add_edge({"id": 3, "source": 10, "target": 30, "label": "KNOWS"})
+    gc.add_edge(20, 30, "KNOWS", 0.7)
+
+    assert gc.get_node_payload(10)["name"] == "Alice"
+    results = gc.search_by_embedding([1.0, 0.0, 0.0, 0.0], k=1)
+    assert results[0]["id"] == 10
+    outgoing = gc.get_outgoing_edges(20)
+    assert len(outgoing) == 1
+    assert outgoing[0]["id"] == 4
+    assert outgoing[0]["source"] == 20
+    assert outgoing[0]["target"] == 30
+    assert outgoing[0]["label"] == "KNOWS"
+    assert outgoing[0]["properties"]["weight"] == 0.7
+
+    assert gc.bfs(20, max_depth=1)[0]["target_id"] == 30
+    assert gc.dfs(20, max_depth=1)[0]["target_id"] == 30
+
+
 def test_analyze_collection_roundtrip(temp_db) -> None:
     """`analyze_collection` still computes and returns stats."""
     col = temp_db.create_collection("gil_analyze", dimension=4)
