@@ -2,16 +2,16 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v1.18.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
+**v2.0.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
 
 ## What's New (unreleased)
 
 - **Relation + durable-TTL surface** (REST backend): `relate()`, `unrelate()`, `getRelations()`, `setTtlDurable()` — now fully tested and documented (see [Knowledge Graph API](#knowledge-graph-api) and [Agent Memory API](#agent-memory-api) below). The WASM backend throws `NOT_SUPPORTED` for these methods.
 - The shipped example (`examples/hybrid_queries.ts`) was rewritten against the real API and is now compile-checked in CI.
 
-## What's New in v1.17.0 / v1.18.0
+## What's New in v2.0.0
 
-- v1.17.0: no SDK-facing API change (engine-side release).
+- v2.0.0: graph dimension on agent memory — `relate()` / `relations()` / `unrelate()`; durable-TTL setters; aligns with the engine 2.0 release. See the root [CHANGELOG](../../CHANGELOG.md) for the breaking VelesQL changes.
 - v1.18.0: agent-memory parity wave — temporal recall facades (`recallRecent` / `recallOlderThan`), id-coercion hardening for `deleteMemory(string | number)`.
 
 ## What's New in v1.16.0

@@ -1,6 +1,6 @@
 # 🎯 Search Modes - Recall Configuration Guide
 
-*Version 1.18.0 -- 2026-06-12*
+*Version 2.0.0 -- 2026-06-12*
 
 Complete guide to configuring the **recall vs latency** trade-off in VelesDB. Covers dense search (HNSW), sparse search (SPLADE/BM42), and hybrid search (dense+sparse with fusion). Includes a comparison with Milvus, OpenSearch, and Qdrant practices.
 

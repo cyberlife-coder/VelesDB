@@ -57,4 +57,4 @@ if _HAS_MEMORY:
         "VelesDBChatMemory",
         "VelesDBProceduralMemory",
     ])
-__version__ = "1.18.0"
+__version__ = "2.0.0"
