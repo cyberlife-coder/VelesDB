@@ -132,7 +132,10 @@ impl MirrorState {
     /// cell — `push_row_unchecked` stores null for absent columns, matching
     /// the JSON filter's "missing field never matches" semantics. Cells whose
     /// type conflicts with the existing column are nulled by `push_typed`.
-    fn collect_cells<'p>(&mut self, payload: Option<&'p serde_json::Value>) -> Vec<(&'p str, ColumnValue)> {
+    fn collect_cells<'p>(
+        &mut self,
+        payload: Option<&'p serde_json::Value>,
+    ) -> Vec<(&'p str, ColumnValue)> {
         let Some(serde_json::Value::Object(map)) = payload else {
             return Vec::new();
         };
