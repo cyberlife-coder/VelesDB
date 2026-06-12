@@ -4,6 +4,7 @@
 //! sparse (optionally filtered) and dense searches in parallel, and fuses
 //! results using the requested fusion strategy.
 
+use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::search::resolve;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
@@ -477,6 +478,7 @@ impl Collection {
     ) -> Vec<SearchResult> {
         let vector_storage = self.vector_storage.read();
         let payload_storage = self.payload_storage.read();
+        let now_secs = now_unix_secs();
 
         let mut out = Vec::with_capacity(capacity_hint.min(limit));
         for (id, score) in pairs.take(limit) {
@@ -486,6 +488,9 @@ impl Collection {
                 .flatten()
                 .unwrap_or_default();
             let payload = payload_storage.retrieve(id).ok().flatten();
+            if is_payload_expired(payload.as_ref(), now_secs) {
+                continue;
+            }
             let point = Point {
                 id,
                 vector,

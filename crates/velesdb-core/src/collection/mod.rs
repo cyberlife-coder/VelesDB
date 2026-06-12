@@ -19,6 +19,7 @@ pub mod auto_reindex;
 mod collection_config;
 mod core;
 pub mod diagnostics;
+pub(crate) mod expiry;
 pub mod graph;
 mod graph_collection;
 mod graph_collection_query;

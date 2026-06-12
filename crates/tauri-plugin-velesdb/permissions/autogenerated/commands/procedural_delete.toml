@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-procedural-delete"
+description = "Enables the procedural_delete command without any pre-configured scope."
+commands.allow = ["procedural_delete"]
+
+[[permission]]
+identifier = "deny-procedural-delete"
+description = "Denies the procedural_delete command without any pre-configured scope."
+commands.deny = ["procedural_delete"]

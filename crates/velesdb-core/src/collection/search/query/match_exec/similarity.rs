@@ -10,6 +10,7 @@
 
 use super::parse_property_path;
 use super::{parse_projection_item, MatchResult, ProjectionItem};
+use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
@@ -494,9 +495,7 @@ impl Collection {
 
         let mut results = Vec::new();
 
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
+        let now_secs = now_unix_secs();
 
         for mr in match_results {
             let base = payload_storage.retrieve(mr.node_id).ok().flatten();
@@ -523,17 +522,6 @@ impl Collection {
 
         Ok(results)
     }
-}
-
-/// Returns `true` when the payload carries a `_veles_expires_at` epoch-seconds
-/// field whose value is strictly less than `now_secs`.
-fn is_payload_expired(payload: Option<&serde_json::Value>, now_secs: u64) -> bool {
-    let Some(serde_json::Value::Object(map)) = payload else {
-        return false;
-    };
-    map.get("_veles_expires_at")
-        .and_then(serde_json::Value::as_u64)
-        .is_some_and(|exp| exp < now_secs)
 }
 
 fn build_match_payload(

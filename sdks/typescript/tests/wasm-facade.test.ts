@@ -243,6 +243,14 @@ describe('WasmBackend — stub delegations (rejections)', () => {
       'matchProceduralPatterns',
       () => backend.matchProceduralPatterns('c', [0.1]),
     ],
+    [
+      'recallRecentEvents',
+      () => backend.recallRecentEvents('c', 1_700_000_000),
+    ],
+    [
+      'recallOlderThanEvents',
+      () => backend.recallOlderThanEvents('c', 1_700_000_000),
+    ],
     // Wave 4 stubs
     ['rebuildIndex', () => backend.rebuildIndex('c')],
     ['getGuardrails', () => backend.getGuardrails()],
@@ -264,6 +272,17 @@ describe('WasmBackend — stub delegations (rejections)', () => {
           k: 5,
         }),
     ],
+    [
+      'sparseSearchNamed',
+      () => backend.sparseSearchNamed('c', { 1: 0.5 }, 'idx'),
+    ],
+    [
+      'relate',
+      () => backend.relate('c', { source: 1, target: 2, relType: 'R' }),
+    ],
+    ['unrelate', () => backend.unrelate('c', 1)],
+    ['getRelations', () => backend.getRelations('c', 1)],
+    ['setTtlDurable', () => backend.setTtlDurable('c', 1, 60)],
   ];
 
   it.each(stubMethods)(

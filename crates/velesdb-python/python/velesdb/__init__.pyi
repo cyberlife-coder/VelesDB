@@ -1635,6 +1635,22 @@ class PyEpisodicMemory:
         """Record an event in episodic memory."""
         ...
 
+    def record_with_ttl(
+        self,
+        event_id: int,
+        description: str,
+        timestamp: int,
+        ttl_seconds: int,
+        embedding: Optional[List[float]] = None,
+    ) -> None:
+        """Record an event with a TTL in one durable call.
+
+        The expiry is persisted to the reserved ``_veles_expires_at``
+        payload field, so the TTL survives a restart. A ``ttl_seconds``
+        of ``0`` expires the event immediately.
+        """
+        ...
+
     def recent(
         self,
         limit: int = 10,
@@ -1690,6 +1706,23 @@ class PyProceduralMemory:
         confidence: float = 0.5,
     ) -> None:
         """Learn a new procedure/pattern."""
+        ...
+
+    def learn_with_ttl(
+        self,
+        procedure_id: int,
+        name: str,
+        steps: List[str],
+        ttl_seconds: int,
+        embedding: Optional[List[float]] = None,
+        confidence: float = 0.5,
+    ) -> None:
+        """Learn a procedure with a TTL in one durable call.
+
+        The expiry is persisted to the reserved ``_veles_expires_at``
+        payload field, so the TTL survives a restart. A ``ttl_seconds``
+        of ``0`` expires the procedure immediately.
+        """
         ...
 
     def recall(
@@ -1797,13 +1830,55 @@ class AgentMemory:
         """
         ...
 
+    def set_semantic_ttl_durable(self, id: int, ttl_seconds: int) -> None:
+        """Durably set the TTL (seconds) of an existing semantic fact.
+
+        Unlike :meth:`set_semantic_ttl` (in-memory map only, lost on
+        restart), the expiry is persisted to the reserved
+        ``_veles_expires_at`` payload field and survives a restart.
+        A ``ttl_seconds`` of ``0`` expires the fact immediately.
+
+        Raises:
+            KeyError: If no semantic fact with ``id`` exists.
+        """
+        ...
+
+    def set_episodic_ttl_durable(self, id: int, ttl_seconds: int) -> None:
+        """Durably set the TTL (seconds) of an existing episodic event.
+
+        Unlike :meth:`set_episodic_ttl` (in-memory map only, lost on
+        restart), the expiry is persisted to the reserved
+        ``_veles_expires_at`` payload field and survives a restart.
+        A ``ttl_seconds`` of ``0`` expires the event immediately.
+
+        Raises:
+            KeyError: If no event with ``id`` exists.
+        """
+        ...
+
+    def set_procedural_ttl_durable(self, id: int, ttl_seconds: int) -> None:
+        """Durably set the TTL (seconds) of an existing procedure.
+
+        Unlike :meth:`set_procedural_ttl` (in-memory map only, lost on
+        restart), the expiry is persisted to the reserved
+        ``_veles_expires_at`` payload field and survives a restart.
+        A ``ttl_seconds`` of ``0`` expires the procedure immediately.
+
+        Raises:
+            KeyError: If no procedure with ``id`` exists.
+        """
+        ...
+
     def auto_expire(self) -> Dict[str, int]:
         """Expire entries past their TTL and consolidate old episodes.
 
         Returns:
             Dict with 'semantic_expired', 'episodic_expired',
             'procedural_expired', 'episodic_consolidated',
-            'procedural_evicted' counts.
+            'procedural_evicted' counts, plus a 'consolidation_truncated'
+            bool — ``True`` when consolidation hit the per-cycle cap and
+            more old episodes remain (call :meth:`auto_expire` again to
+            drain them).
         """
         ...
 

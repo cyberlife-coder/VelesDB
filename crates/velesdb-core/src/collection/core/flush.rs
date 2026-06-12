@@ -86,6 +86,7 @@ impl Collection {
         self.inserts_since_last_hnsw_save
             .store(0, std::sync::atomic::Ordering::Relaxed);
         self.flush_pq_codebook()?;
+        self.flush_rabitq_quantizer()?;
         Ok(())
     }
 
@@ -136,6 +137,27 @@ impl Collection {
 
     #[cfg(not(feature = "persistence"))]
     fn flush_pq_codebook(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Persists the lazily-trained `RaBitQ` quantizer to `rabitq.idx` on every
+    /// full flush (parity with [`Self::flush_pq_codebook`]).
+    ///
+    /// No-op when the backend is not `RaBitQ` or no quantizer is trained yet.
+    /// The artifact is also saved by the explicit `TRAIN QUANTIZER` path
+    /// (`database/training.rs`); this covers the lazy-training case so the
+    /// quantizer survives a restart instead of silently degrading to f32.
+    #[cfg(feature = "persistence")]
+    fn flush_rabitq_quantizer(&self) -> Result<()> {
+        let Some(rabitq) = self.index.rabitq_quantizer() else {
+            return Ok(());
+        };
+        rabitq.save(&self.path)?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "persistence"))]
+    fn flush_rabitq_quantizer(&self) -> Result<()> {
         Ok(())
     }
 
@@ -358,10 +380,19 @@ impl Collection {
     ///
     /// Returns an error if the compaction I/O fails.
     pub(crate) fn compact_vector_storage(&self) -> Result<usize> {
-        self.vector_storage
+        let reclaimed = self
+            .vector_storage
             .write()
             .compact()
-            .map_err(|e| Error::Storage(format!("storage compaction failed: {e}")))
+            .map_err(|e| Error::Storage(format!("storage compaction failed: {e}")))?;
+        // Compaction truncates the vector WAL, so the WAL no longer covers
+        // the delta since the last HNSW save. Re-save the index to restore
+        // the invariant "WAL ⊇ writes since last index save" that open-time
+        // reconciliation relies on.
+        self.index.save(&self.path)?;
+        self.inserts_since_last_hnsw_save
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        Ok(reclaimed)
     }
 
     /// Applies post-creation overrides to the advanced configuration

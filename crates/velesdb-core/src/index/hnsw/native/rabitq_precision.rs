@@ -251,11 +251,28 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
     /// (`transform_score` applied).
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(NodeId, f32)> {
-        if self.rabitq_index.read().is_none() {
+        self.search_with_config(query, k, ef_search, &RaBitQPrecisionConfig::default())
+    }
+
+    /// Searches with an explicit [`RaBitQPrecisionConfig`].
+    ///
+    /// Falls back to exact f32 search when the quantizer is untrained or the
+    /// index holds fewer than `config.min_index_size` vectors (the rotation
+    /// overhead dominates at low vector counts) — mirrors
+    /// `DualPrecisionHnsw::search_with_config`.
+    #[must_use]
+    pub fn search_with_config(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+        config: &RaBitQPrecisionConfig,
+    ) -> Vec<(NodeId, f32)> {
+        if self.rabitq_index.read().is_none() || self.inner.len() < config.min_index_size {
             return self.search_and_transform(query, k, ef_search);
         }
 
-        self.search_rabitq_precision(query, k, ef_search)
+        self.search_rabitq_precision(query, k, ef_search, config)
     }
 
     /// Runs `inner.search()` and applies `transform_score` to each result.
@@ -434,6 +451,7 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
         query: &[f32],
         k: usize,
         ef_search: usize,
+        config: &RaBitQPrecisionConfig,
     ) -> Vec<(NodeId, f32)> {
         let index_guard = self.rabitq_index.read();
         let Some(rabitq) = index_guard.as_ref() else {
@@ -451,7 +469,6 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
             return self.search_and_transform(query, k, ef_search);
         };
 
-        let config = RaBitQPrecisionConfig::default();
         let candidates_k = k * config.oversampling_ratio;
         let coarse = self.search_layer_rabitq(&prepared, candidates_k, ef_search, &rabitq, store);
 

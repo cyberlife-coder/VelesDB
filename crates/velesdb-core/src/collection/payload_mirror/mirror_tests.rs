@@ -128,6 +128,55 @@ fn test_mirror_stays_in_sync_after_upsert_and_delete() {
     assert!(old.is_empty());
 }
 
+/// Returns `(row_count, deleted_row_count)` of the mirror's `ColumnStore`.
+fn mirror_store_counts(col: &Collection) -> (usize, usize) {
+    let guard = col.payload_mirror.state.read();
+    let state = guard.as_ref().expect("mirror must be built");
+    (state.store.row_count(), state.store.deleted_row_count())
+}
+
+/// GIVEN a built mirror over 300 rows
+/// WHEN a delete batch pushes the dead-row ratio past the PostgreSQL-inspired
+///      auto-vacuum threshold (20% AND >= 50 dead rows)
+/// THEN the store is compacted synchronously (tombstones removed) and the
+///      remapped mirror keeps answering filters correctly.
+#[test]
+fn test_auto_vacuum_triggers_on_delete_threshold() {
+    let (_dir, col) = setup_collection();
+    col.build_payload_mirror();
+
+    // 75 of 300 rows = 25% dead ratio, >= 50 dead rows: trigger fires.
+    let ids: Vec<u64> = (0..75).collect();
+    col.delete(&ids).expect("delete");
+
+    assert!(mirror_built(&col), "mirror must survive the vacuum");
+    let (rows, dead) = mirror_store_counts(&col);
+    assert_eq!(dead, 0, "auto-vacuum must compact the tombstones");
+    assert_eq!(rows, ROWS - 75, "only live rows survive the compaction");
+
+    // Row indices were remapped — columnar answers must stay exact.
+    let expected: Vec<u64> = (75..ROWS as u64).filter(|i| i % 3 == 1).collect();
+    assert_eq!(
+        query_ids(&col, "SELECT * FROM c WHERE category = 'cat1' LIMIT 500"),
+        expected
+    );
+}
+
+/// Below `min_dead_rows` (50) the trigger must NOT fire: tombstones remain
+/// until the threshold is crossed.
+#[test]
+fn test_auto_vacuum_stays_idle_below_threshold() {
+    let (_dir, col) = setup_collection();
+    col.build_payload_mirror();
+
+    let ids: Vec<u64> = (0..49).collect();
+    col.delete(&ids).expect("delete");
+
+    let (rows, dead) = mirror_store_counts(&col);
+    assert_eq!(dead, 49, "below min_dead_rows: tombstones must remain");
+    assert_eq!(rows, ROWS, "no compaction below the threshold");
+}
+
 #[test]
 fn test_unsupported_conditions_fall_back_with_correct_results() {
     let (_dir, col) = setup_collection();

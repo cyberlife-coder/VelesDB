@@ -1,180 +1,179 @@
-# 📦 Quantization - Compression des Vecteurs
+# 📦 Quantization - Vector Compression
 
-*Guide utilisateur pour la réduction de l'empreinte mémoire*
+*User guide for reducing the memory footprint*
 
 ---
 
-## 🎯 Qu'est-ce que la Quantization ?
+## 🎯 What is Quantization?
 
-La **quantization** permet de réduire la taille des vecteurs en mémoire tout en conservant une excellente précision de recherche. VelesDB propose quatre méthodes :
+**Quantization** reduces the in-memory size of vectors while preserving excellent search accuracy. VelesDB offers four methods:
 
-| Méthode | Compression | Perte de Recall | Training requis | Cas d'usage |
+| Method | Compression | Recall loss | Training required | Use case |
 |---------|-------------|-----------------|-----------------|-------------|
-| **SQ8** (Scalar 8-bit) | **4x** | < 2% | Non | Usage général, Edge |
-| **PQ** (Product Quantization) | **8-32x** | 5-15% | Oui | Grands datasets, mémoire limitée |
-| **Binary** (1-bit) | **32x** | ~10-15% | Non | IoT, fingerprints |
-| **RaBitQ** (Randomized Binary) | **32x** | ~5-10% | Oui (rotation) | Haute compression + bon recall |
+| **SQ8** (Scalar 8-bit) | **4x** | < 2% | No | General purpose, Edge |
+| **PQ** (Product Quantization) | **8-32x** | 5-15% | Yes | Large datasets, limited memory |
+| **Binary** (1-bit) | **32x** | ~10-15% | No | IoT, fingerprints |
+| **RaBitQ** (Randomized Binary) | **32x** | ~5-10% | Yes (rotation) | High compression + good recall |
 
 ---
 
-## 🚀 SQ8 : Compression 4x
+## 🚀 SQ8: 4x Compression
 
-> **Statut : cache non consommé par la recherche des collections.**
-> Une collection en mode `storage='sq8'` maintient un cache de vecteurs
-> quantifiés SQ8 à l'insertion, mais aucun chemin de recherche ne lit ce
-> cache aujourd'hui : les requêtes s'exécutent en pleine précision f32.
-> Choisir SQ8 au niveau collection AJOUTE donc de la mémoire au lieu d'en
-> réduire, en attendant un mode de stockage à mémoire réduite. Les
-> primitives SQ8 ci-dessous (`QuantizedVector`, distances SIMD) sont, elles,
-> pleinement fonctionnelles pour un usage programmatique direct.
+> **Status: cache not consumed by collection search.**
+> A collection in `storage='sq8'` mode maintains a cache of SQ8-quantized
+> vectors at insertion time, but no search path reads this cache today:
+> queries run at full f32 precision. Choosing SQ8 at the collection level
+> therefore ADDS memory instead of reducing it, pending a reduced-memory
+> storage mode. The SQ8 primitives below (`QuantizedVector`, SIMD
+> distances) are, however, fully functional for direct programmatic use.
 
-Chaque valeur `f32` (4 octets) est convertie en `u8` (1 octet) :
+Each `f32` value (4 bytes) is converted to a `u8` (1 byte):
 
 ```
-Avant:  [0.123, 0.456, 0.789, ...]  → 768 × 4 = 3072 octets
-Après:  [31, 116, 201, ...]         → 768 × 1 = 776 octets (avec métadonnées)
+Before: [0.123, 0.456, 0.789, ...]  → 768 × 4 = 3072 bytes
+After:  [31, 116, 201, ...]         → 768 × 1 = 776 bytes (with metadata)
 ```
 
-### Exemple Rust
+### Rust Example
 
 ```rust
 use velesdb_core::quantization::{QuantizedVector, dot_product_quantized_simd};
 
-// Créer un vecteur quantifié
+// Create a quantized vector
 let original = vec![0.1, 0.5, 0.9, -0.3, 0.0];
 let quantized = QuantizedVector::from_f32(&original);
 
-// Recherche avec un vecteur query f32
+// Search with an f32 query vector
 let query = vec![0.2, 0.4, 0.8, -0.2, 0.1];
 let similarity = dot_product_quantized_simd(&query, &quantized);
 
-println!("Similarité: {:.4}", similarity);
-println!("Mémoire économisée: {}%", 
+println!("Similarity: {:.4}", similarity);
+println!("Memory saved: {}%", 
     (1.0 - quantized.memory_size() as f32 / (original.len() * 4) as f32) * 100.0);
 ```
 
 ### Performance
 
-| Opération | f32 (768D) | SQ8 (768D) | Gain |
+| Operation | f32 (768D) | SQ8 (768D) | Gain |
 |-----------|------------|------------|------|
-| **Mémoire** | 3072 octets | 776 octets | **4x** |
+| **Memory** | 3072 bytes | 776 bytes | **4x** |
 | **Dot Product** | 41 ns | ~60 ns | -30% |
 | **Recall@10** | 99.4% | ~97.5% | -2% |
 
 ---
 
-## ⚡ Binary : Compression 32x
+## ⚡ Binary: 32x Compression
 
-> **Statut : cache non consommé par la recherche des collections.**
-> Comme SQ8 : le mode `storage='binary'` remplit un cache de vecteurs
-> binaires qu'aucun chemin de recherche ne lit (recherche en f32 pleine
-> précision). Pour une compression 32x effective dans le chemin de requête,
-> utiliser RaBitQ. Les primitives `BinaryQuantizedVector` restent
-> utilisables en direct.
+> **Status: cache not consumed by collection search.**
+> Same as SQ8: `storage='binary'` mode fills a cache of binary vectors
+> that no search path reads (search runs at full f32 precision). For
+> effective 32x compression in the query path, use RaBitQ. The
+> `BinaryQuantizedVector` primitives remain directly usable.
 
-Chaque valeur `f32` devient **1 bit** :
-- Valeur ≥ 0 → 1
-- Valeur < 0 → 0
+Each `f32` value becomes **1 bit**:
+- Value ≥ 0 → 1
+- Value < 0 → 0
 
 ```
-Avant:  [0.5, -0.3, 0.1, -0.8, ...]  → 768 × 4 = 3072 octets
-Après:  [0b10100110, ...]            → 768 ÷ 8 = 96 octets
+Before: [0.5, -0.3, 0.1, -0.8, ...]  → 768 × 4 = 3072 bytes
+After:  [0b10100110, ...]            → 768 ÷ 8 = 96 bytes
 ```
 
-### Exemple Rust
+### Rust Example
 
 ```rust
 use velesdb_core::quantization::BinaryQuantizedVector;
 
-// Créer un vecteur binaire
+// Create a binary vector
 let vector = vec![0.5, -0.3, 0.1, -0.8, 0.2, -0.1, 0.9, -0.5];
 let binary = BinaryQuantizedVector::from_f32(&vector);
 
-// Distance de Hamming (nombre de bits différents)
+// Hamming distance (number of differing bits)
 let other = BinaryQuantizedVector::from_f32(&[0.1, -0.1, 0.2, -0.9, 0.3, -0.2, 0.8, -0.4]);
 let distance = binary.hamming_distance(&other);
 
-println!("Distance Hamming: {}", distance);
-println!("Mémoire: {} octets (vs {} octets f32)", 
+println!("Hamming distance: {}", distance);
+println!("Memory: {} bytes (vs {} bytes f32)", 
     binary.memory_size(), vector.len() * 4);
 ```
 
-### Cas d'usage Binary
+### Binary use cases
 
-- **Fingerprints audio/image** : Détection de duplicatas
-- **Hash locality-sensitive** : Recherche approximative ultra-rapide
-- **IoT/Edge** : Mémoire RAM très limitée
+- **Audio/image fingerprints**: Duplicate detection
+- **Locality-sensitive hashing**: Ultra-fast approximate search
+- **IoT/Edge**: Very limited RAM
 
 ---
 
-## PQ : Product Quantization (8-32x)
+## PQ: Product Quantization (8-32x)
 
-### Comment ca marche ?
+### How does it work?
 
-Le vecteur est divise en **m sous-vecteurs**, chacun quantifie independamment vers un **codebook** de k centroides (apprentissage k-means++). Chaque sous-vecteur est remplace par un indice de 8 bits dans le codebook.
+The vector is split into **m sub-vectors**, each quantized independently against a **codebook** of k centroids (k-means++ training). Each sub-vector is replaced by an 8-bit index into the codebook.
 
 ```
-Avant:  [0.1, 0.2, ..., 0.8]  → 768 × 4 = 3072 octets
-Apres:  [idx_1, idx_2, ..., idx_m]  → m × 1 = 8 octets (m=8)
+Before: [0.1, 0.2, ..., 0.8]  → 768 × 4 = 3072 bytes
+After:  [idx_1, idx_2, ..., idx_m]  → m × 1 = 8 bytes (m=8)
 ```
 
 ### Configuration
 
-| Parametre | Defaut | Description |
+| Parameter | Default | Description |
 |-----------|--------|-------------|
-| `m` | 8 | Nombre de sous-espaces (doit diviser la dimension) |
-| `k` | 256 | Taille du codebook par sous-espace (centroides) |
-| `opq_enabled` | `false` | Active l'Optimized PQ (rotation OPQ) |
-| `rescore_oversampling` | `Some(4)` | Facteur de sur-echantillonnage pour le rescoring |
+| `m` | 8 | Number of subspaces (must divide the dimension) |
+| `k` | 256 | Codebook size per subspace (centroids) |
+| `opq_enabled` | `false` | Enables Optimized PQ (OPQ rotation) |
+| `rescore_oversampling` | `Some(4)` | Oversampling factor for rescoring |
 
-### Quand utiliser PQ ?
+### When to use PQ?
 
-- **Grands datasets** (100K+ vecteurs) ou la memoire est un facteur limitant
-- **Recherche approximate acceptable** (recall 85-95% avec rescoring)
-- **Latence faible requise** : ADC (Asymmetric Distance Computation) evite de decoder les vecteurs
+- **Large datasets** (100K+ vectors) where memory is a limiting factor
+- **Approximate search is acceptable** (85-95% recall with rescoring)
+- **Low latency required**: ADC (Asymmetric Distance Computation) avoids decoding the vectors
 
-### Entrainement via VelesQL
+### Training via VelesQL
 
 ```sql
 TRAIN QUANTIZER ON my_collection WITH (m=8, k=256)
 ```
 
-L'entrainement est **explicite** : il ne se declenche pas automatiquement. La collection doit contenir suffisamment de vecteurs (au minimum k vecteurs recommandes).
+Training is **explicit**: it is not triggered automatically. The collection must contain enough vectors (at least k vectors recommended).
 
-**Persistance** : `TRAIN QUANTIZER` sauvegarde le codebook (`codebook.pq`,
-plus `rotation.opq` pour OPQ) dans le repertoire de la collection. A la
-reouverture, le codebook est recharge et le cache PQ est reconstruit en
-re-encodant tous les vecteurs stockes (cout O(n) a l'ouverture) — le
-rescoring ADC survit donc aux redemarrages. Note : le quantizer entraine
-paresseusement a l'insertion (mode `storage='pq'` sans `TRAIN QUANTIZER`)
-n'est PAS persiste ; seul `TRAIN QUANTIZER` ecrit le codebook sur disque.
+**Persistence**: `TRAIN QUANTIZER` saves the codebook (`codebook.pq`, plus
+`rotation.opq` for OPQ) into the collection directory. On reopen, the
+codebook is reloaded and the PQ cache is rebuilt by re-encoding all stored
+vectors (O(n) cost at open time) — ADC rescoring therefore survives
+restarts. A quantizer trained lazily at insertion time (`storage='pq'` mode
+without `TRAIN QUANTIZER`) is persisted too: every full flush writes the
+current codebook to disk (`flush_pq_codebook`), so lazy-trained PQ also
+survives restarts — at parity with the RaBitQ flush hook.
 
-### Entrainement via Rust
+### Training via Rust
 
 ```rust
 use velesdb_core::quantization::ProductQuantizer;
 
 let pq = ProductQuantizer::train(&vectors, m, k)?;
-// Persistance explicite (TRAIN QUANTIZER le fait automatiquement) :
+// Explicit persistence (TRAIN QUANTIZER does this automatically):
 pq.save_codebook(collection_dir)?;
 ```
 
 ### OPQ (Optimized Product Quantization)
 
-OPQ applique une rotation orthogonale aux vecteurs avant la quantification PQ. Cette rotation minimise l'erreur de quantification en alignant la variance des donnees avec les sous-espaces.
+OPQ applies an orthogonal rotation to the vectors before PQ quantization. This rotation minimizes the quantization error by aligning the data variance with the subspaces.
 
-**Quand activer OPQ :**
-- Donnees avec des correlations fortes entre dimensions (embeddings clusteres)
-- Amelioration typique du recall : +3-8% sur donnees correlees
-- Cout supplementaire : temps d'entrainement x2 (calcul de la matrice de rotation PCA)
+**When to enable OPQ:**
+- Data with strong correlations between dimensions (clustered embeddings)
+- Typical recall improvement: +3-8% on correlated data
+- Extra cost: 2x training time (PCA rotation matrix computation)
 
-**Quand ne pas activer OPQ :**
-- Donnees deja decorrelees ou uniformement distribuees
-- Dimension faible (< 64) ou la rotation n'apporte pas de gain significatif
+**When not to enable OPQ:**
+- Already decorrelated or uniformly distributed data
+- Low dimensionality (< 64), where the rotation brings no significant gain
 
-### Performance PQ
+### PQ Performance
 
-| Configuration | Memoire (768D, 100K vecs) | Recall@10 | Latence |
+| Configuration | Memory (768D, 100K vecs) | Recall@10 | Latency |
 |---------------|--------------------------|-----------|---------|
 | f32 (baseline) | 295 MB | 99.4% | ~2 ms |
 | PQ m=8, k=256 | ~8 MB | ~85% | ~1 ms |
@@ -184,65 +183,67 @@ OPQ applique une rotation orthogonale aux vecteurs avant la quantification PQ. C
 
 ---
 
-## RaBitQ : Randomized Binary Quantization (32x)
+## RaBitQ: Randomized Binary Quantization (32x)
 
-> **Statut : branché de bout en bout dans le chemin de requête des
-> collections, redémarrages compris.**
-> Une collection créée avec `storage='rabitq'` utilise le backend HNSW à
-> traversée binaire (`RaBitQPrecisionHnsw`). `TRAIN QUANTIZER` avec
-> `type=rabitq` entraîne le quantizer, le persiste dans `rabitq.idx` ET
-> l'installe immédiatement dans l'index vivant (ré-encodage O(n·d) des
-> vecteurs existants). À la réouverture, `rabitq.idx` est rechargé et les
-> vecteurs sont ré-encodés (coût O(n·d) à l'ouverture, même classe que la
-> gap recovery HNSW). Si la collection a été créée avec un autre mode de
-> stockage, l'entraînement persiste l'index et bascule la config ; le
-> backend RaBitQ prend effet à la prochaine ouverture.
+> **Status: wired end-to-end into the collection query path, including
+> across restarts.**
+> A collection created with `storage='rabitq'` uses the binary-traversal
+> HNSW backend (`RaBitQPrecisionHnsw`). `TRAIN QUANTIZER` with
+> `type=rabitq` trains the quantizer, persists it to `rabitq.idx` AND
+> installs it immediately into the live index (O(n·d) re-encoding of
+> existing vectors). On reopen, `rabitq.idx` is reloaded and the vectors
+> are re-encoded (O(n·d) cost at open time, same class as HNSW gap
+> recovery). If the collection was created with a different storage mode,
+> training persists the index and switches the config; the RaBitQ backend
+> takes effect on the next open. A quantizer trained automatically (lazy,
+> 1000-insertion threshold) is also persisted to `rabitq.idx` on a full
+> flush, at parity with the PQ codebook.
 
-### Comment ca marche ?
+### How does it work?
 
-RaBitQ combine la compression binaire (1-bit par dimension) avec une **rotation orthogonale aleatoire** qui preserve les distances. Contrairement a la quantification binaire naive, la rotation orthogonale distribue l'information de maniere plus uniforme sur tous les bits.
+RaBitQ combines binary compression (1 bit per dimension) with a **random orthogonal rotation** that preserves distances. Unlike naive binary quantization, the orthogonal rotation spreads the information more uniformly across all bits.
 
 ```
-Avant:   [0.5, -0.3, 0.1, ...]  → 768 × 4 = 3072 octets
+Before:   [0.5, -0.3, 0.1, ...]  → 768 × 4 = 3072 bytes
 Rotation: R × v = [0.2, 0.4, -0.1, ...]
-Apres:   [0b10100110, ...]      → 768 / 8 = 96 octets
+After:    [0b10100110, ...]      → 768 / 8 = 96 bytes
 ```
 
-### Avantages par rapport a Binary naif
+### Advantages over naive Binary
 
-| Aspect | Binary naif | RaBitQ |
+| Aspect | Naive Binary | RaBitQ |
 |--------|------------|--------|
 | **Recall@10** | ~85% | ~90-93% |
 | **Compression** | 32x | 32x |
-| **Training** | Non | Oui (rotation) |
-| **Distance** | Hamming | Inner product binaire |
+| **Training** | No | Yes (rotation) |
+| **Distance** | Hamming | Binary inner product |
 
-### Cas d'usage
+### Use cases
 
-- Memes contraintes memoire que Binary, mais meilleur recall
-- Grands datasets haute dimension (128D+) ou la rotation aleatoire est plus efficace
-- Pre-filtrage rapide suivi d'un rescoring exact
+- Same memory constraints as Binary, but better recall
+- Large high-dimensional datasets (128D+) where the random rotation is more effective
+- Fast pre-filtering followed by exact rescoring
 
 ---
 
-## Comparaison des methodes
+## Method comparison
 
-| Methode | Compression | Recall@10 | Training | Temps training | Meilleur cas |
+| Method | Compression | Recall@10 | Training | Training time | Best for |
 |---------|-------------|-----------|----------|----------------|-------------|
-| **f32** | 1x | 99.4% | Non | - | Precision maximale |
-| **SQ8** | 4x | ~97.5% | Non | - | Usage general, Edge |
-| **PQ** (m=8) | ~48x | ~85% | Oui | ~5s/100K | Grand dataset, memoire limitee |
-| **PQ** + rescore | ~48x | ~93% | Oui | ~5s/100K | Compromis recall/memoire |
-| **PQ** + OPQ | ~48x | ~88% | Oui | ~10s/100K | Donnees correlees |
-| **Binary** | 32x | ~85% | Non | - | Fingerprints, IoT |
-| **RaBitQ** | 32x | ~90-93% | Oui | ~2s/100K | Haute compression + bon recall |
+| **f32** | 1x | 99.4% | No | - | Maximum precision |
+| **SQ8** | 4x | ~97.5% | No | - | General purpose, Edge |
+| **PQ** (m=8) | ~48x | ~85% | Yes | ~5s/100K | Large dataset, limited memory |
+| **PQ** + rescore | ~48x | ~93% | Yes | ~5s/100K | Recall/memory trade-off |
+| **PQ** + OPQ | ~48x | ~88% | Yes | ~10s/100K | Correlated data |
+| **Binary** | 32x | ~85% | No | - | Fingerprints, IoT |
+| **RaBitQ** | 32x | ~90-93% | Yes | ~2s/100K | High compression + good recall |
 
 ---
 
-## Choisir la bonne methode
+## Choosing the right method
 
 ```
-                    Précision
+                    Precision
                         ↑
                         │
          f32 ●──────────┤  99.4% recall
@@ -256,41 +257,41 @@ Apres:   [0b10100110, ...]      → 768 / 8 = 96 octets
                    4x        32x
 ```
 
-| Scenario | Recommandation |
+| Scenario | Recommendation |
 |----------|----------------|
-| **Production generale** | SQ8 |
-| **Grand dataset (100K+)** | PQ m=8 + rescore |
-| **RAM tres limitee** | Binary ou RaBitQ |
-| **Precision maximale** | f32 (pas de quantization) |
-| **Haute compression + bon recall** | RaBitQ |
+| **General production** | SQ8 |
+| **Large dataset (100K+)** | PQ m=8 + rescore |
+| **Very limited RAM** | Binary or RaBitQ |
+| **Maximum precision** | f32 (no quantization) |
+| **High compression + good recall** | RaBitQ |
 | **Fingerprints/hashes** | Binary |
-| **Donnees correlees** | PQ + OPQ |
+| **Correlated data** | PQ + OPQ |
 
-> Note : ce tableau compare les methodes en tant que telles. Dans le chemin
-> de requete des collections, seuls **RaBitQ** et **PQ** sont branches
-> aujourd'hui (voir les encarts de statut ci-dessus) — les modes SQ8/Binary
-> y maintiennent des caches que la recherche ne consomme pas encore.
+> Note: this table compares the methods as such. In the collection query
+> path, only **RaBitQ** and **PQ** are wired up today (see the status
+> callouts above) — the SQ8/Binary modes maintain caches there that search
+> does not consume yet.
 
 ---
 
-## 🔧 API Complète
+## 🔧 Full API
 
 ### QuantizedVector (SQ8)
 
 ```rust
-// Création
+// Creation
 let q = QuantizedVector::from_f32(&vector);
 
-// Propriétés
-q.dimension();      // Nombre de dimensions
-q.memory_size();    // Taille en octets
-q.min;              // Valeur min originale
-q.max;              // Valeur max originale
+// Properties
+q.dimension();      // Number of dimensions
+q.memory_size();    // Size in bytes
+q.min;              // Original min value
+q.max;              // Original max value
 
 // Reconstruction (lossy)
 let reconstructed = q.to_f32();
 
-// Sérialisation
+// Serialization
 let bytes = q.to_bytes();
 let restored = QuantizedVector::from_bytes(&bytes)?;
 ```
@@ -298,35 +299,35 @@ let restored = QuantizedVector::from_bytes(&bytes)?;
 ### BinaryQuantizedVector
 
 ```rust
-// Création
+// Creation
 let b = BinaryQuantizedVector::from_f32(&vector);
 
-// Propriétés
-b.dimension();      // Dimensions originales
-b.memory_size();    // Octets (dimension / 8)
-b.get_bits();       // Vec<bool> des bits
+// Properties
+b.dimension();      // Original dimensions
+b.memory_size();    // Bytes (dimension / 8)
+b.get_bits();       // Vec<bool> of the bits
 
 // Distances
-let dist = b.hamming_distance(&other);  // Bits différents
-let sim = b.hamming_similarity(&other); // 0.0 à 1.0
+let dist = b.hamming_distance(&other);  // Differing bits
+let sim = b.hamming_similarity(&other); // 0.0 to 1.0
 
-// Sérialisation
+// Serialization
 let bytes = b.to_bytes();
 let restored = BinaryQuantizedVector::from_bytes(&bytes)?;
 ```
 
-### Fonctions de Distance SIMD
+### SIMD Distance Functions
 
 ```rust
 use velesdb_core::quantization::*;
 
-// Dot product optimisé
+// Optimized dot product
 let dot = dot_product_quantized_simd(&query, &quantized);
 
-// Distance euclidienne carrée
+// Squared Euclidean distance
 let dist = euclidean_squared_quantized_simd(&query, &quantized);
 
-// Similarité cosinus
+// Cosine similarity
 let cos = cosine_similarity_quantized_simd(&query, &quantized);
 ```
 
@@ -334,13 +335,13 @@ let cos = cosine_similarity_quantized_simd(&query, &quantized);
 
 ## 🧪 Benchmarks
 
-Exécuter les benchmarks :
+Run the benchmarks:
 
 ```bash
 cargo bench --bench quantization_benchmark
 ```
 
-Résultats typiques (768D, CPU moderne) :
+Typical results (768D, modern CPU):
 
 ```
 SQ8 Encode/768        time:   [1.2 µs 1.3 µs 1.4 µs]
@@ -350,4 +351,4 @@ Dot Product sq8_simd  time:   [58 ns 60 ns 62 ns]
 
 ---
 
-*Documentation VelesDB -- Mars 2026*
+*VelesDB Documentation -- 2026-06-12*

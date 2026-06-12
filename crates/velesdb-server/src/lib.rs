@@ -109,7 +109,8 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         (name = "query", description = "VelesQL query execution"),
         (name = "indexes", description = "Property index management (EPIC-009)"),
         (name = "graph", description = "Graph traversal and edge operations"),
-        (name = "guardrails", description = "Query guard-rails configuration (EPIC-048)")
+        (name = "guardrails", description = "Query guard-rails configuration (EPIC-048)"),
+        (name = "metrics", description = "Prometheus operational metrics")
     ),
     paths(
         handlers::health::health_check,
@@ -165,7 +166,8 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::points::relations::relate_points,
         handlers::points::relations::unrelate_points,
         handlers::points::relations::get_point_relations,
-        handlers::points::relations::set_point_ttl
+        handlers::points::relations::set_point_ttl,
+        handlers::metrics::prometheus_metrics
     ),
     components(
         schemas(

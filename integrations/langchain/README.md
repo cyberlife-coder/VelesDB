@@ -82,14 +82,17 @@ VelesDBVectorStore(
 **Core Operations:**
 - `add_texts(texts, metadatas=None, ids=None)` - Add texts to the store
 - `add_texts_bulk(texts, metadatas=None, ids=None)` - Bulk insert (2-3x faster for large batches)
-- `add_texts_streaming(texts, metadatas=None, ids=None, ...)` - Stream-insert via the bounded-channel ingestion pipeline (returns backpressure status)
+- `add_texts_streaming(texts, metadatas=None, ids=None, ...)` - Stream-insert via the bounded-channel ingestion pipeline (returns the list of inserted IDs)
 - `delete(ids)` - Delete documents by ID
 - `get_by_ids(ids)` - Retrieve documents by their IDs
 - `flush()` - Flush pending changes to disk
 
 **Search:**
 - `similarity_search(query, k=4)` - Search for similar documents
-- `similarity_search_with_score(query, k=4)` - Search with similarity scores
+- `similarity_search_with_score(query, k=4)` - Search with similarity scores (cosine scores normalized to [0, 1])
+- `similarity_search_by_vector(embedding, k=4, filter=None)` - Search with a pre-computed query vector
+- `max_marginal_relevance_search(query, k=4, fetch_k=20, lambda_mult=0.5)` - MMR search balancing relevance and diversity
+- `max_marginal_relevance_search_by_vector(embedding, k=4, fetch_k=20, lambda_mult=0.5)` - MMR search with a pre-computed query vector
 - `similarity_search_with_filter(query, k=4, filter=None)` - Search with metadata filtering
 - `batch_search(queries, k=4)` - Batch search multiple queries in parallel
 - `batch_search_with_score(queries, k=4)` - Batch search with scores
@@ -208,12 +211,6 @@ results = vectorstore.similarity_search_with_ef(
 )
 ```
 
-### Server Mode: URL Validation
-
-When connecting to a remote `velesdb-server` via the `url` parameter,
-`validate_url` is called automatically during initialization to reject
-malformed URLs before any network request is issued.
-
 ### Hybrid Search (Vector + BM25)
 
 ```python
@@ -277,7 +274,13 @@ for row in results:
 - **Metadata Filtering**: Filter results by document attributes
 - **Typed Column Store**: Schema-aware metadata collections with ColumnStore-backed range / equality predicates
 - **Simple Setup**: Self-contained single binary, no external services required
-- **Full LangChain Compatibility**: Works with all LangChain chains and agents
+- **LangChain VectorStore API**: implements `add_texts`, `add_documents`,
+  `similarity_search`, `similarity_search_with_score`,
+  `similarity_search_with_relevance_scores`, `similarity_search_by_vector`,
+  `max_marginal_relevance_search` (+ `_by_vector`), `get_by_ids`, `delete`,
+  `from_texts`, and `as_retriever` (including `search_type="mmr"`), so it
+  plugs into standard retriever-based chains and agents. Async (`a*`)
+  methods fall back to LangChain's default thread-pool wrappers.
 
 ## Agent Memory (optional)
 

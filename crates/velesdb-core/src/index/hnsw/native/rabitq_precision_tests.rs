@@ -1,8 +1,17 @@
 //! Tests for `RaBitQPrecisionHnsw`.
 
 use super::distance::CachedSimdDistance;
-use super::rabitq_precision::RaBitQPrecisionHnsw;
+use super::rabitq_precision::{RaBitQPrecisionConfig, RaBitQPrecisionHnsw};
 use crate::distance::DistanceMetric;
+
+/// Config that forces the binary path on small test indexes (the default
+/// `min_index_size` of 5000 would route them to the exact-f32 fallback).
+fn binary_path_config() -> RaBitQPrecisionConfig {
+    RaBitQPrecisionConfig {
+        min_index_size: 0,
+        ..RaBitQPrecisionConfig::default()
+    }
+}
 
 // =========================================================================
 // Basic lifecycle tests
@@ -99,7 +108,7 @@ fn test_rabitq_precision_search_after_training() {
     hnsw.force_train_quantizer().expect("test");
 
     let query: Vec<f32> = (0..64).map(|j| (j as f32 * 0.01).sin()).collect();
-    let results = hnsw.search(&query, 10, 50);
+    let results = hnsw.search_with_config(&query, 10, 50, &binary_path_config());
 
     assert!(!results.is_empty());
 
@@ -133,7 +142,7 @@ fn test_rabitq_precision_insert_after_training() {
     assert_eq!(hnsw.len(), 100);
 
     let query: Vec<f32> = (0..32).map(|j| (75 * 32 + j) as f32).collect();
-    let results = hnsw.search(&query, 5, 50);
+    let results = hnsw.search_with_config(&query, 5, 50, &binary_path_config());
     assert!(!results.is_empty());
 }
 
@@ -185,7 +194,7 @@ fn test_install_trained_rabitq_encodes_existing_vectors() {
         .expect("install");
     assert!(hnsw.is_quantizer_trained());
 
-    let results = hnsw.search(query, k, 100);
+    let results = hnsw.search_with_config(query, k, 100, &binary_path_config());
     assert_eq!(results.len(), k);
     assert_eq!(results[0].0, 42, "self-query must return itself as top-1");
 
@@ -228,11 +237,53 @@ fn test_install_trained_rabitq_then_insert_keeps_alignment() {
 
     // Self-query on a post-install vector: top-1 must be its own node id.
     let target = n + 15;
-    let results = hnsw.search(&vectors[target], 5, 100);
+    let results = hnsw.search_with_config(&vectors[target], 5, 100, &binary_path_config());
     assert_eq!(
         results.first().map(|&(id, _)| id),
         Some(target),
         "post-install vector must be searchable at its node id"
+    );
+}
+
+// =========================================================================
+// min_index_size fallback (doc contract on `RaBitQPrecisionConfig`)
+// =========================================================================
+
+/// Default `min_index_size` must match the documented threshold (5000).
+#[test]
+fn test_rabitq_precision_config_default_min_index_size() {
+    assert_eq!(RaBitQPrecisionConfig::default().min_index_size, 5000);
+}
+
+/// Below `min_index_size`, a TRAINED index must skip the binary path and
+/// return exactly the pre-training f32 results (ids and distances) — the
+/// guard short-circuits before any `RaBitQ` machinery runs.
+#[test]
+fn test_rabitq_below_min_index_size_falls_back_to_f32() {
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
+    let hnsw = RaBitQPrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
+
+    for i in 0..100 {
+        let v: Vec<f32> = (0..32)
+            .map(|j| ((i * 32 + j) as f32 * 0.01).sin())
+            .collect();
+        hnsw.insert(&v).expect("test");
+    }
+
+    let query: Vec<f32> = (0..32)
+        .map(|j| ((42 * 32 + j) as f32 * 0.01).sin())
+        .collect();
+    let baseline = hnsw.search(&query, 10, 100);
+
+    hnsw.force_train_quantizer().expect("test");
+    assert!(hnsw.is_quantizer_trained());
+
+    // 100 vectors < default min_index_size (5000): default-config search
+    // must produce the identical exact-f32 result list.
+    let fallback = hnsw.search(&query, 10, 100);
+    assert_eq!(
+        fallback, baseline,
+        "below-min search must stay on exact f32"
     );
 }
 
@@ -341,7 +392,7 @@ fn run_rabitq_self_query(metric: DistanceMetric) {
     hnsw.force_train_quantizer().expect("test");
     assert!(hnsw.is_quantizer_trained());
 
-    let results = hnsw.search(&vectors[query_id], k, 100);
+    let results = hnsw.search_with_config(&vectors[query_id], k, 100, &binary_path_config());
 
     assert_top1_and_recall(&results, &vectors, query_id, metric, k);
 }
@@ -375,7 +426,7 @@ fn test_rabitq_euclidean_returns_sqrt_not_squared() {
 
     hnsw.force_train_quantizer().expect("test");
 
-    let results = hnsw.search(&v0, 2, 50);
+    let results = hnsw.search_with_config(&v0, 2, 50, &binary_path_config());
     assert!(
         results.len() >= 2,
         "Expected at least 2 results, got {}",

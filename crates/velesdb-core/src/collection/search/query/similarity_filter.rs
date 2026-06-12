@@ -5,6 +5,7 @@
 // Reason: Numeric casts in similarity filtering are intentional:
 // - f64->f32 for similarity thresholds: precision loss acceptable for filtering
 
+use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::{Point, SearchResult};
@@ -174,6 +175,9 @@ impl Collection {
             return None; // excluded by the NOT-similarity threshold
         }
         let payload = self.payload_storage.read().retrieve(id).ok().flatten();
+        if is_payload_expired(payload.as_ref(), now_unix_secs()) {
+            return None;
+        }
         if !Self::passes_metadata_filter(filter, payload.as_ref()) {
             return None;
         }
@@ -351,9 +355,13 @@ impl Collection {
         filter: &crate::filter::Filter,
         limit: usize,
     ) -> Vec<SearchResult> {
+        let now_secs = now_unix_secs();
         let mut results = Vec::new();
         for id in ids {
             let payload = payload_storage.retrieve(id).ok().flatten();
+            if is_payload_expired(payload.as_ref(), now_secs) {
+                continue;
+            }
             let matches = match payload {
                 Some(ref p) => filter.matches(p),
                 None => filter.matches(&serde_json::Value::Null),

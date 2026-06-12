@@ -2,13 +2,13 @@
 
 This document is the **15-minute read** an engineer or a technical due-diligence reviewer should start with. It tells you what VelesDB is, how it is shaped, and where to dig deeper.
 
-> **Last updated:** 2026-05-14 — applies to v1.14.x and beyond.
+> **Last updated:** 2026-06-12 — applies to v1.18.x and onward.
 
 ---
 
 ## TL;DR — three sentences
 
-VelesDB is a **single-binary, embeddable database** that fuses a **vector index (HNSW)**, a **graph engine** (nodes + edges + traversal), and a **typed columnstore** behind a **shared SQL-like query language called VelesQL**. The target use case is local-first AI agents and RAG pipelines that today have to stitch together pgvector + Neo4j + PostgreSQL by hand. The whole engine fits in a 6 MB binary, runs on Linux/macOS/Windows/iOS/Android/WASM, and persists to a directory on disk that the user controls.
+VelesDB is a **single-binary, embeddable database** that fuses a **vector index (HNSW)**, a **graph engine** (nodes + edges + traversal), and a **typed columnstore** behind a **shared SQL-like query language called VelesQL**. The target use case is local-first AI agents and RAG pipelines that today have to stitch together pgvector + Neo4j + PostgreSQL by hand. The whole engine ships as a single ~9 MB binary (6–13 MB depending on platform and binary, measured on v1.18.0 release artifacts), runs on Linux/macOS/Windows/iOS/Android/WASM, and persists to a directory on disk that the user controls.
 
 ---
 
@@ -72,12 +72,12 @@ The workspace is laid out as eight crates with one-way dependencies (no cycles).
 | Crate | Role | Public surface | Notes |
 |-------|------|---------------|-------|
 | **`velesdb-core`** | The engine. HNSW, SIMD, VelesQL, collections, storage, recovery, GPU pipeline. Everything else depends on it. | `Database`, `VectorCollection`, `GraphCollection`, `MetadataCollection`, VelesQL parser, error types | The only crate where `unsafe` lives in non-trivial volume (SIMD intrinsics, mmap). All `unsafe` is documented in [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md). |
-| **`velesdb-server`** | Axum REST + OpenAPI server. 47 endpoints. | HTTP API | Optional; `feature = "openapi"` exposes the schema. |
+| **`velesdb-server`** | Axum REST + OpenAPI server. 48 endpoints (55 operations), including relation/TTL management and a Prometheus `GET /metrics` served by default. | HTTP API | Optional; `feature = "openapi"` exposes the schema. |
 | **`velesdb-python`** | PyO3 bindings + NumPy interop. | `velesdb` package on PyPI | Released as wheels via maturin (abi3-py39, manylinux + macOS arm64/x64 + Windows x64). |
 | **`velesdb-wasm`** | Browser-side vector search. | `@wiscale/velesdb-sdk` partial | No `persistence` feature; transient in-memory. |
 | **`velesdb-mobile`** | iOS / Android bindings via UniFFI. | Swift + Kotlin | One binding crate, two outputs. |
 | **`velesdb-cli`** | Interactive REPL for VelesQL. | Single binary | Wraps `velesdb-core`. |
-| **`velesdb-migrate`** | Migration tooling: import from Pinecone / Qdrant / Milvus / Weaviate / Chroma / Elasticsearch / Redis. | CLI tool | Strategic candidate to extract to a separate repo (see ROADMAP.md Horizon 3). |
+| **`velesdb-migrate`** | Migration tooling: import from Pinecone / Qdrant / Milvus / Weaviate / Chroma / Elasticsearch / Redis. | CLI tool | Strategic candidate to extract to a separate repo (see ROADMAP.md Horizon 4). |
 | **`tauri-plugin-velesdb`** | Tauri desktop integration. | Plugin | Used by `demos/tauri-rag-app`. |
 
 The dependency graph is strictly downward: `server`, `python`, `wasm`, `mobile`, `cli`, `migrate`, `tauri-plugin` all depend on `velesdb-core` and never on each other.
@@ -109,8 +109,8 @@ For the deep walkthrough with code references at every step, see [`docs/referenc
 Concurrency is the area where embedded databases earn their reputation. VelesDB uses a few principles:
 
 1. **No `std::sync` lock primitives.** All locks are `parking_lot::RwLock` or `Mutex`. Reasons: no poisoning (so no `.unwrap()` on locks), faster uncontended path, and they release deterministically on `drop`.
-2. **Lock ordering is documented and enforced by code review.** See [`docs/CONCURRENCY_MODEL.md`](docs/CONCURRENCY_MODEL.md) (697 lines) for the full lock graph and deadlock-prevention rules. Every code path that takes more than one lock is annotated with a `// LOCK ORDER:` comment naming the order.
-3. **Single-writer per collection by default.** This is the v1.x trade-off: simple correctness and no write-write contention. Concurrent WAL writer is a v1.16 (`velesdb-premium`) feature, see ROADMAP.md.
+2. **Lock ordering is documented and enforced by code review.** See [`docs/CONCURRENCY_MODEL.md`](docs/CONCURRENCY_MODEL.md) for the full lock graph and deadlock-prevention rules. Every code path that takes more than one lock is annotated with a `// LOCK ORDER:` comment naming the order.
+3. **Single-writer per collection by default.** This is the v1.x trade-off: simple correctness and no write-write contention. A concurrent WAL writer is tracked for the Enterprise edition, see ROADMAP.md.
 4. **Tests run single-threaded.** `--test-threads=1` is mandatory because tests share temp directories. CI enforces it.
 
 The write path for a single point looks like:
@@ -146,7 +146,7 @@ A VelesDB database is **a directory**. Inside that directory:
   - `vectors.mmap` — the raw vector data, memory-mapped
   - `payload.db` — point payloads (JSON)
   - `wal.log` — append-only Write-Ahead Log for durability
-  - `index.hnsw` — serialized HNSW graph
+  - `index.hnsw` — serialized HNSW graph, reloaded at open (3-pass reconciliation against the vector store and WAL)
   - `bm25/` — full-text inverted index (if enabled)
   - `secondary/` — typed column indexes
   - `snapshot.<gen>` — periodic snapshots for fast cold-start
@@ -161,7 +161,7 @@ For the byte-level layout and serialization format, see [`docs/STORAGE_FORMAT.md
 
 These are intentional non-features. Each one keeps the engine simple at the cost of a use case we have ruled out for now:
 
-- **No Raft / multi-node replication.** Single-node, local-first. Tracked for `velesdb-premium` in ROADMAP.md Horizon 3.
+- **No Raft / multi-node replication.** Single-node, local-first. Tracked for the Enterprise edition in ROADMAP.md (tentative scope, Horizon 4).
 - **No built-in embedding model.** Embedding is a model concern; you bring your own (sentence-transformers, OpenAI, Cohere, BGE, CLIP).
 - **No K8s operator / cloud-managed mode.** Conflicts with local-first. Run it on a server, on your laptop, in a container, in WASM, in a mobile app — all the same code.
 - **No reranker / LLM glue.** That's user space.
@@ -184,7 +184,7 @@ The areas where VelesDB uses `unsafe` are:
 
 Every `unsafe` block has a `// SAFETY: <reason>` comment, enforced by `scripts/verify_unsafe_safety_template.py` in CI. Live counts (unsafe sites and `// SAFETY:` comments) are reported by the script on every push and tracked release-over-release in `CHANGELOG.md`. The full audit narrative is in [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md).
 
-External soundness audit (Cure53 / independent Rust safety expert) is in the v1.15 horizon, conditional on funding. See ROADMAP.md.
+External soundness audit (Cure53 / independent Rust safety expert) is on the roadmap, conditional on funding. See ROADMAP.md Horizon 4.
 
 ---
 
@@ -194,7 +194,7 @@ External soundness audit (Cure53 / independent Rust safety expert) is in the v1.
 
 Index-only micro-benchmarks (HNSW search isolated, no WAL, hot cache) measure ~55 µs in the same conditions but at 5K/768D. They are useful to understand where the time goes but they are **not the same number**. The README and the crate README disambiguate explicitly since v1.13.3.
 
-The full performance budget gates are in [`QUALITY_BAR.md`](QUALITY_BAR.md). The benchmark methodology is in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). A reproducible head-to-head benchmark vs Qdrant + Chroma + pgvector under Docker Compose is on the v1.15 roadmap.
+The full performance budget gates are in [`QUALITY_BAR.md`](QUALITY_BAR.md). The benchmark methodology is in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). A reproducible head-to-head benchmark vs Qdrant + Chroma + pgvector under Docker Compose remains on the roadmap (ROADMAP.md Horizon 4).
 
 ---
 
@@ -203,7 +203,7 @@ The full performance budget gates are in [`QUALITY_BAR.md`](QUALITY_BAR.md). The
 | Your question | Read this |
 |--------------|-----------|
 | What does the workspace look like crate by crate? | [`docs/contributing/PROJECT_STRUCTURE.md`](docs/contributing/PROJECT_STRUCTURE.md) |
-| What is the deep architecture, with all box diagrams? | [`docs/reference/ARCHITECTURE.md`](docs/reference/ARCHITECTURE.md) (518 lines) and [`docs/reference/ARCHITECTURE_DIAGRAMS.md`](docs/reference/ARCHITECTURE_DIAGRAMS.md) |
+| What is the deep architecture, with all box diagrams? | [`docs/reference/ARCHITECTURE.md`](docs/reference/ARCHITECTURE.md) and [`docs/reference/ARCHITECTURE_DIAGRAMS.md`](docs/reference/ARCHITECTURE_DIAGRAMS.md) |
 | How does concurrency / locking work? | [`docs/CONCURRENCY_MODEL.md`](docs/CONCURRENCY_MODEL.md) |
 | What is the on-disk format? | [`docs/STORAGE_FORMAT.md`](docs/STORAGE_FORMAT.md) |
 | Where is `unsafe` used and why is it sound? | [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md) |

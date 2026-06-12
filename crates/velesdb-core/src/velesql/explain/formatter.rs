@@ -94,7 +94,8 @@ impl QueryPlan {
                 Self::render_filter_node(f, output, prefix, connector, &child_prefix);
             }
             PlanNode::Limit(l) => {
-                let _ = writeln!(output, "{prefix}{connector}Limit: {}", l.count);
+                let suffix = if l.is_default { " (default)" } else { "" };
+                let _ = writeln!(output, "{prefix}{connector}Limit: {}{suffix}", l.count);
             }
             PlanNode::Offset(o) => {
                 let _ = writeln!(output, "{prefix}{connector}Offset: {}", o.count);

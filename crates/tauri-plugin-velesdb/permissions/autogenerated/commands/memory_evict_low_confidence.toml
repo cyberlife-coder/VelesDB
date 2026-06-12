@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-memory-evict-low-confidence"
+description = "Enables the memory_evict_low_confidence command without any pre-configured scope."
+commands.allow = ["memory_evict_low_confidence"]
+
+[[permission]]
+identifier = "deny-memory-evict-low-confidence"
+description = "Denies the memory_evict_low_confidence command without any pre-configured scope."
+commands.deny = ["memory_evict_low_confidence"]

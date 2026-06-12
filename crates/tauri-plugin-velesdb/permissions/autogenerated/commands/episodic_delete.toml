@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-episodic-delete"
+description = "Enables the episodic_delete command without any pre-configured scope."
+commands.allow = ["episodic_delete"]
+
+[[permission]]
+identifier = "deny-episodic-delete"
+description = "Denies the episodic_delete command without any pre-configured scope."
+commands.deny = ["episodic_delete"]

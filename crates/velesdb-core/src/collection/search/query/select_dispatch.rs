@@ -200,10 +200,9 @@ impl Collection {
         // carries the computed anchor sets into the exact post-filter.
         //
         // When ORDER BY similarity() is present without a NEAR vector,
-        // fetch_anchor_candidates must see enough candidates to surface the
-        // most similar anchors — not just the first `limit` in insertion
-        // order. Over-fetch 10× (capped at 10 000) so ORDER BY can select
-        // the true top-k from the anchor set.
+        // fetch_anchor_candidates must see EVERY anchor — the similarity
+        // sort only runs downstream, so a bounded window would drop the
+        // most-similar anchors by ascending-id order (see anchor_fetch_limit).
         let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
         let anchor_fetch_limit = anchor_fetch_limit(stmt, extracted, limit);
         let anchored = self.try_anchored_fetch(
@@ -606,13 +605,24 @@ fn graph_overfetch_limit(limit: usize) -> usize {
     limit.max(limit.saturating_mul(10).min(GRAPH_OVERFETCH_CAP))
 }
 
+/// Anchored-fetch window for the main SELECT path.
+///
+/// With ORDER BY similarity() and no NEAR vector the anchored fetch must be
+/// EXHAUSTIVE: `fetch_anchor_candidates` hydrates anchors in ascending-id
+/// order and stops at the window, while the similarity sort only runs
+/// downstream in `apply_order_by` — any bounded window therefore drops the
+/// most-similar anchors whenever the anchor set is larger than the window.
+/// `MAX_LIMIT` is the same exhaustive window the unranked graph paths use.
+/// Without ORDER BY similarity() the plain `limit` stays (nothing ranked to
+/// protect); with a NEAR vector the anchored search ranks inside the anchor
+/// set already.
 fn anchor_fetch_limit(
     stmt: &crate::velesql::SelectStatement,
     extracted: &ExtractedComponents,
     limit: usize,
 ) -> usize {
     if Collection::has_order_by_similarity(stmt) && extracted.vector_search.is_none() {
-        graph_overfetch_limit(limit)
+        MAX_LIMIT
     } else {
         limit
     }

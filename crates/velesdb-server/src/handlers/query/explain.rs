@@ -2,7 +2,7 @@
 
 use axum::{extract::State, response::IntoResponse, Json};
 use std::sync::Arc;
-use velesdb_core::velesql::{Condition, SelectColumns};
+use velesdb_core::velesql::{Condition, SelectColumns, DEFAULT_SELECT_LIMIT};
 
 use crate::types::{
     ActualStatsResponse, ExplainCost, ExplainFeatures, ExplainRequest, ExplainResponse,
@@ -62,7 +62,7 @@ fn explain_plan_only(
 ) -> axum::response::Response {
     let select = &parsed.select;
     let features = detect_explain_features(select);
-    let mut plan = build_explain_plan(select, &features);
+    let mut plan = build_explain_plan(parsed, &features);
     let estimated_cost = estimate_cost(features.has_vector_search);
     let query_type = if parsed.is_match_query() {
         "MATCH"
@@ -105,7 +105,7 @@ fn explain_with_analyze(
 ) -> axum::response::Response {
     let select = &parsed.select;
     let features = detect_explain_features(select);
-    let mut plan = build_explain_plan(select, &features);
+    let mut plan = build_explain_plan(parsed, &features);
     let estimated_cost = estimate_cost(features.has_vector_search);
     let query_type = if parsed.is_match_query() {
         "MATCH"
@@ -215,9 +215,10 @@ fn detect_explain_features(select: &velesdb_core::velesql::SelectStatement) -> E
 
 /// Build the execution plan steps for an EXPLAIN response.
 fn build_explain_plan(
-    select: &velesdb_core::velesql::SelectStatement,
+    parsed: &velesdb_core::velesql::Query,
     features: &ExplainFeatures,
 ) -> Vec<ExplainStep> {
+    let select = &parsed.select;
     let mut plan = Vec::new();
     let mut step_num = 1;
 
@@ -226,7 +227,9 @@ fn build_explain_plan(
 
     append_filter_and_join_steps(select, features, &mut plan, &mut step_num);
     append_aggregation_steps(features, &mut plan, &mut step_num);
-    append_pagination_step(select, &mut plan, step_num);
+    // MATCH and compound queries have no implicit default LIMIT.
+    let implicit_limit = parsed.match_clause.is_none() && parsed.compound.is_none();
+    append_pagination_step(select, &mut plan, step_num, implicit_limit);
 
     plan
 }
@@ -323,23 +326,49 @@ fn append_aggregation_steps(
     }
 }
 
+/// Appends the LIMIT/OFFSET step.
+///
+/// Plain SELECT statements (`implicit_limit == true`) without an explicit
+/// LIMIT surface the engine default ([`DEFAULT_SELECT_LIMIT`]) so the plan
+/// matches what execution actually returns. MATCH and compound queries
+/// (`implicit_limit == false`) have no implicit limit.
 fn append_pagination_step(
     select: &velesdb_core::velesql::SelectStatement,
     plan: &mut Vec<ExplainStep>,
     step_num: usize,
+    implicit_limit: bool,
 ) {
-    if select.limit.is_some() || select.offset.is_some() {
-        plan.push(ExplainStep {
-            step: step_num,
-            operation: "Limit".to_string(),
-            description: format!(
-                "Apply LIMIT {} OFFSET {}",
-                select.limit.unwrap_or(0),
-                select.offset.unwrap_or(0)
-            ),
-            estimated_rows: select.limit.map(|l| l as usize),
-            estimation_method: None,
-        });
+    let Some((limit, is_default)) = resolve_pagination_limit(select, implicit_limit) else {
+        return;
+    };
+    let marker = if is_default { " (default)" } else { "" };
+    let estimated_rows = (select.limit.is_some() || is_default).then_some(limit as usize);
+    plan.push(ExplainStep {
+        step: step_num,
+        operation: "Limit".to_string(),
+        description: format!(
+            "Apply LIMIT {limit}{marker} OFFSET {}",
+            select.offset.unwrap_or(0)
+        ),
+        estimated_rows,
+        estimation_method: None,
+    });
+}
+
+/// Resolves the effective LIMIT for the pagination step.
+///
+/// Returns `(limit, is_default)`, or `None` when no step should be emitted
+/// (no LIMIT, no OFFSET, and no implicit default — MATCH/compound queries).
+fn resolve_pagination_limit(
+    select: &velesdb_core::velesql::SelectStatement,
+    implicit_limit: bool,
+) -> Option<(u64, bool)> {
+    match select.limit {
+        Some(limit) => Some((limit, false)),
+        None if implicit_limit => Some((DEFAULT_SELECT_LIMIT, true)),
+        // OFFSET without LIMIT on a no-default query keeps the LIMIT 0 display.
+        None if select.offset.is_some() => Some((0, false)),
+        None => None,
     }
 }
 

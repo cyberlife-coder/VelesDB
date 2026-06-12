@@ -780,7 +780,7 @@ velesdb-server --port 8080
 
 - ✅ **~55 µs HNSW search (index-only)** / **~450 µs end-to-end p50** — no network overhead (see promise-contract)
 - ✅ **SQL syntax** you already know  
-- ✅ **Self-contained** — single 6 MB binary, no external services
+- ✅ **Self-contained** — a single small binary (~9 MB server; 6–13 MB across platforms and binaries), no external services
 - ✅ **Self-hosted**, your data stays private
 - ✅ **4-32x compression** with SQ8/Binary quantization
 

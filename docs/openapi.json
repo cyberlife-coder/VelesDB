@@ -2007,7 +2007,7 @@
           "points"
         ],
         "summary": "Set (or refresh) the durable TTL of a point.",
-        "description": "Persists `_veles_expires_at` in the point's payload so the expiry\nsurvives a restart. A `ttl_seconds` of `0` expires the point immediately.",
+        "description": "Persists `_veles_expires_at` in the point's payload so the expiry\nsurvives a restart. A `ttl_seconds` of `0` expires the point immediately.\nExpired points are excluded from all read surfaces (search/get/scroll/query);\nrefreshing an expired point returns 404; storage is reclaimed lazily.",
         "operationId": "set_point_ttl",
         "parameters": [
           {
@@ -2861,6 +2861,27 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Prometheus text format metrics response.",
+        "description": "Returns metrics in Prometheus exposition format, including plan cache stats.",
+        "operationId": "prometheus_metrics",
+        "responses": {
+          "200": {
+            "description": "Prometheus metrics",
+            "content": {
+              "text/plain": {}
+            }
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -5671,6 +5692,10 @@
     {
       "name": "guardrails",
       "description": "Query guard-rails configuration (EPIC-048)"
+    },
+    {
+      "name": "metrics",
+      "description": "Prometheus operational metrics"
     }
   ]
 }

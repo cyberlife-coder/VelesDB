@@ -4,6 +4,16 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 
 **v1.18.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
 
+## What's New (unreleased)
+
+- **Relation + durable-TTL surface** (REST backend): `relate()`, `unrelate()`, `getRelations()`, `setTtlDurable()` — now fully tested and documented (see [Knowledge Graph API](#knowledge-graph-api) and [Agent Memory API](#agent-memory-api) below). The WASM backend throws `NOT_SUPPORTED` for these methods.
+- The shipped example (`examples/hybrid_queries.ts`) was rewritten against the real API and is now compile-checked in CI.
+
+## What's New in v1.17.0 / v1.18.0
+
+- v1.17.0: no SDK-facing API change (engine-side release).
+- v1.18.0: agent-memory parity wave — temporal recall facades (`recallRecent` / `recallOlderThan`), id-coercion hardening for `deleteMemory(string | number)`.
+
 ## What's New in v1.16.0
 
 - **First-party embedding helper.** New `OpenAIEmbedder` (plus the `Embedder` interface and `OpenAIEmbedderOptions` type), exported from the package root. It calls any OpenAI-compatible `/embeddings` endpoint via the global `fetch` API — no extra runtime dependency — so you can go from text to vectors without hand-writing the request. See [Embedding helper](#embedding-helper) below. Works in Node.js ≥ 18, browsers, and Deno.
@@ -731,6 +741,56 @@ for (const node of result.results) {
 }
 ```
 
+#### `db.relate(collection, request)`
+
+Create a typed relation edge between two existing points. Returns the
+allocated edge ID (`RelateResponse = { edgeId: number | string }`). Point and
+edge IDs are `number | string` — IDs above `Number.MAX_SAFE_INTEGER` travel as
+decimal strings to avoid u64 precision loss. **REST backend only** (the WASM
+backend throws `NOT_SUPPORTED`).
+
+```typescript
+const { edgeId } = await db.relate('social', {
+  source: 100,
+  target: 200,
+  relType: 'FOLLOWS',
+  properties: { since: '2024-01-01' }  // optional, defaults to {}
+});
+```
+
+#### `db.unrelate(collection, edgeId)`
+
+Remove a relation edge by its ID. Returns `true` if the edge was removed,
+`false` if it did not exist. **REST backend only.**
+
+```typescript
+const removed = await db.unrelate('social', edgeId);
+```
+
+#### `db.getRelations(collection, pointId)`
+
+List the outgoing relation edges of a point. Returns
+`RelationsResponse = { edges: RelationEdge[]; count: number }` where each edge
+carries `{ id, source, target, relType, properties? }`. **REST backend only.**
+
+```typescript
+const { edges, count } = await db.getRelations('social', 100);
+for (const edge of edges) {
+  console.log(`${edge.source} -[${edge.relType}]-> ${edge.target}`);
+}
+```
+
+#### `db.setTtlDurable(collection, pointId, ttlSeconds)`
+
+Durably set (or refresh) the time-to-live of a point, in **seconds**. The
+expiry is persisted server-side (reserved `_veles_expires_at` payload field),
+so it survives a restart. `ttlSeconds` must be a non-negative number.
+**REST backend only.**
+
+```typescript
+await db.setTtlDurable('social', 100, 3600); // expire point 100 in 1 hour
+```
+
 ---
 
 ### Property Indexes
@@ -824,11 +884,15 @@ await memory.storeFact('knowledge', {
 const facts = await memory.searchFacts('knowledge', queryEmbedding, 5);
 ```
 
-Each recall method returns `SearchResult[]`:
+Each similarity-recall method (`searchFacts`, `recallEvents`,
+`recallProcedures`) returns `SearchResult[]`:
 
 ```typescript
 // SearchResult = { id: number; score: number; payload?: Record<string, unknown>; vector?: number[] }
 ```
+
+The temporal-recall methods (`recallRecent`, `recallOlderThan`) return
+`EpisodicRecord[]` instead — see [Episodic Memory](#episodic-memory-events-and-experiences).
 
 - `score` is the cosine similarity in `[0, 1]` (for a `cosine` collection);
   higher means more similar.
@@ -867,6 +931,17 @@ const eventId = await memory.recordEvent('events', {
 
 // Recall similar events
 const events = await memory.recallEvents('events', queryEmbedding, 5);
+
+// Temporal recall — no embedding needed, most-recent-first.
+// recallRecent(collection, since?): events with timestamp >= since
+// (inclusive, unix-seconds); recallOlderThan(collection, before): strictly older.
+const nowSecs = Math.floor(Date.now() / 1000);
+const allRecent = await memory.recallRecent('events');
+const lastHour = await memory.recallRecent('events', nowSecs - 3600);
+const stale = await memory.recallOlderThan('events', nowSecs - 86_400);
+
+// Both return EpisodicRecord[]:
+// { id: string; timestamp: number; payload: Record<string, unknown> }
 ```
 
 #### Procedural Memory (learned patterns)
@@ -897,9 +972,14 @@ await memory.deleteMemory('procedures', procId);
 > collection — the collection's own dimension (set at `createCollection`)
 > governs storage and search, and your embeddings must match it.
 
-> **TTL & snapshots.** Per-entry TTL (in **seconds**) and versioned snapshots are
-> exposed by the embedded Rust API only; the REST-backed TypeScript facade does
-> not surface them. See the [Agent Memory guide](../../docs/guides/AGENT_MEMORY.md).
+> **TTL & snapshots.** Durable per-point TTL (in **seconds**) **is** available
+> from this SDK: memory entries are regular points, so
+> [`db.setTtlDurable(collection, pointId, ttlSeconds)`](#dbsetttldurablecollection-pointid-ttlseconds)
+> expires a fact/event/procedure durably over REST. The subsystem-namespaced
+> TTL helpers (`set_semantic_ttl`, `store_with_ttl`, `auto_expire`) and
+> versioned snapshots remain embedded-only (Rust **and** Python bindings) and
+> are not exposed over REST. See the API-availability table in the
+> [Agent Memory guide](../../docs/guides/AGENT_MEMORY.md#api-availability-by-binding).
 
 ---
 
@@ -978,10 +1058,14 @@ import {
   type AddEdgeRequest,
   type TraverseRequest,
   type TraverseResponse,
+  type RelateRequest,
+  type RelateResponse,
+  type RelationsResponse,
   type QueryApiResponse,
   type AgentMemoryConfig,
   type SemanticEntry,
   type EpisodicEvent,
+  type EpisodicRecord,
   type ProceduralPattern,
 } from '@wiscale/velesdb-sdk';
 ```

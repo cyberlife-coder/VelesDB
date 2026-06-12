@@ -1,7 +1,7 @@
 # VelesDB Storage Format Specification
 
 **Version**: 1.0.0  
-**Last Updated**: 2026-01-27  
+**Last Updated**: 2026-06-12  
 **Status**: Stable
 
 ## Overview
@@ -389,7 +389,7 @@ When a breaking change is needed:
 
 | Limit | Value | Reason |
 |-------|-------|--------|
-| Max vector dimension | 65,535 | u16 practical limit |
+| Max vector dimension | 65,536 | `MAX_DIMENSION` in `validation.rs` (covers all known embedding models) |
 | Max file size | 16 EB | Filesystem limit |
 | Max vectors per collection | 2^64 - 1 | u64 ID space |
 

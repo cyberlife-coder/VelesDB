@@ -245,7 +245,13 @@ impl Collection {
             ));
         }
 
-        let limit = match_clause.return_clause.limit.map_or(100, |l| l as usize);
+        // Documented contract (VELESQL_SPEC "Default LIMIT"): MATCH ... RETURN
+        // has no implicit LIMIT 10 — results are bounded only by the
+        // server-wide MAX_LIMIT ceiling shared with compound queries.
+        let limit = match_clause
+            .return_clause
+            .limit
+            .map_or(super::MAX_LIMIT, |l| l as usize);
         let mut all_results: Vec<MatchResult> = Vec::new();
         let mut iteration_count: u32 = 0;
         let mut reported_cardinality: usize = 0;

@@ -310,6 +310,69 @@ class TestTtlAndEviction:
         assert memory.set_episodic_ttl(999, 3600) is False
         assert memory.set_procedural_ttl(999, 3600) is False
 
+    def test_record_with_ttl_immediately_queryable(self, memory):
+        """episodic.record_with_ttl keeps the event visible before expiry."""
+        epi = memory.episodic
+        epi.record_with_ttl(1, "transient", int(time.time()), 3600)
+        assert [e["id"] for e in epi.recent(limit=10)] == [1]
+
+    def test_record_with_ttl_zero_expires(self, memory):
+        """episodic.record_with_ttl with a 0s TTL expires the event."""
+        epi = memory.episodic
+        epi.record_with_ttl(1, "already stale", int(time.time()), 0)
+        assert [e["id"] for e in epi.recent(limit=10)] == []
+
+    def test_learn_with_ttl_immediately_recallable(self, memory):
+        """procedural.learn_with_ttl keeps the procedure listed before expiry."""
+        proc = memory.procedural
+        proc.learn_with_ttl(1, "draft", ["s1"], 3600, [0.5, 0.5, 0.0, 0.0], 0.9)
+        assert [p["id"] for p in proc.list_all()] == [1]
+
+    def test_learn_with_ttl_zero_expires(self, memory):
+        """procedural.learn_with_ttl with a 0s TTL expires the procedure."""
+        proc = memory.procedural
+        proc.learn_with_ttl(1, "stale", ["s1"], 0)
+        assert proc.list_all() == []
+
+    def test_set_ttl_durable_expires_via_auto_expire(self, memory):
+        """set_*_ttl_durable(id, 0) makes each subsystem's entry expirable."""
+        memory.semantic.store(1, "fact", [0.1, 0.2, 0.3, 0.4])
+        memory.episodic.record(2, "event", int(time.time()))
+        memory.procedural.learn(3, "proc", ["s1"])
+        memory.set_semantic_ttl_durable(1, 0)
+        memory.set_episodic_ttl_durable(2, 0)
+        memory.set_procedural_ttl_durable(3, 0)
+        result = memory.auto_expire()
+        assert result["semantic_expired"] == 1
+        assert result["episodic_expired"] == 1
+        assert result["procedural_expired"] == 1
+
+    def test_set_ttl_durable_raises_keyerror_for_unknown_id(self, memory):
+        """set_*_ttl_durable raises KeyError for a non-existent id."""
+        with pytest.raises(KeyError):
+            memory.set_semantic_ttl_durable(999, 3600)
+        with pytest.raises(KeyError):
+            memory.set_episodic_ttl_durable(999, 3600)
+        with pytest.raises(KeyError):
+            memory.set_procedural_ttl_durable(999, 3600)
+
+    def test_set_ttl_durable_survives_new_handle(self, temp_db):
+        """A durable TTL is rebuilt from payloads by a fresh AgentMemory.
+
+        ``set_episodic_ttl_durable`` persists the expiry to the reserved
+        ``_veles_expires_at`` payload field; a second handle (own in-memory
+        TTL registry) must rebuild it and expire the event — proving the
+        durability contract end-to-end from Python.
+        """
+        mem1 = temp_db.agent_memory(dimension=4)
+        mem1.episodic.record(1, "mortal event", int(time.time()))
+        mem1.set_episodic_ttl_durable(1, 0)
+
+        mem2 = temp_db.agent_memory(dimension=4)
+        result = mem2.auto_expire()
+        assert result["episodic_expired"] == 1
+        assert mem2.episodic.recent(limit=10) == []
+
     def test_set_ttl_namespaced_no_cross_subsystem_expiry(self, memory):
         """A semantic TTL must not expire an episodic/procedural row of same id.
 
@@ -352,6 +415,9 @@ class TestTtlAndEviction:
         ):
             assert key in result
             assert isinstance(result[key], int)
+        # Truncation flag: True when consolidation hit the per-cycle cap and
+        # another auto_expire pass is needed to drain remaining old episodes.
+        assert result["consolidation_truncated"] is False
 
     def test_auto_expire_removes_expired_entry(self, memory):
         """set_semantic_ttl(0) + auto_expire deletes the entry from storage."""

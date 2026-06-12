@@ -1323,6 +1323,8 @@ paths:
       description: |-
         Persists `_veles_expires_at` in the point's payload so the expiry
         survives a restart. A `ttl_seconds` of `0` expires the point immediately.
+        Expired points are excluded from all read surfaces (search/get/scroll/query);
+        refreshing an expired point returns 404; storage is reclaimed lazily.
       operationId: set_point_ttl
       parameters:
       - name: name
@@ -1875,6 +1877,20 @@ paths:
             application/json:
               schema:
                 type: object
+  /metrics:
+    get:
+      tags:
+      - metrics
+      summary: Prometheus text format metrics response.
+      description: Returns metrics in Prometheus exposition format, including plan cache stats.
+      operationId: prometheus_metrics
+      responses:
+        '200':
+          description: Prometheus metrics
+          content:
+            text/plain: {}
+        '500':
+          description: Internal server error
   /query:
     post:
       tags:
@@ -3994,3 +4010,5 @@ tags:
   description: Graph traversal and edge operations
 - name: guardrails
   description: Query guard-rails configuration (EPIC-048)
+- name: metrics
+  description: Prometheus operational metrics

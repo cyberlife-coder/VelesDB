@@ -172,9 +172,14 @@ impl Collection {
             let skip = usize::try_from(offset).unwrap_or(usize::MAX);
             results = results.into_iter().skip(skip).collect();
         }
-        let final_limit = usize::try_from(early.stmt.limit.unwrap_or(10))
-            .unwrap_or(MAX_LIMIT)
-            .min(MAX_LIMIT);
+        let final_limit = usize::try_from(
+            early
+                .stmt
+                .limit
+                .unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT),
+        )
+        .unwrap_or(MAX_LIMIT)
+        .min(MAX_LIMIT);
         results.truncate(final_limit);
         self.check_guardrails_and_record(early.ctx, results.len())?;
         self.guard_rails.circuit_breaker.record_success();

@@ -52,13 +52,15 @@ utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
 
 [features]
-default = ["velesdb-core/default", "persistence", "update-check"]
+default = ["velesdb-core/default", "persistence", "update-check", "prometheus"]
 bench-sift1m = ["velesdb-core/bench-sift1m"]
 gpu = ["velesdb-core/gpu"]
 internal-bench = ["velesdb-core/internal-bench"]
 loom = ["velesdb-core/loom"]
 openapi = ["velesdb-core/openapi"]
 persistence = ["velesdb-core/persistence"]
+## Serves GET /metrics (Prometheus exposition format). Default since 1.19:
+## released binaries and the Docker image expose operational metrics.
 prometheus = []
 update-check = ["velesdb-core/update-check"]
 swagger-ui = ["dep:utoipa-swagger-ui"]

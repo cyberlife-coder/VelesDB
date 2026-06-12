@@ -1,6 +1,6 @@
 # VelesDB Frequently Asked Questions
 
-**Last Updated**: 2026-03-15
+**Last Updated**: 2026-06-12
 
 ---
 
@@ -169,7 +169,7 @@ coll.stream_insert([
 
 ### Data size limits
 
-- Vector dimension: up to 65,535 (practical limit ~4096 for performance).
+- Vector dimension: up to 65,536 (`MAX_DIMENSION` in `validation.rs`; practical limit ~4096 for performance).
 - Collection count: no hard limit, but each collection consumes file descriptors for mmap.
 - Single-node memory: vector data is memory-mapped, so the practical limit is available RAM + swap.
 
@@ -228,16 +228,32 @@ cargo build -p velesdb-wasm --no-default-features --target wasm32-unknown-unknow
 
 ### What features are available in WASM?
 
-- In-memory vector collections (HNSW search, quantization).
-- VelesQL parsing and validation (query execution requires the REST server).
+- In-memory vector collections with exact (brute-force) search — there is no
+  HNSW graph in WASM, so search is O(n) but recall is perfect.
+- **Local VelesQL execution** via `db.executeQuery(sql, params)`: SELECT
+  (WHERE, GROUP BY/HAVING, ORDER BY, JOIN, UNION/INTERSECT/EXCEPT, fusion),
+  DML (INSERT/UPSERT/UPDATE/DELETE), DDL (CREATE/DROP/TRUNCATE COLLECTION),
+  introspection (SHOW COLLECTIONS, DESCRIBE, EXPLAIN), and graph statements
+  (INSERT NODE/EDGE, SELECT EDGES). No REST server required.
+- **Graph queries** via the in-memory `GraphStore` (nodes, edges, traversal):
+  graph statements (`INSERT NODE/EDGE`, `SELECT EDGES`) and `MATCH` patterns up
+  to **2 hops** run against a per-collection in-memory graph created lazily.
+  (`CREATE GRAPH COLLECTION` DDL is rejected — use `GraphStore` directly.)
 - All distance metrics (cosine, euclidean, dot product, hamming, jaccard).
+- f16/bf16 half-precision vector storage (50% memory reduction).
+- Explicit snapshot persistence to IndexedDB (`save()` / `load()` /
+  `export_to_bytes()` / `import_from_bytes()`).
 
 ### What features are NOT available in WASM?
 
-- Disk persistence (mmap, WAL).
-- Multi-threaded indexing (rayon).
-- Graph collections (require persistence).
-- Streaming ingestion (requires tokio).
+- Durable disk persistence (mmap, WAL): the `persistence` feature does not
+  compile on `wasm32`. IndexedDB `save()`/`load()` is explicit snapshotting,
+  not write-ahead durability.
+- HNSW indexing — `CREATE INDEX` is accepted as a no-op for API parity;
+  search stays brute-force.
+- `MATCH` patterns beyond 2 hops (rejected with a descriptive error).
+- `TRAIN QUANTIZER` / PQ training (requires the `persistence`/`rayon` stack).
+- Multi-threaded indexing (rayon) and streaming ingestion (tokio).
 
 ---
 

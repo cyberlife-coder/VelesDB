@@ -12,6 +12,21 @@ use super::join::JoinClause;
 use super::values::VectorExpr;
 use super::with_clause::WithClause;
 
+/// Default `LIMIT` applied to every SELECT statement without an explicit
+/// `LIMIT` clause.
+///
+/// VelesQL is ANN-first: a SELECT is a top-k retrieval, so every execution
+/// path (vector NEAR, sparse, scalar filter, hybrid) truncates to this value
+/// when no `LIMIT` is given. This differs from standard SQL, where a SELECT
+/// without LIMIT returns all rows.
+///
+/// Exceptions (no implicit limit is applied):
+/// - `MATCH ... RETURN` graph queries return all matching rows;
+/// - compound queries (`UNION` / `INTERSECT` / `EXCEPT`) evaluate their
+///   operands exhaustively before the set operation, and only an explicit
+///   outer `LIMIT` caps the merged result.
+pub const DEFAULT_SELECT_LIMIT: u64 = 10;
+
 /// DISTINCT mode for SELECT queries (EPIC-052 US-001).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[non_exhaustive]

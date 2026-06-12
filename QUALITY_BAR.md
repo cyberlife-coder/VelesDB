@@ -4,7 +4,7 @@ This document specifies the **explicit, enforceable thresholds** below which Vel
 
 These gates are not aspirational. They are enforced via CI workflows, scripts, and explicit pre-merge protocols. Each gate listed here links to its enforcement mechanism so that the gate can be inspected, contested, or extended publicly.
 
-> **Last updated:** 2026-05-31 — applies to v1.16.x and onward.
+> **Last updated:** 2026-06-12 — applies to v1.18.x and onward.
 
 ---
 
@@ -21,6 +21,8 @@ These gates are not aspirational. They are enforced via CI workflows, scripts, a
 | 7 | **Code duplication** | < 2% per language | jscpd in `scripts/local-ci.ps1` + Codacy |
 
 A pull request that breaks any of these gates **cannot be merged**. There are no waivers without a documented exception added to this file.
+
+**How "cannot be merged" is enforced:** both `develop` and `main` carry GitHub branch protection requiring the **`CI Success`** status check (the summary job that gates lint, tests, security/cargo-deny, WASM, OpenAPI drift, VelesQL conformance, perf-smoke and Python SDK tests); force pushes are disabled on both branches. Gates 5–6 are enforced by Codacy Cloud; the official register of per-file complexity exceptions (each with a written rationale) is [`.codacy.yml`](.codacy.yml) — the bar is ≤ 8 / ≤ 50 everywhere outside that explicit whitelist. Gate 7 runs in `scripts/local-ci.ps1` and Codacy rather than as a GitHub Actions job.
 
 ---
 

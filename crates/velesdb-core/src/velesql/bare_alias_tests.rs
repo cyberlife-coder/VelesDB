@@ -53,17 +53,13 @@ fn test_explain_with_bare_alias_parses() {
 }
 
 #[test]
-fn test_bare_alias_anchor_mismatch_rejected_like_as_alias() {
-    // V011: MATCH anchor must equal a declared alias — bare form included.
+fn test_bare_alias_implicit_anchor_accepted_like_as_alias() {
+    // V011 relaxation: no pattern alias matches 'm', so the anchor 'ctx'
+    // binds implicitly to the FROM rows — bare form included.
     let sql = "SELECT m.* FROM agent_memory m \
                WHERE vector NEAR $q AND MATCH (ctx)-[:RELATES_TO]->(fact)";
     let query = Parser::parse(sql).expect("must parse");
-    let err = QueryValidator::validate(&query).expect_err("anchor 'ctx' must not match alias 'm'");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("ctx"),
-        "error must name the anchor, got: {msg}"
-    );
+    QueryValidator::validate(&query).expect("implicit anchor 'ctx' must validate with alias 'm'");
 }
 
 #[test]

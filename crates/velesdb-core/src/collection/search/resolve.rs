@@ -7,6 +7,7 @@
 //! These helpers are ready for adoption by search submodules.
 //! Currently tested directly; callers will migrate in a follow-up.
 
+use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::error::Error;
 use crate::point::{Point, SearchResult};
 use crate::scored_result::ScoredResult;
@@ -15,16 +16,22 @@ use crate::storage::{PayloadStorage, VectorStorage};
 /// Hydrates a single `(id, score)` pair into a `SearchResult` by fetching
 /// vector and payload from storage.
 ///
-/// Returns `None` if the vector cannot be retrieved (deleted point).
+/// Returns `None` if the vector cannot be retrieved (deleted point) or the
+/// payload is TTL-expired at `now_secs` (expired points are invisible on
+/// every read surface).
 #[inline]
 pub(crate) fn hydrate_point(
     id: u64,
     score: f32,
+    now_secs: u64,
     vector_storage: &dyn VectorStorage,
     payload_storage: &dyn PayloadStorage,
 ) -> Option<SearchResult> {
     let vector = vector_storage.retrieve(id).ok().flatten()?;
     let payload = payload_storage.retrieve(id).ok().flatten();
+    if is_payload_expired(payload.as_ref(), now_secs) {
+        return None;
+    }
     let point = Point {
         id,
         vector,
@@ -42,10 +49,13 @@ pub(crate) fn resolve_id_score_pairs(
     vector_storage: &dyn VectorStorage,
     payload_storage: &dyn PayloadStorage,
 ) -> Vec<SearchResult> {
+    let now_secs = now_unix_secs();
     pairs
         .iter()
         .take(limit)
-        .filter_map(|&(id, score)| hydrate_point(id, score, vector_storage, payload_storage))
+        .filter_map(|&(id, score)| {
+            hydrate_point(id, score, now_secs, vector_storage, payload_storage)
+        })
         .collect()
 }
 
@@ -55,9 +65,10 @@ pub(crate) fn resolve_scored_results(
     vector_storage: &dyn VectorStorage,
     payload_storage: &dyn PayloadStorage,
 ) -> Vec<SearchResult> {
+    let now_secs = now_unix_secs();
     results
         .iter()
-        .filter_map(|sr| hydrate_point(sr.id, sr.score, vector_storage, payload_storage))
+        .filter_map(|sr| hydrate_point(sr.id, sr.score, now_secs, vector_storage, payload_storage))
         .collect()
 }
 

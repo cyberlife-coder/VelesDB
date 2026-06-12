@@ -2,6 +2,10 @@
 
 Complete REST API documentation for VelesDB.
 
+> **Last updated**: 2026-06-12 (VelesDB v1.18.0). The machine-readable source of
+> truth is [`docs/openapi.yaml`](../openapi.yaml), regenerated from the server's
+> annotated handlers; this page is the human-readable companion.
+
 ## Base URL
 
 ```
@@ -56,6 +60,11 @@ Check server health status.
   "version": "1.18.0"
 }
 ```
+
+### GET /ready
+
+Readiness probe. Returns `200` once the database is fully loaded, `503` before
+that. Use `/health` for liveness and `/ready` for load-balancer readiness gates.
 
 ---
 
@@ -161,6 +170,54 @@ Delete a collection and all its data.
 }
 ```
 
+### GET /collections/:name/config
+
+Get detailed collection configuration: HNSW parameters, storage mode, schema,
+deferred-indexing and async-index-builder settings. Returns a
+`CollectionConfigResponse` (`name`, `dimension`, `metric`, `storage_mode`,
+`point_count`, `metadata_only`, optional `embedding_dimension`,
+`deferred_indexing`, `async_index_builder`).
+
+### GET /collections/:name/empty
+
+Check whether a collection contains no points. Returns `200` with an empty/has-points
+status object, `404` when the collection does not exist.
+
+### GET /collections/:name/sanity
+
+Quick onboarding/troubleshooting check (collection reachable, dimensions consistent,
+index responsive). Returns a status object (`200`) or `404`.
+
+### GET /collections/:name/stats
+
+Get **cached** collection statistics computed by the last `ANALYZE`. Returns `404`
+if the collection was never analyzed — run `POST /collections/:name/analyze` first.
+
+**Response** (`CollectionStatsResponse`):
+```json
+{
+  "total_points": 50000,
+  "total_size_bytes": 104857600,
+  "row_count": 49500,
+  "deleted_count": 500,
+  "avg_row_size_bytes": 2048,
+  "payload_size_bytes": 5120000,
+  "column_stats": {},
+  "index_stats": {},
+  "last_analyzed_epoch_ms": 1765500000000
+}
+```
+
+### POST /collections/:name/analyze
+
+Analyze a collection: computes, persists, and returns the statistics served by
+`GET /collections/:name/stats` (same `CollectionStatsResponse` shape).
+
+### POST /collections/:name/flush
+
+Flush pending changes (WAL, payload log, index) to disk. Returns `200` on
+success, `404`/`500` on error.
+
 ---
 
 ## Points
@@ -223,6 +280,89 @@ Delete a point by ID.
   "id": 1
 }
 ```
+
+### POST /collections/:name/points/delete
+
+Bulk-delete points by ID in a single call (idempotent: missing IDs are skipped,
+`{"ids": []}` is a successful no-op). Batches above 10 000 IDs return `400`.
+
+**Request Body:**
+```json
+{
+  "ids": [1, 2, 3]
+}
+```
+
+**Response:** `200` with the number of points submitted for deletion.
+
+### POST /collections/:name/points/scroll
+
+Cursor-based pagination over all points of a collection (ascending ID order).
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| batch_size | integer | No | Points per batch (1–10 000, default: 100) |
+| cursor | integer/null | No | Resume **after** this point ID (exclusive); omit to start from the beginning |
+| filter | object | No | Optional canonical filter expression |
+
+**Response:**
+```json
+{
+  "points": [
+    {"id": "1", "vector": [0.1, 0.2, ...], "payload": {"title": "Doc 1"}}
+  ],
+  "next_cursor": 1
+}
+```
+
+`next_cursor` is `null` once iteration is complete. Point IDs are serialized as
+strings (see the Point ID encoding note in [Search](#search)).
+
+### POST /collections/:name/points/stream
+
+Stream-upsert points as NDJSON (`application/x-ndjson`, one JSON point per line).
+Points are accumulated into micro-batches and flushed via bulk upsert. The
+response includes a `network_errors` count: a non-zero value means the HTTP body
+stream was truncated and fewer points than sent may have been received.
+
+### POST /collections/:name/stream/insert
+
+Insert a **single** point through the bounded streaming-ingestion channel.
+
+**Request Body:**
+```json
+{
+  "id": 1,
+  "vector": [0.1, 0.2, 0.3],
+  "payload": {"title": "Doc 1"}
+}
+```
+
+**Status codes:** `202` accepted into the buffer; `404` collection not found;
+`409` streaming not configured for the collection; `429` buffer full (with
+`Retry-After: 1`); `503` drain task has exited.
+
+### PATCH /collections/:name/points/:id/ttl
+
+Set (or refresh) the **durable TTL** of a point. The expiry is persisted as the
+reserved `_veles_expires_at` payload field (epoch seconds), so it survives a
+restart.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| ttl_seconds | integer | Yes | Seconds from now until expiry; `0` expires the point immediately |
+
+**Response:** `204 No Content` on success; `400` when the point's payload is not
+a JSON object; `404` when the collection or point does not exist.
+
+**TTL semantics:** expired points are excluded from **all** read surfaces
+(search, get, scroll, VelesQL query, and `MATCH`); refreshing an already-expired
+point returns `404`; storage is reclaimed lazily (expired entries are swept
+later, e.g. by the agent-memory `auto_expire` sweep), not at expiry time.
 
 ---
 
@@ -353,6 +493,21 @@ Hybrid search combining vector similarity and BM25 text relevance using Reciproc
     }
   ],
   "timing_ms": 2.45
+}
+```
+
+### POST /collections/:name/search/ids
+
+Lightweight search returning only IDs and scores — no payload hydration.
+Accepts the same request body as `POST /collections/:name/search` (dense,
+sparse, and hybrid modes; `filter`, `ef_search`, `mode`, `fusion` are honored).
+
+**Response:**
+```json
+{
+  "results": [
+    {"id": "1", "score": 0.98}
+  ]
 }
 ```
 
@@ -512,6 +667,11 @@ Execute a VelesQL query.
 ```
 
 **Contract note:** top-level `MATCH` on `/query` requires `collection` in request body.  
+**Default LIMIT:** a SELECT without an explicit `LIMIT` clause returns at most
+10 rows (engine default). `MATCH ... RETURN` and compound queries
+(UNION/INTERSECT/EXCEPT) have no implicit limit and are bounded only by the
+server-wide 100 000-row ceiling — specify `LIMIT` explicitly for
+predictable result sizes.  
 Canonical reference: [`VELESQL_CONTRACT.md`](./VELESQL_CONTRACT.md)
 
 ### POST /aggregate
@@ -688,9 +848,13 @@ List node IDs present in a graph collection.
 }
 ```
 
+### GET /collections/:name/graph/nodes/:id/payload
+
+Get the JSON payload attached to a graph node.
+
 ### PUT /collections/:name/graph/nodes/:id/payload
 
-Create or replace the JSON payload attached to a graph node.
+Create or replace the JSON payload attached to a graph node. Returns `204` on success.
 
 **Request Body:**
 ```json
@@ -698,6 +862,11 @@ Create or replace the JSON payload attached to a graph node.
   "payload": {"_labels": ["Document"], "title": "AI Guide"}
 }
 ```
+
+### GET /collections/:name/graph/edges
+
+List edges filtered by label (`?label=KNOWS`). Returns an `EdgesResponse`
+(`edges` array of `{id, source, target, label, properties}` plus `count`).
 
 ### POST /collections/:name/graph/edges
 
@@ -715,6 +884,28 @@ Add edges between nodes.
 ```
 
 `id`, `source`, and `target` accept either JSON numbers or strings. Responses serialize graph IDs as strings to preserve full `u64` precision in JavaScript clients.
+
+### DELETE /collections/:name/graph/edges/:edge_id
+
+Remove an edge by ID. Returns `204` on success, `404` when the edge or
+collection does not exist.
+
+### GET /collections/:name/graph/edges/count
+
+Get the total number of edges in the graph.
+
+**Response:**
+```json
+{
+  "count": 42
+}
+```
+
+### GET /collections/:name/graph/nodes/:id/edges
+
+List the edges of a specific node, with optional `?direction=in|out|both` and
+`?label=...` query filters. Returns the same `EdgesResponse` shape as
+`GET .../graph/edges`.
 
 ### POST /collections/:name/graph/traverse
 
@@ -764,6 +955,179 @@ Get node degree (in/out edge counts).
   "total_degree": 8
 }
 ```
+
+### POST /collections/:name/graph/traverse/parallel
+
+Parallel multi-source BFS traversal. Same response shape as
+`POST .../graph/traverse`; the request takes a `sources` array instead of a
+single `source`.
+
+### GET /collections/:name/graph/traverse/stream
+
+Stream traversal results as Server-Sent Events (SSE). Query parameters:
+`start_node` (required), `algorithm` (`bfs`/`dfs`), `max_depth`, `limit`,
+`relationship_types` (comma-separated). Emits `node`, periodic `stats`, `done`,
+and `error` events.
+
+### POST /collections/:name/graph/search
+
+Search graph nodes by embedding similarity.
+
+**Request Body:**
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "top_k": 10
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {"id": "1", "score": 0.97, "payload": {"_labels": ["Document"]}}
+  ]
+}
+```
+
+---
+
+## Relations and Durable TTL
+
+Relation endpoints work on **any** collection type (vector, graph, or metadata):
+edges live on the collection's embedded edge store, independently of the
+payload/vector layer. They back the agent-memory `relate()`/`unrelate()` SDK
+surface.
+
+### POST /collections/:name/relations
+
+Create a relation edge between two points. The edge ID is auto-assigned.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| source | integer/string | Yes | Source point ID (string form for u64 > 2^53−1) |
+| target | integer/string | Yes | Target point ID |
+| rel_type | string | Yes | Relationship type label (e.g. `"KNOWS"`) |
+| properties | object | No | Optional edge properties |
+
+**Response (201 Created):**
+```json
+{
+  "edge_id": "7"
+}
+```
+
+### DELETE /collections/:name/relations/:edge_id
+
+Remove a relation edge by ID. Returns `204` on success, `404` when the edge or
+collection does not exist.
+
+### GET /collections/:name/points/:id/relations
+
+List the outgoing relation edges of a point.
+
+**Response:**
+```json
+{
+  "edges": [
+    {"id": "7", "source": "1", "target": "2", "rel_type": "KNOWS", "properties": null}
+  ],
+  "count": 1
+}
+```
+
+For the durable-TTL endpoint, see
+[`PATCH /collections/:name/points/:id/ttl`](#patch-collectionsnamepointsidttl)
+in the Points section.
+
+---
+
+## Property Indexes
+
+### GET /collections/:name/indexes
+
+List all property indexes on a collection.
+
+### POST /collections/:name/indexes
+
+Create a property index on a graph collection.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| label | string | Yes | Node label to index (e.g. `Person`) |
+| property | string | Yes | Property name to index (e.g. `email`) |
+| index_type | string | No | `hash` (equality, O(1)) or `range` (range queries, O(log n)) |
+
+**Response (201 Created):** index descriptor (`label`, `property`, `index_type`,
+`cardinality`, `memory_bytes`).
+
+### DELETE /collections/:name/indexes/:label/:property
+
+Delete a property index. Returns `200` on success, `404` when the index or
+collection does not exist.
+
+---
+
+## Maintenance
+
+### POST /collections/:name/index/rebuild
+
+Rebuild the HNSW index of a vector collection: reclaims memory held by
+tombstoned entries and produces a fresh graph from the current vector storage.
+Blocking — may take several seconds on large collections. The response includes
+the number of compacted entries.
+
+### POST /collections/:name/vacuum
+
+Semantically equivalent to `POST .../index/rebuild`, exposed under a
+maintenance-oriented name. Blocking.
+
+### POST /collections/:name/compact
+
+Compact the vector storage: rewrites active vectors into a contiguous layout
+and reclaims disk space from deleted entries. Blocking; may involve significant
+I/O on large, fragmented collections.
+
+---
+
+## Guardrails
+
+### GET /guardrails
+
+Get the current query guard-rails configuration.
+
+**Response:**
+```json
+{
+  "max_depth": 10,
+  "max_cardinality": 100000,
+  "memory_limit_bytes": 1073741824,
+  "timeout_ms": 30000,
+  "rate_limit_qps": 100,
+  "circuit_failure_threshold": 5,
+  "circuit_recovery_seconds": 30
+}
+```
+
+### PUT /guardrails
+
+Partially update the guard-rails configuration. Accepts any subset of the
+fields above; returns the updated configuration.
+
+---
+
+## Monitoring
+
+### GET /metrics
+
+Prometheus exposition-format metrics (text/plain), including plan-cache
+statistics. Served by default in released binaries (the server's `prometheus`
+cargo feature is a default feature). Unlike `/health` and `/ready`, `/metrics`
+**requires authentication** when API keys are configured.
 
 ---
 

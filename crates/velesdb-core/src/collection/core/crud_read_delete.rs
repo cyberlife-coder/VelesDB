@@ -5,6 +5,7 @@
 //! - `delete()` — point deletion (vector + metadata paths)
 //! - `len()`, `is_empty()`, `all_ids()` — collection-level accessors
 
+use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::Point;
@@ -12,8 +13,29 @@ use crate::storage::{PayloadStorage, VectorStorage};
 
 impl Collection {
     /// Retrieves points by their IDs.
+    ///
+    /// TTL-expired points (payload `_veles_expires_at <= now`) are returned
+    /// as `None`, like deleted points: expired-but-not-yet-swept entries are
+    /// invisible on every read surface. Internal maintenance paths that must
+    /// see them (TTL rebuild, snapshots, PQ training) use
+    /// [`get_raw`](Self::get_raw).
     #[must_use]
     pub fn get(&self, ids: &[u64]) -> Vec<Option<Point>> {
+        let now_secs = now_unix_secs();
+        self.get_raw(ids)
+            .into_iter()
+            .map(|point| point.filter(|p| !is_payload_expired(p.payload.as_ref(), now_secs)))
+            .collect()
+    }
+
+    /// Retrieves points by their IDs **without** the TTL-expiry filter.
+    ///
+    /// Expired-but-not-yet-swept points are returned as-is. This must stay
+    /// the backing read for `rebuild_ttl_from_payloads` (agent TTL cache) and
+    /// memory snapshots: filtering them out would hide unswept expired points
+    /// after a restart, so `auto_expire` could never reclaim their storage.
+    #[must_use]
+    pub(crate) fn get_raw(&self, ids: &[u64]) -> Vec<Option<Point>> {
         let config = self.config.read();
         let is_metadata_only = config.metadata_only;
         drop(config);

@@ -209,6 +209,29 @@ fn test_distance_engine_all_common_dimensions() {
 }
 
 // ---------------------------------------------------------------------------
+// Dimension safety: asserts must hold in release builds too (kernels are
+// pre-resolved for `dimension`; a mismatch would read out of bounds).
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "Vector dimensions must match")]
+fn test_distance_engine_panics_on_input_length_mismatch() {
+    let engine = DistanceEngine::new(128);
+    let a = generate_vector(128, 0.0);
+    let b = generate_vector(64, 1.0);
+    let _ = engine.dot_product(&a, &b);
+}
+
+#[test]
+#[should_panic(expected = "Vector dimension mismatch with engine")]
+fn test_distance_engine_panics_on_engine_dimension_mismatch() {
+    let engine = DistanceEngine::new(128);
+    let a = generate_vector(64, 0.0);
+    let b = generate_vector(64, 1.0);
+    let _ = engine.squared_l2(&a, &b);
+}
+
+// ---------------------------------------------------------------------------
 // Thread safety (compile-time check)
 // ---------------------------------------------------------------------------
 

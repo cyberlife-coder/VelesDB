@@ -19,6 +19,7 @@ from langchain_velesdb._common import (
     _results_to_docs,
     _results_to_docs_with_score,
 )
+from langchain_velesdb.mmr import MMRSearchMixin
 from langchain_velesdb.multi_query_ops import MultiQueryOpsMixin
 from langchain_velesdb.security import (
     validate_k,
@@ -46,17 +47,20 @@ except (ImportError, AttributeError):  # pragma: no cover — optional dependenc
 logger = logging.getLogger(__name__)
 
 
-class SearchOpsMixin(MultiQueryOpsMixin):
+class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
     """Mixin providing all search and query operations for VelesDBVectorStore.
 
     Expects the host class to provide:
         - ``self._embedding``: Embeddings model
+        - ``self._metric``: Distance metric name (e.g. ``"cosine"``)
         - ``self._collection``: Optional VelesDB collection (may be None)
         - ``self._get_collection(dimension)``: Returns or creates the collection
         - ``self._to_document(result)``: Converts a result dict to a Document
 
     Batch and multi-query methods are inherited from
-    :class:`~langchain_velesdb.multi_query_ops.MultiQueryOpsMixin`.
+    :class:`~langchain_velesdb.multi_query_ops.MultiQueryOpsMixin`;
+    by-vector and MMR search methods from
+    :class:`~langchain_velesdb.mmr.MMRSearchMixin`.
     """
 
     def _run_vector_search(
@@ -246,7 +250,10 @@ class SearchOpsMixin(MultiQueryOpsMixin):
                 ``sparse_index_name``, and ``search_quality``.
 
         Returns:
-            List of (Document, score) tuples.
+            List of (Document, score) tuples. For the cosine metric, dense
+            scores are normalised from ``[-1, 1]`` to ``[0, 1]`` (higher is
+            more similar). Hybrid dense+sparse results keep their raw fused
+            scores.
         """
         validate_text(query)
         validate_k(k)
@@ -264,7 +271,15 @@ class SearchOpsMixin(MultiQueryOpsMixin):
             sparse_index_name=sparse_index_name,
             search_quality=quality,
         )
-        return _results_to_docs_with_score(results)
+        docs_with_scores = _results_to_docs_with_score(results)
+        # Cosine similarity is in [-1, 1]; normalise to [0, 1] so scores are
+        # directly usable as relevance scores. Hybrid (sparse) results carry
+        # RRF-fused scores, which are not cosine values — leave them as-is.
+        if self._metric == "cosine" and sparse_vector is None:
+            docs_with_scores = [
+                (doc, (score + 1.0) / 2.0) for doc, score in docs_with_scores
+            ]
+        return docs_with_scores
 
     def similarity_search_with_relevance_scores(
         self,

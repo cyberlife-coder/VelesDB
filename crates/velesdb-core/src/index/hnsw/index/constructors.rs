@@ -440,6 +440,18 @@ impl HnswIndex {
         self.inner.read().is_rabitq_quantizer_trained()
     }
 
+    /// Returns the trained `RaBitQ` quantizer, if any (`RaBitQ` backend only).
+    ///
+    /// Used by the collection flush path to persist a lazily-trained
+    /// quantizer to `rabitq.idx` (parity with the PQ codebook flush).
+    #[cfg(feature = "persistence")]
+    #[must_use]
+    pub(crate) fn rabitq_quantizer(
+        &self,
+    ) -> Option<std::sync::Arc<crate::quantization::RaBitQIndex>> {
+        self.inner.read().rabitq_quantizer()
+    }
+
     /// Returns `true` when this index runs the `RaBitQ` backend.
     pub(crate) fn is_rabitq_backend(&self) -> bool {
         self.inner.read().is_rabitq_backend()

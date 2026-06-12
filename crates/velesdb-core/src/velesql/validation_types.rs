@@ -123,7 +123,8 @@ pub enum ValidationErrorKind {
     /// Subquery used in a WHERE clause; parsed but not yet executable.
     SubqueryNotExecutable,
     /// MATCH predicate in SELECT WHERE whose anchor (first node) alias is
-    /// missing or does not match any declared FROM/JOIN alias.
+    /// missing, or whose implicit binding to the FROM rows violates a guard
+    /// (G1 inverted direction, G2 cross-predicate alias, G3 @collection).
     GraphMatchAnchorMismatch,
 }
 

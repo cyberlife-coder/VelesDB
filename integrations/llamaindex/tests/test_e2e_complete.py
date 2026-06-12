@@ -14,7 +14,7 @@ import shutil
 import numpy as np
 
 try:
-    from llama_index.vector_stores.velesdb import VelesDBVectorStore
+    from llamaindex_velesdb import VelesDBVectorStore
     from llama_index.core.schema import TextNode
     from llama_index.core.vector_stores.types import VectorStoreQuery
     LLAMAINDEX_AVAILABLE = True
@@ -202,9 +202,9 @@ class TestMultiQueryE2E:
         
         # Multi-query
         queries = [generate_embedding(5), generate_embedding(15), generate_embedding(25)]
-        results = temp_store.multi_query_search(queries, top_k=5)
-        
-        assert len(results) == 5
+        result = temp_store.multi_query_search(queries, similarity_top_k=5)
+
+        assert len(result.nodes) == 5
 
     def test_batch_query(self, temp_store):
         """Test batch query with multiple embeddings."""
@@ -215,9 +215,12 @@ class TestMultiQueryE2E:
         temp_store.add(nodes)
         
         # Batch query
-        query_embeddings = [generate_embedding(i * 10) for i in range(5)]
-        results = temp_store.batch_query(query_embeddings, top_k=3)
-        
+        queries = [
+            VectorStoreQuery(query_embedding=generate_embedding(i * 10), similarity_top_k=3)
+            for i in range(5)
+        ]
+        results = temp_store.batch_query(queries)
+
         assert len(results) == 5  # One result set per query
 
 

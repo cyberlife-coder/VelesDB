@@ -3,7 +3,7 @@
 Canonical contract for VelesQL server endpoints and payloads.
 
 - Contract version: `3.6.0`
-- Last updated: `2026-03-31`
+- Last updated: `2026-06-12`
 
 This document is the normative REST contract baseline for VelesQL.
 When behavior differs between docs and runtime, runtime must be fixed or this
@@ -69,9 +69,11 @@ Rules:
 - `SELECT ... WHERE ... AND MATCH (...)` is supported and does not require
   `collection` in body when `FROM <collection>` is present.
 - The MATCH anchor (first node of the pattern) must carry an alias; when the
-  `FROM`/`JOIN` clauses declare aliases, the anchor alias must be one of them.
-  Violations fail validation with error code `V011`. When `FROM` has no alias,
-  any anchor alias is accepted.
+  `FROM`/`JOIN` clauses declare aliases, the anchor alias either is one of
+  them (explicit binding) or — when no pattern alias matches a declared
+  alias — binds implicitly to the FROM rows, guarded by G1/G2/G3 (see the
+  spec's "Anchor rule (V011)"). Violations fail validation with error code
+  `V011`. When `FROM` has no alias, any anchor alias is accepted.
 - Execution note: graph predicates that are AND-required by the WHERE clause
   take the GraphFirst anchored fetch — the pattern is evaluated first and
   retrieval is exhaustive within its anchor set (NEAR, metadata-only,

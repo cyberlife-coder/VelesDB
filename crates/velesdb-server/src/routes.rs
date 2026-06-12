@@ -152,8 +152,11 @@ fn graph_routes() -> Router<Arc<AppState>> {
 /// This is the single source of truth for route registration. Both
 /// the production binary and the OpenAPI conformance test consume it.
 pub fn api_routes() -> Router<Arc<AppState>> {
-    core_routes()
+    let routes = core_routes()
         .merge(search_routes())
         .merge(graph_routes())
-        .merge(relation_routes())
+        .merge(relation_routes());
+    #[cfg(feature = "prometheus")]
+    let routes = routes.route("/metrics", get(crate::prometheus_metrics));
+    routes
 }

@@ -106,7 +106,7 @@ cargo build --release --target aarch64-apple-ios -p velesdb-mobile
 cargo build --release --target aarch64-apple-ios-sim -p velesdb-mobile
 
 # Generate Swift bindings
-cargo run --bin uniffi-bindgen generate \
+cargo run -p velesdb-mobile --bin uniffi-bindgen -- generate \
     --library target/aarch64-apple-ios/release/libvelesdb_mobile.a \
     --language swift \
     --out-dir bindings/swift
@@ -128,7 +128,7 @@ cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
     build --release -p velesdb-mobile
 
 # Generate Kotlin bindings
-cargo run --bin uniffi-bindgen generate \
+cargo run -p velesdb-mobile --bin uniffi-bindgen -- generate \
     --library target/aarch64-linux-android/release/libvelesdb_mobile.so \
     --language kotlin \
     --out-dir bindings/kotlin

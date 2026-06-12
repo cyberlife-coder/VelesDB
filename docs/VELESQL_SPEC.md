@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | **Last Updated**: 2026-06-03 (VelesDB v1.18.0)
+**Version**: 3.10.0 | **Last Updated**: 2026-06-12 (VelesDB v1.18.0)
 
 ---
 
@@ -84,8 +84,10 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 - Conformance test matrix: `docs/reference/VELESQL_CONFORMANCE_MATRIX.md`.
 - Recommended developer syntax for mixed filters:
   `SELECT ... FROM <collection> WHERE ... AND MATCH (...)`.
-  When `FROM` declares an alias, the MATCH anchor must reuse it (rule V011 —
-  see [Graph Match Predicate in WHERE](#graph-match-predicate-in-where)).
+  When `FROM` declares an alias, the MATCH anchor either reuses it or — when
+  no pattern alias matches a declared alias — binds implicitly to the FROM
+  rows (rule V011 — see
+  [Graph Match Predicate in WHERE](#graph-match-predicate-in-where)).
 
 ---
 
@@ -916,22 +918,47 @@ LIMIT 10
 This filters rows that participate in the specified graph pattern, combined with
 any other scalar conditions.
 
-**Anchor alias rule (V011).** The first node of the pattern (the *anchor*) must
-carry an alias. When the `FROM` clause (or a `JOIN`) declares an alias, the
-anchor alias must be one of those declared aliases — the pattern is anchored on
-the rows of that table. When `FROM` has no alias, any anchor alias is accepted.
+**Anchor rule (V011) — explicit and implicit.** The first node of the pattern
+(the *anchor*) must carry an alias. The pattern binds to the FROM rows:
+
+- **Explicitly** — when the anchor alias is one of the aliases declared by
+  `FROM` or a `JOIN`, the pattern is anchored on the rows of that table.
+- **Implicitly** — when **no** alias in the pattern matches a declared alias,
+  the leftmost node binds to the FROM rows. Three guards apply:
+  - **G1**: if a pattern alias *does* match a declared alias, the anchor must
+    be that alias (catches inverted pattern directions);
+  - **G2**: the implicit anchor alias must not appear in another `MATCH`
+    predicate of the same WHERE clause — chain into a single pattern instead,
+    e.g. `MATCH (m)-[:R]->(f)-[:S]->(g)`;
+  - **G3**: the anchor node must not carry a `@collection` override (it would
+    resolve outside the FROM collection).
+- When `FROM` has no alias, any anchor alias is accepted.
+
+`NOT MATCH` applies the same rule uniformly (exact dual of the positive case).
+
+> **Note.** Implicit binding is *not* Cypher's existential MATCH semantics:
+> the leftmost node always binds to the candidate row. `MATCH (ctx)-[:R]->(f)`
+> keeps the rows that have an outgoing `R` edge — it does not test whether the
+> pattern exists *anywhere* in the graph.
+
 Violations are rejected at validation time with error code `V011`
 (`MATCH predicate anchor must be an alias declared in FROM/JOIN`):
 
 ```sql
--- OK: anchor 'd' matches the FROM alias
+-- OK: anchor 'd' matches the FROM alias (explicit)
 SELECT * FROM docs AS d
 WHERE category = 'tech' AND MATCH (d)-[:REL]->(x)
 LIMIT 10
 
--- Rejected with V011: anchor 'ctx' does not match FROM alias 'd'
+-- OK: no pattern alias matches 'd' — 'ctx' binds implicitly to the docs rows
 SELECT * FROM docs AS d
 WHERE category = 'tech' AND MATCH (ctx)-[:REL]->(x)
+LIMIT 10
+
+-- Rejected with V011 (G1): the FROM alias 'd' is in a non-anchor position;
+-- anchor the pattern on it instead, e.g. MATCH (d)-[:REL]->(w)
+SELECT * FROM docs AS d
+WHERE category = 'tech' AND MATCH (w)-[:REL]->(d)
 LIMIT 10
 ```
 
@@ -1316,7 +1343,22 @@ SELECT * FROM docs LIMIT 10
 SELECT * FROM docs LIMIT 10 OFFSET 20
 ```
 
-Always specify `LIMIT` for vector search queries to bound the result set.
+**Default LIMIT.** Unlike standard SQL, VelesQL applies `LIMIT 10` by default
+to every SELECT statement that has no explicit `LIMIT` clause — vector NEAR,
+sparse, scalar-filter, and hybrid forms alike. VelesQL is ANN-first: a SELECT
+is a top-k retrieval, so an unbounded default would defeat top-k vector search.
+`EXPLAIN` surfaces the implicit limit as `Limit: 10 (default)`.
+
+Exceptions (no implicit `LIMIT 10`):
+
+- `MATCH ... RETURN` graph queries return all matching rows, bounded only by
+  the server-wide ceiling of 100 000 rows per query;
+- compound queries (`UNION` / `INTERSECT` / `EXCEPT`) evaluate their operands
+  up to the same 100 000-row ceiling; only an explicit outer `LIMIT` caps the
+  merged result.
+
+Always specify `LIMIT` explicitly — both to bound vector search and for
+exhaustive retrieval beyond the default 10 rows.
 
 ---
 
@@ -2766,7 +2808,7 @@ SELECT id AS `select` FROM docs
 
 | Feature | Default | Notes |
 |---------|---------|-------|
-| LIMIT | No limit (all results) | Always specify LIMIT for vector search |
+| LIMIT | 10 (every SELECT form) | Exceptions: `MATCH ... RETURN` and compound queries (UNION/INTERSECT/EXCEPT) have no implicit `LIMIT 10` (bounded by the 100 000-row server ceiling). Always specify LIMIT for exhaustive retrieval |
 | OFFSET | 0 | |
 | ORDER BY direction | ASC | Explicit DESC recommended for similarity |
 | metric (CREATE) | cosine | |
@@ -3309,7 +3351,11 @@ FLUSH documents
 
 ---
 
-## EBNF Grammar (v3.6)
+## EBNF Grammar (v3.10.0)
+
+Derived from the executable PEG grammar
+[`crates/velesdb-core/src/velesql/grammar.pest`](../crates/velesdb-core/src/velesql/grammar.pest)
+(the source of truth — regenerate this annex whenever the grammar changes).
 
 ```ebnf
 (* ═══════════════════════════════════════════════════════ *)
@@ -3317,15 +3363,15 @@ FLUSH documents
 (* ═══════════════════════════════════════════════════════ *)
 
 query             = let_clause* (show_collections_stmt | describe_stmt
-                    | explain_stmt | flush_stmt
-                    | analyze_stmt | truncate_stmt | alter_collection_stmt
-                    | select_edges_stmt
-                    | match_query | compound_query | train_stmt
+                    | explain_stmt | analyze_stmt | truncate_stmt
+                    | alter_collection_stmt | flush_stmt
+                    | match_query | select_edges_stmt
+                    | compound_query | train_stmt
                     | create_index_stmt | create_collection_stmt
                     | drop_index_stmt | drop_collection_stmt
                     | insert_node_stmt | insert_edge_stmt
                     | delete_edge_stmt | delete_stmt
-                    | upsert_stmt | insert_stmt | update_stmt) [";"] ;
+                    | insert_stmt | upsert_stmt | update_stmt) [";"] ;
 
 (* ═══════════════════════════════════════════════════════ *)
 (* Introspection statements (v3.4)                        *)
@@ -3351,9 +3397,11 @@ match_query       = "MATCH" graph_pattern
 
 graph_pattern     = node_pattern (relationship_pattern node_pattern)* ;
 node_pattern      = "(" [node_spec] ")" ;
-node_spec         = [node_alias] [node_labels] [node_properties] ;
+node_spec         = [node_alias] [node_labels] [collection_annotation]
+                    [node_properties] ;
 node_alias        = identifier ;
 node_labels       = ":" label_name (":" label_name)* ;
+collection_annotation = "@" identifier ;
 node_properties   = "{" property ("," property)* "}" ;
 property          = identifier ":" property_value ;
 property_value    = string | float | integer | boolean | null | parameter ;
@@ -3397,17 +3445,28 @@ distinct_modifier = "DISTINCT" ;
 (* SELECT list *)
 select_list       = "*" | select_item ("," select_item)* ;
 select_item       = "similarity" "(" ")" ["AS" identifier]
+                  | window_item
                   | aggregate_function ["AS" identifier]
                   | qualified_wildcard
                   | column ["AS" identifier] ;
 qualified_wildcard = identifier "." "*" ;
 column            = identifier ("." identifier)* ;
 
-(* FROM clause *)
-from_clause       = identifier ["AS" identifier] ;
+(* Window functions (v1.13.0) *)
+window_item       = window_function_name "(" ")" "OVER" "(" over_clause ")"
+                    ["AS" identifier] ;
+window_function_name = "ROW_NUMBER" | "DENSE_RANK" | "RANK" ;
+over_clause       = [partition_by_clause] [window_order_by_clause] ;
+partition_by_clause = "PARTITION" "BY" column ("," column)* ;
+window_order_by_clause = "ORDER" "BY" window_order_by_item
+                         ("," window_order_by_item)* ;
+window_order_by_item = (order_by_similarity_bare | column) ["ASC" | "DESC"] ;
+
+(* FROM clause — alias with AS or bare (non-reserved identifier) *)
+from_clause       = identifier [["AS"] identifier] ;
 
 (* JOIN clause (v2.0) *)
-join_clause       = [join_type] "JOIN" identifier ["AS" identifier]
+join_clause       = [join_type] "JOIN" identifier [["AS"] identifier]
                     (on_clause | using_clause) ;
 join_type         = "LEFT" ["OUTER"]
                   | "RIGHT" ["OUTER"]
@@ -3436,6 +3495,10 @@ primary_expr      = "(" or_expr ")"
                   | between_expr
                   | like_expr
                   | is_null_expr
+                  | contains_text_expr
+                  | contains_expr
+                  | geo_distance_expr
+                  | geo_bbox_expr
                   | compare_expr ;
 
 not_expr          = "NOT" primary_expr ;
@@ -3471,6 +3534,19 @@ like_expr         = where_column ("ILIKE" | "LIKE") string ;
 is_null_expr      = where_column "IS" ["NOT"] "NULL" ;
 match_expr        = where_column "MATCH" string ;
 
+(* Array / substring containment *)
+contains_text_expr = where_column "CONTAINS_TEXT" string ;
+contains_expr     = where_column "CONTAINS" "ALL" "(" value ("," value)* ")"
+                  | where_column "CONTAINS" "ANY" "(" value ("," value)* ")"
+                  | where_column "CONTAINS" value ;
+
+(* Geospatial predicates *)
+geo_number        = float | integer ;
+geo_distance_expr = "GEO_DISTANCE" "(" column "," geo_number "," geo_number ")"
+                    compare_op geo_number ;
+geo_bbox_expr     = "GEO_BBOX" "(" column "," geo_number "," geo_number ","
+                    geo_number "," geo_number ")" ;
+
 (* ═══════════════════════════════════════════════════════ *)
 (* GROUP BY, HAVING (v2.0)                                *)
 (* ═══════════════════════════════════════════════════════ *)
@@ -3480,8 +3556,8 @@ group_by_clause   = "GROUP" "BY" column ("," column)* ;
 having_clause     = "HAVING" having_condition (("AND" | "OR") having_condition)* ;
 having_condition  = aggregate_function compare_op value ;
 
-aggregate_function = ("COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
-                     "(" ("*" | column) ")" ;
+aggregate_function = ("FIRST" | "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+                     "(" ("*" | "score" | column) ")" ;
 
 (* ═══════════════════════════════════════════════════════ *)
 (* ORDER BY (v2.0 + arithmetic v3.0)                      *)
@@ -3599,13 +3675,6 @@ truncate_stmt     = "TRUNCATE" ["COLLECTION"] identifier ;
 alter_collection_stmt = "ALTER" "COLLECTION" identifier "SET"
                         "(" create_option_list ")" ;
 flush_stmt        = "FLUSH" ["FULL"] [identifier] ;
-
-(* ═══════════════════════════════════════════════════════ *)
-(* Index management (v3.5)                                *)
-(* ═══════════════════════════════════════════════════════ *)
-
-create_index_stmt = "CREATE" "INDEX" "ON" identifier "(" identifier ")" ;
-drop_index_stmt   = "DROP" "INDEX" "ON" identifier "(" identifier ")" ;
 
 (* ═══════════════════════════════════════════════════════ *)
 (* UPSERT (v3.5)                                          *)

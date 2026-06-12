@@ -249,8 +249,8 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
 
-      - name: Run security audit
-        run: cargo deny check advisories
+      - name: Run security audit (advisories, licenses, bans, sources)
+        run: cargo deny check advisories licenses bans sources
 
   # ===========================================================================
   # NOTE: Miri & Loom moved to quality-deep.yml (weekly + manual)
@@ -353,7 +353,10 @@ jobs:
     name: Python Integrations
     runs-on: ubuntu-latest
     needs: test
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    # Runs on PRs too (and gates CI Success) so connector regressions are
+    # caught before merge — the LangChain suite once rotted to 21 failures
+    # while this job was push-only and advisory.
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -398,17 +401,29 @@ jobs:
       - name: Install velesdb-common (local shared package)
         run: pip install -e integrations/common
 
+      # All three RAG framework connectors are installed and tested from
+      # source. Until 2026-06 only LlamaIndex ran here — the LangChain
+      # suite was never executed in CI and rotted to 21 failures.
+      - name: Install & Test LangChain integration
+        run: |
+          pip install -e "integrations/langchain[dev]"
+          python -m pytest integrations/langchain/tests/ -v --tb=short
+
       - name: Install & Test LlamaIndex integration
         run: |
-          cd integrations/llamaindex
-          pip install -e ".[dev]" 2>/dev/null || pip install pytest pytest-asyncio
-          python -m pytest tests/ -v --tb=short
+          pip install -e "integrations/llamaindex[dev]"
+          python -m pytest integrations/llamaindex/tests/ -v --tb=short
+
+      - name: Install & Test Haystack integration
+        run: |
+          pip install -e "integrations/haystack[dev]"
+          python -m pytest integrations/haystack/tests/ -v --tb=short
 
   # ===========================================================================
   # Python SDK Tests — velesdb-python (PyO3) binding functional suite.
   #
   # Until this job existed, crates/velesdb-python/tests/ was never run in CI:
-  # the python-integrations job above only exercises the LlamaIndex package.
+  # the python-integrations job above exercises the three connector packages (LangChain / LlamaIndex / Haystack).
   # Runs on PRs too (no push-only gate) so binding regressions are caught
   # before merge. The slow recall gate (test_recall_gate.py, -m slow) is
   # excluded here — recall@10 >= 0.95 is enforced on a release wheel by
@@ -688,9 +703,12 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, wasm-check, openapi-drift, velesql-conformance, perf-smoke, bench-sift1m-compile, python-sdk-tests, sonarcloud]
+    needs: [lint, test, security, wasm-check, openapi-drift, velesql-conformance, perf-smoke, bench-sift1m-compile, python-sdk-tests, python-integrations, sonarcloud]
     if: always()
     steps:
+      # sonarcloud is intentionally absent from the gate below: it is an
+      # external service (skipped on forks / token-less runs) and must not
+      # block merges. It stays in `needs` so its status is visible here.
       - name: Check results
         run: |
           [[ "${{ needs.lint.result }}" == "success" ]] && \
@@ -701,5 +719,6 @@ jobs:
           [[ "${{ needs.perf-smoke.result }}" == "success" ]] && \
           [[ "${{ needs.bench-sift1m-compile.result }}" == "success" ]] && \
           [[ "${{ needs.python-sdk-tests.result }}" == "success" ]] && \
+          [[ "${{ needs.python-integrations.result }}" == "success" ]] && \
           [[ "${{ needs.security.result }}" == "success" ]] && \
           echo "✅ CI passed" || { echo "❌ CI failed"; exit 1; }

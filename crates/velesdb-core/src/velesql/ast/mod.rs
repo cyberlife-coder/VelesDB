@@ -45,7 +45,7 @@ pub use introspection::{DescribeCollectionStatement, IntrospectionStatement};
 pub use join::{ColumnRef, JoinClause, JoinCondition, JoinType};
 pub use select::{
     ArithmeticExpr, ArithmeticOp, Column, DistinctMode, LetBinding, OrderByExpr, SelectColumns,
-    SelectOrderBy, SelectStatement, SimilarityOrderBy, SimilarityScoreExpr,
+    SelectOrderBy, SelectStatement, SimilarityOrderBy, SimilarityScoreExpr, DEFAULT_SELECT_LIMIT,
 };
 pub use train::TrainStatement;
 pub use values::{

@@ -32,7 +32,7 @@
 //! (`scan_ids_with_filter`); the translation layer (`translate`) is designed
 //! so false negatives are impossible (strict type-match eligibility).
 
-use crate::column_store::{ColumnStore, ColumnType, ColumnValue};
+use crate::column_store::{AutoVacuumConfig, ColumnStore, ColumnType, ColumnValue, VacuumConfig};
 use crate::point::Point;
 use crate::storage::{PayloadStorage, VectorStorage};
 use parking_lot::RwLock;
@@ -196,6 +196,41 @@ impl MirrorState {
         let total = self.store.row_count();
         total > BLOAT_MIN_ROWS && self.live.len().saturating_mul(2) < total as u64
     }
+
+    /// PostgreSQL-inspired auto-vacuum: compacts the store in place when the
+    /// tombstone ratio crosses the [`AutoVacuumConfig`] threshold.
+    ///
+    /// Runs under the mirror state write lock (position 1b) with no other
+    /// collection lock held; `ColumnStore::vacuum` is a pure in-memory pass,
+    /// so there is no lock-ordering or reentrance hazard.
+    fn auto_vacuum_if_due(&mut self, config: &AutoVacuumConfig) {
+        if config.should_trigger(self.store.row_count(), self.store.deleted_row_count()) {
+            self.vacuum_compact();
+        }
+    }
+
+    /// Vacuums the store and rebuilds `row_ids` / `id_rows` / `live` against
+    /// the compacted row indices. The vacuum keeps surviving rows in
+    /// ascending old-index order, which matches ascending iteration over the
+    /// pre-vacuum `live` bitmap — so enumeration yields the new dense index.
+    fn vacuum_compact(&mut self) {
+        self.store.vacuum(VacuumConfig::default());
+        let old_row_ids = std::mem::take(&mut self.row_ids);
+        let old_live = std::mem::take(&mut self.live);
+        self.id_rows.clear();
+        for (new_idx, old_idx) in old_live.iter().enumerate() {
+            let (Some(&id), Ok(idx32)) =
+                (old_row_ids.get(old_idx as usize), u32::try_from(new_idx))
+            else {
+                // Unreachable: `live` ⊆ `0..row_count == old_row_ids.len()`
+                // and the compacted index space only shrinks.
+                break;
+            };
+            self.row_ids.push(id);
+            self.id_rows.insert(id, idx32);
+            self.live.insert(idx32);
+        }
+    }
 }
 
 impl PayloadMirror {
@@ -236,13 +271,16 @@ impl PayloadMirror {
         }
     }
 
-    /// Applies a delete batch incrementally (no-op when not built).
+    /// Applies a delete batch incrementally (no-op when not built), then
+    /// evaluates the auto-vacuum trigger so tombstone bloat is compacted on
+    /// the delete path (PostgreSQL-inspired: 20% dead-row ratio, ≥ 50 dead).
     pub(crate) fn apply_deletes(&self, ids: &[u64]) {
         let mut guard = self.state.write();
         if let Some(state) = guard.as_mut() {
             for &id in ids {
                 state.tombstone(id);
             }
+            state.auto_vacuum_if_due(&AutoVacuumConfig::default());
         }
     }
 

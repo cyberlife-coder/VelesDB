@@ -82,6 +82,9 @@ mod projection_parser_tests;
 #[cfg(feature = "persistence")]
 mod query_stats;
 mod validation;
+mod validation_anchor;
+#[cfg(test)]
+mod validation_anchor_tests;
 #[cfg(test)]
 mod validation_parity_tests;
 #[cfg(test)]
@@ -254,6 +257,8 @@ pub use ast::{
     WithClause,
     WithOption,
     WithValue,
+    // Implicit LIMIT contract (every SELECT without LIMIT)
+    DEFAULT_SELECT_LIMIT,
 };
 pub use graph_pattern::*;
 // Re-export match_clause parser functions for benchmarks

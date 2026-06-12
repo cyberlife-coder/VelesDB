@@ -288,13 +288,11 @@ impl ConcurrentEdgeStore {
             let observed = self
                 .pending_writes
                 .load(std::sync::atomic::Ordering::Acquire);
-            #[allow(unused_variables)]
             if let Err(e) = self.rebuild_snapshot() {
                 // Restore dirty flag so the next caller retries the rebuild.
                 self.csr_dirty
                     .store(true, std::sync::atomic::Ordering::Release);
-                #[cfg(debug_assertions)]
-                eprintln!("[velesdb] WARNING: lazy CSR snapshot rebuild failed: {e}");
+                tracing::warn!("lazy CSR snapshot rebuild failed: {e}");
                 return;
             }
             // Rebuild succeeded: subtract only the writes we accounted for, so

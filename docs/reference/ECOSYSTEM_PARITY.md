@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-05-29 (v1.18.0)
+Last updated: 2026-06-12 (v1.18.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -47,7 +47,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 | **Property Indexes** (secondary, trigram) | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
 | **Quantization** (SQ8 / Binary / PQ) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Quantization** (RaBitQ) | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
-| **Agent Memory** (semantic, episodic, procedural) | ✅ | ⚠️ | ✅ | ✅ | ✅ | N/A | ✅ | ✅ | ⚠️ | ⚠️ | N/A |
+| **Agent Memory** (semantic, episodic, procedural) | ✅ | ⚠️ | ✅ | ⚠️ | ⚠️ | N/A | ✅ | ✅ | ⚠️ | ⚠️ | N/A |
 | **Persistence** (WAL / mmap) | ✅ | ✅ | ✅ | ❌ | ✅ | N/A | N/A | N/A | N/A | N/A | N/A |
 | **GPU Acceleration** (wgpu) | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
@@ -63,7 +63,23 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 - **Collection Types (Metadata)**: WASM and integration SDKs expose metadata collections with reduced column-type support.
 - **Property Indexes (WASM)**: Disabled by design — no persistence layer means indexes cannot survive page reloads.
 - **Quantization (RaBitQ)**: Experimental across all surfaces; API is unstable.
-- **Agent Memory (Server)**: ⚠️ — exposed via REST endpoints but not all memory pattern types are fully mapped (no temporal/confidence-only queries, reinforcement, TTL, or snapshots over REST; those are embedded-only). TTL and snapshots are exposed in the **Python** embedded binding (✅), not over REST.
+- **Agent Memory (Server)**: ⚠️ — durable point TTL **is** exposed over REST
+  (`PATCH /collections/{name}/points/{id}/ttl`, persisted as
+  `_veles_expires_at` and enforced on every read surface — search/get/scroll/
+  query/MATCH), and relation edges are managed via
+  `POST /collections/{name}/relations`, `DELETE .../relations/{edge_id}`, and
+  `GET .../points/{id}/relations`. Still embedded-only: temporal/confidence-only
+  queries, reinforcement, and snapshots.
+  Per-binding parity for the relation + durable-TTL surface:
+
+  | Operation | REST | TS SDK (REST backend) | TS SDK (WASM backend) | Python |
+  |---|---|---|---|---|
+  | `relate()` (create edge) | ✅ `POST .../relations` | ✅ `client.relate()` | ❌ (`wasmRelate` throws `NOT_SUPPORTED` — REST backend only) | ❌ (use `GraphCollection.add_edge` or the core API) |
+  | `unrelate()` (delete edge) | ✅ `DELETE .../relations/{edge_id}` | ✅ `client.unrelate()` | ❌ (throws `NOT_SUPPORTED`) | ❌ |
+  | `getRelations()` (list outgoing) | ✅ `GET .../points/{id}/relations` | ✅ `client.getRelations()` | ❌ (throws `NOT_SUPPORTED`) | ❌ |
+  | Durable TTL set/refresh | ✅ `PATCH .../points/{id}/ttl` | ✅ `client.setTtlDurable()` | ❌ (throws `NOT_SUPPORTED`) | ✅ `set_semantic/episodic/procedural_ttl_durable`, `store_with_ttl`, `record_with_ttl`, `learn_with_ttl` |
+  | Temporal recall facades | n/a (use `/query`) | ✅ `recallRecent` / `recallOlderThan` | ❌ (throws `NOT_SUPPORTED`) | ✅ `episodic.recent` / `episodic.older_than` |
+- **Agent Memory (WASM / Mobile)**: ⚠️ semantic-only surface (`SemanticMemory` in WASM, `VelesSemanticMemory` on mobile); episodic/procedural memory, TTL helpers, and snapshots are not exposed on these bindings.
 - **Persistence (WASM)**: Disabled by design — `persistence` feature flag is excluded for `wasm32-unknown-unknown` targets.
 - **GPU**: Requires `gpu` feature flag; only available in crates that link `wgpu` (core, server, Python bindings).
 

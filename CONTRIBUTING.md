@@ -111,7 +111,7 @@ All new/modified code must satisfy these limits (enforced by Codacy and CI):
 
 ## Pre-Push Validation
 
-Run this sequence **before every push** (CI does not run on PRs):
+Run this sequence **before every push** (CI runs on every PR — running it locally first avoids red pipelines and wasted CI minutes):
 
 ```bash
 # 1. Format
