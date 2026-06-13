@@ -217,6 +217,21 @@ impl PyGraphCollection {
         Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
+    /// Returns `true` if an edge with the given ID exists.
+    #[pyo3(signature = (edge_id))]
+    fn has_edge(&self, edge_id: u64) -> bool {
+        self.inner.has_edge(edge_id)
+    }
+
+    /// Alias for `get_outgoing`.
+    ///
+    /// Preserves compatibility with examples that used the explicit
+    /// `*_edges` suffix.
+    #[pyo3(signature = (node_id))]
+    fn get_outgoing_edges(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
+        self.get_outgoing(py, node_id)
+    }
+
     /// Get incoming edges to a node.
     ///
     /// Args:
@@ -228,6 +243,15 @@ impl PyGraphCollection {
     fn get_incoming(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
         let edges = py.allow_threads(|| self.inner.get_incoming(node_id));
         Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+    }
+
+    /// Alias for `get_incoming`.
+    ///
+    /// Preserves compatibility with examples that used the explicit
+    /// `*_edges` suffix.
+    #[pyo3(signature = (node_id))]
+    fn get_incoming_edges(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
+        self.get_incoming(py, node_id)
     }
 
     /// Get the in-degree and out-degree of a node.
@@ -261,6 +285,32 @@ impl PyGraphCollection {
         py.allow_threads(|| {
             self.inner
                 .upsert_node_payload(node_id, &value)
+                .map_err(core_err)
+        })
+    }
+
+    /// Upsert a node payload, optionally with an embedding vector.
+    ///
+    /// Args:
+    ///     node_id: The node ID
+    ///     payload: Dict of properties to store
+    ///     vector: Optional embedding vector for searchable graph nodes
+    #[pyo3(signature = (node_id, payload, vector=None))]
+    fn upsert_node(
+        &self,
+        py: Python<'_>,
+        node_id: u64,
+        payload: PyObject,
+        vector: Option<PyObject>,
+    ) -> PyResult<()> {
+        let value = python_to_json(py, &payload)?;
+        let vector = match vector {
+            Some(vector) => Some(extract_vector(py, &vector)?),
+            None => None,
+        };
+        py.allow_threads(|| {
+            self.inner
+                .upsert_node(node_id, &value, vector)
                 .map_err(core_err)
         })
     }

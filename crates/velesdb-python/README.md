@@ -164,6 +164,7 @@ db = velesdb.Database("./path/to/data")
 
 # List collections
 names = db.list_collections()
+names = db.get_collections()  # compatibility alias
 
 # Create collection (with optional HNSW tuning via typed options)
 collection = db.create_collection("name", dimension=768, metric="cosine")
@@ -451,9 +452,13 @@ strategy = FusionStrategy.maximum()
 
 # Weighted -- custom combination of avg, max, and hit ratio
 strategy = FusionStrategy.weighted(avg_weight=0.6, max_weight=0.3, hit_weight=0.1)
+strategy = FusionStrategy.weighted({"avg_weight": 0.6, "max_weight": 0.3, "hit_weight": 0.1})
+strategy = FusionStrategy.weighted(0.3, 0.1)  # legacy: max_weight, hit_weight
+strategy = FusionStrategy.weighted(max_weight=0.3, hit_weight=0.1)  # legacy kwargs
 
 # Relative Score Fusion -- linear blend of dense and sparse scores
 strategy = FusionStrategy.relative_score(dense_weight=0.7, sparse_weight=0.3)
+strategy = FusionStrategy.rsf(dense_weight=0.7, sparse_weight=0.3)  # alias
 ```
 
 | Strategy | Formula | Best For |
@@ -461,8 +466,8 @@ strategy = FusionStrategy.relative_score(dense_weight=0.7, sparse_weight=0.3)
 | `rrf(k)` | sum 1/(k + rank) | Multi-query fusion, different score scales |
 | `average()` | mean(scores) | Uniform query importance |
 | `maximum()` | max(scores) | When any single match is sufficient |
-| `weighted(a, m, h)` | a*avg + m*max + h*hit_ratio | Fine-grained scoring control |
-| `relative_score(d, s)` | d*dense + s*sparse | Dense+sparse hybrid pipelines |
+| `weighted(a, m, h)` / `weighted(dict)` | a*avg + m*max + h*hit_ratio | Fine-grained scoring control |
+| `relative_score(d, s)` / `rsf(d, s)` | d*dense + s*sparse | Dense+sparse hybrid pipelines |
 
 ### Agent Memory SDK
 
@@ -606,6 +611,8 @@ knows_edges = graph.get_edges(label="KNOWS")
 # Get outgoing/incoming edges for a node
 outgoing = graph.get_outgoing(10)   # edges from Alice
 incoming = graph.get_incoming(30)   # edges into Paris
+outgoing = graph.get_outgoing_edges(10)  # alias
+incoming = graph.get_incoming_edges(30)  # alias
 
 # Node degree
 in_deg, out_deg = graph.node_degree(10)
