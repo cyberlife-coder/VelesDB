@@ -282,10 +282,14 @@ feasibility · target file for the glue):
 - 6.2 `add_edges_batch` — DONE (server `/collections/{name}/graph/edges/batch` route + OpenAPI snapshot + Tauri command; HTTP integration test + Tauri tests).
 - 6.3 `search_ids` — Tauri command DONE (functional gap closed; unit-tested). **Server fast-path moved to PR-4** (grouped with 6.9: conditional hot-path opt, core `search_ids` has no filter param).
 
-**Status — PR-2 `feat/parity-ops-observability`** (branch open):
+**Status — PR-2 `feat/parity-ops-observability`** (MERGED, PR #1098 → develop):
 - 6.6 `collection_diagnostics` — DONE. New core DTO `CollectionDiagnosticsResponse`; server `GET /collections/{name}/diagnostics` route (+ OpenAPI); Python `Database.collection_diagnostics()` → dict. HTTP integration + pytest.
 - 6.7 guardrails get/update — DONE. Server already had it. Added Python (`Database.update_guardrails(dict)` + `collection.guard_rails()` read), Mobile (`MobileQueryLimits` record + `update_guardrails` + `collection.guard_rails`), Tauri (`update_guardrails`/`get_guardrails` commands). Tests on each. Note: `QueryLimits` (runtime) ≠ `LimitsConfig` (creation caps) — separate marshalling.
 - 6.8 auto-reindex lifecycle — DONE. Python `collection.detach_auto_reindex()` + `check_auto_reindex_divergence()` (completes the attach-only state; see entry 2). Pytest.
+
+**Status — PR-3 `feat/parity-recall-gated`** (branch open):
+- 6.4 `reorder_for_locality` — DONE. Server `POST /collections/{name}/locality/reorder` admin route (+ OpenAPI snapshot), Python `collection.reorder_for_locality()`. Server BDD tests (nominal/empty/404) + pytest. Recall-preserving (only physical layout changes); does **not** touch `index/hnsw/`, `simd_native/`, `quantization/`, `fusion/`, or Python result conversion — Gate-1 recall-contract tests (balanced ≥95, accurate ≥99, perfect =100) green.
+- 6.5 `apply_advanced_config` — DONE. Python `collection.apply_advanced_config(dict)` with three-state semantics (absent key=unchanged, `None`=clear, value=set) over `pq_rescore_oversampling` / `deferred_indexing` / `async_index_builder`; Mobile `MobileAdvancedConfig` record (+ `MobileDeferredIndexerConfig` / `MobileAsyncIndexBuilderConfig`) and `collection.apply_advanced_config` (mobile maps `None`→unchanged; cannot express clear). pytest + mobile `#[test]`.
 
 **Explicitly deferred (not worth closing now)**:
 - `stream_insert_batch` / `enable_streaming` / `StreamIngester::*` — async
