@@ -15,9 +15,11 @@ from haystack.document_stores.errors import DuplicateDocumentError
 from haystack.document_stores.types import DuplicatePolicy
 
 import velesdb
+from velesdb_common.fusion import build_fusion_strategy
 from velesdb_common.security import (
     validate_collection_name,
     validate_metric,
+    validate_named_sparse_vector,
     validate_path,
 )
 
@@ -205,13 +207,17 @@ def _str_id_to_int(doc_id: str) -> int:
     return int.from_bytes(hashlib.sha256(doc_id.encode()).digest()[:8], "big") & _INT63_MASK
 
 
-def _doc_to_point(doc: Document) -> dict:
+def _doc_to_point(doc: Document, sparse_vector: Optional[dict] = None) -> dict:
     """Convert a Haystack Document to a VelesDB point dict.
 
     Reserved payload keys (``_doc_id``, ``content``) are always written from
     the document's canonical fields, not from ``doc.meta``.  Any meta entry
     that shares a reserved name is silently dropped from the payload to
     prevent round-trip corruption.
+
+    When *sparse_vector* is given (a flat ``dict[int, float]`` or a named
+    ``dict[str, dict[int, float]]`` mapping) it is attached so the upsert
+    creates the matching sparse index for hybrid retrieval.
     """
     payload: dict = {}
     # Merge meta first; reserved keys are excluded so they cannot
@@ -226,6 +232,8 @@ def _doc_to_point(doc: Document) -> dict:
     point: dict = {"id": _str_id_to_int(doc.id), "payload": payload}
     if doc.embedding is not None:
         point["vector"] = list(doc.embedding)
+    if sparse_vector is not None:
+        point["sparse_vector"] = sparse_vector
     return point
 
 
@@ -342,18 +350,47 @@ def _filter_skip_policy(
     return [doc for doc in documents if str_to_int[doc.id] not in existing_int_ids]
 
 
-def _documents_to_points(documents: List[Document]) -> List[dict]:
+def _build_sparse_by_id(
+    documents: List[Document],
+    sparse_vectors: Optional[List[dict]],
+) -> Dict[str, dict]:
+    """Map each document id to its validated sparse vector.
+
+    Keying by document id (rather than list position) keeps the sparse
+    vectors aligned with their documents even when ``DuplicatePolicy.SKIP``
+    drops a subset before upsert. Each entry is validated as a flat
+    ``dict[int, float]`` or a named ``dict[str, dict[int, float]]`` mapping.
+    """
+    if sparse_vectors is None:
+        return {}
+    sparse_by_id: Dict[str, dict] = {}
+    for idx, doc in enumerate(documents):
+        if idx >= len(sparse_vectors):
+            break
+        sparse_by_id[doc.id] = validate_named_sparse_vector(sparse_vectors[idx])
+    return sparse_by_id
+
+
+def _documents_to_points(
+    documents: List[Document],
+    sparse_by_id: Optional[Dict[str, dict]] = None,
+) -> List[dict]:
     """Convert each document to its VelesDB point dict, logging documents
     that lack an embedding so the caller still gets feedback when the
     underlying SDK accepts vector-less points.
+
+    *sparse_by_id* (when given) maps document ids to their sparse vector dict;
+    each is attached to its point so the upsert creates the corresponding
+    sparse index.
     """
+    sparse_by_id = sparse_by_id or {}
     points: List[dict] = []
     for doc in documents:
         if doc.embedding is None:
             logger.warning(
                 "Document '%s' has no embedding; stored without vector.", doc.id
             )
-        points.append(_doc_to_point(doc))
+        points.append(_doc_to_point(doc, sparse_vector=sparse_by_id.get(doc.id)))
     return points
 
 
@@ -460,6 +497,7 @@ class VelesDBDocumentStore:
         self,
         documents: List[Document],
         policy: DuplicatePolicy = DuplicatePolicy.NONE,
+        sparse_vectors: Optional[List[dict]] = None,
     ) -> int:
         """Write *documents* to VelesDB and return the number written.
 
@@ -476,6 +514,16 @@ class VelesDBDocumentStore:
           incoming document already exists. Prefer ``OVERWRITE`` or
           ``NONE`` for large batches to avoid the pre-scan cost.
 
+        Args:
+            documents: Documents to write.
+            policy: Duplicate-handling policy (see above).
+            sparse_vectors: Optional list aligned with *documents*; each entry
+                is a flat ``dict[int, float]`` or a named
+                ``dict[str, dict[int, float]]`` mapping (e.g.
+                ``{"bge_m3": {0: 1.5}}``). A named mapping creates the named
+                sparse index so it can later be queried with
+                ``sparse_index_name="bge_m3"``.
+
         Raises:
             DuplicateDocumentError: When *policy* is ``FAIL`` and at least
                 one document already exists in the store.
@@ -484,6 +532,7 @@ class VelesDBDocumentStore:
         """
         if not documents:
             return 0
+        sparse_by_id = _build_sparse_by_id(documents, sparse_vectors)
         int_id_map = _build_int_id_map(documents)
         col = self._get_collection()
         if policy == DuplicatePolicy.FAIL:
@@ -495,7 +544,7 @@ class VelesDBDocumentStore:
                 return 0
         else:
             survivors = documents
-        points = _documents_to_points(survivors)
+        points = _documents_to_points(survivors, sparse_by_id)
         result = col.upsert(points)
         return result if isinstance(result, int) else len(points)
 
@@ -516,6 +565,8 @@ class VelesDBDocumentStore:
         top_k: int = 10,
         filters: Optional[Dict[str, Any]] = None,
         scale_score: bool = True,
+        fusion: Optional[str] = None,
+        fusion_params: Optional[dict] = None,
     ) -> List[Document]:
         """Return the *top_k* documents most similar to *query_embedding*.
 
@@ -527,13 +578,29 @@ class VelesDBDocumentStore:
                 forwarded; ``meta.<key>`` is stripped to ``<key>``.
             scale_score: When ``True`` and ``metric="cosine"``, scores are
                 normalised from ``[-1, 1]`` to ``[0, 1]``. Ignored for other
-                metrics, where raw scores are returned unchanged.
+                metrics, where raw scores are returned unchanged. Score
+                scaling does not apply to fused (``fusion``) results, whose
+                scores come from the fusion strategy rather than the metric.
+            fusion: Optional fusion strategy name applied to the ranking —
+                one of ``"average"``, ``"maximum"``, ``"rrf"``,
+                ``"weighted"``, ``"relative_score"`` / ``"rsf"``. When set,
+                the query is ranked through the chosen
+                :class:`velesdb.FusionStrategy`, which changes the result
+                ordering relative to the default dense ranking. ``filters``
+                are not supported together with ``fusion``.
+            fusion_params: Optional parameters for *fusion* (see
+                :func:`velesdb_common.fusion.build_fusion_strategy`).
 
         Raises:
             NotImplementedError: When *filters* uses an operator VelesDB
                 does not support.
-            ValueError: When *filters* is structurally malformed.
+            ValueError: When *filters* is structurally malformed, or when
+                *filters* is combined with *fusion*.
         """
+        if fusion is not None:
+            return self._fusion_retrieval(
+                query_embedding, top_k, filters, fusion, fusion_params
+            )
         veles_filter = _translate_haystack_filter(filters)
         results: List[dict] = self._get_collection().search_request(
             velesdb.SearchOptions(
@@ -543,6 +610,36 @@ class VelesDBDocumentStore:
             )
         )
         return [_result_to_doc(r, scale_score=scale_score, metric=self._metric) for r in results]
+
+    def _fusion_retrieval(
+        self,
+        query_embedding: List[float],
+        top_k: int,
+        filters: Optional[Dict[str, Any]],
+        fusion: str,
+        fusion_params: Optional[dict],
+    ) -> List[Document]:
+        """Rank a single query through a :class:`velesdb.FusionStrategy`.
+
+        Delegates to ``Collection.multi_query_search`` with a one-element
+        query list so the chosen strategy decides the fused scores. The
+        shared :func:`velesdb_common.fusion.build_fusion_strategy` builder is
+        reused (same as the LangChain and LlamaIndex integrations).
+        """
+        if filters is not None:
+            raise ValueError(
+                "fusion cannot be combined with filters; apply filters in a "
+                "separate dense embedding_retrieval call or omit fusion."
+            )
+        strategy = build_fusion_strategy(fusion, fusion_params)
+        results: List[dict] = self._get_collection().multi_query_search(
+            vectors=[query_embedding],
+            top_k=top_k,
+            fusion=strategy,
+        )
+        # Fused scores are strategy-derived, not metric similarities, so the
+        # cosine [-1, 1] -> [0, 1] rescaling is intentionally not applied.
+        return [_result_to_doc(r, metric=self._metric) for r in results]
 
     # ------------------------------------------------------------------
     # Haystack pipeline serialisation

@@ -34,7 +34,7 @@ from langchain_velesdb.security import (
     validate_storage_mode,
     validate_batch_size,
     validate_collection_name,
-    validate_sparse_vector,
+    validate_named_sparse_vector,
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
@@ -210,7 +210,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
             validate_text(text)
         if sparse_vectors is not None:
             for sv in sparse_vectors:
-                validate_sparse_vector(sv)
+                validate_named_sparse_vector(sv)
 
     def _texts_to_points(
         self,
@@ -261,7 +261,10 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
             ids: Optional list of IDs for each text.
             sparse_vectors: Optional list of sparse vector dicts for hybrid
                 dense+sparse search. Each dict maps int term IDs to float
-                weights, e.g. ``{0: 1.5, 3: 0.8}``.
+                weights, e.g. ``{0: 1.5, 3: 0.8}``. A named mapping
+                ``{"bge_m3": {0: 1.5}}`` creates the named sparse index
+                ``bge_m3`` so it can later be queried with
+                ``sparse_index_name="bge_m3"``.
             **kwargs: Additional arguments.
 
         Returns:
