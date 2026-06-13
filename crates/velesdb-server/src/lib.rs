@@ -55,9 +55,9 @@ pub use onboarding::OnboardingMetrics;
 pub use types::*;
 
 pub use handlers::{
-    aggregate, analyze_collection, batch_search, bulk_delete_points, collection_sanity,
-    compact_collection, create_collection, create_index, delete_collection, delete_index,
-    delete_point, explain, flush_collection, get_collection, get_collection_config,
+    aggregate, analyze_collection, batch_search, bulk_delete_points, collection_diagnostics,
+    collection_sanity, compact_collection, create_collection, create_index, delete_collection,
+    delete_index, delete_point, explain, flush_collection, get_collection, get_collection_config,
     get_collection_stats, get_guardrails, get_point, get_point_relations, health_check,
     hybrid_search, is_empty, list_collections, list_indexes, match_query, multi_query_search,
     query, readiness_check, rebuild_index, relate_points, scroll_points, search, search_ids,
@@ -124,6 +124,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::collections::flush_collection,
         handlers::admin::analyze_collection,
         handlers::admin::get_collection_stats,
+        handlers::admin::collection_diagnostics,
         handlers::admin::get_guardrails,
         handlers::admin::update_guardrails,
         handlers::points::upsert_points,
@@ -215,6 +216,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             ScrollPoint,
             GuardRailsConfigRequest,
             GuardRailsConfigResponse,
+            CollectionDiagnosticsResponse,
             handlers::graph::TraverseRequest,
             handlers::graph::TraverseResponse,
             handlers::graph::TraversalResultItem,

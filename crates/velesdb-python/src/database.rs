@@ -637,6 +637,69 @@ impl Database {
             })
             .transpose()
     }
+
+    /// Get health diagnostics for a collection.
+    ///
+    /// Reports index readiness without relying on the REST server — useful
+    /// for embedded health checks.
+    ///
+    /// Args:
+    ///     name: Collection name
+    ///
+    /// Returns:
+    ///     dict with keys ``has_vectors``, ``search_ready``,
+    ///     ``dimension_configured``, ``point_count``, ``index_health``
+    ///     ("healthy" | "empty" | "needs_rebuild"), and
+    ///     ``index_health_detail`` (only when a rebuild is needed).
+    ///
+    /// Raises:
+    ///     RuntimeError: If the collection does not exist.
+    #[pyo3(signature = (name))]
+    fn collection_diagnostics(&self, py: Python<'_>, name: &str) -> PyResult<PyObject> {
+        use velesdb_core::collection::IndexHealth;
+        let name_owned = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        let diag = py
+            .allow_threads(move || inner.collection_diagnostics(&name_owned))
+            .map_err(core_err)?;
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("has_vectors", diag.has_vectors)?;
+        dict.set_item("search_ready", diag.search_ready)?;
+        dict.set_item("dimension_configured", diag.dimension_configured)?;
+        dict.set_item("point_count", diag.point_count)?;
+        let (health, detail) = match &diag.index_health {
+            IndexHealth::Healthy => ("healthy", None),
+            IndexHealth::Empty => ("empty", None),
+            IndexHealth::NeedsRebuild(reason) => ("needs_rebuild", Some(reason.clone())),
+            _ => ("unknown", None),
+        };
+        dict.set_item("index_health", health)?;
+        if let Some(detail) = detail {
+            dict.set_item("index_health_detail", detail)?;
+        }
+        Ok(dict.into())
+    }
+
+    /// Update query guardrail limits for every collection in this database.
+    ///
+    /// Args:
+    ///     limits: dict of guardrail fields. **Omitted fields reset to their
+    ///         defaults** (this is a full replacement, not a partial patch).
+    ///         Keys: ``max_depth``, ``max_cardinality``, ``memory_limit_bytes``,
+    ///         ``timeout_ms``, ``rate_limit_qps``, ``circuit_failure_threshold``,
+    ///         ``circuit_recovery_seconds``.
+    ///
+    /// Raises:
+    ///     ValueError: If a field has an invalid type/value.
+    #[pyo3(signature = (limits))]
+    fn update_guardrails(&self, py: Python<'_>, limits: PyObject) -> PyResult<()> {
+        let json = utils::python_to_json(py, &limits)?;
+        let parsed: velesdb_core::guardrails::QueryLimits = serde_json::from_value(json)
+            .map_err(|e| PyValueError::new_err(format!("invalid guardrails: {e}")))?;
+        py.allow_threads(|| self.inner.update_guardrails(&parsed));
+        Ok(())
+    }
 }
 
 impl Database {

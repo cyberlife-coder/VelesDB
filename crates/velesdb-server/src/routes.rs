@@ -13,15 +13,16 @@ use axum::{
 
 use crate::{
     add_edge, add_edges_batch, aggregate, analyze_collection, batch_search, bulk_delete_points,
-    collection_sanity, compact_collection, create_collection, create_index, delete_collection,
-    delete_index, delete_point, explain, flush_collection, get_collection, get_collection_config,
-    get_collection_stats, get_edge_count, get_edges, get_guardrails, get_node_degree,
-    get_node_edges, get_node_payload, get_point, get_point_relations, graph_search, health_check,
-    hybrid_search, is_empty, list_collections, list_indexes, list_nodes, match_query,
-    multi_query_search, query, readiness_check, rebuild_index, relate_points, remove_edge,
-    scroll_points, search, search_ids, set_point_ttl, stream_insert, stream_traverse,
-    stream_upsert_points, text_search, traverse_graph, traverse_parallel, unrelate_points,
-    update_guardrails, upsert_node_payload, upsert_points, vacuum_collection, AppState,
+    collection_diagnostics, collection_sanity, compact_collection, create_collection, create_index,
+    delete_collection, delete_index, delete_point, explain, flush_collection, get_collection,
+    get_collection_config, get_collection_stats, get_edge_count, get_edges, get_guardrails,
+    get_node_degree, get_node_edges, get_node_payload, get_point, get_point_relations,
+    graph_search, health_check, hybrid_search, is_empty, list_collections, list_indexes,
+    list_nodes, match_query, multi_query_search, query, readiness_check, rebuild_index,
+    relate_points, remove_edge, scroll_points, search, search_ids, set_point_ttl, stream_insert,
+    stream_traverse, stream_upsert_points, text_search, traverse_graph, traverse_parallel,
+    unrelate_points, update_guardrails, upsert_node_payload, upsert_points, vacuum_collection,
+    AppState,
 };
 
 /// Core CRUD and admin routes.
@@ -44,6 +45,10 @@ fn core_routes() -> Router<Arc<AppState>> {
         .route("/collections/{name}/analyze", post(analyze_collection))
         .route("/collections/{name}/index/rebuild", post(rebuild_index))
         .route("/collections/{name}/stats", get(get_collection_stats))
+        .route(
+            "/collections/{name}/diagnostics",
+            get(collection_diagnostics),
+        )
         .route("/guardrails", get(get_guardrails).put(update_guardrails))
         // 100 MB limit scoped to batch vector upload routes only
         // (1000 vectors x 768D x 4 bytes = ~3 MB typical; 100 MB covers extreme cases)
