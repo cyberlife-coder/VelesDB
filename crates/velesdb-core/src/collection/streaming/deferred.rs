@@ -293,10 +293,14 @@ impl DeferredIndexer {
     }
 
     /// Lazily activates the buffer if it is not already active.
+    ///
+    /// Uses the compare-and-swap [`try_activate`](super::delta::DeltaBuffer::try_activate)
+    /// instead of a `is_active()` + `activate()` pair: the atomic transition
+    /// closes the TOCTOU window between the check and the store. An
+    /// `AlreadyActive` result is the expected idempotent case on the hot push
+    /// path (the buffer stays active across many pushes) and is ignored here.
     fn ensure_buffer_active(&self) {
-        if !self.buffer.is_active() {
-            self.buffer.activate();
-        }
+        let _ = self.buffer.try_activate();
     }
 }
 

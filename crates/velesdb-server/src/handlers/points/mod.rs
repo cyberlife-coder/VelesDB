@@ -5,7 +5,8 @@ pub mod streaming;
 
 pub use relations::{get_point_relations, relate_points, set_point_ttl, unrelate_points};
 pub use streaming::{
-    __path_stream_insert, __path_stream_upsert_points, stream_insert, stream_upsert_points,
+    __path_enable_streaming, __path_stream_insert, __path_stream_upsert_points, enable_streaming,
+    stream_insert, stream_upsert_points,
 };
 
 use axum::{

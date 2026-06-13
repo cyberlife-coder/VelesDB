@@ -165,7 +165,7 @@ pub use update_check::{compute_instance_hash, UpdateCheckConfig};
 pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 #[cfg(feature = "persistence")]
-pub use collection::streaming::BackpressureError;
+pub use collection::streaming::{BackpressureError, StreamIngester, StreamingConfig};
 #[cfg(feature = "persistence")]
 pub use collection::{
     // Type-erased collection handle (v2.0.0)

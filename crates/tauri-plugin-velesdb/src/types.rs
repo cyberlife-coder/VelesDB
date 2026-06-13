@@ -380,6 +380,26 @@ pub struct StreamInsertRequest {
     pub points: Vec<PointInput>,
 }
 
+/// Request to enable streaming ingestion on a collection.
+///
+/// Each field is optional; omitted fields fall back to the engine default
+/// (`buffer_size=10000`, `batch_size=128`, `flush_interval_ms=50`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnableStreamingRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Capacity of the bounded ingestion channel (backpressure threshold).
+    #[serde(default)]
+    pub buffer_size: Option<usize>,
+    /// Number of points that trigger an immediate micro-batch flush.
+    #[serde(default)]
+    pub batch_size: Option<usize>,
+    /// Maximum time (ms) before a partial batch is flushed.
+    #[serde(default)]
+    pub flush_interval_ms: Option<u64>,
+}
+
 // ============================================================================
 // Response DTOs
 //

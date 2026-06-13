@@ -37,8 +37,9 @@ pub use collections::{
 pub use health::{health_check, readiness_check};
 pub use indexes::{create_index, delete_index, list_indexes};
 pub use points::{
-    bulk_delete_points, delete_point, get_point, get_point_relations, relate_points, scroll_points,
-    set_point_ttl, stream_insert, stream_upsert_points, unrelate_points, upsert_points,
+    bulk_delete_points, delete_point, enable_streaming, get_point, get_point_relations,
+    relate_points, scroll_points, set_point_ttl, stream_insert, stream_upsert_points,
+    unrelate_points, upsert_points,
 };
 // EPIC-058 US-007: match_query handler for /collections/{name}/match
 pub use match_query::match_query;

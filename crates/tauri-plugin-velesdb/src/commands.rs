@@ -10,8 +10,6 @@ use crate::helpers::{
 #[cfg(feature = "persistence")]
 use crate::helpers::{parse_search_quality, require_vector_collection};
 use crate::state::VelesDbState;
-#[cfg(feature = "persistence")]
-use crate::types::StreamInsertRequest;
 pub use crate::types::{
     default_fusion, default_metric, default_storage_mode, default_top_k, default_vector_weight,
 };
@@ -21,6 +19,8 @@ use crate::types::{
     MultiQuerySearchRequest, PointOutput, ScrollRequest, ScrollResponse, SearchRequest,
     SearchResponse, TextSearchRequest, TrainPqRequest, UpsertMetadataRequest, UpsertRequest,
 };
+#[cfg(feature = "persistence")]
+use crate::types::{EnableStreamingRequest, StreamInsertRequest};
 use tauri::{command, AppHandle, Runtime, State};
 
 /// Builds [`velesdb_core::HnswParams`] from optional request fields, falling
@@ -824,6 +824,46 @@ pub async fn stream_insert<R: Runtime>(
 
     emit_collection_updated(&app, &collection_name, "stream_insert", count);
     Ok(count)
+}
+
+/// Builds a core [`StreamingConfig`](velesdb_core::StreamingConfig) from the
+/// request, falling back to engine defaults for any omitted field.
+#[cfg(feature = "persistence")]
+pub(crate) fn streaming_config_from_request(
+    request: &EnableStreamingRequest,
+) -> velesdb_core::StreamingConfig {
+    let base = velesdb_core::StreamingConfig::default();
+    velesdb_core::StreamingConfig {
+        buffer_size: request.buffer_size.unwrap_or(base.buffer_size),
+        batch_size: request.batch_size.unwrap_or(base.batch_size),
+        flush_interval_ms: request.flush_interval_ms.unwrap_or(base.flush_interval_ms),
+    }
+}
+
+/// Enables streaming ingestion on a collection.
+///
+/// Spawns the background drain task so subsequent `stream_insert` calls accept
+/// points instead of returning a "not configured" backpressure error. Requires
+/// the `persistence` feature.
+#[cfg(feature = "persistence")]
+#[command]
+pub async fn enable_streaming<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: EnableStreamingRequest,
+) -> std::result::Result<(), CommandError> {
+    let collection_name = request.collection.clone();
+    let config = streaming_config_from_request(&request);
+    state
+        .with_db(|db| {
+            let coll = require_vector_collection(&db, &request.collection)?;
+            coll.enable_streaming(config);
+            Ok(())
+        })
+        .map_err(CommandError::from)?;
+
+    emit_collection_updated(&app, &collection_name, "enable_streaming", 0);
+    Ok(())
 }
 
 // NOTE: AgentMemory Commands moved to commands_memory.rs (NLOC refactoring)

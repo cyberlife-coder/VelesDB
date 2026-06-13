@@ -90,6 +90,7 @@ const COMMANDS: &[&str] = &[
     "train_pq",
     // Streaming insert (persistence only)
     "stream_insert",
+    "enable_streaming",
     // Secondary Indexes
     "create_index",
     "drop_index",

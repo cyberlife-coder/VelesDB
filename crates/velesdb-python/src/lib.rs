@@ -38,6 +38,7 @@ mod graph_collection;
 mod graph_collection_query;
 mod graph_store;
 mod options;
+mod streaming_config;
 mod utils;
 mod velesql;
 mod velesql_helpers;
@@ -50,6 +51,7 @@ pub use graph::{dict_to_edge, dict_to_node, edge_to_dict, node_to_dict, traversa
 pub use graph_collection::{PyGraphCollection, PyGraphSchema};
 pub use graph_store::{GraphStore, StreamingConfig, TraversalResult};
 pub use options::{AutoReindexOptions, HnswOptions, LimitsOptions, VelesConfigOptions};
+pub use streaming_config::StreamingIngestConfig;
 
 use pyo3::prelude::*;
 
@@ -93,6 +95,9 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<GraphStore>()?;
     m.add_class::<StreamingConfig>()?;
     m.add_class::<TraversalResult>()?;
+
+    // Streaming-ingestion config (STREAM-1)
+    m.add_class::<StreamingIngestConfig>()?;
 
     // Agent memory classes (EPIC-010/US-005)
     m.add_class::<agent::AgentMemory>()?;

@@ -220,6 +220,7 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
         ],
         persistence_only: [
             commands::stream_insert,
+            commands::enable_streaming,
         ],
     ));
     builder

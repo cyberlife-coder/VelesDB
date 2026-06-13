@@ -14,15 +14,15 @@ use axum::{
 use crate::{
     add_edge, add_edges_batch, aggregate, analyze_collection, batch_search, bulk_delete_points,
     collection_diagnostics, collection_sanity, compact_collection, create_collection, create_index,
-    delete_collection, delete_index, delete_point, explain, flush_collection, get_collection,
-    get_collection_config, get_collection_stats, get_edge_count, get_edges, get_guardrails,
-    get_node_degree, get_node_edges, get_node_payload, get_point, get_point_relations,
-    graph_search, health_check, hybrid_search, is_empty, list_collections, list_indexes,
-    list_nodes, match_query, multi_query_search, multi_query_search_ids, query, readiness_check,
-    rebuild_index, relate_points, remove_edge, reorder_for_locality, scroll_points, search,
-    search_ids, set_point_ttl, stream_insert, stream_traverse, stream_upsert_points, text_search,
-    traverse_graph, traverse_parallel, unrelate_points, update_guardrails, upsert_node_payload,
-    upsert_points, vacuum_collection, AppState,
+    delete_collection, delete_index, delete_point, enable_streaming, explain, flush_collection,
+    get_collection, get_collection_config, get_collection_stats, get_edge_count, get_edges,
+    get_guardrails, get_node_degree, get_node_edges, get_node_payload, get_point,
+    get_point_relations, graph_search, health_check, hybrid_search, is_empty, list_collections,
+    list_indexes, list_nodes, match_query, multi_query_search, multi_query_search_ids, query,
+    readiness_check, rebuild_index, relate_points, remove_edge, reorder_for_locality,
+    scroll_points, search, search_ids, set_point_ttl, stream_insert, stream_traverse,
+    stream_upsert_points, text_search, traverse_graph, traverse_parallel, unrelate_points,
+    update_guardrails, upsert_node_payload, upsert_points, vacuum_collection, AppState,
 };
 
 /// Core CRUD and admin routes.
@@ -62,6 +62,7 @@ fn core_routes() -> Router<Arc<AppState>> {
                 .layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
         )
         .route("/collections/{name}/stream/insert", post(stream_insert))
+        .route("/collections/{name}/stream/enable", post(enable_streaming))
         .route(
             "/collections/{name}/points/{id}",
             get(get_point).delete(delete_point),

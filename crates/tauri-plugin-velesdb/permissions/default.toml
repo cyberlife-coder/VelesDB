@@ -45,6 +45,7 @@ permissions = [
     "allow-train-pq",
     # Streaming insert
     "allow-stream-insert",
+    "allow-enable-streaming",
     # AgentMemory (semantic, episodic, procedural)
     "allow-semantic-store",
     "allow-semantic-store-with-ttl",
