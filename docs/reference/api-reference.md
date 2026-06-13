@@ -628,6 +628,29 @@ Execute multiple vector queries and merge results using Reciprocal Rank Fusion (
 
 ---
 
+### POST /collections/:name/search/multi/ids
+
+Same fusion as `/search/multi`, but returns only ids and scores (no payloads).
+Lighter on the server (skips payload hydration). Metadata filters are **not**
+supported on this endpoint — use `/search/multi` for filtered fusion.
+
+**Request Body:** identical to `/search/multi` (`vectors`, `top_k`, `strategy`,
+and the fusion params), minus `filter`.
+
+**Response:**
+```json
+{
+  "results": [
+    {"id": "1", "score": 0.0312},
+    {"id": "2", "score": 0.0298}
+  ]
+}
+```
+
+SDK: `client.multiQuerySearchIds(collection, vectors, options)` (TypeScript).
+
+---
+
 ## VelesQL Query
 
 ### POST /query

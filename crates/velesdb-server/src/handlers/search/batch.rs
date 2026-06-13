@@ -75,7 +75,7 @@ pub async fn batch_search(
     let queries: Vec<&[f32]> = req.searches.iter().map(|s| s.vector.as_slice()).collect();
     let max_top_k = req.searches.iter().map(|s| s.top_k).max().unwrap_or(10);
 
-    let batch_result = collection.search_batch_with_filters(&queries, max_top_k, &filters);
+    let batch_result = run_batch_search(&collection, &queries, max_top_k, &filters);
     record_circuit_breaker(&collection, &batch_result);
 
     let all_results = match batch_result {
@@ -87,6 +87,23 @@ pub async fn batch_search(
     };
 
     finish_batch_search(&state, &name, start, all_results)
+}
+
+/// Dispatch a batch search to the throughput-optimized parallel kernel when no
+/// query carries a filter, falling back to the per-query filtered kernel
+/// otherwise. Both paths share the same HNSW traversal, so results are
+/// identical for the unfiltered case — only the rayon parallelism differs.
+fn run_batch_search(
+    collection: &velesdb_core::collection::VectorCollection,
+    queries: &[&[f32]],
+    max_top_k: usize,
+    filters: &[Option<velesdb_core::Filter>],
+) -> velesdb_core::Result<Vec<Vec<velesdb_core::SearchResult>>> {
+    if filters.iter().all(Option::is_none) {
+        collection.search_batch_parallel(queries, max_top_k)
+    } else {
+        collection.search_batch_with_filters(queries, max_top_k, filters)
+    }
 }
 
 /// Record timing metrics and build the final batch response envelope.

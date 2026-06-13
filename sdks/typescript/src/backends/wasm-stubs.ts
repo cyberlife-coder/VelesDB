@@ -30,6 +30,7 @@ import type {
   SearchResult,
   VectorDocument,
   SearchOptions,
+  MultiQuerySearchOptions,
   ScrollRequest,
   ScrollResponse,
   StreamUpsertResponse,
@@ -191,6 +192,14 @@ export async function wasmSearchIds(
   _options?: SearchOptions
 ): Promise<Array<{ id: number; score: number }>> {
   wasmNotSupported('searchIds');
+}
+
+export async function wasmMultiQuerySearchIds(
+  _collection: string,
+  _vectors: Array<number[] | Float32Array>,
+  _options?: MultiQuerySearchOptions
+): Promise<Array<{ id: number; score: number }>> {
+  wasmNotSupported('multiQuerySearchIds');
 }
 
 export async function wasmStoreSemanticFact(
