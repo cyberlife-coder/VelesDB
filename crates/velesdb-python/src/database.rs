@@ -281,6 +281,14 @@ impl Database {
         self.inner.list_collections()
     }
 
+    /// Alias for `list_collections`.
+    ///
+    /// Kept for compatibility with older documentation and examples that used
+    /// `get_collections()` for the same operation.
+    fn get_collections(&self) -> Vec<String> {
+        self.list_collections()
+    }
+
     /// Delete a collection by name.
     ///
     /// Args:

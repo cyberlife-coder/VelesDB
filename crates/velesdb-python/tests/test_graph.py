@@ -77,6 +77,13 @@ class TestGraphStore:
         outgoing_200 = store.get_outgoing(200)
         assert len(outgoing_200) == 1
 
+    def test_get_outgoing_edges_alias(self):
+        """get_outgoing_edges is a compatibility alias for get_outgoing."""
+        store = GraphStore()
+        store.add_edge({"id": 1, "source": 100, "target": 200, "label": "KNOWS"})
+
+        assert store.get_outgoing_edges(100) == store.get_outgoing(100)
+
     def test_get_incoming(self):
         """Test getting incoming edges to a node."""
         store = GraphStore()
@@ -85,6 +92,28 @@ class TestGraphStore:
 
         incoming_200 = store.get_incoming(200)
         assert len(incoming_200) == 2
+
+    def test_get_incoming_edges_alias(self):
+        """get_incoming_edges is a compatibility alias for get_incoming."""
+        store = GraphStore()
+        store.add_edge({"id": 1, "source": 100, "target": 200, "label": "KNOWS"})
+
+        assert store.get_incoming_edges(200) == store.get_incoming(200)
+
+    def test_add_edge_legacy_positional_signature(self):
+        """add_edge(source, target, label, weight) is normalized to a dict edge."""
+        store = GraphStore()
+        store.add_edge({"id": 1, "source": 1, "target": 2, "label": "SEED"})
+        store.add_edge({"id": 3, "source": 1, "target": 3, "label": "SEED"})
+        store.add_edge(100, 200, "KNOWS", 0.7)
+
+        outgoing = store.get_outgoing_edges(100)
+        assert len(outgoing) == 1
+        assert outgoing[0]["id"] == 4
+        assert outgoing[0]["source"] == 100
+        assert outgoing[0]["target"] == 200
+        assert outgoing[0]["label"] == "KNOWS"
+        assert outgoing[0]["properties"]["weight"] == 0.7
 
     def test_get_outgoing_by_label(self):
         """Test getting outgoing edges filtered by label."""

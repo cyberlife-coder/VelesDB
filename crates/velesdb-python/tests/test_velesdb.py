@@ -39,6 +39,13 @@ class TestDatabase:
         collections = temp_db.list_collections()
         assert collections == []
 
+    def test_get_collections_alias(self, temp_db):
+        """get_collections is a compatibility alias for list_collections."""
+        temp_db.create_collection("alias_collection", dimension=4)
+
+        assert temp_db.get_collections() == temp_db.list_collections()
+        assert "alias_collection" in temp_db.get_collections()
+
     def test_create_collection(self, temp_db):
         """Test collection creation."""
         collection = temp_db.create_collection("test", dimension=4, metric="cosine")
@@ -801,6 +808,32 @@ class TestFusionStrategy:
         assert strategy is not None
         assert "weighted" in repr(strategy).lower()
 
+    def test_fusion_strategy_weighted_dict(self):
+        """FusionStrategy.weighted() accepts a weights dict for compatibility."""
+        strategy = velesdb.FusionStrategy.weighted({
+            "avg_weight": 0.6,
+            "max_weight": 0.3,
+            "hit_weight": 0.1,
+        })
+        assert strategy is not None
+        assert "weighted" in repr(strategy).lower()
+
+    def test_fusion_strategy_weighted_legacy_two_args(self):
+        """FusionStrategy.weighted(max_weight, hit_weight) derives avg_weight."""
+        strategy = velesdb.FusionStrategy.weighted(0.3, 0.1)
+        assert strategy is not None
+        assert "avg_weight=0.6" in repr(strategy)
+        assert "max_weight=0.3" in repr(strategy)
+        assert "hit_weight=0.1" in repr(strategy)
+
+    def test_fusion_strategy_weighted_legacy_keyword_args(self):
+        """FusionStrategy.weighted(max_weight=..., hit_weight=...) also works."""
+        strategy = velesdb.FusionStrategy.weighted(max_weight=0.3, hit_weight=0.1)
+        assert strategy is not None
+        assert "avg_weight=0.6" in repr(strategy)
+        assert "max_weight=0.3" in repr(strategy)
+        assert "hit_weight=0.1" in repr(strategy)
+
     def test_fusion_strategy_weighted_invalid_sum(self):
         """Test FusionStrategy.weighted() with weights not summing to 1."""
         with pytest.raises(ValueError):
@@ -818,6 +851,25 @@ class TestFusionStrategy:
                 max_weight=0.6,
                 hit_weight=0.5
             )
+
+    def test_fusion_strategy_weighted_dict_missing_required_weight(self):
+        """weighted(dict) reports missing required max/hit components."""
+        with pytest.raises(ValueError):
+            velesdb.FusionStrategy.weighted({"avg_weight": 0.9, "max_weight": 0.1})
+
+    def test_fusion_strategy_rsf_alias_default(self):
+        """FusionStrategy.rsf() aliases relative_score() with balanced defaults."""
+        strategy = velesdb.FusionStrategy.rsf()
+        assert strategy is not None
+        assert "dense_weight=0.5" in repr(strategy)
+        assert "sparse_weight=0.5" in repr(strategy)
+
+    def test_fusion_strategy_rsf_alias_custom_weights(self):
+        """FusionStrategy.rsf() accepts the same weights as relative_score()."""
+        strategy = velesdb.FusionStrategy.rsf(dense_weight=0.7, sparse_weight=0.3)
+        assert strategy is not None
+        assert "dense_weight=0.7" in repr(strategy)
+        assert "sparse_weight=0.3" in repr(strategy)
 
 
 class TestMultiQuerySearch:
