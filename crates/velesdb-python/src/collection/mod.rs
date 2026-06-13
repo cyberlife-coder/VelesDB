@@ -27,6 +27,67 @@ use velesdb_core::{
 /// Default fusion strategy when none is specified by the caller.
 const DEFAULT_FUSION: CoreFusionStrategy = CoreFusionStrategy::RRF { k: 60 };
 
+use velesdb_core::collection::streaming::{AsyncIndexBuilderConfig, DeferredIndexerConfig};
+
+/// Extract an optional typed value for `key`, returning `None` when the
+/// key is absent or holds Python `None`.
+fn opt_field<'py, T: FromPyObject<'py>>(
+    dict: &Bound<'py, PyDict>,
+    key: &str,
+) -> PyResult<Option<T>> {
+    match dict.get_item(key)? {
+        Some(v) if !v.is_none() => Ok(Some(v.extract()?)),
+        _ => Ok(None),
+    }
+}
+
+/// Resolve a three-state override for `key`: an absent key leaves the field
+/// unchanged (`None`), an explicit Python `None` clears it (`Some(None)`),
+/// and any other value is built via `build` (`Some(Some(_))`).
+fn three_state<T>(
+    config: &Bound<'_, PyDict>,
+    key: &str,
+    build: impl Fn(&Bound<'_, PyAny>) -> PyResult<T>,
+) -> PyResult<Option<Option<T>>> {
+    match config.get_item(key)? {
+        None => Ok(None),
+        Some(v) if v.is_none() => Ok(Some(None)),
+        Some(v) => Ok(Some(Some(build(&v)?))),
+    }
+}
+
+/// Build a `DeferredIndexerConfig` from a Python dict, overriding only the
+/// keys present on top of the struct defaults.
+fn deferred_from_dict(value: &Bound<'_, PyAny>) -> PyResult<DeferredIndexerConfig> {
+    let dict = value.downcast::<PyDict>()?;
+    let mut cfg = DeferredIndexerConfig::default();
+    if let Some(v) = opt_field(dict, "enabled")? {
+        cfg.enabled = v;
+    }
+    if let Some(v) = opt_field(dict, "merge_threshold")? {
+        cfg.merge_threshold = v;
+    }
+    if let Some(v) = opt_field(dict, "max_buffer_age_ms")? {
+        cfg.max_buffer_age_ms = v;
+    }
+    Ok(cfg)
+}
+
+/// Build an `AsyncIndexBuilderConfig` from a Python dict, overriding only the
+/// keys present on top of the struct defaults. `segment_count` accepts a
+/// Python `None` to fall back to the CPU count.
+fn async_builder_from_dict(value: &Bound<'_, PyAny>) -> PyResult<AsyncIndexBuilderConfig> {
+    let dict = value.downcast::<PyDict>()?;
+    let mut cfg = AsyncIndexBuilderConfig::default();
+    if let Some(v) = opt_field(dict, "merge_threshold")? {
+        cfg.merge_threshold = v;
+    }
+    if dict.get_item("segment_count")?.is_some() {
+        cfg.segment_count = opt_field(dict, "segment_count")?;
+    }
+    Ok(cfg)
+}
+
 /// A vector collection in VelesDB.
 ///
 /// Collections store vectors with optional metadata (payload) and support
@@ -209,6 +270,50 @@ impl Collection {
     fn compact_storage(&self, py: Python<'_>) -> PyResult<usize> {
         use crate::collection_helpers::core_err;
         py.allow_threads(|| self.inner.compact_storage().map_err(core_err))
+    }
+
+    /// Reorder the HNSW adjacency lists and vector storage for cache
+    /// locality, so nodes traversed together during search sit close in
+    /// memory. No-op for collections with fewer than 1000 vectors. Recall
+    /// is preserved — only the physical layout changes.
+    ///
+    /// Best called after a bulk ``upsert`` on a freshly loaded collection,
+    /// before serving queries.
+    ///
+    /// Returns:
+    ///     None
+    fn reorder_for_locality(&self, py: Python<'_>) -> PyResult<()> {
+        use crate::collection_helpers::core_err;
+        py.allow_threads(|| self.inner.reorder_for_locality().map_err(core_err))
+    }
+
+    /// Apply post-creation overrides to advanced configuration fields and
+    /// persist the updated ``config.json``.
+    ///
+    /// Three-state semantics per field: a key **absent** from ``config``
+    /// leaves that field unchanged; a key present with value ``None``
+    /// clears it; a key present with a value sets it.
+    ///
+    /// Args:
+    ///     config: dict with optional keys ``pq_rescore_oversampling``
+    ///         (int or None), ``deferred_indexing`` (dict with keys
+    ///         ``enabled``, ``merge_threshold``, ``max_buffer_age_ms``, or
+    ///         None), ``async_index_builder`` (dict with keys
+    ///         ``merge_threshold``, ``segment_count``, or None).
+    ///
+    /// Returns:
+    ///     None
+    #[pyo3(signature = (config))]
+    fn apply_advanced_config(&self, py: Python<'_>, config: &Bound<'_, PyDict>) -> PyResult<()> {
+        use crate::collection_helpers::core_err;
+        let pq = three_state(config, "pq_rescore_oversampling", |v| v.extract::<u32>())?;
+        let deferred = three_state(config, "deferred_indexing", deferred_from_dict)?;
+        let async_builder = three_state(config, "async_index_builder", async_builder_from_dict)?;
+        py.allow_threads(|| {
+            self.inner
+                .apply_advanced_config(pq, deferred, async_builder)
+                .map_err(core_err)
+        })
     }
 
     /// Get the current query guardrail limits for this collection.

@@ -59,7 +59,8 @@ pub use collection::VelesCollection;
 pub use graph::{MobileGraphEdge, MobileGraphNode, MobileGraphStore, TraversalResult};
 pub use query::{QueryResult, QueryResultKind, QueryResultRow};
 pub use types::{
-    DistanceMetric, FusionStrategy, IndividualSearchRequest, MobileCollectionStats,
+    DistanceMetric, FusionStrategy, IndividualSearchRequest, MobileAdvancedConfig,
+    MobileAsyncIndexBuilderConfig, MobileCollectionStats, MobileDeferredIndexerConfig,
     MobileIndexInfo, MobileQueryLimits, PqTrainConfig, SearchQuality, SearchResult, StorageMode,
     VelesError, VelesPoint, VelesSparseVector,
 };
