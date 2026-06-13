@@ -1,7 +1,7 @@
 //! REPL commands for collection inspection and management.
 //!
 //! Covers: `.collections`, `.schema`, `.describe`, `.count`, `.sample`,
-//! `.browse`, `.nodes`, `.stats`, `.scroll`.
+//! `.browse`, `.nodes`, `.stats`, `.diagnostics`, `.scroll`.
 
 use colored::Colorize;
 use std::collections::HashMap;
