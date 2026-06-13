@@ -48,14 +48,14 @@ pub(crate) fn sort_scored_triples<T>(results: &mut [(u64, f32, T)], higher_is_be
 }
 
 /// Validates query dimension matches store dimension.
+///
+/// Delegates the check to core's [`velesdb_core::validate_dimension_match`]
+/// (single source of truth) and maps its error to a `JsValue` at the FFI
+/// boundary, instead of re-implementing the comparison locally.
 #[inline]
 pub fn validate_dimension(query_len: usize, store_dim: usize) -> Result<(), JsValue> {
-    if query_len != store_dim {
-        return Err(JsValue::from_str(&format!(
-            "Query dimension mismatch: expected {store_dim}, got {query_len}"
-        )));
-    }
-    Ok(())
+    velesdb_core::validate_dimension_match(store_dim, query_len)
+        .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Basic vector search.
