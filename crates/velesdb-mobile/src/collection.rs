@@ -3,8 +3,9 @@
 use velesdb_core::VectorCollection as CoreCollection;
 
 use crate::types::{
-    IndividualSearchRequest, MobileAdvancedConfig, MobileCollectionStats, MobileIndexInfo,
-    MobileQueryLimits, SearchQuality, SearchResult, VelesError, VelesPoint,
+    IndividualSearchRequest, MobileAdvancedConfig, MobileCollectionDiagnostics,
+    MobileCollectionStats, MobileIndexInfo, MobileQueryLimits, SearchQuality, SearchResult,
+    VelesError, VelesPoint,
 };
 
 // ============================================================================
@@ -582,6 +583,11 @@ impl VelesCollection {
     /// Returns the latest known collection statistics snapshot.
     pub fn get_stats(&self) -> MobileCollectionStats {
         self.inner.get_stats().into()
+    }
+
+    /// Returns a health/readiness diagnostics snapshot for this collection.
+    pub fn diagnostics(&self) -> MobileCollectionDiagnostics {
+        self.inner.diagnostics().into()
     }
 }
 

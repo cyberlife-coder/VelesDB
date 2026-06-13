@@ -112,6 +112,10 @@ pub fn print_help() {
     );
     println!("  {} Export to JSON file", ".export <name> [file]".yellow());
     println!(
+        "  {} Collection health snapshot",
+        ".diagnostics <name>".yellow()
+    );
+    println!(
         "  {}       Toggle timing display",
         ".timing on|off".yellow()
     );

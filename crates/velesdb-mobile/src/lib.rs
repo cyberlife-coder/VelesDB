@@ -60,9 +60,9 @@ pub use graph::{MobileGraphEdge, MobileGraphNode, MobileGraphStore, TraversalRes
 pub use query::{QueryResult, QueryResultKind, QueryResultRow};
 pub use types::{
     DistanceMetric, FusionStrategy, IndividualSearchRequest, MobileAdvancedConfig,
-    MobileAsyncIndexBuilderConfig, MobileCollectionStats, MobileDeferredIndexerConfig,
-    MobileIndexInfo, MobileQueryLimits, PqTrainConfig, SearchQuality, SearchResult, StorageMode,
-    VelesError, VelesPoint, VelesSparseVector,
+    MobileAsyncIndexBuilderConfig, MobileCollectionDiagnostics, MobileCollectionStats,
+    MobileDeferredIndexerConfig, MobileIndexInfo, MobileQueryLimits, PqTrainConfig, SearchQuality,
+    SearchResult, StorageMode, VelesError, VelesPoint, VelesSparseVector,
 };
 
 use std::sync::Arc;

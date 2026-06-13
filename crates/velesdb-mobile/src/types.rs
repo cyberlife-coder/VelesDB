@@ -319,6 +319,48 @@ impl From<velesdb_core::collection::stats::CollectionStats> for MobileCollection
     }
 }
 
+/// Diagnostic snapshot of a collection's health and search readiness.
+///
+/// FFI mirror of [`velesdb_core::collection::CollectionDiagnostics`]. The
+/// `index_health` enum is flattened to a stable lowercase string
+/// (`"healthy"`, `"empty"`, `"needs_rebuild"`, `"unknown"`) with an optional
+/// detail message, matching the REST and Python bindings.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MobileCollectionDiagnostics {
+    /// Whether the collection contains at least one vector/point.
+    pub has_vectors: bool,
+    /// Whether the collection is ready to serve search queries.
+    pub search_ready: bool,
+    /// Whether a valid dimension is configured.
+    pub dimension_configured: bool,
+    /// Total number of points in the collection.
+    pub point_count: u64,
+    /// Health status of the primary search index.
+    pub index_health: String,
+    /// Optional detail message (e.g. the reason a rebuild is needed).
+    pub index_health_detail: Option<String>,
+}
+
+impl From<velesdb_core::collection::CollectionDiagnostics> for MobileCollectionDiagnostics {
+    fn from(diag: velesdb_core::collection::CollectionDiagnostics) -> Self {
+        use velesdb_core::collection::IndexHealth;
+        let (index_health, index_health_detail) = match diag.index_health {
+            IndexHealth::Healthy => ("healthy".to_string(), None),
+            IndexHealth::Empty => ("empty".to_string(), None),
+            IndexHealth::NeedsRebuild(reason) => ("needs_rebuild".to_string(), Some(reason)),
+            _ => ("unknown".to_string(), None),
+        };
+        Self {
+            has_vectors: diag.has_vectors,
+            search_ready: diag.search_ready,
+            dimension_configured: diag.dimension_configured,
+            point_count: u64::try_from(diag.point_count).unwrap_or(u64::MAX),
+            index_health,
+            index_health_detail,
+        }
+    }
+}
+
 /// Metadata and graph index details.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct MobileIndexInfo {

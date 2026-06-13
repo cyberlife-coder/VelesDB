@@ -312,6 +312,31 @@ fn test_repl_stats_metadata() {
 }
 
 // ============================================================================
+// .diagnostics — collection health snapshot
+// ============================================================================
+
+#[test]
+fn test_repl_diagnostics_command() {
+    let (db_path, _temp) = setup_vector("vecs", 8);
+    repl_run(&db_path, &[".diagnostics vecs"])
+        .stdout(predicate::str::contains("Diagnostics"))
+        .stdout(predicate::str::contains("Search Ready"))
+        .stdout(predicate::str::contains("Index Health"))
+        .stdout(predicate::str::contains("Point Count"))
+        .stdout(predicate::str::contains("5"));
+}
+
+#[test]
+fn test_repl_diagnostics_unknown_collection_returns_error() {
+    let temp = TempDir::new().unwrap();
+    let db_path = temp.path().join("db");
+    velesdb_core::Database::open(&db_path).unwrap();
+
+    repl_run(&db_path, &[".diagnostics nonexistent"])
+        .stdout(predicate::str::contains("not found").or(predicate::str::contains("Error")));
+}
+
+// ============================================================================
 // VelesQL via REPL stdin
 // ============================================================================
 
