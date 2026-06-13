@@ -17,9 +17,9 @@ pub use crate::types::{
 };
 use crate::types::{
     BatchSearchRequest, CollectionInfo, CreateCollectionRequest, CreateMetadataCollectionRequest,
-    DeletePointsRequest, GetPointsRequest, HybridSearchRequest, MultiQuerySearchRequest,
-    PointOutput, ScrollRequest, ScrollResponse, SearchRequest, SearchResponse, TextSearchRequest,
-    TrainPqRequest, UpsertMetadataRequest, UpsertRequest,
+    DeletePointsRequest, GetPointsRequest, HybridSearchRequest, IdScoreOutput,
+    MultiQuerySearchRequest, PointOutput, ScrollRequest, ScrollResponse, SearchRequest,
+    SearchResponse, TextSearchRequest, TrainPqRequest, UpsertMetadataRequest, UpsertRequest,
 };
 use tauri::{command, AppHandle, Runtime, State};
 
@@ -286,6 +286,30 @@ pub async fn delete_points<R: Runtime>(
         .map_err(CommandError::from)
 }
 
+/// Parsed quality argument: a real [`velesdb_core::SearchQuality`] with
+/// `persistence`, otherwise the unit type (quality unsupported).
+#[cfg(feature = "persistence")]
+type QualityArg<'a> = Option<&'a velesdb_core::SearchQuality>;
+#[cfg(not(feature = "persistence"))]
+type QualityArg<'a> = Option<&'a ()>;
+
+/// Runs a vector search honoring filter precedence then quality, returning full
+/// results. Shared by [`search`] and [`search_ids`]. Filter takes precedence
+/// (known limitation #457: quality ignored when a filter is present).
+fn search_full(
+    coll: &velesdb_core::VectorCollection,
+    request: &SearchRequest,
+    filter: Option<&velesdb_core::Filter>,
+    quality: QualityArg<'_>,
+) -> crate::error::Result<Vec<velesdb_core::SearchResult>> {
+    if let Some(f) = filter {
+        coll.search_with_filter(&request.vector, request.top_k, f)
+            .map_err(crate::error::Error::Database)
+    } else {
+        dispatch_quality_search(coll, &request.vector, request.top_k, quality)
+    }
+}
+
 /// Dispatches a single search with optional quality mode.
 ///
 /// When quality is `Some`, delegates to `search_with_quality`;
@@ -338,24 +362,74 @@ pub async fn search<R: Runtime>(
     let results = state
         .with_db(|db| {
             let coll = require_collection(&db, &request.collection)?;
-
-            // Filter takes precedence (known limitation #457: quality ignored
-            // when filter is present). Quality dispatch only when no filter.
-            let search_results = if let Some(ref f) = parsed_filter {
-                coll.search_with_filter(&request.vector, request.top_k, f)?
-            } else {
-                dispatch_quality_search(
-                    &coll,
-                    &request.vector,
-                    request.top_k,
-                    parsed_quality.as_ref(),
-                )?
-            };
+            let search_results = search_full(
+                &coll,
+                &request,
+                parsed_filter.as_ref(),
+                parsed_quality.as_ref(),
+            )?;
             Ok(map_core_results(search_results))
         })
         .map_err(CommandError::from)?;
 
     Ok(timed_search_response(results, start))
+}
+
+/// Projects full search results down to ID + score pairs.
+fn project_search_ids(results: Vec<velesdb_core::SearchResult>) -> Vec<IdScoreOutput> {
+    results
+        .into_iter()
+        .map(|r| IdScoreOutput {
+            id: r.point.id,
+            score: r.score,
+        })
+        .collect()
+}
+
+/// k-NN search returning only IDs and scores (no payloads).
+///
+/// Uses the optimized core `search_ids` path when neither a filter nor a
+/// `quality` mode is supplied, which skips payload hydration. When a filter is
+/// present (precedence, known limitation #457: quality ignored), or a `quality`
+/// mode is requested, falls back to the corresponding full search and projects
+/// the results to IDs + scores.
+#[command]
+pub async fn search_ids<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: SearchRequest,
+) -> std::result::Result<Vec<IdScoreOutput>, CommandError> {
+    let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
+    #[cfg(feature = "persistence")]
+    let parsed_quality = parse_search_quality(&request.quality).map_err(CommandError::from)?;
+    #[cfg(not(feature = "persistence"))]
+    let parsed_quality: Option<()> = None;
+
+    state
+        .with_db(|db| {
+            let coll = require_collection(&db, &request.collection)?;
+            // Optimized id-only path only when no filter and no quality; both
+            // require the full search that hydrates results before projecting.
+            let scored: Vec<IdScoreOutput> = if parsed_filter.is_none() && parsed_quality.is_none()
+            {
+                coll.search_ids(&request.vector, request.top_k)?
+                    .into_iter()
+                    .map(|r| IdScoreOutput {
+                        id: r.id,
+                        score: r.score,
+                    })
+                    .collect()
+            } else {
+                project_search_ids(search_full(
+                    &coll,
+                    &request,
+                    parsed_filter.as_ref(),
+                    parsed_quality.as_ref(),
+                )?)
+            };
+            Ok(scored)
+        })
+        .map_err(CommandError::from)
 }
 
 /// Batch search for multiple query vectors.
@@ -552,6 +626,23 @@ pub async fn flush<R: Runtime>(
             let coll = require_collection(&db, &name)?;
             coll.flush()?;
             Ok(())
+        })
+        .map_err(CommandError::from)
+}
+
+/// Compacts on-disk storage for a collection, reclaiming space from deleted
+/// vectors. Returns the number of bytes reclaimed.
+#[command]
+pub async fn compact_storage<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    name: String,
+) -> std::result::Result<u64, CommandError> {
+    state
+        .with_db(|db| {
+            let coll = require_collection(&db, &name)?;
+            let freed = coll.compact_storage()?;
+            Ok(u64::try_from(freed).unwrap_or(u64::MAX))
         })
         .map_err(CommandError::from)
 }

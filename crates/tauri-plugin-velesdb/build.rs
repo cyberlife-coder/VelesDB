@@ -24,6 +24,7 @@ const COMMANDS: &[&str] = &[
     "get_collection",
     "is_empty",
     "flush",
+    "compact_storage",
     "scroll_collection",
     // Point operations
     "upsert",
@@ -32,6 +33,7 @@ const COMMANDS: &[&str] = &[
     "delete_points",
     // Search operations
     "search",
+    "search_ids",
     "batch_search",
     "text_search",
     "hybrid_search",
@@ -73,6 +75,7 @@ const COMMANDS: &[&str] = &[
     // Knowledge Graph
     "create_graph_collection",
     "add_edge",
+    "add_edges_batch",
     "get_edges",
     "traverse_graph",
     "get_node_degree",

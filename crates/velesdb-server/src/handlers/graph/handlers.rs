@@ -18,8 +18,8 @@ use crate::types::ErrorResponse;
 use crate::AppState;
 
 use super::types::{
-    AddEdgeRequest, DegreeResponse, EdgeQueryParams, EdgeResponse, EdgesResponse, TraversalStats,
-    TraverseRequest, TraverseResponse,
+    AddEdgeRequest, AddEdgesBatchRequest, AddEdgesBatchResponse, DegreeResponse, EdgeQueryParams,
+    EdgeResponse, EdgesResponse, TraversalStats, TraverseRequest, TraverseResponse,
 };
 
 /// Shared graph preamble: record metric and resolve collection.
@@ -157,6 +157,28 @@ pub async fn add_edge(
     State(state): State<Arc<AppState>>,
     Json(request): Json<AddEdgeRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let edge = build_edge(request)?;
+
+    let coll = graph_preamble(&state, &name)?;
+
+    coll.add_edge(edge).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to add edge: {e}"),
+                code: None,
+            }),
+        )
+    })?;
+
+    Ok(StatusCode::CREATED)
+}
+
+/// Converts an [`AddEdgeRequest`] into a core [`GraphEdge`], validating the
+/// properties shape and edge fields. Shared by [`add_edge`] and
+/// [`add_edges_batch`].
+#[allow(clippy::result_large_err)]
+fn build_edge(request: AddEdgeRequest) -> Result<GraphEdge, (StatusCode, Json<ErrorResponse>)> {
     let properties: std::collections::HashMap<String, serde_json::Value> = match request.properties
     {
         serde_json::Value::Object(map) => map.into_iter().collect(),
@@ -183,20 +205,46 @@ pub async fn add_edge(
             )
         })?
         .with_properties(properties);
+    Ok(edge)
+}
+
+/// Add multiple edges to a collection's graph in one batched operation.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/graph/edges/batch",
+    request_body = AddEdgesBatchRequest,
+    responses(
+        (status = 201, description = "Edges added successfully", body = AddEdgesBatchResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    ),
+    tag = "graph"
+)]
+pub async fn add_edges_batch(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<AddEdgesBatchRequest>,
+) -> Result<(StatusCode, Json<AddEdgesBatchResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let edges = request
+        .edges
+        .into_iter()
+        .map(build_edge)
+        .collect::<Result<Vec<_>, _>>()?;
 
     let coll = graph_preamble(&state, &name)?;
 
-    coll.add_edge(edge).map_err(|e| {
+    let added = coll.add_edges_batch(edges).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: format!("Failed to add edge: {e}"),
+                error: format!("Failed to add edges: {e}"),
                 code: None,
             }),
         )
     })?;
 
-    Ok(StatusCode::CREATED)
+    Ok((StatusCode::CREATED, Json(AddEdgesBatchResponse { added })))
 }
 
 /// Traverse the graph using BFS or DFS from a source node.

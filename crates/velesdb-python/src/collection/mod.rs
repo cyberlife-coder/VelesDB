@@ -202,6 +202,15 @@ impl Collection {
         py.allow_threads(|| self.inner.flush_full().map_err(core_err))
     }
 
+    /// Compact on-disk storage, reclaiming space left by deleted vectors.
+    ///
+    /// Returns:
+    ///     int: Number of bytes reclaimed.
+    fn compact_storage(&self, py: Python<'_>) -> PyResult<usize> {
+        use crate::collection_helpers::core_err;
+        py.allow_threads(|| self.inner.compact_storage().map_err(core_err))
+    }
+
     /// Check if a secondary index exists on a payload field.
     ///
     /// Args:

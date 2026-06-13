@@ -49,6 +49,33 @@ pub struct AddEdgeRequest {
     pub properties: Option<serde_json::Value>,
 }
 
+/// A single edge inside a batched insert request.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchEdgeInput {
+    /// Edge ID.
+    pub id: u64,
+    /// Source node ID.
+    pub source: u64,
+    /// Target node ID.
+    pub target: u64,
+    /// Edge label (relationship type).
+    pub label: String,
+    /// Optional edge properties.
+    #[serde(default)]
+    pub properties: Option<serde_json::Value>,
+}
+
+/// Request to add multiple edges to the knowledge graph in one operation.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddEdgesBatchRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Edges to insert.
+    pub edges: Vec<BatchEdgeInput>,
+}
+
 /// Request to get edges from the knowledge graph.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

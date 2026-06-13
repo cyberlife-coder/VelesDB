@@ -11,12 +11,14 @@ Default permissions for VelesDB plugin - allows all database operations
 - `allow-get-collection`
 - `allow-is-empty`
 - `allow-flush`
+- `allow-compact-storage`
 - `allow-scroll-collection`
 - `allow-upsert`
 - `allow-upsert-metadata`
 - `allow-get-points`
 - `allow-delete-points`
 - `allow-search`
+- `allow-search-ids`
 - `allow-batch-search`
 - `allow-text-search`
 - `allow-hybrid-search`
@@ -60,6 +62,7 @@ Default permissions for VelesDB plugin - allows all database operations
 - `allow-memory-query-procedural`
 - `allow-create-graph-collection`
 - `allow-add-edge`
+- `allow-add-edges-batch`
 - `allow-get-edges`
 - `allow-traverse-graph`
 - `allow-get-node-degree`
@@ -106,6 +109,32 @@ Denies the add_edge command without any pre-configured scope.
 <tr>
 <td>
 
+`velesdb:allow-add-edges-batch`
+
+</td>
+<td>
+
+Enables the add_edges_batch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-add-edges-batch`
+
+</td>
+<td>
+
+Denies the add_edges_batch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `velesdb:allow-batch-search`
 
 </td>
@@ -125,6 +154,32 @@ Enables the batch_search command without any pre-configured scope.
 <td>
 
 Denies the batch_search command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-compact-storage`
+
+</td>
+<td>
+
+Enables the compact_storage command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-compact-storage`
+
+</td>
+<td>
+
+Denies the compact_storage command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1295,6 +1350,32 @@ Enables the search command without any pre-configured scope.
 <td>
 
 Denies the search command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-search-ids`
+
+</td>
+<td>
+
+Enables the search_ids command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-search-ids`
+
+</td>
+<td>
+
+Denies the search_ids command without any pre-configured scope.
 
 </td>
 </tr>
