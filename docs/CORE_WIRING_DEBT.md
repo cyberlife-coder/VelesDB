@@ -277,7 +277,7 @@ feasibility · target file for the glue):
 | 6.10 | `VectorCollection::multi_query_search_ids` | rest, tauri, mobile, ts | P3 | trivial — id-only variant of broadly-exposed `multi_query_search` | server `search/multi.rs` (ids-only mode); TS `search-backend.ts` |
 | 6.11 | `validate_collection_name` / `validate_dimension` / `validate_dimension_match` (free-fns) | every binding re-implements them | P3 | trivial — consistency, not a feature | re-export + replace local validators in python `lib.rs`, server validation, ts `client/validation.ts` |
 
-**Status — PR-1 `feat/parity-embedded-ops`** (branch open):
+**Status — PR-1 `feat/parity-embedded-ops`** (MERGED, PR #1096 → develop):
 - 6.1 `compact_storage` — DONE (Python, Mobile, Tauri; each with a unit test).
 - 6.2 `add_edges_batch` — DONE (server `/collections/{name}/graph/edges/batch` route + OpenAPI snapshot + Tauri command; HTTP integration test + Tauri tests).
 - 6.3 `search_ids` — Tauri command DONE (functional gap closed; unit-tested). **Server fast-path moved to PR-4** (grouped with 6.9: conditional hot-path opt, core `search_ids` has no filter param).
@@ -287,9 +287,15 @@ feasibility · target file for the glue):
 - 6.7 guardrails get/update — DONE. Server already had it. Added Python (`Database.update_guardrails(dict)` + `collection.guard_rails()` read), Mobile (`MobileQueryLimits` record + `update_guardrails` + `collection.guard_rails`), Tauri (`update_guardrails`/`get_guardrails` commands). Tests on each. Note: `QueryLimits` (runtime) ≠ `LimitsConfig` (creation caps) — separate marshalling.
 - 6.8 auto-reindex lifecycle — DONE. Python `collection.detach_auto_reindex()` + `check_auto_reindex_divergence()` (completes the attach-only state; see entry 2). Pytest.
 
-**Status — PR-3 `feat/parity-recall-gated`** (branch open):
+**Status — PR-3 `feat/parity-recall-gated`** (MERGED, PR #1099 → develop):
 - 6.4 `reorder_for_locality` — DONE. Server `POST /collections/{name}/locality/reorder` admin route (+ OpenAPI snapshot), Python `collection.reorder_for_locality()`. Server BDD tests (nominal/empty/404) + pytest. Recall-preserving (only physical layout changes); does **not** touch `index/hnsw/`, `simd_native/`, `quantization/`, `fusion/`, or Python result conversion — Gate-1 recall-contract tests (balanced ≥95, accurate ≥99, perfect =100) green.
 - 6.5 `apply_advanced_config` — DONE. Python `collection.apply_advanced_config(dict)` with three-state semantics (absent key=unchanged, `None`=clear, value=set) over `pq_rescore_oversampling` / `deferred_indexing` / `async_index_builder`; Mobile `MobileAdvancedConfig` record (+ `MobileDeferredIndexerConfig` / `MobileAsyncIndexBuilderConfig`) and `collection.apply_advanced_config` (mobile maps `None`→unchanged; cannot express clear). pytest + mobile `#[test]`.
+
+**Status — PR-4 `feat/parity-consistency`** (the final campaign PR):
+- 6.9 `search_batch_parallel` — DONE. Server `/search/batch` dispatches to `search_batch_parallel` (rayon, no-filter throughput path) when no query carries a filter, else `search_batch_with_filters`. Same HNSW traversal, so the unfiltered case is identical to serial. Parity test (`parity_consistency_tests.rs`) pins batch == per-query `/search`.
+- 6.3-server `search_ids` true core path — DONE. `/search/ids` now calls core `search_ids` (skips payload hydration) for plain dense requests (no filter/sparse/`ef_search`/quality `mode`); any other shape falls back to the generic pipeline. `search()` and `search_ids()` share `search_ids_with_adc_if_pq`, so the fast path's id/score ranking is identical — pinned by a `/search` vs `/search/ids` parity test. (Tauri `search_ids` command already landed in PR-1.)
+- 6.10 `multi_query_search_ids` — DONE. Server `POST /collections/{name}/search/multi/ids` (+ OpenAPI) calls core `multi_query_search_ids` (rejects filters — the kernel has no filter param); TS `multiQuerySearchIds` across `search-backend.ts` → REST/WASM backends (WASM = not-supported stub, mirroring `searchIds`) → `Backend` interface → client. Server parity + filter-rejection + 404 tests; TS backend tests.
+- 6.11 `validate_*` free-fn dedup — **VERIFIED no-op (no real gap).** The matrix row was overstated: no binding re-implements these. Core already re-exports `validate_collection_name` / `validate_dimension` / `validate_dimension_match` from the crate root (`lib.rs`); Python relies on core validation via error-mapping (no local validators in `lib.rs`); the server only matches the `InvalidCollectionName` *error* variant (no local name/dimension validator); TS is client-only and has no `validateCollectionName` / `validateDimension`. Nothing to consolidate.
 
 **Explicitly deferred (not worth closing now)**:
 - `stream_insert_batch` / `enable_streaming` / `StreamIngester::*` — async
@@ -319,7 +325,7 @@ consistency-cleanup PR. Each binding glue must pass that crate's CI line
 | `deferred_indexing` / `async_index_builder` | REST-only (no TOML/Python) | RFC pending | Unscoped | Community (future sprint) |
 | `SearchConfig` global defaults | Partial | Consolidation cleanup | 1-2 commits | Community (future sprint) |
 | `LimitsConfig` (3/5 fields) | Partial | Hot-path instrumentation | 2-3 commits | Community (backlog, unscheduled) |
-| Binding API-parity gaps (6.1–6.11) | Partial | P1–P3 backlog (see §6) | 3 PRs (embedded-ops / recall-gated / consistency) | Community |
+| Binding API-parity gaps (6.1–6.11) | DONE | Closed via 4 PRs #1096/#1098/#1099 + consistency (6.11 = verified no-gap); see §6 | 4 PRs (embedded-ops / ops-observability / recall-gated / consistency) | Community |
 
 ## Conventions
 

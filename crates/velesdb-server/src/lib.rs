@@ -60,9 +60,10 @@ pub use handlers::{
     delete_index, delete_point, explain, flush_collection, get_collection, get_collection_config,
     get_collection_stats, get_guardrails, get_point, get_point_relations, health_check,
     hybrid_search, is_empty, list_collections, list_indexes, match_query, multi_query_search,
-    query, readiness_check, rebuild_index, relate_points, reorder_for_locality, scroll_points,
-    search, search_ids, set_point_ttl, stream_insert, stream_upsert_points, text_search,
-    unrelate_points, update_guardrails, upsert_points, vacuum_collection,
+    multi_query_search_ids, query, readiness_check, rebuild_index, relate_points,
+    reorder_for_locality, scroll_points, search, search_ids, set_point_ttl, stream_insert,
+    stream_upsert_points, text_search, unrelate_points, update_guardrails, upsert_points,
+    vacuum_collection,
 };
 
 pub use handlers::graph::{
@@ -136,6 +137,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::search::search,
         handlers::search::batch_search,
         handlers::search::multi_query_search,
+        handlers::search::multi_query_search_ids,
         handlers::search::text_search,
         handlers::search::hybrid_search,
         handlers::search::search_ids,

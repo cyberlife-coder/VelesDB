@@ -259,6 +259,73 @@ pub(crate) fn execute_dense_search(
     Ok(result)
 }
 
+/// Builds payload-less [`SearchResult`]s from id/score pairs.
+///
+/// Used by the ids-only fast paths (`search_ids`, `multi_query_search_ids`) so
+/// they can reuse the standard `finish_search_ids*` machinery without
+/// hydrating payloads that the caller will discard.
+pub(crate) fn id_score_results(
+    pairs: impl IntoIterator<Item = (u64, f32)>,
+) -> Vec<velesdb_core::SearchResult> {
+    pairs
+        .into_iter()
+        .map(|(id, score)| {
+            velesdb_core::SearchResult::new(
+                velesdb_core::Point::without_payload(id, Vec::new()),
+                score,
+            )
+        })
+        .collect()
+}
+
+/// Returns `true` when `req` carries any sparse query payload.
+fn has_sparse_input(req: &SearchRequest) -> bool {
+    req.sparse_vector.is_some() || req.sparse_vectors.as_ref().is_some_and(|m| !m.is_empty())
+}
+
+/// Whether an ids-only request can take the `search_ids` fast path.
+///
+/// Eligible requests are plain dense kNN — no filter, sparse payload,
+/// `ef_search` override, or quality `mode` — i.e. exactly the inputs that
+/// reach `collection.search()` in [`execute_dense_search`]. Both `search` and
+/// `search_ids` run the same HNSW traversal, so the fast path returns an
+/// identical id/score ranking; any other shape falls back to the generic
+/// pipeline to stay correct.
+pub(crate) fn ids_fast_path_eligible(req: &SearchRequest) -> bool {
+    !req.vector.is_empty()
+        && req.filter.is_none()
+        && req.ef_search.is_none()
+        && !has_sparse_input(req)
+        && req
+            .mode
+            .as_ref()
+            .and_then(|m| mode_to_search_quality(m))
+            .is_none()
+}
+
+/// Ids-only fast path: runs `search_ids` (HNSW traversal without payload
+/// hydration) for requests deemed eligible by [`ids_fast_path_eligible`].
+///
+/// # Errors
+///
+/// Returns a 400 response when the query dimension does not match.
+#[allow(clippy::result_large_err)]
+pub(crate) fn execute_dense_search_ids(
+    state: &AppState,
+    name: &str,
+    collection: &VectorCollection,
+    req: &SearchRequest,
+) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
+    let expected_dimension = collection.config().dimension;
+    if let Err(error) = validate_query_dimension(state, name, expected_dimension, &req.vector) {
+        return Err((StatusCode::BAD_REQUEST, Json(error)).into_response());
+    }
+    let result = collection
+        .search_ids(&req.vector, req.top_k)
+        .map(|scored| id_score_results(scored.into_iter().map(|s| (s.id, s.score))));
+    Ok(result)
+}
+
 /// Search mode classification used by [`execute_search_request`] to
 /// dispatch to the appropriate search backend.
 ///

@@ -242,6 +242,12 @@ export class VelesDB {
     return searchMethods.multiQuerySearch(this.backend, collection, vectors, options);
   }
 
+  /** Multi-query fusion search returning only IDs and scores (no payloads). */
+  async multiQuerySearchIds(collection: string, vectors: Array<number[] | Float32Array>, options?: MultiQuerySearchOptions): Promise<Array<{ id: number; score: number }>> {
+    this.ensureInitialized();
+    return searchMethods.multiQuerySearchIds(this.backend, collection, vectors, options);
+  }
+
   /**
    * Pure sparse search against a named sparse index.
    *
