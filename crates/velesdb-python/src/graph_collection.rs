@@ -217,6 +217,12 @@ impl PyGraphCollection {
         Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
+    /// Returns `true` if an edge with the given ID exists.
+    #[pyo3(signature = (edge_id))]
+    fn has_edge(&self, edge_id: u64) -> bool {
+        self.inner.has_edge(edge_id)
+    }
+
     /// Alias for `get_outgoing`.
     ///
     /// Preserves compatibility with examples that used the explicit
