@@ -18,7 +18,7 @@ use velesdb_server::{
     health_check, hybrid_search, list_collections, multi_query_search, multi_query_search_ids,
     query, readiness_check, rebuild_index, reorder_for_locality, scroll_points, search, search_ids,
     set_point_ttl, stream_insert, stream_upsert_points, text_search, traverse_graph, upsert_points,
-    vacuum_collection, AppState, OnboardingMetrics,
+    upsert_points_raw, vacuum_collection, AppState, OnboardingMetrics,
 };
 
 fn base_routes() -> Router<Arc<AppState>> {
@@ -41,6 +41,7 @@ fn base_routes() -> Router<Arc<AppState>> {
         .route("/collections/{name}/index/rebuild", post(rebuild_index))
         .route("/collections/{name}/sanity", get(collection_sanity))
         .route("/collections/{name}/points", post(upsert_points))
+        .route("/collections/{name}/points/raw", post(upsert_points_raw))
         .route(
             "/collections/{name}/points/stream",
             post(stream_upsert_points),

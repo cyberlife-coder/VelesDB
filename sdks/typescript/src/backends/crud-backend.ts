@@ -13,7 +13,7 @@ import type {
   RestPointId,
   SparseVector,
 } from '../types';
-import { ValidationError } from '../types';
+import { ValidationError, ConnectionError, VelesDBError } from '../types';
 import type { BaseTransport } from './shared';
 import {
   throwOnError,
@@ -24,6 +24,25 @@ import {
 
 /** Minimal transport interface for CRUD operations. */
 export type CrudTransport = BaseTransport;
+
+/**
+ * Transport fields needed to send a raw binary body via `fetch`.
+ *
+ * The binary bulk endpoint cannot go through `BaseTransport.requestJson`
+ * (which JSON-stringifies the body), so the raw-bulk sender takes the
+ * connection primitives directly — mirroring the `StreamingTransport`
+ * approach for the NDJSON path.
+ */
+export interface RawBulkTransport {
+  readonly baseUrl: string;
+  readonly apiKey: string | undefined;
+  readonly timeout: number;
+}
+
+/** Magic prefix + fixed header size for the VRB1 binary bulk format. */
+const RAW_BULK_HEADER_LEN = 16;
+const RAW_BULK_MAGIC = [0x56, 0x52, 0x42, 0x31]; // "VRB1"
+const RAW_BULK_ID_WIDTH = 8; // u64
 
 /** Largest value a u64 point id can take (`u64::MAX`). */
 const U64_MAX = 18446744073709551615n;
@@ -276,4 +295,172 @@ export async function flush(
     `${collectionPath(collection)}/flush`
   );
   throwOnError(response, `Collection '${collection}'`);
+}
+
+// ---------------------------------------------------------------------------
+// Binary wire-format bulk upsert (VRB1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode an `(ids, vectors)` batch into the VRB1 binary bulk format.
+ *
+ * Layout (little-endian, matches the Rust `upsert_points_raw` handler):
+ *
+ * ```text
+ * magic b"VRB1" (4) | count u32 (4) | dim u32 (4) | id_width u8 (1) |
+ * reserved (3) | ids [u64; count] | vectors [f32; count*dim]
+ * ```
+ *
+ * The encoding is deterministic: identical inputs always yield identical
+ * bytes. `BigUint64Array`/`Float32Array` views are written through a
+ * `DataView` so the result is host-endian-independent.
+ *
+ * @throws {ValidationError} when `ids.length !== vectors.length`, or any
+ *   vector's length differs from `dim`.
+ */
+export function encodeRawBulk(
+  ids: number[],
+  vectors: Array<number[] | Float32Array>,
+  dim: number
+): Uint8Array {
+  const count = ids.length;
+  if (vectors.length !== count) {
+    throw new ValidationError(
+      `encodeRawBulk: ids length (${count}) must match vectors length (${vectors.length})`
+    );
+  }
+  const buf = new Uint8Array(RAW_BULK_HEADER_LEN + count * 8 + count * dim * 4);
+  const view = new DataView(buf.buffer);
+  buf.set(RAW_BULK_MAGIC, 0);
+  view.setUint32(4, count, true);
+  view.setUint32(8, dim, true);
+  buf[12] = RAW_BULK_ID_WIDTH;
+  // bytes 13..16 stay zero (reserved).
+  writeIds(view, ids);
+  writeVectors(view, vectors, dim, count);
+  return buf;
+}
+
+/** Write packed `u64` ids starting at the fixed header offset. */
+function writeIds(view: DataView, ids: number[]): void {
+  let off = RAW_BULK_HEADER_LEN;
+  for (const id of ids) {
+    view.setBigUint64(off, BigInt(id), true);
+    off += 8;
+  }
+}
+
+/** Write packed row-major `f32` vectors after the id section. */
+function writeVectors(
+  view: DataView,
+  vectors: Array<number[] | Float32Array>,
+  dim: number,
+  count: number
+): void {
+  let off = RAW_BULK_HEADER_LEN + count * 8;
+  for (const vec of vectors) {
+    if (vec.length !== dim) {
+      throw new ValidationError(
+        `encodeRawBulk: vector length (${vec.length}) must match dim (${dim})`
+      );
+    }
+    for (let i = 0; i < dim; i++) {
+      view.setFloat32(off, vec[i] ?? 0, true);
+      off += 4;
+    }
+  }
+}
+
+/**
+ * Bulk upsert points via the binary wire format
+ * (`POST /collections/{name}/points/raw`, `application/octet-stream`).
+ *
+ * Encodes the batch with {@link encodeRawBulk} and sends it as a single raw
+ * request, avoiding the per-point JSON overhead of {@link upsertBatch}.
+ * Payloads are not carried on this path — use {@link upsertBatch} when you
+ * need them. All ids must be plain numbers (encoded as `u64`).
+ *
+ * @returns the number of points the server reports as inserted.
+ * @throws {VelesDBError} on a non-OK HTTP response.
+ * @throws {ConnectionError} on timeout or transport failure.
+ */
+export async function upsertBatchRaw(
+  transport: RawBulkTransport,
+  collection: string,
+  docs: VectorDocument[],
+  dim: number
+): Promise<number> {
+  const ids = docs.map(d => coerceNumericId(d.id));
+  const vectors = docs.map(d => d.vector);
+  const body = encodeRawBulk(ids, vectors, dim);
+  return sendRawBulk(transport, collection, body);
+}
+
+/** Coerce a doc id to a plain number, rejecting precision-critical strings. */
+function coerceNumericId(id: string | number): number {
+  const parsed = parseRestPointId(id);
+  if (typeof parsed === 'string') {
+    throw new ValidationError(
+      `upsertBatchRaw requires ids in the JS safe integer range; received: ${parsed}`
+    );
+  }
+  return parsed;
+}
+
+/** POST a pre-encoded binary body and parse the `{ count }` response. */
+async function sendRawBulk(
+  transport: RawBulkTransport,
+  collection: string,
+  body: Uint8Array
+): Promise<number> {
+  const url = `${transport.baseUrl}${collectionPath(collection)}/points/raw`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/octet-stream',
+  };
+  if (transport.apiKey) {
+    headers['Authorization'] = `Bearer ${transport.apiKey}`;
+  }
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), transport.timeout);
+  try {
+    // `Uint8Array` is a valid `BodyInit` (ArrayBufferView) at runtime; the
+    // cast satisfies the DOM lib's narrower generic `BodyInit` type.
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: body as BodyInit,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return await parseRawBulkResponse(response);
+  } catch (error) {
+    clearTimeout(timeoutId);
+    throw wrapRawBulkError(error);
+  }
+}
+
+/** Parse a raw-bulk HTTP response into the inserted count, throwing on error. */
+async function parseRawBulkResponse(response: Response): Promise<number> {
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const code = typeof data.code === 'string' ? data.code : `HTTP_${response.status}`;
+    const message = typeof data.error === 'string' ? data.error : `HTTP ${response.status}`;
+    throw new VelesDBError(message, code);
+  }
+  return typeof data.count === 'number' ? data.count : 0;
+}
+
+/** Normalise a caught raw-bulk error to a typed VelesDB error. */
+function wrapRawBulkError(error: unknown): Error {
+  if (error instanceof VelesDBError) {
+    return error;
+  }
+  if (error instanceof Error && error.name === 'AbortError') {
+    return new ConnectionError('Request timeout');
+  }
+  const message = error instanceof Error ? error.message : 'Unknown error';
+  return new ConnectionError(
+    `Raw bulk upsert failed: ${message}`,
+    error instanceof Error ? error : undefined
+  );
 }

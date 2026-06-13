@@ -63,7 +63,7 @@ pub use handlers::{
     multi_query_search, multi_query_search_ids, query, readiness_check, rebuild_index,
     relate_points, reorder_for_locality, scroll_points, search, search_ids, set_point_ttl,
     stream_insert, stream_upsert_points, text_search, unrelate_points, update_guardrails,
-    upsert_points, vacuum_collection,
+    upsert_points, upsert_points_raw, vacuum_collection,
 };
 
 pub use handlers::graph::{
@@ -129,6 +129,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::admin::get_guardrails,
         handlers::admin::update_guardrails,
         handlers::points::upsert_points,
+        handlers::points::raw::upsert_points_raw,
         handlers::points::stream_upsert_points,
         handlers::points::stream_insert,
         handlers::points::enable_streaming,
