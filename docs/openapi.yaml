@@ -2123,7 +2123,10 @@ components:
       properties:
         added:
           type: integer
-          description: Number of edges inserted.
+          description: |-
+            Number of edges actually inserted. May be less than the number submitted:
+            edges whose ID already exists (in the request or the graph) are silently
+            skipped. Compare against the request length to detect skipped duplicates.
           minimum: 0
     AggregationResponse:
       type: object
