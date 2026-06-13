@@ -16,8 +16,8 @@ use velesdb_server::{
     compact_collection, create_collection, delete_collection, delete_point, explain,
     get_collection, get_collection_config, get_edges, get_node_degree, get_point, health_check,
     hybrid_search, list_collections, multi_query_search, query, readiness_check, rebuild_index,
-    scroll_points, search, search_ids, set_point_ttl, stream_upsert_points, text_search,
-    traverse_graph, upsert_points, vacuum_collection, AppState, OnboardingMetrics,
+    reorder_for_locality, scroll_points, search, search_ids, set_point_ttl, stream_upsert_points,
+    text_search, traverse_graph, upsert_points, vacuum_collection, AppState, OnboardingMetrics,
 };
 
 fn base_routes() -> Router<Arc<AppState>> {
@@ -84,6 +84,10 @@ fn graph_and_maintenance_routes() -> Router<Arc<AppState>> {
         )
         .route("/collections/{name}/vacuum", post(vacuum_collection))
         .route("/collections/{name}/compact", post(compact_collection))
+        .route(
+            "/collections/{name}/locality/reorder",
+            post(reorder_for_locality),
+        )
 }
 
 fn create_app_state(temp_dir: &TempDir) -> Arc<AppState> {

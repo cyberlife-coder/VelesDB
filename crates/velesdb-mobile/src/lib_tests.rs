@@ -399,6 +399,63 @@ fn test_collection_guardrails_update_and_read() {
 }
 
 #[test]
+fn test_advanced_config_record_conversions() {
+    let deferred: velesdb_core::collection::streaming::DeferredIndexerConfig =
+        MobileDeferredIndexerConfig {
+            enabled: true,
+            merge_threshold: 512,
+            max_buffer_age_ms: 3000,
+        }
+        .into();
+    assert!(deferred.enabled);
+    assert_eq!(deferred.merge_threshold, 512);
+    assert_eq!(deferred.max_buffer_age_ms, 3000);
+
+    let async_builder: velesdb_core::collection::streaming::AsyncIndexBuilderConfig =
+        MobileAsyncIndexBuilderConfig {
+            merge_threshold: 20_000,
+            segment_count: Some(4),
+        }
+        .into();
+    assert_eq!(async_builder.merge_threshold, 20_000);
+    assert_eq!(async_builder.segment_count, Some(4));
+}
+
+#[test]
+fn test_collection_apply_advanced_config() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("adv".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("adv".to_string()).unwrap().unwrap();
+
+    // All three fields set: must persist without error.
+    col.apply_advanced_config(MobileAdvancedConfig {
+        pq_rescore_oversampling: Some(8),
+        deferred_indexing: Some(MobileDeferredIndexerConfig {
+            enabled: true,
+            merge_threshold: 512,
+            max_buffer_age_ms: 3000,
+        }),
+        async_index_builder: Some(MobileAsyncIndexBuilderConfig {
+            merge_threshold: 20_000,
+            segment_count: None,
+        }),
+    })
+    .unwrap();
+
+    // None fields leave configuration unchanged: also a valid no-op.
+    col.apply_advanced_config(MobileAdvancedConfig {
+        pq_rescore_oversampling: None,
+        deferred_indexing: None,
+        async_index_builder: None,
+    })
+    .unwrap();
+}
+
+#[test]
 fn test_collection_with_json_payload() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().to_str().unwrap().to_string();

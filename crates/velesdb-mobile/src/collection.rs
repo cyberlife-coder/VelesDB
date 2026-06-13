@@ -3,8 +3,8 @@
 use velesdb_core::VectorCollection as CoreCollection;
 
 use crate::types::{
-    IndividualSearchRequest, MobileCollectionStats, MobileIndexInfo, MobileQueryLimits,
-    SearchQuality, SearchResult, VelesError, VelesPoint,
+    IndividualSearchRequest, MobileAdvancedConfig, MobileCollectionStats, MobileIndexInfo,
+    MobileQueryLimits, SearchQuality, SearchResult, VelesError, VelesPoint,
 };
 
 // ============================================================================
@@ -502,6 +502,19 @@ impl VelesCollection {
     /// Returns the current query guardrail limits for this collection.
     pub fn guard_rails(&self) -> MobileQueryLimits {
         self.inner.guard_rails().limits().into()
+    }
+
+    /// Applies post-creation overrides to advanced configuration fields
+    /// (`pq_rescore_oversampling`, `deferred_indexing`,
+    /// `async_index_builder`) and persists the updated config. Each `Some`
+    /// field is applied; each `None` field is left unchanged.
+    pub fn apply_advanced_config(&self, config: MobileAdvancedConfig) -> Result<(), VelesError> {
+        self.inner.apply_advanced_config(
+            config.pq_rescore_oversampling.map(Some),
+            config.deferred_indexing.map(|c| Some(c.into())),
+            config.async_index_builder.map(|c| Some(c.into())),
+        )?;
+        Ok(())
     }
 
     /// Returns all point IDs currently present in the collection.

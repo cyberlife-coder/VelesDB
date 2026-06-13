@@ -383,6 +383,71 @@ async fn compact_unknown_collection_returns_404() {
 }
 
 // ---------------------------------------------------------------------
+// /locality/reorder — reorder_for_locality
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn reorder_nominal_returns_200() {
+    let temp_dir = TempDir::new().expect("test: temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_collection(app.clone(), 6).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/collections/{TEST_COLLECTION}/locality/reorder"))
+                .body(Body::empty())
+                .expect("test: build reorder request"),
+        )
+        .await
+        .expect("test: reorder request");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = read_json(response).await;
+    assert_eq!(json["message"], "Locality reordered");
+    assert_eq!(json["collection"], TEST_COLLECTION);
+}
+
+#[tokio::test]
+async fn reorder_empty_collection_returns_200() {
+    // Edge: reordering an empty collection is a valid no-op.
+    let temp_dir = TempDir::new().expect("test: temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_collection(app.clone(), 0).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/collections/{TEST_COLLECTION}/locality/reorder"))
+                .body(Body::empty())
+                .expect("test: build reorder request"),
+        )
+        .await
+        .expect("test: reorder request");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn reorder_unknown_collection_returns_404() {
+    let temp_dir = TempDir::new().expect("test: temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/ghost_collection/locality/reorder")
+                .body(Body::empty())
+                .expect("test: build reorder request"),
+        )
+        .await
+        .expect("test: reorder request");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------
 // Cross-endpoint sanity: delete -> vacuum -> compact lifecycle
 // ---------------------------------------------------------------------
 

@@ -1032,6 +1032,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /collections/{name}/locality/reorder:
+    post:
+      tags:
+      - collections
+      summary: |-
+        Reorders the HNSW adjacency lists and vector storage for cache
+        locality so nodes traversed together during search sit close in
+        memory (issue #377). No-op for collections with fewer than 1 000
+        vectors. Recall is preserved — only the physical layout changes.
+      description: |-
+        This is a blocking operation that may involve significant I/O for
+        large collections.
+      operationId: reorder_for_locality
+      parameters:
+      - name: name
+        in: path
+        description: Collection name
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Locality reordered
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Collection not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Reorder failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /collections/{name}/match:
     post:
       tags:

@@ -392,3 +392,63 @@ impl From<MobileQueryLimits> for velesdb_core::guardrails::QueryLimits {
         }
     }
 }
+
+/// Deferred indexing configuration (buffers bulk inserts before merging
+/// into the HNSW index).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MobileDeferredIndexerConfig {
+    /// Whether deferred indexing is enabled.
+    pub enabled: bool,
+    /// Number of buffered points before a merge is triggered.
+    pub merge_threshold: u64,
+    /// Maximum buffer age in milliseconds before a forced merge.
+    pub max_buffer_age_ms: u64,
+}
+
+impl From<MobileDeferredIndexerConfig>
+    for velesdb_core::collection::streaming::DeferredIndexerConfig
+{
+    fn from(v: MobileDeferredIndexerConfig) -> Self {
+        Self {
+            enabled: v.enabled,
+            merge_threshold: usize::try_from(v.merge_threshold).unwrap_or(usize::MAX),
+            max_buffer_age_ms: v.max_buffer_age_ms,
+        }
+    }
+}
+
+/// Async index builder configuration (parallel segment construction for
+/// deferred bulk loads).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MobileAsyncIndexBuilderConfig {
+    /// Number of buffered points before a segment merge is triggered.
+    pub merge_threshold: u64,
+    /// Number of parallel segments; `None` falls back to the CPU count.
+    pub segment_count: Option<u32>,
+}
+
+impl From<MobileAsyncIndexBuilderConfig>
+    for velesdb_core::collection::streaming::AsyncIndexBuilderConfig
+{
+    fn from(v: MobileAsyncIndexBuilderConfig) -> Self {
+        Self {
+            merge_threshold: usize::try_from(v.merge_threshold).unwrap_or(usize::MAX),
+            segment_count: v.segment_count.map(|s| s as usize),
+        }
+    }
+}
+
+/// Post-creation overrides for advanced collection configuration.
+///
+/// Each field uses `Some` to set the value and `None` to leave it
+/// unchanged. Unlike the Python binding, mobile cannot express the
+/// "clear" state (it maps `None` to "leave unchanged").
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MobileAdvancedConfig {
+    /// PQ rescore oversampling factor; `None` leaves it unchanged.
+    pub pq_rescore_oversampling: Option<u32>,
+    /// Deferred indexing config; `None` leaves it unchanged.
+    pub deferred_indexing: Option<MobileDeferredIndexerConfig>,
+    /// Async index builder config; `None` leaves it unchanged.
+    pub async_index_builder: Option<MobileAsyncIndexBuilderConfig>,
+}
