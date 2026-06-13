@@ -26,8 +26,8 @@ pub mod search;
 pub mod metrics;
 
 pub use admin::{
-    analyze_collection, compact_collection, get_collection_config, get_collection_stats,
-    get_guardrails, rebuild_index, update_guardrails, vacuum_collection,
+    analyze_collection, collection_diagnostics, compact_collection, get_collection_config,
+    get_collection_stats, get_guardrails, rebuild_index, update_guardrails, vacuum_collection,
 };
 pub use collections::{
     collection_sanity, create_collection, delete_collection, flush_collection, get_collection,

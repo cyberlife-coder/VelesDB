@@ -25,6 +25,8 @@ const COMMANDS: &[&str] = &[
     "is_empty",
     "flush",
     "compact_storage",
+    "update_guardrails",
+    "get_guardrails",
     "scroll_collection",
     // Point operations
     "upsert",

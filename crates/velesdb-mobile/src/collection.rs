@@ -3,8 +3,8 @@
 use velesdb_core::VectorCollection as CoreCollection;
 
 use crate::types::{
-    IndividualSearchRequest, MobileCollectionStats, MobileIndexInfo, SearchQuality, SearchResult,
-    VelesError, VelesPoint,
+    IndividualSearchRequest, MobileCollectionStats, MobileIndexInfo, MobileQueryLimits,
+    SearchQuality, SearchResult, VelesError, VelesPoint,
 };
 
 // ============================================================================
@@ -497,6 +497,11 @@ impl VelesCollection {
     /// Returns the number of bytes reclaimed.
     pub fn compact_storage(&self) -> Result<u64, VelesError> {
         Ok(u64::try_from(self.inner.compact_storage()?).unwrap_or(u64::MAX))
+    }
+
+    /// Returns the current query guardrail limits for this collection.
+    pub fn guard_rails(&self) -> MobileQueryLimits {
+        self.inner.guard_rails().limits().into()
     }
 
     /// Returns all point IDs currently present in the collection.
