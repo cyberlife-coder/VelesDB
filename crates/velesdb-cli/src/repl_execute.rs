@@ -13,8 +13,10 @@ use crate::repl::{QueryKind, QueryResult};
 /// Execute a `VelesQL` query and return results.
 ///
 /// Delegates to [`Database::execute_query`] for SELECT/DML/TRAIN queries.
-/// MATCH queries are routed to `Collection::execute_query` on the active
-/// collection (set via `.use collection_name`).
+/// MATCH queries are routed through [`route_match_query`], which also goes
+/// through [`Database::execute_query`] so cross-collection `@collection`
+/// annotations are enriched (the active collection set via `.use` is injected
+/// as the `_collection` param when the query has no explicit `FROM`).
 pub fn execute_query(
     db: &Database,
     query: &str,
@@ -54,11 +56,11 @@ pub fn execute_query(
     }
 
     let kind = query_kind(&parsed);
-    let params = HashMap::new();
 
     let results = if parsed.is_match_query() {
-        execute_match_query(db, &parsed, active_collection, &params)?
+        route_match_query(db, &parsed, active_collection)?
     } else {
+        let params = HashMap::new();
         db.execute_query(&parsed, &params)
             .map_err(|e| anyhow::anyhow!("Query error: {e}"))?
     };
@@ -90,27 +92,34 @@ fn query_kind(parsed: &velesdb_core::velesql::Query) -> QueryKind {
     }
 }
 
-/// Route a MATCH query to the active collection (graph first, then vector).
-fn execute_match_query(
+/// Route a MATCH query through [`Database::execute_query`] so cross-collection
+/// `@collection` annotations are enriched.
+///
+/// `Database::execute_query` resolves the target collection from the query's
+/// `FROM` clause or the `_collection` param, then merges payloads from any
+/// `@collection`-annotated node patterns. The REPL selects the target via
+/// `.use <collection>`, so when the query has no explicit `FROM` we inject the
+/// active collection as `_collection`. Resolution covers graph, vector, and
+/// metadata collections alike.
+fn route_match_query(
     db: &Database,
     parsed: &velesdb_core::velesql::Query,
     active_collection: Option<&str>,
-    params: &HashMap<String, serde_json::Value>,
 ) -> Result<Vec<velesdb_core::SearchResult>> {
-    let col_name = active_collection.ok_or_else(|| {
-        anyhow::anyhow!("MATCH queries require an active collection. Use: .use <collection_name>")
-    })?;
-    if let Some(graph_col) = db.get_graph_collection(col_name) {
-        graph_col
-            .execute_query(parsed, params)
-            .map_err(|e| anyhow::anyhow!("Query error: {e}"))
-    } else if let Some(vec_col) = db.get_vector_collection(col_name) {
-        vec_col
-            .execute_query(parsed, params)
-            .map_err(|e| anyhow::anyhow!("Query error: {e}"))
-    } else {
-        Err(anyhow::anyhow!("Collection '{}' not found", col_name))
+    let mut params = HashMap::new();
+    if parsed.select.from.is_empty() {
+        let col_name = active_collection.ok_or_else(|| {
+            anyhow::anyhow!(
+                "MATCH queries require an active collection. Use: .use <collection_name>"
+            )
+        })?;
+        params.insert(
+            "_collection".to_string(),
+            serde_json::Value::String(col_name.to_string()),
+        );
     }
+    db.execute_query(parsed, &params)
+        .map_err(|e| anyhow::anyhow!("Query error: {e}"))
 }
 
 /// Convert a single [`velesdb_core::SearchResult`] into a display row.

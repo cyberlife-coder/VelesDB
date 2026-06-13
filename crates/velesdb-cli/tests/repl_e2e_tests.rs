@@ -395,3 +395,62 @@ fn test_repl_multi_command_session() {
     .stdout(predicate::str::contains("5"))
     .stdout(predicate::str::contains("Vector"));
 }
+
+// ============================================================================
+// Cross-collection MATCH enrichment (@collection) via the REPL
+// ============================================================================
+
+/// Create a graph collection `catalog` whose `Warehouse` node cross-references a
+/// metadata collection `pricing`, so a `@pricing`-annotated MATCH must enrich
+/// results with `pricing` fields.
+fn setup_cross_collection_enrichment() -> (std::path::PathBuf, TempDir) {
+    let temp = TempDir::new().unwrap();
+    let db_path = temp.path().join("db");
+    let db = velesdb_core::Database::open(&db_path).unwrap();
+    db.create_graph_collection("catalog", GraphSchema::schemaless())
+        .unwrap();
+    let gc = db.get_graph_collection("catalog").unwrap();
+    gc.upsert_node_payload(
+        1,
+        &serde_json::json!({"_labels": ["Product"], "name": "Headphones"}),
+    )
+    .unwrap();
+    gc.upsert_node_payload(
+        2,
+        &serde_json::json!({"_labels": ["Warehouse"], "name": "Paris HQ"}),
+    )
+    .unwrap();
+    gc.add_edge(GraphEdge::new(1, 1, 2, "STORED_IN").unwrap())
+        .unwrap();
+    gc.flush().unwrap();
+    db.create_metadata_collection("pricing").unwrap();
+    let mc = db.get_metadata_collection("pricing").unwrap();
+    mc.upsert(vec![Point::metadata_only(
+        2,
+        serde_json::json!({"price": 99.99, "stock": 50}),
+    )])
+    .unwrap();
+    drop(db);
+    (db_path, temp)
+}
+
+/// Regression test for the CLI `@collection` cross-collection MATCH enrichment.
+///
+/// Before the fix, the REPL routed every MATCH query to
+/// `Collection::execute_query`, bypassing
+/// `Database::enrich_match_results_cross_collection`, so the `@pricing`
+/// annotation was parsed but silently dropped. After the fix the query is
+/// routed through `Database::execute_query`, which enriches the `w` binding
+/// with `pricing` fields — the `w.price` / `w.stock` columns must render.
+#[test]
+fn test_repl_match_at_collection_enrichment() {
+    let (db_path, _temp) = setup_cross_collection_enrichment();
+    repl_run(
+        &db_path,
+        &[
+            ".use catalog",
+            "MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@pricing) RETURN p, w LIMIT 10",
+        ],
+    )
+    .stdout(predicate::str::contains("w.price"));
+}
