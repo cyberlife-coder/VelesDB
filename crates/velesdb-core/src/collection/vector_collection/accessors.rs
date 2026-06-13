@@ -199,12 +199,12 @@ impl VectorCollection {
     }
 
     /// Attaches an [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager)
-    /// to this collection as a runtime-only hook.
+    /// to this collection.
     ///
-    /// The attachment is **not persisted** to `config.json` — callers must
-    /// re-attach after every [`Database::open`](crate::Database::open).
-    /// This intentional design avoids the `Duration` serde round-trip and
-    /// keeps the collection schema version stable.
+    /// The manager's config is mirrored into `config.json` (schema v2) so the
+    /// policy is restored automatically on the next
+    /// [`Database::open`](crate::Database::open) — no manual re-attach is
+    /// required once a subsequent flush has persisted it.
     ///
     /// Once attached, the manager is consulted by the bulk upsert hot
     /// path after every successful `upsert_bulk` call. When the manager
