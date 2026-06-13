@@ -234,6 +234,32 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /collections/{name}/diagnostics:
+    get:
+      tags:
+      - collections
+      summary: Get health diagnostics for a collection (index readiness, point count).
+      operationId: collection_diagnostics
+      parameters:
+      - name: name
+        in: path
+        description: Collection name
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Collection diagnostics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionDiagnosticsResponse'
+        '404':
+          description: Collection not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /collections/{name}/empty:
     get:
       tags:
@@ -2254,6 +2280,37 @@ components:
         storage_mode:
           type: string
           description: Storage mode (full, sq8, binary, pq).
+    CollectionDiagnosticsResponse:
+      type: object
+      description: Response with a collection's health diagnostics.
+      required:
+      - has_vectors
+      - search_ready
+      - dimension_configured
+      - point_count
+      - index_health
+      properties:
+        dimension_configured:
+          type: boolean
+          description: Whether a valid dimension is configured (> 0 for vector collections).
+        has_vectors:
+          type: boolean
+          description: Whether the collection contains at least one vector/point.
+        index_health:
+          type: string
+          description: 'Primary search-index health: `healthy`, `empty`, or `needs_rebuild`.'
+        index_health_detail:
+          type:
+          - string
+          - 'null'
+          description: Detail message when `index_health` is `needs_rebuild`.
+        point_count:
+          type: integer
+          description: Total number of points in the collection.
+          minimum: 0
+        search_ready:
+          type: boolean
+          description: Whether the collection is ready to serve search queries.
     CollectionResponse:
       type: object
       description: Response with collection information.

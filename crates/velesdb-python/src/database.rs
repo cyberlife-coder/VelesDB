@@ -15,6 +15,41 @@ use crate::utils::{self, parse_metric, parse_storage_mode};
 use velesdb_core::collection::auto_reindex::AutoReindexManager;
 use velesdb_core::{CollectionType, Database as CoreDatabase, GraphSchema};
 
+/// The full set of guardrail fields. `update_guardrails` is an explicit full
+/// replacement (matching the Mobile/Tauri typed structs), so the supplied dict
+/// must contain exactly these keys: omitting one would silently reset it to its
+/// default, and a typo'd key would silently reset every field.
+const GUARDRAIL_FIELDS: [&str; 7] = [
+    "max_depth",
+    "max_cardinality",
+    "memory_limit_bytes",
+    "timeout_ms",
+    "rate_limit_qps",
+    "circuit_failure_threshold",
+    "circuit_recovery_seconds",
+];
+
+/// Validates that `obj` contains exactly the guardrail fields — no unknown keys
+/// and none missing — so a partial or misspelled dict is rejected loudly rather
+/// than silently resetting limits to their defaults.
+fn validate_guardrail_keys(obj: &serde_json::Map<String, serde_json::Value>) -> PyResult<()> {
+    for key in obj.keys() {
+        if !GUARDRAIL_FIELDS.contains(&key.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "unknown guardrail field: '{key}'"
+            )));
+        }
+    }
+    for field in GUARDRAIL_FIELDS {
+        if !obj.contains_key(field) {
+            return Err(PyValueError::new_err(format!(
+                "missing guardrail field: '{field}' (update_guardrails is a full replacement; provide all fields)"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// VelesDB Database - the main entry point for interacting with VelesDB.
 ///
 /// Example:
@@ -636,6 +671,79 @@ impl Database {
                 Ok(utils::json_to_python(py, &json))
             })
             .transpose()
+    }
+
+    /// Get health diagnostics for a collection.
+    ///
+    /// Reports index readiness without relying on the REST server — useful
+    /// for embedded health checks.
+    ///
+    /// Args:
+    ///     name: Collection name
+    ///
+    /// Returns:
+    ///     dict with keys ``has_vectors``, ``search_ready``,
+    ///     ``dimension_configured``, ``point_count``, ``index_health``
+    ///     ("healthy" | "empty" | "needs_rebuild"), and
+    ///     ``index_health_detail`` (only when a rebuild is needed).
+    ///
+    /// Raises:
+    ///     RuntimeError: If the collection does not exist.
+    #[pyo3(signature = (name))]
+    fn collection_diagnostics(&self, py: Python<'_>, name: &str) -> PyResult<PyObject> {
+        use velesdb_core::collection::IndexHealth;
+        let name_owned = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        let diag = py
+            .allow_threads(move || inner.collection_diagnostics(&name_owned))
+            .map_err(core_err)?;
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("has_vectors", diag.has_vectors)?;
+        dict.set_item("search_ready", diag.search_ready)?;
+        dict.set_item("dimension_configured", diag.dimension_configured)?;
+        dict.set_item("point_count", diag.point_count)?;
+        let (health, detail) = match &diag.index_health {
+            IndexHealth::Healthy => ("healthy", None),
+            IndexHealth::Empty => ("empty", None),
+            IndexHealth::NeedsRebuild(reason) => ("needs_rebuild", Some(reason.clone())),
+            _ => ("unknown", None),
+        };
+        dict.set_item("index_health", health)?;
+        if let Some(detail) = detail {
+            dict.set_item("index_health_detail", detail)?;
+        }
+        Ok(dict.into())
+    }
+
+    /// Update query guardrail limits for every collection in this database.
+    ///
+    /// This is a **full replacement**, not a partial patch (matching the
+    /// Mobile/Tauri bindings): the dict must contain *all* guardrail fields.
+    /// A missing or misspelled key raises ``ValueError`` rather than silently
+    /// resetting limits to their defaults. To change one field, read the
+    /// current limits first (``Collection.guard_rails()``), mutate, and submit
+    /// the complete dict.
+    ///
+    /// Args:
+    ///     limits: dict with exactly these keys: ``max_depth``,
+    ///         ``max_cardinality``, ``memory_limit_bytes``, ``timeout_ms``,
+    ///         ``rate_limit_qps``, ``circuit_failure_threshold``,
+    ///         ``circuit_recovery_seconds``.
+    ///
+    /// Raises:
+    ///     ValueError: If a field is missing, unknown, or has an invalid value.
+    #[pyo3(signature = (limits))]
+    fn update_guardrails(&self, py: Python<'_>, limits: PyObject) -> PyResult<()> {
+        let json = utils::python_to_json(py, &limits)?;
+        let obj = json
+            .as_object()
+            .ok_or_else(|| PyValueError::new_err("guardrails must be a dict"))?;
+        validate_guardrail_keys(obj)?;
+        let parsed: velesdb_core::guardrails::QueryLimits = serde_json::from_value(json)
+            .map_err(|e| PyValueError::new_err(format!("invalid guardrails: {e}")))?;
+        py.allow_threads(|| self.inner.update_guardrails(&parsed));
+        Ok(())
     }
 }
 

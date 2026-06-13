@@ -372,6 +372,33 @@ fn test_collection_compact_storage() {
 }
 
 #[test]
+fn test_collection_guardrails_update_and_read() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("gr".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("gr".to_string()).unwrap().unwrap();
+
+    db.update_guardrails(MobileQueryLimits {
+        max_depth: 7,
+        max_cardinality: 1000,
+        memory_limit_bytes: 1_048_576,
+        timeout_ms: 5000,
+        rate_limit_qps: 50,
+        circuit_failure_threshold: 3,
+        circuit_recovery_seconds: 30,
+    });
+
+    let read = col.guard_rails();
+    assert_eq!(read.max_depth, 7);
+    assert_eq!(read.timeout_ms, 5000);
+    assert_eq!(read.rate_limit_qps, 50);
+    assert_eq!(read.memory_limit_bytes, 1_048_576);
+}
+
+#[test]
 fn test_collection_with_json_payload() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().to_str().unwrap().to_string();

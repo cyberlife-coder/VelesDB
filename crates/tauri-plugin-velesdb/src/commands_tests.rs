@@ -863,3 +863,36 @@ fn test_id_score_output_serialize() {
     assert!(json.contains("\"id\":7"));
     assert!(json.contains("\"score\":0.42"));
 }
+
+#[test]
+fn test_guardrail_limits_roundtrip_conversion() {
+    use crate::types::GuardrailLimits;
+    let limits = GuardrailLimits {
+        max_depth: 9,
+        max_cardinality: 2000,
+        memory_limit_bytes: 4096,
+        timeout_ms: 1234,
+        rate_limit_qps: 77,
+        circuit_failure_threshold: 5,
+        circuit_recovery_seconds: 60,
+    };
+    let core: velesdb_core::guardrails::QueryLimits = limits.into();
+    assert_eq!(core.max_depth, 9);
+    assert_eq!(core.timeout_ms, 1234);
+    assert_eq!(core.max_cardinality, 2000);
+    let back: GuardrailLimits = core.into();
+    assert_eq!(back.rate_limit_qps, 77);
+    assert_eq!(back.circuit_recovery_seconds, 60);
+}
+
+#[test]
+fn test_guardrail_limits_deserialize_camel_case() {
+    use crate::types::GuardrailLimits;
+    let json = r#"{"maxDepth":3,"maxCardinality":10,"memoryLimitBytes":100,
+                   "timeoutMs":5,"rateLimitQps":2,"circuitFailureThreshold":1,
+                   "circuitRecoverySeconds":9}"#;
+    let g: GuardrailLimits = serde_json::from_str(json).unwrap();
+    assert_eq!(g.max_depth, 3);
+    assert_eq!(g.timeout_ms, 5);
+    assert_eq!(g.circuit_recovery_seconds, 9);
+}

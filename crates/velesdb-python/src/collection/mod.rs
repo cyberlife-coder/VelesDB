@@ -211,6 +211,60 @@ impl Collection {
         py.allow_threads(|| self.inner.compact_storage().map_err(core_err))
     }
 
+    /// Get the current query guardrail limits for this collection.
+    ///
+    /// Returns:
+    ///     dict with keys ``max_depth``, ``max_cardinality``,
+    ///     ``memory_limit_bytes``, ``timeout_ms``, ``rate_limit_qps``,
+    ///     ``circuit_failure_threshold``, ``circuit_recovery_seconds``.
+    fn guard_rails(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let limits = self.inner.guard_rails().limits();
+        let dict = PyDict::new(py);
+        dict.set_item("max_depth", limits.max_depth)?;
+        dict.set_item("max_cardinality", limits.max_cardinality)?;
+        dict.set_item("memory_limit_bytes", limits.memory_limit_bytes)?;
+        dict.set_item("timeout_ms", limits.timeout_ms)?;
+        dict.set_item("rate_limit_qps", limits.rate_limit_qps)?;
+        dict.set_item(
+            "circuit_failure_threshold",
+            limits.circuit_failure_threshold,
+        )?;
+        dict.set_item("circuit_recovery_seconds", limits.circuit_recovery_seconds)?;
+        Ok(dict.into())
+    }
+
+    /// Detach the auto-reindex manager attached to this collection, if any.
+    ///
+    /// Returns:
+    ///     bool: True if a manager was detached, False if none was attached.
+    fn detach_auto_reindex(&self) -> bool {
+        self.inner.detach_auto_reindex().is_some()
+    }
+
+    /// Check whether the attached auto-reindex manager considers the index
+    /// diverged from its optimal parameters.
+    ///
+    /// Read-only — does not mutate the manager or trigger a reindex.
+    ///
+    /// Returns:
+    ///     dict with keys ``should_reindex``, ``current_m``, ``optimal_m``,
+    ///     ``ratio`` (and ``reason`` when a reindex is recommended), or
+    ///     ``None`` when no auto-reindex manager is attached.
+    fn check_auto_reindex_divergence(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let Some(check) = self.inner.check_auto_reindex_divergence() else {
+            return Ok(None);
+        };
+        let dict = PyDict::new(py);
+        dict.set_item("should_reindex", check.should_reindex)?;
+        dict.set_item("current_m", check.current_m)?;
+        dict.set_item("optimal_m", check.optimal_m)?;
+        dict.set_item("ratio", check.ratio)?;
+        if let Some(reason) = &check.reason {
+            dict.set_item("reason", format!("{reason:?}"))?;
+        }
+        Ok(Some(dict.into()))
+    }
+
     /// Check if a secondary index exists on a payload field.
     ///
     /// Args:

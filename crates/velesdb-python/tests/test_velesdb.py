@@ -233,6 +233,62 @@ class TestCollection:
         # Live points are unaffected by compaction.
         assert collection.count() == 2
 
+    def test_collection_diagnostics(self, temp_db):
+        """Test collection_diagnostics reports index readiness."""
+        collection = temp_db.create_collection("diag_test", dimension=4)
+        collection.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}])
+
+        diag = temp_db.collection_diagnostics("diag_test")
+        assert diag["has_vectors"] is True
+        assert diag["search_ready"] is True
+        assert diag["dimension_configured"] is True
+        assert diag["point_count"] == 1
+        assert diag["index_health"] == "healthy"
+
+    @staticmethod
+    def _full_guardrails(**overrides):
+        """A complete guardrail dict (full replacement requires every field)."""
+        limits = {
+            "max_depth": 7,
+            "max_cardinality": 1_000_000,
+            "memory_limit_bytes": 1_073_741_824,
+            "timeout_ms": 5000,
+            "rate_limit_qps": 50,
+            "circuit_failure_threshold": 5,
+            "circuit_recovery_seconds": 30,
+        }
+        limits.update(overrides)
+        return limits
+
+    def test_update_and_read_guardrails(self, temp_db):
+        """Test update_guardrails + collection.guard_rails round-trip."""
+        collection = temp_db.create_collection("gr_test", dimension=4)
+
+        temp_db.update_guardrails(self._full_guardrails())
+
+        limits = collection.guard_rails()
+        assert limits["timeout_ms"] == 5000
+        assert limits["rate_limit_qps"] == 50
+        assert limits["max_depth"] == 7
+
+    def test_update_guardrails_rejects_partial_dict(self, temp_db):
+        """A missing field is rejected, not silently reset to its default."""
+        with pytest.raises(ValueError, match="missing guardrail field"):
+            temp_db.update_guardrails({"timeout_ms": 5000, "max_depth": 7})
+
+    def test_update_guardrails_rejects_unknown_key(self, temp_db):
+        """A misspelled/unknown key is rejected loudly."""
+        with pytest.raises(ValueError, match="unknown guardrail field"):
+            temp_db.update_guardrails(self._full_guardrails(timeoutMs=5000))
+
+    def test_auto_reindex_lifecycle_without_manager(self, temp_db):
+        """detach/divergence behave when no auto-reindex manager is attached."""
+        collection = temp_db.create_collection("ar_test", dimension=4)
+
+        # No manager attached → nothing to detach, no divergence to report.
+        assert collection.detach_auto_reindex() is False
+        assert collection.check_auto_reindex_divergence() is None
+
 
 class TestNumpySupport:
     """Tests for NumPy array support."""

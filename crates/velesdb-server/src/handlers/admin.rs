@@ -9,8 +9,9 @@ use axum::{
 use std::sync::Arc;
 
 use crate::types::{
-    CollectionConfigResponse, CollectionStatsResponse, ColumnStatsResponse, ErrorResponse,
-    GuardRailsConfigRequest, GuardRailsConfigResponse, IndexStatsResponse,
+    CollectionConfigResponse, CollectionDiagnosticsResponse, CollectionStatsResponse,
+    ColumnStatsResponse, ErrorResponse, GuardRailsConfigRequest, GuardRailsConfigResponse,
+    IndexStatsResponse,
 };
 use crate::AppState;
 
@@ -289,6 +290,50 @@ pub async fn get_collection_stats(
             format!("No stats for '{name}'. Run POST /collections/{name}/analyze first."),
         ),
         Err(e) => auto_core_error_response(&e),
+    }
+}
+
+/// Get health diagnostics for a collection (index readiness, point count).
+#[utoipa::path(
+    get,
+    path = "/collections/{name}/diagnostics",
+    tag = "collections",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    responses(
+        (status = 200, description = "Collection diagnostics", body = CollectionDiagnosticsResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    )
+)]
+pub async fn collection_diagnostics(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.db.collection_diagnostics(&name) {
+        Ok(diag) => (StatusCode::OK, Json(diagnostics_to_response(&diag))).into_response(),
+        Err(e) => auto_core_error_response(&e),
+    }
+}
+
+/// Maps the core diagnostics snapshot to the REST response DTO.
+fn diagnostics_to_response(
+    diag: &velesdb_core::collection::CollectionDiagnostics,
+) -> CollectionDiagnosticsResponse {
+    use velesdb_core::collection::IndexHealth;
+    let (index_health, index_health_detail) = match &diag.index_health {
+        IndexHealth::Healthy => ("healthy".to_string(), None),
+        IndexHealth::Empty => ("empty".to_string(), None),
+        IndexHealth::NeedsRebuild(reason) => ("needs_rebuild".to_string(), Some(reason.clone())),
+        _ => ("unknown".to_string(), None),
+    };
+    CollectionDiagnosticsResponse {
+        has_vectors: diag.has_vectors,
+        search_ready: diag.search_ready,
+        dimension_configured: diag.dimension_configured,
+        point_count: diag.point_count,
+        index_health,
+        index_health_detail,
     }
 }
 

@@ -2007,6 +2007,63 @@ async fn test_graph_add_edges_batch() {
 }
 
 #[tokio::test]
+async fn test_collection_diagnostics() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({"name": "diag", "dimension": 4, "metric": "cosine"}).to_string(),
+                ))
+                .expect("build"),
+        )
+        .await
+        .expect("create");
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/diag/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({"points": [{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}]}).to_string(),
+                ))
+                .expect("build"),
+        )
+        .await
+        .expect("upsert");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/collections/diag/diagnostics")
+                .body(Body::empty())
+                .expect("build"),
+        )
+        .await
+        .expect("diagnostics");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("parse json");
+    assert_eq!(json["has_vectors"], true);
+    assert_eq!(json["search_ready"], true);
+    assert_eq!(json["dimension_configured"], true);
+    assert_eq!(json["point_count"], 1);
+    assert_eq!(json["index_health"], "healthy");
+}
+
+#[tokio::test]
 async fn test_graph_get_edges_by_label() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
