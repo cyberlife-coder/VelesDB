@@ -12,6 +12,8 @@ Default permissions for VelesDB plugin - allows all database operations
 - `allow-is-empty`
 - `allow-flush`
 - `allow-compact-storage`
+- `allow-update-guardrails`
+- `allow-get-guardrails`
 - `allow-scroll-collection`
 - `allow-upsert`
 - `allow-upsert-metadata`
@@ -622,6 +624,32 @@ Enables the get_edges command without any pre-configured scope.
 <td>
 
 Denies the get_edges command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-get-guardrails`
+
+</td>
+<td>
+
+Enables the get_guardrails command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-get-guardrails`
+
+</td>
+<td>
+
+Denies the get_guardrails command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1740,6 +1768,32 @@ Enables the traverse_graph_parallel command without any pre-configured scope.
 <td>
 
 Denies the traverse_graph_parallel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-update-guardrails`
+
+</td>
+<td>
+
+Enables the update_guardrails command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-update-guardrails`
+
+</td>
+<td>
+
+Denies the update_guardrails command without any pre-configured scope.
 
 </td>
 </tr>

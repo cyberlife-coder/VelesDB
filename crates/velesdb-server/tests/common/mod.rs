@@ -12,12 +12,12 @@ use velesdb_core::Database;
 use velesdb_server::{
     add_edge, add_edges_batch, aggregate,
     auth::{auth_middleware, AuthState},
-    batch_search, bulk_delete_points, collection_sanity, compact_collection, create_collection,
-    delete_collection, delete_point, explain, get_collection, get_collection_config, get_edges,
-    get_node_degree, get_point, health_check, hybrid_search, list_collections, multi_query_search,
-    query, readiness_check, rebuild_index, scroll_points, search, search_ids, set_point_ttl,
-    stream_upsert_points, text_search, traverse_graph, upsert_points, vacuum_collection, AppState,
-    OnboardingMetrics,
+    batch_search, bulk_delete_points, collection_diagnostics, collection_sanity,
+    compact_collection, create_collection, delete_collection, delete_point, explain,
+    get_collection, get_collection_config, get_edges, get_node_degree, get_point, health_check,
+    hybrid_search, list_collections, multi_query_search, query, readiness_check, rebuild_index,
+    scroll_points, search, search_ids, set_point_ttl, stream_upsert_points, text_search,
+    traverse_graph, upsert_points, vacuum_collection, AppState, OnboardingMetrics,
 };
 
 fn base_routes() -> Router<Arc<AppState>> {
@@ -33,6 +33,10 @@ fn base_routes() -> Router<Arc<AppState>> {
             get(get_collection).delete(delete_collection),
         )
         .route("/collections/{name}/config", get(get_collection_config))
+        .route(
+            "/collections/{name}/diagnostics",
+            get(collection_diagnostics),
+        )
         .route("/collections/{name}/index/rebuild", post(rebuild_index))
         .route("/collections/{name}/sanity", get(collection_sanity))
         .route("/collections/{name}/points", post(upsert_points))

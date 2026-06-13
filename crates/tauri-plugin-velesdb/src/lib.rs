@@ -163,6 +163,8 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             commands::is_empty,
             commands::flush,
             commands::compact_storage,
+            commands::update_guardrails,
+            commands::get_guardrails,
             commands::scroll_collection,
             // Sparse vector commands
             commands_sparse::sparse_search,

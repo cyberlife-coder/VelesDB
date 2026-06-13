@@ -478,3 +478,22 @@ pub struct GuardRailsConfigResponse {
     /// Circuit breaker: recovery time in seconds.
     pub circuit_recovery_seconds: u64,
 }
+
+/// Response with a collection's health diagnostics.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct CollectionDiagnosticsResponse {
+    /// Whether the collection contains at least one vector/point.
+    pub has_vectors: bool,
+    /// Whether the collection is ready to serve search queries.
+    pub search_ready: bool,
+    /// Whether a valid dimension is configured (> 0 for vector collections).
+    pub dimension_configured: bool,
+    /// Total number of points in the collection.
+    pub point_count: usize,
+    /// Primary search-index health: `healthy`, `empty`, or `needs_rebuild`.
+    pub index_health: String,
+    /// Detail message when `index_health` is `needs_rebuild`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_health_detail: Option<String>,
+}
