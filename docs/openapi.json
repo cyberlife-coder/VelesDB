@@ -3237,7 +3237,7 @@
         "properties": {
           "added": {
             "type": "integer",
-            "description": "Number of edges inserted.",
+            "description": "Number of edges actually inserted. May be less than the number submitted:\nedges whose ID already exists (in the request or the graph) are silently\nskipped. Compare against the request length to detect skipped duplicates.",
             "minimum": 0
           }
         }

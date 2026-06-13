@@ -153,7 +153,9 @@ pub struct AddEdgesBatchRequest {
 /// Response for a batched edge insertion.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AddEdgesBatchResponse {
-    /// Number of edges inserted.
+    /// Number of edges actually inserted. May be less than the number submitted:
+    /// edges whose ID already exists (in the request or the graph) are silently
+    /// skipped. Compare against the request length to detect skipped duplicates.
     pub added: usize,
 }
 
