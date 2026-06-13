@@ -263,6 +263,12 @@ impl GraphCollection {
         self.inner.remove_edge(edge_id)
     }
 
+    /// Returns `true` if an edge with `edge_id` exists in the graph.
+    #[must_use]
+    pub fn has_edge(&self, edge_id: u64) -> bool {
+        self.inner.edge_exists(edge_id)
+    }
+
     /// Performs BFS traversal from a source node.
     ///
     /// # Examples

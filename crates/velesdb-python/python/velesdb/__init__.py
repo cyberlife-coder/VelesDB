@@ -106,7 +106,7 @@ class GraphStore:
                 target=target,
                 label=label,
                 weight=weight,
-                id=id,
+                edge_id=id,
                 source=source,
                 properties=properties,
                 next_id=self._next_edge_id,
@@ -150,7 +150,7 @@ def _legacy_edge_to_dict(
     target: int | None,
     label: str | None,
     weight: Any | None,
-    id: int | None,
+    edge_id: int | None,
     source: int | None,
     properties: dict[str, Any] | None,
     next_id: Any,
@@ -164,19 +164,19 @@ def _legacy_edge_to_dict(
         props.setdefault("weight", weight)
 
     # Current explicit-id shape: add_edge(id, source=..., target=..., label=...)
-    if source is not None or id is not None:
-        edge_id = int(edge_or_source if id is None else id)
+    if source is not None or edge_id is not None:
+        eid = int(edge_or_source if edge_id is None else edge_id)
         edge_source = int(source if source is not None else 0)
     else:
         # Legacy no-id shape: add_edge(source, target, label, weight=None)
-        edge_id = int(next_id())
+        eid = int(next_id())
         edge_source = int(edge_or_source)
 
     if target is None:
         raise ValueError("add_edge() requires a target node id")
 
     edge_dict: dict[str, Any] = {
-        "id": edge_id,
+        "id": eid,
         "source": edge_source,
         "target": int(target),
         "label": label or "RELATED_TO",
@@ -214,7 +214,7 @@ class GraphCollection:
         return edge_id
 
     def has_edge(self, edge_id: int) -> bool:
-        return any(edge["id"] == int(edge_id) for edge in self._inner.get_edges(None))
+        return self._inner.has_edge(int(edge_id))
 
     def add_edge(
         self,
@@ -237,7 +237,7 @@ class GraphCollection:
                 target=target,
                 label=label,
                 weight=weight,
-                id=id,
+                edge_id=id,
                 source=source,
                 properties=properties,
                 next_id=self._next_edge_id,
