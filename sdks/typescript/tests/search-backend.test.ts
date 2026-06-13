@@ -2,8 +2,8 @@
  * Search Backend Tests (#598)
  *
  * Covers `src/backends/search-backend.ts`: search, searchBatch,
- * textSearch, hybridSearch, multiQuerySearch, searchIds,
- * sparseSearchNamed. Exercises
+ * textSearch, hybridSearch, multiQuerySearch, multiQuerySearchIds,
+ * searchIds, sparseSearchNamed. Exercises
  * body shape (top_k, filter, include_vectors, fusion params), vector
  * normalisation (Float32Array → number[]), sparse-vector routing via
  * `transport.sparseToRest`, the `searchQualityToMode` integration, and
@@ -17,6 +17,7 @@ import {
   textSearch,
   hybridSearch,
   multiQuerySearch,
+  multiQuerySearchIds,
   searchIds,
   sparseSearchNamed,
   type SearchTransport,
@@ -431,6 +432,73 @@ describe('multiQuerySearch', () => {
 
     await expect(
       multiQuerySearch(transport, 'missing', [[0.1]])
+    ).rejects.toThrow(CollectionNotFoundError);
+  });
+});
+
+describe('multiQuerySearchIds', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('POSTs to /search/multi/ids with defaults strategy=rrf and rrf_k=60', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { results: [{ id: 1, score: 0.9 }] },
+    });
+
+    const result = await multiQuerySearchIds(transport, 'docs', [[0.1], [0.2]]);
+
+    const call = (transport.requestJson as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
+    expect(call[1]).toBe('/collections/docs/search/multi/ids');
+    const body = call[2] as Record<string, unknown>;
+    expect(body.strategy).toBe('rrf');
+    expect(body.rrf_k).toBe(60);
+    expect(body.top_k).toBe(10);
+    expect(body.vectors).toEqual([[0.1], [0.2]]);
+    // ids-only endpoint must not forward a filter.
+    expect(body.filter).toBeUndefined();
+    expect(result).toEqual([{ id: 1, score: 0.9 }]);
+  });
+
+  it('forwards fusion / fusionParams and normalises Float32Array vectors', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { results: [] },
+    });
+
+    await multiQuerySearchIds(
+      transport,
+      'docs',
+      [new Float32Array([0.1]), [0.2]],
+      { k: 5, fusion: 'avg', fusionParams: { avgWeight: 0.3, maxWeight: 0.7, hitWeight: 0.5 } }
+    );
+
+    const body = (transport.requestJson as ReturnType<typeof vi.fn>).mock
+      .calls[0]![2] as Record<string, unknown>;
+    expect(body.strategy).toBe('avg');
+    expect(body.top_k).toBe(5);
+    expect(body.avg_weight).toBe(0.3);
+    expect(Array.isArray(body.vectors)).toBe(true);
+  });
+
+  it('returns [] when data.results is missing', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      { data: {} } as TransportResponse<unknown>
+    );
+
+    const result = await multiQuerySearchIds(transport, 'docs', [[0.1]]);
+    expect(result).toEqual([]);
+  });
+
+  it('throws CollectionNotFoundError on VELES-002', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      typedError()
+    );
+
+    await expect(
+      multiQuerySearchIds(transport, 'missing', [[0.1]])
     ).rejects.toThrow(CollectionNotFoundError);
   });
 });

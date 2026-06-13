@@ -1784,6 +1784,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /collections/{name}/search/multi/ids:
+    post:
+      tags:
+      - search
+      summary: Multi-query fusion search returning only ids and scores (no payloads).
+      description: |-
+        Faster than `/search/multi` when payloads are not needed: the core
+        `multi_query_search_ids` kernel skips payload hydration. Metadata filters
+        are not supported here — use `/search/multi` for filtered fusion.
+      operationId: multi_query_search_ids
+      parameters:
+      - name: name
+        in: path
+        description: Collection name
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultiQuerySearchRequest'
+        required: true
+      responses:
+        '200':
+          description: Multi-query ids-only results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchIdsResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Collection not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /collections/{name}/search/text:
     post:
       tags:

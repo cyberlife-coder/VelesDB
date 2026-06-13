@@ -167,6 +167,13 @@ export interface IVelesDBBackend {
     options?: MultiQuerySearchOptions
   ): Promise<SearchResult[]>;
 
+  /** Multi-query fusion search returning only IDs and scores */
+  multiQuerySearchIds(
+    collection: string,
+    vectors: Array<number[] | Float32Array>,
+    options?: MultiQuerySearchOptions
+  ): Promise<Array<{ id: number; score: number }>>;
+
   /** Check if collection is empty */
   isEmpty(collection: string): Promise<boolean>;
 

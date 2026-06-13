@@ -3,7 +3,7 @@
  *
  * Extracted from rest.ts to keep file size manageable.
  * Implements: search, searchBatch, textSearch, hybridSearch,
- * multiQuerySearch, and searchIds.
+ * multiQuerySearch, multiQuerySearchIds, and searchIds.
  */
 
 import type {
@@ -163,6 +163,40 @@ export async function multiQuerySearch(
       filter: options?.filter,
     }
   );
+
+  throwOnError(response, `Collection '${collection}'`);
+
+  return response.data?.results ?? [];
+}
+
+/**
+ * Multi-query fusion search returning only IDs and scores (no payloads).
+ *
+ * Lighter than {@link multiQuerySearch} when payloads are not needed — the
+ * server skips payload hydration. Metadata filters are not supported on this
+ * endpoint; use {@link multiQuerySearch} for filtered fusion.
+ */
+export async function multiQuerySearchIds(
+  transport: SearchTransport,
+  collection: string,
+  vectors: Array<number[] | Float32Array>,
+  options?: MultiQuerySearchOptions
+): Promise<Array<{ id: number; score: number }>> {
+  const formattedVectors = vectors.map(toNumberArray);
+
+  const response = await transport.requestJson<{
+    results: Array<{ id: number; score: number }>;
+  }>('POST', `${collectionPath(collection)}/search/multi/ids`, {
+    vectors: formattedVectors,
+    top_k: options?.k ?? 10,
+    strategy: options?.fusion ?? 'rrf',
+    rrf_k: options?.fusionParams?.k ?? 60,
+    avg_weight: options?.fusionParams?.avgWeight,
+    max_weight: options?.fusionParams?.maxWeight,
+    hit_weight: options?.fusionParams?.hitWeight,
+    dense_weight: options?.fusionParams?.denseWeight,
+    sparse_weight: options?.fusionParams?.sparseWeight,
+  });
 
   throwOnError(response, `Collection '${collection}'`);
 
