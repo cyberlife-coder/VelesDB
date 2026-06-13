@@ -21,6 +21,8 @@ permissions = [
     "allow-is-empty",
     "allow-flush",
     "allow-compact-storage",
+    "allow-update-guardrails",
+    "allow-get-guardrails",
     "allow-scroll-collection",
     # Point operations
     "allow-upsert",
@@ -116,6 +118,7 @@ permissions = [
     "allow-list-indexes",
     "allow-sparse-search",
     "allow-hybrid-sparse-search",
+    "allow-get-guardrails",
 ]
 
 # Search-only permission set

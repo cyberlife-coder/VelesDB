@@ -60,8 +60,8 @@ pub use graph::{MobileGraphEdge, MobileGraphNode, MobileGraphStore, TraversalRes
 pub use query::{QueryResult, QueryResultKind, QueryResultRow};
 pub use types::{
     DistanceMetric, FusionStrategy, IndividualSearchRequest, MobileCollectionStats,
-    MobileIndexInfo, PqTrainConfig, SearchQuality, SearchResult, StorageMode, VelesError,
-    VelesPoint, VelesSparseVector,
+    MobileIndexInfo, MobileQueryLimits, PqTrainConfig, SearchQuality, SearchResult, StorageMode,
+    VelesError, VelesPoint, VelesSparseVector,
 };
 
 use std::sync::Arc;
@@ -105,6 +105,13 @@ impl VelesDatabase {
     pub fn open(path: String) -> Result<Arc<Self>, VelesError> {
         let db = CoreDatabase::open(&path)?;
         Ok(Arc::new(Self { inner: db }))
+    }
+
+    /// Updates query guardrail limits for every collection in this database.
+    ///
+    /// This is a full replacement: all fields of `limits` are applied.
+    pub fn update_guardrails(&self, limits: MobileQueryLimits) {
+        self.inner.update_guardrails(&limits.into());
     }
 
     /// Creates a new collection with the specified parameters.

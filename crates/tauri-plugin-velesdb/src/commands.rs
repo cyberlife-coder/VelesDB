@@ -17,7 +17,7 @@ pub use crate::types::{
 };
 use crate::types::{
     BatchSearchRequest, CollectionInfo, CreateCollectionRequest, CreateMetadataCollectionRequest,
-    DeletePointsRequest, GetPointsRequest, HybridSearchRequest, IdScoreOutput,
+    DeletePointsRequest, GetPointsRequest, GuardrailLimits, HybridSearchRequest, IdScoreOutput,
     MultiQuerySearchRequest, PointOutput, ScrollRequest, ScrollResponse, SearchRequest,
     SearchResponse, TextSearchRequest, TrainPqRequest, UpsertMetadataRequest, UpsertRequest,
 };
@@ -606,6 +606,38 @@ pub async fn compact_storage<R: Runtime>(
             let coll = require_collection(&db, &name)?;
             let freed = coll.compact_storage()?;
             Ok(u64::try_from(freed).unwrap_or(u64::MAX))
+        })
+        .map_err(CommandError::from)
+}
+
+/// Updates query guardrail limits for every collection in the database.
+///
+/// This is a full replacement: all fields of `limits` are applied.
+#[command]
+pub async fn update_guardrails<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    limits: GuardrailLimits,
+) -> std::result::Result<(), CommandError> {
+    state
+        .with_db(|db| {
+            db.update_guardrails(&limits.into());
+            Ok(())
+        })
+        .map_err(CommandError::from)
+}
+
+/// Returns the current query guardrail limits for a collection.
+#[command]
+pub async fn get_guardrails<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    name: String,
+) -> std::result::Result<GuardrailLimits, CommandError> {
+    state
+        .with_db(|db| {
+            let coll = require_collection(&db, &name)?;
+            Ok(GuardrailLimits::from(coll.guard_rails().limits()))
         })
         .map_err(CommandError::from)
 }
