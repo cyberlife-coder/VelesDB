@@ -15,9 +15,10 @@ use velesdb_server::{
     batch_search, bulk_delete_points, collection_diagnostics, collection_sanity,
     compact_collection, create_collection, delete_collection, delete_point, explain,
     get_collection, get_collection_config, get_edges, get_node_degree, get_point, health_check,
-    hybrid_search, list_collections, multi_query_search, query, readiness_check, rebuild_index,
-    reorder_for_locality, scroll_points, search, search_ids, set_point_ttl, stream_upsert_points,
-    text_search, traverse_graph, upsert_points, vacuum_collection, AppState, OnboardingMetrics,
+    hybrid_search, list_collections, multi_query_search, multi_query_search_ids, query,
+    readiness_check, rebuild_index, reorder_for_locality, scroll_points, search, search_ids,
+    set_point_ttl, stream_upsert_points, text_search, traverse_graph, upsert_points,
+    vacuum_collection, AppState, OnboardingMetrics,
 };
 
 fn base_routes() -> Router<Arc<AppState>> {
@@ -53,6 +54,10 @@ fn base_routes() -> Router<Arc<AppState>> {
         .route("/collections/{name}/search", post(search))
         .route("/collections/{name}/search/batch", post(batch_search))
         .route("/collections/{name}/search/multi", post(multi_query_search))
+        .route(
+            "/collections/{name}/search/multi/ids",
+            post(multi_query_search_ids),
+        )
         .route("/collections/{name}/search/text", post(text_search))
         .route("/collections/{name}/search/hybrid", post(hybrid_search))
         .route("/collections/{name}/search/ids", post(search_ids))

@@ -18,9 +18,9 @@ use crate::{
     get_collection_config, get_collection_stats, get_edge_count, get_edges, get_guardrails,
     get_node_degree, get_node_edges, get_node_payload, get_point, get_point_relations,
     graph_search, health_check, hybrid_search, is_empty, list_collections, list_indexes,
-    list_nodes, match_query, multi_query_search, query, readiness_check, rebuild_index,
-    relate_points, remove_edge, reorder_for_locality, scroll_points, search, search_ids,
-    set_point_ttl, stream_insert, stream_traverse, stream_upsert_points, text_search,
+    list_nodes, match_query, multi_query_search, multi_query_search_ids, query, readiness_check,
+    rebuild_index, relate_points, remove_edge, reorder_for_locality, scroll_points, search,
+    search_ids, set_point_ttl, stream_insert, stream_traverse, stream_upsert_points, text_search,
     traverse_graph, traverse_parallel, unrelate_points, update_guardrails, upsert_node_payload,
     upsert_points, vacuum_collection, AppState,
 };
@@ -102,6 +102,10 @@ fn search_routes() -> Router<Arc<AppState>> {
         .route("/collections/{name}/search", post(search))
         .route("/collections/{name}/search/batch", post(batch_search))
         .route("/collections/{name}/search/multi", post(multi_query_search))
+        .route(
+            "/collections/{name}/search/multi/ids",
+            post(multi_query_search_ids),
+        )
         .route("/collections/{name}/search/text", post(text_search))
         .route("/collections/{name}/search/hybrid", post(hybrid_search))
         .route("/collections/{name}/search/ids", post(search_ids))

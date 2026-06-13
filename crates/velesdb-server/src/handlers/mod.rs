@@ -44,7 +44,8 @@ pub use points::{
 pub use match_query::match_query;
 pub use query::{aggregate, explain, query};
 pub use search::{
-    batch_search, hybrid_search, multi_query_search, search, search_ids, text_search,
+    batch_search, hybrid_search, multi_query_search, multi_query_search_ids, search, search_ids,
+    text_search,
 };
 
 // Graph handlers (EPIC-016) - exported via lib.rs
