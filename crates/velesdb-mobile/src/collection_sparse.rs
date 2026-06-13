@@ -137,6 +137,46 @@ impl VelesCollection {
             .collect())
     }
 
+    /// Performs multi-query search returning IDs and scores only.
+    ///
+    /// Id-only twin of [`Self::multi_query_search`]: reuses the same fusion
+    /// path but strips payloads, avoiding payload materialization.
+    pub fn multi_query_search_ids(
+        &self,
+        vectors: Vec<Vec<f32>>,
+        limit: u32,
+        strategy: FusionStrategy,
+    ) -> Result<Vec<SearchResult>, VelesError> {
+        if vectors.is_empty() {
+            return Err(VelesError::Database {
+                message: "multi_query_search requires at least one vector".to_string(),
+            });
+        }
+
+        let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let core_strategy: CoreFusionStrategy = strategy.into();
+
+        let results = self
+            .inner
+            .multi_query_search_ids(
+                &query_refs,
+                usize::try_from(limit).unwrap_or(usize::MAX),
+                core_strategy,
+            )
+            .map_err(|e| VelesError::Database {
+                message: format!("Multi-query search failed: {e}"),
+            })?;
+
+        Ok(results
+            .into_iter()
+            .map(|(id, score)| SearchResult {
+                id,
+                score,
+                payload: None,
+            })
+            .collect())
+    }
+
     /// Performs multi-query search with metadata filtering.
     pub fn multi_query_search_with_filter(
         &self,
