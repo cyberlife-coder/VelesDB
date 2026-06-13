@@ -19,10 +19,10 @@ use crate::{
     get_node_degree, get_node_edges, get_node_payload, get_point, get_point_relations,
     graph_search, health_check, hybrid_search, is_empty, list_collections, list_indexes,
     list_nodes, match_query, multi_query_search, query, readiness_check, rebuild_index,
-    relate_points, remove_edge, scroll_points, search, search_ids, set_point_ttl, stream_insert,
-    stream_traverse, stream_upsert_points, text_search, traverse_graph, traverse_parallel,
-    unrelate_points, update_guardrails, upsert_node_payload, upsert_points, vacuum_collection,
-    AppState,
+    relate_points, remove_edge, reorder_for_locality, scroll_points, search, search_ids,
+    set_point_ttl, stream_insert, stream_traverse, stream_upsert_points, text_search,
+    traverse_graph, traverse_parallel, unrelate_points, update_guardrails, upsert_node_payload,
+    upsert_points, vacuum_collection, AppState,
 };
 
 /// Core CRUD and admin routes.
@@ -75,6 +75,10 @@ fn core_routes() -> Router<Arc<AppState>> {
         // Maintenance endpoints
         .route("/collections/{name}/vacuum", post(vacuum_collection))
         .route("/collections/{name}/compact", post(compact_collection))
+        .route(
+            "/collections/{name}/locality/reorder",
+            post(reorder_for_locality),
+        )
 }
 
 /// Relation (graph edge) and durable TTL routes (any collection type).

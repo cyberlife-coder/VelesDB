@@ -233,6 +233,50 @@ class TestCollection:
         # Live points are unaffected by compaction.
         assert collection.count() == 2
 
+    def test_reorder_for_locality(self, temp_db):
+        """Test reorder_for_locality returns None and preserves points."""
+        collection = temp_db.create_collection("reorder_test", dimension=4)
+        collection.upsert([
+            {"id": i, "vector": [1.0, 0.0, 0.0, 0.0]} for i in range(10)
+        ])
+
+        # No-op below the 1000-vector threshold, but must not raise.
+        assert collection.reorder_for_locality() is None
+        assert collection.count() == 10
+
+    def test_apply_advanced_config_sets_fields(self, temp_db):
+        """Test apply_advanced_config accepts all three advanced fields."""
+        collection = temp_db.create_collection("adv_cfg_test", dimension=4)
+
+        # Mix all three: int, nested dicts. Must not raise and must persist.
+        assert collection.apply_advanced_config({
+            "pq_rescore_oversampling": 8,
+            "deferred_indexing": {
+                "enabled": True,
+                "merge_threshold": 512,
+                "max_buffer_age_ms": 3000,
+            },
+            "async_index_builder": {
+                "merge_threshold": 20000,
+                "segment_count": 4,
+            },
+        }) is None
+
+    def test_apply_advanced_config_clear_and_unchanged(self, temp_db):
+        """Test absent key = unchanged, None value = clear (three-state)."""
+        collection = temp_db.create_collection("adv_cfg_clear", dimension=4)
+
+        # None clears pq rescore; absent keys leave the others unchanged.
+        assert collection.apply_advanced_config(
+            {"pq_rescore_oversampling": None}
+        ) is None
+
+        # segment_count None falls back to CPU count; empty dict is a no-op.
+        assert collection.apply_advanced_config(
+            {"async_index_builder": {"segment_count": None}}
+        ) is None
+        assert collection.apply_advanced_config({}) is None
+
     def test_collection_diagnostics(self, temp_db):
         """Test collection_diagnostics reports index readiness."""
         collection = temp_db.create_collection("diag_test", dimension=4)
