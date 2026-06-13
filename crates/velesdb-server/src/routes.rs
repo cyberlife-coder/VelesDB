@@ -22,7 +22,8 @@ use crate::{
     readiness_check, rebuild_index, relate_points, remove_edge, reorder_for_locality,
     scroll_points, search, search_ids, set_point_ttl, stream_insert, stream_traverse,
     stream_upsert_points, text_search, traverse_graph, traverse_parallel, unrelate_points,
-    update_guardrails, upsert_node_payload, upsert_points, vacuum_collection, AppState,
+    update_guardrails, upsert_node_payload, upsert_points, upsert_points_raw, vacuum_collection,
+    AppState,
 };
 
 /// Core CRUD and admin routes.
@@ -55,6 +56,7 @@ fn core_routes() -> Router<Arc<AppState>> {
         .merge(
             Router::new()
                 .route("/collections/{name}/points", post(upsert_points))
+                .route("/collections/{name}/points/raw", post(upsert_points_raw))
                 .route(
                     "/collections/{name}/points/stream",
                     post(stream_upsert_points),

@@ -158,6 +158,12 @@ export async function wasmStreamUpsertPoints(
   wasmNotSupported('Streaming batch upsert');
 }
 
+export async function wasmUpsertBatchRaw(
+  _collection: string, _docs: VectorDocument[]
+): Promise<number> {
+  wasmNotSupported('Binary bulk upsert (upsertBatchRaw)');
+}
+
 // ---------------------------------------------------------------------------
 // Graph Collection / Stats / Agent Memory (Phase 8)
 // ---------------------------------------------------------------------------
