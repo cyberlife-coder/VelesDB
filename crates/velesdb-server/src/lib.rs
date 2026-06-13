@@ -66,9 +66,9 @@ pub use handlers::{
 };
 
 pub use handlers::graph::{
-    add_edge, get_edge_count, get_edges, get_node_degree, get_node_edges, get_node_payload,
-    graph_search, list_nodes, remove_edge, stream_traverse, traverse_graph, traverse_parallel,
-    upsert_node_payload, DegreeResponse, EdgeCountResponse, GraphSearchRequest,
+    add_edge, add_edges_batch, get_edge_count, get_edges, get_node_degree, get_node_edges,
+    get_node_payload, graph_search, list_nodes, remove_edge, stream_traverse, traverse_graph,
+    traverse_parallel, upsert_node_payload, DegreeResponse, EdgeCountResponse, GraphSearchRequest,
     GraphSearchResponse, NodeEdgeQueryParams, NodeListResponse, NodePayloadResponse,
     ParallelTraverseRequest, StreamDoneEvent, StreamNodeEvent, StreamStatsEvent,
     StreamTraverseParams, TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
@@ -147,6 +147,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::indexes::delete_index,
         handlers::graph::handlers::get_edges,
         handlers::graph::handlers::add_edge,
+        handlers::graph::handlers::add_edges_batch,
         handlers::graph::handlers_extended::remove_edge,
         handlers::graph::handlers_extended::get_edge_count,
         handlers::graph::handlers_extended::list_nodes,
@@ -220,6 +221,8 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             handlers::graph::TraversalStats,
             handlers::graph::DegreeResponse,
             handlers::graph::AddEdgeRequest,
+            handlers::graph::AddEdgesBatchRequest,
+            handlers::graph::AddEdgesBatchResponse,
             handlers::graph::EdgesResponse,
             handlers::graph::EdgeResponse,
             handlers::graph::EdgeCountResponse,

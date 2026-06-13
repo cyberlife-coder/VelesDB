@@ -492,6 +492,13 @@ impl VelesCollection {
         Ok(())
     }
 
+    /// Compacts on-disk storage, reclaiming space left by deleted vectors.
+    ///
+    /// Returns the number of bytes reclaimed.
+    pub fn compact_storage(&self) -> Result<u64, VelesError> {
+        Ok(u64::try_from(self.inner.compact_storage()?).unwrap_or(u64::MAX))
+    }
+
     /// Returns all point IDs currently present in the collection.
     pub fn all_ids(&self) -> Vec<u64> {
         self.inner.all_ids()

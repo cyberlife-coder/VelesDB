@@ -10,7 +10,7 @@ pub mod stream;
 pub mod types;
 
 // Re-export public API — original handlers
-pub use handlers::{add_edge, get_edges, get_node_degree, traverse_graph};
+pub use handlers::{add_edge, add_edges_batch, get_edges, get_node_degree, traverse_graph};
 // Re-export public API — extended handlers (parity)
 pub use handlers_extended::{
     get_edge_count, get_node_edges, get_node_payload, graph_search, list_nodes, remove_edge,
@@ -19,11 +19,11 @@ pub use handlers_extended::{
 pub use stream::stream_traverse;
 #[allow(unused_imports)]
 pub use types::{
-    AddEdgeRequest, DegreeResponse, EdgeCountResponse, EdgeQueryParams, EdgeResponse,
-    EdgesResponse, GraphSearchRequest, GraphSearchResponse, GraphSearchResultItem,
-    NodeEdgeQueryParams, NodeListResponse, NodePayloadResponse, ParallelTraverseRequest,
-    StreamDoneEvent, StreamErrorEvent, StreamNodeEvent, StreamStatsEvent, StreamTraverseParams,
-    TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
+    AddEdgeRequest, AddEdgesBatchRequest, AddEdgesBatchResponse, DegreeResponse, EdgeCountResponse,
+    EdgeQueryParams, EdgeResponse, EdgesResponse, GraphSearchRequest, GraphSearchResponse,
+    GraphSearchResultItem, NodeEdgeQueryParams, NodeListResponse, NodePayloadResponse,
+    ParallelTraverseRequest, StreamDoneEvent, StreamErrorEvent, StreamNodeEvent, StreamStatsEvent,
+    StreamTraverseParams, TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
     UpsertNodePayloadRequest,
 };
 

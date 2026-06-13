@@ -12,9 +12,9 @@ use axum::{
 };
 
 use crate::{
-    add_edge, aggregate, analyze_collection, batch_search, bulk_delete_points, collection_sanity,
-    compact_collection, create_collection, create_index, delete_collection, delete_index,
-    delete_point, explain, flush_collection, get_collection, get_collection_config,
+    add_edge, add_edges_batch, aggregate, analyze_collection, batch_search, bulk_delete_points,
+    collection_sanity, compact_collection, create_collection, create_index, delete_collection,
+    delete_index, delete_point, explain, flush_collection, get_collection, get_collection_config,
     get_collection_stats, get_edge_count, get_edges, get_guardrails, get_node_degree,
     get_node_edges, get_node_payload, get_point, get_point_relations, graph_search, health_check,
     hybrid_search, is_empty, list_collections, list_indexes, list_nodes, match_query,
@@ -116,6 +116,10 @@ fn graph_routes() -> Router<Arc<AppState>> {
         .route(
             "/collections/{name}/graph/edges",
             get(get_edges).post(add_edge),
+        )
+        .route(
+            "/collections/{name}/graph/edges/batch",
+            post(add_edges_batch),
         )
         .route(
             "/collections/{name}/graph/edges/{edge_id}",

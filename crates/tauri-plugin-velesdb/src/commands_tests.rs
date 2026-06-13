@@ -831,3 +831,35 @@ fn test_scroll_response_no_next_cursor() {
     // next_cursor should be skipped when None
     assert!(!json.contains("nextCursor"));
 }
+
+#[test]
+fn test_add_edges_batch_request_deserialize() {
+    use crate::types::AddEdgesBatchRequest;
+    let req: AddEdgesBatchRequest = serde_json::from_str(
+        r#"{
+            "collection": "kg",
+            "edges": [
+                {"id": 1, "source": 10, "target": 20, "label": "KNOWS"},
+                {"id": 2, "source": 20, "target": 30, "label": "WROTE",
+                 "properties": {"weight": 0.5}}
+            ]
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(req.collection, "kg");
+    assert_eq!(req.edges.len(), 2);
+    assert_eq!(req.edges[0].label, "KNOWS");
+    assert_eq!(req.edges[1].target, 30);
+    assert!(req.edges[1].properties.is_some());
+    // Properties default to None when omitted.
+    assert!(req.edges[0].properties.is_none());
+}
+
+#[test]
+fn test_id_score_output_serialize() {
+    use crate::types::IdScoreOutput;
+    let out = IdScoreOutput { id: 7, score: 0.42 };
+    let json = serde_json::to_string(&out).unwrap();
+    assert!(json.contains("\"id\":7"));
+    assert!(json.contains("\"score\":0.42"));
+}
