@@ -143,6 +143,20 @@ pub struct AddEdgeRequest {
     pub properties: serde_json::Value,
 }
 
+/// Request to add multiple edges in one batched operation.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct AddEdgesBatchRequest {
+    /// Edges to insert.
+    pub edges: Vec<AddEdgeRequest>,
+}
+
+/// Response for a batched edge insertion.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AddEdgesBatchResponse {
+    /// Number of edges inserted.
+    pub added: usize,
+}
+
 // ============================================================================
 // Edge Count, Node List, Node Payload, Parallel Traversal, Graph Search
 // ============================================================================

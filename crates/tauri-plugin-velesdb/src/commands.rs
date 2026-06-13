@@ -17,9 +17,9 @@ pub use crate::types::{
 };
 use crate::types::{
     BatchSearchRequest, CollectionInfo, CreateCollectionRequest, CreateMetadataCollectionRequest,
-    DeletePointsRequest, GetPointsRequest, HybridSearchRequest, MultiQuerySearchRequest,
-    PointOutput, ScrollRequest, ScrollResponse, SearchRequest, SearchResponse, TextSearchRequest,
-    TrainPqRequest, UpsertMetadataRequest, UpsertRequest,
+    DeletePointsRequest, GetPointsRequest, HybridSearchRequest, IdScoreOutput,
+    MultiQuerySearchRequest, PointOutput, ScrollRequest, ScrollResponse, SearchRequest,
+    SearchResponse, TextSearchRequest, TrainPqRequest, UpsertMetadataRequest, UpsertRequest,
 };
 use tauri::{command, AppHandle, Runtime, State};
 
@@ -358,6 +358,43 @@ pub async fn search<R: Runtime>(
     Ok(timed_search_response(results, start))
 }
 
+/// k-NN search returning only IDs and scores (no payloads).
+///
+/// Uses the optimized core `search_ids` path when no filter is supplied,
+/// which skips payload hydration. When a filter is present, falls back to
+/// filtered search and projects the results to IDs + scores.
+#[command]
+pub async fn search_ids<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: SearchRequest,
+) -> std::result::Result<Vec<IdScoreOutput>, CommandError> {
+    let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
+    state
+        .with_db(|db| {
+            let coll = require_collection(&db, &request.collection)?;
+            let scored: Vec<IdScoreOutput> = if let Some(ref f) = parsed_filter {
+                coll.search_with_filter(&request.vector, request.top_k, f)?
+                    .into_iter()
+                    .map(|r| IdScoreOutput {
+                        id: r.point.id,
+                        score: r.score,
+                    })
+                    .collect()
+            } else {
+                coll.search_ids(&request.vector, request.top_k)?
+                    .into_iter()
+                    .map(|r| IdScoreOutput {
+                        id: r.id,
+                        score: r.score,
+                    })
+                    .collect()
+            };
+            Ok(scored)
+        })
+        .map_err(CommandError::from)
+}
+
 /// Batch search for multiple query vectors.
 ///
 /// When any individual search specifies a `quality` mode, each search is
@@ -552,6 +589,23 @@ pub async fn flush<R: Runtime>(
             let coll = require_collection(&db, &name)?;
             coll.flush()?;
             Ok(())
+        })
+        .map_err(CommandError::from)
+}
+
+/// Compacts on-disk storage for a collection, reclaiming space from deleted
+/// vectors. Returns the number of bytes reclaimed.
+#[command]
+pub async fn compact_storage<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    name: String,
+) -> std::result::Result<u64, CommandError> {
+    state
+        .with_db(|db| {
+            let coll = require_collection(&db, &name)?;
+            let freed = coll.compact_storage()?;
+            Ok(u64::try_from(freed).unwrap_or(u64::MAX))
         })
         .map_err(CommandError::from)
 }

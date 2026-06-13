@@ -1955,6 +1955,58 @@ async fn test_graph_add_edge() {
 }
 
 #[tokio::test]
+async fn test_graph_add_edges_batch() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    create_graph_collection(&app, "test").await;
+
+    // Insert three edges in one batched request.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/test/graph/edges/batch")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "edges": [
+                            {"id": 1, "source": 100, "target": 200, "label": "KNOWS"},
+                            {"id": 2, "source": 200, "target": 300, "label": "KNOWS"},
+                            {"id": 3, "source": 100, "target": 300, "label": "WROTE",
+                             "properties": {"weight": 0.5}}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("parse json");
+    assert_eq!(json["added"], 3);
+
+    // The batched edges are retrievable.
+    let get = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/collections/test/graph/edges?label=KNOWS")
+                .body(Body::empty())
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(get.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn test_graph_get_edges_by_label() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);

@@ -377,6 +377,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /collections/{name}/graph/edges/batch:
+    post:
+      tags:
+      - graph
+      summary: Add multiple edges to a collection's graph in one batched operation.
+      operationId: add_edges_batch
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddEdgesBatchRequest'
+        required: true
+      responses:
+        '201':
+          description: Edges added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddEdgesBatchResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Collection not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /collections/{name}/graph/edges/count:
     get:
       tags:
@@ -2061,6 +2104,27 @@ components:
             format: int64
           - type: string
           description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
+    AddEdgesBatchRequest:
+      type: object
+      description: Request to add multiple edges in one batched operation.
+      required:
+      - edges
+      properties:
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/AddEdgeRequest'
+          description: Edges to insert.
+    AddEdgesBatchResponse:
+      type: object
+      description: Response for a batched edge insertion.
+      required:
+      - added
+      properties:
+        added:
+          type: integer
+          description: Number of edges inserted.
+          minimum: 0
     AggregationResponse:
       type: object
       description: Response from `VelesQL` aggregation query execution.

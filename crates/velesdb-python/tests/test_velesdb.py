@@ -217,6 +217,22 @@ class TestCollection:
         collection.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}])
         collection.flush()  # Should not raise
 
+    def test_compact_storage(self, temp_db):
+        """Test compact_storage reclaims space and returns a byte count."""
+        collection = temp_db.create_collection("compact_test", dimension=4)
+
+        collection.upsert([
+            {"id": i, "vector": [1.0, 0.0, 0.0, 0.0]} for i in range(5)
+        ])
+        collection.delete([0, 1, 2])
+
+        freed = collection.compact_storage()
+        assert isinstance(freed, int)
+        assert freed >= 0
+
+        # Live points are unaffected by compaction.
+        assert collection.count() == 2
+
 
 class TestNumpySupport:
     """Tests for NumPy array support."""

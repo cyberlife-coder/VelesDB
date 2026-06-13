@@ -477,6 +477,16 @@ pub struct SearchResponse {
     pub timing_ms: f64,
 }
 
+/// A single ID + score result returned by the `search_ids` command.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdScoreOutput {
+    /// Matched point ID.
+    pub id: u64,
+    /// Relevance score.
+    pub score: f32,
+}
+
 // ============================================================================
 // Default value functions (Tauri-specific)
 // ============================================================================
