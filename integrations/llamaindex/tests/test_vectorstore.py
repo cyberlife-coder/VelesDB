@@ -306,6 +306,49 @@ class TestVelesDBVectorStoreAdvanced:
         assert result is not None
         assert len(result.nodes) <= 3
 
+    def test_add_with_named_sparse_vectors(self, temp_dir):
+        """add() accepts named sparse vectors (dict[str, dict[int, float]]),
+        creating the named sparse index so it can be queried by name.
+        """
+        store = VelesDBVectorStore(
+            path=temp_dir,
+            collection_name="test_named_sparse",
+            metric="cosine",
+        )
+        nodes = [
+            TextNode(text="alpha", id_="a", embedding=[1.0, 0.0, 0.0] + [0.0] * 765),
+            TextNode(text="beta", id_="b", embedding=[1.0, 0.0, 0.0] + [0.0] * 765),
+        ]
+        ids = store.add(
+            nodes,
+            sparse_vectors=[
+                {"bge_m3": {0: 5.0}, "splade": {5: 0.1}},
+                {"bge_m3": {0: 0.1}, "splade": {5: 5.0}},
+            ],
+        )
+        assert len(ids) == 2
+
+        embedding = [1.0, 0.0, 0.0] + [0.0] * 765
+        bge = store.query(
+            VectorStoreQuery(query_embedding=embedding, similarity_top_k=2),
+            sparse_vector={0: 1.0},
+            sparse_index_name="bge_m3",
+        )
+        splade = store.query(
+            VectorStoreQuery(query_embedding=embedding, similarity_top_k=2),
+            sparse_vector={5: 1.0},
+            sparse_index_name="splade",
+        )
+        assert len(bge.nodes) == 2 and len(splade.nodes) == 2
+        bge_scores = dict(zip(bge.ids, bge.similarities))
+        splade_scores = dict(zip(splade.ids, splade.similarities))
+        # Each named index is consulted independently, so the per-document
+        # fused scores differ between the two indexes — proving creation and
+        # by-name querying of distinct named sparse indexes works.
+        assert bge_scores != splade_scores, (
+            "different named sparse indexes must give different results"
+        )
+
     def test_text_query(self, populated_store):
         """Test full-text BM25 search."""
         result = populated_store.text_query(
