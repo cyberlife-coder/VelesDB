@@ -1,5 +1,6 @@
 //! Collection configuration and schema versioning.
 
+use crate::collection::auto_reindex::AutoReindexConfig;
 use crate::collection::streaming::AsyncIndexBuilderConfig;
 use crate::distance::DistanceMetric;
 use crate::index::hnsw::HnswParams;
@@ -13,7 +14,7 @@ use crate::collection::graph::GraphSchema;
 /// Increment this constant when the persisted format changes in a way that
 /// older VelesDB versions cannot safely read. The `Collection::open()` path
 /// rejects any `schema_version > CURRENT_SCHEMA_VERSION` with a clear error.
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// Returns the default schema version for backward-compatible deserialization.
 ///
@@ -119,6 +120,31 @@ pub struct CollectionConfig {
     /// deserialize to `None` (disabled).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub async_index_builder: Option<AsyncIndexBuilderConfig>,
+
+    /// Auto-reindex configuration (schema v2 — W2).
+    ///
+    /// When `Some`, the [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager)
+    /// is restored automatically on [`Collection::open`](crate::collection::VectorCollection)
+    /// so the policy survives a process restart instead of requiring a manual
+    /// re-attach.
+    ///
+    /// Backward compatible: v1 `config.json` files without this field
+    /// deserialize to `None` (no manager attached).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_reindex_config: Option<AutoReindexConfig>,
+
+    /// Streaming ingestion configuration (schema v2 — STREAM-7).
+    ///
+    /// Describes the persisted shape (channel/batch sizing, flush timing) of
+    /// the streaming pipeline. The live `StreamIngester` is still created on
+    /// demand via `Collection::enable_streaming`; persisting the config lets a
+    /// future open-time hook re-enable streaming without a fresh API call.
+    ///
+    /// Backward compatible: v1 `config.json` files without this field
+    /// deserialize to `None` (streaming not configured).
+    #[cfg(feature = "persistence")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub streaming_config: Option<crate::collection::streaming::StreamingConfig>,
 }
 
 #[cfg(test)]
@@ -143,6 +169,9 @@ mod rescore_config_tests {
             #[cfg(feature = "persistence")]
             deferred_indexing: None,
             async_index_builder: None,
+            auto_reindex_config: None,
+            #[cfg(feature = "persistence")]
+            streaming_config: None,
         }
     }
 

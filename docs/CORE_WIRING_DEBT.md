@@ -109,31 +109,25 @@ Enterprise tier ships.
 
 ## 2. `AutoReindexConfig.cooldown` — Duration serde round-trip
 
-**Outcome**: **Partially wired** (runtime-only, no persistence).
+**Outcome**: **Wired** (persisted in schema v2 — W2).
 
 **What exists**:
 - `crates/velesdb-core/src/collection/auto_reindex/mod.rs` defines
   `AutoReindexManager` with a policy that uses `std::time::Duration` for
   the cooldown period between reindex triggers.
+- `AutoReindexConfig` now derives `Serialize`/`Deserialize`; its `cooldown`
+  `Duration` round-trips as whole seconds via the custom serde helper in
+  `crates/velesdb-core/src/collection/config_serde.rs` (`duration_secs`).
+- `CollectionConfig.auto_reindex_config: Option<AutoReindexConfig>` persists
+  the policy in `config.json` under schema v2 (`CURRENT_SCHEMA_VERSION = 2`).
+  `VectorCollection::attach_auto_reindex` mirrors the manager's config into
+  this field, and `Collection::open` restores the `AutoReindexManager`
+  automatically (`restore_auto_reindex_from_config`). No manual re-attach is
+  required after a `Database::open` once a flush has persisted the config.
 
-**What is missing**:
-- `CollectionConfig` does NOT currently persist `AutoReindexConfig` to
-  `config.json`. Serializing `Duration` via serde requires either a
-  custom representation (seconds-as-u64) or a schema version bump.
-- The runtime-only attachment **shipped** (re-verified 2026-06-12):
-  users call `VectorCollection::attach_auto_reindex(manager)` after opening
-  the collection. The manager is NOT restored on `Database::open`.
-
-**Why this is intentional**:
-- Keeping `AutoReindexManager` out of the persisted config avoids the
-  schema version bump and the `Duration` serde decision.
-- Runtime-only attachment fits the typical agentic-workflow pattern where
-  the reindex policy is determined at application startup, not at
-  collection creation.
-
-**Future action**: add `serde(with = "serde_duration_secs")` helper and
-persist `AutoReindexConfig` in a future schema version. This is a
-Community-scope enhancement; no enterprise angle.
+**What is missing**: nothing for the persistence gap. The auto-reconstruct
+decision after a divergence event remains caller-driven (out of scope, by
+design — see entry 2 history and `notify_auto_reindex_after_bulk`).
 
 ---
 
@@ -321,7 +315,7 @@ consistency-cleanup PR. Each binding glue must pass that crate's CI line
 | Config | Wired? | Outcome | Effort | Target |
 |---|---|---|---|---|
 | `WalBatchConfig` | No | Transferred to velesdb-premium | 13-17 commits, 3-5 days | Enterprise tier |
-| `AutoReindexConfig` | Runtime-only | Partially wired (attachment API shipped) | 1 commit | Community (schema bump later) |
+| `AutoReindexConfig` | Yes | Wired — persisted in schema v2 (W2) + restored on open | done | Community |
 | `deferred_indexing` / `async_index_builder` | REST-only (no TOML/Python) | RFC pending | Unscoped | Community (future sprint) |
 | `SearchConfig` global defaults | Partial | Consolidation cleanup | 1-2 commits | Community (future sprint) |
 | `LimitsConfig` (3/5 fields) | Partial | Hot-path instrumentation | 2-3 commits | Community (backlog, unscheduled) |

@@ -17,6 +17,7 @@
 
 pub mod auto_reindex;
 mod collection_config;
+pub(crate) mod config_serde;
 mod core;
 pub mod diagnostics;
 pub(crate) mod expiry;
