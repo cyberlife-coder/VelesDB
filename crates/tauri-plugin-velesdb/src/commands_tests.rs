@@ -3,9 +3,9 @@
 use crate::helpers::{metric_to_string, parse_metric, parse_storage_mode, storage_mode_to_string};
 use crate::types::{
     default_metric, default_top_k, default_vector_weight, BatchSearchRequest, CollectionInfo,
-    CreateCollectionRequest, DeletePointsRequest, GetPointsRequest, HybridResult,
-    HybridSearchRequest, PointOutput, QueryRequest, QueryResponse, SearchRequest, SearchResponse,
-    SearchResult, TextSearchRequest,
+    CreateCollectionRequest, DeletePointsRequest, EnableStreamingRequest, GetPointsRequest,
+    HybridResult, HybridSearchRequest, PointOutput, QueryRequest, QueryResponse, SearchRequest,
+    SearchResponse, SearchResult, TextSearchRequest,
 };
 use toml;
 
@@ -290,6 +290,57 @@ fn test_delete_points_request_deserialize() {
 
     assert_eq!(request.collection, "docs");
     assert_eq!(request.ids, vec![1, 2]);
+}
+
+#[test]
+fn test_enable_streaming_request_deserialize_camel_case() {
+    let json =
+        r#"{"collection": "docs", "bufferSize": 2048, "batchSize": 64, "flushIntervalMs": 25}"#;
+    let request: EnableStreamingRequest = serde_json::from_str(json).unwrap();
+
+    assert_eq!(request.collection, "docs");
+    assert_eq!(request.buffer_size, Some(2048));
+    assert_eq!(request.batch_size, Some(64));
+    assert_eq!(request.flush_interval_ms, Some(25));
+}
+
+#[test]
+fn test_enable_streaming_request_defaults_optional() {
+    let json = r#"{"collection": "docs"}"#;
+    let request: EnableStreamingRequest = serde_json::from_str(json).unwrap();
+
+    assert_eq!(request.collection, "docs");
+    assert_eq!(request.buffer_size, None);
+    assert_eq!(request.batch_size, None);
+    assert_eq!(request.flush_interval_ms, None);
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_tauri_enable_streaming() {
+    // streaming_config_from_request maps overrides and falls back to engine
+    // defaults for omitted fields (the wiring exercised by the command).
+    let base = velesdb_core::StreamingConfig::default();
+
+    let overridden = crate::commands::streaming_config_from_request(&EnableStreamingRequest {
+        collection: "docs".to_string(),
+        buffer_size: Some(4096),
+        batch_size: Some(256),
+        flush_interval_ms: Some(10),
+    });
+    assert_eq!(overridden.buffer_size, 4096);
+    assert_eq!(overridden.batch_size, 256);
+    assert_eq!(overridden.flush_interval_ms, 10);
+
+    let defaulted = crate::commands::streaming_config_from_request(&EnableStreamingRequest {
+        collection: "docs".to_string(),
+        buffer_size: None,
+        batch_size: None,
+        flush_interval_ms: None,
+    });
+    assert_eq!(defaulted.buffer_size, base.buffer_size);
+    assert_eq!(defaulted.batch_size, base.batch_size);
+    assert_eq!(defaulted.flush_interval_ms, base.flush_interval_ms);
 }
 
 #[test]
