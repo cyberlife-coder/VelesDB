@@ -342,6 +342,36 @@ fn test_collection_delete() {
 }
 
 #[test]
+fn test_collection_compact_storage() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("compact_test".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db
+        .get_collection("compact_test".to_string())
+        .unwrap()
+        .unwrap();
+
+    for id in 0..5u64 {
+        col.upsert(VelesPoint {
+            id,
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            payload: None,
+        })
+        .unwrap();
+    }
+    col.delete(0).unwrap();
+    col.delete(1).unwrap();
+
+    // Compaction must succeed and return the reclaimed byte count; live
+    // points are unaffected.
+    let _freed = col.compact_storage().unwrap();
+    assert_eq!(col.count(), 3);
+}
+
+#[test]
 fn test_collection_with_json_payload() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().to_str().unwrap().to_string();

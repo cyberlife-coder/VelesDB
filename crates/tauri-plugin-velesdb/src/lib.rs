@@ -136,6 +136,9 @@ macro_rules! velesdb_invoke_handler {
 ///     .expect("error while running tauri application");
 /// ```
 #[must_use]
+// The body is a flat command-registration list (trivial cyclomatic complexity);
+// the line count grows linearly with the number of exposed commands.
+#[allow(clippy::too_many_lines)]
 pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
     let db_path = path.as_ref().to_path_buf();
 
@@ -151,6 +154,7 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             commands::get_points,
             commands::delete_points,
             commands::search,
+            commands::search_ids,
             commands::batch_search,
             commands::text_search,
             commands::hybrid_search,
@@ -158,6 +162,7 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             commands_query::query,
             commands::is_empty,
             commands::flush,
+            commands::compact_storage,
             commands::scroll_collection,
             // Sparse vector commands
             commands_sparse::sparse_search,
@@ -201,6 +206,7 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             // Knowledge Graph commands (EPIC-015 US-001)
             commands_graph::create_graph_collection,
             commands_graph::add_edge,
+            commands_graph::add_edges_batch,
             commands_graph::get_edges,
             commands_graph::traverse_graph,
             commands_graph::get_node_degree,

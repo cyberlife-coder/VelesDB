@@ -229,6 +229,78 @@ hot-path cost is <1%.
 
 ---
 
+## 6. Binding API-parity wiring gaps (core fns not exposed in embedded bindings)
+
+**Outcome**: **Partially wired** — backlog below, prioritised P1–P3.
+
+This entry records the result of a full core→binding API-parity audit
+(re-verified 2026-06-13 against `develop` post-#1094, with `file:line`
+evidence for every cell). The audit replaced an earlier informal matrix
+that was substantially inaccurate — most of its "missing in Python /
+nowhere" claims were **false**: `velesdb-python` already exposes
+`search_with_ef`, `search_ids`, `search_batch_parallel`,
+`multi_query_search`, `multi_query_search_ids`, `sparse_search`,
+`hybrid_sparse_search`, `execute_match_with_similarity`, `flush_full`,
+`upsert_bulk_from_raw`, `is_delta_active`, `explain_analyze_query`,
+`GraphCollection::add_edges_batch`/`delete`/`remove_edge` natively. The
+genuine, worth-closing gaps that survived verification are below.
+
+**Audit ground rules** (why some "gaps" are *not* listed as debt):
+- **WASM** links `velesdb-core` with `persistence` OFF and reimplements
+  its own in-memory engine. Every persistence/runtime-gated core method is
+  therefore **N/A** in WASM, not a closeable gap (only the three
+  non-gated `validate_*` free-fns are real — see 6.11).
+- **Mobile / Tauri / WASM graph stores** are standalone in-memory stores
+  that wrap nothing in core; their graph rows are partial-via-VelesQL, by
+  design.
+- `MetadataCollection::search` is a structural no-op (metadata collections
+  have no vector index) — use `text_search`/VelesQL. Documented, not debt.
+- `velesdb-server` is the source of truth for `execute_aggregate`,
+  `rebuild_index`, `compact_storage`, `apply_advanced_config`,
+  `update_guardrails`, `explain_analyze_query`, `push_to_delta_if_active` —
+  the TS SDK merely forwards to native server routes.
+
+**What is missing** (backlog — each row: core fn · surfaces lacking it ·
+feasibility · target file for the glue):
+
+| # | Core fn | Missing in | Pri | Feasibility | Glue lands in |
+|---|---------|-----------|-----|-------------|---------------|
+| 6.1 | `VectorCollection::compact_storage` | python, mobile, tauri | P1 | moderate (run under `allow_threads`/`spawn_blocking`) | `velesdb-python/src/collection/mod.rs` (mirror `flush_full`); `velesdb-mobile/src/collection.rs` |
+| 6.2 | `GraphCollection::add_edges_batch` (typed route/cmd) | rest, tauri | P1 | trivial | `velesdb-server/src/handlers/` (new `/graph/edges/batch`); `tauri-plugin-velesdb/src/lib.rs` |
+| 6.3 | `VectorCollection::search_ids` (true core path) | rest, tauri | P2 | trivial (server route reuses generic search + strips payloads; never calls core `search_ids`) | `velesdb-server/src/handlers/search/mod.rs:344` (route to core fn when no payloads requested); tauri command |
+| 6.4 | `VectorCollection::reorder_for_locality` | python, rest, tauri, mobile, ts (**nowhere**) | P2 | moderate — **recall-gated** (QUALITY_BAR Gate 1) | server admin route first (next to `compact_storage`/`rebuild_index`), then `velesdb-python/src/collection/mod.rs` |
+| 6.5 | `VectorCollection::apply_advanced_config` | python, mobile, tauri | P2 | moderate — config marshalling across FFI; recall-adjacent (PQ/HNSW) | `velesdb-python/src/collection/` (py-dict→`AdvancedConfig`); mobile UniFFI record |
+| 6.6 | `AnyCollection::diagnostics` / `Database::collection_diagnostics` (typed) | python, rest-typed, tauri, mobile | P2 | moderate — define serializable diagnostics DTO once | server `/collections/{name}/diagnostics`; `velesdb-python/src/database.rs` (returns dict) |
+| 6.7 | `Database::update_guardrails` + `VectorCollection::guard_rails` (read) | python, mobile, tauri | P2 | moderate — limits struct marshalling | `velesdb-python/src/database.rs`; mobile `lib.rs` |
+| 6.8 | `detach_auto_reindex` / `check_auto_reindex_divergence` | python (only `attach`), all others | P2 | moderate — store manager handle on wrapper. **See entry 2** | `velesdb-python/src/collection/` (same wrapper as `attach_auto_reindex`) |
+| 6.9 | `VectorCollection::search_batch_parallel` | rest, tauri, mobile | P2 | moderate — server batch route funnels through serial kernel; needs a parallel branch flag | `velesdb-server/src/handlers/search/` (batch handler) |
+| 6.10 | `VectorCollection::multi_query_search_ids` | rest, tauri, mobile, ts | P3 | trivial — id-only variant of broadly-exposed `multi_query_search` | server `search/multi.rs` (ids-only mode); TS `search-backend.ts` |
+| 6.11 | `validate_collection_name` / `validate_dimension` / `validate_dimension_match` (free-fns) | every binding re-implements them | P3 | trivial — consistency, not a feature | re-export + replace local validators in python `lib.rs`, server validation, ts `client/validation.ts` |
+
+**Status — PR-1 `feat/parity-embedded-ops`** (branch open):
+- 6.1 `compact_storage` — DONE (Python, Mobile, Tauri; each with a unit test).
+- 6.2 `add_edges_batch` — DONE (server `/collections/{name}/graph/edges/batch` route + OpenAPI snapshot + Tauri command; HTTP integration test + Tauri tests).
+- 6.3 `search_ids` — Tauri command DONE (functional gap closed; unit-tested). **Server fast-path moved to PR-4** (grouped with 6.9: conditional hot-path opt, core `search_ids` has no filter param).
+
+**Explicitly deferred (not worth closing now)**:
+- `stream_insert_batch` / `enable_streaming` / `StreamIngester::*` — async
+  runtime + channel-handle lifetime across PyO3/UniFFI is **hard** and
+  low-demand vs `upsert_bulk`. WASM N/A (no async fs). P3, defer.
+- Observer plane (`open_with_observer[_and_config]`, `notify_upsert`,
+  `notify_query`) — marshalling a Rust callback trait object across FFI;
+  feasible only in Python (PyO3 closures), awkward/niche elsewhere. P3,
+  defer. Only `velesdb-server` wires the notify hooks (its metrics).
+- `upsert_bulk_from_raw` beyond Python — REST/TS already have JSON
+  `upsert_bulk`; the zero-copy raw path needs a flat-buffer wire format
+  for marginal benefit. Keep Python/NumPy-only.
+
+**Future action**: schedule 6.1–6.3 (P1 + trivial-P2) as one embedded-ops
+PR; gate 6.4/6.5 behind a recall-validation run (Gate 1); 6.10/6.11 as a
+consistency-cleanup PR. Each binding glue must pass that crate's CI line
+(no `.unwrap()`, complexity ≤8, clippy pedantic).
+
+---
+
 ## Summary table
 
 | Config | Wired? | Outcome | Effort | Target |
@@ -238,6 +310,7 @@ hot-path cost is <1%.
 | `deferred_indexing` / `async_index_builder` | REST-only (no TOML/Python) | RFC pending | Unscoped | Community (future sprint) |
 | `SearchConfig` global defaults | Partial | Consolidation cleanup | 1-2 commits | Community (future sprint) |
 | `LimitsConfig` (3/5 fields) | Partial | Hot-path instrumentation | 2-3 commits | Community (backlog, unscheduled) |
+| Binding API-parity gaps (6.1–6.11) | Partial | P1–P3 backlog (see §6) | 3 PRs (embedded-ops / recall-gated / consistency) | Community |
 
 ## Conventions
 

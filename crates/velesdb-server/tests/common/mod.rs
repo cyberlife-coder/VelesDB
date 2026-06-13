@@ -10,7 +10,7 @@ use tempfile::TempDir;
 
 use velesdb_core::Database;
 use velesdb_server::{
-    add_edge, aggregate,
+    add_edge, add_edges_batch, aggregate,
     auth::{auth_middleware, AuthState},
     batch_search, bulk_delete_points, collection_sanity, compact_collection, create_collection,
     delete_collection, delete_point, explain, get_collection, get_collection_config, get_edges,
@@ -63,6 +63,10 @@ fn graph_and_maintenance_routes() -> Router<Arc<AppState>> {
         .route(
             "/collections/{name}/graph/edges",
             get(get_edges).post(add_edge),
+        )
+        .route(
+            "/collections/{name}/graph/edges/batch",
+            post(add_edges_batch),
         )
         .route("/collections/{name}/graph/traverse", post(traverse_graph))
         .route(
