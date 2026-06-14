@@ -1,0 +1,5 @@
+# Consolidate the historical AI-tool committer identity onto the maintainer so
+# `git shortlog`, `git blame --use-mailmap`, and GitHub's contributor graph
+# attribute those commits to the human maintainer. Going forward, AI-attributed
+# commits are rejected by the PR governance check (.github/workflows/pr-governance.yml).
+cyberlife-coder <174732281+cyberlife-coder@users.noreply.github.com> <noreply@anthropic.com>
