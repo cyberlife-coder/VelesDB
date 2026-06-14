@@ -11,7 +11,7 @@ use futures::StreamExt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::types::{ErrorResponse, StreamInsertRequest};
+use crate::types::{EnableStreamingRequest, ErrorResponse, StreamInsertRequest};
 use crate::AppState;
 use velesdb_core::{BackpressureError, Point, VectorCollection};
 
@@ -320,3 +320,55 @@ fn stream_insert_result_to_response(
         ),
     }
 }
+
+/// Enable streaming ingestion on a collection.
+///
+/// Spawns the background drain task so subsequent calls to
+/// `/collections/{name}/stream/insert` accept points instead of returning a
+/// `409 Conflict` "streaming not configured" error. Omitted body fields fall
+/// back to the engine defaults. Calling this again replaces the existing
+/// ingester (the old drain task is aborted).
+///
+/// Returns `200 OK` on success and `404 Not Found` when the collection does
+/// not exist.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/stream/enable",
+    tag = "points",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    request_body = EnableStreamingRequest,
+    responses(
+        (status = 200, description = "Streaming enabled", body = Object),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    )
+)]
+pub async fn enable_streaming(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<EnableStreamingRequest>,
+) -> impl IntoResponse {
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    enable_streaming_on(&collection, &req);
+
+    Json(serde_json::json!({
+        "message": "Streaming enabled",
+        "collection": name,
+    }))
+    .into_response()
+}
+
+/// Enables streaming on the collection when persistence is compiled in.
+#[cfg(feature = "persistence")]
+fn enable_streaming_on(collection: &VectorCollection, req: &EnableStreamingRequest) {
+    collection.enable_streaming(req.to_config());
+}
+
+/// No-op when persistence is disabled (the streaming pipeline is unavailable).
+#[cfg(not(feature = "persistence"))]
+fn enable_streaming_on(_collection: &VectorCollection, _req: &EnableStreamingRequest) {}

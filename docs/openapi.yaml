@@ -1890,6 +1890,47 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /collections/{name}/stream/enable:
+    post:
+      tags:
+      - points
+      summary: Enable streaming ingestion on a collection.
+      description: |-
+        Spawns the background drain task so subsequent calls to
+        `/collections/{name}/stream/insert` accept points instead of returning a
+        `409 Conflict` "streaming not configured" error. Omitted body fields fall
+        back to the engine defaults. Calling this again replaces the existing
+        ingester (the old drain task is aborted).
+
+        Returns `200 OK` on success and `404 Not Found` when the collection does
+        not exist.
+      operationId: enable_streaming
+      parameters:
+      - name: name
+        in: path
+        description: Collection name
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnableStreamingRequest'
+        required: true
+      responses:
+        '200':
+          description: Streaming enabled
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Collection not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /collections/{name}/stream/insert:
     post:
       tags:
@@ -2719,6 +2760,33 @@ components:
           items:
             $ref: '#/components/schemas/EdgeResponse'
           description: List of edges.
+    EnableStreamingRequest:
+      type: object
+      description: |-
+        Request body for the enable-streaming endpoint.
+
+        All fields are optional; omitted fields fall back to the engine defaults
+        (`buffer_size = 10000`, `batch_size = 128`, `flush_interval_ms = 50`).
+      properties:
+        batch_size:
+          type:
+          - integer
+          - 'null'
+          description: Number of points that trigger an immediate micro-batch flush.
+          minimum: 0
+        buffer_size:
+          type:
+          - integer
+          - 'null'
+          description: Capacity of the bounded ingestion channel (backpressure threshold).
+          minimum: 0
+        flush_interval_ms:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          description: Maximum time (ms) before a partial batch is flushed.
+          minimum: 0
     ErrorResponse:
       type: object
       description: Error response.

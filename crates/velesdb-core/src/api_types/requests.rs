@@ -275,6 +275,39 @@ pub struct StreamInsertRequest {
     pub payload: Option<serde_json::Value>,
 }
 
+/// Request body for the enable-streaming endpoint.
+///
+/// All fields are optional; omitted fields fall back to the engine defaults
+/// (`buffer_size = 10000`, `batch_size = 128`, `flush_interval_ms = 50`).
+#[derive(Debug, Default, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct EnableStreamingRequest {
+    /// Capacity of the bounded ingestion channel (backpressure threshold).
+    #[serde(default)]
+    pub buffer_size: Option<usize>,
+    /// Number of points that trigger an immediate micro-batch flush.
+    #[serde(default)]
+    pub batch_size: Option<usize>,
+    /// Maximum time (ms) before a partial batch is flushed.
+    #[serde(default)]
+    pub flush_interval_ms: Option<u64>,
+}
+
+#[cfg(feature = "persistence")]
+impl EnableStreamingRequest {
+    /// Builds a [`StreamingConfig`](crate::StreamingConfig), falling back to the
+    /// engine default for every omitted field.
+    #[must_use]
+    pub fn to_config(&self) -> crate::StreamingConfig {
+        let base = crate::StreamingConfig::default();
+        crate::StreamingConfig {
+            buffer_size: self.buffer_size.unwrap_or(base.buffer_size),
+            batch_size: self.batch_size.unwrap_or(base.batch_size),
+            flush_interval_ms: self.flush_interval_ms.unwrap_or(base.flush_interval_ms),
+        }
+    }
+}
+
 // ============================================================================
 // Search Types
 // ============================================================================

@@ -13,11 +13,11 @@ use velesdb_server::{
     add_edge, add_edges_batch, aggregate,
     auth::{auth_middleware, AuthState},
     batch_search, bulk_delete_points, collection_diagnostics, collection_sanity,
-    compact_collection, create_collection, delete_collection, delete_point, explain,
-    get_collection, get_collection_config, get_edges, get_node_degree, get_point, health_check,
-    hybrid_search, list_collections, multi_query_search, multi_query_search_ids, query,
-    readiness_check, rebuild_index, reorder_for_locality, scroll_points, search, search_ids,
-    set_point_ttl, stream_upsert_points, text_search, traverse_graph, upsert_points,
+    compact_collection, create_collection, delete_collection, delete_point, enable_streaming,
+    explain, get_collection, get_collection_config, get_edges, get_node_degree, get_point,
+    health_check, hybrid_search, list_collections, multi_query_search, multi_query_search_ids,
+    query, readiness_check, rebuild_index, reorder_for_locality, scroll_points, search, search_ids,
+    set_point_ttl, stream_insert, stream_upsert_points, text_search, traverse_graph, upsert_points,
     vacuum_collection, AppState, OnboardingMetrics,
 };
 
@@ -45,6 +45,8 @@ fn base_routes() -> Router<Arc<AppState>> {
             "/collections/{name}/points/stream",
             post(stream_upsert_points),
         )
+        .route("/collections/{name}/stream/enable", post(enable_streaming))
+        .route("/collections/{name}/stream/insert", post(stream_insert))
         .route(
             "/collections/{name}/points/{id}",
             get(get_point).delete(delete_point),
