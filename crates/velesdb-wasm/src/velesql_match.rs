@@ -8,10 +8,74 @@ use velesdb_core::velesql::{
     Condition, Direction, GraphPattern, MatchClause, NodePattern, Query, RelationshipPattern,
 };
 
-use crate::database::DatabaseInner;
+use crate::database::{DatabaseInner, SharedStore};
 use crate::graph_store::{WasmEdge, WasmGraphNode, WasmGraphStore};
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::Params;
+
+/// A resolved `@collection` cross-reference: an aliased node's alias paired
+/// with the store of the collection it references for payload enrichment.
+type CrossRef = (String, SharedStore);
+
+/// Collects `@collection` cross-references from a MATCH clause.
+///
+/// Mirrors core's `enrich_match_results_cross_collection`: only nodes with
+/// **both** an explicit alias and a collection annotation are enriched, and a
+/// reference to a missing collection is silently skipped (the MATCH still
+/// returns its graph results). The referenced collection's store is resolved
+/// once here and reused for every result row.
+///
+/// WASM note: lacking a `FROM` clause, the executor also reuses the *first*
+/// node's `@collection` annotation to pick the graph store (see
+/// [`inferred_graph_store`]). Enrichment therefore applies to any annotated
+/// node that names an existing **vector** collection — in practice the
+/// non-anchor nodes (`b`, `c`); the anchor enriches only when a same-named
+/// vector collection also exists, otherwise its annotation just selects the
+/// graph and the lookup is skipped.
+fn resolve_cross_refs(db: &DatabaseInner, clause: &MatchClause) -> Vec<CrossRef> {
+    clause
+        .patterns
+        .iter()
+        .flat_map(|p| p.nodes.iter())
+        .filter_map(|n| {
+            let alias = n.alias.clone()?;
+            let coll = n.collection.as_deref()?;
+            let store = db.get_shared_store(coll).ok()?;
+            Some((alias, store))
+        })
+        .collect()
+}
+
+/// Merges cross-collection payloads into a freshly built MATCH row.
+///
+/// For each cross-reference, the node id is read back from the alias object's
+/// `id` field (every row builder writes it), the referenced collection's
+/// payload for that id is looked up, and its fields are merged into the alias
+/// object. The graph node's own fields — including the reserved `id`/`labels` —
+/// win on collision, so enrichment never overwrites graph identity.
+fn enrich_row(map: &mut serde_json::Map<String, serde_json::Value>, cross: &[CrossRef]) {
+    for (alias, store) in cross {
+        let Some(id) = map
+            .get(alias)
+            .and_then(|v| v.get("id"))
+            .and_then(serde_json::Value::as_u64)
+        else {
+            continue;
+        };
+        let borrowed = store.borrow();
+        let Some(serde_json::Value::Object(cross_obj)) = borrowed.payload_for_id(id) else {
+            continue;
+        };
+        let Some(serde_json::Value::Object(alias_obj)) = map.get_mut(alias) else {
+            continue;
+        };
+        for (key, value) in cross_obj {
+            alias_obj
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
+    }
+}
 
 /// Executes a MATCH query.
 ///
@@ -58,6 +122,7 @@ fn execute_single_node(
 ) -> Result<Vec<QueryResultRow>, String> {
     let node = &pattern.nodes[0];
     let label = first_label(node);
+    let cross = resolve_cross_refs(db, clause);
     let store = inferred_graph_store(db, pattern)?;
     let borrowed = store.borrow();
     let candidates = borrowed.candidate_nodes(label.as_deref());
@@ -74,7 +139,7 @@ fn execute_single_node(
         if (out.len() as u64) >= limit {
             break;
         }
-        out.push(build_match_row_single(node, nid, node_data)?);
+        out.push(build_match_row_single(node, nid, node_data, &cross)?);
     }
     Ok(out)
 }
@@ -91,6 +156,7 @@ fn execute_1_hop(
             pattern.relationships.len()
         ));
     }
+    let cross = resolve_cross_refs(db, clause);
     let store = inferred_graph_store(db, pattern)?;
     let borrowed = store.borrow();
     let ctx = OneHopContext {
@@ -99,6 +165,7 @@ fn execute_1_hop(
         rel: &pattern.relationships[0],
         la: first_label(&pattern.nodes[0]),
         lb: first_label(&pattern.nodes[1]),
+        cross,
     };
     let limit = clause.return_clause.limit.unwrap_or(u64::MAX);
     let mut out = Vec::new();
@@ -125,6 +192,7 @@ struct OneHopContext<'p> {
     rel: &'p RelationshipPattern,
     la: Option<String>,
     lb: Option<String>,
+    cross: Vec<CrossRef>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -159,9 +227,7 @@ fn expand_one_hop(
         if (out.len() as u64) >= limit {
             return Ok(());
         }
-        out.push(build_match_row_pair(
-            ctx.na, sid, a_node, ctx.nb, other, b_node,
-        )?);
+        out.push(build_match_row_pair(ctx, sid, a_node, other, b_node)?);
     }
     Ok(())
 }
@@ -224,9 +290,10 @@ fn execute_2_hop(
             pattern.relationships.len()
         ));
     }
+    let cross = resolve_cross_refs(db, clause);
     let store = inferred_graph_store(db, pattern)?;
     let borrowed = store.borrow();
-    let ctx = TwoHopContext::new(pattern);
+    let ctx = TwoHopContext::new(pattern, cross);
     let limit = clause.return_clause.limit.unwrap_or(u64::MAX);
     let where_clause = clause.where_clause.as_ref();
     let mut out = Vec::new();
@@ -248,10 +315,11 @@ struct TwoHopContext<'p> {
     lc: Option<String>,
     r1: &'p RelationshipPattern,
     r2: &'p RelationshipPattern,
+    cross: Vec<CrossRef>,
 }
 
 impl<'p> TwoHopContext<'p> {
-    fn new(pattern: &'p GraphPattern) -> Self {
+    fn new(pattern: &'p GraphPattern, cross: Vec<CrossRef>) -> Self {
         Self {
             na: &pattern.nodes[0],
             nb: &pattern.nodes[1],
@@ -261,6 +329,7 @@ impl<'p> TwoHopContext<'p> {
             lc: first_label(&pattern.nodes[2]),
             r1: &pattern.relationships[0],
             r2: &pattern.relationships[1],
+            cross,
         }
     }
 }
@@ -338,7 +407,7 @@ fn expand_from_b(
             return Ok(());
         }
         out.push(build_match_row_triple(
-            ctx.na, a_id, a_node, ctx.nb, b_id, b_node, ctx.nc, c_id, c_node,
+            ctx, a_id, a_node, b_id, b_node, c_id, c_node,
         )?);
     }
     Ok(())
@@ -498,48 +567,48 @@ fn build_match_row_single(
     node: &NodePattern,
     id: u64,
     data: &WasmGraphNode,
+    cross: &[CrossRef],
 ) -> Result<QueryResultRow, String> {
     let alias = node.alias.clone().unwrap_or_else(|| "a".to_string());
     let mut map = serde_json::Map::new();
     map.insert(alias, node_json(id, data));
+    enrich_row(&mut map, cross);
     QueryResultRow::synthetic(serde_json::Value::Object(map))
 }
 
 fn build_match_row_pair(
-    na: &NodePattern,
+    ctx: &OneHopContext<'_>,
     a_id: u64,
     a_data: &WasmGraphNode,
-    nb: &NodePattern,
     b_id: u64,
     b_data: &WasmGraphNode,
 ) -> Result<QueryResultRow, String> {
-    let alias_a = na.alias.clone().unwrap_or_else(|| "a".to_string());
-    let alias_b = nb.alias.clone().unwrap_or_else(|| "b".to_string());
+    let alias_a = ctx.na.alias.clone().unwrap_or_else(|| "a".to_string());
+    let alias_b = ctx.nb.alias.clone().unwrap_or_else(|| "b".to_string());
     let mut map = serde_json::Map::new();
     map.insert(alias_a, node_json(a_id, a_data));
     map.insert(alias_b, node_json(b_id, b_data));
+    enrich_row(&mut map, &ctx.cross);
     QueryResultRow::synthetic(serde_json::Value::Object(map))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_match_row_triple(
-    na: &NodePattern,
+    ctx: &TwoHopContext<'_>,
     a_id: u64,
     a_data: &WasmGraphNode,
-    nb: &NodePattern,
     b_id: u64,
     b_data: &WasmGraphNode,
-    nc: &NodePattern,
     c_id: u64,
     c_data: &WasmGraphNode,
 ) -> Result<QueryResultRow, String> {
-    let alias_a = na.alias.clone().unwrap_or_else(|| "a".to_string());
-    let alias_b = nb.alias.clone().unwrap_or_else(|| "b".to_string());
-    let alias_c = nc.alias.clone().unwrap_or_else(|| "c".to_string());
+    let alias_a = ctx.na.alias.clone().unwrap_or_else(|| "a".to_string());
+    let alias_b = ctx.nb.alias.clone().unwrap_or_else(|| "b".to_string());
+    let alias_c = ctx.nc.alias.clone().unwrap_or_else(|| "c".to_string());
     let mut map = serde_json::Map::new();
     map.insert(alias_a, node_json(a_id, a_data));
     map.insert(alias_b, node_json(b_id, b_data));
     map.insert(alias_c, node_json(c_id, c_data));
+    enrich_row(&mut map, &ctx.cross);
     QueryResultRow::synthetic(serde_json::Value::Object(map))
 }
 

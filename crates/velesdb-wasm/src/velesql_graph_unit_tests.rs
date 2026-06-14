@@ -110,6 +110,94 @@ fn test_match_1_hop_returns_pairs() {
 }
 
 #[test]
+fn test_match_at_collection_enriches_referenced_node() {
+    let mut db = DatabaseInner::new();
+
+    // A vector collection 'profiles' holds rich payloads keyed by node id.
+    db.create_metadata_collection("profiles")
+        .expect("test: create profiles collection");
+    {
+        let store = db
+            .get_shared_store("profiles")
+            .expect("test: profiles store");
+        crate::store_insert::insert_with_payload(
+            &mut store.borrow_mut(),
+            2,
+            &[],
+            Some(serde_json::json!({"email": "bob@x.io", "tier": "gold"})),
+        );
+    }
+
+    // Default WASM graph 'graph': node 1 (Person) -[HAS]-> node 2 (Profile).
+    for (id, name, labels) in [(1u64, "Alice", vec!["Person"]), (2, "Bob", vec!["Profile"])] {
+        let stmt = InsertNodeStatement {
+            collection: "graph".to_string(),
+            node_id: id,
+            payload: serde_json::json!({"name": name, "labels": labels}),
+        };
+        insert_node(&mut db, &stmt).expect("test: insert node");
+    }
+    let edge = InsertEdgeStatement {
+        collection: "graph".to_string(),
+        edge_id: None,
+        source: 1,
+        target: 2,
+        label: "HAS".to_string(),
+        properties: Vec::new(),
+    };
+    insert_edge(&mut db, &edge, &Params::new()).expect("test: insert edge");
+
+    // The second node references 'profiles' for cross-collection enrichment.
+    let q = parse_match("MATCH (a:Person)-[:HAS]->(b:Profile@profiles) RETURN a, b LIMIT 10");
+    let rows = execute_match(&mut db, &q, &Params::new()).expect("test: match");
+    assert_eq!(rows.len(), 1);
+
+    let data: serde_json::Value =
+        serde_json::from_str(rows[0].data_json_ref()).expect("test: row json");
+    let b = &data["b"];
+    // Cross-collection fields merged into the `b` alias object...
+    assert_eq!(b["email"], serde_json::json!("bob@x.io"));
+    assert_eq!(b["tier"], serde_json::json!("gold"));
+    // ...without clobbering the graph node's own identity.
+    assert_eq!(b["name"], serde_json::json!("Bob"));
+    assert_eq!(b["id"], serde_json::json!(2));
+    // The unannotated anchor `a` gains no cross-collection fields.
+    assert_eq!(data["a"]["name"], serde_json::json!("Alice"));
+    assert!(data["a"].get("email").is_none());
+}
+
+#[test]
+fn test_match_at_collection_missing_collection_is_skipped() {
+    // An @collection pointing at a non-existent vector collection must not
+    // fail the MATCH — the graph results are returned un-enriched.
+    let mut db = DatabaseInner::new();
+    for (id, name, labels) in [(1u64, "Alice", vec!["Person"]), (2, "Bob", vec!["Profile"])] {
+        let stmt = InsertNodeStatement {
+            collection: "graph".to_string(),
+            node_id: id,
+            payload: serde_json::json!({"name": name, "labels": labels}),
+        };
+        insert_node(&mut db, &stmt).expect("test: insert node");
+    }
+    let edge = InsertEdgeStatement {
+        collection: "graph".to_string(),
+        edge_id: None,
+        source: 1,
+        target: 2,
+        label: "HAS".to_string(),
+        properties: Vec::new(),
+    };
+    insert_edge(&mut db, &edge, &Params::new()).expect("test: insert edge");
+
+    let q = parse_match("MATCH (a:Person)-[:HAS]->(b:Profile@nope) RETURN a, b LIMIT 10");
+    let rows = execute_match(&mut db, &q, &Params::new()).expect("test: match still succeeds");
+    assert_eq!(rows.len(), 1);
+    let data: serde_json::Value =
+        serde_json::from_str(rows[0].data_json_ref()).expect("test: row json");
+    assert_eq!(data["b"]["name"], serde_json::json!("Bob"));
+}
+
+#[test]
 fn test_match_rejects_beyond_2_hop() {
     let mut db = DatabaseInner::new();
     let q =
