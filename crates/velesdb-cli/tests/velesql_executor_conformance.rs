@@ -170,11 +170,9 @@ fn test_cli_velesql_executor_conformance_fixture_cases() {
     assert_cases(&db_path, &fixture.cases);
 }
 
-/// Reproducer for the core B001 bug as seen through the CLI (which delegates to
-/// `Database::execute_query`). Ignored so CI stays green; un-ignore once the
-/// core bounded-top-k LIMIT-before-sort bug is fixed.
+/// Regression lock for B001 through the CLI (which delegates to
+/// `Database::execute_query`): formerly LIMIT-before-sort, now fixed.
 #[test]
-#[ignore = "B001: CLI delegates to core; scalar ORDER BY + LIMIT applies LIMIT before sort (bounded top-k)"]
 fn test_cli_velesql_executor_known_bugs() {
     let fixture = load_fixture();
     let dir = TempDir::new().expect("tempdir");

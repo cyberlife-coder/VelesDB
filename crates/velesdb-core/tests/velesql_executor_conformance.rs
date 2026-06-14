@@ -103,10 +103,10 @@ fn test_velesql_executor_conformance_fixture_cases() {
     assert_cases(&db, &fixture.cases);
 }
 
-/// Reproducer for confirmed executor bugs (correct expectation). Ignored so CI
-/// stays green; remove `#[ignore]` once the bug is fixed to lock the fix.
+/// Regression lock for B001 (scalar `ORDER BY` + `LIMIT`): formerly LIMIT was
+/// applied before the sort; fixed in the executor so the bounded result now
+/// equals the unbounded path truncated to k (KNOWN_LIMITATIONS #9).
 #[test]
-#[ignore = "B001: scalar ORDER BY + LIMIT applies LIMIT before sort (bounded top-k); contradicts KNOWN_LIMITATIONS #9"]
 fn test_velesql_executor_known_bugs() {
     let fixture = load_fixture();
     let (_dir, db) = open_loaded_db(&fixture.dataset);
