@@ -2,7 +2,7 @@
 #![allow(clippy::missing_errors_doc, deprecated)]
 
 use crate::error::{CommandError, Error};
-use crate::events::{emit_collection_created, emit_collection_deleted, emit_collection_updated};
+use crate::events::emit_collection_updated;
 use crate::helpers::{
     map_core_results, metric_to_string, parse_filter, parse_fusion_strategy, parse_metric,
     parse_storage_mode, require_collection, storage_mode_to_string, timed_search_response,
@@ -52,7 +52,7 @@ pub(crate) const fn has_advanced_params(request: &CreateCollectionRequest) -> bo
 /// Creates a new collection.
 #[command]
 pub async fn create_collection<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: CreateCollectionRequest,
 ) -> std::result::Result<CollectionInfo, CommandError> {
@@ -92,14 +92,13 @@ pub async fn create_collection<R: Runtime>(
         })
         .map_err(CommandError::from)?;
 
-    emit_collection_created(&app, &request.name);
     Ok(result)
 }
 
 /// Creates a metadata-only collection (no vectors, just payloads).
 #[command]
 pub async fn create_metadata_collection<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: CreateMetadataCollectionRequest,
 ) -> std::result::Result<CollectionInfo, CommandError> {
@@ -116,14 +115,13 @@ pub async fn create_metadata_collection<R: Runtime>(
         })
         .map_err(CommandError::from)?;
 
-    emit_collection_created(&app, &request.name);
     Ok(result)
 }
 
 /// Deletes a collection.
 #[command]
 pub async fn delete_collection<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     name: String,
 ) -> std::result::Result<(), CommandError> {
@@ -134,7 +132,6 @@ pub async fn delete_collection<R: Runtime>(
         })
         .map_err(CommandError::from)?;
 
-    emit_collection_deleted(&app, &name);
     Ok(())
 }
 
