@@ -158,6 +158,12 @@ fetch for that one operator.) The `similarity()`-ordered HNSW path stays bounded
 top-k — it is pre-sorted by score, so truncation is correct without an
 exhaustive fetch and recall is unaffected.
 
+The O(n) cost of that exhaustive scalar-`ORDER BY` fetch (~312 ms for `ORDER BY
+year DESC LIMIT 10` over 50k rows) is addressed by an ordered-index pushdown
+tracked in `docs/planning/CORE_PARITY_REMEDIATION.md` (EPIC-081): its load-bearing
+primitive `SecondaryIndex::ordered_ids` (O(log n + k)) has landed; the gated
+planner routing is the next phase.
+
 ### 10. Configuration range caps
 
 **Status**: resolved (validated in every loader and on open; the `limits.*`
