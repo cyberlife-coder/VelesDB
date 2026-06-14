@@ -22,6 +22,7 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     Database as _RawDatabase,
     DatabaseLockedError,
     DimensionMismatchError,
+    DISTANCE_METRICS,
     EdgeExistsError,
     FusionStrategy,
     GraphStore as _RawGraphStore,
@@ -35,6 +36,7 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     PySemanticMemory,
     SearchOptions,
     SearchResult,
+    STORAGE_MODES,
     StreamingConfig,
     StreamingIngestConfig,
     TraversalResult,
@@ -900,6 +902,9 @@ __all__ = [
     "LimitsOptions",
     "AutoReindexOptions",
     "VelesConfigOptions",
+    # Canonical enum name sets, single-sourced from velesdb-core (tuples of str).
+    "DISTANCE_METRICS",
+    "STORAGE_MODES",
     "embed",
     "__version__",
 ]
