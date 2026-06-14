@@ -480,6 +480,22 @@ impl From<MobileAsyncIndexBuilderConfig>
     }
 }
 
+/// Configuration for streaming ingestion on a collection.
+///
+/// FFI mirror of [`velesdb_core::StreamingConfig`]. Fields are `u64` for
+/// portable mapping to Swift/Kotlin; they are narrowed to `usize`/`u64` when
+/// converted to the core type. Engine defaults are `buffer_size=10000`,
+/// `batch_size=128`, `flush_interval_ms=50`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MobileStreamingConfig {
+    /// Capacity of the bounded channel (backpressure threshold). Default 10000.
+    pub buffer_size: u64,
+    /// Number of points that trigger an immediate micro-batch flush. Default 128.
+    pub batch_size: u64,
+    /// Maximum time (ms) before a partial batch is flushed. Default 50.
+    pub flush_interval_ms: u64,
+}
+
 /// Post-creation overrides for advanced collection configuration.
 ///
 /// Each field uses `Some` to set the value and `None` to leave it

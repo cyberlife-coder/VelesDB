@@ -52,6 +52,7 @@ mod collection;
 mod collection_sparse;
 mod graph;
 mod query;
+mod streaming_runtime;
 mod types;
 
 pub use agent::{SemanticResult, VelesSemanticMemory};
@@ -61,8 +62,9 @@ pub use query::{QueryResult, QueryResultKind, QueryResultRow};
 pub use types::{
     DistanceMetric, FusionStrategy, IndividualSearchRequest, MobileAdvancedConfig,
     MobileAsyncIndexBuilderConfig, MobileCollectionDiagnostics, MobileCollectionStats,
-    MobileDeferredIndexerConfig, MobileIndexInfo, MobileQueryLimits, PqTrainConfig, SearchQuality,
-    SearchResult, StorageMode, VelesError, VelesPoint, VelesSparseVector,
+    MobileDeferredIndexerConfig, MobileIndexInfo, MobileQueryLimits, MobileStreamingConfig,
+    PqTrainConfig, SearchQuality, SearchResult, StorageMode, VelesError, VelesPoint,
+    VelesSparseVector,
 };
 
 use std::sync::Arc;
