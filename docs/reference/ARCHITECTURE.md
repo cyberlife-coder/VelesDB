@@ -232,7 +232,7 @@ VelesDB core architecture is explicitly **hybrid by design**:
 - **Parameters**:
   - `M`: Max connections per node (default: 24-32, auto-tuned by dimension)
   - `ef_construction`: Build-time search width (default: 300-400, auto-tuned by dimension)
-  - `ef_search`: Query-time search width (default: 128, Balanced mode)
+  - `ef_search`: Query-time search width (default: 160, Balanced mode). An explicit `WITH (ef_search = N)` is passed through as the requested budget (clamped to at least `k`, and still subject to the standard dataset-size scaling), instead of being snapped to a coarse named profile. (Updated 2026-06-14.)
 
 - **Features**:
   - Thread-safe parallel insertions with lock-free CAS entry-point promotion
