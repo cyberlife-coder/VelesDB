@@ -396,6 +396,11 @@ SELECT * FROM docs WHERE vector NEAR $v WITH (ef_search = 512);
 
 **Result**: The query uses `ef_search = 512` (runtime override wins).
 
+> Any `WITH (ef_search = N)` value is passed through as the requested budget —
+> `N` is sent to HNSW (clamped to at least `k`, and still subject to the
+> standard dataset-size scaling), not snapped to a coarse named profile.
+> (Updated 2026-06-14.)
+
 ---
 
 ## Complete Reference
