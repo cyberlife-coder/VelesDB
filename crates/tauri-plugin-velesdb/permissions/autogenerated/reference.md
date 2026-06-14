@@ -31,6 +31,7 @@ Default permissions for VelesDB plugin - allows all database operations
 - `allow-sparse-upsert`
 - `allow-train-pq`
 - `allow-stream-insert`
+- `allow-enable-streaming`
 - `allow-semantic-store`
 - `allow-semantic-store-with-ttl`
 - `allow-semantic-query`
@@ -364,6 +365,32 @@ Enables the drop_index command without any pre-configured scope.
 <td>
 
 Denies the drop_index command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-enable-streaming`
+
+</td>
+<td>
+
+Enables the enable_streaming command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-enable-streaming`
+
+</td>
+<td>
+
+Denies the enable_streaming command without any pre-configured scope.
 
 </td>
 </tr>
