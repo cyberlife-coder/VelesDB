@@ -48,17 +48,17 @@ pub struct SearchOptions {
     /// Dense query vector (list or numpy array). Optional when
     /// ``sparse_vector`` is provided.
     #[pyo3(get, set)]
-    pub vector: Option<PyObject>,
+    pub vector: Option<Py<PyAny>>,
     /// Sparse query as ``dict[int, float]`` or scipy sparse matrix.
     /// Optional when ``vector`` is provided.
     #[pyo3(get, set)]
-    pub sparse_vector: Option<PyObject>,
+    pub sparse_vector: Option<Py<PyAny>>,
     /// Number of results to return (default: 10).
     #[pyo3(get, set)]
     pub top_k: usize,
     /// Optional metadata filter dict.
     #[pyo3(get, set)]
-    pub filter: Option<PyObject>,
+    pub filter: Option<Py<PyAny>>,
     /// Named sparse index to query.  When ``None``, the default (unnamed)
     /// sparse index is used.
     #[pyo3(get, set)]
@@ -96,10 +96,10 @@ impl SearchOptions {
         include_vectors = false,
     ))]
     pub fn new(
-        vector: Option<PyObject>,
-        sparse_vector: Option<PyObject>,
+        vector: Option<Py<PyAny>>,
+        sparse_vector: Option<Py<PyAny>>,
         top_k: usize,
-        filter: Option<PyObject>,
+        filter: Option<Py<PyAny>>,
         sparse_index_name: Option<String>,
         include_vectors: bool,
     ) -> Self {
@@ -134,7 +134,7 @@ impl SearchOptions {
 #[pymethods]
 impl SearchOptions {
     /// Sets the dense query vector and returns `self`.
-    pub fn with_vector(slf: Py<Self>, py: Python<'_>, vector: Option<PyObject>) -> Py<Self> {
+    pub fn with_vector(slf: Py<Self>, py: Python<'_>, vector: Option<Py<PyAny>>) -> Py<Self> {
         slf.bind(py).borrow_mut().vector = vector;
         slf
     }
@@ -143,7 +143,7 @@ impl SearchOptions {
     pub fn with_sparse_vector(
         slf: Py<Self>,
         py: Python<'_>,
-        sparse_vector: Option<PyObject>,
+        sparse_vector: Option<Py<PyAny>>,
     ) -> Py<Self> {
         slf.bind(py).borrow_mut().sparse_vector = sparse_vector;
         slf
@@ -156,7 +156,7 @@ impl SearchOptions {
     }
 
     /// Sets the metadata filter and returns `self`.
-    pub fn with_filter(slf: Py<Self>, py: Python<'_>, filter: Option<PyObject>) -> Py<Self> {
+    pub fn with_filter(slf: Py<Self>, py: Python<'_>, filter: Option<Py<PyAny>>) -> Py<Self> {
         slf.bind(py).borrow_mut().filter = filter;
         slf
     }

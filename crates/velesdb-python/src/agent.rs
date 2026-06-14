@@ -24,7 +24,7 @@ use crate::exceptions::DimensionMismatchError;
 fn procedures_to_pylist(
     py: Python<'_>,
     results: Vec<velesdb_core::agent::ProcedureMatch>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let list = pyo3::types::PyList::empty(py);
     for m in results {
         let dict = PyDict::new(py);
@@ -39,7 +39,7 @@ fn procedures_to_pylist(
 }
 
 /// Convert episodic event tuples to a Python list of dicts.
-fn events_to_pylist(py: Python<'_>, events: Vec<(u64, String, i64)>) -> PyResult<PyObject> {
+fn events_to_pylist(py: Python<'_>, events: Vec<(u64, String, i64)>) -> PyResult<Py<PyAny>> {
     let list = pyo3::types::PyList::empty(py);
     for (id, description, timestamp) in events {
         let dict = PyDict::new(py);
@@ -187,7 +187,7 @@ impl AgentMemory {
     ///     ``False`` when no such fact exists (the call is a no-op).
     #[pyo3(signature = (id, ttl_seconds))]
     fn set_semantic_ttl(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<bool> {
-        let exists = py.allow_threads(|| self.core.semantic().get(id).map_err(to_py_err))?;
+        let exists = py.detach(|| self.core.semantic().get(id).map_err(to_py_err))?;
         Ok(
             self.apply_ttl(exists.is_some(), id, ttl_seconds, |c, i, t| {
                 c.set_semantic_ttl(i, t);
@@ -204,7 +204,7 @@ impl AgentMemory {
     ///     ``False`` when no such event exists (the call is a no-op).
     #[pyo3(signature = (id, ttl_seconds))]
     fn set_episodic_ttl(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<bool> {
-        let exists = py.allow_threads(|| {
+        let exists = py.detach(|| {
             self.core
                 .episodic()
                 .get_with_embedding(id)
@@ -226,7 +226,7 @@ impl AgentMemory {
     ///     ``False`` when no such procedure exists (the call is a no-op).
     #[pyo3(signature = (id, ttl_seconds))]
     fn set_procedural_ttl(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<bool> {
-        let exists = py.allow_threads(|| {
+        let exists = py.detach(|| {
             self.core
                 .procedural()
                 .list_all()
@@ -249,7 +249,7 @@ impl AgentMemory {
     ///     KeyError: If no semantic fact with `id` exists.
     #[pyo3(signature = (id, ttl_seconds))]
     fn set_semantic_ttl_durable(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<()> {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.core
                 .set_semantic_ttl_durable(id, ttl_seconds)
                 .map_err(to_py_err)
@@ -267,7 +267,7 @@ impl AgentMemory {
     ///     KeyError: If no event with `id` exists.
     #[pyo3(signature = (id, ttl_seconds))]
     fn set_episodic_ttl_durable(&self, py: Python<'_>, id: u64, ttl_seconds: u64) -> PyResult<()> {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.core
                 .set_episodic_ttl_durable(id, ttl_seconds)
                 .map_err(to_py_err)
@@ -290,7 +290,7 @@ impl AgentMemory {
         id: u64,
         ttl_seconds: u64,
     ) -> PyResult<()> {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.core
                 .set_procedural_ttl_durable(id, ttl_seconds)
                 .map_err(to_py_err)
@@ -305,8 +305,8 @@ impl AgentMemory {
     ///     'consolidation_truncated' bool — True when consolidation hit the
     ///     per-cycle cap and more old episodes remain (call auto_expire again
     ///     to drain them).
-    fn auto_expire(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let result = py.allow_threads(|| self.core.auto_expire().map_err(to_py_err))?;
+    fn auto_expire(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let result = py.detach(|| self.core.auto_expire().map_err(to_py_err))?;
         Ok(expire_result_to_dict(py, &result))
     }
 
@@ -320,7 +320,7 @@ impl AgentMemory {
         py: Python<'_>,
         min_confidence: f32,
     ) -> PyResult<usize> {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.core
                 .evict_low_confidence_procedures(min_confidence)
                 .map_err(to_py_err)
@@ -334,7 +334,7 @@ impl AgentMemory {
     /// Returns:
     ///     The version number of the created snapshot.
     fn snapshot(&self, py: Python<'_>) -> PyResult<u64> {
-        py.allow_threads(|| self.core.snapshot().map_err(to_py_err))
+        py.detach(|| self.core.snapshot().map_err(to_py_err))
     }
 
     /// Loads the most recent snapshot, restoring all memory subsystems.
@@ -342,13 +342,13 @@ impl AgentMemory {
     /// Returns:
     ///     The version number of the loaded snapshot.
     fn load_latest_snapshot(&self, py: Python<'_>) -> PyResult<u64> {
-        py.allow_threads(|| self.core.load_latest_snapshot().map_err(to_py_err))
+        py.detach(|| self.core.load_latest_snapshot().map_err(to_py_err))
     }
 
     /// Loads a specific snapshot version, restoring all memory subsystems.
     #[pyo3(signature = (version))]
     fn load_snapshot_version(&self, py: Python<'_>, version: u64) -> PyResult<()> {
-        py.allow_threads(|| self.core.load_snapshot_version(version).map_err(to_py_err))
+        py.detach(|| self.core.load_snapshot_version(version).map_err(to_py_err))
     }
 
     /// Alias for `load_snapshot_version`.
@@ -361,7 +361,7 @@ impl AgentMemory {
 
     /// Lists all available snapshot version numbers.
     fn list_snapshot_versions(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
-        py.allow_threads(|| self.core.list_snapshot_versions().map_err(to_py_err))
+        py.detach(|| self.core.list_snapshot_versions().map_err(to_py_err))
     }
 
     /// Executes a VelesQL query against the semantic memory collection.
@@ -377,8 +377,8 @@ impl AgentMemory {
         &self,
         py: Python<'_>,
         query_str: &str,
-        params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<PyObject>> {
+        params: Option<HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         self.run_memory_query(py, query_str, params, |c, sql, p| c.query_semantic(sql, p))
     }
 
@@ -388,8 +388,8 @@ impl AgentMemory {
         &self,
         py: Python<'_>,
         query_str: &str,
-        params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<PyObject>> {
+        params: Option<HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         self.run_memory_query(py, query_str, params, |c, sql, p| c.query_episodic(sql, p))
     }
 
@@ -399,8 +399,8 @@ impl AgentMemory {
         &self,
         py: Python<'_>,
         query_str: &str,
-        params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<PyObject>> {
+        params: Option<HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         self.run_memory_query(py, query_str, params, |c, sql, p| {
             c.query_procedural(sql, p)
         })
@@ -434,9 +434,9 @@ impl AgentMemory {
         &self,
         py: Python<'_>,
         query_str: &str,
-        params: Option<HashMap<String, PyObject>>,
+        params: Option<HashMap<String, Py<PyAny>>>,
         execute: F,
-    ) -> PyResult<Vec<PyObject>>
+    ) -> PyResult<Vec<Py<PyAny>>>
     where
         F: FnOnce(
                 &CoreAgentMemory,
@@ -447,14 +447,13 @@ impl AgentMemory {
     {
         let rust_params = convert_params(py, params)?;
         let core = Arc::clone(&self.core);
-        let results =
-            py.allow_threads(|| execute(&core, query_str, &rust_params).map_err(to_py_err))?;
+        let results = py.detach(|| execute(&core, query_str, &rust_params).map_err(to_py_err))?;
         Ok(search_results_to_multimodel_dicts(py, results))
     }
 }
 
 /// Builds a Python dict from an `ExpireResult`.
-fn expire_result_to_dict(py: Python<'_>, r: &velesdb_core::agent::ExpireResult) -> PyObject {
+fn expire_result_to_dict(py: Python<'_>, r: &velesdb_core::agent::ExpireResult) -> Py<PyAny> {
     let dict = PyDict::new(py);
     let _ = dict.set_item(PyString::intern(py, "semantic_expired"), r.semantic_expired);
     let _ = dict.set_item(PyString::intern(py, "episodic_expired"), r.episodic_expired);
@@ -512,7 +511,7 @@ impl PySemanticMemory {
     #[pyo3(signature = (id, content, embedding))]
     fn store(&self, py: Python<'_>, id: u64, content: &str, embedding: Vec<f32>) -> PyResult<()> {
         let content_owned = content.to_string();
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner()
                 .store(id, &content_owned, &embedding)
                 .map_err(to_py_err)
@@ -542,7 +541,7 @@ impl PySemanticMemory {
         ttl_seconds: u64,
     ) -> PyResult<()> {
         let content_owned = content.to_string();
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner()
                 .store_with_ttl(id, &content_owned, &embedding, ttl_seconds)
                 .map_err(to_py_err)
@@ -563,9 +562,8 @@ impl PySemanticMemory {
     ///     >>> for r in results:
     ///     ...     print(f"{r['content']} (score: {r['score']:.3f})")
     #[pyo3(signature = (embedding, top_k = 10))]
-    fn query(&self, py: Python<'_>, embedding: Vec<f32>, top_k: usize) -> PyResult<PyObject> {
-        let results =
-            py.allow_threads(|| self.inner().query(&embedding, top_k).map_err(to_py_err))?;
+    fn query(&self, py: Python<'_>, embedding: Vec<f32>, top_k: usize) -> PyResult<Py<PyAny>> {
+        let results = py.detach(|| self.inner().query(&embedding, top_k).map_err(to_py_err))?;
 
         // Phase 3: Build Python objects (GIL held)
         // set_item is infallible on fresh dicts with interned keys and basic Python types.
@@ -589,15 +587,15 @@ impl PySemanticMemory {
     ///     >>> memory.semantic.delete(1)
     #[pyo3(signature = (id,))]
     fn delete(&self, py: Python<'_>, id: u64) -> PyResult<()> {
-        py.allow_threads(|| self.inner().delete(id).map_err(to_py_err))
+        py.detach(|| self.inner().delete(id).map_err(to_py_err))
     }
 
     /// Serializes all stored facts to a bytes blob for snapshotting.
     ///
     /// Returns:
     ///     A `bytes` object that can be passed back to `deserialize`.
-    fn serialize(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let bytes = py.allow_threads(|| self.inner().serialize().map_err(to_py_err))?;
+    fn serialize(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let bytes = py.detach(|| self.inner().serialize().map_err(to_py_err))?;
         Ok(pyo3::types::PyBytes::new(py, &bytes).into())
     }
 
@@ -607,7 +605,7 @@ impl PySemanticMemory {
     ///     data: Bytes previously produced by `serialize()`.
     #[pyo3(signature = (data))]
     fn deserialize(&self, py: Python<'_>, data: Vec<u8>) -> PyResult<()> {
-        py.allow_threads(|| self.inner().deserialize(&data).map_err(to_py_err))
+        py.detach(|| self.inner().deserialize(&data).map_err(to_py_err))
     }
 
     fn __repr__(&self) -> String {
@@ -659,7 +657,7 @@ impl PyEpisodicMemory {
         embedding: Option<Vec<f32>>,
     ) -> PyResult<()> {
         let description_owned = description.to_string();
-        py.allow_threads(|| {
+        py.detach(|| {
             let emb_ref = embedding.as_deref();
             self.inner()
                 .record(event_id, &description_owned, timestamp, emb_ref)
@@ -693,7 +691,7 @@ impl PyEpisodicMemory {
         embedding: Option<Vec<f32>>,
     ) -> PyResult<()> {
         let description_owned = description.to_string();
-        py.allow_threads(|| {
+        py.detach(|| {
             let emb_ref = embedding.as_deref();
             self.inner()
                 .record_with_ttl(
@@ -719,8 +717,8 @@ impl PyEpisodicMemory {
     /// Example:
     ///     >>> events = memory.episodic.recent(limit=5)
     #[pyo3(signature = (limit = 10, since = None))]
-    fn recent(&self, py: Python<'_>, limit: usize, since: Option<i64>) -> PyResult<PyObject> {
-        let results = py.allow_threads(|| self.inner().recent(limit, since).map_err(to_py_err))?;
+    fn recent(&self, py: Python<'_>, limit: usize, since: Option<i64>) -> PyResult<Py<PyAny>> {
+        let results = py.detach(|| self.inner().recent(limit, since).map_err(to_py_err))?;
         events_to_pylist(py, results)
     }
 
@@ -738,8 +736,8 @@ impl PyEpisodicMemory {
         py: Python<'_>,
         embedding: Vec<f32>,
         top_k: usize,
-    ) -> PyResult<PyObject> {
-        let results = py.allow_threads(|| {
+    ) -> PyResult<Py<PyAny>> {
+        let results = py.detach(|| {
             self.inner()
                 .recall_similar(&embedding, top_k)
                 .map_err(to_py_err)
@@ -769,9 +767,8 @@ impl PyEpisodicMemory {
     /// Example:
     ///     >>> old_events = memory.episodic.older_than(before=yesterday, limit=20)
     #[pyo3(signature = (before, limit = 10))]
-    fn older_than(&self, py: Python<'_>, before: i64, limit: usize) -> PyResult<PyObject> {
-        let results =
-            py.allow_threads(|| self.inner().older_than(before, limit).map_err(to_py_err))?;
+    fn older_than(&self, py: Python<'_>, before: i64, limit: usize) -> PyResult<Py<PyAny>> {
+        let results = py.detach(|| self.inner().older_than(before, limit).map_err(to_py_err))?;
         events_to_pylist(py, results)
     }
 
@@ -784,7 +781,7 @@ impl PyEpisodicMemory {
     ///     >>> memory.episodic.delete(1)
     #[pyo3(signature = (event_id,))]
     fn delete(&self, py: Python<'_>, event_id: u64) -> PyResult<()> {
-        py.allow_threads(|| self.inner().delete(event_id).map_err(to_py_err))
+        py.detach(|| self.inner().delete(event_id).map_err(to_py_err))
     }
 
     fn __repr__(&self) -> String {
@@ -837,7 +834,7 @@ impl PyProceduralMemory {
         confidence: f32,
     ) -> PyResult<()> {
         let name_owned = name.to_string();
-        py.allow_threads(|| {
+        py.detach(|| {
             let emb_ref = embedding.as_deref();
             self.inner()
                 .learn(procedure_id, &name_owned, &steps, emb_ref, confidence)
@@ -874,7 +871,7 @@ impl PyProceduralMemory {
         confidence: f32,
     ) -> PyResult<()> {
         let name_owned = name.to_string();
-        py.allow_threads(|| {
+        py.detach(|| {
             let emb_ref = embedding.as_deref();
             self.inner()
                 .learn_with_ttl(
@@ -908,8 +905,8 @@ impl PyProceduralMemory {
         embedding: Vec<f32>,
         top_k: usize,
         min_confidence: f32,
-    ) -> PyResult<PyObject> {
-        let results = py.allow_threads(|| {
+    ) -> PyResult<Py<PyAny>> {
+        let results = py.detach(|| {
             self.inner()
                 .recall(&embedding, top_k, min_confidence)
                 .map_err(to_py_err)
@@ -929,7 +926,7 @@ impl PyProceduralMemory {
     ///     >>> memory.procedural.reinforce(1, success=True)
     #[pyo3(signature = (procedure_id, success))]
     fn reinforce(&self, py: Python<'_>, procedure_id: u64, success: bool) -> PyResult<()> {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner()
                 .reinforce(procedure_id, success)
                 .map_err(to_py_err)
@@ -943,8 +940,8 @@ impl PyProceduralMemory {
     ///
     /// Example:
     ///     >>> all_procs = memory.procedural.list_all()
-    fn list_all(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let results = py.allow_threads(|| self.inner().list_all().map_err(to_py_err))?;
+    fn list_all(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let results = py.detach(|| self.inner().list_all().map_err(to_py_err))?;
         procedures_to_pylist(py, results)
     }
 
@@ -957,7 +954,7 @@ impl PyProceduralMemory {
     ///     >>> memory.procedural.delete(1)
     #[pyo3(signature = (procedure_id,))]
     fn delete(&self, py: Python<'_>, procedure_id: u64) -> PyResult<()> {
-        py.allow_threads(|| self.inner().delete(procedure_id).map_err(to_py_err))
+        py.detach(|| self.inner().delete(procedure_id).map_err(to_py_err))
     }
 
     fn __repr__(&self) -> String {

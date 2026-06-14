@@ -29,7 +29,7 @@ pub fn reject_nan_vector(vector: &[f32]) -> PyResult<()> {
     Ok(())
 }
 
-/// Extracts a vector from a PyObject, supporting both Python lists and NumPy arrays.
+/// Extracts a vector from a Py<PyAny>, supporting both Python lists and NumPy arrays.
 ///
 /// After extraction the vector is validated: NaN values are rejected with a
 /// `PyValueError`.
@@ -44,7 +44,7 @@ pub fn reject_nan_vector(vector: &[f32]) -> PyResult<()> {
 /// # Errors
 /// Returns an error if the object is neither a list nor a numpy array,
 /// or if the extracted vector contains NaN values.
-pub fn extract_vector(py: Python<'_>, obj: &PyObject) -> PyResult<Vec<f32>> {
+pub fn extract_vector(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<Vec<f32>> {
     // Try numpy array first (most common in ML workflows)
     if let Ok(array) = obj.extract::<numpy::PyReadonlyArray1<f32>>(py) {
         let vec = array.as_slice()?.to_vec();
@@ -96,7 +96,7 @@ pub fn parse_storage_mode(mode: &str) -> PyResult<StorageMode> {
 /// # Errors
 ///
 /// Returns `PyValueError` if the Python object type is not JSON-serializable.
-pub fn python_to_json(py: Python<'_>, obj: &PyObject) -> PyResult<serde_json::Value> {
+pub fn python_to_json(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<serde_json::Value> {
     if let Ok(s) = obj.extract::<String>(py) {
         return Ok(serde_json::Value::String(s));
     }
@@ -118,14 +118,14 @@ pub fn python_to_json(py: Python<'_>, obj: &PyObject) -> PyResult<serde_json::Va
     if obj.is_none(py) {
         return Ok(serde_json::Value::Null);
     }
-    if let Ok(list) = obj.extract::<Vec<PyObject>>(py) {
+    if let Ok(list) = obj.extract::<Vec<Py<PyAny>>>(py) {
         let arr: Vec<serde_json::Value> = list
             .iter()
             .map(|item| python_to_json(py, item))
             .collect::<PyResult<_>>()?;
         return Ok(serde_json::Value::Array(arr));
     }
-    if let Ok(dict) = obj.extract::<HashMap<String, PyObject>>(py) {
+    if let Ok(dict) = obj.extract::<HashMap<String, Py<PyAny>>>(py) {
         let map: serde_json::Map<String, serde_json::Value> = dict
             .into_iter()
             .map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
@@ -143,13 +143,13 @@ pub fn python_to_json(py: Python<'_>, obj: &PyObject) -> PyResult<serde_json::Va
     )))
 }
 
-/// Helper to convert a value to `PyObject` using the `IntoPyObject` trait.
+/// Helper to convert a value to `Py<PyAny>` using the `IntoPyObject` trait.
 ///
 /// Returns `py.None()` on conversion failure instead of panicking,
-/// which preserves the existing `-> PyObject` signature for 18 callers.
+/// which preserves the existing `-> Py<PyAny>` signature for 18 callers.
 /// Failures are logged to help diagnose unexpected `None` values in results.
 #[inline]
-pub fn to_pyobject<'py, T>(py: Python<'py>, value: T) -> PyObject
+pub fn to_pyobject<'py, T>(py: Python<'py>, value: T) -> Py<PyAny>
 where
     T: IntoPyObjectExt<'py>,
 {
@@ -163,7 +163,7 @@ where
 ///
 /// Builds `PyDict`/`PyList` directly instead of going through `HashMap`/`Vec`
 /// intermediaries to avoid unnecessary allocations.
-pub fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> PyObject {
+pub fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> Py<PyAny> {
     use pyo3::types::{PyDict, PyList};
 
     match value {
@@ -180,8 +180,8 @@ pub fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> PyObject {
         }
         serde_json::Value::String(s) => to_pyobject(py, s.as_str()),
         serde_json::Value::Array(arr) => {
-            let items: Vec<PyObject> = arr.iter().map(|v| json_to_python(py, v)).collect();
-            // PyList::new is infallible for Vec<PyObject> items.
+            let items: Vec<Py<PyAny>> = arr.iter().map(|v| json_to_python(py, v)).collect();
+            // PyList::new is infallible for Vec<Py<PyAny>> items.
             let list = PyList::new(py, &items).unwrap_or_else(|_| PyList::empty(py));
             list.into_any().unbind()
         }
@@ -229,10 +229,10 @@ mod tests {
 
     #[test]
     fn test_extract_vector_rejects_nan_list() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let list = vec![1.0_f32, f32::NAN, 3.0];
-            let obj: PyObject = list
+            let obj: Py<PyAny> = list
                 .into_pyobject(py)
                 .expect("test: convert Vec<f32> to Python list")
                 .into();
@@ -243,8 +243,8 @@ mod tests {
 
     #[test]
     fn test_parse_metric_cosine() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|_py| {
+        pyo3::Python::initialize();
+        Python::attach(|_py| {
             assert!(matches!(
                 parse_metric("cosine").expect("test: 'cosine' is a valid metric"),
                 DistanceMetric::Cosine
@@ -259,8 +259,8 @@ mod tests {
 
     #[test]
     fn test_parse_metric_euclidean() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|_py| {
+        pyo3::Python::initialize();
+        Python::attach(|_py| {
             assert!(matches!(
                 parse_metric("euclidean").expect("test: 'euclidean' is a valid metric"),
                 DistanceMetric::Euclidean
@@ -274,8 +274,8 @@ mod tests {
 
     #[test]
     fn test_parse_metric_dot() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|_py| {
+        pyo3::Python::initialize();
+        Python::attach(|_py| {
             assert!(matches!(
                 parse_metric("dot").expect("test: 'dot' is a valid metric"),
                 DistanceMetric::DotProduct
@@ -293,8 +293,8 @@ mod tests {
 
     #[test]
     fn test_parse_metric_hamming() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|_py| {
+        pyo3::Python::initialize();
+        Python::attach(|_py| {
             assert!(matches!(
                 parse_metric("hamming").expect("test: 'hamming' is a valid metric"),
                 DistanceMetric::Hamming
@@ -304,8 +304,8 @@ mod tests {
 
     #[test]
     fn test_parse_metric_jaccard() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|_py| {
+        pyo3::Python::initialize();
+        Python::attach(|_py| {
             assert!(matches!(
                 parse_metric("jaccard").expect("test: 'jaccard' is a valid metric"),
                 DistanceMetric::Jaccard
@@ -315,16 +315,16 @@ mod tests {
 
     #[test]
     fn test_parse_metric_invalid() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|_py| {
+        pyo3::Python::initialize();
+        Python::attach(|_py| {
             assert!(parse_metric("invalid").is_err());
         });
     }
 
     #[test]
     fn test_parse_storage_mode_full() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|_py| {
+        pyo3::Python::initialize();
+        Python::attach(|_py| {
             assert!(matches!(
                 parse_storage_mode("full").expect("test: 'full' is a valid storage mode"),
                 StorageMode::Full
@@ -338,8 +338,8 @@ mod tests {
 
     #[test]
     fn test_parse_storage_mode_sq8() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|_py| {
+        pyo3::Python::initialize();
+        Python::attach(|_py| {
             assert!(matches!(
                 parse_storage_mode("sq8").expect("test: 'sq8' is a valid storage mode"),
                 StorageMode::SQ8
@@ -353,8 +353,8 @@ mod tests {
 
     #[test]
     fn test_parse_storage_mode_binary() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|_py| {
+        pyo3::Python::initialize();
+        Python::attach(|_py| {
             assert!(matches!(
                 parse_storage_mode("binary").expect("test: 'binary' is a valid storage mode"),
                 StorageMode::Binary
@@ -368,8 +368,8 @@ mod tests {
 
     #[test]
     fn test_parse_storage_mode_pq() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|_py| {
+        pyo3::Python::initialize();
+        Python::attach(|_py| {
             assert!(matches!(
                 parse_storage_mode("pq").expect("test: 'pq' is a valid storage mode"),
                 StorageMode::ProductQuantization
@@ -389,8 +389,8 @@ mod tests {
 
     #[test]
     fn test_parse_storage_mode_rabitq() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|_py| {
+        pyo3::Python::initialize();
+        Python::attach(|_py| {
             assert!(matches!(
                 parse_storage_mode("rabitq").expect("test: 'rabitq' is a valid storage mode"),
                 StorageMode::RaBitQ
@@ -411,8 +411,8 @@ mod tests {
 
     #[test]
     fn test_parse_storage_mode_invalid() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|_py| {
+        pyo3::Python::initialize();
+        Python::attach(|_py| {
             assert!(parse_storage_mode("invalid").is_err());
         });
     }

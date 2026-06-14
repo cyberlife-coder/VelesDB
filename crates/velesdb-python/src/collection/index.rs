@@ -14,7 +14,7 @@ impl Collection {
     fn create_property_index(&self, py: Python<'_>, label: &str, property: &str) -> PyResult<()> {
         let label_owned = label.to_string();
         let property_owned = property.to_string();
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner
                 .create_property_index(&label_owned, &property_owned)
                 .map_err(core_err)
@@ -26,7 +26,7 @@ impl Collection {
     fn create_range_index(&self, py: Python<'_>, label: &str, property: &str) -> PyResult<()> {
         let label_owned = label.to_string();
         let property_owned = property.to_string();
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner
                 .create_range_index(&label_owned, &property_owned)
                 .map_err(core_err)
@@ -49,9 +49,9 @@ impl Collection {
     ///
     /// Returns:
     ///     List of dicts with keys: label, property, index_type, cardinality, memory_bytes
-    fn list_indexes(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+    fn list_indexes(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let indexes = self.inner.list_indexes();
-        let py_indexes: Vec<PyObject> = indexes
+        let py_indexes: Vec<Py<PyAny>> = indexes
             .into_iter()
             .map(|idx| {
                 let dict = PyDict::new(py);
@@ -78,7 +78,7 @@ impl Collection {
     fn drop_index(&self, py: Python<'_>, label: &str, property: &str) -> PyResult<bool> {
         let label_owned = label.to_string();
         let property_owned = property.to_string();
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner
                 .drop_index(&label_owned, &property_owned)
                 .map_err(core_err)

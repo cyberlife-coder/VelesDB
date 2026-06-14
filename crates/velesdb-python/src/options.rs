@@ -47,7 +47,7 @@ use velesdb_core::index::hnsw::HnswParams;
 ///     ...     dimension=128,
 ///     ...     hnsw=HnswOptions.for_dataset_size(128, 1_000_000),
 ///     ... )
-#[pyclass(module = "velesdb")]
+#[pyclass(module = "velesdb", from_py_object)]
 #[derive(Clone, Debug, Default)]
 pub struct HnswOptions {
     /// Maximum connections per node (M parameter). Higher = better
@@ -228,7 +228,7 @@ impl HnswOptions {
 /// - `max_perfect_mode_vectors` — parsed but not yet enforced
 ///
 /// See `docs/CORE_WIRING_DEBT.md` for the enforcement roadmap.
-#[pyclass(module = "velesdb")]
+#[pyclass(module = "velesdb", from_py_object)]
 #[derive(Clone, Debug, Default)]
 pub struct LimitsOptions {
     /// Maximum number of collections in the database. Default: 1000.
@@ -319,7 +319,7 @@ impl LimitsOptions {
 ///
 /// `cooldown_secs` is exposed as an integer (seconds) rather than a
 /// `Duration` to avoid the Python/Rust serde mismatch.
-#[pyclass(module = "velesdb")]
+#[pyclass(module = "velesdb", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct AutoReindexOptions {
     /// Enable auto-reindex divergence detection. Default: `true`.
@@ -437,7 +437,7 @@ impl AutoReindexOptions {
 /// `wal_batch` is intentionally not exposed: the concurrent WAL
 /// writer is a velesdb-premium Enterprise feature. See
 /// `docs/guides/WRITE_CONCURRENCY.md`.
-#[pyclass(module = "velesdb")]
+#[pyclass(module = "velesdb", from_py_object)]
 #[derive(Clone, Debug, Default)]
 pub struct VelesConfigOptions {
     /// Tenant-wide guard-rail limits.

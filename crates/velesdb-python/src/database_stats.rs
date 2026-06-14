@@ -20,7 +20,7 @@ impl Database {
     /// Example:
     ///     >>> stats = db.plan_cache_stats()
     ///     >>> print(stats["hit_rate"])
-    fn plan_cache_stats(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn plan_cache_stats(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let cache = self.inner().plan_cache();
         let stats = cache.stats();
         let metrics = cache.metrics();

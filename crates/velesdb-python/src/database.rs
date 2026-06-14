@@ -166,7 +166,7 @@ impl Database {
         let core_observer: Option<Arc<dyn DatabaseObserver>> =
             observer.map(|cb| Arc::new(PyObserver::new(cb)) as Arc<dyn DatabaseObserver>);
         let db = py
-            .allow_threads(move || open_core(&path_clone, core_config, core_observer))
+            .detach(move || open_core(&path_clone, core_config, core_observer))
             .map_err(core_err)?;
         Ok(Self {
             inner: Arc::new(db),
@@ -276,7 +276,7 @@ impl Database {
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
         let name_for_closure = name_owned.clone();
-        py.allow_threads(move || match plan {
+        py.detach(move || match plan {
             CreatePlan::Full {
                 hnsw_params,
                 pq_rescore_oversampling,
@@ -389,7 +389,7 @@ impl Database {
         // other Python threads keep running.
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
-        py.allow_threads(move || inner.delete_collection(&name_owned))
+        py.detach(move || inner.delete_collection(&name_owned))
             .map_err(core_err)
     }
 
@@ -415,7 +415,7 @@ impl Database {
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
         let name_for_closure = name_owned.clone();
-        py.allow_threads(move || inner.create_metadata_collection(&name_for_closure))
+        py.detach(move || inner.create_metadata_collection(&name_for_closure))
             .map_err(core_err)?;
 
         // Use get_any_collection to get the registered instance (not a disconnected copy).
@@ -543,7 +543,7 @@ impl Database {
         let inner = Arc::clone(&self.inner);
         let name_for_closure = name_owned.clone();
 
-        py.allow_threads(move || {
+        py.detach(move || {
             inner.create_collection_typed(
                 &name_for_closure,
                 &CollectionType::Graph {
@@ -616,8 +616,8 @@ impl Database {
         &self,
         py: Python<'_>,
         sql: &str,
-        params: Option<std::collections::HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<PyObject>> {
+        params: Option<std::collections::HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         use crate::collection::query::{convert_params, parse_velesql};
         use crate::collection_helpers::search_results_to_multimodel_dicts;
 
@@ -625,7 +625,7 @@ impl Database {
         let rust_params = convert_params(py, params)?;
         let inner = Arc::clone(&self.inner);
         let results = py
-            .allow_threads(move || inner.execute_query(&parsed, &rust_params))
+            .detach(move || inner.execute_query(&parsed, &rust_params))
             .map_err(core_err)?;
         Ok(search_results_to_multimodel_dicts(py, results))
     }
@@ -668,7 +668,7 @@ impl Database {
     ///     >>> stats = db.analyze_collection("documents")
     ///     >>> print(stats["total_points"])
     #[pyo3(signature = (name))]
-    fn analyze_collection(&self, py: Python<'_>, name: &str) -> PyResult<PyObject> {
+    fn analyze_collection(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
         // `analyze_collection` walks the column store and the index,
         // computing cardinality, size histograms, and graph stats. On
         // a ten-million-row collection it crosses the 1-second mark —
@@ -676,7 +676,7 @@ impl Database {
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
         let stats = py
-            .allow_threads(move || inner.analyze_collection(&name_owned))
+            .detach(move || inner.analyze_collection(&name_owned))
             .map_err(core_err)?;
         let json = serde_json::to_value(&stats)
             .map_err(|e| PyRuntimeError::new_err(format!("Serialization failed: {e}")))?;
@@ -702,7 +702,7 @@ impl Database {
     ///     >>> if stats is not None:
     ///     ...     print(stats["row_count"])
     #[pyo3(signature = (name))]
-    fn get_collection_stats(&self, py: Python<'_>, name: &str) -> PyResult<Option<PyObject>> {
+    fn get_collection_stats(&self, py: Python<'_>, name: &str) -> PyResult<Option<Py<PyAny>>> {
         // `get_collection_stats` reads the cached stats file from disk
         // when the in-memory cache is cold, so in the worst case it
         // performs a small I/O. Release the GIL so other Python threads
@@ -710,7 +710,7 @@ impl Database {
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
         let maybe_stats = py
-            .allow_threads(move || inner.get_collection_stats(&name_owned))
+            .detach(move || inner.get_collection_stats(&name_owned))
             .map_err(core_err)?;
         maybe_stats
             .map(|stats| {
@@ -739,12 +739,12 @@ impl Database {
     /// Raises:
     ///     RuntimeError: If the collection does not exist.
     #[pyo3(signature = (name))]
-    fn collection_diagnostics(&self, py: Python<'_>, name: &str) -> PyResult<PyObject> {
+    fn collection_diagnostics(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
         use velesdb_core::collection::IndexHealth;
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
         let diag = py
-            .allow_threads(move || inner.collection_diagnostics(&name_owned))
+            .detach(move || inner.collection_diagnostics(&name_owned))
             .map_err(core_err)?;
 
         let dict = pyo3::types::PyDict::new(py);
@@ -783,7 +783,7 @@ impl Database {
     /// Raises:
     ///     ValueError: If a field is missing, unknown, or has an invalid value.
     #[pyo3(signature = (limits))]
-    fn update_guardrails(&self, py: Python<'_>, limits: PyObject) -> PyResult<()> {
+    fn update_guardrails(&self, py: Python<'_>, limits: Py<PyAny>) -> PyResult<()> {
         let json = utils::python_to_json(py, &limits)?;
         let obj = json
             .as_object()
@@ -791,7 +791,7 @@ impl Database {
         validate_guardrail_keys(obj)?;
         let parsed: velesdb_core::guardrails::QueryLimits = serde_json::from_value(json)
             .map_err(|e| PyValueError::new_err(format!("invalid guardrails: {e}")))?;
-        py.allow_threads(|| self.inner.update_guardrails(&parsed));
+        py.detach(|| self.inner.update_guardrails(&parsed));
         Ok(())
     }
 }
