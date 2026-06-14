@@ -595,8 +595,31 @@ class Database:
         self,
         path: str,
         config: VelesConfigOptions | None = None,
+        observer: Any | None = None,
     ) -> None:
-        self._inner = _RawDatabase(path, config)
+        """Open or create a database.
+
+        Args:
+            path: Directory path for database storage.
+            config: Optional :class:`VelesConfigOptions` applied at open time.
+            observer: Optional callable invoked on collection lifecycle
+                events as ``observer(event, **fields)``. ``event`` is one of
+                ``"collection_created"`` (fields ``name``, ``kind``, where
+                ``kind`` is ``"vector"``/``"metadata"``/``"graph"``/``"unknown"``),
+                ``"collection_deleted"`` (``name``), ``"upsert"``
+                (``collection``, ``point_count``), or ``"query"``
+                (``collection``, ``duration_us``). The observer is immutable
+                once the database is opened and cannot veto operations;
+                exceptions it raises are swallowed.
+
+                Caveat: in the embedded Python SDK only
+                ``collection_created`` / ``collection_deleted`` fire, as they
+                originate in the core engine. ``upsert`` / ``query`` are
+                emitted only by callers that explicitly call
+                ``notify_upsert`` / ``notify_query`` — in this ecosystem that
+                is the REST server, not embedded usage.
+        """
+        self._inner = _RawDatabase(path, config, observer)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
