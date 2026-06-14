@@ -35,7 +35,48 @@ the residual gaps are core-internal/ops plumbing (by design) or already tracked 
 - **Wave 2 — divergence removal:** T1 (under the recall gate, protected by T2's net), T4 type re-export.
 - **Wave 3 — docs:** T6.
 
-EPIC IDs: highest referenced today is EPIC-078 → candidates EPIC-079…084 (confirm next free ID in the tracker before tagging code TODOs).
+EPIC IDs: highest referenced today is EPIC-080 (`ci.yml`) → candidates EPIC-081… (confirm next free ID in the tracker before tagging code TODOs).
+
+## EPIC-081 (proposed) — Ordered-index `ORDER BY <col> LIMIT k` pushdown (B001 perf follow-up)
+
+**Why.** The B001 fix made scalar `ORDER BY <col> … LIMIT k` *correct* by fetching the full
+matching set before sorting — but at O(n): measured **312 ms** for `ORDER BY year DESC LIMIT 10`
+over 50k rows (capped at `MAX_LIMIT`=100k). An ordered index serves top-k without scanning all rows.
+
+**Substrate decision (from the design fan-out).** Build on **`SecondaryIndex::BTree`**
+(`crates/velesdb-core/src/index/secondary/mod.rs`) — the only flat-payload ordered structure that is
+actually *populated and maintained* on upsert/delete/bulk, keyed by field name, with a total-`Ord`
+`JsonValue` key. **Do not** use `RangeIndex` (`collection/graph/range_index.rs`): it is **inert**
+(`self.range_index.insert` is never called from any CRUD path), label-bound, and its range queries
+return *unordered* bitmaps. Tradeoff: `SecondaryIndex` is **not snapshotted** (rebuilt on `create_index`
+via backfill), so the optimization is **opt-in per field** — which matches existing secondary-index
+semantics and needs no new persistence format. (A later phase may add snapshotting in `flush.rs`.)
+
+**Phase 1 — primitive (DONE, on this branch).** `SecondaryIndex::ordered_ids(descending, limit)` +
+6 golden tests (`ordered_ids_tests.rs`). Pure BTreeMap walk (`.values()`, `.rev()` for DESC), O(log n + k),
+ascending IDs within an equal-key bucket for determinism. Currently `#[allow(dead_code)]` (no consumer yet).
+
+**Phase 2 — minimal planner routing (gated hard).** At the B001 hook
+`Collection::order_by_requires_exhaustive_fetch` (`select_dispatch.rs:98`), add an `Option<OrderedScanPlan>`
+that fires **only** when ALL hold: primary `ORDER BY` is a single plain `Field` (not Aggregate/Arithmetic/
+similarity); that field has a secondary index; the field is **fully covered** (index id-count == point count —
+no missing/JSON-null rows, which a full sort places first/last but the index omits); and there is **no**
+WHERE / JOIN / graph / DISTINCT / vector-search. Then fetch the top-k IDs from `ordered_ids`, **snapshot the
+IDs and release the index lock before hydrating** (`get(ids)` re-reads payload, so it tolerates concurrent
+writes and respects lock ordering), and skip the `MAX_LIMIT` exhaustive fetch + in-memory sort. Else fall
+straight through to today's exact behavior — zero change. **The similarity() HNSW fast path is untouched**
+(the hook already returns false for a leading `similarity()` key).
+
+**Gate (Phase 2).** A correctness matrix asserting the index path's result **equals** the unbounded sort
+truncated to k (KNOWN_LIMITATIONS #9) across ASC/DESC × {OFFSET, ties, exact-k, k>n}; an explicit
+tie-determinism decision (the full-scan uses an *unstable* sort, so ties have no canonical order — the index
+path is deterministic by ID, arguably better but a behavior change to ratify); a recall@10 non-regression run;
+and a perf benchmark showing sub-linear top-k vs the 312 ms/50k baseline. Disable the route entirely for any
+collection containing an id > `u32::MAX` (the bitmap paths can't represent it).
+
+**Phase 3 — broaden (separate, optional).** WHERE-filtered top-k (walk the index in order, apply the
+prefilter, stop at k); multi-column `ORDER BY` (index prunes lead-key groups, secondary sort within each);
+secondary-index snapshotting for auto-persistence; an auto-index advisor for hot `ORDER BY` fields.
 
 ## Artifacts produced by the audit
 - `PARITY_MATRIX.md` (81 capabilities × 13 components) — regenerate via `.claude/skills/core-parity-audit/scripts/gen_matrix.py`.
