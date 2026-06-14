@@ -23,6 +23,10 @@ pyo3 = { version = "0.24", features = ["extension-module", "multiple-pymethods",
 serde_json = { workspace = true }
 numpy = "0.24"
 parking_lot = "0.12"
+# Hosts the background streaming-ingestion drain task (Collection.enable_streaming).
+# The Python process has no ambient Tokio runtime, so the bindings provide a
+# shared multi-thread runtime for the StreamIngester to spawn its drain loop on.
+tokio = { workspace = true }
 
 [features]
 default = ["velesdb-core/default"]
