@@ -315,10 +315,29 @@ impl Collection {
             sparse_indexes,
         });
 
+        collection.restore_auto_reindex_from_config();
+
         #[cfg(feature = "persistence")]
         collection.run_post_open_hooks()?;
 
         Ok(collection)
+    }
+
+    /// Restores the [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager)
+    /// from the persisted `auto_reindex_config` (schema v2 — W2).
+    ///
+    /// No-op when `auto_reindex_config` is `None` (v1 collections or those
+    /// created without an auto-reindex policy). Previously the manager had to
+    /// be re-attached manually after every open
+    /// (see `docs/CORE_WIRING_DEBT.md` entry 2).
+    fn restore_auto_reindex_from_config(&self) {
+        let cfg = self.config.read().auto_reindex_config.clone();
+        if let Some(cfg) = cfg {
+            let manager = Arc::new(crate::collection::auto_reindex::AutoReindexManager::new(
+                cfg,
+            ));
+            self.attach_auto_reindex(manager);
+        }
     }
 
     /// Pre-assemble index recovery: quantizer preinstall + 3-pass

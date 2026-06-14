@@ -3,6 +3,7 @@
 use crate::collection::types::Collection;
 use crate::point::Point;
 
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
@@ -19,29 +20,44 @@ use tokio::sync::Notify;
 /// | `batch_size`       | 128      |
 /// | `flush_interval_ms`| 50       |
 ///
-/// Future: persist StreamingConfig in CollectionConfig (STREAM-04)
-///
-/// `StreamingConfig` is currently runtime-only. A future pass should
-/// serialize it into `CollectionConfig` so the pipeline is automatically
-/// restored on `Collection::open`.
-#[derive(Debug, Clone)]
+/// Persisted into `CollectionConfig` (schema v2+). The struct only describes
+/// the pipeline shape (sizes/timing); the live `StreamIngester` is still
+/// created on demand via `Collection::enable_streaming`. Each field carries a
+/// serde default matching [`Default`] so an older or partial `config.json`
+/// deserializes without error.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamingConfig {
     /// Capacity of the bounded mpsc channel (backpressure threshold).
+    #[serde(default = "default_buffer_size")]
     pub buffer_size: usize,
 
     /// Number of points that trigger an immediate micro-batch flush.
+    #[serde(default = "default_batch_size")]
     pub batch_size: usize,
 
     /// Maximum time (ms) before a partial batch is flushed.
+    #[serde(default = "default_flush_interval_ms")]
     pub flush_interval_ms: u64,
+}
+
+fn default_buffer_size() -> usize {
+    10_000
+}
+
+fn default_batch_size() -> usize {
+    128
+}
+
+fn default_flush_interval_ms() -> u64 {
+    50
 }
 
 impl Default for StreamingConfig {
     fn default() -> Self {
         Self {
-            buffer_size: 10_000,
-            batch_size: 128,
-            flush_interval_ms: 50,
+            buffer_size: default_buffer_size(),
+            batch_size: default_batch_size(),
+            flush_interval_ms: default_flush_interval_ms(),
         }
     }
 }

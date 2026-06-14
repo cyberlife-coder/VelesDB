@@ -473,29 +473,38 @@ impl Collection {
         }
     }
 
-    /// Attaches a runtime-only [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager).
+    /// Attaches an [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager)
+    /// and records its config for persistence (schema v2 — W2).
     ///
     /// Replaces any previously attached manager. The manager is consulted by
     /// the bulk upsert hot path after every successful batch and can be
     /// queried externally via [`Self::auto_reindex_manager`] or
     /// [`Self::check_auto_reindex_divergence`].
     ///
-    /// The attachment is **not persisted**. After a [`Database::open`] the
-    /// caller must re-attach the manager if auto-reindex behavior is desired.
+    /// The manager's config is mirrored into [`CollectionConfig::auto_reindex_config`]
+    /// so the next `save_config` persists it; the manager is then restored
+    /// automatically on the following [`Collection::open`] without a manual
+    /// re-attach.
     pub(crate) fn attach_auto_reindex(
         &self,
         manager: Arc<crate::collection::auto_reindex::AutoReindexManager>,
     ) {
+        // Mirror the policy into the persisted config first (config lock
+        // released before the auto_reindex lock at position 11 is taken).
+        self.config.write().auto_reindex_config = Some(manager.config());
         *self.auto_reindex.write() = Some(manager);
     }
 
     /// Detaches the currently attached auto-reindex manager, if any.
     ///
     /// Subsequent bulk upserts will no longer consult the manager. Returns
-    /// the previously attached manager so callers can drop or reuse it.
+    /// the previously attached manager so callers can drop or reuse it. Also
+    /// clears the persisted [`CollectionConfig::auto_reindex_config`] so a
+    /// subsequent `save_config` does not re-restore it on the next open.
     pub(crate) fn detach_auto_reindex(
         &self,
     ) -> Option<Arc<crate::collection::auto_reindex::AutoReindexManager>> {
+        self.config.write().auto_reindex_config = None;
         self.auto_reindex.write().take()
     }
 
