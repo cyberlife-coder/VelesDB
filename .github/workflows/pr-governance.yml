@@ -45,7 +45,7 @@ jobs:
             case "$src" in
               feature/*|feat/*|fix/*|bugfix/*|refactor/*|chore/*) return 0 ;;
               docs/*|style/*|perf/*|test/*|build/*|ci/*) return 0 ;;
-              dependabot/*|claude/*) return 0 ;;
+              dependabot/*) return 0 ;;
               *) return 1 ;;
             esac
           }
@@ -97,3 +97,21 @@ jobs:
             echo "::error::Branch is behind origin/${BASE_REF}. Rebase/merge ${BASE_REF} before opening this PR."
             exit 1
           fi
+
+      - name: Reject AI-attributed commits
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          # Commits introduced by this PR must be authored as the human
+          # maintainer, with no AI/assistant identity or attribution trailers.
+          git fetch origin "${BASE_REF}" --depth=200
+          range="origin/${BASE_REF}..HEAD"
+          ident=$(git log "$range" --format='%H %an <%ae> | %cn <%ce>' | grep -iE 'claude|anthropic' || true)
+          trailers=$(git log "$range" --format='%B' | grep -iE 'co-authored-by:.*(claude|anthropic)|generated with.*claude|claude\.ai/code|🤖' || true)
+          if [ -n "$ident" ] || [ -n "$trailers" ]; then
+            echo "::error::AI attribution is not allowed. Re-author commits as the maintainer and strip any Co-Authored-By / Generated-with / 🤖 trailers."
+            [ -n "$ident" ] && { echo "Offending author/committer identity:"; echo "$ident"; }
+            [ -n "$trailers" ] && { echo "Offending message lines:"; echo "$trailers"; }
+            exit 1
+          fi
+          echo "OK: no AI attribution in PR commits."
