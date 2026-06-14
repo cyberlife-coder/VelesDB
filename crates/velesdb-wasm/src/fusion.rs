@@ -6,6 +6,17 @@
 //! `relative_score` / `rsf` strategy keeps a WASM-local implementation because
 //! its N-branch equal-weight averaging semantics differ from core's two-branch
 //! (dense + sparse) `RelativeScore` — see [`fuse_relative_score`].
+//!
+//! Branch-arity split (why `rsf` is *not* converged here): the only production
+//! caller of [`fuse_results`] is `multi_query_search`, which fuses one branch
+//! per query vector, so the branch count is the user-supplied query count —
+//! genuinely N, with no dense/sparse distinction. Core's `RelativeScore` is
+//! defined only for the 2-branch dense+sparse hybrid (it discards branches
+//! beyond index 1), so delegating this N-branch path to it would silently drop
+//! results. The 2-branch hybrid that *does* match core's contract — the
+//! VelesQL `USING FUSION (strategy='rsf')` clause — already routes through core
+//! (`crate::velesql_fusion::build_rsf` → `FusionStrategy::relative_score`), so
+//! only the genuinely-N path stays WASM-local.
 
 use std::collections::HashMap;
 
@@ -209,6 +220,63 @@ mod tests {
         let fused = fuse_results(&results, "rsf", 60).unwrap();
         // "rsf" should behave like "relative_score"
         assert_eq!(fused.len(), 2);
+    }
+
+    /// Pins the *intentional* divergence between this WASM N-branch
+    /// `relative_score` and core's two-branch
+    /// [`velesdb_core::FusionStrategy::RelativeScore`] for the production
+    /// arity (`multi_query_search` fuses one branch per query vector, so N is
+    /// the user-supplied query count — genuinely N, not a fixed dense+sparse 2).
+    ///
+    /// Core's `RelativeScore` only consumes branches 0 and 1 (dense + sparse)
+    /// and discards the rest; this WASM path averages all N normalized branches.
+    /// They MUST keep producing a different ranking — if a future change tries
+    /// to "also delegate rsf to core", this test fails loudly instead of
+    /// silently corrupting multi-query WASM search results.
+    #[test]
+    fn test_rsf_n_branch_diverges_from_core_relative_score() {
+        // 3 homogeneous dense-query branches (N > 2).
+        let input: Vec<Vec<(u64, f32)>> = vec![
+            vec![(1, 0.9), (2, 0.1), (3, 0.5)],
+            vec![(1, 0.2), (2, 0.8)],
+            vec![(3, 1.0), (1, 0.0)],
+        ];
+
+        let wasm_order: Vec<u64> = fuse_results(&input, "relative_score", 60)
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+
+        // WASM averages every branch: id3 wins (0.75), id2 (0.5), id1 (0.333).
+        assert_eq!(
+            wasm_order,
+            vec![3, 2, 1],
+            "WASM rsf must average all N branches"
+        );
+
+        // Core discards branch index >= 2, so id3 (only present in branch 2)
+        // collapses to its dense contribution alone and sinks to the bottom.
+        let core_strategy = FusionStrategy::relative_score(0.5, 0.5).unwrap();
+        let core_order: Vec<u64> = core_strategy
+            .fuse(input.clone())
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(
+            core_order.last().copied(),
+            Some(3),
+            "core RelativeScore ranks the discarded-branch id last"
+        );
+
+        // WASM ranks id3 first, core ranks it last: the orderings genuinely
+        // diverge, so forcing convergence onto core would be a silent
+        // multi-query ranking regression. The split is deliberate.
+        assert_ne!(
+            wasm_order, core_order,
+            "N-branch rsf must diverge from core's 2-branch RelativeScore"
+        );
     }
 
     /// BUG regression (PR #556): when all scores in a branch are equal
