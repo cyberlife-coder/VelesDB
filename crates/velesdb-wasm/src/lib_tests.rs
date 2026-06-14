@@ -329,3 +329,35 @@ fn test_wasm_sparse_search_no_index_error() {
         "error should mention the missing sparse index"
     );
 }
+
+// =============================================================================
+// validate_multi_vector_len — overflow-safe flat multi-vector length check
+// =============================================================================
+
+#[test]
+fn test_validate_multi_vector_len_ok() {
+    // 3 vectors x 4 dims = 12 floats: the validated expected length is returned.
+    let expected =
+        store_search::validate_multi_vector_len(12, 3, 4).expect("test: 12 == 3 * 4 is valid");
+    assert_eq!(expected, 12);
+}
+
+#[test]
+fn test_validate_multi_vector_len_mismatch() {
+    // A buffer shorter than num_vectors * dimension is rejected.
+    let err = store_search::validate_multi_vector_len(10, 3, 4)
+        .expect_err("test: 10 != 3 * 4 must error");
+    assert!(
+        err.contains("expected 12"),
+        "error names the expected length"
+    );
+}
+
+#[test]
+fn test_validate_multi_vector_len_overflow() {
+    // num_vectors * dimension that wraps usize is rejected up front rather than
+    // spoofing the length check (the wasm32 32-bit overflow guard).
+    let err = store_search::validate_multi_vector_len(0, usize::MAX, 2)
+        .expect_err("test: usize::MAX * 2 overflows");
+    assert!(err.contains("overflow"), "error flags the overflow");
+}
