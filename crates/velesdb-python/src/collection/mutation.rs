@@ -278,6 +278,36 @@ impl Collection {
     ///     >>> count = collection.stream_insert([
     ///     ...     {"id": 1, "vector": [...], "payload": {"key": "value"}}
     ///     ... ])
+    /// Enables streaming ingestion on this collection.
+    ///
+    /// Must be called before `stream_insert`; otherwise stream inserts fail
+    /// with "not configured". Mirrors the REST `/stream/enable` endpoint and
+    /// the Tauri binding. Calling it again replaces the existing ingester.
+    ///
+    /// Args:
+    ///     config: Optional `StreamingIngestConfig`. Defaults to the engine
+    ///         defaults (buffer_size=10000, batch_size=128, flush_interval_ms=50).
+    ///
+    /// Example:
+    ///     >>> collection.enable_streaming(StreamingIngestConfig(batch_size=256))
+    ///     >>> collection.stream_insert([{"id": 1, "vector": [...]}])
+    #[pyo3(signature = (config=None))]
+    fn enable_streaming(&self, config: Option<crate::StreamingIngestConfig>) -> PyResult<()> {
+        let core_config = config.map_or_else(velesdb_core::StreamingConfig::default, |c| {
+            velesdb_core::StreamingConfig {
+                buffer_size: c.buffer_size,
+                batch_size: c.batch_size,
+                flush_interval_ms: c.flush_interval_ms,
+            }
+        });
+        // Spawning the drain task needs an ambient runtime; enter the shared
+        // streaming runtime so the task is scheduled on it and survives this call.
+        let runtime = crate::streaming_runtime::stream_runtime()?;
+        let _guard = runtime.enter();
+        self.inner.enable_streaming(core_config);
+        Ok(())
+    }
+
     #[pyo3(signature = (points))]
     fn stream_insert(
         &self,

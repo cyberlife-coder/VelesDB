@@ -6701,6 +6701,7 @@ dependencies = [
  "pyo3",
  "pyo3-build-config 0.28.3",
  "serde_json",
+ "tokio",
  "velesdb-core",
 ]
 
