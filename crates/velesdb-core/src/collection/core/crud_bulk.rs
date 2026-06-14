@@ -13,7 +13,6 @@ use crate::error::{Error, Result};
 use crate::index::hnsw::direct_writer::DirectVectorWriter;
 use crate::point::Point;
 use crate::storage::VectorStorage;
-use crate::validation::validate_dimension_match;
 
 use std::collections::BTreeMap;
 
@@ -70,10 +69,10 @@ impl Collection {
             return Ok(0);
         }
 
+        // Parity item E + dimension validation at the cold boundary, before any
+        // storage lock / WAL write (shared with the single-upsert path).
         let dimension = self.config.read().dimension;
-        for point in points {
-            validate_dimension_match(dimension, point.dimension())?;
-        }
+        self.validate_vector_upsert_batch(points, dimension)?;
 
         let vector_refs: Vec<(u64, &[f32])> =
             points.iter().map(|p| (p.id, p.vector.as_slice())).collect();

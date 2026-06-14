@@ -152,7 +152,12 @@ legitimately drop rows fall back to the conservative server-side ceiling.
 
 ### 10. Configuration range caps
 
-**Status**: resolved (validated in every loader and on open). Source: `crates/velesdb-core/src/config_validation.rs`; called from `Config` loaders and `Database::open_with_config`.
+**Status**: resolved (validated in every loader and on open; the `limits.*`
+fields are additionally enforced at runtime since 2026-06-14). Source:
+`crates/velesdb-core/src/config_validation.rs` (range checks, called from
+`Config` loaders and `Database::open_with_config`);
+`crates/velesdb-core/src/collection/{types,payload_size,core/crud,core/bulk_import,core/graph_api,search/vector,search/vector_filter}.rs`
+and `database/collection_ops.rs` (runtime enforcement).
 
 `VelesConfig::validate()` now runs in every config loader (`load`,
 `load_from_path`, `from_toml`) **and** on `open_with_config`. Each capacity/limit
@@ -173,6 +178,21 @@ rather than being silently accepted (which previously allowed `0` = DoS or
 absurdly large = unbounded). The per-client `RateLimiter` map is also bounded
 with sampled eviction so a client cycling `client_id` values cannot OOM the
 limiter.
+
+Beyond range validation, all five `limits.*` fields are now **enforced at
+runtime** (2026-06-14): `max_dimensions` / `max_collections` at collection
+creation, and `max_vectors_per_collection` / `max_payload_size` /
+`max_perfect_mode_vectors` at the cold ingest/search boundary inside the
+`Collection` (off the hot path), covering the Point upsert, zero-copy raw
+bulk, graph node-write, and filtered/unfiltered search paths. An operation
+that would exceed a cap is rejected with `Error::GuardRail` (`VELES-027`)
+naming the actual value and the `limits.<field>` to raise; the engine never
+silently clamps. Two intentional scoping notes: (1) `max_vectors_per_collection`
+is a conservative O(1) pre-count (`stored + batch`) that treats every incoming
+point as net-new, so a collection exactly at the cap may reject a pure in-place
+update batch — raise the cap to update at the limit; (2) vector-less graph node
+writes do not increment the vector count, so `max_vectors_per_collection` does
+not apply to pure-graph node ingest (only `max_payload_size` does there).
 
 ### 11. `AllocGuard` per-allocation ceiling
 

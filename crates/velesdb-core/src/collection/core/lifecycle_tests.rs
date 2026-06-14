@@ -689,3 +689,40 @@ fn test_persist_streaming_config_across_reopen() {
     assert_eq!(streaming.batch_size, 64);
     assert_eq!(streaming.flush_interval_ms, 25);
 }
+
+/// A freshly created `Collection` starts with the permissive default runtime
+/// limits (matching `LimitsConfig::default`), and `set_runtime_limits`
+/// overwrites them. Without the push from `Database`, direct callers are
+/// therefore never constrained (parity item E).
+#[test]
+fn test_runtime_limits_default_permissive_and_setter_overwrites() {
+    use crate::collection::RuntimeLimits;
+
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 8, DistanceMetric::Cosine)
+        .expect("collection should be created");
+
+    // Default mirrors the permissive LimitsConfig::default values.
+    let defaults = crate::config::LimitsConfig::default();
+    let got = collection.runtime_limits();
+    assert_eq!(
+        got.max_vectors_per_collection,
+        defaults.max_vectors_per_collection
+    );
+    assert_eq!(got.max_payload_size, defaults.max_payload_size);
+    assert_eq!(
+        got.max_perfect_mode_vectors,
+        defaults.max_perfect_mode_vectors
+    );
+
+    // The setter overwrites the snapshot.
+    collection.set_runtime_limits(RuntimeLimits {
+        max_vectors_per_collection: 10,
+        max_payload_size: 64,
+        max_perfect_mode_vectors: 5,
+    });
+    let updated = collection.runtime_limits();
+    assert_eq!(updated.max_vectors_per_collection, 10);
+    assert_eq!(updated.max_payload_size, 64);
+    assert_eq!(updated.max_perfect_mode_vectors, 5);
+}
