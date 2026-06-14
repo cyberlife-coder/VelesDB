@@ -39,6 +39,7 @@ mod graph_collection_query;
 mod graph_store;
 mod options;
 mod streaming_config;
+mod streaming_runtime;
 mod utils;
 mod velesql;
 mod velesql_helpers;
