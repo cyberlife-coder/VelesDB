@@ -327,6 +327,66 @@ fn test_import_csv_custom_columns() {
 }
 
 // =========================================================================
+// Integration tests for VRB1 binary import
+// =========================================================================
+
+#[test]
+fn test_import_raw_bulk_basic() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("db");
+    let bin_path = dir.path().join("data.bin");
+
+    // Encode a small VRB1 buffer via the shared core codec.
+    let ids = [1u64, 2, 3];
+    let vectors = [
+        1.0f32, 0.0, 0.0, // id 1
+        0.0, 1.0, 0.0, // id 2
+        0.0, 0.0, 1.0, // id 3
+    ];
+    let bytes = velesdb_core::wire::vrb1::encode(&ids, &vectors, 3);
+    std::fs::write(&bin_path, &bytes).unwrap();
+
+    let db = Database::open(&db_path).unwrap();
+    let config = ImportConfig {
+        collection: "test".to_string(),
+        show_progress: false,
+        ..Default::default()
+    };
+
+    let stats = import_raw_bulk(&db, &bin_path, &config).unwrap();
+
+    assert_eq!(stats.total, 3);
+    assert_eq!(stats.imported, 3);
+    assert_eq!(stats.errors, 0);
+
+    // The imported vectors must be searchable.
+    let col = db.get_vector_collection("test").unwrap();
+    assert_eq!(col.len(), 3);
+    let results = col.search(&[1.0, 0.0, 0.0], 1).unwrap();
+    assert_eq!(results[0].point.id, 1);
+}
+
+#[test]
+fn test_import_raw_bulk_invalid_magic() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("db");
+    let bin_path = dir.path().join("bad.bin");
+
+    let mut bytes = velesdb_core::wire::vrb1::encode(&[1u64], &[0.0f32, 0.0, 0.0], 3);
+    bytes[0] = b'X'; // corrupt the magic
+    std::fs::write(&bin_path, &bytes).unwrap();
+
+    let db = Database::open(&db_path).unwrap();
+    let config = ImportConfig {
+        collection: "test".to_string(),
+        show_progress: false,
+        ..Default::default()
+    };
+
+    assert!(import_raw_bulk(&db, &bin_path, &config).is_err());
+}
+
+// =========================================================================
 // Integration tests for typical usage scenarios
 // =========================================================================
 
