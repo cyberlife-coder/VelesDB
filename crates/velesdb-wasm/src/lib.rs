@@ -188,3 +188,7 @@ mod velesql_exec_hybrid_tests;
 #[cfg(test)]
 #[path = "velesql_exec_graph_tests.rs"]
 mod velesql_exec_graph_tests;
+
+#[cfg(test)]
+#[path = "velesql_executor_conformance_tests.rs"]
+mod velesql_executor_conformance_tests;
