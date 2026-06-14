@@ -1161,6 +1161,40 @@ class Database:
 
 
 # =============================================================================
+# VelesDB Errors
+# =============================================================================
+
+class VelesDBError(Exception):
+    """Base class for all VelesDB-specific exceptions."""
+    ...
+
+
+class DimensionMismatchError(VelesDBError):
+    """Raised when a vector's dimension does not match the collection."""
+    ...
+
+
+class CollectionNotFoundError(VelesDBError):
+    """Raised when the named collection does not exist."""
+    ...
+
+
+class CollectionExistsError(VelesDBError):
+    """Raised when creating a collection whose name already exists."""
+    ...
+
+
+class EdgeExistsError(VelesDBError):
+    """Raised when adding a graph edge whose ID already exists."""
+    ...
+
+
+class DatabaseLockedError(VelesDBError):
+    """Raised when the database is already locked by another handle or process."""
+    ...
+
+
+# =============================================================================
 # VelesQL Classes
 # =============================================================================
 
@@ -1194,6 +1228,11 @@ class ParsedStatement:
     def has_distinct(self) -> bool: ...
     def has_joins(self) -> bool: ...
     def has_fusion(self) -> bool: ...
+    def has_having(self) -> bool: ...
+    def is_ddl(self) -> bool: ...
+    def is_dml(self) -> bool: ...
+    def is_delete(self) -> bool: ...
+    def is_insert_edge(self) -> bool: ...
     @property
     def join_count(self) -> int: ...
 
@@ -1251,6 +1290,21 @@ class TraversalResult:
     edge_id: int
 
 
+class StreamingIngestConfig:
+    """Configuration for streaming ingestion (``Collection.enable_streaming``)."""
+
+    buffer_size: int
+    batch_size: int
+    flush_interval_ms: int
+
+    def __init__(
+        self,
+        buffer_size: int = 10000,
+        batch_size: int = 128,
+        flush_interval_ms: int = 50,
+    ) -> None: ...
+
+
 class GraphStore:
     """In-memory graph store for knowledge graph operations."""
 
@@ -1275,6 +1329,28 @@ class GraphStore:
     def traverse_bfs_streaming(
         self, start_node: int, config: StreamingConfig
     ) -> List[TraversalResult]: ...
+
+    def traverse_bfs(
+        self,
+        *,
+        source: int,
+        max_depth: int = 3,
+        limit: int = 10000,
+        relationship_types: Optional[List[str]] = None,
+    ) -> List[TraversalResult]:
+        """Run a BFS traversal from ``source`` (keyword-only arguments)."""
+        ...
+
+    def traverse_dfs(
+        self,
+        *,
+        source: int,
+        max_depth: int = 3,
+        limit: int = 10000,
+        relationship_types: Optional[List[str]] = None,
+    ) -> List[TraversalResult]:
+        """Run a DFS traversal from ``source`` (keyword-only arguments)."""
+        ...
 
     def remove_edge(self, edge_id: int) -> None: ...
     def edge_count(self) -> int: ...
@@ -1685,6 +1761,10 @@ class GraphCollection(PyGraphCollection):
 
     def __enter__(self) -> "GraphCollection":
         """Context manager entry — returns ``self``."""
+        ...
+
+    def close(self) -> None:
+        """Flush and release the underlying graph collection."""
         ...
 
 
