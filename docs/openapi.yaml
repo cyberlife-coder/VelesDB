@@ -1238,6 +1238,51 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /collections/{name}/points/raw:
+    post:
+      tags:
+      - points
+      summary: Bulk upsert points via the binary wire format.
+      description: |-
+        Accepts an `application/octet-stream` body in the v1 raw-bulk format
+        documented at the module level: a 16-byte header (magic, count, dim,
+        id_width) followed by tightly-packed `u64` ids and `f32` vectors. The
+        vectors are forwarded to `Collection::upsert_bulk_from_raw` (zero per-point
+        `Point` allocation). Payloads are not supported on this path.
+      operationId: upsert_points_raw
+      parameters:
+      - name: name
+        in: path
+        description: Collection name
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: 'VRB1 binary bulk format: header + packed u64 ids + packed f32 vectors'
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+        required: true
+      responses:
+        '200':
+          description: Points upserted
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: Malformed body or dimension mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Collection not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /collections/{name}/points/scroll:
     post:
       tags:

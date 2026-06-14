@@ -9,7 +9,7 @@
 import type { SparseVector } from '../types';
 import { ConnectionError } from '../types';
 import type { TransportResponse, BaseTransport } from './shared';
-import type { CrudTransport } from './crud-backend';
+import type { CrudTransport, RawBulkTransport } from './crud-backend';
 import { parseRestPointId, sparseVectorToRestFormat } from './crud-backend';
 import type { SearchTransport } from './search-backend';
 import type { AgentMemoryTransport } from './agent-memory-backend';
@@ -140,6 +140,15 @@ export function buildBaseTransport(config: RestHttpConfig): BaseTransport {
 export function buildCrudTransport(config: RestHttpConfig): CrudTransport {
   return {
     requestJson: <T>(m: string, p: string, b?: unknown) => request<T>(config, m, p, b),
+  };
+}
+
+/** Build a RawBulkTransport adapter (raw `fetch` primitives for binary bodies). */
+export function buildRawBulkTransport(config: RestHttpConfig): RawBulkTransport {
+  return {
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    timeout: config.timeout,
   };
 }
 

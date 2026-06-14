@@ -184,6 +184,23 @@ export class VelesDB {
     await this.backend.upsertBatch(collection, docs);
   }
 
+  /**
+   * Bulk upsert via the binary wire format (REST backend only).
+   *
+   * Encodes `(id, vector)` pairs into the deterministic VRB1 binary layout
+   * and sends them as a single `application/octet-stream` request, avoiding
+   * per-point JSON overhead. Payloads are not carried — use
+   * {@link upsertBatch} when you need them. Throws a not-supported error on
+   * the WASM backend.
+   *
+   * @returns the number of points the server reports as inserted.
+   */
+  async upsertBatchRaw(collection: string, docs: VectorDocument[]): Promise<number> {
+    this.ensureInitialized();
+    validateDocsBatch(docs, doc => { validateDocument(doc, this.config); });
+    return this.backend.upsertBatchRaw(collection, docs);
+  }
+
   async delete(collection: string, id: string | number): Promise<boolean> {
     this.ensureInitialized();
     validateRestPointId(id, this.config);
