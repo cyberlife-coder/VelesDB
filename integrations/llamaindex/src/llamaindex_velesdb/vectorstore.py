@@ -28,7 +28,7 @@ from llamaindex_velesdb.security import (
     validate_storage_mode,
     validate_batch_size,
     validate_collection_name,
-    validate_sparse_vector,
+    validate_named_sparse_vector,
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
@@ -300,7 +300,12 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
 
         Args:
             nodes: List of nodes with embeddings to add.
-            **add_kwargs: Additional arguments.
+            **add_kwargs: Additional arguments. ``sparse_vectors`` accepts a
+                list aligned with *nodes*; each entry is a flat
+                ``dict[int, float]`` or a named ``dict[str, dict[int, float]]``
+                mapping (e.g. ``{"bge_m3": {0: 1.5}}``). A named mapping
+                creates the named sparse index so it can later be queried with
+                ``sparse_index_name="bge_m3"``.
 
         Returns:
             List of node IDs that were added.
@@ -316,7 +321,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         sparse_vectors = add_kwargs.get("sparse_vectors")
         if sparse_vectors is not None:
             for sv in sparse_vectors:
-                validate_sparse_vector(sv)
+                validate_named_sparse_vector(sv)
 
         first_embedding = nodes[0].get_embedding()
         if first_embedding is None:
@@ -431,7 +436,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         sparse_vectors = kwargs.get("sparse_vectors")
         if sparse_vectors is not None:
             for sv in sparse_vectors:
-                validate_sparse_vector(sv)
+                validate_named_sparse_vector(sv)
 
         first_embedding = nodes[0].get_embedding()
         if first_embedding is None:
