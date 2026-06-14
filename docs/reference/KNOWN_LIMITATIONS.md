@@ -148,7 +148,15 @@ Result materialization for top-k scans, JOIN, parallel graph traversal, and
 set operations (UNION/INTERSECT) is bounded by the effective LIMIT via bounded
 top-k rather than collect-all-then-truncate. Results are identical to the
 unbounded path; only peak memory is bounded. Intermediate operators that can
-legitimately drop rows fall back to the conservative server-side ceiling.
+legitimately drop rows fall back to the conservative server-side ceiling — this
+includes a scalar (non-`similarity()`) `ORDER BY ... LIMIT k`, which must rank
+the full matching set before truncating, so it fetches exhaustively rather than
+bounding the fetch at `k`. (Capping the fetch at `k` first was the
+`ORDER BY`-before-sort defect fixed 2026-06-14; the bounded==unbounded identity
+above now holds for scalar `ORDER BY` as well, at the cost of an exhaustive
+fetch for that one operator.) The `similarity()`-ordered HNSW path stays bounded
+top-k — it is pre-sorted by score, so truncation is correct without an
+exhaustive fetch and recall is unaffected.
 
 ### 10. Configuration range caps
 
@@ -211,16 +219,16 @@ per-artifact load-time validation (file-length-bounded counts).
 
 ### 12. String → u64 point-ID hashing differs across components
 
-**Status**: documented trade-off (intentional). Sources: `integrations/common/src/velesdb_common/ids.py` (`stable_hash_id`, used by LangChain/LlamaIndex); `integrations/haystack/src/haystack_velesdb/document_store.py` (`_str_id_to_int`, same algorithm); `crates/velesdb-migrate/src/pipeline_points.rs` (`stable_point_id`).
+**Status**: documented trade-off (intentional). Sources: `integrations/common/src/velesdb_common/ids.py` (`stable_hash_id`, the single source shared by LangChain, LlamaIndex, **and** Haystack since 2026-06-14); `integrations/haystack/src/haystack_velesdb/document_store.py` (now imports `stable_hash_id` — the previous forked `_str_id_to_int` copy was removed); `crates/velesdb-migrate/src/pipeline_points.rs` (`stable_point_id`).
 
 VelesDB point IDs are `u64`. Components that ingest documents keyed by an
 arbitrary string derive the numeric ID with **two intentionally different**
-hash strategies:
+hash strategies — every Python integration now shares one, and `velesdb-migrate`
+keeps its deliberately distinct one:
 
 | Component | Function | Strategy |
 |-----------|----------|----------|
-| LangChain / LlamaIndex | `velesdb_common.ids.stable_hash_id` | SHA-256 of the UTF-8 string, top 8 bytes, sign bit cleared → positive 63-bit ID |
-| Haystack | `_str_id_to_int` (local, identical algorithm) | same SHA-256 / 63-bit mapping as `stable_hash_id` |
+| LangChain / LlamaIndex / Haystack | `velesdb_common.ids.stable_hash_id` (shared) | SHA-256 of the UTF-8 string, top 8 bytes, sign bit cleared → positive 63-bit ID |
 | `velesdb-migrate` | `stable_point_id` | numeric strings parsed directly to `u64`; non-numeric strings hashed via FNV-1a |
 
 These do not agree. The `velesdb-migrate` strategy is deliberately distinct: it
@@ -243,21 +251,22 @@ numeric point ID.
 
 ### 13. VelesQL conformance for WASM/CLI is parser-only
 
-**Status**: open (coverage gap). Sources: `crates/velesdb-wasm/tests/velesql_parser_conformance.rs`, `crates/velesdb-cli/tests/velesql_parser_conformance.rs` (parser fixture); `crates/velesdb-server/tests/velesql_conformance_tests.rs` (executor contract fixture).
+**Status**: open (coverage gap, narrowed 2026-06-14). Sources: `crates/velesdb-wasm/tests/velesql_parser_conformance.rs`, `crates/velesdb-cli/tests/velesql_parser_conformance.rs` (parser fixture); `crates/velesdb-server/tests/velesql_conformance_tests.rs` (server executor contract fixture); `crates/velesdb-core/tests/velesql_executor_conformance.rs` + `conformance/velesql_executor_cases.json` (core executor result fixture).
 
-The shared VelesQL conformance fixtures come in two layers. The
+The shared VelesQL conformance fixtures come in layers. The
 `velesql_parser_cases.json` layer (does this query parse?) is checked across
 **core, WASM, and CLI** — all three run the same `Parser::parse` assertions.
 The `velesql_contract_cases.json` layer (does this query *execute* and return
-the contracted result/error shape?) is currently exercised at the **server**
-runtime only.
+the contracted result/error shape over REST?) is exercised at the **server**
+runtime. The `velesql_executor_cases.json` layer (does this query produce the
+exact result **rows / counts / ordering**?) now exists for the **core**
+executor, with goldens derived from `velesdb-core` as the source of truth.
 
-**What remains open**: executor result-level conformance is being added for the
-**core** runtime; **WASM** and **CLI** executor result parity is **not yet
-fixture-checked**. The WASM and CLI surfaces share the same `velesdb-core`
-executor, so a query that parses identically across the three is expected to
-execute identically — but that expectation is asserted today only for the
-server, not pinned by a per-runtime executor fixture for WASM/CLI.
+**What remains open**: **WASM** and **CLI** executor result parity is **not yet
+fixture-checked** against those executor goldens. The WASM and CLI surfaces
+share the same `velesdb-core` executor, so a query that parses identically
+across the three is expected to execute identically — but for WASM/CLI that
+expectation is not yet pinned by a per-runtime executor fixture run.
 
 **User impact**: a result-shape divergence specific to the WASM or CLI surface
 (e.g. a serialization or projection difference) would not be caught by the
