@@ -601,6 +601,20 @@ impl VectorStore {
         }
         Ok(())
     }
+
+    /// Bulk insert from a flat contiguous `Float32Array` (zero-copy layout),
+    /// mirroring the VRB1 raw-bulk contract: `ids` + flat row-major `vectors`
+    /// + `dimension`. No payloads (use `insert_batch` for those).
+    #[wasm_bindgen(js_name = insertBatchRaw)]
+    pub fn insert_batch_raw(
+        &mut self,
+        ids: &[u64],
+        vectors: &[f32],
+        dimension: usize,
+    ) -> Result<(), JsValue> {
+        store_insert::insert_batch_raw(self, ids, vectors, dimension)
+            .map_err(|e| JsValue::from_str(&e))
+    }
 }
 
 // Native-testable internals (not part of the wasm-bindgen surface).

@@ -1,6 +1,6 @@
 //! Insert operations for `VectorStore`.
 
-use crate::{StorageMode, VectorStore};
+use crate::{store_search, StorageMode, VectorStore};
 
 #[cfg(test)]
 #[path = "store_insert_tests.rs"]
@@ -70,6 +70,49 @@ pub fn insert_vector(store: &mut VectorStore, id: u64, vector: &[f32]) {
     store.ids.push(id);
     store.payloads.push(None);
     encode_vector(store, vector);
+}
+
+/// Validates a flat raw batch against the store geometry.
+///
+/// Checks that `dimension` matches the store, then delegates the
+/// `checked_mul` overflow guard and `ids.len() * dimension` length check to
+/// [`store_search::validate_multi_vector_len`].
+fn validate_raw_batch(
+    store: &VectorStore,
+    ids: &[u64],
+    vectors: &[f32],
+    dimension: usize,
+) -> Result<(), String> {
+    if dimension != store.dimension {
+        return Err(format!(
+            "dimension mismatch: expected {}, got {dimension}",
+            store.dimension
+        ));
+    }
+    store_search::validate_multi_vector_len(vectors.len(), ids.len(), dimension)?;
+    Ok(())
+}
+
+/// Bulk insert from a flat row-major `vectors` buffer plus parallel `ids`.
+///
+/// Mirrors the VRB1 raw-bulk wire contract (flat `Float32Array` + `u64`
+/// ids + explicit `dimension`). Reuses [`insert_vector`] per row so the
+/// upsert-dedup and per-mode encoding (Full/SQ8/Binary) behave identically
+/// to single insert. No payloads — use `insert_batch` for those.
+pub fn insert_batch_raw(
+    store: &mut VectorStore,
+    ids: &[u64],
+    vectors: &[f32],
+    dimension: usize,
+) -> Result<(), String> {
+    validate_raw_batch(store, ids, vectors, dimension)?;
+    store.ids.reserve(ids.len());
+    store.data.reserve(vectors.len());
+    for (i, &id) in ids.iter().enumerate() {
+        let v = &vectors[i * dimension..(i + 1) * dimension];
+        insert_vector(store, id, v);
+    }
+    Ok(())
 }
 
 /// Inserts a vector with payload.

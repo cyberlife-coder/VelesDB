@@ -406,6 +406,24 @@ impl WasmCollectionHandle {
         store.insert(id, vector)
     }
 
+    /// Bulk insert from a flat row-major `vectors` buffer plus parallel `ids`
+    /// (VRB1 raw-bulk contract). No payloads.
+    ///
+    /// # Errors
+    /// Returns an error on dimension mismatch or when
+    /// `vectors.len() != ids.len() * dimension`.
+    #[wasm_bindgen(js_name = insertBatchRaw)]
+    pub fn insert_batch_raw(
+        &self,
+        ids: &[u64],
+        vectors: &[f32],
+        dimension: usize,
+    ) -> Result<(), JsValue> {
+        self.inner
+            .borrow_mut()
+            .insert_batch_raw(ids, vectors, dimension)
+    }
+
     /// k-NN search. Returns `[[id, score], ...]`.
     ///
     /// # Errors
