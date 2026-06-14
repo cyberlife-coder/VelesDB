@@ -58,6 +58,29 @@ pub fn validate_dimension(query_len: usize, store_dim: usize) -> Result<(), JsVa
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// Validates that a flat multi-vector buffer holds exactly
+/// `num_vectors * dimension` floats, using a checked multiplication.
+///
+/// On `wasm32`, `usize` is 32-bit, so an unchecked `num_vectors * dimension`
+/// can wrap and spoof the length comparison — admitting an out-of-bounds slice
+/// when the per-vector chunks are later read. `checked_mul` rejects the
+/// overflow up front. Returns the validated expected length on success.
+pub fn validate_multi_vector_len(
+    actual_len: usize,
+    num_vectors: usize,
+    dimension: usize,
+) -> Result<usize, String> {
+    let expected = num_vectors.checked_mul(dimension).ok_or_else(|| {
+        "Vector array size overflow: num_vectors * dimension exceeds usize".to_string()
+    })?;
+    if actual_len != expected {
+        return Err(format!(
+            "Vector array size mismatch: expected {expected}, got {actual_len}"
+        ));
+    }
+    Ok(expected)
+}
+
 /// Basic vector search.
 #[allow(clippy::too_many_arguments)]
 pub fn search(
@@ -195,20 +218,12 @@ pub fn multi_query_search_impl(
     strategy: &str,
     rrf_k: Option<u32>,
 ) -> Result<JsValue, JsValue> {
-    if vectors.len() != num_vectors * dimension {
-        return Err(JsValue::from_str(&format!(
-            "Vector array size mismatch: expected {}, got {}",
-            num_vectors * dimension,
-            vectors.len()
-        )));
-    }
+    validate_multi_vector_len(vectors.len(), num_vectors, dimension)
+        .map_err(|e| JsValue::from_str(&e))?;
 
     let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
 
-    for i in 0..num_vectors {
-        let start = i * dimension;
-        let query = &vectors[start..start + dimension];
-
+    for query in vectors.chunks_exact(dimension) {
         let mut results = vector_ops::compute_scores(
             query,
             ids,
@@ -348,10 +363,7 @@ pub fn batch_search_impl(
 ) -> Result<JsValue, JsValue> {
     let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
 
-    for i in 0..num_vectors {
-        let start = i * dimension;
-        let query = &vectors[start..start + dimension];
-
+    for query in vectors.chunks_exact(dimension) {
         let mut results: Vec<(u64, f32)> = ids
             .iter()
             .enumerate()
