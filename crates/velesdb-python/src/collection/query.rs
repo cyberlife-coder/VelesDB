@@ -17,7 +17,7 @@ use super::Collection;
 pub(crate) fn match_result_to_dict(
     py: Python<'_>,
     r: velesdb_core::collection::search::query::match_exec::MatchResult,
-) -> PyObject {
+) -> Py<PyAny> {
     let dict = PyDict::new(py);
     let _ = dict.set_item(PyString::intern(py, "node_id"), r.node_id);
     let _ = dict.set_item(PyString::intern(py, "depth"), r.depth);
@@ -49,7 +49,7 @@ pub(crate) fn parse_velesql(query_str: &str) -> PyResult<velesdb_core::velesql::
 pub(crate) fn build_explain_dict(
     py: Python<'_>,
     parsed: &velesdb_core::velesql::Query,
-) -> PyObject {
+) -> Py<PyAny> {
     let plan = if let Some(match_clause) = parsed.match_clause.as_ref() {
         let stats =
             velesdb_core::collection::search::query::match_planner::CollectionStats::default();
@@ -88,7 +88,7 @@ pub(crate) fn build_explain_dict(
 pub(crate) fn build_explain_analyze_dict(
     py: Python<'_>,
     output: &velesdb_core::velesql::ExplainOutput,
-) -> PyObject {
+) -> Py<PyAny> {
     let dict = PyDict::new(py);
 
     // Plan sub-dict (same keys as build_explain_dict)
@@ -129,7 +129,7 @@ pub(crate) fn build_explain_analyze_dict(
     }
 
     // node_stats list
-    let node_dicts: Vec<PyObject> = output
+    let node_dicts: Vec<Py<PyAny>> = output
         .node_stats
         .iter()
         .map(|ns| {
@@ -191,7 +191,7 @@ pub(crate) fn build_explain_analyze_dict(
 pub(crate) fn search_results_to_id_score(
     py: Python<'_>,
     results: Vec<velesdb_core::SearchResult>,
-) -> Vec<PyObject> {
+) -> Vec<Py<PyAny>> {
     let tuples: Vec<(u64, f32)> = results.into_iter().map(|r| (r.point.id, r.score)).collect();
     id_score_pairs_to_dicts(py, tuples)
 }
@@ -199,7 +199,7 @@ pub(crate) fn search_results_to_id_score(
 /// Converts Python params dict to Rust `HashMap<String, serde_json::Value>`.
 pub(crate) fn convert_params(
     py: Python<'_>,
-    params: Option<HashMap<String, PyObject>>,
+    params: Option<HashMap<String, Py<PyAny>>>,
 ) -> PyResult<HashMap<String, serde_json::Value>> {
     params
         .unwrap_or_default()
@@ -216,9 +216,9 @@ pub(crate) fn convert_params(
 pub(crate) fn run_velesql_select<F>(
     py: Python<'_>,
     query_str: &str,
-    params: Option<HashMap<String, PyObject>>,
+    params: Option<HashMap<String, Py<PyAny>>>,
     execute: F,
-) -> PyResult<Vec<PyObject>>
+) -> PyResult<Vec<Py<PyAny>>>
 where
     F: FnOnce(
             &velesdb_core::velesql::Query,
@@ -228,7 +228,7 @@ where
 {
     let parsed = parse_velesql(query_str)?;
     let rust_params = convert_params(py, params)?;
-    let results = py.allow_threads(move || execute(&parsed, &rust_params).map_err(core_err))?;
+    let results = py.detach(move || execute(&parsed, &rust_params).map_err(core_err))?;
     Ok(crate::collection_helpers::search_results_to_multimodel_dicts(py, results))
 }
 
@@ -236,9 +236,9 @@ where
 pub(crate) fn run_velesql_select_ids<F>(
     py: Python<'_>,
     query_str: &str,
-    params: Option<HashMap<String, PyObject>>,
+    params: Option<HashMap<String, Py<PyAny>>>,
     execute: F,
-) -> PyResult<Vec<PyObject>>
+) -> PyResult<Vec<Py<PyAny>>>
 where
     F: FnOnce(
             &velesdb_core::velesql::Query,
@@ -248,7 +248,7 @@ where
 {
     let parsed = parse_velesql(query_str)?;
     let rust_params = convert_params(py, params)?;
-    let results = py.allow_threads(move || execute(&parsed, &rust_params).map_err(core_err))?;
+    let results = py.detach(move || execute(&parsed, &rust_params).map_err(core_err))?;
     Ok(search_results_to_id_score(py, results))
 }
 
@@ -256,10 +256,10 @@ where
 pub(crate) fn run_velesql_match<F>(
     py: Python<'_>,
     query_str: &str,
-    params: Option<HashMap<String, PyObject>>,
-    vector: Option<PyObject>,
+    params: Option<HashMap<String, Py<PyAny>>>,
+    vector: Option<Py<PyAny>>,
     execute: F,
-) -> PyResult<Vec<PyObject>>
+) -> PyResult<Vec<Py<PyAny>>>
 where
     F: FnOnce(
             velesdb_core::velesql::MatchClause,
@@ -277,9 +277,8 @@ where
         .clone();
     let rust_params = convert_params(py, params)?;
     let query_vector = vector.map(|v| extract_vector(py, &v)).transpose()?;
-    let results = py.allow_threads(move || {
-        execute(match_clause, rust_params, query_vector).map_err(core_err)
-    })?;
+    let results =
+        py.detach(move || execute(match_clause, rust_params, query_vector).map_err(core_err))?;
     Ok(results
         .into_iter()
         .map(|r| match_result_to_dict(py, r))
@@ -308,8 +307,8 @@ impl Collection {
         &self,
         py: Python<'_>,
         query_str: &str,
-        params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<PyObject>> {
+        params: Option<HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let inner = &self.inner;
         run_velesql_select(py, query_str, params, |q, p| inner.execute_query(q, p))
     }
@@ -329,10 +328,10 @@ impl Collection {
         &self,
         py: Python<'_>,
         query_str: &str,
-        params: Option<HashMap<String, PyObject>>,
-        vector: Option<PyObject>,
+        params: Option<HashMap<String, Py<PyAny>>>,
+        vector: Option<Py<PyAny>>,
         threshold: f32,
-    ) -> PyResult<Vec<PyObject>> {
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let inner = &self.inner;
         run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {
             if let Some(ref qv) = qv {
@@ -345,7 +344,7 @@ impl Collection {
 
     /// Return query execution plan (EXPLAIN).
     #[pyo3(signature = (query_str))]
-    fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<PyObject> {
+    fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<Py<PyAny>> {
         let parsed = parse_velesql(query_str)?;
         Ok(build_explain_dict(py, &parsed))
     }
@@ -366,12 +365,12 @@ impl Collection {
         &self,
         py: Python<'_>,
         query_str: &str,
-        params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<PyObject> {
+        params: Option<HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Py<PyAny>> {
         let parsed = parse_velesql(query_str)?;
         let rust_params = convert_params(py, params)?;
         let inner = &self.inner;
-        let output = py.allow_threads(move || {
+        let output = py.detach(move || {
             inner
                 .explain_analyze_query(&parsed, &rust_params)
                 .map_err(core_err)
@@ -397,8 +396,8 @@ impl Collection {
         &self,
         py: Python<'_>,
         velesql: &str,
-        params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<PyObject>> {
+        params: Option<HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let inner = &self.inner;
         run_velesql_select_ids(py, velesql, params, |q, p| inner.execute_query(q, p))
     }

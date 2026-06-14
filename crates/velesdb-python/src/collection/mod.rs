@@ -31,12 +31,12 @@ use velesdb_core::collection::streaming::{AsyncIndexBuilderConfig, DeferredIndex
 
 /// Extract an optional typed value for `key`, returning `None` when the
 /// key is absent or holds Python `None`.
-fn opt_field<'py, T: FromPyObject<'py>>(
+fn opt_field<'py, T: FromPyObjectOwned<'py>>(
     dict: &Bound<'py, PyDict>,
     key: &str,
 ) -> PyResult<Option<T>> {
     match dict.get_item(key)? {
-        Some(v) if !v.is_none() => Ok(Some(v.extract()?)),
+        Some(v) if !v.is_none() => Ok(Some(v.extract().map_err(Into::into)?)),
         _ => Ok(None),
     }
 }
@@ -59,7 +59,7 @@ fn three_state<T>(
 /// Build a `DeferredIndexerConfig` from a Python dict, overriding only the
 /// keys present on top of the struct defaults.
 fn deferred_from_dict(value: &Bound<'_, PyAny>) -> PyResult<DeferredIndexerConfig> {
-    let dict = value.downcast::<PyDict>()?;
+    let dict = value.cast::<PyDict>()?;
     let mut cfg = DeferredIndexerConfig::default();
     if let Some(v) = opt_field(dict, "enabled")? {
         cfg.enabled = v;
@@ -77,7 +77,7 @@ fn deferred_from_dict(value: &Bound<'_, PyAny>) -> PyResult<DeferredIndexerConfi
 /// keys present on top of the struct defaults. `segment_count` accepts a
 /// Python `None` to fall back to the CPU count.
 fn async_builder_from_dict(value: &Bound<'_, PyAny>) -> PyResult<AsyncIndexBuilderConfig> {
-    let dict = value.downcast::<PyDict>()?;
+    let dict = value.cast::<PyDict>()?;
     let mut cfg = AsyncIndexBuilderConfig::default();
     if let Some(v) = opt_field(dict, "merge_threshold")? {
         cfg.merge_threshold = v;
@@ -174,7 +174,7 @@ impl Collection {
     ///
     /// Returns:
     ///     Dict with name, dimension, metric, storage_mode, point_count, and metadata_only
-    fn info(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn info(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let config = self.inner.config();
         let dict = PyDict::new(py);
         let _ = dict.set_item(PyString::intern(py, "name"), config.name.as_str());
@@ -251,7 +251,7 @@ impl Collection {
     /// Returns:
     ///     List[int]: All point IDs
     fn all_ids(&self, py: Python<'_>) -> Vec<u64> {
-        py.allow_threads(|| self.inner.all_ids())
+        py.detach(|| self.inner.all_ids())
     }
 
     /// Full durability flush including vectors.idx serialization.
@@ -260,7 +260,7 @@ impl Collection {
     /// For routine persistence, use ``flush()`` instead.
     fn flush_full(&self, py: Python<'_>) -> PyResult<()> {
         use crate::collection_helpers::core_err;
-        py.allow_threads(|| self.inner.flush_full().map_err(core_err))
+        py.detach(|| self.inner.flush_full().map_err(core_err))
     }
 
     /// Compact on-disk storage, reclaiming space left by deleted vectors.
@@ -269,7 +269,7 @@ impl Collection {
     ///     int: Number of bytes reclaimed.
     fn compact_storage(&self, py: Python<'_>) -> PyResult<usize> {
         use crate::collection_helpers::core_err;
-        py.allow_threads(|| self.inner.compact_storage().map_err(core_err))
+        py.detach(|| self.inner.compact_storage().map_err(core_err))
     }
 
     /// Reorder the HNSW adjacency lists and vector storage for cache
@@ -284,7 +284,7 @@ impl Collection {
     ///     None
     fn reorder_for_locality(&self, py: Python<'_>) -> PyResult<()> {
         use crate::collection_helpers::core_err;
-        py.allow_threads(|| self.inner.reorder_for_locality().map_err(core_err))
+        py.detach(|| self.inner.reorder_for_locality().map_err(core_err))
     }
 
     /// Apply post-creation overrides to advanced configuration fields and
@@ -309,7 +309,7 @@ impl Collection {
         let pq = three_state(config, "pq_rescore_oversampling", |v| v.extract::<u32>())?;
         let deferred = three_state(config, "deferred_indexing", deferred_from_dict)?;
         let async_builder = three_state(config, "async_index_builder", async_builder_from_dict)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner
                 .apply_advanced_config(pq, deferred, async_builder)
                 .map_err(core_err)
@@ -322,7 +322,7 @@ impl Collection {
     ///     dict with keys ``max_depth``, ``max_cardinality``,
     ///     ``memory_limit_bytes``, ``timeout_ms``, ``rate_limit_qps``,
     ///     ``circuit_failure_threshold``, ``circuit_recovery_seconds``.
-    fn guard_rails(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn guard_rails(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let limits = self.inner.guard_rails().limits();
         let dict = PyDict::new(py);
         dict.set_item("max_depth", limits.max_depth)?;
@@ -355,7 +355,7 @@ impl Collection {
     ///     dict with keys ``should_reindex``, ``current_m``, ``optimal_m``,
     ///     ``ratio`` (and ``reason`` when a reindex is recommended), or
     ///     ``None`` when no auto-reindex manager is attached.
-    fn check_auto_reindex_divergence(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn check_auto_reindex_divergence(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         let Some(check) = self.inner.check_auto_reindex_divergence() else {
             return Ok(None);
         };
@@ -407,9 +407,9 @@ impl Collection {
     /// Returns:
     ///     dict: Statistics including row_count, deleted_count, total_size_bytes,
     ///           column_stats, index_stats, etc.
-    fn analyze(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn analyze(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         use crate::collection_helpers::core_err;
-        let stats = py.allow_threads(|| self.inner.analyze().map_err(core_err))?;
+        let stats = py.detach(|| self.inner.analyze().map_err(core_err))?;
         let json = serde_json::to_value(&stats).map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Stats serialization failed: {e}"))
         })?;
@@ -446,7 +446,7 @@ impl Collection {
     /// context manager (``with`` statement).
     fn close(&self, py: Python<'_>) -> PyResult<()> {
         use crate::collection_helpers::core_err;
-        py.allow_threads(|| self.inner.flush_full().map_err(core_err))
+        py.detach(|| self.inner.flush_full().map_err(core_err))
     }
 
     /// Context manager entry — returns ``self`` so the collection can be
@@ -461,9 +461,9 @@ impl Collection {
     fn __exit__(
         &self,
         py: Python<'_>,
-        _exc_type: Option<PyObject>,
-        _exc_value: Option<PyObject>,
-        _traceback: Option<PyObject>,
+        _exc_type: Option<Py<PyAny>>,
+        _exc_value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
     ) -> PyResult<bool> {
         self.close(py)?;
         Ok(false)

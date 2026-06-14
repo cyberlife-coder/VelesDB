@@ -50,7 +50,7 @@ impl ScrollIterator {
     /// where it can be) and pays for itself many times over by
     /// releasing the GIL for the duration of the page read, which is
     /// the dominant cost of a scroll step.
-    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         if self.exhausted {
             return Ok(None);
         }
@@ -66,7 +66,7 @@ impl ScrollIterator {
         // applies the optional filter. Any resulting `velesdb_core::Error`
         // is routed to the typed Python exception hierarchy by `core_err`.
         let batch = py
-            .allow_threads(move || inner.scroll_batch(cursor, batch_size, filter_owned.as_ref()))
+            .detach(move || inner.scroll_batch(cursor, batch_size, filter_owned.as_ref()))
             .map_err(core_err)?;
 
         if batch.points.is_empty() {
@@ -78,7 +78,7 @@ impl ScrollIterator {
         // Exhaustion is handled via the empty-batch early return above.
         self.cursor = batch.next_cursor;
 
-        let dicts: Vec<PyObject> = batch.points.iter().map(|p| point_to_dict(py, p)).collect();
+        let dicts: Vec<Py<PyAny>> = batch.points.iter().map(|p| point_to_dict(py, p)).collect();
         let py_list = pyo3::types::PyList::new(py, &dicts)?;
 
         if self.as_dataframe {
@@ -112,7 +112,7 @@ impl Collection {
         &self,
         py: Python<'_>,
         batch_size: usize,
-        filter: Option<PyObject>,
+        filter: Option<Py<PyAny>>,
         as_dataframe: bool,
         backend: &str,
     ) -> PyResult<ScrollIterator> {

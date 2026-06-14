@@ -71,7 +71,7 @@ fn collection_kind(kind: &CollectionType) -> &'static str {
 impl DatabaseObserver for PyObserver {
     fn on_collection_created(&self, name: &str, kind: &CollectionType) {
         let kind = collection_kind(kind);
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let fields = PyDict::new(py);
             if fields.set_item("name", name).is_err() || fields.set_item("kind", kind).is_err() {
                 return;
@@ -81,7 +81,7 @@ impl DatabaseObserver for PyObserver {
     }
 
     fn on_collection_deleted(&self, name: &str) {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let fields = PyDict::new(py);
             if fields.set_item("name", name).is_err() {
                 return;
@@ -91,7 +91,7 @@ impl DatabaseObserver for PyObserver {
     }
 
     fn on_upsert(&self, collection: &str, point_count: usize) {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let fields = PyDict::new(py);
             if fields.set_item("collection", collection).is_err()
                 || fields.set_item("point_count", point_count).is_err()
@@ -103,7 +103,7 @@ impl DatabaseObserver for PyObserver {
     }
 
     fn on_query(&self, collection: &str, duration_us: u64) {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let fields = PyDict::new(py);
             if fields.set_item("collection", collection).is_err()
                 || fields.set_item("duration_us", duration_us).is_err()

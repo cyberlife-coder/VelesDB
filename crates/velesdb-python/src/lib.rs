@@ -65,7 +65,7 @@ pub struct SearchResult {
     #[pyo3(get)]
     score: f32,
     #[pyo3(get)]
-    payload: PyObject,
+    payload: Py<PyAny>,
 }
 
 /// VelesDB - A high-performance vector database for AI applications.
