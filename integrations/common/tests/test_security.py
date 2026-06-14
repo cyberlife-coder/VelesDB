@@ -92,6 +92,41 @@ def test_allowed_storage_modes_exact_set():
         )
 
 
+def test_allowed_metrics_exact_set():
+    """ALLOWED_METRICS must match the canonical set exactly."""
+    if ALLOWED_METRICS != frozenset({"cosine", "euclidean", "dot", "hamming", "jaccard"}):
+        raise AssertionError(
+            f"ALLOWED_METRICS mismatch: {ALLOWED_METRICS!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Single-source-of-truth drift guard: when the compiled ``velesdb`` binding is
+# present, the security constants must equal its exported name sets EXACTLY.
+# This catches a core-vs-binding-vs-integration drift the literal checks above
+# cannot (e.g. a new core variant the binding picked up but a stale literal did
+# not). Skipped only when the wheel is not built.
+# ---------------------------------------------------------------------------
+
+def test_allowed_metrics_equals_binding_exactly():
+    velesdb = pytest.importorskip("velesdb")
+    binding = frozenset(velesdb.DISTANCE_METRICS)
+    if ALLOWED_METRICS != binding:
+        raise AssertionError(
+            f"ALLOWED_METRICS {ALLOWED_METRICS!r} != velesdb.DISTANCE_METRICS {binding!r}"
+        )
+
+
+def test_allowed_storage_modes_equals_binding_exactly():
+    velesdb = pytest.importorskip("velesdb")
+    binding = frozenset(velesdb.STORAGE_MODES)
+    if ALLOWED_STORAGE_MODES != binding:
+        raise AssertionError(
+            f"ALLOWED_STORAGE_MODES {ALLOWED_STORAGE_MODES!r} "
+            f"!= velesdb.STORAGE_MODES {binding!r}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Type errors — non-string inputs
 # ---------------------------------------------------------------------------

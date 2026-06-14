@@ -24,8 +24,25 @@ MAX_K_VALUE = 10_000             # Max top_k for search
 MAX_DIMENSION = 65_536           # Max vector dimension (reasonable for any model)
 MIN_DIMENSION = 1
 MAX_PATH_LENGTH = 4096           # Max path length
-ALLOWED_METRICS = frozenset({"cosine", "euclidean", "dot", "hamming", "jaccard"})
-ALLOWED_STORAGE_MODES = frozenset({"full", "sq8", "binary", "pq", "rabitq"})
+
+# Canonical metric / storage-mode name sets. Single-sourced from the compiled
+# ``velesdb`` binding (``DISTANCE_METRICS`` / ``STORAGE_MODES``), themselves
+# generated from velesdb-core's ``DistanceMetric`` / ``StorageMode`` variants.
+# Fall back to the historical literals when the wheel is unavailable so this
+# package still imports without the native extension (e.g. docs-only checkouts).
+# The drift guard in ``tests/test_security.py`` asserts exact equality with the
+# binding lists whenever the wheel is present.
+_FALLBACK_METRICS = frozenset({"cosine", "euclidean", "dot", "hamming", "jaccard"})
+_FALLBACK_STORAGE_MODES = frozenset({"full", "sq8", "binary", "pq", "rabitq"})
+
+try:
+    import velesdb as _velesdb
+
+    ALLOWED_METRICS = frozenset(_velesdb.DISTANCE_METRICS)
+    ALLOWED_STORAGE_MODES = frozenset(_velesdb.STORAGE_MODES)
+except (ImportError, AttributeError):
+    ALLOWED_METRICS = _FALLBACK_METRICS
+    ALLOWED_STORAGE_MODES = _FALLBACK_STORAGE_MODES
 # Aliases accepted by the Rust core via ``from_str_with_aliases()``.
 # Maps alias → canonical name (same set of aliases as Rust).
 STORAGE_MODE_ALIASES: dict[str, str] = {
