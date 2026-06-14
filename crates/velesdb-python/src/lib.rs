@@ -37,6 +37,7 @@ mod graph;
 mod graph_collection;
 mod graph_collection_query;
 mod graph_store;
+mod observer;
 mod options;
 mod streaming_config;
 mod streaming_runtime;

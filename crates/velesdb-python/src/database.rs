@@ -9,11 +9,12 @@ use crate::agent;
 use crate::collection::Collection;
 use crate::collection_helpers::core_err;
 use crate::graph_collection::{PyGraphCollection, PyGraphSchema};
+use crate::observer::PyObserver;
 use crate::options::{AutoReindexOptions, HnswOptions, VelesConfigOptions};
 use crate::utils::{self, parse_metric, parse_storage_mode};
 
 use velesdb_core::collection::auto_reindex::AutoReindexManager;
-use velesdb_core::{CollectionType, Database as CoreDatabase, GraphSchema};
+use velesdb_core::{CollectionType, Database as CoreDatabase, DatabaseObserver, GraphSchema};
 
 /// The full set of guardrail fields. `update_guardrails` is an explicit full
 /// replacement (matching the Mobile/Tauri typed structs), so the supplied dict
@@ -48,6 +49,24 @@ fn validate_guardrail_keys(obj: &serde_json::Map<String, serde_json::Value>) -> 
         }
     }
     Ok(())
+}
+
+/// Opens the core database, branching across the optional config and observer.
+///
+/// Extracted from [`Database::new`] so the constructor stays within the
+/// cyclomatic-complexity budget: the four config × observer combinations would
+/// otherwise inflate `new`. Runs off the GIL (called inside `allow_threads`).
+fn open_core(
+    path: &std::path::Path,
+    config: Option<velesdb_core::config::VelesConfig>,
+    observer: Option<Arc<dyn DatabaseObserver>>,
+) -> velesdb_core::Result<CoreDatabase> {
+    match (config, observer) {
+        (Some(cfg), Some(obs)) => CoreDatabase::open_with_observer_and_config(path, obs, cfg),
+        (Some(cfg), None) => CoreDatabase::open_with_config(path, cfg),
+        (None, Some(obs)) => CoreDatabase::open_with_observer(path, obs),
+        (None, None) => CoreDatabase::open(path),
+    }
 }
 
 /// VelesDB Database - the main entry point for interacting with VelesDB.
@@ -91,6 +110,22 @@ impl Database {
     ///     path: Directory path for database storage.
     ///     config: Optional typed configuration (limits, etc.) applied
     ///         at open time. See :class:`VelesConfigOptions`.
+    ///     observer: Optional callable invoked on collection lifecycle
+    ///         events. Called as ``observer(event, **fields)`` where
+    ///         ``event`` is one of ``"collection_created"``,
+    ///         ``"collection_deleted"``, ``"upsert"``, or ``"query"``:
+    ///
+    ///         - ``collection_created`` → ``name``, ``kind``
+    ///           (``"vector"``/``"metadata"``/``"graph"``/``"unknown"``)
+    ///         - ``collection_deleted`` → ``name``
+    ///         - ``upsert`` → ``collection``, ``point_count``
+    ///         - ``query`` → ``collection``, ``duration_us``
+    ///
+    ///         The observer is immutable once the database is opened
+    ///         (there is no post-open setter). Exceptions raised inside
+    ///         the callback are swallowed so they never break a core
+    ///         operation. This is a notify-only hook — it cannot veto
+    ///         operations.
     ///
     /// Returns:
     ///     Database instance
@@ -101,9 +136,20 @@ impl Database {
     ///     >>> from velesdb import VelesConfigOptions, LimitsOptions
     ///     >>> cfg = VelesConfigOptions(limits=LimitsOptions(max_collections=50))
     ///     >>> db = velesdb.Database("./tenant1", config=cfg)
+    ///     >>> # With a lifecycle observer:
+    ///     >>> events = []
+    ///     >>> db = velesdb.Database(
+    ///     ...     "./audited",
+    ///     ...     observer=lambda event, **f: events.append((event, f)),
+    ///     ... )
     #[new]
-    #[pyo3(signature = (path, config = None))]
-    fn new(py: Python<'_>, path: &str, config: Option<VelesConfigOptions>) -> PyResult<Self> {
+    #[pyo3(signature = (path, config = None, observer = None))]
+    fn new(
+        py: Python<'_>,
+        path: &str,
+        config: Option<VelesConfigOptions>,
+        observer: Option<Py<PyAny>>,
+    ) -> PyResult<Self> {
         // Open the database off the GIL. Opening walks the WAL, rebuilds
         // any in-memory state, and mmaps vector/edge files — on a multi-
         // million-vector directory this easily reaches multi-second
@@ -111,13 +157,16 @@ impl Database {
         // Python thread. PyO3 ≥0.20 allows `py: Python<'_>` as the first
         // parameter of a `#[new]` constructor, which is exactly what we
         // need to call `allow_threads` here.
+        //
+        // The observer's `Py<PyAny>` is `Send`, so it can be captured by the
+        // `'static` open closure; building the `PyObserver` stays off-GIL.
         let path_buf = PathBuf::from(path);
         let path_clone = path_buf.clone();
+        let core_config = config.map(|cfg| cfg.to_core());
+        let core_observer: Option<Arc<dyn DatabaseObserver>> =
+            observer.map(|cb| Arc::new(PyObserver::new(cb)) as Arc<dyn DatabaseObserver>);
         let db = py
-            .allow_threads(move || match config {
-                Some(cfg) => CoreDatabase::open_with_config(&path_clone, cfg.to_core()),
-                None => CoreDatabase::open(&path_clone),
-            })
+            .allow_threads(move || open_core(&path_clone, core_config, core_observer))
             .map_err(core_err)?;
         Ok(Self {
             inner: Arc::new(db),
