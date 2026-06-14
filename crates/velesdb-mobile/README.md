@@ -1,5 +1,7 @@
 # VelesDB Mobile
 
+_Last updated: 2026-06-14._
+
 Native bindings for **iOS** (Swift) and **Android** (Kotlin) via [UniFFI](https://mozilla.github.io/uniffi-rs/).
 
 VelesDB Mobile brings microsecond vector search to edge devices - perfect for on-device AI, semantic search, and RAG applications.
@@ -173,6 +175,8 @@ cargo run -p velesdb-mobile --bin uniffi-bindgen -- generate \
 | `upsert(point)` | Inserts or updates a single point |
 | `upsertBatch(points)` | Batch insert/update (faster for bulk operations) |
 | `upsertWithSparse(point, sparseVector)` | Inserts a point with an associated sparse vector |
+| `enableStreaming(config)` | Enables streaming ingestion (config optional; defaults bufferSize=10000, batchSize=128, flushIntervalMs=50) |
+| `streamInsert(points)` | Queues a batch of points for streaming ingestion; returns the count queued |
 | `delete(id)` | Deletes a point by ID |
 | `get(ids)` | Gets points by their IDs (missing IDs silently skipped) |
 | `getById(id)` | Gets a single point by ID (returns nil/null if not found) |
