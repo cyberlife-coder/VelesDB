@@ -7,7 +7,7 @@
 //! These tests pin the corrected swap-remove semantics across Full, SQ8
 //! and Binary modes, plus the metadata-only (dimension = 0) edge case.
 
-use crate::store_insert::{insert_vector, insert_with_payload, remove_at_index};
+use crate::store_insert::{insert_batch_raw, insert_vector, insert_with_payload, remove_at_index};
 use crate::store_new::create_store;
 use crate::{DistanceMetric, StorageMode};
 
@@ -237,4 +237,73 @@ fn test_reinsert_same_id_overwrites_and_keeps_alignment() {
     assert_eq!(&store.data[0..2], &[1.0, 1.0]);
     assert_eq!(&store.data[2..4], &[3.0, 3.0]);
     assert_eq!(&store.data[4..6], &[20.0, 20.0]);
+}
+
+// -------------------------------------------------------------------------
+// insert_batch_raw: flat raw-bulk insert (VRB1 contract)
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_insert_batch_raw_happy_path_roundtrip() {
+    let mut store = mk_full_store(4);
+    let ids = [10u64, 11, 12];
+    // 3 vectors, dim 4, row-major.
+    let vectors = [
+        1.0, 0.0, 0.0, 0.0, // id=10
+        0.0, 1.0, 0.0, 0.0, // id=11
+        0.0, 0.0, 1.0, 0.0, // id=12
+    ];
+    insert_batch_raw(&mut store, &ids, &vectors, 4).unwrap();
+
+    assert_eq!(store.ids, vec![10, 11, 12]);
+    assert_eq!(store.data.len(), 12);
+    // Each row lands contiguously in insertion order.
+    assert_eq!(&store.data[0..4], &[1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(&store.data[4..8], &[0.0, 1.0, 0.0, 0.0]);
+    assert_eq!(&store.data[8..12], &[0.0, 0.0, 1.0, 0.0]);
+}
+
+#[test]
+fn test_insert_batch_raw_upserts_existing_id() {
+    let mut store = mk_full_store(2);
+    insert_vector(&mut store, 1, &[9.0, 9.0]);
+    // id=1 already present — raw batch must dedup via insert_vector.
+    insert_batch_raw(&mut store, &[1u64, 2], &[1.0, 1.0, 2.0, 2.0], 2).unwrap();
+    assert_eq!(store.ids.len(), 2);
+    // id=1 is the only element, so its swap-remove truncates, then id=1 is
+    // re-appended with the new data, followed by id=2: ids = [1, 2].
+    assert_eq!(store.ids, vec![1, 2]);
+    // New data overwrote the old [9.0, 9.0] for id=1.
+    assert_eq!(&store.data[0..2], &[1.0, 1.0]);
+    assert_eq!(&store.data[2..4], &[2.0, 2.0]);
+}
+
+#[test]
+fn test_insert_batch_raw_length_mismatch_errors() {
+    let mut store = mk_full_store(4);
+    // 2 ids but only 4 floats (need 8). Must error, leaving the store empty.
+    let err = insert_batch_raw(&mut store, &[1u64, 2], &[1.0, 2.0, 3.0, 4.0], 4).unwrap_err();
+    assert!(err.contains("size mismatch"), "unexpected error: {err}");
+    assert!(store.ids.is_empty());
+    assert!(store.data.is_empty());
+}
+
+#[test]
+fn test_insert_batch_raw_dimension_mismatch_errors() {
+    let mut store = mk_full_store(4);
+    let err = insert_batch_raw(&mut store, &[1u64], &[1.0, 2.0, 3.0], 3).unwrap_err();
+    assert!(
+        err.contains("dimension mismatch"),
+        "unexpected error: {err}"
+    );
+    assert!(store.ids.is_empty());
+}
+
+#[test]
+fn test_insert_batch_raw_overflow_errors() {
+    let mut store = mk_full_store(usize::MAX);
+    // ids.len() * dimension overflows usize -> checked_mul guard rejects.
+    let err = insert_batch_raw(&mut store, &[1u64, 2], &[], usize::MAX).unwrap_err();
+    assert!(err.contains("overflow"), "unexpected error: {err}");
+    assert!(store.ids.is_empty());
 }
