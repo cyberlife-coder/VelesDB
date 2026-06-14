@@ -1125,3 +1125,44 @@ fn test_collection_analyze_and_get_stats() {
     assert!(snapshot.total_points >= 2);
     assert!(snapshot.field_stats_count >= 1 || snapshot.column_stats_count >= 1);
 }
+
+// =========================================================================
+// Streaming ingestion tests
+// =========================================================================
+
+#[test]
+fn test_streaming_enable_and_insert_roundtrip() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("stream_rt".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("stream_rt".to_string()).unwrap().unwrap();
+
+    // enable with engine defaults
+    col.enable_streaming(None).unwrap();
+    // re-enable with an explicit config (replaces the ingester)
+    col.enable_streaming(Some(MobileStreamingConfig {
+        buffer_size: 256,
+        batch_size: 32,
+        flush_interval_ms: 10,
+    }))
+    .unwrap();
+
+    let queued = col
+        .stream_insert(vec![
+            VelesPoint {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(r#"{"k":"v"}"#.to_string()),
+            },
+            VelesPoint {
+                id: 2,
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                payload: None,
+            },
+        ])
+        .unwrap();
+    assert_eq!(queued, 2);
+}
