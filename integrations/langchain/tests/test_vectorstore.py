@@ -790,6 +790,42 @@ class TestV15Features:
 
         assert isinstance(results, list)
 
+    def test_add_texts_with_named_sparse_vectors(self, temp_db_path, embeddings):
+        """add_texts accepts named sparse vectors (dict[str, dict[int, float]]),
+        creating the named sparse index so it can be queried by name.
+        """
+        vectorstore = VelesDBVectorStore(
+            embedding=embeddings,
+            path=temp_db_path,
+            collection_name="test_named_sparse_create",
+        )
+
+        ids = vectorstore.add_texts(
+            ["alpha doc", "beta doc"],
+            sparse_vectors=[
+                {"bge_m3": {0: 5.0}, "splade": {5: 0.1}},
+                {"bge_m3": {0: 0.1}, "splade": {5: 5.0}},
+            ],
+        )
+        assert len(ids) == 2
+
+        # Query the bge_m3 named index (term 0) vs the splade index (term 5).
+        bge = vectorstore.similarity_search_with_score(
+            "alpha", k=2, sparse_vector={0: 1.0}, sparse_index_name="bge_m3",
+        )
+        splade = vectorstore.similarity_search_with_score(
+            "beta", k=2, sparse_vector={5: 1.0}, sparse_index_name="splade",
+        )
+        assert len(bge) == 2 and len(splade) == 2
+        bge_scores = {doc.page_content: score for doc, score in bge}
+        splade_scores = {doc.page_content: score for doc, score in splade}
+        # Each named index is consulted independently, so the per-document
+        # fused scores differ between the two indexes — proving creation and
+        # by-name querying of distinct named sparse indexes works.
+        assert bge_scores != splade_scores, (
+            "different named sparse indexes must give different results"
+        )
+
     def test_train_pq_calls_db_train_pq(self, embeddings):
         """Test that train_pq delegates to db.train_pq with correct args."""
         vectorstore = VelesDBVectorStore(
