@@ -712,6 +712,129 @@ fn test_multi_query_search_empty_vectors_error() {
     assert!(result.is_err());
 }
 
+#[test]
+fn test_multi_query_search_ids_matches_core() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("mqs_ids".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let col = db.get_collection("mqs_ids".to_string()).unwrap().unwrap();
+
+    col.upsert_batch(vec![
+        VelesPoint {
+            id: 1,
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            payload: Some("{\"k\":1}".to_string()),
+        },
+        VelesPoint {
+            id: 2,
+            vector: vec![0.0, 1.0, 0.0, 0.0],
+            payload: Some("{\"k\":2}".to_string()),
+        },
+        VelesPoint {
+            id: 3,
+            vector: vec![0.0, 0.0, 1.0, 0.0],
+            payload: Some("{\"k\":3}".to_string()),
+        },
+    ])
+    .unwrap();
+
+    let vectors = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
+
+    let id_results = col
+        .multi_query_search_ids(vectors.clone(), 5, FusionStrategy::Rrf { k: 60 })
+        .unwrap();
+    let full_results = col
+        .multi_query_search(vectors, 5, FusionStrategy::Rrf { k: 60 })
+        .unwrap();
+
+    // id-only twin returns the same IDs/scores as the payload-carrying path.
+    // Compare as sorted sets: equal scores may tie-break in either order.
+    let mut id_pairs: Vec<(u64, u32)> = id_results
+        .iter()
+        .map(|r| (r.id, r.score.to_bits()))
+        .collect();
+    let mut full_pairs: Vec<(u64, u32)> = full_results
+        .iter()
+        .map(|r| (r.id, r.score.to_bits()))
+        .collect();
+    id_pairs.sort_unstable();
+    full_pairs.sort_unstable();
+    assert_eq!(id_pairs, full_pairs);
+
+    // Payloads are stripped from the id-only variant.
+    assert!(id_results.iter().all(|r| r.payload.is_none()));
+}
+
+#[test]
+fn test_multi_query_search_ids_empty_vectors_error() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("mqs_ids_empty".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let col = db
+        .get_collection("mqs_ids_empty".to_string())
+        .unwrap()
+        .unwrap();
+
+    let result = col.multi_query_search_ids(vec![], 5, FusionStrategy::Rrf { k: 60 });
+
+    assert!(result.is_err());
+}
+
+// =========================================================================
+// Collection Diagnostics Tests
+// =========================================================================
+
+#[test]
+fn test_collection_diagnostics_with_data() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("diag_test".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let col = db.get_collection("diag_test".to_string()).unwrap().unwrap();
+
+    // Empty collection: no vectors, not search-ready, index empty.
+    let empty = col.diagnostics();
+    assert!(!empty.has_vectors);
+    assert!(!empty.search_ready);
+    assert!(empty.dimension_configured);
+    assert_eq!(empty.point_count, 0);
+    assert_eq!(empty.index_health, "empty");
+
+    col.upsert_batch(vec![
+        VelesPoint {
+            id: 1,
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            payload: None,
+        },
+        VelesPoint {
+            id: 2,
+            vector: vec![0.0, 1.0, 0.0, 0.0],
+            payload: None,
+        },
+    ])
+    .unwrap();
+
+    // Populated collection: vectors present, search-ready, index healthy.
+    let diag = col.diagnostics();
+    assert!(diag.has_vectors);
+    assert!(diag.search_ready);
+    assert!(diag.dimension_configured);
+    assert_eq!(diag.point_count, 2);
+    assert_eq!(diag.index_health, "healthy");
+    assert!(diag.index_health_detail.is_none());
+}
+
 // =========================================================================
 // Metadata-Only Collection Tests
 // =========================================================================

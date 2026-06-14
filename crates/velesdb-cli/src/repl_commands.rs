@@ -48,6 +48,7 @@ pub fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Com
         ".sample" => repl_collection_cmds::cmd_sample(db, &parts),
         ".browse" => repl_collection_cmds::cmd_browse(db, &parts),
         ".stats" => repl_collection_cmds::cmd_stats(db, &parts),
+        ".diagnostics" | ".diag" => repl_collection_cmds::cmd_diagnostics(db, &parts),
         ".scroll" => repl_collection_cmds::cmd_scroll(db, &parts),
         ".bench" | "\\bench" => repl_data_cmds::cmd_bench(db, config, &parts),
         ".export" => repl_data_cmds::cmd_export(db, &parts),

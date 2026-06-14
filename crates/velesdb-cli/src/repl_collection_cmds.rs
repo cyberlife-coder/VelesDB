@@ -1,7 +1,7 @@
 //! REPL commands for collection inspection and management.
 //!
 //! Covers: `.collections`, `.schema`, `.describe`, `.count`, `.sample`,
-//! `.browse`, `.nodes`, `.stats`, `.scroll`.
+//! `.browse`, `.nodes`, `.stats`, `.diagnostics`, `.scroll`.
 
 use colored::Colorize;
 use std::collections::HashMap;
@@ -362,6 +362,50 @@ pub(crate) fn cmd_stats(db: &Database, parts: &[&str]) -> CommandResult {
         }
     }
     CommandResult::Continue
+}
+
+pub(crate) fn cmd_diagnostics(db: &Database, parts: &[&str]) -> CommandResult {
+    if parts.len() < 2 {
+        println!("Usage: .diagnostics <collection_name>\n");
+        return CommandResult::Continue;
+    }
+    let name = parts[1];
+    let diag = match db.collection_diagnostics(name) {
+        Ok(d) => d,
+        Err(_) => return CommandResult::Error(format!("Collection '{name}' not found")),
+    };
+    let (health, detail) = index_health_label(&diag.index_health);
+
+    println!("\n{}", "Collection Diagnostics".bold().underline());
+    println!("  {} {}", "Name:".cyan(), name.green());
+    println!("  {} {}", "Has Vectors:".cyan(), diag.has_vectors);
+    println!("  {} {}", "Search Ready:".cyan(), diag.search_ready);
+    println!(
+        "  {} {}",
+        "Dimension Configured:".cyan(),
+        diag.dimension_configured
+    );
+    println!("  {} {}", "Point Count:".cyan(), diag.point_count);
+    println!("  {} {}", "Index Health:".cyan(), health.green());
+    if let Some(reason) = detail {
+        println!("  {} {}", "Detail:".cyan(), reason);
+    }
+    println!();
+    CommandResult::Continue
+}
+
+/// Maps an [`IndexHealth`](velesdb_core::collection::IndexHealth) to a stable
+/// lowercase label plus an optional detail message.
+fn index_health_label(
+    health: &velesdb_core::collection::IndexHealth,
+) -> (&'static str, Option<String>) {
+    use velesdb_core::collection::IndexHealth;
+    match health {
+        IndexHealth::Healthy => ("healthy", None),
+        IndexHealth::Empty => ("empty", None),
+        IndexHealth::NeedsRebuild(reason) => ("needs_rebuild", Some(reason.clone())),
+        _ => ("unknown", None),
+    }
 }
 
 /// Scroll through collection points with cursor-based pagination.
