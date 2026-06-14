@@ -52,6 +52,17 @@ pub struct VectorStore {
     pub(crate) sparse_index: Option<sparse::SparseIndex>,
 }
 
+impl VectorStore {
+    /// Returns the JSON payload stored for `id`, if the id exists and carries one.
+    ///
+    /// Used by cross-collection MATCH enrichment to merge a referenced
+    /// collection's metadata into graph results by node id.
+    pub(crate) fn payload_for_id(&self, id: u64) -> Option<&serde_json::Value> {
+        let idx = self.ids.iter().position(|&x| x == id)?;
+        self.payloads.get(idx).and_then(Option::as_ref)
+    }
+}
+
 #[wasm_bindgen]
 impl VectorStore {
     /// Creates a new vector store. Metrics: cosine, euclidean, dot, hamming, jaccard.
