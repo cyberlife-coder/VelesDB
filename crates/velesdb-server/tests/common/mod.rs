@@ -98,8 +98,7 @@ fn graph_and_maintenance_routes() -> Router<Arc<AppState>> {
         )
 }
 
-fn create_app_state(temp_dir: &TempDir) -> Arc<AppState> {
-    let db = Database::open(temp_dir.path()).expect("Failed to open database");
+fn app_state_from_db(db: Database) -> Arc<AppState> {
     Arc::new(AppState {
         db,
         onboarding_metrics: OnboardingMetrics::default(),
@@ -113,9 +112,26 @@ fn create_app_state(temp_dir: &TempDir) -> Arc<AppState> {
     })
 }
 
+fn create_app_state(temp_dir: &TempDir) -> Arc<AppState> {
+    app_state_from_db(Database::open(temp_dir.path()).expect("Failed to open database"))
+}
+
 /// Helper to create test app with all routes (no auth).
 pub fn create_test_app(temp_dir: &TempDir) -> Router {
     base_routes().with_state(create_app_state(temp_dir))
+}
+
+/// Helper to create a test app whose database is opened with the given
+/// [`DatabaseObserver`](velesdb_core::DatabaseObserver), so the lifecycle
+/// notify hooks (`on_collection_created`/`on_collection_deleted`/`on_upsert`/
+/// `on_query`) fire through the server's handlers.
+pub fn create_test_app_with_observer(
+    temp_dir: &TempDir,
+    observer: Arc<dyn velesdb_core::DatabaseObserver>,
+) -> Router {
+    let db =
+        Database::open_with_observer(temp_dir.path(), observer).expect("Failed to open database");
+    base_routes().with_state(app_state_from_db(db))
 }
 
 /// Helper to create test app and return the shared state for direct manipulation.

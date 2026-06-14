@@ -304,14 +304,25 @@ feasibility · target file for the glue):
 - 6.10 `multi_query_search_ids` — DONE. Server `POST /collections/{name}/search/multi/ids` (+ OpenAPI) calls core `multi_query_search_ids` (rejects filters — the kernel has no filter param); TS `multiQuerySearchIds` across `search-backend.ts` → REST/WASM backends (WASM = not-supported stub, mirroring `searchIds`) → `Backend` interface → client. Server parity + filter-rejection + 404 tests; TS backend tests.
 - 6.11 `validate_*` free-fn dedup — **VERIFIED no-op (no real gap).** The matrix row was overstated: no binding re-implements these. Core already re-exports `validate_collection_name` / `validate_dimension` / `validate_dimension_match` from the crate root (`lib.rs`); Python relies on core validation via error-mapping (no local validators in `lib.rs`); the server only matches the `InvalidCollectionName` *error* variant (no local name/dimension validator); TS is client-only and has no `validateCollectionName` / `validateDimension`. Nothing to consolidate.
 
+**Status — Observer plane** (item P, 2026-06-14): **DONE for Python + server
+e2e.** Python `Database(path, observer=cb)` injects a `PyObserver` that bridges
+the four core *notify* hooks to one callable `cb(event, **fields)` — events
+`collection_created` (`name`, `kind`), `collection_deleted` (`name`), `upsert`
+(`collection`, `point_count`), `query` (`collection`, `duration_us`). In the
+embedded SDK only `collection_created`/`collection_deleted` fire (the core
+emits them directly); `upsert`/`query` are emitted by callers that measure and
+call `notify_upsert`/`notify_query` — that is the REST server, now covered
+end-to-end by `crates/velesdb-server/tests/observer_lifecycle_tests.rs` (a
+`CountingObserver` injected via `Database::open_with_observer` asserts all four
+hooks across create/upsert/search/delete). The two **veto** hooks
+(`on_ddl_request`/`on_dml_mutation_request`) stay trait-default (allow) and are
+intentionally **not** exposed — no policy/RBAC engine in the open SDK. WASM is
+architecturally N/A; TypeScript-REST (SSE/WS) and Mobile remain deferred.
+
 **Explicitly deferred (not worth closing now)**:
 - `stream_insert_batch` / `enable_streaming` / `StreamIngester::*` — async
   runtime + channel-handle lifetime across PyO3/UniFFI is **hard** and
   low-demand vs `upsert_bulk`. WASM N/A (no async fs). P3, defer.
-- Observer plane (`open_with_observer[_and_config]`, `notify_upsert`,
-  `notify_query`) — marshalling a Rust callback trait object across FFI;
-  feasible only in Python (PyO3 closures), awkward/niche elsewhere. P3,
-  defer. Only `velesdb-server` wires the notify hooks (its metrics).
 - `upsert_bulk_from_raw` beyond Python — REST/TS already have JSON
   `upsert_bulk`; the zero-copy raw path needs a flat-buffer wire format
   for marginal benefit. Keep Python/NumPy-only.
