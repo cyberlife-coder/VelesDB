@@ -8,6 +8,12 @@ import numpy as np
 
 __version__: str
 
+# Canonical enum name sets, single-sourced from velesdb-core's
+# `DistanceMetric` / `StorageMode` variants. Immutable tuples of canonical
+# lowercase names, in declaration order.
+DISTANCE_METRICS: Tuple[str, ...]
+STORAGE_MODES: Tuple[str, ...]
+
 
 # ---------------------------------------------------------------------------
 # Structural return types (TypedDict)

@@ -35,13 +35,68 @@ pub struct MobileGraphEdge {
     pub properties_json: Option<String>,
 }
 
-/// Traversal result from BFS.
+/// Traversal result from BFS/DFS.
+///
+/// FFI projection of [`velesdb_core::TraversalResult`]. The mobile field
+/// `node_id` corresponds to core's `target_id` (the node reached); `path`
+/// and `depth` mirror core's fields one-for-one. See the `From` impls below
+/// for the canonical mapping — they make any future core field drift a
+/// compile error rather than silent divergence.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct TraversalResult {
-    /// Target node ID.
+    /// Target node ID reached (core: `target_id`).
     pub node_id: u64,
-    /// Depth from source.
+    /// Edge IDs along the path from the source to this node (core: `path`).
+    pub path: Vec<u64>,
+    /// Depth from source (number of hops).
     pub depth: u32,
+}
+
+/// Serializes a core property map to the mobile `properties_json` shape.
+///
+/// Returns `None` for an empty map (no properties) and a JSON object string
+/// otherwise. A serialization failure also yields `None` so the projection is
+/// total (FFI conversions cannot return a `Result`).
+fn properties_to_json(
+    properties: &std::collections::HashMap<String, serde_json::Value>,
+) -> Option<String> {
+    if properties.is_empty() {
+        return None;
+    }
+    serde_json::to_string(properties).ok()
+}
+
+impl From<velesdb_core::GraphNode> for MobileGraphNode {
+    fn from(node: velesdb_core::GraphNode) -> Self {
+        Self {
+            id: node.id(),
+            label: node.label().to_string(),
+            properties_json: properties_to_json(node.properties()),
+            vector: node.vector().cloned(),
+        }
+    }
+}
+
+impl From<velesdb_core::GraphEdge> for MobileGraphEdge {
+    fn from(edge: velesdb_core::GraphEdge) -> Self {
+        Self {
+            id: edge.id(),
+            source: edge.source(),
+            target: edge.target(),
+            label: edge.label().to_string(),
+            properties_json: properties_to_json(edge.properties()),
+        }
+    }
+}
+
+impl From<velesdb_core::TraversalResult> for TraversalResult {
+    fn from(result: velesdb_core::TraversalResult) -> Self {
+        Self {
+            node_id: result.target_id,
+            path: result.path,
+            depth: result.depth,
+        }
+    }
 }
 
 /// In-memory graph store for mobile knowledge graphs.
@@ -197,24 +252,28 @@ impl MobileGraphStore {
 
         let mut results: Vec<TraversalResult> = Vec::new();
         let mut visited: HashSet<u64> = HashSet::new();
-        let mut queue: VecDeque<(u64, u32)> = VecDeque::new();
+        let mut queue: VecDeque<(u64, u32, Vec<u64>)> = VecDeque::new();
 
         for &source_id in &source_ids {
             if visited.insert(source_id) {
-                queue.push_back((source_id, 0));
+                queue.push_back((source_id, 0, Vec::new()));
             }
         }
 
-        while let Some((node_id, depth)) = queue.pop_front() {
+        while let Some((node_id, depth, path)) = queue.pop_front() {
             if results.len() >= limit as usize {
                 break;
             }
 
             if depth > 0 {
-                results.push(TraversalResult { node_id, depth });
+                results.push(TraversalResult {
+                    node_id,
+                    path: path.clone(),
+                    depth,
+                });
             }
 
-            self.enqueue_neighbors(node_id, depth, max_depth, &mut visited, &mut queue);
+            self.enqueue_neighbors(node_id, depth, max_depth, &path, &mut visited, &mut queue);
         }
 
         results
@@ -308,9 +367,9 @@ impl MobileGraphStore {
 
         let mut results: Vec<TraversalResult> = Vec::new();
         let mut visited: HashSet<u64> = HashSet::new();
-        let mut stack: Vec<(u64, u32)> = vec![(source_id, 0)];
+        let mut stack: Vec<(u64, u32, Vec<u64>)> = vec![(source_id, 0, Vec::new())];
 
-        while let Some((node_id, depth)) = stack.pop() {
+        while let Some((node_id, depth, path)) = stack.pop() {
             if results.len() >= limit as usize {
                 break;
             }
@@ -321,7 +380,11 @@ impl MobileGraphStore {
             visited.insert(node_id);
 
             if depth > 0 {
-                results.push(TraversalResult { node_id, depth });
+                results.push(TraversalResult {
+                    node_id,
+                    path: path.clone(),
+                    depth,
+                });
             }
 
             if depth < max_depth {
@@ -332,7 +395,9 @@ impl MobileGraphStore {
                     .collect();
 
                 for edge in neighbors.into_iter().rev() {
-                    stack.push((edge.target, depth + 1));
+                    let mut next_path = path.clone();
+                    next_path.push(edge.id);
+                    stack.push((edge.target, depth + 1, next_path));
                 }
             }
         }
@@ -411,21 +476,27 @@ impl MobileGraphStore {
 
     /// Enqueues unvisited outgoing neighbors of `node_id` for further traversal.
     ///
-    /// No-op when `depth` has already reached `max_depth`.
+    /// Each enqueued entry carries the edge-ID path taken to reach the neighbor
+    /// (`path` so far plus the traversed edge), mirroring core's
+    /// `TraversalResult::path`. No-op when `depth` has already reached
+    /// `max_depth`.
     fn enqueue_neighbors(
         &self,
         node_id: u64,
         depth: u32,
         max_depth: u32,
+        path: &[u64],
         visited: &mut std::collections::HashSet<u64>,
-        queue: &mut std::collections::VecDeque<(u64, u32)>,
+        queue: &mut std::collections::VecDeque<(u64, u32, Vec<u64>)>,
     ) {
         if depth >= max_depth {
             return;
         }
         for edge in self.get_outgoing(node_id) {
             if visited.insert(edge.target) {
-                queue.push_back((edge.target, depth + 1));
+                let mut next_path = path.to_vec();
+                next_path.push(edge.id);
+                queue.push_back((edge.target, depth + 1, next_path));
             }
         }
     }
@@ -537,11 +608,53 @@ mod tests {
 
         let results = store.bfs_traverse(1, 3, 100);
 
-        // Should find nodes 2, 3, 4 at depths 1, 2, 3
+        // Should find nodes 2, 3, 4 at depths 1, 2, 3, each carrying the
+        // edge-ID path mirroring core's TraversalResult::path.
         assert_eq!(results.len(), 3);
-        assert!(results.iter().any(|r| r.node_id == 2 && r.depth == 1));
-        assert!(results.iter().any(|r| r.node_id == 3 && r.depth == 2));
-        assert!(results.iter().any(|r| r.node_id == 4 && r.depth == 3));
+        assert!(results
+            .iter()
+            .any(|r| r.node_id == 2 && r.depth == 1 && r.path == vec![100]));
+        assert!(results
+            .iter()
+            .any(|r| r.node_id == 3 && r.depth == 2 && r.path == vec![100, 101]));
+        assert!(results
+            .iter()
+            .any(|r| r.node_id == 4 && r.depth == 3 && r.path == vec![100, 101, 102]));
+    }
+
+    #[test]
+    fn test_traversal_result_from_core() {
+        let core = velesdb_core::TraversalResult::new(7, vec![10, 20], 2);
+        let mobile: TraversalResult = core.into();
+        assert_eq!(mobile.node_id, 7);
+        assert_eq!(mobile.path, vec![10, 20]);
+        assert_eq!(mobile.depth, 2);
+    }
+
+    #[test]
+    fn test_graph_node_from_core() {
+        let mut props = std::collections::HashMap::new();
+        props.insert("name".to_string(), serde_json::json!("Alice"));
+        let core = velesdb_core::GraphNode::new(1, "Person")
+            .with_properties(props)
+            .with_vector(vec![0.1, 0.2]);
+        let mobile: MobileGraphNode = core.into();
+        assert_eq!(mobile.id, 1);
+        assert_eq!(mobile.label, "Person");
+        assert_eq!(mobile.vector, Some(vec![0.1, 0.2]));
+        assert!(mobile.properties_json.is_some());
+    }
+
+    #[test]
+    fn test_graph_edge_from_core() -> Result<(), velesdb_core::Error> {
+        let core = velesdb_core::GraphEdge::new(100, 1, 2, "KNOWS")?;
+        let mobile: MobileGraphEdge = core.into();
+        assert_eq!(mobile.id, 100);
+        assert_eq!(mobile.source, 1);
+        assert_eq!(mobile.target, 2);
+        assert_eq!(mobile.label, "KNOWS");
+        assert_eq!(mobile.properties_json, None);
+        Ok(())
     }
 
     #[test]

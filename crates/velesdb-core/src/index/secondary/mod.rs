@@ -2,6 +2,8 @@
 
 #[cfg(test)]
 mod bitmap_tests;
+#[cfg(test)]
+mod ordered_ids_tests;
 
 use parking_lot::RwLock;
 use serde_json::Number;
@@ -150,6 +152,59 @@ impl SecondaryIndex {
                 Some(bm)
             }
         }
+    }
+
+    /// Returns up to `limit` point IDs in this index's key order — ascending,
+    /// or descending when `descending` is true — with IDs inside an equal-key
+    /// bucket emitted in ascending ID order for determinism.
+    ///
+    /// This is the ordered-iteration primitive for index-backed
+    /// `ORDER BY <field> LIMIT k` top-k (the B001 perf follow-up): a
+    /// `BTreeMap` walk costs `O(log n + k)` instead of the `O(n log n)`
+    /// full-scan sort. It only sees rows that carry the field — rows missing
+    /// the field (which a full `ORDER BY` sorts first for ASC / last for DESC)
+    /// are absent, so callers MUST restrict use to fully-covered fields and
+    /// fall back to the full scan otherwise.
+    // Staged API: landed + unit-tested ahead of its planner consumer. The
+    // `ORDER BY <field> LIMIT k` pushdown that calls this (routing at
+    // `order_by_requires_exhaustive_fetch`) is phase 2 of the ordered-index
+    // EPIC — see docs/planning/CORE_PARITY_REMEDIATION.md.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn ordered_ids(&self, descending: bool, limit: usize) -> Vec<u64> {
+        let Self::BTree(tree) = self;
+        let guard = tree.read();
+        let mut out: Vec<u64> = Vec::new();
+        if descending {
+            for ids in guard.values().rev() {
+                if out.len() >= limit {
+                    break;
+                }
+                push_bucket_capped(ids, limit, &mut out);
+            }
+        } else {
+            for ids in guard.values() {
+                if out.len() >= limit {
+                    break;
+                }
+                push_bucket_capped(ids, limit, &mut out);
+            }
+        }
+        out
+    }
+}
+
+/// Appends `ids` (sorted ascending for determinism) to `out`, stopping once
+/// `out` reaches `limit`.
+#[allow(dead_code)] // helper for the staged `ordered_ids` primitive (see above)
+fn push_bucket_capped(ids: &[u64], limit: usize, out: &mut Vec<u64>) {
+    let mut bucket = ids.to_vec();
+    bucket.sort_unstable();
+    for id in bucket {
+        if out.len() >= limit {
+            return;
+        }
+        out.push(id);
     }
 }
 
