@@ -94,6 +94,7 @@ class VectorStore {
   insert(id: bigint, vector: Float32Array): void;
   insert_with_payload(id: bigint, vector: Float32Array, payload: object): void;
   insert_batch(batch: Array<[bigint, number[]]>): void;  // Bulk insert
+  insertBatchRaw(ids: BigUint64Array, vectors: Float32Array, dimension: number): void;  // Flat raw-bulk insert (since 2026-06-14)
   search(query: Float32Array, k: number): Array<[bigint, number]>;
   search_with_filter(query: Float32Array, k: number, filter: object): Array<{id, score, payload}>;
   text_search(query: string, k: number, field?: string): Array<{id, score, payload}>;
