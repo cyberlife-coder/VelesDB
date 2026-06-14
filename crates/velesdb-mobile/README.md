@@ -331,7 +331,7 @@ Used with `multiQuerySearch()` for combining results from multiple query vectors
 | `PqTrainConfig` | `m: UInt32`, `k: UInt32`, `opq: Bool` | PQ training configuration |
 | `MobileGraphNode` | `id: UInt64`, `label: String`, `propertiesJson: String?`, `vector: [Float]?` | Graph node |
 | `MobileGraphEdge` | `id: UInt64`, `source: UInt64`, `target: UInt64`, `label: String`, `propertiesJson: String?` | Graph edge |
-| `TraversalResult` | `nodeId: UInt64`, `depth: UInt32` | BFS/DFS traversal result |
+| `TraversalResult` | `nodeId: UInt64`, `path: [UInt64]`, `depth: UInt32` | BFS/DFS traversal result (`path` = edge IDs taken from the source; mirrors core's `TraversalResult`) |
 | `MobileCollectionStats` | `totalPoints`, `payloadSizeBytes`, `rowCount`, ... | Collection statistics |
 | `MobileIndexInfo` | `label`, `property`, `indexType`, `cardinality`, `memoryBytes` | Index metadata |
 
