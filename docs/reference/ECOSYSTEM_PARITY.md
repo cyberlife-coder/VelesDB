@@ -31,7 +31,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 |---------------|------|--------|--------|------|--------|-----|--------|-------|-----------|------------|----------|
 | **Vector CRUD** (insert, upsert, delete, get) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Batch Operations** (batch_insert, batch_upsert) | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Streaming Ingestion** (enableStreaming / stream_insert) | ✅ | ✅ | ✅ | ❌ | ❌ | ⚠️ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Streaming Ingestion** (enableStreaming / stream_insert) | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Vector Search** (k-NN, filtered, batch) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Multi-Query Fusion** (RRF) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
 | **Multi-Query Fusion** (RSF / Weighted) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
@@ -56,7 +56,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 
 - **Cross-Collection MATCH**: Core and Server support `@collection` annotation on MATCH node patterns. Python bindings support via `_collection` param. CLI supports via `\use`. WASM, Mobile, Tauri, and integrations do not yet expose this feature.
 - **Batch Operations**: WASM and Mobile use streaming chunked inserts instead of single-call bulk to stay within memory constraints.
-- **Streaming Ingestion** (2026-06-14): Core, Server (`POST /collections/{name}/stream/enable` + `/stream/insert`), Python, Tauri, and the TS SDK (`enableStreaming()` / `streamInsert()`, REST backend) support the bounded ingestion channel. The CLI reaches it ⚠️ via the embedded core path with no dedicated REPL command. WASM throws `NOT_SUPPORTED` (no persistence layer). Mobile and the LangChain/LlamaIndex/Haystack integrations do not yet expose it.
+- **Streaming Ingestion** (2026-06-14): Core, Server (`POST /collections/{name}/stream/enable` + `/stream/insert`), Python, Tauri, Mobile (`enableStreaming()` / `streamInsert()` on its own tokio streaming runtime), and the TS SDK (`enableStreaming()` / `streamInsert()`, REST backend) support the bounded ingestion channel. The CLI reaches it ⚠️ via the embedded core path with no dedicated REPL command. WASM throws `NOT_SUPPORTED` (no persistence layer). Only the LangChain/LlamaIndex/Haystack integrations do not yet expose it.
 - **Multi-Query Fusion (RSF/Weighted)**: WASM supports RRF only. LangChain and LlamaIndex expose RSF/Weighted through `multi_query_search(fusion=...)`, which delegates to the shared `velesdb_common.fusion.build_fusion_strategy` (builds `weighted()` and `relative_score()`). Haystack remains ⚠️: fusion is reachable only via the underlying `velesdb` Python wrapper, not through the `DocumentStore` protocol.
 - **Sparse Vector Search (named indexes) — LangChain/LlamaIndex**: ⚠️ query-side only. Both integrations forward a `sparse_index_name` argument to the underlying `collection.search`/`hybrid_search`, so an existing named sparse index can be *queried*. Creating named sparse indexes is not exposed by the integrations (use the core `velesdb` API), and this path is not yet covered by integration tests.
 - **Graph Operations (WASM)**: Basic node/edge CRUD is supported; multi-hop traversal and MATCH queries are limited.
@@ -219,7 +219,7 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
 
 ## Remaining Gaps and Action Items
 
-1. Add explicit CLI end-to-end assertions for REST error shape (`code/hint/details`) beyond parser conformance.
+1. Add explicit server-side end-to-end assertions for the REST error shape (`code/hint/details`) beyond parser conformance. (The CLI has no HTTP layer — it executes against embedded core — so the REST error-shape contract belongs to `velesdb-server`.)
 2. Extend WASM conformance from parser-only to executable feature checks where applicable.
 3. Keep docs, fixtures, and examples synchronized on every contract version change.
 4. Promote RaBitQ from experimental to stable once the API is finalized.

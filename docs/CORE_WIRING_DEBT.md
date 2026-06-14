@@ -1,8 +1,9 @@
 # Core Wiring Debt
 
-> **Last updated**: 2026-06-12 — inventory re-verified against the code on
+> **Last updated**: 2026-06-14 — inventory re-verified against the code on
 > this date (entries 1, 2, 3, and 5 re-checked at their call sites; entry 4
-> is a qualitative single-source-of-truth cleanup and unchanged).
+> is a qualitative single-source-of-truth cleanup and unchanged; §5
+> `LimitsConfig` runtime enforcement and the §6 Observer plane re-checked).
 
 This document lists configuration structures and subsystems that exist in
 `velesdb-core` but are **not yet fully wired** to the user-facing runtime.
@@ -304,6 +305,14 @@ feasibility · target file for the glue):
 - 6.10 `multi_query_search_ids` — DONE. Server `POST /collections/{name}/search/multi/ids` (+ OpenAPI) calls core `multi_query_search_ids` (rejects filters — the kernel has no filter param); TS `multiQuerySearchIds` across `search-backend.ts` → REST/WASM backends (WASM = not-supported stub, mirroring `searchIds`) → `Backend` interface → client. Server parity + filter-rejection + 404 tests; TS backend tests.
 - 6.11 `validate_*` free-fn dedup — **VERIFIED no-op (no real gap).** The matrix row was overstated: no binding re-implements these. Core already re-exports `validate_collection_name` / `validate_dimension` / `validate_dimension_match` from the crate root (`lib.rs`); Python relies on core validation via error-mapping (no local validators in `lib.rs`); the server only matches the `InvalidCollectionName` *error* variant (no local name/dimension validator); TS is client-only and has no `validateCollectionName` / `validateDimension`. Nothing to consolidate.
 
+**Status — Wave 1 PR-L** (`feat/parity-mobile-cli-diagnostics`, MERGED #1106,
+2026-06-14): 6.6 mobile `diagnostics` DONE (`collection.rs:620`); 6.10 mobile
+`multi_query_search_ids` DONE (`collection_sparse.rs:144`); CLI `.diagnostics`
+REPL command added (`repl_collection_cmds.rs`). Still open after PR-L: 6.9
+`search_batch_parallel` on mobile (mobile batch still routes through
+`search_batch_with_filters`) and all three diagnostics / multi_query /
+search_batch_parallel surfaces on Tauri.
+
 **Status — Observer plane** (item P, 2026-06-14): **DONE for Python + server
 e2e.** Python `Database(path, observer=cb)` injects a `PyObserver` that bridges
 the four core *notify* hooks to one callable `cb(event, **fields)` — events
@@ -319,10 +328,22 @@ hooks across create/upsert/search/delete). The two **veto** hooks
 intentionally **not** exposed — no policy/RBAC engine in the open SDK. WASM is
 architecturally N/A; TypeScript-REST (SSE/WS) and Mobile remain deferred.
 
+**Streaming ingestion (`stream_insert_batch` / `enable_streaming` /
+`StreamIngester::*`) — DONE across the first-party bindings (2026-06-14).** The
+async-runtime + channel-handle-lifetime concern was solved by giving each
+binding a process-wide tokio streaming runtime that the drain task is scheduled
+on: Python (`velesdb-python/src/streaming_runtime.rs` + `collection/mutation.rs`
+`enable_streaming`/`stream_insert`) and Mobile/UniFFI
+(`velesdb-mobile/src/streaming_runtime.rs` +
+`collection.rs:481`/`:508`), alongside Server
+(`POST /collections/{name}/stream/enable` + `/stream/insert`), the TS SDK
+(`enableStreaming()`/`streamInsert()`, REST backend) and Tauri. WASM is N/A (no
+async fs / persistence layer; throws `NOT_SUPPORTED`). The CLI reaches it ⚠️ via
+the embedded core path with no dedicated REPL command. Only the
+LangChain/LlamaIndex/Haystack integrations do not yet expose it. See
+`docs/reference/ECOSYSTEM_PARITY.md` (Streaming Ingestion row).
+
 **Explicitly deferred (not worth closing now)**:
-- `stream_insert_batch` / `enable_streaming` / `StreamIngester::*` — async
-  runtime + channel-handle lifetime across PyO3/UniFFI is **hard** and
-  low-demand vs `upsert_bulk`. WASM N/A (no async fs). P3, defer.
 - `upsert_bulk_from_raw` beyond Python — REST/TS already have JSON
   `upsert_bulk`; the zero-copy raw path needs a flat-buffer wire format
   for marginal benefit. Keep Python/NumPy-only.
