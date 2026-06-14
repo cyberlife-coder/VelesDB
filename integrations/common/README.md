@@ -73,8 +73,8 @@ direct use by end users.
 
 | Export | Type | Description |
 |--------|------|-------------|
-| `ALLOWED_METRICS` | set | Canonical metric strings (cosine, euclidean, dot, …) |
-| `ALLOWED_STORAGE_MODES` | set | Canonical storage modes (full, sq8, binary, pq, rabitq) |
+| `ALLOWED_METRICS` | set | Canonical metric strings (cosine, euclidean, dot, …); single-sourced from `velesdb.DISTANCE_METRICS`, with a literal fallback when the wheel is absent |
+| `ALLOWED_STORAGE_MODES` | set | Canonical storage modes (full, sq8, binary, pq, rabitq); single-sourced from `velesdb.STORAGE_MODES`, with a literal fallback when the wheel is absent |
 | `STORAGE_MODE_ALIASES` | dict | Alias → canonical mapping (e.g. `int8` → `sq8`) |
 | `DEFAULT_TIMEOUT_MS` | int | Default timeout used when callers don't specify one |
 | `MIN_DIMENSION` / `MAX_DIMENSION` | int | Vector dimension bounds |

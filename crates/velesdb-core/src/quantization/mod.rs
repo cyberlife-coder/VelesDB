@@ -103,6 +103,15 @@ pub trait QuantizationCodec: Sized {
     fn from_bytes(bytes: &[u8]) -> io::Result<Self>;
 }
 
+/// Canonical names of every [`StorageMode`] variant, in declaration order.
+///
+/// Single source of truth for the storage-mode name set exported to downstream
+/// crates and bindings (Python `velesdb.STORAGE_MODES`, the integrations
+/// security guard). Each entry is the variant's
+/// [`canonical_name`](StorageMode::canonical_name); a unit test asserts the
+/// slice stays exhaustive so adding a variant without updating it fails CI.
+pub const STORAGE_MODE_NAMES: &[&str] = &["full", "sq8", "binary", "pq", "rabitq"];
+
 /// Storage mode for vectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -189,7 +198,36 @@ impl std::str::FromStr for StorageMode {
 
 #[cfg(test)]
 mod storage_mode_parsing_tests {
-    use super::StorageMode;
+    use super::{StorageMode, STORAGE_MODE_NAMES};
+
+    /// Forces this test to be revisited whenever a variant is added: the
+    /// exhaustive `match` (no wildcard arm) fails to compile until the new
+    /// variant is listed here, which in turn flags the missing const entry.
+    fn ordinal(mode: StorageMode) -> usize {
+        match mode {
+            StorageMode::Full => 0,
+            StorageMode::SQ8 => 1,
+            StorageMode::Binary => 2,
+            StorageMode::ProductQuantization => 3,
+            StorageMode::RaBitQ => 4,
+        }
+    }
+
+    #[test]
+    fn storage_mode_names_is_exhaustive_and_canonical() {
+        let variants = [
+            StorageMode::Full,
+            StorageMode::SQ8,
+            StorageMode::Binary,
+            StorageMode::ProductQuantization,
+            StorageMode::RaBitQ,
+        ];
+        assert_eq!(variants.len(), STORAGE_MODE_NAMES.len());
+        for (i, variant) in variants.into_iter().enumerate() {
+            assert_eq!(ordinal(variant), i);
+            assert_eq!(STORAGE_MODE_NAMES[i], variant.canonical_name());
+        }
+    }
 
     #[test]
     fn test_parse_all_canonical_names() {
