@@ -37,13 +37,15 @@ impl Collection {
                 }
             }
             drop(config);
+            // `upsert_metadata` is the storage entry for this path and applies
+            // the runtime limits itself — checking here too would double-scan.
             return self.upsert_metadata(points);
         }
         drop(config);
 
-        for point in &points {
-            validate_dimension_match(dimension, point.dimension())?;
-        }
+        // Parity item E + dimension validation at the cold boundary, before any
+        // storage lock or WAL write — a violation rejects the whole batch.
+        self.validate_vector_upsert_batch(&points, dimension)?;
 
         let (sparse_batch, old_payloads) = self.upsert_storage_and_index(&points, storage_mode)?;
 
@@ -55,6 +57,27 @@ impl Collection {
         self.apply_histogram_replace_dedup(&points, &old_payloads);
 
         self.bump_generation_with_mirror_upserts(&points);
+        Ok(())
+    }
+
+    /// Validates a vector-collection upsert batch at the cold boundary:
+    /// runtime ingest limits (parity item E) followed by the per-point
+    /// dimension check. Shared by [`Self::upsert`] and `upsert_bulk_inner`
+    /// so both ingest paths apply the identical pre-storage validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::GuardRail`] on a limit violation, or the dimension
+    /// mismatch error from [`validate_dimension_match`].
+    pub(super) fn validate_vector_upsert_batch(
+        &self,
+        points: &[Point],
+        dimension: usize,
+    ) -> Result<()> {
+        self.enforce_upsert_limits(points)?;
+        for point in points {
+            validate_dimension_match(dimension, point.dimension())?;
+        }
         Ok(())
     }
 
@@ -401,6 +424,11 @@ impl Collection {
     pub fn upsert_metadata(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         let points: Vec<Point> = points.into_iter().collect();
 
+        // Parity item E: cold-boundary runtime limits. This is the storage
+        // entry for the metadata-only path (`MetadataCollection::upsert` and
+        // `upsert_metadata` route here directly, bypassing `Collection::upsert`).
+        self.enforce_upsert_limits(&points)?;
+
         // LOCK ORDER: payload_storage(3) → label_index(7).
         let mut payload_storage = self.payload_storage.write();
         let mut label_idx = self.label_index.write();
@@ -411,7 +439,41 @@ impl Collection {
         // so the old value is decremented exactly once.
         let old_payloads_for_hist = Self::collect_old_payloads(&points, &payload_storage);
 
-        for point in &points {
+        self.apply_metadata_point_writes(&points, &mut payload_storage, &mut label_idx)?;
+
+        // LOCK ORDER: drop label_index(7) before acquiring config(1) and stats_io_mutex(12).
+        drop(label_idx);
+
+        // LOCK ORDER: flush while payload_storage(3) still held, then drop before acquiring config(1).
+        let point_count = payload_storage.ids().len();
+        payload_storage.flush()?;
+        drop(payload_storage);
+
+        // config(1) only — payload_storage(3) and label_index(7) both released above.
+        self.config.write().point_count = point_count;
+
+        // Incremental histogram maintenance for metadata-only collections
+        // (Bug #47 + Bug #49): dedup by id and replace histograms in one
+        // atomic cycle. See `apply_histogram_replace_dedup`.
+        self.apply_histogram_replace_dedup(&points, &old_payloads_for_hist);
+
+        self.bump_generation_with_mirror_upserts(&points);
+        Ok(())
+    }
+
+    /// Applies the per-point payload store/delete, text-index, secondary-index,
+    /// and label-index updates for a metadata-only batch.
+    ///
+    /// Extracted from [`Self::upsert_metadata`] so each function stays within
+    /// the complexity budget. Both write guards are passed in by the caller,
+    /// which holds them across the whole batch in lock order (3 → 7).
+    fn apply_metadata_point_writes(
+        &self,
+        points: &[Point],
+        payload_storage: &mut LogPayloadStorage,
+        label_idx: &mut crate::collection::graph::LabelIndex,
+    ) -> Result<()> {
+        for point in points {
             let old_payload = payload_storage.retrieve(point.id).ok().flatten();
             if let Some(payload) = &point.payload {
                 payload_storage.store(point.id, payload)?;
@@ -433,24 +495,6 @@ impl Collection {
                 label_idx.index_from_payload(point.id, payload);
             }
         }
-
-        // LOCK ORDER: drop label_index(7) before acquiring config(1) and stats_io_mutex(12).
-        drop(label_idx);
-
-        // LOCK ORDER: flush while payload_storage(3) still held, then drop before acquiring config(1).
-        let point_count = payload_storage.ids().len();
-        payload_storage.flush()?;
-        drop(payload_storage);
-
-        // config(1) only — payload_storage(3) and label_index(7) both released above.
-        self.config.write().point_count = point_count;
-
-        // Incremental histogram maintenance for metadata-only collections
-        // (Bug #47 + Bug #49): dedup by id and replace histograms in one
-        // atomic cycle. See `apply_histogram_replace_dedup`.
-        self.apply_histogram_replace_dedup(&points, &old_payloads_for_hist);
-
-        self.bump_generation_with_mirror_upserts(&points);
         Ok(())
     }
 }

@@ -132,6 +132,11 @@ impl Database {
         metric: DistanceMetric,
         storage_mode: StorageMode,
     ) {
+        // Parity item E: thread the live LimitsConfig caps into the collection
+        // before it is shared, so direct Collection::upsert / search paths
+        // (used by every SDK/REST handler) enforce the configured limits.
+        self.push_runtime_limits(&coll.inner);
+
         self.vector_colls
             .write()
             .insert(name.to_string(), coll.clone());
@@ -173,6 +178,8 @@ impl Database {
             return None;
         }
         let coll = VectorCollection::open(self.data_dir.join(name)).ok()?;
+        // Parity item E: re-push runtime limits on disk-open (not persisted).
+        self.push_runtime_limits(&coll.inner);
         self.vector_colls
             .write()
             .insert(name.to_string(), coll.clone());

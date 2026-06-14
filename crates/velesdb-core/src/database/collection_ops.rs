@@ -53,6 +53,19 @@ impl Database {
         Ok(())
     }
 
+    /// Pushes the live [`LimitsConfig`](crate::config::LimitsConfig) ingest/
+    /// search caps into a collection (parity item E).
+    ///
+    /// Single helper reused by the vector / graph / metadata registration and
+    /// disk-open paths so all three thread the same runtime limits into the
+    /// `Collection`. The limits are **not** persisted to `config.json`: they
+    /// are re-pushed on every open from the live `VelesConfig`.
+    pub(super) fn push_runtime_limits(&self, coll: &crate::collection::Collection) {
+        coll.set_runtime_limits(crate::collection::RuntimeLimits::from_config(
+            &self.config.limits,
+        ));
+    }
+
     /// Checks whether a collection name exists in any of the typed registries.
     fn collection_exists_in_registry(&self, name: &str) -> bool {
         self.vector_colls.read().contains_key(name)

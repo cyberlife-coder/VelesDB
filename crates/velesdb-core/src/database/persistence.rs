@@ -147,6 +147,9 @@ impl Database {
     ) -> bool {
         match open_fn(path.to_path_buf()) {
             Ok(typed) => {
+                // Parity item E: thread the live LimitsConfig caps into the
+                // startup-loaded collection (not persisted — re-pushed here).
+                self.push_runtime_limits(typed.inner());
                 typed.insert_into(
                     &self.vector_colls,
                     &self.graph_colls,
@@ -201,6 +204,16 @@ enum TypedColl {
 }
 
 impl TypedColl {
+    /// Returns the wrapped `Collection` so the caller can push runtime limits
+    /// before the typed handle is moved into its registry (parity item E).
+    fn inner(&self) -> &crate::collection::Collection {
+        match self {
+            Self::Vector(c) => &c.inner,
+            Self::Graph(c) => &c.inner,
+            Self::Metadata(c) => &c.inner,
+        }
+    }
+
     fn insert_into(
         self,
         vectors: &parking_lot::RwLock<std::collections::HashMap<String, VectorCollection>>,
