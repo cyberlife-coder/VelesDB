@@ -323,6 +323,11 @@ velesdb data import embeddings.csv \
   --id-column doc_id \
   --vector-column embedding
 
+# Import from a VRB1 binary file (.bin / .vrb1) — zero-copy bulk path
+velesdb data import vectors.bin \
+  --database ./data \
+  --collection docs
+
 # Export to JSON (vector collections only)
 velesdb data export ./data documents --output documents.json
 
@@ -349,6 +354,10 @@ Each line must be a valid JSON object with the following fields:
 | `payload` | JSON object | no | Arbitrary JSON metadata |
 
 Lines with mismatched vector dimensions are counted as errors and skipped.
+
+**VRB1 binary format for `data import` (`.bin` / `.vrb1`, since 2026-06-14):**
+
+A `.bin` / `.vrb1` file uses the VRB1 little-endian wire format: a 16-byte header (`b"VRB1"` magic, `u32` count, `u32` dimension, `u8` id width = 8, 3 reserved zero bytes) followed by tightly-packed `u64` ids and row-major `f32` vectors. It feeds the zero-copy bulk path and carries **no payloads** — use `.jsonl` / `.csv` when payloads are needed. The declared dimension sizes a freshly created collection, so `--dimension` is not required for `.bin` imports.
 
 **`data import` flags:**
 
