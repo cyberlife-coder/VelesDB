@@ -5,7 +5,6 @@ as the vector backend in any Haystack 2.x indexing or retrieval pipeline.
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -16,6 +15,7 @@ from haystack.document_stores.types import DuplicatePolicy
 
 import velesdb
 from velesdb_common.fusion import build_fusion_strategy
+from velesdb_common.ids import stable_hash_id
 from velesdb_common.security import (
     validate_collection_name,
     validate_metric,
@@ -31,7 +31,6 @@ _DEFAULT_COLLECTION = "haystack_documents"
 _DEFAULT_DIMENSION = 768
 _DEFAULT_METRIC = "cosine"
 _DEFAULT_SCROLL_LIMIT = 10_000
-_INT63_MASK = (1 << 63) - 1
 # Reserved keys stored by this integration in the VelesDB payload.
 _RESERVED_PAYLOAD_KEYS = frozenset({"_doc_id", "content"})
 
@@ -195,18 +194,6 @@ def _translate_haystack_filter(
     return {"condition": _translate_condition(filters)}
 
 
-def _str_id_to_int(doc_id: str) -> int:
-    """Map a Haystack string document ID to a stable positive 63-bit integer.
-
-    Uses the first 8 bytes of SHA-256, masked to 63 bits (~9.2 × 10¹⁸ slots).
-    Collision probability for a 1 M-document collection is roughly 5 × 10⁻¹⁴ —
-    negligible for typical RAG workloads but not zero.  If two distinct string
-    IDs produce the same integer ID, :meth:`write_documents` raises
-    :class:`ValueError` rather than silently overwriting the existing document.
-    """
-    return int.from_bytes(hashlib.sha256(doc_id.encode()).digest()[:8], "big") & _INT63_MASK
-
-
 def _doc_to_point(doc: Document, sparse_vector: Optional[dict] = None) -> dict:
     """Convert a Haystack Document to a VelesDB point dict.
 
@@ -229,7 +216,7 @@ def _doc_to_point(doc: Document, sparse_vector: Optional[dict] = None) -> dict:
     payload["_doc_id"] = doc.id
     if doc.content is not None:
         payload["content"] = doc.content
-    point: dict = {"id": _str_id_to_int(doc.id), "payload": payload}
+    point: dict = {"id": stable_hash_id(doc.id), "payload": payload}
     if doc.embedding is not None:
         point["vector"] = list(doc.embedding)
     if sparse_vector is not None:
@@ -289,7 +276,7 @@ def _build_int_id_map(documents: List[Document]) -> Dict[int, str]:
     """
     int_id_map: Dict[int, str] = {}
     for doc in documents:
-        iid = _str_id_to_int(doc.id)
+        iid = stable_hash_id(doc.id)
         if iid in int_id_map and int_id_map[iid] != doc.id:
             raise ValueError(
                 f"SHA-256 collision in write batch: '{int_id_map[iid]}' and "
@@ -555,7 +542,7 @@ class VelesDBDocumentStore:
         """Delete documents identified by their Haystack string IDs."""
         if not document_ids:
             return
-        int_ids = [_str_id_to_int(did) for did in document_ids]
+        int_ids = [stable_hash_id(did) for did in document_ids]
         self._get_collection().delete(int_ids)
 
     def embedding_retrieval(
