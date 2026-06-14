@@ -122,6 +122,11 @@ const stubCases: StubCase[] = [
     feature: /PQ training/,
   },
   {
+    name: 'wasmEnableStreaming',
+    call: () => wasmStubs.wasmEnableStreaming('c', { bufferSize: 2048 }),
+    feature: /Streaming enable/,
+  },
+  {
     name: 'wasmStreamInsert',
     call: () => wasmStubs.wasmStreamInsert('c', [] as VectorDocument[]),
     feature: /Streaming insert/,
@@ -219,7 +224,7 @@ describe.each(stubCases)('wasm-stubs: $name', ({ call, feature }) => {
 });
 
 describe('wasm-stubs — cardinality guard', () => {
-  it('covers all 29 stub exports (index + graph + explain + sparse + agent)', () => {
-    expect(stubCases).toHaveLength(29);
+  it('covers all 30 stub exports (index + graph + explain + sparse + agent)', () => {
+    expect(stubCases).toHaveLength(30);
   });
 });

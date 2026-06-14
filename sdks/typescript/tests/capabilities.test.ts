@@ -27,6 +27,7 @@ const ALL_CAPABILITY_KEYS: readonly (keyof CapabilityMap)[] = [
   'graphTraversal',
   'secondaryIndexes',
   'agentMemory',
+  'enableStreaming',
   'streamInsert',
   'pqTraining',
   'velesqlQuery',
@@ -63,6 +64,7 @@ describe('REST_CAPABILITIES — full-feature contract', () => {
     expect(REST_CAPABILITIES.graphTraversal).toBe(true);
     expect(REST_CAPABILITIES.secondaryIndexes).toBe(true);
     expect(REST_CAPABILITIES.agentMemory).toBe(true);
+    expect(REST_CAPABILITIES.enableStreaming).toBe(true);
     expect(REST_CAPABILITIES.streamInsert).toBe(true);
     expect(REST_CAPABILITIES.pqTraining).toBe(true);
     expect(REST_CAPABILITIES.velesqlQuery).toBe(true);
@@ -84,6 +86,7 @@ describe('WASM_CAPABILITIES — focused subset', () => {
     expect(WASM_CAPABILITIES.graphTraversal).toBe(false);
     expect(WASM_CAPABILITIES.secondaryIndexes).toBe(false);
     expect(WASM_CAPABILITIES.agentMemory).toBe(false);
+    expect(WASM_CAPABILITIES.enableStreaming).toBe(false);
     expect(WASM_CAPABILITIES.streamInsert).toBe(false);
     expect(WASM_CAPABILITIES.pqTraining).toBe(false);
     // query() only executes pure top-k NEAR statements — full VelesQL is
