@@ -65,6 +65,7 @@ import type {
   AggregateQueryOptions,
   AggregateResponse,
   StreamUpsertResponse,
+  StreamingConfig,
 } from './endpoints';
 
 /** Backend interface that all backends must implement */
@@ -247,6 +248,15 @@ export interface IVelesDBBackend {
 
   /** Train Product Quantization on a collection */
   trainPq(collection: string, options?: PqTrainOptions): Promise<string>;
+
+  /**
+   * Enable the bounded streaming-ingestion channel on a collection.
+   *
+   * POSTs an optional `StreamingConfig` to
+   * `POST /collections/{name}/stream/enable`; omitted config fields fall
+   * back to the server defaults. Must be called before `streamInsert`.
+   */
+  enableStreaming(collection: string, config?: StreamingConfig): Promise<void>;
 
   /** Stream-insert documents with backpressure support */
   streamInsert(collection: string, docs: VectorDocument[]): Promise<void>;

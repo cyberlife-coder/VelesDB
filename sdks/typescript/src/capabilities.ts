@@ -56,6 +56,8 @@ export interface CapabilityMap {
   secondaryIndexes: boolean;
   /** Agent Memory SDK (semantic, episodic, procedural). */
   agentMemory: boolean;
+  /** Enable the bounded streaming-ingestion channel (`enableStreaming`). */
+  enableStreaming: boolean;
   /** Streaming insert with backpressure (`streamInsert`). */
   streamInsert: boolean;
   /** Product quantization training (`trainPq`). */
@@ -83,6 +85,7 @@ export const REST_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   graphTraversal: true,
   secondaryIndexes: true,
   agentMemory: true,
+  enableStreaming: true,
   streamInsert: true,
   pqTraining: true,
   velesqlQuery: true,
@@ -115,6 +118,7 @@ export const WASM_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   graphTraversal: false,
   secondaryIndexes: false,
   agentMemory: false,
+  enableStreaming: false,
   streamInsert: false,
   pqTraining: false,
   velesqlQuery: false,

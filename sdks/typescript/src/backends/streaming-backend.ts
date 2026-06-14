@@ -11,6 +11,7 @@ import type {
   SparseVector,
   RestPointId,
   StreamUpsertResponse,
+  StreamingConfig,
 } from '../types';
 import { BackpressureError, ConnectionError, ValidationError, VelesDBError } from '../types';
 import type { BaseTransport } from './shared';
@@ -151,6 +152,40 @@ export async function streamInsert(
       );
     }
   }
+}
+
+/**
+ * Enable the bounded streaming-ingestion channel on a collection.
+ *
+ * POSTs the optional `StreamingConfig` to `/collections/{name}/stream/enable`
+ * as a snake_case JSON body. Omitted fields are left out of the body so the
+ * server applies its own defaults (`buffer_size` 10000, `batch_size` 128,
+ * `flush_interval_ms` 50). A non-2xx response raises `VelesDBError` and an
+ * abort raises `ConnectionError` (both via the shared `requestJson` path).
+ */
+export async function enableStreaming(
+  transport: StreamingTransport,
+  collection: string,
+  config?: StreamingConfig
+): Promise<void> {
+  const body: Record<string, number> = {};
+  if (config?.bufferSize !== undefined) {
+    body.buffer_size = config.bufferSize;
+  }
+  if (config?.batchSize !== undefined) {
+    body.batch_size = config.batchSize;
+  }
+  if (config?.flushIntervalMs !== undefined) {
+    body.flush_interval_ms = config.flushIntervalMs;
+  }
+
+  const response = await transport.requestJson(
+    'POST',
+    `${collectionPath(collection)}/stream/enable`,
+    body
+  );
+
+  throwOnError(response);
 }
 
 /**

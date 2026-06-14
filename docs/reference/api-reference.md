@@ -363,6 +363,30 @@ Points are accumulated into micro-batches and flushed via bulk upsert. The
 response includes a `network_errors` count: a non-zero value means the HTTP body
 stream was truncated and fewer points than sent may have been received.
 
+### POST /collections/:name/stream/enable
+
+Enable the bounded streaming-ingestion channel on a collection. Call this once
+before `POST /collections/:name/stream/insert`. Every field is optional; omitted
+fields fall back to the server defaults.
+
+**Request Body:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| buffer_size | integer | No | 10000 | Bounded ingestion channel capacity |
+| batch_size | integer | No | 128 | Points flushed to the index per batch |
+| flush_interval_ms | integer | No | 50 | Max milliseconds before a partial batch is flushed |
+
+```json
+{ "buffer_size": 4096, "batch_size": 64, "flush_interval_ms": 25 }
+```
+
+**Status codes:** `200` enabled (response `{ "message", "collection" }`); `404`
+collection not found.
+
+TypeScript SDK: `await db.enableStreaming('docs', { bufferSize: 4096 })` (REST
+backend; the WASM backend throws `NOT_SUPPORTED`).
+
 ### POST /collections/:name/stream/insert
 
 Insert a **single** point through the bounded streaming-ingestion channel.
