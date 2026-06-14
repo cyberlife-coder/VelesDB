@@ -30,6 +30,38 @@ impl Collection {
             .to_string()
     }
 
+    /// Builds a `CollectionConfig` with the fields common to every
+    /// constructor, leaving the per-constructor fields at their `Default`
+    /// (notably `metadata_only`/`graph_schema`/`embedding_dimension`/
+    /// `async_index_builder`). Callers override the differing fields via
+    /// struct-update syntax (`..Self::base_config(..)`).
+    fn base_config(
+        name: String,
+        dimension: usize,
+        metric: DistanceMetric,
+        storage_mode: StorageMode,
+    ) -> CollectionConfig {
+        CollectionConfig {
+            name,
+            dimension,
+            metric,
+            point_count: 0,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            storage_mode,
+            metadata_only: false,
+            graph_schema: None,
+            embedding_dimension: None,
+            pq_rescore_oversampling: Some(4),
+            hnsw_params: None,
+            #[cfg(feature = "persistence")]
+            deferred_indexing: None,
+            async_index_builder: None,
+            auto_reindex_config: None,
+            #[cfg(feature = "persistence")]
+            streaming_config: None,
+        }
+    }
+
     /// Shared init-and-persist pipeline for all `create_*` constructors.
     ///
     /// Validates dimensions (when non-zero), creates the directory, assembles
@@ -70,22 +102,8 @@ impl Collection {
         metric: DistanceMetric,
         storage_mode: StorageMode,
     ) -> Result<Self> {
-        let config = CollectionConfig {
-            name: Self::name_from_path(&path),
-            dimension,
-            metric,
-            point_count: 0,
-            schema_version: CURRENT_SCHEMA_VERSION,
-            storage_mode,
-            metadata_only: false,
-            graph_schema: None,
-            embedding_dimension: None,
-            pq_rescore_oversampling: Some(4),
-            hnsw_params: None,
-            #[cfg(feature = "persistence")]
-            deferred_indexing: None,
-            async_index_builder: None,
-        };
+        let config =
+            Self::base_config(Self::name_from_path(&path), dimension, metric, storage_mode);
         Self::create_from_config(path, config, None)
     }
 
@@ -145,20 +163,9 @@ impl Collection {
         pq_rescore_oversampling: Option<u32>,
     ) -> Result<Self> {
         let config = CollectionConfig {
-            name: Self::name_from_path(&path),
-            dimension,
-            metric,
-            point_count: 0,
-            schema_version: CURRENT_SCHEMA_VERSION,
-            storage_mode,
-            metadata_only: false,
-            graph_schema: None,
-            embedding_dimension: None,
             pq_rescore_oversampling,
             hnsw_params: Some(hnsw_params),
-            #[cfg(feature = "persistence")]
-            deferred_indexing: None,
-            async_index_builder: None,
+            ..Self::base_config(Self::name_from_path(&path), dimension, metric, storage_mode)
         };
         Self::create_from_config(path, config, Some(hnsw_params))
     }
@@ -178,20 +185,13 @@ impl Collection {
         async_builder_config: crate::collection::streaming::AsyncIndexBuilderConfig,
     ) -> Result<Self> {
         let config = CollectionConfig {
-            name: Self::name_from_path(&path),
-            dimension,
-            metric,
-            point_count: 0,
-            schema_version: CURRENT_SCHEMA_VERSION,
-            storage_mode: StorageMode::Full,
-            metadata_only: false,
-            graph_schema: None,
-            embedding_dimension: None,
-            pq_rescore_oversampling: Some(4),
-            hnsw_params: None,
-            #[cfg(feature = "persistence")]
-            deferred_indexing: None,
             async_index_builder: Some(async_builder_config),
+            ..Self::base_config(
+                Self::name_from_path(&path),
+                dimension,
+                metric,
+                StorageMode::Full,
+            )
         };
         Self::create_from_config(path, config, None)
     }
@@ -207,20 +207,13 @@ impl Collection {
     /// Returns an error if the directory cannot be created or the config cannot be saved.
     pub fn create_metadata_only(path: PathBuf, name: &str) -> Result<Self> {
         let config = CollectionConfig {
-            name: name.to_string(),
-            dimension: 0,
-            metric: DistanceMetric::Cosine,
-            point_count: 0,
-            schema_version: CURRENT_SCHEMA_VERSION,
-            storage_mode: StorageMode::Full,
             metadata_only: true,
-            graph_schema: None,
-            embedding_dimension: None,
-            pq_rescore_oversampling: Some(4),
-            hnsw_params: None,
-            #[cfg(feature = "persistence")]
-            deferred_indexing: None,
-            async_index_builder: None,
+            ..Self::base_config(
+                name.to_string(),
+                0,
+                DistanceMetric::Cosine,
+                StorageMode::Full,
+            )
         };
         Self::create_from_config(path, config, None)
     }
@@ -240,20 +233,14 @@ impl Collection {
         metric: DistanceMetric,
     ) -> Result<Self> {
         let config = CollectionConfig {
-            name: name.to_string(),
-            dimension: embedding_dim.unwrap_or(0),
-            metric,
-            point_count: 0,
-            schema_version: CURRENT_SCHEMA_VERSION,
-            storage_mode: StorageMode::Full,
-            metadata_only: false,
             graph_schema: Some(schema),
             embedding_dimension: embedding_dim,
-            pq_rescore_oversampling: Some(4),
-            hnsw_params: None,
-            #[cfg(feature = "persistence")]
-            deferred_indexing: None,
-            async_index_builder: None,
+            ..Self::base_config(
+                name.to_string(),
+                embedding_dim.unwrap_or(0),
+                metric,
+                StorageMode::Full,
+            )
         };
         Self::create_from_config(path, config, None)
     }

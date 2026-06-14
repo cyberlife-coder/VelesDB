@@ -581,3 +581,111 @@ fn test_incompatible_schema_version_is_not_recoverable() {
         "IncompatibleSchemaVersion must not be recoverable"
     );
 }
+
+/// A v1 `config.json` (no schema_version, no W2/STREAM-7 fields) must
+/// deserialize with defaults: schema_version=1, no auto-reindex, no streaming.
+#[test]
+fn collection_config_backward_compat_v1() {
+    let json = r#"{
+        "name": "v1_collection",
+        "dimension": 64,
+        "metric": "Cosine",
+        "point_count": 7,
+        "storage_mode": "full",
+        "metadata_only": false
+    }"#;
+
+    let cfg: CollectionConfig =
+        serde_json::from_str(json).expect("v1 config must deserialize with defaults");
+
+    assert_eq!(
+        cfg.schema_version, 1,
+        "missing schema_version defaults to 1"
+    );
+    assert!(
+        cfg.auto_reindex_config.is_none(),
+        "v1 config must have no persisted auto-reindex policy"
+    );
+    assert!(
+        cfg.streaming_config.is_none(),
+        "v1 config must have no persisted streaming config"
+    );
+}
+
+/// W2: an attached `AutoReindexManager` is persisted into `config.json` and
+/// restored automatically on `Collection::open` — no manual re-attach needed.
+#[test]
+fn auto_reindex_manager_restored_on_open() {
+    use crate::collection::auto_reindex::{AutoReindexConfig, AutoReindexManager};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection should be created");
+
+    // Attach a manager with a non-default, recognizable config.
+    let config = AutoReindexConfig {
+        param_divergence_threshold: 3.25,
+        min_size_for_reindex: 42,
+        cooldown: Duration::from_secs(120),
+        ..AutoReindexConfig::default()
+    };
+    collection.attach_auto_reindex(Arc::new(AutoReindexManager::new(config)));
+    collection
+        .flush()
+        .expect("flush should persist config.json");
+    drop(collection);
+
+    // Reopen — the manager must be restored from the persisted config.
+    let reopened =
+        Collection::open(PathBuf::from(temp_dir.path())).expect("collection should reopen");
+
+    let manager = reopened
+        .auto_reindex_manager()
+        .expect("auto-reindex manager must be restored on open");
+    let restored = manager.config();
+    assert!((restored.param_divergence_threshold - 3.25).abs() < f64::EPSILON);
+    assert_eq!(restored.min_size_for_reindex, 42);
+    assert_eq!(
+        restored.cooldown,
+        Duration::from_secs(120),
+        "Duration cooldown must round-trip as whole seconds"
+    );
+}
+
+/// STREAM-7: a persisted `StreamingConfig` survives a `config.json` reopen.
+#[test]
+fn test_persist_streaming_config_across_reopen() {
+    use crate::collection::streaming::StreamingConfig;
+
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection should be created");
+
+    // Record a non-default streaming config directly on the persisted config.
+    {
+        let mut cfg = collection.config_write();
+        cfg.streaming_config = Some(StreamingConfig {
+            buffer_size: 2048,
+            batch_size: 64,
+            flush_interval_ms: 25,
+        });
+    }
+    collection
+        .flush()
+        .expect("flush should persist config.json");
+    drop(collection);
+
+    let reopened =
+        Collection::open(PathBuf::from(temp_dir.path())).expect("collection should reopen");
+    let streaming = reopened
+        .config()
+        .streaming_config
+        .expect("streaming config must survive reopen");
+    assert_eq!(streaming.buffer_size, 2048);
+    assert_eq!(streaming.batch_size, 64);
+    assert_eq!(streaming.flush_interval_ms, 25);
+}
