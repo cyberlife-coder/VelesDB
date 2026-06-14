@@ -47,8 +47,8 @@ impl PyGraphCollection {
         &self,
         py: Python<'_>,
         query_str: &str,
-        params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<PyObject>> {
+        params: Option<HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let inner = &self.inner;
         run_velesql_select(py, query_str, params, |q, p| inner.execute_query(q, p))
     }
@@ -76,10 +76,10 @@ impl PyGraphCollection {
         &self,
         py: Python<'_>,
         query_str: &str,
-        params: Option<HashMap<String, PyObject>>,
-        vector: Option<PyObject>,
+        params: Option<HashMap<String, Py<PyAny>>>,
+        vector: Option<Py<PyAny>>,
         threshold: f32,
-    ) -> PyResult<Vec<PyObject>> {
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let inner = &self.inner;
         run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {
             if let Some(ref qv) = qv {
@@ -98,7 +98,7 @@ impl PyGraphCollection {
     /// Returns:
     ///     Dict with tree, estimated_cost_ms, filter_strategy, index_used
     #[pyo3(signature = (query_str))]
-    fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<PyObject> {
+    fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<Py<PyAny>> {
         let parsed = parse_velesql(query_str)?;
         Ok(build_explain_dict(py, &parsed))
     }
@@ -119,12 +119,12 @@ impl PyGraphCollection {
         &self,
         py: Python<'_>,
         query_str: &str,
-        params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<PyObject> {
+        params: Option<HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Py<PyAny>> {
         let parsed = parse_velesql(query_str)?;
         let rust_params = convert_params(py, params)?;
         let inner = &self.inner;
-        let output = py.allow_threads(move || {
+        let output = py.detach(move || {
             inner
                 .explain_analyze_query(&parsed, &rust_params)
                 .map_err(core_err)
@@ -145,8 +145,8 @@ impl PyGraphCollection {
         &self,
         py: Python<'_>,
         velesql: &str,
-        params: Option<HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<PyObject>> {
+        params: Option<HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let inner = &self.inner;
         run_velesql_select_ids(py, velesql, params, |q, p| inner.execute_query(q, p))
     }

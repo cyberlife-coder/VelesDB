@@ -15,7 +15,7 @@ use velesdb_core::FusionStrategy as CoreFusionStrategy;
 ///     >>> strategy = FusionStrategy.rrf()
 ///     >>> # Weighted fusion
 ///     >>> strategy = FusionStrategy.weighted(avg_weight=0.6, max_weight=0.3, hit_weight=0.1)
-#[pyclass(frozen)]
+#[pyclass(frozen, from_py_object)]
 #[derive(Clone)]
 pub struct FusionStrategy {
     inner: CoreFusionStrategy,
@@ -194,7 +194,7 @@ fn parse_weighted_args(
         };
     };
 
-    if let Ok(weights) = avg_weight.downcast::<PyDict>() {
+    if let Ok(weights) = avg_weight.cast::<PyDict>() {
         if max_weight.is_some() || hit_weight.is_some() {
             return Err(PyValueError::new_err(
                 "FusionStrategy.weighted(dict) cannot be combined with positional weights",

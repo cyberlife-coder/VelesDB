@@ -156,13 +156,16 @@ pub fn core_err_with_collection(e: velesdb_core::Error, collection_name: &str) -
 ///
 /// Converts the Python dict directly to `serde_json::Value` via [`python_to_json`],
 /// then deserializes into [`Filter`]. This avoids the Python `json.dumps` round-trip.
-pub fn parse_filter(py: Python<'_>, filter: &PyObject) -> PyResult<Filter> {
+pub fn parse_filter(py: Python<'_>, filter: &Py<PyAny>) -> PyResult<Filter> {
     let json_value = crate::utils::python_to_json(py, filter)?;
     Filter::from_json_value(json_value).map_err(PyValueError::new_err)
 }
 
 /// Parse an optional Python filter object.
-pub fn parse_optional_filter(py: Python<'_>, filter: Option<PyObject>) -> PyResult<Option<Filter>> {
+pub fn parse_optional_filter(
+    py: Python<'_>,
+    filter: Option<Py<PyAny>>,
+) -> PyResult<Option<Filter>> {
     match filter {
         Some(f) => Ok(Some(parse_filter(py, &f)?)),
         None => Ok(None),
@@ -171,7 +174,7 @@ pub fn parse_optional_filter(py: Python<'_>, filter: Option<PyObject>) -> PyResu
 
 /// Convert payload to Python object (shared helper to avoid duplication).
 #[inline]
-fn payload_to_python(py: Python<'_>, payload: &Option<serde_json::Value>) -> PyObject {
+fn payload_to_python(py: Python<'_>, payload: &Option<serde_json::Value>) -> Py<PyAny> {
     match payload {
         Some(p) => json_to_python(py, p),
         None => py.None(),
@@ -186,7 +189,7 @@ pub fn search_result_to_dict(
     py: Python<'_>,
     result: &SearchResult,
     include_vectors: bool,
-) -> PyObject {
+) -> Py<PyAny> {
     let dict = PyDict::new(py);
     // PyString::intern reuses the same Python string object across calls
     let _ = dict.set_item(PyString::intern(py, "id"), result.point.id);
@@ -205,7 +208,7 @@ pub fn search_result_to_dict(
 }
 
 /// Convert a `SearchResult` to a multi-model Python dict (EPIC-031).
-pub fn search_result_to_multimodel_dict(py: Python<'_>, result: &SearchResult) -> PyObject {
+pub fn search_result_to_multimodel_dict(py: Python<'_>, result: &SearchResult) -> Py<PyAny> {
     let dict = PyDict::new(py);
     let none = py.None();
     let payload_py = payload_to_python(py, &result.point.payload);
@@ -230,7 +233,7 @@ pub fn search_result_to_multimodel_dict(py: Python<'_>, result: &SearchResult) -
 ///
 /// Omits the `vector` field when empty (e.g., graph collections
 /// without embeddings) to avoid misleading empty arrays.
-pub fn point_to_dict(py: Python<'_>, point: &Point) -> PyObject {
+pub fn point_to_dict(py: Python<'_>, point: &Point) -> Py<PyAny> {
     let dict = PyDict::new(py);
     let _ = dict.set_item(PyString::intern(py, "id"), point.id);
     if !point.vector.is_empty() {
@@ -249,7 +252,7 @@ pub fn search_results_to_dicts(
     py: Python<'_>,
     results: Vec<SearchResult>,
     include_vectors: bool,
-) -> Vec<PyObject> {
+) -> Vec<Py<PyAny>> {
     results
         .into_iter()
         .map(|r| search_result_to_dict(py, &r, include_vectors))
@@ -260,7 +263,7 @@ pub fn search_results_to_dicts(
 pub fn search_results_to_multimodel_dicts(
     py: Python<'_>,
     results: Vec<SearchResult>,
-) -> Vec<PyObject> {
+) -> Vec<Py<PyAny>> {
     results
         .into_iter()
         .map(|r| search_result_to_multimodel_dict(py, &r))
@@ -268,7 +271,7 @@ pub fn search_results_to_multimodel_dicts(
 }
 
 /// Convert a list of (id, score) pairs to Python dicts.
-pub fn id_score_pairs_to_dicts(py: Python<'_>, results: Vec<(u64, f32)>) -> Vec<PyObject> {
+pub fn id_score_pairs_to_dicts(py: Python<'_>, results: Vec<(u64, f32)>) -> Vec<Py<PyAny>> {
     results
         .into_iter()
         .map(|(id, score)| {
@@ -287,7 +290,7 @@ pub fn id_score_pairs_to_dicts(py: Python<'_>, results: Vec<(u64, f32)>) -> Vec<
 /// - A scipy sparse object with a `.toarray()` method (COO/CSR/CSC).
 ///
 /// Returns `PyValueError` if the object is neither format.
-pub fn parse_sparse_vector(py: Python<'_>, obj: &PyObject) -> PyResult<SparseVector> {
+pub fn parse_sparse_vector(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<SparseVector> {
     // Try dict[int, float] first (most common usage pattern).
     if let Ok(dict) = obj.extract::<HashMap<u32, f32>>(py) {
         let pairs: Vec<(u32, f32)> = dict.into_iter().collect();
@@ -339,7 +342,7 @@ pub fn parse_sparse_vector(py: Python<'_>, obj: &PyObject) -> PyResult<SparseVec
 /// Returns `None` if the key is absent from the point dict.
 pub fn parse_sparse_vectors_from_point(
     py: Python<'_>,
-    point_dict: &HashMap<String, PyObject>,
+    point_dict: &HashMap<String, Py<PyAny>>,
 ) -> PyResult<Option<BTreeMap<String, SparseVector>>> {
     let Some(obj) = point_dict.get("sparse_vector") else {
         return Ok(None);
@@ -354,7 +357,7 @@ pub fn parse_sparse_vectors_from_point(
     }
 
     // Try as dict[str, dict[int, float]] -> named sparse vectors.
-    if let Ok(named) = obj.extract::<HashMap<String, PyObject>>(py) {
+    if let Ok(named) = obj.extract::<HashMap<String, Py<PyAny>>>(py) {
         let mut map = BTreeMap::new();
         for (name, inner_obj) in named {
             let sv = parse_sparse_vector(py, &inner_obj)?;
@@ -378,7 +381,7 @@ pub fn parse_sparse_vectors_from_point(
 /// `parse_payload` to avoid duplicating the dict-to-JSON conversion.
 pub fn dict_to_json_map(
     py: Python<'_>,
-    dict: &HashMap<String, PyObject>,
+    dict: &HashMap<String, Py<PyAny>>,
 ) -> PyResult<serde_json::Value> {
     let json_map: serde_json::Map<String, serde_json::Value> = dict
         .iter()
@@ -394,7 +397,7 @@ pub fn dict_to_json_map(
 /// the user can locate the offending item: "Point at index 4237 missing 'id' field".
 pub fn extract_point_id(
     py: Python<'_>,
-    dict: &HashMap<String, PyObject>,
+    dict: &HashMap<String, Py<PyAny>>,
     index: usize,
 ) -> PyResult<u64> {
     dict.get("id")
@@ -405,7 +408,7 @@ pub fn extract_point_id(
 /// Extract the `"vector"` field from a point dict as `Vec<f32>`.
 pub fn extract_point_vector(
     py: Python<'_>,
-    dict: &HashMap<String, PyObject>,
+    dict: &HashMap<String, Py<PyAny>>,
 ) -> PyResult<Vec<f32>> {
     let obj = dict
         .get("vector")
@@ -421,7 +424,7 @@ pub fn extract_point_vector(
 /// Shared by [`Collection::upsert`] and [`Collection::stream_insert`].
 pub fn parse_point_dicts(
     py: Python<'_>,
-    points: &[HashMap<String, PyObject>],
+    points: &[HashMap<String, Py<PyAny>>],
 ) -> PyResult<Vec<Point>> {
     let mut result = Vec::with_capacity(points.len());
     for (index, point_dict) in points.iter().enumerate() {
@@ -434,14 +437,14 @@ pub fn parse_point_dicts(
     Ok(result)
 }
 
-/// Parse an optional payload `PyObject` into a JSON value.
+/// Parse an optional payload `Py<PyAny>` into a JSON value.
 pub fn parse_payload(
     py: Python<'_>,
-    payload_obj: Option<&PyObject>,
+    payload_obj: Option<&Py<PyAny>>,
 ) -> PyResult<Option<serde_json::Value>> {
     match payload_obj {
         Some(p) => {
-            let dict: HashMap<String, PyObject> = p
+            let dict: HashMap<String, Py<PyAny>> = p
                 .extract(py)
                 .map_err(|_| PyValueError::new_err("payload must be a dict[str, Any]"))?;
             Ok(Some(dict_to_json_map(py, &dict)?))
@@ -458,10 +461,10 @@ mod tests {
     /// extract_point_id error message includes the batch index.
     #[test]
     fn test_extract_point_id_missing_includes_index() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             // Dict with no "id" key — simulates a malformed point at position 4237.
-            let empty: HashMap<String, PyObject> = HashMap::new();
+            let empty: HashMap<String, Py<PyAny>> = HashMap::new();
             let err = extract_point_id(py, &empty, 4237).unwrap_err();
             let msg = err.to_string();
             assert!(
@@ -478,9 +481,9 @@ mod tests {
     /// extract_point_id at index 0 still includes the index in the message.
     #[test]
     fn test_extract_point_id_missing_at_index_zero() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let empty: HashMap<String, PyObject> = HashMap::new();
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            let empty: HashMap<String, Py<PyAny>> = HashMap::new();
             let err = extract_point_id(py, &empty, 0).unwrap_err();
             let msg = err.to_string();
             assert!(
