@@ -66,6 +66,16 @@ impl DatabaseInner {
         self.graphs.get(name).map(Rc::clone)
     }
 
+    /// Applies core's collection-name syntax rules (single source of truth).
+    ///
+    /// Without this, the lifecycle methods only ran a `HashMap` existence
+    /// check, silently accepting names core would reject (path traversal,
+    /// reserved device names, forbidden characters). Mapped to a `String`
+    /// error for native-target testability.
+    fn validate_name(name: &str) -> Result<(), String> {
+        velesdb_core::validate_collection_name(name).map_err(|e| e.to_string())
+    }
+
     pub(crate) fn create_collection(
         &mut self,
         name: &str,
@@ -89,6 +99,7 @@ impl DatabaseInner {
         metric: &str,
         mode: crate::StorageMode,
     ) -> Result<(), String> {
+        Self::validate_name(name)?;
         if self.collections.contains_key(name) {
             return Err(format!("Collection '{name}' already exists"));
         }
@@ -119,6 +130,7 @@ impl DatabaseInner {
     /// that does not require vector similarity search. Mirrors the Mobile
     /// bindings surface (`create_metadata_collection`).
     pub(crate) fn create_metadata_collection(&mut self, name: &str) -> Result<(), String> {
+        Self::validate_name(name)?;
         if self.collections.contains_key(name) {
             return Err(format!("Collection '{name}' already exists"));
         }
