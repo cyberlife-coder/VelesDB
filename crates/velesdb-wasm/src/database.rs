@@ -22,7 +22,7 @@ use crate::vector_store::VectorStore;
 // Shared inner store
 // ---------------------------------------------------------------------------
 
-type SharedStore = Rc<RefCell<VectorStore>>;
+pub(crate) type SharedStore = Rc<RefCell<VectorStore>>;
 type SharedGraph = Rc<RefCell<WasmGraphStore>>;
 
 // ---------------------------------------------------------------------------
