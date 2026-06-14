@@ -193,6 +193,7 @@ describe('WasmBackend — stub delegations (rejections)', () => {
     ['traverseParallel', () => backend.traverseParallel('c', { sources: [1] })],
     ['getNodeDegree', () => backend.getNodeDegree('c', 1)],
     ['trainPq', () => backend.trainPq('c')],
+    ['enableStreaming', () => backend.enableStreaming('c')],
     ['streamInsert', () => backend.streamInsert('c', [])],
     ['streamUpsertPoints', () => backend.streamUpsertPoints('c', [])],
     ['createGraphCollection', () => backend.createGraphCollection('c')],

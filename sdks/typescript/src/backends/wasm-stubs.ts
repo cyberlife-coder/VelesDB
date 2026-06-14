@@ -34,6 +34,7 @@ import type {
   ScrollRequest,
   ScrollResponse,
   StreamUpsertResponse,
+  StreamingConfig,
 } from '../types';
 import { wasmNotSupported } from './shared';
 
@@ -144,6 +145,12 @@ export async function wasmTrainPq(
   _collection: string, _options?: PqTrainOptions
 ): Promise<string> {
   wasmNotSupported('PQ training');
+}
+
+export async function wasmEnableStreaming(
+  _collection: string, _config?: StreamingConfig
+): Promise<void> {
+  wasmNotSupported('Streaming enable');
 }
 
 export async function wasmStreamInsert(

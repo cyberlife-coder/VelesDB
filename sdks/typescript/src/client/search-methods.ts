@@ -31,6 +31,7 @@ import type {
   ExplainResponse,
   CollectionSanityResponse,
   StreamUpsertResponse,
+  StreamingConfig,
   SparseVector,
 } from '../types';
 import type { FilterInput } from '../filter';
@@ -162,6 +163,15 @@ export function trainPq(
   options?: PqTrainOptions
 ): Promise<string> {
   return backend.trainPq(collection, options);
+}
+
+/** Enable the bounded streaming-ingestion channel on a collection. */
+export function enableStreaming(
+  backend: IVelesDBBackend,
+  collection: string,
+  config?: StreamingConfig
+): Promise<void> {
+  return backend.enableStreaming(collection, config);
 }
 
 /** Stream-insert documents with backpressure support. */

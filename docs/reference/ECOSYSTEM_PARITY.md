@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-06-12 (v2.0.0)
+Last updated: 2026-06-14 (v2.0.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -23,7 +23,7 @@ This matrix tracks runtime contract and feature parity across the VelesDB ecosys
 | LlamaIndex integration | via Python binding | via Python binding | via Python binding | n/a REST | n/a REST |
 | Haystack integration | via Python binding | via Python binding | via Python binding | n/a REST | n/a REST |
 
-## Feature Parity Matrix (85 features, 11 components)
+## Feature Parity Matrix (86 features, 11 components)
 
 Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A not applicable
 
@@ -31,6 +31,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 |---------------|------|--------|--------|------|--------|-----|--------|-------|-----------|------------|----------|
 | **Vector CRUD** (insert, upsert, delete, get) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Batch Operations** (batch_insert, batch_upsert) | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Streaming Ingestion** (enableStreaming / stream_insert) | ✅ | ✅ | ✅ | ❌ | ❌ | ⚠️ | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Vector Search** (k-NN, filtered, batch) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Multi-Query Fusion** (RRF) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
 | **Multi-Query Fusion** (RSF / Weighted) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
@@ -55,6 +56,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 
 - **Cross-Collection MATCH**: Core and Server support `@collection` annotation on MATCH node patterns. Python bindings support via `_collection` param. CLI supports via `\use`. WASM, Mobile, Tauri, and integrations do not yet expose this feature.
 - **Batch Operations**: WASM and Mobile use streaming chunked inserts instead of single-call bulk to stay within memory constraints.
+- **Streaming Ingestion** (2026-06-14): Core, Server (`POST /collections/{name}/stream/enable` + `/stream/insert`), Python, Tauri, and the TS SDK (`enableStreaming()` / `streamInsert()`, REST backend) support the bounded ingestion channel. The CLI reaches it ⚠️ via the embedded core path with no dedicated REPL command. WASM throws `NOT_SUPPORTED` (no persistence layer). Mobile and the LangChain/LlamaIndex/Haystack integrations do not yet expose it.
 - **Multi-Query Fusion (RSF/Weighted)**: WASM supports RRF only. LangChain and LlamaIndex expose RSF/Weighted through `multi_query_search(fusion=...)`, which delegates to the shared `velesdb_common.fusion.build_fusion_strategy` (builds `weighted()` and `relative_score()`). Haystack remains ⚠️: fusion is reachable only via the underlying `velesdb` Python wrapper, not through the `DocumentStore` protocol.
 - **Sparse Vector Search (named indexes) — LangChain/LlamaIndex**: ⚠️ query-side only. Both integrations forward a `sparse_index_name` argument to the underlying `collection.search`/`hybrid_search`, so an existing named sparse index can be *queried*. Creating named sparse indexes is not exposed by the integrations (use the core `velesdb` API), and this path is not yet covered by integration tests.
 - **Graph Operations (WASM)**: Basic node/edge CRUD is supported; multi-hop traversal and MATCH queries are limited.
