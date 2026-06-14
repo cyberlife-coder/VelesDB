@@ -18,7 +18,7 @@ use pyo3::prelude::*;
 ///     >>> cfg = StreamingIngestConfig(buffer_size=4096, batch_size=256)
 ///     >>> cfg.flush_interval_ms
 ///     50
-#[pyclass(module = "velesdb")]
+#[pyclass(module = "velesdb", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct StreamingIngestConfig {
     /// Capacity of the bounded ingestion channel (backpressure threshold).

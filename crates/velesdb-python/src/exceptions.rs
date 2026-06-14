@@ -99,8 +99,8 @@ mod tests {
     /// DimensionMismatch maps to DimensionMismatchError, not RuntimeError.
     #[test]
     fn test_core_err_dimension_mismatch_type() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(velesdb_core::Error::DimensionMismatch {
                 expected: 768,
                 actual: 512,
@@ -116,8 +116,8 @@ mod tests {
     /// DimensionMismatch message includes expected and actual dimensions.
     #[test]
     fn test_core_err_dimension_mismatch_message() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(velesdb_core::Error::DimensionMismatch {
                 expected: 768,
                 actual: 512,
@@ -131,8 +131,8 @@ mod tests {
     /// core_err_with_collection embeds the collection name in DimensionMismatch messages.
     #[test]
     fn test_core_err_with_collection_includes_name() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err_with_collection(
                 velesdb_core::Error::DimensionMismatch {
                     expected: 768,
@@ -154,8 +154,8 @@ mod tests {
     /// CollectionNotFound maps to CollectionNotFoundError.
     #[test]
     fn test_core_err_collection_not_found_type() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(velesdb_core::Error::CollectionNotFound("my_col".into()));
             assert!(
                 err.is_instance_of::<CollectionNotFoundError>(py),
@@ -170,8 +170,8 @@ mod tests {
     /// use `except velesdb.VelesDBError` as a catch-all.
     #[test]
     fn test_core_err_fallback_to_veles_db_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(velesdb_core::Error::Internal("oops".into()));
             assert!(
                 err.is_instance_of::<VelesDBError>(py),
@@ -211,8 +211,8 @@ mod tests {
     /// `CollectionExistsError` exists, carries its message, and inherits from `VelesDBError`.
     #[test]
     fn test_collection_exists_error_hierarchy() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = raise_instance::<CollectionExistsError>(py, "docs already exists");
             assert!(
                 err.is_instance_of::<VelesDBError>(py),
@@ -229,8 +229,8 @@ mod tests {
     /// `EdgeExistsError` exists, carries its message, and inherits from `VelesDBError`.
     #[test]
     fn test_edge_exists_error_hierarchy() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = raise_instance::<EdgeExistsError>(py, "edge 42 already present");
             assert!(
                 err.is_instance_of::<VelesDBError>(py),
@@ -243,8 +243,8 @@ mod tests {
     /// `DatabaseLockedError` exists, carries its message, and inherits from `VelesDBError`.
     #[test]
     fn test_database_locked_error_hierarchy() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = raise_instance::<DatabaseLockedError>(py, "held by pid 1234");
             assert!(
                 err.is_instance_of::<VelesDBError>(py),
@@ -259,8 +259,8 @@ mod tests {
     /// `create_exception!` macros accidentally collapse to the same type.
     #[test]
     fn test_veles_db_error_is_not_a_subclass() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = raise_instance::<VelesDBError>(py, "plain base error");
             assert!(!err.is_instance_of::<CollectionExistsError>(py));
             assert!(!err.is_instance_of::<EdgeExistsError>(py));
@@ -288,8 +288,8 @@ mod tests {
 
     #[test]
     fn test_core_err_collection_exists_type() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::CollectionExists("docs".into()));
             assert!(err.is_instance_of::<CollectionExistsError>(py));
             assert!(err.is_instance_of::<VelesDBError>(py));
@@ -299,8 +299,8 @@ mod tests {
 
     #[test]
     fn test_core_err_edge_exists_type() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::EdgeExists(42));
             assert!(err.is_instance_of::<EdgeExistsError>(py));
             assert!(err.is_instance_of::<VelesDBError>(py));
@@ -310,8 +310,8 @@ mod tests {
 
     #[test]
     fn test_core_err_database_locked_type() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::DatabaseLocked("pid 1234".into()));
             assert!(err.is_instance_of::<DatabaseLockedError>(py));
             assert!(err.is_instance_of::<VelesDBError>(py));
@@ -321,8 +321,8 @@ mod tests {
 
     #[test]
     fn test_core_err_point_not_found_is_key_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::PointNotFound(7));
             assert!(err.is_instance_of::<PyKeyError>(py));
             assert!(err.value(py).to_string().contains('7'));
@@ -331,8 +331,8 @@ mod tests {
 
     #[test]
     fn test_core_err_edge_not_found_is_key_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::EdgeNotFound(99));
             assert!(err.is_instance_of::<PyKeyError>(py));
             assert!(err.value(py).to_string().contains("99"));
@@ -341,8 +341,8 @@ mod tests {
 
     #[test]
     fn test_core_err_node_not_found_is_key_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::NodeNotFound(11));
             assert!(err.is_instance_of::<PyKeyError>(py));
             assert!(err.value(py).to_string().contains("11"));
@@ -351,8 +351,8 @@ mod tests {
 
     #[test]
     fn test_core_err_invalid_vector_is_value_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::InvalidVector("nan at position 0".into()));
             assert!(err.is_instance_of::<PyValueError>(py));
         });
@@ -360,8 +360,8 @@ mod tests {
 
     #[test]
     fn test_core_err_query_is_value_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::Query("unexpected token".into()));
             assert!(err.is_instance_of::<PyValueError>(py));
         });
@@ -369,8 +369,8 @@ mod tests {
 
     #[test]
     fn test_core_err_config_is_value_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::Config("bad hnsw parameter".into()));
             assert!(err.is_instance_of::<PyValueError>(py));
         });
@@ -378,8 +378,8 @@ mod tests {
 
     #[test]
     fn test_core_err_graph_not_supported_is_value_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::GraphNotSupported("edges disabled".into()));
             assert!(err.is_instance_of::<PyValueError>(py));
         });
@@ -387,8 +387,8 @@ mod tests {
 
     #[test]
     fn test_core_err_invalid_dimension_is_value_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::InvalidDimension {
                 dimension: 0,
                 min: 1,
@@ -400,8 +400,8 @@ mod tests {
 
     #[test]
     fn test_core_err_invalid_collection_name_is_value_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::InvalidCollectionName {
                 name: "../etc/passwd".into(),
                 reason: "path traversal".into(),
@@ -412,8 +412,8 @@ mod tests {
 
     #[test]
     fn test_core_err_overflow_is_overflow_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::Overflow("u64 -> usize".into()));
             assert!(err.is_instance_of::<PyOverflowError>(py));
         });
@@ -421,8 +421,8 @@ mod tests {
 
     #[test]
     fn test_core_err_allocation_failed_is_memory_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::AllocationFailed("16 GiB".into()));
             assert!(err.is_instance_of::<PyMemoryError>(py));
         });
@@ -431,8 +431,8 @@ mod tests {
     /// Storage errors map to VelesDBError so `except velesdb.VelesDBError` catches them.
     #[test]
     fn test_core_err_storage_is_veles_db_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::Storage("disk full".into()));
             assert!(
                 err.is_instance_of::<VelesDBError>(py),
@@ -447,8 +447,8 @@ mod tests {
     /// Internal errors map to VelesDBError (same as Storage, Io, etc.).
     #[test]
     fn test_core_err_internal_is_veles_db_error() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let err = core_err(CoreError::Internal("BUG: unreachable".into()));
             assert!(err.is_instance_of::<VelesDBError>(py));
         });
@@ -464,8 +464,8 @@ mod tests {
     /// the mapping in `collection_helpers::core_err` and this test.
     #[test]
     fn test_core_err_mapping_covers_every_code() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let cases: Vec<CoreError> = vec![
                 CoreError::CollectionExists("x".into()),
                 CoreError::CollectionNotFound("x".into()),
