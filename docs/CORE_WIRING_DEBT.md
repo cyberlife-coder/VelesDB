@@ -194,32 +194,45 @@ helper. Community-scope cleanup, not a feature.
 
 ## 5. `LimitsConfig::max_vectors_per_collection` / `max_payload_size` / `max_perfect_mode_vectors`
 
-**Outcome**: **Not yet wired** (Wave 3 Commit 7 wired 2 of 5 fields).
+**Outcome**: **Wired** (2026-06-14 — all 5 `LimitsConfig` fields now enforced).
 
 **What exists**:
-- Sprint 2 Wave 3 Commit 7 (`ed2a057a`) enforces `max_collections` and
-  `max_dimensions` at collection creation time via
-  `Database::ensure_collection_name_available` and
-  `enforce_vector_dimension_limit`.
+- Wave 3 Commit 7 enforces `max_collections` and `max_dimensions` at
+  collection creation time via `Database::ensure_collection_name_available`
+  and `enforce_vector_dimension_limit`.
+- The remaining three fields are now threaded from the live
+  `VelesConfig::limits` into each `Collection` (new `runtime_limits` field,
+  populated by `Database::push_runtime_limits` at every vector/graph/metadata
+  registration and disk/startup open path) and enforced at the cold ingest/
+  search boundary:
+  - `max_vectors_per_collection` — one O(1) `len() + batch > cap` check
+    (shared `enforce_vector_count` helper) on every ingest entry:
+    `Collection::upsert` / `upsert_bulk_inner` / `upsert_metadata` (Point
+    paths) and `upsert_bulk_from_raw` (the zero-copy Python/REST bulk path),
+    before any storage lock or WAL write. It is a conservative pre-count: a
+    pure update batch re-supplying existing ids is counted as net-new, so a
+    collection exactly at the cap may reject an in-place update (raise the cap
+    to update at the limit). Vector-less graph node writes never touch
+    `config.point_count`, so this field does not apply to pure-graph node
+    ingest.
+  - `max_payload_size` — a per-point serialized-size check (shared
+    `enforce_payload_value_size` helper) on the same cold ingest boundary for
+    every payload path: Point upsert, raw bulk, and graph node writes
+    (`store_node_payload`). The size is measured with a bounded counting
+    writer that aborts past the cap, so it allocates no throwaway buffer and
+    serializes at most `cap + 1` bytes — **not** in the innermost WAL
+    `write_store_record` loop.
+  - `max_perfect_mode_vectors` — a single gate (`enforce_perfect_mode_limit`)
+    consulted by all four index search entry points
+    (`search_with_quality` / `search_with_opts` and the filtered path
+    `search_with_filter_and_opts`) before `index.search_with_quality`, so a
+    `WITH (mode='perfect')` query — filtered or not — cannot trigger an
+    unbounded brute-force scan and the HNSW/SIMD inner loop is never touched.
 
-**What is missing** (re-verified 2026-06-12 — the three fields are
-range-validated in `config_validation.rs` but still not enforced at runtime):
-- `max_vectors_per_collection` — would require instrumentation in the
-  hot upsert path.
-- `max_payload_size` — would require a size check in `write_store_record`
-  before the WAL write.
-- `max_perfect_mode_vectors` — would require a runtime check in the
-  exact-search path.
-
-**Why this is deferred**:
-- Commit 7 targeted the two fields where enforcement is cheap and the
-  default is safely permissive (1000 collections, 4096 dimensions). The
-  remaining three fields add hot-path overhead and need benchmarks to
-  validate the cost.
-
-**Future action**: unscheduled Community-scope backlog item (not started as
-of 2026-06-12) — wire the remaining three fields with benchmarks proving the
-hot-path cost is <1%.
+A violation returns `Error::GuardRail` (VELES-027) carrying the actual value,
+the cap, and the `limits.<field>` to raise — mirroring the two creation-time
+gates. The `runtime_limits` field is **not** persisted to `config.json`; it is
+re-pushed from the live `VelesConfig` on every open.
 
 ---
 
@@ -318,7 +331,7 @@ consistency-cleanup PR. Each binding glue must pass that crate's CI line
 | `AutoReindexConfig` | Yes | Wired — persisted in schema v2 (W2) + restored on open | done | Community |
 | `deferred_indexing` / `async_index_builder` | REST-only (no TOML/Python) | RFC pending | Unscoped | Community (future sprint) |
 | `SearchConfig` global defaults | Partial | Consolidation cleanup | 1-2 commits | Community (future sprint) |
-| `LimitsConfig` (3/5 fields) | Partial | Hot-path instrumentation | 2-3 commits | Community (backlog, unscheduled) |
+| `LimitsConfig` (5/5 fields) | Yes | Wired — all 5 fields enforced (creation + runtime ingest/search caps) 2026-06-14 | done | Community |
 | Binding API-parity gaps (6.1–6.11) | DONE | Closed via 4 PRs #1096/#1098/#1099 + consistency (6.11 = verified no-gap); see §6 | 4 PRs (embedded-ops / ops-observability / recall-gated / consistency) | Community |
 
 ## Conventions

@@ -104,6 +104,9 @@ impl Collection {
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             payload_mirror: Arc::new(crate::collection::payload_mirror::PayloadMirror::default()),
             guard_rails: Arc::new(GuardRails::default()),
+            runtime_limits: Arc::new(RwLock::new(
+                crate::collection::types::RuntimeLimits::default(),
+            )),
             query_planner: Arc::new(QueryPlanner::new()),
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),

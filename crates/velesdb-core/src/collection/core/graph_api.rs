@@ -501,6 +501,14 @@ impl Collection {
     ///
     /// Returns an error if storage fails.
     pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
+        // Parity item E: gate the node payload size at the cold ingest boundary
+        // before any mutation. Graph node writes bypass `enforce_upsert_limits`
+        // (they take a raw `&Value`, not a `Point`), so apply the shared
+        // payload-size gate here. `max_vectors_per_collection` is intentionally
+        // not checked: vector-less node writes never touch `config.point_count`,
+        // so a projected count would be meaningless on this path.
+        Self::enforce_payload_value_size(node_id, payload, self.runtime_limits().max_payload_size)?;
+
         // Reject undeclared node types before any mutation. Schemaless and
         // payloads without `_labels` short-circuit at zero cost.
         // LOCK ORDER: payload_storage(3) → label_index(7) → graph_range_indexes(7).
