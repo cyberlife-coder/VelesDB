@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 use velesdb_core::agent::AgentMemory;
-use velesdb_core::Database;
+use velesdb_core::{Database, DatabaseObserver};
 
 use crate::error::{Error, Result};
 
@@ -35,6 +35,11 @@ pub struct VelesDbState {
     memory: Arc<RwLock<Option<Arc<AgentMemory>>>>,
     /// Path to the database directory.
     path: PathBuf,
+    /// Optional lifecycle observer injected when the database is opened.
+    ///
+    /// Set by the plugin at setup so collection create/delete events reach the
+    /// frontend regardless of the entry path. `None` falls back to a plain open.
+    observer: Option<Arc<dyn DatabaseObserver>>,
 }
 
 impl VelesDbState {
@@ -49,10 +54,22 @@ impl VelesDbState {
     /// A new `VelesDbState` instance (database not yet opened).
     #[must_use]
     pub fn new(path: PathBuf) -> Self {
+        Self::with_observer(path, None)
+    }
+
+    /// Creates a new plugin state that injects `observer` into the database when
+    /// it is opened, so collection lifecycle events are forwarded to Tauri.
+    #[must_use]
+    pub fn new_with_observer(path: PathBuf, observer: Arc<dyn DatabaseObserver>) -> Self {
+        Self::with_observer(path, Some(observer))
+    }
+
+    fn with_observer(path: PathBuf, observer: Option<Arc<dyn DatabaseObserver>>) -> Self {
         Self {
             db: Arc::new(RwLock::new(None)),
             memory: Arc::new(RwLock::new(None)),
             path,
+            observer,
         }
     }
 
@@ -64,8 +81,11 @@ impl VelesDbState {
     pub fn open(&self) -> Result<()> {
         let mut db_guard = self.db.write();
         if db_guard.is_none() {
-            let db = Arc::new(Database::open(&self.path)?);
-            *db_guard = Some(db);
+            let db = match &self.observer {
+                Some(observer) => Database::open_with_observer(&self.path, Arc::clone(observer))?,
+                None => Database::open(&self.path)?,
+            };
+            *db_guard = Some(Arc::new(db));
             tracing::info!("VelesDB opened at {:?}", self.path);
         }
         Ok(())
@@ -230,6 +250,48 @@ mod tests {
         assert!(result1.is_ok());
         assert!(result2.is_ok());
         assert!(result3.is_ok());
+    }
+
+    /// An observer injected via `new_with_observer` must receive the core's
+    /// collection lifecycle hooks — this is the wiring that lets the Tauri
+    /// plugin forward create/delete events to the frontend.
+    #[test]
+    fn test_injected_observer_receives_lifecycle_hooks() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use velesdb_core::collection::CollectionType;
+        use velesdb_core::DatabaseObserver;
+
+        #[derive(Default)]
+        struct CountingObserver {
+            created: AtomicUsize,
+            deleted: AtomicUsize,
+        }
+        impl DatabaseObserver for CountingObserver {
+            fn on_collection_created(&self, _name: &str, _kind: &CollectionType) {
+                self.created.fetch_add(1, Ordering::SeqCst);
+            }
+            fn on_collection_deleted(&self, _name: &str) {
+                self.deleted.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        // Arrange
+        let dir = tempdir().expect("Failed to create temp dir");
+        let observer = Arc::new(CountingObserver::default());
+        let state = VelesDbState::new_with_observer(dir.path().to_path_buf(), observer.clone());
+
+        // Act - a create then a delete, both through the observed database.
+        state
+            .with_db(|db| {
+                db.create_metadata_collection("docs")?;
+                db.delete_collection("docs")?;
+                Ok(())
+            })
+            .expect("create + delete");
+
+        // Assert - each lifecycle hook fired exactly once.
+        assert_eq!(observer.created.load(Ordering::SeqCst), 1);
+        assert_eq!(observer.deleted.load(Ordering::SeqCst), 1);
     }
 
     /// The persistent handle must be one shared `AgentMemory`, not a fresh
