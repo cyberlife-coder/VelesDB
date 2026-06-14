@@ -1433,3 +1433,85 @@ fn test_dimension_zero_is_exempt_from_limits_gate() {
     db.create_metadata_collection("meta").unwrap();
     assert_eq!(db.list_collections(), vec!["meta"]);
 }
+
+#[test]
+fn test_raw_bulk_upsert_enforces_vector_count_cap() {
+    use crate::config::{LimitsConfig, VelesConfig};
+
+    let dir = tempdir().unwrap();
+    let config = VelesConfig {
+        limits: LimitsConfig {
+            max_vectors_per_collection: 2,
+            ..LimitsConfig::default()
+        },
+        ..VelesConfig::default()
+    };
+    let db = Database::open_with_config(dir.path(), config).unwrap();
+    db.create_collection("v", 4, DistanceMetric::Cosine)
+        .unwrap();
+    let coll = db.get_vector_collection("v").unwrap();
+
+    // Five vectors via the zero-copy raw path: the cap of 2 must reject it,
+    // so the dominant SDK/REST bulk surface cannot bypass the limit.
+    let ids = [1u64, 2, 3, 4, 5];
+    let vectors: Vec<f32> = (0..ids.len()).flat_map(|_| [0.1, 0.2, 0.3, 0.4]).collect();
+    let err = coll
+        .upsert_bulk_from_raw(&vectors, &ids, 4, None)
+        .unwrap_err();
+    assert!(matches!(err, Error::GuardRail(_)), "got {err:?}");
+}
+
+#[test]
+fn test_raw_bulk_upsert_enforces_payload_size_cap() {
+    use crate::config::{LimitsConfig, VelesConfig};
+
+    let dir = tempdir().unwrap();
+    let config = VelesConfig {
+        limits: LimitsConfig {
+            max_payload_size: 16,
+            ..LimitsConfig::default()
+        },
+        ..VelesConfig::default()
+    };
+    let db = Database::open_with_config(dir.path(), config).unwrap();
+    db.create_collection("v", 4, DistanceMetric::Cosine)
+        .unwrap();
+    let coll = db.get_vector_collection("v").unwrap();
+
+    let ids = [1u64];
+    let vectors = [0.1_f32, 0.2, 0.3, 0.4];
+    let big = serde_json::json!({ "text": "x".repeat(64) });
+    let payloads = [Some(big)];
+    let err = coll
+        .upsert_bulk_from_raw(&vectors, &ids, 4, Some(&payloads))
+        .unwrap_err();
+    assert!(matches!(err, Error::GuardRail(_)), "got {err:?}");
+}
+
+#[test]
+fn test_graph_node_payload_enforces_payload_size_cap() {
+    use crate::config::{LimitsConfig, VelesConfig};
+
+    let dir = tempdir().unwrap();
+    let config = VelesConfig {
+        limits: LimitsConfig {
+            max_payload_size: 16,
+            ..LimitsConfig::default()
+        },
+        ..VelesConfig::default()
+    };
+    let db = Database::open_with_config(dir.path(), config).unwrap();
+    db.create_graph_collection("g", crate::collection::GraphSchema::new())
+        .unwrap();
+    let graph = db.get_graph_collection("g").unwrap();
+
+    // Vector-less node write routes through store_node_payload, which the
+    // gate must cover — an oversized payload is rejected.
+    let big = serde_json::json!({ "text": "x".repeat(64) });
+    let err = graph.upsert_node_payload(1, &big).unwrap_err();
+    assert!(matches!(err, Error::GuardRail(_)), "got {err:?}");
+
+    // A small payload still succeeds on the same path.
+    let small = serde_json::json!({ "k": 1 });
+    graph.upsert_node_payload(2, &small).unwrap();
+}

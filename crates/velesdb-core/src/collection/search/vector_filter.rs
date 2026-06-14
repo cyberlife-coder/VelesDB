@@ -48,6 +48,11 @@ impl Collection {
 
         let quality = resolve_quality(opts);
 
+        // Parity item E: gate Perfect-mode over-cap before any index dispatch
+        // so a filtered `WITH (mode='perfect')` query cannot trigger an
+        // unbounded brute-force scan, matching the unfiltered entry points.
+        self.enforce_perfect_mode_limit(quality)?;
+
         let index_results = match self.build_prefilter_bitmap(filter) {
             Some(bitmap) if bitmap.is_empty() => return Ok(Vec::new()),
             Some(bitmap) => {

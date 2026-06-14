@@ -130,6 +130,55 @@ impl CollectionType {
     }
 }
 
+/// Runtime guard-rail limits threaded into a `Collection` from the live
+/// [`VelesConfig::limits`](crate::config::LimitsConfig).
+///
+/// These three fields are the subset of `LimitsConfig` enforced at the
+/// `Collection` ingest/search boundary (the other two — `max_dimensions`
+/// and `max_collections` — are enforced at `Database` collection-creation
+/// time). They are **not** persisted to `config.json`: each `Database`
+/// re-pushes the live values after every open, so the source of truth stays
+/// the runtime `VelesConfig`.
+///
+/// `Copy` so the field adds no allocation and `Collection: Clone` stays cheap.
+/// The default mirrors [`LimitsConfig::default`](crate::config::LimitsConfig)
+/// so direct `Collection::create`/`open` callers (and tests) that never set
+/// it are permissive by construction.
+#[derive(Debug, Clone, Copy)]
+// Field names intentionally mirror `LimitsConfig` so the mapping in
+// `from_config` is a 1:1 transcription; the shared `max_` prefix is the
+// established convention there.
+#[allow(clippy::struct_field_names)]
+pub(crate) struct RuntimeLimits {
+    /// Maximum vectors a single collection may hold.
+    pub(crate) max_vectors_per_collection: usize,
+    /// Maximum serialized payload size (bytes) for a single point.
+    pub(crate) max_payload_size: usize,
+    /// Maximum collection size for which Perfect (brute-force) search is allowed.
+    pub(crate) max_perfect_mode_vectors: usize,
+}
+
+impl RuntimeLimits {
+    /// Extracts the three enforced fields from a [`LimitsConfig`](crate::config::LimitsConfig).
+    ///
+    /// Single mapping point reused by both [`Default`] and the `Database`
+    /// registration push, so the field correspondence never drifts.
+    #[must_use]
+    pub(crate) fn from_config(limits: &crate::config::LimitsConfig) -> Self {
+        Self {
+            max_vectors_per_collection: limits.max_vectors_per_collection,
+            max_payload_size: limits.max_payload_size,
+            max_perfect_mode_vectors: limits.max_perfect_mode_vectors,
+        }
+    }
+}
+
+impl Default for RuntimeLimits {
+    fn default() -> Self {
+        Self::from_config(&crate::config::LimitsConfig::default())
+    }
+}
+
 // === LOCK ORDERING ===
 // All code acquiring multiple locks on Collection MUST follow this order.
 // Acquiring in any other order risks deadlock under concurrent access.
@@ -266,6 +315,18 @@ pub(crate) struct Collection {
     /// Guard-rails for query execution (EPIC-048).
     pub(crate) guard_rails: Arc<GuardRails>,
 
+    /// Runtime ingest/search limits pushed from the live
+    /// [`VelesConfig::limits`](crate::config::LimitsConfig) at `Database`
+    /// registration time (parity item E).
+    ///
+    /// Defaults to the permissive [`RuntimeLimits::default`] so direct
+    /// `Collection::create`/`open` callers are unaffected; the `Database`
+    /// registration paths overwrite it via [`Collection::set_runtime_limits`].
+    /// `Arc<RwLock<_>>` so every `Collection` clone shares the same value and
+    /// the setter can run after the registry has cloned the collection.
+    /// **Not persisted** — re-pushed on every open.
+    pub(crate) runtime_limits: Arc<RwLock<RuntimeLimits>>,
+
     /// Query planner for cost-based optimization (EPIC-046).
     pub(crate) query_planner: Arc<QueryPlanner>,
 
@@ -367,6 +428,110 @@ impl Collection {
     #[allow(dead_code)] // Reason: Used in tests for sparse index verification
     pub(crate) fn sparse_indexes(&self) -> &Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>> {
         &self.sparse_indexes
+    }
+
+    /// Overwrites the runtime ingest/search limits (parity item E).
+    ///
+    /// Called by the `Database` registration paths to push the live
+    /// [`VelesConfig::limits`](crate::config::LimitsConfig) into the
+    /// collection. The value is **not** persisted — each open re-pushes it.
+    pub(crate) fn set_runtime_limits(&self, limits: RuntimeLimits) {
+        *self.runtime_limits.write() = limits;
+    }
+
+    /// Returns the current runtime limits snapshot (`Copy`, no lock retained).
+    pub(crate) fn runtime_limits(&self) -> RuntimeLimits {
+        *self.runtime_limits.read()
+    }
+
+    /// Enforces the runtime ingest limits at the cold upsert boundary
+    /// (parity item E): the O(1) `max_vectors_per_collection` cap once for
+    /// the whole batch, then `max_payload_size` per point.
+    ///
+    /// Shared by [`Self::upsert`](crate::collection::Collection) and
+    /// `upsert_bulk_inner` so both ingest paths apply identical limits with
+    /// no duplicated logic. Runs before any storage lock or WAL write, so a
+    /// violation rejects the batch without leaving partial state.
+    ///
+    /// # Cap is a conservative pre-count
+    ///
+    /// `max_vectors_per_collection` is checked as `len() + points.len()`,
+    /// treating every incoming point as net-new. Because upsert dedups by id,
+    /// re-supplying ids already present (a pure in-place update) does **not**
+    /// grow the stored count, yet still counts toward the projection here.
+    /// A collection exactly at the cap may therefore reject an update batch
+    /// that would have left the count unchanged. This O(1) approximation is
+    /// intentional: counting true net-new ids would require a storage read
+    /// pass on the hot ingest boundary. Raise the cap to update at the limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::GuardRail`](crate::error::Error::GuardRail) when the
+    /// batch would push the collection past `max_vectors_per_collection`, or
+    /// when any point's serialized payload exceeds `max_payload_size`.
+    pub(crate) fn enforce_upsert_limits(
+        &self,
+        points: &[crate::point::Point],
+    ) -> crate::error::Result<()> {
+        let limits = self.runtime_limits();
+        self.enforce_vector_count(points.len(), limits.max_vectors_per_collection)?;
+        for point in points {
+            if let Some(payload) = point.payload.as_ref() {
+                Self::enforce_payload_value_size(point.id, payload, limits.max_payload_size)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Projects the post-batch collection size against the vector cap.
+    ///
+    /// Shared by the `Point`-based [`Self::enforce_upsert_limits`] and the
+    /// slice-based raw bulk path so both apply the identical conservative
+    /// pre-count (see the doc note on `enforce_upsert_limits`).
+    pub(crate) fn enforce_vector_count(
+        &self,
+        incoming: usize,
+        cap: usize,
+    ) -> crate::error::Result<()> {
+        let projected = self.len().saturating_add(incoming);
+        if projected > cap {
+            return Err(crate::error::Error::GuardRail(format!(
+                "upsert would raise collection size to {projected}, exceeding \
+                 max_vectors_per_collection cap of {cap}; raise \
+                 `limits.max_vectors_per_collection` in VelesConfig"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Rejects a JSON payload whose serialized size exceeds the cap.
+    ///
+    /// The single shared payload-size gate, reused by every ingest path
+    /// (`Point` upsert, raw bulk, and graph node writes). Measures the
+    /// serialized length with a bounded counting writer that stops as soon
+    /// as the running total passes `cap`, so it never materializes a throwaway
+    /// `Vec` and never serializes more than `cap + 1` bytes. Payloads that
+    /// fail to serialize (the JSON value is in-memory and infallible in
+    /// practice) are accepted.
+    pub(crate) fn enforce_payload_value_size(
+        id: u64,
+        payload: &serde_json::Value,
+        cap: usize,
+    ) -> crate::error::Result<()> {
+        let mut counter = crate::collection::payload_size::BoundedCounter::new(cap);
+        if serde_json::to_writer(&mut counter, payload).is_err() && !counter.exceeded() {
+            // A real I/O error from the counter only ever signals "over cap"
+            // (see `BoundedCounter`); any other serde error is treated as
+            // unserializable and accepted, matching prior behavior.
+            return Ok(());
+        }
+        if counter.exceeded() {
+            return Err(crate::error::Error::GuardRail(format!(
+                "point {id} payload exceeds max_payload_size cap of {cap} bytes; \
+                 raise `limits.max_payload_size` in VelesConfig"
+            )));
+        }
+        Ok(())
     }
 
     /// Returns the current write generation counter.

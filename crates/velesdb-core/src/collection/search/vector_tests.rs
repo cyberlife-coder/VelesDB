@@ -402,3 +402,50 @@ fn test_search_with_filter_and_opts_no_bitmap_falls_back_to_post_filter() {
         "should find tag=A results via post-filter fallback"
     );
 }
+
+/// Parity item E: a filtered `WITH (mode='perfect')` search over a collection
+/// larger than `max_perfect_mode_vectors` must be rejected, so the gate cannot
+/// be bypassed by adding a WHERE clause (the unbounded brute-force path).
+#[test]
+fn test_filtered_perfect_search_over_cap_is_rejected() {
+    use crate::collection::RuntimeLimits;
+
+    let temp_dir = TempDir::new().expect("test: temp dir");
+    let col = Collection::create(temp_dir.path().to_path_buf(), 4, DistanceMetric::Cosine)
+        .expect("create");
+    let points: Vec<Point> = (0u64..5)
+        .map(|id| Point {
+            id,
+            vector: vec![0.1_f32, 0.2, 0.3, 0.4],
+            payload: Some(serde_json::json!({ "tag": "A" })),
+            sparse_vectors: None,
+        })
+        .collect();
+    col.upsert(points).expect("upsert");
+
+    // Cap below the 5 indexed vectors: Perfect mode is now over the limit.
+    col.set_runtime_limits(RuntimeLimits {
+        max_vectors_per_collection: 1_000,
+        max_payload_size: 1_048_576,
+        max_perfect_mode_vectors: 1,
+    });
+
+    let filter = crate::filter::Filter::new(crate::filter::Condition::Eq {
+        field: "tag".to_string(),
+        value: serde_json::Value::String("A".to_string()),
+    });
+    let opts = crate::collection::search::query::QuerySearchOptions {
+        quality: Some(crate::SearchQuality::Perfect),
+        ef_search: None,
+        force_rerank: None,
+        fusion_clause: None,
+    };
+
+    let err = col
+        .search_with_filter_and_opts(&[0.1, 0.2, 0.3, 0.4], 5, &filter, &opts)
+        .expect_err("filtered Perfect search over cap must be rejected");
+    assert!(
+        matches!(err, crate::error::Error::GuardRail(_)),
+        "expected GuardRail, got {err:?}"
+    );
+}
