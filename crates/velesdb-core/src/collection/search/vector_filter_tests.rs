@@ -1,7 +1,8 @@
 //! Unit tests for `vector_filter` oversampling computation.
 
-use super::vector_filter::compute_oversampled_k;
+use super::vector_filter::{compute_oversampled_k, ef_to_quality};
 use crate::filter::{Condition, Filter};
+use crate::SearchQuality;
 
 fn eq_filter() -> Filter {
     Filter::new(Condition::Eq {
@@ -35,4 +36,14 @@ fn test_compute_oversampled_k_small_k_unchanged() {
     assert_eq!(compute_oversampled_k(100, &eq_filter()), 1_000);
     // 5 / 0.1 = 50, above the lower bound (15).
     assert_eq!(compute_oversampled_k(5, &eq_filter()), 50);
+}
+
+/// `WITH (ef_search = N)` must honor the exact budget verbatim, not snap to a
+/// coarse named profile. The old bracket would map 200 to Accurate and 64 to
+/// Fast; the value-preserving mapping returns `Custom(N)` for both.
+#[test]
+fn test_ef_to_quality_preserves_exact_value() {
+    assert_eq!(ef_to_quality(200), SearchQuality::Custom(200));
+    // 64 is the old Fast/Balanced bracket edge: still preserved exactly.
+    assert_eq!(ef_to_quality(64), SearchQuality::Custom(64));
 }
