@@ -207,6 +207,65 @@ per-artifact load-time validation (file-length-bounded counts).
 
 ---
 
+## Ecosystem / interop
+
+### 12. String → u64 point-ID hashing differs across components
+
+**Status**: documented trade-off (intentional). Sources: `integrations/common/src/velesdb_common/ids.py` (`stable_hash_id`, used by LangChain/LlamaIndex); `integrations/haystack/src/haystack_velesdb/document_store.py` (`_str_id_to_int`, same algorithm); `crates/velesdb-migrate/src/pipeline_points.rs` (`stable_point_id`).
+
+VelesDB point IDs are `u64`. Components that ingest documents keyed by an
+arbitrary string derive the numeric ID with **two intentionally different**
+hash strategies:
+
+| Component | Function | Strategy |
+|-----------|----------|----------|
+| LangChain / LlamaIndex | `velesdb_common.ids.stable_hash_id` | SHA-256 of the UTF-8 string, top 8 bytes, sign bit cleared → positive 63-bit ID |
+| Haystack | `_str_id_to_int` (local, identical algorithm) | same SHA-256 / 63-bit mapping as `stable_hash_id` |
+| `velesdb-migrate` | `stable_point_id` | numeric strings parsed directly to `u64`; non-numeric strings hashed via FNV-1a |
+
+These do not agree. The `velesdb-migrate` strategy is deliberately distinct: it
+parses numeric IDs verbatim so a source row keyed `"12345"` maps to point
+`12345`, and its FNV-1a fallback is frozen for **checkpoint-resumable**
+migrations (changing it would re-key already-inserted points and corrupt a
+resumed run — see the stability note in the source).
+
+**User impact**: the *same* logical document can land under **different point
+IDs** depending on the ingestion path. A corpus loaded via `velesdb-migrate`
+and the same corpus loaded via the LangChain/LlamaIndex/Haystack vector store
+will not share point IDs, so cross-referencing or de-duplicating across the two
+paths by point ID is not reliable. Pick a single ingestion path per collection,
+or map on a payload field (e.g. a stored `source_id`) rather than on the
+numeric point ID.
+
+---
+
+## Tooling / test coverage
+
+### 13. VelesQL conformance for WASM/CLI is parser-only
+
+**Status**: open (coverage gap). Sources: `crates/velesdb-wasm/tests/velesql_parser_conformance.rs`, `crates/velesdb-cli/tests/velesql_parser_conformance.rs` (parser fixture); `crates/velesdb-server/tests/velesql_conformance_tests.rs` (executor contract fixture).
+
+The shared VelesQL conformance fixtures come in two layers. The
+`velesql_parser_cases.json` layer (does this query parse?) is checked across
+**core, WASM, and CLI** — all three run the same `Parser::parse` assertions.
+The `velesql_contract_cases.json` layer (does this query *execute* and return
+the contracted result/error shape?) is currently exercised at the **server**
+runtime only.
+
+**What remains open**: executor result-level conformance is being added for the
+**core** runtime; **WASM** and **CLI** executor result parity is **not yet
+fixture-checked**. The WASM and CLI surfaces share the same `velesdb-core`
+executor, so a query that parses identically across the three is expected to
+execute identically — but that expectation is asserted today only for the
+server, not pinned by a per-runtime executor fixture for WASM/CLI.
+
+**User impact**: a result-shape divergence specific to the WASM or CLI surface
+(e.g. a serialization or projection difference) would not be caught by the
+conformance suite until executor-level fixtures cover those runtimes. Parser
+acceptance — which features parse — is fully covered for all three.
+
+---
+
 ## Reading this document
 
 Each entry states:
