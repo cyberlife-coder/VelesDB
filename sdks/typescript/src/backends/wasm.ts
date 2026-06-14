@@ -78,6 +78,7 @@ import {
   wasmCollectionSanity,
   wasmScroll,
   wasmTrainPq,
+  wasmEnableStreaming,
   wasmStreamInsert,
   wasmStreamUpsertPoints,
   wasmUpsertBatchRaw,
@@ -422,6 +423,7 @@ export class WasmBackend implements IVelesDBBackend {
   async traverseParallel(c: string, r: TraverseParallelRequest): Promise<TraverseResponse> { this.ensureInitialized(); return wasmTraverseParallel(c, r); }
   async getNodeDegree(c: string, n: number): Promise<DegreeResponse> { this.ensureInitialized(); return wasmGetNodeDegree(c, n); }
   async trainPq(c: string, o?: PqTrainOptions): Promise<string> { this.ensureInitialized(); return wasmTrainPq(c, o); }
+  async enableStreaming(c: string, cfg?: import('../types').StreamingConfig): Promise<void> { this.ensureInitialized(); return wasmEnableStreaming(c, cfg); }
   async streamInsert(c: string, d: VectorDocument[]): Promise<void> { this.ensureInitialized(); return wasmStreamInsert(c, d); }
   async streamUpsertPoints(c: string, d: VectorDocument[]): Promise<import('../types').StreamUpsertResponse> { this.ensureInitialized(); return wasmStreamUpsertPoints(c, d); }
   async createGraphCollection(n: string, c?: GraphCollectionConfig): Promise<void> { this.ensureInitialized(); return wasmCreateGraphCollection(n, c); }

@@ -48,6 +48,7 @@ import type {
   MatchQueryOptions,
   MatchQueryResponse,
   StreamUpsertResponse,
+  StreamingConfig,
   RelateRequest,
   RelateResponse,
   RelationsResponse,
@@ -299,6 +300,11 @@ export class VelesDB {
   async trainPq(collection: string, options?: PqTrainOptions): Promise<string> {
     this.ensureInitialized();
     return searchMethods.trainPq(this.backend, collection, options);
+  }
+
+  async enableStreaming(collection: string, config?: StreamingConfig): Promise<void> {
+    this.ensureInitialized();
+    return searchMethods.enableStreaming(this.backend, collection, config);
   }
 
   async streamInsert(collection: string, docs: VectorDocument[]): Promise<void> {
