@@ -155,6 +155,8 @@ pub mod vector_ref;
 #[cfg(test)]
 mod vector_ref_tests;
 pub mod velesql;
+/// Binary wire formats (VRB1 raw-bulk) — pure, persistence-free, wasm-safe.
+pub mod wire;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
 pub use update_check::{check_for_updates, spawn_update_check};

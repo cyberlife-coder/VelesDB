@@ -1890,7 +1890,7 @@
           "points"
         ],
         "summary": "Bulk upsert points via the binary wire format.",
-        "description": "Accepts an `application/octet-stream` body in the v1 raw-bulk format\ndocumented at the module level: a 16-byte header (magic, count, dim,\nid_width) followed by tightly-packed `u64` ids and `f32` vectors. The\nvectors are forwarded to `Collection::upsert_bulk_from_raw` (zero per-point\n`Point` allocation). Payloads are not supported on this path.",
+        "description": "Accepts an `application/octet-stream` body in the VRB1 raw-bulk format\n(a 16-byte header — magic, count, dim, id_width — followed by tightly-packed\n`u64` ids and `f32` vectors). The vectors are forwarded to\n`Collection::upsert_bulk_from_raw` (zero per-point `Point` allocation).\nPayloads are not supported on this path.",
         "operationId": "upsert_points_raw",
         "parameters": [
           {

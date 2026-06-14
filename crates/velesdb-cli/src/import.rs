@@ -246,6 +246,38 @@ pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<I
     })
 }
 
+/// Import from a VRB1 binary file (`.bin` / `.vrb1`).
+///
+/// Reads the whole file, decodes the shared VRB1 wire format, and forwards the
+/// flat ids/vectors to the zero-copy `upsert_bulk_from_raw` path. The declared
+/// dimension in the file is authoritative (it sizes a freshly created
+/// collection). Payloads are not carried by this format — use `.jsonl` / `.csv`
+/// when payloads are needed.
+pub fn import_raw_bulk(db: &Database, path: &Path, config: &ImportConfig) -> Result<ImportStats> {
+    let bytes = std::fs::read(path).context("Failed to read binary file")?;
+    let raw = velesdb_core::wire::vrb1::decode(&bytes)
+        .map_err(|e| anyhow::anyhow!("Invalid VRB1 binary file: {e}"))?;
+
+    let collection = get_or_create_collection(
+        db,
+        &config.collection,
+        raw.dimension,
+        config.metric,
+        config.storage_mode,
+    )?;
+
+    let total = raw.ids.len();
+    let start = std::time::Instant::now();
+    let imported = collection.upsert_bulk_from_raw(&raw.vectors, &raw.ids, raw.dimension, None)?;
+
+    Ok(ImportStats {
+        total,
+        imported,
+        errors: 0,
+        duration_ms: start.elapsed().as_millis() as u64,
+    })
+}
+
 /// Process a single CSV record and push it into the batch importer.
 fn process_csv_record(
     record: &csv::StringRecord,
