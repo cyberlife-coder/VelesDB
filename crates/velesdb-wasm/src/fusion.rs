@@ -1,11 +1,15 @@
 //! Result fusion strategies for `VelesDB` WASM.
 //!
-//! Provides different strategies for combining results from multiple queries:
-//! - Average: Mean score across all queries
-//! - Maximum: Highest score from any query  
-//! - RRF: Reciprocal Rank Fusion (position-based)
+//! The four score/rank strategies (`average`, `maximum`, `weighted`, `rrf`)
+//! delegate to the canonical [`velesdb_core::FusionStrategy`] so the browser
+//! engine and the core engine produce identical rankings. The
+//! `relative_score` / `rsf` strategy keeps a WASM-local implementation because
+//! its N-branch equal-weight averaging semantics differ from core's two-branch
+//! (dense + sparse) `RelativeScore` — see [`fuse_relative_score`].
 
 use std::collections::HashMap;
+
+use velesdb_core::FusionStrategy;
 
 /// Fuses results from multiple queries using the specified strategy.
 ///
@@ -28,85 +32,51 @@ pub fn fuse_results(
     strategy: &str,
     rrf_k: u32,
 ) -> Result<Vec<(u64, f32)>, String> {
-    let mut scores: HashMap<u64, Vec<f32>> = HashMap::new();
-    let mut ranks: HashMap<u64, Vec<usize>> = HashMap::new();
-
-    for (query_idx, results) in all_results.iter().enumerate() {
-        for (rank, (id, score)) in results.iter().enumerate() {
-            scores.entry(*id).or_default().push(*score);
-            ranks
-                .entry(*id)
-                .or_insert_with(|| vec![usize::MAX; all_results.len()])[query_idx] = rank;
-        }
+    match strategy.to_lowercase().as_str() {
+        "average" | "avg" => fuse_with_core(all_results, &FusionStrategy::Average),
+        "maximum" | "max" => fuse_with_core(all_results, &FusionStrategy::Maximum),
+        "weighted" => fuse_with_core(
+            all_results,
+            &FusionStrategy::Weighted {
+                avg_weight: 0.5,
+                max_weight: 0.3,
+                hit_weight: 0.2,
+            },
+        ),
+        "rrf" => fuse_with_core(all_results, &FusionStrategy::RRF { k: rrf_k }),
+        "relative_score" | "rsf" => Ok(fuse_relative_score(all_results)),
+        _ => Err(format!(
+            "Unknown fusion strategy '{strategy}'. \
+             Expected one of: average, avg, maximum, max, weighted, \
+             relative_score, rsf, rrf"
+        )),
     }
-
-    let mut fused: Vec<(u64, f32)> = match strategy.to_lowercase().as_str() {
-        "average" | "avg" => fuse_average(&scores),
-        "maximum" | "max" => fuse_maximum(&scores),
-        "weighted" => fuse_weighted(&scores, all_results.len()),
-        "relative_score" | "rsf" => fuse_relative_score(all_results),
-        "rrf" => fuse_rrf(&ranks, rrf_k),
-        _ => {
-            return Err(format!(
-                "Unknown fusion strategy '{strategy}'. \
-                 Expected one of: average, avg, maximum, max, weighted, \
-                 relative_score, rsf, rrf"
-            ));
-        }
-    };
-
-    fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(fused)
 }
 
-/// Average fusion: mean score across all queries.
-fn fuse_average(scores: &HashMap<u64, Vec<f32>>) -> Vec<(u64, f32)> {
-    scores
-        .iter()
-        .map(|(id, s)| {
-            let avg = s.iter().sum::<f32>() / s.len() as f32;
-            (*id, avg)
-        })
-        .collect()
-}
-
-/// Maximum fusion: highest score from any query.
-fn fuse_maximum(scores: &HashMap<u64, Vec<f32>>) -> Vec<(u64, f32)> {
-    scores
-        .iter()
-        .map(|(id, s)| {
-            let max = s.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            (*id, max)
-        })
-        .collect()
-}
-
-/// Weighted fusion: combines average score, max score, and hit ratio.
-///
-/// `score = 0.5 * avg + 0.3 * max + 0.2 * (hits / total_queries)`
-fn fuse_weighted(scores: &HashMap<u64, Vec<f32>>, total_queries: usize) -> Vec<(u64, f32)> {
-    scores
-        .iter()
-        .map(|(id, s)| {
-            let avg = s.iter().sum::<f32>() / s.len() as f32;
-            let max = s.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let hit_ratio = s.len() as f32 / total_queries.max(1) as f32;
-            (*id, 0.5 * avg + 0.3 * max + 0.2 * hit_ratio)
-        })
-        .collect()
+/// Delegates to the canonical core fusion and adapts its error to a `String`.
+fn fuse_with_core(
+    all_results: &[Vec<(u64, f32)>],
+    strategy: &FusionStrategy,
+) -> Result<Vec<(u64, f32)>, String> {
+    strategy
+        .fuse(all_results.to_vec())
+        .map_err(|e| e.to_string())
 }
 
 /// Relative Score Fusion: min-max normalizes each query independently.
 ///
-/// Each query's scores are normalized to `[0, 1]`, then averaged per document.
-/// When all scores in a branch are equal (range < epsilon), the normalized
-/// value defaults to 0.5 — consistent with the core engine's
-/// `min_max_normalize` in `crates/velesdb-core/src/fusion/strategy.rs`.
+/// Each query's scores are normalized to `[0, 1]`, then averaged per document
+/// across the queries in which the document appears. When all scores in a
+/// branch are equal (range < epsilon), the normalized value defaults to 0.5 —
+/// consistent with the core engine's `min_max_normalize`.
 ///
-/// **Note:** This WASM implementation is a simplified approximation of the
-/// core `RelativeScore` strategy. The core version is designed for exactly
-/// two branches (dense + sparse) with explicit weights. This WASM version
-/// averages across N branches with equal weights.
+/// **Note:** this is intentionally *not* delegated to
+/// [`velesdb_core::FusionStrategy::RelativeScore`]. Core's `RelativeScore` is a
+/// two-branch (dense + sparse) weighted sum that zero-fills documents missing
+/// from a branch and discards branches beyond index 1. This WASM version
+/// averages across N branches with equal weights and skips missing branches,
+/// which yields a different ranking; converging it onto core would silently
+/// change WASM search results.
 fn fuse_relative_score(all_results: &[Vec<(u64, f32)>]) -> Vec<(u64, f32)> {
     let mut normalized: HashMap<u64, Vec<f32>> = HashMap::new();
     for results in all_results {
@@ -121,7 +91,16 @@ fn fuse_relative_score(all_results: &[Vec<(u64, f32)>]) -> Vec<(u64, f32)> {
             normalized.entry(id).or_default().push(norm);
         }
     }
-    fuse_average(&normalized)
+
+    let mut fused: Vec<(u64, f32)> = normalized
+        .iter()
+        .map(|(id, s)| {
+            let avg = s.iter().sum::<f32>() / s.len() as f32;
+            (*id, avg)
+        })
+        .collect();
+    fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    fused
 }
 
 /// Returns `(min, max)` scores from a result set.
@@ -131,21 +110,6 @@ fn min_max_scores(results: &[(u64, f32)]) -> (f32, f32) {
         .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &(_, s)| {
             (min.min(s), max.max(s))
         })
-}
-
-/// Reciprocal Rank Fusion: position-based scoring.
-fn fuse_rrf(ranks: &HashMap<u64, Vec<usize>>, rrf_k: u32) -> Vec<(u64, f32)> {
-    ranks
-        .iter()
-        .map(|(id, r)| {
-            let rrf_score: f32 = r
-                .iter()
-                .filter(|&&rank| rank != usize::MAX)
-                .map(|&rank| 1.0 / (rrf_k as f32 + rank as f32 + 1.0))
-                .sum();
-            (*id, rrf_score)
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -275,5 +239,67 @@ mod tests {
             err.contains("Unknown fusion strategy"),
             "expected descriptive error, got: {err}"
         );
+    }
+
+    /// Equivalence guard: for representative multi-query inputs the four
+    /// delegated strategies (`average`, `maximum`, `weighted`, `rrf`) must
+    /// return the SAME ordering as the corresponding
+    /// [`velesdb_core::FusionStrategy::fuse`] call. `relative_score` is
+    /// intentionally excluded: its N-branch averaging semantics differ from
+    /// core's two-branch `RelativeScore` (documented on `fuse_relative_score`).
+    #[test]
+    fn test_fuse_results_matches_core_ordering() {
+        let inputs: Vec<Vec<Vec<(u64, f32)>>> = vec![
+            vec![
+                vec![(1, 0.9), (2, 0.8), (3, 0.7)],
+                vec![(2, 1.0), (1, 0.5), (4, 0.3)],
+            ],
+            vec![vec![(1, 0.8), (2, 0.6)], vec![(1, 0.6), (2, 0.8)]],
+            vec![vec![(1, 0.9), (2, 0.5)], vec![(1, 0.3), (2, 0.8)]],
+            vec![vec![(1, 0.9), (2, 0.8)]],
+            vec![
+                vec![(10, 0.5), (20, 0.4), (30, 0.9)],
+                vec![(30, 0.1), (40, 0.99), (10, 0.2)],
+                vec![(20, 0.7), (50, 0.6)],
+            ],
+        ];
+
+        let cases: [(&str, FusionStrategy); 4] = [
+            ("average", FusionStrategy::Average),
+            ("maximum", FusionStrategy::Maximum),
+            (
+                "weighted",
+                FusionStrategy::Weighted {
+                    avg_weight: 0.5,
+                    max_weight: 0.3,
+                    hit_weight: 0.2,
+                },
+            ),
+            ("rrf", FusionStrategy::RRF { k: 60 }),
+        ];
+
+        // Tie-break deterministically (score desc, then id asc) so that ties —
+        // whose order depends on non-deterministic HashMap iteration — do not
+        // produce spurious mismatches. Real ranking divergence still shows up
+        // as a different score sequence.
+        let canonical = |mut v: Vec<(u64, f32)>| -> Vec<u64> {
+            v.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.0.cmp(&b.0))
+            });
+            v.into_iter().map(|(id, _)| id).collect()
+        };
+
+        for input in &inputs {
+            for (name, strategy) in &cases {
+                let wasm = canonical(fuse_results(input, name, 60).unwrap());
+                let core = canonical(strategy.fuse(input.clone()).unwrap());
+                assert_eq!(
+                    wasm, core,
+                    "strategy '{name}' ordering diverged from core for input {input:?}"
+                );
+            }
+        }
     }
 }
