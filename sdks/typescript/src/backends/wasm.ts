@@ -80,6 +80,7 @@ import {
   wasmTrainPq,
   wasmStreamInsert,
   wasmStreamUpsertPoints,
+  wasmUpsertBatchRaw,
   wasmCreateGraphCollection,
   wasmGetCollectionStats,
   wasmAnalyzeCollection,
@@ -324,6 +325,8 @@ export class WasmBackend implements IVelesDBBackend {
       }
     }
   }
+
+  async upsertBatchRaw(c: string, d: VectorDocument[]): Promise<number> { return wasmUpsertBatchRaw(c, d); }
 
   async delete(collectionName: string, id: string | number): Promise<boolean> {
     this.ensureInitialized();

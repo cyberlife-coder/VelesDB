@@ -256,6 +256,42 @@ Insert or update points (upsert).
 }
 ```
 
+### POST /collections/:name/points/raw
+
+Bulk-upsert points via a compact binary wire format (`application/octet-stream`)
+for zero-copy, high-throughput ingestion. This avoids the per-point JSON
+overhead of `POST /collections/:name/points`. **Payloads are not carried on this
+path** — use the JSON endpoint when you need them.
+
+**Wire format (`VRB1`, little-endian).** All multi-byte integers and `f32`s are
+little-endian:
+
+| Offset | Size | Field |
+|--------|------|-------|
+| 0 | 4 | magic `b"VRB1"` (Veles Raw Bulk v1) |
+| 4 | 4 | `count` : u32 (number of points) |
+| 8 | 4 | `dim` : u32 (vector dimension) |
+| 12 | 1 | `id_width` : u8 (must be `8` → u64) |
+| 13 | 3 | reserved (must be `0`) |
+| 16 | `count * 8` | `ids` : packed `[u64; count]` |
+| 16 + `count*8` | `count * dim * 4` | `vectors` : packed `[f32; count*dim]` (row-major) |
+
+The body length must be **exactly** `16 + count*8 + count*dim*4` bytes; any
+mismatch, a bad magic, an unsupported `id_width`, or a `dim` that differs from
+the collection returns `400 Bad Request`. The encoding is deterministic: a
+given batch always serialises to the same bytes.
+
+**Response:**
+```json
+{
+  "message": "Points upserted",
+  "count": 1000
+}
+```
+
+The TypeScript SDK encodes this format for you via
+`client.upsertBatchRaw(collection, docs)`.
+
 ### GET /collections/:name/points/:id
 
 Get a single point by ID.

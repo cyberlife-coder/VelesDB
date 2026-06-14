@@ -103,6 +103,18 @@ export interface IVelesDBBackend {
   /** Upsert (insert or replace) multiple vectors */
   upsertBatch(collection: string, docs: VectorDocument[]): Promise<void>;
 
+  /**
+   * Bulk upsert multiple vectors via the binary wire format (REST only).
+   *
+   * Encodes `(id, vector)` pairs into the deterministic VRB1 binary layout
+   * and POSTs them as `application/octet-stream`, avoiding per-point JSON
+   * overhead. Payloads are not carried on this path. Not supported by the
+   * WASM backend.
+   *
+   * @returns the number of points the server reports as inserted.
+   */
+  upsertBatchRaw(collection: string, docs: VectorDocument[]): Promise<number>;
+
   /** Search for similar vectors */
   search(
     collection: string,
