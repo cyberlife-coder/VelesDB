@@ -1,5 +1,5 @@
 #![cfg(feature = "persistence")]
-//! Executor-level VelesQL conformance (T2 of the core-parity remediation plan).
+//! Executor-level `VelesQL` conformance (T2 of the core-parity remediation plan).
 //!
 //! The existing `velesql_parser_conformance` fixture only asserts that a query
 //! *parses*. This suite goes further: it loads a fixed dataset, executes each
@@ -105,7 +105,7 @@ fn test_velesql_executor_conformance_fixture_cases() {
 
 /// Regression lock for B001 (scalar `ORDER BY` + `LIMIT`): formerly LIMIT was
 /// applied before the sort; fixed in the executor so the bounded result now
-/// equals the unbounded path truncated to k (KNOWN_LIMITATIONS #9).
+/// equals the unbounded path truncated to k (`KNOWN_LIMITATIONS` #9).
 #[test]
 fn test_velesql_executor_known_bugs() {
     let fixture = load_fixture();
