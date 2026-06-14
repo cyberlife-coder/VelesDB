@@ -177,6 +177,26 @@ pub fn hybrid_search_impl(
     scored_triples_to_js(results)
 }
 
+/// Validates that `vectors_len == num_vectors * dimension` without integer
+/// overflow. Returns the expected length on success, a `String` error on
+/// failure so the validation path is testable on native (non-wasm32) targets
+/// without requiring `JsValue`.
+pub(crate) fn validate_multi_vector_len(
+    vectors_len: usize,
+    num_vectors: usize,
+    dimension: usize,
+) -> Result<usize, String> {
+    let expected = num_vectors
+        .checked_mul(dimension)
+        .ok_or_else(|| "Overflow: num_vectors × dimension exceeds usize".to_string())?;
+    if vectors_len != expected {
+        return Err(format!(
+            "Vector array size mismatch: expected {expected}, got {vectors_len}"
+        ));
+    }
+    Ok(expected)
+}
+
 /// Multi-query search with fusion.
 #[allow(clippy::too_many_arguments)]
 pub fn multi_query_search_impl(
@@ -195,20 +215,15 @@ pub fn multi_query_search_impl(
     strategy: &str,
     rrf_k: Option<u32>,
 ) -> Result<JsValue, JsValue> {
-    if vectors.len() != num_vectors * dimension {
-        return Err(JsValue::from_str(&format!(
-            "Vector array size mismatch: expected {}, got {}",
-            num_vectors * dimension,
-            vectors.len()
-        )));
-    }
+    // validate_multi_vector_len uses checked_mul so the length check cannot
+    // overflow; the String error is mapped to JsValue only at the FFI boundary.
+    validate_multi_vector_len(vectors.len(), num_vectors, dimension)
+        .map_err(|e| JsValue::from_str(&e))?;
 
+    // chunks_exact eliminates manual start = i * dimension index arithmetic,
+    // which was a second multiplication that could independently overflow.
     let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
-
-    for i in 0..num_vectors {
-        let start = i * dimension;
-        let query = &vectors[start..start + dimension];
-
+    for query in vectors.chunks_exact(dimension) {
         let mut results = vector_ops::compute_scores(
             query,
             ids,
@@ -221,7 +236,6 @@ pub fn multi_query_search_impl(
             metric,
             storage_mode,
         );
-
         vector_ops::sort_results(&mut results, metric.higher_is_better());
         results.truncate(k * 2);
         all_results.push(results);
@@ -346,26 +360,27 @@ pub fn batch_search_impl(
     metric: crate::DistanceMetric,
     k: usize,
 ) -> Result<JsValue, JsValue> {
-    let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
+    // Validate with the shared overflow-safe helper; the caller
+    // (VectorStore::batch_search) also validates, but batch_search_impl is
+    // pub(crate) and may be called from tests or future code paths directly.
+    validate_multi_vector_len(vectors.len(), num_vectors, dimension)
+        .map_err(|e| JsValue::from_str(&e))?;
 
-    for i in 0..num_vectors {
-        let start = i * dimension;
-        let query = &vectors[start..start + dimension];
-
-        let mut results: Vec<(u64, f32)> = ids
-            .iter()
-            .enumerate()
-            .map(|(idx, &id)| {
-                let v_start = idx * dimension;
-                let v_data = &data[v_start..v_start + dimension];
-                (id, metric.calculate(query, v_data))
-            })
-            .collect();
-
-        vector_ops::sort_results(&mut results, metric.higher_is_better());
-        results.truncate(k);
-        all_results.push(results);
-    }
+    // Use chunks_exact for both the query and store-data iteration, removing
+    // manual start/v_start index arithmetic (potential overflow or off-by-one).
+    let all_results: Vec<Vec<(u64, f32)>> = vectors
+        .chunks_exact(dimension)
+        .map(|query| {
+            let mut results: Vec<(u64, f32)> = ids
+                .iter()
+                .zip(data.chunks_exact(dimension))
+                .map(|(&id, v_data)| (id, metric.calculate(query, v_data)))
+                .collect();
+            vector_ops::sort_results(&mut results, metric.higher_is_better());
+            results.truncate(k);
+            results
+        })
+        .collect();
 
     to_js(&all_results)
 }

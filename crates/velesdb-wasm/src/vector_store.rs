@@ -448,13 +448,8 @@ impl VectorStore {
             return serde_wasm_bindgen::to_value::<Vec<Vec<(u64, f32)>>>(&vec![])
                 .map_err(|e| JsValue::from_str(&e.to_string()));
         }
-        let expected_len = num_vectors * self.dimension;
-        if vectors.len() != expected_len {
-            return Err(JsValue::from_str(&format!(
-                "Expected {expected_len} floats, got {}",
-                vectors.len()
-            )));
-        }
+        store_search::validate_multi_vector_len(vectors.len(), num_vectors, self.dimension)
+            .map_err(|e| JsValue::from_str(&e))?;
         if self.storage_mode != StorageMode::Full {
             return Err(JsValue::from_str(
                 "batch_search only supports Full storage mode",

@@ -283,3 +283,57 @@ fn test_similarity_threshold_logic() {
     assert!((0.8001_f32 - threshold).abs() < 0.001);
     assert!((0.81_f32 - threshold).abs() >= 0.001);
 }
+
+// =============================================================================
+// Bounds-check and overflow safety — validate_multi_vector_len
+//
+// The JsValue-returning search functions are wasm-only and cannot be called
+// from native tests (JsValue::from_str aborts on non-wasm32). The validation
+// logic is extracted into validate_multi_vector_len (returns String errors) so
+// it can be exercised here. The full wasm integration path is covered by the
+// wasm-pack test suite in CI.
+// =============================================================================
+
+#[test]
+fn test_validate_multi_vector_len_length_mismatch() {
+    use super::store_search::validate_multi_vector_len;
+    // 4 floats declared as 2 vectors of dim 4 — expected 8, got 4.
+    let err = validate_multi_vector_len(4, 2, 4);
+    assert!(err.is_err(), "length mismatch must be an error");
+    let msg = err.unwrap_err();
+    assert!(
+        msg.contains("size mismatch"),
+        "error should describe the mismatch: {msg}"
+    );
+}
+
+#[test]
+fn test_validate_multi_vector_len_exact_match() {
+    use super::store_search::validate_multi_vector_len;
+    // 8 floats = 2 vectors × dim 4: valid.
+    let ok = validate_multi_vector_len(8, 2, 4);
+    assert!(ok.is_ok(), "matching lengths must succeed");
+    assert_eq!(ok.unwrap(), 8);
+}
+
+#[test]
+fn test_validate_multi_vector_len_zero_vectors() {
+    use super::store_search::validate_multi_vector_len;
+    // 0 vectors × dim 4 → expected 0 floats.
+    let ok = validate_multi_vector_len(0, 0, 4);
+    assert!(ok.is_ok());
+    assert_eq!(ok.unwrap(), 0);
+}
+
+#[test]
+fn test_validate_multi_vector_len_overflow_returns_error() {
+    use super::store_search::validate_multi_vector_len;
+    // usize::MAX vectors × dimension 2 must overflow checked_mul.
+    let err = validate_multi_vector_len(0, usize::MAX, 2);
+    assert!(err.is_err(), "overflow must be an error");
+    let msg = err.unwrap_err();
+    assert!(
+        msg.to_lowercase().contains("overflow"),
+        "error should mention overflow: {msg}"
+    );
+}
