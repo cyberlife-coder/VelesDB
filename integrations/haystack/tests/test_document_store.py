@@ -282,6 +282,17 @@ def _load_module() -> types.ModuleType:
 
     vc_mod = types.ModuleType("velesdb_common")
     sys.modules["velesdb_common"] = vc_mod
+
+    # Load the REAL velesdb_common.ids (pure stdlib) so the store exercises the
+    # canonical stable_hash_id rather than a forked copy (single-source-of-truth
+    # + license hygiene — see docs/planning/CORE_PARITY_REMEDIATION.md T3).
+    _ids_path = Path(__file__).resolve().parents[2] / "common" / "src" / "velesdb_common" / "ids.py"
+    _ids_spec = importlib.util.spec_from_file_location("velesdb_common.ids", _ids_path)
+    assert _ids_spec and _ids_spec.loader
+    vc_ids = importlib.util.module_from_spec(_ids_spec)
+    sys.modules["velesdb_common.ids"] = vc_ids
+    _ids_spec.loader.exec_module(vc_ids)
+
     vc_sec = types.ModuleType("velesdb_common.security")
     vc_sec.validate_path = _passthrough  # type: ignore[attr-defined]
     vc_sec.validate_collection_name = _passthrough  # type: ignore[attr-defined]
@@ -1028,3 +1039,29 @@ def test_write_documents_forwards_named_sparse_vectors() -> None:
         assert point["sparse_vector"] == {"bge_m3": {0: 1.5, 7: 0.8}}
     finally:
         _MOD.velesdb = original_velesdb
+
+
+def test_id_hashing_uses_canonical_stable_hash_id():
+    """T3: the store delegates string->int ID hashing to the shared
+    velesdb_common.ids.stable_hash_id, not a forked local copy. This keeps the
+    same logical document mapped to the same VelesDB point ID across every
+    integration (single source of truth) and avoids re-implementing the hash in
+    an MIT package (license hygiene). See docs/planning/CORE_PARITY_REMEDIATION.md.
+    """
+    import hashlib
+
+    import velesdb_common.ids as canonical_ids
+
+    # the module imported the canonical helper, and the forked copy is gone
+    assert _MOD.stable_hash_id is canonical_ids.stable_hash_id
+    assert not hasattr(_MOD, "_str_id_to_int")
+    assert not hasattr(_MOD, "_INT63_MASK")
+
+    # and it yields the canonical positive-63-bit value
+    for doc_id in ["", "doc-1", "héllo-世界", "Document_42::chunk#3", "a" * 500]:
+        expected = (
+            int.from_bytes(hashlib.sha256(doc_id.encode("utf-8")).digest()[:8], "big")
+            & 0x7FFFFFFFFFFFFFFF
+        )
+        assert _MOD.stable_hash_id(doc_id) == expected
+        assert 0 <= _MOD.stable_hash_id(doc_id) <= 0x7FFFFFFFFFFFFFFF
