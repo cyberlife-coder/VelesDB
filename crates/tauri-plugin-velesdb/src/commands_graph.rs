@@ -4,7 +4,6 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::error::{CommandError, Error};
-use crate::events::emit_collection_created;
 use crate::helpers::{parse_metric, require_graph_collection};
 use crate::state::VelesDbState;
 use crate::types::{
@@ -23,7 +22,7 @@ use velesdb_core::GraphSchema;
 /// embeddings are enabled with the given metric.
 #[command]
 pub async fn create_graph_collection<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: CreateGraphCollectionRequest,
 ) -> std::result::Result<CollectionInfo, CommandError> {
@@ -51,7 +50,6 @@ pub async fn create_graph_collection<R: Runtime>(
         })
         .map_err(CommandError::from)?;
 
-    emit_collection_created(&app, &request.name);
     Ok(result)
 }
 

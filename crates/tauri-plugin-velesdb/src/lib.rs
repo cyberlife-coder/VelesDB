@@ -74,6 +74,7 @@ pub mod commands_sparse;
 pub mod error;
 pub mod events;
 pub mod helpers;
+pub mod observer;
 pub mod state;
 pub mod types;
 pub mod types_graph;
@@ -225,7 +226,8 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
     ));
     builder
         .setup(move |app, _api| {
-            let state = VelesDbState::new(db_path.clone());
+            let observer = std::sync::Arc::new(observer::TauriObserver::new(app.clone()));
+            let state = VelesDbState::new_with_observer(db_path.clone(), observer);
             app.manage(state);
             tracing::info!("VelesDB plugin initialized with path: {:?}", db_path);
             Ok(())
