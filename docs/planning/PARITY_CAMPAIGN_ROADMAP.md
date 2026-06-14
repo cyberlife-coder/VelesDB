@@ -44,7 +44,7 @@ policy engine** (RBAC stays premium).
 | **H** ✅ | feat(ts,mobile): enableStreaming SDK + mobile wrapper | STREAM-6/3 | TS strict | F/G |
 | **I** | feat(streaming): WAL bypass via WriteMode | STREAM-8 | **crash-recovery parity**, optional | G |
 | **J** ✅ | feat(rest,ts): binary wire-format `upsert_bulk_from_raw` | raw-bulk rest+ts | document contract | — |
-| **K** | feat(wasm,cli): raw-bulk typed-array + CLI ingest | raw-bulk wasm+cli | wasm no-default-features | — |
+| **K** ✅ | feat(wasm,cli): raw-bulk typed-array + CLI ingest | raw-bulk wasm+cli | wasm no-default-features | — |
 | **L** ✅ | feat(mobile): diagnostics + multi_query_search_ids; feat(cli): `.diagnostics` | M1, M2, C1 | standard (C1 after A) | A (CLI) |
 | **M** ✅ | feat(wasm): sparse_search + validate dedup | M3 | wasm check, after K | K |
 | **N** ✅ | feat(integrations): Haystack fusion + named-sparse creation (LC/LI/Haystack) | I1, I2 | py integration tests | — |
