@@ -241,30 +241,110 @@ fn high_id_above_u32_max_matches_exhaustive() {
     assert_eq!(indexed, vec![2, 3, big]);
 }
 
+// === EPIC-081 phase 3b — WHERE-filtered top-k ==========================
+// A pure-metadata WHERE is now eligible: the index side walks the covered
+// ordered index applying the same metadata predicate the exhaustive path
+// applies, stopping at the page. Each case asserts the filtered route's id
+// sequence equals the exhaustive filter→sort→limit, across predicate shapes,
+// OFFSET, ties, and the uncovered fall-back.
+
 #[test]
-fn where_clause_keeps_exhaustive_path_and_correct() {
-    // A WHERE clause disqualifies the index fast path; the result must still be
-    // correct (and identical with or without the index present).
-    let (no_index, _d1) = build(ROWS);
-    let exhaustive = ids(&no_index
-        .execute_query_str(
-            "SELECT * FROM docs WHERE year >= 2021 ORDER BY year DESC LIMIT 2",
-            &HashMap::new(),
-        )
-        .expect("exhaustive"));
-
-    let (with_index, _d2) = build(ROWS);
-    with_index.create_index("year").expect("create_index");
-    let indexed = ids(&with_index
-        .execute_query_str(
-            "SELECT * FROM docs WHERE year >= 2021 ORDER BY year DESC LIMIT 2",
-            &HashMap::new(),
-        )
-        .expect("index"));
-
+fn where_filtered_range_matches_exhaustive() {
+    let (exhaustive, indexed) = run_both(
+        ROWS,
+        "SELECT * FROM docs WHERE year >= 2021 ORDER BY year DESC LIMIT 2",
+    );
     assert_eq!(exhaustive, indexed);
     // year >= 2021 → {2023→4, 2022→{2,6}, 2021→3}; DESC LIMIT 2 → [4, 2].
     assert_eq!(indexed, vec![4, 2]);
+}
+
+#[test]
+fn where_filtered_or_matches_exhaustive() {
+    let (exhaustive, indexed) = run_both(
+        ROWS,
+        "SELECT * FROM docs WHERE year = 2023 OR year = 2019 ORDER BY year DESC LIMIT 5",
+    );
+    assert_eq!(exhaustive, indexed);
+    // {2023→4, 2019→{5,8}}; DESC → [4, 5, 8] (ties broken by ascending id).
+    assert_eq!(indexed, vec![4, 5, 8]);
+}
+
+#[test]
+fn where_filtered_not_matches_exhaustive() {
+    let (exhaustive, indexed) = run_both(
+        ROWS,
+        "SELECT * FROM docs WHERE NOT (year = 2022) ORDER BY year ASC LIMIT 4",
+    );
+    assert_eq!(exhaustive, indexed);
+    // Exclude 2022→{2,6}; ASC → 2019→{5,8}, 2020→{1,7} → [5, 8, 1, 7].
+    assert_eq!(indexed, vec![5, 8, 1, 7]);
+}
+
+#[test]
+fn where_filtered_in_matches_exhaustive() {
+    let (exhaustive, indexed) = run_both(
+        ROWS,
+        "SELECT * FROM docs WHERE year IN (2019, 2023) ORDER BY year ASC LIMIT 5",
+    );
+    assert_eq!(exhaustive, indexed);
+    // {2019→{5,8}, 2023→4}; ASC → [5, 8, 4].
+    assert_eq!(indexed, vec![5, 8, 4]);
+}
+
+#[test]
+fn where_filtered_offset_and_ties_match_exhaustive() {
+    let (exhaustive, indexed) = run_both(
+        ROWS,
+        "SELECT * FROM docs WHERE year >= 2020 ORDER BY year DESC LIMIT 2 OFFSET 1",
+    );
+    assert_eq!(exhaustive, indexed);
+    // year >= 2020 DESC: [4, 2, 6, 3, 1, 7]; skip 1, take 2 → [2, 6].
+    assert_eq!(indexed, vec![2, 6]);
+}
+
+#[test]
+fn where_filtered_uncovered_falls_back_and_stays_correct() {
+    // A row missing the sort field breaks coverage → the filtered route declines
+    // and the exhaustive path runs; the result must still match.
+    let rows: &[(u64, i64)] = &[(1, 2020), (2, 2022), (3, 2021)];
+    let (no_index, _d1) = build(rows);
+    no_index
+        .upsert(vec![Point::new(
+            9,
+            vec![1.0, 0.0],
+            Some(json!({ "year": 2099, "other": 1 })),
+        )])
+        .expect("upsert");
+    // Remove the sort field from id 9 by overwriting without `year`.
+    no_index
+        .upsert(vec![Point::new(
+            9,
+            vec![1.0, 0.0],
+            Some(json!({ "other": 1 })),
+        )])
+        .expect("re-upsert without year");
+
+    let (with_index, _d2) = build(rows);
+    with_index
+        .upsert(vec![Point::new(
+            9,
+            vec![1.0, 0.0],
+            Some(json!({ "other": 1 })),
+        )])
+        .expect("upsert missing-field row");
+    with_index.create_index("year").expect("create_index");
+
+    let sql = "SELECT * FROM docs WHERE year >= 2021 ORDER BY year DESC LIMIT 3";
+    let exhaustive = ids(&no_index
+        .execute_query_str(sql, &HashMap::new())
+        .expect("exhaustive"));
+    let indexed = ids(&with_index
+        .execute_query_str(sql, &HashMap::new())
+        .expect("index"));
+    assert_eq!(exhaustive, indexed);
+    // id 9 lacks year → excluded by `year >= 2021`; {2022→2, 2021→3} DESC → [2, 3].
+    assert_eq!(indexed, vec![2, 3]);
 }
 
 /// The index path must reproduce the exhaustive path's `.score`, not just the

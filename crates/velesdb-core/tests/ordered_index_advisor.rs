@@ -82,16 +82,19 @@ fn non_order_by_query_is_not_recorded() {
 }
 
 #[test]
-fn where_clause_currently_not_recorded() {
+fn where_filtered_eligible_query_is_recorded() {
     let (c, _d) = build(ROWS);
-    // A WHERE clause disqualifies the phase-2 route before the advisor hook, so
-    // it is not observed today. (EPIC-081 phase 3b — WHERE-filtered top-k —
-    // will make this shape eligible; update this expectation then.)
+    // EPIC-081 phase 3b makes a pure-metadata WHERE eligible for the route, so a
+    // broadly-matching WHERE on an unindexed sort field now records the field as
+    // wanting an index (the only missing piece is the covering index).
     let _ = run(
         &c,
-        "SELECT * FROM docs WHERE year >= 2021 ORDER BY year DESC LIMIT 2",
+        "SELECT * FROM docs WHERE year >= 2019 ORDER BY year DESC LIMIT 2",
     );
-    assert!(c.order_by_index_advice(1).is_empty());
+    let advice = c.order_by_index_advice(1);
+    assert_eq!(advice.len(), 1);
+    assert_eq!(advice[0].field, "year");
+    assert_eq!(advice[0].state, OrderByIndexState::Missing);
 }
 
 #[test]
