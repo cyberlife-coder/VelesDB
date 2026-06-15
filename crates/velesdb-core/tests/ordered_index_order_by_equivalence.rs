@@ -430,3 +430,89 @@ fn window_function_projection_not_dropped_by_index_path() {
         "window-function alias dropped on the ordered-index fast path"
     );
 }
+
+// === TTL-expired rows ==================================================
+// Lazy TTL expiry leaves an expired-but-unswept row in `point_count` and the
+// secondary B-tree, so coverage passes and the route would fire — but `get`
+// drops the row. The route must still equal the exhaustive path, which filters
+// expired rows BEFORE applying OFFSET/LIMIT and backfills from below.
+
+/// Builds the same `(id, year)` rows but marks `expired_id` with a past
+/// `_veles_expires_at`, on a fresh collection (with the index when `index`).
+fn build_with_expired(
+    rows: &[(u64, i64)],
+    expired_id: u64,
+    index: bool,
+) -> (VectorCollection, TempDir) {
+    let (collection, dir) = build(&[]);
+    let points: Vec<Point> = rows
+        .iter()
+        .map(|&(id, year)| {
+            let payload = if id == expired_id {
+                json!({ "year": year, "_veles_expires_at": 1 })
+            } else {
+                json!({ "year": year })
+            };
+            Point::new(id, vec![1.0, 0.0], Some(payload))
+        })
+        .collect();
+    collection.upsert(points).expect("upsert");
+    if index {
+        collection.create_index("year").expect("create_index");
+    }
+    (collection, dir)
+}
+
+#[test]
+fn plain_route_expired_row_in_page_matches_exhaustive() {
+    let rows: &[(u64, i64)] = &[(1, 2020), (2, 2022), (3, 2021), (4, 2023), (5, 2019)];
+    let (no_index, _d1) = build_with_expired(rows, 1, false);
+    let (with_index, _d2) = build_with_expired(rows, 1, true);
+    let sql = "SELECT * FROM docs ORDER BY year ASC LIMIT 3";
+    let exhaustive = ids(&no_index
+        .execute_query_str(sql, &HashMap::new())
+        .expect("exhaustive"));
+    let indexed = ids(&with_index
+        .execute_query_str(sql, &HashMap::new())
+        .expect("index"));
+    assert_eq!(exhaustive, indexed);
+    // id1 (2020) expired & dropped; live ASC: 2019→5, 2021→3, 2022→2 → [5, 3, 2].
+    // Without the fall-back the index slice would return only [5, 3].
+    assert_eq!(indexed, vec![5, 3, 2]);
+}
+
+#[test]
+fn plain_route_expired_row_with_offset_matches_exhaustive() {
+    // OFFSET makes the bug worse: an expired row in the skipped region shifts
+    // the page. Both paths must align on LIVE rows.
+    let rows: &[(u64, i64)] = &[(1, 2019), (2, 2022), (3, 2021), (4, 2023), (5, 2020)];
+    let (no_index, _d1) = build_with_expired(rows, 1, false);
+    let (with_index, _d2) = build_with_expired(rows, 1, true);
+    let sql = "SELECT * FROM docs ORDER BY year ASC LIMIT 2 OFFSET 1";
+    let exhaustive = ids(&no_index
+        .execute_query_str(sql, &HashMap::new())
+        .expect("exhaustive"));
+    let indexed = ids(&with_index
+        .execute_query_str(sql, &HashMap::new())
+        .expect("index"));
+    assert_eq!(exhaustive, indexed);
+    // id1 (2019) expired; live ASC: 2020→5, 2021→3, 2022→2, 2023→4; skip 1, take 2 → [3, 2].
+    assert_eq!(indexed, vec![3, 2]);
+}
+
+#[test]
+fn filtered_route_expired_row_matches_exhaustive() {
+    let rows: &[(u64, i64)] = &[(1, 2020), (2, 2022), (3, 2021), (4, 2023), (5, 2019)];
+    let (no_index, _d1) = build_with_expired(rows, 1, false);
+    let (with_index, _d2) = build_with_expired(rows, 1, true);
+    let sql = "SELECT * FROM docs WHERE year >= 2019 ORDER BY year ASC LIMIT 3";
+    let exhaustive = ids(&no_index
+        .execute_query_str(sql, &HashMap::new())
+        .expect("exhaustive"));
+    let indexed = ids(&with_index
+        .execute_query_str(sql, &HashMap::new())
+        .expect("index"));
+    assert_eq!(exhaustive, indexed);
+    // Filtered walk drops expired id1 and backfills: [5, 3, 2].
+    assert_eq!(indexed, vec![5, 3, 2]);
+}

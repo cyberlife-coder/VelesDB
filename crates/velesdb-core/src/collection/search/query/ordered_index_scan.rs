@@ -76,23 +76,37 @@ impl Collection {
         Ok(Some(results))
     }
 
-    /// Plain (no-WHERE) route: hydrate the top `offset+limit` ordered IDs. Score
-    /// is 1.0 to match the exhaustive metadata-scan path. Records an advisor
-    /// observation and returns `None` when the index is missing or not fully
-    /// covering (EPIC-081 phase 3a).
+    /// Plain (no-WHERE) route: hydrate the top `offset+limit` ordered IDs, then
+    /// apply OFFSET/LIMIT. Score is 1.0 to match the exhaustive metadata-scan
+    /// path. Records an advisor observation and returns `None` when the index is
+    /// missing or not fully covering (EPIC-081 phase 3a).
+    ///
+    /// If `get` drops any id in the slice (deleted, or TTL-expired-but-unswept —
+    /// lazy expiry leaves the row in `point_count` and the B-tree, so coverage
+    /// still passes), this index slice no longer aligns with the exhaustive path,
+    /// which filters such rows **before** OFFSET and backfills from beyond the
+    /// slice. So decline and let the exhaustive path run — correctness over the
+    /// fast path. The common (no-TTL) case keeps the `O(log n + k)` walk.
     fn ordered_index_plain_results(
         &self,
         stmt: &crate::velesql::SelectStatement,
         field: &str,
     ) -> Option<Vec<SearchResult>> {
-        let Some(page) = self.ordered_index_page(stmt, field) else {
+        let (limit, fetch_limit) = Self::compute_fetch_limit(stmt);
+        let Some(ids) = self.ordered_ids_if_covered(field, order_descending(stmt), fetch_limit)
+        else {
             self.order_by_advisor.write().observe(field);
             return None;
         };
+        let hydrated: Vec<crate::point::Point> = self.get(&ids).into_iter().flatten().collect();
+        if hydrated.len() != ids.len() {
+            return None;
+        }
         Some(
-            self.get(&page)
+            hydrated
                 .into_iter()
-                .flatten()
+                .skip(order_offset(stmt))
+                .take(limit)
                 .map(|point| SearchResult::new(point, 1.0))
                 .collect(),
         )
@@ -170,26 +184,6 @@ impl Collection {
             }
         }
         out
-    }
-
-    /// Resolves the page of point IDs for the plain route: the top `offset+limit`
-    /// ordered IDs from the covered index, OFFSET then LIMIT applied. `None` when
-    /// the index is missing or not fully covered (caller then falls back to the
-    /// exhaustive path, which places field-missing rows first for ASC / last for
-    /// DESC).
-    fn ordered_index_page(
-        &self,
-        stmt: &crate::velesql::SelectStatement,
-        field: &str,
-    ) -> Option<Vec<u64>> {
-        let (limit, fetch_limit) = Self::compute_fetch_limit(stmt);
-        let ids = self.ordered_ids_if_covered(field, order_descending(stmt), fetch_limit)?;
-        Some(
-            ids.into_iter()
-                .skip(order_offset(stmt))
-                .take(limit)
-                .collect(),
-        )
     }
 }
 
