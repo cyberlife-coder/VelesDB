@@ -91,8 +91,7 @@ export async function streamInsert(
     const restId = transport.parseRestPointId(doc.id);
     const vector = toNumberArray(doc.vector);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const body: Record<string, any> = {
+    const body: Record<string, unknown> = {
       id: restId,
       vector,
       payload: doc.payload ?? null,
@@ -233,8 +232,7 @@ export async function streamUpsertPoints(
     const restId = requireSafeRangeId(transport.parseRestPointId(doc.id));
     const vector = toNumberArray(doc.vector);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const point: Record<string, any> = {
+    const point: Record<string, unknown> = {
       id: restId,
       vector,
       payload: doc.payload ?? null,
