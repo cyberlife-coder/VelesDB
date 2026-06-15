@@ -20,6 +20,7 @@ import {
   returnNullOnNotFound,
   collectionPath,
   toNumberArray,
+  safeJsonParse,
 } from './shared';
 
 /** Minimal transport interface for CRUD operations. */
@@ -441,7 +442,7 @@ async function sendRawBulk(
 
 /** Parse a raw-bulk HTTP response into the inserted count, throwing on error. */
 async function parseRawBulkResponse(response: Response): Promise<number> {
-  const data = await response.json().catch(() => ({}));
+  const data = await safeJsonParse(response);
   if (!response.ok) {
     const code = typeof data.code === 'string' ? data.code : `HTTP_${response.status}`;
     const message = typeof data.error === 'string' ? data.error : `HTTP ${response.status}`;
