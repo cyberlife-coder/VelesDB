@@ -200,6 +200,34 @@ impl SecondaryIndex {
         }
         Some(walk_ordered(&guard, descending, limit))
     }
+
+    /// Returns the point IDs of the leading lead-key buckets (in `descending`
+    /// key order) whose cumulative size first reaches `min_rows`, **only when
+    /// the index fully covers** `point_count`. Whole buckets are absorbed (never
+    /// cut mid-bucket), IDs ascending within a bucket; all IDs are returned when
+    /// the whole index holds fewer than `min_rows`. `None` when coverage is
+    /// incomplete.
+    ///
+    /// Backs multi-column `ORDER BY <lead_field>, ...` (EPIC-081 phase 3c): the
+    /// lead key dominates the total order, so after a full multi-key sort the top
+    /// `min_rows` rows lie entirely within these leading buckets — the caller
+    /// hydrates them, applies the exhaustive multi-key sort, then OFFSET/LIMIT.
+    /// The coverage check and the walk share one read lock (TOCTOU-safe).
+    #[must_use]
+    pub fn ordered_prefix_if_covered(
+        &self,
+        descending: bool,
+        min_rows: usize,
+        point_count: usize,
+    ) -> Option<Vec<u64>> {
+        let Self::BTree(tree) = self;
+        let guard = tree.read();
+        let covered: usize = guard.values().map(Vec::len).sum();
+        if covered != point_count {
+            return None;
+        }
+        Some(walk_whole_buckets(&guard, descending, min_rows))
+    }
 }
 
 /// Walks the B-tree in key order (ascending, or descending when `descending`)
@@ -220,6 +248,35 @@ fn walk_ordered(tree: &BTreeMap<JsonValue, Vec<u64>>, descending: bool, limit: u
         collect(&mut tree.values().rev());
     } else {
         collect(&mut tree.values());
+    }
+    out
+}
+
+/// Walks the B-tree in key order (ascending, or descending when `descending`)
+/// absorbing WHOLE buckets (IDs ascending within) until the accumulated count
+/// first reaches `min_rows`. Check-then-absorb, so `min_rows == 0` touches no
+/// bucket and the result holds complete leading buckets — never a partial one,
+/// which a multi-key secondary sort requires.
+fn walk_whole_buckets(
+    tree: &BTreeMap<JsonValue, Vec<u64>>,
+    descending: bool,
+    min_rows: usize,
+) -> Vec<u64> {
+    let mut out: Vec<u64> = Vec::new();
+    let mut absorb = |buckets: &mut dyn Iterator<Item = &Vec<u64>>| {
+        for ids in buckets {
+            if out.len() >= min_rows {
+                break;
+            }
+            let mut bucket = ids.clone();
+            bucket.sort_unstable();
+            out.extend(bucket);
+        }
+    };
+    if descending {
+        absorb(&mut tree.values().rev());
+    } else {
+        absorb(&mut tree.values());
     }
     out
 }
