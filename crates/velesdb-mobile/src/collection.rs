@@ -483,11 +483,11 @@ impl VelesCollection {
         config: Option<MobileStreamingConfig>,
     ) -> Result<(), VelesError> {
         let core_config = config.map_or_else(velesdb_core::StreamingConfig::default, |c| {
-            velesdb_core::StreamingConfig {
-                buffer_size: usize::try_from(c.buffer_size).unwrap_or(usize::MAX),
-                batch_size: usize::try_from(c.batch_size).unwrap_or(usize::MAX),
-                flush_interval_ms: c.flush_interval_ms,
-            }
+            velesdb_core::StreamingConfig::new(
+                usize::try_from(c.buffer_size).unwrap_or(usize::MAX),
+                usize::try_from(c.batch_size).unwrap_or(usize::MAX),
+                c.flush_interval_ms,
+            )
         });
         // Spawning the drain task needs an ambient runtime; enter the shared
         // streaming runtime so the task is scheduled on it and survives this call.

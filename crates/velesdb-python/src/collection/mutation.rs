@@ -298,11 +298,7 @@ impl Collection {
     #[pyo3(signature = (config=None))]
     fn enable_streaming(&self, config: Option<crate::StreamingIngestConfig>) -> PyResult<()> {
         let core_config = config.map_or_else(velesdb_core::StreamingConfig::default, |c| {
-            velesdb_core::StreamingConfig {
-                buffer_size: c.buffer_size,
-                batch_size: c.batch_size,
-                flush_interval_ms: c.flush_interval_ms,
-            }
+            velesdb_core::StreamingConfig::new(c.buffer_size, c.batch_size, c.flush_interval_ms)
         });
         // Spawning the drain task needs an ambient runtime; enter the shared
         // streaming runtime so the task is scheduled on it and survives this call.
