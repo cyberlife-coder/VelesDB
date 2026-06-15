@@ -187,6 +187,9 @@ pub use collection::{
     IndexInfo,
     MetadataCollection,
     NodeType,
+    // Ordered-index ORDER BY advisor (EPIC-081 phase 3a)
+    OrderByIndexState,
+    OrderByIndexSuggestion,
     // Scroll cursor (Issue #429)
     ScrollBatch,
     TraversalConfig,

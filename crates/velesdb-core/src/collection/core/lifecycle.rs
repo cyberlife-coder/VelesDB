@@ -98,6 +98,9 @@ impl Collection {
             composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),
             query_pattern_tracker: Arc::new(RwLock::new(QueryPatternTracker::new())),
             index_advisor: Arc::new(RwLock::new(IndexAdvisor::new())),
+            order_by_advisor: Arc::new(RwLock::new(
+                crate::collection::order_by_advisor::OrderByIndexAdvisor::default(),
+            )),
             edge_store: Arc::new(parts.edge_store),
             edge_wal_lock: Arc::new(Mutex::new(())),
             sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),

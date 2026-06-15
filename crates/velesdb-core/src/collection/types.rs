@@ -10,6 +10,7 @@ use crate::collection::graph::property_index::{
 use crate::collection::graph::{
     ConcurrentEdgeStore, GraphSchema, LabelIndex, PropertyIndex, RangeIndex,
 };
+use crate::collection::order_by_advisor::OrderByIndexAdvisor;
 use crate::collection::stats::CollectionStats;
 #[cfg(feature = "persistence")]
 use crate::collection::streaming::delta::DeltaBuffer;
@@ -279,6 +280,16 @@ pub(crate) struct Collection {
     ///
     /// Lock order position: **7** (same tier as `property_index` / `range_index`).
     pub(crate) index_advisor: Arc<RwLock<IndexAdvisor>>,
+
+    /// Scalar `ORDER BY <field>` index advisor (EPIC-081 phase 3a).
+    ///
+    /// Records eligible `ORDER BY` queries that fell back to the exhaustive
+    /// sort because the sort field lacks a fully-covering secondary index, so
+    /// an operator can be advised to create one. Recommendation-only — never
+    /// mutates an index or a query result.
+    ///
+    /// Lock order position: **7** (same tier as `index_advisor`).
+    pub(crate) order_by_advisor: Arc<RwLock<OrderByIndexAdvisor>>,
 
     /// Concurrent edge store for knowledge graph relationships (EPIC-015).
     ///
