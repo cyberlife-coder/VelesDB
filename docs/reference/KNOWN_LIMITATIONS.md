@@ -165,6 +165,9 @@ query has no WHERE/JOIN/graph/similarity, the engine serves the top-k from the
 index in O(log n + k) (`create_index(field)` to opt in) — ~89 ms → ~0.013 ms for
 that 50k-row query — with identical results to the exhaustive path. Queries
 without a covering index keep the exhaustive scalar-`ORDER BY` behaviour above.
+The `create_index(field)` opt-in is persisted (recorded in `config.json` and
+rebuilt from the stored payloads on open), so the fast path keeps firing after a
+process restart instead of silently reverting to the exhaustive scan.
 
 ### 10. Configuration range caps
 
