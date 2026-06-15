@@ -1198,4 +1198,53 @@ mod tests {
             "OR with unindexed IN child must return None"
         );
     }
+
+    /// Regression (EPIC-081 ph3d / adversarial finding C1): a bulk overwrite of
+    /// an already-indexed point must REMOVE the prior indexed value, not just
+    /// insert the new one. A stale old-value entry would put the id in two
+    /// buckets, so `Σ buckets (2) != point_count (1)` and the ordered-index
+    /// coverage check would decline — yet a restart that rebuilds from the final
+    /// stored payload (backfill) would produce a covered index, diverging from
+    /// the live tree. After the fix the bulk path leaves a single bucket, so
+    /// coverage holds (matching the post-restart backfill).
+    #[test]
+    fn bulk_overwrite_of_indexed_point_removes_stale_entry() {
+        use crate::point::Point;
+        use serde_json::json;
+
+        let (collection, _temp) = create_test_collection();
+        collection
+            .upsert(vec![Point::new(
+                1,
+                vec![0.1; 128],
+                Some(json!({ "year": 2000 })),
+            )])
+            .expect("seed upsert");
+        collection.create_index("year").expect("create_index");
+        assert_eq!(
+            collection.ordered_ids_if_covered("year", false, 10),
+            Some(vec![1]),
+            "precondition: single indexed point is covered"
+        );
+
+        // Bulk-overwrite the SAME id with a different value for the indexed field.
+        let payloads = vec![Some(json!({ "year": 2020 }))];
+        collection
+            .upsert_bulk_from_raw(&[0.2_f32; 128], &[1], 128, Some(&payloads))
+            .expect("bulk overwrite");
+
+        assert_eq!(
+            collection.ordered_ids_if_covered("year", false, 10),
+            Some(vec![1]),
+            "bulk overwrite must drop the stale 2000-bucket entry so coverage \
+             (Σ buckets == point_count) still holds — else the live tree diverges \
+             from the post-restart backfill"
+        );
+        // The point now lives only under its new value.
+        let two_k = crate::index::JsonValue::from_json(&json!(2000)).expect("key");
+        assert!(
+            collection.secondary_index_lookup("year", &two_k).is_none(),
+            "the old value's bucket must be gone after the overwrite"
+        );
+    }
 }

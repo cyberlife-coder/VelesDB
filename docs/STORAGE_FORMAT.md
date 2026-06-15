@@ -57,6 +57,7 @@ collection_directory/
 | `distance_metric` | string | `"cosine"` | Distance metric |
 | `schema_version` | u32 | `1` | On-disk format version (see below) |
 | `hnsw_config` | object | — | HNSW index parameters |
+| `indexed_fields` | string[] | `[]` | Payload fields with a secondary index (`CREATE INDEX`); rebuilt from payloads on open (EPIC-081). Omitted when empty |
 
 ### schema_version
 
