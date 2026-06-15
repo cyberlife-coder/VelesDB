@@ -16,6 +16,15 @@ use crate::simd_native;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+/// Canonical names of every [`DistanceMetric`] variant, in declaration order.
+///
+/// Single source of truth for the metric name set exported to downstream
+/// crates and bindings (Python `velesdb.DISTANCE_METRICS`, the integrations
+/// security guard). Each entry is the variant's
+/// [`canonical_name`](DistanceMetric::canonical_name); a unit test asserts the
+/// slice stays exhaustive so adding a variant without updating it fails CI.
+pub const DISTANCE_METRIC_NAMES: &[&str] = &["cosine", "euclidean", "dot", "hamming", "jaccard"];
+
 /// Distance metric for vector similarity calculations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -162,5 +171,41 @@ impl FromStr for DistanceMetric {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse_alias(s)
             .ok_or("Unknown metric. Use: cosine, euclidean, l2, dot, dotproduct, inner, ip, hamming, jaccard")
+    }
+}
+
+#[cfg(test)]
+mod distance_metric_names_tests {
+    use super::{DistanceMetric, DISTANCE_METRIC_NAMES};
+
+    /// Forces this test to be revisited whenever a variant is added: the
+    /// exhaustive `match` (no wildcard arm) fails to compile until the new
+    /// variant is listed here, which in turn flags the missing const entry.
+    fn ordinal(metric: DistanceMetric) -> usize {
+        match metric {
+            DistanceMetric::Cosine => 0,
+            DistanceMetric::Euclidean => 1,
+            DistanceMetric::DotProduct => 2,
+            DistanceMetric::Hamming => 3,
+            DistanceMetric::Jaccard => 4,
+        }
+    }
+
+    #[test]
+    fn distance_metric_names_is_exhaustive_and_canonical() {
+        let variants = [
+            DistanceMetric::Cosine,
+            DistanceMetric::Euclidean,
+            DistanceMetric::DotProduct,
+            DistanceMetric::Hamming,
+            DistanceMetric::Jaccard,
+        ];
+        // Tie the variant list to the `ordinal` tripwire so a new variant
+        // cannot silently skip this assertion.
+        assert_eq!(variants.len(), DISTANCE_METRIC_NAMES.len());
+        for (i, variant) in variants.into_iter().enumerate() {
+            assert_eq!(ordinal(variant), i);
+            assert_eq!(DISTANCE_METRIC_NAMES[i], variant.canonical_name());
+        }
     }
 }

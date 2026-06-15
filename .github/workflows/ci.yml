@@ -575,6 +575,15 @@ jobs:
       - name: WASM parser conformance
         run: cargo test -p velesdb-wasm --test velesql_parser_conformance
 
+      - name: Core executor conformance
+        run: cargo test -p velesdb-core --features persistence --test velesql_executor_conformance
+
+      - name: CLI executor conformance
+        run: cargo test -p velesdb-cli --test velesql_executor_conformance
+
+      - name: WASM executor conformance
+        run: cargo test -p velesdb-wasm velesql_executor_conformance
+
       - name: Server REST conformance
         run: cargo test -p velesdb-server --test velesql_conformance_tests
 

@@ -151,7 +151,9 @@ todo_analysis_report_updated.md
 #Ignore windsurf AI rules
 .windsurfrules
 
-.claude/
+.claude/*
+# keep the shared project skill tracked (the rest of .claude/ stays local)
+!.claude/skills/
 .codacy/flamegraph.svg
 .kiro/
 
