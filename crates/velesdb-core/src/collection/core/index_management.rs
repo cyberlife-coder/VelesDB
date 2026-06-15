@@ -114,6 +114,72 @@ impl Collection {
         self.secondary_indexes.read().contains_key(field_name)
     }
 
+    /// Recommends secondary indexes for scalar `ORDER BY <field>` queries
+    /// (EPIC-081 phase 3a, recommendation-only).
+    ///
+    /// Returns one [`OrderByIndexSuggestion`] per field that drove at least
+    /// `min_observations` eligible `ORDER BY <field>` queries down the
+    /// exhaustive path (sorted by descending observation count, then field
+    /// name). The state is derived from the **live** index, so a field whose
+    /// index now fully covers the collection is *resolved* (the fast path fires)
+    /// and is dropped from the advice. Remaining fields carry [`OrderByIndexState`]:
+    /// `Missing` (no secondary index — `CREATE INDEX (<field>)` would enable the
+    /// `O(log n + k)` fast path) or `BuiltButUncovered` (an index exists but does
+    /// not fully cover the collection, so the gap is the data, not a missing
+    /// index). Observation counts are cumulative since the collection was opened
+    /// and do not decay.
+    ///
+    /// Observation-only: this never creates, drops, or mutates an index.
+    ///
+    /// [`OrderByIndexSuggestion`]: crate::collection::order_by_advisor::OrderByIndexSuggestion
+    /// [`OrderByIndexState`]: crate::collection::order_by_advisor::OrderByIndexState
+    #[must_use]
+    pub(crate) fn order_by_index_advice(
+        &self,
+        min_observations: u64,
+    ) -> Vec<crate::collection::order_by_advisor::OrderByIndexSuggestion> {
+        use crate::collection::order_by_advisor::OrderByIndexSuggestion;
+        // Snapshot under the advisor lock, release it before touching the
+        // secondary-index lock so only one lock is ever held at a time.
+        let observed = self.order_by_advisor.read().observed(min_observations);
+        observed
+            .into_iter()
+            .filter_map(|(field, observed_count)| {
+                self.order_by_index_state(&field)
+                    .map(|state| OrderByIndexSuggestion {
+                        field,
+                        observed_count,
+                        state,
+                    })
+            })
+            .collect()
+    }
+
+    /// Live advice state for `field`, derived under one secondary-index read
+    /// lock: `Missing` when no index exists, `BuiltButUncovered` when an index
+    /// exists but does not fully cover the collection, or `None` when an index
+    /// exists *and* fully covers it — in which case the ordered-index fast path
+    /// already serves the field, so there is nothing to advise.
+    fn order_by_index_state(
+        &self,
+        field: &str,
+    ) -> Option<crate::collection::order_by_advisor::OrderByIndexState> {
+        use crate::collection::order_by_advisor::OrderByIndexState;
+        let point_count = self.len();
+        let indexes = self.secondary_indexes.read();
+        match indexes.get(field) {
+            None => Some(OrderByIndexState::Missing),
+            Some(index)
+                if index
+                    .ordered_ids_if_covered(false, 0, point_count)
+                    .is_some() =>
+            {
+                None
+            }
+            Some(_) => Some(OrderByIndexState::BuiltButUncovered),
+        }
+    }
+
     /// Returns the set of payload field names covered by a secondary index
     /// (issue #607).
     ///

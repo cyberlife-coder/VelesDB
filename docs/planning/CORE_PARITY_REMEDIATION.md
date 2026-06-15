@@ -85,9 +85,25 @@ path is deterministic by ID, arguably better but a behavior change to ratify); a
 and a perf benchmark showing sub-linear top-k vs the 312 ms/50k baseline. Disable the route entirely for any
 collection containing an id > `u32::MAX` (the bitmap paths can't represent it).
 
-**Phase 3 — broaden (separate, optional).** WHERE-filtered top-k (walk the index in order, apply the
-prefilter, stop at k); multi-column `ORDER BY` (index prunes lead-key groups, secondary sort within each);
-secondary-index snapshotting for auto-persistence; an auto-index advisor for hot `ORDER BY` fields.
+**Phase 3 — broaden (separate, optional).** Four independent sub-items, sequenced as gated PRs (a design
+fan-out found the three perf sub-items each *sound-with-fixes*, never *sound* — see their must-fix lists):
+
+- **3a — auto-index advisor (DONE).** Recommendation-only: `Collection::order_by_advisor` records eligible
+  `ORDER BY <field>` queries that decline the fast path for want of a covering secondary index;
+  `VectorCollection::order_by_index_advice(min)` surfaces them with live-derived state `Missing` /
+  `BuiltButUncovered` (a now-covering field is *resolved* and dropped). Behavior-neutral (never mutates an
+  index or a result), shape-isolated to the eligible `ORDER BY` shape, observations capped. Never
+  auto-creates (a backfill is `O(n)` on the query thread). `tests/ordered_index_advisor.rs`.
+- **3b — WHERE-filtered top-k.** Walk the covering index in sort order, apply the extracted metadata filter
+  per row, stop at offset+limit matches. Single-guard snapshot under one lock + coverage check, release,
+  hydrate+filter. Decline when `point_count > MAX_LIMIT`; selectivity guard via `CostEstimator`; u64 only
+  (no bitmap intersection). Equivalence matrix (NOT/OR/mixed-type/>100k) + perf gate.
+- **3c — multi-column `ORDER BY`.** Lead-key index prunes/orders groups, secondary sort within each. Decline
+  if `len > MAX_LIMIT`; lead-key `JsonValue` Ord must match `compare_json_values`; non-primitive lead value
+  forces fall-through.
+- **3d — secondary-index snapshotting.** Persist the BTree in `flush.rs` ATOMICALLY under the payload write
+  lock; reconcile the coverage denominator for vector collections; reconstruct F64 keys from `u64` bits (no
+  `f64` round-trip); config-persisted indexed-field-names as authority; restart-equivalence + concurrency tests.
 
 ## Artifacts produced by the audit
 - `PARITY_MATRIX.md` (81 capabilities × 13 components) — regenerate via `.claude/skills/core-parity-audit/scripts/gen_matrix.py`.

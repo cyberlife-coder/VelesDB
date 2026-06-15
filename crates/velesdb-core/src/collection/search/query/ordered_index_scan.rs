@@ -44,6 +44,11 @@ impl Collection {
             return Ok(None);
         };
         let Some(page) = self.ordered_index_page(stmt, field) else {
+            // Eligible shape but no covering index → record an advisor
+            // observation (EPIC-081 phase 3a), then fall through unchanged. The
+            // index lock taken by `ordered_index_page` is already released here,
+            // so the brief advisor write lock holds nothing else.
+            self.order_by_advisor.write().observe(field);
             return Ok(None);
         };
 

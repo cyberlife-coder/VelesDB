@@ -174,6 +174,20 @@ impl VectorCollection {
         self.inner.drop_secondary_index(field_name)
     }
 
+    /// Recommends secondary indexes for scalar `ORDER BY <field>` queries that
+    /// repeatedly fell back to the exhaustive sort (EPIC-081 phase 3a).
+    ///
+    /// Returns one suggestion per field observed at least `min_observations`
+    /// times, sorted by descending observation count then field name. This is
+    /// recommendation-only — it never creates, drops, or mutates an index.
+    #[must_use]
+    pub fn order_by_index_advice(
+        &self,
+        min_observations: u64,
+    ) -> Vec<crate::collection::order_by_advisor::OrderByIndexSuggestion> {
+        self.inner.order_by_index_advice(min_observations)
+    }
+
     /// Returns `true` if a property index exists.
     #[must_use]
     pub fn has_property_index(&self, label: &str, property: &str) -> bool {
