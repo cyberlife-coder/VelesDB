@@ -67,6 +67,7 @@ mod multi_vector;
 #[cfg(test)]
 mod multi_vector_tests;
 mod options;
+mod ordered_index_scan;
 mod ordering;
 #[cfg(test)]
 mod ordering_tests;
@@ -109,6 +110,16 @@ use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
 use std::collections::HashSet;
+
+/// Bundles the non-query/params arguments for
+/// [`Collection::dispatch_and_finalize`] to stay within the parameter limit.
+struct DispatchFinalizeArgs<'a> {
+    extracted: &'a ExtractedComponents,
+    limit: usize,
+    fetch_limit: usize,
+    is_vgb: bool,
+    ctx: &'a crate::guardrails::QueryContext,
+}
 
 impl Collection {
     /// Executes a `VelesQL` query on this collection with the `"default"` client id.
@@ -219,6 +230,16 @@ impl Collection {
         let (limit, fetch_limit) = Self::compute_fetch_limit(stmt);
         let extracted = self.extract_query_components(stmt, params)?;
 
+        // EPIC-081 phase 2: serve a plain `ORDER BY <indexed_field> LIMIT k` from
+        // the field's ordered secondary index instead of the exhaustive
+        // MAX_LIMIT fetch + sort. Gated hard (single plain Field key, fully
+        // covered index, no WHERE/JOIN/graph/vector/sparse/DISTINCT/aggregate);
+        // OFFSET/LIMIT are applied inside the scan, so it returns the finished
+        // page directly. Falls through unchanged otherwise.
+        if let Some(results) = self.try_ordered_index_scan(query, stmt, &extracted, ctx)? {
+            return Ok(results);
+        }
+
         // When vector GROUP BY is active, fetch more results from vector search
         // so grouping has enough chunks to work with.
         let is_vgb = vector_group_by::is_vector_group_by_query(stmt);
@@ -236,13 +257,37 @@ impl Collection {
             return Ok(results);
         }
 
-        // Main dispatch + post-processing.
+        self.dispatch_and_finalize(
+            query,
+            params,
+            &DispatchFinalizeArgs {
+                extracted: &extracted,
+                limit,
+                fetch_limit: effective_fetch_limit,
+                is_vgb,
+                ctx,
+            },
+        )
+    }
+
+    /// Runs the main dispatch, optional vector GROUP BY, and finalization
+    /// (DISTINCT / window / ORDER BY / OFFSET / LIMIT / LET injection).
+    ///
+    /// Split out of [`execute_select_pipeline`] so each stays within the
+    /// cyclomatic-complexity budget.
+    fn dispatch_and_finalize(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        args: &DispatchFinalizeArgs<'_>,
+    ) -> Result<Vec<SearchResult>> {
+        let stmt = &query.select;
         let mut results =
-            self.dispatch_main_select(stmt, params, &extracted, effective_fetch_limit, ctx)?;
+            self.dispatch_main_select(stmt, params, args.extracted, args.fetch_limit, args.ctx)?;
 
         // Vector GROUP BY post-processing: group results by parent field
         // before ORDER BY / LIMIT / OFFSET are applied.
-        if is_vgb {
+        if args.is_vgb {
             results = self.apply_vector_group_by(stmt, &results);
         }
 
@@ -251,9 +296,9 @@ impl Collection {
             &QueryFinalizationContext {
                 stmt,
                 params,
-                limit,
-                extracted: &extracted,
-                ctx,
+                limit: args.limit,
+                extracted: args.extracted,
+                ctx: args.ctx,
                 let_bindings: &query.let_bindings,
             },
         )?;

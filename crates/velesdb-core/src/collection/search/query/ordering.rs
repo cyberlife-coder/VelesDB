@@ -115,6 +115,13 @@ impl Collection {
                 higher_is_better,
                 per_result_let,
             )
+            // Deterministic tie-break: rows whose ORDER BY keys are all equal are
+            // ordered by ascending point id, regardless of ASC/DESC on the keys.
+            // This makes ORDER BY fully deterministic and — crucially — matches the
+            // index-backed `ordered_ids` walk (ascending id within an equal-key
+            // bucket), so the index fast path returns the same id sequence as this
+            // full-scan sort (EPIC-081 phase 2).
+            .then_with(|| results[i].point.id.cmp(&results[j].point.id))
         });
 
         let sorted_results: Vec<SearchResult> =
