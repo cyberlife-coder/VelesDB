@@ -96,7 +96,11 @@ pub enum ReindexEvent {
 /// VelesDB — or one that omits any field — deserializes without error. The
 /// [`cooldown`](Self::cooldown) `Duration` is stored as whole seconds via
 /// [`duration_secs`].
+///
+/// `#[non_exhaustive]`: build from [`AutoReindexConfig::default`] and adjust
+/// fields so future additions stay backward compatible for downstream crates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AutoReindexConfig {
     /// Enable automatic reindex detection
     #[serde(default = "default_enabled")]

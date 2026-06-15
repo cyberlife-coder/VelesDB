@@ -830,11 +830,11 @@ pub(crate) fn streaming_config_from_request(
     request: &EnableStreamingRequest,
 ) -> velesdb_core::StreamingConfig {
     let base = velesdb_core::StreamingConfig::default();
-    velesdb_core::StreamingConfig {
-        buffer_size: request.buffer_size.unwrap_or(base.buffer_size),
-        batch_size: request.batch_size.unwrap_or(base.batch_size),
-        flush_interval_ms: request.flush_interval_ms.unwrap_or(base.flush_interval_ms),
-    }
+    velesdb_core::StreamingConfig::new(
+        request.buffer_size.unwrap_or(base.buffer_size),
+        request.batch_size.unwrap_or(base.batch_size),
+        request.flush_interval_ms.unwrap_or(base.flush_interval_ms),
+    )
 }
 
 /// Enables streaming ingestion on a collection.

@@ -33,7 +33,13 @@ fn default_pq_rescore_oversampling() -> Option<u32> {
 }
 
 /// Metadata for a collection.
+///
+/// `#[non_exhaustive]`: new fields are added over time (schema-versioned and
+/// serde-defaulted), so external crates must obtain a `CollectionConfig` via
+/// the `VectorCollection::create*` constructors / `Collection::config()` rather
+/// than a struct literal — this keeps future field additions non-breaking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CollectionConfig {
     /// Name of the collection.
     pub name: String,

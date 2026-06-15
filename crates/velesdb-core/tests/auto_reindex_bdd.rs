@@ -46,11 +46,9 @@ fn create_collection(db: &Database, name: &str) -> VectorCollection {
 /// Builds a manager with a tight `min_size_for_reindex = 1` so divergence
 /// checks fire even on small test collections.
 fn manager_with_min_size(min_size: usize) -> Arc<AutoReindexManager> {
-    let config = AutoReindexConfig {
-        enabled: true,
-        min_size_for_reindex: min_size,
-        ..AutoReindexConfig::default()
-    };
+    let mut config = AutoReindexConfig::default();
+    config.enabled = true;
+    config.min_size_for_reindex = min_size;
     Arc::new(AutoReindexManager::new(config))
 }
 
@@ -184,11 +182,9 @@ fn disabled_manager_reports_no_reindex() {
     let (_dir, db) = temp_database();
     let coll = create_collection(&db, "docs");
 
-    let config = AutoReindexConfig {
-        enabled: false,
-        min_size_for_reindex: 1,
-        ..AutoReindexConfig::default()
-    };
+    let mut config = AutoReindexConfig::default();
+    config.enabled = false;
+    config.min_size_for_reindex = 1;
     let manager = Arc::new(AutoReindexManager::new(config));
     coll.attach_auto_reindex(manager);
 
@@ -212,12 +208,10 @@ fn cooldown_window_blocks_immediate_re_trigger() {
     let (_dir, db) = temp_database();
     let coll = create_collection(&db, "docs");
 
-    let config = AutoReindexConfig {
-        enabled: true,
-        min_size_for_reindex: 1,
-        cooldown: Duration::from_secs(3600),
-        ..AutoReindexConfig::default()
-    };
+    let mut config = AutoReindexConfig::default();
+    config.enabled = true;
+    config.min_size_for_reindex = 1;
+    config.cooldown = Duration::from_secs(3600);
     let manager = Arc::new(AutoReindexManager::new(config));
     coll.attach_auto_reindex(Arc::clone(&manager));
 
