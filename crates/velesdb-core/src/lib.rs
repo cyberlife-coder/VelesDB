@@ -196,14 +196,14 @@ pub use collection::{
     VectorCollection,
 };
 pub use contiguous_ops::pad_to_simd_width;
-pub use distance::DistanceMetric;
+pub use distance::{DistanceMetric, DISTANCE_METRIC_NAMES};
 pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
 pub use point::{ComponentScores, Point, SearchResult};
 pub use quantization::{
     cosine_similarity_quantized, cosine_similarity_quantized_simd, dot_product_quantized,
     dot_product_quantized_simd, euclidean_squared_quantized, euclidean_squared_quantized_simd,
-    BinaryQuantizedVector, QuantizationCodec, QuantizedVector, StorageMode,
+    BinaryQuantizedVector, QuantizationCodec, QuantizedVector, StorageMode, STORAGE_MODE_NAMES,
 };
 pub use scored_result::ScoredResult;
 pub use validation::{

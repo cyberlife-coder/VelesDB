@@ -85,6 +85,25 @@ impl Collection {
             .any(|item| Self::order_by_item_reduces_to_similarity(&item.expr))
     }
 
+    /// Returns `true` when the primary ORDER BY key is a scalar column (not a
+    /// `similarity()` reduction), so the candidate fetch must be exhaustive.
+    ///
+    /// The similarity-ordered fast path (HNSW returns top-k pre-sorted by
+    /// score) is correct under a bounded fetch, but a scalar key is only
+    /// ranked downstream in `apply_select_postprocessing`; truncating the
+    /// fetch first would yield the first `limit` rows in storage/score order
+    /// rather than the top `limit` by the ORDER BY key. The *primary* key
+    /// decides: a leading `similarity()` keeps the fast path even when a
+    /// scalar tie-breaker follows it.
+    pub(super) fn order_by_requires_exhaustive_fetch(
+        stmt: &crate::velesql::SelectStatement,
+    ) -> bool {
+        stmt.order_by
+            .as_ref()
+            .and_then(|ob| ob.first())
+            .is_some_and(|first| !Self::order_by_item_reduces_to_similarity(&first.expr))
+    }
+
     /// Helper for [`has_order_by_similarity`]. Kept as an associated function
     /// so the match arm can delegate to the arithmetic-expression walker
     /// without inflating the outer method's cyclomatic complexity.
@@ -188,7 +207,7 @@ impl Collection {
                 .where_clause
                 .as_ref()
                 .is_some_and(Self::condition_contains_or);
-        let execution_limit = main_select_execution_limit(extracted, limit);
+        let execution_limit = main_select_execution_limit(stmt, extracted, limit);
         let search_opts = super::QuerySearchOptions::from_with_clause(stmt.with_clause.as_ref())
             .with_fusion(stmt.fusion_clause.clone());
         let (cbo_strategy, cbo_over_fetch) =
@@ -589,7 +608,20 @@ fn anchored_fetch_applies(
 /// queries never reach here; they are dispatched by `try_early_return_path`).
 /// This window only applies when the GraphFirst anchored fetch declined
 /// (`try_anchored_fetch`).
-fn main_select_execution_limit(extracted: &ExtractedComponents, limit: usize) -> usize {
+fn main_select_execution_limit(
+    stmt: &crate::velesql::SelectStatement,
+    extracted: &ExtractedComponents,
+    limit: usize,
+) -> usize {
+    // A scalar (non-similarity) ORDER BY ranks rows AFTER the fetch, in
+    // `apply_select_postprocessing`. Capping the fetch at `limit` would
+    // truncate before that sort, returning the first `limit` rows in
+    // storage/score order instead of the top `limit` by the ORDER BY key
+    // (KNOWN_LIMITATIONS #9: bounded results must equal the unbounded path
+    // truncated to k). Fetch exhaustively so the sort precedes truncation.
+    if Collection::order_by_requires_exhaustive_fetch(stmt) {
+        return MAX_LIMIT;
+    }
     let has_graph_predicates = !extracted.graph_match_predicates.is_empty();
     let has_ranked_fetch =
         extracted.vector_search.is_some() || !extracted.similarity_conditions.is_empty();
@@ -621,6 +653,13 @@ fn anchor_fetch_limit(
     extracted: &ExtractedComponents,
     limit: usize,
 ) -> usize {
+    // A scalar ORDER BY ranks downstream, so the anchored fetch (which
+    // hydrates anchors in ascending-id order) must be exhaustive too —
+    // otherwise the ascending-id window drops rows the ORDER BY key would
+    // have surfaced. Mirrors `main_select_execution_limit`.
+    if Collection::order_by_requires_exhaustive_fetch(stmt) {
+        return MAX_LIMIT;
+    }
     if Collection::has_order_by_similarity(stmt) && extracted.vector_search.is_none() {
         MAX_LIMIT
     } else {

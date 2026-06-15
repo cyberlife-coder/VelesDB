@@ -1,0 +1,56 @@
+{
+  "version": "1.0.0",
+  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the CORRECT expectation for a confirmed core bug and are checked only by the #[ignore]d reproducer test until fixed.",
+  "dataset": {
+    "collection": "docs",
+    "dimension": 4,
+    "metric": "cosine",
+    "points": [
+      { "id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": { "category": "tech", "year": 2020 } },
+      { "id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": { "category": "tech", "year": 2022 } },
+      { "id": 3, "vector": [0.0, 0.0, 1.0, 0.0], "payload": { "category": "other", "year": 2021 } },
+      { "id": 4, "vector": [0.0, 0.0, 0.0, 1.0], "payload": { "category": "tech", "year": 2023 } },
+      { "id": 5, "vector": [0.5, 0.5, 0.0, 0.0], "payload": { "category": "other", "year": 2019 } }
+    ]
+  },
+  "cases": [
+    {
+      "id": "X001",
+      "query": "SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC",
+      "expect_ids": [1, 2, 4],
+      "note": "string equality filter + ORDER BY column ASC"
+    },
+    {
+      "id": "X002",
+      "query": "SELECT * FROM docs WHERE year >= 2021 ORDER BY year ASC",
+      "expect_ids": [3, 2, 4],
+      "note": "integer range filter + ordering"
+    },
+    {
+      "id": "X003",
+      "query": "SELECT * FROM docs ORDER BY year DESC",
+      "expect_ids": [4, 2, 3, 1, 5],
+      "note": "full scan + ORDER BY column DESC (no LIMIT)"
+    },
+    {
+      "id": "X004",
+      "query": "SELECT * FROM docs WHERE category = 'tech' AND year >= 2022 ORDER BY year ASC",
+      "expect_ids": [2, 4],
+      "note": "conjunctive (AND) filter"
+    },
+    {
+      "id": "X005",
+      "query": "SELECT * FROM docs WHERE category = 'other' ORDER BY year ASC",
+      "expect_ids": [5, 3],
+      "note": "filter selecting the complementary partition"
+    }
+  ],
+  "known_bugs": [
+    {
+      "id": "B001",
+      "query": "SELECT * FROM docs WHERE year >= 2019 ORDER BY year DESC LIMIT 2",
+      "expect_ids": [4, 2],
+      "note": "BUG: scalar ORDER BY <column> + LIMIT applies the LIMIT before the sort on the bounded top-k path (observed [2,1] = first two by id, then sorted). This contradicts KNOWN_LIMITATIONS.md #9 ('Results are identical to the unbounded path'). The bounded top-k optimization only honors similarity() ordering, not scalar ORDER BY. expect_ids holds the CORRECT result; un-ignore test_velesql_executor_known_bugs once fixed."
+    }
+  ]
+}

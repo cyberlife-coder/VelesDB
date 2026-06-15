@@ -58,7 +58,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 - **Batch Operations**: WASM and Mobile use streaming chunked inserts instead of single-call bulk to stay within memory constraints. WASM additionally exposes a single-call raw-bulk path via `VectorStore.insertBatchRaw` (see the Raw-Bulk Insert note).
 - **Streaming Ingestion** (2026-06-14): Core, Server (`POST /collections/{name}/stream/enable` + `/stream/insert`), Python, Tauri, Mobile (`enableStreaming()` / `streamInsert()` on its own tokio streaming runtime), and the TS SDK (`enableStreaming()` / `streamInsert()`, REST backend) support the bounded ingestion channel. The CLI reaches it ⚠️ via the embedded core path with no dedicated REPL command. WASM throws `NOT_SUPPORTED` (no persistence layer). Only the LangChain/LlamaIndex/Haystack integrations do not yet expose it.
 - **Raw-Bulk Insert** (2026-06-14): the zero-copy raw-bulk path is now exposed by Core (`upsert_bulk_from_raw`), Server (`POST /collections/{name}/points/raw`, VRB1 binary), the TS SDK (`upsertBatchRaw`), WASM (`VectorStore.insertBatchRaw(ids, vectors, dim)`, writing into its in-memory buffer), and the CLI (`velesdb data import <file.bin>`, VRB1 binary). Mobile remains a follow-up. All surfaces share the one `velesdb_core::wire::vrb1` codec.
-- **Multi-Query Fusion (RSF/Weighted)**: WASM supports RRF only. LangChain and LlamaIndex expose RSF/Weighted through `multi_query_search(fusion=...)`, which delegates to the shared `velesdb_common.fusion.build_fusion_strategy` (builds `weighted()` and `relative_score()`). Haystack remains ⚠️: fusion is reachable only via the underlying `velesdb` Python wrapper, not through the `DocumentStore` protocol.
+- **Multi-Query Fusion (RSF/Weighted)** (2026-06-14): WASM's multi-query `fuse_results` now delegates **4 of its 5 strategies** (`average`, `maximum`, `weighted`, `rrf`) to the canonical `velesdb_core::FusionStrategy::fuse`, so the browser engine reproduces core's ranking 1:1 for those (`crates/velesdb-wasm/src/fusion.rs`; equivalence pinned by `test_fuse_results_matches_core_ordering`). The fifth strategy, `relative_score` / `rsf`, is **intentionally kept WASM-local**: core's `RelativeScore` is a two-branch (dense + sparse) weighted sum that zero-fills documents missing from a branch and discards branches beyond index 1, whereas WASM's is an N-branch equal-weight average that skips missing branches. The two semantics yield different rankings, so converging WASM onto core would silently change WASM search results — that convergence is a product decision deferred to a follow-up, and `relative_score` behaviour is unchanged. (This is the multi-query fusion entry point; the VelesQL `USING FUSION (...)` clause executor in `velesql_fusion.rs` already builds every strategy — including RSF — directly from `velesdb_core::fusion::FusionStrategy`.) LangChain and LlamaIndex expose RSF/Weighted through `multi_query_search(fusion=...)`, which delegates to the shared `velesdb_common.fusion.build_fusion_strategy` (builds `weighted()` and `relative_score()`). Haystack remains ⚠️: fusion is reachable only via the underlying `velesdb` Python wrapper, not through the `DocumentStore` protocol.
 - **Sparse Vector Search (named indexes) — LangChain/LlamaIndex**: ⚠️ query-side only. Both integrations forward a `sparse_index_name` argument to the underlying `collection.search`/`hybrid_search`, so an existing named sparse index can be *queried*. Creating named sparse indexes is not exposed by the integrations (use the core `velesdb` API), and this path is not yet covered by integration tests.
 - **Graph Operations (WASM)**: Basic node/edge CRUD is supported; multi-hop traversal and MATCH queries are limited.
 - **VelesQL (LangChain/LlamaIndex/Haystack)**: Pass-through to Python bindings works for simple queries; full parser integration is not surfaced in the integration API.
@@ -105,9 +105,17 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 |---------|---------|------|
 | Server REST contract | `conformance/velesql_contract_cases.json` | `crates/velesdb-server/tests/velesql_conformance_tests.rs` |
 | TypeScript SDK contract mapping | `conformance/velesql_contract_cases.json` | `sdks/typescript/tests/velesql-contract-fixtures.test.ts` |
+| Core executor (rows/counts/ordering) | `conformance/velesql_executor_cases.json` | `crates/velesdb-core/tests/velesql_executor_conformance.rs` |
 | Core parser | `conformance/velesql_parser_cases.json` | `crates/velesdb-core/tests/velesql_parser_conformance.rs` |
 | CLI parser | `conformance/velesql_parser_cases.json` | `crates/velesdb-cli/tests/velesql_parser_conformance.rs` |
 | WASM parser | `conformance/velesql_parser_cases.json` | `crates/velesdb-wasm/tests/velesql_parser_conformance.rs` |
+
+The executor fixture (added 2026-06-14) asserts the exact result set (ids,
+count, ordering) the core executor produces for a fixed dataset, so a future
+WASM/CLI executor divergence fails CI rather than going unnoticed. WASM and CLI
+executor parity is **not yet** fixture-checked against these goldens — extending
+the executor net to those two runtimes is the open follow-up tracked in
+[KNOWN_LIMITATIONS #13](./KNOWN_LIMITATIONS.md#13-velesql-conformance-for-wasmcli-is-parser-only).
 
 ## Enum Propagation Matrix
 
@@ -218,10 +226,17 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
 
 ---
 
+## Recently Landed (2026-06-14)
+
+- **WASM fusion now delegates 4/5 strategies to core.** `average`/`maximum`/`weighted`/`rrf` map onto `velesdb_core::FusionStrategy::fuse` (ranking identical to core, pinned by an equivalence test); `relative_score`/`rsf` stays WASM-local by design because its N-branch equal-weight semantics differ from core's two-branch dense+sparse weighted sum. See the RSF/Weighted note above.
+- **Executor-level conformance now exists for core.** `conformance/velesql_executor_cases.json` + `crates/velesdb-core/tests/velesql_executor_conformance.rs` assert result rows/counts/ordering (not just that a query parses). Extending the same goldens to the WASM and CLI executors is the remaining step (action item 2).
+- **Scalar `ORDER BY` + `LIMIT` correctness bug fixed.** A scalar (non-`similarity()`) `ORDER BY <col> ... LIMIT k` previously truncated to `k` in storage order *before* sorting; it now fetches the full matching set so the sort precedes truncation, restoring the [KNOWN_LIMITATIONS #9](./KNOWN_LIMITATIONS.md#9-bounded-query-result-materialization) bounded==unbounded guarantee. The `similarity()`-ordered HNSW fast path was untouched, so recall is unaffected. (Surfaced by the new executor conformance net above.)
+- **Point-ID hashing single-sourced for Haystack.** The Haystack `DocumentStore` now imports the canonical `velesdb_common.ids.stable_hash_id` instead of a bit-identical forked copy (behaviour-preserving; removes a re-implemented hash from an MIT package). The intentional remaining divergence — `velesdb-migrate`'s distinct `stable_point_id` — is documented in [KNOWN_LIMITATIONS #12](./KNOWN_LIMITATIONS.md#12-string--u64-point-id-hashing-differs-across-components).
+
 ## Remaining Gaps and Action Items
 
 1. Add explicit server-side end-to-end assertions for the REST error shape (`code/hint/details`) beyond parser conformance. (The CLI has no HTTP layer — it executes against embedded core — so the REST error-shape contract belongs to `velesdb-server`.)
-2. Extend WASM conformance from parser-only to executable feature checks where applicable.
+2. Extend the executor-level conformance net (now established for **core** via `conformance/velesql_executor_cases.json`) to the **WASM** and **CLI** runtimes so a result-shape divergence on those surfaces fails CI. (Parser conformance already covers all three; see [KNOWN_LIMITATIONS #13](./KNOWN_LIMITATIONS.md#13-velesql-conformance-for-wasmcli-is-parser-only).)
 3. Keep docs, fixtures, and examples synchronized on every contract version change.
 4. Promote RaBitQ from experimental to stable once the API is finalized.
 5. Surface RSF/Weighted fusion in Haystack (already exposed in LangChain and
