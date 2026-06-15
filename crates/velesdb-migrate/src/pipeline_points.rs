@@ -143,7 +143,6 @@ pub(crate) fn load_prepared_batch(
     continue_on_error: bool,
     stats: &mut MigrationStats,
 ) -> Result<bool> {
-    #[allow(deprecated)] // TODO(MIGRATE-01): migrate to get_vector_collection()
     let collection = db
         .get_vector_collection(collection_name)
         .ok_or_else(|| Error::DestinationConnection("Collection not found".to_string()))?;

@@ -177,14 +177,9 @@ fn build_edge(
     let key = format!("{from_node_id}-{to_node_id}-{}", relation.edge_label);
     let id = crate::pipeline::fnv1a64(key.as_bytes());
 
-    let edge =
-        match velesdb_core::GraphEdge::new(id, from_node_id, to_node_id, &relation.edge_label) {
-            Ok(e) => e,
-            Err(e) => {
-                warn!("Failed to create edge {}: {}", id, e);
-                return None;
-            }
-        };
+    let edge = velesdb_core::GraphEdge::new(id, from_node_id, to_node_id, &relation.edge_label)
+        .inspect_err(|e| warn!("Failed to create edge {}: {}", id, e))
+        .ok()?;
 
     Some(attach_weight(edge, point, relation))
 }
@@ -194,19 +189,16 @@ fn attach_weight(
     point: &crate::connectors::ExtractedPoint,
     relation: &RelationConfig,
 ) -> velesdb_core::GraphEdge {
-    let weight_col = match relation.weight_column {
-        Some(ref col) => col,
-        None => return edge,
+    let Some(weight_col) = &relation.weight_column else {
+        return edge;
     };
-
-    let weight = match point.payload.get(weight_col).and_then(|v| v.as_f64()) {
-        Some(w) => w,
-        None => return edge,
+    let Some(weight) = point.payload.get(weight_col).and_then(|v| v.as_f64()) else {
+        return edge;
     };
-
-    let mut props = std::collections::HashMap::new();
-    props.insert("weight".to_string(), serde_json::json!(weight));
-    edge.with_properties(props)
+    edge.with_properties(std::collections::HashMap::from([(
+        "weight".to_string(),
+        serde_json::json!(weight),
+    )]))
 }
 
 fn value_to_id_str(value: &serde_json::Value) -> Option<String> {
