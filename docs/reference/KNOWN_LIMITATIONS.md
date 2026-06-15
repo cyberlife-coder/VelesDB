@@ -158,11 +158,13 @@ fetch for that one operator.) The `similarity()`-ordered HNSW path stays bounded
 top-k — it is pre-sorted by score, so truncation is correct without an
 exhaustive fetch and recall is unaffected.
 
-The O(n) cost of that exhaustive scalar-`ORDER BY` fetch (~312 ms for `ORDER BY
-year DESC LIMIT 10` over 50k rows) is addressed by an ordered-index pushdown
-tracked in `docs/planning/CORE_PARITY_REMEDIATION.md` (EPIC-081): its load-bearing
-primitive `SecondaryIndex::ordered_ids` (O(log n + k)) has landed; the gated
-planner routing is the next phase.
+The O(n) cost of that exhaustive scalar-`ORDER BY` fetch is removed by the
+ordered-index pushdown (EPIC-081, `docs/planning/CORE_PARITY_REMEDIATION.md`):
+when the single `ORDER BY` field has a fully-covering secondary index and the
+query has no WHERE/JOIN/graph/similarity, the engine serves the top-k from the
+index in O(log n + k) (`create_index(field)` to opt in) — ~89 ms → ~0.013 ms for
+that 50k-row query — with identical results to the exhaustive path. Queries
+without a covering index keep the exhaustive scalar-`ORDER BY` behaviour above.
 
 ### 10. Configuration range caps
 
