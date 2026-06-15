@@ -59,6 +59,7 @@ impl Collection {
             auto_reindex_config: None,
             #[cfg(feature = "persistence")]
             streaming_config: None,
+            indexed_fields: std::collections::BTreeSet::new(),
         }
     }
 
