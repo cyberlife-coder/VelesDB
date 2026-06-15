@@ -119,7 +119,7 @@ export async function request<T>(
         message: ep.message ?? `HTTP ${response.status}`,
       }};
     }
-    return { data };
+    return { data: data as unknown as T };
   } catch (error) {
     clearTimeout(timeoutId);
     wrapCatchError(error);
