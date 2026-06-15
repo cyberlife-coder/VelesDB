@@ -214,6 +214,29 @@ impl Collection {
             .ordered_ids_if_covered(descending, limit, point_count)
     }
 
+    /// Returns the leading lead-key buckets' point IDs (in `descending` key
+    /// order) whose cumulative size first reaches `min_rows`, **only when the
+    /// index fully covers** the collection. Whole buckets, so a caller can
+    /// secondary-sort within each equal-lead-key group. `None` when no such
+    /// index exists or coverage is incomplete.
+    ///
+    /// Backs multi-column `ORDER BY <lead_field>, ...` (EPIC-081 phase 3c). Like
+    /// [`ordered_ids_if_covered`](Self::ordered_ids_if_covered), the IDs are a
+    /// snapshot so the secondary-index lock is released before hydration.
+    #[must_use]
+    pub(crate) fn ordered_prefix_if_covered(
+        &self,
+        field_name: &str,
+        descending: bool,
+        min_rows: usize,
+    ) -> Option<Vec<u64>> {
+        let point_count = self.len();
+        let indexes = self.secondary_indexes.read();
+        indexes
+            .get(field_name)?
+            .ordered_prefix_if_covered(descending, min_rows, point_count)
+    }
+
     /// Looks up matching point IDs for an indexed field value.
     #[must_use]
     pub fn secondary_index_lookup(&self, field_name: &str, value: &JsonValue) -> Option<Vec<u64>> {
