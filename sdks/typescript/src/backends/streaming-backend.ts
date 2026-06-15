@@ -20,6 +20,7 @@ import {
   collectionPath,
   toNumberArray,
   validateCollectionName,
+  safeJsonParse,
 } from './shared';
 
 /** Minimal transport interface for streaming operations. */
@@ -90,8 +91,7 @@ export async function streamInsert(
     const restId = transport.parseRestPointId(doc.id);
     const vector = toNumberArray(doc.vector);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const body: Record<string, any> = {
+    const body: Record<string, unknown> = {
       id: restId,
       vector,
       payload: doc.payload ?? null,
@@ -128,7 +128,7 @@ export async function streamInsert(
       }
 
       if (!response.ok && response.status !== 202) {
-        const data = await response.json().catch(() => ({}));
+        const data = await safeJsonParse(response);
         const errorPayload = transport.extractErrorPayload(data);
         throw new VelesDBError(
           errorPayload.message ?? `HTTP ${response.status}`,
@@ -232,8 +232,7 @@ export async function streamUpsertPoints(
     const restId = requireSafeRangeId(transport.parseRestPointId(doc.id));
     const vector = toNumberArray(doc.vector);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const point: Record<string, any> = {
+    const point: Record<string, unknown> = {
       id: restId,
       vector,
       payload: doc.payload ?? null,
@@ -274,7 +273,7 @@ export async function streamUpsertPoints(
     }
 
     if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
+      const data = await safeJsonParse(response);
       const errorPayload = transport.extractErrorPayload(data);
       throw new VelesDBError(
         errorPayload.message ?? `HTTP ${response.status}`,
@@ -282,7 +281,7 @@ export async function streamUpsertPoints(
       );
     }
 
-    const data = await response.json().catch(() => ({}));
+    const data = await safeJsonParse(response);
     return {
       message: typeof data.message === 'string' ? data.message : 'Stream processed',
       inserted: typeof data.inserted === 'number' ? data.inserted : 0,
