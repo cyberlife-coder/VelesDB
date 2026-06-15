@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@wiscale/velesdb-wasm": "1.18.0",
+    "@wiscale/velesdb-wasm": "2.0.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
