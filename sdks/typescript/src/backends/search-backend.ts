@@ -37,8 +37,7 @@ export async function search(
 ): Promise<SearchResult[]> {
   const queryVector = toNumberArray(query);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const body: Record<string, any> = {
+  const body: Record<string, unknown> = {
     vector: queryVector,
     top_k: options?.k ?? 10,
     filter: options?.filter,
@@ -211,8 +210,7 @@ export async function sparseSearchNamed(
   indexName: string,
   options?: SparseSearchNamedOptions
 ): Promise<SearchResult[]> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const body: Record<string, any> = {
+  const body: Record<string, unknown> = {
     sparse_vectors: { [indexName]: transport.sparseToRest(query) },
     sparse_index: indexName,
     top_k: options?.k ?? 10,
