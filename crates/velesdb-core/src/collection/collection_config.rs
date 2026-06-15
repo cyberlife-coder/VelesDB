@@ -6,6 +6,7 @@ use crate::distance::DistanceMetric;
 use crate::index::hnsw::HnswParams;
 use crate::quantization::StorageMode;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 use crate::collection::graph::GraphSchema;
 
@@ -145,6 +146,32 @@ pub struct CollectionConfig {
     #[cfg(feature = "persistence")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streaming_config: Option<crate::collection::streaming::StreamingConfig>,
+
+    /// Names of payload fields carrying a secondary metadata index
+    /// (`CREATE INDEX (<field>)`) — the persisted **authority** for which
+    /// indexes exist (EPIC-081 phase 3d).
+    ///
+    /// `create_index` adds a field here and `drop_secondary_index` removes it,
+    /// each persisted via [`save_config`](crate::collection::Collection). On
+    /// [`Collection::open`](crate::collection::VectorCollection) every listed
+    /// field is rebuilt from the recovered payloads (backfill), so an index
+    /// survives a process restart instead of silently vanishing — without
+    /// which the ordered-index `ORDER BY` fast path, the bitmap pre-filter,
+    /// `EXPLAIN` `IndexLookup`, and the index advisor would all change behaviour
+    /// after a restart (results stay correct via the exhaustive fallback).
+    ///
+    /// A `BTreeSet` so the on-disk ordering is deterministic. Backward
+    /// compatible: configs written before this field deserialize to an empty
+    /// set (no indexes restored), and an empty set is not serialized.
+    ///
+    /// Downgrade caveat: a pre-3d binary opening this config ignores the field
+    /// (no `deny_unknown_fields`), but the next `save_config` it performs
+    /// re-serializes without it, dropping the authority — a subsequent newer
+    /// binary then will not restore those indexes until `CREATE INDEX` is
+    /// re-issued. Bounded and fully recoverable (results stay correct via the
+    /// exhaustive fallback); no schema-version bump guards it, by design.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub indexed_fields: BTreeSet<String>,
 }
 
 #[cfg(test)]
@@ -172,6 +199,7 @@ mod rescore_config_tests {
             auto_reindex_config: None,
             #[cfg(feature = "persistence")]
             streaming_config: None,
+            indexed_fields: BTreeSet::new(),
         }
     }
 

@@ -28,11 +28,46 @@ impl Collection {
     /// existing payloads are indexed (handles the case where bulk insert
     /// skipped per-point index updates).
     ///
+    /// The field is recorded in [`CollectionConfig::indexed_fields`] (the
+    /// persisted authority) and `config.json` is saved, so the index is rebuilt
+    /// on the next [`Collection::open`] instead of silently vanishing across a
+    /// restart (EPIC-081 phase 3d). The `config.json` write is skipped when the
+    /// field is already tracked (a redundant re-CREATE or the restore path), so
+    /// an idempotent CREATE does not rewrite + fsync the file.
+    ///
+    /// [`CollectionConfig::indexed_fields`]: crate::collection::types::CollectionConfig::indexed_fields
+    ///
     /// # Errors
     ///
-    /// Returns Ok(()) on success. Index creation is idempotent.
-    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
+    /// Returns an error if persisting the updated `config.json` fails — a
+    /// `CREATE INDEX` whose authority cannot be persisted is surfaced rather
+    /// than silently lost on restart.
     pub fn create_index(&self, field_name: &str) -> Result<()> {
+        self.build_and_backfill_secondary_index(field_name);
+        // Record the field in the persisted authority. `BTreeSet::insert`
+        // returns `false` when the field is already tracked, so a no-op CREATE
+        // does not rewrite + fsync config.json. The write guard is released at
+        // the end of this statement, before `save_config` takes a read guard
+        // (parking_lot RwLock is non-reentrant).
+        let newly_tracked = self
+            .config
+            .write()
+            .indexed_fields
+            .insert(field_name.to_string());
+        if newly_tracked {
+            self.save_config()?;
+        }
+        Ok(())
+    }
+
+    /// Inserts the (empty) secondary index entry if absent and backfills it
+    /// from existing payloads, **without** touching the persisted authority.
+    ///
+    /// Shared by [`create_index`](Self::create_index) — which then records the
+    /// field in `config.indexed_fields` — and `restore_secondary_indexes_from_config`,
+    /// where the config set is already the authority, so neither path rewrites
+    /// `config.json` during an open-time restore.
+    pub(crate) fn build_and_backfill_secondary_index(&self, field_name: &str) {
         let mut indexes = self.secondary_indexes.write();
         let is_new = !indexes.contains_key(field_name);
         indexes
@@ -44,8 +79,6 @@ impl Collection {
         // inserted via bulk paths that skipped per-point index updates).
         drop(indexes); // Release write lock before reading payloads
         self.backfill_secondary_index(field_name, is_new);
-
-        Ok(())
     }
 
     /// Scans existing payloads and populates the secondary index for `field_name`.
@@ -101,11 +134,33 @@ impl Collection {
 
     /// Drops a secondary metadata index for a payload field.
     ///
-    /// Returns `true` if the index existed and was removed, `false` if no
-    /// such index existed.
+    /// Returns `true` if the index existed (in the live map or the persisted
+    /// authority) and was removed, `false` otherwise.
+    ///
+    /// Also removes the field from [`CollectionConfig::indexed_fields`] so the
+    /// index does not resurrect on the next [`Collection::open`] (EPIC-081
+    /// phase 3d). Persisting that removal is **best-effort**: a `save_config`
+    /// I/O error is logged, not propagated, so the public signature stays
+    /// infallible. The in-memory removal is re-persisted by the next successful
+    /// `save_config`/flush, and the worst case of a failed-save-then-immediate-crash
+    /// is a correct-but-unwanted index reappearing — never incorrect results.
+    ///
+    /// [`CollectionConfig::indexed_fields`]: crate::collection::types::CollectionConfig::indexed_fields
     #[must_use]
     pub fn drop_secondary_index(&self, field_name: &str) -> bool {
-        self.secondary_indexes.write().remove(field_name).is_some()
+        let removed_from_map = self.secondary_indexes.write().remove(field_name).is_some();
+        let untracked = self.config.write().indexed_fields.remove(field_name);
+        if untracked {
+            if let Err(e) = self.save_config() {
+                tracing::warn!(
+                    field = field_name,
+                    error = %e,
+                    "drop_secondary_index: failed to persist index removal to config.json; \
+                     the next flush will re-persist it"
+                );
+            }
+        }
+        removed_from_map || untracked
     }
 
     /// Checks whether a secondary metadata index exists for a field.
