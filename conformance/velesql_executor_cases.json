@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the CORRECT expectation for a confirmed core bug and are checked only by the #[ignore]d reproducer test until fixed.",
+  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing.",
   "dataset": {
     "collection": "docs",
     "dimension": 4,
@@ -50,7 +50,7 @@
       "id": "B001",
       "query": "SELECT * FROM docs WHERE year >= 2019 ORDER BY year DESC LIMIT 2",
       "expect_ids": [4, 2],
-      "note": "BUG: scalar ORDER BY <column> + LIMIT applies the LIMIT before the sort on the bounded top-k path (observed [2,1] = first two by id, then sorted). This contradicts KNOWN_LIMITATIONS.md #9 ('Results are identical to the unbounded path'). The bounded top-k optimization only honors similarity() ordering, not scalar ORDER BY. expect_ids holds the CORRECT result; un-ignore test_velesql_executor_known_bugs once fixed."
+      "note": "REGRESSION LOCK (fixed): scalar ORDER BY <column> + LIMIT previously applied the LIMIT before the sort on the bounded top-k path (returned [2,1] instead of [4,2]); the bounded path now equals the unbounded path truncated to k, per KNOWN_LIMITATIONS.md #9. expect_ids is the correct, currently-asserted result."
     }
   ]
 }

@@ -80,8 +80,7 @@ impl Collection {
         if extracted.is_not_similarity_query {
             return self.run_not_similarity_early(&early_ctx, limit).map(Some);
         }
-        self.run_union_early(&early_ctx, cond, params, limit)
-            .map(Some)
+        self.run_union_early(&early_ctx, limit).map(Some)
     }
 
     /// Runs the union early-return path (EPIC-044 US-002: similarity() OR metadata).
@@ -92,8 +91,6 @@ impl Collection {
     fn run_union_early(
         &self,
         early: &EarlyReturnCtx<'_>,
-        cond: &crate::velesql::Condition,
-        params: &std::collections::HashMap<String, serde_json::Value>,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
@@ -103,7 +100,7 @@ impl Collection {
             limit
         };
         self.execute_early_return_query(
-            |s| s.execute_union_query(cond, params, execution_limit),
+            |s| s.execute_union_query(early.cond, early.params, execution_limit),
             early,
             &mut graph_cache,
         )
