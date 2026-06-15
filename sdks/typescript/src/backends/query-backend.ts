@@ -130,13 +130,12 @@ export async function query(
 
   throwOnError(response, `Collection '${collection}'`);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rawData = response.data as any;
-  if (rawData && Object.prototype.hasOwnProperty.call(rawData, 'result')) {
+  const rawData = response.data; // Record<string, unknown> | undefined
+  if (rawData != null && Object.prototype.hasOwnProperty.call(rawData, 'result')) {
     return {
       result: rawData.result as Record<string, unknown> | unknown[],
       stats: {
-        executionTimeMs: rawData.timing_ms ?? 0,
+        executionTimeMs: (rawData.timing_ms as number | undefined) ?? 0,
         strategy: 'aggregation',
         scannedNodes: 0,
       },
@@ -145,11 +144,11 @@ export async function query(
 
   // v3.0.0: Results are projected rows — shape depends on SELECT clause.
   return {
-    results: (rawData?.results ?? []) as Record<string, unknown>[],
+    results: ((rawData?.results ?? []) as Record<string, unknown>[]),
     stats: {
-      executionTimeMs: rawData?.timing_ms ?? 0,
+      executionTimeMs: (rawData?.timing_ms as number | undefined) ?? 0,
       strategy: 'select',
-      scannedNodes: rawData?.rows_returned ?? 0,
+      scannedNodes: (rawData?.rows_returned as number | undefined) ?? 0,
     },
   };
 }
