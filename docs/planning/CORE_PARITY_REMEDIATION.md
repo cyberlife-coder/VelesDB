@@ -51,7 +51,8 @@ actually *populated and maintained* on upsert/delete/bulk, keyed by field name, 
 return *unordered* bitmaps. Tradeoff: the optimization is **opt-in per field** via `create_index`. The
 in-memory `SecondaryIndex` BTree is **not binary-snapshotted**, but the field-name set now persists in
 `config.json` and the BTree is rebuilt from payloads on open (EPIC-081 phase 3d Layer A), so the opt-in
-survives a restart automatically; a binary snapshot to skip that O(n) open-scan is the deferred Layer B.
+survives a restart automatically; a binary snapshot to skip that O(n) open-scan was the proposed Layer B,
+considered and DECLINED (see §3d below).
 
 **Phase 1 — primitive (DONE, shipped in PR #1127).** `SecondaryIndex::ordered_ids` + golden tests.
 Pure BTreeMap walk (`.values()`, `.rev()` for DESC), O(log n + k), ascending IDs within an equal-key
@@ -129,11 +130,25 @@ fan-out found the three perf sub-items each *sound-with-fixes*, never *sound* �
     behaviour (results stayed correct via the exhaustive fallback). `tests/secondary_index_persistence.rs`
     (12: config round-trip / back-compat / restart equivalence across TTL+delete / partial-coverage / filtered
     top-k / DDL CREATE+DROP survive a `Database` restart / save-failure surfaces).
-  - **Layer B — binary BTree snapshot (deferred, separate PR).** A `secondary_index.bin` cache to skip the
-    O(n) open-scan: snapshot the BTree ATOMICALLY under the payload write lock with a `wal_pos` watermark,
-    F64 keys persisted as raw `u64` bits (no `f64` round-trip), self-validating (watermark/version mismatch or
-    corruption → discard + Layer-A backfill, never the authority). Optional optimization — Layer A is the
-    correctness deliverable.
+  - **Layer B — binary BTree snapshot (considered, DECLINED 2026-06-15).** A `secondary_index.bin` cache to
+    skip the O(n) open-scan was fully designed (format mirroring `storage/snapshot.rs`: `MAGIC + version +
+    wal_pos + point_count + per-field {name, (JsonValue, Vec<u64>) buckets} + CRC32` via `atomic_write`; F64
+    keys as raw `u64` bits, no `f64` round-trip; writer in `flush_full` only; loader replacing the
+    `restore_secondary_indexes_from_config` body with snapshot-then-Layer-A-backfill; self-validating, Layer A
+    always the fallback authority). **Not implemented**, because: (1) Layer A already delivers correctness —
+    the BTree is a pure function of {payloads × field}, so backfill-on-open is provably equal to the live tree;
+    Layer B is *purely* a cold-start perf cache. (2) The win is marginal/situational — `recover_index_state` is
+    already O(n) over vectors on every open, so for vector collections the asymptotic open cost is unchanged;
+    only large metadata-only collections with frequent restarts benefit, and WASM (the frequent-reinit case)
+    has no `persistence` feature. (3) The upsert path commits + flushes the payload (advancing `write_offset`)
+    in Phase 1 (`crud.rs:157-202`) but mutates the index BTree in Phase 2 with no payload lock held
+    (`crud.rs:395`); a snapshot captured during a *concurrent* upsert's gap could be stamped with a `wal_pos`
+    the BTree doesn't yet reflect → a stale-but-valid-looking snapshot. Harmless under the documented
+    single-writer model, but making it sound under arbitrary concurrency would require moving the BTree update
+    onto the hot payload-write critical section — too invasive a hot-path/perf risk for a perf-only cache. A
+    persistence-format surface + a subtle concurrency contract for a marginal gain is the wrong trade
+    (CLAUDE.md: simplicity first / bias toward caution). EPIC-081 phase 3 is therefore complete with 3a+3b+3c +
+    3d Layer A shipped and 3d Layer B closed as declined.
 
 ## Artifacts produced by the audit
 - `PARITY_MATRIX.md` (81 capabilities × 13 components) — regenerate via `.claude/skills/core-parity-audit/scripts/gen_matrix.py`.
