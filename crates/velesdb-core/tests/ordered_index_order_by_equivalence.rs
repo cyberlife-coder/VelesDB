@@ -299,3 +299,54 @@ fn score_matches_exhaustive_not_just_ids() {
         "plain ORDER BY scan scores 1.0 on the index path"
     );
 }
+
+/// EPIC-081 phase 2 gate hole (regression): a window-function projection over a
+/// plain `ORDER BY <indexed_field> LIMIT k` must NOT take the ordered-index
+/// fast path. The fast path returns the page directly (`mod.rs` `return
+/// Ok(results)`), bypassing window evaluation (`select_dispatch::evaluate`),
+/// which silently drops the injected alias. The gate's `Mixed { aggregations,
+/// .. }` arm ignored `window_functions`, so the route fired and `rn` vanished.
+#[test]
+fn window_function_projection_not_dropped_by_index_path() {
+    let sql = "SELECT id, year, ROW_NUMBER() OVER (ORDER BY year DESC) AS rn \
+               FROM docs ORDER BY year DESC LIMIT 5";
+
+    let rn_by_id = |rs: &[velesdb_core::point::SearchResult]| -> Vec<(u64, Option<u64>)> {
+        rs.iter()
+            .map(|r| {
+                let rn = r
+                    .point
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("rn"))
+                    .and_then(serde_json::Value::as_u64);
+                (r.point.id, rn)
+            })
+            .collect()
+    };
+
+    let (no_index, _d1) = build(ROWS);
+    let exhaustive = no_index
+        .execute_query_str(sql, &HashMap::new())
+        .expect("exhaustive");
+
+    let (with_index, _d2) = build(ROWS);
+    with_index.create_index("year").expect("create_index");
+    let indexed = with_index
+        .execute_query_str(sql, &HashMap::new())
+        .expect("index");
+
+    // The exhaustive path computes rn; the index path must fall back so it does
+    // too — not return rows with the alias missing.
+    assert!(
+        exhaustive
+            .iter()
+            .all(|r| r.point.payload.as_ref().and_then(|p| p.get("rn")).is_some()),
+        "exhaustive path should compute rn"
+    );
+    assert_eq!(
+        rn_by_id(&exhaustive),
+        rn_by_id(&indexed),
+        "window-function alias dropped on the ordered-index fast path"
+    );
+}

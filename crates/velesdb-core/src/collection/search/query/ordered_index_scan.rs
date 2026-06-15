@@ -94,7 +94,8 @@ impl Collection {
 /// Eligible shape (all required): the ORDER BY is exactly **one** plain
 /// `Field` key (not Aggregate / Arithmetic / similarity); no WHERE / filter,
 /// no JOIN, no graph MATCH, no vector / similarity / sparse search, no
-/// DISTINCT, no GROUP BY / HAVING, and a plain (non-aggregate) projection.
+/// DISTINCT, no GROUP BY / HAVING, and a plain (non-computed) projection — no
+/// aggregate, window function, `similarity()` score, or qualified wildcard.
 /// Coverage and index existence are verified later via `ordered_ids_if_covered`.
 fn ordered_index_scan_applies<'a>(
     stmt: &'a crate::velesql::SelectStatement,
@@ -111,14 +112,14 @@ fn ordered_index_scan_applies<'a>(
 }
 
 /// Whether the statement carries no clause that changes the result shape
-/// (WHERE / JOIN / DISTINCT / GROUP BY / HAVING / aggregate projection).
+/// (WHERE / JOIN / DISTINCT / GROUP BY / HAVING / computed projection).
 fn plain_query_shape(stmt: &crate::velesql::SelectStatement) -> bool {
     stmt.where_clause.is_none()
         && stmt.joins.is_empty()
         && stmt.distinct == crate::velesql::DistinctMode::None
         && stmt.group_by.is_none()
         && stmt.having.is_none()
-        && !select_has_aggregate(&stmt.columns)
+        && projection_is_plain(&stmt.columns)
 }
 
 /// Whether the extracted components carry no ranked / graph / set-op fetch
@@ -134,13 +135,33 @@ fn plain_fetch_shape(extracted: &ExtractedComponents) -> bool {
         && !extracted.is_not_similarity_query
 }
 
-/// Returns `true` when the projection carries an aggregate function, which
-/// changes the result shape and disqualifies the ordered-index fast path.
-fn select_has_aggregate(columns: &crate::velesql::SelectColumns) -> bool {
+/// Returns `true` when the projection is "plain" — `SELECT *` or a bare column
+/// list — so the fast path reproduces it exactly. The fast path returns its
+/// page directly (`mod.rs`), bypassing the post-processing stage that runs
+/// DISTINCT, **window functions** (`select_dispatch::evaluate`) and similarity
+/// scoring; any *computed* projection (aggregate, window function, `similarity()`
+/// score, or qualified wildcard) needs that bypassed stage and therefore
+/// disqualifies the route. The `Mixed` arm names every field (no `..`) so a
+/// future computed field is a compile error here, not a silently-dropped
+/// projection.
+fn projection_is_plain(columns: &crate::velesql::SelectColumns) -> bool {
     use crate::velesql::SelectColumns;
     match columns {
-        SelectColumns::Aggregations(aggs) => !aggs.is_empty(),
-        SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
-        _ => false,
+        SelectColumns::All | SelectColumns::Columns(_) => true,
+        SelectColumns::Mixed {
+            columns: _,
+            aggregations,
+            similarity_scores,
+            qualified_wildcards,
+            window_functions,
+        } => {
+            aggregations.is_empty()
+                && similarity_scores.is_empty()
+                && qualified_wildcards.is_empty()
+                && window_functions.is_empty()
+        }
+        SelectColumns::Aggregations(_)
+        | SelectColumns::SimilarityScore(_)
+        | SelectColumns::QualifiedWildcard(_) => false,
     }
 }
