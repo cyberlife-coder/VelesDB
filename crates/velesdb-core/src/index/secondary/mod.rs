@@ -165,38 +165,67 @@ impl SecondaryIndex {
     /// the field (which a full `ORDER BY` sorts first for ASC / last for DESC)
     /// are absent, so callers MUST restrict use to fully-covered fields and
     /// fall back to the full scan otherwise.
-    // Staged API: landed + unit-tested ahead of its planner consumer. The
-    // `ORDER BY <field> LIMIT k` pushdown that calls this (routing at
-    // `order_by_requires_exhaustive_fetch`) is phase 2 of the ordered-index
-    // EPIC — see docs/planning/CORE_PARITY_REMEDIATION.md.
-    #[allow(dead_code)]
+    // Consumed by the `ORDER BY <field> LIMIT k` pushdown (routing at
+    // `Collection::try_ordered_index_scan`, gated by
+    // `order_by_requires_exhaustive_fetch`) — phase 2 of the ordered-index
+    // EPIC, see docs/planning/CORE_PARITY_REMEDIATION.md.
+    #[cfg(test)]
     #[must_use]
     pub fn ordered_ids(&self, descending: bool, limit: usize) -> Vec<u64> {
         let Self::BTree(tree) = self;
-        let guard = tree.read();
-        let mut out: Vec<u64> = Vec::new();
-        if descending {
-            for ids in guard.values().rev() {
-                if out.len() >= limit {
-                    break;
-                }
-                push_bucket_capped(ids, limit, &mut out);
-            }
-        } else {
-            for ids in guard.values() {
-                if out.len() >= limit {
-                    break;
-                }
-                push_bucket_capped(ids, limit, &mut out);
-            }
-        }
-        out
+        walk_ordered(&tree.read(), descending, limit)
     }
+
+    /// Returns the top `limit` ordered IDs **only when the index fully covers**
+    /// `point_count` rows — i.e. every point carries the indexed field
+    /// (`Σ bucket lengths == point_count`). Returns `None` otherwise.
+    ///
+    /// The coverage check and the ordered walk share **one** read lock so a
+    /// concurrent upsert cannot slip a row in between the two (TOCTOU). A
+    /// partially-covered index omits rows missing the field (which a full
+    /// `ORDER BY` places first for ASC / last for DESC), so the caller must fall
+    /// back to the exhaustive scan — that's what `None` signals.
+    #[must_use]
+    pub fn ordered_ids_if_covered(
+        &self,
+        descending: bool,
+        limit: usize,
+        point_count: usize,
+    ) -> Option<Vec<u64>> {
+        let Self::BTree(tree) = self;
+        let guard = tree.read();
+        let covered: usize = guard.values().map(Vec::len).sum();
+        if covered != point_count {
+            return None;
+        }
+        Some(walk_ordered(&guard, descending, limit))
+    }
+}
+
+/// Walks the B-tree in key order (ascending, or descending when `descending`)
+/// collecting up to `limit` point IDs, ascending by ID within each equal-key
+/// bucket. The caller holds the read guard so the coverage check and the walk
+/// stay atomic.
+fn walk_ordered(tree: &BTreeMap<JsonValue, Vec<u64>>, descending: bool, limit: usize) -> Vec<u64> {
+    let mut out: Vec<u64> = Vec::new();
+    let mut collect = |buckets: &mut dyn Iterator<Item = &Vec<u64>>| {
+        for ids in buckets {
+            if out.len() >= limit {
+                break;
+            }
+            push_bucket_capped(ids, limit, &mut out);
+        }
+    };
+    if descending {
+        collect(&mut tree.values().rev());
+    } else {
+        collect(&mut tree.values());
+    }
+    out
 }
 
 /// Appends `ids` (sorted ascending for determinism) to `out`, stopping once
 /// `out` reaches `limit`.
-#[allow(dead_code)] // helper for the staged `ordered_ids` primitive (see above)
 fn push_bucket_capped(ids: &[u64], limit: usize, out: &mut Vec<u64>) {
     let mut bucket = ids.to_vec();
     bucket.sort_unstable();
