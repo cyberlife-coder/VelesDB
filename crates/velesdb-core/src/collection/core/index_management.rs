@@ -126,6 +126,28 @@ impl Collection {
         self.secondary_indexes.read().keys().cloned().collect()
     }
 
+    /// Returns the top `limit` point IDs for `field_name` in index order
+    /// (ascending, or descending when `descending`), **only when the index
+    /// fully covers** the collection (every point carries the field). Returns
+    /// `None` when no such index exists or coverage is incomplete.
+    ///
+    /// Backs the index-backed `ORDER BY <field> LIMIT k` fast path
+    /// (EPIC-081 phase 2): the returned IDs are a snapshot, so the secondary
+    /// index lock is released before the caller hydrates them via `get`.
+    #[must_use]
+    pub(crate) fn ordered_ids_if_covered(
+        &self,
+        field_name: &str,
+        descending: bool,
+        limit: usize,
+    ) -> Option<Vec<u64>> {
+        let point_count = self.len();
+        let indexes = self.secondary_indexes.read();
+        indexes
+            .get(field_name)?
+            .ordered_ids_if_covered(descending, limit, point_count)
+    }
+
     /// Looks up matching point IDs for an indexed field value.
     #[must_use]
     pub fn secondary_index_lookup(&self, field_name: &str, value: &JsonValue) -> Option<Vec<u64>> {
