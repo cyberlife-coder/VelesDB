@@ -21,13 +21,13 @@
 //!
 //! # known_bugs (B001)
 //!
-//! The CLI delegates SELECT execution to `velesdb-core::Database::execute_query`,
-//! so it reproduces the core B001 bug verbatim (`ORDER BY <column> + LIMIT`
-//! applies the LIMIT before the sort on the bounded top-k path — observed
-//! `[2, 1]` instead of the correct `[4, 2]`). The B001 reproducer is therefore
-//! `#[ignore]`d here, mirroring `test_velesql_executor_known_bugs` in core; the
-//! fixture's `expect_ids` carries the CORRECT result so the test can be
-//! un-ignored to lock the fix once core is patched.
+//! B001 was the core bug where `ORDER BY <column> + LIMIT` applied the LIMIT
+//! before the sort on the bounded top-k path (observed `[2, 1]` instead of the
+//! correct `[4, 2]`). It is now fixed in `velesdb-core`, and the CLI delegates
+//! SELECT execution to `velesdb-core::Database::execute_query`, so it inherits
+//! the fix. `test_cli_velesql_executor_known_bugs` asserts the corrected golden
+//! result directly (no `#[ignore]`), mirroring `test_velesql_executor_known_bugs`
+//! in core, and locks the fix against regression.
 
 use std::path::{Path, PathBuf};
 
