@@ -52,11 +52,22 @@ return *unordered* bitmaps. Tradeoff: `SecondaryIndex` is **not snapshotted** (r
 via backfill), so the optimization is **opt-in per field** — which matches existing secondary-index
 semantics and needs no new persistence format. (A later phase may add snapshotting in `flush.rs`.)
 
-**Phase 1 — primitive (DONE, on this branch).** `SecondaryIndex::ordered_ids(descending, limit)` +
-6 golden tests (`ordered_ids_tests.rs`). Pure BTreeMap walk (`.values()`, `.rev()` for DESC), O(log n + k),
-ascending IDs within an equal-key bucket for determinism. Currently `#[allow(dead_code)]` (no consumer yet).
+**Phase 1 — primitive (DONE, shipped in PR #1127).** `SecondaryIndex::ordered_ids` + golden tests.
+Pure BTreeMap walk (`.values()`, `.rev()` for DESC), O(log n + k), ascending IDs within an equal-key
+bucket for determinism.
 
-**Phase 2 — minimal planner routing (gated hard).** At the B001 hook
+**Phase 2 — minimal planner routing (DONE).** Implemented as `Collection::try_ordered_index_scan`
+(`collection/search/query/ordered_index_scan.rs`), wired into `execute_select_pipeline`. Coverage is
+checked atomically via `SecondaryIndex::ordered_ids_if_covered` (Σ bucket lengths == `config.point_count`
+under one read lock). The ORDER BY sort gained an ascending point-id final tie-break (`ordering.rs`) so it
+is deterministic AND identical to the index walk. Score is 1.0 to match the exhaustive metadata-scan path.
+`ordered_ids_if_covered` returns `Vec<u64>` (no bitmap), so ids > `u32::MAX` are fine — no id-range
+restriction needed. Equivalence gate `tests/ordered_index_order_by_equivalence.rs` (13 tests) proves the
+same query yields identical (id, score) sequences with vs without the index across ASC/DESC/OFFSET/ties/
+k>n/k==n/k=0/not-covered/coverage-break/id>u32::MAX/WHERE-fallback. Perf: ~89 ms exhaustive → ~0.013 ms
+index (50k rows). recall@10 unaffected. *(Original design notes below, kept for reference.)*
+
+**Phase 2 design (reference).** At the B001 hook
 `Collection::order_by_requires_exhaustive_fetch` (`select_dispatch.rs:98`), add an `Option<OrderedScanPlan>`
 that fires **only** when ALL hold: primary `ORDER BY` is a single plain `Field` (not Aggregate/Arithmetic/
 similarity); that field has a secondary index; the field is **fully covered** (index id-count == point count —
