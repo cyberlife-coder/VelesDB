@@ -61,12 +61,15 @@ impl Collection {
         if !query.let_bindings.is_empty() {
             return Ok(None);
         }
-        let Some((field, filter)) = ordered_index_scan_applies(stmt, extracted) else {
+        let Some(plan) = ordered_index_scan_applies(stmt, extracted) else {
             return Ok(None);
         };
-        let results = match filter {
-            None => self.ordered_index_plain_results(stmt, field),
-            Some(cond) => self.ordered_index_filtered_results(stmt, field, &cond),
+        let results = match plan {
+            ScanPlan::Plain(field) => self.ordered_index_plain_results(stmt, field),
+            ScanPlan::Filtered(field, cond) => {
+                self.ordered_index_filtered_results(stmt, field, &cond)
+            }
+            ScanPlan::MultiKey(lead_field) => self.ordered_index_multikey_results(stmt, lead_field),
         };
         let Some(results) = results else {
             return Ok(None);
@@ -151,6 +154,56 @@ impl Collection {
         Some(self.collect_filtered_page(&ids, &predicate, order_offset(stmt), limit))
     }
 
+    /// Multi-column route (EPIC-081 phase 3c): `ORDER BY <lead_field>, <more…>`
+    /// with no WHERE and all keys plain `Field`. Absorbs whole leading lead-key
+    /// buckets (in lead order) until ≥ offset+limit rows, hydrates them, applies
+    /// the **exact** exhaustive multi-key sort (`apply_order_by`), then OFFSET/
+    /// LIMIT. Equivalent to the exhaustive sort because the lead key dominates
+    /// the total order, so every row outside the leading buckets sorts strictly
+    /// after them — the top page is wholly inside the prefix.
+    ///
+    /// Declines (returns `None`) without observing the advisor above `MAX_LIMIT`;
+    /// observes (a covering index is the missing piece) when the lead field has
+    /// no covering index; and declines if any prefix row was dropped by `get`
+    /// (deleted / TTL-expired — the page could need a trailing-bucket row, so the
+    /// exhaustive path must run, as in the plain route).
+    fn ordered_index_multikey_results(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        lead_field: &str,
+    ) -> Option<Vec<SearchResult>> {
+        let point_count = self.len();
+        if point_count > MAX_LIMIT {
+            return None;
+        }
+        let (limit, fetch_limit) = Self::compute_fetch_limit(stmt);
+        let Some(ids) =
+            self.ordered_prefix_if_covered(lead_field, order_descending(stmt), fetch_limit)
+        else {
+            self.order_by_advisor.write().observe(lead_field);
+            return None;
+        };
+        let mut hydrated: Vec<SearchResult> = self
+            .get(&ids)
+            .into_iter()
+            .flatten()
+            .map(|point| SearchResult::new(point, 1.0))
+            .collect();
+        if hydrated.len() != ids.len() {
+            return None;
+        }
+        let order_by = stmt.order_by.as_deref().unwrap_or(&[]);
+        self.apply_order_by(&mut hydrated, order_by, &std::collections::HashMap::new())
+            .ok()?;
+        Some(
+            hydrated
+                .into_iter()
+                .skip(order_offset(stmt))
+                .take(limit)
+                .collect(),
+        )
+    }
+
     /// Hydrates `ids` (already in ORDER BY order) in batches, keeps rows passing
     /// `predicate`, skips the first `offset` matches, and collects up to `limit`
     /// — stopping as soon as the page is full so a broad filter does not hydrate
@@ -201,38 +254,72 @@ fn order_offset(stmt: &crate::velesql::SelectStatement) -> usize {
         .map_or(0, |o| usize::try_from(o).unwrap_or(usize::MAX))
 }
 
-/// Returns `Some((field, filter))` when the query is eligible for the
-/// index-backed `ORDER BY <field> LIMIT k` fast path. `filter` is `Some(cond)`
-/// for the WHERE-filtered route (the pure-metadata predicate, identical to the
-/// one the exhaustive path applies) or `None` for the plain route.
+/// Which index-backed route a query is eligible for (or `None` to decline).
+enum ScanPlan<'a> {
+    /// Single plain `Field` ORDER BY, no WHERE.
+    Plain(&'a str),
+    /// Single plain `Field` ORDER BY + pure-metadata WHERE (the predicate is the
+    /// same one the exhaustive path applies).
+    Filtered(&'a str, Condition),
+    /// Multi-key ORDER BY — 2+ plain `Field` keys, no WHERE — on the covering
+    /// lead field. Carries the lead field; the full key list is read from `stmt`.
+    MultiKey(&'a str),
+}
+
+/// Returns the route a query is eligible for, or `None` to fall through.
 ///
-/// Eligible shape (all required): the ORDER BY is exactly **one** plain `Field`
-/// key (not Aggregate / Arithmetic / similarity); no JOIN, no DISTINCT, no
-/// GROUP BY / HAVING, and a plain (non-computed) projection — no aggregate,
-/// window function, `similarity()` score, or qualified wildcard. The only WHERE
-/// permitted is a pure-metadata filter; any vector / similarity / sparse / graph
-/// MATCH / union / NOT-similarity fetch declines. Coverage and index existence
-/// are verified later via `ordered_ids_if_covered`.
+/// Eligible shape (all required): the ORDER BY keys are all plain `Field`s (the
+/// lead key always; every key for the multi-column route); no JOIN, no DISTINCT,
+/// no GROUP BY / HAVING, and a plain (non-computed) projection — no aggregate,
+/// window function, `similarity()` score, or qualified wildcard; no vector /
+/// similarity / sparse / graph MATCH / union / NOT-similarity fetch. A
+/// pure-metadata WHERE is allowed only for the single-key route; multi-key with
+/// a WHERE declines (handled by the exhaustive path). Coverage and index
+/// existence are verified later via the `*_if_covered` primitives.
 fn ordered_index_scan_applies<'a>(
     stmt: &'a crate::velesql::SelectStatement,
     extracted: &ExtractedComponents,
-) -> Option<(&'a str, Option<Condition>)> {
-    let single_field = match stmt.order_by.as_deref() {
-        Some([only]) => match &only.expr {
-            crate::velesql::OrderByExpr::Field(name) => name.as_str(),
-            _ => return None,
-        },
+) -> Option<ScanPlan<'a>> {
+    let keys = stmt.order_by.as_deref()?;
+    let lead_field = match keys.first()?.expr {
+        crate::velesql::OrderByExpr::Field(ref name) => name.as_str(),
         _ => return None,
     };
     if !plain_query_shape(stmt) {
         return None;
     }
-    let filter = match route_metadata_filter(stmt, extracted) {
-        MetadataRoute::Decline => return None,
-        MetadataRoute::Plain => None,
-        MetadataRoute::Filtered(cond) => Some(cond),
-    };
-    Some((single_field, filter))
+    let filter = route_metadata_filter(stmt, extracted);
+    if keys.len() == 1 {
+        single_key_plan(lead_field, filter)
+    } else {
+        multi_key_plan(lead_field, keys, &filter)
+    }
+}
+
+/// Single-key route: plain or pure-metadata-filtered on the lead field.
+fn single_key_plan(lead_field: &str, filter: MetadataRoute) -> Option<ScanPlan<'_>> {
+    match filter {
+        MetadataRoute::Decline => None,
+        MetadataRoute::Plain => Some(ScanPlan::Plain(lead_field)),
+        MetadataRoute::Filtered(cond) => Some(ScanPlan::Filtered(lead_field, cond)),
+    }
+}
+
+/// Multi-key route: every key must be a plain `Field`, and there must be no
+/// WHERE (a filtered multi-key sort is left to the exhaustive path for now).
+fn multi_key_plan<'a>(
+    lead_field: &'a str,
+    keys: &[crate::velesql::SelectOrderBy],
+    filter: &MetadataRoute,
+) -> Option<ScanPlan<'a>> {
+    let all_fields = keys
+        .iter()
+        .all(|k| matches!(k.expr, crate::velesql::OrderByExpr::Field(_)));
+    if all_fields && matches!(filter, MetadataRoute::Plain) {
+        Some(ScanPlan::MultiKey(lead_field))
+    } else {
+        None
+    }
 }
 
 /// Outcome of classifying a SELECT's WHERE for the ordered-index route.
