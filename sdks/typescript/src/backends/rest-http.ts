@@ -9,6 +9,7 @@
 import type { SparseVector } from '../types';
 import { ConnectionError } from '../types';
 import type { TransportResponse, BaseTransport } from './shared';
+import { safeJsonParse } from './shared';
 import type { CrudTransport, RawBulkTransport } from './crud-backend';
 import { parseRestPointId, sparseVectorToRestFormat } from './crud-backend';
 import type { SearchTransport } from './search-backend';
@@ -110,7 +111,7 @@ export async function request<T>(
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
-    const data = await response.json().catch(() => ({}));
+    const data = await safeJsonParse(response);
     if (!response.ok) {
       const ep = extractErrorPayload(data);
       return { error: {

@@ -248,6 +248,31 @@ export function validateCollectionName(name: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// HTTP helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a fetch `Response` body as JSON, returning an empty object `{}`
+ * on parse failure.
+ *
+ * Used at HTTP error-body extraction sites where a malformed or absent body
+ * (e.g. a 504 gateway response with no JSON payload) must not mask the
+ * original HTTP error code. Callers always narrow individual properties
+ * before use (`typeof data.code === 'string'`), so the empty-object fallback
+ * is safe.
+ *
+ * @since 2026-06-15
+ */
+export async function safeJsonParse(
+  response: Response
+): Promise<Record<string, unknown>> {
+  // response.json() returns Promise<any>; the catch arm guarantees we
+  // always resolve to a plain object, never reject.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+  return response.json().catch(() => ({}));
+}
+
+// ---------------------------------------------------------------------------
 // Vector helpers
 // ---------------------------------------------------------------------------
 
