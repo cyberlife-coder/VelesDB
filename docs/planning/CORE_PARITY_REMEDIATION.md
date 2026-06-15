@@ -104,9 +104,17 @@ fan-out found the three perf sub-items each *sound-with-fixes*, never *sound* �
   TTL-expired-row regression in `tests/ordered_index_order_by_equivalence.rs`. Also fixed a latent phase-2
   divergence the review surfaced: the plain route now backfills past deleted/TTL-expired rows (or declines)
   instead of returning a short/misaligned page.
-- **3c — multi-column `ORDER BY`.** Lead-key index prunes/orders groups, secondary sort within each. Decline
-  if `len > MAX_LIMIT`; lead-key `JsonValue` Ord must match `compare_json_values`; non-primitive lead value
-  forces fall-through.
+- **3c — multi-column `ORDER BY` (DONE).** `ORDER BY <lead>, <more…>` (2+ plain `Field` keys, no WHERE) on a
+  covering lead index: `SecondaryIndex::ordered_prefix_if_covered` absorbs whole leading lead-key buckets
+  (check-then-absorb) until ≥ offset+limit rows, then `Collection::apply_order_by` runs the **exact**
+  exhaustive multi-key sort over the prefix + OFFSET/LIMIT. Correct because the lead key dominates the
+  comparator (every trailing-bucket row sorts strictly after the prefix). The index `JsonValue` Ord
+  (`Bool<Number<String`, f64 `total_cmp`) matches `compare_json_values`, so heterogeneous primitive lead
+  types are safe; non-primitive / non-f64 lead values aren't indexed → coverage breaks → fall-through.
+  Declines above `MAX_LIMIT`, on multi-key+WHERE, on any non-`Field` key, and (like the plain route) when a
+  deleted/TTL-expired row sits in the prefix. Gate refactored to a `ScanPlan` enum.
+  `tests/ordered_index_multikey.rs` (9). Adversarial review: SHIP (830+ equivalence assertions + a 700-case
+  fuzz, no divergence).
 - **3d — secondary-index snapshotting.** Persist the BTree in `flush.rs` ATOMICALLY under the payload write
   lock; reconcile the coverage denominator for vector collections; reconstruct F64 keys from `u64` bits (no
   `f64` round-trip); config-persisted indexed-field-names as authority; restart-equivalence + concurrency tests.
