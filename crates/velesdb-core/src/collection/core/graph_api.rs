@@ -312,13 +312,7 @@ impl Collection {
         limit: usize,
     ) -> Result<Vec<TraversalResult>> {
         let filter: &[&str] = rel_types.unwrap_or(&[]);
-        let params = TraversalParams {
-            store: &self.edge_store,
-            filter,
-            limit,
-            max_depth,
-            source,
-        };
+        let params = self.traversal_params(source, max_depth, filter, limit);
         let mut frontier = std::collections::VecDeque::new();
         frontier.push_back((source, 0u32));
 
@@ -328,6 +322,25 @@ impl Collection {
             bfs_push,
             &mut frontier,
         ))
+    }
+
+    /// Builds the [`TraversalParams`] bundle shared by `traverse_bfs` and
+    /// `traverse_dfs`; the two differ only in their frontier type and
+    /// pop/push functions, which stay with each method.
+    fn traversal_params<'a>(
+        &'a self,
+        source: u64,
+        max_depth: u32,
+        filter: &'a [&'a str],
+        limit: usize,
+    ) -> TraversalParams<'a> {
+        TraversalParams {
+            store: &self.edge_store,
+            filter,
+            limit,
+            max_depth,
+            source,
+        }
     }
 
     /// Traverses the graph using DFS from a source node.
@@ -356,13 +369,7 @@ impl Collection {
         limit: usize,
     ) -> Result<Vec<TraversalResult>> {
         let filter: &[&str] = rel_types.unwrap_or(&[]);
-        let params = TraversalParams {
-            store: &self.edge_store,
-            filter,
-            limit,
-            max_depth,
-            source,
-        };
+        let params = self.traversal_params(source, max_depth, filter, limit);
         let mut frontier = vec![(source, 0u32)];
 
         Ok(traverse_with_frontier(

@@ -135,15 +135,7 @@ pub fn import_jsonl(db: &Database, path: &Path, config: &ImportConfig) -> Result
         progress.inc(1);
     }
 
-    let acc = importer.flush()?;
-    progress.finish_with_message("Import complete");
-
-    Ok(ImportStats {
-        total,
-        imported: acc.imported,
-        errors: acc.errors,
-        duration_ms: start.elapsed().as_millis() as u64,
-    })
+    finalize_import(importer, &progress, total, start)
 }
 
 /// Import from CSV file
@@ -235,6 +227,18 @@ pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<I
         progress.inc(1);
     }
 
+    finalize_import(importer, &progress, total, start)
+}
+
+/// Flush the batch importer, finish the progress bar, and build [`ImportStats`].
+///
+/// Shared finalization tail for `import_jsonl` and `import_csv`.
+fn finalize_import(
+    importer: BatchImporter<'_>,
+    progress: &indicatif::ProgressBar,
+    total: usize,
+    start: std::time::Instant,
+) -> Result<ImportStats> {
     let acc = importer.flush()?;
     progress.finish_with_message("Import complete");
 

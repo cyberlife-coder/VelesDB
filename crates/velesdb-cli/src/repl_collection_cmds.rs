@@ -100,11 +100,7 @@ pub(crate) fn cmd_describe(db: &Database, parts: &[&str]) -> CommandResult {
             println!();
         }
         Some(collection_helpers::TypedCollection::Metadata(col)) => {
-            println!("\n{}", "Collection Details".bold().underline());
-            println!("  {} {}", "Name:".cyan(), col.name().green());
-            println!("  {} {}", "Type:".cyan(), type_label.green());
-            println!("  {} {}", "Item Count:".cyan(), col.len());
-            println!();
+            print_metadata_detail("Collection Details", type_label, &col.name(), col.len());
         }
         None => {
             return CommandResult::Error(format!("Collection '{name}' not found"));
@@ -241,16 +237,7 @@ pub(crate) fn cmd_browse(db: &Database, parts: &[&str]) -> CommandResult {
             );
             println!();
 
-            if node_page.entries.is_empty() {
-                println!("No nodes on this page.\n");
-            } else {
-                let rows = node_entries_to_rows(&node_page.entries);
-                crate::repl_output::print_table(&rows);
-                println!(
-                    "\nUse {} to see next page\n",
-                    format!(".browse {} {}", name, page + 1).yellow()
-                );
-            }
+            print_node_page_body(&node_page.entries, name, ".browse", page);
         }
         Some(collection_helpers::TypedCollection::Metadata(col)) => {
             browse_id_based(
@@ -304,16 +291,7 @@ pub(crate) fn cmd_nodes(db: &Database, parts: &[&str]) -> CommandResult {
     );
     println!();
 
-    if node_page.entries.is_empty() {
-        println!("No nodes on this page.\n");
-    } else {
-        let rows = node_entries_to_rows(&node_page.entries);
-        crate::repl_output::print_table(&rows);
-        println!(
-            "\nUse {} to see next page\n",
-            format!(".nodes {} {}", name, page + 1).yellow()
-        );
-    }
+    print_node_page_body(&node_page.entries, name, ".nodes", page);
     CommandResult::Continue
 }
 
@@ -351,11 +329,7 @@ pub(crate) fn cmd_stats(db: &Database, parts: &[&str]) -> CommandResult {
             println!();
         }
         Some(collection_helpers::TypedCollection::Metadata(col)) => {
-            println!("\n{}", "Collection Statistics".bold().underline());
-            println!("  {} {}", "Name:".cyan(), col.name().green());
-            println!("  {} {}", "Type:".cyan(), "Metadata".green());
-            println!("  {} {}", "Item Count:".cyan(), col.len());
-            println!();
+            print_metadata_detail("Collection Statistics", "Metadata", &col.name(), col.len());
         }
         None => {
             return CommandResult::Error(format!("Collection '{name}' not found"));
@@ -474,6 +448,40 @@ pub(crate) fn node_entries_to_rows(
         .iter()
         .map(|(node_id, payload)| helpers::point_payload_to_row(*node_id, payload))
         .collect()
+}
+
+/// Prints the four-line detail block for a Metadata collection (title, name, type,
+/// item count). `title` and `type_value` let `.describe` and `.stats` share the
+/// rendering while keeping their distinct section heading and type label.
+fn print_metadata_detail(title: &str, type_value: &str, name: &str, item_count: usize) {
+    println!("\n{}", title.bold().underline());
+    println!("  {} {}", "Name:".cyan(), name.green());
+    println!("  {} {}", "Type:".cyan(), type_value.green());
+    println!("  {} {}", "Item Count:".cyan(), item_count);
+    println!();
+}
+
+/// Prints the body of a paginated graph node page: either an empty notice or the
+/// node table followed by a "next page" navigation hint.
+///
+/// `command` is the REPL command word used in the hint (e.g. `.browse`, `.nodes`),
+/// allowing callers to share the rendering while keeping their distinct headers.
+fn print_node_page_body(
+    entries: &[(u64, Option<serde_json::Value>)],
+    name: &str,
+    command: &str,
+    page: usize,
+) {
+    if entries.is_empty() {
+        println!("No nodes on this page.\n");
+    } else {
+        let rows = node_entries_to_rows(entries);
+        crate::repl_output::print_table(&rows);
+        println!(
+            "\nUse {} to see next page\n",
+            format!("{} {} {}", command, name, page + 1).yellow()
+        );
+    }
 }
 
 /// Formats a vector as a truncated preview string (first 5 dimensions).
