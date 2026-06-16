@@ -581,3 +581,7 @@ fn print_scroll_results(points: &[velesdb_core::Point], name: &str, next_cursor:
         None => println!("\n  {}\n", "Iteration complete.".green()),
     }
 }
+
+#[cfg(test)]
+#[path = "repl_collection_cmds_tests.rs"]
+mod repl_collection_cmds_tests;
