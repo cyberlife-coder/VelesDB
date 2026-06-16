@@ -12,6 +12,7 @@
 //! Requires the `persistence` feature (the core search/streaming paths the
 //! commands call are persistence-gated).
 #![cfg(feature = "persistence")]
+#![allow(clippy::too_many_lines)] // verbose end-to-end command-handler setup
 
 use std::sync::Arc;
 

@@ -48,6 +48,19 @@ async fn read_json(response: axum::response::Response) -> Value {
     serde_json::from_slice(&body).expect("test: valid JSON")
 }
 
+/// Asserts a 400 response carrying the `build_edge` properties-shape error.
+async fn assert_properties_shape_error(resp: axum::response::Response) {
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = read_json(resp).await;
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Properties must be an object or null"),
+        "expected the properties-shape error, got {json:?}"
+    );
+}
+
 /// Creates a 4-d cosine collection named `name` and seeds two points so
 /// fusion actually has candidates to rank.
 async fn seed_vector_collection(app: &axum::Router, name: &str) {
@@ -257,15 +270,7 @@ async fn test_add_edge_invalid_properties_returns_400() {
     )
     .await;
 
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let json = read_json(resp).await;
-    assert!(
-        json["error"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Properties must be an object or null"),
-        "expected the properties-shape error, got {json:?}"
-    );
+    assert_properties_shape_error(resp).await;
 }
 
 #[tokio::test]
@@ -288,15 +293,7 @@ async fn test_add_edges_batch_invalid_properties_returns_400() {
     )
     .await;
 
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let json = read_json(resp).await;
-    assert!(
-        json["error"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Properties must be an object or null"),
-        "expected the properties-shape error, got {json:?}"
-    );
+    assert_properties_shape_error(resp).await;
 }
 
 /// A `null` properties value is explicitly allowed and must succeed (201),
