@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-06-16 (v3.0.0)
+Last updated: 2026-06-16 (v3.0.1)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 

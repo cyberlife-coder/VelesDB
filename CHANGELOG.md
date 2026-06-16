@@ -5,6 +5,23 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] — 2026-06-16
+
+Maintenance release. **No functional changes** — the published artifacts are
+equivalent to 3.0.0 (only tests, CI/quality config, and the version bump
+changed). This release adds test coverage for code introduced in 3.0.0 and
+corrects the SonarCloud coverage scope.
+
+### Internal
+- **Coverage:** ~2,600 lines of native tests across `velesdb-core`,
+  `velesdb-server`, `velesdb-cli`, `velesdb-migrate`, the Tauri plugin
+  (mock-runtime command-handler tests), `velesdb-wasm`, and `velesdb-mobile`,
+  covering new code from 3.0.0 (VRB1 wire codec, ordered-index decline branches,
+  multi-query fusion strategies, graph edge-property validation, and more).
+- **SonarCloud:** exclude `velesdb-python` from coverage measurement — its pyo3
+  code is exercised by the pytest suite, not `cargo`, so it has no LCOV data and
+  was incorrectly counted as 0%-covered. Measured workspace coverage is ~81.7%.
+
 ## [3.0.0] — 2026-06-16
 
 A **major release**. The sole backward-incompatible change is to the
