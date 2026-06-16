@@ -82,4 +82,18 @@ mod tests {
         assert!(serde_json::to_writer(&mut over, &value).is_err());
         assert!(over.exceeded());
     }
+
+    /// Writing exactly `cap` bytes is allowed; the cap trips strictly above it.
+    /// Exercises the boundary of the `written > cap` test, then `flush`.
+    #[test]
+    fn boundary_at_cap_and_flush_are_noops() {
+        let mut counter = BoundedCounter::new(5);
+        assert_eq!(counter.write(b"hello").expect("at cap"), 5);
+        assert!(!counter.exceeded(), "exactly cap bytes does not trip");
+        // One more byte tips it over.
+        assert!(counter.write(b"!").is_err());
+        assert!(counter.exceeded());
+        // flush is a no-op that always succeeds.
+        assert!(counter.flush().is_ok());
+    }
 }

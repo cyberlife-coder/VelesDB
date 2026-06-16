@@ -29,6 +29,10 @@ velesdb-core = { workspace = true }
 [dev-dependencies]
 tempfile = "3.14"
 toml = "1.1"
+# `test` feature unlocks `tauri::test::{mock_builder, mock_context, noop_assets}`
+# and `MockRuntime`, used by command integration tests to build an
+# `App<MockRuntime>` and exercise the `#[command]` handlers directly.
+tauri = { version = "2.11", default-features = false, features = ["test"] }
 
 [features]
 default = ["velesdb-core/default"]
