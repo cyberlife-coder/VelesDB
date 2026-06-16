@@ -289,18 +289,19 @@ impl LimitsOptions {
 
 impl LimitsOptions {
     pub(crate) fn to_core(&self) -> CoreLimitsConfig {
-        let base = CoreLimitsConfig::default();
-        CoreLimitsConfig {
-            max_dimensions: self.max_dimensions.unwrap_or(base.max_dimensions),
-            max_vectors_per_collection: self
-                .max_vectors_per_collection
-                .unwrap_or(base.max_vectors_per_collection),
-            max_collections: self.max_collections.unwrap_or(base.max_collections),
-            max_payload_size: self.max_payload_size.unwrap_or(base.max_payload_size),
-            max_perfect_mode_vectors: self
-                .max_perfect_mode_vectors
-                .unwrap_or(base.max_perfect_mode_vectors),
-        }
+        // `CoreLimitsConfig` is `#[non_exhaustive]`; build from `Default` and
+        // override each field (struct literal is disallowed outside velesdb-core).
+        let mut cfg = CoreLimitsConfig::default();
+        cfg.max_dimensions = self.max_dimensions.unwrap_or(cfg.max_dimensions);
+        cfg.max_vectors_per_collection = self
+            .max_vectors_per_collection
+            .unwrap_or(cfg.max_vectors_per_collection);
+        cfg.max_collections = self.max_collections.unwrap_or(cfg.max_collections);
+        cfg.max_payload_size = self.max_payload_size.unwrap_or(cfg.max_payload_size);
+        cfg.max_perfect_mode_vectors = self
+            .max_perfect_mode_vectors
+            .unwrap_or(cfg.max_perfect_mode_vectors);
+        cfg
     }
 }
 
@@ -412,14 +413,17 @@ impl AutoReindexOptions {
 
 impl AutoReindexOptions {
     pub(crate) fn to_core(&self) -> CoreAutoReindexConfig {
-        CoreAutoReindexConfig {
-            enabled: self.enabled,
-            param_divergence_threshold: self.param_divergence_threshold,
-            min_size_for_reindex: self.min_size_for_reindex,
-            max_latency_regression_percent: self.max_latency_regression_percent,
-            max_recall_regression_percent: self.max_recall_regression_percent,
-            cooldown: Duration::from_secs(self.cooldown_secs),
-        }
+        // `CoreAutoReindexConfig` is `#[non_exhaustive]`; build from its
+        // `Default` and override each field (struct literal is disallowed
+        // outside velesdb-core).
+        let mut cfg = CoreAutoReindexConfig::default();
+        cfg.enabled = self.enabled;
+        cfg.param_divergence_threshold = self.param_divergence_threshold;
+        cfg.min_size_for_reindex = self.min_size_for_reindex;
+        cfg.max_latency_regression_percent = self.max_latency_regression_percent;
+        cfg.max_recall_regression_percent = self.max_recall_regression_percent;
+        cfg.cooldown = Duration::from_secs(self.cooldown_secs);
+        cfg
     }
 }
 

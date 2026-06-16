@@ -206,8 +206,12 @@ pub mod server {
 pub use server::{LoggingConfig, ServerConfig, StorageConfig};
 
 /// Limits configuration section.
+///
+/// `#[non_exhaustive]`: build from [`LimitsConfig::default`] and adjust fields
+/// so future limits stay backward compatible for downstream crates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct LimitsConfig {
     /// Maximum vector dimensions.
     pub max_dimensions: usize,

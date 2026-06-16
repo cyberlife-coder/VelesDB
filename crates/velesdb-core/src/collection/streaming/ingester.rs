@@ -26,6 +26,7 @@ use tokio::sync::Notify;
 /// serde default matching [`Default`] so an older or partial `config.json`
 /// deserializes without error.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StreamingConfig {
     /// Capacity of the bounded mpsc channel (backpressure threshold).
     #[serde(default = "default_buffer_size")]
@@ -58,6 +59,21 @@ impl Default for StreamingConfig {
             buffer_size: default_buffer_size(),
             batch_size: default_batch_size(),
             flush_interval_ms: default_flush_interval_ms(),
+        }
+    }
+}
+
+impl StreamingConfig {
+    /// Constructs a config from explicit pipeline parameters.
+    ///
+    /// Provided because the struct is `#[non_exhaustive]` (future fields use
+    /// serde defaults), so downstream crates cannot use a struct literal.
+    #[must_use]
+    pub fn new(buffer_size: usize, batch_size: usize, flush_interval_ms: u64) -> Self {
+        Self {
+            buffer_size,
+            batch_size,
+            flush_interval_ms,
         }
     }
 }
