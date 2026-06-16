@@ -184,6 +184,42 @@ pub async fn get_collection<R: Runtime>(
         .map_err(CommandError::from)
 }
 
+/// Looks up the collection, builds points via `build`, inserts them via
+/// `insert`, then emits a collection-updated event tagged with `event`.
+///
+/// Shared skeleton of [`upsert`] and [`upsert_metadata`]: only the per-point
+/// construction and the core insert method differ between callers.
+fn upsert_points<R, B, I>(
+    app: &AppHandle<R>,
+    state: &State<'_, VelesDbState>,
+    collection: &str,
+    event: &str,
+    build: B,
+    insert: I,
+) -> std::result::Result<usize, CommandError>
+where
+    R: Runtime,
+    B: FnOnce() -> Vec<velesdb_core::Point>,
+    I: FnOnce(
+        &velesdb_core::VectorCollection,
+        Vec<velesdb_core::Point>,
+    ) -> crate::error::Result<()>,
+{
+    let count = state
+        .with_db(|db| {
+            let coll = require_collection(&db, collection)?;
+
+            let points = build();
+            let count = points.len();
+            insert(&coll, points)?;
+            Ok(count)
+        })
+        .map_err(CommandError::from)?;
+
+    emit_collection_updated(app, collection, event, count);
+    Ok(count)
+}
+
 /// Upserts points into a collection.
 #[command]
 pub async fn upsert<R: Runtime>(
@@ -192,24 +228,20 @@ pub async fn upsert<R: Runtime>(
     request: UpsertRequest,
 ) -> std::result::Result<usize, CommandError> {
     let collection_name = request.collection.clone();
-    let count = state
-        .with_db(|db| {
-            let coll = require_collection(&db, &request.collection)?;
-
-            let points: Vec<velesdb_core::Point> = request
+    upsert_points(
+        &app,
+        &state,
+        &collection_name,
+        "upsert",
+        || {
+            request
                 .points
                 .into_iter()
                 .map(|p| velesdb_core::Point::new(p.id, p.vector, p.payload))
-                .collect();
-
-            let count = points.len();
-            coll.upsert(points)?;
-            Ok(count)
-        })
-        .map_err(CommandError::from)?;
-
-    emit_collection_updated(&app, &collection_name, "upsert", count);
-    Ok(count)
+                .collect()
+        },
+        |coll, points| coll.upsert(points).map_err(crate::error::Error::Database),
+    )
 }
 
 /// Upserts metadata-only points into a collection.
@@ -220,24 +252,23 @@ pub async fn upsert_metadata<R: Runtime>(
     request: UpsertMetadataRequest,
 ) -> std::result::Result<usize, CommandError> {
     let collection_name = request.collection.clone();
-    let count = state
-        .with_db(|db| {
-            let coll = require_collection(&db, &request.collection)?;
-
-            let points: Vec<velesdb_core::Point> = request
+    upsert_points(
+        &app,
+        &state,
+        &collection_name,
+        "upsert_metadata",
+        || {
+            request
                 .points
                 .into_iter()
                 .map(|p| velesdb_core::Point::new(p.id, vec![], Some(p.payload)))
-                .collect();
-
-            let count = points.len();
-            coll.upsert_metadata(points)?;
-            Ok(count)
-        })
-        .map_err(CommandError::from)?;
-
-    emit_collection_updated(&app, &collection_name, "upsert_metadata", count);
-    Ok(count)
+                .collect()
+        },
+        |coll, points| {
+            coll.upsert_metadata(points)
+                .map_err(crate::error::Error::Database)
+        },
+    )
 }
 
 /// Gets points by their IDs.
@@ -530,6 +561,45 @@ fn batch_search_bulk(
         .map_err(CommandError::from)
 }
 
+/// Runs a filter-aware search on `collection` and wraps the mapped results in a
+/// timed [`SearchResponse`].
+///
+/// Shared skeleton of [`text_search`] and [`hybrid_search`]: when a filter is
+/// present `filtered` is invoked with it, otherwise `unfiltered` is used. Only
+/// those two core calls differ between callers.
+fn run_filtered_search<Filtered, Unfiltered>(
+    state: &State<'_, VelesDbState>,
+    collection: &str,
+    parsed_filter: Option<&velesdb_core::Filter>,
+    filtered: Filtered,
+    unfiltered: Unfiltered,
+) -> std::result::Result<SearchResponse, CommandError>
+where
+    Filtered: FnOnce(
+        &velesdb_core::VectorCollection,
+        &velesdb_core::Filter,
+    ) -> crate::error::Result<Vec<velesdb_core::SearchResult>>,
+    Unfiltered: FnOnce(
+        &velesdb_core::VectorCollection,
+    ) -> crate::error::Result<Vec<velesdb_core::SearchResult>>,
+{
+    let start = std::time::Instant::now();
+    let results = state
+        .with_db(|db| {
+            let coll = require_collection(&db, collection)?;
+
+            let search_results = if let Some(f) = parsed_filter {
+                filtered(&coll, f)?
+            } else {
+                unfiltered(&coll)?
+            };
+            Ok(map_core_results(search_results))
+        })
+        .map_err(CommandError::from)?;
+
+    Ok(timed_search_response(results, start))
+}
+
 /// Searches by text using BM25.
 #[command]
 pub async fn text_search<R: Runtime>(
@@ -537,23 +607,21 @@ pub async fn text_search<R: Runtime>(
     state: State<'_, VelesDbState>,
     request: TextSearchRequest,
 ) -> std::result::Result<SearchResponse, CommandError> {
-    let start = std::time::Instant::now();
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
 
-    let results = state
-        .with_db(|db| {
-            let coll = require_collection(&db, &request.collection)?;
-
-            let search_results = if let Some(ref f) = parsed_filter {
-                coll.text_search_with_filter(&request.query, request.top_k, f)?
-            } else {
-                coll.text_search(&request.query, request.top_k)?
-            };
-            Ok(map_core_results(search_results))
-        })
-        .map_err(CommandError::from)?;
-
-    Ok(timed_search_response(results, start))
+    run_filtered_search(
+        &state,
+        &request.collection,
+        parsed_filter.as_ref(),
+        |coll, f| {
+            coll.text_search_with_filter(&request.query, request.top_k, f)
+                .map_err(crate::error::Error::Database)
+        },
+        |coll| {
+            coll.text_search(&request.query, request.top_k)
+                .map_err(crate::error::Error::Database)
+        },
+    )
 }
 
 /// Hybrid search combining vector similarity and BM25.
@@ -563,34 +631,32 @@ pub async fn hybrid_search<R: Runtime>(
     state: State<'_, VelesDbState>,
     request: HybridSearchRequest,
 ) -> std::result::Result<SearchResponse, CommandError> {
-    let start = std::time::Instant::now();
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
 
-    let results = state
-        .with_db(|db| {
-            let coll = require_collection(&db, &request.collection)?;
-
-            let search_results = if let Some(ref f) = parsed_filter {
-                coll.hybrid_search_with_filter(
-                    &request.vector,
-                    &request.query,
-                    request.top_k,
-                    Some(request.vector_weight),
-                    f,
-                )?
-            } else {
-                coll.hybrid_search(
-                    &request.vector,
-                    &request.query,
-                    request.top_k,
-                    Some(request.vector_weight),
-                )?
-            };
-            Ok(map_core_results(search_results))
-        })
-        .map_err(CommandError::from)?;
-
-    Ok(timed_search_response(results, start))
+    run_filtered_search(
+        &state,
+        &request.collection,
+        parsed_filter.as_ref(),
+        |coll, f| {
+            coll.hybrid_search_with_filter(
+                &request.vector,
+                &request.query,
+                request.top_k,
+                Some(request.vector_weight),
+                f,
+            )
+            .map_err(crate::error::Error::Database)
+        },
+        |coll| {
+            coll.hybrid_search(
+                &request.vector,
+                &request.query,
+                request.top_k,
+                Some(request.vector_weight),
+            )
+            .map_err(crate::error::Error::Database)
+        },
+    )
 }
 
 // NOTE: VelesQL query command moved to commands_query.rs (NLOC refactoring)

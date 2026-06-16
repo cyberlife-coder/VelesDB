@@ -72,6 +72,33 @@ fn build_edge(
         .map(|edge| edge.with_properties(properties))
 }
 
+/// Builds a [`TraversalConfig`] from the raw request fields. Shared by
+/// [`traverse_graph`] and [`traverse_graph_parallel`].
+fn build_traversal_config(
+    max_depth: u32,
+    limit: usize,
+    rel_types: Option<Vec<String>>,
+) -> TraversalConfig {
+    TraversalConfig::with_range(1, max_depth)
+        .with_limit(limit)
+        .with_rel_types(rel_types.unwrap_or_default())
+}
+
+/// Maps core traversal results into the API [`TraversalOutput`] shape. Shared by
+/// [`traverse_graph`] and [`traverse_graph_parallel`].
+fn to_traversal_outputs(
+    results: Vec<velesdb_core::collection::graph::TraversalResult>,
+) -> Vec<TraversalOutput> {
+    results
+        .into_iter()
+        .map(|r| TraversalOutput {
+            target_id: r.target_id,
+            depth: r.depth,
+            path: r.path,
+        })
+        .collect()
+}
+
 /// Adds an edge to the knowledge graph.
 #[command]
 pub async fn add_edge<R: Runtime>(
@@ -167,9 +194,8 @@ pub async fn traverse_graph<R: Runtime>(
         .with_db(|db| {
             let coll = require_graph_collection(&db, &request.collection)?;
 
-            let config = TraversalConfig::with_range(1, request.max_depth)
-                .with_limit(request.limit)
-                .with_rel_types(request.rel_types.unwrap_or_default());
+            let config =
+                build_traversal_config(request.max_depth, request.limit, request.rel_types);
 
             let results = if request.algorithm == "dfs" {
                 coll.traverse_dfs(request.source, &config)
@@ -177,14 +203,7 @@ pub async fn traverse_graph<R: Runtime>(
                 coll.traverse_bfs(request.source, &config)
             };
 
-            Ok(results
-                .into_iter()
-                .map(|r| TraversalOutput {
-                    target_id: r.target_id,
-                    depth: r.depth,
-                    path: r.path,
-                })
-                .collect())
+            Ok(to_traversal_outputs(results))
         })
         .map_err(CommandError::from)
 }
@@ -222,20 +241,12 @@ pub async fn traverse_graph_parallel<R: Runtime>(
         .with_db(|db| {
             let coll = require_graph_collection(&db, &request.collection)?;
 
-            let config = TraversalConfig::with_range(1, request.max_depth)
-                .with_limit(request.limit)
-                .with_rel_types(request.rel_types.unwrap_or_default());
+            let config =
+                build_traversal_config(request.max_depth, request.limit, request.rel_types);
 
             let results = coll.traverse_bfs_parallel(&request.sources, &config);
 
-            Ok(results
-                .into_iter()
-                .map(|r| TraversalOutput {
-                    target_id: r.target_id,
-                    depth: r.depth,
-                    path: r.path,
-                })
-                .collect())
+            Ok(to_traversal_outputs(results))
         })
         .map_err(CommandError::from)
 }
