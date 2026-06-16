@@ -2,7 +2,7 @@
 FROM rust:1.96-bookworm AS builder
 
 LABEL maintainer="VelesDB Team <contact@wiscale.fr>"
-LABEL version="2.0.0"
+LABEL version="3.0.0"
 
 WORKDIR /app
 
@@ -25,7 +25,7 @@ RUN cargo build --release --bin velesdb-server
 FROM debian:bookworm-slim
 
 LABEL maintainer="VelesDB Team <contact@wiscale.fr>"
-LABEL version="2.0.0"
+LABEL version="3.0.0"
 
 WORKDIR /app
 
