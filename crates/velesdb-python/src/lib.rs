@@ -37,7 +37,10 @@ mod graph;
 mod graph_collection;
 mod graph_collection_query;
 mod graph_store;
+mod observer;
 mod options;
+mod streaming_config;
+mod streaming_runtime;
 mod utils;
 mod velesql;
 mod velesql_helpers;
@@ -50,8 +53,10 @@ pub use graph::{dict_to_edge, dict_to_node, edge_to_dict, node_to_dict, traversa
 pub use graph_collection::{PyGraphCollection, PyGraphSchema};
 pub use graph_store::{GraphStore, StreamingConfig, TraversalResult};
 pub use options::{AutoReindexOptions, HnswOptions, LimitsOptions, VelesConfigOptions};
+pub use streaming_config::StreamingIngestConfig;
 
 use pyo3::prelude::*;
+use pyo3::types::PyTuple;
 
 /// Search result from a vector query.
 #[pyclass(frozen)]
@@ -61,7 +66,7 @@ pub struct SearchResult {
     #[pyo3(get)]
     score: f32,
     #[pyo3(get)]
-    payload: PyObject,
+    payload: Py<PyAny>,
 }
 
 /// VelesDB - A high-performance vector database for AI applications.
@@ -94,6 +99,9 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<StreamingConfig>()?;
     m.add_class::<TraversalResult>()?;
 
+    // Streaming-ingestion config (STREAM-1)
+    m.add_class::<StreamingIngestConfig>()?;
+
     // Agent memory classes (EPIC-010/US-005)
     m.add_class::<agent::AgentMemory>()?;
     m.add_class::<agent::PySemanticMemory>()?;
@@ -108,6 +116,18 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Typed exception hierarchy (issue #427)
     exceptions::register_exceptions(m)?;
+
+    // Canonical enum name sets, single-sourced from velesdb-core so the
+    // bindings and integrations never drift from the engine's variants.
+    // Exposed as immutable tuples of `str`.
+    m.add(
+        "DISTANCE_METRICS",
+        PyTuple::new(m.py(), velesdb_core::DISTANCE_METRIC_NAMES)?,
+    )?;
+    m.add(
+        "STORAGE_MODES",
+        PyTuple::new(m.py(), velesdb_core::STORAGE_MODE_NAMES)?,
+    )?;
 
     // Add version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

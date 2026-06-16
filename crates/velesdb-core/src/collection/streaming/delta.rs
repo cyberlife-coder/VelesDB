@@ -18,11 +18,12 @@
 //! - `search`: scan when `ACTIVE` or `DRAINING` (so concurrent searches during
 //!   drain still see the buffered vectors).
 //!
-//! Future: promote activate() to a CAS so double-activate is detectable (STREAM-02)
-//!
-//! Currently `activate()` is an unconditional store. A future hardening pass
-//! should use `compare_exchange(INACTIVE, ACTIVE)` and return `Err(())` on
-//! re-entrance to surface bugs during testing.
+//! [`DeltaBuffer::activate`] is an unconditional store kept for the idempotent
+//! callers in the rebuild path. [`DeltaBuffer::try_activate`] is the hardened
+//! variant: it uses `compare_exchange(INACTIVE, ACTIVE)` and returns
+//! [`ActivateError::AlreadyActive`] on re-entrance, so a double-activation bug
+//! (two rebuilds racing on the same buffer) surfaces instead of being silently
+//! swallowed (STREAM-9).
 //!
 //! # Lock ordering
 //!
@@ -41,6 +42,17 @@ const INACTIVE: u8 = 0;
 const ACTIVE: u8 = 1;
 /// Buffer is draining — no new writes accepted, but still readable for search.
 const DRAINING: u8 = 2;
+
+/// Error returned by [`DeltaBuffer::try_activate`] when activation is rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ActivateError {
+    /// The buffer was not `INACTIVE` (it is `ACTIVE` or `DRAINING`), so a
+    /// concurrent activation/drain already owns it. Signals a double-activation
+    /// bug rather than a recoverable condition.
+    #[error("delta buffer is already active or draining; double-activation rejected")]
+    AlreadyActive,
+}
 
 /// Delta buffer for streaming inserts during HNSW rebuilds.
 ///
@@ -92,6 +104,25 @@ impl DeltaBuffer {
     /// Idempotent: calling `activate()` when already active is a no-op.
     pub fn activate(&self) {
         self.state.store(ACTIVE, Ordering::Release);
+    }
+
+    /// Activates the buffer via compare-and-swap, rejecting double-activation.
+    ///
+    /// Transitions `INACTIVE → ACTIVE` atomically. Unlike [`activate`](Self::activate),
+    /// this surfaces a re-entrant activation: if the buffer is already `ACTIVE`
+    /// or `DRAINING` (i.e., not `INACTIVE`), it returns
+    /// [`ActivateError::AlreadyActive`] instead of silently overwriting the
+    /// state. Use this on the rebuild entry path so two concurrent rebuilds on
+    /// the same collection cannot both believe they own the buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ActivateError::AlreadyActive`] when the buffer is not `INACTIVE`.
+    pub fn try_activate(&self) -> Result<(), ActivateError> {
+        self.state
+            .compare_exchange(INACTIVE, ACTIVE, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| ())
+            .map_err(|_| ActivateError::AlreadyActive)
     }
 
     /// Deactivates the buffer and drains all buffered points.
@@ -400,6 +431,39 @@ mod tests {
         assert_eq!(drained.len(), 2);
         assert_eq!(drained[0].0, 1);
         assert_eq!(drained[1].0, 2);
+    }
+
+    // ── STREAM-9: try_activate CAS detects double-activation ───────────
+
+    #[test]
+    fn test_delta_activate_cas_detects_double() {
+        let buf = DeltaBuffer::new();
+        // First activation on an INACTIVE buffer succeeds.
+        assert!(
+            buf.try_activate().is_ok(),
+            "first try_activate must succeed"
+        );
+        assert!(buf.is_active());
+        // Second activation must be rejected (double-activation detected).
+        assert_eq!(
+            buf.try_activate(),
+            Err(ActivateError::AlreadyActive),
+            "re-entrant try_activate must report AlreadyActive"
+        );
+        // After draining back to INACTIVE, try_activate succeeds again.
+        let _ = buf.deactivate_and_drain();
+        assert!(
+            buf.try_activate().is_ok(),
+            "try_activate must succeed again once buffer is INACTIVE"
+        );
+    }
+
+    #[test]
+    fn test_delta_try_activate_pushes_after_cas() {
+        let buf = DeltaBuffer::new();
+        buf.try_activate().expect("activation should succeed");
+        buf.push(1, vec![1.0, 0.0]);
+        assert_eq!(buf.len(), 1, "push after CAS activation must accumulate");
     }
 
     #[test]

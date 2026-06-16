@@ -10,14 +10,15 @@ use tempfile::TempDir;
 
 use velesdb_core::Database;
 use velesdb_server::{
-    add_edge, aggregate,
+    add_edge, add_edges_batch, aggregate,
     auth::{auth_middleware, AuthState},
-    batch_search, bulk_delete_points, collection_sanity, compact_collection, create_collection,
-    delete_collection, delete_point, explain, get_collection, get_collection_config, get_edges,
-    get_node_degree, get_point, health_check, hybrid_search, list_collections, multi_query_search,
-    query, readiness_check, rebuild_index, scroll_points, search, search_ids, set_point_ttl,
-    stream_upsert_points, text_search, traverse_graph, upsert_points, vacuum_collection, AppState,
-    OnboardingMetrics,
+    batch_search, bulk_delete_points, collection_diagnostics, collection_sanity,
+    compact_collection, create_collection, delete_collection, delete_point, enable_streaming,
+    explain, get_collection, get_collection_config, get_edges, get_node_degree, get_point,
+    health_check, hybrid_search, list_collections, multi_query_search, multi_query_search_ids,
+    query, readiness_check, rebuild_index, reorder_for_locality, scroll_points, search, search_ids,
+    set_point_ttl, stream_insert, stream_upsert_points, text_search, traverse_graph, upsert_points,
+    upsert_points_raw, vacuum_collection, AppState, OnboardingMetrics,
 };
 
 fn base_routes() -> Router<Arc<AppState>> {
@@ -33,13 +34,20 @@ fn base_routes() -> Router<Arc<AppState>> {
             get(get_collection).delete(delete_collection),
         )
         .route("/collections/{name}/config", get(get_collection_config))
+        .route(
+            "/collections/{name}/diagnostics",
+            get(collection_diagnostics),
+        )
         .route("/collections/{name}/index/rebuild", post(rebuild_index))
         .route("/collections/{name}/sanity", get(collection_sanity))
         .route("/collections/{name}/points", post(upsert_points))
+        .route("/collections/{name}/points/raw", post(upsert_points_raw))
         .route(
             "/collections/{name}/points/stream",
             post(stream_upsert_points),
         )
+        .route("/collections/{name}/stream/enable", post(enable_streaming))
+        .route("/collections/{name}/stream/insert", post(stream_insert))
         .route(
             "/collections/{name}/points/{id}",
             get(get_point).delete(delete_point),
@@ -49,6 +57,10 @@ fn base_routes() -> Router<Arc<AppState>> {
         .route("/collections/{name}/search", post(search))
         .route("/collections/{name}/search/batch", post(batch_search))
         .route("/collections/{name}/search/multi", post(multi_query_search))
+        .route(
+            "/collections/{name}/search/multi/ids",
+            post(multi_query_search_ids),
+        )
         .route("/collections/{name}/search/text", post(text_search))
         .route("/collections/{name}/search/hybrid", post(hybrid_search))
         .route("/collections/{name}/search/ids", post(search_ids))
@@ -64,6 +76,10 @@ fn graph_and_maintenance_routes() -> Router<Arc<AppState>> {
             "/collections/{name}/graph/edges",
             get(get_edges).post(add_edge),
         )
+        .route(
+            "/collections/{name}/graph/edges/batch",
+            post(add_edges_batch),
+        )
         .route("/collections/{name}/graph/traverse", post(traverse_graph))
         .route(
             "/collections/{name}/graph/nodes/{node_id}/degree",
@@ -76,10 +92,13 @@ fn graph_and_maintenance_routes() -> Router<Arc<AppState>> {
         )
         .route("/collections/{name}/vacuum", post(vacuum_collection))
         .route("/collections/{name}/compact", post(compact_collection))
+        .route(
+            "/collections/{name}/locality/reorder",
+            post(reorder_for_locality),
+        )
 }
 
-fn create_app_state(temp_dir: &TempDir) -> Arc<AppState> {
-    let db = Database::open(temp_dir.path()).expect("Failed to open database");
+fn app_state_from_db(db: Database) -> Arc<AppState> {
     Arc::new(AppState {
         db,
         onboarding_metrics: OnboardingMetrics::default(),
@@ -93,9 +112,26 @@ fn create_app_state(temp_dir: &TempDir) -> Arc<AppState> {
     })
 }
 
+fn create_app_state(temp_dir: &TempDir) -> Arc<AppState> {
+    app_state_from_db(Database::open(temp_dir.path()).expect("Failed to open database"))
+}
+
 /// Helper to create test app with all routes (no auth).
 pub fn create_test_app(temp_dir: &TempDir) -> Router {
     base_routes().with_state(create_app_state(temp_dir))
+}
+
+/// Helper to create a test app whose database is opened with the given
+/// [`DatabaseObserver`](velesdb_core::DatabaseObserver), so the lifecycle
+/// notify hooks (`on_collection_created`/`on_collection_deleted`/`on_upsert`/
+/// `on_query`) fire through the server's handlers.
+pub fn create_test_app_with_observer(
+    temp_dir: &TempDir,
+    observer: Arc<dyn velesdb_core::DatabaseObserver>,
+) -> Router {
+    let db =
+        Database::open_with_observer(temp_dir.path(), observer).expect("Failed to open database");
+    base_routes().with_state(app_state_from_db(db))
 }
 
 /// Helper to create test app and return the shared state for direct manipulation.

@@ -8,6 +8,12 @@ import numpy as np
 
 __version__: str
 
+# Canonical enum name sets, single-sourced from velesdb-core's
+# `DistanceMetric` / `StorageMode` variants. Immutable tuples of canonical
+# lowercase names, in declaration order.
+DISTANCE_METRICS: Tuple[str, ...]
+STORAGE_MODES: Tuple[str, ...]
+
 
 # ---------------------------------------------------------------------------
 # Structural return types (TypedDict)
@@ -88,6 +94,7 @@ class FusionStrategy:
         ...
 
     @staticmethod
+    @overload
     def weighted(
         avg_weight: float,
         max_weight: float,
@@ -106,6 +113,29 @@ class FusionStrategy:
         ...
 
     @staticmethod
+    @overload
+    def weighted(weights: Dict[str, float]) -> "FusionStrategy":
+        """Create a Weighted fusion strategy from a ``{"avg"/"max"/"hit": w}`` dict."""
+        ...
+
+    @staticmethod
+    @overload
+    def weighted(max_weight: float, hit_weight: float) -> "FusionStrategy":
+        """Legacy two-argument form: ``avg_weight`` is derived from the remainder."""
+        ...
+
+    @staticmethod
+    @overload
+    def weighted(
+        avg_weight: None = None,
+        *,
+        max_weight: float,
+        hit_weight: float,
+    ) -> "FusionStrategy":
+        """Legacy keyword form: ``avg_weight`` is derived from the remainder."""
+        ...
+
+    @staticmethod
     def relative_score(dense_weight: float, sparse_weight: float) -> "FusionStrategy":
         """Create a Relative Score Fusion (RSF) strategy for hybrid dense+sparse search.
 
@@ -116,6 +146,11 @@ class FusionStrategy:
         Raises:
             ValueError: If weights are invalid
         """
+        ...
+
+    @staticmethod
+    def rsf(dense_weight: float = 0.5, sparse_weight: float = 0.5) -> "FusionStrategy":
+        """Short alias for :meth:`relative_score` (``USING FUSION rsf`` in VelesQL)."""
         ...
 
 
@@ -975,6 +1010,10 @@ class Database:
         """
         ...
 
+    def get_collections(self) -> List[str]:
+        """Compatibility alias for :meth:`list_collections`."""
+        ...
+
     def delete_collection(self, name: str) -> None:
         """Delete a collection.
 
@@ -1000,7 +1039,7 @@ class Database:
         dimension: Optional[int] = None,
         metric: str = "cosine",
         schema: Optional["PyGraphSchema"] = None,
-    ) -> "PyGraphCollection":
+    ) -> "GraphCollection":
         """Create a new persistent graph collection.
 
         Args:
@@ -1014,7 +1053,7 @@ class Database:
         """
         ...
 
-    def get_graph_collection(self, name: str) -> Optional["PyGraphCollection"]:
+    def get_graph_collection(self, name: str) -> Optional["GraphCollection"]:
         """Get an existing graph collection by name.
 
         Returns:
@@ -1128,6 +1167,40 @@ class Database:
 
 
 # =============================================================================
+# VelesDB Errors
+# =============================================================================
+
+class VelesDBError(Exception):
+    """Base class for all VelesDB-specific exceptions."""
+    ...
+
+
+class DimensionMismatchError(VelesDBError):
+    """Raised when a vector's dimension does not match the collection."""
+    ...
+
+
+class CollectionNotFoundError(VelesDBError):
+    """Raised when the named collection does not exist."""
+    ...
+
+
+class CollectionExistsError(VelesDBError):
+    """Raised when creating a collection whose name already exists."""
+    ...
+
+
+class EdgeExistsError(VelesDBError):
+    """Raised when adding a graph edge whose ID already exists."""
+    ...
+
+
+class DatabaseLockedError(VelesDBError):
+    """Raised when the database is already locked by another handle or process."""
+    ...
+
+
+# =============================================================================
 # VelesQL Classes
 # =============================================================================
 
@@ -1161,6 +1234,11 @@ class ParsedStatement:
     def has_distinct(self) -> bool: ...
     def has_joins(self) -> bool: ...
     def has_fusion(self) -> bool: ...
+    def has_having(self) -> bool: ...
+    def is_ddl(self) -> bool: ...
+    def is_dml(self) -> bool: ...
+    def is_delete(self) -> bool: ...
+    def is_insert_edge(self) -> bool: ...
     @property
     def join_count(self) -> int: ...
 
@@ -1218,6 +1296,21 @@ class TraversalResult:
     edge_id: int
 
 
+class StreamingIngestConfig:
+    """Configuration for streaming ingestion (``Collection.enable_streaming``)."""
+
+    buffer_size: int
+    batch_size: int
+    flush_interval_ms: int
+
+    def __init__(
+        self,
+        buffer_size: int = 10000,
+        batch_size: int = 128,
+        flush_interval_ms: int = 50,
+    ) -> None: ...
+
+
 class GraphStore:
     """In-memory graph store for knowledge graph operations."""
 
@@ -1234,15 +1327,40 @@ class GraphStore:
 
     def get_edges_by_label(self, label: str) -> List[GraphEdgeDict]: ...
     def get_outgoing(self, node_id: int) -> List[GraphEdgeDict]: ...
+    def get_outgoing_edges(self, node_id: int) -> List[GraphEdgeDict]: ...
     def get_incoming(self, node_id: int) -> List[GraphEdgeDict]: ...
+    def get_incoming_edges(self, node_id: int) -> List[GraphEdgeDict]: ...
     def get_outgoing_by_label(self, node_id: int, label: str) -> List[GraphEdgeDict]: ...
 
     def traverse_bfs_streaming(
         self, start_node: int, config: StreamingConfig
     ) -> List[TraversalResult]: ...
 
+    def traverse_bfs(
+        self,
+        *,
+        source: int,
+        max_depth: int = 3,
+        limit: int = 10000,
+        relationship_types: Optional[List[str]] = None,
+    ) -> List[TraversalResult]:
+        """Run a BFS traversal from ``source`` (keyword-only arguments)."""
+        ...
+
+    def traverse_dfs(
+        self,
+        *,
+        source: int,
+        max_depth: int = 3,
+        limit: int = 10000,
+        relationship_types: Optional[List[str]] = None,
+    ) -> List[TraversalResult]:
+        """Run a DFS traversal from ``source`` (keyword-only arguments)."""
+        ...
+
     def remove_edge(self, edge_id: int) -> None: ...
     def edge_count(self) -> int: ...
+    def has_edge(self, edge_id: int) -> bool: ...
 
 
 class PyGraphSchema:
@@ -1323,8 +1441,16 @@ class PyGraphCollection:
         """Get outgoing edges from a node."""
         ...
 
+    def get_outgoing_edges(self, node_id: int) -> List[GraphEdgeDict]:
+        """Compatibility alias for :meth:`get_outgoing`."""
+        ...
+
     def get_incoming(self, node_id: int) -> List[GraphEdgeDict]:
         """Get incoming edges to a node."""
+        ...
+
+    def get_incoming_edges(self, node_id: int) -> List[GraphEdgeDict]:
+        """Compatibility alias for :meth:`get_incoming`."""
         ...
 
     def edge_count(self) -> int:
@@ -1342,6 +1468,15 @@ class PyGraphCollection:
         API and the rest of the Python surface (which uses `upsert`
         everywhere).
         """
+        ...
+
+    def upsert_node(
+        self,
+        node_id: int,
+        payload: Dict[str, Any],
+        vector: Optional[List[float]] = None,
+    ) -> None:
+        """Upsert a node's payload, optionally with an embedding vector."""
         ...
 
     def get_node_payload(self, node_id: int) -> Optional[Dict[str, Any]]:
@@ -1537,6 +1672,10 @@ class PyGraphCollection:
         """
         ...
 
+    def has_edge(self, edge_id: int) -> bool:
+        """Return True when an edge with the given ID exists."""
+        ...
+
     def __contains__(self, node_id: int) -> bool:
         """Membership test: ``node_id in graph`` (true if node has a payload)."""
         ...
@@ -1554,6 +1693,84 @@ class PyGraphCollection:
 
         Idempotent — safe to call multiple times.
         """
+        ...
+
+
+class GraphCollection(PyGraphCollection):
+    """Python compatibility wrapper returned by the graph-collection helpers.
+
+    Returned by :meth:`Database.create_graph_collection` and
+    :meth:`Database.get_graph_collection`. Unknown attributes delegate to the
+    underlying :class:`PyGraphCollection`; the members below are the
+    facade-specific overrides and convenience aliases.
+    """
+
+    @overload
+    def add_edge(self, edge: Dict[str, Any]) -> None:
+        """Add an edge from the canonical dict shape."""
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        edge_id: int,
+        *,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        properties: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Add an edge using the explicit-id legacy shape."""
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        weight: Any = None,
+    ) -> None:
+        """Add an edge using the legacy no-id positional shape."""
+        ...
+
+    def add_node(
+        self,
+        node_id: int,
+        payload: Optional[Dict[str, Any]] = None,
+        vector: Optional[List[float]] = None,
+    ) -> None:
+        """Compatibility alias for :meth:`upsert_node`."""
+        ...
+
+    def bfs(
+        self,
+        start_id: int,
+        max_depth: int = 3,
+        limit: int = 100,
+    ) -> List[TraversalResultDict]:
+        """Compatibility alias for :meth:`traverse_bfs`."""
+        ...
+
+    def dfs(
+        self,
+        start_id: int,
+        max_depth: int = 3,
+        limit: int = 100,
+    ) -> List[TraversalResultDict]:
+        """Compatibility alias for :meth:`traverse_dfs`."""
+        ...
+
+    def has_edge(self, edge_id: int) -> bool:
+        """Return True when an edge with the given ID exists."""
+        ...
+
+    def __enter__(self) -> "GraphCollection":
+        """Context manager entry — returns ``self``."""
+        ...
+
+    def close(self) -> None:
+        """Flush and release the underlying graph collection."""
         ...
 
 
@@ -1910,6 +2127,10 @@ class AgentMemory:
 
     def load_snapshot_version(self, version: int) -> None:
         """Load a specific snapshot version, restoring all subsystems."""
+        ...
+
+    def rollback(self, version: int) -> None:
+        """Compatibility alias for :meth:`load_snapshot_version`."""
         ...
 
     def list_snapshot_versions(self) -> List[int]:

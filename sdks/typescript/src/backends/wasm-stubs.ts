@@ -30,9 +30,11 @@ import type {
   SearchResult,
   VectorDocument,
   SearchOptions,
+  MultiQuerySearchOptions,
   ScrollRequest,
   ScrollResponse,
   StreamUpsertResponse,
+  StreamingConfig,
 } from '../types';
 import { wasmNotSupported } from './shared';
 
@@ -145,6 +147,12 @@ export async function wasmTrainPq(
   wasmNotSupported('PQ training');
 }
 
+export async function wasmEnableStreaming(
+  _collection: string, _config?: StreamingConfig
+): Promise<void> {
+  wasmNotSupported('Streaming enable');
+}
+
 export async function wasmStreamInsert(
   _collection: string, _docs: VectorDocument[]
 ): Promise<void> {
@@ -155,6 +163,12 @@ export async function wasmStreamUpsertPoints(
   _collection: string, _docs: VectorDocument[]
 ): Promise<StreamUpsertResponse> {
   wasmNotSupported('Streaming batch upsert');
+}
+
+export async function wasmUpsertBatchRaw(
+  _collection: string, _docs: VectorDocument[]
+): Promise<number> {
+  wasmNotSupported('Binary bulk upsert (upsertBatchRaw)');
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +205,14 @@ export async function wasmSearchIds(
   _options?: SearchOptions
 ): Promise<Array<{ id: number; score: number }>> {
   wasmNotSupported('searchIds');
+}
+
+export async function wasmMultiQuerySearchIds(
+  _collection: string,
+  _vectors: Array<number[] | Float32Array>,
+  _options?: MultiQuerySearchOptions
+): Promise<Array<{ id: number; score: number }>> {
+  wasmNotSupported('multiQuerySearchIds');
 }
 
 export async function wasmStoreSemanticFact(

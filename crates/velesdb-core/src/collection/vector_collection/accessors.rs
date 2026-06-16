@@ -174,6 +174,20 @@ impl VectorCollection {
         self.inner.drop_secondary_index(field_name)
     }
 
+    /// Recommends secondary indexes for scalar `ORDER BY <field>` queries that
+    /// repeatedly fell back to the exhaustive sort (EPIC-081 phase 3a).
+    ///
+    /// Returns one suggestion per field observed at least `min_observations`
+    /// times, sorted by descending observation count then field name. This is
+    /// recommendation-only — it never creates, drops, or mutates an index.
+    #[must_use]
+    pub fn order_by_index_advice(
+        &self,
+        min_observations: u64,
+    ) -> Vec<crate::collection::order_by_advisor::OrderByIndexSuggestion> {
+        self.inner.order_by_index_advice(min_observations)
+    }
+
     /// Returns `true` if a property index exists.
     #[must_use]
     pub fn has_property_index(&self, label: &str, property: &str) -> bool {
@@ -199,12 +213,12 @@ impl VectorCollection {
     }
 
     /// Attaches an [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager)
-    /// to this collection as a runtime-only hook.
+    /// to this collection.
     ///
-    /// The attachment is **not persisted** to `config.json` — callers must
-    /// re-attach after every [`Database::open`](crate::Database::open).
-    /// This intentional design avoids the `Duration` serde round-trip and
-    /// keeps the collection schema version stable.
+    /// The manager's config is mirrored into `config.json` (schema v2) so the
+    /// policy is restored automatically on the next
+    /// [`Database::open`](crate::Database::open) — no manual re-attach is
+    /// required once a subsequent flush has persisted it.
     ///
     /// Once attached, the manager is consulted by the bulk upsert hot
     /// path after every successful `upsert_bulk` call. When the manager

@@ -19,10 +19,14 @@ crate-type = ["cdylib"]
 
 [dependencies]
 velesdb-core = { workspace = true }
-pyo3 = { version = "0.24", features = ["extension-module", "multiple-pymethods", "abi3-py39"] }
+pyo3 = { version = "0.29", features = ["extension-module", "multiple-pymethods", "abi3-py39", "generate-import-lib"] }
 serde_json = { workspace = true }
-numpy = "0.24"
+numpy = "0.29"
 parking_lot = "0.12"
+# Hosts the background streaming-ingestion drain task (Collection.enable_streaming).
+# The Python process has no ambient Tokio runtime, so the bindings provide a
+# shared multi-thread runtime for the StreamIngester to spawn its drain loop on.
+tokio = { workspace = true }
 
 [features]
 default = ["velesdb-core/default"]
@@ -31,7 +35,7 @@ update-check = ["velesdb-core/update-check"]
 loom = ["velesdb-core/loom"]
 
 [build-dependencies]
-pyo3-build-config = "0.28"
+pyo3-build-config = "0.29"
 
 [lints]
 workspace = true

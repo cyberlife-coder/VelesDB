@@ -44,7 +44,9 @@ impl Collection {
             return Ok(0);
         }
 
-        // Validate inputs BEFORE any state mutation.
+        // Validate inputs and enforce the runtime ingest limits (parity item E)
+        // BEFORE any state mutation, so the caps are not bypassable on this
+        // zero-copy path (the dominant Python/REST bulk upsert surface).
         self.validate_raw_inputs(vectors, ids, dimension, payloads)?;
 
         // Build (id, &[f32]) pairs by slicing the flat buffer -- zero copy.
@@ -88,7 +90,7 @@ impl Collection {
 
         self.update_text_index_from_raw(ids, payloads)?;
         self.update_label_index_from_raw(ids, payloads);
-        self.update_secondary_indexes_from_raw(ids, payloads);
+        self.update_secondary_indexes_from_raw(ids, payloads, &old_payloads);
 
         let inserted = self.bulk_index_or_defer(&vector_refs);
         self.config.write().point_count = self.vector_storage.read().len();
@@ -134,6 +136,32 @@ impl Collection {
         self.update_histograms_replace(old_payloads, &owned);
     }
 
+    /// Enforces the runtime ingest limits (parity item E) for the raw bulk
+    /// path, reusing the shared `Collection` gates so the slice-based and
+    /// `Point`-based ingest paths apply identical caps.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::GuardRail`] when the batch would push the
+    /// collection past `max_vectors_per_collection`, or when any payload
+    /// exceeds `max_payload_size`.
+    fn enforce_raw_upsert_limits(
+        &self,
+        ids: &[u64],
+        payloads: Option<&[Option<serde_json::Value>]>,
+    ) -> Result<()> {
+        let limits = self.runtime_limits();
+        self.enforce_vector_count(ids.len(), limits.max_vectors_per_collection)?;
+        if let Some(ps) = payloads {
+            for (i, opt) in ps.iter().enumerate() {
+                if let Some(payload) = opt {
+                    Self::enforce_payload_value_size(ids[i], payload, limits.max_payload_size)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Validates raw bulk-insert inputs before any state mutation.
     fn validate_raw_inputs(
         &self,
@@ -164,6 +192,7 @@ impl Collection {
         }
         let collection_dim = self.config.read().dimension;
         validate_dimension_match(collection_dim, dimension)?;
+        self.enforce_raw_upsert_limits(ids, payloads)?;
         Ok(())
     }
 
@@ -221,38 +250,37 @@ impl Collection {
 
     /// Batch-updates secondary indexes from raw payload slices.
     ///
-    /// For each point with a payload, updates all secondary indexes that
-    /// have a matching field. Skips the update when no secondary indexes
-    /// exist (fast path for bulk loading before `create_index`).
+    /// For each point with a payload, **removes the prior indexed value and
+    /// inserts the new one** (via [`update_secondary_indexes_on_upsert`]) so an
+    /// overwrite of an already-indexed point does not leave a stale entry in the
+    /// old key's bucket. Without the removal the same id would sit in both its
+    /// old and new key buckets, inflating `Σ buckets` above `point_count` so the
+    /// ordered-index coverage check declines the fast path — and a restart that
+    /// rebuilds from the final stored payload (backfill) would then diverge from
+    /// the live tree (EPIC-081 phase 3d restore equivalence). `old_payloads[i]`
+    /// is the pre-batch payload for `ids[i]` (already collected by the caller),
+    /// deduplicated so a duplicate id within the same batch carries `None`.
+    ///
+    /// Skips entirely when no secondary indexes exist (fast path for bulk
+    /// loading before `create_index`).
+    ///
+    /// [`update_secondary_indexes_on_upsert`]: Self::update_secondary_indexes_on_upsert
     fn update_secondary_indexes_from_raw(
         &self,
         ids: &[u64],
         payloads: Option<&[Option<serde_json::Value>]>,
+        old_payloads: &[Option<serde_json::Value>],
     ) {
         let Some(ps) = payloads else { return };
-        let indexes = self.secondary_indexes.read();
-        if indexes.is_empty() {
+        if self.secondary_indexes.read().is_empty() {
             return;
         }
         for (i, opt) in ps.iter().enumerate() {
-            let Some(payload) = opt else { continue };
-            self.index_single_payload(&indexes, payload, ids[i]);
-        }
-    }
-
-    /// Indexes a single payload against all secondary indexes.
-    fn index_single_payload(
-        &self,
-        indexes: &std::collections::HashMap<String, crate::index::SecondaryIndex>,
-        payload: &serde_json::Value,
-        point_id: u64,
-    ) {
-        for (field, index) in indexes {
-            if let Some(val) = payload.get(field) {
-                if let Some(key) = crate::index::JsonValue::from_json(val) {
-                    self.insert_into_secondary_index(index, key, point_id);
-                }
+            if opt.is_none() {
+                continue;
             }
+            let old = old_payloads.get(i).and_then(Option::as_ref);
+            self.update_secondary_indexes_on_upsert(ids[i], old, opt.as_ref());
         }
     }
 

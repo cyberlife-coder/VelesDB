@@ -714,6 +714,7 @@ memory = AgentMemory(db, dimension=384,
 version = memory.snapshot()                 # -> version number
 versions = memory.list_snapshot_versions()  # -> [1, 2, ...]
 memory.load_snapshot_version(version)       # restore a specific version
+memory.rollback(version)                    # compatibility alias
 memory.load_latest_snapshot()               # restore the most recent
 ```
 

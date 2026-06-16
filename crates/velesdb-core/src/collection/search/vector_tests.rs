@@ -58,6 +58,39 @@ fn test_search_ids_product_quantization_cosine_scores_stay_in_similarity_domain(
 // Bitmap pre-filter integration tests
 // =============================================================================
 
+/// Builds one 4-dim point whose first coordinate is offset by `id` and then
+/// L2-normalized for cosine, carrying the supplied `payload`.
+fn make_normalized_point(id: u64, payload: serde_json::Value) -> Point {
+    let mut vector = vec![0.1_f32; 4];
+    // Reason: id fits in u16 for these small test fixtures.
+    #[allow(clippy::cast_precision_loss)]
+    {
+        vector[0] += (id as f32) * 0.01;
+    }
+    // Normalize for cosine
+    let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+    for x in &mut vector {
+        *x /= norm;
+    }
+    Point {
+        id,
+        vector,
+        payload: Some(payload),
+        sparse_vectors: None,
+    }
+}
+
+/// Builds 20 normalized points tagged `tag = "A"` (IDs 0..10) or `"B"`
+/// (IDs 10..20), used by the no-index post-filter fallback tests.
+fn tag_ab_points() -> Vec<Point> {
+    (0u64..20)
+        .map(|id| {
+            let payload = serde_json::json!({"tag": if id < 10 { "A" } else { "B" }});
+            make_normalized_point(id, payload)
+        })
+        .collect()
+}
+
 /// Creates a collection with indexed points for bitmap pre-filter testing.
 ///
 /// Inserts 50 points in 4-dim space with payloads:
@@ -84,23 +117,7 @@ fn create_indexed_collection() -> (Collection, TempDir) {
                 "category": category,
                 "priority": id % 5,
             });
-            let mut vector = vec![0.1_f32; 4];
-            // Reason: id fits in u16 for 50 points.
-            #[allow(clippy::cast_precision_loss)]
-            {
-                vector[0] += (id as f32) * 0.01;
-            }
-            // Normalize for cosine
-            let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
-            for x in &mut vector {
-                *x /= norm;
-            }
-            Point {
-                id,
-                vector,
-                payload: Some(payload),
-                sparse_vectors: None,
-            }
+            make_normalized_point(id, payload)
         })
         .collect();
 
@@ -148,26 +165,7 @@ fn test_search_with_filter_no_index_falls_back_to_postfilter() {
         .expect("test: create collection");
 
     // Insert points WITHOUT creating a secondary index
-    let points: Vec<Point> = (0u64..20)
-        .map(|id| {
-            let payload = serde_json::json!({"tag": if id < 10 { "A" } else { "B" }});
-            let mut vector = vec![0.1_f32; 4];
-            #[allow(clippy::cast_precision_loss)]
-            {
-                vector[0] += (id as f32) * 0.01;
-            }
-            let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
-            for x in &mut vector {
-                *x /= norm;
-            }
-            Point {
-                id,
-                vector,
-                payload: Some(payload),
-                sparse_vectors: None,
-            }
-        })
-        .collect();
+    let points: Vec<Point> = tag_ab_points();
 
     collection.upsert(points).expect("test: upsert");
 
@@ -360,26 +358,7 @@ fn test_search_with_filter_and_opts_no_bitmap_falls_back_to_post_filter() {
     let temp_dir = TempDir::new().expect("test: temp dir");
     let col = Collection::create(temp_dir.path().to_path_buf(), 4, DistanceMetric::Cosine)
         .expect("create");
-    let points: Vec<crate::point::Point> = (0u64..20)
-        .map(|id| {
-            let payload = serde_json::json!({"tag": if id < 10 { "A" } else { "B" }});
-            let mut vector = vec![0.1_f32; 4];
-            #[allow(clippy::cast_precision_loss)]
-            {
-                vector[0] += (id as f32) * 0.01;
-            }
-            let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
-            for x in &mut vector {
-                *x /= norm;
-            }
-            crate::point::Point {
-                id,
-                vector,
-                payload: Some(payload),
-                sparse_vectors: None,
-            }
-        })
-        .collect();
+    let points: Vec<Point> = tag_ab_points();
     col.upsert(points).expect("upsert");
     let filter = crate::filter::Filter::new(crate::filter::Condition::Eq {
         field: "tag".to_string(),
@@ -400,5 +379,52 @@ fn test_search_with_filter_and_opts_no_bitmap_falls_back_to_post_filter() {
     assert!(
         !results.is_empty(),
         "should find tag=A results via post-filter fallback"
+    );
+}
+
+/// Parity item E: a filtered `WITH (mode='perfect')` search over a collection
+/// larger than `max_perfect_mode_vectors` must be rejected, so the gate cannot
+/// be bypassed by adding a WHERE clause (the unbounded brute-force path).
+#[test]
+fn test_filtered_perfect_search_over_cap_is_rejected() {
+    use crate::collection::RuntimeLimits;
+
+    let temp_dir = TempDir::new().expect("test: temp dir");
+    let col = Collection::create(temp_dir.path().to_path_buf(), 4, DistanceMetric::Cosine)
+        .expect("create");
+    let points: Vec<Point> = (0u64..5)
+        .map(|id| Point {
+            id,
+            vector: vec![0.1_f32, 0.2, 0.3, 0.4],
+            payload: Some(serde_json::json!({ "tag": "A" })),
+            sparse_vectors: None,
+        })
+        .collect();
+    col.upsert(points).expect("upsert");
+
+    // Cap below the 5 indexed vectors: Perfect mode is now over the limit.
+    col.set_runtime_limits(RuntimeLimits {
+        max_vectors_per_collection: 1_000,
+        max_payload_size: 1_048_576,
+        max_perfect_mode_vectors: 1,
+    });
+
+    let filter = crate::filter::Filter::new(crate::filter::Condition::Eq {
+        field: "tag".to_string(),
+        value: serde_json::Value::String("A".to_string()),
+    });
+    let opts = crate::collection::search::query::QuerySearchOptions {
+        quality: Some(crate::SearchQuality::Perfect),
+        ef_search: None,
+        force_rerank: None,
+        fusion_clause: None,
+    };
+
+    let err = col
+        .search_with_filter_and_opts(&[0.1, 0.2, 0.3, 0.4], 5, &filter, &opts)
+        .expect_err("filtered Perfect search over cap must be rejected");
+    assert!(
+        matches!(err, crate::error::Error::GuardRail(_)),
+        "expected GuardRail, got {err:?}"
     );
 }

@@ -5,6 +5,75 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] — 2026-06-16
+
+A **major release**. The sole backward-incompatible change is to the
+`velesdb-core` Rust crate API — the public configuration structs are now
+`#[non_exhaustive]`. Everything else since 2.0.0 is additive: index-backed
+`ORDER BY` pushdown, durable secondary indexes, streaming ingestion across the
+ecosystem, binary bulk paths, and broad binding parity. The SDKs
+(Python / TypeScript / REST / mobile / WASM) and the on-disk data format remain
+backward compatible — a 2.0.0 data directory opens unchanged.
+
+**Breaking — read before upgrading:**
+- **`velesdb-core` config structs are `#[non_exhaustive]`.** `CollectionConfig`,
+  `LimitsConfig`, `AutoReindexConfig`, and the ingestion `StreamingConfig` can no
+  longer be constructed (or exhaustively destructured) with a struct literal from
+  outside the crate. Build them via the `VectorCollection::create*` constructors,
+  `StreamingConfig::new`, or `Default` + field assignment. This makes future field
+  additions non-breaking. **No effect on the SDKs, the REST API, or stored data.**
+
+### Added
+- **Index-backed `ORDER BY <col> LIMIT k` pushdown (EPIC-081).** Scalar
+  single-column, `WHERE`-filtered, and multi-column `ORDER BY` now serve top-k from
+  an ordered secondary index instead of an O(n) fetch-then-sort (~89 ms → ~0.01 ms
+  over 50k rows), plus an `ORDER BY` index advisor that surfaces eligible queries.
+- **Durable secondary indexes.** `CREATE INDEX` field definitions persist in
+  `config.json` and are rebuilt from payloads on open, so an index survives a
+  process restart (previously a `CREATE INDEX` was silently lost, changing the
+  fast-path/EXPLAIN behaviour after a restart while results stayed correct via the
+  exhaustive fallback).
+- **Streaming ingestion across the ecosystem.** Core `StreamingConfig` +
+  persistence; `enableStreaming` / `streamInsert` on the TypeScript and mobile
+  SDKs; `Collection.enable_streaming` (Python); REST + Tauri `enable_streaming`.
+- **Binary bulk ingestion paths.** WASM `VectorStore.insertBatchRaw` (flat buffer),
+  CLI `VRB1` import via the shared core codec, and a REST `upsert_bulk_from_raw`
+  binary endpoint.
+- **Binding parity.** `search_ids`, `multi_query_search_ids`, `batch_parallel`,
+  `reorder_for_locality`, `apply_advanced_config`, `compact_storage`, batch graph
+  edges, `collection_diagnostics`, guardrails, and the auto-reindex lifecycle
+  exposed to Python / mobile / CLI / Tauri; `DatabaseObserver` lifecycle callbacks
+  (Python / server / Tauri); WASM cross-collection `@collection` MATCH enrichment
+  and `VectorStore::search_sparse`.
+- **Integrations.** Haystack fusion kwarg and named-sparse-index creation for
+  LangChain / LlamaIndex / Haystack; canonical metric/storage names single-sourced
+  from core.
+
+### Changed
+- **`ORDER BY` is now correct under `LIMIT` and deterministic.** Scalar
+  `ORDER BY <col> LIMIT k` sorts the full matching set **before** truncating (e.g.
+  `ORDER BY year DESC LIMIT 2` now returns the two newest rows, not the first two by
+  id), and equal-key rows get a stable ascending point-id tie-break. **Results
+  change for affected bounded/tied queries.**
+- **`WITH (ef_search = N)` honors the exact budget** via a custom search quality
+  instead of snapping to one of four named buckets; the Balanced default `ef_search`
+  is now `160` (was `128`).
+- **Runtime enforcement of `limits.*`.** `max_vectors_per_collection`,
+  `max_payload_size`, and `max_perfect_mode_vectors` now hard-error
+  (`GuardRail VELES-027`) on ingest/search for collections that opted into a
+  non-default limit (previously configured-but-ignored; the permissive defaults are
+  unchanged).
+- **Python `update_guardrails` rejects partial/unknown dicts** (full-replacement
+  contract) instead of silently applying serde defaults to omitted fields.
+- `CollectionConfig` on-disk schema bumped v1 → v2 (persists auto-reindex,
+  streaming, and indexed-field config). Backward compatible on read: a v1
+  `config.json` deserializes with defaults.
+
+### Internal
+- pyo3 / numpy upgraded to 0.29.
+- All jscpd code-duplication eliminated (0 findings) via behavior-preserving
+  Extract Method; config structs hardened with `#[non_exhaustive]`.
+
 ## [2.0.0] — 2026-06-12
 
 A **major release**. Two correctness fixes to behavior shipped in 1.18.0 — the

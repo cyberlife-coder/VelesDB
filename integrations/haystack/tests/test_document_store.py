@@ -43,6 +43,78 @@ class DuplicateDocumentError(Exception):
 # ---------------------------------------------------------------------------
 
 
+class _FakeFusionStrategy:
+    """Minimal stand-in for velesdb.FusionStrategy.
+
+    Records the strategy name so a fake ``multi_query_search`` can vary its
+    result ordering by strategy (mirrors the real binding, where different
+    strategies produce different fused scores).
+    """
+
+    def __init__(self, name: str, params: Optional[dict] = None) -> None:
+        self.name = name
+        self.params = params or {}
+
+    @staticmethod
+    def average() -> "_FakeFusionStrategy":
+        return _FakeFusionStrategy("average")
+
+    @staticmethod
+    def maximum() -> "_FakeFusionStrategy":
+        return _FakeFusionStrategy("maximum")
+
+    @staticmethod
+    def rrf(k: int = 60) -> "_FakeFusionStrategy":
+        return _FakeFusionStrategy("rrf", {"k": k})
+
+    @staticmethod
+    def weighted(
+        avg_weight: float = 0.6,
+        max_weight: float = 0.3,
+        hit_weight: float = 0.1,
+    ) -> "_FakeFusionStrategy":
+        return _FakeFusionStrategy(
+            "weighted",
+            {
+                "avg_weight": avg_weight,
+                "max_weight": max_weight,
+                "hit_weight": hit_weight,
+            },
+        )
+
+    @staticmethod
+    def relative_score(
+        dense_weight: float, sparse_weight: float
+    ) -> "_FakeFusionStrategy":
+        return _FakeFusionStrategy(
+            "relative_score",
+            {"dense_weight": dense_weight, "sparse_weight": sparse_weight},
+        )
+
+
+def _build_fake_fusion(
+    fusion: str, fusion_params: Optional[dict] = None
+) -> _FakeFusionStrategy:
+    """Stand-in for velesdb_common.fusion.build_fusion_strategy.
+
+    Maps the strategy name to the matching FusionStrategy factory so the
+    document store's fusion routing can be exercised without the real
+    velesdb_common package.
+    """
+    params = fusion_params or {}
+    if fusion in ("relative_score", "rsf"):
+        return _FakeFusionStrategy.relative_score(
+            params.get("dense_weight", 0.5), params.get("sparse_weight", 0.5)
+        )
+    if fusion == "weighted":
+        return _FakeFusionStrategy.weighted()
+    if fusion == "maximum":
+        return _FakeFusionStrategy.maximum()
+    if fusion == "average":
+        return _FakeFusionStrategy.average()
+    return _FakeFusionStrategy.rrf(params.get("k", 60))
+
+
 class _FakeSearchOptions:
     """Minimal stand-in for velesdb.SearchOptions used by search_request."""
 
@@ -94,6 +166,33 @@ class _FakeCollection:
     def search_request(self, opts: Any) -> list:
         """Canonical search entry point — delegate to the legacy `search`."""
         return self.search(opts.vector, top_k=opts.top_k, filter=opts.filter)
+
+    def multi_query_search(
+        self,
+        vectors: list,
+        top_k: int = 10,
+        fusion: Any = None,
+        filter: Any = None,  # pylint: disable=redefined-builtin
+    ) -> list:
+        """Fused multi-query search whose ordering depends on the strategy.
+
+        The real binding produces strategy-dependent fused scores. This fake
+        reproduces that observable behaviour: the points are sorted by a
+        per-strategy key so callers can assert that ``fusion='rsf'`` and
+        ``fusion='weighted'`` yield different orderings.
+        """
+        del vectors, filter  # the fake ignores these
+        points = list(self._points.values())
+        name = getattr(fusion, "name", "rrf")
+        # Reverse the order for relative_score so the resulting ranking
+        # differs from the default (rrf) and from weighted.
+        reverse = name in ("relative_score", "rsf")
+        ordered = points[::-1] if reverse else points
+        results = [
+            {"id": p["id"], "score": 0.9, "payload": p.get("payload", {})}
+            for p in ordered[:top_k]
+        ]
+        return results
 
     def scroll(  # pylint: disable=redefined-builtin
         self,
@@ -172,7 +271,9 @@ def _load_module() -> types.ModuleType:
     sys.modules["haystack.document_stores.errors"] = errors_mod
 
     sys.modules["velesdb"] = types.SimpleNamespace(  # type: ignore
-        Database=_FakeDatabase, SearchOptions=_FakeSearchOptions
+        Database=_FakeDatabase,
+        SearchOptions=_FakeSearchOptions,
+        FusionStrategy=_FakeFusionStrategy,
     )
 
     # Stub velesdb_common.security with no-op validators (real package has its own tests).
@@ -181,12 +282,28 @@ def _load_module() -> types.ModuleType:
 
     vc_mod = types.ModuleType("velesdb_common")
     sys.modules["velesdb_common"] = vc_mod
+
+    # Load the REAL velesdb_common.ids (pure stdlib) so the store exercises the
+    # canonical stable_hash_id rather than a forked copy (single-source-of-truth
+    # + license hygiene — see docs/planning/CORE_PARITY_REMEDIATION.md T3).
+    _ids_path = Path(__file__).resolve().parents[2] / "common" / "src" / "velesdb_common" / "ids.py"
+    _ids_spec = importlib.util.spec_from_file_location("velesdb_common.ids", _ids_path)
+    assert _ids_spec and _ids_spec.loader
+    vc_ids = importlib.util.module_from_spec(_ids_spec)
+    sys.modules["velesdb_common.ids"] = vc_ids
+    _ids_spec.loader.exec_module(vc_ids)
+
     vc_sec = types.ModuleType("velesdb_common.security")
     vc_sec.validate_path = _passthrough  # type: ignore[attr-defined]
     vc_sec.validate_collection_name = _passthrough  # type: ignore[attr-defined]
     vc_sec.validate_metric = _passthrough  # type: ignore[attr-defined]
+    vc_sec.validate_named_sparse_vector = _passthrough  # type: ignore[attr-defined]
     vc_sec.SecurityError = ValueError  # type: ignore[attr-defined]
     sys.modules["velesdb_common.security"] = vc_sec
+
+    vc_fusion = types.ModuleType("velesdb_common.fusion")
+    vc_fusion.build_fusion_strategy = _build_fake_fusion  # type: ignore[attr-defined]
+    sys.modules["velesdb_common.fusion"] = vc_fusion
 
     pkg = types.ModuleType("haystack_velesdb")
     pkg.__path__ = [str(root)]  # type: ignore[attr-defined]
@@ -782,3 +899,169 @@ def test_embedding_retrieval_translates_haystack_filter_to_veles_shape() -> None
         }, "embedding_retrieval must translate Haystack filter to VelesDB Filter shape"
     finally:
         _MOD.velesdb = original_velesdb
+
+
+# ---------------------------------------------------------------------------
+# I1: fusion (RSF / Weighted) on embedding_retrieval
+# ---------------------------------------------------------------------------
+
+
+def _store_with_three_docs(name: str) -> Any:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name=name)
+    store.write_documents([
+        Document(id="d1", content="one", embedding=[0.1]),
+        Document(id="d2", content="two", embedding=[0.2]),
+        Document(id="d3", content="three", embedding=[0.3]),
+    ])
+    return store
+
+
+def test_embedding_retrieval_fusion_changes_ordering_vs_default() -> None:
+    """fusion='rsf' must reorder results relative to the default ranking."""
+    store = _store_with_three_docs("t_fusion_rsf")
+    default_ids = [d.id for d in store.embedding_retrieval([0.1], top_k=3)]
+    rsf_ids = [
+        d.id for d in store.embedding_retrieval([0.1], top_k=3, fusion="rsf")
+    ]
+    assert rsf_ids != default_ids, "fusion='rsf' must change result ordering"
+    assert sorted(rsf_ids) == sorted(default_ids), "same doc set, different order"
+
+
+def test_embedding_retrieval_rsf_and_weighted_differ() -> None:
+    """rsf and weighted fusion must produce different orderings."""
+    store = _store_with_three_docs("t_fusion_pair")
+    rsf_ids = [
+        d.id for d in store.embedding_retrieval([0.1], top_k=3, fusion="rsf")
+    ]
+    weighted_ids = [
+        d.id
+        for d in store.embedding_retrieval([0.1], top_k=3, fusion="weighted")
+    ]
+    assert rsf_ids != weighted_ids, "rsf and weighted must differ in ordering"
+
+
+def test_embedding_retrieval_fusion_passes_params() -> None:
+    """fusion_params must reach build_fusion_strategy and the collection."""
+    captured: dict = {}
+
+    class _CapturingCollection(_FakeCollection):
+        def multi_query_search(
+            self,
+            vectors: list,
+            top_k: int = 10,
+            fusion: Any = None,
+            filter: Any = None,  # pylint: disable=redefined-builtin
+        ) -> list:
+            captured["fusion_name"] = getattr(fusion, "name", None)
+            captured["fusion_params"] = getattr(fusion, "params", None)
+            return super().multi_query_search(
+                vectors, top_k=top_k, fusion=fusion, filter=filter
+            )
+
+    class _CapturingDatabase:
+        def __init__(self, path: str) -> None:
+            self._col = _CapturingCollection()
+
+        def get_collection(self, name: str) -> _CapturingCollection:
+            return self._col
+
+        def create_collection(
+            self, name: str, dimension: int, metric: str
+        ) -> _CapturingCollection:
+            return self._col
+
+    original_velesdb = _MOD.velesdb
+    try:
+        _MOD.velesdb = types.SimpleNamespace(  # type: ignore
+            Database=_CapturingDatabase,
+            SearchOptions=_FakeSearchOptions,
+            FusionStrategy=_FakeFusionStrategy,
+        )
+        store = _MOD.VelesDBDocumentStore(
+            path="/tmp/hs", collection_name="t_fusion_params"
+        )
+        store.write_documents([Document(id="p", content="x", embedding=[0.5])])
+        store.embedding_retrieval(
+            [0.5],
+            top_k=3,
+            fusion="rsf",
+            fusion_params={"dense_weight": 0.7, "sparse_weight": 0.3},
+        )
+        assert captured["fusion_name"] == "relative_score"
+        assert captured["fusion_params"]["dense_weight"] == 0.7
+    finally:
+        _MOD.velesdb = original_velesdb
+
+
+# ---------------------------------------------------------------------------
+# I2: named-sparse-index creation on write_documents
+# ---------------------------------------------------------------------------
+
+
+def test_write_documents_forwards_named_sparse_vectors() -> None:
+    """A named sparse vector dict must reach the upserted point so the
+    underlying named sparse index is created.
+    """
+    captured: dict = {}
+
+    class _CapturingCollection(_FakeCollection):
+        def upsert(self, points: list) -> int:
+            captured["points"] = points
+            return super().upsert(points)
+
+    class _CapturingDatabase:
+        def __init__(self, path: str) -> None:
+            self._col = _CapturingCollection()
+
+        def get_collection(self, name: str) -> _CapturingCollection:
+            return self._col
+
+        def create_collection(
+            self, name: str, dimension: int, metric: str
+        ) -> _CapturingCollection:
+            return self._col
+
+    original_velesdb = _MOD.velesdb
+    try:
+        _MOD.velesdb = types.SimpleNamespace(  # type: ignore
+            Database=_CapturingDatabase,
+            SearchOptions=_FakeSearchOptions,
+            FusionStrategy=_FakeFusionStrategy,
+        )
+        store = _MOD.VelesDBDocumentStore(
+            path="/tmp/hs", collection_name="t_named_sparse"
+        )
+        store.write_documents(
+            [Document(id="s1", content="hi", embedding=[0.5])],
+            sparse_vectors=[{"bge_m3": {0: 1.5, 7: 0.8}}],
+        )
+        point = captured["points"][0]
+        assert point["sparse_vector"] == {"bge_m3": {0: 1.5, 7: 0.8}}
+    finally:
+        _MOD.velesdb = original_velesdb
+
+
+def test_id_hashing_uses_canonical_stable_hash_id():
+    """T3: the store delegates string->int ID hashing to the shared
+    velesdb_common.ids.stable_hash_id, not a forked local copy. This keeps the
+    same logical document mapped to the same VelesDB point ID across every
+    integration (single source of truth) and avoids re-implementing the hash in
+    an MIT package (license hygiene). See docs/planning/CORE_PARITY_REMEDIATION.md.
+    """
+    import hashlib
+
+    import velesdb_common.ids as canonical_ids
+
+    # the module imported the canonical helper, and the forked copy is gone
+    assert _MOD.stable_hash_id is canonical_ids.stable_hash_id
+    assert not hasattr(_MOD, "_str_id_to_int")
+    assert not hasattr(_MOD, "_INT63_MASK")
+
+    # and it yields the canonical positive-63-bit value
+    for doc_id in ["", "doc-1", "héllo-世界", "Document_42::chunk#3", "a" * 500]:
+        expected = (
+            int.from_bytes(hashlib.sha256(doc_id.encode("utf-8")).digest()[:8], "big")
+            & 0x7FFFFFFFFFFFFFFF
+        )
+        assert _MOD.stable_hash_id(doc_id) == expected
+        assert 0 <= _MOD.stable_hash_id(doc_id) <= 0x7FFFFFFFFFFFFFFF

@@ -98,12 +98,18 @@ impl Collection {
             composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),
             query_pattern_tracker: Arc::new(RwLock::new(QueryPatternTracker::new())),
             index_advisor: Arc::new(RwLock::new(IndexAdvisor::new())),
+            order_by_advisor: Arc::new(RwLock::new(
+                crate::collection::order_by_advisor::OrderByIndexAdvisor::default(),
+            )),
             edge_store: Arc::new(parts.edge_store),
             edge_wal_lock: Arc::new(Mutex::new(())),
             sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),
             secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
             payload_mirror: Arc::new(crate::collection::payload_mirror::PayloadMirror::default()),
             guard_rails: Arc::new(GuardRails::default()),
+            runtime_limits: Arc::new(RwLock::new(
+                crate::collection::types::RuntimeLimits::default(),
+            )),
             query_planner: Arc::new(QueryPlanner::new()),
             query_cache: Arc::new(QueryCache::new(256)),
             cached_stats: Arc::new(Mutex::new(None)),
@@ -315,10 +321,57 @@ impl Collection {
             sparse_indexes,
         });
 
+        collection.restore_auto_reindex_from_config();
+        collection.restore_secondary_indexes_from_config();
+
         #[cfg(feature = "persistence")]
         collection.run_post_open_hooks()?;
 
         Ok(collection)
+    }
+
+    /// Restores secondary metadata indexes from the persisted authority
+    /// (EPIC-081 phase 3d).
+    ///
+    /// For every field in [`CollectionConfig::indexed_fields`], rebuilds the
+    /// in-memory BTree by backfilling from the recovered payloads — the same
+    /// `O(n)` scan `create_index` runs, yielding an index observationally
+    /// identical to the live one (callers sort each bucket on read, so internal
+    /// bucket order is irrelevant). Without this, secondary indexes are lost on
+    /// restart: the ordered-index `ORDER BY` fast path, the bitmap pre-filter,
+    /// `EXPLAIN` `IndexLookup`, and the index advisor would all silently change
+    /// behaviour (results stay correct via the exhaustive fallback).
+    ///
+    /// No-op when the set is empty (collections created before this field, or
+    /// with no index). Does not rewrite `config.json` (the set is already the
+    /// authority), so the restore cannot churn the file. Runs after payload WAL
+    /// replay (in [`LogPayloadStorage::new`]) and `reconcile_point_count`, so
+    /// the coverage denominator (`config.point_count`) matches what the live
+    /// `ordered_ids_if_covered` fast path uses.
+    ///
+    /// [`CollectionConfig::indexed_fields`]: crate::collection::types::CollectionConfig::indexed_fields
+    fn restore_secondary_indexes_from_config(&self) {
+        let fields: Vec<String> = self.config.read().indexed_fields.iter().cloned().collect();
+        for field in fields {
+            self.build_and_backfill_secondary_index(&field);
+        }
+    }
+
+    /// Restores the [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager)
+    /// from the persisted `auto_reindex_config` (schema v2 — W2).
+    ///
+    /// No-op when `auto_reindex_config` is `None` (v1 collections or those
+    /// created without an auto-reindex policy). Previously the manager had to
+    /// be re-attached manually after every open
+    /// (see `docs/CORE_WIRING_DEBT.md` entry 2).
+    fn restore_auto_reindex_from_config(&self) {
+        let cfg = self.config.read().auto_reindex_config.clone();
+        if let Some(cfg) = cfg {
+            let manager = Arc::new(crate::collection::auto_reindex::AutoReindexManager::new(
+                cfg,
+            ));
+            self.attach_auto_reindex(manager);
+        }
     }
 
     /// Pre-assemble index recovery: quantizer preinstall + 3-pass

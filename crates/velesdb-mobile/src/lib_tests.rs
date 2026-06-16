@@ -342,6 +342,120 @@ fn test_collection_delete() {
 }
 
 #[test]
+fn test_collection_compact_storage() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("compact_test".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db
+        .get_collection("compact_test".to_string())
+        .unwrap()
+        .unwrap();
+
+    for id in 0..5u64 {
+        col.upsert(VelesPoint {
+            id,
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            payload: None,
+        })
+        .unwrap();
+    }
+    col.delete(0).unwrap();
+    col.delete(1).unwrap();
+
+    // Compaction must succeed and return the reclaimed byte count; live
+    // points are unaffected.
+    let _freed = col.compact_storage().unwrap();
+    assert_eq!(col.count(), 3);
+}
+
+#[test]
+fn test_collection_guardrails_update_and_read() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("gr".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("gr".to_string()).unwrap().unwrap();
+
+    db.update_guardrails(MobileQueryLimits {
+        max_depth: 7,
+        max_cardinality: 1000,
+        memory_limit_bytes: 1_048_576,
+        timeout_ms: 5000,
+        rate_limit_qps: 50,
+        circuit_failure_threshold: 3,
+        circuit_recovery_seconds: 30,
+    });
+
+    let read = col.guard_rails();
+    assert_eq!(read.max_depth, 7);
+    assert_eq!(read.timeout_ms, 5000);
+    assert_eq!(read.rate_limit_qps, 50);
+    assert_eq!(read.memory_limit_bytes, 1_048_576);
+}
+
+#[test]
+fn test_advanced_config_record_conversions() {
+    let deferred: velesdb_core::collection::streaming::DeferredIndexerConfig =
+        MobileDeferredIndexerConfig {
+            enabled: true,
+            merge_threshold: 512,
+            max_buffer_age_ms: 3000,
+        }
+        .into();
+    assert!(deferred.enabled);
+    assert_eq!(deferred.merge_threshold, 512);
+    assert_eq!(deferred.max_buffer_age_ms, 3000);
+
+    let async_builder: velesdb_core::collection::streaming::AsyncIndexBuilderConfig =
+        MobileAsyncIndexBuilderConfig {
+            merge_threshold: 20_000,
+            segment_count: Some(4),
+        }
+        .into();
+    assert_eq!(async_builder.merge_threshold, 20_000);
+    assert_eq!(async_builder.segment_count, Some(4));
+}
+
+#[test]
+fn test_collection_apply_advanced_config() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("adv".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("adv".to_string()).unwrap().unwrap();
+
+    // All three fields set: must persist without error.
+    col.apply_advanced_config(MobileAdvancedConfig {
+        pq_rescore_oversampling: Some(8),
+        deferred_indexing: Some(MobileDeferredIndexerConfig {
+            enabled: true,
+            merge_threshold: 512,
+            max_buffer_age_ms: 3000,
+        }),
+        async_index_builder: Some(MobileAsyncIndexBuilderConfig {
+            merge_threshold: 20_000,
+            segment_count: None,
+        }),
+    })
+    .unwrap();
+
+    // None fields leave configuration unchanged: also a valid no-op.
+    col.apply_advanced_config(MobileAdvancedConfig {
+        pq_rescore_oversampling: None,
+        deferred_indexing: None,
+        async_index_builder: None,
+    })
+    .unwrap();
+}
+
+#[test]
 fn test_collection_with_json_payload() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().to_str().unwrap().to_string();
@@ -596,6 +710,129 @@ fn test_multi_query_search_empty_vectors_error() {
     let result = col.multi_query_search(vec![], 5, FusionStrategy::Rrf { k: 60 });
 
     assert!(result.is_err());
+}
+
+#[test]
+fn test_multi_query_search_ids_matches_core() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("mqs_ids".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let col = db.get_collection("mqs_ids".to_string()).unwrap().unwrap();
+
+    col.upsert_batch(vec![
+        VelesPoint {
+            id: 1,
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            payload: Some("{\"k\":1}".to_string()),
+        },
+        VelesPoint {
+            id: 2,
+            vector: vec![0.0, 1.0, 0.0, 0.0],
+            payload: Some("{\"k\":2}".to_string()),
+        },
+        VelesPoint {
+            id: 3,
+            vector: vec![0.0, 0.0, 1.0, 0.0],
+            payload: Some("{\"k\":3}".to_string()),
+        },
+    ])
+    .unwrap();
+
+    let vectors = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
+
+    let id_results = col
+        .multi_query_search_ids(vectors.clone(), 5, FusionStrategy::Rrf { k: 60 })
+        .unwrap();
+    let full_results = col
+        .multi_query_search(vectors, 5, FusionStrategy::Rrf { k: 60 })
+        .unwrap();
+
+    // id-only twin returns the same IDs/scores as the payload-carrying path.
+    // Compare as sorted sets: equal scores may tie-break in either order.
+    let mut id_pairs: Vec<(u64, u32)> = id_results
+        .iter()
+        .map(|r| (r.id, r.score.to_bits()))
+        .collect();
+    let mut full_pairs: Vec<(u64, u32)> = full_results
+        .iter()
+        .map(|r| (r.id, r.score.to_bits()))
+        .collect();
+    id_pairs.sort_unstable();
+    full_pairs.sort_unstable();
+    assert_eq!(id_pairs, full_pairs);
+
+    // Payloads are stripped from the id-only variant.
+    assert!(id_results.iter().all(|r| r.payload.is_none()));
+}
+
+#[test]
+fn test_multi_query_search_ids_empty_vectors_error() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("mqs_ids_empty".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let col = db
+        .get_collection("mqs_ids_empty".to_string())
+        .unwrap()
+        .unwrap();
+
+    let result = col.multi_query_search_ids(vec![], 5, FusionStrategy::Rrf { k: 60 });
+
+    assert!(result.is_err());
+}
+
+// =========================================================================
+// Collection Diagnostics Tests
+// =========================================================================
+
+#[test]
+fn test_collection_diagnostics_with_data() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("diag_test".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let col = db.get_collection("diag_test".to_string()).unwrap().unwrap();
+
+    // Empty collection: no vectors, not search-ready, index empty.
+    let empty = col.diagnostics();
+    assert!(!empty.has_vectors);
+    assert!(!empty.search_ready);
+    assert!(empty.dimension_configured);
+    assert_eq!(empty.point_count, 0);
+    assert_eq!(empty.index_health, "empty");
+
+    col.upsert_batch(vec![
+        VelesPoint {
+            id: 1,
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            payload: None,
+        },
+        VelesPoint {
+            id: 2,
+            vector: vec![0.0, 1.0, 0.0, 0.0],
+            payload: None,
+        },
+    ])
+    .unwrap();
+
+    // Populated collection: vectors present, search-ready, index healthy.
+    let diag = col.diagnostics();
+    assert!(diag.has_vectors);
+    assert!(diag.search_ready);
+    assert!(diag.dimension_configured);
+    assert_eq!(diag.point_count, 2);
+    assert_eq!(diag.index_health, "healthy");
+    assert!(diag.index_health_detail.is_none());
 }
 
 // =========================================================================
@@ -887,4 +1124,45 @@ fn test_collection_analyze_and_get_stats() {
     let snapshot = col.get_stats();
     assert!(snapshot.total_points >= 2);
     assert!(snapshot.field_stats_count >= 1 || snapshot.column_stats_count >= 1);
+}
+
+// =========================================================================
+// Streaming ingestion tests
+// =========================================================================
+
+#[test]
+fn test_streaming_enable_and_insert_roundtrip() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("stream_rt".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("stream_rt".to_string()).unwrap().unwrap();
+
+    // enable with engine defaults
+    col.enable_streaming(None).unwrap();
+    // re-enable with an explicit config (replaces the ingester)
+    col.enable_streaming(Some(MobileStreamingConfig {
+        buffer_size: 256,
+        batch_size: 32,
+        flush_interval_ms: 10,
+    }))
+    .unwrap();
+
+    let queued = col
+        .stream_insert(vec![
+            VelesPoint {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: Some(r#"{"k":"v"}"#.to_string()),
+            },
+            VelesPoint {
+                id: 2,
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                payload: None,
+            },
+        ])
+        .unwrap();
+    assert_eq!(queued, 2);
 }

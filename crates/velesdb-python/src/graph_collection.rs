@@ -25,7 +25,7 @@ use velesdb_core::{GraphCollection, GraphSchema};
 /// Example:
 ///     >>> schema = PyGraphSchema.schemaless()
 ///     >>> schema = PyGraphSchema.strict()
-#[pyclass(name = "GraphSchema", frozen)]
+#[pyclass(name = "GraphSchema", frozen, from_py_object)]
 #[derive(Clone)]
 pub struct PyGraphSchema {
     inner: GraphSchema,
@@ -153,9 +153,9 @@ impl PyGraphCollection {
     ///     ...     "label": "KNOWS", "properties": {"since": 2020}
     ///     ... })
     #[pyo3(signature = (edge))]
-    fn add_edge(&self, py: Python<'_>, edge: HashMap<String, PyObject>) -> PyResult<()> {
+    fn add_edge(&self, py: Python<'_>, edge: HashMap<String, Py<PyAny>>) -> PyResult<()> {
         let graph_edge = dict_to_edge(py, &edge)?;
-        py.allow_threads(|| self.inner.add_edge(graph_edge).map_err(core_err))
+        py.detach(|| self.inner.add_edge(graph_edge).map_err(core_err))
     }
 
     /// Add multiple edges in batch (much faster than calling add_edge in a loop).
@@ -178,13 +178,13 @@ impl PyGraphCollection {
     fn add_edges_batch(
         &self,
         py: Python<'_>,
-        edges: Vec<HashMap<String, PyObject>>,
+        edges: Vec<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<usize> {
         let graph_edges: Vec<velesdb_core::collection::graph::GraphEdge> = edges
             .iter()
             .map(|e| dict_to_edge(py, e))
             .collect::<PyResult<Vec<_>>>()?;
-        py.allow_threads(|| self.inner.add_edges_batch(graph_edges).map_err(core_err))
+        py.detach(|| self.inner.add_edges_batch(graph_edges).map_err(core_err))
     }
 
     /// Get edges, optionally filtered by label.
@@ -199,8 +199,8 @@ impl PyGraphCollection {
     ///     >>> all_edges = graph.get_edges()
     ///     >>> knows_edges = graph.get_edges(label="KNOWS")
     #[pyo3(signature = (label=None))]
-    fn get_edges(&self, py: Python<'_>, label: Option<String>) -> PyResult<Vec<PyObject>> {
-        let edges = py.allow_threads(|| self.inner.get_edges(label.as_deref()));
+    fn get_edges(&self, py: Python<'_>, label: Option<String>) -> PyResult<Vec<Py<PyAny>>> {
+        let edges = py.detach(|| self.inner.get_edges(label.as_deref()));
         Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
@@ -212,9 +212,24 @@ impl PyGraphCollection {
     /// Returns:
     ///     List of edge dicts
     #[pyo3(signature = (node_id))]
-    fn get_outgoing(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
-        let edges = py.allow_threads(|| self.inner.get_outgoing(node_id));
+    fn get_outgoing(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
+        let edges = py.detach(|| self.inner.get_outgoing(node_id));
         Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+    }
+
+    /// Returns `true` if an edge with the given ID exists.
+    #[pyo3(signature = (edge_id))]
+    fn has_edge(&self, edge_id: u64) -> bool {
+        self.inner.has_edge(edge_id)
+    }
+
+    /// Alias for `get_outgoing`.
+    ///
+    /// Preserves compatibility with examples that used the explicit
+    /// `*_edges` suffix.
+    #[pyo3(signature = (node_id))]
+    fn get_outgoing_edges(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
+        self.get_outgoing(py, node_id)
     }
 
     /// Get incoming edges to a node.
@@ -225,9 +240,18 @@ impl PyGraphCollection {
     /// Returns:
     ///     List of edge dicts
     #[pyo3(signature = (node_id))]
-    fn get_incoming(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
-        let edges = py.allow_threads(|| self.inner.get_incoming(node_id));
+    fn get_incoming(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
+        let edges = py.detach(|| self.inner.get_incoming(node_id));
         Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+    }
+
+    /// Alias for `get_incoming`.
+    ///
+    /// Preserves compatibility with examples that used the explicit
+    /// `*_edges` suffix.
+    #[pyo3(signature = (node_id))]
+    fn get_incoming_edges(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
+        self.get_incoming(py, node_id)
     }
 
     /// Get the in-degree and out-degree of a node.
@@ -256,11 +280,42 @@ impl PyGraphCollection {
     /// Example:
     ///     >>> graph.upsert_node_payload(10, {"name": "Alice", "age": 30})
     #[pyo3(signature = (node_id, payload))]
-    fn upsert_node_payload(&self, py: Python<'_>, node_id: u64, payload: PyObject) -> PyResult<()> {
+    fn upsert_node_payload(
+        &self,
+        py: Python<'_>,
+        node_id: u64,
+        payload: Py<PyAny>,
+    ) -> PyResult<()> {
         let value = python_to_json(py, &payload)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner
                 .upsert_node_payload(node_id, &value)
+                .map_err(core_err)
+        })
+    }
+
+    /// Upsert a node payload, optionally with an embedding vector.
+    ///
+    /// Args:
+    ///     node_id: The node ID
+    ///     payload: Dict of properties to store
+    ///     vector: Optional embedding vector for searchable graph nodes
+    #[pyo3(signature = (node_id, payload, vector=None))]
+    fn upsert_node(
+        &self,
+        py: Python<'_>,
+        node_id: u64,
+        payload: Py<PyAny>,
+        vector: Option<Py<PyAny>>,
+    ) -> PyResult<()> {
+        let value = python_to_json(py, &payload)?;
+        let vector = match vector {
+            Some(vector) => Some(extract_vector(py, &vector)?),
+            None => None,
+        };
+        py.detach(|| {
+            self.inner
+                .upsert_node(node_id, &value, vector)
                 .map_err(core_err)
         })
     }
@@ -273,8 +328,8 @@ impl PyGraphCollection {
     /// Returns:
     ///     Dict of properties, or None if no payload is stored
     #[pyo3(signature = (node_id))]
-    fn get_node_payload(&self, py: Python<'_>, node_id: u64) -> PyResult<Option<PyObject>> {
-        let value = py.allow_threads(|| self.inner.get_node_payload(node_id).map_err(core_err))?;
+    fn get_node_payload(&self, py: Python<'_>, node_id: u64) -> PyResult<Option<Py<PyAny>>> {
+        let value = py.detach(|| self.inner.get_node_payload(node_id).map_err(core_err))?;
         Ok(value.map(|v| json_to_python(py, &v)))
     }
 
@@ -283,7 +338,7 @@ impl PyGraphCollection {
     /// Returns:
     ///     List of node IDs
     fn all_node_ids(&self, py: Python<'_>) -> Vec<u64> {
-        py.allow_threads(|| self.inner.all_node_ids())
+        py.detach(|| self.inner.all_node_ids())
     }
 
     /// Perform BFS traversal from a source node.
@@ -311,10 +366,10 @@ impl PyGraphCollection {
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
         relationship_types: Option<Vec<String>>,
-    ) -> PyResult<Vec<PyObject>> {
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let effective_rel_types = rel_types.or(relationship_types);
         let config = build_traversal_config(max_depth, limit, effective_rel_types);
-        let results = py.allow_threads(|| self.inner.traverse_bfs(source_id, &config));
+        let results = py.detach(|| self.inner.traverse_bfs(source_id, &config));
         Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
 
@@ -343,10 +398,10 @@ impl PyGraphCollection {
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
         relationship_types: Option<Vec<String>>,
-    ) -> PyResult<Vec<PyObject>> {
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let effective_rel_types = rel_types.or(relationship_types);
         let config = build_traversal_config(max_depth, limit, effective_rel_types);
-        let results = py.allow_threads(|| self.inner.traverse_dfs(source_id, &config));
+        let results = py.detach(|| self.inner.traverse_dfs(source_id, &config));
         Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
 
@@ -376,10 +431,10 @@ impl PyGraphCollection {
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
         relationship_types: Option<Vec<String>>,
-    ) -> PyResult<Vec<PyObject>> {
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let effective_rel_types = rel_types.or(relationship_types);
         let config = build_traversal_config(max_depth, limit, effective_rel_types);
-        let results = py.allow_threads(|| self.inner.traverse_bfs_parallel(&source_ids, &config));
+        let results = py.detach(|| self.inner.traverse_bfs_parallel(&source_ids, &config));
         Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
 
@@ -401,13 +456,13 @@ impl PyGraphCollection {
     fn search_by_embedding(
         &self,
         py: Python<'_>,
-        query: PyObject,
+        query: Py<PyAny>,
         k: Option<usize>,
-    ) -> PyResult<Vec<PyObject>> {
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let vec = extract_vector(py, &query)?;
         let top_k = k.unwrap_or(10);
 
-        let results = py.allow_threads(|| {
+        let results = py.detach(|| {
             self.inner
                 .search_by_embedding(&vec, top_k)
                 .map_err(core_err)
@@ -423,7 +478,7 @@ impl PyGraphCollection {
     ///
     /// Ensures edges, payloads, and indexes are persisted.
     fn flush(&self, py: Python<'_>) -> PyResult<()> {
-        py.allow_threads(|| self.inner.flush().map_err(core_err))
+        py.detach(|| self.inner.flush().map_err(core_err))
     }
 
     /// Returns the total number of edges in the graph.
@@ -439,7 +494,7 @@ impl PyGraphCollection {
     /// Use on graceful shutdown to avoid a full WAL replay on next startup.
     /// For routine persistence, use ``flush()`` instead.
     fn flush_full(&self, py: Python<'_>) -> PyResult<()> {
-        py.allow_threads(|| self.inner.flush_full().map_err(core_err))
+        py.detach(|| self.inner.flush_full().map_err(core_err))
     }
 
     /// Returns the number of points (nodes with payload) in the graph.
@@ -474,8 +529,8 @@ impl PyGraphCollection {
     /// Returns:
     ///     List of point dicts (or None for missing IDs)
     #[pyo3(signature = (ids))]
-    fn get(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<Vec<Option<PyObject>>> {
-        let points = py.allow_threads(|| self.inner.get(&ids));
+    fn get(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<Vec<Option<Py<PyAny>>>> {
+        let points = py.detach(|| self.inner.get(&ids));
         let py_points = points
             .into_iter()
             .map(|opt_point| opt_point.map(|p| point_to_dict(py, &p)))
@@ -489,7 +544,7 @@ impl PyGraphCollection {
     ///     ids: List of point IDs to delete
     #[pyo3(signature = (ids))]
     fn delete(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<()> {
-        py.allow_threads(|| self.inner.delete(&ids).map_err(core_err))
+        py.detach(|| self.inner.delete(&ids).map_err(core_err))
     }
 
     /// Remove a specific edge by its ID.
@@ -501,7 +556,7 @@ impl PyGraphCollection {
     ///     bool: True if the edge existed and was removed
     #[pyo3(signature = (edge_id))]
     fn remove_edge(&self, py: Python<'_>, edge_id: u64) -> bool {
-        py.allow_threads(|| self.inner.remove_edge(edge_id))
+        py.detach(|| self.inner.remove_edge(edge_id))
     }
 
     fn __repr__(&self) -> String {
@@ -534,7 +589,7 @@ impl PyGraphCollection {
     /// :py:meth:`flush_full` but named so graph collections can be used
     /// as a context manager.
     fn close(&self, py: Python<'_>) -> PyResult<()> {
-        py.allow_threads(|| self.inner.flush_full().map_err(core_err))
+        py.detach(|| self.inner.flush_full().map_err(core_err))
     }
 
     /// Context manager entry — returns ``self``.
@@ -548,9 +603,9 @@ impl PyGraphCollection {
     fn __exit__(
         &self,
         py: Python<'_>,
-        _exc_type: Option<PyObject>,
-        _exc_value: Option<PyObject>,
-        _traceback: Option<PyObject>,
+        _exc_type: Option<Py<PyAny>>,
+        _exc_value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
     ) -> PyResult<bool> {
         self.close(py)?;
         Ok(false)

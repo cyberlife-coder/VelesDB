@@ -3,9 +3,9 @@
 use crate::helpers::{metric_to_string, parse_metric, parse_storage_mode, storage_mode_to_string};
 use crate::types::{
     default_metric, default_top_k, default_vector_weight, BatchSearchRequest, CollectionInfo,
-    CreateCollectionRequest, DeletePointsRequest, GetPointsRequest, HybridResult,
-    HybridSearchRequest, PointOutput, QueryRequest, QueryResponse, SearchRequest, SearchResponse,
-    SearchResult, TextSearchRequest,
+    CreateCollectionRequest, DeletePointsRequest, EnableStreamingRequest, GetPointsRequest,
+    HybridResult, HybridSearchRequest, PointOutput, QueryRequest, QueryResponse, SearchRequest,
+    SearchResponse, SearchResult, TextSearchRequest,
 };
 use toml;
 
@@ -290,6 +290,57 @@ fn test_delete_points_request_deserialize() {
 
     assert_eq!(request.collection, "docs");
     assert_eq!(request.ids, vec![1, 2]);
+}
+
+#[test]
+fn test_enable_streaming_request_deserialize_camel_case() {
+    let json =
+        r#"{"collection": "docs", "bufferSize": 2048, "batchSize": 64, "flushIntervalMs": 25}"#;
+    let request: EnableStreamingRequest = serde_json::from_str(json).unwrap();
+
+    assert_eq!(request.collection, "docs");
+    assert_eq!(request.buffer_size, Some(2048));
+    assert_eq!(request.batch_size, Some(64));
+    assert_eq!(request.flush_interval_ms, Some(25));
+}
+
+#[test]
+fn test_enable_streaming_request_defaults_optional() {
+    let json = r#"{"collection": "docs"}"#;
+    let request: EnableStreamingRequest = serde_json::from_str(json).unwrap();
+
+    assert_eq!(request.collection, "docs");
+    assert_eq!(request.buffer_size, None);
+    assert_eq!(request.batch_size, None);
+    assert_eq!(request.flush_interval_ms, None);
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_tauri_enable_streaming() {
+    // streaming_config_from_request maps overrides and falls back to engine
+    // defaults for omitted fields (the wiring exercised by the command).
+    let base = velesdb_core::StreamingConfig::default();
+
+    let overridden = crate::commands::streaming_config_from_request(&EnableStreamingRequest {
+        collection: "docs".to_string(),
+        buffer_size: Some(4096),
+        batch_size: Some(256),
+        flush_interval_ms: Some(10),
+    });
+    assert_eq!(overridden.buffer_size, 4096);
+    assert_eq!(overridden.batch_size, 256);
+    assert_eq!(overridden.flush_interval_ms, 10);
+
+    let defaulted = crate::commands::streaming_config_from_request(&EnableStreamingRequest {
+        collection: "docs".to_string(),
+        buffer_size: None,
+        batch_size: None,
+        flush_interval_ms: None,
+    });
+    assert_eq!(defaulted.buffer_size, base.buffer_size);
+    assert_eq!(defaulted.batch_size, base.batch_size);
+    assert_eq!(defaulted.flush_interval_ms, base.flush_interval_ms);
 }
 
 #[test]
@@ -830,4 +881,69 @@ fn test_scroll_response_no_next_cursor() {
     let json = serde_json::to_string(&resp).unwrap();
     // next_cursor should be skipped when None
     assert!(!json.contains("nextCursor"));
+}
+
+#[test]
+fn test_add_edges_batch_request_deserialize() {
+    use crate::types::AddEdgesBatchRequest;
+    let req: AddEdgesBatchRequest = serde_json::from_str(
+        r#"{
+            "collection": "kg",
+            "edges": [
+                {"id": 1, "source": 10, "target": 20, "label": "KNOWS"},
+                {"id": 2, "source": 20, "target": 30, "label": "WROTE",
+                 "properties": {"weight": 0.5}}
+            ]
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(req.collection, "kg");
+    assert_eq!(req.edges.len(), 2);
+    assert_eq!(req.edges[0].label, "KNOWS");
+    assert_eq!(req.edges[1].target, 30);
+    assert!(req.edges[1].properties.is_some());
+    // Properties default to None when omitted.
+    assert!(req.edges[0].properties.is_none());
+}
+
+#[test]
+fn test_id_score_output_serialize() {
+    use crate::types::IdScoreOutput;
+    let out = IdScoreOutput { id: 7, score: 0.42 };
+    let json = serde_json::to_string(&out).unwrap();
+    assert!(json.contains("\"id\":7"));
+    assert!(json.contains("\"score\":0.42"));
+}
+
+#[test]
+fn test_guardrail_limits_roundtrip_conversion() {
+    use crate::types::GuardrailLimits;
+    let limits = GuardrailLimits {
+        max_depth: 9,
+        max_cardinality: 2000,
+        memory_limit_bytes: 4096,
+        timeout_ms: 1234,
+        rate_limit_qps: 77,
+        circuit_failure_threshold: 5,
+        circuit_recovery_seconds: 60,
+    };
+    let core: velesdb_core::guardrails::QueryLimits = limits.into();
+    assert_eq!(core.max_depth, 9);
+    assert_eq!(core.timeout_ms, 1234);
+    assert_eq!(core.max_cardinality, 2000);
+    let back: GuardrailLimits = core.into();
+    assert_eq!(back.rate_limit_qps, 77);
+    assert_eq!(back.circuit_recovery_seconds, 60);
+}
+
+#[test]
+fn test_guardrail_limits_deserialize_camel_case() {
+    use crate::types::GuardrailLimits;
+    let json = r#"{"maxDepth":3,"maxCardinality":10,"memoryLimitBytes":100,
+                   "timeoutMs":5,"rateLimitQps":2,"circuitFailureThreshold":1,
+                   "circuitRecoverySeconds":9}"#;
+    let g: GuardrailLimits = serde_json::from_str(json).unwrap();
+    assert_eq!(g.max_depth, 3);
+    assert_eq!(g.timeout_ms, 5);
+    assert_eq!(g.circuit_recovery_seconds, 9);
 }

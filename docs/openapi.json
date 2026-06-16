@@ -11,7 +11,7 @@
       "name": "VelesDB Core License 1.0",
       "url": "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"
     },
-    "version": "2.0.0"
+    "version": "3.0.0"
   },
   "servers": [
     {
@@ -371,6 +371,48 @@
         }
       }
     },
+    "/collections/{name}/diagnostics": {
+      "get": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Get health diagnostics for a collection (index readiness, point count).",
+        "operationId": "collection_diagnostics",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection diagnostics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionDiagnosticsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{name}/empty": {
       "get": {
         "tags": [
@@ -568,6 +610,77 @@
         "responses": {
           "201": {
             "description": "Edge added successfully"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/graph/edges/batch": {
+      "post": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Add multiple edges to a collection's graph in one batched operation.",
+        "operationId": "add_edges_batch",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddEdgesBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Edges added successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddEdgesBatchResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid request",
@@ -1510,6 +1623,59 @@
         }
       }
     },
+    "/collections/{name}/locality/reorder": {
+      "post": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Reorders the HNSW adjacency lists and vector storage for cache\nlocality so nodes traversed together during search sit close in\nmemory (issue #377). No-op for collections with fewer than 1 000\nvectors. Recall is preserved — only the physical layout changes.",
+        "description": "This is a blocking operation that may involve significant I/O for\nlarge collections.",
+        "operationId": "reorder_for_locality",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Locality reordered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Reorder failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{name}/match": {
       "post": {
         "tags": [
@@ -1707,6 +1873,70 @@
           },
           "500": {
             "description": "Delete failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/points/raw": {
+      "post": {
+        "tags": [
+          "points"
+        ],
+        "summary": "Bulk upsert points via the binary wire format.",
+        "description": "Accepts an `application/octet-stream` body in the VRB1 raw-bulk format\n(a 16-byte header — magic, count, dim, id_width — followed by tightly-packed\n`u64` ids and `f32` vectors). The vectors are forwarded to\n`Collection::upsert_bulk_from_raw` (zero per-point `Point` allocation).\nPayloads are not supported on this path.",
+        "operationId": "upsert_points_raw",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "VRB1 binary bulk format: header + packed u64 ids + packed f32 vectors",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Points upserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body or dimension mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -2561,6 +2791,69 @@
         }
       }
     },
+    "/collections/{name}/search/multi/ids": {
+      "post": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Multi-query fusion search returning only ids and scores (no payloads).",
+        "description": "Faster than `/search/multi` when payloads are not needed: the core\n`multi_query_search_ids` kernel skips payload hydration. Metadata filters\nare not supported here — use `/search/multi` for filtered fusion.",
+        "operationId": "multi_query_search_ids",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultiQuerySearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Multi-query ids-only results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchIdsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{name}/search/text": {
       "post": {
         "tags": [
@@ -2654,6 +2947,59 @@
           },
           "500": {
             "description": "Failed to read stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/stream/enable": {
+      "post": {
+        "tags": [
+          "points"
+        ],
+        "summary": "Enable streaming ingestion on a collection.",
+        "description": "Spawns the background drain task so subsequent calls to\n`/collections/{name}/stream/insert` accept points instead of returning a\n`409 Conflict` \"streaming not configured\" error. Omitted body fields fall\nback to the engine defaults. Calling this again replaces the existing\ningester (the old drain task is aborted).\n\nReturns `200 OK` on success and `404 Not Found` when the collection does\nnot exist.",
+        "operationId": "enable_streaming",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnableStreamingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Streaming enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Collection not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -3141,6 +3487,36 @@
           }
         }
       },
+      "AddEdgesBatchRequest": {
+        "type": "object",
+        "description": "Request to add multiple edges in one batched operation.",
+        "required": [
+          "edges"
+        ],
+        "properties": {
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddEdgeRequest"
+            },
+            "description": "Edges to insert."
+          }
+        }
+      },
+      "AddEdgesBatchResponse": {
+        "type": "object",
+        "description": "Response for a batched edge insertion.",
+        "required": [
+          "added"
+        ],
+        "properties": {
+          "added": {
+            "type": "integer",
+            "description": "Number of edges actually inserted. May be less than the number submitted:\nedges whose ID already exists (in the request or the graph) are silently\nskipped. Compare against the request length to detect skipped duplicates.",
+            "minimum": 0
+          }
+        }
+      },
       "AggregationResponse": {
         "type": "object",
         "description": "Response from `VelesQL` aggregation query execution.",
@@ -3292,6 +3668,47 @@
           "storage_mode": {
             "type": "string",
             "description": "Storage mode (full, sq8, binary, pq)."
+          }
+        }
+      },
+      "CollectionDiagnosticsResponse": {
+        "type": "object",
+        "description": "Response with a collection's health diagnostics.",
+        "required": [
+          "has_vectors",
+          "search_ready",
+          "dimension_configured",
+          "point_count",
+          "index_health"
+        ],
+        "properties": {
+          "dimension_configured": {
+            "type": "boolean",
+            "description": "Whether a valid dimension is configured (> 0 for vector collections)."
+          },
+          "has_vectors": {
+            "type": "boolean",
+            "description": "Whether the collection contains at least one vector/point."
+          },
+          "index_health": {
+            "type": "string",
+            "description": "Primary search-index health: `healthy`, `empty`, or `needs_rebuild`."
+          },
+          "index_health_detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Detail message when `index_health` is `needs_rebuild`."
+          },
+          "point_count": {
+            "type": "integer",
+            "description": "Total number of points in the collection.",
+            "minimum": 0
+          },
+          "search_ready": {
+            "type": "boolean",
+            "description": "Whether the collection is ready to serve search queries."
           }
         }
       },
@@ -3671,6 +4088,37 @@
               "$ref": "#/components/schemas/EdgeResponse"
             },
             "description": "List of edges."
+          }
+        }
+      },
+      "EnableStreamingRequest": {
+        "type": "object",
+        "description": "Request body for the enable-streaming endpoint.\n\nAll fields are optional; omitted fields fall back to the engine defaults\n(`buffer_size = 10000`, `batch_size = 128`, `flush_interval_ms = 50`).",
+        "properties": {
+          "batch_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Number of points that trigger an immediate micro-batch flush.",
+            "minimum": 0
+          },
+          "buffer_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Capacity of the bounded ingestion channel (backpressure threshold).",
+            "minimum": 0
+          },
+          "flush_interval_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Maximum time (ms) before a partial batch is flushed.",
+            "minimum": 0
           }
         }
       },

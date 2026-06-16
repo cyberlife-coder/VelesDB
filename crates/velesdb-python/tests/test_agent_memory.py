@@ -555,19 +555,21 @@ class TestSnapshots:
             assert v1 in versions
             assert v2 in versions
 
-    def test_load_latest_snapshot_returns_version(self, temp_db):
-        """load_latest_snapshot returns the version it restored.
-
-        The snapshot captures whatever the AgentMemory's own subsystems track;
-        here we assert the load mechanics (version returned, no error) rather
-        than getter-stored round-trips, which use independent TTL/tracking.
-        """
+    def test_load_latest_snapshot_restores_semantic_data(self, temp_db):
+        """load_latest_snapshot returns the version and restores data."""
         with tempfile.TemporaryDirectory() as snap_dir:
             mem = self._memory_with_snapshots(temp_db, snap_dir)
             mem.semantic.store(1, "snapshotted", [0.1, 0.2, 0.3, 0.4])
             created = mem.snapshot()
+            mem.semantic.delete(1)
+            assert mem.semantic.query([0.1, 0.2, 0.3, 0.4], top_k=10) == []
+
             loaded = mem.load_latest_snapshot()
+
             assert loaded == created
+            results = mem.semantic.query([0.1, 0.2, 0.3, 0.4], top_k=1)
+            assert results[0]["id"] == 1
+            assert results[0]["content"] == "snapshotted"
 
     def test_load_snapshot_version_does_not_raise(self, temp_db):
         """load_snapshot_version restores a known version without error."""
@@ -577,6 +579,25 @@ class TestSnapshots:
             v1 = mem.snapshot()
             mem.snapshot()
             mem.load_snapshot_version(v1)
+
+    def test_rollback_alias_restores_snapshot_version(self, temp_db):
+        """rollback is a compatibility alias that restores the target version."""
+        with tempfile.TemporaryDirectory() as snap_dir:
+            mem = self._memory_with_snapshots(temp_db, snap_dir)
+            mem.semantic.store(1, "first", [0.1, 0.2, 0.3, 0.4])
+            version = mem.snapshot()
+            mem.semantic.store(2, "second", [0.9, 0.8, 0.7, 0.6])
+
+            mem.rollback(version)
+
+            ids = [
+                result["id"]
+                for result in mem.semantic.query([0.9, 0.8, 0.7, 0.6], top_k=10)
+            ]
+            assert 2 not in ids
+            results = mem.semantic.query([0.1, 0.2, 0.3, 0.4], top_k=1)
+            assert results[0]["id"] == 1
+            assert results[0]["content"] == "first"
 
     def test_load_unknown_snapshot_version_raises(self, temp_db):
         """Loading a non-existent version raises."""

@@ -22,6 +22,7 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     Database as _RawDatabase,
     DatabaseLockedError,
     DimensionMismatchError,
+    DISTANCE_METRICS,
     EdgeExistsError,
     FusionStrategy,
     GraphStore as _RawGraphStore,
@@ -35,7 +36,9 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     PySemanticMemory,
     SearchOptions,
     SearchResult,
+    STORAGE_MODES,
     StreamingConfig,
+    StreamingIngestConfig,
     TraversalResult,
     VelesConfigOptions,
     VelesDBError,
@@ -70,32 +73,48 @@ class GraphStore:
 
     def __init__(self, inner: _RawGraphStore | None = None) -> None:
         self._inner = inner or _RawGraphStore()
+        self._legacy_edge_id = 1
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
+    def _next_edge_id(self) -> int:
+        edge_id = max(self._legacy_edge_id, self._inner.edge_count() + 1)
+        while self.has_edge(edge_id):
+            edge_id += 1
+        self._legacy_edge_id += 1
+        return edge_id
+
+    def has_edge(self, edge_id: int) -> bool:
+        return self._inner.has_edge(int(edge_id))
+
     def add_edge(
         self,
         edge: Any,
-        *,
-        source: int | None = None,
         target: int | None = None,
         label: str | None = None,
+        weight: Any | None = None,
+        *,
+        id: int | None = None,
+        source: int | None = None,
         properties: dict[str, Any] | None = None,
     ) -> None:
         if isinstance(edge, dict):
             self._inner.add_edge(edge)
             return
 
-        edge_dict: dict[str, Any] = {
-            "id": int(edge),
-            "source": int(source) if source is not None else 0,
-            "target": int(target) if target is not None else 0,
-            "label": label or "",
-        }
-        if properties is not None:
-            edge_dict["properties"] = properties
-        self._inner.add_edge(edge_dict)
+        self._inner.add_edge(
+            _legacy_edge_to_dict(
+                edge,
+                target=target,
+                label=label,
+                weight=weight,
+                edge_id=id,
+                source=source,
+                properties=properties,
+                next_id=self._next_edge_id,
+            )
+        )
 
     def traverse_bfs(
         self,
@@ -126,6 +145,124 @@ class GraphStore:
             relationship_types=relationship_types,
         )
         return self._inner.traverse_dfs(source, cfg)
+
+
+def _legacy_edge_to_dict(
+    edge_or_source: Any,
+    *,
+    target: int | None,
+    label: str | None,
+    weight: Any | None,
+    edge_id: int | None,
+    source: int | None,
+    properties: dict[str, Any] | None,
+    next_id: Any,
+) -> dict[str, Any]:
+    """Normalize legacy positional edge calls to the dict contract."""
+    props = dict(properties or {})
+    if isinstance(weight, dict):
+        props.update(weight)
+        weight = None
+    elif weight is not None:
+        props.setdefault("weight", weight)
+
+    # Current explicit-id shape: add_edge(id, source=..., target=..., label=...)
+    if source is not None or edge_id is not None:
+        eid = int(edge_or_source if edge_id is None else edge_id)
+        edge_source = int(source if source is not None else 0)
+    else:
+        # Legacy no-id shape: add_edge(source, target, label, weight=None)
+        eid = int(next_id())
+        edge_source = int(edge_or_source)
+
+    if target is None:
+        raise ValueError("add_edge() requires a target node id")
+
+    edge_dict: dict[str, Any] = {
+        "id": eid,
+        "source": edge_source,
+        "target": int(target),
+        "label": label or "RELATED_TO",
+    }
+    if props:
+        edge_dict["properties"] = props
+    return edge_dict
+
+
+class GraphCollection:
+    """Compatibility adapter around the Rust GraphCollection binding."""
+
+    def __init__(self, inner: PyGraphCollection) -> None:
+        self._inner = inner
+        self._legacy_edge_id = 1
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def __contains__(self, node_id: int) -> bool:
+        return self._inner.__contains__(int(node_id))
+
+    def __enter__(self) -> "GraphCollection":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc_value: Any, _traceback: Any) -> bool:
+        self._inner.close()
+        return False
+
+    def _next_edge_id(self) -> int:
+        edge_id = max(self._legacy_edge_id, self._inner.edge_count() + 1)
+        while self.has_edge(edge_id):
+            edge_id += 1
+        self._legacy_edge_id += 1
+        return edge_id
+
+    def has_edge(self, edge_id: int) -> bool:
+        return self._inner.has_edge(int(edge_id))
+
+    def add_edge(
+        self,
+        edge: Any,
+        target: int | None = None,
+        label: str | None = None,
+        weight: Any | None = None,
+        *,
+        id: int | None = None,
+        source: int | None = None,
+        properties: dict[str, Any] | None = None,
+    ) -> None:
+        if isinstance(edge, dict):
+            self._inner.add_edge(edge)
+            return
+
+        self._inner.add_edge(
+            _legacy_edge_to_dict(
+                edge,
+                target=target,
+                label=label,
+                weight=weight,
+                edge_id=id,
+                source=source,
+                properties=properties,
+                next_id=self._next_edge_id,
+            )
+        )
+
+    def add_node(
+        self,
+        node_id: int,
+        payload: dict[str, Any] | None = None,
+        vector: Iterable[float] | None = None,
+    ) -> None:
+        self._inner.upsert_node(int(node_id), dict(payload or {}), vector)
+
+    def bfs(self, start_id: int, max_depth: int = 3, limit: int = 100) -> list[dict[str, Any]]:
+        return self._inner.traverse_bfs(start_id, max_depth=max_depth, limit=limit)
+
+    def dfs(self, start_id: int, max_depth: int = 3, limit: int = 100) -> list[dict[str, Any]]:
+        return self._inner.traverse_dfs(start_id, max_depth=max_depth, limit=limit)
+
+    def close(self) -> None:
+        self._inner.close()
 
 
 class Collection:
@@ -460,8 +597,31 @@ class Database:
         self,
         path: str,
         config: VelesConfigOptions | None = None,
+        observer: Any | None = None,
     ) -> None:
-        self._inner = _RawDatabase(path, config)
+        """Open or create a database.
+
+        Args:
+            path: Directory path for database storage.
+            config: Optional :class:`VelesConfigOptions` applied at open time.
+            observer: Optional callable invoked on collection lifecycle
+                events as ``observer(event, **fields)``. ``event`` is one of
+                ``"collection_created"`` (fields ``name``, ``kind``, where
+                ``kind`` is ``"vector"``/``"metadata"``/``"graph"``/``"unknown"``),
+                ``"collection_deleted"`` (``name``), ``"upsert"``
+                (``collection``, ``point_count``), or ``"query"``
+                (``collection``, ``duration_us``). The observer is immutable
+                once the database is opened and cannot veto operations;
+                exceptions it raises are swallowed.
+
+                Caveat: in the embedded Python SDK only
+                ``collection_created`` / ``collection_deleted`` fire, as they
+                originate in the core engine. ``upsert`` / ``query`` are
+                emitted only by callers that explicitly call
+                ``notify_upsert`` / ``notify_query`` — in this ecosystem that
+                is the REST server, not embedded usage.
+        """
+        self._inner = _RawDatabase(path, config, observer)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -600,6 +760,27 @@ class Database:
         col = self._inner.create_metadata_collection(name)
         return Collection(col)
 
+    def create_graph_collection(
+        self,
+        name: str,
+        dimension: int | None = None,
+        metric: str = "cosine",
+        schema: PyGraphSchema | None = None,
+    ) -> GraphCollection:
+        graph = self._inner.create_graph_collection(
+            name,
+            dimension=dimension,
+            metric=metric,
+            schema=schema,
+        )
+        return GraphCollection(graph)
+
+    def get_graph_collection(self, name: str) -> "GraphCollection | None":
+        graph = self._inner.get_graph_collection(name)
+        if graph is None:
+            return None
+        return GraphCollection(graph)
+
     def execute_query(
         self,
         sql: str,
@@ -690,7 +871,9 @@ __all__ = [
     "SearchResult",
     "FusionStrategy",
     "GraphStore",
+    "GraphCollection",
     "StreamingConfig",
+    "StreamingIngestConfig",
     "TraversalResult",
     "VelesQL",
     "ParsedStatement",
@@ -719,6 +902,9 @@ __all__ = [
     "LimitsOptions",
     "AutoReindexOptions",
     "VelesConfigOptions",
+    # Canonical enum name sets, single-sourced from velesdb-core (tuples of str).
+    "DISTANCE_METRICS",
+    "STORAGE_MODES",
     "embed",
     "__version__",
 ]

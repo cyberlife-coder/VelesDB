@@ -1,5 +1,7 @@
 # VelesDB Mobile
 
+_Last updated: 2026-06-14._
+
 Native bindings for **iOS** (Swift) and **Android** (Kotlin) via [UniFFI](https://mozilla.github.io/uniffi-rs/).
 
 VelesDB Mobile brings microsecond vector search to edge devices - perfect for on-device AI, semantic search, and RAG applications.
@@ -173,6 +175,8 @@ cargo run -p velesdb-mobile --bin uniffi-bindgen -- generate \
 | `upsert(point)` | Inserts or updates a single point |
 | `upsertBatch(points)` | Batch insert/update (faster for bulk operations) |
 | `upsertWithSparse(point, sparseVector)` | Inserts a point with an associated sparse vector |
+| `enableStreaming(config)` | Enables streaming ingestion (config optional; defaults bufferSize=10000, batchSize=128, flushIntervalMs=50) |
+| `streamInsert(points)` | Queues a batch of points for streaming ingestion; returns the count queued |
 | `delete(id)` | Deletes a point by ID |
 | `get(ids)` | Gets points by their IDs (missing IDs silently skipped) |
 | `getById(id)` | Gets a single point by ID (returns nil/null if not found) |
@@ -327,7 +331,7 @@ Used with `multiQuerySearch()` for combining results from multiple query vectors
 | `PqTrainConfig` | `m: UInt32`, `k: UInt32`, `opq: Bool` | PQ training configuration |
 | `MobileGraphNode` | `id: UInt64`, `label: String`, `propertiesJson: String?`, `vector: [Float]?` | Graph node |
 | `MobileGraphEdge` | `id: UInt64`, `source: UInt64`, `target: UInt64`, `label: String`, `propertiesJson: String?` | Graph edge |
-| `TraversalResult` | `nodeId: UInt64`, `depth: UInt32` | BFS/DFS traversal result |
+| `TraversalResult` | `nodeId: UInt64`, `path: [UInt64]`, `depth: UInt32` | BFS/DFS traversal result (`path` = edge IDs taken from the source; mirrors core's `TraversalResult`) |
 | `MobileCollectionStats` | `totalPoints`, `payloadSizeBytes`, `rowCount`, ... | Collection statistics |
 | `MobileIndexInfo` | `label`, `property`, `indexType`, `cardinality`, `memoryBytes` | Index metadata |
 

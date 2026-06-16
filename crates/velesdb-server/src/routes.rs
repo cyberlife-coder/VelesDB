@@ -12,16 +12,18 @@ use axum::{
 };
 
 use crate::{
-    add_edge, aggregate, analyze_collection, batch_search, bulk_delete_points, collection_sanity,
-    compact_collection, create_collection, create_index, delete_collection, delete_index,
-    delete_point, explain, flush_collection, get_collection, get_collection_config,
-    get_collection_stats, get_edge_count, get_edges, get_guardrails, get_node_degree,
-    get_node_edges, get_node_payload, get_point, get_point_relations, graph_search, health_check,
-    hybrid_search, is_empty, list_collections, list_indexes, list_nodes, match_query,
-    multi_query_search, query, readiness_check, rebuild_index, relate_points, remove_edge,
+    add_edge, add_edges_batch, aggregate, analyze_collection, batch_search, bulk_delete_points,
+    collection_diagnostics, collection_sanity, compact_collection, create_collection, create_index,
+    delete_collection, delete_index, delete_point, enable_streaming, explain, flush_collection,
+    get_collection, get_collection_config, get_collection_stats, get_edge_count, get_edges,
+    get_guardrails, get_node_degree, get_node_edges, get_node_payload, get_point,
+    get_point_relations, graph_search, health_check, hybrid_search, is_empty, list_collections,
+    list_indexes, list_nodes, match_query, multi_query_search, multi_query_search_ids, query,
+    readiness_check, rebuild_index, relate_points, remove_edge, reorder_for_locality,
     scroll_points, search, search_ids, set_point_ttl, stream_insert, stream_traverse,
     stream_upsert_points, text_search, traverse_graph, traverse_parallel, unrelate_points,
-    update_guardrails, upsert_node_payload, upsert_points, vacuum_collection, AppState,
+    update_guardrails, upsert_node_payload, upsert_points, upsert_points_raw, vacuum_collection,
+    AppState,
 };
 
 /// Core CRUD and admin routes.
@@ -44,12 +46,17 @@ fn core_routes() -> Router<Arc<AppState>> {
         .route("/collections/{name}/analyze", post(analyze_collection))
         .route("/collections/{name}/index/rebuild", post(rebuild_index))
         .route("/collections/{name}/stats", get(get_collection_stats))
+        .route(
+            "/collections/{name}/diagnostics",
+            get(collection_diagnostics),
+        )
         .route("/guardrails", get(get_guardrails).put(update_guardrails))
         // 100 MB limit scoped to batch vector upload routes only
         // (1000 vectors x 768D x 4 bytes = ~3 MB typical; 100 MB covers extreme cases)
         .merge(
             Router::new()
                 .route("/collections/{name}/points", post(upsert_points))
+                .route("/collections/{name}/points/raw", post(upsert_points_raw))
                 .route(
                     "/collections/{name}/points/stream",
                     post(stream_upsert_points),
@@ -57,6 +64,7 @@ fn core_routes() -> Router<Arc<AppState>> {
                 .layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
         )
         .route("/collections/{name}/stream/insert", post(stream_insert))
+        .route("/collections/{name}/stream/enable", post(enable_streaming))
         .route(
             "/collections/{name}/points/{id}",
             get(get_point).delete(delete_point),
@@ -70,6 +78,10 @@ fn core_routes() -> Router<Arc<AppState>> {
         // Maintenance endpoints
         .route("/collections/{name}/vacuum", post(vacuum_collection))
         .route("/collections/{name}/compact", post(compact_collection))
+        .route(
+            "/collections/{name}/locality/reorder",
+            post(reorder_for_locality),
+        )
 }
 
 /// Relation (graph edge) and durable TTL routes (any collection type).
@@ -93,6 +105,10 @@ fn search_routes() -> Router<Arc<AppState>> {
         .route("/collections/{name}/search", post(search))
         .route("/collections/{name}/search/batch", post(batch_search))
         .route("/collections/{name}/search/multi", post(multi_query_search))
+        .route(
+            "/collections/{name}/search/multi/ids",
+            post(multi_query_search_ids),
+        )
         .route("/collections/{name}/search/text", post(text_search))
         .route("/collections/{name}/search/hybrid", post(hybrid_search))
         .route("/collections/{name}/search/ids", post(search_ids))
@@ -116,6 +132,10 @@ fn graph_routes() -> Router<Arc<AppState>> {
         .route(
             "/collections/{name}/graph/edges",
             get(get_edges).post(add_edge),
+        )
+        .route(
+            "/collections/{name}/graph/edges/batch",
+            post(add_edges_batch),
         )
         .route(
             "/collections/{name}/graph/edges/{edge_id}",

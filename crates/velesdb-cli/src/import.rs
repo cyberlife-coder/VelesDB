@@ -135,15 +135,7 @@ pub fn import_jsonl(db: &Database, path: &Path, config: &ImportConfig) -> Result
         progress.inc(1);
     }
 
-    let acc = importer.flush()?;
-    progress.finish_with_message("Import complete");
-
-    Ok(ImportStats {
-        total,
-        imported: acc.imported,
-        errors: acc.errors,
-        duration_ms: start.elapsed().as_millis() as u64,
-    })
+    finalize_import(importer, &progress, total, start)
 }
 
 /// Import from CSV file
@@ -235,6 +227,18 @@ pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<I
         progress.inc(1);
     }
 
+    finalize_import(importer, &progress, total, start)
+}
+
+/// Flush the batch importer, finish the progress bar, and build [`ImportStats`].
+///
+/// Shared finalization tail for `import_jsonl` and `import_csv`.
+fn finalize_import(
+    importer: BatchImporter<'_>,
+    progress: &indicatif::ProgressBar,
+    total: usize,
+    start: std::time::Instant,
+) -> Result<ImportStats> {
     let acc = importer.flush()?;
     progress.finish_with_message("Import complete");
 
@@ -242,6 +246,38 @@ pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<I
         total,
         imported: acc.imported,
         errors: acc.errors,
+        duration_ms: start.elapsed().as_millis() as u64,
+    })
+}
+
+/// Import from a VRB1 binary file (`.bin` / `.vrb1`).
+///
+/// Reads the whole file, decodes the shared VRB1 wire format, and forwards the
+/// flat ids/vectors to the zero-copy `upsert_bulk_from_raw` path. The declared
+/// dimension in the file is authoritative (it sizes a freshly created
+/// collection). Payloads are not carried by this format — use `.jsonl` / `.csv`
+/// when payloads are needed.
+pub fn import_raw_bulk(db: &Database, path: &Path, config: &ImportConfig) -> Result<ImportStats> {
+    let bytes = std::fs::read(path).context("Failed to read binary file")?;
+    let raw = velesdb_core::wire::vrb1::decode(&bytes)
+        .map_err(|e| anyhow::anyhow!("Invalid VRB1 binary file: {e}"))?;
+
+    let collection = get_or_create_collection(
+        db,
+        &config.collection,
+        raw.dimension,
+        config.metric,
+        config.storage_mode,
+    )?;
+
+    let total = raw.ids.len();
+    let start = std::time::Instant::now();
+    let imported = collection.upsert_bulk_from_raw(&raw.vectors, &raw.ids, raw.dimension, None)?;
+
+    Ok(ImportStats {
+        total,
+        imported,
+        errors: 0,
         duration_ms: start.elapsed().as_millis() as u64,
     })
 }

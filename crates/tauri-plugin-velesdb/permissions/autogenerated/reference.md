@@ -11,12 +11,16 @@ Default permissions for VelesDB plugin - allows all database operations
 - `allow-get-collection`
 - `allow-is-empty`
 - `allow-flush`
+- `allow-compact-storage`
+- `allow-update-guardrails`
+- `allow-get-guardrails`
 - `allow-scroll-collection`
 - `allow-upsert`
 - `allow-upsert-metadata`
 - `allow-get-points`
 - `allow-delete-points`
 - `allow-search`
+- `allow-search-ids`
 - `allow-batch-search`
 - `allow-text-search`
 - `allow-hybrid-search`
@@ -27,6 +31,7 @@ Default permissions for VelesDB plugin - allows all database operations
 - `allow-sparse-upsert`
 - `allow-train-pq`
 - `allow-stream-insert`
+- `allow-enable-streaming`
 - `allow-semantic-store`
 - `allow-semantic-store-with-ttl`
 - `allow-semantic-query`
@@ -60,6 +65,7 @@ Default permissions for VelesDB plugin - allows all database operations
 - `allow-memory-query-procedural`
 - `allow-create-graph-collection`
 - `allow-add-edge`
+- `allow-add-edges-batch`
 - `allow-get-edges`
 - `allow-traverse-graph`
 - `allow-get-node-degree`
@@ -106,6 +112,32 @@ Denies the add_edge command without any pre-configured scope.
 <tr>
 <td>
 
+`velesdb:allow-add-edges-batch`
+
+</td>
+<td>
+
+Enables the add_edges_batch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-add-edges-batch`
+
+</td>
+<td>
+
+Denies the add_edges_batch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `velesdb:allow-batch-search`
 
 </td>
@@ -125,6 +157,32 @@ Enables the batch_search command without any pre-configured scope.
 <td>
 
 Denies the batch_search command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-compact-storage`
+
+</td>
+<td>
+
+Enables the compact_storage command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-compact-storage`
+
+</td>
+<td>
+
+Denies the compact_storage command without any pre-configured scope.
 
 </td>
 </tr>
@@ -307,6 +365,32 @@ Enables the drop_index command without any pre-configured scope.
 <td>
 
 Denies the drop_index command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-enable-streaming`
+
+</td>
+<td>
+
+Enables the enable_streaming command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-enable-streaming`
+
+</td>
+<td>
+
+Denies the enable_streaming command without any pre-configured scope.
 
 </td>
 </tr>
@@ -567,6 +651,32 @@ Enables the get_edges command without any pre-configured scope.
 <td>
 
 Denies the get_edges command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-get-guardrails`
+
+</td>
+<td>
+
+Enables the get_guardrails command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-get-guardrails`
+
+</td>
+<td>
+
+Denies the get_guardrails command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1302,6 +1412,32 @@ Denies the search command without any pre-configured scope.
 <tr>
 <td>
 
+`velesdb:allow-search-ids`
+
+</td>
+<td>
+
+Enables the search_ids command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-search-ids`
+
+</td>
+<td>
+
+Denies the search_ids command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `velesdb:allow-semantic-delete`
 
 </td>
@@ -1659,6 +1795,32 @@ Enables the traverse_graph_parallel command without any pre-configured scope.
 <td>
 
 Denies the traverse_graph_parallel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-update-guardrails`
+
+</td>
+<td>
+
+Enables the update_guardrails command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-update-guardrails`
+
+</td>
+<td>
+
+Denies the update_guardrails command without any pre-configured scope.
 
 </td>
 </tr>

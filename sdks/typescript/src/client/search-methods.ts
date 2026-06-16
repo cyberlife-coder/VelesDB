@@ -31,6 +31,7 @@ import type {
   ExplainResponse,
   CollectionSanityResponse,
   StreamUpsertResponse,
+  StreamingConfig,
   SparseVector,
 } from '../types';
 import type { FilterInput } from '../filter';
@@ -137,6 +138,24 @@ export function multiQuerySearch(
   return backend.multiQuerySearch(collection, vectors, options);
 }
 
+/** Multi-query fusion search returning only IDs and scores (no payloads). */
+export function multiQuerySearchIds(
+  backend: IVelesDBBackend,
+  collection: string,
+  vectors: Array<number[] | Float32Array>,
+  options?: MultiQuerySearchOptions
+): Promise<Array<{ id: number; score: number }>> {
+  if (!Array.isArray(vectors) || vectors.length === 0) {
+    throw new ValidationError('Vectors must be a non-empty array');
+  }
+
+  for (const v of vectors) {
+    requireVector(v, 'Each vector');
+  }
+
+  return backend.multiQuerySearchIds(collection, vectors, options);
+}
+
 /** Train Product Quantization on a collection. */
 export function trainPq(
   backend: IVelesDBBackend,
@@ -144,6 +163,15 @@ export function trainPq(
   options?: PqTrainOptions
 ): Promise<string> {
   return backend.trainPq(collection, options);
+}
+
+/** Enable the bounded streaming-ingestion channel on a collection. */
+export function enableStreaming(
+  backend: IVelesDBBackend,
+  collection: string,
+  config?: StreamingConfig
+): Promise<void> {
+  return backend.enableStreaming(collection, config);
 }
 
 /** Stream-insert documents with backpressure support. */

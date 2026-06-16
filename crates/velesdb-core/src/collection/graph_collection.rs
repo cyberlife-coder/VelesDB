@@ -263,6 +263,12 @@ impl GraphCollection {
         self.inner.remove_edge(edge_id)
     }
 
+    /// Returns `true` if an edge with `edge_id` exists in the graph.
+    #[must_use]
+    pub fn has_edge(&self, edge_id: u64) -> bool {
+        self.inner.edge_exists(edge_id)
+    }
+
     /// Performs BFS traversal from a source node.
     ///
     /// # Examples
@@ -330,6 +336,26 @@ impl GraphCollection {
         self.inner.store_node_payload(node_id, payload)
     }
 
+    /// Inserts or updates a node payload, optionally with an embedding vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage fails, the vector dimension is invalid, or
+    /// an embedding is supplied for a graph collection without embeddings.
+    pub fn upsert_node(
+        &self,
+        node_id: u64,
+        payload: &serde_json::Value,
+        vector: Option<Vec<f32>>,
+    ) -> Result<()> {
+        match vector {
+            Some(vector) => self
+                .inner
+                .upsert([Point::new(node_id, vector, Some(payload.clone()))]),
+            None => self.upsert_node_payload(node_id, payload),
+        }
+    }
+
     /// Inserts or updates node payload (properties).
     ///
     /// # Errors
@@ -382,19 +408,29 @@ mod tests {
     use crate::collection::graph::GraphSchema;
     use crate::distance::DistanceMetric;
     use std::collections::HashMap;
-    use tempfile::tempdir;
+    use tempfile::{tempdir, TempDir};
 
-    #[test]
-    fn test_all_node_ids_returns_ids_with_payload() {
+    /// Creates a schemaless cosine `GraphCollection` in a fresh temp dir.
+    ///
+    /// Returns the `TempDir` guard alongside the collection so the backing
+    /// directory outlives the test. `dimension` controls embedding support
+    /// (`None` for payload/edge-only collections, `Some(n)` for searchable ones).
+    fn make_test_collection(dimension: Option<usize>) -> (TempDir, GraphCollection) {
         let dir = tempdir().unwrap();
         let col = GraphCollection::create(
             dir.path().to_path_buf(),
             "kg",
-            None,
+            dimension,
             DistanceMetric::Cosine,
             GraphSchema::schemaless(),
         )
         .unwrap();
+        (dir, col)
+    }
+
+    #[test]
+    fn test_all_node_ids_returns_ids_with_payload() {
+        let (_dir, col) = make_test_collection(None);
 
         // Store payloads on two nodes
         col.upsert_node_payload(10, &serde_json::json!({"name": "Alice"}))
@@ -409,16 +445,27 @@ mod tests {
     }
 
     #[test]
-    fn test_edge_count_returns_correct_count() {
-        let dir = tempdir().unwrap();
-        let col = GraphCollection::create(
-            dir.path().to_path_buf(),
-            "kg",
-            None,
-            DistanceMetric::Cosine,
-            GraphSchema::schemaless(),
+    fn test_upsert_node_with_embedding_is_searchable() {
+        let (_dir, col) = make_test_collection(Some(4));
+
+        col.upsert_node(
+            10,
+            &serde_json::json!({"name": "Alice"}),
+            Some(vec![1.0, 0.0, 0.0, 0.0]),
         )
         .unwrap();
+
+        assert_eq!(
+            col.get_node_payload(10).unwrap(),
+            Some(serde_json::json!({"name": "Alice"}))
+        );
+        let results = col.search_by_embedding(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
+        assert_eq!(results[0].point.id, 10);
+    }
+
+    #[test]
+    fn test_edge_count_returns_correct_count() {
+        let (_dir, col) = make_test_collection(None);
 
         assert_eq!(col.edge_count(), 0);
 
@@ -433,15 +480,7 @@ mod tests {
 
     #[test]
     fn test_traverse_bfs_parallel_through_graph_collection() {
-        let dir = tempdir().unwrap();
-        let col = GraphCollection::create(
-            dir.path().to_path_buf(),
-            "kg",
-            None,
-            DistanceMetric::Cosine,
-            GraphSchema::schemaless(),
-        )
-        .unwrap();
+        let (_dir, col) = make_test_collection(None);
 
         // Build chain: 1->2->3
         col.add_edge(GraphEdge::new(1, 1, 2, "NEXT").unwrap())
@@ -463,15 +502,7 @@ mod tests {
 
     #[test]
     fn test_execute_match_finds_edges() {
-        let dir = tempdir().unwrap();
-        let col = GraphCollection::create(
-            dir.path().to_path_buf(),
-            "kg",
-            None,
-            DistanceMetric::Cosine,
-            GraphSchema::schemaless(),
-        )
-        .unwrap();
+        let (_dir, col) = make_test_collection(None);
 
         // Store node payloads with labels
         col.upsert_node_payload(

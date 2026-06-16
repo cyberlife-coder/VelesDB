@@ -52,6 +52,17 @@ pub struct VectorStore {
     pub(crate) sparse_index: Option<sparse::SparseIndex>,
 }
 
+impl VectorStore {
+    /// Returns the JSON payload stored for `id`, if the id exists and carries one.
+    ///
+    /// Used by cross-collection MATCH enrichment to merge a referenced
+    /// collection's metadata into graph results by node id.
+    pub(crate) fn payload_for_id(&self, id: u64) -> Option<&serde_json::Value> {
+        let idx = self.ids.iter().position(|&x| x == id)?;
+        self.payloads.get(idx).and_then(Option::as_ref)
+    }
+}
+
 #[wasm_bindgen]
 impl VectorStore {
     /// Creates a new vector store. Metrics: cosine, euclidean, dot, hamming, jaccard.
@@ -340,6 +351,31 @@ impl VectorStore {
         )
     }
 
+    /// Sparse k-NN search over the store's pre-built sparse index.
+    ///
+    /// Unlike [`sparse_search`](Self::sparse_search) — which returns an empty
+    /// result set when no sparse data has been inserted — this method mirrors
+    /// the core `sparse_search` contract and returns an **error** when the
+    /// store has no sparse index, so callers can distinguish "index missing"
+    /// from "no matches". Scoring is delegated unchanged to the
+    /// recall-verified [`sparse::SparseIndex`] kernel.
+    ///
+    /// Returns a JSON array of `{doc_id, score}` objects sorted by score
+    /// descending, truncated to `k`.
+    #[wasm_bindgen]
+    pub fn search_sparse(
+        &self,
+        query_indices: &[u32],
+        query_values: &[f32],
+        k: usize,
+    ) -> Result<JsValue, JsValue> {
+        let results = self
+            .search_sparse_scored(query_indices, query_values, k)
+            .map_err(|e| JsValue::from_str(&e))?;
+        serde_wasm_bindgen::to_value(&results)
+            .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
+    }
+
     /// VelesQL-style query returning multi-model results (EPIC-031 US-009).
     ///
     /// Returns results in `HybridResult` format with `node_id`, `vector_score`,
@@ -448,13 +484,8 @@ impl VectorStore {
             return serde_wasm_bindgen::to_value::<Vec<Vec<(u64, f32)>>>(&vec![])
                 .map_err(|e| JsValue::from_str(&e.to_string()));
         }
-        let expected_len = num_vectors * self.dimension;
-        if vectors.len() != expected_len {
-            return Err(JsValue::from_str(&format!(
-                "Expected {expected_len} floats, got {}",
-                vectors.len()
-            )));
-        }
+        store_search::validate_multi_vector_len(vectors.len(), num_vectors, self.dimension)
+            .map_err(|e| JsValue::from_str(&e))?;
         if self.storage_mode != StorageMode::Full {
             return Err(JsValue::from_str(
                 "batch_search only supports Full storage mode",
@@ -569,5 +600,41 @@ impl VectorStore {
             self.payloads.push(None);
         }
         Ok(())
+    }
+
+    /// Bulk insert from a flat contiguous `Float32Array` (zero-copy layout),
+    /// mirroring the VRB1 raw-bulk contract: `ids` + flat row-major `vectors`
+    /// + `dimension`. No payloads (use `insert_batch` for those).
+    #[wasm_bindgen(js_name = insertBatchRaw)]
+    pub fn insert_batch_raw(
+        &mut self,
+        ids: &[u64],
+        vectors: &[f32],
+        dimension: usize,
+    ) -> Result<(), JsValue> {
+        store_insert::insert_batch_raw(self, ids, vectors, dimension)
+            .map_err(|e| JsValue::from_str(&e))
+    }
+}
+
+// Native-testable internals (not part of the wasm-bindgen surface).
+impl VectorStore {
+    /// Scoring entry point behind [`search_sparse`](Self::search_sparse).
+    ///
+    /// Returns an error when no sparse index has been built (parity with the
+    /// core `sparse_search` contract); otherwise delegates scoring to the
+    /// [`sparse::SparseIndex`] kernel. Returns `String` errors and plain
+    /// result structs so it can be exercised off-`wasm32`.
+    pub(crate) fn search_sparse_scored(
+        &self,
+        query_indices: &[u32],
+        query_values: &[f32],
+        k: usize,
+    ) -> Result<Vec<sparse::SparseSearchResult>, String> {
+        let idx = self
+            .sparse_index
+            .as_ref()
+            .ok_or_else(|| "sparse index not found: insert sparse vectors first".to_string())?;
+        idx.search_scored(query_indices, query_values, k)
     }
 }

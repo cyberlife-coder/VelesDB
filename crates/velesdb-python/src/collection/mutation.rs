@@ -12,6 +12,10 @@ use crate::collection_helpers::{
 
 use super::Collection;
 
+/// Optional per-row Python payload dicts for a NumPy bulk upsert: `None` means
+/// "no payloads", otherwise one `Option<dict>` per vector row.
+type NumpyPayloadBatch = Option<Vec<Option<HashMap<String, Py<PyAny>>>>>;
+
 #[pymethods]
 impl Collection {
     /// Creates a secondary index on a payload field for faster filtered queries.
@@ -24,12 +28,12 @@ impl Collection {
     #[pyo3(signature = (field_name))]
     fn create_index(&self, py: Python<'_>, field_name: &str) -> PyResult<()> {
         let name = field_name.to_string();
-        py.allow_threads(|| self.inner.create_index(&name).map_err(core_err))
+        py.detach(|| self.inner.create_index(&name).map_err(core_err))
     }
 
     /// Insert or update vectors in the collection.
     #[pyo3(signature = (points))]
-    fn upsert(&self, py: Python<'_>, points: Vec<HashMap<String, PyObject>>) -> PyResult<usize> {
+    fn upsert(&self, py: Python<'_>, points: Vec<HashMap<String, Py<PyAny>>>) -> PyResult<usize> {
         // Phase 1: Parse all Python dicts (GIL held)
         let core_points = parse_point_dicts(py, &points)?;
         let count = core_points.len();
@@ -37,7 +41,7 @@ impl Collection {
         // Phase 2: Release GIL during core engine work; report DimensionMismatch with
         // the collection name so the error message includes full context.
         let name = self.name.clone();
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner
                 .upsert(core_points)
                 .map_err(|e| core_err_with_collection(e, &name))
@@ -51,7 +55,7 @@ impl Collection {
     fn upsert_metadata(
         &self,
         py: Python<'_>,
-        points: Vec<HashMap<String, PyObject>>,
+        points: Vec<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<usize> {
         let mut core_points = Vec::with_capacity(points.len());
 
@@ -66,7 +70,7 @@ impl Collection {
         }
 
         let count = core_points.len();
-        py.allow_threads(|| self.inner.upsert_metadata(core_points).map_err(core_err))?;
+        py.detach(|| self.inner.upsert_metadata(core_points).map_err(core_err))?;
 
         Ok(count)
     }
@@ -76,7 +80,7 @@ impl Collection {
     fn upsert_bulk(
         &self,
         py: Python<'_>,
-        points: Vec<HashMap<String, PyObject>>,
+        points: Vec<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<usize> {
         let mut core_points = Vec::with_capacity(points.len());
 
@@ -88,7 +92,7 @@ impl Collection {
         }
 
         let name = self.name.clone();
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner
                 .upsert_bulk(&core_points)
                 .map_err(|e| core_err_with_collection(e, &name))
@@ -136,7 +140,7 @@ impl Collection {
         py: Python<'_>,
         vectors: numpy::PyReadonlyArray2<f32>,
         ids: Vec<u64>,
-        payloads: Option<Vec<Option<HashMap<String, PyObject>>>>,
+        payloads: NumpyPayloadBatch,
     ) -> PyResult<usize> {
         let array = vectors.as_array();
         let n = array.nrows();
@@ -151,11 +155,11 @@ impl Collection {
         // Convert Python payload dicts to serde_json::Value (GIL required).
         let json_payloads = convert_payloads(py, &payloads)?;
 
-        // Copy the flat data so we can release the GIL (numpy buffer is PyObject-backed).
+        // Copy the flat data so we can release the GIL (numpy buffer is Py<PyAny>-backed).
         let flat_owned: Vec<f32> = flat.to_vec();
         let payloads_ref = json_payloads.as_deref();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner
                 .upsert_bulk_from_raw(&flat_owned, &ids, dimension, payloads_ref)
                 .map_err(core_err)
@@ -227,7 +231,7 @@ impl Collection {
         let flat_owned: Vec<f32> = flat.to_vec();
         let payload_vec: Vec<Option<serde_json::Value>> = parsed_payloads;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner
                 .upsert_bulk_from_raw(&flat_owned, &ids, dimension, Some(&payload_vec))
                 .map_err(core_err)
@@ -236,9 +240,9 @@ impl Collection {
 
     /// Get points by their IDs.
     #[pyo3(signature = (ids))]
-    fn get(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<Vec<Option<PyObject>>> {
+    fn get(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<Vec<Option<Py<PyAny>>>> {
         // Phase 2: Release GIL during core retrieval
-        let points = py.allow_threads(|| self.inner.get(&ids));
+        let points = py.detach(|| self.inner.get(&ids));
 
         // Phase 3: Convert to Python (GIL held)
         let py_points = points
@@ -251,12 +255,12 @@ impl Collection {
     /// Delete points by their IDs.
     #[pyo3(signature = (ids))]
     fn delete(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<()> {
-        py.allow_threads(|| self.inner.delete(&ids).map_err(core_err))
+        py.detach(|| self.inner.delete(&ids).map_err(core_err))
     }
 
     /// Flush all pending changes to disk.
     fn flush(&self, py: Python<'_>) -> PyResult<()> {
-        py.allow_threads(|| self.inner.flush().map_err(core_err))
+        py.detach(|| self.inner.flush().map_err(core_err))
     }
 
     /// Insert points via the streaming ingestion channel.
@@ -278,17 +282,43 @@ impl Collection {
     ///     >>> count = collection.stream_insert([
     ///     ...     {"id": 1, "vector": [...], "payload": {"key": "value"}}
     ///     ... ])
+    /// Enables streaming ingestion on this collection.
+    ///
+    /// Must be called before `stream_insert`; otherwise stream inserts fail
+    /// with "not configured". Mirrors the REST `/stream/enable` endpoint and
+    /// the Tauri binding. Calling it again replaces the existing ingester.
+    ///
+    /// Args:
+    ///     config: Optional `StreamingIngestConfig`. Defaults to the engine
+    ///         defaults (buffer_size=10000, batch_size=128, flush_interval_ms=50).
+    ///
+    /// Example:
+    ///     >>> collection.enable_streaming(StreamingIngestConfig(batch_size=256))
+    ///     >>> collection.stream_insert([{"id": 1, "vector": [...]}])
+    #[pyo3(signature = (config=None))]
+    fn enable_streaming(&self, config: Option<crate::StreamingIngestConfig>) -> PyResult<()> {
+        let core_config = config.map_or_else(velesdb_core::StreamingConfig::default, |c| {
+            velesdb_core::StreamingConfig::new(c.buffer_size, c.batch_size, c.flush_interval_ms)
+        });
+        // Spawning the drain task needs an ambient runtime; enter the shared
+        // streaming runtime so the task is scheduled on it and survives this call.
+        let runtime = crate::streaming_runtime::stream_runtime()?;
+        let _guard = runtime.enter();
+        self.inner.enable_streaming(core_config);
+        Ok(())
+    }
+
     #[pyo3(signature = (points))]
     fn stream_insert(
         &self,
         py: Python<'_>,
-        points: Vec<HashMap<String, PyObject>>,
+        points: Vec<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<usize> {
-        // Phase 1: Parse all points while holding the GIL (required for PyObject access)
+        // Phase 1: Parse all points while holding the GIL (required for Py<PyAny> access)
         let parsed = parse_point_dicts(py, &points)?;
 
         // Phase 2: Send entire batch in one call (single lock acquisition), GIL released
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner.stream_insert_batch(parsed).map_err(|e| {
                 pyo3::exceptions::PyRuntimeError::new_err(format!(
                     "Stream insert failed (buffer full or not configured): {e}"
@@ -299,11 +329,7 @@ impl Collection {
 }
 
 /// Validate that ids and optional payloads lengths match the vector row count.
-fn validate_numpy_lengths(
-    n: usize,
-    ids: &[u64],
-    payloads: &Option<Vec<Option<HashMap<String, PyObject>>>>,
-) -> PyResult<()> {
+fn validate_numpy_lengths(n: usize, ids: &[u64], payloads: &NumpyPayloadBatch) -> PyResult<()> {
     if ids.len() != n {
         return Err(PyValueError::new_err(format!(
             "ids length ({}) must match vectors row count ({n})",
@@ -327,7 +353,7 @@ fn validate_numpy_lengths(
 /// `Some(json_map)` when a dict is present, or `None` for that index.
 fn convert_payloads(
     py: Python<'_>,
-    payloads: &Option<Vec<Option<HashMap<String, PyObject>>>>,
+    payloads: &NumpyPayloadBatch,
 ) -> PyResult<Option<Vec<Option<serde_json::Value>>>> {
     let Some(ref payload_list) = *payloads else {
         return Ok(None);

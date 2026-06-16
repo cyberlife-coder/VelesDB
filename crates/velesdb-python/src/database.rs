@@ -9,11 +9,65 @@ use crate::agent;
 use crate::collection::Collection;
 use crate::collection_helpers::core_err;
 use crate::graph_collection::{PyGraphCollection, PyGraphSchema};
+use crate::observer::PyObserver;
 use crate::options::{AutoReindexOptions, HnswOptions, VelesConfigOptions};
 use crate::utils::{self, parse_metric, parse_storage_mode};
 
 use velesdb_core::collection::auto_reindex::AutoReindexManager;
-use velesdb_core::{CollectionType, Database as CoreDatabase, GraphSchema};
+use velesdb_core::{CollectionType, Database as CoreDatabase, DatabaseObserver, GraphSchema};
+
+/// The full set of guardrail fields. `update_guardrails` is an explicit full
+/// replacement (matching the Mobile/Tauri typed structs), so the supplied dict
+/// must contain exactly these keys: omitting one would silently reset it to its
+/// default, and a typo'd key would silently reset every field.
+const GUARDRAIL_FIELDS: [&str; 7] = [
+    "max_depth",
+    "max_cardinality",
+    "memory_limit_bytes",
+    "timeout_ms",
+    "rate_limit_qps",
+    "circuit_failure_threshold",
+    "circuit_recovery_seconds",
+];
+
+/// Validates that `obj` contains exactly the guardrail fields — no unknown keys
+/// and none missing — so a partial or misspelled dict is rejected loudly rather
+/// than silently resetting limits to their defaults.
+fn validate_guardrail_keys(obj: &serde_json::Map<String, serde_json::Value>) -> PyResult<()> {
+    for key in obj.keys() {
+        if !GUARDRAIL_FIELDS.contains(&key.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "unknown guardrail field: '{key}'"
+            )));
+        }
+    }
+    for field in GUARDRAIL_FIELDS {
+        if !obj.contains_key(field) {
+            return Err(PyValueError::new_err(format!(
+                "missing guardrail field: '{field}' (update_guardrails is a full replacement; provide all fields)"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Opens the core database, branching across the optional config and observer.
+///
+/// Extracted from [`Database::new`] so the constructor stays within the
+/// cyclomatic-complexity budget: the four config × observer combinations would
+/// otherwise inflate `new`. Runs off the GIL (called inside `allow_threads`).
+fn open_core(
+    path: &std::path::Path,
+    config: Option<velesdb_core::config::VelesConfig>,
+    observer: Option<Arc<dyn DatabaseObserver>>,
+) -> velesdb_core::Result<CoreDatabase> {
+    match (config, observer) {
+        (Some(cfg), Some(obs)) => CoreDatabase::open_with_observer_and_config(path, obs, cfg),
+        (Some(cfg), None) => CoreDatabase::open_with_config(path, cfg),
+        (None, Some(obs)) => CoreDatabase::open_with_observer(path, obs),
+        (None, None) => CoreDatabase::open(path),
+    }
+}
 
 /// VelesDB Database - the main entry point for interacting with VelesDB.
 ///
@@ -56,6 +110,22 @@ impl Database {
     ///     path: Directory path for database storage.
     ///     config: Optional typed configuration (limits, etc.) applied
     ///         at open time. See :class:`VelesConfigOptions`.
+    ///     observer: Optional callable invoked on collection lifecycle
+    ///         events. Called as ``observer(event, **fields)`` where
+    ///         ``event`` is one of ``"collection_created"``,
+    ///         ``"collection_deleted"``, ``"upsert"``, or ``"query"``:
+    ///
+    ///         - ``collection_created`` → ``name``, ``kind``
+    ///           (``"vector"``/``"metadata"``/``"graph"``/``"unknown"``)
+    ///         - ``collection_deleted`` → ``name``
+    ///         - ``upsert`` → ``collection``, ``point_count``
+    ///         - ``query`` → ``collection``, ``duration_us``
+    ///
+    ///         The observer is immutable once the database is opened
+    ///         (there is no post-open setter). Exceptions raised inside
+    ///         the callback are swallowed so they never break a core
+    ///         operation. This is a notify-only hook — it cannot veto
+    ///         operations.
     ///
     /// Returns:
     ///     Database instance
@@ -66,9 +136,20 @@ impl Database {
     ///     >>> from velesdb import VelesConfigOptions, LimitsOptions
     ///     >>> cfg = VelesConfigOptions(limits=LimitsOptions(max_collections=50))
     ///     >>> db = velesdb.Database("./tenant1", config=cfg)
+    ///     >>> # With a lifecycle observer:
+    ///     >>> events = []
+    ///     >>> db = velesdb.Database(
+    ///     ...     "./audited",
+    ///     ...     observer=lambda event, **f: events.append((event, f)),
+    ///     ... )
     #[new]
-    #[pyo3(signature = (path, config = None))]
-    fn new(py: Python<'_>, path: &str, config: Option<VelesConfigOptions>) -> PyResult<Self> {
+    #[pyo3(signature = (path, config = None, observer = None))]
+    fn new(
+        py: Python<'_>,
+        path: &str,
+        config: Option<VelesConfigOptions>,
+        observer: Option<Py<PyAny>>,
+    ) -> PyResult<Self> {
         // Open the database off the GIL. Opening walks the WAL, rebuilds
         // any in-memory state, and mmaps vector/edge files — on a multi-
         // million-vector directory this easily reaches multi-second
@@ -76,13 +157,16 @@ impl Database {
         // Python thread. PyO3 ≥0.20 allows `py: Python<'_>` as the first
         // parameter of a `#[new]` constructor, which is exactly what we
         // need to call `allow_threads` here.
+        //
+        // The observer's `Py<PyAny>` is `Send`, so it can be captured by the
+        // `'static` open closure; building the `PyObserver` stays off-GIL.
         let path_buf = PathBuf::from(path);
         let path_clone = path_buf.clone();
+        let core_config = config.map(|cfg| cfg.to_core());
+        let core_observer: Option<Arc<dyn DatabaseObserver>> =
+            observer.map(|cb| Arc::new(PyObserver::new(cb)) as Arc<dyn DatabaseObserver>);
         let db = py
-            .allow_threads(move || match config {
-                Some(cfg) => CoreDatabase::open_with_config(&path_clone, cfg.to_core()),
-                None => CoreDatabase::open(&path_clone),
-            })
+            .detach(move || open_core(&path_clone, core_config, core_observer))
             .map_err(core_err)?;
         Ok(Self {
             inner: Arc::new(db),
@@ -192,7 +276,7 @@ impl Database {
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
         let name_for_closure = name_owned.clone();
-        py.allow_threads(move || match plan {
+        py.detach(move || match plan {
             CreatePlan::Full {
                 hnsw_params,
                 pq_rescore_oversampling,
@@ -281,6 +365,14 @@ impl Database {
         self.inner.list_collections()
     }
 
+    /// Alias for `list_collections`.
+    ///
+    /// Kept for compatibility with older documentation and examples that used
+    /// `get_collections()` for the same operation.
+    fn get_collections(&self) -> Vec<String> {
+        self.list_collections()
+    }
+
     /// Delete a collection by name.
     ///
     /// Args:
@@ -297,7 +389,7 @@ impl Database {
         // other Python threads keep running.
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
-        py.allow_threads(move || inner.delete_collection(&name_owned))
+        py.detach(move || inner.delete_collection(&name_owned))
             .map_err(core_err)
     }
 
@@ -323,7 +415,7 @@ impl Database {
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
         let name_for_closure = name_owned.clone();
-        py.allow_threads(move || inner.create_metadata_collection(&name_for_closure))
+        py.detach(move || inner.create_metadata_collection(&name_for_closure))
             .map_err(core_err)?;
 
         // Use get_any_collection to get the registered instance (not a disconnected copy).
@@ -451,7 +543,7 @@ impl Database {
         let inner = Arc::clone(&self.inner);
         let name_for_closure = name_owned.clone();
 
-        py.allow_threads(move || {
+        py.detach(move || {
             inner.create_collection_typed(
                 &name_for_closure,
                 &CollectionType::Graph {
@@ -524,8 +616,8 @@ impl Database {
         &self,
         py: Python<'_>,
         sql: &str,
-        params: Option<std::collections::HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<PyObject>> {
+        params: Option<std::collections::HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         use crate::collection::query::{convert_params, parse_velesql};
         use crate::collection_helpers::search_results_to_multimodel_dicts;
 
@@ -533,7 +625,7 @@ impl Database {
         let rust_params = convert_params(py, params)?;
         let inner = Arc::clone(&self.inner);
         let results = py
-            .allow_threads(move || inner.execute_query(&parsed, &rust_params))
+            .detach(move || inner.execute_query(&parsed, &rust_params))
             .map_err(core_err)?;
         Ok(search_results_to_multimodel_dicts(py, results))
     }
@@ -576,7 +668,7 @@ impl Database {
     ///     >>> stats = db.analyze_collection("documents")
     ///     >>> print(stats["total_points"])
     #[pyo3(signature = (name))]
-    fn analyze_collection(&self, py: Python<'_>, name: &str) -> PyResult<PyObject> {
+    fn analyze_collection(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
         // `analyze_collection` walks the column store and the index,
         // computing cardinality, size histograms, and graph stats. On
         // a ten-million-row collection it crosses the 1-second mark —
@@ -584,7 +676,7 @@ impl Database {
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
         let stats = py
-            .allow_threads(move || inner.analyze_collection(&name_owned))
+            .detach(move || inner.analyze_collection(&name_owned))
             .map_err(core_err)?;
         let json = serde_json::to_value(&stats)
             .map_err(|e| PyRuntimeError::new_err(format!("Serialization failed: {e}")))?;
@@ -610,7 +702,7 @@ impl Database {
     ///     >>> if stats is not None:
     ///     ...     print(stats["row_count"])
     #[pyo3(signature = (name))]
-    fn get_collection_stats(&self, py: Python<'_>, name: &str) -> PyResult<Option<PyObject>> {
+    fn get_collection_stats(&self, py: Python<'_>, name: &str) -> PyResult<Option<Py<PyAny>>> {
         // `get_collection_stats` reads the cached stats file from disk
         // when the in-memory cache is cold, so in the worst case it
         // performs a small I/O. Release the GIL so other Python threads
@@ -618,7 +710,7 @@ impl Database {
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
         let maybe_stats = py
-            .allow_threads(move || inner.get_collection_stats(&name_owned))
+            .detach(move || inner.get_collection_stats(&name_owned))
             .map_err(core_err)?;
         maybe_stats
             .map(|stats| {
@@ -628,6 +720,79 @@ impl Database {
                 Ok(utils::json_to_python(py, &json))
             })
             .transpose()
+    }
+
+    /// Get health diagnostics for a collection.
+    ///
+    /// Reports index readiness without relying on the REST server — useful
+    /// for embedded health checks.
+    ///
+    /// Args:
+    ///     name: Collection name
+    ///
+    /// Returns:
+    ///     dict with keys ``has_vectors``, ``search_ready``,
+    ///     ``dimension_configured``, ``point_count``, ``index_health``
+    ///     ("healthy" | "empty" | "needs_rebuild"), and
+    ///     ``index_health_detail`` (only when a rebuild is needed).
+    ///
+    /// Raises:
+    ///     RuntimeError: If the collection does not exist.
+    #[pyo3(signature = (name))]
+    fn collection_diagnostics(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
+        use velesdb_core::collection::IndexHealth;
+        let name_owned = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        let diag = py
+            .detach(move || inner.collection_diagnostics(&name_owned))
+            .map_err(core_err)?;
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("has_vectors", diag.has_vectors)?;
+        dict.set_item("search_ready", diag.search_ready)?;
+        dict.set_item("dimension_configured", diag.dimension_configured)?;
+        dict.set_item("point_count", diag.point_count)?;
+        let (health, detail) = match &diag.index_health {
+            IndexHealth::Healthy => ("healthy", None),
+            IndexHealth::Empty => ("empty", None),
+            IndexHealth::NeedsRebuild(reason) => ("needs_rebuild", Some(reason.clone())),
+            _ => ("unknown", None),
+        };
+        dict.set_item("index_health", health)?;
+        if let Some(detail) = detail {
+            dict.set_item("index_health_detail", detail)?;
+        }
+        Ok(dict.into())
+    }
+
+    /// Update query guardrail limits for every collection in this database.
+    ///
+    /// This is a **full replacement**, not a partial patch (matching the
+    /// Mobile/Tauri bindings): the dict must contain *all* guardrail fields.
+    /// A missing or misspelled key raises ``ValueError`` rather than silently
+    /// resetting limits to their defaults. To change one field, read the
+    /// current limits first (``Collection.guard_rails()``), mutate, and submit
+    /// the complete dict.
+    ///
+    /// Args:
+    ///     limits: dict with exactly these keys: ``max_depth``,
+    ///         ``max_cardinality``, ``memory_limit_bytes``, ``timeout_ms``,
+    ///         ``rate_limit_qps``, ``circuit_failure_threshold``,
+    ///         ``circuit_recovery_seconds``.
+    ///
+    /// Raises:
+    ///     ValueError: If a field is missing, unknown, or has an invalid value.
+    #[pyo3(signature = (limits))]
+    fn update_guardrails(&self, py: Python<'_>, limits: Py<PyAny>) -> PyResult<()> {
+        let json = utils::python_to_json(py, &limits)?;
+        let obj = json
+            .as_object()
+            .ok_or_else(|| PyValueError::new_err("guardrails must be a dict"))?;
+        validate_guardrail_keys(obj)?;
+        let parsed: velesdb_core::guardrails::QueryLimits = serde_json::from_value(json)
+            .map_err(|e| PyValueError::new_err(format!("invalid guardrails: {e}")))?;
+        py.detach(|| self.inner.update_guardrails(&parsed));
+        Ok(())
     }
 }
 

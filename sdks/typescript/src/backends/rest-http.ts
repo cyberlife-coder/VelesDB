@@ -9,7 +9,8 @@
 import type { SparseVector } from '../types';
 import { ConnectionError } from '../types';
 import type { TransportResponse, BaseTransport } from './shared';
-import type { CrudTransport } from './crud-backend';
+import { safeJsonParse } from './shared';
+import type { CrudTransport, RawBulkTransport } from './crud-backend';
 import { parseRestPointId, sparseVectorToRestFormat } from './crud-backend';
 import type { SearchTransport } from './search-backend';
 import type { AgentMemoryTransport } from './agent-memory-backend';
@@ -110,7 +111,7 @@ export async function request<T>(
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
-    const data = await response.json().catch(() => ({}));
+    const data = await safeJsonParse(response);
     if (!response.ok) {
       const ep = extractErrorPayload(data);
       return { error: {
@@ -118,7 +119,7 @@ export async function request<T>(
         message: ep.message ?? `HTTP ${response.status}`,
       }};
     }
-    return { data };
+    return { data: data as unknown as T };
   } catch (error) {
     clearTimeout(timeoutId);
     wrapCatchError(error);
@@ -140,6 +141,15 @@ export function buildBaseTransport(config: RestHttpConfig): BaseTransport {
 export function buildCrudTransport(config: RestHttpConfig): CrudTransport {
   return {
     requestJson: <T>(m: string, p: string, b?: unknown) => request<T>(config, m, p, b),
+  };
+}
+
+/** Build a RawBulkTransport adapter (raw `fetch` primitives for binary bodies). */
+export function buildRawBulkTransport(config: RestHttpConfig): RawBulkTransport {
+  return {
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    timeout: config.timeout,
   };
 }
 

@@ -50,6 +50,7 @@ function buildBackend(): IVelesDBBackend {
 
     scroll: vi.fn(() => Promise.resolve({ points: [] })),
     trainPq: vi.fn(() => Promise.resolve('ok')),
+    enableStreaming: vi.fn(() => Promise.resolve()),
     streamInsert: vi.fn(() => Promise.resolve()),
     streamUpsertPoints: vi.fn(() =>
       Promise.resolve({ upserted: 0, errors: 0 })
@@ -267,6 +268,16 @@ describe('VelesDB — search / admin / scroll delegations (search-methods.ts)', 
   it('trainPq delegates', async () => {
     await db.trainPq('c', { iterations: 1 } as never);
     expect(backend.trainPq).toHaveBeenCalled();
+  });
+
+  it('enableStreaming delegates (with and without config)', async () => {
+    await db.enableStreaming('c');
+    expect(backend.enableStreaming).toHaveBeenCalledWith('c', undefined);
+
+    await db.enableStreaming('c', { bufferSize: 2048 });
+    expect(backend.enableStreaming).toHaveBeenCalledWith('c', {
+      bufferSize: 2048,
+    });
   });
 
   it('streamInsert validates docs and delegates', async () => {

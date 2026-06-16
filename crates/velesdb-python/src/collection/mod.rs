@@ -27,6 +27,67 @@ use velesdb_core::{
 /// Default fusion strategy when none is specified by the caller.
 const DEFAULT_FUSION: CoreFusionStrategy = CoreFusionStrategy::RRF { k: 60 };
 
+use velesdb_core::collection::streaming::{AsyncIndexBuilderConfig, DeferredIndexerConfig};
+
+/// Extract an optional typed value for `key`, returning `None` when the
+/// key is absent or holds Python `None`.
+fn opt_field<'py, T: FromPyObjectOwned<'py>>(
+    dict: &Bound<'py, PyDict>,
+    key: &str,
+) -> PyResult<Option<T>> {
+    match dict.get_item(key)? {
+        Some(v) if !v.is_none() => Ok(Some(v.extract().map_err(Into::into)?)),
+        _ => Ok(None),
+    }
+}
+
+/// Resolve a three-state override for `key`: an absent key leaves the field
+/// unchanged (`None`), an explicit Python `None` clears it (`Some(None)`),
+/// and any other value is built via `build` (`Some(Some(_))`).
+fn three_state<T>(
+    config: &Bound<'_, PyDict>,
+    key: &str,
+    build: impl Fn(&Bound<'_, PyAny>) -> PyResult<T>,
+) -> PyResult<Option<Option<T>>> {
+    match config.get_item(key)? {
+        None => Ok(None),
+        Some(v) if v.is_none() => Ok(Some(None)),
+        Some(v) => Ok(Some(Some(build(&v)?))),
+    }
+}
+
+/// Build a `DeferredIndexerConfig` from a Python dict, overriding only the
+/// keys present on top of the struct defaults.
+fn deferred_from_dict(value: &Bound<'_, PyAny>) -> PyResult<DeferredIndexerConfig> {
+    let dict = value.cast::<PyDict>()?;
+    let mut cfg = DeferredIndexerConfig::default();
+    if let Some(v) = opt_field(dict, "enabled")? {
+        cfg.enabled = v;
+    }
+    if let Some(v) = opt_field(dict, "merge_threshold")? {
+        cfg.merge_threshold = v;
+    }
+    if let Some(v) = opt_field(dict, "max_buffer_age_ms")? {
+        cfg.max_buffer_age_ms = v;
+    }
+    Ok(cfg)
+}
+
+/// Build an `AsyncIndexBuilderConfig` from a Python dict, overriding only the
+/// keys present on top of the struct defaults. `segment_count` accepts a
+/// Python `None` to fall back to the CPU count.
+fn async_builder_from_dict(value: &Bound<'_, PyAny>) -> PyResult<AsyncIndexBuilderConfig> {
+    let dict = value.cast::<PyDict>()?;
+    let mut cfg = AsyncIndexBuilderConfig::default();
+    if let Some(v) = opt_field(dict, "merge_threshold")? {
+        cfg.merge_threshold = v;
+    }
+    if dict.get_item("segment_count")?.is_some() {
+        cfg.segment_count = opt_field(dict, "segment_count")?;
+    }
+    Ok(cfg)
+}
+
 /// A vector collection in VelesDB.
 ///
 /// Collections store vectors with optional metadata (payload) and support
@@ -113,7 +174,7 @@ impl Collection {
     ///
     /// Returns:
     ///     Dict with name, dimension, metric, storage_mode, point_count, and metadata_only
-    fn info(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn info(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let config = self.inner.config();
         let dict = PyDict::new(py);
         let _ = dict.set_item(PyString::intern(py, "name"), config.name.as_str());
@@ -190,7 +251,7 @@ impl Collection {
     /// Returns:
     ///     List[int]: All point IDs
     fn all_ids(&self, py: Python<'_>) -> Vec<u64> {
-        py.allow_threads(|| self.inner.all_ids())
+        py.detach(|| self.inner.all_ids())
     }
 
     /// Full durability flush including vectors.idx serialization.
@@ -199,7 +260,114 @@ impl Collection {
     /// For routine persistence, use ``flush()`` instead.
     fn flush_full(&self, py: Python<'_>) -> PyResult<()> {
         use crate::collection_helpers::core_err;
-        py.allow_threads(|| self.inner.flush_full().map_err(core_err))
+        py.detach(|| self.inner.flush_full().map_err(core_err))
+    }
+
+    /// Compact on-disk storage, reclaiming space left by deleted vectors.
+    ///
+    /// Returns:
+    ///     int: Number of bytes reclaimed.
+    fn compact_storage(&self, py: Python<'_>) -> PyResult<usize> {
+        use crate::collection_helpers::core_err;
+        py.detach(|| self.inner.compact_storage().map_err(core_err))
+    }
+
+    /// Reorder the HNSW adjacency lists and vector storage for cache
+    /// locality, so nodes traversed together during search sit close in
+    /// memory. No-op for collections with fewer than 1000 vectors. Recall
+    /// is preserved — only the physical layout changes.
+    ///
+    /// Best called after a bulk ``upsert`` on a freshly loaded collection,
+    /// before serving queries.
+    ///
+    /// Returns:
+    ///     None
+    fn reorder_for_locality(&self, py: Python<'_>) -> PyResult<()> {
+        use crate::collection_helpers::core_err;
+        py.detach(|| self.inner.reorder_for_locality().map_err(core_err))
+    }
+
+    /// Apply post-creation overrides to advanced configuration fields and
+    /// persist the updated ``config.json``.
+    ///
+    /// Three-state semantics per field: a key **absent** from ``config``
+    /// leaves that field unchanged; a key present with value ``None``
+    /// clears it; a key present with a value sets it.
+    ///
+    /// Args:
+    ///     config: dict with optional keys ``pq_rescore_oversampling``
+    ///         (int or None), ``deferred_indexing`` (dict with keys
+    ///         ``enabled``, ``merge_threshold``, ``max_buffer_age_ms``, or
+    ///         None), ``async_index_builder`` (dict with keys
+    ///         ``merge_threshold``, ``segment_count``, or None).
+    ///
+    /// Returns:
+    ///     None
+    #[pyo3(signature = (config))]
+    fn apply_advanced_config(&self, py: Python<'_>, config: &Bound<'_, PyDict>) -> PyResult<()> {
+        use crate::collection_helpers::core_err;
+        let pq = three_state(config, "pq_rescore_oversampling", |v| v.extract::<u32>())?;
+        let deferred = three_state(config, "deferred_indexing", deferred_from_dict)?;
+        let async_builder = three_state(config, "async_index_builder", async_builder_from_dict)?;
+        py.detach(|| {
+            self.inner
+                .apply_advanced_config(pq, deferred, async_builder)
+                .map_err(core_err)
+        })
+    }
+
+    /// Get the current query guardrail limits for this collection.
+    ///
+    /// Returns:
+    ///     dict with keys ``max_depth``, ``max_cardinality``,
+    ///     ``memory_limit_bytes``, ``timeout_ms``, ``rate_limit_qps``,
+    ///     ``circuit_failure_threshold``, ``circuit_recovery_seconds``.
+    fn guard_rails(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let limits = self.inner.guard_rails().limits();
+        let dict = PyDict::new(py);
+        dict.set_item("max_depth", limits.max_depth)?;
+        dict.set_item("max_cardinality", limits.max_cardinality)?;
+        dict.set_item("memory_limit_bytes", limits.memory_limit_bytes)?;
+        dict.set_item("timeout_ms", limits.timeout_ms)?;
+        dict.set_item("rate_limit_qps", limits.rate_limit_qps)?;
+        dict.set_item(
+            "circuit_failure_threshold",
+            limits.circuit_failure_threshold,
+        )?;
+        dict.set_item("circuit_recovery_seconds", limits.circuit_recovery_seconds)?;
+        Ok(dict.into())
+    }
+
+    /// Detach the auto-reindex manager attached to this collection, if any.
+    ///
+    /// Returns:
+    ///     bool: True if a manager was detached, False if none was attached.
+    fn detach_auto_reindex(&self) -> bool {
+        self.inner.detach_auto_reindex().is_some()
+    }
+
+    /// Check whether the attached auto-reindex manager considers the index
+    /// diverged from its optimal parameters.
+    ///
+    /// Read-only — does not mutate the manager or trigger a reindex.
+    ///
+    /// Returns:
+    ///     dict with keys ``should_reindex``, ``current_m``, ``optimal_m``,
+    ///     ``ratio`` (and ``reason`` when a reindex is recommended), or
+    ///     ``None`` when no auto-reindex manager is attached.
+    fn check_auto_reindex_divergence(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let Some(check) = self.inner.check_auto_reindex_divergence() else {
+            return Ok(None);
+        };
+        let dict = PyDict::new(py);
+        dict.set_item("should_reindex", check.should_reindex)?;
+        dict.set_item("current_m", check.current_m)?;
+        dict.set_item("optimal_m", check.optimal_m)?;
+        dict.set_item("ratio", check.ratio)?;
+        if let Some(reason) = &check.reason {
+            dict.set_item("reason", format!("{reason:?}"))?;
+        }
+        Ok(Some(dict.into()))
     }
 
     /// Check if a secondary index exists on a payload field.
@@ -239,9 +407,9 @@ impl Collection {
     /// Returns:
     ///     dict: Statistics including row_count, deleted_count, total_size_bytes,
     ///           column_stats, index_stats, etc.
-    fn analyze(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn analyze(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         use crate::collection_helpers::core_err;
-        let stats = py.allow_threads(|| self.inner.analyze().map_err(core_err))?;
+        let stats = py.detach(|| self.inner.analyze().map_err(core_err))?;
         let json = serde_json::to_value(&stats).map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Stats serialization failed: {e}"))
         })?;
@@ -278,7 +446,7 @@ impl Collection {
     /// context manager (``with`` statement).
     fn close(&self, py: Python<'_>) -> PyResult<()> {
         use crate::collection_helpers::core_err;
-        py.allow_threads(|| self.inner.flush_full().map_err(core_err))
+        py.detach(|| self.inner.flush_full().map_err(core_err))
     }
 
     /// Context manager entry — returns ``self`` so the collection can be
@@ -293,9 +461,9 @@ impl Collection {
     fn __exit__(
         &self,
         py: Python<'_>,
-        _exc_type: Option<PyObject>,
-        _exc_value: Option<PyObject>,
-        _traceback: Option<PyObject>,
+        _exc_type: Option<Py<PyAny>>,
+        _exc_value: Option<Py<PyAny>>,
+        _traceback: Option<Py<PyAny>>,
     ) -> PyResult<bool> {
         self.close(py)?;
         Ok(false)

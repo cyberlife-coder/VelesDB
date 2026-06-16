@@ -283,3 +283,81 @@ fn test_similarity_threshold_logic() {
     assert!((0.8001_f32 - threshold).abs() < 0.001);
     assert!((0.81_f32 - threshold).abs() >= 0.001);
 }
+
+// =============================================================================
+// VectorStore::search_sparse — query the store's pre-built sparse index
+// =============================================================================
+
+#[test]
+fn test_wasm_sparse_search_basic() {
+    // A pre-built in-memory sparse index returns ranked doc ids for a known
+    // query. Uses the native-testable scored entry point (the wasm-bindgen
+    // method serializes to JsValue, which panics off-wasm32).
+    let mut store = store_new::create_store(4, DistanceMetric::Cosine, StorageMode::Full);
+    store
+        .sparse_insert(1, &[10, 20, 30], &[1.0, 0.5, 0.3])
+        .expect("test: sparse_insert doc 1");
+    store
+        .sparse_insert(2, &[10, 40], &[0.8, 1.2])
+        .expect("test: sparse_insert doc 2");
+    store
+        .sparse_insert(3, &[20, 30, 50], &[0.9, 0.7, 0.4])
+        .expect("test: sparse_insert doc 3");
+    store
+        .sparse_insert(4, &[10, 20], &[0.3, 1.5])
+        .expect("test: sparse_insert doc 4");
+
+    // query = {10: 1.0, 20: 1.0}
+    // Doc 1: 1.5, Doc 2: 0.8, Doc 3: 0.9, Doc 4: 1.8
+    let results = store
+        .search_sparse_scored(&[10, 20], &[1.0, 1.0], 10)
+        .expect("test: search_sparse on a populated index");
+
+    assert_eq!(results[0].doc_id(), 4, "doc 4 (score 1.8) ranks first");
+    assert_eq!(results[1].doc_id(), 1, "doc 1 (score 1.5) ranks second");
+}
+
+#[test]
+fn test_wasm_sparse_search_no_index_error() {
+    // Querying a store with no sparse index returns an error (parity with
+    // core's sparse_search, which errors when the index does not exist).
+    let store = store_new::create_store(4, DistanceMetric::Cosine, StorageMode::Full);
+    let err = store.search_sparse_scored(&[10, 20], &[1.0, 1.0], 10);
+    assert!(err.is_err(), "search_sparse without an index must error");
+    assert!(
+        err.unwrap_err().contains("sparse index"),
+        "error should mention the missing sparse index"
+    );
+}
+
+// =============================================================================
+// validate_multi_vector_len — overflow-safe flat multi-vector length check
+// =============================================================================
+
+#[test]
+fn test_validate_multi_vector_len_ok() {
+    // 3 vectors x 4 dims = 12 floats: the validated expected length is returned.
+    let expected =
+        store_search::validate_multi_vector_len(12, 3, 4).expect("test: 12 == 3 * 4 is valid");
+    assert_eq!(expected, 12);
+}
+
+#[test]
+fn test_validate_multi_vector_len_mismatch() {
+    // A buffer shorter than num_vectors * dimension is rejected.
+    let err = store_search::validate_multi_vector_len(10, 3, 4)
+        .expect_err("test: 10 != 3 * 4 must error");
+    assert!(
+        err.contains("expected 12"),
+        "error names the expected length"
+    );
+}
+
+#[test]
+fn test_validate_multi_vector_len_overflow() {
+    // num_vectors * dimension that wraps usize is rejected up front rather than
+    // spoofing the length check (the wasm32 32-bit overflow guard).
+    let err = store_search::validate_multi_vector_len(0, usize::MAX, 2)
+        .expect_err("test: usize::MAX * 2 overflows");
+    assert!(err.contains("overflow"), "error flags the overflow");
+}

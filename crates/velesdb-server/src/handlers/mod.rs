@@ -26,8 +26,9 @@ pub mod search;
 pub mod metrics;
 
 pub use admin::{
-    analyze_collection, compact_collection, get_collection_config, get_collection_stats,
-    get_guardrails, rebuild_index, update_guardrails, vacuum_collection,
+    analyze_collection, collection_diagnostics, compact_collection, get_collection_config,
+    get_collection_stats, get_guardrails, rebuild_index, reorder_for_locality, update_guardrails,
+    vacuum_collection,
 };
 pub use collections::{
     collection_sanity, create_collection, delete_collection, flush_collection, get_collection,
@@ -36,22 +37,25 @@ pub use collections::{
 pub use health::{health_check, readiness_check};
 pub use indexes::{create_index, delete_index, list_indexes};
 pub use points::{
-    bulk_delete_points, delete_point, get_point, get_point_relations, relate_points, scroll_points,
-    set_point_ttl, stream_insert, stream_upsert_points, unrelate_points, upsert_points,
+    bulk_delete_points, delete_point, enable_streaming, get_point, get_point_relations,
+    relate_points, scroll_points, set_point_ttl, stream_insert, stream_upsert_points,
+    unrelate_points, upsert_points, upsert_points_raw,
 };
 // EPIC-058 US-007: match_query handler for /collections/{name}/match
 pub use match_query::match_query;
 pub use query::{aggregate, explain, query};
 pub use search::{
-    batch_search, hybrid_search, multi_query_search, search, search_ids, text_search,
+    batch_search, hybrid_search, multi_query_search, multi_query_search_ids, search, search_ids,
+    text_search,
 };
 
 // Graph handlers (EPIC-016) - exported via lib.rs
 #[allow(unused_imports)]
 pub use graph::{
-    add_edge, get_edge_count, get_edges, get_node_degree, get_node_edges, get_node_payload,
-    graph_search, list_nodes, remove_edge, traverse_graph, traverse_parallel, upsert_node_payload,
-    DegreeResponse, TraversalResultItem, TraversalStats, TraverseRequest, TraverseResponse,
+    add_edge, add_edges_batch, get_edge_count, get_edges, get_node_degree, get_node_edges,
+    get_node_payload, graph_search, list_nodes, remove_edge, traverse_graph, traverse_parallel,
+    upsert_node_payload, DegreeResponse, TraversalResultItem, TraversalStats, TraverseRequest,
+    TraverseResponse,
 };
 
 // Metrics handlers - conditional on prometheus feature

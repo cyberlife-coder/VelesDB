@@ -66,27 +66,44 @@ impl Collection {
             ctx,
         };
 
-        // EPIC-044 US-003: NOT similarity() requires full scan
-        if extracted.is_not_similarity_query {
-            return self.run_not_similarity_early(&early_ctx, limit).map(Some);
-        }
-
-        // EPIC-044 US-002: Union mode for similarity() OR metadata.
-        // The union path keeps the MAX_LIMIT window when graph predicates
-        // are present: its similarity/metadata legs rank independently and
-        // would each need anchor-aware fetching to drop it.
-        let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
-        let execution_limit = if has_graph_predicates {
+        // A scalar (non-similarity) ORDER BY ranks rows only in
+        // `finalize_early_results`, so capping the fetch at `limit` first would
+        // truncate before the sort (same defect as the main-dispatch path).
+        // Fetch exhaustively so the sort precedes truncation.
+        let limit = if Self::order_by_requires_exhaustive_fetch(stmt) {
             MAX_LIMIT
         } else {
             limit
         };
-        let results = self.execute_early_return_query(
-            |s| s.execute_union_query(cond, params, execution_limit),
-            &early_ctx,
+
+        // EPIC-044 US-003: NOT similarity() requires full scan
+        if extracted.is_not_similarity_query {
+            return self.run_not_similarity_early(&early_ctx, limit).map(Some);
+        }
+        self.run_union_early(&early_ctx, limit).map(Some)
+    }
+
+    /// Runs the union early-return path (EPIC-044 US-002: similarity() OR metadata).
+    ///
+    /// The union path keeps the `MAX_LIMIT` window when graph predicates are
+    /// present: its similarity/metadata legs rank independently and would each
+    /// need anchor-aware fetching to drop it.
+    fn run_union_early(
+        &self,
+        early: &EarlyReturnCtx<'_>,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
+        let execution_limit = if early.has_graph_predicates {
+            MAX_LIMIT
+        } else {
+            limit
+        };
+        self.execute_early_return_query(
+            |s| s.execute_union_query(early.cond, early.params, execution_limit),
+            early,
             &mut graph_cache,
-        )?;
-        Ok(Some(results))
+        )
     }
 
     /// Runs the NOT-similarity early path with GraphFirst anchoring:

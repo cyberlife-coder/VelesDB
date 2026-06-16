@@ -9,8 +9,9 @@ use axum::{
 use std::sync::Arc;
 
 use crate::types::{
-    CollectionConfigResponse, CollectionStatsResponse, ColumnStatsResponse, ErrorResponse,
-    GuardRailsConfigRequest, GuardRailsConfigResponse, IndexStatsResponse,
+    CollectionConfigResponse, CollectionDiagnosticsResponse, CollectionStatsResponse,
+    ColumnStatsResponse, ErrorResponse, GuardRailsConfigRequest, GuardRailsConfigResponse,
+    IndexStatsResponse,
 };
 use crate::AppState;
 
@@ -226,6 +227,53 @@ pub async fn compact_collection(
     }
 }
 
+/// Reorders the HNSW adjacency lists and vector storage for cache
+/// locality so nodes traversed together during search sit close in
+/// memory (issue #377). No-op for collections with fewer than 1 000
+/// vectors. Recall is preserved — only the physical layout changes.
+///
+/// This is a blocking operation that may involve significant I/O for
+/// large collections.
+#[utoipa::path(
+    post,
+    path = "/collections/{name}/locality/reorder",
+    tag = "collections",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    responses(
+        (status = 200, description = "Locality reordered", body = Object),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 500, description = "Reorder failed", body = ErrorResponse)
+    )
+)]
+pub async fn reorder_for_locality(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let collection = match get_vector_collection_or_404(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    let result = tokio::task::spawn_blocking(move || collection.reorder_for_locality()).await;
+    match result {
+        Ok(Ok(())) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "message": "Locality reordered",
+                "collection": name
+            })),
+        )
+            .into_response(),
+        Ok(Err(e)) => auto_core_error_response(&e),
+        Err(join_err) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("reorder task panicked: {join_err}"),
+        ),
+    }
+}
+
 /// Analyze a collection, computing and persisting statistics.
 #[utoipa::path(
     post,
@@ -289,6 +337,50 @@ pub async fn get_collection_stats(
             format!("No stats for '{name}'. Run POST /collections/{name}/analyze first."),
         ),
         Err(e) => auto_core_error_response(&e),
+    }
+}
+
+/// Get health diagnostics for a collection (index readiness, point count).
+#[utoipa::path(
+    get,
+    path = "/collections/{name}/diagnostics",
+    tag = "collections",
+    params(
+        ("name" = String, Path, description = "Collection name")
+    ),
+    responses(
+        (status = 200, description = "Collection diagnostics", body = CollectionDiagnosticsResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
+    )
+)]
+pub async fn collection_diagnostics(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.db.collection_diagnostics(&name) {
+        Ok(diag) => (StatusCode::OK, Json(diagnostics_to_response(&diag))).into_response(),
+        Err(e) => auto_core_error_response(&e),
+    }
+}
+
+/// Maps the core diagnostics snapshot to the REST response DTO.
+fn diagnostics_to_response(
+    diag: &velesdb_core::collection::CollectionDiagnostics,
+) -> CollectionDiagnosticsResponse {
+    use velesdb_core::collection::IndexHealth;
+    let (index_health, index_health_detail) = match &diag.index_health {
+        IndexHealth::Healthy => ("healthy".to_string(), None),
+        IndexHealth::Empty => ("empty".to_string(), None),
+        IndexHealth::NeedsRebuild(reason) => ("needs_rebuild".to_string(), Some(reason.clone())),
+        _ => ("unknown".to_string(), None),
+    };
+    CollectionDiagnosticsResponse {
+        has_vectors: diag.has_vectors,
+        search_ready: diag.search_ready,
+        dimension_configured: diag.dimension_configured,
+        point_count: diag.point_count,
+        index_health,
+        index_health_detail,
     }
 }
 

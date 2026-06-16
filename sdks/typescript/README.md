@@ -2,10 +2,11 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v2.0.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
+**v3.0.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
 
 ## What's New (unreleased)
 
+- **Streaming ingestion enablement (2026-06-14)** (REST backend): `enableStreaming(collection, config?)` turns on the bounded streaming-ingestion channel before `streamInsert()`. The optional `StreamingConfig` (`bufferSize`, `batchSize`, `flushIntervalMs`) is camelCase; omitted fields fall back to the server defaults. See [`db.enableStreaming`](#dbenablestreamingcollection-config) below. The WASM backend throws `NOT_SUPPORTED`.
 - **Relation + durable-TTL surface** (REST backend): `relate()`, `unrelate()`, `getRelations()`, `setTtlDurable()` — now fully tested and documented (see [Knowledge Graph API](#knowledge-graph-api) and [Agent Memory API](#agent-memory-api) below). The WASM backend throws `NOT_SUPPORTED` for these methods.
 - The shipped example (`examples/hybrid_queries.ts`) was rewritten against the real API and is now compile-checked in CI.
 
@@ -330,6 +331,21 @@ await db.upsertBatch('docs', [
   { id: 'a', vector: vecA, payload: { title: 'First' } },
   { id: 'b', vector: vecB, payload: { title: 'Second' } },
 ]);
+```
+
+#### `db.enableStreaming(collection, config?)`
+
+Enable the bounded streaming-ingestion channel on a collection. Call this once before `streamInsert()`. The optional `config` is camelCase; every field is optional and omitted fields fall back to the server defaults (REST only; the WASM backend throws `NOT_SUPPORTED`).
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `bufferSize` | `number` | `10000` | Bounded ingestion channel capacity |
+| `batchSize` | `number` | `128` | Points flushed to the index per batch |
+| `flushIntervalMs` | `number` | `50` | Max milliseconds before a partial batch is flushed |
+
+```typescript
+await db.enableStreaming('docs', { bufferSize: 4096, batchSize: 64 });
+await db.streamInsert('docs', largeDocumentArray);
 ```
 
 #### `db.streamInsert(collection, documents)`

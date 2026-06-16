@@ -57,7 +57,7 @@ Check server health status.
 ```json
 {
   "status": "ok",
-  "version": "2.0.0"
+  "version": "3.0.0"
 }
 ```
 
@@ -90,8 +90,14 @@ Create a new collection.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | name | string | Yes | Unique collection name |
-| dimension | integer | Yes | Vector dimension (e.g., 768) |
+| dimension | integer | Yes (vector/graph) | Vector dimension (e.g., 768). Omit for `metadata_only` |
 | metric | string | No | Distance metric (see table below) |
+| storage_mode | string | No | `full` (default), `sq8`, or `binary` quantization |
+| collection_type | string | No | `vector` (default), `metadata_only`, or `graph` (see [CollectionType](#collectiontype-descriptor)) |
+| hnsw_m | integer | No | Tuned HNSW: bi-directional links per node |
+| hnsw_ef_construction | integer | No | Tuned HNSW: candidate list size during build |
+| hnsw_alpha | float | No | VAMANA neighbor-diversification factor (≥ 1.0) |
+| hnsw_max_elements | integer | No | Initial HNSW capacity (pre-size for bulk import) |
 
 **Distance Metrics:**
 
@@ -129,6 +135,50 @@ Create a new collection.
   "metric": "jaccard"
 }
 ```
+
+**Example (tuned HNSW for higher recall):**
+
+Any of `hnsw_m`, `hnsw_ef_construction`, `hnsw_alpha`, or `hnsw_max_elements`
+present switches collection creation onto the tuned-parameters path; omitted
+fields keep the engine defaults (auto-derived from `dimension`). Larger `hnsw_m`
+and `hnsw_ef_construction` raise recall and index size at a build-time cost;
+`hnsw_max_elements` only pre-sizes capacity for bulk imports (the index still
+grows automatically if exceeded). Out-of-range tunables (e.g. `hnsw_alpha < 1.0`
+or non-finite) are rejected with `400`.
+
+```json
+{
+  "name": "documents",
+  "dimension": 768,
+  "metric": "cosine",
+  "hnsw_m": 48,
+  "hnsw_ef_construction": 600,
+  "hnsw_alpha": 1.2
+}
+```
+
+**Example (metadata-only collection):**
+
+A `metadata_only` collection stores payload rows with no vectors and no HNSW
+index. It supports CRUD and VelesQL queries over the payload but not vector
+search. `dimension` is ignored and may be omitted.
+
+```json
+{
+  "name": "catalog",
+  "collection_type": "metadata_only"
+}
+```
+
+#### CollectionType descriptor
+
+The `collection_type` field selects the runtime descriptor for the collection:
+
+| `collection_type` | Vectors / HNSW | Use case |
+|-------------------|----------------|----------|
+| `vector` (default) | Yes — HNSW index over `dimension`-d vectors | Semantic search, RAG, recommendations |
+| `metadata_only` | No | Reference tables, catalogs, payload-only stores; CRUD + VelesQL on payload, no vector search |
+| `graph` | Optional node embeddings (`dimension` may be null) + typed edges | Knowledge graphs, agentic memory, entity-relationship storage. Supply `graph_schema` for a strict schema; absent means schemaless |
 
 **Response (201 Created):**
 ```json
@@ -178,6 +228,13 @@ deferred-indexing and async-index-builder settings. Returns a
 `point_count`, `metadata_only`, optional `embedding_dimension`,
 `deferred_indexing`, `async_index_builder`).
 
+### Collection health diagnostics
+
+Three read-only endpoints surface collection health for onboarding and
+troubleshooting, ordered cheapest to richest: `GET …/empty` (single boolean),
+`GET …/sanity` (live readiness + hints, no `ANALYZE` required), and
+`GET …/stats` (cached statistics from the last `ANALYZE`).
+
 ### GET /collections/:name/empty
 
 Check whether a collection contains no points. Returns `200` with an empty/has-points
@@ -185,8 +242,34 @@ status object, `404` when the collection does not exist.
 
 ### GET /collections/:name/sanity
 
-Quick onboarding/troubleshooting check (collection reachable, dimensions consistent,
-index responsive). Returns a status object (`200`) or `404`.
+Quick onboarding/troubleshooting check, computed live (no `ANALYZE` needed):
+reports point count, whether the index is search-ready, and actionable hints.
+Returns a status object (`200`) or `404`.
+
+**Response (200):**
+```json
+{
+  "collection": "documents",
+  "dimension": 768,
+  "metric": "cosine",
+  "point_count": 1000,
+  "is_empty": false,
+  "checks": {
+    "has_vectors": true,
+    "search_ready": true,
+    "dimension_configured": true
+  },
+  "diagnostics": {
+    "search_requests_total": 42,
+    "dimension_mismatch_total": 0,
+    "empty_search_results_total": 1,
+    "filter_parse_errors_total": 0
+  },
+  "hints": [
+    "Run a search without strict filters first, then tighten filters progressively."
+  ]
+}
+```
 
 ### GET /collections/:name/stats
 
@@ -255,6 +338,61 @@ Insert or update points (upsert).
   "count": 1
 }
 ```
+
+**Metadata-only / payload upsert:**
+
+For a `metadata_only` collection there are no vectors — upsert points carrying
+only `id` and `payload`, with an empty `vector`. The point is stored and is
+queryable via VelesQL over its payload, but is not added to any HNSW index.
+(In `metadata_only` collections, vector search is unavailable by design.)
+
+```json
+{
+  "points": [
+    {
+      "id": 1,
+      "vector": [],
+      "payload": {"sku": "A-100", "category": "books", "in_stock": true}
+    }
+  ]
+}
+```
+
+### POST /collections/:name/points/raw
+
+Bulk-upsert points via a compact binary wire format (`application/octet-stream`)
+for zero-copy, high-throughput ingestion. This avoids the per-point JSON
+overhead of `POST /collections/:name/points`. **Payloads are not carried on this
+path** — use the JSON endpoint when you need them.
+
+**Wire format (`VRB1`, little-endian).** All multi-byte integers and `f32`s are
+little-endian:
+
+| Offset | Size | Field |
+|--------|------|-------|
+| 0 | 4 | magic `b"VRB1"` (Veles Raw Bulk v1) |
+| 4 | 4 | `count` : u32 (number of points) |
+| 8 | 4 | `dim` : u32 (vector dimension) |
+| 12 | 1 | `id_width` : u8 (must be `8` → u64) |
+| 13 | 3 | reserved (must be `0`) |
+| 16 | `count * 8` | `ids` : packed `[u64; count]` |
+| 16 + `count*8` | `count * dim * 4` | `vectors` : packed `[f32; count*dim]` (row-major) |
+
+The body length must be **exactly** `16 + count*8 + count*dim*4` bytes; any
+mismatch, a bad magic, an unsupported `id_width`, or a `dim` that differs from
+the collection returns `400 Bad Request`. The encoding is deterministic: a
+given batch always serialises to the same bytes.
+
+**Response:**
+```json
+{
+  "message": "Points upserted",
+  "count": 1000
+}
+```
+
+The TypeScript SDK encodes this format for you via
+`client.upsertBatchRaw(collection, docs)`.
 
 ### GET /collections/:name/points/:id
 
@@ -326,6 +464,30 @@ Stream-upsert points as NDJSON (`application/x-ndjson`, one JSON point per line)
 Points are accumulated into micro-batches and flushed via bulk upsert. The
 response includes a `network_errors` count: a non-zero value means the HTTP body
 stream was truncated and fewer points than sent may have been received.
+
+### POST /collections/:name/stream/enable
+
+Enable the bounded streaming-ingestion channel on a collection. Call this once
+before `POST /collections/:name/stream/insert`. Every field is optional; omitted
+fields fall back to the server defaults.
+
+**Request Body:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| buffer_size | integer | No | 10000 | Bounded ingestion channel capacity |
+| batch_size | integer | No | 128 | Points flushed to the index per batch |
+| flush_interval_ms | integer | No | 50 | Max milliseconds before a partial batch is flushed |
+
+```json
+{ "buffer_size": 4096, "batch_size": 64, "flush_interval_ms": 25 }
+```
+
+**Status codes:** `200` enabled (response `{ "message", "collection" }`); `404`
+collection not found.
+
+TypeScript SDK: `await db.enableStreaming('docs', { bufferSize: 4096 })` (REST
+backend; the WASM backend throws `NOT_SUPPORTED`).
 
 ### POST /collections/:name/stream/insert
 
@@ -625,6 +787,29 @@ Execute multiple vector queries and merge results using Reciprocal Rank Fusion (
 - Multi-modal search (text + image embeddings)
 - Query expansion with multiple query variants
 - Ensemble retrieval with different embedding models
+
+---
+
+### POST /collections/:name/search/multi/ids
+
+Same fusion as `/search/multi`, but returns only ids and scores (no payloads).
+Lighter on the server (skips payload hydration). Metadata filters are **not**
+supported on this endpoint — use `/search/multi` for filtered fusion.
+
+**Request Body:** identical to `/search/multi` (`vectors`, `top_k`, `strategy`,
+and the fusion params), minus `filter`.
+
+**Response:**
+```json
+{
+  "results": [
+    {"id": "1", "score": 0.0312},
+    {"id": "2", "score": 0.0298}
+  ]
+}
+```
+
+SDK: `client.multiQuerySearchIds(collection, vectors, options)` (TypeScript).
 
 ---
 
@@ -1155,6 +1340,20 @@ collection = db.create_collection("docs", dimension=768, metric="cosine")
 collection = db.get_collection("docs")
 db.delete_collection("docs")
 collections = db.list_collections()
+
+# Tuned HNSW at creation (typed options)
+from velesdb import HnswOptions
+collection = db.create_collection(
+    "docs_hi_recall",
+    dimension=768,
+    hnsw=HnswOptions(m=48, ef_construction=600),
+)
+# Auto-tuned for an expected dataset size:
+collection = db.create_collection(
+    "big",
+    dimension=128,
+    hnsw=HnswOptions.for_dataset_size(128, 1_000_000),
+)
 
 # Points
 collection.upsert([{"id": 1, "vector": [...], "payload": {...}}])

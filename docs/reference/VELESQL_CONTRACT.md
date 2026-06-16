@@ -270,6 +270,7 @@ Contract test cases are listed in:
 
 - `conformance/velesql_parser_cases.json` (parser conformance, v3.6)
 - `conformance/velesql_contract_cases.json` (runtime contract)
+- `conformance/velesql_executor_cases.json` (executor result rows/counts/ordering, goldens derived from `velesdb-core`)
 
 Each invalid case maps to an expected HTTP status and an expected error shape.
 

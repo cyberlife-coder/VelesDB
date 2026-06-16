@@ -319,6 +319,48 @@ impl From<velesdb_core::collection::stats::CollectionStats> for MobileCollection
     }
 }
 
+/// Diagnostic snapshot of a collection's health and search readiness.
+///
+/// FFI mirror of [`velesdb_core::collection::CollectionDiagnostics`]. The
+/// `index_health` enum is flattened to a stable lowercase string
+/// (`"healthy"`, `"empty"`, `"needs_rebuild"`, `"unknown"`) with an optional
+/// detail message, matching the REST and Python bindings.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MobileCollectionDiagnostics {
+    /// Whether the collection contains at least one vector/point.
+    pub has_vectors: bool,
+    /// Whether the collection is ready to serve search queries.
+    pub search_ready: bool,
+    /// Whether a valid dimension is configured.
+    pub dimension_configured: bool,
+    /// Total number of points in the collection.
+    pub point_count: u64,
+    /// Health status of the primary search index.
+    pub index_health: String,
+    /// Optional detail message (e.g. the reason a rebuild is needed).
+    pub index_health_detail: Option<String>,
+}
+
+impl From<velesdb_core::collection::CollectionDiagnostics> for MobileCollectionDiagnostics {
+    fn from(diag: velesdb_core::collection::CollectionDiagnostics) -> Self {
+        use velesdb_core::collection::IndexHealth;
+        let (index_health, index_health_detail) = match diag.index_health {
+            IndexHealth::Healthy => ("healthy".to_string(), None),
+            IndexHealth::Empty => ("empty".to_string(), None),
+            IndexHealth::NeedsRebuild(reason) => ("needs_rebuild".to_string(), Some(reason)),
+            _ => ("unknown".to_string(), None),
+        };
+        Self {
+            has_vectors: diag.has_vectors,
+            search_ready: diag.search_ready,
+            dimension_configured: diag.dimension_configured,
+            point_count: u64::try_from(diag.point_count).unwrap_or(u64::MAX),
+            index_health,
+            index_health_detail,
+        }
+    }
+}
+
 /// Metadata and graph index details.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct MobileIndexInfo {
@@ -344,4 +386,127 @@ impl From<velesdb_core::IndexInfo> for MobileIndexInfo {
             memory_bytes: u64::try_from(value.memory_bytes).unwrap_or(u64::MAX),
         }
     }
+}
+
+/// Runtime query guardrail limits for a collection.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MobileQueryLimits {
+    /// Maximum graph traversal depth.
+    pub max_depth: u32,
+    /// Maximum intermediate cardinality.
+    pub max_cardinality: u64,
+    /// Memory limit per query in bytes.
+    pub memory_limit_bytes: u64,
+    /// Query timeout in milliseconds (0 disables the timeout).
+    pub timeout_ms: u64,
+    /// Rate limit: max queries per second per client.
+    pub rate_limit_qps: u32,
+    /// Circuit breaker: failure threshold before tripping.
+    pub circuit_failure_threshold: u32,
+    /// Circuit breaker: recovery time in seconds.
+    pub circuit_recovery_seconds: u64,
+}
+
+impl From<velesdb_core::guardrails::QueryLimits> for MobileQueryLimits {
+    fn from(v: velesdb_core::guardrails::QueryLimits) -> Self {
+        Self {
+            max_depth: v.max_depth,
+            max_cardinality: u64::try_from(v.max_cardinality).unwrap_or(u64::MAX),
+            memory_limit_bytes: u64::try_from(v.memory_limit_bytes).unwrap_or(u64::MAX),
+            timeout_ms: v.timeout_ms,
+            rate_limit_qps: v.rate_limit_qps,
+            circuit_failure_threshold: v.circuit_failure_threshold,
+            circuit_recovery_seconds: v.circuit_recovery_seconds,
+        }
+    }
+}
+
+impl From<MobileQueryLimits> for velesdb_core::guardrails::QueryLimits {
+    fn from(v: MobileQueryLimits) -> Self {
+        Self {
+            max_depth: v.max_depth,
+            max_cardinality: usize::try_from(v.max_cardinality).unwrap_or(usize::MAX),
+            memory_limit_bytes: usize::try_from(v.memory_limit_bytes).unwrap_or(usize::MAX),
+            timeout_ms: v.timeout_ms,
+            rate_limit_qps: v.rate_limit_qps,
+            circuit_failure_threshold: v.circuit_failure_threshold,
+            circuit_recovery_seconds: v.circuit_recovery_seconds,
+        }
+    }
+}
+
+/// Deferred indexing configuration (buffers bulk inserts before merging
+/// into the HNSW index).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MobileDeferredIndexerConfig {
+    /// Whether deferred indexing is enabled.
+    pub enabled: bool,
+    /// Number of buffered points before a merge is triggered.
+    pub merge_threshold: u64,
+    /// Maximum buffer age in milliseconds before a forced merge.
+    pub max_buffer_age_ms: u64,
+}
+
+impl From<MobileDeferredIndexerConfig>
+    for velesdb_core::collection::streaming::DeferredIndexerConfig
+{
+    fn from(v: MobileDeferredIndexerConfig) -> Self {
+        Self {
+            enabled: v.enabled,
+            merge_threshold: usize::try_from(v.merge_threshold).unwrap_or(usize::MAX),
+            max_buffer_age_ms: v.max_buffer_age_ms,
+        }
+    }
+}
+
+/// Async index builder configuration (parallel segment construction for
+/// deferred bulk loads).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MobileAsyncIndexBuilderConfig {
+    /// Number of buffered points before a segment merge is triggered.
+    pub merge_threshold: u64,
+    /// Number of parallel segments; `None` falls back to the CPU count.
+    pub segment_count: Option<u32>,
+}
+
+impl From<MobileAsyncIndexBuilderConfig>
+    for velesdb_core::collection::streaming::AsyncIndexBuilderConfig
+{
+    fn from(v: MobileAsyncIndexBuilderConfig) -> Self {
+        Self {
+            merge_threshold: usize::try_from(v.merge_threshold).unwrap_or(usize::MAX),
+            segment_count: v.segment_count.map(|s| s as usize),
+        }
+    }
+}
+
+/// Configuration for streaming ingestion on a collection.
+///
+/// FFI mirror of [`velesdb_core::StreamingConfig`]. Fields are `u64` for
+/// portable mapping to Swift/Kotlin; they are narrowed to `usize`/`u64` when
+/// converted to the core type. Engine defaults are `buffer_size=10000`,
+/// `batch_size=128`, `flush_interval_ms=50`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MobileStreamingConfig {
+    /// Capacity of the bounded channel (backpressure threshold). Default 10000.
+    pub buffer_size: u64,
+    /// Number of points that trigger an immediate micro-batch flush. Default 128.
+    pub batch_size: u64,
+    /// Maximum time (ms) before a partial batch is flushed. Default 50.
+    pub flush_interval_ms: u64,
+}
+
+/// Post-creation overrides for advanced collection configuration.
+///
+/// Each field uses `Some` to set the value and `None` to leave it
+/// unchanged. Unlike the Python binding, mobile cannot express the
+/// "clear" state (it maps `None` to "leave unchanged").
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MobileAdvancedConfig {
+    /// PQ rescore oversampling factor; `None` leaves it unchanged.
+    pub pq_rescore_oversampling: Option<u32>,
+    /// Deferred indexing config; `None` leaves it unchanged.
+    pub deferred_indexing: Option<MobileDeferredIndexerConfig>,
+    /// Async index builder config; `None` leaves it unchanged.
+    pub async_index_builder: Option<MobileAsyncIndexBuilderConfig>,
 }

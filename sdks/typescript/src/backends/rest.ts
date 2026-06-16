@@ -51,6 +51,7 @@ import type {
   AggregateQueryOptions,
   AggregateResponse,
   StreamUpsertResponse,
+  StreamingConfig,
   RelateRequest,
   RelateResponse,
   RelationsResponse,
@@ -66,6 +67,7 @@ import {
   request,
   buildBaseTransport,
   buildCrudTransport,
+  buildRawBulkTransport,
   buildSearchTransport,
   buildQueryTransport,
   buildStreamingTransport,
@@ -101,7 +103,8 @@ import {
 import {
   search as _search, searchBatch as _searchBatch,
   textSearch as _textSearch, hybridSearch as _hybridSearch,
-  multiQuerySearch as _multiQuerySearch, searchIds as _searchIds,
+  multiQuerySearch as _multiQuerySearch,
+  multiQuerySearchIds as _multiQuerySearchIds, searchIds as _searchIds,
   sparseSearchNamed as _sparseSearchNamed,
 } from './search-backend';
 import {
@@ -115,11 +118,11 @@ import { query as _query, queryExplain as _queryExplain, collectionSanity as _co
 import { scroll as _scroll } from './scroll-backend';
 import { getCollectionStats as _getCollectionStats, analyzeCollection as _analyzeCollection, getCollectionConfig as _getCollectionConfig } from './admin-backend';
 import { createIndex as _createIndex, listIndexes as _listIndexes, hasIndex as _hasIndex, dropIndex as _dropIndex } from './index-backend';
-import { trainPq as _trainPq, streamInsert as _streamInsert, streamUpsertPoints as _streamUpsertPoints } from './streaming-backend';
+import { trainPq as _trainPq, enableStreaming as _enableStreaming, streamInsert as _streamInsert, streamUpsertPoints as _streamUpsertPoints } from './streaming-backend';
 import {
   createCollection as _createCollection, deleteCollection as _deleteCollection,
   getCollection as _getCollection, listCollections as _listCollections,
-  upsert as _upsert, upsertBatch as _upsertBatch,
+  upsert as _upsert, upsertBatch as _upsertBatch, upsertBatchRaw as _upsertBatchRaw,
   deletePoint as _deletePoint, get as _get, isEmpty as _isEmpty, flush as _flush,
 } from './crud-backend';
 
@@ -169,6 +172,7 @@ export class RestBackend implements IVelesDBBackend {
   async listCollections(): Promise<Collection[]> { this.ensureInitialized(); return _listCollections(buildCrudTransport(this.httpConfig)); }
   async upsert(c: string, d: VectorDocument): Promise<void> { this.ensureInitialized(); return _upsert(buildCrudTransport(this.httpConfig), c, d); }
   async upsertBatch(c: string, d: VectorDocument[]): Promise<void> { this.ensureInitialized(); return _upsertBatch(buildCrudTransport(this.httpConfig), c, d); }
+  async upsertBatchRaw(c: string, d: VectorDocument[]): Promise<number> { this.ensureInitialized(); return _upsertBatchRaw(buildRawBulkTransport(this.httpConfig), c, d, d[0]?.vector.length ?? 0); }
   async delete(c: string, id: string | number): Promise<boolean> { this.ensureInitialized(); return _deletePoint(buildCrudTransport(this.httpConfig), c, id); }
   async get(c: string, id: string | number): Promise<VectorDocument | null> { this.ensureInitialized(); return _get(buildCrudTransport(this.httpConfig), c, id); }
   async isEmpty(c: string): Promise<boolean> { this.ensureInitialized(); return _isEmpty(buildCrudTransport(this.httpConfig), c); }
@@ -198,6 +202,7 @@ export class RestBackend implements IVelesDBBackend {
   async textSearch(c: string, q: string, o?: { k?: number; filter?: FilterInput }): Promise<SearchResult[]> { this.ensureInitialized(); return _textSearch(buildSearchTransport(this.httpConfig), c, q, o); }
   async hybridSearch(c: string, v: number[] | Float32Array, t: string, o?: { k?: number; vectorWeight?: number; filter?: FilterInput }): Promise<SearchResult[]> { this.ensureInitialized(); return _hybridSearch(buildSearchTransport(this.httpConfig), c, v, t, o); }
   async multiQuerySearch(c: string, v: Array<number[] | Float32Array>, o?: MultiQuerySearchOptions): Promise<SearchResult[]> { this.ensureInitialized(); return _multiQuerySearch(buildSearchTransport(this.httpConfig), c, v, o); }
+  async multiQuerySearchIds(c: string, v: Array<number[] | Float32Array>, o?: MultiQuerySearchOptions): Promise<Array<{ id: number; score: number }>> { this.ensureInitialized(); return _multiQuerySearchIds(buildSearchTransport(this.httpConfig), c, v, o); }
   async searchIds(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<Array<{ id: number; score: number }>> { this.ensureInitialized(); return _searchIds(buildSearchTransport(this.httpConfig), c, q, o); }
   async sparseSearchNamed(c: string, q: import('../types').SparseVector, idx: string, o?: import('../types').SparseSearchNamedOptions): Promise<SearchResult[]> { this.ensureInitialized(); return _sparseSearchNamed(buildSearchTransport(this.httpConfig), c, q, idx, o); }
 
@@ -230,6 +235,7 @@ export class RestBackend implements IVelesDBBackend {
 
   // Streaming / PQ
   async trainPq(c: string, o?: PqTrainOptions): Promise<string> { this.ensureInitialized(); return _trainPq(buildStreamingTransport(this.httpConfig), c, o); }
+  async enableStreaming(c: string, cfg?: StreamingConfig): Promise<void> { this.ensureInitialized(); return _enableStreaming(buildStreamingTransport(this.httpConfig), c, cfg); }
   async streamInsert(c: string, d: VectorDocument[]): Promise<void> { this.ensureInitialized(); return _streamInsert(buildStreamingTransport(this.httpConfig), c, d); }
   async streamUpsertPoints(c: string, d: VectorDocument[]): Promise<StreamUpsertResponse> { this.ensureInitialized(); return _streamUpsertPoints(buildStreamingTransport(this.httpConfig), c, d); }
 

@@ -17,6 +17,7 @@
 
 pub mod auto_reindex;
 mod collection_config;
+pub(crate) mod config_serde;
 mod core;
 pub mod diagnostics;
 pub(crate) mod expiry;
@@ -24,7 +25,9 @@ pub mod graph;
 mod graph_collection;
 mod graph_collection_query;
 mod metadata_collection;
+pub(crate) mod order_by_advisor;
 pub(crate) mod payload_mirror;
+pub(crate) mod payload_size;
 pub mod query_cost;
 pub mod search;
 pub mod stats;
@@ -63,6 +66,8 @@ pub use graph::{
 };
 pub use graph_collection::GraphCollection;
 pub use metadata_collection::MetadataCollection;
+pub use order_by_advisor::{OrderByIndexState, OrderByIndexSuggestion};
 pub(crate) use types::Collection;
 pub use types::CollectionType;
+pub(crate) use types::RuntimeLimits;
 pub use vector_collection::VectorCollection;

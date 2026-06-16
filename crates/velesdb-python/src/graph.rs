@@ -13,12 +13,12 @@ use velesdb_core::collection::graph::{GraphEdge, GraphNode, TraversalResult};
 /// Parse a Python properties dict into a JSON properties map.
 ///
 /// Used by both [`dict_to_node`] and [`dict_to_edge`] to avoid duplicating
-/// the `PyObject` -> `HashMap<String, serde_json::Value>` conversion.
+/// the `Py<PyAny>` -> `HashMap<String, serde_json::Value>` conversion.
 fn parse_properties(
     py: Python<'_>,
-    props_obj: &PyObject,
+    props_obj: &Py<PyAny>,
 ) -> PyResult<HashMap<String, serde_json::Value>> {
-    let props_dict: HashMap<String, PyObject> = props_obj.extract(py)?;
+    let props_dict: HashMap<String, Py<PyAny>> = props_obj.extract(py)?;
     props_dict
         .into_iter()
         .map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
@@ -26,7 +26,7 @@ fn parse_properties(
 }
 
 /// Convert a Python dict to a GraphNode.
-pub fn dict_to_node(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResult<GraphNode> {
+pub fn dict_to_node(py: Python<'_>, dict: &HashMap<String, Py<PyAny>>) -> PyResult<GraphNode> {
     let id: u64 = dict
         .get("id")
         .ok_or_else(|| PyValueError::new_err("Node missing 'id' field"))?
@@ -57,7 +57,7 @@ pub fn dict_to_node(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResul
 }
 
 /// Convert a Python dict to a GraphEdge.
-pub fn dict_to_edge(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResult<GraphEdge> {
+pub fn dict_to_edge(py: Python<'_>, dict: &HashMap<String, Py<PyAny>>) -> PyResult<GraphEdge> {
     let id: u64 = dict
         .get("id")
         .ok_or_else(|| PyValueError::new_err("Edge missing 'id' field"))?
@@ -95,7 +95,7 @@ pub fn dict_to_edge(py: Python<'_>, dict: &HashMap<String, PyObject>) -> PyResul
 ///
 /// Uses `PyDict::new()` + `PyString::intern()` for static keys to avoid
 /// repeated string allocation.
-pub fn node_to_dict(py: Python<'_>, node: &GraphNode) -> PyObject {
+pub fn node_to_dict(py: Python<'_>, node: &GraphNode) -> Py<PyAny> {
     let dict = PyDict::new(py);
     let _ = dict.set_item(PyString::intern(py, "id"), node.id());
     let _ = dict.set_item(PyString::intern(py, "label"), node.label());
@@ -121,7 +121,7 @@ pub fn node_to_dict(py: Python<'_>, node: &GraphNode) -> PyObject {
 ///
 /// Uses `PyDict::new()` + `PyString::intern()` for static keys to avoid
 /// repeated string allocation.
-pub fn edge_to_dict(py: Python<'_>, edge: &GraphEdge) -> PyObject {
+pub fn edge_to_dict(py: Python<'_>, edge: &GraphEdge) -> Py<PyAny> {
     let dict = PyDict::new(py);
     let _ = dict.set_item(PyString::intern(py, "id"), edge.id());
     let _ = dict.set_item(PyString::intern(py, "source"), edge.source());
@@ -144,7 +144,7 @@ pub fn edge_to_dict(py: Python<'_>, edge: &GraphEdge) -> PyObject {
 ///
 /// Uses `PyDict::new()` + `PyString::intern()` for static keys to avoid
 /// repeated string allocation.
-pub fn traversal_to_dict(py: Python<'_>, result: &TraversalResult) -> PyObject {
+pub fn traversal_to_dict(py: Python<'_>, result: &TraversalResult) -> Py<PyAny> {
     let dict = PyDict::new(py);
     let _ = dict.set_item(PyString::intern(py, "target_id"), result.target_id);
     let _ = dict.set_item(PyString::intern(py, "path"), result.path.to_vec());
@@ -158,8 +158,8 @@ mod tests {
 
     #[test]
     fn test_dict_to_node_minimal() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let mut dict = HashMap::new();
             dict.insert("id".to_string(), 1u64.into_pyobject(py).unwrap().into());
             dict.insert(
@@ -175,8 +175,8 @@ mod tests {
 
     #[test]
     fn test_dict_to_edge_minimal() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let mut dict = HashMap::new();
             dict.insert("id".to_string(), 100u64.into_pyobject(py).unwrap().into());
             dict.insert("source".to_string(), 1u64.into_pyobject(py).unwrap().into());
@@ -196,8 +196,8 @@ mod tests {
 
     #[test]
     fn test_dict_to_node_rejects_nan_vector() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let mut dict = HashMap::new();
             dict.insert("id".to_string(), 1u64.into_pyobject(py).unwrap().into());
             dict.insert(
@@ -217,8 +217,8 @@ mod tests {
 
     #[test]
     fn test_node_to_dict() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let mut props = std::collections::HashMap::new();
             props.insert(
                 "name".to_string(),
@@ -227,7 +227,7 @@ mod tests {
             let node = GraphNode::new(1, "Person").with_properties(props);
 
             let obj = node_to_dict(py, &node);
-            let dict = obj.bind(py).downcast::<PyDict>().unwrap();
+            let dict = obj.bind(py).cast::<PyDict>().unwrap();
             assert!(dict.contains("id").unwrap());
             assert!(dict.contains("label").unwrap());
         });

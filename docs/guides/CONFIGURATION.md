@@ -1,6 +1,6 @@
 # ⚙️ VelesDB Configuration
 
-*Version 2.0.0 — May 2026*
+*Version 3.0.0 — May 2026*
 
 Complete guide for configuring VelesDB via configuration file, environment variables, and runtime parameters.
 
@@ -62,7 +62,7 @@ data_dir = "./data"
 ```toml
 # =============================================================================
 # VelesDB Configuration File
-# Version: 2.0.0
+# Version: 3.0.0
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -396,6 +396,11 @@ SELECT * FROM docs WHERE vector NEAR $v WITH (ef_search = 512);
 
 **Result**: The query uses `ef_search = 512` (runtime override wins).
 
+> Any `WITH (ef_search = N)` value is passed through as the requested budget —
+> `N` is sent to HNSW (clamped to at least `k`, and still subject to the
+> standard dataset-size scaling), not snapped to a coarse named profile.
+> (Updated 2026-06-14.)
+
 ---
 
 ## Complete Reference
@@ -435,6 +440,15 @@ SELECT * FROM docs WHERE vector NEAR $v WITH (ef_search = 512);
 | `max_collections` | int | `1000` | Max collections |
 | `max_payload_size` | int | `1048576` | Max payload (bytes) |
 | `max_perfect_mode_vectors` | int | `500000` | Bruteforce limit |
+
+All five `[limits]` fields are enforced at runtime (since 2026-06-14), not only
+range-validated at load: `max_dimensions` / `max_collections` at collection
+creation, and `max_vectors_per_collection` / `max_payload_size` /
+`max_perfect_mode_vectors` at the ingest/search boundary. An operation that
+would exceed a cap is rejected with a `GuardRail` error (`VELES-027`) naming the
+actual value, the cap, and the `limits.<field>` to raise — the engine never
+silently clamps. The defaults are permissive, so typical workloads are
+unaffected.
 
 ### Section [server]
 

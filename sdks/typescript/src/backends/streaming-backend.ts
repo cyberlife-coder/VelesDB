@@ -11,6 +11,7 @@ import type {
   SparseVector,
   RestPointId,
   StreamUpsertResponse,
+  StreamingConfig,
 } from '../types';
 import { BackpressureError, ConnectionError, ValidationError, VelesDBError } from '../types';
 import type { BaseTransport } from './shared';
@@ -19,6 +20,7 @@ import {
   collectionPath,
   toNumberArray,
   validateCollectionName,
+  safeJsonParse,
 } from './shared';
 
 /** Minimal transport interface for streaming operations. */
@@ -89,8 +91,7 @@ export async function streamInsert(
     const restId = transport.parseRestPointId(doc.id);
     const vector = toNumberArray(doc.vector);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const body: Record<string, any> = {
+    const body: Record<string, unknown> = {
       id: restId,
       vector,
       payload: doc.payload ?? null,
@@ -127,7 +128,7 @@ export async function streamInsert(
       }
 
       if (!response.ok && response.status !== 202) {
-        const data = await response.json().catch(() => ({}));
+        const data = await safeJsonParse(response);
         const errorPayload = transport.extractErrorPayload(data);
         throw new VelesDBError(
           errorPayload.message ?? `HTTP ${response.status}`,
@@ -151,6 +152,40 @@ export async function streamInsert(
       );
     }
   }
+}
+
+/**
+ * Enable the bounded streaming-ingestion channel on a collection.
+ *
+ * POSTs the optional `StreamingConfig` to `/collections/{name}/stream/enable`
+ * as a snake_case JSON body. Omitted fields are left out of the body so the
+ * server applies its own defaults (`buffer_size` 10000, `batch_size` 128,
+ * `flush_interval_ms` 50). A non-2xx response raises `VelesDBError` and an
+ * abort raises `ConnectionError` (both via the shared `requestJson` path).
+ */
+export async function enableStreaming(
+  transport: StreamingTransport,
+  collection: string,
+  config?: StreamingConfig
+): Promise<void> {
+  const body: Record<string, number> = {};
+  if (config?.bufferSize !== undefined) {
+    body.buffer_size = config.bufferSize;
+  }
+  if (config?.batchSize !== undefined) {
+    body.batch_size = config.batchSize;
+  }
+  if (config?.flushIntervalMs !== undefined) {
+    body.flush_interval_ms = config.flushIntervalMs;
+  }
+
+  const response = await transport.requestJson(
+    'POST',
+    `${collectionPath(collection)}/stream/enable`,
+    body
+  );
+
+  throwOnError(response);
 }
 
 /**
@@ -197,8 +232,7 @@ export async function streamUpsertPoints(
     const restId = requireSafeRangeId(transport.parseRestPointId(doc.id));
     const vector = toNumberArray(doc.vector);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const point: Record<string, any> = {
+    const point: Record<string, unknown> = {
       id: restId,
       vector,
       payload: doc.payload ?? null,
@@ -239,7 +273,7 @@ export async function streamUpsertPoints(
     }
 
     if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
+      const data = await safeJsonParse(response);
       const errorPayload = transport.extractErrorPayload(data);
       throw new VelesDBError(
         errorPayload.message ?? `HTTP ${response.status}`,
@@ -247,7 +281,7 @@ export async function streamUpsertPoints(
       );
     }
 
-    const data = await response.json().catch(() => ({}));
+    const data = await safeJsonParse(response);
     return {
       message: typeof data.message === 'string' ? data.message : 'Stream processed',
       inserted: typeof data.inserted === 'number' ? data.inserted : 0,

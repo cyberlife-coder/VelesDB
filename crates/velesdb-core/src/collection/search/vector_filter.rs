@@ -48,6 +48,11 @@ impl Collection {
 
         let quality = resolve_quality(opts);
 
+        // Parity item E: gate Perfect-mode over-cap before any index dispatch
+        // so a filtered `WITH (mode='perfect')` query cannot trigger an
+        // unbounded brute-force scan, matching the unfiltered entry points.
+        self.enforce_perfect_mode_limit(quality)?;
+
         let index_results = match self.build_prefilter_bitmap(filter) {
             Some(bitmap) if bitmap.is_empty() => return Ok(Vec::new()),
             Some(bitmap) => {
@@ -149,18 +154,22 @@ impl Collection {
     }
 }
 
+/// Maps an explicit `ef_search` value to a value-preserving `SearchQuality`.
+///
+/// Uses `Custom(ef)` so the exact budget is honored (the documented contract
+/// for `WITH (ef_search = N)`), instead of snapping to a coarse named profile.
+#[must_use]
+pub(crate) fn ef_to_quality(ef_search: usize) -> crate::SearchQuality {
+    crate::SearchQuality::Custom(ef_search)
+}
+
 /// Resolves the search quality from query options.
 fn resolve_quality(
     opts: &crate::collection::search::query::QuerySearchOptions,
 ) -> crate::SearchQuality {
     opts.quality.unwrap_or_else(|| {
         opts.ef_search
-            .map_or(crate::SearchQuality::Balanced, |ef| match ef {
-                0..=64 => crate::SearchQuality::Fast,
-                65..=128 => crate::SearchQuality::Balanced,
-                129..=512 => crate::SearchQuality::Accurate,
-                _ => crate::SearchQuality::Perfect,
-            })
+            .map_or(crate::SearchQuality::Balanced, ef_to_quality)
     })
 }
 

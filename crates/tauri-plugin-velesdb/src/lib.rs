@@ -74,6 +74,7 @@ pub mod commands_sparse;
 pub mod error;
 pub mod events;
 pub mod helpers;
+pub mod observer;
 pub mod state;
 pub mod types;
 pub mod types_graph;
@@ -136,6 +137,9 @@ macro_rules! velesdb_invoke_handler {
 ///     .expect("error while running tauri application");
 /// ```
 #[must_use]
+// The body is a flat command-registration list (trivial cyclomatic complexity);
+// the line count grows linearly with the number of exposed commands.
+#[allow(clippy::too_many_lines)]
 pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
     let db_path = path.as_ref().to_path_buf();
 
@@ -151,6 +155,7 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             commands::get_points,
             commands::delete_points,
             commands::search,
+            commands::search_ids,
             commands::batch_search,
             commands::text_search,
             commands::hybrid_search,
@@ -158,6 +163,9 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             commands_query::query,
             commands::is_empty,
             commands::flush,
+            commands::compact_storage,
+            commands::update_guardrails,
+            commands::get_guardrails,
             commands::scroll_collection,
             // Sparse vector commands
             commands_sparse::sparse_search,
@@ -201,6 +209,7 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
             // Knowledge Graph commands (EPIC-015 US-001)
             commands_graph::create_graph_collection,
             commands_graph::add_edge,
+            commands_graph::add_edges_batch,
             commands_graph::get_edges,
             commands_graph::traverse_graph,
             commands_graph::get_node_degree,
@@ -212,11 +221,13 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
         ],
         persistence_only: [
             commands::stream_insert,
+            commands::enable_streaming,
         ],
     ));
     builder
         .setup(move |app, _api| {
-            let state = VelesDbState::new(db_path.clone());
+            let observer = std::sync::Arc::new(observer::TauriObserver::new(app.clone()));
+            let state = VelesDbState::new_with_observer(db_path.clone(), observer);
             app.manage(state);
             tracing::info!("VelesDB plugin initialized with path: {:?}", db_path);
             Ok(())

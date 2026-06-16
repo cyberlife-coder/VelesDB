@@ -8,10 +8,19 @@ use std::collections::BTreeMap;
 use wasm_bindgen::prelude::*;
 
 /// Result from sparse search.
-#[derive(Serialize, Deserialize)]
-struct SparseSearchResult {
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct SparseSearchResult {
     doc_id: u64,
     score: f32,
+}
+
+impl SparseSearchResult {
+    /// Returns the document id of this result. Test-only accessor used to
+    /// assert ranking order; the wasm path serializes the fields directly.
+    #[cfg(test)]
+    pub(crate) fn doc_id(&self) -> u64 {
+        self.doc_id
+    }
 }
 
 /// A sparse vector: sorted parallel arrays of term indices and weights.
@@ -142,17 +151,33 @@ impl SparseIndex {
         query_values: &[f32],
         k: usize,
     ) -> Result<JsValue, JsValue> {
+        let results = self
+            .search_scored(query_indices, query_values, k)
+            .map_err(|e| JsValue::from_str(&e))?;
+        serde_wasm_bindgen::to_value(&results)
+            .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
+    }
+
+    /// Native-testable scoring kernel shared by [`Self::search`] and the
+    /// `VectorStore::search_sparse` delegate.
+    ///
+    /// Performs DAAT (Document-At-A-Time) accumulation and top-`k` extraction
+    /// without touching `JsValue`, so it can be exercised off-`wasm32`.
+    pub(crate) fn search_scored(
+        &self,
+        query_indices: &[u32],
+        query_values: &[f32],
+        k: usize,
+    ) -> Result<Vec<SparseSearchResult>, String> {
         if query_indices.len() != query_values.len() {
-            return Err(JsValue::from_str(&format!(
+            return Err(format!(
                 "query indices/values length mismatch: {} vs {}",
                 query_indices.len(),
                 query_values.len()
-            )));
+            ));
         }
         if k == 0 {
-            let empty: Vec<SparseSearchResult> = Vec::new();
-            return serde_wasm_bindgen::to_value(&empty)
-                .map_err(|e| JsValue::from_str(&e.to_string()));
+            return Ok(Vec::new());
         }
 
         // DAAT (Document-At-A-Time) accumulation using a hash map.
@@ -173,9 +198,7 @@ impl SparseIndex {
             .collect();
         results.sort_by(|a, b| b.score.total_cmp(&a.score));
         results.truncate(k);
-
-        serde_wasm_bindgen::to_value(&results)
-            .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
+        Ok(results)
     }
 
     /// Returns the number of documents in the index.

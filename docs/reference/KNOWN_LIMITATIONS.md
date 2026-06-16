@@ -148,11 +148,35 @@ Result materialization for top-k scans, JOIN, parallel graph traversal, and
 set operations (UNION/INTERSECT) is bounded by the effective LIMIT via bounded
 top-k rather than collect-all-then-truncate. Results are identical to the
 unbounded path; only peak memory is bounded. Intermediate operators that can
-legitimately drop rows fall back to the conservative server-side ceiling.
+legitimately drop rows fall back to the conservative server-side ceiling — this
+includes a scalar (non-`similarity()`) `ORDER BY ... LIMIT k`, which must rank
+the full matching set before truncating, so it fetches exhaustively rather than
+bounding the fetch at `k`. (Capping the fetch at `k` first was the
+`ORDER BY`-before-sort defect fixed 2026-06-14; the bounded==unbounded identity
+above now holds for scalar `ORDER BY` as well, at the cost of an exhaustive
+fetch for that one operator.) The `similarity()`-ordered HNSW path stays bounded
+top-k — it is pre-sorted by score, so truncation is correct without an
+exhaustive fetch and recall is unaffected.
+
+The O(n) cost of that exhaustive scalar-`ORDER BY` fetch is removed by the
+ordered-index pushdown (EPIC-081, `docs/planning/CORE_PARITY_REMEDIATION.md`):
+when the single `ORDER BY` field has a fully-covering secondary index and the
+query has no WHERE/JOIN/graph/similarity, the engine serves the top-k from the
+index in O(log n + k) (`create_index(field)` to opt in) — ~89 ms → ~0.013 ms for
+that 50k-row query — with identical results to the exhaustive path. Queries
+without a covering index keep the exhaustive scalar-`ORDER BY` behaviour above.
+The `create_index(field)` opt-in is persisted (recorded in `config.json` and
+rebuilt from the stored payloads on open), so the fast path keeps firing after a
+process restart instead of silently reverting to the exhaustive scan.
 
 ### 10. Configuration range caps
 
-**Status**: resolved (validated in every loader and on open). Source: `crates/velesdb-core/src/config_validation.rs`; called from `Config` loaders and `Database::open_with_config`.
+**Status**: resolved (validated in every loader and on open; the `limits.*`
+fields are additionally enforced at runtime since 2026-06-14). Source:
+`crates/velesdb-core/src/config_validation.rs` (range checks, called from
+`Config` loaders and `Database::open_with_config`);
+`crates/velesdb-core/src/collection/{types,payload_size,core/crud,core/bulk_import,core/graph_api,search/vector,search/vector_filter}.rs`
+and `database/collection_ops.rs` (runtime enforcement).
 
 `VelesConfig::validate()` now runs in every config loader (`load`,
 `load_from_path`, `from_toml`) **and** on `open_with_config`. Each capacity/limit
@@ -174,6 +198,21 @@ absurdly large = unbounded). The per-client `RateLimiter` map is also bounded
 with sampled eviction so a client cycling `client_id` values cannot OOM the
 limiter.
 
+Beyond range validation, all five `limits.*` fields are now **enforced at
+runtime** (2026-06-14): `max_dimensions` / `max_collections` at collection
+creation, and `max_vectors_per_collection` / `max_payload_size` /
+`max_perfect_mode_vectors` at the cold ingest/search boundary inside the
+`Collection` (off the hot path), covering the Point upsert, zero-copy raw
+bulk, graph node-write, and filtered/unfiltered search paths. An operation
+that would exceed a cap is rejected with `Error::GuardRail` (`VELES-027`)
+naming the actual value and the `limits.<field>` to raise; the engine never
+silently clamps. Two intentional scoping notes: (1) `max_vectors_per_collection`
+is a conservative O(1) pre-count (`stored + batch`) that treats every incoming
+point as net-new, so a collection exactly at the cap may reject a pure in-place
+update batch — raise the cap to update at the limit; (2) vector-less graph node
+writes do not increment the vector count, so `max_vectors_per_collection` does
+not apply to pure-graph node ingest (only `max_payload_size` does there).
+
 ### 11. `AllocGuard` per-allocation ceiling
 
 **Status**: resolved (backstop). Source: `crates/velesdb-core/src/alloc_guard.rs` (`DEFAULT_ALLOC_BYTE_LIMIT = 1 TiB`).
@@ -184,6 +223,66 @@ deliberately high *backstop* against arithmetic-wrapped or pathological sizes; i
 is far above any single contiguous buffer VelesDB legitimately allocates, so it
 never rejects a real index. Primary defense against untrusted sizes is the
 per-artifact load-time validation (file-length-bounded counts).
+
+---
+
+## Ecosystem / interop
+
+### 12. String → u64 point-ID hashing differs across components
+
+**Status**: documented trade-off (intentional). Sources: `integrations/common/src/velesdb_common/ids.py` (`stable_hash_id`, the single source shared by LangChain, LlamaIndex, **and** Haystack since 2026-06-14); `integrations/haystack/src/haystack_velesdb/document_store.py` (now imports `stable_hash_id` — the previous forked `_str_id_to_int` copy was removed); `crates/velesdb-migrate/src/pipeline_points.rs` (`stable_point_id`).
+
+VelesDB point IDs are `u64`. Components that ingest documents keyed by an
+arbitrary string derive the numeric ID with **two intentionally different**
+hash strategies — every Python integration now shares one, and `velesdb-migrate`
+keeps its deliberately distinct one:
+
+| Component | Function | Strategy |
+|-----------|----------|----------|
+| LangChain / LlamaIndex / Haystack | `velesdb_common.ids.stable_hash_id` (shared) | SHA-256 of the UTF-8 string, top 8 bytes, sign bit cleared → positive 63-bit ID |
+| `velesdb-migrate` | `stable_point_id` | numeric strings parsed directly to `u64`; non-numeric strings hashed via FNV-1a |
+
+These do not agree. The `velesdb-migrate` strategy is deliberately distinct: it
+parses numeric IDs verbatim so a source row keyed `"12345"` maps to point
+`12345`, and its FNV-1a fallback is frozen for **checkpoint-resumable**
+migrations (changing it would re-key already-inserted points and corrupt a
+resumed run — see the stability note in the source).
+
+**User impact**: the *same* logical document can land under **different point
+IDs** depending on the ingestion path. A corpus loaded via `velesdb-migrate`
+and the same corpus loaded via the LangChain/LlamaIndex/Haystack vector store
+will not share point IDs, so cross-referencing or de-duplicating across the two
+paths by point ID is not reliable. Pick a single ingestion path per collection,
+or map on a payload field (e.g. a stored `source_id`) rather than on the
+numeric point ID.
+
+---
+
+## Tooling / test coverage
+
+### 13. VelesQL conformance for WASM/CLI is parser-only
+
+**Status**: open (coverage gap, narrowed 2026-06-14). Sources: `crates/velesdb-wasm/tests/velesql_parser_conformance.rs`, `crates/velesdb-cli/tests/velesql_parser_conformance.rs` (parser fixture); `crates/velesdb-server/tests/velesql_conformance_tests.rs` (server executor contract fixture); `crates/velesdb-core/tests/velesql_executor_conformance.rs` + `conformance/velesql_executor_cases.json` (core executor result fixture).
+
+The shared VelesQL conformance fixtures come in layers. The
+`velesql_parser_cases.json` layer (does this query parse?) is checked across
+**core, WASM, and CLI** — all three run the same `Parser::parse` assertions.
+The `velesql_contract_cases.json` layer (does this query *execute* and return
+the contracted result/error shape over REST?) is exercised at the **server**
+runtime. The `velesql_executor_cases.json` layer (does this query produce the
+exact result **rows / counts / ordering**?) now exists for the **core**
+executor, with goldens derived from `velesdb-core` as the source of truth.
+
+**What remains open**: **WASM** and **CLI** executor result parity is **not yet
+fixture-checked** against those executor goldens. The WASM and CLI surfaces
+share the same `velesdb-core` executor, so a query that parses identically
+across the three is expected to execute identically — but for WASM/CLI that
+expectation is not yet pinned by a per-runtime executor fixture run.
+
+**User impact**: a result-shape divergence specific to the WASM or CLI surface
+(e.g. a serialization or projection difference) would not be caught by the
+conformance suite until executor-level fixtures cover those runtimes. Parser
+acceptance — which features parse — is fully covered for all three.
 
 ---
 

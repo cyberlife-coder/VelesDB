@@ -25,7 +25,7 @@ use velesdb_core::collection::graph::{bfs_stream, StreamingConfig as CoreStreami
 /// Example:
 ///     >>> config = StreamingConfig(max_depth=3, max_visited=10000)
 ///     >>> config.relationship_types = ["KNOWS", "FOLLOWS"]
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct StreamingConfig {
     /// Maximum traversal depth (default: 3).
@@ -53,7 +53,7 @@ impl StreamingConfig {
 }
 
 /// Result of a BFS traversal step.
-#[pyclass(frozen)]
+#[pyclass(frozen, from_py_object)]
 #[derive(Clone)]
 pub struct TraversalResult {
     /// Current depth in the traversal.
@@ -112,9 +112,9 @@ impl GraphStore {
     ///     edge: Dict with keys: id (int), source (int), target (int), label (str),
     ///           properties (dict, optional)
     #[pyo3(signature = (edge))]
-    fn add_edge(&self, py: Python<'_>, edge: HashMap<String, PyObject>) -> PyResult<()> {
+    fn add_edge(&self, py: Python<'_>, edge: HashMap<String, Py<PyAny>>) -> PyResult<()> {
         let graph_edge = dict_to_edge(py, &edge)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut store = self.inner.write();
             store.add_edge(graph_edge).map_err(core_err)
         })
@@ -131,9 +131,9 @@ impl GraphStore {
     /// Note:
     ///     Uses internal label index for O(1) lookup per label.
     #[pyo3(signature = (label))]
-    fn get_edges_by_label(&self, py: Python<'_>, label: &str) -> PyResult<Vec<PyObject>> {
+    fn get_edges_by_label(&self, py: Python<'_>, label: &str) -> PyResult<Vec<Py<PyAny>>> {
         let label_owned = label.to_string();
-        let edges = py.allow_threads(|| {
+        let edges = py.detach(|| {
             let store = self.inner.read();
             store
                 .get_edges_by_label(&label_owned)
@@ -146,8 +146,8 @@ impl GraphStore {
 
     /// Gets outgoing edges from a node.
     #[pyo3(signature = (node_id))]
-    fn get_outgoing(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
-        let edges = py.allow_threads(|| {
+    fn get_outgoing(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
+        let edges = py.detach(|| {
             let store = self.inner.read();
             store
                 .get_outgoing(node_id)
@@ -158,10 +158,16 @@ impl GraphStore {
         Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
+    /// Alias for `get_outgoing`.
+    #[pyo3(signature = (node_id))]
+    fn get_outgoing_edges(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
+        self.get_outgoing(py, node_id)
+    }
+
     /// Gets incoming edges to a node.
     #[pyo3(signature = (node_id))]
-    fn get_incoming(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<PyObject>> {
-        let edges = py.allow_threads(|| {
+    fn get_incoming(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
+        let edges = py.detach(|| {
             let store = self.inner.read();
             store
                 .get_incoming(node_id)
@@ -172,6 +178,12 @@ impl GraphStore {
         Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
+    /// Alias for `get_incoming`.
+    #[pyo3(signature = (node_id))]
+    fn get_incoming_edges(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
+        self.get_incoming(py, node_id)
+    }
+
     /// Gets outgoing edges filtered by label.
     #[pyo3(signature = (node_id, label))]
     fn get_outgoing_by_label(
@@ -179,9 +191,9 @@ impl GraphStore {
         py: Python<'_>,
         node_id: u64,
         label: &str,
-    ) -> PyResult<Vec<PyObject>> {
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let label_owned = label.to_string();
-        let edges = py.allow_threads(|| {
+        let edges = py.detach(|| {
             let store = self.inner.read();
             store
                 .get_outgoing_by_label(node_id, &label_owned)
@@ -229,8 +241,8 @@ impl GraphStore {
             deadline: None,
         };
 
-        // Release GIL during traversal (no PyObject involved)
-        py.allow_threads(|| {
+        // Release GIL during traversal (no Py<PyAny> involved)
+        py.detach(|| {
             let store = self.inner.read();
 
             // FLAG-1 FIX: Use core's BfsIterator instead of re-implementing BFS
@@ -268,7 +280,7 @@ impl GraphStore {
     /// Removes an edge by ID.
     #[pyo3(signature = (edge_id))]
     fn remove_edge(&self, py: Python<'_>, edge_id: u64) -> PyResult<()> {
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut store = self.inner.write();
             store.remove_edge(edge_id);
         });
@@ -277,7 +289,7 @@ impl GraphStore {
 
     /// Returns the number of edges in the store.
     fn edge_count(&self, py: Python<'_>) -> PyResult<usize> {
-        Ok(py.allow_threads(|| {
+        Ok(py.detach(|| {
             let store = self.inner.read();
             store.edge_count()
         }))
@@ -292,7 +304,7 @@ impl GraphStore {
     ///     True if the edge exists, False otherwise.
     #[pyo3(signature = (edge_id))]
     fn has_edge(&self, py: Python<'_>, edge_id: u64) -> PyResult<bool> {
-        Ok(py.allow_threads(|| {
+        Ok(py.detach(|| {
             let store = self.inner.read();
             store.get_edge(edge_id).is_some()
         }))
@@ -307,7 +319,7 @@ impl GraphStore {
     ///     Number of outgoing edges from this node.
     #[pyo3(signature = (node_id))]
     fn out_degree(&self, py: Python<'_>, node_id: u64) -> PyResult<usize> {
-        Ok(py.allow_threads(|| {
+        Ok(py.detach(|| {
             let store = self.inner.read();
             store.get_outgoing(node_id).len()
         }))
@@ -322,7 +334,7 @@ impl GraphStore {
     ///     Number of incoming edges to this node.
     #[pyo3(signature = (node_id))]
     fn in_degree(&self, py: Python<'_>, node_id: u64) -> PyResult<usize> {
-        Ok(py.allow_threads(|| {
+        Ok(py.detach(|| {
             let store = self.inner.read();
             store.get_incoming(node_id).len()
         }))
@@ -352,7 +364,7 @@ impl GraphStore {
         let max_depth = config.max_depth;
         let relationship_types = config.relationship_types.clone();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let store = self.inner.read();
             Ok(dfs_collect(
                 &store,

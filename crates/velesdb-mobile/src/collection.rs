@@ -3,8 +3,9 @@
 use velesdb_core::VectorCollection as CoreCollection;
 
 use crate::types::{
-    IndividualSearchRequest, MobileCollectionStats, MobileIndexInfo, SearchQuality, SearchResult,
-    VelesError, VelesPoint,
+    IndividualSearchRequest, MobileAdvancedConfig, MobileCollectionDiagnostics,
+    MobileCollectionStats, MobileIndexInfo, MobileQueryLimits, MobileStreamingConfig,
+    SearchQuality, SearchResult, VelesError, VelesPoint,
 };
 
 // ============================================================================
@@ -84,15 +85,7 @@ impl VelesCollection {
     ///
     /// * `point` - The point to upsert
     pub fn upsert(&self, point: VelesPoint) -> Result<(), VelesError> {
-        let payload = point
-            .payload
-            .map(|s| serde_json::from_str(&s))
-            .transpose()
-            .map_err(|e| VelesError::Database {
-                message: format!("Invalid JSON payload: {e}"),
-            })?;
-
-        let core_point = velesdb_core::Point::new(point.id, point.vector, payload);
+        let core_point = parse_point(point)?;
         self.inner.upsert(vec![core_point])?;
         Ok(())
     }
@@ -103,19 +96,8 @@ impl VelesCollection {
     ///
     /// * `points` - Points to upsert
     pub fn upsert_batch(&self, points: Vec<VelesPoint>) -> Result<(), VelesError> {
-        let core_points: Result<Vec<velesdb_core::Point>, VelesError> = points
-            .into_iter()
-            .map(|p| {
-                let payload = p
-                    .payload
-                    .map(|s| serde_json::from_str(&s))
-                    .transpose()
-                    .map_err(|e| VelesError::Database {
-                        message: format!("Invalid JSON payload: {e}"),
-                    })?;
-                Ok(velesdb_core::Point::new(p.id, p.vector, payload))
-            })
-            .collect();
+        let core_points: Result<Vec<velesdb_core::Point>, VelesError> =
+            points.into_iter().map(parse_point).collect();
 
         self.inner.upsert(core_points?)?;
         Ok(())
@@ -486,9 +468,84 @@ impl VelesCollection {
 
     // multi_query_search and multi_query_search_with_filter are in collection_sparse.rs
 
+    /// Enables streaming ingestion on this collection.
+    ///
+    /// Must be called before [`stream_insert`](Self::stream_insert); otherwise
+    /// stream inserts fail with "not configured". Calling it again replaces the
+    /// existing ingester.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Optional [`MobileStreamingConfig`]. `None` uses the engine
+    ///   defaults (`buffer_size=10000`, `batch_size=128`, `flush_interval_ms=50`).
+    pub fn enable_streaming(
+        &self,
+        config: Option<MobileStreamingConfig>,
+    ) -> Result<(), VelesError> {
+        let core_config = config.map_or_else(velesdb_core::StreamingConfig::default, |c| {
+            velesdb_core::StreamingConfig::new(
+                usize::try_from(c.buffer_size).unwrap_or(usize::MAX),
+                usize::try_from(c.batch_size).unwrap_or(usize::MAX),
+                c.flush_interval_ms,
+            )
+        });
+        // Spawning the drain task needs an ambient runtime; enter the shared
+        // streaming runtime so the task is scheduled on it and survives this call.
+        let rt = crate::streaming_runtime::stream_runtime()?;
+        let _guard = rt.enter();
+        self.inner.enable_streaming(core_config);
+        Ok(())
+    }
+
+    /// Queues a batch of points for streaming ingestion.
+    ///
+    /// Requires [`enable_streaming`](Self::enable_streaming) to have been called
+    /// first. Returns the number of points successfully queued.
+    ///
+    /// # Arguments
+    ///
+    /// * `points` - Points to queue for ingestion
+    pub fn stream_insert(&self, points: Vec<VelesPoint>) -> Result<u64, VelesError> {
+        let core_points: Result<Vec<velesdb_core::Point>, VelesError> =
+            points.into_iter().map(parse_point).collect();
+
+        let queued =
+            self.inner
+                .stream_insert_batch(core_points?)
+                .map_err(|e| VelesError::Database {
+                    message: format!("Stream insert failed (buffer full or not configured): {e}"),
+                })?;
+        Ok(u64::try_from(queued).unwrap_or(u64::MAX))
+    }
+
     /// Flushes collection data to durable storage.
     pub fn flush(&self) -> Result<(), VelesError> {
         self.inner.flush()?;
+        Ok(())
+    }
+
+    /// Compacts on-disk storage, reclaiming space left by deleted vectors.
+    ///
+    /// Returns the number of bytes reclaimed.
+    pub fn compact_storage(&self) -> Result<u64, VelesError> {
+        Ok(u64::try_from(self.inner.compact_storage()?).unwrap_or(u64::MAX))
+    }
+
+    /// Returns the current query guardrail limits for this collection.
+    pub fn guard_rails(&self) -> MobileQueryLimits {
+        self.inner.guard_rails().limits().into()
+    }
+
+    /// Applies post-creation overrides to advanced configuration fields
+    /// (`pq_rescore_oversampling`, `deferred_indexing`,
+    /// `async_index_builder`) and persists the updated config. Each `Some`
+    /// field is applied; each `None` field is left unchanged.
+    pub fn apply_advanced_config(&self, config: MobileAdvancedConfig) -> Result<(), VelesError> {
+        self.inner.apply_advanced_config(
+            config.pq_rescore_oversampling.map(Some),
+            config.deferred_indexing.map(|c| Some(c.into())),
+            config.async_index_builder.map(|c| Some(c.into())),
+        )?;
         Ok(())
     }
 
@@ -558,6 +615,23 @@ impl VelesCollection {
     pub fn get_stats(&self) -> MobileCollectionStats {
         self.inner.get_stats().into()
     }
+
+    /// Returns a health/readiness diagnostics snapshot for this collection.
+    pub fn diagnostics(&self) -> MobileCollectionDiagnostics {
+        self.inner.diagnostics().into()
+    }
+}
+
+/// Converts a [`VelesPoint`] into a core point, parsing the optional JSON payload.
+fn parse_point(p: VelesPoint) -> Result<velesdb_core::Point, VelesError> {
+    let payload = p
+        .payload
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .map_err(|e| VelesError::Database {
+            message: format!("Invalid JSON payload: {e}"),
+        })?;
+    Ok(velesdb_core::Point::new(p.id, p.vector, payload))
 }
 
 // Sparse vector operations are in collection_sparse.rs

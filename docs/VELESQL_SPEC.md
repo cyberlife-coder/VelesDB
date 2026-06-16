@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | **Last Updated**: 2026-06-12 (VelesDB v2.0.0)
+**Version**: 3.10.0 | **Last Updated**: 2026-06-16 (VelesDB v3.0.0)
 
 ---
 
@@ -2189,10 +2189,13 @@ Dropping a non-existent index succeeds silently (no error).
 
 - Secondary indexes only apply to **metadata payload fields** (not vector data).
 - Indexes accelerate equality filters in WHERE clauses (e.g., `WHERE category = 'tech'`).
-- The indexed field must already contain data for the index to be populated on
-  subsequent upserts. Existing data is not retroactively indexed.
-- Indexes are in-memory only; they are not persisted to disk in the current
-  implementation.
+- `CREATE INDEX` retroactively indexes all existing payloads for the field (a
+  one-time backfill scan); the index is then maintained incrementally on
+  subsequent upserts and deletes.
+- Secondary index *definitions* persist: a `CREATE INDEX` records the field in
+  `config.json` and the index is rebuilt from the stored payloads on the next
+  open, so it survives a process restart (EPIC-081). `DROP INDEX` removes the
+  field from `config.json`, so a dropped index does not reappear on restart.
 
 ### ANALYZE (v3.5+, histograms v3.9+)
 

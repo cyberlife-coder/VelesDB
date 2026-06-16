@@ -141,6 +141,26 @@ fn test_create_with_invalid_metric_returns_error() {
 }
 
 #[test]
+fn test_wasm_validate_collection_name_reserved() {
+    // Collection creation must apply core's name-syntax validation, not just
+    // an existence check. A Windows reserved device name and a path-traversal
+    // name are both rejected before any store is allocated.
+    let mut db = DatabaseInner::new();
+    for bad in ["CON", "../evil", "a/b", "", "-leading"] {
+        let err = db.create_collection(bad, 4, "cosine");
+        assert!(err.is_err(), "name '{bad}' must be rejected");
+    }
+    assert_eq!(
+        db.collection_count(),
+        0,
+        "no collection should be added when the name is invalid"
+    );
+    // The same gate applies to metadata-only collections.
+    assert!(db.create_metadata_collection("NUL").is_err());
+    assert_eq!(db.collection_count(), 0);
+}
+
+#[test]
 fn test_delete_missing_returns_error() {
     let mut db = DatabaseInner::new();
     let err = db.delete_collection("ghost");

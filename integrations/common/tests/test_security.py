@@ -3,6 +3,7 @@ from velesdb_common.security import (
     validate_batch_size,
     validate_weight,
     validate_storage_mode,
+    validate_named_sparse_vector,
     SecurityError,
     validate_text,
     ALLOWED_METRICS,
@@ -88,6 +89,41 @@ def test_allowed_storage_modes_exact_set():
     if ALLOWED_STORAGE_MODES != frozenset({"full", "sq8", "binary", "pq", "rabitq"}):
         raise AssertionError(
             f"ALLOWED_STORAGE_MODES mismatch: {ALLOWED_STORAGE_MODES!r}"
+        )
+
+
+def test_allowed_metrics_exact_set():
+    """ALLOWED_METRICS must match the canonical set exactly."""
+    if ALLOWED_METRICS != frozenset({"cosine", "euclidean", "dot", "hamming", "jaccard"}):
+        raise AssertionError(
+            f"ALLOWED_METRICS mismatch: {ALLOWED_METRICS!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Single-source-of-truth drift guard: when the compiled ``velesdb`` binding is
+# present, the security constants must equal its exported name sets EXACTLY.
+# This catches a core-vs-binding-vs-integration drift the literal checks above
+# cannot (e.g. a new core variant the binding picked up but a stale literal did
+# not). Skipped only when the wheel is not built.
+# ---------------------------------------------------------------------------
+
+def test_allowed_metrics_equals_binding_exactly():
+    velesdb = pytest.importorskip("velesdb")
+    binding = frozenset(velesdb.DISTANCE_METRICS)
+    if ALLOWED_METRICS != binding:
+        raise AssertionError(
+            f"ALLOWED_METRICS {ALLOWED_METRICS!r} != velesdb.DISTANCE_METRICS {binding!r}"
+        )
+
+
+def test_allowed_storage_modes_equals_binding_exactly():
+    velesdb = pytest.importorskip("velesdb")
+    binding = frozenset(velesdb.STORAGE_MODES)
+    if ALLOWED_STORAGE_MODES != binding:
+        raise AssertionError(
+            f"ALLOWED_STORAGE_MODES {ALLOWED_STORAGE_MODES!r} "
+            f"!= velesdb.STORAGE_MODES {binding!r}"
         )
 
 
@@ -194,3 +230,36 @@ def test_storage_mode_aliases_all_values_are_canonical():
         raise AssertionError(
             f"Aliases point to non-canonical names: {invalid}"
         )
+
+
+def test_validate_named_sparse_vector_accepts_flat():
+    """A flat dict[int, float] is accepted (default unnamed sparse index)."""
+    sv = {0: 1.5, 7: 0.8}
+    assert validate_named_sparse_vector(sv) == sv
+
+
+def test_validate_named_sparse_vector_accepts_named_mapping():
+    """A dict[str, dict[int, float]] names one or more sparse indexes."""
+    sv = {"bge_m3": {0: 1.5}, "splade": {5: 0.1}}
+    assert validate_named_sparse_vector(sv) == sv
+
+
+def test_validate_named_sparse_vector_rejects_non_dict():
+    with pytest.raises(SecurityError, match="must be a dict"):
+        validate_named_sparse_vector("nope")
+
+
+def test_validate_named_sparse_vector_rejects_named_inner_non_dict():
+    with pytest.raises(SecurityError, match="must map to a dict"):
+        validate_named_sparse_vector({"bge_m3": [1, 2, 3]})
+
+
+def test_validate_named_sparse_vector_rejects_named_inner_bad_entry():
+    """Inner dicts are validated like a flat sparse vector (int keys only)."""
+    with pytest.raises(SecurityError, match="keys must be int"):
+        validate_named_sparse_vector({"bge_m3": {"x": 1.0}})
+
+
+def test_validate_named_sparse_vector_empty_dict_is_flat():
+    """An empty dict has no string keys, so it is treated as a flat vector."""
+    assert validate_named_sparse_vector({}) == {}

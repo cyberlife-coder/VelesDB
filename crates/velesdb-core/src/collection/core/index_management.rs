@@ -28,11 +28,46 @@ impl Collection {
     /// existing payloads are indexed (handles the case where bulk insert
     /// skipped per-point index updates).
     ///
+    /// The field is recorded in [`CollectionConfig::indexed_fields`] (the
+    /// persisted authority) and `config.json` is saved, so the index is rebuilt
+    /// on the next [`Collection::open`] instead of silently vanishing across a
+    /// restart (EPIC-081 phase 3d). The `config.json` write is skipped when the
+    /// field is already tracked (a redundant re-CREATE or the restore path), so
+    /// an idempotent CREATE does not rewrite + fsync the file.
+    ///
+    /// [`CollectionConfig::indexed_fields`]: crate::collection::types::CollectionConfig::indexed_fields
+    ///
     /// # Errors
     ///
-    /// Returns Ok(()) on success. Index creation is idempotent.
-    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
+    /// Returns an error if persisting the updated `config.json` fails — a
+    /// `CREATE INDEX` whose authority cannot be persisted is surfaced rather
+    /// than silently lost on restart.
     pub fn create_index(&self, field_name: &str) -> Result<()> {
+        self.build_and_backfill_secondary_index(field_name);
+        // Record the field in the persisted authority. `BTreeSet::insert`
+        // returns `false` when the field is already tracked, so a no-op CREATE
+        // does not rewrite + fsync config.json. The write guard is released at
+        // the end of this statement, before `save_config` takes a read guard
+        // (parking_lot RwLock is non-reentrant).
+        let newly_tracked = self
+            .config
+            .write()
+            .indexed_fields
+            .insert(field_name.to_string());
+        if newly_tracked {
+            self.save_config()?;
+        }
+        Ok(())
+    }
+
+    /// Inserts the (empty) secondary index entry if absent and backfills it
+    /// from existing payloads, **without** touching the persisted authority.
+    ///
+    /// Shared by [`create_index`](Self::create_index) — which then records the
+    /// field in `config.indexed_fields` — and `restore_secondary_indexes_from_config`,
+    /// where the config set is already the authority, so neither path rewrites
+    /// `config.json` during an open-time restore.
+    pub(crate) fn build_and_backfill_secondary_index(&self, field_name: &str) {
         let mut indexes = self.secondary_indexes.write();
         let is_new = !indexes.contains_key(field_name);
         indexes
@@ -44,8 +79,6 @@ impl Collection {
         // inserted via bulk paths that skipped per-point index updates).
         drop(indexes); // Release write lock before reading payloads
         self.backfill_secondary_index(field_name, is_new);
-
-        Ok(())
     }
 
     /// Scans existing payloads and populates the secondary index for `field_name`.
@@ -101,17 +134,105 @@ impl Collection {
 
     /// Drops a secondary metadata index for a payload field.
     ///
-    /// Returns `true` if the index existed and was removed, `false` if no
-    /// such index existed.
+    /// Returns `true` if the index existed (in the live map or the persisted
+    /// authority) and was removed, `false` otherwise.
+    ///
+    /// Also removes the field from [`CollectionConfig::indexed_fields`] so the
+    /// index does not resurrect on the next [`Collection::open`] (EPIC-081
+    /// phase 3d). Persisting that removal is **best-effort**: a `save_config`
+    /// I/O error is logged, not propagated, so the public signature stays
+    /// infallible. The in-memory removal is re-persisted by the next successful
+    /// `save_config`/flush, and the worst case of a failed-save-then-immediate-crash
+    /// is a correct-but-unwanted index reappearing — never incorrect results.
+    ///
+    /// [`CollectionConfig::indexed_fields`]: crate::collection::types::CollectionConfig::indexed_fields
     #[must_use]
     pub fn drop_secondary_index(&self, field_name: &str) -> bool {
-        self.secondary_indexes.write().remove(field_name).is_some()
+        let removed_from_map = self.secondary_indexes.write().remove(field_name).is_some();
+        let untracked = self.config.write().indexed_fields.remove(field_name);
+        if untracked {
+            if let Err(e) = self.save_config() {
+                tracing::warn!(
+                    field = field_name,
+                    error = %e,
+                    "drop_secondary_index: failed to persist index removal to config.json; \
+                     the next flush will re-persist it"
+                );
+            }
+        }
+        removed_from_map || untracked
     }
 
     /// Checks whether a secondary metadata index exists for a field.
     #[must_use]
     pub fn has_secondary_index(&self, field_name: &str) -> bool {
         self.secondary_indexes.read().contains_key(field_name)
+    }
+
+    /// Recommends secondary indexes for scalar `ORDER BY <field>` queries
+    /// (EPIC-081 phase 3a, recommendation-only).
+    ///
+    /// Returns one [`OrderByIndexSuggestion`] per field that drove at least
+    /// `min_observations` eligible `ORDER BY <field>` queries down the
+    /// exhaustive path (sorted by descending observation count, then field
+    /// name). The state is derived from the **live** index, so a field whose
+    /// index now fully covers the collection is *resolved* (the fast path fires)
+    /// and is dropped from the advice. Remaining fields carry [`OrderByIndexState`]:
+    /// `Missing` (no secondary index — `CREATE INDEX (<field>)` would enable the
+    /// `O(log n + k)` fast path) or `BuiltButUncovered` (an index exists but does
+    /// not fully cover the collection, so the gap is the data, not a missing
+    /// index). Observation counts are cumulative since the collection was opened
+    /// and do not decay.
+    ///
+    /// Observation-only: this never creates, drops, or mutates an index.
+    ///
+    /// [`OrderByIndexSuggestion`]: crate::collection::order_by_advisor::OrderByIndexSuggestion
+    /// [`OrderByIndexState`]: crate::collection::order_by_advisor::OrderByIndexState
+    #[must_use]
+    pub(crate) fn order_by_index_advice(
+        &self,
+        min_observations: u64,
+    ) -> Vec<crate::collection::order_by_advisor::OrderByIndexSuggestion> {
+        use crate::collection::order_by_advisor::OrderByIndexSuggestion;
+        // Snapshot under the advisor lock, release it before touching the
+        // secondary-index lock so only one lock is ever held at a time.
+        let observed = self.order_by_advisor.read().observed(min_observations);
+        observed
+            .into_iter()
+            .filter_map(|(field, observed_count)| {
+                self.order_by_index_state(&field)
+                    .map(|state| OrderByIndexSuggestion {
+                        field,
+                        observed_count,
+                        state,
+                    })
+            })
+            .collect()
+    }
+
+    /// Live advice state for `field`, derived under one secondary-index read
+    /// lock: `Missing` when no index exists, `BuiltButUncovered` when an index
+    /// exists but does not fully cover the collection, or `None` when an index
+    /// exists *and* fully covers it — in which case the ordered-index fast path
+    /// already serves the field, so there is nothing to advise.
+    fn order_by_index_state(
+        &self,
+        field: &str,
+    ) -> Option<crate::collection::order_by_advisor::OrderByIndexState> {
+        use crate::collection::order_by_advisor::OrderByIndexState;
+        let point_count = self.len();
+        let indexes = self.secondary_indexes.read();
+        match indexes.get(field) {
+            None => Some(OrderByIndexState::Missing),
+            Some(index)
+                if index
+                    .ordered_ids_if_covered(false, 0, point_count)
+                    .is_some() =>
+            {
+                None
+            }
+            Some(_) => Some(OrderByIndexState::BuiltButUncovered),
+        }
     }
 
     /// Returns the set of payload field names covered by a secondary index
@@ -124,6 +245,51 @@ impl Collection {
     #[must_use]
     pub fn indexed_field_names(&self) -> std::collections::HashSet<String> {
         self.secondary_indexes.read().keys().cloned().collect()
+    }
+
+    /// Returns the top `limit` point IDs for `field_name` in index order
+    /// (ascending, or descending when `descending`), **only when the index
+    /// fully covers** the collection (every point carries the field). Returns
+    /// `None` when no such index exists or coverage is incomplete.
+    ///
+    /// Backs the index-backed `ORDER BY <field> LIMIT k` fast path
+    /// (EPIC-081 phase 2): the returned IDs are a snapshot, so the secondary
+    /// index lock is released before the caller hydrates them via `get`.
+    #[must_use]
+    pub(crate) fn ordered_ids_if_covered(
+        &self,
+        field_name: &str,
+        descending: bool,
+        limit: usize,
+    ) -> Option<Vec<u64>> {
+        let point_count = self.len();
+        let indexes = self.secondary_indexes.read();
+        indexes
+            .get(field_name)?
+            .ordered_ids_if_covered(descending, limit, point_count)
+    }
+
+    /// Returns the leading lead-key buckets' point IDs (in `descending` key
+    /// order) whose cumulative size first reaches `min_rows`, **only when the
+    /// index fully covers** the collection. Whole buckets, so a caller can
+    /// secondary-sort within each equal-lead-key group. `None` when no such
+    /// index exists or coverage is incomplete.
+    ///
+    /// Backs multi-column `ORDER BY <lead_field>, ...` (EPIC-081 phase 3c). Like
+    /// [`ordered_ids_if_covered`](Self::ordered_ids_if_covered), the IDs are a
+    /// snapshot so the secondary-index lock is released before hydration.
+    #[must_use]
+    pub(crate) fn ordered_prefix_if_covered(
+        &self,
+        field_name: &str,
+        descending: bool,
+        min_rows: usize,
+    ) -> Option<Vec<u64>> {
+        let point_count = self.len();
+        let indexes = self.secondary_indexes.read();
+        indexes
+            .get(field_name)?
+            .ordered_prefix_if_covered(descending, min_rows, point_count)
     }
 
     /// Looks up matching point IDs for an indexed field value.

@@ -151,6 +151,24 @@ export interface AggregateResponse {
 }
 
 /**
+ * Configuration for `POST /collections/{name}/stream/enable`.
+ *
+ * Enables the bounded streaming-ingestion channel on a collection so that
+ * subsequent `streamInsert` calls are accepted. Every field is optional;
+ * omitted fields fall back to the server defaults (`bufferSize` 10000,
+ * `batchSize` 128, `flushIntervalMs` 50). camelCase here, converted to the
+ * snake_case wire body by the backend.
+ */
+export interface StreamingConfig {
+  /** Bounded ingestion channel capacity (server default: 10000). */
+  bufferSize?: number;
+  /** Points flushed to the index per batch (server default: 128). */
+  batchSize?: number;
+  /** Max milliseconds before a partial batch is flushed (server default: 50). */
+  flushIntervalMs?: number;
+}
+
+/**
  * Response from `POST /collections/{name}/points/stream` (NDJSON batch upsert).
  *
  * The server returns statistics about the stream processing: how many points

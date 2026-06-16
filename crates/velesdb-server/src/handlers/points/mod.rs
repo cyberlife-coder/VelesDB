@@ -1,11 +1,14 @@
 //! Point operations handlers.
 
+pub mod raw;
 pub mod relations;
 pub mod streaming;
 
+pub use raw::upsert_points_raw;
 pub use relations::{get_point_relations, relate_points, set_point_ttl, unrelate_points};
 pub use streaming::{
-    __path_stream_insert, __path_stream_upsert_points, stream_insert, stream_upsert_points,
+    __path_enable_streaming, __path_stream_insert, __path_stream_upsert_points, enable_streaming,
+    stream_insert, stream_upsert_points,
 };
 
 use axum::{
@@ -120,9 +123,22 @@ pub async fn upsert_points(
     // Must use spawn_blocking to avoid blocking the async runtime.
     let result = tokio::task::spawn_blocking(move || collection.upsert_bulk(&points)).await;
 
+    upsert_result_to_response(&state, &name, result)
+}
+
+/// Convert a `spawn_blocking` bulk-upsert result into an HTTP response.
+///
+/// On success it notifies the observer and returns `{message, count}`; a core
+/// error maps via [`auto_core_error_response`] and a task panic yields a 500.
+/// Shared by [`upsert_points`] and [`raw::upsert_points_raw`].
+pub(super) fn upsert_result_to_response(
+    state: &AppState,
+    name: &str,
+    result: Result<velesdb_core::Result<usize>, tokio::task::JoinError>,
+) -> axum::response::Response {
     match result {
         Ok(Ok(inserted)) => {
-            state.db.notify_upsert(&name, inserted);
+            state.db.notify_upsert(name, inserted);
             Json(serde_json::json!({
                 "message": "Points upserted",
                 "count": inserted

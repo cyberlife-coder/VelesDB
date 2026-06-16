@@ -48,6 +48,7 @@ import type {
   MatchQueryOptions,
   MatchQueryResponse,
   StreamUpsertResponse,
+  StreamingConfig,
   RelateRequest,
   RelateResponse,
   RelationsResponse,
@@ -184,6 +185,23 @@ export class VelesDB {
     await this.backend.upsertBatch(collection, docs);
   }
 
+  /**
+   * Bulk upsert via the binary wire format (REST backend only).
+   *
+   * Encodes `(id, vector)` pairs into the deterministic VRB1 binary layout
+   * and sends them as a single `application/octet-stream` request, avoiding
+   * per-point JSON overhead. Payloads are not carried — use
+   * {@link upsertBatch} when you need them. Throws a not-supported error on
+   * the WASM backend.
+   *
+   * @returns the number of points the server reports as inserted.
+   */
+  async upsertBatchRaw(collection: string, docs: VectorDocument[]): Promise<number> {
+    this.ensureInitialized();
+    validateDocsBatch(docs, doc => { validateDocument(doc, this.config); });
+    return this.backend.upsertBatchRaw(collection, docs);
+  }
+
   async delete(collection: string, id: string | number): Promise<boolean> {
     this.ensureInitialized();
     validateRestPointId(id, this.config);
@@ -242,6 +260,12 @@ export class VelesDB {
     return searchMethods.multiQuerySearch(this.backend, collection, vectors, options);
   }
 
+  /** Multi-query fusion search returning only IDs and scores (no payloads). */
+  async multiQuerySearchIds(collection: string, vectors: Array<number[] | Float32Array>, options?: MultiQuerySearchOptions): Promise<Array<{ id: number; score: number }>> {
+    this.ensureInitialized();
+    return searchMethods.multiQuerySearchIds(this.backend, collection, vectors, options);
+  }
+
   /**
    * Pure sparse search against a named sparse index.
    *
@@ -276,6 +300,11 @@ export class VelesDB {
   async trainPq(collection: string, options?: PqTrainOptions): Promise<string> {
     this.ensureInitialized();
     return searchMethods.trainPq(this.backend, collection, options);
+  }
+
+  async enableStreaming(collection: string, config?: StreamingConfig): Promise<void> {
+    this.ensureInitialized();
+    return searchMethods.enableStreaming(this.backend, collection, config);
   }
 
   async streamInsert(collection: string, docs: VectorDocument[]): Promise<void> {

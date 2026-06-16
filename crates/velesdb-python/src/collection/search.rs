@@ -60,13 +60,13 @@ impl Collection {
     fn search(
         &self,
         py: Python<'_>,
-        vector: Option<PyObject>,
-        sparse_vector: Option<PyObject>,
+        vector: Option<Py<PyAny>>,
+        sparse_vector: Option<Py<PyAny>>,
         top_k: usize,
-        filter: Option<PyObject>,
+        filter: Option<Py<PyAny>>,
         sparse_index_name: Option<String>,
         include_vectors: bool,
-    ) -> PyResult<Vec<PyObject>> {
+    ) -> PyResult<Vec<Py<PyAny>>> {
         PyErr::warn(
             py,
             &py.get_type::<PyDeprecationWarning>(),
@@ -104,8 +104,8 @@ impl Collection {
     ///     >>> opts = SearchOptions(vector=my_emb, top_k=20, filter={"lang": "en"})
     ///     >>> results = collection.search_request(opts)
     #[pyo3(signature = (opts))]
-    fn search_request(&self, py: Python<'_>, opts: &SearchOptions) -> PyResult<Vec<PyObject>> {
-        // Phase 1: Parse Python args (GIL held — required for PyObject access)
+    fn search_request(&self, py: Python<'_>, opts: &SearchOptions) -> PyResult<Vec<Py<PyAny>>> {
+        // Phase 1: Parse Python args (GIL held — required for Py<PyAny> access)
         let dense = opts
             .vector
             .as_ref()
@@ -123,7 +123,7 @@ impl Collection {
         let include_vectors = opts.include_vectors;
 
         // Phase 2: Release GIL during Rust computation
-        let results = py.allow_threads(|| {
+        let results = py.detach(|| {
             self.dispatch_search(
                 dense,
                 sparse,
@@ -133,7 +133,7 @@ impl Collection {
             )
         })?;
 
-        // Phase 3: Convert results (GIL held — required for PyObject creation)
+        // Phase 3: Convert results (GIL held — required for Py<PyAny> creation)
         Ok(search_results_to_dicts(py, results, include_vectors))
     }
 
@@ -142,13 +142,13 @@ impl Collection {
     fn search_with_ef(
         &self,
         py: Python<'_>,
-        vector: PyObject,
+        vector: Py<PyAny>,
         top_k: usize,
         ef_search: usize,
-    ) -> PyResult<Vec<PyObject>> {
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let query_vector = extract_vector(py, &vector)?;
 
-        let results = py.allow_threads(|| {
+        let results = py.detach(|| {
             self.inner
                 .search_with_ef(&query_vector, top_k, ef_search)
                 .map_err(core_err)
@@ -169,14 +169,14 @@ impl Collection {
     fn search_with_quality(
         &self,
         py: Python<'_>,
-        vector: PyObject,
+        vector: Py<PyAny>,
         quality: &str,
         top_k: usize,
-    ) -> PyResult<Vec<PyObject>> {
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let query_vector = extract_vector(py, &vector)?;
         let sq = parse_search_quality(quality)?;
 
-        let results = py.allow_threads(|| {
+        let results = py.detach(|| {
             self.inner
                 .search_with_quality(&query_vector, top_k, sq)
                 .map_err(core_err)
@@ -190,12 +190,12 @@ impl Collection {
     fn search_ids(
         &self,
         py: Python<'_>,
-        vector: PyObject,
+        vector: Py<PyAny>,
         top_k: usize,
-    ) -> PyResult<Vec<PyObject>> {
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let query_vector = extract_vector(py, &vector)?;
 
-        let results = py.allow_threads(|| {
+        let results = py.detach(|| {
             self.inner
                 .search_ids(&query_vector, top_k)
                 .map_err(core_err)
@@ -210,17 +210,17 @@ impl Collection {
     fn search_with_filter(
         &self,
         py: Python<'_>,
-        vector: PyObject,
+        vector: Py<PyAny>,
         top_k: usize,
-        filter: Option<PyObject>,
-    ) -> PyResult<Vec<PyObject>> {
+        filter: Option<Py<PyAny>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let query_vector = extract_vector(py, &vector)?;
         let filter_obj = filter
             .map(|f| parse_filter(py, &f))
             .transpose()?
             .ok_or_else(|| PyValueError::new_err("Filter is required for search_with_filter"))?;
 
-        let results = py.allow_threads(|| {
+        let results = py.detach(|| {
             self.inner
                 .search_with_filter(&query_vector, top_k, &filter_obj)
                 .map_err(core_err)
@@ -236,12 +236,12 @@ impl Collection {
         py: Python<'_>,
         query: &str,
         top_k: usize,
-        filter: Option<PyObject>,
-    ) -> PyResult<Vec<PyObject>> {
+        filter: Option<Py<PyAny>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let filter_obj = parse_optional_filter(py, filter)?;
         let query_owned = query.to_string();
 
-        let results = py.allow_threads(|| {
+        let results = py.detach(|| {
             if let Some(f) = filter_obj {
                 self.inner
                     .text_search_with_filter(&query_owned, top_k, &f)
@@ -261,17 +261,17 @@ impl Collection {
     fn hybrid_search(
         &self,
         py: Python<'_>,
-        vector: PyObject,
+        vector: Py<PyAny>,
         query: &str,
         top_k: usize,
         vector_weight: f32,
-        filter: Option<PyObject>,
-    ) -> PyResult<Vec<PyObject>> {
+        filter: Option<Py<PyAny>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let query_vector = extract_vector(py, &vector)?;
         let filter_obj = parse_optional_filter(py, filter)?;
         let query_owned = query.to_string();
 
-        let results = py.allow_threads(|| {
+        let results = py.detach(|| {
             if let Some(f) = filter_obj {
                 self.inner.hybrid_search_with_filter(
                     &query_vector,
@@ -302,11 +302,11 @@ impl Collection {
     fn batch_search(
         &self,
         py: Python<'_>,
-        searches: Vec<HashMap<String, PyObject>>,
-    ) -> PyResult<Vec<Vec<PyObject>>> {
+        searches: Vec<HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Vec<Vec<Py<PyAny>>>> {
         let parsed = Self::parse_batch_searches(py, &searches)?;
 
-        let results = py.allow_threads(|| self.dispatch_batch_by_top_k(&parsed))?;
+        let results = py.detach(|| self.dispatch_batch_by_top_k(&parsed))?;
 
         Ok(Self::convert_batch_results(py, results))
     }
@@ -316,11 +316,11 @@ impl Collection {
     fn multi_query_search(
         &self,
         py: Python<'_>,
-        vectors: Vec<PyObject>,
+        vectors: Vec<Py<PyAny>>,
         top_k: usize,
         fusion: Option<FusionStrategy>,
-        filter: Option<PyObject>,
-    ) -> PyResult<Vec<PyObject>> {
+        filter: Option<Py<PyAny>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let query_vectors: Vec<Vec<f32>> = vectors
             .iter()
             .map(|v| extract_vector(py, v))
@@ -328,7 +328,7 @@ impl Collection {
         let fusion_strategy = fusion.map_or(DEFAULT_FUSION, |f| f.inner());
         let filter_obj = parse_optional_filter(py, filter)?;
 
-        let results = py.allow_threads(|| {
+        let results = py.detach(|| {
             let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
             self.inner
                 .multi_query_search(&query_refs, top_k, fusion_strategy, filter_obj.as_ref())
@@ -354,15 +354,15 @@ impl Collection {
     fn search_batch_parallel(
         &self,
         py: Python<'_>,
-        vectors: Vec<PyObject>,
+        vectors: Vec<Py<PyAny>>,
         top_k: usize,
-    ) -> PyResult<Vec<Vec<PyObject>>> {
+    ) -> PyResult<Vec<Vec<Py<PyAny>>>> {
         let query_vectors: Vec<Vec<f32>> = vectors
             .iter()
             .map(|v| extract_vector(py, v))
             .collect::<PyResult<_>>()?;
 
-        let results = py.allow_threads(|| {
+        let results = py.detach(|| {
             let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
             self.inner
                 .search_batch_parallel(&query_refs, top_k)
@@ -377,17 +377,17 @@ impl Collection {
     fn multi_query_search_ids(
         &self,
         py: Python<'_>,
-        vectors: Vec<PyObject>,
+        vectors: Vec<Py<PyAny>>,
         top_k: usize,
         fusion: Option<FusionStrategy>,
-    ) -> PyResult<Vec<PyObject>> {
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let query_vectors: Vec<Vec<f32>> = vectors
             .iter()
             .map(|v| extract_vector(py, v))
             .collect::<PyResult<_>>()?;
         let fusion_strategy = fusion.map_or(DEFAULT_FUSION, |f| f.inner());
 
-        let results = py.allow_threads(|| {
+        let results = py.detach(|| {
             let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
             self.inner
                 .multi_query_search_ids(&query_refs, top_k, fusion_strategy)
@@ -407,7 +407,7 @@ impl Collection {
     /// Extracts vector, top_k, and filter from each search dict.
     fn parse_batch_searches(
         py: Python<'_>,
-        searches: &[HashMap<String, PyObject>],
+        searches: &[HashMap<String, Py<PyAny>>],
     ) -> PyResult<Vec<ParsedSearch>> {
         let mut parsed = Vec::with_capacity(searches.len());
         for search_dict in searches {
@@ -515,7 +515,7 @@ impl Collection {
     fn convert_batch_results(
         py: Python<'_>,
         results: Vec<Vec<SearchResult>>,
-    ) -> Vec<Vec<PyObject>> {
+    ) -> Vec<Vec<Py<PyAny>>> {
         results
             .iter()
             .map(|query_results| {
@@ -596,7 +596,7 @@ mod tests {
     /// Initialize the Python interpreter once (idempotent, required by PyO3
     /// error constructors such as `PyValueError::new_err`).
     fn init_python() {
-        pyo3::prepare_freethreaded_python();
+        pyo3::Python::initialize();
     }
 
     // ---- Named modes ----

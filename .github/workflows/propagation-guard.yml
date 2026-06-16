@@ -53,7 +53,7 @@ jobs:
         with:
           toolchain: "1.86"
       - name: Install Linux build deps
-        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05
+        uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f
         with:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0

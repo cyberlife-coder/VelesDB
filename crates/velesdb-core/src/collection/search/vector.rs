@@ -344,16 +344,41 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         let metric = self.validate_query_and_read_metric(query)?;
 
-        // Convert ef_search to SearchQuality
-        let quality = match ef_search {
-            0..=64 => crate::SearchQuality::Fast,
-            65..=128 => crate::SearchQuality::Balanced,
-            129..=512 => crate::SearchQuality::Accurate,
-            _ => crate::SearchQuality::Perfect,
-        };
+        // Convert ef_search to a value-preserving SearchQuality.
+        let quality = super::vector_filter::ef_to_quality(ef_search);
 
         let index_results = self.index.search_with_quality(query, k, quality)?;
         Ok(self.finalize_search_results(query, k, metric, index_results))
+    }
+
+    /// Rejects a Perfect (brute-force) search on a collection larger than the
+    /// configured `max_perfect_mode_vectors` cap (parity item E).
+    ///
+    /// Gates at search entry — before `index.search_with_quality` — so the
+    /// HNSW/SIMD inner loop is never touched on a violation. A no-op for every
+    /// non-Perfect quality mode. Shared by [`Self::search_with_quality`],
+    /// `search_with_opts`, and the filtered path `search_with_filter_and_opts`
+    /// so all four index entry points apply the identical gate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::GuardRail`] when `quality` is
+    /// [`SearchQuality::Perfect`](crate::SearchQuality::Perfect) and the
+    /// indexed vector count exceeds the cap.
+    pub(super) fn enforce_perfect_mode_limit(&self, quality: crate::SearchQuality) -> Result<()> {
+        if !matches!(quality, crate::SearchQuality::Perfect) {
+            return Ok(());
+        }
+        let cap = self.runtime_limits().max_perfect_mode_vectors;
+        let size = self.index.len();
+        if size > cap {
+            return Err(Error::GuardRail(format!(
+                "Perfect (brute-force) search rejected: collection has {size} vectors, \
+                 exceeding max_perfect_mode_vectors cap of {cap}; raise \
+                 `limits.max_perfect_mode_vectors` in VelesConfig or use a lower quality mode"
+            )));
+        }
+        Ok(())
     }
 
     /// Performs vector similarity search with a specific [`SearchQuality`] profile.
@@ -371,6 +396,7 @@ impl Collection {
         quality: crate::SearchQuality,
     ) -> Result<Vec<SearchResult>> {
         let metric = self.validate_query_and_read_metric(query)?;
+        self.enforce_perfect_mode_limit(quality)?;
 
         let index_results = self.index.search_with_quality(query, k, quality)?;
         Ok(self.finalize_search_results(query, k, metric, index_results))
@@ -397,16 +423,17 @@ impl Collection {
             return self.search(query, k);
         }
 
-        // Resolve the search quality: explicit mode > ef_search bracket > default.
+        // Resolve the search quality: explicit mode > exact ef_search > default.
         let quality = opts.quality.unwrap_or_else(|| {
-            opts.ef_search
-                .map_or(crate::SearchQuality::Balanced, |ef| match ef {
-                    0..=64 => crate::SearchQuality::Fast,
-                    65..=128 => crate::SearchQuality::Balanced,
-                    129..=512 => crate::SearchQuality::Accurate,
-                    _ => crate::SearchQuality::Perfect,
-                })
+            opts.ef_search.map_or(
+                crate::SearchQuality::Balanced,
+                super::vector_filter::ef_to_quality,
+            )
         });
+
+        // Parity item E: gate Perfect-mode over-cap once here, covering the
+        // forced-rerank / no-rerank branches that bypass `search_with_quality`.
+        self.enforce_perfect_mode_limit(quality)?;
 
         match opts.force_rerank {
             Some(true) => self.search_with_forced_rerank(query, k, quality),

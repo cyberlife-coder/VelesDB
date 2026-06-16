@@ -78,13 +78,16 @@ import {
   wasmCollectionSanity,
   wasmScroll,
   wasmTrainPq,
+  wasmEnableStreaming,
   wasmStreamInsert,
   wasmStreamUpsertPoints,
+  wasmUpsertBatchRaw,
   wasmCreateGraphCollection,
   wasmGetCollectionStats,
   wasmAnalyzeCollection,
   wasmGetCollectionConfig,
   wasmSearchIds,
+  wasmMultiQuerySearchIds,
   wasmStoreSemanticFact,
   wasmSearchSemanticMemory,
   wasmRecordEpisodicEvent,
@@ -324,6 +327,8 @@ export class WasmBackend implements IVelesDBBackend {
     }
   }
 
+  async upsertBatchRaw(c: string, d: VectorDocument[]): Promise<number> { return wasmUpsertBatchRaw(c, d); }
+
   async delete(collectionName: string, id: string | number): Promise<boolean> {
     this.ensureInitialized();
     const collection = this.collections.get(collectionName);
@@ -418,6 +423,7 @@ export class WasmBackend implements IVelesDBBackend {
   async traverseParallel(c: string, r: TraverseParallelRequest): Promise<TraverseResponse> { this.ensureInitialized(); return wasmTraverseParallel(c, r); }
   async getNodeDegree(c: string, n: number): Promise<DegreeResponse> { this.ensureInitialized(); return wasmGetNodeDegree(c, n); }
   async trainPq(c: string, o?: PqTrainOptions): Promise<string> { this.ensureInitialized(); return wasmTrainPq(c, o); }
+  async enableStreaming(c: string, cfg?: import('../types').StreamingConfig): Promise<void> { this.ensureInitialized(); return wasmEnableStreaming(c, cfg); }
   async streamInsert(c: string, d: VectorDocument[]): Promise<void> { this.ensureInitialized(); return wasmStreamInsert(c, d); }
   async streamUpsertPoints(c: string, d: VectorDocument[]): Promise<import('../types').StreamUpsertResponse> { this.ensureInitialized(); return wasmStreamUpsertPoints(c, d); }
   async createGraphCollection(n: string, c?: GraphCollectionConfig): Promise<void> { this.ensureInitialized(); return wasmCreateGraphCollection(n, c); }
@@ -425,6 +431,7 @@ export class WasmBackend implements IVelesDBBackend {
   async analyzeCollection(c: string): Promise<CollectionStatsResponse> { this.ensureInitialized(); return wasmAnalyzeCollection(c); }
   async getCollectionConfig(c: string): Promise<CollectionConfigResponse> { this.ensureInitialized(); return wasmGetCollectionConfig(c); }
   async searchIds(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<Array<{ id: number; score: number }>> { this.ensureInitialized(); return wasmSearchIds(c, q, o); }
+  async multiQuerySearchIds(c: string, v: Array<number[] | Float32Array>, o?: MultiQuerySearchOptions): Promise<Array<{ id: number; score: number }>> { this.ensureInitialized(); return wasmMultiQuerySearchIds(c, v, o); }
   async storeSemanticFact(c: string, e: SemanticEntry): Promise<void> { this.ensureInitialized(); return wasmStoreSemanticFact(c, e); }
   async searchSemanticMemory(c: string, e: number[], k?: number): Promise<SearchResult[]> { this.ensureInitialized(); return wasmSearchSemanticMemory(c, e, k); }
   async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<string> { this.ensureInitialized(); return wasmRecordEpisodicEvent(c, e); }

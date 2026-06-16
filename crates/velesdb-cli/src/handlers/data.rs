@@ -104,8 +104,12 @@ pub fn handle_import(
     let stats = match ext.to_lowercase().as_str() {
         "jsonl" | "ndjson" => import::import_jsonl(&db, file, &config)?,
         "csv" => import::import_csv(&db, file, &config)?,
+        "bin" | "vrb1" => import::import_raw_bulk(&db, file, &config)?,
         _ => {
-            anyhow::bail!("Unsupported file format: {}. Use .csv or .jsonl", ext);
+            anyhow::bail!(
+                "Unsupported file format: {}. Use .csv, .jsonl, or .bin (VRB1)",
+                ext
+            );
         }
     };
 

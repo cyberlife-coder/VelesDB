@@ -4,7 +4,41 @@
 
 use super::*;
 use std::io::Write;
+use std::path::Path;
 use tempfile::tempdir;
+
+/// Write each line (with a trailing newline) to a fresh file at `path`.
+///
+/// Shared fixture for the JSONL/CSV import tests, which all materialize a
+/// small data file as a list of text lines before importing it.
+fn write_lines(path: &Path, lines: &[&str]) {
+    let mut file = File::create(path).unwrap();
+    for line in lines {
+        writeln!(file, "{line}").unwrap();
+    }
+}
+
+/// Open a DB at `db_path` and build the default import config targeting the
+/// `"test"` collection with progress disabled — the setup every basic
+/// import test shares verbatim.
+fn open_db_and_test_config(db_path: &Path) -> (Database, ImportConfig) {
+    let db = Database::open(db_path).unwrap();
+    let config = ImportConfig {
+        collection: "test".to_string(),
+        show_progress: false,
+        ..Default::default()
+    };
+    (db, config)
+}
+
+/// Opens a fresh DB with the standard test config and imports `jsonl_path`,
+/// returning the DB handle and the resulting stats. Shared by the basic JSONL
+/// import tests (default `collection="test"`, progress off).
+fn run_jsonl_import(db_path: &Path, jsonl_path: &Path) -> (Database, ImportStats) {
+    let (db, config) = open_db_and_test_config(db_path);
+    let stats = import_jsonl(&db, jsonl_path, &config).unwrap();
+    (db, stats)
+}
 
 // =========================================================================
 // Unit tests for parse_vector
@@ -113,19 +147,16 @@ fn test_import_jsonl_basic() {
     let jsonl_path = dir.path().join("data.jsonl");
 
     // Create test JSONL file
-    let mut file = File::create(&jsonl_path).unwrap();
-    writeln!(file, r#"{{"id": 1, "vector": [1.0, 0.0, 0.0]}}"#).unwrap();
-    writeln!(file, r#"{{"id": 2, "vector": [0.0, 1.0, 0.0]}}"#).unwrap();
-    writeln!(file, r#"{{"id": 3, "vector": [0.0, 0.0, 1.0]}}"#).unwrap();
+    write_lines(
+        &jsonl_path,
+        &[
+            r#"{"id": 1, "vector": [1.0, 0.0, 0.0]}"#,
+            r#"{"id": 2, "vector": [0.0, 1.0, 0.0]}"#,
+            r#"{"id": 3, "vector": [0.0, 0.0, 1.0]}"#,
+        ],
+    );
 
-    let db = Database::open(&db_path).unwrap();
-    let config = ImportConfig {
-        collection: "test".to_string(),
-        show_progress: false,
-        ..Default::default()
-    };
-
-    let stats = import_jsonl(&db, &jsonl_path, &config).unwrap();
+    let (db, stats) = run_jsonl_import(&db_path, &jsonl_path);
 
     assert_eq!(stats.total, 3);
     assert_eq!(stats.imported, 3);
@@ -141,26 +172,15 @@ fn test_import_jsonl_with_payload() {
     let db_path = dir.path().join("db");
     let jsonl_path = dir.path().join("data.jsonl");
 
-    let mut file = File::create(&jsonl_path).unwrap();
-    writeln!(
-        file,
-        r#"{{"id": 1, "vector": [1.0, 0.0, 0.0], "payload": {{"title": "Doc 1"}}}}"#
-    )
-    .unwrap();
-    writeln!(
-        file,
-        r#"{{"id": 2, "vector": [0.0, 1.0, 0.0], "payload": {{"title": "Doc 2"}}}}"#
-    )
-    .unwrap();
+    write_lines(
+        &jsonl_path,
+        &[
+            r#"{"id": 1, "vector": [1.0, 0.0, 0.0], "payload": {"title": "Doc 1"}}"#,
+            r#"{"id": 2, "vector": [0.0, 1.0, 0.0], "payload": {"title": "Doc 2"}}"#,
+        ],
+    );
 
-    let db = Database::open(&db_path).unwrap();
-    let config = ImportConfig {
-        collection: "test".to_string(),
-        show_progress: false,
-        ..Default::default()
-    };
-
-    let stats = import_jsonl(&db, &jsonl_path, &config).unwrap();
+    let (db, stats) = run_jsonl_import(&db_path, &jsonl_path);
 
     assert_eq!(stats.imported, 2);
 
@@ -175,19 +195,16 @@ fn test_import_jsonl_with_errors() {
     let db_path = dir.path().join("db");
     let jsonl_path = dir.path().join("data.jsonl");
 
-    let mut file = File::create(&jsonl_path).unwrap();
-    writeln!(file, r#"{{"id": 1, "vector": [1.0, 0.0, 0.0]}}"#).unwrap();
-    writeln!(file, r#"invalid json line"#).unwrap();
-    writeln!(file, r#"{{"id": 3, "vector": [0.0, 0.0, 1.0]}}"#).unwrap();
+    write_lines(
+        &jsonl_path,
+        &[
+            r#"{"id": 1, "vector": [1.0, 0.0, 0.0]}"#,
+            "invalid json line",
+            r#"{"id": 3, "vector": [0.0, 0.0, 1.0]}"#,
+        ],
+    );
 
-    let db = Database::open(&db_path).unwrap();
-    let config = ImportConfig {
-        collection: "test".to_string(),
-        show_progress: false,
-        ..Default::default()
-    };
-
-    let stats = import_jsonl(&db, &jsonl_path, &config).unwrap();
+    let (_db, stats) = run_jsonl_import(&db_path, &jsonl_path);
 
     assert_eq!(stats.total, 3);
     assert_eq!(stats.imported, 2);
@@ -200,19 +217,16 @@ fn test_import_jsonl_dimension_mismatch() {
     let db_path = dir.path().join("db");
     let jsonl_path = dir.path().join("data.jsonl");
 
-    let mut file = File::create(&jsonl_path).unwrap();
-    writeln!(file, r#"{{"id": 1, "vector": [1.0, 0.0, 0.0]}}"#).unwrap();
-    writeln!(file, r#"{{"id": 2, "vector": [0.0, 1.0]}}"#).unwrap(); // Wrong dimension
-    writeln!(file, r#"{{"id": 3, "vector": [0.0, 0.0, 1.0]}}"#).unwrap();
+    write_lines(
+        &jsonl_path,
+        &[
+            r#"{"id": 1, "vector": [1.0, 0.0, 0.0]}"#,
+            r#"{"id": 2, "vector": [0.0, 1.0]}"#, // Wrong dimension
+            r#"{"id": 3, "vector": [0.0, 0.0, 1.0]}"#,
+        ],
+    );
 
-    let db = Database::open(&db_path).unwrap();
-    let config = ImportConfig {
-        collection: "test".to_string(),
-        show_progress: false,
-        ..Default::default()
-    };
-
-    let stats = import_jsonl(&db, &jsonl_path, &config).unwrap();
+    let (_db, stats) = run_jsonl_import(&db_path, &jsonl_path);
 
     assert_eq!(stats.imported, 2);
     assert_eq!(stats.errors, 1);
@@ -228,18 +242,17 @@ fn test_import_csv_basic() {
     let db_path = dir.path().join("db");
     let csv_path = dir.path().join("data.csv");
 
-    let mut file = File::create(&csv_path).unwrap();
-    writeln!(file, "id,vector").unwrap();
-    writeln!(file, "1,\"[1.0, 0.0, 0.0]\"").unwrap();
-    writeln!(file, "2,\"[0.0, 1.0, 0.0]\"").unwrap();
-    writeln!(file, "3,\"[0.0, 0.0, 1.0]\"").unwrap();
+    write_lines(
+        &csv_path,
+        &[
+            "id,vector",
+            "1,\"[1.0, 0.0, 0.0]\"",
+            "2,\"[0.0, 1.0, 0.0]\"",
+            "3,\"[0.0, 0.0, 1.0]\"",
+        ],
+    );
 
-    let db = Database::open(&db_path).unwrap();
-    let config = ImportConfig {
-        collection: "test".to_string(),
-        show_progress: false,
-        ..Default::default()
-    };
+    let (db, config) = open_db_and_test_config(&db_path);
 
     let stats = import_csv(&db, &csv_path, &config).unwrap();
 
@@ -254,17 +267,12 @@ fn test_import_csv_comma_separated_vector() {
     let db_path = dir.path().join("db");
     let csv_path = dir.path().join("data.csv");
 
-    let mut file = File::create(&csv_path).unwrap();
-    writeln!(file, "id,vector").unwrap();
-    writeln!(file, "1,\"1.0,0.0,0.0\"").unwrap();
-    writeln!(file, "2,\"0.0,1.0,0.0\"").unwrap();
+    write_lines(
+        &csv_path,
+        &["id,vector", "1,\"1.0,0.0,0.0\"", "2,\"0.0,1.0,0.0\""],
+    );
 
-    let db = Database::open(&db_path).unwrap();
-    let config = ImportConfig {
-        collection: "test".to_string(),
-        show_progress: false,
-        ..Default::default()
-    };
+    let (db, config) = open_db_and_test_config(&db_path);
 
     let stats = import_csv(&db, &csv_path, &config).unwrap();
 
@@ -277,17 +285,16 @@ fn test_import_csv_with_extra_columns() {
     let db_path = dir.path().join("db");
     let csv_path = dir.path().join("data.csv");
 
-    let mut file = File::create(&csv_path).unwrap();
-    writeln!(file, "id,vector,title,category").unwrap();
-    writeln!(file, "1,\"[1.0, 0.0, 0.0]\",Document 1,tech").unwrap();
-    writeln!(file, "2,\"[0.0, 1.0, 0.0]\",Document 2,science").unwrap();
+    write_lines(
+        &csv_path,
+        &[
+            "id,vector,title,category",
+            "1,\"[1.0, 0.0, 0.0]\",Document 1,tech",
+            "2,\"[0.0, 1.0, 0.0]\",Document 2,science",
+        ],
+    );
 
-    let db = Database::open(&db_path).unwrap();
-    let config = ImportConfig {
-        collection: "test".to_string(),
-        show_progress: false,
-        ..Default::default()
-    };
+    let (db, config) = open_db_and_test_config(&db_path);
 
     let stats = import_csv(&db, &csv_path, &config).unwrap();
 
@@ -307,10 +314,14 @@ fn test_import_csv_custom_columns() {
     let db_path = dir.path().join("db");
     let csv_path = dir.path().join("data.csv");
 
-    let mut file = File::create(&csv_path).unwrap();
-    writeln!(file, "doc_id,embedding").unwrap();
-    writeln!(file, "1,\"[1.0, 0.0, 0.0]\"").unwrap();
-    writeln!(file, "2,\"[0.0, 1.0, 0.0]\"").unwrap();
+    write_lines(
+        &csv_path,
+        &[
+            "doc_id,embedding",
+            "1,\"[1.0, 0.0, 0.0]\"",
+            "2,\"[0.0, 1.0, 0.0]\"",
+        ],
+    );
 
     let db = Database::open(&db_path).unwrap();
     let config = ImportConfig {
@@ -324,6 +335,66 @@ fn test_import_csv_custom_columns() {
     let stats = import_csv(&db, &csv_path, &config).unwrap();
 
     assert_eq!(stats.imported, 2);
+}
+
+// =========================================================================
+// Integration tests for VRB1 binary import
+// =========================================================================
+
+#[test]
+fn test_import_raw_bulk_basic() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("db");
+    let bin_path = dir.path().join("data.bin");
+
+    // Encode a small VRB1 buffer via the shared core codec.
+    let ids = [1u64, 2, 3];
+    let vectors = [
+        1.0f32, 0.0, 0.0, // id 1
+        0.0, 1.0, 0.0, // id 2
+        0.0, 0.0, 1.0, // id 3
+    ];
+    let bytes = velesdb_core::wire::vrb1::encode(&ids, &vectors, 3);
+    std::fs::write(&bin_path, &bytes).unwrap();
+
+    let db = Database::open(&db_path).unwrap();
+    let config = ImportConfig {
+        collection: "test".to_string(),
+        show_progress: false,
+        ..Default::default()
+    };
+
+    let stats = import_raw_bulk(&db, &bin_path, &config).unwrap();
+
+    assert_eq!(stats.total, 3);
+    assert_eq!(stats.imported, 3);
+    assert_eq!(stats.errors, 0);
+
+    // The imported vectors must be searchable.
+    let col = db.get_vector_collection("test").unwrap();
+    assert_eq!(col.len(), 3);
+    let results = col.search(&[1.0, 0.0, 0.0], 1).unwrap();
+    assert_eq!(results[0].point.id, 1);
+}
+
+#[test]
+fn test_import_raw_bulk_invalid_magic() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("db");
+    let bin_path = dir.path().join("bad.bin");
+
+    let mut bytes = velesdb_core::wire::vrb1::encode(&[1u64], &[0.0f32, 0.0, 0.0], 3);
+    bytes[0] = b'X'; // corrupt the magic
+    std::fs::write(&bin_path, &bytes).unwrap();
+
+    let db = Database::open(&db_path).unwrap();
+    let config = ImportConfig {
+        collection: "test".to_string(),
+        show_progress: false,
+        ..Default::default()
+    };
+
+    assert!(import_raw_bulk(&db, &bin_path, &config).is_err());
 }
 
 // =========================================================================

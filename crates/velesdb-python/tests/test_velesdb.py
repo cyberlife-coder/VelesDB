@@ -39,6 +39,13 @@ class TestDatabase:
         collections = temp_db.list_collections()
         assert collections == []
 
+    def test_get_collections_alias(self, temp_db):
+        """get_collections is a compatibility alias for list_collections."""
+        temp_db.create_collection("alias_collection", dimension=4)
+
+        assert temp_db.get_collections() == temp_db.list_collections()
+        assert "alias_collection" in temp_db.get_collections()
+
     def test_create_collection(self, temp_db):
         """Test collection creation."""
         collection = temp_db.create_collection("test", dimension=4, metric="cosine")
@@ -209,6 +216,122 @@ class TestCollection:
 
         collection.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}])
         collection.flush()  # Should not raise
+
+    def test_compact_storage(self, temp_db):
+        """Test compact_storage reclaims space and returns a byte count."""
+        collection = temp_db.create_collection("compact_test", dimension=4)
+
+        collection.upsert([
+            {"id": i, "vector": [1.0, 0.0, 0.0, 0.0]} for i in range(5)
+        ])
+        collection.delete([0, 1, 2])
+
+        freed = collection.compact_storage()
+        assert isinstance(freed, int)
+        assert freed >= 0
+
+        # Live points are unaffected by compaction.
+        assert collection.count() == 2
+
+    def test_reorder_for_locality(self, temp_db):
+        """Test reorder_for_locality returns None and preserves points."""
+        collection = temp_db.create_collection("reorder_test", dimension=4)
+        collection.upsert([
+            {"id": i, "vector": [1.0, 0.0, 0.0, 0.0]} for i in range(10)
+        ])
+
+        # No-op below the 1000-vector threshold, but must not raise.
+        assert collection.reorder_for_locality() is None
+        assert collection.count() == 10
+
+    def test_apply_advanced_config_sets_fields(self, temp_db):
+        """Test apply_advanced_config accepts all three advanced fields."""
+        collection = temp_db.create_collection("adv_cfg_test", dimension=4)
+
+        # Mix all three: int, nested dicts. Must not raise and must persist.
+        assert collection.apply_advanced_config({
+            "pq_rescore_oversampling": 8,
+            "deferred_indexing": {
+                "enabled": True,
+                "merge_threshold": 512,
+                "max_buffer_age_ms": 3000,
+            },
+            "async_index_builder": {
+                "merge_threshold": 20000,
+                "segment_count": 4,
+            },
+        }) is None
+
+    def test_apply_advanced_config_clear_and_unchanged(self, temp_db):
+        """Test absent key = unchanged, None value = clear (three-state)."""
+        collection = temp_db.create_collection("adv_cfg_clear", dimension=4)
+
+        # None clears pq rescore; absent keys leave the others unchanged.
+        assert collection.apply_advanced_config(
+            {"pq_rescore_oversampling": None}
+        ) is None
+
+        # segment_count None falls back to CPU count; empty dict is a no-op.
+        assert collection.apply_advanced_config(
+            {"async_index_builder": {"segment_count": None}}
+        ) is None
+        assert collection.apply_advanced_config({}) is None
+
+    def test_collection_diagnostics(self, temp_db):
+        """Test collection_diagnostics reports index readiness."""
+        collection = temp_db.create_collection("diag_test", dimension=4)
+        collection.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}])
+
+        diag = temp_db.collection_diagnostics("diag_test")
+        assert diag["has_vectors"] is True
+        assert diag["search_ready"] is True
+        assert diag["dimension_configured"] is True
+        assert diag["point_count"] == 1
+        assert diag["index_health"] == "healthy"
+
+    @staticmethod
+    def _full_guardrails(**overrides):
+        """A complete guardrail dict (full replacement requires every field)."""
+        limits = {
+            "max_depth": 7,
+            "max_cardinality": 1_000_000,
+            "memory_limit_bytes": 1_073_741_824,
+            "timeout_ms": 5000,
+            "rate_limit_qps": 50,
+            "circuit_failure_threshold": 5,
+            "circuit_recovery_seconds": 30,
+        }
+        limits.update(overrides)
+        return limits
+
+    def test_update_and_read_guardrails(self, temp_db):
+        """Test update_guardrails + collection.guard_rails round-trip."""
+        collection = temp_db.create_collection("gr_test", dimension=4)
+
+        temp_db.update_guardrails(self._full_guardrails())
+
+        limits = collection.guard_rails()
+        assert limits["timeout_ms"] == 5000
+        assert limits["rate_limit_qps"] == 50
+        assert limits["max_depth"] == 7
+
+    def test_update_guardrails_rejects_partial_dict(self, temp_db):
+        """A missing field is rejected, not silently reset to its default."""
+        with pytest.raises(ValueError, match="missing guardrail field"):
+            temp_db.update_guardrails({"timeout_ms": 5000, "max_depth": 7})
+
+    def test_update_guardrails_rejects_unknown_key(self, temp_db):
+        """A misspelled/unknown key is rejected loudly."""
+        with pytest.raises(ValueError, match="unknown guardrail field"):
+            temp_db.update_guardrails(self._full_guardrails(timeoutMs=5000))
+
+    def test_auto_reindex_lifecycle_without_manager(self, temp_db):
+        """detach/divergence behave when no auto-reindex manager is attached."""
+        collection = temp_db.create_collection("ar_test", dimension=4)
+
+        # No manager attached → nothing to detach, no divergence to report.
+        assert collection.detach_auto_reindex() is False
+        assert collection.check_auto_reindex_divergence() is None
 
 
 class TestNumpySupport:
@@ -801,6 +924,32 @@ class TestFusionStrategy:
         assert strategy is not None
         assert "weighted" in repr(strategy).lower()
 
+    def test_fusion_strategy_weighted_dict(self):
+        """FusionStrategy.weighted() accepts a weights dict for compatibility."""
+        strategy = velesdb.FusionStrategy.weighted({
+            "avg_weight": 0.6,
+            "max_weight": 0.3,
+            "hit_weight": 0.1,
+        })
+        assert strategy is not None
+        assert "weighted" in repr(strategy).lower()
+
+    def test_fusion_strategy_weighted_legacy_two_args(self):
+        """FusionStrategy.weighted(max_weight, hit_weight) derives avg_weight."""
+        strategy = velesdb.FusionStrategy.weighted(0.3, 0.1)
+        assert strategy is not None
+        assert "avg_weight=0.6" in repr(strategy)
+        assert "max_weight=0.3" in repr(strategy)
+        assert "hit_weight=0.1" in repr(strategy)
+
+    def test_fusion_strategy_weighted_legacy_keyword_args(self):
+        """FusionStrategy.weighted(max_weight=..., hit_weight=...) also works."""
+        strategy = velesdb.FusionStrategy.weighted(max_weight=0.3, hit_weight=0.1)
+        assert strategy is not None
+        assert "avg_weight=0.6" in repr(strategy)
+        assert "max_weight=0.3" in repr(strategy)
+        assert "hit_weight=0.1" in repr(strategy)
+
     def test_fusion_strategy_weighted_invalid_sum(self):
         """Test FusionStrategy.weighted() with weights not summing to 1."""
         with pytest.raises(ValueError):
@@ -818,6 +967,25 @@ class TestFusionStrategy:
                 max_weight=0.6,
                 hit_weight=0.5
             )
+
+    def test_fusion_strategy_weighted_dict_missing_required_weight(self):
+        """weighted(dict) reports missing required max/hit components."""
+        with pytest.raises(ValueError):
+            velesdb.FusionStrategy.weighted({"avg_weight": 0.9, "max_weight": 0.1})
+
+    def test_fusion_strategy_rsf_alias_default(self):
+        """FusionStrategy.rsf() aliases relative_score() with balanced defaults."""
+        strategy = velesdb.FusionStrategy.rsf()
+        assert strategy is not None
+        assert "dense_weight=0.5" in repr(strategy)
+        assert "sparse_weight=0.5" in repr(strategy)
+
+    def test_fusion_strategy_rsf_alias_custom_weights(self):
+        """FusionStrategy.rsf() accepts the same weights as relative_score()."""
+        strategy = velesdb.FusionStrategy.rsf(dense_weight=0.7, sparse_weight=0.3)
+        assert strategy is not None
+        assert "dense_weight=0.7" in repr(strategy)
+        assert "sparse_weight=0.3" in repr(strategy)
 
 
 class TestMultiQuerySearch:

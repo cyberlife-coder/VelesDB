@@ -155,6 +155,8 @@ pub mod vector_ref;
 #[cfg(test)]
 mod vector_ref_tests;
 pub mod velesql;
+/// Binary wire formats (VRB1 raw-bulk) — pure, persistence-free, wasm-safe.
+pub mod wire;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
 pub use update_check::{check_for_updates, spawn_update_check};
@@ -165,7 +167,7 @@ pub use update_check::{compute_instance_hash, UpdateCheckConfig};
 pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
 
 #[cfg(feature = "persistence")]
-pub use collection::streaming::BackpressureError;
+pub use collection::streaming::{BackpressureError, StreamIngester, StreamingConfig};
 #[cfg(feature = "persistence")]
 pub use collection::{
     // Type-erased collection handle (v2.0.0)
@@ -185,6 +187,9 @@ pub use collection::{
     IndexInfo,
     MetadataCollection,
     NodeType,
+    // Ordered-index ORDER BY advisor (EPIC-081 phase 3a)
+    OrderByIndexState,
+    OrderByIndexSuggestion,
     // Scroll cursor (Issue #429)
     ScrollBatch,
     TraversalConfig,
@@ -194,14 +199,14 @@ pub use collection::{
     VectorCollection,
 };
 pub use contiguous_ops::pad_to_simd_width;
-pub use distance::DistanceMetric;
+pub use distance::{DistanceMetric, DISTANCE_METRIC_NAMES};
 pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
 pub use point::{ComponentScores, Point, SearchResult};
 pub use quantization::{
     cosine_similarity_quantized, cosine_similarity_quantized_simd, dot_product_quantized,
     dot_product_quantized_simd, euclidean_squared_quantized, euclidean_squared_quantized_simd,
-    BinaryQuantizedVector, QuantizationCodec, QuantizedVector, StorageMode,
+    BinaryQuantizedVector, QuantizationCodec, QuantizedVector, StorageMode, STORAGE_MODE_NAMES,
 };
 pub use scored_result::ScoredResult;
 pub use validation::{

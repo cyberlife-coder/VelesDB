@@ -581,3 +581,148 @@ fn test_incompatible_schema_version_is_not_recoverable() {
         "IncompatibleSchemaVersion must not be recoverable"
     );
 }
+
+/// A v1 `config.json` (no schema_version, no W2/STREAM-7 fields) must
+/// deserialize with defaults: schema_version=1, no auto-reindex, no streaming.
+#[test]
+fn collection_config_backward_compat_v1() {
+    let json = r#"{
+        "name": "v1_collection",
+        "dimension": 64,
+        "metric": "Cosine",
+        "point_count": 7,
+        "storage_mode": "full",
+        "metadata_only": false
+    }"#;
+
+    let cfg: CollectionConfig =
+        serde_json::from_str(json).expect("v1 config must deserialize with defaults");
+
+    assert_eq!(
+        cfg.schema_version, 1,
+        "missing schema_version defaults to 1"
+    );
+    assert!(
+        cfg.auto_reindex_config.is_none(),
+        "v1 config must have no persisted auto-reindex policy"
+    );
+    assert!(
+        cfg.streaming_config.is_none(),
+        "v1 config must have no persisted streaming config"
+    );
+}
+
+/// W2: an attached `AutoReindexManager` is persisted into `config.json` and
+/// restored automatically on `Collection::open` — no manual re-attach needed.
+#[test]
+fn auto_reindex_manager_restored_on_open() {
+    use crate::collection::auto_reindex::{AutoReindexConfig, AutoReindexManager};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection should be created");
+
+    // Attach a manager with a non-default, recognizable config.
+    let config = AutoReindexConfig {
+        param_divergence_threshold: 3.25,
+        min_size_for_reindex: 42,
+        cooldown: Duration::from_secs(120),
+        ..AutoReindexConfig::default()
+    };
+    collection.attach_auto_reindex(Arc::new(AutoReindexManager::new(config)));
+    collection
+        .flush()
+        .expect("flush should persist config.json");
+    drop(collection);
+
+    // Reopen — the manager must be restored from the persisted config.
+    let reopened =
+        Collection::open(PathBuf::from(temp_dir.path())).expect("collection should reopen");
+
+    let manager = reopened
+        .auto_reindex_manager()
+        .expect("auto-reindex manager must be restored on open");
+    let restored = manager.config();
+    assert!((restored.param_divergence_threshold - 3.25).abs() < f64::EPSILON);
+    assert_eq!(restored.min_size_for_reindex, 42);
+    assert_eq!(
+        restored.cooldown,
+        Duration::from_secs(120),
+        "Duration cooldown must round-trip as whole seconds"
+    );
+}
+
+/// STREAM-7: a persisted `StreamingConfig` survives a `config.json` reopen.
+#[test]
+fn test_persist_streaming_config_across_reopen() {
+    use crate::collection::streaming::StreamingConfig;
+
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection should be created");
+
+    // Record a non-default streaming config directly on the persisted config.
+    {
+        let mut cfg = collection.config_write();
+        cfg.streaming_config = Some(StreamingConfig {
+            buffer_size: 2048,
+            batch_size: 64,
+            flush_interval_ms: 25,
+        });
+    }
+    collection
+        .flush()
+        .expect("flush should persist config.json");
+    drop(collection);
+
+    let reopened =
+        Collection::open(PathBuf::from(temp_dir.path())).expect("collection should reopen");
+    let streaming = reopened
+        .config()
+        .streaming_config
+        .expect("streaming config must survive reopen");
+    assert_eq!(streaming.buffer_size, 2048);
+    assert_eq!(streaming.batch_size, 64);
+    assert_eq!(streaming.flush_interval_ms, 25);
+}
+
+/// A freshly created `Collection` starts with the permissive default runtime
+/// limits (matching `LimitsConfig::default`), and `set_runtime_limits`
+/// overwrites them. Without the push from `Database`, direct callers are
+/// therefore never constrained (parity item E).
+#[test]
+fn test_runtime_limits_default_permissive_and_setter_overwrites() {
+    use crate::collection::RuntimeLimits;
+
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 8, DistanceMetric::Cosine)
+        .expect("collection should be created");
+
+    // Default mirrors the permissive LimitsConfig::default values.
+    let defaults = crate::config::LimitsConfig::default();
+    let got = collection.runtime_limits();
+    assert_eq!(
+        got.max_vectors_per_collection,
+        defaults.max_vectors_per_collection
+    );
+    assert_eq!(got.max_payload_size, defaults.max_payload_size);
+    assert_eq!(
+        got.max_perfect_mode_vectors,
+        defaults.max_perfect_mode_vectors
+    );
+
+    // The setter overwrites the snapshot.
+    collection.set_runtime_limits(RuntimeLimits {
+        max_vectors_per_collection: 10,
+        max_payload_size: 64,
+        max_perfect_mode_vectors: 5,
+    });
+    let updated = collection.runtime_limits();
+    assert_eq!(updated.max_vectors_per_collection, 10);
+    assert_eq!(updated.max_payload_size, 64);
+    assert_eq!(updated.max_perfect_mode_vectors, 5);
+}

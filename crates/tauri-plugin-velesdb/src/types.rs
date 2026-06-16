@@ -380,6 +380,26 @@ pub struct StreamInsertRequest {
     pub points: Vec<PointInput>,
 }
 
+/// Request to enable streaming ingestion on a collection.
+///
+/// Each field is optional; omitted fields fall back to the engine default
+/// (`buffer_size=10000`, `batch_size=128`, `flush_interval_ms=50`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnableStreamingRequest {
+    /// Collection name.
+    pub collection: String,
+    /// Capacity of the bounded ingestion channel (backpressure threshold).
+    #[serde(default)]
+    pub buffer_size: Option<usize>,
+    /// Number of points that trigger an immediate micro-batch flush.
+    #[serde(default)]
+    pub batch_size: Option<usize>,
+    /// Maximum time (ms) before a partial batch is flushed.
+    #[serde(default)]
+    pub flush_interval_ms: Option<u64>,
+}
+
 // ============================================================================
 // Response DTOs
 //
@@ -475,6 +495,64 @@ pub struct SearchResponse {
     pub results: Vec<SearchResult>,
     /// Query time in milliseconds.
     pub timing_ms: f64,
+}
+
+/// A single ID + score result returned by the `search_ids` command.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdScoreOutput {
+    /// Matched point ID.
+    pub id: u64,
+    /// Relevance score.
+    pub score: f32,
+}
+
+/// Runtime query guardrail limits for a collection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuardrailLimits {
+    /// Maximum graph traversal depth.
+    pub max_depth: u32,
+    /// Maximum intermediate cardinality.
+    pub max_cardinality: u64,
+    /// Memory limit per query in bytes.
+    pub memory_limit_bytes: u64,
+    /// Query timeout in milliseconds (0 disables the timeout).
+    pub timeout_ms: u64,
+    /// Rate limit: max queries per second per client.
+    pub rate_limit_qps: u32,
+    /// Circuit breaker: failure threshold before tripping.
+    pub circuit_failure_threshold: u32,
+    /// Circuit breaker: recovery time in seconds.
+    pub circuit_recovery_seconds: u64,
+}
+
+impl From<velesdb_core::guardrails::QueryLimits> for GuardrailLimits {
+    fn from(v: velesdb_core::guardrails::QueryLimits) -> Self {
+        Self {
+            max_depth: v.max_depth,
+            max_cardinality: u64::try_from(v.max_cardinality).unwrap_or(u64::MAX),
+            memory_limit_bytes: u64::try_from(v.memory_limit_bytes).unwrap_or(u64::MAX),
+            timeout_ms: v.timeout_ms,
+            rate_limit_qps: v.rate_limit_qps,
+            circuit_failure_threshold: v.circuit_failure_threshold,
+            circuit_recovery_seconds: v.circuit_recovery_seconds,
+        }
+    }
+}
+
+impl From<GuardrailLimits> for velesdb_core::guardrails::QueryLimits {
+    fn from(v: GuardrailLimits) -> Self {
+        Self {
+            max_depth: v.max_depth,
+            max_cardinality: usize::try_from(v.max_cardinality).unwrap_or(usize::MAX),
+            memory_limit_bytes: usize::try_from(v.memory_limit_bytes).unwrap_or(usize::MAX),
+            timeout_ms: v.timeout_ms,
+            rate_limit_qps: v.rate_limit_qps,
+            circuit_failure_threshold: v.circuit_failure_threshold,
+            circuit_recovery_seconds: v.circuit_recovery_seconds,
+        }
+    }
 }
 
 // ============================================================================

@@ -65,6 +65,7 @@ import type {
   AggregateQueryOptions,
   AggregateResponse,
   StreamUpsertResponse,
+  StreamingConfig,
 } from './endpoints';
 
 /** Backend interface that all backends must implement */
@@ -102,6 +103,18 @@ export interface IVelesDBBackend {
 
   /** Upsert (insert or replace) multiple vectors */
   upsertBatch(collection: string, docs: VectorDocument[]): Promise<void>;
+
+  /**
+   * Bulk upsert multiple vectors via the binary wire format (REST only).
+   *
+   * Encodes `(id, vector)` pairs into the deterministic VRB1 binary layout
+   * and POSTs them as `application/octet-stream`, avoiding per-point JSON
+   * overhead. Payloads are not carried on this path. Not supported by the
+   * WASM backend.
+   *
+   * @returns the number of points the server reports as inserted.
+   */
+  upsertBatchRaw(collection: string, docs: VectorDocument[]): Promise<number>;
 
   /** Search for similar vectors */
   search(
@@ -167,6 +180,13 @@ export interface IVelesDBBackend {
     options?: MultiQuerySearchOptions
   ): Promise<SearchResult[]>;
 
+  /** Multi-query fusion search returning only IDs and scores */
+  multiQuerySearchIds(
+    collection: string,
+    vectors: Array<number[] | Float32Array>,
+    options?: MultiQuerySearchOptions
+  ): Promise<Array<{ id: number; score: number }>>;
+
   /** Check if collection is empty */
   isEmpty(collection: string): Promise<boolean>;
 
@@ -228,6 +248,15 @@ export interface IVelesDBBackend {
 
   /** Train Product Quantization on a collection */
   trainPq(collection: string, options?: PqTrainOptions): Promise<string>;
+
+  /**
+   * Enable the bounded streaming-ingestion channel on a collection.
+   *
+   * POSTs an optional `StreamingConfig` to
+   * `POST /collections/{name}/stream/enable`; omitted config fields fall
+   * back to the server defaults. Must be called before `streamInsert`.
+   */
+  enableStreaming(collection: string, config?: StreamingConfig): Promise<void>;
 
   /** Stream-insert documents with backpressure support */
   streamInsert(collection: string, docs: VectorDocument[]): Promise<void>;
