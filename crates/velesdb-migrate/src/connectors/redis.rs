@@ -87,7 +87,11 @@ impl RedisConnector {
         &self,
         attrs: &HashMap<String, serde_json::Value>,
     ) -> HashMap<String, serde_json::Value> {
-        extract_payload_from_hashmap(attrs, &[&self.config.vector_field], &self.config.payload_fields)
+        extract_payload_from_hashmap(
+            attrs,
+            &[&self.config.vector_field],
+            &self.config.payload_fields,
+        )
     }
 
     /// Opens a multiplexed async Redis connection with optional AUTH.
