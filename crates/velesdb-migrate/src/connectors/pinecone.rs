@@ -61,8 +61,9 @@ impl PineconeConnector {
     fn control_plane_url(&self) -> String {
         self.config
             .base_url
-            .clone()
-            .unwrap_or_else(|| "https://api.pinecone.io".to_string())
+            .as_deref()
+            .unwrap_or("https://api.pinecone.io")
+            .to_string()
     }
 
     /// Data-plane base URL (list, fetch, stats).
