@@ -10,9 +10,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::config::RedisConfig;
-#[cfg(test)]
-use crate::connectors::common::extract_payload_from_object;
-use crate::connectors::common::{build_numeric_offset_batch, parse_vector_from_json};
+use crate::connectors::common::{
+    build_numeric_offset_batch, extract_payload_from_hashmap, parse_vector_from_json,
+};
 use crate::connectors::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::error::{Error, Result};
 
@@ -87,13 +87,7 @@ impl RedisConnector {
         &self,
         attrs: &HashMap<String, serde_json::Value>,
     ) -> HashMap<String, serde_json::Value> {
-        let obj =
-            serde_json::Value::Object(attrs.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
-        extract_payload_from_object(
-            &obj,
-            &[&self.config.vector_field],
-            &self.config.payload_fields,
-        )
+        extract_payload_from_hashmap(attrs, &[&self.config.vector_field], &self.config.payload_fields)
     }
 
     /// Opens a multiplexed async Redis connection with optional AUTH.
@@ -474,11 +468,7 @@ fn build_payload(
     attrs: &HashMap<String, serde_json::Value>,
     vector_field: &str,
 ) -> HashMap<String, serde_json::Value> {
-    attrs
-        .iter()
-        .filter(|(k, _)| k.as_str() != vector_field)
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
+    extract_payload_from_hashmap(attrs, &[vector_field], &[])
 }
 
 /// Parses a `FT.INFO` RESP response to extract `num_docs` and field definitions.
