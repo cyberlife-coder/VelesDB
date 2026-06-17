@@ -266,7 +266,7 @@ pub fn extract_payload_from_hashmap<'a>(
 ) -> HashMap<String, Value> {
     source
         .into_iter()
-        .filter(|(key, _)| !excluded_fields.iter().any(|f| *f == key.as_str()))
+        .filter(|(key, _)| !excluded_fields.contains(&key.as_str()))
         .filter(|(key, _)| included_fields.is_empty() || included_fields.contains(key))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
