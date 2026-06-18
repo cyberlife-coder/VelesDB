@@ -593,9 +593,9 @@ mod persistence {
                         results[0].point.id, target,
                         "exact-match point must be nearest under concurrency"
                     );
-                    // Scores must be monotonic non-decreasing (ascending distance).
+                    // Scores are sorted descending: higher score = more similar.
                     for w in results.windows(2) {
-                        assert!(w[0].score <= w[1].score, "results not sorted by distance");
+                        assert!(w[0].score >= w[1].score, "results not sorted by score descending");
                     }
                 }
             });
