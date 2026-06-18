@@ -603,9 +603,24 @@ mod tests {
             let parsed = Parser::parse(query).expect("parse");
             let results = col.execute_query(&parsed, &params).expect("execute");
 
-            assert!(
-                results.len() >= 2,
-                "Should have at least 2 results for ordering verification"
+            assert_eq!(
+                results.len(),
+                3,
+                "all 3 upserted points should be returned (LIMIT 10)"
+            );
+            let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+            // Weighted score = 0.5*similarity() + 0.5*priority, DESC:
+            //   point 2: 0.5*0.994 + 0.5*0.9 = 0.947  (wins despite not being the nearest)
+            //   point 3: 0.5*0.707 + 0.5*0.5 = 0.604
+            //   point 1: 0.5*1.000 + 0.5*0.1 = 0.550
+            assert_eq!(
+                ids,
+                vec![2, 3, 1],
+                "results must be sorted by weighted score DESC, got {ids:?}"
+            );
+            assert_eq!(
+                results[0].point.id, 2,
+                "highest weighted score (point 2) must rank first under DESC"
             );
         }
     }

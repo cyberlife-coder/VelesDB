@@ -75,6 +75,10 @@ fn test_simd_hamming_uses_simd_implementation() {
     // Verify result is reasonable (hamming distance between these patterns)
     assert!(dist >= 0.0, "Hamming distance must be non-negative");
     assert!(dist <= 64.0, "Hamming distance cannot exceed vector length");
+    assert!(
+        (dist - 32.0).abs() < 1e-5,
+        "Expected Hamming distance 32 (32 differing positions for i%2 vs i%3 over 64 elements), got {dist}"
+    );
 }
 
 #[test]
@@ -335,7 +339,10 @@ fn test_cached_simd_hamming() {
         .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
         .collect();
     let dist = cached.distance(&a, &b);
-    assert!(dist >= 0.0);
+    assert!(
+        (dist - 15.0).abs() < 1e-5,
+        "Expected Hamming distance 15 (15 differing positions for i%2 vs i%3 over 0..32), got {dist}"
+    );
 }
 
 #[test]
@@ -345,6 +352,12 @@ fn test_cached_simd_jaccard() {
     let b = vec![1.0, 1.0, 1.0, 0.0];
     let dist = cached.distance(&a, &b);
     assert!((0.0..=1.0).contains(&dist));
+    // intersection=2, union=3, similarity=2/3, distance=1/3
+    let expected = 1.0 - (2.0_f32 / 3.0);
+    assert!(
+        (dist - expected).abs() < 1e-4,
+        "Jaccard distance: expected {expected}, got {dist}"
+    );
 }
 
 // =========================================================================
@@ -452,24 +465,6 @@ fn test_cached_simd_euclidean_returns_squared_distance() {
 }
 
 #[test]
-fn test_cached_simd_hamming_returns_distance() {
-    let cached = CachedSimdDistance::new(DistanceMetric::Hamming, 32);
-
-    let a: Vec<f32> = (0..32)
-        .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
-        .collect();
-    let b: Vec<f32> = (0..32)
-        .map(|i| if i % 3 == 0 { 1.0 } else { 0.0 })
-        .collect();
-
-    let dist = cached.distance(&a, &b);
-    assert!(
-        dist >= 0.0,
-        "CachedSimdDistance Hamming distance should be non-negative, got {dist}"
-    );
-}
-
-#[test]
 #[allow(clippy::cast_precision_loss)]
 fn test_cached_simd_batch_dot_product() {
     let cached = CachedSimdDistance::new(DistanceMetric::DotProduct, 16);
@@ -498,6 +493,16 @@ fn test_cached_simd_batch_euclidean() {
 
     let distances = cached.batch_distance(&query, &candidate_refs);
     assert_eq!(distances.len(), 2);
+    assert!(
+        (distances[0] - 8.0).abs() < 1e-4,
+        "squared L2 of [0]*8 vs [1]*8 should be 8.0 (no sqrt), got {}",
+        distances[0]
+    );
+    assert!(
+        (distances[1] - 32.0).abs() < 1e-4,
+        "squared L2 of [0]*8 vs [2]*8 should be 32.0 (no sqrt), got {}",
+        distances[1]
+    );
 }
 
 #[test]

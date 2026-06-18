@@ -535,7 +535,7 @@ fn test_index_consistency_after_multiple_mutations() {
 
 #[test]
 fn test_composite_index_create() {
-    let index = CompositeGraphIndex::new(
+    let mut index = CompositeGraphIndex::new(
         "Person",
         vec!["name".to_string(), "city".to_string()],
         CompositeIndexType::Hash,
@@ -544,6 +544,13 @@ fn test_composite_index_create() {
     assert_eq!(index.label(), "Person");
     assert_eq!(index.properties(), &["name", "city"]);
     assert_eq!(index.index_type(), CompositeIndexType::Hash);
+
+    index.insert(1, &[json!("Alice"), json!("Paris")]);
+    index.insert(2, &[json!("Alice"), json!("Paris")]);
+    let nodes = index.lookup(&[json!("Alice"), json!("Paris")]);
+    assert_eq!(nodes.len(), 2);
+    assert!(nodes.contains(&1) && nodes.contains(&2));
+    assert!(index.lookup(&[json!("Bob"), json!("Lyon")]).is_empty());
 }
 
 #[test]
@@ -686,9 +693,11 @@ fn test_composite_index_manager_hooks() {
 
 #[test]
 fn test_range_index_create() {
-    let index = CompositeRangeIndex::new("Person", "age");
+    let mut index = CompositeRangeIndex::new("Person", "age");
     assert_eq!(index.label(), "Person");
     assert_eq!(index.property(), "age");
+    index.insert(1, &json!(42));
+    assert_eq!(index.lookup_exact(&json!(42)), &[1]);
 }
 
 #[test]

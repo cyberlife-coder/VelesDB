@@ -158,11 +158,8 @@ mod tests {
 
         let results = result.unwrap();
         // Only point 1 should match (similarity = 1.0)
-        assert!(
-            results.len() <= 2,
-            "High threshold should filter results: got {}",
-            results.len()
-        );
+        assert_eq!(results.len(), 1, "Only id=1 (cosine 1.0) survives the >0.9 threshold; id=2 (~0.707) and id=3 (0.0) are filtered");
+        assert_eq!(results[0].point.id, 1, "the surviving point must be id=1");
     }
 
     // =========================================================================
@@ -198,6 +195,17 @@ mod tests {
             "NOT metadata equality should be supported: {:?}",
             result.err()
         );
+
+        let results = result.unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "NOT category='tech' should keep exactly one point"
+        );
+        assert_eq!(
+            results[0].point.id, 2,
+            "NOT category='tech' must exclude id=1 (tech) and return only id=2 (science)"
+        );
     }
 
     #[test]
@@ -229,6 +237,17 @@ mod tests {
             result.is_ok(),
             "!= metadata should be supported: {:?}",
             result.err()
+        );
+
+        let results = result.unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "category != 'tech' should match exactly one point"
+        );
+        assert_eq!(
+            results[0].point.id, 2,
+            "category != 'tech' should exclude id=1 and return only id=2 (science)"
         );
     }
 
@@ -265,6 +284,16 @@ mod tests {
             result.is_ok(),
             "similarity() AND != metadata should be supported: {:?}",
             result.err()
+        );
+
+        let results = result.unwrap();
+        assert!(
+            !results.is_empty(),
+            "similarity() > 0.5 AND category != 'tech' should match id=2 (science)"
+        );
+        assert!(
+            results.iter().all(|r| r.point.id != 1),
+            "id=1 has category='tech' and must be excluded by the != filter"
         );
     }
 
@@ -441,10 +470,25 @@ mod tests {
         let result = collection.execute_query(&parsed, &HashMap::new());
         assert!(result.is_ok());
 
-        // Rust sort_by is stable, so order should be preserved for equal values
-        // We just verify it doesn't crash and returns all results
         let results = result.unwrap();
         assert_eq!(results.len(), 3);
+        // Equal ORDER BY keys are broken deterministically by ascending point id
+        // (matches the index-backed ordered_ids walk — EPIC-081 phase 2).
+        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        assert_eq!(
+            ids,
+            vec![10, 20, 30],
+            "Equal-key tie-break must be ascending point id"
+        );
+        let seqs: Vec<i64> = results
+            .iter()
+            .map(|r| r.point.payload.as_ref().unwrap()["seq"].as_i64().unwrap())
+            .collect();
+        assert_eq!(
+            seqs,
+            vec![1, 2, 3],
+            "Tie-break order must be deterministic for equal keys"
+        );
     }
 
     #[test]

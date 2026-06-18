@@ -83,7 +83,16 @@ fn test_prefetch_does_not_panic() {
     };
     store.push(&bits, correction);
 
-    // Should not panic even for valid and invalid indices
-    store.prefetch(0);
-    store.prefetch(999); // out of bounds — no-op
+    // Prefetch every in-bounds index plus several out-of-bounds indices: must
+    // not panic (the in-bounds guard prevents an OOB slice index) and must
+    // leave the store state untouched (prefetch is a pure performance hint).
+    for i in 0..store.len() {
+        store.prefetch(i);
+    }
+    for oob in store.len()..store.len() + 5 {
+        store.prefetch(oob);
+    }
+    assert_eq!(store.len(), 1);
+    assert!(!store.is_empty());
+    assert_eq!(store.get_bits_slice(0).unwrap(), &bits[..]);
 }

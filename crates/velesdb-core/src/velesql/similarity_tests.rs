@@ -164,6 +164,14 @@ mod tests {
         let query = "SELECT * FROM docs WHERE similarity(emb, $v) >= 1.0";
         let result = Parser::parse(query);
         assert!(result.is_ok());
+
+        let stmt = result.unwrap();
+        if let Some(Condition::Similarity(sim)) = &stmt.select.where_clause {
+            assert_eq!(sim.operator, CompareOp::Gte);
+            assert!((sim.threshold - 1.0).abs() < 0.001);
+        } else {
+            panic!("Expected Similarity condition");
+        }
     }
 
     #[test]

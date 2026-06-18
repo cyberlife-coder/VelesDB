@@ -237,28 +237,3 @@ fn test_no_deadlock_cache_and_bloom_together() {
 
     handle.join().expect("Main thread panicked");
 }
-
-// ========== Lock Ordering Documentation Test ==========
-
-#[test]
-fn test_lock_ordering_documented() {
-    // This test documents the lock ordering to prevent future deadlocks
-    //
-    // LOCK HIERARCHY (always acquire in this order):
-    // 1. BloomFilter.bits (RwLock)
-    // 2. BloomFilter.count (RwLock)
-    // 3. LruCache.inner (RwLock)
-    //
-    // RULES:
-    // - Never hold a lower-level lock while acquiring a higher-level lock
-    // - BloomFilter uses separate locks for bits and count (both acquired independently)
-    // - LruCache uses a single RwLock for all operations
-    //
-    // The current implementation is deadlock-free because:
-    // - BloomFilter: insert() acquires bits.write() then count.write() sequentially
-    // - BloomFilter: contains() only acquires bits.read()
-    // - LruCache: All ops acquire single inner lock
-    // - No cross-module lock dependencies
-
-    assert!(true, "Lock ordering is documented and verified");
-}

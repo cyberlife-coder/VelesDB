@@ -418,12 +418,13 @@ fn test_ndcg_worst_ranking() {
     // Act
     let ndcg = ndcg_at_k(&relevances, 4);
 
-    // Assert: should be < 1.0 (penalized for wrong order)
+    // Assert: exact NDCG of the fully-reversed ranking [0,1,2,3] vs ideal [3,2,1,0].
+    // DCG/IDCG = 5.14569.../9.39279... = 0.547831481922746 (penalized, in (0,1)).
+    let expected = 0.547_831_481_922_746_f64;
     assert!(
-        ndcg < 1.0,
-        "NDCG should be < 1.0 for bad ranking, got {ndcg}"
+        (ndcg - expected).abs() < 1e-10,
+        "NDCG worst-ranking expected {expected}, got {ndcg}"
     );
-    assert!(ndcg > 0.0, "NDCG should be > 0.0, got {ndcg}");
 }
 
 #[test]

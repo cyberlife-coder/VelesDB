@@ -56,15 +56,16 @@ fn test_train_returns_error_on_empty() {
 // =========================================================================
 
 #[test]
-fn test_quantize_min_becomes_zero() {
+fn test_quantize_constant_dimension_yields_zero() {
+    // Single training vector => every dimension is constant (min == max),
+    // so train() takes the scale=1.0 fallback. quantize() must then map the
+    // constant value to 0 (val - min == 0), never to garbage/255.
     let v = vec![0.0, 100.0];
     let quantizer = ScalarQuantizer::train(&[&v]).expect("test: valid training data");
-
+    assert!((quantizer.scales[0] - 1.0).abs() < 1e-6);
+    assert!((quantizer.scales[1] - 1.0).abs() < 1e-6);
     let qvec = quantizer.quantize(&[0.0, 100.0]);
-
-    // min should map to 0, max should map to 255
-    assert_eq!(qvec.data[0], 0);
-    // For single vector, min=max for each dim, so scale=1.0
+    assert_eq!(qvec.data, vec![0, 0], "constant dims must quantize to 0");
 }
 
 #[test]
@@ -200,8 +201,10 @@ fn test_store_push_and_get() {
     let v0 = store.get(0).expect("Should have index 0");
     let v1 = store.get(1).expect("Should have index 1");
 
-    // Verify values are different
-    assert_ne!(v0.data, v1.data);
+    // [2.0, 3.0] -> round(2.0*25.5)=51, round(3.0*25.5)=round(76.5)=77
+    assert_eq!(v0.data, vec![51, 77]);
+    // [7.0, 8.0] -> round(7.0*25.5)=179, round(8.0*25.5)=204
+    assert_eq!(v1.data, vec![179, 204]);
 }
 
 #[test]
@@ -229,24 +232,6 @@ fn test_store_get_slice_zero_copy() {
     // Verify it's the expected quantized value (~127)
     assert!((i32::from(slice[0]) - 127).abs() <= 1);
     assert!((i32::from(slice[1]) - 127).abs() <= 1);
-}
-
-// =========================================================================
-// TDD Tests: Memory efficiency
-// =========================================================================
-
-#[test]
-fn test_memory_efficiency_4x_reduction() {
-    let dim = 768;
-    let count = 10_000;
-
-    // Float32 storage: 768 * 4 * 10000 = 30.72 MB
-    let float32_bytes = dim * 4 * count;
-
-    // Int8 storage: 768 * 1 * 10000 = 7.68 MB
-    let int8_bytes = dim * count;
-
-    assert_eq!(float32_bytes / int8_bytes, 4, "Should be 4x reduction");
 }
 
 // =========================================================================

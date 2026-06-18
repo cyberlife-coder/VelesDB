@@ -106,11 +106,17 @@ fn test_contiguous_vectors_prefetch() {
         cv.push(&v).expect("test");
     }
 
-    // Should not panic
+    let before_len = cv.len();
+    let v25_before = cv.get(25).expect("test").to_vec();
     cv.prefetch(0);
     cv.prefetch(25);
-    cv.prefetch(49);
-    cv.prefetch(100); // Out of bounds - should be no-op
+    cv.prefetch(49); // last valid index (count-1)
+    cv.prefetch(50); // first OOB index (== count) — exercises the off-by-one boundary of `index < self.count`
+    cv.prefetch(100); // far OOB — no-op
+    cv.prefetch(usize::MAX); // extreme OOB — must not overflow offset or panic
+                             // prefetch must be observably side-effect-free
+    assert_eq!(cv.len(), before_len);
+    assert_eq!(cv.get(25).expect("test"), v25_before.as_slice());
 }
 
 #[test]
@@ -150,6 +156,19 @@ fn test_contiguous_vectors_batch_dot_products() {
 
     let results = cv.batch_dot_products(&indices, &query);
     assert_eq!(results.len(), 50);
+
+    // Every batch result must be a real computed score, not 0/NaN/garbage.
+    assert!(
+        results.iter().all(|r| r.is_finite() && *r > 0.0),
+        "all batch dot products must be finite and positive: {results:?}"
+    );
+    // Spot-check index 0 against the independently derived value.
+    // v0[j] = ((0+j)%10) normalized; q[j] = j/64.0  ->  dot = 3.3243657
+    assert!(
+        (results[0] - 3.324_365_7).abs() < 1e-4,
+        "index-0 dot product mismatch: got {}",
+        results[0]
+    );
 }
 
 // =========================================================================
@@ -250,6 +269,11 @@ fn test_contiguous_large_dimension() {
     // Verify random access works
     let v50 = cv.get(50).unwrap();
     assert_eq!(v50.len(), 768);
+    // Spot-check actual stored values: v50[j] == ((50 + j) % 100) / 100.0
+    assert!((v50[0] - 0.50).abs() < EPSILON, "v50[0]"); // (50  % 100)/100
+    assert!((v50[50] - 0.00).abs() < EPSILON, "v50[50]"); // (100 % 100)/100
+    assert!((v50[100] - 0.50).abs() < EPSILON, "v50[100]"); // (150 % 100)/100
+    assert!((v50[767] - 0.17).abs() < EPSILON, "v50[767]"); // (817 % 100)/100
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -265,6 +289,17 @@ fn test_contiguous_gpt4_dimension() {
 
     assert_eq!(cv.len(), 20);
     assert_eq!(cv.dimension(), 1536);
+
+    // Read back the first and last stored vectors and verify content,
+    // so a bad copy offset / stride at GPT-4 dimension cannot slip through.
+    let v0 = cv.get(0).expect("vector 0 exists");
+    assert_eq!(v0.len(), 1536);
+    assert!((v0[0] - 0.0).abs() < 1e-6); // i=0, j=0  -> (0 % 100) / 100.0
+    assert!((v0[1] - 0.01).abs() < 1e-6); // i=0, j=1 -> (1 % 100) / 100.0
+
+    let v19 = cv.get(19).expect("vector 19 exists");
+    assert_eq!(v19.len(), 1536);
+    assert!((v19[0] - 0.19).abs() < 1e-6); // i=19, j=0 -> (19 % 100) / 100.0
 }
 
 // =========================================================================
@@ -394,12 +429,14 @@ fn test_drop_after_resize_no_leak() {
             let v: Vec<f32> = (0..256).map(|j| (i + j) as f32).collect();
             cv.push(&v).expect("test");
         }
-
-        // cv is dropped here - should not leak memory
+        // resize path must preserve count, grow capacity, and keep data intact
+        assert_eq!(cv.len(), 100);
+        assert!(cv.capacity() >= 100); // grew from 8 via doubling; >= avoids over-fitting
+        let last = cv.get(99).expect("last vector present after resizes");
+        assert!((last[0] - 99.0).abs() < EPSILON); // value survived buffer migration
+                                                   // cv is dropped here; under `cargo miri test --lib` (scripts/local-ci.ps1 -Miri)
+                                                   // a leak or layout-mismatched dealloc in resize()/Drop fails the test.
     }
-
-    // If we get here without memory issues, the test passes
-    // Note: In a real scenario, use tools like valgrind or miri to verify
 }
 
 #[test]

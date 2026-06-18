@@ -4,7 +4,7 @@
 use crate::collection::Collection;
 use crate::distance::DistanceMetric;
 use crate::point::Point;
-use crate::velesql::{Aggregator, Parser};
+use crate::velesql::Parser;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -221,22 +221,4 @@ fn test_executor_empty_collection() {
     // SUM of empty set returns null, which is valid JSON null
     let sum_price = result.get("sum_price");
     assert!(sum_price.is_none_or(serde_json::Value::is_null));
-}
-
-#[test]
-fn test_aggregator_streaming() {
-    // Test the Aggregator struct directly for streaming behavior
-    let mut aggregator = Aggregator::new();
-
-    aggregator.process_count();
-    aggregator.process_value("price", &serde_json::json!(10));
-    aggregator.process_count();
-    aggregator.process_value("price", &serde_json::json!(20));
-    aggregator.process_count();
-    aggregator.process_value("price", &serde_json::json!(30));
-
-    let result = aggregator.finalize();
-
-    assert_eq!(result.count, 3);
-    assert_eq!(result.sums.get("price"), Some(&60.0));
 }

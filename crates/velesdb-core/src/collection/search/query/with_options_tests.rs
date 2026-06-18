@@ -259,6 +259,22 @@ fn test_with_rerank_true_returns_results() {
         )
         .expect("query should succeed with rerank=true");
     assert_eq!(results.len(), 5);
+    // The forced-rerank path must return score-sorted results with valid cosine scores.
+    for w in results.windows(2) {
+        assert!(
+            w[0].score >= w[1].score,
+            "rerank path must return score-sorted results: {} < {}",
+            w[0].score,
+            w[1].score
+        );
+    }
+    for r in &results {
+        assert!(
+            (-1.0..=1.0).contains(&r.score),
+            "cosine score out of range: {}",
+            r.score
+        );
+    }
 }
 
 #[test]
@@ -273,6 +289,16 @@ fn test_with_rerank_false_returns_results() {
         )
         .expect("query should succeed with rerank=false");
     assert_eq!(results.len(), 5);
+    // The no-rerank path must still return score-sorted results within the inserted id range.
+    for w in results.windows(2) {
+        assert!(
+            w[0].score >= w[1].score,
+            "rerank=false results must be sorted desc"
+        );
+    }
+    for r in &results {
+        assert!(r.point.id < 20);
+    }
 }
 
 #[test]
@@ -287,6 +313,16 @@ fn test_with_rerank_and_mode_combined() {
         )
         .expect("query should succeed with mode+rerank");
     assert_eq!(results.len(), 5);
+    // The combined accurate+forced-rerank path must yield real, sorted scores.
+    assert!(results.iter().all(|r| r.score.is_finite() && r.score > 0.0));
+    for w in results.windows(2) {
+        assert!(
+            w[0].score >= w[1].score,
+            "forced-rerank+accurate must yield desc-sorted scores: {} < {}",
+            w[0].score,
+            w[1].score
+        );
+    }
 }
 
 // ============================================================================
@@ -402,13 +438,14 @@ fn test_timeout_ms_very_small_still_executes() {
     let mut params = HashMap::new();
     params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
     // Very small timeout — on a tiny dataset this should still succeed
-    // (20 points is sub-millisecond even with timeout_ms=1)
-    let result = col.execute_query_str(
-        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (timeout_ms=100)",
-        &params,
-    );
-    // Should succeed on tiny dataset
-    assert!(result.is_ok());
+    // (20 points is sub-millisecond even with timeout_ms=100)
+    let results = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (timeout_ms=100)",
+            &params,
+        )
+        .expect("small non-firing timeout should still return full results");
+    assert_eq!(results.len(), 5);
 }
 
 // --- Conflicting options ---
@@ -578,8 +615,14 @@ fn test_fusion_k_parameter_passed_to_hybrid_search() {
     assert_eq!(results_k60.len(), 5);
     assert_eq!(results_k1.len(), 5);
     // With k=1, the RRF denominator is much smaller (rank + 1 vs rank + 60),
-    // which amplifies rank differences. The top-1 scores should differ.
-    // We don't assert ordering difference (small dataset), but both must succeed.
+    // which amplifies rank differences. The top-1 scores must differ, proving
+    // the k parameter actually flows into the RRF scoring (not hardcoded to 60).
+    let score_k60 = results_k60[0].score;
+    let score_k1 = results_k1[0].score;
+    assert!(
+        (score_k60 - score_k1).abs() > 1e-6,
+        "k=1 and k=60 should produce different RRF scores, got k60={score_k60} k1={score_k1}"
+    );
 }
 
 #[test]

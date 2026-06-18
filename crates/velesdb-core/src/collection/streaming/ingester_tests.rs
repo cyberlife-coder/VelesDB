@@ -37,19 +37,6 @@ fn streaming_config_defaults() {
     assert_eq!(cfg.flush_interval_ms, 50);
 }
 
-#[test]
-fn streaming_config_clone_is_identical() {
-    let cfg = StreamingConfig {
-        buffer_size: 42,
-        batch_size: 7,
-        flush_interval_ms: 100,
-    };
-    let cloned = cfg.clone();
-    assert_eq!(cloned.buffer_size, 42);
-    assert_eq!(cloned.batch_size, 7);
-    assert_eq!(cloned.flush_interval_ms, 100);
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // try_send with backpressure
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,12 +77,15 @@ async fn ingester_config_accessor() {
         batch_size: 7,
         flush_interval_ms: 99,
     };
+    // values intentionally differ from StreamingConfig::default() so a stub
+    // returning defaults would fail this test
     let ingester = StreamIngester::new(coll, config);
 
     let c = ingester.config();
     assert_eq!(c.buffer_size, 42);
     assert_eq!(c.batch_size, 7);
     assert_eq!(c.flush_interval_ms, 99);
+    assert_ne!(c.buffer_size, StreamingConfig::default().buffer_size);
 
     ingester.shutdown().await;
 }
@@ -160,6 +150,7 @@ async fn test_stream_try_send_succeeds_when_capacity_available() {
         batch_size: 100,
         flush_interval_ms: 5000,
     };
+    let coll_clone = coll.clone();
     let ingester = StreamIngester::new(coll, config);
 
     let result = ingester.try_send(make_point(1, 4));
@@ -169,6 +160,12 @@ async fn test_stream_try_send_succeeds_when_capacity_available() {
     );
 
     ingester.shutdown().await;
+
+    let results = coll_clone.get(&[1]);
+    assert!(
+        results[0].is_some(),
+        "point accepted by try_send must be flushed to the collection on shutdown"
+    );
 }
 
 #[tokio::test]

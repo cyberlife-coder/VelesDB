@@ -275,7 +275,19 @@ fn test_with_eviction_config() {
 
     // Verify the memory is usable after configuration
     memory.semantic().store(1, "fact", &vec![0.0; 384]).unwrap();
-    assert!(memory.auto_expire().is_ok());
+    // No old episodes, no procedures, no expired TTLs: with the configured
+    // thresholds active, auto_expire must touch nothing and the live semantic
+    // row must survive. A populated, well-defined zero result proves the
+    // builder wired a usable config into auto_expire's consolidation branch.
+    let result = memory.auto_expire().unwrap();
+    assert_eq!(result.semantic_expired, 0);
+    assert_eq!(result.episodic_expired, 0);
+    assert_eq!(result.procedural_expired, 0);
+    assert_eq!(result.episodic_consolidated, 0);
+    assert_eq!(result.procedural_evicted, 0);
+    assert!(!result.consolidation_truncated);
+    // The stored fact must still be retrievable (not consolidated/evicted).
+    assert!(memory.semantic().get(1).unwrap().is_some());
 }
 
 /// Test: with_snapshots enables the snapshot manager

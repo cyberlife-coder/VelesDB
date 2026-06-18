@@ -149,14 +149,12 @@ fn test_wal_recovery_truncated_payload_data() {
     wal.extend_from_slice(&[0xABu8; 10]); // only 10 of 100 bytes
 
     let result = open_storage_with_wal(&wal);
-    // The seek past payload should fail or overshoot — no panic expected
+    // The torn-tail guard (wal_entry.rs apply_store) detects the declared payload
+    // length runs past the WAL end and drops the over-EOF record, leaving an empty
+    // index; the legacy-format read path may instead fail with UnexpectedEof.
     match result {
-        Ok((_dir, storage)) => {
-            // If recovery tolerates this, the entry may or may not be indexed.
-            // Key assertion: no panic.
-            let _ = storage.ids();
-        }
-        Err(_) => { /* acceptable */ }
+        Ok((_dir, storage)) => assert_eq!(storage.ids().len(), 0),
+        Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::UnexpectedEof),
     }
 }
 
@@ -221,9 +219,14 @@ fn test_wal_recovery_write_interrupted_mid_vector() {
     // No panic — either error or empty storage
     match result {
         Ok((_dir, storage)) => {
-            // If indexed, the entry may point to invalid data — that's a separate concern.
-            // Key: no panic during recovery.
-            let _ = storage.ids();
+            // The torn-tail guard (wal_entry.rs apply_store) detects that the
+            // declared payload length runs past the WAL end and drops the
+            // half-written record, so the index is empty.
+            assert_eq!(
+                storage.ids().len(),
+                0,
+                "torn mid-payload record must be dropped, leaving an empty index"
+            );
         }
         Err(_) => { /* acceptable */ }
     }
@@ -311,15 +314,16 @@ fn test_wal_recovery_oversized_payload_length() {
     wal.extend_from_slice(&u32::MAX.to_le_bytes()); // claims 4GB payload
     wal.extend_from_slice(b"tiny"); // only 4 bytes
 
-    let result = open_storage_with_wal(&wal);
-    // Recovery should handle this gracefully — the seek will overshoot
-    match result {
-        Ok((_dir, storage)) => {
-            // May index entry pointing beyond file — key: no panic
-            let _ = storage.ids();
-        }
-        Err(_) => { /* acceptable — seek past EOF */ }
-    }
+    // The OOM guard (wal_entry.rs apply_store) fires for u32::MAX regardless of the
+    // 4-byte tail, so the open always succeeds with an empty index. Removing the guard
+    // would index the entry (len() == 1) and fail this test.
+    let (_dir, storage) = open_storage_with_wal(&wal)
+        .expect("oversized payload length must be tolerated as a torn tail");
+    assert_eq!(
+        storage.ids().len(),
+        0,
+        "the OOM guard must drop the oversized record even when a partial payload tail is present"
+    );
 }
 
 #[test]
@@ -339,17 +343,19 @@ fn test_wal_recovery_valid_entries_then_garbage() {
     let mut wal = build_valid_wal(3);
     wal.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE]);
 
-    let result = open_storage_with_wal(&wal);
-    match result {
-        Ok((_dir, storage)) => {
-            let ids = storage.ids();
-            // At least some valid entries should be recovered
-            assert!(!ids.is_empty(), "Should recover at least some entries");
-        }
-        Err(_) => {
-            // Any error is acceptable (InvalidData or UnexpectedEof)
-        }
-    }
+    // Trailing garbage shorter than a full record (here only 6 bytes, fewer than the
+    // 8-byte id) is consumed as a torn tail by WalEntry::read, so the open must succeed
+    // and all 3 valid entries before it must survive (#898 torn-tail policy).
+    let (_dir, storage) = open_storage_with_wal(&wal).expect(
+        "trailing garbage after valid entries must be treated as a torn tail, not fail the open",
+    );
+    let mut ids = storage.ids();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec![1, 2, 3],
+        "all 3 valid entries before the trailing garbage must survive replay (#898 torn-tail policy)"
+    );
 }
 
 // ===========================================================================

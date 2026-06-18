@@ -58,8 +58,16 @@ fn test_bfs_multi_hop() {
 
     let results = bfs_traverse(&store, 1, &config);
 
-    assert!(results.len() >= 4);
+    assert_eq!(
+        results.len(),
+        4,
+        "reachable set {{2,3,4,5}} from node 1 within 1..3"
+    );
     assert!(results.iter().any(|r| r.target_id == 4 && r.depth == 3));
+    assert!(
+        !results.iter().any(|r| r.target_id == 1),
+        "source node must not be emitted"
+    );
 }
 
 #[test]
@@ -92,7 +100,15 @@ fn test_bfs_limit() {
 
     let results = bfs_traverse(&store, 1, &config);
 
-    assert!(results.len() <= 2);
+    assert_eq!(
+        results.len(),
+        2,
+        "limit=2 must truncate a >=4-result traversal to exactly 2"
+    );
+    assert!(
+        results.iter().any(|r| r.target_id == 2 && r.depth == 1),
+        "node 2 (the sole depth-1 hop) must be present among the limited results"
+    );
 }
 
 #[test]
@@ -181,9 +197,17 @@ fn test_bfs_cyclic_graph_no_infinite_loop() {
 }
 
 #[test]
-fn test_with_max_depth_custom() {
-    let config = TraversalConfig::default().with_max_depth(7);
-    assert_eq!(config.max_depth, 7);
+fn test_with_max_depth_caps_traversal() {
+    let store = create_test_edge_store();
+    // with_max_depth(1) must bound BFS to a single hop.
+    let config = TraversalConfig::default().with_max_depth(1);
+    assert_eq!(config.max_depth, 1, "builder sets the field");
+
+    let results = bfs_traverse(&store, 1, &config);
+    // Only node 2 (depth 1) is reachable; nodes 3 and 4 are beyond max_depth.
+    assert!(results.iter().any(|r| r.target_id == 2 && r.depth == 1));
+    assert!(!results.iter().any(|r| r.target_id == 3));
+    assert!(!results.iter().any(|r| r.target_id == 4));
 }
 
 // =========================================================================
@@ -206,17 +230,6 @@ fn test_traversal_result_path_is_vec_u64() {
         .expect("test: should find node 3 at depth 2");
     let path: Vec<u64> = result.path.clone();
     assert_eq!(path, vec![100, 101]);
-}
-
-#[test]
-fn test_traversal_result_new_accepts_vec() {
-    // GIVEN / WHEN: constructing a TraversalResult with Vec<u64>
-    let path: Vec<u64> = vec![10, 20, 30];
-    let result = TraversalResult::new(42, path.clone(), 3);
-
-    // THEN: the path field round-trips correctly
-    let recovered: Vec<u64> = result.path;
-    assert_eq!(recovered, path);
 }
 
 // =========================================================================

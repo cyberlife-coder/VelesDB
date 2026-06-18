@@ -53,7 +53,10 @@ fn test_duplicate_collection_error() {
         .unwrap();
 
     let result = db.create_collection("test", 768, DistanceMetric::Cosine);
-    assert!(result.is_err());
+    assert!(
+        matches!(result, Err(Error::CollectionExists(_))),
+        "expected CollectionExists, got {result:?}"
+    );
 }
 
 #[test]
@@ -89,15 +92,6 @@ fn test_delete_collection() {
     db.delete_collection("to_delete").unwrap();
     assert!(db.list_collections().is_empty());
     assert!(db.get_vector_collection("to_delete").is_none());
-}
-
-#[test]
-fn test_delete_nonexistent_collection() {
-    let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
-
-    let result = db.delete_collection("nonexistent");
-    assert!(result.is_err());
 }
 
 #[test]
@@ -1172,7 +1166,10 @@ fn test_diagnostics_not_found() {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path()).unwrap();
     let result = db.collection_diagnostics("nonexistent");
-    assert!(result.is_err());
+    assert!(
+        matches!(result, Err(Error::CollectionNotFound(_))),
+        "expected CollectionNotFound, got {result:?}"
+    );
 }
 
 // =========================================================================

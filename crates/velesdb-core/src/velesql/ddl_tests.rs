@@ -131,7 +131,16 @@ fn test_create_vector_collection_without_semicolon() {
     let query = Parser::parse("CREATE COLLECTION docs (dimension = 768, metric = 'cosine')")
         .expect("CREATE without semicolon should parse");
 
-    assert!(query.ddl.is_some());
+    let ddl = query.ddl.expect("Expected DDL statement");
+    let DdlStatement::CreateCollection(create) = ddl else {
+        panic!("Expected CreateCollection variant");
+    };
+    assert_eq!(create.name, "docs");
+    let CreateCollectionKind::Vector(params) = &create.kind else {
+        panic!("Expected Vector kind");
+    };
+    assert_eq!(params.dimension, 768);
+    assert_eq!(params.metric, "cosine");
 }
 
 #[test]
@@ -351,11 +360,19 @@ fn test_insert_edge_with_properties() {
     assert_eq!(edge.properties.len(), 2);
 
     // Verify properties by key
-    let weight = edge.properties.iter().find(|(k, _)| k == "weight");
-    assert!(weight.is_some(), "weight property should exist");
+    let weight = edge
+        .properties
+        .iter()
+        .find(|(k, _)| k == "weight")
+        .expect("weight property should exist");
+    assert_eq!(weight.1, Value::Float(0.95));
 
-    let year = edge.properties.iter().find(|(k, _)| k == "year");
-    assert!(year.is_some(), "year property should exist");
+    let year = edge
+        .properties
+        .iter()
+        .find(|(k, _)| k == "year")
+        .expect("year property should exist");
+    assert_eq!(year.1, Value::Integer(2026));
 }
 
 // ============================================================================
@@ -703,10 +720,12 @@ fn test_ast_insert_edge_fields() {
     assert_eq!(edge.target, 20);
     assert_eq!(edge.label, "FOLLOWS");
     assert!(edge.edge_id.is_none());
-    assert!(!edge.properties.is_empty());
-
-    let since = edge.properties.iter().find(|(k, _)| k == "since");
-    assert!(since.is_some(), "since property should exist");
+    assert_eq!(edge.properties.len(), 1, "single property expected");
+    assert_eq!(
+        edge.properties[0],
+        ("since".to_string(), Value::Integer(2025)),
+        "since must parse to Value::Integer(2025)"
+    );
 }
 
 #[test]
@@ -780,7 +799,14 @@ fn test_insert_edge_case_insensitive() {
     let query = Parser::parse("insert edge into kg (source = 5, target = 6, label = 'LINKED');")
         .expect("lowercase INSERT EDGE should parse");
 
-    assert!(query.is_dml_query());
+    let dml = query.dml.expect("Expected DML statement");
+    let DmlStatement::InsertEdge(edge) = dml else {
+        panic!("Expected InsertEdge variant");
+    };
+    assert_eq!(edge.collection, "kg");
+    assert_eq!(edge.source, 5);
+    assert_eq!(edge.target, 6);
+    assert_eq!(edge.label, "LINKED");
 }
 
 #[test]
@@ -788,7 +814,20 @@ fn test_delete_from_case_insensitive() {
     let query = Parser::parse("delete from docs where id = 1;")
         .expect("lowercase DELETE FROM should parse");
 
-    assert!(query.is_dml_query());
+    let dml = query.dml.expect("Expected DML statement");
+    let DmlStatement::Delete(delete) = dml else {
+        panic!("Expected Delete variant");
+    };
+    assert_eq!(delete.table, "docs");
+    let Condition::Comparison(cmp) = &delete.where_clause else {
+        panic!(
+            "Expected Comparison condition, got {:?}",
+            delete.where_clause
+        );
+    };
+    assert_eq!(cmp.column, "id");
+    assert_eq!(cmp.operator, CompareOp::Eq);
+    assert_eq!(cmp.value, Value::Integer(1));
 }
 
 #[test]
@@ -796,7 +835,12 @@ fn test_delete_edge_case_insensitive() {
     let query =
         Parser::parse("delete edge 7 from kg;").expect("lowercase DELETE EDGE should parse");
 
-    assert!(query.is_dml_query());
+    let dml = query.dml.expect("Expected DML statement");
+    let DmlStatement::DeleteEdge(del_edge) = dml else {
+        panic!("Expected DeleteEdge variant");
+    };
+    assert_eq!(del_edge.edge_id, 7);
+    assert_eq!(del_edge.collection, "kg");
 }
 
 #[test]

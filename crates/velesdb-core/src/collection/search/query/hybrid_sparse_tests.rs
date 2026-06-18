@@ -178,6 +178,11 @@ fn test_hybrid_empty_sparse_branch() {
         !results.is_empty(),
         "Should return dense results when sparse is empty"
     );
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert!(
+        ids.iter().any(|&id| (6..10).contains(&id)),
+        "Dense-fallback must surface dense-only points (ids 6-9), got {ids:?}"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -212,6 +217,14 @@ fn test_resolve_sparse_vector_shorthand() {
     // Values should be present (order from BTreeMap is sorted by string key)
     assert!(sv.indices.contains(&10));
     assert!(sv.indices.contains(&20));
+    assert!(
+        sv.values.iter().any(|&v| (v - 0.8_f32).abs() < 1e-5),
+        "weight 0.8 for index 10 must survive shorthand parse"
+    );
+    assert!(
+        sv.values.iter().any(|&v| (v - 0.3_f32).abs() < 1e-5),
+        "weight 0.3 for index 20 must survive shorthand parse"
+    );
 }
 
 #[test]

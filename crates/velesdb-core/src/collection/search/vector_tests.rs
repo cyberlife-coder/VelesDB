@@ -264,7 +264,7 @@ mod selectivity_tests {
 
 #[cfg(test)]
 mod selectivity_property_tests {
-    use super::super::vector::{estimate_real_selectivity, SELECTIVITY_THRESHOLD};
+    use super::super::vector::estimate_real_selectivity;
     use proptest::prelude::*;
 
     proptest! {
@@ -293,40 +293,6 @@ mod selectivity_property_tests {
                 (result - expected).abs() < f64::EPSILON,
                 "selectivity mismatch: got {result}, expected {expected}"
             );
-        }
-
-        /// **Validates: Requirements 3.1, 3.4, 4.3, 4.4**
-        ///
-        /// Feature: bitmap-prefilter-v2, Property 3: Strategy selection by selectivity threshold
-        ///
-        /// For any non-empty bitmap and collection size > 0, the strategy
-        /// selected (full_scan vs hnsw_bitmap) is deterministic and depends
-        /// only on the selectivity ratio vs SELECTIVITY_THRESHOLD.
-        #[test]
-        fn prop_strategy_selection_by_threshold(
-            n in 1u32..10_000,
-            big_n in 1usize..100_000,
-        ) {
-            let mut bitmap = roaring::RoaringBitmap::new();
-            for i in 0..n {
-                bitmap.insert(i);
-            }
-            let selectivity = estimate_real_selectivity(&bitmap, big_n);
-            let use_full_scan = selectivity <= SELECTIVITY_THRESHOLD;
-            let use_hnsw_bitmap = selectivity > SELECTIVITY_THRESHOLD;
-
-            // Exactly one strategy must be selected
-            prop_assert!(
-                use_full_scan ^ use_hnsw_bitmap,
-                "exactly one strategy must be selected"
-            );
-
-            // Verify consistency with threshold
-            if selectivity <= SELECTIVITY_THRESHOLD {
-                prop_assert!(use_full_scan, "should select full_scan for low selectivity");
-            } else {
-                prop_assert!(use_hnsw_bitmap, "should select hnsw_bitmap for high selectivity");
-            }
         }
     }
 }

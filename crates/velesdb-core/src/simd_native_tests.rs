@@ -127,19 +127,13 @@ fn test_batch_dot_product_native() {
 // =========================================================================
 
 #[test]
-fn test_simd_level_detection() {
-    let level = simd_level();
-    assert!(matches!(
-        level,
-        SimdLevel::Avx512 | SimdLevel::Avx2 | SimdLevel::Neon | SimdLevel::Scalar
-    ));
-}
-
-#[test]
 fn test_simd_level_debug() {
     let level = simd_level();
     let debug = format!("{level:?}");
-    assert!(!debug.is_empty());
+    assert!(
+        matches!(debug.as_str(), "Avx512" | "Avx2" | "Neon" | "Scalar"),
+        "unexpected SimdLevel Debug output: {debug}"
+    );
 }
 
 #[test]

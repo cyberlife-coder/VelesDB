@@ -54,6 +54,15 @@ fn test_vector_data_from_f32_slice_f16() {
 
     assert_eq!(v.precision(), VectorPrecision::F16);
     assert_eq!(v.len(), 3);
+
+    let back = v.to_f32_vec();
+    assert_eq!(back.len(), data.len());
+    for (orig, got) in data.iter().zip(back.iter()) {
+        assert!(
+            (orig - got).abs() < 0.001,
+            "f16 conversion error: {orig} vs {got}"
+        );
+    }
 }
 
 #[test]
@@ -63,6 +72,14 @@ fn test_vector_data_from_f32_slice_bf16() {
 
     assert_eq!(v.precision(), VectorPrecision::BF16);
     assert_eq!(v.len(), 3);
+
+    let back = v.to_f32_vec();
+    for (orig, got) in data.iter().zip(back.iter()) {
+        assert!(
+            (orig - got).abs() < 0.01,
+            "bf16 conversion error: {orig} vs {got}"
+        );
+    }
 }
 
 #[test]
@@ -135,13 +152,22 @@ fn test_vector_data_convert() {
 
     let to_half = original.convert(VectorPrecision::F16);
     assert_eq!(to_half.precision(), VectorPrecision::F16);
+    assert_eq!(to_half.len(), data.len());
+    for (o, g) in data.iter().zip(to_half.to_f32_vec().iter()) {
+        assert!((o - g).abs() < 0.001, "F16 convert error: {o} vs {g}");
+    }
 
     let to_brain = original.convert(VectorPrecision::BF16);
     assert_eq!(to_brain.precision(), VectorPrecision::BF16);
+    assert_eq!(to_brain.len(), data.len());
+    for (o, g) in data.iter().zip(to_brain.to_f32_vec().iter()) {
+        assert!((o - g).abs() < 0.01, "BF16 convert error: {o} vs {g}");
+    }
 
-    // Same precision returns clone
+    // Same precision returns clone — values must be bit-exact
     let same = original.convert(VectorPrecision::F32);
     assert_eq!(same.precision(), VectorPrecision::F32);
+    assert_eq!(same.to_f32_vec(), data);
 }
 
 #[test]
@@ -287,6 +313,19 @@ fn test_vector_data_serialization() {
 
         assert_eq!(v.precision(), back.precision());
         assert_eq!(v.len(), back.len());
+
+        // The serde round-trip must preserve the float payload, not just the
+        // tag/length. Compare against v's own values (not the raw input) so
+        // F16/BF16 quantization cancels out and the tolerance can stay tight.
+        let orig = v.to_f32_vec();
+        let recovered = back.to_f32_vec();
+        assert_eq!(orig.len(), recovered.len());
+        for (o, b) in orig.iter().zip(&recovered) {
+            assert!(
+                (o - b).abs() < 1e-6,
+                "serde value mismatch for {precision:?}: {o} vs {b}"
+            );
+        }
     }
 }
 
@@ -332,11 +371,13 @@ fn test_large_vector_4096d() {
 fn test_from_impls() {
     let data = vec![0.1, 0.2, 0.3];
 
-    // From Vec<f32>
+    // From Vec<f32>: data is moved, not dropped/truncated
     let v: VectorData = data.clone().into();
     assert_eq!(v.precision(), VectorPrecision::F32);
+    assert_eq!(v.to_f32_vec(), data);
 
-    // From &[f32]
+    // From &[f32]: copied via to_vec(), contents preserved
     let v: VectorData = data.as_slice().into();
     assert_eq!(v.precision(), VectorPrecision::F32);
+    assert_eq!(v.to_f32_vec(), data);
 }

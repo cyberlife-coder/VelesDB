@@ -10,25 +10,6 @@ use serial_test::serial;
 
 #[test]
 #[serial(gpu)]
-fn test_gpu_available_check() {
-    // Should not panic
-    let _ = GpuAccelerator::is_available();
-}
-
-#[test]
-#[serial(gpu)]
-fn test_gpu_accelerator_creation() {
-    // May return None if no GPU available (CI environment)
-    let gpu = GpuAccelerator::new();
-    if gpu.is_some() {
-        println!("GPU available for testing");
-    } else {
-        println!("No GPU available, skipping GPU tests");
-    }
-}
-
-#[test]
-#[serial(gpu)]
 fn test_batch_cosine_empty_input() {
     if let Some(gpu) = GpuAccelerator::new() {
         let results = gpu
@@ -270,18 +251,36 @@ fn test_batch_cosine_large_batch() {
 #[serial(gpu)]
 fn test_gpu_no_panic_on_edge_inputs() {
     if let Some(gpu) = GpuAccelerator::new() {
-        // Each case: (vectors, query, dimension)
-        let cases: Vec<(&[f32], &[f32], usize)> = vec![
-            (&[], &[], 0),
-            (&[1.0], &[1.0], 1),
+        // Deterministic edge cases: result is production-defined -> assert it.
+        // (vectors, query, dim, expected_len)
+        let deterministic: &[(&[f32], &[f32], usize, usize)] = &[
+            (&[], &[], 0, 0),                  // early-exit: Ok(empty)
+            (&[1.0], &[1.0], 1, 1),            // one vector of dim 1 -> one result
+            (&[0.0; 1024], &[0.0; 8], 8, 128), // 128 zero vectors, dim 8
+        ];
+        for &(vectors, query, dim, want_len) in deterministic {
+            for r in [
+                gpu.batch_cosine_similarity(vectors, query, dim),
+                gpu.batch_euclidean_distance(vectors, query, dim),
+                gpu.batch_dot_product(vectors, query, dim),
+            ] {
+                let v = r.expect("deterministic edge case must return Ok");
+                assert_eq!(v.len(), want_len, "wrong result length");
+                // zero-norm / zero-distance guard => all finite (NaN guard in shader)
+                assert!(
+                    v.iter().all(|x| x.is_finite()),
+                    "result must be finite, got {v:?}"
+                );
+            }
+        }
+
+        // Implementation-defined float propagation: only the no-panic guarantee holds.
+        let no_panic: &[(&[f32], &[f32], usize)] = &[
             (&[f32::NAN], &[1.0], 1),
             (&[f32::INFINITY], &[1.0], 1),
             (&[f32::NEG_INFINITY], &[1.0], 1),
-            (&[0.0; 1024], &[0.0; 8], 8), // 128 zero vectors of dim 8
         ];
-
-        for (vectors, query, dim) in cases {
-            // None of these should panic
+        for &(vectors, query, dim) in no_panic {
             let _ = gpu.batch_cosine_similarity(vectors, query, dim);
             let _ = gpu.batch_euclidean_distance(vectors, query, dim);
             let _ = gpu.batch_dot_product(vectors, query, dim);
@@ -302,8 +301,8 @@ fn test_gpu_cosine_zero_norm_vectors() {
         assert_eq!(values.len(), 1);
         // Should return 0.0 (shader checks denom > 0.0)
         assert!(
-            values[0].is_finite(),
-            "Zero-norm cosine should be finite, got {}",
+            values[0].abs() < 0.01,
+            "Zero-norm cosine should be 0.0 (shader denominator guard), got {}",
             values[0]
         );
     }
@@ -410,14 +409,32 @@ fn test_gpu_has_all_pipelines() {
         let query = vec![1.0, 0.0, 0.0];
         let vectors = vec![1.0, 0.0, 0.0];
 
-        let cosine = gpu.batch_cosine_similarity(&vectors, &query, 3);
-        assert!(cosine.is_ok(), "cosine pipeline must produce results");
+        let cosine = gpu
+            .batch_cosine_similarity(&vectors, &query, 3)
+            .expect("cosine pipeline must produce results");
+        assert!(
+            (cosine[0] - 1.0).abs() < 0.01,
+            "cosine identical -> ~1.0, got {}",
+            cosine[0]
+        );
 
-        let euclidean = gpu.batch_euclidean_distance(&vectors, &query, 3);
-        assert!(euclidean.is_ok(), "euclidean pipeline must produce results");
+        let euclidean = gpu
+            .batch_euclidean_distance(&vectors, &query, 3)
+            .expect("euclidean pipeline must produce results");
+        assert!(
+            euclidean[0].abs() < 0.01,
+            "euclidean identical -> ~0.0, got {}",
+            euclidean[0]
+        );
 
-        let dot = gpu.batch_dot_product(&vectors, &query, 3);
-        assert!(dot.is_ok(), "dot_product pipeline must produce results");
+        let dot = gpu
+            .batch_dot_product(&vectors, &query, 3)
+            .expect("dot_product pipeline must produce results");
+        assert!(
+            (dot[0] - 1.0).abs() < 0.01,
+            "dot identical unit -> ~1.0, got {}",
+            dot[0]
+        );
     }
 }
 

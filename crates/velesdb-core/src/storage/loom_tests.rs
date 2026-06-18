@@ -78,6 +78,9 @@ mod loom_sharded_index {
             t1.join().unwrap();
             t2.join().unwrap();
             t3.join().unwrap();
+
+            assert_eq!(index.get(1), Some(100));
+            assert_eq!(index.get(2), Some(200));
         });
     }
 
@@ -99,8 +102,16 @@ mod loom_sharded_index {
             t1.join().unwrap();
             t2.join().unwrap();
 
-            assert!(index.get(0).is_some() || index.get(0).is_none());
-            assert!(index.get(4).is_some() || index.get(4).is_none());
+            assert_eq!(
+                index.get(0),
+                Some(100),
+                "writer t1's insert must be visible after same-shard contention"
+            );
+            assert_eq!(
+                index.get(4),
+                Some(400),
+                "writer t2's insert must be visible after same-shard contention"
+            );
         });
     }
 }
@@ -295,33 +306,5 @@ mod standard_concurrency_tests {
             epoch.load(Ordering::Acquire),
             num_threads * increments_per_thread
         );
-    }
-
-    #[test]
-    fn test_guard_epoch_validation() {
-        struct MockGuard {
-            epoch_at_creation: u64,
-            epoch_ptr: Arc<AtomicU64>,
-        }
-
-        impl MockGuard {
-            fn is_valid(&self) -> bool {
-                let current = self.epoch_ptr.load(Ordering::Acquire);
-                current == self.epoch_at_creation
-            }
-        }
-
-        let epoch = Arc::new(AtomicU64::new(0));
-
-        let guard = MockGuard {
-            epoch_at_creation: epoch.load(Ordering::Acquire),
-            epoch_ptr: Arc::clone(&epoch),
-        };
-
-        assert!(guard.is_valid());
-
-        epoch.fetch_add(1, Ordering::Release);
-
-        assert!(!guard.is_valid());
     }
 }

@@ -175,8 +175,16 @@ fn test_memory_usage_increases_with_data() {
     let mut index = LabelIndex::new();
     let baseline = index.memory_usage();
 
-    index.index_from_payload(1, &json!({"_labels": ["Person"]}));
-    assert!(index.memory_usage() > baseline);
+    let label = "Person";
+    index.index_from_payload(1, &json!({ "_labels": [label] }));
+
+    // The estimate must reflect at least the stored label string
+    // (label bytes + the String header). The bitmap term is intentionally
+    // excluded from the lower bound to avoid coupling to roaring internals.
+    assert!(
+        index.memory_usage() >= baseline + label.len() + std::mem::size_of::<String>(),
+        "memory_usage must account for stored label string"
+    );
 }
 
 #[test]

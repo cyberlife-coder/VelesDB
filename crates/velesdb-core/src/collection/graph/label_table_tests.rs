@@ -74,14 +74,30 @@ fn test_label_table_iter() {
 
 #[test]
 fn test_label_table_with_capacity() {
-    let table = LabelTable::with_capacity(100);
+    let mut table = LabelTable::with_capacity(100);
     assert!(table.is_empty());
+    assert_eq!(table.len(), 0);
+
+    let id_a = table.intern("A").unwrap();
+    let id_b = table.intern("B").unwrap();
+    assert_ne!(id_a, id_b);
+    assert_eq!(table.intern("A").unwrap(), id_a); // interning is idempotent
+    assert_eq!(table.len(), 2);
+    assert_eq!(table.resolve(id_a), Some("A"));
+    assert!(!table.is_empty());
 }
 
 #[test]
 fn test_label_id_as_u32_and_from_u32() {
-    let id = LabelId::from_u32(42);
-    assert_eq!(id.as_u32(), 42);
+    for raw in [0u32, 1, 42, 1000, u32::MAX] {
+        assert_eq!(
+            LabelId::from_u32(raw).as_u32(),
+            raw,
+            "from_u32/as_u32 must round-trip for {raw}"
+        );
+    }
+    // Default must be the zero id (relied on by Default-derived structs).
+    assert_eq!(LabelId::default().as_u32(), 0);
 }
 
 #[test]

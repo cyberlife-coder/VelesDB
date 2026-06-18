@@ -61,8 +61,8 @@ fn test_jaccard_simd_large_vector() {
         .collect();
     let result = jaccard_similarity_native(&a, &b);
     assert!(
-        result > 0.0 && result < 1.0,
-        "Jaccard should be between 0 and 1"
+        (result - 0.25).abs() < 1e-4,
+        "Expected Jaccard = 0.25 for 768D even/multiple-of-3 sets (inter=128, union=512), got {result}"
     );
 }
 

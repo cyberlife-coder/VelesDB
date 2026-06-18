@@ -774,13 +774,16 @@ fn test_heap_pool_bounded_size() {
 
 #[test]
 fn test_heap_pool_recall_regression() {
-    // End-to-end recall test with pooled heaps: build HNSW, search
-    // multiple times (triggering pool reuse), verify recall >= 0.95.
+    // Pool-hygiene + cross-search isolation test (NOT a duplicate of
+    // test_bitvec_visited_recall_regression, which already guards end-to-end
+    // recall). Asserts that heaps reused from a real, non-empty prior search
+    // come back cleared and that two sequential warm-pool searches are
+    // deterministic — a missing heap.clear() in the pool release path would be
+    // silently tolerated by a recall threshold but is caught here.
     let dim = 32;
     let n = 500;
     let k = 10;
     let ef_search = 128;
-    let n_queries = 20;
 
     let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
     let hnsw = NativeHnsw::new(engine, 16, 200, n);
@@ -797,48 +800,38 @@ fn test_heap_pool_recall_regression() {
         hnsw.insert(v).expect("insert should succeed");
     }
 
-    let mut total_recall = 0.0_f64;
-    for q_idx in 0..n_queries {
-        let query = &vectors[q_idx * (n / n_queries)];
+    // Warm the thread-local heap pool with a real search whose heaps are
+    // released non-empty (the Drop path is expected to clear them).
+    let query = &vectors[123];
+    let first = hnsw.search(query, k, ef_search);
+    assert!(!first.is_empty(), "warm-up search must return results");
 
-        let hnsw_ids: Vec<NodeId> = hnsw
-            .search(query, k, ef_search)
-            .iter()
-            .map(|(id, _)| *id)
-            .collect();
-
-        // Brute-force ground truth
-        let mut brute: Vec<(NodeId, f32)> = vectors
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                let dist: f32 = v
-                    .iter()
-                    .zip(query.iter())
-                    .map(|(a, b)| (a - b) * (a - b))
-                    .sum();
-                (i, dist)
-            })
-            .collect();
-        brute.sort_by(|a, b| a.1.total_cmp(&b.1));
-        let gt: Vec<NodeId> = brute.iter().take(k).map(|(id, _)| *id).collect();
-
-        let hits = hnsw_ids.iter().filter(|id| gt.contains(id)).count();
-        #[allow(clippy::cast_precision_loss)]
-        {
-            total_recall += hits as f64 / k as f64;
-        }
+    // Pool hygiene: a state acquired after a non-empty prior search must come
+    // back with cleared heaps. Catches a missing clear() in the pool release
+    // path (search_pools.rs release_candidate_heap/release_result_heap).
+    {
+        let state = SearchState::new(0);
+        assert!(
+            state.candidates.is_empty(),
+            "pooled candidate heap must be empty after a non-empty prior search"
+        );
+        assert!(
+            state.results.is_empty(),
+            "pooled result heap must be empty after a non-empty prior search"
+        );
     }
 
-    #[allow(clippy::cast_precision_loss)]
-    let avg_recall = total_recall / n_queries as f64;
-
-    assert!(
-        avg_recall >= 0.95,
-        "Pooled heap recall@{k} must be >= 95% (got {:.1}%); \
-         heap pool regression detected",
-        avg_recall * 100.0,
+    // Cross-search isolation: a second warm-pool search must be identical to
+    // the first; stale pooled-heap state would perturb the result vector.
+    let second = hnsw.search(query, k, ef_search);
+    assert_eq!(
+        first, second,
+        "two sequential warm-pool searches must return identical results"
     );
+
+    // The query is its own exact vector, so node 123 (distance ~0) must rank
+    // first; this anchors the result against a known ground truth.
+    assert_eq!(first[0].0, 123, "self-query must rank its own vector first");
 }
 
 // =========================================================================

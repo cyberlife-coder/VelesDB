@@ -291,8 +291,11 @@ fn test_ef_search_for_scale_100k() {
     // At 100K: sqrt(10) ≈ 3.16 → capped at 2.0
     let ef = SearchQuality::Balanced.ef_search_for_scale(10, 100_000);
     // 160 * 2.0 = 320, capped at 160*2=320
-    assert!(ef > 160, "ef should scale up at 100K, got {ef}");
-    assert!(ef <= 320, "ef should be capped at 2x base, got {ef}");
+    assert_eq!(
+        ef,
+        160 * 2,
+        "Balanced ef_search_for_scale(10, 100_000) = 160 base * 2.0 cap = 320"
+    );
 }
 
 #[test]
@@ -306,8 +309,10 @@ fn test_ef_search_for_scale_1m() {
 fn test_ef_search_for_scale_custom_passes_through() {
     // Custom ef should also scale
     let ef = SearchQuality::Custom(200).ef_search_for_scale(10, 100_000);
-    assert!(ef > 200, "custom ef should scale at 100K, got {ef}");
-    assert!(ef <= 400, "custom ef should be capped at 2x, got {ef}");
+    assert_eq!(
+        ef, 400,
+        "Custom(200) ef_search_for_scale(10, 100_000) must equal 400: base=max(200,10)=200, sqrt(100_000/10_000)=sqrt(10)≈3.16 capped at 2.0, 200*2=400, then min(base*2=400)"
+    );
 }
 
 #[test]
@@ -321,17 +326,6 @@ fn test_hnsw_params_for_dataset_size_500k_768d() {
 // =============================================================================
 // Alpha (VAMANA diversification) parameter tests
 // =============================================================================
-
-#[test]
-fn test_hnsw_params_alpha_default() {
-    // All constructors should default alpha to 1.2 (VAMANA recommendation)
-    let params = HnswParams::auto(768);
-    assert!(
-        (params.alpha - 1.2).abs() < f32::EPSILON,
-        "auto() alpha should be 1.2, got {}",
-        params.alpha
-    );
-}
 
 #[test]
 fn test_hnsw_params_alpha_default_all_constructors() {

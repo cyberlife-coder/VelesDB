@@ -18,6 +18,7 @@ fn test_create_graph_node_with_label() {
     assert_eq!(node.label(), "Person");
     assert!(node.properties().is_empty());
     assert!(node.vector().is_none());
+    assert_eq!(node.property("name"), None);
 }
 
 #[test]
@@ -173,20 +174,6 @@ fn test_element_serialization_roundtrip() {
 }
 
 // =============================================================================
-// ID uniqueness and validation
-// =============================================================================
-
-#[test]
-fn test_element_id_uniqueness_concept() {
-    // Both Point and Node use the same ID space
-    let point = crate::Point::new(100, vec![0.1], None);
-    let node = GraphNode::new(100, "Entity");
-
-    // They have the same ID - in a collection, this would be a conflict
-    assert_eq!(Element::Point(point).id(), Element::Node(node).id());
-}
-
-// =============================================================================
 // Edge cases
 // =============================================================================
 
@@ -198,7 +185,11 @@ fn test_graph_node_empty_label() {
 
 #[test]
 fn test_graph_node_empty_properties() {
-    let node = GraphNode::new(1, "Type").with_properties(HashMap::new());
+    let mut props = HashMap::new();
+    props.insert("name".to_string(), json!("Alice"));
+    let node = GraphNode::new(1, "Type")
+        .with_properties(props)
+        .with_properties(HashMap::new());
     assert!(node.properties().is_empty());
 }
 

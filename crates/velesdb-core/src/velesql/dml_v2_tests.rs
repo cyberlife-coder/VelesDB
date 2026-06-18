@@ -77,6 +77,8 @@ fn test_single_row_insert_still_works() {
 
     assert_eq!(insert.rows.len(), 1);
     assert_eq!(insert.rows[0].len(), 2);
+    assert_eq!(insert.rows[0][0], Value::Integer(1));
+    assert_eq!(insert.rows[0][1], Value::String("Only".to_string()));
 }
 
 // ============================================================================
@@ -231,4 +233,8 @@ fn test_multi_row_insert_rows_count_and_shape() {
             "Row {i} should match column count"
         );
     }
+    assert_eq!(insert.rows[0][0], Value::Integer(1));
+    assert_eq!(insert.rows[0][1], Value::Integer(100));
+    assert_eq!(insert.rows[3][0], Value::Integer(4));
+    assert_eq!(insert.rows[3][1], Value::Integer(400));
 }

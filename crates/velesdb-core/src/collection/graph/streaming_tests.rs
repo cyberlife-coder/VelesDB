@@ -116,6 +116,9 @@ fn test_bfs_iterator_visited_overflow() {
 
     let mut iter = BfsIterator::new(&store, 1, config);
 
+    // Drive the iterator: with max_visited=2 on a 4-node graph the visited
+    // set overflows on the second pop (node 2 -> node 3), after which cycle
+    // tracking is disabled and traversal continues unbounded.
     let mut count = 0;
     while iter.next().is_some() {
         count += 1;
@@ -123,8 +126,11 @@ fn test_bfs_iterator_visited_overflow() {
             break;
         }
     }
-
-    assert!(iter.is_visited_overflow() || count <= 2);
+    assert!(
+        iter.is_visited_overflow(),
+        "visited set must overflow with max_visited=2 on a 4-node graph"
+    );
+    assert!(count >= 1, "overflow mode must still yield results");
 }
 
 #[test]
@@ -147,8 +153,14 @@ fn test_bfs_stream_convenience_function() {
 
     let results: Vec<_> = bfs_stream(&store, 1, config).collect();
 
-    assert!(!results.is_empty());
-    assert!(results.iter().all(|r| r.depth <= 2));
+    assert_eq!(results.len(), 3, "depth<=2 reaches exactly nodes 2,3,5");
+    assert!(results.iter().any(|r| r.target_id == 2 && r.depth == 1));
+    assert!(results.iter().any(|r| r.target_id == 3 && r.depth == 2));
+    assert!(results.iter().any(|r| r.target_id == 5 && r.depth == 2));
+    assert!(
+        !results.iter().any(|r| r.target_id == 4),
+        "node 4 is at depth 3, excluded by max_depth(2)"
+    );
 }
 
 #[test]

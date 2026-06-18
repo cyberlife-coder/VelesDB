@@ -41,8 +41,11 @@ mod tests {
         let strategy = AdaptiveLearningRate::default();
         let context = ReinforcementContext::new().with_usage_count(10);
         let new_confidence = strategy.update_confidence(0.5, true, &context);
-        assert!(new_confidence > 0.5);
-        assert!(new_confidence <= 1.0);
+        // multiplier = 0.5^(10/10) = 0.5; delta = base_success_rate(0.2) * 0.5 = 0.1 -> 0.6
+        assert!(
+            (new_confidence - 0.6).abs() < 0.001,
+            "AdaptiveLearningRate at usage=10 (half-life=10) should give 0.6, got {new_confidence}"
+        );
     }
 
     #[test]
@@ -52,17 +55,42 @@ mod tests {
             .with_created_at(0)
             .with_last_used(0);
         let new_confidence = strategy.update_confidence(0.5, true, &context);
-        assert!(new_confidence > 0.5);
+        assert!(
+            (new_confidence - 0.55).abs() < 0.01,
+            "TemporalDecay at max decay (0.1 cap): 0.5*0.9 + 0.1 success_delta = ~0.55, got {new_confidence}"
+        );
+    }
+
+    #[test]
+    fn test_temporal_decay_failure_applies_decay_then_penalty() {
+        let strategy = TemporalDecay::default();
+        let context = ReinforcementContext::new()
+            .with_created_at(0)
+            .with_last_used(0);
+        let new_confidence = strategy.update_confidence(0.5, false, &context);
+        // decayed 0.5*0.9=0.45, minus failure_delta 0.05 => 0.40 (and strictly < 0.45 proves decay ran)
+        assert!((new_confidence - 0.40).abs() < 0.01, "got {new_confidence}");
+        assert!(
+            new_confidence < 0.45,
+            "decay must apply before the failure penalty"
+        );
     }
 
     #[test]
     fn test_contextual_reinforcement() {
         let strategy = ContextualReinforcement::default();
-        let context = ReinforcementContext::new()
+        let mut context = ReinforcementContext::new()
             .with_usage_count(5)
             .with_success_rate(0.8);
+        context.last_used = context.current_time; // recency_factor == 1.0 (no clock sensitivity)
         let new_confidence = strategy.update_confidence(0.5, true, &context);
-        assert!(new_confidence > 0.5);
+        // recency=1.0, usage=ln1p(5)/10≈0.179, success_rate=0.8
+        // context_score = 0.4*1.0 + 0.3*0.179 + 0.3*0.8 ≈ 0.4938
+        // effective_rate = 0.15*(0.5+0.4938) ≈ 0.1491 → 0.5 + 0.1491 ≈ 0.6791
+        assert!(
+            (new_confidence - 0.6791).abs() < 0.01,
+            "ContextualReinforcement (recency=1.0) should produce ~0.6791, got {new_confidence}"
+        );
     }
 
     #[test]
@@ -123,10 +151,18 @@ mod tests {
         let mut ctx = ReinforcementContext::new();
         ctx.custom.insert("success_count".to_string(), 0.0);
         ctx.custom.insert("failure_count".to_string(), 0.0);
+        // Pre-clamp success = 0.9 + 0.5 = 1.4 -> clamped to exactly 1.0.
         let high = strategy.update_confidence(0.9, true, &ctx);
-        assert!(high <= 1.0, "should not exceed 1.0");
+        assert!(
+            (high - 1.0).abs() < 0.001,
+            "expected 1.0 after clamp, got {high}"
+        );
+        // Pre-clamp failure = 0.1 - 0.5 = -0.4 -> clamped to exactly 0.0.
         let low = strategy.update_confidence(0.1, false, &ctx);
-        assert!(low >= 0.0, "should not go below 0.0");
+        assert!(
+            (low - 0.0).abs() < 0.001,
+            "expected 0.0 after clamp, got {low}"
+        );
     }
 
     // --- power_law_decay (Phase 1) ---

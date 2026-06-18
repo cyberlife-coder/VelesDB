@@ -368,6 +368,7 @@ fn test_stale_temp_file_does_not_block_compaction() {
 }
 
 #[test]
+#[cfg(windows)]
 #[allow(clippy::cast_precision_loss)]
 fn test_backup_file_cleaned_after_successful_compaction() {
     // On Windows, atomic_replace uses a .dat.bak intermediate.
@@ -384,6 +385,13 @@ fn test_backup_file_cleaned_after_successful_compaction() {
     assert!(
         !backup_path.exists(),
         "Backup file should be removed after successful compaction"
+    );
+
+    // The swap must have completed: the live data file exists and is non-empty.
+    let dat_path = dir.path().join("vectors.dat");
+    assert!(
+        dat_path.metadata().map(|m| m.len() > 0).unwrap_or(false),
+        "Compacted vectors.dat should exist and be non-empty after the swap"
     );
 }
 

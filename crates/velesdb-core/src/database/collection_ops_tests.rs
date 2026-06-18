@@ -416,22 +416,44 @@ fn test_reject_invalid_name_on_analyze() {
 #[test]
 fn test_get_vector_collection_rejects_traversal() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
-    // Should return None rather than attempting filesystem access.
+    let data = dir.path().join("data");
+    let db = Database::open(&data).unwrap();
+    // Plant a real vector collection one level up so the traversal target
+    // (data/../evil == dir/evil) genuinely exists on disk and would be
+    // opened if the read path skipped name validation.
+    let outside = Database::open(dir.path()).unwrap();
+    outside
+        .create_collection("evil", 4, DistanceMetric::Cosine)
+        .unwrap();
+    // Validation must reject "../evil" before any filesystem access, so the
+    // planted sibling collection must never be reached.
     assert!(db.get_vector_collection("../evil").is_none());
 }
 
 #[test]
 fn test_get_graph_collection_rejects_traversal() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
+    let data = dir.path().join("data");
+    let db = Database::open(&data).unwrap();
+    // Plant a real graph collection at the traversal target (dir/evil).
+    let outside = Database::open(dir.path()).unwrap();
+    outside
+        .create_graph_collection("evil", crate::collection::GraphSchema::schemaless())
+        .unwrap();
+    // Validation must short-circuit before resolving "../evil" to the planted
+    // sibling collection.
     assert!(db.get_graph_collection("../evil").is_none());
 }
 
 #[test]
 fn test_get_metadata_collection_rejects_traversal() {
     let dir = tempdir().unwrap();
-    let db = Database::open(dir.path()).unwrap();
+    let data = dir.path().join("data");
+    let db = Database::open(&data).unwrap();
+    // Plant a real metadata collection at the traversal target (dir/evil).
+    let outside = Database::open(dir.path()).unwrap();
+    outside.create_metadata_collection("evil").unwrap();
+    // Validation must reject "../evil" before any filesystem access.
     assert!(db.get_metadata_collection("../evil").is_none());
 }
 

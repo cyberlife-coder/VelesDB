@@ -155,7 +155,10 @@ fn test_sharded_vectors_iter_all() {
     let all: Vec<(usize, Vec<f32>)> = storage.iter_all();
 
     // Assert
-    assert_eq!(all.len(), 3);
+    let mut all = all;
+    // Cross-shard collection order is non-deterministic; sort by idx first.
+    all.sort_by_key(|(i, _)| *i);
+    assert_eq!(all, vec![(0, vec![1.0]), (1, vec![3.0]), (16, vec![2.0])]);
 }
 
 #[test]

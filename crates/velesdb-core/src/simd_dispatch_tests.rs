@@ -2,8 +2,8 @@
 
 use crate::simd_dispatch::{
     cosine_dispatched, cosine_normalized_dispatched, dot_product_dispatched, euclidean_dispatched,
-    hamming_dispatched, prefetch_distance, simd_features_info, SimdFeatures,
-    PREFETCH_DISTANCE_1536D, PREFETCH_DISTANCE_384D, PREFETCH_DISTANCE_768D,
+    hamming_dispatched, prefetch_distance, simd_features_info, PREFETCH_DISTANCE_1536D,
+    PREFETCH_DISTANCE_384D, PREFETCH_DISTANCE_768D,
 };
 
 // -------------------------------------------------------------------------
@@ -102,9 +102,15 @@ fn test_dot_product_dispatched_768d() {
     // Act
     let result = dot_product_dispatched(&a, &b);
 
-    // Assert - just verify it doesn't panic and returns reasonable value
+    // Assert against the scalar reference (cheap, deterministic).
+    // 768d routes through the multi-accumulator SIMD kernels; tolerance
+    // covers f32 lane-order accumulation differences (measured ~3e-5).
+    let expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     assert!(result.is_finite());
-    assert!(result > 0.0);
+    assert!(
+        (result - expected).abs() < 0.01,
+        "got {result}, expected {expected}"
+    );
 }
 
 #[test]
@@ -137,17 +143,6 @@ fn test_cosine_dispatched_768d() {
 // -------------------------------------------------------------------------
 // SIMD features detection tests
 // -------------------------------------------------------------------------
-
-#[test]
-fn test_simd_features_detect() {
-    // Act
-    let features = SimdFeatures::detect();
-
-    // Assert - just verify it doesn't panic
-    let _name = features.best_instruction_set();
-    println!("SIMD features: {:?}", features);
-    println!("Best instruction set: {}", features.best_instruction_set());
-}
 
 #[test]
 fn test_simd_features_info() {
@@ -197,14 +192,14 @@ fn test_dispatch_initialized_once() {
     let a = vec![1.0f32; 100];
     let b = vec![2.0f32; 100];
 
-    // First call initializes
     let r1 = dot_product_dispatched(&a, &b);
-
-    // Second call uses cached pointer
     let r2 = dot_product_dispatched(&a, &b);
-
-    // Results should be identical
-    assert!((r1 - r2).abs() < f32::EPSILON);
+    // 100 * (1.0 * 2.0) = 200.0; both calls must equal the scalar reference
+    assert!((r1 - 200.0).abs() < 1e-4, "first call wrong: {r1}");
+    assert!(
+        (r2 - 200.0).abs() < 1e-4,
+        "second (cached) call wrong: {r2}"
+    );
 }
 
 #[test]
@@ -223,9 +218,20 @@ fn test_dispatch_thread_safe() {
             let b = Arc::clone(&b);
             thread::spawn(move || {
                 for _ in 0..100 {
-                    let _ = dot_product_dispatched(&a, &b);
-                    let _ = cosine_dispatched(&a, &b);
-                    let _ = euclidean_dispatched(&a, &b);
+                    // Pin each kernel to its exact value so the test fails on
+                    // garbage output under concurrent OnceLock initialization.
+                    let dot = dot_product_dispatched(&a, &b);
+                    assert!(
+                        (dot - 1536.0).abs() < 1e-3,
+                        "dot mismatch under concurrency: {dot}"
+                    );
+                    let cos = cosine_dispatched(&a, &b);
+                    assert!((cos - 1.0).abs() < 1e-5, "cosine mismatch: {cos}");
+                    let euc = euclidean_dispatched(&a, &b);
+                    assert!(
+                        (euc - 768.0_f32.sqrt()).abs() < 1e-2,
+                        "euclidean mismatch: {euc}"
+                    );
                 }
             })
         })

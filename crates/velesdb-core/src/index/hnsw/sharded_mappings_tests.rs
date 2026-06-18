@@ -117,8 +117,11 @@ fn test_sharded_mappings_iter() {
     mappings.register(10);
     mappings.register(20);
     mappings.register(30);
-    let items: Vec<(u64, usize)> = mappings.iter().collect();
+    let mut items: Vec<(u64, usize)> = mappings.iter().collect();
     assert_eq!(items.len(), 3);
+    // DashMap iteration order is non-deterministic; sort before exact compare.
+    items.sort_by_key(|(id, _)| *id);
+    assert_eq!(items, vec![(10, 0), (20, 1), (30, 2)]);
 }
 
 // -------------------------------------------------------------------------
@@ -609,23 +612,43 @@ fn test_tombstone_count_zero_after_slow_path_replace() {
 
 #[test]
 fn test_tombstone_count_reset_on_clear() {
+    // Populate first so clear() has real state to reset.
     let mappings = ShardedMappings::new();
-    // Simulate a race by inserting an ID between vacancy check and entry().
-    // Since tests are single-threaded, we use the slow path to confirm the
-    // counter resets — the actual increment only occurs under real contention.
+    mappings.register_or_replace_batch(&[10, 20, 30]);
+    assert_eq!(mappings.len(), 3);
+    assert_eq!(mappings.next_idx(), 3, "next_idx advanced before clear");
+
     mappings.clear();
-    assert_eq!(mappings.tombstone_count(), 0);
+
+    assert!(mappings.is_empty(), "clear empties id_to_idx/idx_to_id");
+    assert_eq!(mappings.len(), 0);
+    assert!(!mappings.contains(10));
+    assert_eq!(
+        mappings.next_idx(),
+        0,
+        "clear resets the monotonic index counter"
+    );
+    // tombstone reset is best-effort here: a non-zero pre-state can only be
+    // produced under real contention, unreachable in single-threaded tests.
+    assert_eq!(
+        mappings.tombstone_count(),
+        0,
+        "clear resets the tombstone counter"
+    );
 }
 
 #[test]
 fn test_tombstone_count_zero_on_from_parts() {
+    // Tombstones are non-persisted runtime contention metadata; as_parts()
+    // returns only a 3-tuple, so from_parts cannot propagate any tombstone count.
     let original = ShardedMappings::new();
     original.register(1);
-    let (id_to_idx, idx_to_id, next_idx) = original.as_parts();
-    let restored = ShardedMappings::from_parts(id_to_idx, idx_to_id, next_idx);
+    assert_eq!(original.tombstone_count(), 0);
+    let parts = original.as_parts();
+    let restored = ShardedMappings::from_parts(parts.0, parts.1, parts.2);
     assert_eq!(
         restored.tombstone_count(),
         0,
-        "from_parts starts with zero tombstones"
+        "as_parts() returns no tombstone field (3-tuple), so from_parts cannot propagate runtime tombstone metadata across serialization"
     );
 }

@@ -79,12 +79,19 @@ fn test_warmup_all_functions() {
     let b: Vec<f32> = (0..768).map(|i| (767 - i) as f32 * 0.01).collect();
 
     let dot_result = dot_product_native(&a, &b);
-    assert!(dot_result > 0.0, "Dot product after warmup failed");
+    let dot_expected: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    // Relative tolerance: the accumulated sum is in the hundreds, so SIMD vs
+    // scalar reduction order diverges by more than a tight absolute epsilon.
+    assert!(
+        (dot_result - dot_expected).abs() <= dot_expected.abs() * 1e-4,
+        "Dot product after warmup: got {dot_result}, expected {dot_expected}"
+    );
 
     // Test cosine
     let cos_result = cosine_similarity_native(&a, &b);
+    let cos_expected = crate::simd_native::scalar::cosine_scalar(&a, &b);
     assert!(
-        (-1.0..=1.0).contains(&cos_result),
-        "Cosine after warmup failed"
+        (cos_result - cos_expected).abs() < 1e-3,
+        "Cosine after warmup: got {cos_result}, expected {cos_expected}"
     );
 }

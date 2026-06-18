@@ -192,25 +192,6 @@ fn rabitq_encode_distance_preserves_relative_ordering() {
 }
 
 #[test]
-fn rabitq_xor_popcount_correct_on_known_patterns() {
-    // All bits set vs no bits set: maximum Hamming distance
-    let all_set = [u64::MAX];
-    let none_set = [0u64];
-
-    let xor = all_set[0] ^ none_set[0];
-    assert_eq!(xor.count_ones(), 64);
-
-    // Same pattern: zero Hamming distance
-    let xor2 = all_set[0] ^ all_set[0];
-    assert_eq!(xor2.count_ones(), 0);
-
-    // Known pattern: alternating bits
-    let a = 0xAAAA_AAAA_AAAA_AAAAu64;
-    let b = 0x5555_5555_5555_5555u64;
-    assert_eq!((a ^ b).count_ones(), 64); // all differ
-}
-
-#[test]
 fn rabitq_distance_non_negative() {
     use rand::{RngExt, SeedableRng};
     let dim = 128;
@@ -608,10 +589,22 @@ fn rabitq_prepared_query_is_pub_crate() {
     assert!(pq.is_some());
     let pq = pq.unwrap();
     assert_eq!(pq.num_words, 1);
-    assert!(pq.norm > 0.0);
-    assert!(pq.norm_sq > 0.0);
     assert_eq!(pq.bits.len(), 1);
     assert_eq!(pq.rotated.len(), dim);
+    // Deterministic pipeline: centroid [0;64], identity rotation, v = [1.0;64]
+    // => centered = [1.0;64] => norm_sq = 64, norm = sqrt(64) = 8.
+    assert!((pq.norm - 8.0).abs() < 1e-4, "norm should be sqrt(64)=8");
+    assert!((pq.norm_sq - 64.0).abs() < 1e-4, "norm_sq should be 64");
+    // All 64 rotated values are positive => every sign bit is set.
+    assert_eq!(
+        pq.bits[0],
+        u64::MAX,
+        "all rotated values are positive so all bits should be set"
+    );
+    assert!(
+        pq.rotated.iter().all(|&x| x > 0.0),
+        "identity rotation of a positive normalized vector stays positive"
+    );
 }
 
 // ====================================================================

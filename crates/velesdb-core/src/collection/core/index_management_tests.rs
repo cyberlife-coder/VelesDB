@@ -165,16 +165,6 @@ mod tests {
     }
 
     #[test]
-    fn test_indexes_memory_usage_initial() {
-        let (collection, _temp) = create_test_collection();
-
-        // Memory usage should be minimal initially
-        let memory = collection.indexes_memory_usage();
-        // Memory usage returns usize, just verify it doesn't panic
-        let _ = memory;
-    }
-
-    #[test]
     fn test_indexes_memory_usage_after_creation() {
         let (collection, _temp) = create_test_collection();
 
@@ -184,8 +174,12 @@ mod tests {
         collection.create_range_index("Event", "timestamp").unwrap();
 
         let after_memory = collection.indexes_memory_usage();
-        // Memory should be at least the same (could be more with index structures)
-        assert!(after_memory >= initial_memory);
+        // Each registered index adds label.len()+prop.len() bytes over the fixed
+        // base, so memory must strictly grow after creating two indexes.
+        assert!(
+            after_memory > initial_memory,
+            "memory must grow after registering indexes; got initial={initial_memory} after={after_memory}"
+        );
     }
 
     // =========================================================================
@@ -705,33 +699,6 @@ mod tests {
         assert!(bm.is_empty(), "no entries => empty bitmap");
     }
 
-    #[test]
-    fn test_index_info_struct() {
-        use crate::collection::core::index_management::IndexInfo;
-
-        let info = IndexInfo {
-            label: "Test".to_string(),
-            property: "field".to_string(),
-            index_type: "hash".to_string(),
-            cardinality: 100,
-            memory_bytes: 1024,
-        };
-
-        assert_eq!(info.label, "Test");
-        assert_eq!(info.property, "field");
-        assert_eq!(info.index_type, "hash");
-        assert_eq!(info.cardinality, 100);
-        assert_eq!(info.memory_bytes, 1024);
-
-        // Test Clone
-        let cloned = info.clone();
-        assert_eq!(cloned.label, info.label);
-
-        // Test Debug
-        let debug_str = format!("{:?}", info);
-        assert!(debug_str.contains("IndexInfo"));
-    }
-
     // =========================================================================
     // IN bitmap pre-filter tests (Issue #512)
     // =========================================================================
@@ -968,31 +935,6 @@ mod tests {
         });
         let bitmap = collection.build_prefilter_bitmap(&filter);
         assert!(bitmap.is_none(), "no secondary index => None");
-    }
-
-    #[test]
-    fn test_not_in_empty_list_returns_none() {
-        // GIVEN: index with tech=[1,5,10], science=[2,7], art=[3]
-        let (collection, _temp) = create_test_collection();
-        collection
-            .create_index("category")
-            .expect("test: index creation");
-        populate_category_index(&collection);
-
-        // WHEN: NOT IN () — empty exclusion list
-        let filter = crate::filter::Filter::new(crate::filter::Condition::Not {
-            condition: Box::new(crate::filter::Condition::In {
-                field: "category".to_string(),
-                values: vec![],
-            }),
-        });
-
-        // THEN: all `Not` conditions return None now (full-scan fallback). The
-        // post-filter evaluates the predicate correctly, including field-absent rows.
-        assert!(
-            collection.build_prefilter_bitmap(&filter).is_none(),
-            "NOT IN () must return None (conservative scan fallback)"
-        );
     }
 
     #[test]

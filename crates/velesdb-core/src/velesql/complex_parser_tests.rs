@@ -4,7 +4,10 @@
 //! Based on research: VLDB 2024 hybrid vector+graph queries, cost estimation patterns.
 #![cfg(all(test, feature = "persistence"))]
 
-use crate::velesql::{Parser, QueryPlan, SelectColumns};
+use crate::velesql::{
+    AggregateArg, AggregateType, CompareOp, Condition, OrderByExpr, Parser, QueryPlan,
+    SelectColumns, Value,
+};
 
 // =============================================================================
 // CATEGORY 1: Pure Aggregation Queries
@@ -115,6 +118,18 @@ fn test_parse_having_avg() {
     .unwrap();
 
     assert!(query.select.having.is_some());
+    let having = query.select.having.as_ref().unwrap();
+    assert_eq!(having.conditions.len(), 1);
+    assert_eq!(
+        having.conditions[0].aggregate.function_type,
+        AggregateType::Avg
+    );
+    assert_eq!(
+        having.conditions[0].aggregate.argument,
+        AggregateArg::Column("price".to_string())
+    );
+    assert_eq!(having.conditions[0].operator, CompareOp::Gt);
+    assert_eq!(having.conditions[0].value, Value::Integer(100));
 }
 
 #[test]
@@ -161,7 +176,17 @@ fn test_parse_vector_similarity_order() {
     )
     .unwrap();
 
-    assert!(query.select.order_by.is_some());
+    let order_by = query.select.order_by.expect("ORDER BY should be present");
+    assert_eq!(order_by.len(), 1);
+    assert!(
+        matches!(&order_by[0].expr, OrderByExpr::Similarity(_)),
+        "expected similarity(field, $param) to parse as OrderByExpr::Similarity, got {:?}",
+        order_by[0].expr
+    );
+    assert!(
+        order_by[0].descending,
+        "ORDER BY ... DESC should set descending = true"
+    );
 }
 
 // =============================================================================
@@ -401,9 +426,27 @@ fn test_case_insensitive_keywords() {
         "SELECT * FROM docs WHERE VECTOR NEAR $V LIMIT 10",
     ];
 
-    for sql in &queries {
-        let result = Parser::parse(sql);
-        assert!(result.is_ok(), "Failed to parse: {}", sql);
+    let parsed: Vec<_> = queries
+        .iter()
+        .map(|sql| Parser::parse(sql).unwrap_or_else(|e| panic!("Failed to parse {sql}: {e:?}")))
+        .collect();
+    // Keywords (SELECT/FROM/WHERE/NEAR/LIMIT) are case-insensitive, so the
+    // structural fields must be identical across variants. Identifiers and the
+    // `$param` name preserve case, so we do NOT assert full-AST equality.
+    for (sql, q) in queries.iter().zip(parsed.iter()) {
+        assert_eq!(
+            q.select.from, "docs",
+            "FROM parsed case-insensitively: {sql}"
+        );
+        assert_eq!(
+            q.select.limit,
+            Some(10),
+            "LIMIT parsed case-insensitively: {sql}"
+        );
+        assert!(
+            q.select.where_clause.is_some(),
+            "WHERE ... NEAR must parse into a condition: {sql}"
+        );
     }
 }
 
@@ -429,8 +472,14 @@ fn test_case_insensitive_groupby_having() {
 #[test]
 fn test_parse_empty_result_query() {
     // Simple query with filter that might return no results
-    let query = Parser::parse("SELECT * FROM products WHERE stock = 0 LIMIT 10");
-    assert!(query.is_ok());
+    let query =
+        Parser::parse("SELECT * FROM products WHERE stock = 0 LIMIT 10").expect("should parse");
+    assert_eq!(query.select.from, "products");
+    assert_eq!(query.select.limit, Some(10));
+    assert!(
+        query.select.where_clause.is_some(),
+        "integer-equality WHERE should parse into a condition"
+    );
 }
 
 #[test]
@@ -441,8 +490,15 @@ fn test_parse_very_long_column_list() {
         .join(", ");
     let sql = format!("SELECT {} FROM wide_table LIMIT 100", columns);
 
-    let query = Parser::parse(&sql);
-    assert!(query.is_ok());
+    let query = Parser::parse(&sql).expect("20-column SELECT should parse");
+    match &query.select.columns {
+        SelectColumns::Columns(cols) => {
+            assert_eq!(cols.len(), 20, "all 20 columns must be preserved");
+            assert_eq!(cols[0].name, "col1");
+            assert_eq!(cols[19].name, "col20");
+        }
+        other => panic!("Expected a named-column list, got {other:?}"),
+    }
 }
 
 #[test]
@@ -460,6 +516,15 @@ fn test_parse_nested_column_names() {
 
 #[test]
 fn test_parse_special_characters_in_strings() {
-    let query = Parser::parse("SELECT * FROM docs WHERE title = 'Hello, World!' LIMIT 10");
-    assert!(query.is_ok());
+    let query = Parser::parse("SELECT * FROM docs WHERE title = 'Hello, World!' LIMIT 10")
+        .expect("query with comma+special chars in string literal should parse");
+    assert_eq!(query.select.limit, Some(10));
+    match query.select.where_clause {
+        Some(Condition::Comparison(c)) => {
+            assert_eq!(c.column, "title");
+            // Comma inside the literal must NOT split the value; '!' must be preserved.
+            assert_eq!(c.value, Value::String("Hello, World!".to_string()));
+        }
+        _ => panic!("Expected a Comparison WHERE condition"),
+    }
 }

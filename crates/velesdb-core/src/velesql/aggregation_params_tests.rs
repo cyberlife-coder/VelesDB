@@ -137,9 +137,25 @@ fn test_bug_5_grouped_aggregation_with_params() {
 
     let result = collection.execute_aggregate(&query, &params);
 
-    assert!(
-        result.is_ok(),
-        "Grouped aggregation with params should work: {:?}",
-        result.err()
+    let json = result.expect("Grouped aggregation with params should work");
+    let groups = json.as_array().expect("grouped result is an array");
+    assert_eq!(
+        groups.len(),
+        2,
+        "expected exactly groups A and B, got {json:?}"
     );
+
+    let count_for = |cat: &str| -> i64 {
+        groups
+            .iter()
+            .find(|g| g.get("category").and_then(serde_json::Value::as_str) == Some(cat))
+            .and_then(|g| g.get("count"))
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or_else(|| panic!("missing count for group {cat} in {json:?}"))
+    };
+
+    // price > $min ($min = 20): A keeps only price=30 (1), B keeps 40 & 50 (2).
+    // If params were ignored, $min collapses to NULL -> wrong counts (this is the bug).
+    assert_eq!(count_for("A"), 1, "group A should count only price=30");
+    assert_eq!(count_for("B"), 2, "group B should count prices 40 and 50");
 }

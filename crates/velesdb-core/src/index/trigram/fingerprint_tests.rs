@@ -91,26 +91,33 @@ fn test_approx_intersection_subset() {
 // ========== Jaccard Tests ==========
 
 #[test]
-fn test_approx_jaccard_ranges() {
-    let texts = [
-        ("hello world", "hello world"),
-        ("hello world", "hello there"),
-        ("hello world", "completely different"),
-        ("abc", "xyz"),
-    ];
+fn test_approx_jaccard_orders_by_similarity() {
+    let fp = |t: &str| TrigramFingerprint::from_text(t);
+    let cnt = |t: &str| extract_trigrams(t).len();
 
-    for (a, b) in &texts {
-        let fp_a = TrigramFingerprint::from_text(a);
-        let fp_b = TrigramFingerprint::from_text(b);
-        let count_a = extract_trigrams(a).len();
-        let count_b = extract_trigrams(b).len();
+    let base = "hello world";
+    let base_fp = fp(base);
+    let base_cnt = cnt(base);
 
-        let jaccard = fp_a.approx_jaccard(&fp_b, count_a, count_b);
-        assert!(
-            (0.0..=1.0).contains(&jaccard),
-            "Jaccard for ({a}, {b}) out of range: {jaccard}"
-        );
-    }
+    // Identical fingerprints: AND == OR == A ⇒ ratio is exactly 1.0.
+    let j_same = base_fp.approx_jaccard(&fp(base), base_cnt, cnt(base));
+    assert!(j_same > 0.9, "identical text must score ~1.0, got {j_same}");
+
+    // Shares the whole "hello " prefix.
+    let j_close = base_fp.approx_jaccard(&fp("hello there"), base_cnt, cnt("hello there"));
+    // Shares essentially nothing with "hello world".
+    let j_far = base_fp.approx_jaccard(
+        &fp("completely different"),
+        base_cnt,
+        cnt("completely different"),
+    );
+
+    assert!(
+        j_close > j_far,
+        "more-similar text must score strictly higher: close={j_close}, far={j_far}"
+    );
+    // Still cheap and safe to keep the bounds as an invariant guard.
+    assert!((0.0..=1.0).contains(&j_close) && (0.0..=1.0).contains(&j_far));
 }
 
 #[test]
@@ -121,8 +128,8 @@ fn test_approx_jaccard_identical_text() {
 
     let jaccard = fp.approx_jaccard(&fp, count, count);
     assert!(
-        jaccard > 0.8,
-        "identical text Jaccard should be high, got {jaccard}"
+        (jaccard - 1.0).abs() < f32::EPSILON,
+        "identical text self-Jaccard must be exactly 1.0, got {jaccard}"
     );
 }
 
