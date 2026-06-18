@@ -261,13 +261,23 @@ fn test_graph_degree_zero_for_isolated_node() {
     let temp = tempfile::tempdir().unwrap();
     create_graph_collection(temp.path(), "g");
 
-    cmd()
-        .args(["graph", "degree", temp.path().to_str().unwrap(), "g", "999"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("In-degree:"))
-        .stdout(predicate::str::contains("Out-degree:"))
-        .stdout(predicate::str::contains("Total:"));
+    let output = cmd()
+        .args([
+            "graph",
+            "degree",
+            temp.path().to_str().unwrap(),
+            "g",
+            "999",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert_eq!(parsed["in_degree"], 0);
+    assert_eq!(parsed["out_degree"], 0);
+    assert_eq!(parsed["total_degree"], 0);
 }
 
 #[test]

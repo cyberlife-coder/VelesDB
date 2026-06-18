@@ -32,7 +32,8 @@ fn test_license_info_has_feature() {
 fn test_premium_feature_enum_only_contains_true_premium_variants() {
     // After #390: HybridSearch, AdvancedFiltering, GpuAcceleration are free
     // in open-source core and must NOT be in the PremiumFeature enum.
-    // The remaining 6 variants are genuinely premium.
+    // The remaining 6 variants are genuinely premium. This guard fails loudly
+    // if the set ever changes (count assert + exhaustive match with no wildcard).
     let all_premium = [
         PremiumFeature::EncryptionAtRest,
         PremiumFeature::Snapshots,
@@ -41,14 +42,18 @@ fn test_premium_feature_enum_only_contains_true_premium_variants() {
         PremiumFeature::SSO,
         PremiumFeature::AuditLogging,
     ];
-
-    // Verify Display works for each remaining variant
+    assert_eq!(all_premium.len(), 6, "PremiumFeature must have exactly 6 variants");
     for feature in &all_premium {
-        let display = feature.to_string();
-        assert!(
-            !display.is_empty(),
-            "Display must be non-empty for {feature:?}"
-        );
+        // Exhaustive match (no `_` arm): adding/removing a variant breaks
+        // compilation here, forcing this guard to be updated deliberately.
+        match feature {
+            PremiumFeature::EncryptionAtRest
+            | PremiumFeature::Snapshots
+            | PremiumFeature::MultiTenancy
+            | PremiumFeature::RBAC
+            | PremiumFeature::SSO
+            | PremiumFeature::AuditLogging => {}
+        }
     }
 }
 

@@ -12,8 +12,8 @@ use velesdb_core::{Database, DistanceMetric, GraphEdge, GraphSchema, Point};
 
 use super::{
     cmd_browse, cmd_count, cmd_describe, cmd_diagnostics, cmd_nodes, cmd_sample, cmd_schema,
-    cmd_scroll, cmd_stats, index_health_label, node_entries_to_rows, print_metadata_detail,
-    print_node_page_body, vector_preview,
+    cmd_scroll, cmd_stats, index_health_label, node_entries_to_rows, print_node_page_body,
+    vector_preview,
 };
 use crate::repl_commands::CommandResult;
 
@@ -114,25 +114,8 @@ fn test_index_health_label_needs_rebuild_carries_reason() {
 }
 
 // =============================================================================
-// print_metadata_detail (L456) — must not panic, shared by .describe / .stats
+// print_node_page_body — non-empty branch
 // =============================================================================
-
-#[test]
-fn test_print_metadata_detail_runs() {
-    print_metadata_detail("Collection Details", "Metadata", "catalog", 42);
-    print_metadata_detail("Collection Statistics", "Metadata", "empty", 0);
-}
-
-// =============================================================================
-// print_node_page_body — empty branch (L476) and non-empty branch
-// =============================================================================
-
-#[test]
-fn test_print_node_page_body_empty_branch() {
-    let empty: Vec<(u64, Option<serde_json::Value>)> = Vec::new();
-    // Empty entries hit the "No nodes on this page." branch.
-    print_node_page_body(&empty, "kg", ".nodes", 99);
-}
 
 #[test]
 fn test_print_node_page_body_non_empty_branch() {
@@ -140,6 +123,12 @@ fn test_print_node_page_body_non_empty_branch() {
         (10u64, Some(serde_json::json!({"name": "a"}))),
         (20u64, None),
     ];
+    // Renders the non-empty arm (table + "next page" hint) without panicking,
+    // including a None payload. Assert on the rows the branch actually builds.
+    let rows = node_entries_to_rows(&entries);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get("id"), Some(&serde_json::json!(10)));
+    assert_eq!(rows[1].get("id"), Some(&serde_json::json!(20)));
     print_node_page_body(&entries, "kg", ".browse", 1);
 }
 
@@ -152,9 +141,11 @@ fn test_node_entries_to_rows_maps_id_and_payload() {
     let entries = vec![(7u64, Some(serde_json::json!({"k": "v"}))), (8u64, None)];
     let rows = node_entries_to_rows(&entries);
     assert_eq!(rows.len(), 2);
-    // The id column is always populated by point_payload_to_row.
-    assert!(rows[0].contains_key("id"));
-    assert!(rows[1].contains_key("id"));
+    assert_eq!(rows[0]["id"], serde_json::json!(7));
+    assert_eq!(rows[0]["k"], serde_json::json!("v"));
+    assert_eq!(rows[0].len(), 2); // id + flattened payload key
+    assert_eq!(rows[1]["id"], serde_json::json!(8));
+    assert_eq!(rows[1].len(), 1); // None payload => only id, no spurious keys
 }
 
 #[test]

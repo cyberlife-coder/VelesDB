@@ -696,15 +696,14 @@ fn test_index_create_then_list_in_separate_invocations() {
         .success();
 
     // Note: in-memory indexes don't persist across CLI invocations.
-    // This tests the list command runs successfully even with no persisted indexes.
-    velesdb_cmd()
-        .arg("index")
-        .arg("list")
-        .arg(&db_path)
-        .arg("docs")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Indexes"));
+    // Verify via the core API (same process) that the created index is present.
+    let db = velesdb_core::Database::open(&db_path).unwrap();
+    let col = db.get_vector_collection("docs").unwrap();
+    let indexes = col.list_indexes();
+    assert!(
+        indexes.iter().any(|i| i.property == "category"),
+        "created secondary index on 'category' must be listed, got {indexes:?}"
+    );
 }
 
 #[test]
@@ -713,7 +712,7 @@ fn test_index_list_json_format_empty() {
 
     // In-memory indexes don't persist across CLI invocations.
     // Verify the JSON output is a valid empty array.
-    velesdb_cmd()
+    let output = velesdb_cmd()
         .arg("index")
         .arg("list")
         .arg(&db_path)
@@ -722,7 +721,14 @@ fn test_index_list_json_format_empty() {
         .arg("json")
         .assert()
         .success()
-        .stdout(predicate::str::contains("["));
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&output);
+    let parsed: serde_json::Value =
+        serde_json::from_str(text.trim()).expect("index list --format json should emit valid JSON");
+    let arr = parsed.as_array().expect("json output should be an array");
+    assert!(arr.is_empty(), "no indexes persist across CLI invocations, so the array must be empty");
 }
 
 #[test]
