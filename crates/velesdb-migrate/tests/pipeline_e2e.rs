@@ -434,6 +434,24 @@ async fn test_pipeline_qdrant_sparse_vectors_e2e() {
             .expect("payload for point 2")["title"],
         "Doc dense only"
     );
+
+    // Point 1 was ingested with sparse indices [10, 45, 16]; a query on index 10
+    // must match point 1 and not the dense-only point 2.
+    use velesdb_core::sparse_index::{SparseVector, DEFAULT_SPARSE_INDEX_NAME};
+    let sparse_query = SparseVector::new(vec![(10u32, 0.9f32)]);
+    let results = collection
+        .sparse_search(&sparse_query, 2, DEFAULT_SPARSE_INDEX_NAME)
+        .expect("sparse search on default index");
+    assert_eq!(
+        results.len(),
+        1,
+        "sparse index must contain exactly the one point (id=1) carrying sparse indices"
+    );
+    assert_eq!(
+        results[0].point.id,
+        1u64,
+        "the sparse-vector point (id=1) must be the sparse-search result"
+    );
 }
 
 /// Verify that an HTTP 500 on the Qdrant scroll endpoint fails the pipeline
@@ -758,6 +776,36 @@ async fn test_pipeline_pinecone_sparse_vectors_e2e() {
 
     let collection = open_collection(destination.path(), "pinecone_sparse_docs");
     assert_eq!(collection.len(), 2);
+
+    // vec-1 carried sparseValues {indices:[0,5,12], values:[0.9,0.4,0.7]};
+    // build_point wires it into Point::with_sparse under the default sparse index.
+    // If sparse extraction silently dropped, the default index would never be
+    // created and sparse_search would Err.
+    use velesdb_core::sparse_index::{SparseVector, DEFAULT_SPARSE_INDEX_NAME};
+    let query = SparseVector::new(vec![(0u32, 0.9f32)]);
+    let sparse_hits = collection
+        .sparse_search(&query, 2, DEFAULT_SPARSE_INDEX_NAME)
+        .expect("default sparse index must exist after migrating sparseValues");
+    assert!(
+        !sparse_hits.is_empty(),
+        "sparse index must be populated from Pinecone sparseValues"
+    );
+
+    // Dense payload must also survive. IDs are FNV-hashed by the pipeline's
+    // pub(crate) stable_point_id (not callable here), so scan the sparse hits
+    // to retrieve the payload of the matched point.
+    let hit_ids: Vec<u64> = sparse_hits.iter().map(|r| r.point.id).collect();
+    let stored = collection.get(&hit_ids);
+    let titles: Vec<String> = stored
+        .iter()
+        .filter_map(|p| p.as_ref())
+        .filter_map(|p| p.payload.as_ref())
+        .filter_map(|pl| pl.get("title").and_then(|t| t.as_str()).map(str::to_owned))
+        .collect();
+    assert!(
+        titles.iter().any(|t| t == "Sparse doc"),
+        "payload of the sparse point must be preserved, got titles: {titles:?}"
+    );
 }
 
 #[tokio::test]

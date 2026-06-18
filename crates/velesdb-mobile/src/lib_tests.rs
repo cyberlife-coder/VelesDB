@@ -452,10 +452,16 @@ fn test_collection_apply_advanced_config() {
 
     let cfg = col.inner.config();
     assert_eq!(cfg.pq_rescore_oversampling, Some(8));
-    let aib = cfg.async_index_builder.as_ref().expect("async_index_builder set");
+    let aib = cfg
+        .async_index_builder
+        .as_ref()
+        .expect("async_index_builder set");
     assert_eq!(aib.merge_threshold, 20_000);
     assert_eq!(aib.segment_count, None);
-    let d = cfg.deferred_indexing.as_ref().expect("deferred_indexing set");
+    let d = cfg
+        .deferred_indexing
+        .as_ref()
+        .expect("deferred_indexing set");
     assert!(d.enabled);
     assert_eq!(d.merge_threshold, 512);
     assert_eq!(d.max_buffer_age_ms, 3000);
@@ -470,8 +476,14 @@ fn test_collection_apply_advanced_config() {
 
     let cfg2 = col.inner.config();
     assert_eq!(cfg2.pq_rescore_oversampling, Some(8));
-    assert!(cfg2.async_index_builder.as_ref().is_some_and(|a| a.merge_threshold == 20_000));
-    assert!(cfg2.deferred_indexing.as_ref().is_some_and(|d| d.enabled && d.merge_threshold == 512));
+    assert!(cfg2
+        .async_index_builder
+        .as_ref()
+        .is_some_and(|a| a.merge_threshold == 20_000));
+    assert!(cfg2
+        .deferred_indexing
+        .as_ref()
+        .is_some_and(|d| d.enabled && d.merge_threshold == 512));
 }
 
 #[test]
@@ -501,9 +513,11 @@ fn test_collection_with_json_payload() {
     let payload_str = fetched.payload.expect("payload should persist");
     let got: serde_json::Value =
         serde_json::from_str(&payload_str).expect("stored payload must be valid JSON");
-    let expected: serde_json::Value =
-        serde_json::json!({"title": "Hello", "category": "test"});
-    assert_eq!(got, expected, "payload must round-trip through parse_point + get_by_id");
+    let expected: serde_json::Value = serde_json::json!({"title": "Hello", "category": "test"});
+    assert_eq!(
+        got, expected,
+        "payload must round-trip through parse_point + get_by_id"
+    );
 }
 
 // =========================================================================
@@ -729,7 +743,10 @@ fn test_multi_query_search_all_strategies() {
         assert_eq!(results.len(), 2, "{strategy:?} should return both points");
         // Query 0 == id=1's vector exactly, and id=1 ties/beats id=2 on query 1,
         // so id=1 must rank first under every fusion strategy.
-        assert_eq!(results[0].id, 1, "{strategy:?} must rank the exact-match id=1 first");
+        assert_eq!(
+            results[0].id, 1,
+            "{strategy:?} must rank the exact-match id=1 first"
+        );
     }
 }
 
