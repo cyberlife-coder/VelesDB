@@ -124,8 +124,9 @@ class TestVelesDBVectorStore:
         ]
         vector_store.add(nodes)
 
-        # Delete should not raise
         vector_store.delete("delete_me")
+        info = vector_store.get_collection_info()
+        assert info["point_count"] == 0
 
     def test_client_property(self, vector_store):
         """Test client property returns database."""

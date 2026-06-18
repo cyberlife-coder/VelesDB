@@ -15,7 +15,10 @@ class TestVelesDBChatMemory:
         """Test: VelesDBChatMemory can be imported."""
         from langchain_velesdb import VelesDBChatMemory
 
-        assert VelesDBChatMemory is not None
+        assert VelesDBChatMemory is not None  # guards __init__.py's `= None` ImportError fallback
+        assert callable(VelesDBChatMemory)
+        assert hasattr(VelesDBChatMemory, "save_context")
+        assert hasattr(VelesDBChatMemory, "load_memory_variables")
 
     def test_chat_memory_initialization(self):
         """Test: VelesDBChatMemory can be initialized."""

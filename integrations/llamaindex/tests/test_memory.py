@@ -157,12 +157,6 @@ class TestSemanticMemory:
 class TestEpisodicMemory:
     """Tests for VelesDBEpisodicMemory."""
 
-    def test_import(self):
-        """VelesDBEpisodicMemory can be imported."""
-        from llamaindex_velesdb.memory import VelesDBEpisodicMemory
-
-        assert VelesDBEpisodicMemory is not None
-
     def test_init(self, tmp_db):
         """Initialisation succeeds with a valid path and dimension."""
         from llamaindex_velesdb.memory import VelesDBEpisodicMemory
