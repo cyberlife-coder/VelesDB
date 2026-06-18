@@ -224,7 +224,16 @@ describe('WasmBackend', () => {
         { id: '1', vector: [1.0, 0.0, 0.0, 0.0] },
         { id: '2', vector: [0.0, 1.0, 0.0, 0.0] },
       ]);
-      // No error means success
+
+      const collections = (backend as any).collections;
+      const store = collections.get('vectors').store as MockVectorStore;
+
+      expect(store.insert_with_payload).not.toHaveBeenCalled();
+      expect(store.insert_batch).toHaveBeenCalledTimes(1);
+      expect(store.insert_batch).toHaveBeenCalledWith([
+        [BigInt(1), [1.0, 0.0, 0.0, 0.0]],
+        [BigInt(2), [0.0, 1.0, 0.0, 0.0]],
+      ]);
     });
 
     it('should forward payload docs in upsertBatch via insert_with_payload', async () => {
@@ -287,11 +296,19 @@ describe('WasmBackend', () => {
     });
 
     it('should accept weighted fusion strategy', async () => {
+      const collections = (backend as any).collections;
+      const store = collections.get('vectors').store as MockVectorStore;
+
       const results = await backend.multiQuerySearch('vectors', [[0.1, 0.2, 0.3, 0.4]], {
         fusion: 'weighted',
         fusionParams: { avgWeight: 0.6, maxWeight: 0.3, hitWeight: 0.1 },
       });
-      expect(Array.isArray(results)).toBe(true);
+
+      expect(store.multi_query_search).toHaveBeenCalledWith(
+        expect.any(Float32Array), 1, 10, 'weighted', 60,
+      );
+      expect(results.length).toBe(1);
+      expect(results[0].score).toBe(0.95);
     });
   });
 

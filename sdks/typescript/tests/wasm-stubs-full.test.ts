@@ -23,6 +23,7 @@ import type {
   CreateIndexOptions,
   EpisodicEvent,
   GraphCollectionConfig,
+  MultiQuerySearchOptions,
   PqTrainOptions,
   ProceduralPattern,
   SemanticEntry,

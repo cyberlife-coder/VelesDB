@@ -332,7 +332,12 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM docs USING FUSION LIMIT 20'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'docs',
+        'SELECT * FROM docs USING FUSION LIMIT 20',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
 
@@ -342,7 +347,12 @@ describe('VelesQL v2.0', () => {
         "SELECT * FROM docs USING FUSION(strategy = 'rrf', k = 60) LIMIT 20"
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'docs',
+        "SELECT * FROM docs USING FUSION(strategy = 'rrf', k = 60) LIMIT 20",
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
 
@@ -352,7 +362,12 @@ describe('VelesQL v2.0', () => {
         "SELECT * FROM docs USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3) LIMIT 20"
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'docs',
+        "SELECT * FROM docs USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3) LIMIT 20",
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
 
@@ -362,26 +377,30 @@ describe('VelesQL v2.0', () => {
         "SELECT * FROM docs USING FUSION(strategy = 'maximum') LIMIT 20"
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'docs',
+        "SELECT * FROM docs USING FUSION(strategy = 'maximum') LIMIT 20",
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
   });
 
   describe('Complex queries combining v2.0 features', () => {
     it('should execute complex analytics query', async () => {
-      const result = await db.query(
-        'orders',
-        `SELECT category, COUNT(*), AVG(amount) 
-         FROM orders 
-         JOIN products AS p ON orders.product_id = p.id 
-         GROUP BY category 
-         HAVING COUNT(*) > 10 AND AVG(amount) > 100 
-         ORDER BY COUNT(*) DESC 
-         LIMIT 20`
-      );
+      const sql = `SELECT category, COUNT(*), AVG(amount)
+         FROM orders
+         JOIN products AS p ON orders.product_id = p.id
+         GROUP BY category
+         HAVING COUNT(*) > 10 AND AVG(amount) > 100
+         ORDER BY COUNT(*) DESC
+         LIMIT 20`;
+      const result = await db.query('orders', sql);
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith('orders', sql, undefined, undefined);
       expect(result.results).toBeDefined();
+      expect(result.results.length).toBe(2);
     });
 
     it('should execute semantic search with aggregation', async () => {
