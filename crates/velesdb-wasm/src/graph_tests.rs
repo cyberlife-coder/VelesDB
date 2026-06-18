@@ -20,7 +20,10 @@ fn test_graph_node_properties() {
     node.set_number_property("age", 30.0);
     node.set_bool_property("active", true);
 
-    assert_eq!(node.properties["name"], serde_json::Value::String("John".to_string()));
+    assert_eq!(
+        node.properties["name"],
+        serde_json::Value::String("John".to_string())
+    );
     assert_eq!(node.properties["age"], serde_json::json!(30.0));
     assert_eq!(node.properties["active"], serde_json::Value::Bool(true));
 }

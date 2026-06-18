@@ -724,4 +724,3 @@ fn test_not_vector_near_bare_returns_all_rows() {
         "bare NOT (VS) collapses residual to None under ¬VS=true"
     );
 }
-

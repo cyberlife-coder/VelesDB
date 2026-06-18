@@ -138,9 +138,16 @@ fn test_search_cosine_similarity() {
     assert_eq!(ranked.len(), 3, "all three vectors returned");
     // ID 1 (identical to query) ranks first with cosine ~1.0
     assert_eq!(ranked[0].0, 1, "highest cosine similarity must rank first");
-    assert!((ranked[0].1 - 1.0).abs() < 1e-5, "top score is cosine 1.0, got {}", ranked[0].1);
+    assert!(
+        (ranked[0].1 - 1.0).abs() < 1e-5,
+        "top score is cosine 1.0, got {}",
+        ranked[0].1
+    );
     // Orthogonal vectors score ~0.0 and rank below
-    assert!(ranked[1].1 < 0.5 && ranked[2].1 < 0.5, "orthogonal vectors score near zero");
+    assert!(
+        ranked[1].1 < 0.5 && ranked[2].1 < 0.5,
+        "orthogonal vectors score near zero"
+    );
 }
 
 #[wasm_bindgen_test]

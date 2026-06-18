@@ -187,9 +187,17 @@ fn test_fuse_results_rrf() {
     let fused = fusion::fuse_results(&all_results, "rrf", 60).unwrap();
     let top_ids: Vec<u64> = fused.iter().take(2).map(|(id, _)| *id).collect();
     // IDs 1 and 2 appear in both lists; 3 and 4 in only one -> 1 and 2 must rank top-2.
-    assert!(top_ids.contains(&1) && top_ids.contains(&2), "RRF must rank dual-list IDs 1 and 2 in the top 2, got {top_ids:?}");
-    let score = |target: u64| fused.iter().find(|(id, _)| *id == target).map(|(_, s)| *s)
-        .unwrap_or_else(|| panic!("id {target} missing from fused result"));
+    assert!(
+        top_ids.contains(&1) && top_ids.contains(&2),
+        "RRF must rank dual-list IDs 1 and 2 in the top 2, got {top_ids:?}"
+    );
+    let score = |target: u64| {
+        fused
+            .iter()
+            .find(|(id, _)| *id == target)
+            .map(|(_, s)| *s)
+            .unwrap_or_else(|| panic!("id {target} missing from fused result"))
+    };
     // Both shared-list IDs must outrank the single-list IDs (3, 4).
     assert!(score(1) > score(3));
     assert!(score(1) > score(4));

@@ -42,7 +42,11 @@ fn test_premium_feature_enum_only_contains_true_premium_variants() {
         PremiumFeature::SSO,
         PremiumFeature::AuditLogging,
     ];
-    assert_eq!(all_premium.len(), 6, "PremiumFeature must have exactly 6 variants");
+    assert_eq!(
+        all_premium.len(),
+        6,
+        "PremiumFeature must have exactly 6 variants"
+    );
     for feature in &all_premium {
         // Exhaustive match (no `_` arm): adding/removing a variant breaks
         // compilation here, forcing this guard to be updated deliberately.

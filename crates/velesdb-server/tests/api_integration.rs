@@ -3040,9 +3040,15 @@ async fn test_search_ids_sparse() {
     let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
     let results = json["results"].as_array().expect("results is array");
 
-    assert!(!results.is_empty(), "sparse search must return at least one result");
+    assert!(
+        !results.is_empty(),
+        "sparse search must return at least one result"
+    );
     assert!(results.len() <= 2, "top_k=2 caps results");
-    assert_eq!(results[0]["id"], "1", "exact sparse-vector match for id=1 must rank first");
+    assert_eq!(
+        results[0]["id"], "1",
+        "exact sparse-vector match for id=1 must rank first"
+    );
     // Verify id+score schema and no payload for every returned row
     for r in results {
         assert!(r["id"].is_string());

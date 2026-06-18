@@ -23,7 +23,10 @@ fn observability_types_are_root_exported() {
     let _ = velesdb_core::DurationHistogram::new();
     let _ = velesdb_core::OperationalMetrics::new();
     let _ = velesdb_core::TraversalMetrics::new();
-    let _ = velesdb_core::QueryStats { collection: String::from("facade"), ..Default::default() };
+    let _ = velesdb_core::QueryStats {
+        collection: String::from("facade"),
+        ..Default::default()
+    };
     let _ = velesdb_core::GuardRailsMetrics::new();
 }
 

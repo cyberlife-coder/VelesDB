@@ -131,11 +131,22 @@ fn test_delete_edge_by_id_returns_deletion() {
     seed_graph(&mut db);
     let r = execute(&mut db, "DELETE EDGE 1 FROM graph", None).expect("test: delete edge");
     assert_eq!(r.kind(), "deletion");
-    let after = execute(&mut db, "SELECT EDGES FROM graph", None).expect("test: edges after delete");
-    assert_eq!(after.row_count(), 1, "exactly one edge must remain after deleting edge id 1");
+    let after =
+        execute(&mut db, "SELECT EDGES FROM graph", None).expect("test: edges after delete");
+    assert_eq!(
+        after.row_count(),
+        1,
+        "exactly one edge must remain after deleting edge id 1"
+    );
     let rows = after.rows_json();
-    assert!(!rows.contains("\"source\":1"), "deleted edge (Alice->Bob, source=1) must be gone, got: {rows}");
-    assert!(rows.contains("\"source\":2"), "the untouched Bob->Carol edge (source=2) must survive, got: {rows}");
+    assert!(
+        !rows.contains("\"source\":1"),
+        "deleted edge (Alice->Bob, source=1) must be gone, got: {rows}"
+    );
+    assert!(
+        rows.contains("\"source\":2"),
+        "the untouched Bob->Carol edge (source=2) must survive, got: {rows}"
+    );
 }
 
 // =========================================================================

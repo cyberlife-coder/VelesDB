@@ -87,11 +87,23 @@ fn test_group_by_category_returns_one_row_per_group() {
     assert_eq!(r.row_count(), 3); // tech, food, home
     let body = r.rows_json();
     // All three group keys present.
-    assert!(body.contains("\"category\":\"tech\""), "missing tech group: {body}");
-    assert!(body.contains("\"category\":\"food\""), "missing food group: {body}");
-    assert!(body.contains("\"category\":\"home\""), "missing home group: {body}");
+    assert!(
+        body.contains("\"category\":\"tech\""),
+        "missing tech group: {body}"
+    );
+    assert!(
+        body.contains("\"category\":\"food\""),
+        "missing food group: {body}"
+    );
+    assert!(
+        body.contains("\"category\":\"home\""),
+        "missing home group: {body}"
+    );
     // Per-group COUNT(*) under the alias `n`: tech=2, food=2, home=1.
-    assert!(body.contains("\"n\":2"), "expected a count of 2 (tech/food): {body}");
+    assert!(
+        body.contains("\"n\":2"),
+        "expected a count of 2 (tech/food): {body}"
+    );
     assert!(body.contains("\"n\":1"), "expected home count of 1: {body}");
 }
 
@@ -157,8 +169,8 @@ fn test_distinct_star_all_rows_distinct() {
     let mut db = db_with_seed();
     let r = execute(&mut db, "SELECT DISTINCT * FROM products LIMIT 100", None).expect("test: d*");
     assert_eq!(r.row_count(), 5); // no rows lost
-    // DISTINCT * goes through the synthetic-row path: row id is reset to 0
-    // (QueryResultRow::synthetic), unlike a plain scan which preserves the id.
+                                  // DISTINCT * goes through the synthetic-row path: row id is reset to 0
+                                  // (QueryResultRow::synthetic), unlike a plain scan which preserves the id.
     let first = r.row(0).expect("test: first");
     assert_eq!(first.id(), 0);
     // The full payload columns are projected into each row.

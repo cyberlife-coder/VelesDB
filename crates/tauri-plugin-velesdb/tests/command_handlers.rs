@@ -14,10 +14,11 @@
 #![cfg(feature = "persistence")]
 #![allow(clippy::too_many_lines)] // verbose end-to-end command-handler setup
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use tauri::test::{mock_builder, mock_context, noop_assets};
-use tauri::{App, AppHandle, Manager, State};
+use tauri::{App, AppHandle, Listener, Manager, State};
 
 use tauri::Runtime;
 use tauri_plugin_velesdb::commands::{
@@ -486,8 +487,7 @@ fn batch_search_bulk_and_per_query_quality() {
     // Query [1.0, 0.0, 0.0, 0.0] is the exact vector of seeded point id=1,
     // so the quality dispatch must rank it first.
     assert_eq!(
-        per_query[0].results[0].id,
-        1,
+        per_query[0].results[0].id, 1,
         "fast-quality dispatch must return the nearest neighbor (id=1)"
     );
 }
@@ -525,10 +525,16 @@ fn text_and_hybrid_search_filtered_and_unfiltered() {
         },
     ))
     .expect("text_search filtered");
-    assert!(!text_filtered.results.is_empty(), "filter must not drop all matches");
+    assert!(
+        !text_filtered.results.is_empty(),
+        "filter must not drop all matches"
+    );
     for r in &text_filtered.results {
         assert_eq!(
-            r.payload.as_ref().and_then(|p| p.get("category")).and_then(|v| v.as_str()),
+            r.payload
+                .as_ref()
+                .and_then(|p| p.get("category"))
+                .and_then(|v| v.as_str()),
             Some("tech"),
             "filtered text search leaked a non-tech doc: id={}",
             r.id,
@@ -564,10 +570,16 @@ fn text_and_hybrid_search_filtered_and_unfiltered() {
         },
     ))
     .expect("hybrid_search filtered");
-    assert!(!hybrid_filtered.results.is_empty(), "filter must not drop all matches");
+    assert!(
+        !hybrid_filtered.results.is_empty(),
+        "filter must not drop all matches"
+    );
     for r in &hybrid_filtered.results {
         assert_eq!(
-            r.payload.as_ref().and_then(|p| p.get("category")).and_then(|v| v.as_str()),
+            r.payload
+                .as_ref()
+                .and_then(|p| p.get("category"))
+                .and_then(|v| v.as_str()),
             Some("tech"),
             "filtered hybrid search leaked a non-tech doc: id={}",
             r.id,
@@ -630,7 +642,14 @@ fn scroll_collection_paginates() {
         },
     ))
     .expect("scroll first page");
-    assert!(first.points.len() <= 2);
+    assert_eq!(
+        first.points.len(),
+        2,
+        "first page must be full at batch_size=2"
+    );
+    assert_eq!(first.points[0].id, 1);
+    assert_eq!(first.points[1].id, 2);
+    assert_eq!(first.next_cursor, Some(2));
 
     // Filtered scroll only returns the sports doc.
     let filtered = run(scroll_collection(
@@ -644,9 +663,8 @@ fn scroll_collection_paginates() {
         },
     ))
     .expect("scroll filtered");
-    for p in &filtered.points {
-        assert_eq!(p.id, 3);
-    }
+    assert_eq!(filtered.points.len(), 1, "exactly one sports doc");
+    assert_eq!(filtered.points[0].id, 3);
 }
 
 // ===========================================================================
@@ -921,6 +939,27 @@ fn tauri_observer_forwards_lifecycle_hooks_to_app() {
     let app = mock_builder()
         .build(mock_context(noop_assets()))
         .expect("build app");
+
+    // Register listeners before managing state so events fired during
+    // create/delete are counted. Tauri dispatches listeners synchronously on
+    // the emitting thread, so the counters are safe to read after block_on.
+    let created = Arc::new(AtomicUsize::new(0));
+    let deleted = Arc::new(AtomicUsize::new(0));
+    let c = Arc::clone(&created);
+    app.handle().listen(
+        tauri_plugin_velesdb::events::event_names::COLLECTION_CREATED,
+        move |_| {
+            c.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    let d = Arc::clone(&deleted);
+    app.handle().listen(
+        tauri_plugin_velesdb::events::event_names::COLLECTION_DELETED,
+        move |_| {
+            d.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+
     let observer = Arc::new(TauriObserver::new(app.handle().clone()));
     let state = VelesDbState::new_with_observer(dir.path().to_path_buf(), observer);
     app.manage(state);
@@ -934,6 +973,11 @@ fn tauri_observer_forwards_lifecycle_hooks_to_app() {
     ))
     .expect("create observed");
     assert_eq!(info.name, "observed");
+    assert_eq!(
+        created.load(Ordering::SeqCst),
+        1,
+        "TauriObserver did not emit collection-created"
+    );
 
     run(delete_collection(
         handle(&app),
@@ -941,4 +985,9 @@ fn tauri_observer_forwards_lifecycle_hooks_to_app() {
         "observed".to_string(),
     ))
     .expect("delete observed");
+    assert_eq!(
+        deleted.load(Ordering::SeqCst),
+        1,
+        "TauriObserver did not emit collection-deleted"
+    );
 }

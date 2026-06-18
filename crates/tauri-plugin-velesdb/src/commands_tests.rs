@@ -12,37 +12,55 @@ use toml;
 #[test]
 fn test_parse_metric_cosine() {
     let result = parse_metric("cosine");
-    assert!(matches!(result, Ok(velesdb_core::distance::DistanceMetric::Cosine)));
+    assert!(matches!(
+        result,
+        Ok(velesdb_core::distance::DistanceMetric::Cosine)
+    ));
 }
 
 #[test]
 fn test_parse_metric_euclidean() {
     let result = parse_metric("euclidean");
-    assert!(matches!(result, Ok(velesdb_core::distance::DistanceMetric::Euclidean)));
+    assert!(matches!(
+        result,
+        Ok(velesdb_core::distance::DistanceMetric::Euclidean)
+    ));
 }
 
 #[test]
 fn test_parse_metric_l2_alias() {
     let result = parse_metric("l2");
-    assert_eq!(result.unwrap(), velesdb_core::distance::DistanceMetric::Euclidean);
+    assert_eq!(
+        result.unwrap(),
+        velesdb_core::distance::DistanceMetric::Euclidean
+    );
 }
 
 #[test]
 fn test_parse_metric_dot() {
     let result = parse_metric("dot");
-    assert!(matches!(result, Ok(velesdb_core::distance::DistanceMetric::DotProduct)));
+    assert!(matches!(
+        result,
+        Ok(velesdb_core::distance::DistanceMetric::DotProduct)
+    ));
 }
 
 #[test]
 fn test_parse_metric_hamming() {
     let result = parse_metric("hamming");
-    assert_eq!(result.unwrap(), velesdb_core::distance::DistanceMetric::Hamming);
+    assert_eq!(
+        result.unwrap(),
+        velesdb_core::distance::DistanceMetric::Hamming
+    );
 }
 
 #[test]
 fn test_parse_metric_jaccard() {
     let result = parse_metric("jaccard");
-    assert_eq!(result.unwrap(), velesdb_core::distance::DistanceMetric::Jaccard);
+    assert_eq!(
+        result.unwrap(),
+        velesdb_core::distance::DistanceMetric::Jaccard
+    );
 }
 
 #[test]
@@ -57,7 +75,10 @@ fn test_parse_metric_invalid() {
 fn test_parse_metric_case_insensitive() {
     use velesdb_core::distance::DistanceMetric;
     assert_eq!(parse_metric("COSINE").unwrap(), DistanceMetric::Cosine);
-    assert_eq!(parse_metric("Euclidean").unwrap(), DistanceMetric::Euclidean);
+    assert_eq!(
+        parse_metric("Euclidean").unwrap(),
+        DistanceMetric::Euclidean
+    );
     assert_eq!(parse_metric("DOT").unwrap(), DistanceMetric::DotProduct);
 }
 

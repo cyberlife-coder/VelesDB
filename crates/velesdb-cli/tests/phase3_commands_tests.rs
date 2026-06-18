@@ -728,7 +728,10 @@ fn test_index_list_json_format_empty() {
     let parsed: serde_json::Value =
         serde_json::from_str(text.trim()).expect("index list --format json should emit valid JSON");
     let arr = parsed.as_array().expect("json output should be an array");
-    assert!(arr.is_empty(), "no indexes persist across CLI invocations, so the array must be empty");
+    assert!(
+        arr.is_empty(),
+        "no indexes persist across CLI invocations, so the array must be empty"
+    );
 }
 
 #[test]
