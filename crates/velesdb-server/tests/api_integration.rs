@@ -215,7 +215,13 @@ async fn test_upsert_and_search() {
         .expect("Failed to read body");
     let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
 
-    assert!(json["results"].is_array());
+    let results = json["results"].as_array().expect("Not an array");
+    assert_eq!(results.len(), 2); // top_k=2 over 3 inserted points
+    assert_eq!(results[0]["id"], "1"); // exact-match orthogonal unit vector ranks first
+    assert!(
+        results[0]["score"].as_f64().expect("score is a number")
+            > results[1]["score"].as_f64().expect("score is a number"),
+    ); // cosine: id=1 (~1.0) outranks the orthogonal vectors (~0.0)
 }
 
 #[tokio::test]
@@ -1574,6 +1580,12 @@ async fn test_velesql_select_specific_columns() {
     assert_eq!(results.len(), 1);
     // Should have requested fields
     assert_eq!(results[0]["id"], 1);
+    assert_eq!(results[0]["name"], "doc1");
+    assert_eq!(results[0]["year"], 2024);
+    assert!(
+        results[0].get("author").is_none(),
+        "field not in SELECT list (author) must be projected out"
+    );
 }
 
 #[tokio::test]
@@ -2943,6 +2955,7 @@ async fn test_search_ids_with_mode() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn test_search_ids_sparse() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
@@ -3027,7 +3040,10 @@ async fn test_search_ids_sparse() {
     let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
     let results = json["results"].as_array().expect("results is array");
 
-    // Should return results as id+score only
+    assert!(!results.is_empty(), "sparse search must return at least one result");
+    assert!(results.len() <= 2, "top_k=2 caps results");
+    assert_eq!(results[0]["id"], "1", "exact sparse-vector match for id=1 must rank first");
+    // Verify id+score schema and no payload for every returned row
     for r in results {
         assert!(r["id"].is_string());
         assert!(r["score"].is_number());
