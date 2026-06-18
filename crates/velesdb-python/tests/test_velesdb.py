@@ -30,10 +30,6 @@ _SKIP_NO_NUMPY = pytest.mark.skipif(not HAS_NUMPY, reason="numpy not available")
 class TestDatabase:
     """Tests for Database class."""
 
-    def test_create_database(self, temp_db):
-        """Test database creation."""
-        assert temp_db is not None
-
     def test_list_collections_empty(self, temp_db):
         """Test listing collections on empty database."""
         collections = temp_db.list_collections()
@@ -56,12 +52,15 @@ class TestDatabase:
         """Test collection creation with different metrics."""
         c1 = temp_db.create_collection("cosine_col", dimension=4, metric="cosine")
         assert c1 is not None
+        assert c1.info()["metric"] == "cosine"
 
         c2 = temp_db.create_collection("euclidean_col", dimension=4, metric="euclidean")
         assert c2 is not None
+        assert c2.info()["metric"] == "euclidean"
 
         c3 = temp_db.create_collection("dot_col", dimension=4, metric="dot")
         assert c3 is not None
+        assert c3.info()["metric"] == "dot"
 
     def test_get_collection(self, temp_db):
         """Test getting an existing collection."""
@@ -215,7 +214,11 @@ class TestCollection:
         collection = temp_db.create_collection("flush_test", dimension=4)
 
         collection.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}])
-        collection.flush()  # Should not raise
+        collection.flush()
+        # flush() must not corrupt or drop the upserted point
+        assert collection.count() == 1
+        assert collection.get([1])[0] is not None
+        assert collection.get([1])[0]["id"] == 1
 
     def test_compact_storage(self, temp_db):
         """Test compact_storage reclaims space and returns a byte count."""
@@ -276,6 +279,13 @@ class TestCollection:
             {"async_index_builder": {"segment_count": None}}
         ) is None
         assert collection.apply_advanced_config({}) is None
+
+        # Verify the collection is still functional after the clear/no-op calls.
+        collection.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}])
+        assert collection.count() == 1
+        results = collection.search([1.0, 0.0, 0.0, 0.0], top_k=1)
+        assert len(results) == 1
+        assert results[0]["id"] == 1
 
     def test_collection_diagnostics(self, temp_db):
         """Test collection_diagnostics reports index readiness."""
@@ -409,11 +419,12 @@ class TestTextSearch:
 
         results = collection.text_search("learning", top_k=2)
 
-        assert len(results) <= 2
-        # Results should have id, score, payload
-        if len(results) > 0:
-            assert "id" in results[0]
-            assert "score" in results[0]
+        assert len(results) == 2
+        assert {r["id"] for r in results} == {1, 2}
+        for r in results:
+            assert "id" in r
+            assert "score" in r
+            assert "payload" in r
 
     def test_text_search_no_results(self, temp_db):
         """Test text search with no matching results."""
@@ -424,7 +435,7 @@ class TestTextSearch:
         ])
 
         results = collection.text_search("xyznonexistent", top_k=10)
-        assert isinstance(results, list)
+        assert results == []
 
 
 class TestHybridSearch:
@@ -447,10 +458,14 @@ class TestHybridSearch:
             vector_weight=0.5
         )
 
-        assert len(results) <= 3
-        if len(results) > 0:
-            assert "id" in results[0]
-            assert "score" in results[0]
+        assert len(results) == 3
+        assert all("id" in r and "score" in r for r in results)
+        assert {r["id"] for r in results} == {1, 2, 3}
+        # id 1 is the strict winner: perfect rank-0 vector match + BM25 hit
+        assert results[0]["id"] == 1
+        # results are returned in descending score order
+        scores = [r["score"] for r in results]
+        assert scores == sorted(scores, reverse=True)
 
     def test_hybrid_search_vector_weight(self, temp_db):
         """Test hybrid search with different vector weights."""
@@ -466,8 +481,16 @@ class TestHybridSearch:
         # Low vector weight
         results_text = collection.hybrid_search([1.0, 0.0, 0.0, 0.0], "beta", top_k=2, vector_weight=0.1)
 
-        assert isinstance(results_vec, list)
-        assert isinstance(results_text, list)
+        score_vec = {r["id"]: r["score"] for r in results_vec}
+        score_text = {r["id"]: r["score"] for r in results_text}
+        # Both points are returned in both runs.
+        assert set(score_vec) == {1, 2}
+        assert set(score_text) == {1, 2}
+        # id 1 matches only the vector branch, so raising vector_weight must raise
+        # its fused RRF score — proves vector_weight actually drives the fusion.
+        assert score_vec[1] > score_text[1]
+        # id 2 (the text match) moves the other way as text weight grows.
+        assert score_text[2] > score_vec[2]
 
 
 class TestBatchSearch:
@@ -858,9 +881,9 @@ class TestLikeIlikeFilters:
             filter={"condition": {"type": "like", "field": "city", "pattern": "Par%"}}
         )
 
-        # Should only return Paris (matches LIKE and has "Tower" in text)
-        if len(results) > 0:
-            assert results[0]["id"] == 1
+        # Should only return Paris (matches both "Tower" text query and city LIKE 'Par%')
+        assert len(results) == 1
+        assert results[0]["id"] == 1
 
 
 class TestEdgeCases:
@@ -1012,8 +1035,15 @@ class TestMultiQuerySearch:
             top_k=3
         )
 
-        assert len(results) <= 3
-        assert all("id" in r and "score" in r for r in results)
+        assert len(results) == 3
+        ids = [r["id"] for r in results]
+        # RRF over the two queries: id1 (top for q1) and id2 (top for q2) are the
+        # two highest-scoring docs and must appear in the fused top-3.
+        assert 1 in ids and 2 in ids
+        # scores must be present, numeric, and sorted descending (fusion ranking)
+        scores = [r["score"] for r in results]
+        assert all(isinstance(s, (int, float)) for s in scores)
+        assert scores == sorted(scores, reverse=True)
 
     def test_multi_query_search_with_rrf(self, temp_db):
         """Test multi-query search with RRF fusion."""
@@ -1058,6 +1088,10 @@ class TestMultiQuerySearch:
         )
 
         assert len(results) == 2
+        ids = [r["id"] for r in results]
+        assert 1 in ids
+        assert 2 in ids
+        assert all("score" in r for r in results)
 
     def test_multi_query_search_single_vector(self, temp_db):
         """Test multi-query search with single vector."""
@@ -1186,12 +1220,12 @@ class TestVelesQLSimilarity:
         assert len(results_gte) >= 1
 
         # Test < operator (low similarity)
+        # id1 cosine=1.0 and id2 cosine=0.5 are both >= 0.3, so < 0.3 filters all
         results_lt = collection.query(
             "SELECT * FROM sim_ops WHERE similarity(vector, $v) < 0.3",
             params={"v": query_vec}
         )
-        # Results should have low similarity
-        assert isinstance(results_lt, list)
+        assert results_lt == []  # both docs have similarity >= 0.3 (1.0 and 0.5)
 
 
 if __name__ == "__main__":

@@ -46,7 +46,9 @@ def test_match_query_finds_edges(graph_db):
 def test_match_query_single_node_pattern(graph_db):
     """MATCH (n) without relationships should return nodes."""
     results = graph_db.match_query("MATCH (n) RETURN n LIMIT 5")
-    assert len(results) > 0
+    assert len(results) == 3, "all 3 seeded nodes should match unlabeled MATCH (n)"
+    node_ids = {r["node_id"] for r in results}
+    assert node_ids == {10, 20, 30}, f"expected the 3 seeded node IDs, got {node_ids}"
 
 
 def test_match_query_label_filter(graph_db):
@@ -66,8 +68,17 @@ def test_match_query_relationship_type_filter(graph_db):
     works = graph_db.match_query(
         "MATCH (a)-[:WORKS_AT]->(b) RETURN a, b LIMIT 10"
     )
-    assert len(knows) > 0
-    assert len(works) > 0
+    # Exactly one edge of each type in the fixture, kept distinct by the filter
+    assert len(knows) == 1
+    assert len(works) == 1
+
+    # KNOWS edge is Alice(10) -> Bob(20); terminal node_id is the b-binding (20)
+    assert knows[0]["bindings"] == {"a": 10, "b": 20}
+    assert knows[0]["node_id"] == 20
+
+    # WORKS_AT edge is Bob(20) -> Acme(30); terminal node_id is 30
+    assert works[0]["bindings"] == {"a": 20, "b": 30}
+    assert works[0]["node_id"] == 30
 
 
 def test_match_query_returns_zero_for_missing_rel(graph_db):
@@ -97,8 +108,11 @@ def test_explain_on_graph_collection(graph_db):
 def test_query_method_on_graph_collection(graph_db):
     """query() (VelesQL SELECT) should work on GraphCollection."""
     results = graph_db.query("SELECT * FROM kg LIMIT 5")
-    # Should return nodes stored in the collection
     assert isinstance(results, list)
+    assert len(results) == 3, "SELECT should return all 3 seeded nodes"
+    ids = {r["id"] for r in results}
+    assert ids == {10, 20, 30}
+    assert all("payload" in r and "node_id" in r for r in results)
 
 
 def test_match_query_rejects_non_match(graph_db):
@@ -122,3 +136,9 @@ def test_bfs_and_match_agree(graph_db):
     # Both should find the Alice->Bob KNOWS edge
     assert len(bfs_results) > 0, "BFS should find KNOWS edges"
     assert len(match_results) > 0, "MATCH should find KNOWS edges"
+    bfs_targets = {r["target_id"] for r in bfs_results}
+    match_nodes = {r["node_id"] for r in match_results}
+    # BFS over KNOWS from Alice(10) and MATCH (a)-[:KNOWS]->(b) must both reach Bob(20)
+    assert 20 in bfs_targets, f"BFS should reach Bob(20) via KNOWS, got {bfs_targets}"
+    assert 20 in match_nodes, f"MATCH should reach Bob(20) via KNOWS, got {match_nodes}"
+    assert bfs_targets & match_nodes, "BFS and MATCH must agree on at least one reached node"

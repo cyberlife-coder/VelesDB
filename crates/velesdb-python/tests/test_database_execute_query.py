@@ -16,21 +16,18 @@ pytestmark = _SKIP_NO_BINDINGS
 class TestDatabaseExecuteQuerySignature:
     """Verify the Python wrapper has the correct signature and delegation."""
 
-    def test_method_exists_on_database(self, temp_db):
-        """Database.execute_query is exposed by the wrapper."""
-        assert callable(getattr(temp_db, "execute_query", None))
-
     def test_params_defaults_to_none(self, temp_db):
         """Calling execute_query without params must not raise TypeError."""
         temp_db.create_collection("sig_test", 4)
+        # Intentionally omits `params` to guard the pyo3 `params = None` default.
         result = temp_db.execute_query("SELECT * FROM sig_test LIMIT 1")
-        assert isinstance(result, list)
+        assert result == []
 
     def test_empty_params_dict_accepted(self, temp_db):
         """Explicit empty params dict is accepted."""
         temp_db.create_collection("sig_empty", 4)
         result = temp_db.execute_query("SELECT * FROM sig_empty LIMIT 1", params={})
-        assert isinstance(result, list)
+        assert result == []
 
 
 class TestDatabaseExecuteQueryDDL:
@@ -79,8 +76,9 @@ class TestDatabaseExecuteQuerySelect:
         assert len(result) == 1
         row = result[0]
         assert isinstance(row, dict)
-        # Multimodel fields
-        assert "id" in row or "node_id" in row
+        # Both keys are unconditionally populated by search_result_to_multimodel_dict
+        assert row["id"] == 1
+        assert row["node_id"] == 1
 
     def test_select_limit_respected(self, temp_db):
         """LIMIT clause is honoured by execute_query."""

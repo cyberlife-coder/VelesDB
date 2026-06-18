@@ -34,15 +34,14 @@ def test_match_query_basic(temp_db_path):
     _seed_collection(collection)
 
     results = collection.match_query("MATCH (n) RETURN n LIMIT 2")
-    assert len(results) <= 2
-    if results:
-        sample = results[0]
-        assert "node_id" in sample
-        assert "depth" in sample
-        assert "path" in sample
-        assert "bindings" in sample
-        assert "score" in sample
-        assert "projected" in sample
+    # 3 nodes seeded, LIMIT 2 must yield exactly 2 (exercises LIMIT enforcement in execute_match)
+    assert len(results) == 2
+    # returned node IDs must be the real seeded nodes, not garbage
+    assert {r["node_id"] for r in results} <= {1, 2, 3}
+    # every result must carry a numeric score and the full documented dict shape
+    for r in results:
+        assert isinstance(r["score"], float)
+        assert {"node_id", "depth", "path", "bindings", "score", "projected"} <= set(r.keys())
 
 
 def test_match_query_with_similarity(temp_db_path):
@@ -56,7 +55,16 @@ def test_match_query_with_similarity(temp_db_path):
         threshold=0.5,
     )
     assert results
+    # Query [1,0,0,0] is identical to node 1 (cosine=1.0) -> must rank first.
+    assert results[0]["node_id"] == 1
+    # Node 2 at [0,1,0,0] (cosine=0.0) is below threshold 0.5 and excluded;
+    # only node 1 (1.0) and node 3 (~0.994) survive.
+    assert {r["node_id"] for r in results} == {1, 3}
+    # Every returned score is populated and at/above the 0.5 threshold.
     assert all(r.get("score") is not None for r in results)
+    assert all(r["score"] >= 0.5 for r in results)
+    # execute_match_with_similarity sorts cosine results descending by score.
+    assert results[0]["score"] >= results[-1]["score"]
 
 
 def test_match_query_invalid_non_match_query(temp_db_path):
@@ -93,10 +101,12 @@ def test_search_with_ef_and_search_ids(temp_db_path):
     ef_results = collection.search_with_ef([1.0, 0.0, 0.0, 0.0], top_k=2, ef_search=64)
     id_results = collection.search_ids([1.0, 0.0, 0.0, 0.0], top_k=2)
 
-    assert len(ef_results) <= 2
-    assert len(id_results) <= 2
-    if id_results:
-        first = id_results[0]
-        assert isinstance(first, dict)
-        assert "id" in first
-        assert "score" in first
+    assert len(ef_results) == 2
+    assert len(id_results) == 2
+    first, second = id_results[0], id_results[1]
+    assert isinstance(first, dict)
+    assert "id" in first and "score" in first
+    # query vector == node 1's vector -> node 1 is the exact (cosine ~1.0) match
+    assert first["id"] == 1
+    # descending-score ordering (no ties: node 3 is strictly less similar)
+    assert first["score"] > second["score"]

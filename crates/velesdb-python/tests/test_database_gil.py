@@ -164,6 +164,8 @@ def test_analyze_collection_roundtrip(temp_db) -> None:
 
     assert stats is not None
     assert "total_points" in stats or "row_count" in stats
+    count = stats.get("total_points", stats.get("row_count"))
+    assert count == 5, f"expected 5 points, got {count!r}"
 
 
 def test_get_collection_stats_roundtrip(temp_db) -> None:
@@ -175,6 +177,8 @@ def test_get_collection_stats_roundtrip(temp_db) -> None:
     stats = temp_db.get_collection_stats("gil_stats")
 
     assert stats is not None
+    count = stats.get("total_points", stats.get("row_count"))
+    assert count == 1, f"expected 1 point in cached stats, got {count!r}"
 
 
 # ---------------------------------------------------------------------------
