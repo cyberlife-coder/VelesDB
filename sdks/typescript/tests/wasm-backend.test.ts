@@ -176,7 +176,22 @@ describe('WasmBackend', () => {
         vector: [1.0, 0.0, 0.0, 0.0],
         payload: { title: 'Test' },
       });
-      // No error means success
+
+      const collections = (backend as any).collections;
+      const collection = collections.get('vectors');
+      const store = collection.store as MockVectorStore;
+
+      // payload-bearing upsert must dispatch to insert_with_payload, not insert
+      expect(store.insert_with_payload).toHaveBeenCalledTimes(1);
+      expect(store.insert_with_payload).toHaveBeenCalledWith(
+        BigInt(1),
+        expect.any(Float32Array),
+        { title: 'Test' },
+      );
+      expect(store.insert).not.toHaveBeenCalled();
+
+      // and the in-memory payload map must be populated (read by get())
+      expect(collection.payloads.get('1')).toEqual({ title: 'Test' });
     });
 
     it('should get a vector by id', async () => {

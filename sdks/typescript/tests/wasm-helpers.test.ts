@@ -8,7 +8,7 @@
  * required.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   normalizeIdString,
   canonicalPayloadKey,
@@ -195,23 +195,3 @@ describe('buildCollectionInfo', () => {
   });
 });
 
-describe('buildWasmContext — arrow delegation (coverage of wrappers)', () => {
-  it('calls through to module-level helpers', () => {
-    // Spy on helpers by invoking them through the context to ensure
-    // each arrow function in buildWasmContext executes at least once.
-    const ctx = buildWasmContext({} as WasmModule, new Map());
-
-    // Exercise each delegating arrow
-    expect(typeof ctx.canonicalPayloadKey(1)).toBe('string');
-    expect(typeof ctx.canonicalPayloadKeyFromResultId(2)).toBe('string');
-    expect(typeof ctx.toNumericId(3)).toBe('number');
-    expect(ctx.sparseVectorToArrays({})).toEqual({
-      indices: [],
-      values: [],
-    });
-    // vi.fn() silencer in case the compiler strips an unused variable
-    const spy = vi.fn();
-    spy();
-    expect(spy).toHaveBeenCalled();
-  });
-});

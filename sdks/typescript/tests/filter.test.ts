@@ -310,7 +310,32 @@ describe('Filter builders — edge cases', () => {
         ]),
       ]),
     ]);
-    expect(deep.condition.type).toBe('and');
+    expect(deep.condition).toEqual({
+      type: 'and',
+      conditions: [
+        {
+          type: 'or',
+          conditions: [
+            {
+              type: 'and',
+              conditions: [
+                {
+                  type: 'not',
+                  condition: {
+                    type: 'or',
+                    conditions: [
+                      { type: 'eq', field: 'a', value: 1 },
+                      { type: 'eq', field: 'b', value: 2 },
+                    ],
+                  },
+                },
+                { type: 'gt', field: 'c', value: 3 },
+              ],
+            },
+          ],
+        },
+      ],
+    });
   });
 });
 

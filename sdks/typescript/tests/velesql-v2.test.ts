@@ -141,7 +141,12 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM products ORDER BY price DESC'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'products',
+        'SELECT * FROM products ORDER BY price DESC',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
 
@@ -151,7 +156,12 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM products ORDER BY category ASC, price DESC'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'products',
+        'SELECT * FROM products ORDER BY category ASC, price DESC',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
 
@@ -180,7 +190,12 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'orders',
+        'SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
 
@@ -190,7 +205,12 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM orders JOIN customers AS c ON orders.customer_id = c.id'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'orders',
+        'SELECT * FROM orders JOIN customers AS c ON orders.customer_id = c.id',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
 
@@ -218,7 +238,12 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM active_users UNION SELECT * FROM archived_users'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'users',
+        'SELECT * FROM active_users UNION SELECT * FROM archived_users',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
 
@@ -228,7 +253,12 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM active_users UNION ALL SELECT * FROM archived_users'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'users',
+        'SELECT * FROM active_users UNION ALL SELECT * FROM archived_users',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
 
@@ -238,7 +268,12 @@ describe('VelesQL v2.0', () => {
         'SELECT id FROM premium_users INTERSECT SELECT id FROM active_users'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'users',
+        'SELECT id FROM premium_users INTERSECT SELECT id FROM active_users',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
 
@@ -248,7 +283,12 @@ describe('VelesQL v2.0', () => {
         'SELECT id FROM all_users EXCEPT SELECT id FROM banned_users'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'users',
+        'SELECT id FROM all_users EXCEPT SELECT id FROM banned_users',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
   });
@@ -260,7 +300,12 @@ describe('VelesQL v2.0', () => {
         'SELECT category, COUNT(*) FROM products WITH (max_groups = 100) GROUP BY category'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'products',
+        'SELECT category, COUNT(*) FROM products WITH (max_groups = 100) GROUP BY category',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
 
@@ -270,7 +315,12 @@ describe('VelesQL v2.0', () => {
         'SELECT category, COUNT(*) FROM products WITH (group_limit = 50) GROUP BY category'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'products',
+        'SELECT category, COUNT(*) FROM products WITH (group_limit = 50) GROUP BY category',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
   });

@@ -284,9 +284,15 @@ describe('transport adapter factories', () => {
     });
 
     const transport = buildCrudTransport(config);
-    await transport.requestJson('POST', '/x', { a: 1 });
+    const result = await transport.requestJson('POST', '/x', { a: 1 });
 
+    expect(result).toEqual({ data: {} });
     expect(mockFetch).toHaveBeenCalledTimes(1);
+    const call = mockFetch.mock.calls[0]!;
+    expect(call[0]).toBe('http://localhost:8080/x');
+    expect(call[1].method).toBe('POST');
+    expect(call[1].body).toBe(JSON.stringify({ a: 1 }));
+    expect(call[1].headers.Authorization).toBe('Bearer test-key');
   });
 
   it('buildSearchTransport exposes a sparseToRest helper that works', () => {

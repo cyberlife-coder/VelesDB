@@ -51,10 +51,6 @@ describe('WasmBackend — lifecycle + helpers (#598)', () => {
     await backend.init();
   });
 
-  it('capabilities() returns WASM_CAPABILITIES', () => {
-    expect(typeof backend.capabilities()).toBe('object');
-  });
-
   it('searchBatch delegates and returns one result array per input', async () => {
     await backend.createCollection('c', { dimension: 2, metric: 'cosine' });
 
@@ -146,18 +142,6 @@ describe('WasmBackend — upsertBatch dimension mismatch', () => {
     await expect(
       backend.upsertBatch('c', [{ id: 1, vector: [0.1] /* only 1-D */ }])
     ).rejects.toBeInstanceOf(VelesDBError);
-  });
-
-  it('batches non-payload docs via insert_batch and payload docs via insert_with_payload', async () => {
-    const backend = new WasmBackend();
-    await backend.init();
-    await backend.createCollection('c', { dimension: 2, metric: 'cosine' });
-
-    await backend.upsertBatch('c', [
-      { id: 1, vector: [0.1, 0.2] },
-      { id: 2, vector: [0.3, 0.4], payload: { k: 'v' } },
-    ]);
-    // Test passes if no exception — both branches covered
   });
 
   it('throws NotFoundError when collection missing', async () => {

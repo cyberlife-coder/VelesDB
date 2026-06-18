@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { VelesDB } from '../src/client';
+import { VelesDB, AgentMemoryClient } from '../src/client';
 import type { IVelesDBBackend } from '../src/types';
 import { ValidationError } from '../src/types';
 
@@ -550,8 +550,7 @@ describe('VelesDB — agent memory factory', () => {
   it('returns an AgentMemoryClient instance', () => {
     const { db } = setup();
     const mem = db.agentMemory();
-    expect(mem).toBeDefined();
-    expect(typeof mem).toBe('object');
+    expect(mem).toBeInstanceOf(AgentMemoryClient);
   });
 
   it('throws when called before init', () => {
