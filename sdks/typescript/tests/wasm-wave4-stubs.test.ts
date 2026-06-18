@@ -142,7 +142,10 @@ describe.each(stubCases)('$name', ({ call, feature }) => {
 });
 
 describe('WASM Wave 4 stubs — coverage guard', () => {
-  it('exports exactly 17 stubs', () => {
-    expect(stubCases).toHaveLength(17);
+  it('covers every production stub', () => {
+    const exportedNames = Object.keys(wasmWaveFour).sort();
+    expect(exportedNames).toHaveLength(17);
+    const testedNames = stubCases.map((c) => c.name).sort();
+    expect(testedNames).toEqual(exportedNames);
   });
 });

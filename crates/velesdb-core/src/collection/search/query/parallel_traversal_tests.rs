@@ -21,6 +21,7 @@ fn test_traversal_result_new() {
     assert_eq!(result.end_node, 5);
     assert_eq!(result.depth, 2);
     assert!(result.score.is_none());
+    assert_eq!(result.path, vec![100, 103]);
 }
 
 #[test]
@@ -93,7 +94,12 @@ fn test_bfs_multiple_starts() {
     let (results, stats) = traverser.bfs_parallel(&[1, 3], get_neighbors);
 
     assert_eq!(stats.start_nodes_count, 2);
-    assert!(results.len() >= 2);
+    // start=1 explores ends {1,2,3,4,5,6} = 6 results within depth 2;
+    // start=3 yields 3 distinct-signature results (3,3,[]), (3,5,[104]), (3,6,[105]);
+    // no signature collision because start_node is hashed into path_signature.
+    assert_eq!(results.len(), 9);
+    assert!(results.iter().any(|r| r.start_node == 1));
+    assert!(results.iter().any(|r| r.start_node == 3));
 }
 
 #[test]
@@ -396,8 +402,13 @@ fn test_sharded_traverser_basic() {
 
     let (results, stats) = traverser.traverse_parallel(&[1], get_neighbors);
 
-    // Should visit all reachable nodes
-    assert!(!results.is_empty());
+    // All 6 nodes are reachable from node 1 within depth 3.
+    assert_eq!(results.len(), 6);
+    let end_nodes: std::collections::HashSet<u64> = results.iter().map(|r| r.end_node).collect();
+    assert_eq!(
+        end_nodes,
+        std::collections::HashSet::from([1, 2, 3, 4, 5, 6])
+    );
     assert_eq!(stats.start_nodes_count, 1);
 }
 

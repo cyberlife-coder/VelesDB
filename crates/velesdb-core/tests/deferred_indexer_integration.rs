@@ -117,9 +117,19 @@ fn deferred_flush_drains_buffer_into_hnsw() {
     let post_flush = coll
         .search(&make_vector(0, 4), 5)
         .expect("search after flush");
-    assert!(
-        !post_flush.is_empty(),
-        "vectors must be in HNSW after flush"
+    assert_eq!(
+        post_flush.len(),
+        5,
+        "all 5 nearest must be returned from HNSW after flush"
+    );
+    assert_eq!(
+        post_flush[0].point.id, 0,
+        "exact-match query must rank id=0 first via HNSW"
+    );
+    // pre/post consistency: top-1 identity unchanged across the buffer->HNSW transition
+    assert_eq!(
+        pre_flush[0].point.id, post_flush[0].point.id,
+        "top-1 must be stable across flush"
     );
     assert_eq!(coll.len(), 10, "point count must be 10 after upsert");
 }
@@ -142,6 +152,10 @@ fn deferred_upsert_bulk_is_searchable() {
     assert!(
         !results.is_empty(),
         "bulk-upserted vectors must be searchable via deferred buffer"
+    );
+    assert_eq!(
+        results[0].point.id, 0,
+        "exact-match query vector must rank top-1 in deferred buffer brute-force scan"
     );
 }
 
@@ -170,6 +184,20 @@ fn deferred_merge_triggered_at_threshold() {
         !results.is_empty(),
         "results must be available after threshold-triggered merge"
     );
+    // Exact-match query for id=0 must rank id=0 first whether it now lives in HNSW or the buffer.
+    assert_eq!(
+        results[0].point.id, 0,
+        "exact query must return its own vector as top-1 after merge"
+    );
+    // id=99 was inserted after the threshold drain (lands in the re-activated buffer); a wider
+    // search must still find every vector, proving merge-then-continue keeps all data searchable.
+    let all = coll.search(&make_vector(99, 4), 6).expect("search all");
+    let ids: std::collections::HashSet<u64> = all.iter().map(|r| r.point.id).collect();
+    assert!(
+        ids.contains(&99),
+        "post-threshold insert must remain searchable"
+    );
+    assert_eq!(coll.len(), 6, "all 6 points must be tracked in storage");
 }
 
 // ── Delete from deferred buffer ────────────────────────────────────────

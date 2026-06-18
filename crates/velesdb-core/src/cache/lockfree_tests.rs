@@ -114,10 +114,10 @@ fn test_lockfree_cache_l1_eviction() {
         cache.insert(i, format!("value_{i}"));
     }
 
-    assert!(
-        cache.stats().l1_size <= 15,
-        "L1 size {} should be <= 15",
-        cache.stats().l1_size
+    assert_eq!(
+        cache.stats().l1_size,
+        cache.l1_capacity(),
+        "after inserting 20 items into a capacity-10 L1, eviction must restore L1 to exactly its capacity"
     );
     assert_eq!(cache.stats().l2_size, 20);
 }
@@ -147,7 +147,21 @@ fn test_lockfree_cache_concurrent_reads() {
     }
 
     let stats = cache.stats();
-    assert!(stats.l1_hits > 0);
+    assert_eq!(
+        stats.l1_hits, 8000,
+        "all 8x1000 reads hit pre-populated L1, got {}",
+        stats.l1_hits
+    );
+    assert_eq!(
+        stats.l2_hits, 0,
+        "no read should fall through to L2, got {}",
+        stats.l2_hits
+    );
+    assert_eq!(
+        stats.misses, 0,
+        "every key is present, got {} misses",
+        stats.misses
+    );
 }
 
 #[test]

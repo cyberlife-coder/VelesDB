@@ -63,8 +63,7 @@ def test_search_options_fields_set():
     opts = SearchOptions(vector=vec, top_k=5, include_vectors=True)
     assert opts.top_k == 5
     assert opts.include_vectors is True
-    # vector is stored as a Python object; just confirm it's not None
-    assert opts.vector is not None
+    assert list(opts.vector) == vec
 
 
 def test_search_options_repr():
@@ -113,7 +112,7 @@ def test_search_request_top_k_respected(collection):
     query = [0.5, 0.5, 0.5, 0.1]
     opts = SearchOptions(vector=query, top_k=2)
     results = collection.search_request(opts)
-    assert len(results) <= 2
+    assert len(results) == 2, f"top_k=2 over 5 points must return exactly 2 results, got {len(results)}"
 
 
 # ---------------------------------------------------------------------------

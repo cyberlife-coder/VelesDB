@@ -429,8 +429,21 @@ fn test_property_access() {
 #[test]
 fn test_edgestore_with_capacity_basic() {
     let store = EdgeStore::with_capacity(1000, 100);
-    // Store is empty but has capacity
     assert_eq!(store.edge_count(), 0);
+    // with_capacity pre-allocates the internal maps; HashMap::capacity()
+    // guarantees room for at least the requested number of elements.
+    assert!(
+        store.edges.capacity() >= 1000,
+        "edges map should be pre-allocated for >= expected_edges"
+    );
+    assert!(
+        store.outgoing.capacity() >= 100,
+        "outgoing map should be pre-allocated for >= expected_nodes"
+    );
+    assert!(
+        store.incoming.capacity() >= 100,
+        "incoming map should be pre-allocated for >= expected_nodes"
+    );
 }
 
 /// AC-2: EdgeStore::with_capacity reduces reallocations during bulk insert

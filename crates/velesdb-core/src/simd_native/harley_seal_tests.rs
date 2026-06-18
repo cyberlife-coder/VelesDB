@@ -221,34 +221,31 @@ fn test_harley_seal_vs_scalar_jaccard() {
         let a: Vec<f32> = (0..size)
             .map(|i| if (i * 7) % 5 == 0 { 1.0 } else { 0.0 })
             .collect();
+        // Use a different residue so b differs from a and a real (non-trivial)
+        // intersection/union ratio is exercised instead of self-similarity.
         let b: Vec<f32> = (0..size)
-            .map(|i| if (i * 13) % 5 == 0 { 1.0 } else { 0.0 })
+            .map(|i| if (i * 13) % 5 == 1 { 1.0 } else { 0.0 })
             .collect();
 
         let result = jaccard_similarity_native(&a, &b);
 
-        // Scalar reference
-        let (intersection, union): (f32, f32) =
-            a.iter()
-                .zip(b.iter())
-                .fold((0.0_f32, 0.0_f32), |(inter, uni), (x, y)| {
-                    let x_bit: f32 = if *x > 0.5 { 1.0 } else { 0.0 };
-                    let y_bit: f32 = if *y > 0.5 { 1.0 } else { 0.0 };
-                    (inter + x_bit.min(y_bit), uni + x_bit.max(y_bit))
-                });
-
-        let expected = if union > 0.0 {
-            intersection / union
-        } else {
-            0.0
-        };
+        // Authoritative scalar reference (kept in sync with production).
+        let expected = super::scalar::jaccard_scalar(&a, &b);
 
         assert!(
-            (result - expected).abs() < 1e-5,
+            (result - expected).abs() < 1e-6,
             "Harley-Seal Jaccard vs scalar failed for size {}: got {}, expected {}",
             size,
             result,
             expected
+        );
+
+        // Cover the zero-union guard path: production returns 1.0 for all-zero.
+        let z = vec![0.0f32; size];
+        assert!(
+            (jaccard_similarity_native(&z, &z) - 1.0).abs() < 1e-6,
+            "Zero-union Jaccard should be 1.0 for size {}",
+            size
         );
     }
 }

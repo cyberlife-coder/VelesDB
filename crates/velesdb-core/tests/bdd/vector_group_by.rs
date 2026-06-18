@@ -126,8 +126,35 @@ fn test_given_chunked_collection_when_group_by_avg_score_then_correct_averages()
         })
         .expect("doc-1 group");
 
-    // doc-1 has 3 chunks; the AVG score should be > 0 (exact value depends on cosine).
+    let doc3 = results
+        .iter()
+        .find(|r| {
+            r.point
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("parent_id"))
+                .and_then(|v| v.as_str())
+                == Some("doc-3")
+        })
+        .expect("doc-3 group");
+
+    // doc-1's best chunk equals the query ([1,0,0,0]) so its MAX score is 1.0.
+    // Under AVG the group score MUST be strictly below 1.0 because the lower-
+    // scoring chunks pull the mean down. A MAX (or any "take the best") strategy
+    // would yield exactly 1.0, so this guards the averaging arithmetic.
     assert!(doc1.score > 0.0, "doc-1 avg score should be positive");
+    assert!(
+        doc1.score < 1.0,
+        "AVG must be < per-chunk max (1.0); got {} — looks like MAX, not AVG",
+        doc1.score
+    );
+    // doc-3 vectors are furthest from the query, so its average is lower.
+    assert!(
+        doc1.score > doc3.score,
+        "doc-1 avg ({}) should exceed doc-3 avg ({})",
+        doc1.score,
+        doc3.score
+    );
 }
 
 // =========================================================================

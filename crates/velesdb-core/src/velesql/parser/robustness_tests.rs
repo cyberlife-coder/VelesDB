@@ -1,6 +1,6 @@
 //! Robustness regression tests for parser panic-prone paths.
 
-use crate::velesql::Parser;
+use crate::velesql::{CompareOp, Condition, Parser, Value};
 
 #[test]
 fn parse_join_condition_handles_quoted_identifiers_with_dots() {
@@ -112,7 +112,17 @@ fn parse_does_not_count_parens_inside_string_literal() {
     // Must not be rejected for nesting; the literal parses fine.
     let parsed = Parser::parse(&query)
         .expect("parens inside a string literal must not trip the depth guard");
-    assert!(parsed.select.where_clause.is_some());
+    let where_clause = parsed.select.where_clause.expect("WHERE clause present");
+    let Condition::Comparison(cmp) = where_clause else {
+        panic!("expected a Comparison, got {where_clause:?}");
+    };
+    assert_eq!(cmp.column, "name");
+    assert_eq!(cmp.operator, CompareOp::Eq);
+    assert!(
+        matches!(&cmp.value, Value::String(s) if s.len() == 5000 && s.bytes().all(|b| b == b'(')),
+        "the 5000 '(' string literal must be preserved intact, got {:?}",
+        cmp.value
+    );
 }
 
 /// A normal moderately-nested query still parses fine (no regression).
@@ -120,7 +130,20 @@ fn parse_does_not_count_parens_inside_string_literal() {
 fn parse_accepts_moderately_nested_query() {
     let query = "SELECT * FROM t WHERE ((a = 1 AND b = 2) OR (c = 3 AND (d = 4 OR e = 5)))";
     let parsed = Parser::parse(query).expect("moderately nested query should parse");
-    assert!(parsed.select.where_clause.is_some());
+    let where_clause = parsed
+        .select
+        .where_clause
+        .expect("moderately nested query should parse");
+    // Outermost parens -> Group; its child is the OR of two AND-groups.
+    let Condition::Group(inner) = where_clause else {
+        panic!("expected outer Group, got {where_clause:?}");
+    };
+    assert!(
+        matches!(*inner, Condition::Or(ref left, ref right)
+            if matches!(**left, Condition::Group(ref l) if matches!(**l, Condition::And(..)))
+            && matches!(**right, Condition::Group(ref r) if matches!(**r, Condition::And(..)))),
+        "expected Group(Or(Group(And), Group(And))), got {inner:?}"
+    );
 }
 
 /// #896 follow-up defect 1 (critical): a bracket-free `NOT NOT NOT …` chain
@@ -170,7 +193,16 @@ fn parse_does_not_count_brackets_inside_line_comment() {
 
     let parsed =
         Parser::parse(&query).expect("brackets inside a -- comment must not trip the depth guard");
-    assert!(parsed.select.where_clause.is_some());
+    let where_clause = parsed
+        .select
+        .where_clause
+        .expect("WHERE clause after the comment must be parsed");
+    let Condition::Comparison(cmp) = where_clause else {
+        panic!("expected a Comparison condition, got {where_clause:?}");
+    };
+    assert_eq!(cmp.column, "a");
+    assert_eq!(cmp.operator, CompareOp::Eq);
+    assert_eq!(cmp.value, Value::Integer(1));
 }
 
 /// No regression: a small legitimate `NOT` nesting under the bound parses fine
@@ -179,5 +211,30 @@ fn parse_does_not_count_brackets_inside_line_comment() {
 fn parse_accepts_small_not_nesting() {
     let query = "SELECT * FROM t WHERE NOT NOT a = 1 AND NOT b = 2";
     let parsed = Parser::parse(query).expect("small NOT nesting should parse");
-    assert!(parsed.select.where_clause.is_some());
+    // Verified shape: And(Not(Not(a = 1)), Not(b = 2)) — the prefix-run reset on the
+    // operand boundary must NOT corrupt the AST.
+    match parsed.select.where_clause {
+        Some(Condition::And(left, right)) => {
+            // left side: the double `NOT NOT a = 1`
+            match *left {
+                Condition::Not(inner1) => match *inner1 {
+                    Condition::Not(inner2) => assert!(
+                        matches!(*inner2, Condition::Comparison(_)),
+                        "inner of double NOT should be `a = 1` comparison, got {inner2:?}"
+                    ),
+                    other => panic!("expected double NOT on left, got Not({other:?})"),
+                },
+                other => panic!("expected double NOT on left, got {other:?}"),
+            }
+            // right side: the single `NOT b = 2`
+            match *right {
+                Condition::Not(inner) => assert!(
+                    matches!(*inner, Condition::Comparison(_)),
+                    "inner of single NOT should be `b = 2` comparison, got {inner:?}"
+                ),
+                other => panic!("expected single NOT on right, got {other:?}"),
+            }
+        }
+        other => panic!("expected top-level And, got {other:?}"),
+    }
 }

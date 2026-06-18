@@ -220,14 +220,17 @@ fn test_sort_results_handles_nan() {
     let mut results = vec![(1, f32::NAN), (2, 0.5), (3, 0.8)];
     // Should not panic with NaN values
     DistanceMetric::Cosine.sort_results(&mut results);
-    // NaN ordering is implementation-defined, just verify no panic
+    assert!(results[0].1.is_nan()); // positive NaN is the max under total_cmp (descending)
+    assert_eq!(results[1].0, 3); // 0.8
+    assert_eq!(results[2].0, 2); // 0.5
 }
 
 #[test]
-fn test_sort_results_empty() {
+fn test_sort_results_empty_input_does_not_panic() {
     let mut results: Vec<(u64, f32)> = vec![];
+    // Empty input is the trivial boundary case: sort_results must not panic
+    // (e.g. must not assume a non-empty slice / index results[0]).
     DistanceMetric::Cosine.sort_results(&mut results);
-    assert!(results.is_empty());
 }
 
 #[test]

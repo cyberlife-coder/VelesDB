@@ -83,7 +83,7 @@ describe('search', () => {
     const body = (transport.requestJson as ReturnType<typeof vi.fn>).mock
       .calls[0]![2] as Record<string, unknown>;
     expect(Array.isArray(body.vector)).toBe(true);
-    expect(body.vector).toHaveLength(2);
+    expect(body.vector).toEqual([0.5, 0.5]);
   });
 
   it('forwards k / filter / includeVectors / quality', async () => {
@@ -478,7 +478,15 @@ describe('multiQuerySearchIds', () => {
     expect(body.strategy).toBe('avg');
     expect(body.top_k).toBe(5);
     expect(body.avg_weight).toBe(0.3);
-    expect(Array.isArray(body.vectors)).toBe(true);
+    const vectors = body.vectors as unknown[];
+    expect(Array.isArray(vectors)).toBe(true);
+    // Float32Array input is converted to a plain number[] (not left as a typed array).
+    expect(vectors[0]).toBeInstanceOf(Array);
+    expect(vectors[0]).not.toBeInstanceOf(Float32Array);
+    // 0.1 widened through float32 is 0.10000000149011612, not 0.1 — assert the actual value.
+    expect((vectors[0] as number[])[0]).toBeCloseTo(0.1, 6);
+    // The plain-array element passes through unchanged.
+    expect(vectors[1]).toEqual([0.2]);
   });
 
   it('returns [] when data.results is missing', async () => {

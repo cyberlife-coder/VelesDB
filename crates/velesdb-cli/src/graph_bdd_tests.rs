@@ -193,11 +193,22 @@ fn test_count_populated_graph_shows_correct_counts() {
     let (_dir, path) = setup_graph_db();
     populate_edges(&path);
 
-    // WHEN: run count (we test the underlying logic, not stdout)
-    let col = open_graph(&path);
+    // WHEN: run count through the CLI handler — exercises both output branches
+    crate::graph::handle(GraphAction::Count {
+        path: path.clone(),
+        collection: "kg".to_string(),
+        format: "table".to_string(),
+    })
+    .expect("count (table) should succeed");
+    crate::graph::handle(GraphAction::Count {
+        path: path.clone(),
+        collection: "kg".to_string(),
+        format: "json".to_string(),
+    })
+    .expect("count (json) should succeed");
 
-    // THEN: correct counts
-    assert_eq!(col.edge_count(), 4);
+    // THEN: correct underlying counts
+    assert_eq!(open_graph(&path).edge_count(), 4);
     // all_node_ids returns payload-stored IDs; edges reference 5 nodes
     // but without stored payloads, all_node_ids may return fewer
 }

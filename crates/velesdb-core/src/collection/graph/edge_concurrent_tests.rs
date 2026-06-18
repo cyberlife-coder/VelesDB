@@ -169,7 +169,18 @@ fn test_concurrent_reads_no_block() {
         let store_clone = Arc::clone(&store);
         handles.push(thread::spawn(move || {
             for i in 0..100 {
-                let _ = store_clone.get_outgoing(i);
+                let outgoing = store_clone.get_outgoing(i);
+                assert_eq!(
+                    outgoing.len(),
+                    1,
+                    "node {i} must have exactly one outgoing edge"
+                );
+                assert_eq!(
+                    outgoing[0].target(),
+                    i + 1,
+                    "node {i} edge must target {}",
+                    i + 1
+                );
             }
         }));
     }
@@ -228,6 +239,27 @@ fn test_concurrent_read_write_same_shard() {
 
     writer.join().expect("Writer panicked");
     reader.join().expect("Reader panicked");
+
+    // All 100 writes (source=1, IDs 0..99) must have landed despite the
+    // reader contending on the same shard's RwLock.
+    assert_eq!(
+        store.edge_count(),
+        100,
+        "all writes landed under same-shard read/write contention"
+    );
+    let outgoing = store.get_outgoing(1);
+    assert_eq!(
+        outgoing.len(),
+        100,
+        "every outgoing edge from node 1 is retrievable"
+    );
+    let mut targets: Vec<u64> = outgoing.iter().map(GraphEdge::target).collect();
+    targets.sort_unstable();
+    assert_eq!(
+        targets,
+        (100u64..200).collect::<Vec<_>>(),
+        "no edge silently dropped or duplicated"
+    );
 }
 
 #[test]
@@ -256,6 +288,9 @@ fn test_sharded_lock_ordering_no_deadlock() {
     for h in handles {
         h.join().expect("Thread panicked - possible deadlock");
     }
+
+    // 4 threads x 50 distinct IDs: every edge must have landed.
+    assert_eq!(store.edge_count(), 200, "all 200 distinct edges inserted");
 }
 
 // =============================================================================
@@ -801,25 +836,15 @@ fn test_lock_ordering_no_deadlock_add_remove() {
 #[test]
 fn test_default_shard_count_is_256() {
     let store = ConcurrentEdgeStore::new();
-    // Verify by checking edge distribution - add 256 edges with sequential IDs
-    // Each should go to a different shard if we have 256 shards
-    for i in 0..256u64 {
-        store
-            .add_edge(GraphEdge::new(i, i, i + 1000, "TEST").expect("valid"))
-            .expect("add");
-    }
-    // All 256 edges should be distributed (proves we have at least 256 shards)
-    assert_eq!(store.edge_count(), 256);
-
-    // Add edge with source=256, should go to shard 0 (256 % 256 = 0)
-    // If we only had 64 shards, source=256 would go to shard 0 (256 % 64 = 0)
-    // and source=0 also goes to shard 0, so they'd be in same shard
-    // With 256 shards, source=256 goes to shard 0, same as source=0
-    // Test that shard selection is deterministic based on 256 shards
-    store
-        .add_edge(GraphEdge::new(1000, 256, 1256, "TEST").expect("valid"))
-        .expect("add");
-    assert_eq!(store.edge_count(), 257);
+    assert_eq!(
+        store.num_shards, 256,
+        "DEFAULT_NUM_SHARDS (EPIC-019 US-001) must be 256"
+    );
+    // shard_index = node_id % num_shards: wrap-around and max-index boundaries
+    assert_eq!(store.shard_index(256), 0, "256 % 256 == 0");
+    assert_eq!(store.shard_index(0), 0, "0 maps to shard 0");
+    assert_eq!(store.shard_index(255), 255, "255 % 256 == 255 (top shard)");
+    assert_eq!(store.shard_index(257), 1, "257 % 256 == 1");
 }
 
 /// AC-2: Edge distribution should be uniform across 256 shards
@@ -835,27 +860,17 @@ fn test_edge_distribution_across_256_shards() {
     }
 
     assert_eq!(store.edge_count(), 2560);
-}
 
-/// AC-3: Shard selection must be deterministic
-#[test]
-fn test_shard_selection_deterministic() {
-    let store1 = ConcurrentEdgeStore::new();
-    let store2 = ConcurrentEdgeStore::new();
-
-    // Same edge added to two stores should behave identically
-    store1
-        .add_edge(GraphEdge::new(1, 12345, 67890, "DET").expect("valid"))
-        .expect("add");
-    store2
-        .add_edge(GraphEdge::new(1, 12345, 67890, "DET").expect("valid"))
-        .expect("add");
-
-    // Both should have same outgoing edges for same source
-    let out1 = store1.get_outgoing(12345);
-    let out2 = store2.get_outgoing(12345);
-    assert_eq!(out1.len(), out2.len());
-    assert_eq!(out1[0].target(), out2[0].target());
+    // Source IDs are contiguous 0..2560, so each shard receives exactly 10
+    // outgoing edges under the modulo distribution.
+    assert_eq!(store.num_shards, 256, "AC-2 assumes 256 shards");
+    for (i, shard) in store.shards.iter().enumerate() {
+        let c = shard.read().outgoing_edge_count();
+        assert_eq!(
+            c, 10,
+            "shard {i} holds {c} outgoing edges, expected 10 (uniform distribution)"
+        );
+    }
 }
 
 /// AC-4: Concurrent insert with 16 threads should not deadlock

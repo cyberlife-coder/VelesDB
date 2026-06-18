@@ -80,8 +80,12 @@ class TestVelesQLv2GroupBy:
             k=10,
             filter={"category": "ai"},
         )
-        # Filter may or may not work depending on backend, but API accepts it
+        # similarity_search drops the `filter` kwarg (filtering lives on
+        # similarity_search_with_filter); here we only assert the dispatch
+        # tolerates the kwarg and returns valid Documents.
         assert isinstance(results, list)
+        assert len(results) >= 1
+        assert all(isinstance(doc, Document) for doc in results)
 
 
 class TestVelesQLv2OrderBy:
@@ -101,8 +105,8 @@ class TestVelesQLv2DirectQuery:
 
     def test_vectorstore_has_query_method(self, vectorstore):
         """VectorStore should have query method for VelesQL."""
-        # Check if the vectorstore exposes query capability
-        assert hasattr(vectorstore, '_collection') or hasattr(vectorstore, 'db')
+        # Assert the public query method exists and is callable.
+        assert hasattr(vectorstore, 'query') and callable(vectorstore.query)
 
 
 class TestVelesQLv2Integration:
@@ -215,5 +219,11 @@ class TestVelesQLv2Documentation:
             k=10,
             filter={"category": "tech"},
         )
-        # API accepts filter, actual filtering handled by VelesQL v2.0 backend
+        # NOTE: similarity_search() does not forward `filter` to the engine
+        # (only similarity_search_with_filter does), so the filter is currently
+        # a no-op here and both documents are returned. Assert real content was
+        # converted end-to-end rather than only the list type.
         assert isinstance(results, list)
+        assert len(results) == 2
+        contents = {doc.page_content for doc in results}
+        assert contents == {"Tech article", "Science paper"}

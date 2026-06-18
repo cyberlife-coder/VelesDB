@@ -320,7 +320,35 @@ fn test_groupby_limit_protection() {
     let params = HashMap::new();
     let result = collection.execute_aggregate(&query, &params);
 
-    assert!(result.is_ok());
+    let groups = result.expect("100 groups under default limit must succeed");
+    assert_eq!(groups.as_array().expect("array").len(), 100);
+}
+
+#[test]
+fn test_groupby_limit_exceeded_is_rejected() {
+    let (collection, _tmp) = create_test_collection();
+
+    // Insert 100 unique categories.
+    let points: Vec<Point> = (0..100u64)
+        .map(|i| Point {
+            id: i,
+            vector: vec![0.1; 4],
+            payload: Some(serde_json::json!({"category": format!("cat_{}", i)})),
+            sparse_vectors: None,
+        })
+        .collect();
+    collection.upsert(points).unwrap();
+
+    // A WITH (max_groups = 10) limit must reject 100 distinct groups.
+    let query = Parser::parse(
+        "SELECT category, COUNT(*) FROM items GROUP BY category WITH (max_groups = 10)",
+    )
+    .unwrap();
+    let params = HashMap::new();
+    let err = collection
+        .execute_aggregate(&query, &params)
+        .expect_err("exceeding max_groups must error");
+    assert!(matches!(err, crate::error::Error::Config(m) if m.contains("Too many groups")));
 }
 
 // ========== EPIC-052 US-005: Nested GROUP BY Tests ==========

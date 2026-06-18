@@ -61,7 +61,9 @@ mod info_commands {
             .arg("--format")
             .arg("table")
             .assert()
-            .success();
+            .success()
+            .stdout(predicate::str::contains("Collections"))
+            .stdout(predicate::str::contains("No collections found"));
     }
 }
 
@@ -396,7 +398,8 @@ mod completions_commands {
             .arg("completions")
             .arg("powershell")
             .assert()
-            .success();
+            .success()
+            .stdout(predicate::str::contains("velesdb"));
     }
 }
 
@@ -418,7 +421,11 @@ mod repl_commands {
 
     #[test]
     fn test_repl_version() {
-        cli().arg("--version").assert().success();
+        cli()
+            .arg("--version")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("velesdb"));
     }
 }
 
@@ -440,21 +447,6 @@ mod get_commands {
             .arg("1")
             .arg("--format")
             .arg("json")
-            .assert()
-            .failure();
-    }
-
-    #[test]
-    fn test_get_point_table() {
-        let temp = temp_db_dir();
-
-        cli()
-            .args(["data", "get"])
-            .arg(temp.path())
-            .arg("test_collection")
-            .arg("1")
-            .arg("--format")
-            .arg("table")
             .assert()
             .failure();
     }
@@ -484,14 +476,31 @@ mod show_commands {
     #[test]
     fn test_show_collection_with_samples() {
         let temp = temp_db_dir();
+        let db_path = temp.path().join("db");
+
+        // Create a vector collection and insert one point so the samples branch fires.
+        {
+            let db = velesdb_core::Database::open(&db_path).unwrap();
+            db.create_vector_collection("docs", 4, velesdb_core::DistanceMetric::Cosine)
+                .unwrap();
+            let col = db.get_vector_collection("docs").unwrap();
+            col.upsert(vec![velesdb_core::Point::new(
+                1,
+                vec![1.0, 0.0, 0.0, 0.0],
+                None,
+            )])
+            .unwrap();
+        }
 
         cli()
             .args(["collection", "show"])
-            .arg(temp.path())
-            .arg("test_collection")
+            .arg(&db_path)
+            .arg("docs")
             .arg("--samples")
             .arg("5")
             .assert()
-            .failure();
+            .success()
+            .stdout(predicate::str::contains("Sample Records"))
+            .stdout(predicate::str::contains("ID: 1"));
     }
 }

@@ -157,5 +157,8 @@ fn test_estimate_cost_vector_first() {
     };
 
     let cost = planner.estimate_cost(&plan, 100);
-    assert!(cost > 0);
+    assert_eq!(
+        cost, 200,
+        "VectorFirst cost = avg_vector_latency (100) + candidate_count (100)"
+    );
 }

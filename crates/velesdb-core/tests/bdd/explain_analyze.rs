@@ -286,13 +286,19 @@ fn test_explain_analyze_match_graph_returns_nonzero_traversal_counts() {
         .actual_stats
         .expect("test: actual_stats should be Some");
     assert!(stats.actual_rows > 0, "MATCH should return results");
-    assert!(
-        stats.nodes_visited > 0,
-        "graph traversal should visit nodes"
+    // NOTE: until per-node/per-edge graph traversal instrumentation lands
+    // (#467-#469), the engine reports nodes_visited and edges_traversed as a
+    // proxy equal to actual_rows (query_engine.rs `if is_match { (actual_rows,
+    // actual_rows) }`). Pin that relationship so a future real implementation
+    // that returns distinct counts (e.g. intermediate hops, not just matched
+    // rows) deliberately fails here and forces this expectation to be revisited.
+    assert_eq!(
+        stats.nodes_visited, stats.actual_rows,
+        "nodes_visited is currently a proxy for actual_rows (see #467-#469)"
     );
-    assert!(
-        stats.edges_traversed > 0,
-        "graph traversal should traverse edges"
+    assert_eq!(
+        stats.edges_traversed, stats.actual_rows,
+        "edges_traversed is currently a proxy for actual_rows (see #467-#469)"
     );
     assert!(stats.actual_time_ms > 0.0, "execution takes time");
 }

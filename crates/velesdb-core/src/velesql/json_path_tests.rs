@@ -30,6 +30,11 @@ fn test_parse_nested() {
 fn test_parse_deep_nested() {
     let path = JsonPath::parse("a.b.c.d.e").unwrap();
     assert_eq!(path.segments.len(), 5);
+    assert_eq!(path.segments[0], PathSegment::Property("a".to_string()));
+    assert_eq!(path.segments[1], PathSegment::Property("b".to_string()));
+    assert_eq!(path.segments[2], PathSegment::Property("c".to_string()));
+    assert_eq!(path.segments[3], PathSegment::Property("d".to_string()));
+    assert_eq!(path.segments[4], PathSegment::Property("e".to_string()));
 }
 
 #[test]

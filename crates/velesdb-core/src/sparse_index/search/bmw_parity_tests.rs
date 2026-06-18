@@ -219,12 +219,21 @@ fn test_sparse_search_single_doc_corpus() {
     let queries = gen_queries(5, 2);
     let index = build_index(&corpus);
 
-    for query in &queries {
+    for (qi, query) in queries.iter().enumerate() {
         let ms = sparse_search(&index, query, 10);
+        let bf = brute_force_search(&index, query, 10);
         assert!(
             ms.len() <= 1,
             "single-doc corpus should return at most 1 result"
         );
+        assert_eq!(
+            doc_ids(&bf),
+            doc_ids(&ms),
+            "Query {qi} (single-doc): IDs diverge from brute-force"
+        );
+        if !bf.is_empty() {
+            assert_scores_close(&bf, &ms, &format!("single-doc query {qi}"));
+        }
     }
 }
 

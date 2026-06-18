@@ -33,20 +33,10 @@ fn test_collection_type_vector_exists() {
         storage_mode: StorageMode::Full,
     };
 
-    match ct {
-        CollectionType::Vector {
-            dimension,
-            metric,
-            storage_mode,
-        } => {
-            assert_eq!(dimension, 768);
-            assert_eq!(metric, DistanceMetric::Cosine);
-            assert_eq!(storage_mode, StorageMode::Full);
-        }
-        CollectionType::MetadataOnly | CollectionType::Graph { .. } => {
-            panic!("Expected Vector variant")
-        }
-    }
+    assert!(!ct.is_metadata_only());
+    assert!(!ct.is_graph());
+    assert_eq!(ct.dimension(), Some(768));
+    assert!(ct.graph_schema().is_none());
 }
 
 // =============================================================================
@@ -284,12 +274,19 @@ fn test_metadata_only_no_hnsw_file() {
 
     coll.flush().unwrap();
 
-    // HNSW index file should NOT exist
-    let hnsw_path = dir.path().join("products").join("hnsw.bin");
-    assert!(
-        !hnsw_path.exists(),
-        "HNSW index should not be created for metadata-only collections"
-    );
+    // HNSW persistence files should NOT exist for metadata-only collections.
+    let coll_dir = dir.path().join("products");
+    for f in [
+        "native_meta.bin",
+        "native_mappings.bin",
+        "native_vectors.bin",
+        "native_hnsw.gen",
+    ] {
+        assert!(
+            !coll_dir.join(f).exists(),
+            "metadata-only collection must not persist HNSW file {f}"
+        );
+    }
 }
 
 // =============================================================================
@@ -324,16 +321,30 @@ fn test_metadata_only_memory_efficient() {
 
     coll.upsert_metadata(points).unwrap();
 
-    // No vector storage file should be created or should be minimal
-    let vectors_path = dir.path().join("products").join("vectors.bin");
-    if vectors_path.exists() {
-        let size = std::fs::metadata(&vectors_path).unwrap().len();
-        // Should be essentially empty (just header, not 768*4*100 = 307KB)
-        assert!(
-            size < 1000,
-            "Vector storage should be minimal for metadata-only, got {size} bytes"
-        );
-    }
+    coll.flush().unwrap();
+    let coll_dir = dir.path().join("products");
+
+    // Metadata-only never writes vector data: the vector WAL stays empty and the
+    // mmap data file stays at its fixed pre-allocated header size (16 MiB INITIAL_SIZE),
+    // i.e. it is NOT grown by 100 * dim * 4 bytes of dummy vectors.
+    let vectors_dat = coll_dir.join("vectors.dat");
+    assert!(
+        vectors_dat.exists(),
+        "vectors.dat is always created by MmapStorage::new"
+    );
+    let dat_len = std::fs::metadata(&vectors_dat).unwrap().len();
+    assert!(
+        dat_len <= 16 * 1024 * 1024,
+        "metadata-only vectors.dat must not grow past the fixed header (no dummy vector data), got {dat_len} bytes"
+    );
+
+    // The vector WAL must contain no records for a metadata-only collection.
+    let vectors_wal = coll_dir.join("vectors.wal");
+    let wal_len = std::fs::metadata(&vectors_wal).map_or(0, |m| m.len());
+    assert_eq!(
+        wal_len, 0,
+        "metadata-only must write no vector WAL records, got {wal_len} bytes"
+    );
 }
 
 // =============================================================================

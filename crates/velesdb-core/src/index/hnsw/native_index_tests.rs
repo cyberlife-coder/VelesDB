@@ -49,6 +49,14 @@ fn test_native_index_batch_insert() {
     index.insert_batch(&items).expect("test");
 
     assert_eq!(index.len(), 50);
+
+    let query = vec![0.0_f32; 32];
+    let results = index.search(&query, 1);
+    assert_eq!(results.len(), 1, "batch-inserted graph must be searchable");
+    assert_eq!(
+        results[0].id, 0,
+        "exact-match query must return batch-inserted vector 0"
+    );
 }
 
 #[test]
@@ -118,6 +126,17 @@ fn test_native_index_delete() {
     index.insert(2, &vec![0.2; 32]).expect("test");
 
     assert!(index.remove(1));
+
+    let results = index.search(&vec![0.1; 32], 2);
+    assert!(
+        !results.iter().any(|r| r.id == 1),
+        "removed id=1 must not appear in HNSW search results"
+    );
+    assert!(
+        results.iter().any(|r| r.id == 2),
+        "surviving id=2 must still be searchable"
+    );
+
     assert!(!index.remove(999));
 }
 
@@ -422,4 +441,8 @@ fn test_native_index_default_alpha_search_works() {
     let query: Vec<f32> = (0..32).map(|j| j as f32 * 0.01).collect();
     let results = index.search(&query, 5);
     assert!(!results.is_empty(), "search should return results");
+    assert_eq!(
+        results[0].id, 0,
+        "nearest neighbor of vector[0] should be node 0 with default alpha"
+    );
 }

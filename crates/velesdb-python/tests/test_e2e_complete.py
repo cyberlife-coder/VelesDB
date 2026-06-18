@@ -71,9 +71,9 @@ class TestDatabaseE2E:
 
         # Delete
         col.delete([1, 2, 3])
-
-        # Verify count decreased
-        # Note: Some implementations may soft-delete
+        assert col.count() == 47
+        deleted = col.get([1, 2, 3])
+        assert all(p is None for p in deleted)
 
     @pytest.mark.parametrize("metric", ["cosine", "euclidean", "dot", "hamming", "jaccard"])
     def test_all_distance_metrics(self, temp_db, metric):
@@ -253,7 +253,11 @@ class TestVelesQLE2E:
 
         # Execute VelesQL
         results = col.query("SELECT * FROM velesql_test LIMIT 5")
-        assert len(results) <= 5
+        assert 1 <= len(results) <= 5, f"plain SELECT LIMIT 5 over 20 rows returned {len(results)}"
+        # guard the result-dict conversion + payload round-trip through PyO3
+        first = results[0]
+        payload = first.get("payload") or first.get("bindings") or {}
+        assert payload.get("category") in ("tech", "science"), f"unexpected payload shape: {first}"
 
     def test_velesql_with_parameters(self, temp_db, sample_vectors):
         """Test VelesQL with parameterized queries."""
@@ -268,7 +272,9 @@ class TestVelesQLE2E:
             params={"query": sample_vectors[5].tolist()}
         )
 
-        assert len(results) <= 5
+        assert len(results) == 5, f"NEAR $query LIMIT 5 over 10 vectors should return 5, got {len(results)}"
+        # parameter binding produced a usable result row
+        assert isinstance(results[0], dict)
 
 
 class TestHybridSearchE2E:

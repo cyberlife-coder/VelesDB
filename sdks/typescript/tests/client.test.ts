@@ -339,7 +339,7 @@ describe('VelesDB Client', () => {
 
       await db.multiQuerySearch('test', vectors);
 
-      expect(mockBackend.multiQuerySearch).toHaveBeenCalled();
+      expect(mockBackend.multiQuerySearch).toHaveBeenCalledWith('test', vectors, undefined);
     });
 
     it('should work with default options when none provided', async () => {
@@ -361,6 +361,10 @@ describe('VelesDB Client', () => {
       await db.multiQuerySearch('test', vectors, { fusion: 'weighted' });
 
       expect(mockBackend.multiQuerySearch).toHaveBeenCalledTimes(4);
+      expect(mockBackend.multiQuerySearch).toHaveBeenNthCalledWith(1, 'test', vectors, { fusion: 'rrf' });
+      expect(mockBackend.multiQuerySearch).toHaveBeenNthCalledWith(2, 'test', vectors, { fusion: 'average' });
+      expect(mockBackend.multiQuerySearch).toHaveBeenNthCalledWith(3, 'test', vectors, { fusion: 'maximum' });
+      expect(mockBackend.multiQuerySearch).toHaveBeenNthCalledWith(4, 'test', vectors, { fusion: 'weighted' });
     });
 
     it('should pass fusion params correctly', async () => {

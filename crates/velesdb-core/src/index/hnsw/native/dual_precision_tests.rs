@@ -143,7 +143,13 @@ fn test_dual_precision_recall() {
     let query: Vec<f32> = (0..128).map(|j| (j as f32 * 0.01).sin()).collect();
     let results = hnsw.search(&query, 10, 100);
 
-    assert!(results.len() >= 5, "Should find at least 5 neighbors");
+    assert_eq!(
+        results.len(),
+        10,
+        "should return exactly k=10 neighbors from 200 vectors"
+    );
+    // Query == vectors[0], so node 0 is the exact match (distance 0) and must rank first
+    assert_eq!(results[0].0, 0, "self-query must rank first");
 
     // Results should be sorted by distance
     for i in 1..results.len() {
@@ -183,6 +189,10 @@ fn test_insert_after_quantizer_training() {
     let results = hnsw.search(&query, 5, 50);
 
     assert!(!results.is_empty());
+    assert_eq!(
+        results[0].0, 75,
+        "post-training-inserted vector should be the nearest neighbor of its own exact-match query"
+    );
 }
 
 // =========================================================================
@@ -276,14 +286,22 @@ fn test_search_with_int8_traversal_enabled() {
     let config = DualPrecisionConfig {
         oversampling_ratio: 4,
         use_int8_traversal: true, // Force int8 graph traversal
+        min_index_size: 0,        // bypass the size guard so int8 path is exercised
         ..Default::default()
     };
     let results = hnsw.search_with_config(&query, 10, 50, &config);
 
-    assert!(!results.is_empty());
-    // Results should be sorted by distance
+    assert_eq!(results.len(), 10, "int8 traversal should return k results");
+    // Self-query: node 0 should be the top (closest) result after f32 rerank.
+    assert_eq!(
+        results[0].0, 0,
+        "int8 traversal + f32 rerank should rank the exact match first"
+    );
     for i in 1..results.len() {
-        assert!(results[i].1 >= results[i - 1].1, "Results should be sorted");
+        assert!(
+            results[i].1 >= results[i - 1].1,
+            "Results should be sorted by distance"
+        );
     }
 }
 
@@ -310,11 +328,16 @@ fn test_int8_traversal_recall_vs_f32() {
     // Search with f32 (baseline)
     let query = vectors[0].clone();
     let f32_results = hnsw.search(&query, 10, 100);
+    assert!(
+        f32_results.len() >= 5,
+        "baseline search must return a non-degenerate result set"
+    );
 
     // Search with int8 traversal
     let config = DualPrecisionConfig {
         oversampling_ratio: 4,
         use_int8_traversal: true,
+        min_index_size: 0,
         ..Default::default()
     };
     let int8_results = hnsw.search_with_config(&query, 10, 100, &config);
@@ -336,9 +359,29 @@ fn test_int8_traversal_recall_vs_f32() {
 #[test]
 fn test_dual_precision_config_defaults() {
     let config = DualPrecisionConfig::default();
+    // Documented public contract (EPIC-055/US-003).
     assert_eq!(config.oversampling_ratio, 4);
     assert!(config.use_int8_traversal);
     assert_eq!(config.min_index_size, 10_000);
+
+    // Behavioral guard: with a small index (< default min_index_size of
+    // 10_000), search_with_config(&Default::default()) must take the f32
+    // fallback at dual_precision.rs:334 and thus match plain search().
+    let engine = CachedSimdDistance::new(DistanceMetric::Euclidean, 32);
+    let mut hnsw = DualPrecisionHnsw::new(engine, 32, 16, 100, 1000).expect("test");
+    for i in 0..50 {
+        let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
+        hnsw.insert(&v).expect("test");
+    }
+    hnsw.force_train_quantizer();
+    let query: Vec<f32> = (0..32).map(|j| j as f32).collect();
+    // index len (50) < default min_index_size (10_000) -> fallback path.
+    let with_default = hnsw.search_with_config(&query, 10, 50, &config);
+    let plain = hnsw.search(&query, 10, 50);
+    assert_eq!(
+        with_default, plain,
+        "default min_index_size=10_000 must force small indexes onto the f32 fallback path"
+    );
 }
 
 // =========================================================================

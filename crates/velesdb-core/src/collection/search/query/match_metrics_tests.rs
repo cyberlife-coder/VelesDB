@@ -41,7 +41,26 @@ fn test_metrics_latency_buckets() {
     metrics.record_success(Duration::from_millis(3), 1, 1);
     metrics.record_success(Duration::from_millis(50), 1, 1);
 
-    assert!(metrics.latency_buckets[0].load(Ordering::Relaxed) >= 1);
+    assert_eq!(
+        metrics.latency_buckets[0].load(Ordering::Relaxed),
+        1,
+        "500us -> bucket 0 (<1ms)"
+    );
+    assert_eq!(
+        metrics.latency_buckets[1].load(Ordering::Relaxed),
+        1,
+        "3ms -> bucket 1 (<5ms)"
+    );
+    assert_eq!(
+        metrics.latency_buckets[5].load(Ordering::Relaxed),
+        1,
+        "50ms -> bucket 5 (<100ms; strict < skips the le=50 bound at idx 4)"
+    );
+    for (i, b) in metrics.latency_buckets.iter().enumerate() {
+        if i != 0 && i != 1 && i != 5 {
+            assert_eq!(b.load(Ordering::Relaxed), 0, "bucket {i} should be empty");
+        }
+    }
 }
 
 #[test]

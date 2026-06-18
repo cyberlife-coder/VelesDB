@@ -15,13 +15,6 @@
 
 use velesdb_core::{Error, Result};
 
-/// Helper function that simulates production code path for dimension validation
-fn validate_dimension(dimension: usize) -> Result<u32> {
-    // Production pattern: convert usize to u32 with overflow check
-    u32::try_from(dimension)
-        .map_err(|_| Error::Overflow(format!("Dimension {dimension} exceeds u32::MAX")))
-}
-
 /// Helper function that simulates production code path for offset validation
 fn validate_offset(offset: u64) -> Result<usize> {
     // Production pattern: convert u64 to usize with overflow check
@@ -29,185 +22,69 @@ fn validate_offset(offset: u64) -> Result<usize> {
         .map_err(|_| Error::Overflow(format!("Offset {offset} exceeds usize::MAX")))
 }
 
-/// Helper function that simulates production code path for count validation
-fn validate_count(count: usize) -> Result<u32> {
-    // Production pattern: convert usize to u32 for serialization
-    u32::try_from(count).map_err(|_| Error::Overflow(format!("Count {count} exceeds u32::MAX")))
-}
-
-#[test]
-fn test_u32_try_from_usize_valid() {
-    let valid: usize = 1000;
-    assert_eq!(u32::try_from(valid).unwrap(), 1000);
-}
-
-#[test]
-fn test_u32_try_from_usize_max() {
-    // u32::MAX should convert successfully
-    let max_u32: usize = u32::MAX as usize;
-    assert_eq!(u32::try_from(max_u32).unwrap(), u32::MAX);
-}
-
-#[test]
-fn test_u32_try_from_usize_overflow() {
-    // u32::MAX + 1 should fail
-    let overflow: usize = (u32::MAX as usize) + 1;
-    assert!(u32::try_from(overflow).is_err());
-}
-
-#[test]
-fn test_usize_try_from_u64_valid() {
-    let valid: u64 = 1000;
-    assert_eq!(usize::try_from(valid).unwrap(), 1000);
-}
-
 #[test]
 fn test_usize_try_from_u64_max_on_64bit() {
-    // On 64-bit systems, usize::MAX equals u64::MAX
-    // This test verifies conversion at the boundary
-    let max_usize: u64 = usize::MAX as u64;
-    assert_eq!(usize::try_from(max_usize).unwrap(), usize::MAX);
+    // validate_offset must accept the maximum representable offset
+    // (u64 == usize on 64-bit), modeling the usize::try_from(u64)
+    // production conversion in sparse/persistence.rs, wal_replay.rs, log_payload.rs.
+    let result = validate_offset(u64::MAX);
+    assert!(
+        result.is_ok(),
+        "max offset should validate on 64-bit targets"
+    );
+    assert_eq!(result.unwrap(), usize::MAX);
 }
 
 #[test]
-fn test_dimension_validation_valid() {
-    let result = validate_dimension(768);
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 768);
-}
-
-#[test]
-fn test_dimension_validation_max() {
-    let result = validate_dimension(u32::MAX as usize);
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), u32::MAX);
-}
-
-#[test]
-fn test_dimension_validation_overflow() {
-    let oversized = (u32::MAX as usize) + 1;
-    let result = validate_dimension(oversized);
-    assert!(result.is_err());
-
-    // Verify it's the correct error type
-    match result {
-        Err(Error::Overflow(_)) => (), // Expected
-        _ => panic!("Expected Error::Overflow for oversized dimension"),
-    }
-}
-
-#[test]
-fn test_offset_validation_valid() {
-    let result = validate_offset(1024);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_offset_validation_large() {
-    // Test with a large but valid offset
-    let large_offset: u64 = 1024 * 1024 * 1024; // 1GB
-    let result = validate_offset(large_offset);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_count_validation_valid() {
-    let result = validate_count(100);
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 100);
-}
-
-#[test]
-fn test_count_validation_zero() {
-    let result = validate_count(0);
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 0);
-}
-
-#[test]
-fn test_i64_to_u64_positive() {
-    let positive: i64 = 1000;
-    assert_eq!(positive as u64, 1000);
-}
-
-#[test]
-fn test_i64_to_u64_zero() {
-    let zero: i64 = 0;
-    assert_eq!(zero as u64, 0);
-}
-
-#[test]
-fn test_f64_to_f32_precision_loss() {
-    // Very large f64 values lose precision when cast to f32
-    let large: f64 = 1e300;
-    let as_f32 = large as f32;
-    assert!(as_f32.is_infinite()); // f32::MAX is ~3.4e38
+fn test_production_dimension_validation_boundary() {
+    // MAX_DIMENSION (65_536) is accepted; one past it is rejected as InvalidDimension.
+    assert!(velesdb_core::validate_dimension(velesdb_core::MAX_DIMENSION).is_ok());
+    let err = velesdb_core::validate_dimension(velesdb_core::MAX_DIMENSION + 1)
+        .expect_err("dimension above MAX_DIMENSION must be rejected");
+    assert!(
+        matches!(err, Error::InvalidDimension { max, .. } if max == velesdb_core::MAX_DIMENSION)
+    );
 }
 
 #[test]
 fn test_f64_to_f32_normal_range() {
-    // Normal values should convert reasonably
-    let normal: f64 = 3.14159;
-    let as_f32 = normal as f32;
-    assert!((as_f32 - 3.14159).abs() < 0.0001);
-}
-
-#[test]
-fn test_clamped_conversion_valid() {
-    // Pattern: clamp then cast for bounded values
-    let value: f64 = 0.75;
-    let clamped = (value.clamp(0.0, 1.0) * 100.0) as u32;
-    assert_eq!(clamped, 75);
+    // Mirrors multi_vector.rs JSON -> Vec<f32> coercion: parse a serde_json
+    // number into f32 via the same as_f64().map(|f| f as f32) pattern.
+    let v = serde_json::json!(3.14159);
+    let as_f32 = v.as_f64().map(|f| f as f32);
+    assert_eq!(as_f32, Some(3.14159_f64 as f32));
+    assert!(as_f32.unwrap().is_finite());
 }
 
 #[test]
 fn test_clamped_conversion_oob() {
-    // Values outside [0.0, 1.0] are clamped
-    let value: f64 = 1.5;
+    // Mirrors the OOB guard in query_cost::query_executor::compute_cache_key:
+    // out-of-range selectivity must be clamped to 1.0 before the *100 -> u32 cast.
+    let value: f64 = 1.5; // invalid selectivity (> 1.0)
     let clamped = (value.clamp(0.0, 1.0) * 100.0) as u32;
-    assert_eq!(clamped, 100);
+    assert_eq!(clamped, 100, "OOB value must saturate at 100, not 150");
+    // Guard intent: without the clamp the result would differ (and large
+    // invalid values could truncate/overflow on cast).
+    let unclamped = (value * 100.0) as u32;
+    assert_ne!(
+        unclamped, clamped,
+        "clamp must change the result for OOB input"
+    );
+    assert_eq!(unclamped, 150);
 }
 
 #[test]
 fn test_vector_dimension_bounds_realistic() {
-    // Test realistic vector dimensions used in ML models
-    let dimensions = vec![128, 256, 384, 512, 768, 1024, 1536, 3072];
-
-    for dim in dimensions {
-        let result = validate_dimension(dim);
-        assert!(result.is_ok(), "Dimension {dim} should be valid");
+    // Realistic vector dimensions used in ML models must pass the production
+    // MIN_DIMENSION..=MAX_DIMENSION contract.
+    for dim in [128usize, 256, 384, 512, 768, 1024, 1536, 3072] {
+        assert!(
+            velesdb_core::validate_dimension(dim).is_ok(),
+            "Dimension {dim} should be valid"
+        );
     }
-}
-
-#[test]
-fn test_batch_size_validation() {
-    // Test batch size limits for bulk operations
-    let small_batch = validate_count(1);
-    assert!(small_batch.is_ok());
-
-    let medium_batch = validate_count(1000);
-    assert!(medium_batch.is_ok());
-
-    let large_batch = validate_count(100_000);
-    assert!(large_batch.is_ok());
-}
-
-#[test]
-fn test_error_message_contains_value() {
-    let oversized = (u32::MAX as usize) + 1;
-    let result = validate_dimension(oversized);
-
-    match result {
-        Err(Error::Overflow(msg)) => {
-            assert!(
-                msg.contains("Dimension"),
-                "Error message should mention 'Dimension'"
-            );
-            assert!(
-                msg.contains(&oversized.to_string()),
-                "Error message should contain the value"
-            );
-        }
-        _ => panic!("Expected Error::Overflow with descriptive message"),
-    }
+    // Boundary checks against the production cap.
+    assert!(velesdb_core::validate_dimension(velesdb_core::MAX_DIMENSION).is_ok());
+    assert!(velesdb_core::validate_dimension(velesdb_core::MAX_DIMENSION + 1).is_err());
+    assert!(velesdb_core::validate_dimension(0).is_err());
 }

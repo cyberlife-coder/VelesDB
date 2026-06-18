@@ -473,7 +473,7 @@ fn test_bfs_csr_depth_range() {
     );
 }
 
-/// Verify results.len() <= limit.
+/// Verify the limit saturates to exactly `limit` results.
 #[test]
 fn test_bfs_csr_limit_respected() {
     // Star graph: 1 -> {2, 3, 4, 5, 6}
@@ -490,10 +490,15 @@ fn test_bfs_csr_limit_respected() {
     let config = TraversalConfig::with_range(1, 1).with_limit(3);
     let results = bfs_traverse_csr(&snapshot, 1, &config);
 
-    assert!(
-        results.len() <= 3,
-        "expected at most 3 results, got {}",
+    assert_eq!(
+        results.len(),
+        3,
+        "limit=3 with 5 reachable depth-1 nodes must saturate to exactly 3, got {}",
         results.len()
+    );
+    assert!(
+        results.iter().all(|r| r.depth == 1),
+        "all returned results must be at depth 1"
     );
 }
 

@@ -20,9 +20,12 @@ fn test_graph_node_properties() {
     node.set_number_property("age", 30.0);
     node.set_bool_property("active", true);
 
-    assert!(node.properties.contains_key("name"));
-    assert!(node.properties.contains_key("age"));
-    assert!(node.properties.contains_key("active"));
+    assert_eq!(
+        node.properties["name"],
+        serde_json::Value::String("John".to_string())
+    );
+    assert_eq!(node.properties["age"], serde_json::json!(30.0));
+    assert_eq!(node.properties["active"], serde_json::Value::Bool(true));
 }
 
 #[wasm_bindgen_test]
@@ -254,7 +257,14 @@ fn test_dfs_traverse() {
         .unwrap();
 
     let result = store.dfs_traverse(1, 3, 10);
-    assert!(result.is_ok());
+    let nodes: Vec<(u64, usize)> = serde_wasm_bindgen::from_value(result.unwrap()).unwrap();
+    // source node (depth 0) is excluded
+    assert!(!nodes.iter().any(|(id, _)| *id == 1));
+    // all reachable nodes visited with their correct depths
+    assert!(nodes.contains(&(2, 1)));
+    assert!(nodes.contains(&(3, 2)));
+    assert!(nodes.contains(&(4, 1)));
+    assert_eq!(nodes.len(), 3);
 }
 
 #[wasm_bindgen_test]

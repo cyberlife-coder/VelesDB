@@ -102,6 +102,7 @@ test.describe('VelesDB WASM VelesQL', () => {
     });
 
     expect(result.isValid).toBe(true);
+    expect(result.hasOrderBy).toBe(true);
   });
 
   test('should parse complex filter expressions', async ({ page }) => {

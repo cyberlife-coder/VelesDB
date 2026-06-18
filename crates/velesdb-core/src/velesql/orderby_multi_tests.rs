@@ -7,7 +7,9 @@
 //! - Direction per column (ASC/DESC)
 //! - ORDER BY arithmetic expressions (EPIC-042)
 
-use crate::velesql::{ArithmeticExpr, ArithmeticOp, OrderByExpr, Parser};
+use crate::velesql::{
+    AggregateArg, AggregateType, ArithmeticExpr, ArithmeticOp, OrderByExpr, Parser,
+};
 
 #[test]
 fn test_orderby_multiple_columns() {
@@ -57,8 +59,18 @@ fn test_orderby_mixed_columns_and_aggregates() {
     assert_eq!(order_by.len(), 2, "Should have 2 ORDER BY items");
     // First: COUNT(*) DESC
     assert!(order_by[0].descending);
+    assert!(
+        matches!(&order_by[0].expr, OrderByExpr::Aggregate(_)),
+        "First expr should be Aggregate (COUNT(*)), got {:?}",
+        order_by[0].expr
+    );
     // Second: category ASC
     assert!(!order_by[1].descending);
+    assert!(
+        matches!(&order_by[1].expr, OrderByExpr::Field(f) if f == "category"),
+        "Second expr should be Field(category), got {:?}",
+        order_by[1].expr
+    );
 }
 
 #[test]
@@ -72,7 +84,22 @@ fn test_orderby_aggregate_with_column_arg() {
     let order_by = query.select.order_by.expect("ORDER BY should be present");
 
     assert_eq!(order_by.len(), 1);
-    assert!(order_by[0].descending);
+    assert!(order_by[0].descending, "Should be DESC");
+    match &order_by[0].expr {
+        OrderByExpr::Aggregate(agg) => {
+            assert_eq!(
+                agg.function_type,
+                AggregateType::Sum,
+                "Expected SUM aggregate"
+            );
+            assert_eq!(
+                agg.argument,
+                AggregateArg::Column("price".to_string()),
+                "Expected column argument 'price'"
+            );
+        }
+        other => panic!("Expected Aggregate(SUM(price)), got {other:?}"),
+    }
 }
 
 #[test]

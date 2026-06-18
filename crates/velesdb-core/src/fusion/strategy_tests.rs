@@ -129,7 +129,12 @@ fn test_average_with_empty_query() {
     let fused = strategy.fuse(results).unwrap();
 
     // Should handle empty queries gracefully
-    assert!(!fused.is_empty());
+    let doc1 = fused.iter().find(|(id, _)| *id == 1).unwrap();
+    assert!(
+        (doc1.1 - 0.875).abs() < 0.01,
+        "doc1 avg must be ~0.875 = (0.9+0.85)/2 — the empty query must NOT count toward the denominator, got {}",
+        doc1.1
+    );
 }
 
 // =============================================================================
@@ -353,7 +358,13 @@ fn test_weighted_zero_hit_weight() {
     let results = sample_results();
 
     let fused = strategy.fuse(results).unwrap();
-    assert!(!fused.is_empty());
+    let doc1 = fused.iter().find(|(id, _)| *id == 1).unwrap();
+    // hit_weight=0 ⇒ score omits hit_ratio: 0.7*avg(0.89) + 0.3*max(0.95) = 0.908
+    assert!(
+        (doc1.1 - 0.908).abs() < 0.02,
+        "Doc 1 weighted (hit_weight=0) should be ~0.908, got {}",
+        doc1.1
+    );
 }
 
 // =============================================================================

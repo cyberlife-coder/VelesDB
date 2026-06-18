@@ -53,7 +53,8 @@ class TestIssue357GraphImports:
     def test_graphschema_schemaless(self):
         """GraphSchema.schemaless() must work through the alias."""
         schema = PyGraphSchema.schemaless()
-        assert schema is not None
+        assert isinstance(schema, PyGraphSchema)
+        assert schema.is_schemaless
 
 
 class TestIssue356AgentMemoryLock:
@@ -69,6 +70,7 @@ class TestIssue356AgentMemoryLock:
         """agent_memory() with default dimension must not raise."""
         memory = temp_db.agent_memory()
         assert memory is not None
+        assert memory.dimension == 384  # DEFAULT_DIMENSION
 
     def test_agent_memory_semantic_store_and_query(self, temp_db):
         """Full semantic memory round-trip through agent_memory()."""

@@ -163,8 +163,13 @@ async fn v1_and_legacy_health_return_same_body() {
         .expect("test: read body");
     let json_legacy: Value = serde_json::from_slice(&body_legacy).expect("test: parse JSON");
 
+    assert_eq!(json_v1["status"], "ok", "health status must be ok");
     assert_eq!(
-        json_v1["status"], json_legacy["status"],
-        "v1 and legacy must return the same status"
+        json_legacy["status"], "ok",
+        "legacy health status must be ok"
+    );
+    assert_eq!(
+        json_v1, json_legacy,
+        "deprecation middleware must not alter the response body"
     );
 }

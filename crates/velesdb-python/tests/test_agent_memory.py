@@ -286,15 +286,6 @@ class TestTtlAndEviction:
         ids = [r["id"] for r in results]
         assert 1 not in ids
 
-    def test_set_ttl_helpers_do_not_raise(self, memory):
-        """set_*_ttl helpers accept ids/seconds without raising."""
-        memory.semantic.store(1, "fact", [0.1, 0.2, 0.3, 0.4])
-        memory.episodic.record(2, "event", int(time.time()))
-        memory.procedural.learn(3, "proc", ["s1"])
-        memory.set_semantic_ttl(1, 3600)
-        memory.set_episodic_ttl(2, 3600)
-        memory.set_procedural_ttl(3, 3600)
-
     def test_set_ttl_returns_true_for_existing_id(self, memory):
         """set_*_ttl returns True when the id names a live entry."""
         memory.semantic.store(1, "fact", [0.1, 0.2, 0.3, 0.4])
@@ -579,6 +570,9 @@ class TestSnapshots:
             v1 = mem.snapshot()
             mem.snapshot()
             mem.load_snapshot_version(v1)
+            results = mem.semantic.query([0.1, 0.2, 0.3, 0.4], top_k=1)
+            assert results[0]["id"] == 1
+            assert results[0]["content"] == "first"
 
     def test_rollback_alias_restores_snapshot_version(self, temp_db):
         """rollback is a compatibility alias that restores the target version."""

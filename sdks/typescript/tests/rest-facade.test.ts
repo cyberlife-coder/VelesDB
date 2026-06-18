@@ -28,6 +28,7 @@ import {
 } from 'vitest';
 import { RestBackend } from '../src/backends/rest';
 import { ConnectionError } from '../src/types';
+import { REST_CAPABILITIES } from '../src/capabilities';
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -77,8 +78,9 @@ describe('RestBackend — lifecycle helpers', () => {
   it('capabilities() returns REST_CAPABILITIES', async () => {
     const backend = await initBackend();
     const caps = backend.capabilities();
-    // REST_CAPABILITIES is an object — should at least have the core keys
-    expect(typeof caps).toBe('object');
+    expect(caps).toBe(REST_CAPABILITIES);
+    expect(caps.vectorSearch).toBe(true);
+    expect(caps.collectionIntrospection).toBe(true);
   });
 
   it('close() resets isInitialized', async () => {
@@ -257,6 +259,10 @@ describe('RestBackend — admin facade delegation', () => {
   it('getCollectionStats delegates', async () => {
     mockOk(stats);
     const result = await backend.getCollectionStats('docs');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, opts] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toContain('/collections/docs/stats');
+    expect((opts?.method ?? 'GET')).toBe('GET');
     expect(result).not.toBeNull();
   });
 
@@ -336,7 +342,8 @@ describe('RestBackend — missing-endpoints facade delegation (Wave 4)', () => {
   it('getEdgeCount delegates', async () => {
     mockOk({ count: 42 });
     const result = await backend.getEdgeCount('kg');
-    expect(typeof result).toBe('number');
+    expect(result).toBe(42);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   it('listNodes delegates', async () => {

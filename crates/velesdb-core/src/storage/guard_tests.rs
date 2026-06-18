@@ -49,7 +49,12 @@ fn guard_try_deref_same_as_slice() {
     let guard = make_guard(&lock, &data, &epoch, 0);
     let via_slice = guard.as_slice().expect("ok");
     let via_try = guard.try_deref().expect("ok");
-    assert_eq!(via_slice, via_try);
+    assert_eq!(
+        via_try,
+        &[4.0, 5.0f32],
+        "try_deref must return the actual vector data"
+    );
+    assert_eq!(via_slice, via_try, "try_deref must alias as_slice");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

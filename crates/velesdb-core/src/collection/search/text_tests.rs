@@ -83,7 +83,12 @@ fn test_text_search_respects_k_limit() {
     let (_dir, col) = setup_text_collection();
 
     let results = col.text_search("programming", 1).expect("text search");
-    assert!(results.len() <= 1, "should respect k=1 limit");
+    assert_eq!(results.len(), 1, "k=1 must return exactly 1 result");
+    assert!(
+        [1u64, 2].contains(&results[0].point.id),
+        "returned doc must be a 'programming' match (id 1 or 2), got {}",
+        results[0].point.id
+    );
 }
 
 // -----------------------------------------------------------------------

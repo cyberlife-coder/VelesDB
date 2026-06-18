@@ -74,9 +74,9 @@ fn test_heuristic_selection_fewer_than_max() {
 
     let selected = hnsw.select_neighbors(&candidates, 10);
     assert_eq!(
-        selected.len(),
-        3,
-        "Should return all candidates when fewer than max"
+        selected,
+        vec![0, 1, 2],
+        "fewer-than-max short-circuit must return all candidate IDs in input order"
     );
 }
 
@@ -95,6 +95,23 @@ fn test_heuristic_selection_respects_max() {
 
     let selected = hnsw.select_neighbors(&candidates, 5);
     assert_eq!(selected.len(), 5, "Should respect max_neighbors limit");
+    // First candidate (id 0, dist 0.0) is always accepted (diversity short-circuit).
+    assert!(
+        selected.contains(&0),
+        "closest candidate (dist 0) must be selected first"
+    );
+    // Every selected id must come from the actual candidate set (0..15), not a phantom id.
+    assert!(
+        selected.iter().all(|&id| id < 15),
+        "selection must draw from real candidates"
+    );
+    // Selection must be duplicate-free (selected_set dedup contract).
+    let unique: std::collections::HashSet<_> = selected.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        selected.len(),
+        "selected neighbors must be unique"
+    );
 }
 
 #[test]
@@ -136,6 +153,14 @@ fn test_heuristic_selection_prefers_diverse_neighbors() {
     assert_eq!(selected.len(), 2);
     assert!(selected.contains(&1), "Should include first closest");
     // The heuristic should prefer 4 over 2,3 because 4 is in a different direction
+    assert!(
+        selected.contains(&4),
+        "diverse node (perpendicular direction) must be preferred over redundant cluster nodes 2/3"
+    );
+    assert!(
+        !selected.contains(&2) && !selected.contains(&3),
+        "redundant cluster nodes must be rejected by the VAMANA diversity gate"
+    );
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -158,6 +183,26 @@ fn test_heuristic_fills_quota_with_closest_if_needed() {
         selected.len(),
         8,
         "Should fill quota with closest candidates"
+    );
+    let candidate_ids: std::collections::HashSet<NodeId> =
+        candidates.iter().map(|(id, _)| *id).collect();
+    assert!(
+        selected.iter().all(|id| candidate_ids.contains(id)),
+        "all selected must be input candidates"
+    );
+    assert!(
+        selected.contains(&0) && selected.contains(&1),
+        "the two closest must be selected"
+    );
+    assert!(
+        !selected.contains(&9),
+        "the farthest candidate (9) must be the one dropped — proves the quota is filled by closeness, not arbitrarily"
+    );
+    let unique: std::collections::HashSet<_> = selected.iter().collect();
+    assert_eq!(
+        unique.len(),
+        selected.len(),
+        "no duplicate neighbors after backfill"
     );
 }
 
@@ -437,30 +482,6 @@ fn test_cas_promote_from_empty() {
         ep < 4,
         "test: entry point must be one of the promoted node IDs (0..4)"
     );
-}
-
-/// Verifies that the struct no longer contains entry_point_promote_lock.
-/// This is a compile-time check — if the field existed, this test would
-/// fail to compile because NativeHnsw is not #[repr(C)] and field access
-/// would be valid.
-#[test]
-fn test_no_mutex_field_exists() {
-    // If entry_point_promote_lock still existed as a Mutex field, this
-    // test would be trivially correct. The real verification is that the
-    // promote_entry_point function body uses CAS, which is tested above.
-    // This test verifies that search + insert work correctly without the mutex.
-    let engine = CpuDistance::new(DistanceMetric::Euclidean);
-    let hnsw = NativeHnsw::new(engine, 16, 100, 500);
-
-    for i in 0..200_usize {
-        #[allow(clippy::cast_precision_loss)]
-        let v: Vec<f32> = (0..32).map(|j| (i * 32 + j) as f32).collect();
-        hnsw.insert(&v).expect("test: insert should succeed");
-    }
-
-    let query: Vec<f32> = (0..32).map(|j| j as f32).collect();
-    let results = hnsw.search(&query, 10, 50);
-    assert!(!results.is_empty(), "test: search must return results");
 }
 
 // ============================================================================

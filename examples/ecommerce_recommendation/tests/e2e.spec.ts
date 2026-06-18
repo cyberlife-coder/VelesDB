@@ -140,18 +140,29 @@ test.describe('E-commerce Recommendation Example E2E', () => {
 
   test('should execute Vector Similarity query (Query 1)', () => {
     expect(output.queryResults.vectorSimilarity).toBe(true);
+    const m = output.raw.match(/Found (\d+) similar products in/);
+    expect(m).not.toBeNull();
+    expect(Number.parseInt(m![1], 10)).toBeGreaterThan(0);
   });
 
   test('should execute Vector + Filter query (Query 2)', () => {
     expect(output.queryResults.vectorFilter).toBe(true);
+    expect(output.raw).toMatch(/Found \d+ filtered results in/);
   });
 
   test('should execute Graph Lookup query (Query 3)', () => {
     expect(output.queryResults.graphLookup).toBe(true);
+    const m = output.raw.match(/Found (\d+) co-purchased products/);
+    expect(m).not.toBeNull();
+    expect(Number.parseInt(m![1], 10)).toBeGreaterThan(0);
   });
 
   test('should execute Hybrid query (Query 4)', () => {
     expect(output.queryResults.hybrid).toBe(true);
+    // The hybrid result line is printed unconditionally after RRF fusion +
+    // post-filtering, so it ties this test to the hybrid path,
+    // not just the static section header. Count may be 0 but the line prints.
+    expect(output.raw).toMatch(/Found \d+ recommendations in /);
   });
 
   test('should complete demo successfully', () => {

@@ -358,9 +358,22 @@ fn kmeans_converges_early_on_well_separated_data() {
     let vectors = generate_clustered_vectors(200, 8, 4, 42);
     let pq = ProductQuantizer::train(&vectors, 4, 4).unwrap();
 
-    assert_eq!(pq.codebook.num_subspaces, 4);
-    assert_eq!(pq.codebook.num_centroids, 4);
-    assert_eq!(pq.codebook.subspace_dim, 2);
+    // Well-separated clusters (inter-cluster gap = 50.0, intra-cluster
+    // perturbation < 0.5) => PQ reconstruction stays within the same cluster,
+    // so reconstruction error must be tiny. A degenerate/non-converged codebook
+    // would push this error orders of magnitude higher.
+    let probe = &vectors[0];
+    let code = pq.quantize(probe).unwrap();
+    let recon = pq.reconstruct(&code).unwrap();
+    let err: f32 = probe
+        .iter()
+        .zip(&recon)
+        .map(|(a, b)| (a - b) * (a - b))
+        .sum();
+    assert!(
+        err < 10.0,
+        "well-separated PQ reconstruction error too high: {err}"
+    );
 }
 
 #[test]
@@ -383,6 +396,7 @@ fn degenerate_centroids_not_present_after_training() {
 }
 
 #[test]
+#[allow(clippy::cast_precision_loss)]
 fn parallel_subspace_training_produces_valid_codebooks() {
     let vectors = generate_clustered_vectors(200, 16, 4, 77);
     let pq = ProductQuantizer::train(&vectors, 4, 4).unwrap();
@@ -394,6 +408,20 @@ fn parallel_subspace_training_produces_valid_codebooks() {
     let code = pq.quantize(&vectors[0]).unwrap();
     let reconstructed = pq.reconstruct(&code).unwrap();
     assert_eq!(reconstructed.len(), 16);
+
+    // A correctly trained codebook (parallel path) must reconstruct each
+    // clustered vector with low error; a degenerate/mis-ordered codebook would not.
+    for v in &vectors {
+        let code = pq.quantize(v).unwrap();
+        let rec = pq.reconstruct(&code).unwrap();
+        let mse: f32 = v
+            .iter()
+            .zip(&rec)
+            .map(|(a, b)| (a - b) * (a - b))
+            .sum::<f32>()
+            / v.len() as f32;
+        assert!(mse < 1.0, "reconstruction MSE too high: {mse}");
+    }
 }
 
 #[test]

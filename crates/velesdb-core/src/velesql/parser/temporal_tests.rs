@@ -7,40 +7,85 @@ use crate::velesql::Parser;
 fn test_parse_now_function() {
     let query = "SELECT * FROM events WHERE timestamp > NOW()";
     let result = Parser::parse(query);
-    assert!(result.is_ok(), "Failed to parse NOW(): {:?}", result.err());
+    let parsed = result.expect("Failed to parse NOW()");
+    let Some(crate::velesql::Condition::Comparison(cmp)) = parsed.select.where_clause.as_ref()
+    else {
+        panic!(
+            "Expected Comparison condition, got {:?}",
+            parsed.select.where_clause
+        );
+    };
+    assert!(
+        matches!(cmp.value, Value::Temporal(TemporalExpr::Now)),
+        "Expected Temporal(Now), got {:?}",
+        cmp.value
+    );
 }
 
 #[test]
 fn test_parse_interval_days() {
     let query = "SELECT * FROM events WHERE timestamp > INTERVAL '7 days'";
     let result = Parser::parse(query);
-    assert!(
-        result.is_ok(),
-        "Failed to parse INTERVAL: {:?}",
-        result.err()
-    );
+    let parsed = result.expect("INTERVAL '7 days' should parse");
+    let Some(crate::velesql::Condition::Comparison(cmp)) = parsed.select.where_clause.as_ref()
+    else {
+        panic!("expected a Comparison condition");
+    };
+    let Value::Temporal(TemporalExpr::Interval(iv)) = &cmp.value else {
+        panic!("expected Temporal(Interval), got {:?}", cmp.value);
+    };
+    assert_eq!(iv.magnitude, 7, "wrong interval magnitude");
+    assert_eq!(iv.unit, IntervalUnit::Days, "wrong interval unit");
 }
 
 #[test]
 fn test_parse_now_minus_interval() {
     let query = "SELECT * FROM logs WHERE created_at > NOW() - INTERVAL '24 hours'";
     let result = Parser::parse(query);
+    let parsed = result.expect("NOW() - INTERVAL '24 hours' should parse");
+    let Some(crate::velesql::Condition::Comparison(cmp)) = parsed.select.where_clause.as_ref()
+    else {
+        panic!(
+            "Expected Comparison condition, got {:?}",
+            parsed.select.where_clause
+        );
+    };
+    let Value::Temporal(TemporalExpr::Subtract(left, right)) = &cmp.value else {
+        panic!("Expected Temporal(Subtract), got {:?}", cmp.value);
+    };
     assert!(
-        result.is_ok(),
-        "Failed to parse NOW() - INTERVAL: {:?}",
-        result.err()
+        matches!(left.as_ref(), TemporalExpr::Now),
+        "left operand should be NOW(), got {left:?}"
     );
+    let TemporalExpr::Interval(iv) = right.as_ref() else {
+        panic!("right operand should be Interval, got {right:?}");
+    };
+    assert_eq!(iv.magnitude, 24, "interval magnitude");
+    assert_eq!(iv.unit, IntervalUnit::Hours, "interval unit");
 }
 
 #[test]
 fn test_parse_now_plus_interval() {
     let query = "SELECT * FROM tasks WHERE due_date < NOW() + INTERVAL '7 days'";
     let result = Parser::parse(query);
+    let parsed = result.expect("NOW() + INTERVAL should parse");
+    let Some(crate::velesql::Condition::Comparison(cmp)) = parsed.select.where_clause.as_ref()
+    else {
+        panic!("Expected Comparison condition")
+    };
+    let Value::Temporal(TemporalExpr::Add(left, right)) = &cmp.value else {
+        panic!("Expected Temporal(Add), got {:?}", cmp.value)
+    };
     assert!(
-        result.is_ok(),
-        "Failed to parse NOW() + INTERVAL: {:?}",
-        result.err()
+        matches!(**left, TemporalExpr::Now),
+        "lhs should be NOW(), got {:?}",
+        left
     );
+    let TemporalExpr::Interval(iv) = &**right else {
+        panic!("rhs should be an interval, got {:?}", right)
+    };
+    assert_eq!(iv.magnitude, 7);
+    assert_eq!(iv.unit, IntervalUnit::Days);
 }
 
 #[test]
@@ -124,9 +169,16 @@ fn test_temporal_expr_to_epoch_seconds() {
 
 #[test]
 fn test_interval_shorthand_units() {
-    let shorthands = ["1 s", "30 sec", "5 min", "2 h", "7 d", "2 w"];
+    let shorthands = [
+        ("1 s", IntervalUnit::Seconds),
+        ("30 sec", IntervalUnit::Seconds),
+        ("5 min", IntervalUnit::Minutes),
+        ("2 h", IntervalUnit::Hours),
+        ("7 d", IntervalUnit::Days),
+        ("2 w", IntervalUnit::Weeks),
+    ];
 
-    for shorthand in shorthands {
+    for (shorthand, expected_unit) in shorthands {
         let query = format!("SELECT * FROM events WHERE ts > INTERVAL '{}'", shorthand);
         let result = Parser::parse(&query);
         assert!(
@@ -135,5 +187,21 @@ fn test_interval_shorthand_units() {
             shorthand,
             result.err()
         );
+        let parsed = result.unwrap();
+        if let Some(crate::velesql::Condition::Comparison(cmp)) =
+            parsed.select.where_clause.as_ref()
+        {
+            if let Value::Temporal(TemporalExpr::Interval(iv)) = &cmp.value {
+                assert_eq!(
+                    iv.unit, expected_unit,
+                    "Wrong unit for '{}': expected {:?}, got {:?}",
+                    shorthand, expected_unit, iv.unit
+                );
+            } else {
+                panic!("Expected Temporal(Interval), got {:?}", cmp.value);
+            }
+        } else {
+            panic!("Expected Comparison condition");
+        }
     }
 }

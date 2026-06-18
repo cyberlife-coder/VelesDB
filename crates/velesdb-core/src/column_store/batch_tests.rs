@@ -93,8 +93,17 @@ fn test_set_ttl_basic() {
         ])
         .unwrap();
 
+    let before = ColumnStore::now_timestamp();
     let result = store.set_ttl(1, 3600);
     assert!(result.is_ok());
+    let after = ColumnStore::now_timestamp();
+    let stored = store
+        .row_expiry
+        .get(&0)
+        .copied()
+        .expect("row_expiry entry should exist for the live row");
+    // expiry = now_timestamp() + 3600, bounded by the timestamps taken around the call
+    assert!(stored >= before + 3600 && stored <= after + 3600);
 }
 
 #[test]
@@ -213,6 +222,12 @@ fn test_set_column_value_float() {
     let mut col = TypedColumn::Float(vec![Some(1.0), Some(2.0)]);
     let result = ColumnStore::set_column_value(&mut col, 0, ColumnValue::Float(3.5));
     assert!(result.is_ok());
+    if let TypedColumn::Float(vec) = col {
+        assert_eq!(vec[0], Some(3.5));
+        assert_eq!(vec[1], Some(2.0)); // untouched cell preserved
+    } else {
+        panic!("expected Float column");
+    }
 }
 
 #[test]
@@ -220,6 +235,12 @@ fn test_set_column_value_bool() {
     let mut col = TypedColumn::Bool(vec![Some(true), Some(false)]);
     let result = ColumnStore::set_column_value(&mut col, 1, ColumnValue::Bool(true));
     assert!(result.is_ok());
+    if let TypedColumn::Bool(vec) = col {
+        assert_eq!(vec[1], Some(true));
+        assert_eq!(vec[0], Some(true)); // untouched cell preserved
+    } else {
+        panic!("expected Bool column");
+    }
 }
 
 #[test]
@@ -234,6 +255,11 @@ fn test_set_column_value_null_float() {
     let mut col = TypedColumn::Float(vec![Some(1.0)]);
     let result = ColumnStore::set_column_value(&mut col, 0, ColumnValue::Null);
     assert!(result.is_ok());
+    if let TypedColumn::Float(vec) = col {
+        assert!(vec[0].is_none());
+    } else {
+        panic!("expected Float column");
+    }
 }
 
 #[test]
@@ -241,11 +267,18 @@ fn test_set_column_value_null_bool() {
     let mut col = TypedColumn::Bool(vec![Some(true)]);
     let result = ColumnStore::set_column_value(&mut col, 0, ColumnValue::Null);
     assert!(result.is_ok());
+    if let TypedColumn::Bool(vec) = col {
+        assert!(vec[0].is_none());
+    }
 }
 
 #[test]
 fn test_set_column_value_null_string() {
-    let mut col = TypedColumn::String(vec![None]);
+    use super::types::StringId;
+    let mut col = TypedColumn::String(vec![Some(StringId(0))]);
     let result = ColumnStore::set_column_value(&mut col, 0, ColumnValue::Null);
     assert!(result.is_ok());
+    if let TypedColumn::String(vec) = col {
+        assert!(vec[0].is_none());
+    }
 }

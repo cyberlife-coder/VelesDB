@@ -105,7 +105,7 @@ def test_bouncer_hamming():
 # Test 2: Detective - CLIP meanings + Cosine collection
 # ---------------------------------------------------------------------------
 
-def test_detective_cosine(db, files):
+def _run_detective_cosine(db, files):
     """The Detective indexes meanings and Cosine search ranks semantically."""
     try:
         import open_clip
@@ -156,7 +156,7 @@ def test_detective_cosine(db, files):
 # Test 3: Combined two-pass pipeline (Bouncer + Detective)
 # ---------------------------------------------------------------------------
 
-def test_combined_pipeline(bouncer, detective, compute_meaning_fn, files):
+def _run_combined_pipeline(bouncer, detective, compute_meaning_fn, files):
     """Two-pass pipeline completes under 100ms and produces valid re-ranking."""
     query_path = os.path.join(PHOTO_DIR, "beach_1.jpg")
 
@@ -214,27 +214,6 @@ def test_all_metrics():
 
 
 # ---------------------------------------------------------------------------
-# Test 5: HTML dashboard generation
-# ---------------------------------------------------------------------------
-
-def test_html_generation():
-    """Base64 image encoding works for the HTML dashboard."""
-    import base64
-    from io import BytesIO
-
-    path = os.path.join(PHOTO_DIR, "beach_1.jpg")
-    img = Image.open(path).convert("RGB")
-    img.thumbnail((200, 200))
-    buf = BytesIO()
-    img.save(buf, format="JPEG", quality=80)
-    b64 = base64.b64encode(buf.getvalue()).decode()
-
-    assert len(b64) > 100
-    assert b64[:4] == "/9j/", "Not a valid JPEG base64"
-    print(f"  [PASS] Image base64 encoding ({len(b64)} chars)")
-
-
-# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -251,18 +230,15 @@ if __name__ == "__main__":
     db, bouncer, files = test_bouncer_hamming()
 
     print("\nTest 2: Detective (CLIP + Cosine)")
-    result = test_detective_cosine(db, files)
+    result = _run_detective_cosine(db, files)
 
     if result:
         detective, compute_meaning_fn = result
         print("\nTest 3: Two-pass pipeline (Bouncer + Detective)")
-        test_combined_pipeline(bouncer, detective, compute_meaning_fn, files)
+        _run_combined_pipeline(bouncer, detective, compute_meaning_fn, files)
 
     print("\nTest 4: All article metrics")
     test_all_metrics()
-
-    print("\nTest 5: HTML generation")
-    test_html_generation()
 
     print(f"\n{'=' * 60}")
     print("ALL TESTS PASSED")

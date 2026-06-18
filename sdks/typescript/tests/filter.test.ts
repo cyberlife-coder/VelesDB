@@ -310,7 +310,32 @@ describe('Filter builders — edge cases', () => {
         ]),
       ]),
     ]);
-    expect(deep.condition.type).toBe('and');
+    expect(deep.condition).toEqual({
+      type: 'and',
+      conditions: [
+        {
+          type: 'or',
+          conditions: [
+            {
+              type: 'and',
+              conditions: [
+                {
+                  type: 'not',
+                  condition: {
+                    type: 'or',
+                    conditions: [
+                      { type: 'eq', field: 'a', value: 1 },
+                      { type: 'eq', field: 'b', value: 2 },
+                    ],
+                  },
+                },
+                { type: 'gt', field: 'c', value: 3 },
+              ],
+            },
+          ],
+        },
+      ],
+    });
   });
 });
 
@@ -372,7 +397,13 @@ describe('Filter negative / contract tests', () => {
 
   it('CompareOp mirrors the exact 6 Rust variants', () => {
     const ops: CompareOp[] = ['Eq', 'NotEq', 'Gt', 'Gte', 'Lt', 'Lte'];
-    expect(ops).toHaveLength(6);
+    expect(ops).toHaveLength(6); // compile-time guard: drift from Rust enum breaks tsc
+    for (const op of ops) {
+      const filter = f.geoDistance('loc', 48.85, 2.35, op, 1000);
+      expect(filter).toEqual({
+        condition: { type: 'geo_distance', field: 'loc', lat: 48.85, lng: 2.35, operator: op, threshold: 1000 },
+      });
+    }
   });
 
   it('serializes to JSON losslessly (roundtrip)', () => {

@@ -400,14 +400,21 @@ fn test_execute_match_depth_limit_enforced() {
         crate::collection::graph::GraphEdge::new(1, 0, 1, "LINKS").expect("GraphEdge::new failed");
     col.add_edge(edge).expect("add_edge failed");
 
-    // MATCH query with traversal — depth guard-rail either stops traversal
-    // or BFS returns 0 results because no edges exceed depth 0.
+    // MATCH query with traversal — the 1-hop edge (0->1) trips the depth
+    // guard-rail (max_depth=0) before any result is accepted, so the query
+    // must return a guard-rail error.
     let sql = "MATCH (a)-[r]->(b) RETURN a LIMIT 5;";
     let query = Parser::parse(sql).expect("parse failed");
     let params = HashMap::new();
 
     let result = col.execute_query(&query, &params);
-    // Either a guard-rail error or empty results — both are acceptable.
-    // We assert the operation doesn't panic.
-    let _ = result;
+    assert!(
+        result.is_err(),
+        "depth guard-rail (max_depth=0) must reject a 1-hop traversal, got Ok"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Guard-rail") || err.contains("depth"),
+        "Unexpected error: {err}"
+    );
 }

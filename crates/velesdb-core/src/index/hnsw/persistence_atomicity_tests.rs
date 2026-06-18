@@ -344,7 +344,19 @@ fn test_backward_compat_legacy_3tuple_meta_loads() {
         "3-tuple meta must default storage_mode to Full"
     );
 
-    load_sidecars(path, &loaded_meta).expect("test: legacy sidecars load cleanly");
+    let (loaded_mappings, _vectors, enabled) =
+        load_sidecars(path, &loaded_meta).expect("test: legacy sidecars load cleanly");
+    assert!(
+        enabled,
+        "vector storage must round-trip from legacy 3-tuple meta"
+    );
+    let (id_to_idx, _, next_idx) = loaded_mappings.as_parts();
+    assert_eq!(
+        id_to_idx.len(),
+        2,
+        "both legacy mappings must survive the 3-tuple round-trip"
+    );
+    assert_eq!(next_idx, 2, "next_idx must round-trip from legacy mappings");
 }
 
 // -----------------------------------------------------------------------

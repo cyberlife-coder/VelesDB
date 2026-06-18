@@ -251,9 +251,33 @@ mod tests {
         driver2.run_insert().expect("Insert 2 failed");
 
         // Both collections should have identical data
+        let count = config1.count;
         let collection1 = VectorCollection::open(config1.data_dir).expect("Open 1 failed");
         let collection2 = VectorCollection::open(config2.data_dir).expect("Open 2 failed");
 
         assert_eq!(collection1.len(), collection2.len());
+        for id in 0..count as u64 {
+            let p1 = collection1
+                .get(&[id])
+                .into_iter()
+                .next()
+                .flatten()
+                .expect("point missing in run 1");
+            let p2 = collection2
+                .get(&[id])
+                .into_iter()
+                .next()
+                .flatten()
+                .expect("point missing in run 2");
+            assert_eq!(p1.id, p2.id);
+            assert_eq!(
+                p1.vector, p2.vector,
+                "seeded vectors must match for id {id}"
+            );
+            assert_eq!(
+                p1.payload, p2.payload,
+                "seeded payloads (incl. checksum) must match for id {id}"
+            );
+        }
     }
 }

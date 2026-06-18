@@ -248,5 +248,37 @@ fn search_raw_does_not_overfetch_beyond_k_unlike_rerank() {
             "search_raw with k=10 must never return more than 10 results (ef={ef}); got {}",
             results.len()
         );
+        // At high ef on a tiny, well-connected graph the search must surface
+        // exactly k=10 neighbors (k < index size, ef >= k). Low ef can under-fill.
+        if ef >= 64 {
+            assert_eq!(
+                results.len(),
+                10,
+                "search_raw must return exactly k=10 at ef={ef}; got {}",
+                results.len()
+            );
+        }
     }
+
+    // The candidate budget must equal k, not a k*4 over-fetch ceiling:
+    // k == index size must return every point, while a small k returns fewer.
+    // A k*4-then-truncate-to-k stub could not return all 100 for k=100.
+    let all = index
+        .search_raw(&query, 100, 128)
+        .expect("valid query must succeed");
+    assert_eq!(
+        all.len(),
+        100,
+        "search_raw budget must equal k: k=index_size must return every point; got {}",
+        all.len()
+    );
+    let few = index
+        .search_raw(&query, 10, 128)
+        .expect("valid query must succeed");
+    assert!(
+        few.len() < all.len(),
+        "a small-k search must return fewer results than k=index_size; got {} vs {}",
+        few.len(),
+        all.len()
+    );
 }

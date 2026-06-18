@@ -45,6 +45,11 @@ class TestGraphStore:
             }
         )
         assert store.edge_count() == 1
+        edges = store.get_edges_by_label("KNOWS")
+        assert len(edges) == 1
+        props = edges[0]["properties"]
+        assert props["since"] == "2020-01-01"
+        assert abs(props["strength"] - 0.9) < 1e-9
 
     def test_get_edges_by_label(self):
         """Test get_edges_by_label (AC-3 from US-030)."""

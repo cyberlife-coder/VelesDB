@@ -103,7 +103,7 @@ fn test_list_json_format() {
         .arg("json")
         .assert()
         .success()
-        .stdout(predicate::str::contains("["));
+        .stdout(predicate::str::is_match(r"^\s*\[\s*\]\s*$").unwrap());
 }
 
 // =============================================================================
@@ -157,6 +157,13 @@ fn test_create_metadata_collection_then_list() {
         .assert()
         .success()
         .stdout(predicate::str::contains("created"));
+
+    velesdb_cmd()
+        .args(["collection", "list"])
+        .arg(&db_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my_collection"));
 }
 
 // =============================================================================

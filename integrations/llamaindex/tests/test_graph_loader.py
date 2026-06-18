@@ -17,6 +17,8 @@ class TestGraphLoader:
         mock_store = MagicMock()
         loader = GraphLoader(mock_store)
         assert loader._vector_store is mock_store
+        assert loader._edges == []            # empty edge list initialized
+        assert loader._native_graph is None   # no graph_collection_name -> native branch skipped
 
     def test_add_node_with_metadata(self):
         """Test adding a node with metadata."""
@@ -139,6 +141,12 @@ class TestGraphLoader:
         assert result["nodes"] == 1
         assert result["edges"] == 0
         mock_collection.upsert_metadata.assert_called_once()
+        call_args = mock_collection.upsert_metadata.call_args[0][0][0]
+        payload = call_args["payload"]
+        assert payload["label"] == "DOCUMENT"
+        assert payload["node_id"] == "test-node-1"
+        assert payload["text_preview"] == "Test content"   # content[:200] of the short content
+        assert payload["source"] == "test.txt"             # scalar metadata merged in
 
     def test_load_from_nodes_with_none_content(self):
         """Test loading nodes when get_content() returns None.

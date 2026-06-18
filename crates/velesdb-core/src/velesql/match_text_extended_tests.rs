@@ -4,7 +4,7 @@
 //! syntax, including combinations with vector NEAR, AND/OR/NOT, ORDER BY,
 //! LIMIT/OFFSET, and WITH clauses.
 
-use crate::velesql::{Condition, Parser};
+use crate::velesql::{Condition, OrderByExpr, Parser};
 
 // =============================================================================
 // Nominal: basic MATCH parsing
@@ -54,15 +54,32 @@ fn test_match_with_multiple_and_conditions() {
     let sql = "SELECT * FROM docs WHERE vector NEAR $v AND title MATCH 'AI' AND category = 'tech' LIMIT 10";
     let query = Parser::parse(sql).expect("MATCH with multiple ANDs should parse");
 
-    assert!(query.select.where_clause.is_some());
     assert_eq!(query.select.limit, Some(10));
 
     // The tree is AND(AND(VectorSearch, Match), Comparison) — left-to-right fold.
-    // We only assert the root is AND and the structure is not None.
-    assert!(
-        matches!(query.select.where_clause, Some(Condition::And(_, _))),
-        "Root condition should be AND"
-    );
+    match query.select.where_clause.as_ref() {
+        Some(Condition::And(left, right)) => {
+            // left is itself AND(VectorSearch, Match) per the left-to-right fold.
+            match left.as_ref() {
+                Condition::And(l, r) => {
+                    assert!(
+                        matches!(l.as_ref(), Condition::VectorSearch(_)),
+                        "inner-left should be VectorSearch, got {l:?}"
+                    );
+                    assert!(
+                        matches!(r.as_ref(), Condition::Match(m) if m.column == "title" && m.query == "AI"),
+                        "inner-right should be Match(title,'AI'), got {r:?}"
+                    );
+                }
+                other => panic!("Expected nested And(VectorSearch, Match), got {other:?}"),
+            }
+            assert!(
+                matches!(right.as_ref(), Condition::Comparison(c) if c.column == "category"),
+                "right should be Comparison on category, got {right:?}"
+            );
+        }
+        other => panic!("Expected And(And(VectorSearch, Match), Comparison), got {other:?}"),
+    }
 }
 
 #[test]
@@ -85,14 +102,26 @@ fn test_match_with_order_by_similarity() {
     let sql = "SELECT * FROM docs WHERE content MATCH 'search' ORDER BY similarity() DESC LIMIT 10";
     let query = Parser::parse(sql).expect("MATCH + ORDER BY similarity() should parse");
 
-    assert!(
-        query.select.where_clause.is_some(),
-        "WHERE clause must be present"
+    match query.select.where_clause.as_ref() {
+        Some(Condition::Match(m)) => {
+            assert_eq!(m.column, "content");
+            assert_eq!(m.query, "search");
+        }
+        other => panic!("Expected Match condition, got {other:?}"),
+    }
+
+    let order_by = query
+        .select
+        .order_by
+        .as_ref()
+        .expect("ORDER BY clause must be present");
+    assert_eq!(order_by.len(), 1);
+    assert_eq!(
+        order_by[0].expr,
+        OrderByExpr::SimilarityBare,
+        "similarity() must parse to SimilarityBare"
     );
-    assert!(
-        query.select.order_by.is_some(),
-        "ORDER BY clause must be present"
-    );
+    assert!(order_by[0].descending, "DESC must set descending=true");
     assert_eq!(query.select.limit, Some(10));
 }
 

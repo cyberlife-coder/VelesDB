@@ -21,6 +21,9 @@ fn test_point_without_payload() {
 
     assert_eq!(point.id, 1);
     assert!(point.payload.is_none());
+    assert_eq!(point.dimension(), 3);
+    assert!(!point.has_sparse_vectors());
+    assert!(!point.is_metadata_only());
 }
 
 #[test]

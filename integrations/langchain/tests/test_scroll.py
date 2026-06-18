@@ -63,9 +63,13 @@ class TestScrollNominal:
         # WHEN scroll is called with no cursor
         result = store_with_docs.scroll(cursor=None, batch_size=100)
 
-        # THEN it returns a 2-tuple
+        # THEN it returns a 2-tuple with real content
         assert isinstance(result, tuple)
         assert len(result) == 2
+        docs, next_cursor = result
+        assert isinstance(docs, list)
+        assert len(docs) == 5  # all 5 fixture docs returned in one batch
+        assert next_cursor is not None  # last-seen id reported for pagination
 
     def test_scroll_first_page_returns_documents(self, store_with_docs):
         # GIVEN a store with 5 documents
@@ -166,7 +170,9 @@ class TestScrollOnePageHelper:
             pytest.skip("collection not initialised")
         batch, cursor = _scroll_one_batch(col, None, 100, None)
         assert isinstance(batch, list)
-        assert cursor is None or isinstance(cursor, int)
+        assert len(batch) == 5  # all 5 fixture docs fit in one batch
+        assert all("id" in pt for pt in batch)  # raw dicts came from the collection
+        assert isinstance(cursor, int)  # non-exhausted: a last-ID cursor is reported
 
     def test_scroll_one_batch_cursor_skips_seen(self, store_with_docs):
         col = store_with_docs._collection

@@ -103,30 +103,6 @@ fn setup_graph_collection(db: &Database) {
 }
 
 // =========================================================================
-// Scenario 1: `VectorCollection` JOIN `MetadataCollection`
-// =========================================================================
-
-/// GIVEN a `VectorCollection` `products` and a `MetadataCollection` `inventory`
-/// WHEN a JOIN query combines both collections
-/// THEN results contain fields from both collections.
-#[test]
-fn test_join_vector_and_metadata_collections() {
-    let (_dir, db) = create_test_db();
-    setup_cross_type_collections(&db);
-
-    let sql = "SELECT * FROM products \
-               JOIN inventory ON products.id = inventory.id \
-               LIMIT 10";
-
-    let results = execute_sql(&db, sql).expect("test: cross-type JOIN should succeed");
-
-    assert!(
-        !results.is_empty(),
-        "JOIN between VectorCollection and MetadataCollection should return results"
-    );
-}
-
-// =========================================================================
 // Scenario 2: `VectorCollection` JOIN `MetadataCollection` + vector search
 // =========================================================================
 

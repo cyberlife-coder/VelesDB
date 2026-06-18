@@ -16,11 +16,35 @@ fn test_bm25_index_creation() {
 
 #[test]
 fn test_bm25_index_with_custom_params() {
-    let params = Bm25Params { k1: 1.5, b: 0.5 };
-    let index = Bm25Index::with_params(params);
-    // Verify index was created with custom params by testing behavior
-    // The params affect scoring, so we just verify the index is functional
-    assert!(index.is_empty());
+    // Identical corpus indexed with default vs. custom params.
+    // A long doc and a short doc share the term "rust"; b controls
+    // length-normalization, so changing b/k1 must change the scores.
+    let make = |idx: &Bm25Index| {
+        idx.add_document(1, "rust");
+        idx.add_document(2, "rust is a systems programming language that runs fast");
+    };
+
+    let default_idx = Bm25Index::new(); // k1=1.2, b=0.75
+    make(&default_idx);
+    let default_scores = default_idx.search("rust", 10);
+
+    let custom_idx = Bm25Index::with_params(Bm25Params { k1: 1.5, b: 0.5 });
+    make(&custom_idx);
+    let custom_scores = custom_idx.search("rust", 10);
+
+    // Same docs match under both parameterizations.
+    assert_eq!(default_scores.len(), 2);
+    assert_eq!(custom_scores.len(), 2);
+    // Scores must be finite and the custom params must actually reach the
+    // scoring path: at least one matching doc's score differs from default.
+    for (_, s) in &custom_scores {
+        assert!(s.is_finite() && *s > 0.0);
+    }
+    let changed = default_scores
+        .iter()
+        .zip(&custom_scores)
+        .any(|((_, d), (_, c))| (d - c).abs() > f32::EPSILON);
+    assert!(changed, "custom k1/b must alter BM25 scores vs. defaults");
 }
 
 #[test]
@@ -133,11 +157,25 @@ fn test_search_multiple_terms() {
     // All docs match "programming", docs 1 and 3 also match "rust"
     assert!(!results.is_empty());
 
-    // Doc 1 should score highest (matches both "rust" and "programming")
-    // Actually doc 3 also matches both, let's check they're both high
     let ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
     assert!(ids.contains(&1));
     assert!(ids.contains(&3));
+
+    let score = |id: u64| {
+        results
+            .iter()
+            .find(|(i, _)| *i == id)
+            .map_or(0.0, |(_, s)| *s)
+    };
+    // Docs matching BOTH "rust" and "programming" must outscore the doc matching only "programming".
+    assert!(
+        score(1) > score(2),
+        "dual-match doc 1 must outscore single-match doc 2"
+    );
+    assert!(
+        score(3) > score(2),
+        "dual-match doc 3 must outscore single-match doc 2"
+    );
 }
 
 #[test]

@@ -16,19 +16,12 @@ from langchain_velesdb.graph_toolkit import (
 class TestEntity:
     """Tests for Entity dataclass."""
 
-    def test_entity_creation(self):
-        entity = Entity(name="John", entity_type="PERSON")
-        assert entity.name == "John"
-        assert entity.entity_type == "PERSON"
-        assert entity.properties == {}
-
-    def test_entity_with_properties(self):
-        entity = Entity(
-            name="Acme Corp",
-            entity_type="ORGANIZATION",
-            properties={"industry": "tech"},
-        )
-        assert entity.properties["industry"] == "tech"
+    def test_entity_creation_defaults_properties_to_empty_dict(self):
+        e1 = Entity(name="John", entity_type="PERSON")
+        e2 = Entity(name="Mary", entity_type="PERSON")
+        assert e1.properties == {}
+        e1.properties["x"] = 1
+        assert e2.properties == {}  # default_factory yields a fresh dict per instance
 
     def test_entity_to_dict(self):
         entity = Entity(name="Paris", entity_type="LOCATION")
@@ -39,16 +32,6 @@ class TestEntity:
 
 class TestRelation:
     """Tests for Relation dataclass."""
-
-    def test_relation_creation(self):
-        relation = Relation(
-            source="John",
-            target="Acme Corp",
-            relation_type="WORKS_AT",
-        )
-        assert relation.source == "John"
-        assert relation.target == "Acme Corp"
-        assert relation.relation_type == "WORKS_AT"
 
     def test_relation_to_dict(self):
         relation = Relation(
@@ -192,9 +175,13 @@ class TestGraphLoader:
 
     def test_loader_creation(self):
         mock_db = Mock()
+        # default collection name is a public contract
         loader = GraphLoader(mock_db)
-        assert loader.db == mock_db
+        assert loader.db is mock_db
         assert loader.collection_name == "knowledge_graph"
+        # explicit collection_name must override the default (proves the param is wired)
+        custom = GraphLoader(mock_db, collection_name="custom_graph")
+        assert custom.collection_name == "custom_graph"
 
     def test_load_entities_and_relations(self):
         mock_collection = Mock()

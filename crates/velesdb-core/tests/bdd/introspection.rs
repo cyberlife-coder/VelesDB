@@ -38,14 +38,13 @@ fn test_show_collections_returns_all_types() {
     names.sort_unstable();
     assert_eq!(names, vec!["docs", "kg", "tags"]);
 
-    // Verify types are present for each.
-    for result in &results {
-        let ctype = payload_str(result, "type");
-        assert!(
-            ctype.is_some(),
-            "each collection should have a 'type' field"
-        );
-    }
+    // Verify each collection reports a concrete, valid type (not the "unknown" fallback).
+    let mut types: Vec<&str> = results
+        .iter()
+        .filter_map(|r| payload_str(r, "type"))
+        .collect();
+    types.sort_unstable();
+    assert_eq!(types, vec!["graph", "metadata", "vector"]);
 }
 
 #[test]
@@ -191,14 +190,21 @@ fn test_explain_select_returns_plan() {
         .is_some();
     assert!(has_plan, "result should contain a 'plan' field");
 
-    let has_tree = result
+    let tree = result
         .point
         .payload
         .as_ref()
         .and_then(|p| p.get("tree"))
         .and_then(serde_json::Value::as_str)
-        .is_some();
-    assert!(has_tree, "result should contain a 'tree' string field");
+        .expect("result should contain a 'tree' string field");
+    assert!(
+        tree.contains("docs"),
+        "tree should name the scanned collection 'docs', got: {tree}"
+    );
+    assert!(
+        tree.contains("Limit: 10"),
+        "tree should show the explicit LIMIT 10 node, got: {tree}"
+    );
 }
 
 // ============================================================================
@@ -287,9 +293,10 @@ fn test_describe_collection_with_data() {
     );
 }
 
-/// DESCRIBE with HNSW params — verify custom M and `ef_construction` are shown.
+/// DESCRIBE of an HNSW-tuned collection still reports metric/dimension/point_count
+/// (custom HNSW params are not surfaced in the DESCRIBE payload today).
 #[test]
-fn test_describe_collection_with_hnsw_params() {
+fn test_describe_collection_reports_metric_and_dimension() {
     let (_dir, db) = create_test_db();
 
     execute_sql(
@@ -314,6 +321,18 @@ fn test_describe_collection_with_hnsw_params() {
         .and_then(|p| p.get("dimension"))
         .and_then(serde_json::Value::as_u64);
     assert_eq!(dim, Some(64));
+
+    let point_count = results[0]
+        .point
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("point_count"))
+        .and_then(serde_json::Value::as_u64);
+    assert_eq!(
+        point_count,
+        Some(0),
+        "freshly created collection has 0 points"
+    );
 }
 
 // ============================================================================
@@ -411,10 +430,22 @@ fn test_explain_complex_query() {
         .and_then(serde_json::Value::as_str)
         .expect("tree field should be present");
 
-    // Complex query plan should mention the collection and search strategy.
+    // Complex query plan should model the NEAR search, scalar filter, and limit.
     assert!(
-        !tree.is_empty(),
-        "EXPLAIN tree should not be empty for complex query"
+        tree.contains("VectorSearch"),
+        "plan should model the NEAR vector search: {tree}"
+    );
+    assert!(
+        tree.contains("docs"),
+        "VectorSearch node should name the queried collection: {tree}"
+    );
+    assert!(
+        tree.contains("Filter"),
+        "plan should model the scalar WHERE predicate (category = 'tech'): {tree}"
+    );
+    assert!(
+        tree.contains("Limit: 10"),
+        "plan should model the explicit LIMIT: {tree}"
     );
 }
 
@@ -436,14 +467,26 @@ fn test_explain_metadata_only_query() {
     .expect("EXPLAIN metadata query");
 
     assert_eq!(results.len(), 1);
+    let tree = results[0]
+        .point
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("tree"))
+        .and_then(serde_json::Value::as_str)
+        .expect("tree field should be present");
+    // Non-vector query must plan a TableScan over the queried collection,
+    // not a VectorSearch, and must surface the scalar WHERE filter.
     assert!(
-        results[0]
-            .point
-            .payload
-            .as_ref()
-            .and_then(|p| p.get("plan"))
-            .is_some(),
-        "plan field should be present"
+        tree.contains("TableScan: items"),
+        "metadata-only plan should TableScan the queried collection, got:\n{tree}"
+    );
+    assert!(
+        !tree.contains("VectorSearch"),
+        "metadata-only query must not plan a vector search, got:\n{tree}"
+    );
+    assert!(
+        tree.contains("Filter"),
+        "scalar WHERE clause should produce a Filter node, got:\n{tree}"
     );
 }
 

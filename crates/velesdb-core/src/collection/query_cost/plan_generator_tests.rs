@@ -33,10 +33,19 @@ fn test_generate_scan_plan() {
 
     let plans = generator.generate_plans(&query, &stats);
 
-    assert!(!plans.is_empty());
-    assert!(plans
+    let scan = plans
         .iter()
-        .any(|p| matches!(p.plan, PhysicalPlan::SeqScan { .. })));
+        .find(|p| matches!(p.plan, PhysicalPlan::SeqScan { .. }))
+        .expect("scan plan must always be generated");
+    // estimate_scan reports live rows (100_000 - 0 deleted) and the SeqScan
+    // variant copies that into estimated_rows.
+    assert_eq!(scan.cost.rows, 100_000);
+    if let PhysicalPlan::SeqScan { estimated_rows, .. } = scan.plan {
+        assert_eq!(estimated_rows, 100_000);
+    }
+    // io_cost + cpu_cost with positive default factors is strictly positive.
+    assert!(scan.cost.total > 0.0);
+    assert!(scan.cost.startup.abs() < f64::EPSILON);
 }
 
 #[test]
@@ -63,19 +72,35 @@ fn test_generate_vector_plan() {
     let generator = PlanGenerator::default();
     let stats = test_stats();
 
+    // Use input values that differ from the production defaults
+    // (unwrap_or(10)/unwrap_or(100)) so the assertion proves real pass-through,
+    // not a coincidence with the defaults.
     let query = QueryCharacteristics {
         collection: "test".to_string(),
         has_similarity: true,
-        top_k: Some(10),
-        ef_search: Some(100),
+        top_k: Some(7),
+        ef_search: Some(64),
         ..Default::default()
     };
 
     let plans = generator.generate_plans(&query, &stats);
 
-    assert!(plans
+    let vp = plans
         .iter()
-        .any(|p| matches!(p.plan, PhysicalPlan::VectorSearch { .. })));
+        .find(|p| matches!(p.plan, PhysicalPlan::VectorSearch { .. }))
+        .expect("vector plan present");
+    if let PhysicalPlan::VectorSearch {
+        k,
+        ef_search,
+        collection,
+    } = &vp.plan
+    {
+        assert_eq!(*k, 7);
+        assert_eq!(*ef_search, 64);
+        assert_eq!(collection, "test");
+    } else {
+        unreachable!();
+    }
 }
 
 #[test]
@@ -112,17 +137,16 @@ fn test_select_best_plan() {
         ..Default::default()
     };
 
-    let best = generator.optimize(&query, &stats);
-
-    assert!(best.is_some());
-    let best = best.unwrap();
-    // Vector search should typically win for similarity queries
+    let best = generator
+        .optimize(&query, &stats)
+        .expect("optimize always returns a plan (scan baseline)");
+    // With this fixture the low-cardinality prop_category index (50 entries, depth 3)
+    // wins: cost = depth*random_page_cost = 12, beating VectorSearch (~166) and
+    // SeqScan+filter (~5125). Pin the deterministic winner so a regression in the
+    // cost model or plan selection is caught.
     assert!(
-        matches!(
-            best.plan,
-            PhysicalPlan::VectorSearch { .. } | PhysicalPlan::IndexScan { .. }
-        ),
-        "Expected VectorSearch or IndexScan, got {:?}",
+        matches!(best.plan, PhysicalPlan::IndexScan { .. }),
+        "IndexScan should win for selective-filter + similarity, got {:?}",
         best.plan.plan_type()
     );
 }

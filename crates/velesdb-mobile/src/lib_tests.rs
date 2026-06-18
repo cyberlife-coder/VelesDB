@@ -367,7 +367,11 @@ fn test_collection_compact_storage() {
 
     // Compaction must succeed and return the reclaimed byte count; live
     // points are unaffected.
-    let _freed = col.compact_storage().unwrap();
+    let freed = col.compact_storage().unwrap();
+    assert!(
+        freed > 0,
+        "compact_storage should reclaim bytes after 2 deletes"
+    );
     assert_eq!(col.count(), 3);
 }
 
@@ -431,7 +435,7 @@ fn test_collection_apply_advanced_config() {
         .unwrap();
     let col = db.get_collection("adv".to_string()).unwrap().unwrap();
 
-    // All three fields set: must persist without error.
+    // All three fields set: must persist and be readable back.
     col.apply_advanced_config(MobileAdvancedConfig {
         pq_rescore_oversampling: Some(8),
         deferred_indexing: Some(MobileDeferredIndexerConfig {
@@ -446,13 +450,40 @@ fn test_collection_apply_advanced_config() {
     })
     .unwrap();
 
-    // None fields leave configuration unchanged: also a valid no-op.
+    let cfg = col.inner.config();
+    assert_eq!(cfg.pq_rescore_oversampling, Some(8));
+    let aib = cfg
+        .async_index_builder
+        .as_ref()
+        .expect("async_index_builder set");
+    assert_eq!(aib.merge_threshold, 20_000);
+    assert_eq!(aib.segment_count, None);
+    let d = cfg
+        .deferred_indexing
+        .as_ref()
+        .expect("deferred_indexing set");
+    assert!(d.enabled);
+    assert_eq!(d.merge_threshold, 512);
+    assert_eq!(d.max_buffer_age_ms, 3000);
+
+    // None fields leave configuration unchanged (no-op contract).
     col.apply_advanced_config(MobileAdvancedConfig {
         pq_rescore_oversampling: None,
         deferred_indexing: None,
         async_index_builder: None,
     })
     .unwrap();
+
+    let cfg2 = col.inner.config();
+    assert_eq!(cfg2.pq_rescore_oversampling, Some(8));
+    assert!(cfg2
+        .async_index_builder
+        .as_ref()
+        .is_some_and(|a| a.merge_threshold == 20_000));
+    assert!(cfg2
+        .deferred_indexing
+        .as_ref()
+        .is_some_and(|d| d.enabled && d.merge_threshold == 512));
 }
 
 #[test]
@@ -477,6 +508,16 @@ fn test_collection_with_json_payload() {
 
     col.upsert(point).unwrap();
     assert_eq!(col.count(), 1);
+
+    let fetched = col.get_by_id(1).expect("point 1 should exist");
+    let payload_str = fetched.payload.expect("payload should persist");
+    let got: serde_json::Value =
+        serde_json::from_str(&payload_str).expect("stored payload must be valid JSON");
+    let expected: serde_json::Value = serde_json::json!({"title": "Hello", "category": "test"});
+    assert_eq!(
+        got, expected,
+        "payload must round-trip through parse_point + get_by_id"
+    );
 }
 
 // =========================================================================
@@ -584,14 +625,17 @@ fn test_fusion_strategy_weighted_conversion() {
         hit_weight: 0.2,
     };
     let core: CoreFusionStrategy = strategy.into();
-    assert!(matches!(
-        core,
-        CoreFusionStrategy::Weighted {
-            avg_weight: _,
-            max_weight: _,
-            hit_weight: _
-        }
-    ));
+    let CoreFusionStrategy::Weighted {
+        avg_weight,
+        max_weight,
+        hit_weight,
+    } = core
+    else {
+        panic!("expected Weighted variant, got {core:?}");
+    };
+    assert!((avg_weight - 0.5).abs() < f32::EPSILON);
+    assert!((max_weight - 0.3).abs() < f32::EPSILON);
+    assert!((hit_weight - 0.2).abs() < f32::EPSILON);
 }
 
 #[test]
@@ -644,7 +688,10 @@ fn test_multi_query_search_basic() {
 
     assert!(!results.is_empty());
     let ids: Vec<u64> = results.iter().map(|r| r.id).collect();
-    assert!(ids.contains(&1) || ids.contains(&2));
+    assert!(
+        ids.contains(&1) && ids.contains(&2),
+        "both query-aligned exact matches (id=1 for query[0], id=2 for query[1]) must survive RRF fusion within top-5"
+    );
 }
 
 #[test]
@@ -690,9 +737,16 @@ fn test_multi_query_search_all_strategies() {
 
     for strategy in strategies {
         let results = col
-            .multi_query_search(vectors.clone(), 5, strategy)
+            .multi_query_search(vectors.clone(), 5, strategy.clone())
             .unwrap();
-        assert!(!results.is_empty(), "Strategy should return results");
+        // Only 2 points exist, limit 5 -> both returned.
+        assert_eq!(results.len(), 2, "{strategy:?} should return both points");
+        // Query 0 == id=1's vector exactly, and id=1 ties/beats id=2 on query 1,
+        // so id=1 must rank first under every fusion strategy.
+        assert_eq!(
+            results[0].id, 1,
+            "{strategy:?} must rank the exact-match id=1 first"
+        );
     }
 }
 

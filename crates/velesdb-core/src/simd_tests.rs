@@ -11,7 +11,7 @@
 use crate::simd_native::{
     calculate_prefetch_distance, cosine_similarity_native, dot_product_native, euclidean_native,
     hamming_distance_native, jaccard_similarity_native, norm_native, normalize_inplace_native,
-    prefetch_vector, squared_l2_native, L2_CACHE_LINE_BYTES,
+    squared_l2_native, L2_CACHE_LINE_BYTES,
 };
 
 // =========================================================================
@@ -360,9 +360,11 @@ fn test_jaccard_simd_large_vectors() {
         .collect();
 
     let result = jaccard_similarity_native(&a, &b);
-
-    // Verify result is in valid range
-    assert!((0.0..=1.0).contains(&result), "Jaccard must be in [0,1]");
+    let expected = reference_jaccard(&a, &b);
+    assert!(
+        (result - expected).abs() < EPSILON,
+        "Expected {expected}, got {result}"
+    );
 }
 
 #[test]
@@ -444,19 +446,6 @@ fn test_calculate_prefetch_distance_large_vectors() {
     assert_eq!(calculate_prefetch_distance(768), 16);
     // 1536D vectors (6144 bytes) -> raw = 96, clamped to 16
     assert_eq!(calculate_prefetch_distance(1536), 16);
-}
-
-#[test]
-fn test_prefetch_vector_does_not_panic() {
-    // Prefetch should never panic, even with edge cases
-    let empty: Vec<f32> = vec![];
-    prefetch_vector(&empty); // Empty vector - should be no-op
-
-    let small = vec![1.0, 2.0, 3.0];
-    prefetch_vector(&small); // Small vector
-
-    let large = generate_test_vector(768, 0.0);
-    prefetch_vector(&large); // Large vector
 }
 
 #[test]

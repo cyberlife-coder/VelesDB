@@ -143,19 +143,21 @@ class TestE2EVelesDB:
         results = vectorstore.similarity_search("anything", k=5)
         assert results == []
 
-    def test_temp_directory_cleanup(self, temp_dir, embeddings):
-        """Verify temp directory is properly cleaned up after use."""
+    def test_data_persisted_to_configured_path(self, temp_dir, embeddings):
+        """Writing through the store persists data files into the configured path."""
         import os
 
         store = VelesDBVectorStore(
             embedding=embeddings,
             path=temp_dir,
             collection_name="cleanup_test",
+            storage_mode="full",
         )
+        before = set(os.listdir(temp_dir))
         store.add_texts(["test"])
-        # Directory exists during test
-        assert os.path.isdir(temp_dir)
-        # Cleanup happens via fixture teardown
+        after = set(os.listdir(temp_dir))
+        # add_texts opened velesdb.Database(path) and upserted -> files written to disk
+        assert after - before, "expected VelesDB to write persistence files into the configured path"
 
 
 class TestE2EVelesDBAdvanced:

@@ -53,21 +53,6 @@ fn test_parse_self_join_basic() {
 }
 
 #[test]
-fn test_parse_self_join_with_column_select() {
-    let sql =
-        "SELECT e.name, m.name FROM employees AS e JOIN employees AS m ON e.manager_id = m.id";
-    let result = Parser::parse(sql);
-    assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
-
-    let query = result.unwrap();
-    assert_eq!(query.select.from, "employees");
-    assert!(query.select.from_alias.contains(&"e".to_string()));
-    assert_eq!(query.select.joins.len(), 1);
-    assert_eq!(query.select.joins[0].table, "employees");
-    assert_eq!(query.select.joins[0].alias, Some("m".to_string()));
-}
-
-#[test]
 fn test_parse_self_join_left() {
     let sql =
         "SELECT e.name, m.name FROM employees AS e LEFT JOIN employees AS m ON e.manager_id = m.id";

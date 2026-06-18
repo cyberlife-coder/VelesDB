@@ -182,7 +182,9 @@ def test_veles_config_options_with_limits():
 def test_database_accepts_none_config(tmp_db_path):
     """Passing config=None is equivalent to not passing it at all."""
     db = Database(str(tmp_db_path), config=None)
-    db.create_collection("ok", dimension=4)
+    col = db.create_collection("ok", dimension=4)
+    assert col is not None
+    assert db.list_collections() == ["ok"]
 
 
 # ---------------------------------------------------------------------------

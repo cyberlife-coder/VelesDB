@@ -29,6 +29,11 @@ mod tests {
         let (collection, _temp) = create_test_collection();
         let edge = make_edge(1, 100, 200, "KNOWS");
         assert!(collection.add_edge(edge).is_ok());
+        assert_eq!(
+            collection.edge_count(),
+            1,
+            "edge must be stored after add_edge"
+        );
     }
 
     #[test]
@@ -238,7 +243,13 @@ mod tests {
         build_chain(&collection);
 
         let results = collection.traverse_bfs(1, 10, None, 2).unwrap();
-        assert!(results.len() <= 2, "limit should be respected");
+        assert_eq!(
+            results.len(),
+            2,
+            "limit=2 must return exactly 2 of the 3 reachable nodes"
+        );
+        assert_eq!(results[0].target_id, 2);
+        assert_eq!(results[1].target_id, 3); // node 4 is reachable but truncated by the limit
     }
 
     #[test]
@@ -318,7 +329,11 @@ mod tests {
             deadline: None,
         };
         let results = collection.traverse_bfs_config(1, &config);
-        assert!(!results.is_empty());
+        assert_eq!(
+            results.len(),
+            3,
+            "chain 1->2->3->4 with max_depth=3, min_depth=0 should visit nodes 2, 3, 4"
+        );
     }
 
     #[test]
@@ -351,7 +366,11 @@ mod tests {
             deadline: None,
         };
         let results = collection.traverse_dfs_config(1, &config);
-        assert!(!results.is_empty());
+        assert_eq!(
+            results.len(),
+            3,
+            "chain 1->2->3->4 with max_depth=3, min_depth=0 should visit nodes 2, 3, 4"
+        );
     }
 
     #[test]

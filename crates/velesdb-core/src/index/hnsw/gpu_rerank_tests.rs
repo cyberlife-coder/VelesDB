@@ -339,22 +339,35 @@ fn test_batch_search_fallback_without_gpu() {
     let queries: Vec<Vec<f32>> = (0..5).map(|_| lcg_vector(&mut seed, dim)).collect();
     let query_refs: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
 
-    // Fast quality = no reranking, pure HNSW
+    // Fast quality below the 10K ef-scaling threshold: at n>100, Fast still
+    // triggers two-stage rerank (rerank_k = ef/2) — this exercises the
+    // sub-10K batch-rerank path.
     let results = index
         .search_batch_parallel(&query_refs, 5, SearchQuality::Fast)
         .unwrap();
 
     assert_eq!(results.len(), 5, "Should return one result set per query");
-    for (i, result) in results.iter().enumerate() {
+
+    // Cross-validate the batch path against individual search_with_quality:
+    // both run identical rerank_k/ef over exact distances, so per-query top-1
+    // must be deterministically equal.
+    let individual: Vec<Vec<crate::scored_result::ScoredResult>> = queries
+        .iter()
+        .map(|q| {
+            index
+                .search_with_quality(q, 5, SearchQuality::Fast)
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(results.len(), individual.len());
+    for (i, (batch, ind)) in results.iter().zip(&individual).enumerate() {
+        assert_eq!(batch.len(), ind.len(), "Query {i}: result count mismatch");
+        assert!(!batch.is_empty());
         assert_eq!(
-            result.len(),
-            5,
-            "Query {i}: should return exactly 5 neighbors"
+            batch[0].id, ind[0].id,
+            "Query {i}: batch top-1 ({}) must match individual top-1 ({})",
+            batch[0].id, ind[0].id,
         );
-        // Verify results are non-empty and have valid IDs
-        for sr in result {
-            assert!(sr.id < 200, "Query {i}: ID out of range: {}", sr.id);
-        }
     }
 }
 
