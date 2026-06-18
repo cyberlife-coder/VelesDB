@@ -595,7 +595,10 @@ mod persistence {
                     );
                     // Scores are sorted descending: higher score = more similar.
                     for w in results.windows(2) {
-                        assert!(w[0].score >= w[1].score, "results not sorted by score descending");
+                        assert!(
+                            w[0].score >= w[1].score,
+                            "results not sorted by score descending"
+                        );
                     }
                 }
             });
