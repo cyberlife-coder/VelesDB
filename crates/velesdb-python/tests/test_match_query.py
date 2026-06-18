@@ -38,9 +38,9 @@ def test_match_query_basic(temp_db_path):
     assert len(results) == 2
     # returned node IDs must be the real seeded nodes, not garbage
     assert {r["node_id"] for r in results} <= {1, 2, 3}
-    # every result must carry a numeric score and the full documented dict shape
+    # score is None when no vector is provided; present as None or float
     for r in results:
-        assert isinstance(r["score"], float)
+        assert r["score"] is None or isinstance(r["score"], float)
         assert {"node_id", "depth", "path", "bindings", "score", "projected"} <= set(r.keys())
 
 
