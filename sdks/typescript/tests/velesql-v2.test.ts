@@ -77,7 +77,12 @@ describe('VelesQL v2.0', () => {
         'SELECT category, MIN(price), MAX(price) FROM products GROUP BY category'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'products',
+        'SELECT category, MIN(price), MAX(price) FROM products GROUP BY category',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
   });
@@ -104,7 +109,12 @@ describe('VelesQL v2.0', () => {
         'SELECT category, COUNT(*), AVG(price) FROM products GROUP BY category HAVING COUNT(*) > 5 AND AVG(price) > 50'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'products',
+        'SELECT category, COUNT(*), AVG(price) FROM products GROUP BY category HAVING COUNT(*) > 5 AND AVG(price) > 50',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
 
@@ -114,7 +124,12 @@ describe('VelesQL v2.0', () => {
         'SELECT category, COUNT(*) FROM products GROUP BY category HAVING COUNT(*) > 10 OR COUNT(*) < 2'
       );
 
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledWith(
+        'products',
+        'SELECT category, COUNT(*) FROM products GROUP BY category HAVING COUNT(*) > 10 OR COUNT(*) < 2',
+        undefined,
+        undefined
+      );
       expect(result.results).toBeDefined();
     });
   });
