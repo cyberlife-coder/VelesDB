@@ -29,6 +29,8 @@ class TestVelesDBChatMemory:
             assert memory is not None
             assert memory.path == tmpdir
             assert memory.dimension == 4
+            assert memory._db is not None
+            assert memory._memory is not None
 
     def test_chat_memory_save_and_load(self):
         """Test: VelesDBChatMemory can save and load context."""
@@ -207,9 +209,13 @@ class TestVelesDBSemanticMemory:
 
     def test_semantic_memory_import(self):
         """Test: VelesDBSemanticMemory can be imported."""
+        import inspect
         from langchain_velesdb import VelesDBSemanticMemory
 
-        assert VelesDBSemanticMemory is not None
+        # On ImportError the package binds this name to None (see __init__.py
+        # optional-import block); assert the real class loaded instead.
+        assert inspect.isclass(VelesDBSemanticMemory)
+        assert VelesDBSemanticMemory.__name__ == "VelesDBSemanticMemory"
 
     def test_semantic_memory_initialization(self):
         """Test: VelesDBSemanticMemory can be initialized with mock embedding."""
@@ -225,6 +231,8 @@ class TestVelesDBSemanticMemory:
             )
             assert memory is not None
             assert memory.dimension == 4
+            assert memory._db is not None
+            assert memory._memory is not None
 
     def test_semantic_memory_add_fact(self):
         """Test: VelesDBSemanticMemory can add facts."""

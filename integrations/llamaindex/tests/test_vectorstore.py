@@ -129,9 +129,12 @@ class TestVelesDBVectorStore:
         assert info["point_count"] == 0
 
     def test_client_property(self, vector_store):
-        """Test client property returns database."""
+        """Client property returns the lazily-cached velesdb.Database instance."""
+        import velesdb
         client = vector_store.client
-        assert client is not None
+        assert isinstance(client, velesdb.Database)
+        # Lazy-init contract: the same _db instance is reused across accesses.
+        assert vector_store.client is client
 
     def test_stable_hash_id_is_deterministic_and_63bit(self):
         """Stable IDs must remain deterministic with a wide collision space."""
@@ -358,10 +361,13 @@ class TestVelesDBVectorStoreAdvanced:
         )
 
         assert result is not None
-        assert hasattr(result, 'nodes')
+        # doc1 is the only document containing the query tokens ("VelesDB"/"database"),
+        # so BM25 must return it and rank it first; doc2/doc3 share no terms.
+        assert len(result.nodes) >= 1
         assert len(result.nodes) <= 2
-        for node in result.nodes:
-            assert isinstance(node, TextNode)
+        assert result.nodes[0].id_ == "doc1"
+        assert isinstance(result.nodes[0], TextNode)
+        assert result.ids[0] == "doc1"
 
     def test_text_query_empty_collection(self, temp_dir):
         """Test text query on empty collection returns empty."""

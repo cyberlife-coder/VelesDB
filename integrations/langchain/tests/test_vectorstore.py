@@ -90,6 +90,13 @@ class TestVelesDBVectorStore:
 
         assert len(ids) == 2
 
+        # Verify metadata actually persists through the storage layer, not just
+        # that IDs come back. A silent metadata drop in _build_point would
+        # otherwise go undetected.
+        docs = vectorstore.get_by_ids(ids)
+        sources = {doc.metadata.get("source") for doc in docs}
+        assert sources == {"doc1.txt", "doc2.txt"}
+
     def test_similarity_search(self, temp_db_path, embeddings):
         """Test similarity search."""
         vectorstore = VelesDBVectorStore(

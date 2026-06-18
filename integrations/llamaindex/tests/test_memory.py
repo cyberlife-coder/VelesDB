@@ -41,14 +41,17 @@ class TestSemanticMemory:
         """VelesDBSemanticMemory can be imported."""
         from llamaindex_velesdb.memory import VelesDBSemanticMemory
 
-        assert VelesDBSemanticMemory is not None
+        assert callable(getattr(VelesDBSemanticMemory, "add_fact", None))
+        assert callable(getattr(VelesDBSemanticMemory, "query", None))
+        assert callable(getattr(VelesDBSemanticMemory, "clear", None))
 
     def test_init(self, tmp_db):
         """Initialisation succeeds with a valid path and dimension."""
         from llamaindex_velesdb.memory import VelesDBSemanticMemory
 
         memory = VelesDBSemanticMemory(db_path=tmp_db, dimension=SMALL_DIM)
-        assert memory is not None
+        assert memory._dimension == SMALL_DIM
+        assert memory._memory is not None
 
     def test_empty_db_path_raises(self):
         """Empty db_path must raise ValueError at construction time."""
@@ -304,12 +307,6 @@ class TestEpisodicMemory:
 
 class TestProceduralMemory:
     """Tests for VelesDBProceduralMemory."""
-
-    def test_import(self):
-        """VelesDBProceduralMemory can be imported."""
-        from llamaindex_velesdb.memory import VelesDBProceduralMemory
-
-        assert VelesDBProceduralMemory is not None
 
     def test_init(self, tmp_db):
         """Initialisation succeeds with a valid path and dimension."""
