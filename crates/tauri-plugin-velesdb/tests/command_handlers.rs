@@ -479,6 +479,17 @@ fn batch_search_bulk_and_per_query_quality() {
     ))
     .expect("batch_search per-query");
     assert_eq!(per_query.len(), 1);
+    assert!(
+        !per_query[0].results.is_empty(),
+        "per-query quality search must return results"
+    );
+    // Query [1.0, 0.0, 0.0, 0.0] is the exact vector of seeded point id=1,
+    // so the quality dispatch must rank it first.
+    assert_eq!(
+        per_query[0].results[0].id,
+        1,
+        "fast-quality dispatch must return the nearest neighbor (id=1)"
+    );
 }
 
 #[test]
@@ -514,7 +525,15 @@ fn text_and_hybrid_search_filtered_and_unfiltered() {
         },
     ))
     .expect("text_search filtered");
-    assert!(!text_filtered.results.is_empty());
+    assert!(!text_filtered.results.is_empty(), "filter must not drop all matches");
+    for r in &text_filtered.results {
+        assert_eq!(
+            r.payload.as_ref().and_then(|p| p.get("category")).and_then(|v| v.as_str()),
+            Some("tech"),
+            "filtered text search leaked a non-tech doc: id={}",
+            r.id,
+        );
+    }
 
     // Hybrid search (unfiltered + filtered branches).
     let hybrid = run(hybrid_search(
@@ -545,7 +564,15 @@ fn text_and_hybrid_search_filtered_and_unfiltered() {
         },
     ))
     .expect("hybrid_search filtered");
-    assert!(!hybrid_filtered.results.is_empty());
+    assert!(!hybrid_filtered.results.is_empty(), "filter must not drop all matches");
+    for r in &hybrid_filtered.results {
+        assert_eq!(
+            r.payload.as_ref().and_then(|p| p.get("category")).and_then(|v| v.as_str()),
+            Some("tech"),
+            "filtered hybrid search leaked a non-tech doc: id={}",
+            r.id,
+        );
+    }
 }
 
 #[test]
