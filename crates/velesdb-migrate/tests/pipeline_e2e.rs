@@ -448,8 +448,7 @@ async fn test_pipeline_qdrant_sparse_vectors_e2e() {
         "sparse index must contain exactly the one point (id=1) carrying sparse indices"
     );
     assert_eq!(
-        results[0].point.id,
-        1u64,
+        results[0].point.id, 1u64,
         "the sparse-vector point (id=1) must be the sparse-search result"
     );
 }
