@@ -85,6 +85,16 @@ fn test_group_by_count() {
     });
     let out = apply(&s, &rows, &Params::new()).expect("test: agg");
     assert_eq!(out.len(), 2);
+    let json: Vec<&str> = out.iter().map(|r| r.data_json_ref()).collect();
+    // cat "a" appears twice -> n:2 ; cat "b" once -> n:1
+    assert!(
+        json.iter().any(|j| j.contains("\"cat\":\"a\"") && j.contains("\"n\":2")),
+        "expected group cat=a with n=2, got {json:?}"
+    );
+    assert!(
+        json.iter().any(|j| j.contains("\"cat\":\"b\"") && j.contains("\"n\":1")),
+        "expected group cat=b with n=1, got {json:?}"
+    );
 }
 
 #[test]
@@ -118,6 +128,10 @@ fn test_distinct_dedups() {
     s.columns = SelectColumns::Columns(vec![Column::new("cat")]);
     let out = apply(&s, &rows, &Params::new()).expect("test: distinct");
     assert_eq!(out.len(), 2);
+    let json: Vec<String> = out.iter().map(|r| r.data_json_ref().to_string()).collect();
+    // both distinct values survive, exactly once each
+    assert_eq!(json.iter().filter(|j| j.contains("\"cat\":\"a\"")).count(), 1);
+    assert_eq!(json.iter().filter(|j| j.contains("\"cat\":\"b\"")).count(), 1);
 }
 
 #[test]

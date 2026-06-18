@@ -38,8 +38,12 @@ fn test_similarity_threshold_filters_low_scores() {
     )
     .expect("test: similarity");
     // Only id=1 (1.0) and id=2 (~0.9939) should pass the >0.5 threshold.
-    assert!(r.row_count() >= 2);
-    assert!(r.row_count() <= 4);
+    assert_eq!(r.row_count(), 2);
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&2));
 }
 
 #[test]
@@ -69,8 +73,18 @@ fn test_fusion_rrf_returns_ranked_results() {
         Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
     )
     .expect("test: rrf fusion");
-    // Both branches return ids; FUSION is tolerant and never errors.
-    assert!(r.row_count() >= 1);
+    // RRF fuses the union of the NEAR branch (all ids) and the cat='a' payload branch.
+    assert_eq!(
+        r.row_count(),
+        4,
+        "RRF fuses the union of the NEAR branch (all ids) and the cat='a' payload branch"
+    );
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    for id in [1u64, 2, 3, 4] {
+        assert!(ids.contains(&id), "fused result must contain id {id}");
+    }
 }
 
 // =========================================================================
@@ -128,6 +142,8 @@ fn test_drop_index_noop_returns_ddl_result() {
     db.create_metadata_collection("docs").expect("test: create");
     let r = execute(&mut db, "DROP INDEX ON docs (category)", None).expect("test: drop idx");
     assert_eq!(r.kind(), "ddl");
+    assert!(r.rows_json().contains("accepted-noop"));
+    assert!(r.rows_json().contains("DROP INDEX"));
 }
 
 #[test]
@@ -709,23 +725,3 @@ fn test_not_vector_near_bare_returns_all_rows() {
     );
 }
 
-#[test]
-fn test_bare_or_vector_near_and_predicate_unchanged_non_regression() {
-    // Non-regression for finding G: without a NOT wrapper, the existing
-    // strip_vector_search + combine_after_strip(Or, None, Some) = None
-    // path still holds. `vector NEAR $q OR cat = 'a'` yields 4 rows
-    // because the OR is trivially satisfied by the NEAR branch.
-    // This test is intentionally redundant with
-    // `test_or_near_with_predicate_does_not_filter_non_matching_rows`
-    // above — it's kept here as a guard for finding I's change to
-    // strip_vector_search so any future refactor that accidentally
-    // de-normalizes the non-NOT path is caught in this block.
-    let mut db = db_with_vectors();
-    let r = execute(
-        &mut db,
-        "SELECT * FROM vecs WHERE vector NEAR $q OR cat = 'a' LIMIT 4",
-        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
-    )
-    .expect("test: bare OR near (non-regression)");
-    assert_eq!(r.row_count(), 4);
-}

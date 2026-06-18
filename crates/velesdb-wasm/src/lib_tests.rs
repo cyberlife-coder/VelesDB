@@ -43,34 +43,6 @@ fn test_similarity_threshold_metric_aware_comparison() {
     );
 }
 
-#[test]
-fn test_threshold_comparison_builder() {
-    // Test the comparison function builder that should be metric-aware
-
-    // For Euclidean (lower = better), ">" means "more similar than"
-    // which is actually "distance < threshold"
-    let euclidean_higher_is_better = false;
-
-    // Build the correct comparison for ">" operator
-    let gt_comparison = |score: f32, thresh: f32, higher_is_better: bool| -> bool {
-        if higher_is_better {
-            score > thresh
-        } else {
-            score < thresh // Invert for distance metrics
-        }
-    };
-
-    // Distance 0.3 is "more similar" than threshold 0.5
-    assert!(gt_comparison(0.3, 0.5, euclidean_higher_is_better));
-    // Distance 0.7 is NOT "more similar" than threshold 0.5
-    assert!(!gt_comparison(0.7, 0.5, euclidean_higher_is_better));
-
-    // For Cosine (higher = better), normal comparison
-    let cosine_higher_is_better = true;
-    assert!(gt_comparison(0.9, 0.8, cosine_higher_is_better));
-    assert!(!gt_comparison(0.7, 0.8, cosine_higher_is_better));
-}
-
 // =============================================================================
 // Original tests
 // =============================================================================
@@ -213,9 +185,17 @@ fn test_fuse_results_rrf() {
     let all_results = vec![results1, results2];
 
     let fused = fusion::fuse_results(&all_results, "rrf", 60).unwrap();
-    assert!(!fused.is_empty());
-    // ID 2 appears in rank 0 and rank 1, should have high RRF score
-    // ID 1 appears in rank 0 and rank 1, should also be high
+    let top_ids: Vec<u64> = fused.iter().take(2).map(|(id, _)| *id).collect();
+    // IDs 1 and 2 appear in both lists; 3 and 4 in only one -> 1 and 2 must rank top-2.
+    assert!(top_ids.contains(&1) && top_ids.contains(&2), "RRF must rank dual-list IDs 1 and 2 in the top 2, got {top_ids:?}");
+    let score = |target: u64| fused.iter().find(|(id, _)| *id == target).map(|(_, s)| *s)
+        .unwrap_or_else(|| panic!("id {target} missing from fused result"));
+    // Both shared-list IDs must outrank the single-list IDs (3, 4).
+    assert!(score(1) > score(3));
+    assert!(score(1) > score(4));
+    assert!(score(2) > score(3));
+    assert!(score(2) > score(4));
+    // Do NOT assert score(1) vs score(2): with symmetric ranks {0,1}/{1,0} they tie exactly.
 }
 
 #[test]

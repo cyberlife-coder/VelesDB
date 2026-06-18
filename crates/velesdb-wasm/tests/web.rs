@@ -133,9 +133,14 @@ fn test_search_cosine_similarity() {
 
     let query = vec![1.0_f32, 0.0, 0.0, 0.0];
     let results = store.search(&query, 3).expect("Search should succeed");
-
-    // ID 1 should be first (highest cosine similarity)
-    assert!(!results.is_null());
+    let ranked: Vec<(u64, f32)> =
+        serde_wasm_bindgen::from_value(results).expect("results deserialize as (id, score) pairs");
+    assert_eq!(ranked.len(), 3, "all three vectors returned");
+    // ID 1 (identical to query) ranks first with cosine ~1.0
+    assert_eq!(ranked[0].0, 1, "highest cosine similarity must rank first");
+    assert!((ranked[0].1 - 1.0).abs() < 1e-5, "top score is cosine 1.0, got {}", ranked[0].1);
+    // Orthogonal vectors score ~0.0 and rank below
+    assert!(ranked[1].1 < 0.5 && ranked[2].1 < 0.5, "orthogonal vectors score near zero");
 }
 
 #[wasm_bindgen_test]
@@ -149,9 +154,9 @@ fn test_search_top_k() {
 
     let query = vec![50.0_f32, 0.0, 0.0, 0.0];
     let results = store.search(&query, 5).expect("Search should succeed");
-
-    // Should return exactly 5 results
-    assert!(!results.is_null());
+    let ranked: Vec<(u64, f32)> =
+        serde_wasm_bindgen::from_value(results).expect("results deserialize");
+    assert_eq!(ranked.len(), 5, "top-k must truncate 100 candidates to k=5");
 }
 
 #[wasm_bindgen_test]
@@ -350,11 +355,15 @@ fn test_reserve_capacity() {
 
 #[wasm_bindgen_test]
 fn test_with_capacity_constructor() {
-    let store = VectorStore::with_capacity(128, "cosine", 10_000).unwrap();
+    let mut store = VectorStore::with_capacity(128, "cosine", 10_000).unwrap();
 
     assert_eq!(store.dimension(), 128);
     assert_eq!(store.len(), 0);
     assert!(store.is_empty());
+    // The pre-allocated store must be usable for inserts.
+    store.insert(0, &vec![0.0_f32; 128]).unwrap();
+    assert_eq!(store.len(), 1);
+    assert!(!store.is_empty());
 }
 
 // =============================================================================
@@ -472,6 +481,19 @@ fn test_search_in_10k_vectors() {
 
     let query = vec![5000.0_f32; 128];
     let results = store.search(&query, 10).expect("Search should succeed");
-
-    assert!(!results.is_null());
+    let ranked: Vec<(u64, f32)> =
+        serde_wasm_bindgen::from_value(results).expect("results deserialize");
+    // truncate(k) over 10k candidates yields exactly k.
+    assert_eq!(ranked.len(), 10);
+    // Every returned id must be one we inserted (0..10_000), and distinct.
+    let mut seen = std::collections::HashSet::new();
+    for (id, score) in &ranked {
+        assert!(*id < 10_000, "id {id} out of inserted range");
+        assert!(seen.insert(*id), "duplicate id {id} in results");
+        assert!(score.is_finite(), "score for id {id} is not finite");
+    }
+    // cosine => higher_is_better, so results must be sorted descending by score.
+    for w in ranked.windows(2) {
+        assert!(w[0].1 >= w[1].1, "results not sorted by descending score");
+    }
 }

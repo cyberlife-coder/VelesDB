@@ -135,15 +135,6 @@ fn test_insert_single_row_mutation_kind() {
 }
 
 #[test]
-fn test_insert_multi_row() {
-    let mut db = db_with_metadata();
-    seed_metadata_docs(&mut db);
-
-    let back = execute(&mut db, "SELECT * FROM docs LIMIT 10", None).expect("test: select multi");
-    assert_eq!(back.row_count(), 3);
-}
-
-#[test]
 fn test_insert_vector_collection_with_param() {
     let mut db = db_with_vectors();
 

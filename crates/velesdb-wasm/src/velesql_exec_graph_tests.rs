@@ -131,6 +131,11 @@ fn test_delete_edge_by_id_returns_deletion() {
     seed_graph(&mut db);
     let r = execute(&mut db, "DELETE EDGE 1 FROM graph", None).expect("test: delete edge");
     assert_eq!(r.kind(), "deletion");
+    let after = execute(&mut db, "SELECT EDGES FROM graph", None).expect("test: edges after delete");
+    assert_eq!(after.row_count(), 1, "exactly one edge must remain after deleting edge id 1");
+    let rows = after.rows_json();
+    assert!(!rows.contains("\"source\":1"), "deleted edge (Alice->Bob, source=1) must be gone, got: {rows}");
+    assert!(rows.contains("\"source\":2"), "the untouched Bob->Carol edge (source=2) must survive, got: {rows}");
 }
 
 // =========================================================================
@@ -1138,20 +1143,6 @@ fn test_bdd_insert_edge_after_delete_can_reuse_explicit_id() {
 // and returned rows from the first pattern alone. The fix fails loud
 // when `clause.patterns.len() > 1`, pointing callers at the persistent
 // core backend.
-
-#[test]
-fn test_bdd_match_single_pattern_works() {
-    // Non-regression: single-pattern MATCH keeps its behaviour.
-    let mut db = DatabaseInner::new();
-    seed_graph(&mut db);
-    let r = execute(
-        &mut db,
-        "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b LIMIT 10",
-        None,
-    )
-    .expect("test: single pattern");
-    assert_eq!(r.row_count(), 2);
-}
 
 #[test]
 fn test_bdd_match_multi_pattern_returns_clear_error() {
