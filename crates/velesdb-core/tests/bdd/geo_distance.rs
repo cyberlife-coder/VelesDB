@@ -262,9 +262,28 @@ fn test_given_geo_distance_and_vector_near_then_hybrid() {
     .expect("test: GEO_DISTANCE AND vector NEAR");
 
     // Should return results that are both within 1000km of Paris AND similar to query vector
+    let ids = result_ids(&results);
     assert!(
         !results.is_empty(),
         "Hybrid geo+vector should return results"
+    );
+    // Paris (id=1) is in range AND has the exact query vector -> must be present
+    assert!(
+        ids.contains(&1),
+        "Paris must match (in range + most similar vector)"
+    );
+    // Geo filter must hard-exclude out-of-range and null points even if vector-similar
+    assert!(
+        !ids.contains(&3),
+        "NYC (~5837 km) is out of range and must be excluded"
+    );
+    assert!(
+        !ids.contains(&4),
+        "Tokyo (~9712 km) is out of range and must be excluded"
+    );
+    assert!(
+        !ids.contains(&5),
+        "Null location must be excluded from geo filter"
     );
 }
 
@@ -296,5 +315,23 @@ fn test_given_geo_distance_with_order_by_limit_then_correct() {
     )
     .expect("test: GEO_DISTANCE with ORDER BY LIMIT");
 
-    assert!(results.len() <= 2, "Should respect LIMIT 2");
+    assert_eq!(
+        results.len(),
+        2,
+        "3 rows qualify (1,2,6); LIMIT 2 must truncate to 2"
+    );
+    let ids = result_ids(&results);
+    assert_eq!(
+        ids,
+        std::collections::HashSet::from([1, 2]),
+        "Top-2 by rating DESC among in-range: Paris(4.5), London(4.2)"
+    );
+    assert_eq!(
+        results[0].point.id, 1,
+        "Highest rating (Paris 4.5) must sort first under DESC"
+    );
+    assert_eq!(
+        results[1].point.id, 2,
+        "Second-highest (London 4.2) must sort second"
+    );
 }

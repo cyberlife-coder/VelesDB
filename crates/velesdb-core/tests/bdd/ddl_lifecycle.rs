@@ -552,6 +552,20 @@ fn test_vector_collection_with_hnsw_params_via_sql() {
         .expect("test: collection should exist");
     assert_eq!(vc.dimension(), 64);
     assert_eq!(vc.metric(), DistanceMetric::Euclidean);
+
+    let cfg = vc.config();
+    let hp = cfg
+        .hnsw_params
+        .as_ref()
+        .expect("test: WITH clause should populate hnsw_params");
+    assert_eq!(
+        hp.max_connections, 32,
+        "WITH m=32 should set max_connections"
+    );
+    assert_eq!(
+        hp.ef_construction, 200,
+        "WITH ef_construction=200 should be applied"
+    );
 }
 
 // =========================================================================
@@ -846,21 +860,24 @@ fn test_insert_into_via_sql() {
     )
     .expect("test: CREATE");
 
-    // INSERT INTO via full SQL pipeline -- requires id and vector columns.
-    // Uses $vector parameter which must be resolved from params HashMap.
-    execute_sql(
+    // $vector is an unbound bind parameter (execute_sql passes empty params),
+    // so INSERT must FAIL during value resolution rather than silently succeed.
+    let err = execute_sql(
         &db,
         "INSERT INTO sql_insert (id, vector, category) VALUES (1, $vector, 'test');",
     )
-    .unwrap_or_else(|e| {
-        // INSERT INTO with $vector parameter requires params -- this path tests
-        // that the parser handles DML correctly. If it errors because of missing
-        // parameter, that's the expected parse -> validate -> execute flow.
-        let msg = e.to_string();
-        assert!(
-            msg.contains("vector") || msg.contains("parameter") || msg.contains("requires"),
-            "Error should be about missing vector/param, got: {msg}"
-        );
-        Vec::new()
-    });
+    .expect_err("INSERT with an unbound $vector parameter must error, not silently succeed");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("parameter") && msg.contains("vector"),
+        "error should name the missing $vector parameter, got: {msg}"
+    );
+    // And the failed INSERT must not have written anything.
+    let vc = db
+        .get_vector_collection("sql_insert")
+        .expect("test: collection should exist");
+    assert!(
+        vc.get(&[1])[0].is_none(),
+        "no point should be inserted on a failed INSERT"
+    );
 }

@@ -31,6 +31,7 @@ pub use validator::{IntegrityReport, IntegrityValidator};
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use velesdb_core::VectorCollection;
 
     /// Basic crash recovery test - insert, simulate crash, verify recovery.
     ///
@@ -89,8 +90,9 @@ mod tests {
     }
 
     /// Test recovery with mixed operations (insert + delete).
-    /// Note: This test verifies that the collection remains valid after mixed ops,
-    /// but doesn't check exact counts since delete may not update `point_count` immediately.
+    /// Verifies that the collection remains valid after mixed ops, that the
+    /// post-delete count is reflected after recovery, and that deleted IDs are
+    /// absent.
     #[test]
     fn test_mixed_operations_recovery() {
         let temp = TempDir::new().expect("Failed to create temp dir");
@@ -105,19 +107,39 @@ mod tests {
         let driver = CrashTestDriver::new(config.clone());
 
         // Insert
-        let _inserted = driver.run_insert().expect("Insert failed");
+        let inserted = driver.run_insert().expect("Insert failed");
 
         // Delete some
-        let _deleted = driver.run_delete(50).expect("Delete failed");
+        let deleted = driver.run_delete(50).expect("Delete failed");
 
         // Flush
         driver.flush().expect("Flush failed");
 
         // Validate - check that collection is still valid and can be opened
-        let validator = IntegrityValidator::new(config.data_dir);
+        let validator = IntegrityValidator::new(config.data_dir.clone());
         let report = validator.validate().expect("Validation failed");
 
         // Collection should be valid (no corruption)
+        assert!(
+            report.is_valid,
+            "Collection should be valid after mixed ops"
+        );
         assert!(report.vectors_consistent, "Vectors should be consistent");
+        // The delete must actually take effect across reopen/WAL replay.
+        assert_eq!(
+            report.recovered_count,
+            inserted - deleted,
+            "post-delete count must reflect the {deleted} removed points"
+        );
+
+        // Deleted IDs (0..deleted) must be absent after recovery.
+        let collection = VectorCollection::open(config.data_dir).expect("Open failed");
+        for id in 0..deleted as u64 {
+            let points = collection.get(&[id]);
+            assert!(
+                points.first().and_then(|p| p.as_ref()).is_none(),
+                "deleted id {id} should be absent after recovery"
+            );
+        }
     }
 }

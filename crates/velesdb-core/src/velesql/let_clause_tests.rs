@@ -152,6 +152,16 @@ fn test_parse_let_nested_parentheses() {
     let query = Parser::parse(sql).expect("should parse nested parens");
     assert_eq!(query.let_bindings.len(), 1);
     assert_eq!(query.let_bindings[0].name, "x");
+    // Outer parens collapse to a top-level Mul wrapping the inner-paren Add.
+    assert!(
+        matches!(
+            &query.let_bindings[0].expr,
+            ArithmeticExpr::BinaryOp { op: ArithmeticOp::Mul, right, .. }
+                if matches!(right.as_ref(), ArithmeticExpr::BinaryOp { op: ArithmeticOp::Add, .. })
+        ),
+        "expected outer-paren Mul wrapping inner-paren Add, got {:?}",
+        query.let_bindings[0].expr
+    );
 }
 
 /// `let` keyword is case-insensitive (PEG `^"LET"`).

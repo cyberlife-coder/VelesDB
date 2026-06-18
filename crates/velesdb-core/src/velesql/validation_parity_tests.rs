@@ -96,6 +96,18 @@ mod tests {
         assert!(
             crate::collection::Collection::validate_similarity_query_structure(&condition).is_ok()
         );
+
+        // OR of two NEAR (VectorSearch) searches must be rejected by both validators
+        let or_two_near = Condition::Or(
+            Box::new(vector_search_condition()),
+            Box::new(vector_search_condition()),
+        );
+        let or_query = make_query(Some(or_two_near.clone()));
+        assert!(QueryValidator::validate(&or_query).is_err());
+        assert!(
+            crate::collection::Collection::validate_similarity_query_structure(&or_two_near)
+                .is_err()
+        );
     }
 
     #[test]
@@ -106,6 +118,22 @@ mod tests {
         assert!(QueryValidator::validate(&query).is_ok());
         assert!(
             crate::collection::Collection::validate_similarity_query_structure(&condition).is_ok()
+        );
+    }
+
+    #[test]
+    fn test_parity_multiple_fused_with_or_rejected() {
+        // Two VectorFusedSearch in OR must be rejected: the fused type must be
+        // counted toward the multi-similarity-in-OR limit by BOTH validators.
+        let condition = Condition::Or(
+            Box::new(vector_fused_condition()),
+            Box::new(vector_fused_condition()),
+        );
+        let query = make_query(Some(condition.clone()));
+
+        assert!(QueryValidator::validate(&query).is_err());
+        assert!(
+            crate::collection::Collection::validate_similarity_query_structure(&condition).is_err()
         );
     }
 

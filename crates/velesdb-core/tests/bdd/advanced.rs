@@ -220,11 +220,26 @@ fn test_similarity_threshold_zero_returns_all() {
     let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
     let results = execute_sql_with_params(&db, sql, &params).expect("test: similarity > 0.0 query");
 
-    assert!(
-        results.len() >= 3,
-        "Permissive threshold (> 0.0) should return at least the 3 science docs, got {}",
+    // 5 non-orthogonal docs pass `> 0.0`; the 3 orthogonal ones (cosine=0.0) do not.
+    assert_eq!(
+        results.len(),
+        5,
+        "Permissive threshold (> 0.0) returns exactly the 5 non-orthogonal docs, got {}",
         results.len()
     );
+    let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+    for included in [1u64, 2, 3, 5, 8] {
+        assert!(
+            ids.contains(&included),
+            "id={included} must pass threshold > 0.0"
+        );
+    }
+    for excluded in [4u64, 6, 7] {
+        assert!(
+            !ids.contains(&excluded),
+            "orthogonal id={excluded} must not pass threshold > 0.0"
+        );
+    }
 
     for r in &results {
         assert!(
@@ -487,6 +502,14 @@ fn test_match_bm25_returns_relevant_results() {
 /// GIVEN a collection with text content
 /// WHEN `vector NEAR $v AND content MATCH 'programming'`
 /// THEN returns hybrid (vector + BM25 RRF) fused results.
+fn bm25_component(r: &velesdb_core::SearchResult) -> f32 {
+    r.component_scores
+        .as_ref()
+        .and_then(|c| c.iter().find(|(name, _)| *name == "bm25_score"))
+        .map(|(_, s)| *s)
+        .expect("hybrid result must expose a bm25_score component")
+}
+
 #[test]
 fn test_match_hybrid_near_and_text() {
     let (_dir, db) = create_test_db();
@@ -496,6 +519,12 @@ fn test_match_hybrid_near_and_text() {
     let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
     let results =
         execute_sql_with_params(&db, sql, &params).expect("test: hybrid NEAR + BM25 query");
+
+    // Production routes this to Collection::hybrid_search (RRF UNION fusion):
+    // vector candidates are surfaced regardless of BM25, so non-matching docs
+    // (id=3, id=4) DO appear — but only via their vector branch (bm25_score == 0.0).
+    // The BM25 signal must therefore discriminate in the per-component breakdown
+    // and in the ranking, NOT in membership.
 
     assert!(
         !results.is_empty(),
@@ -508,6 +537,47 @@ fn test_match_hybrid_near_and_text() {
             "Hybrid result must have positive fused score, got {} for id={}",
             r.score,
             r.point.id
+        );
+    }
+
+    let by_id: HashMap<u64, &velesdb_core::SearchResult> =
+        results.iter().map(|r| (r.point.id, r)).collect();
+
+    // The real 'programming' docs (id=1 'rust programming...', id=2 'python programming...')
+    // must be present AND carry a strictly positive BM25 contribution.
+    for pid in [1u64, 2] {
+        let r = by_id.get(&pid).unwrap_or_else(|| {
+            panic!(
+                "programming doc id={pid} must be in hybrid results, got {:?}",
+                results.iter().map(|r| r.point.id).collect::<Vec<_>>()
+            )
+        });
+        assert!(
+            bm25_component(r) > 0.0,
+            "id={pid} matches 'programming' so its bm25_score must be > 0.0, got {}",
+            bm25_component(r)
+        );
+    }
+
+    // A non-'programming' doc that is present (e.g. id=3 'football world cup sports')
+    // must contribute ZERO BM25 — proving BM25 actually discriminated rather than
+    // matching everything.
+    if let Some(r3) = by_id.get(&3) {
+        assert!(
+            (bm25_component(r3) - 0.0).abs() < f32::EPSILON,
+            "id=3 has no 'programming' token; its bm25_score must be 0.0, got {}",
+            bm25_component(r3)
+        );
+    }
+
+    // A 'programming' doc must outrank a non-'programming' doc when both are present,
+    // proving the BM25 signal lifts genuine text matches above pure-vector hits.
+    if let (Some(r1), Some(r3)) = (by_id.get(&1), by_id.get(&3)) {
+        assert!(
+            r1.score > r3.score,
+            "programming doc id=1 (score {}) must outrank non-programming id=3 (score {})",
+            r1.score,
+            r3.score
         );
     }
 }

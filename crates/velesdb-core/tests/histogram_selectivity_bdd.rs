@@ -162,25 +162,31 @@ fn histogram_nominal_flow_analyze_and_explain() {
         "Between selectivity should be in (0, 1), got {between_sel}"
     );
 
-    // AND FilterPlan has estimated_rows and estimation_method fields
-    // Reason: selectivity is clamped to [0.0, 1.0], so the product is non-negative.
-    #[allow(clippy::cast_sign_loss)]
-    let estimated = (eq_sel * stats.total_points as f64).round() as u64;
-    let plan = FilterPlan {
-        conditions: "score = 50".to_string(),
-        selectivity: eq_sel,
-        estimated_rows: Some(estimated),
-        estimation_method: Some("histogram".to_string()),
-    };
-    assert!(
-        plan.estimated_rows.is_some(),
-        "estimated_rows should be set"
-    );
+    // AND the real planner populates the FilterPlan's estimated_rows /
+    // estimation_method fields from the production CostEstimator + plan builder.
+    let query = velesdb_core::velesql::Parser::parse("SELECT * FROM nominal WHERE score = 50")
+        .expect("parse explain query");
+    let plan = db.explain_query(&query).expect("explain");
+    let fp = find_filter_plan(&plan.root).expect("plan must contain a Filter node");
     assert_eq!(
-        plan.estimation_method.as_deref(),
+        fp.estimation_method.as_deref(),
         Some("histogram"),
-        "estimation_method should be 'histogram'"
+        "histogram-backed numeric WHERE should report histogram method"
     );
+    assert!(
+        fp.estimated_rows.is_some(),
+        "estimated_rows should be populated when stats exist"
+    );
+}
+
+/// Recursively locates the first `Filter` node in an EXPLAIN plan tree.
+fn find_filter_plan(node: &velesdb_core::velesql::PlanNode) -> Option<&FilterPlan> {
+    use velesdb_core::velesql::PlanNode;
+    match node {
+        PlanNode::Filter(fp) => Some(fp),
+        PlanNode::Sequence(children) => children.iter().find_map(find_filter_plan),
+        _ => None,
+    }
 }
 
 // ===========================================================================

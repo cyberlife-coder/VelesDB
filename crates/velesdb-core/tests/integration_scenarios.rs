@@ -441,13 +441,31 @@ mod hybrid_search {
         // Vector search
         let query = text_embedding("Rust programming");
         let vector_results = collection.search(&query, 3).expect("Search failed");
-        assert!(!vector_results.is_empty());
+        // kNN over 5 points with k=3 must return exactly 3 distinct results.
+        assert_eq!(
+            vector_results.len(),
+            3,
+            "kNN over 5 points with k=3 must return 3 results"
+        );
+        let ids: std::collections::HashSet<u64> =
+            vector_results.iter().map(|r| r.point.id).collect();
+        assert_eq!(ids.len(), 3, "vector results must be distinct points");
 
-        // Text search (BM25)
+        // Text search (BM25): only articles 1 and 4 contain 'rust'.
         let text_results = collection.text_search("rust", 10).unwrap();
         assert!(
             !text_results.is_empty(),
             "Should find articles mentioning 'rust'"
+        );
+        let text_ids: std::collections::HashSet<u64> =
+            text_results.iter().map(|r| r.point.id).collect();
+        assert!(
+            text_ids.is_subset(&[1u64, 4u64].into_iter().collect()),
+            "BM25 'rust' must only match articles 1 and 4, got {text_ids:?}"
+        );
+        assert!(
+            text_ids.contains(&1) || text_ids.contains(&4),
+            "BM25 'rust' must return article 1 or 4"
         );
     }
 
@@ -482,6 +500,17 @@ mod hybrid_search {
             .expect("Hybrid search failed");
 
         assert!(!hybrid_results.is_empty());
+        // BM25 fusion must surface the 7 'Rust' docs (id % 3 == 0) at the
+        // top of the hybrid ranking, above the non-matching vector results.
+        let top7_rust = hybrid_results
+            .iter()
+            .take(7)
+            .filter(|r| r.point.id % 3 == 0)
+            .count();
+        assert_eq!(
+            top7_rust, 7,
+            "all 7 BM25-matched Rust docs must rank in the hybrid top-7, got {top7_rust}"
+        );
     }
 }
 
@@ -552,12 +581,22 @@ mod persistence {
         for thread_id in 0u64..4 {
             let col = Arc::clone(&collection);
             let handle = thread::spawn(move || {
+                // Query a known seeded point's own embedding (thread_id < 4 < 100).
+                let target = thread_id;
                 for _ in 0..10 {
-                    let query: Vec<f32> = (0..64)
-                        .map(|i| (thread_id as f32 * 10.0 + i as f32) * 0.01)
-                        .collect();
+                    let query: Vec<f32> =
+                        (0..64).map(|i| (target as f32 + i as f32) * 0.01).collect();
                     let results = col.search(&query, 5).expect("Search failed");
-                    assert!(!results.is_empty());
+                    assert_eq!(results.len(), 5, "k=5 over 100 points must return 5");
+                    // The exact match (cosine distance 0) must be ranked first.
+                    assert_eq!(
+                        results[0].point.id, target,
+                        "exact-match point must be nearest under concurrency"
+                    );
+                    // Scores must be monotonic non-decreasing (ascending distance).
+                    for w in results.windows(2) {
+                        assert!(w[0].score <= w[1].score, "results not sorted by distance");
+                    }
                 }
             });
             handles.push(handle);

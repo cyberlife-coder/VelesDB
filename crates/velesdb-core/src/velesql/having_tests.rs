@@ -4,7 +4,7 @@
 use crate::collection::Collection;
 use crate::distance::DistanceMetric;
 use crate::point::Point;
-use crate::velesql::Parser;
+use crate::velesql::{AggregateArg, AggregateType, CompareOp, LogicalOp, Parser, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -38,7 +38,16 @@ fn test_parser_having_with_avg() {
     )
     .unwrap();
 
-    assert!(query.select.having.is_some());
+    let having = query.select.having.as_ref().unwrap();
+    assert_eq!(having.conditions.len(), 1);
+    let cond = &having.conditions[0];
+    assert_eq!(cond.aggregate.function_type, AggregateType::Avg);
+    assert_eq!(
+        cond.aggregate.argument,
+        AggregateArg::Column("price".to_string())
+    );
+    assert_eq!(cond.operator, CompareOp::Gt);
+    assert_eq!(cond.value, Value::Integer(100));
 }
 
 #[test]
@@ -49,8 +58,22 @@ fn test_parser_having_multiple_conditions() {
 
     assert!(query.select.having.is_some());
     let having = query.select.having.as_ref().unwrap();
-    // Should have AND condition
-    assert!(having.conditions.len() >= 2 || matches!(having.conditions[0], _));
+    assert_eq!(having.conditions.len(), 2);
+    assert_eq!(having.operators, vec![LogicalOp::And]);
+    // First condition: COUNT(*) > 2
+    assert_eq!(
+        having.conditions[0].aggregate.function_type,
+        AggregateType::Count
+    );
+    assert_eq!(having.conditions[0].operator, CompareOp::Gt);
+    assert_eq!(having.conditions[0].value, Value::Integer(2));
+    // Second condition: SUM(price) > 500
+    assert_eq!(
+        having.conditions[1].aggregate.function_type,
+        AggregateType::Sum
+    );
+    assert_eq!(having.conditions[1].operator, CompareOp::Gt);
+    assert_eq!(having.conditions[1].value, Value::Integer(500));
 }
 
 // ========== Executor Tests ==========

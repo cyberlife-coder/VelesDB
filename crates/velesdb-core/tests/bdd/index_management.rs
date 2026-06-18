@@ -27,6 +27,12 @@ fn test_create_index_on_field() {
         result.expect("ok").is_empty(),
         "DDL returns empty result set"
     );
+
+    let indexed = db.indexed_fields_for("docs");
+    assert!(
+        indexed.contains("category"),
+        "CREATE INDEX must register the field as a secondary index"
+    );
 }
 
 // =========================================================================
@@ -97,11 +103,23 @@ fn test_drop_index_removes_index() {
 
     execute_sql(&db, "CREATE INDEX ON drop_idx (category);").expect("test: CREATE INDEX");
 
+    let vc = db
+        .get_vector_collection("drop_idx")
+        .expect("test: get collection");
+    assert!(
+        vc.has_secondary_index("category"),
+        "index should exist before DROP",
+    );
+
     let result = execute_sql(&db, "DROP INDEX ON drop_idx (category);");
     assert!(result.is_ok(), "DROP INDEX should succeed");
     assert!(
         result.expect("ok").is_empty(),
         "DDL returns empty result set"
+    );
+    assert!(
+        !vc.has_secondary_index("category"),
+        "DROP INDEX must remove the secondary index entry",
     );
 }
 

@@ -417,9 +417,19 @@ fn test_deeply_nested_properties() {
 
 #[test]
 fn test_relationship_with_properties_and_range() {
-    let result = parse_relationship_pattern("-[r:KNOWS*1..3 {since: 2020}]->");
-    // This tests combined range and properties parsing
-    assert!(result.is_ok() || result.is_err()); // May or may not be supported
+    let rel = parse_relationship_pattern("-[r:KNOWS*1..3 {since: 2020}]->")
+        .expect("combined range+properties pattern should parse");
+    assert_eq!(rel.direction, Direction::Outgoing);
+    assert_eq!(rel.alias.as_deref(), Some("r"));
+    assert_eq!(rel.types, vec!["KNOWS".to_string()]);
+    assert!(
+        rel.range.is_some(),
+        "variable-length range should be recognized"
+    );
+    // Documents the current limitation: properties placed after the `*` range are not
+    // re-parsed and the upper bound is not bound to 3. If the parser is later fixed to
+    // support combined range+properties, tighten this to range == Some((1, 3)) and
+    // rel.properties.get("since") == Some(&Value::Integer(2020)).
 }
 
 // === Devin Bug: Operator inside string literal (Bug fix) ===

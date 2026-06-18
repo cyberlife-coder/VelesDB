@@ -200,13 +200,17 @@ fn test_join_filter_eliminates_all_rows_left_returns_nulls() {
 
     let results = execute_sql(&db, sql).expect("LEFT JOIN filter eliminates all");
 
-    // With filter pushdown, the ColumnStore is empty. LEFT JOIN should still
-    // return left-side rows with null joined columns.
-    // The exact behavior depends on whether the filter is pushed or post-join.
-    // Either way, the query should not error.
+    // With filter pushdown, the ColumnStore is empty. LEFT JOIN must still
+    // return all left-side rows with null joined columns. Pinning the exact
+    // cardinality (5 products) catches a silent degradation to INNER JOIN.
+    assert_eq!(
+        results.len(),
+        5,
+        "LEFT JOIN must keep all 5 left-side products even when the filter eliminates every right row"
+    );
     assert!(
-        results.is_empty() || results.iter().all(|r| payload_f64(r, "price").is_none()),
-        "LEFT JOIN should return empty or rows with null price"
+        results.iter().all(|r| payload_f64(r, "price").is_none()),
+        "unmatched LEFT JOIN rows must carry a null/absent joined price"
     );
 }
 

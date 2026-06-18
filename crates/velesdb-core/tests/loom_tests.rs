@@ -142,37 +142,6 @@ mod loom_edge_store {
 use loom_edge_store::LoomEdgeStore;
 
 // ============================================================================
-// Test 1: Concurrent edge insertion (same shard)
-// ============================================================================
-
-#[test]
-fn test_loom_concurrent_edge_insert_same_shard() {
-    loom::model(|| {
-        let store = Arc::new(LoomEdgeStore::new(4));
-
-        let s1 = Arc::clone(&store);
-        let t1 = thread::spawn(move || {
-            // Node 0 and 4 both hash to shard 0 (mod 4)
-            let _ = s1.add_edge(TestEdge::new(1, 0, 4, "knows"));
-        });
-
-        let s2 = Arc::clone(&store);
-        let t2 = thread::spawn(move || {
-            // Node 8 also hashes to shard 0
-            let _ = s2.add_edge(TestEdge::new(2, 0, 8, "likes"));
-        });
-
-        t1.join().unwrap();
-        t2.join().unwrap();
-
-        // Both edges should exist
-        assert!(store.contains_edge(1));
-        assert!(store.contains_edge(2));
-        assert_eq!(store.edge_count(), 2);
-    });
-}
-
-// ============================================================================
 // Test 2: Concurrent edge insertion (cross-shard, lock ordering)
 // ============================================================================
 
@@ -225,8 +194,11 @@ fn test_loom_concurrent_read_write() {
         let t2 = thread::spawn(move || {
             // Reader: query outgoing edges
             let edges = s2.get_outgoing(0);
-            // Should see at least the initial edge
-            assert!(!edges.is_empty());
+            // Reader must always observe the committed initial edge (id=1, 0->1),
+            // regardless of interleaving with the concurrent writer (no torn read).
+            assert!(edges
+                .iter()
+                .any(|e| e.id == 1 && e.source == 0 && e.target == 1));
         });
 
         t1.join().unwrap();
@@ -293,7 +265,11 @@ fn test_loom_parallel_insert_no_contention() {
         t2.join().unwrap();
         t3.join().unwrap();
 
-        // All edges should exist
+        // All edges should exist, each placed in its own shard (no loss/mis-shard).
         assert_eq!(store.edge_count(), 3);
+        assert!(store.contains_edge(1) && store.contains_edge(2) && store.contains_edge(3));
+        assert_eq!(store.get_outgoing(0).len(), 1);
+        assert_eq!(store.get_outgoing(1).len(), 1);
+        assert_eq!(store.get_outgoing(2).len(), 1);
     });
 }

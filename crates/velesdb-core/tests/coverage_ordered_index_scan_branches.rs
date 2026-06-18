@@ -152,33 +152,38 @@ fn filtered_route_broad_where_matches_exhaustive() {
 /// still applies on the exhaustive path; both paths must agree on the rows.
 #[test]
 fn similarity_where_is_not_routed_and_matches_exhaustive() {
-    let sql = "SELECT * FROM docs WHERE similarity([1.0, 0.0]) > 0.0 ORDER BY year DESC LIMIT 3";
+    // Valid two-argument similarity over the point vectors so both paths parse
+    // and run; every row's vector is [1.0, 0.0], so similarity > 0.0 selects all.
+    let sql =
+        "SELECT * FROM docs WHERE similarity(vector, [1.0, 0.0]) > 0.0 ORDER BY year DESC LIMIT 3";
     let da = TempDir::new().expect("dir");
     let a = mk(&da);
     a.upsert(distinct_year_rows()).expect("upsert exhaustive");
-    let exhaustive = a.execute_query_str(sql, &HashMap::new());
+    let exhaustive = ids(&a
+        .execute_query_str(sql, &HashMap::new())
+        .expect("exhaustive similarity query must parse and run"));
 
     let db = TempDir::new().expect("dir");
     let b = mk(&db);
     b.upsert(distinct_year_rows()).expect("upsert indexed");
     b.create_index("year").expect("create_index");
-    let indexed = b.execute_query_str(sql, &HashMap::new());
+    let indexed = ids(&b
+        .execute_query_str(sql, &HashMap::new())
+        .expect("indexed similarity query must parse and run"));
 
-    match (exhaustive, indexed) {
-        (Ok(ex), Ok(idx)) => {
-            // The non-metadata fetch declines the ordered-index route on the
-            // indexed collection; both collections run the same (ranked) path,
-            // so the returned id sets must be identical.
-            let mut ex_ids = ids(&ex);
-            let mut idx_ids = ids(&idx);
-            ex_ids.sort_unstable();
-            idx_ids.sort_unstable();
-            assert_eq!(ex_ids, idx_ids, "similarity WHERE must match across paths");
-        }
-        (Err(_), Err(_)) => {
-            // Both paths reject the shape identically — also acceptable: the
-            // point is that the index does not change behaviour.
-        }
-        (ex, idx) => panic!("index changed similarity-WHERE behaviour: {ex:?} vs {idx:?}"),
-    }
+    // The non-metadata fetch declines the ordered-index route on the indexed
+    // collection; both collections run the same (ranked) path, so the returned
+    // id sets must be identical (similarity ordering is independent of the
+    // secondary index, so compare sorted).
+    let (mut ex_ids, mut idx_ids) = (exhaustive, indexed);
+    ex_ids.sort_unstable();
+    idx_ids.sort_unstable();
+    assert!(
+        !ex_ids.is_empty(),
+        "similarity WHERE must select rows so the comparison is non-trivial"
+    );
+    assert_eq!(
+        ex_ids, idx_ids,
+        "similarity WHERE: index must not change result set"
+    );
 }

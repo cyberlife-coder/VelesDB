@@ -328,6 +328,27 @@ fn test_window_function_on_empty_result_returns_no_rows() {
     .expect("test: query");
 
     assert!(results.is_empty(), "filter selects nothing → 0 rows");
+
+    let all = execute_sql(
+        &db,
+        "SELECT id, ROW_NUMBER() OVER (ORDER BY score DESC) AS rn FROM docs LIMIT 10",
+    )
+    .expect("test: query");
+    assert_eq!(
+        all.len(),
+        6,
+        "all 6 docs survive when no filter excludes them"
+    );
+    let mut rns: Vec<u64> = all
+        .iter()
+        .map(|r| payload_u64(r, "rn").expect("rn present"))
+        .collect();
+    rns.sort_unstable();
+    assert_eq!(
+        rns,
+        vec![1, 2, 3, 4, 5, 6],
+        "evaluator injects a contiguous 1..6 ROW_NUMBER on non-empty input"
+    );
 }
 
 // =========================================================================
@@ -358,10 +379,14 @@ fn test_window_function_coexists_with_vector_search_near() {
         6,
         "all 6 docs returned by NEAR (k=10 but only 6 exist)"
     );
-    for r in &results {
-        assert!(
-            payload_u64(r, "rn").is_some(),
-            "window alias `rn` in payload even when NEAR runs first"
-        );
-    }
+    let mut rns: Vec<u64> = results
+        .iter()
+        .map(|r| payload_u64(r, "rn").expect("rn present in payload on the NEAR path"))
+        .collect();
+    rns.sort_unstable();
+    assert_eq!(
+        rns,
+        vec![1, 2, 3, 4, 5, 6],
+        "ROW_NUMBER over NEAR-ranked rows emits a contiguous 1..6 permutation, not a constant/garbage"
+    );
 }

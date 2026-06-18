@@ -356,17 +356,22 @@ fn test_sparse_wal_append_parity() {
     );
     assert_eq!(retrieved_a.len(), 6, "all 6 points must reload");
 
-    // AND the point_count reported by the Database matches on both sides.
-    let stats_a = db_a_reopen
-        .get_collection_stats("sparse_a")
-        .expect("stats a");
-    let stats_b = db_b_reopen
-        .get_collection_stats("sparse_b")
-        .expect("stats b");
-    // Stats may be None (no ANALYZE yet) — compare the option shape.
-    assert_eq!(
-        stats_a.is_some(),
-        stats_b.is_some(),
-        "stats file presence must be identical between paths"
-    );
+    // AND the replayed sparse postings must yield identical rankings on both paths.
+    // Each point i was inserted with sparse postings at indices (i, i+10); query the
+    // default sparse index ("") which reads the WAL-replayed sparse_indexes.
+    for i in 1..=6u64 {
+        let q = sv(&[(i as u32, 1.0), (i as u32 + 10, 0.5)]);
+        let ra = coll_a.sparse_search(&q, 6, "").expect("sparse search a");
+        let rb = coll_b.sparse_search(&q, 6, "").expect("sparse search b");
+        let ids_a: Vec<u64> = ra.iter().map(|r| r.point.id).collect();
+        let ids_b: Vec<u64> = rb.iter().map(|r| r.point.id).collect();
+        assert_eq!(
+            ids_a, ids_b,
+            "sparse WAL replay must yield identical ranking on both paths for id {i}"
+        );
+        assert!(
+            ids_a.contains(&i),
+            "the matching doc {i} must be retrievable from its own sparse vector after reload"
+        );
+    }
 }

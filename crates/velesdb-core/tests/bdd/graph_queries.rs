@@ -498,13 +498,31 @@ fn test_concurrent_edge_add_and_query() {
     let reads = reader.join().expect("test: reader thread should not panic");
     assert_eq!(reads, 50, "All 50 reads should complete without panic");
 
-    // Final consistency: all edges are valid.
+    // Final consistency: all 50 edges present with intact, in-range endpoints.
     let final_edges = gc.get_edges(None);
+    // All 50 edges have distinct IDs (1..=50), source != target for every i,
+    // and add_edge rejects only duplicate IDs (none here) -> count is deterministic.
+    assert_eq!(
+        final_edges.len(),
+        50,
+        "all 50 concurrently-added edges must be present"
+    );
     for e in &final_edges {
         assert!(
-            !e.label().is_empty(),
-            "Edge {} has corrupted label after concurrent ops",
+            (1..=50).contains(&e.id()),
+            "edge ID {} out of range",
             e.id()
         );
+        assert!(
+            (1..=10).contains(&e.source()),
+            "source {} out of range",
+            e.source()
+        );
+        assert!(
+            (1..=10).contains(&e.target()),
+            "target {} out of range",
+            e.target()
+        );
+        assert_ne!(e.source(), e.target(), "no self-loops were inserted");
     }
 }
