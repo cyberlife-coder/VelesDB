@@ -134,10 +134,11 @@ class TestVelesQLv2Filters:
             filters=filters,
         )
         result = vector_store.query(query)
-        
-        # Query should execute without error
-        assert result is not None
-        assert isinstance(result.nodes, list)
+
+        # Filter must actually be applied by the engine: only python nodes returned.
+        assert len(result.nodes) == 2
+        assert {n.node_id for n in result.nodes} == {"py1", "py2"}
+        assert all(n.metadata.get("language") == "python" for n in result.nodes)
 
 
 class TestVelesQLv2Integration:

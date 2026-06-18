@@ -157,6 +157,10 @@ class TestVelesDBVectorStore:
 
         retriever = vectorstore.as_retriever(search_kwargs={"k": 1})
         assert retriever is not None
+        docs = retriever.invoke("Test")
+        assert len(docs) == 1
+        assert all(isinstance(doc, Document) for doc in docs)
+        assert docs[0].page_content == "Test document"
 
     def test_delete(self, temp_db_path, embeddings):
         """Test deleting auto-generated numeric IDs."""
@@ -195,10 +199,12 @@ class TestVelesDBVectorStore:
 
         # Add at least one document to create the collection
         vectorstore.add_texts(["Placeholder"])
-        
-        # Should return results without error
+
+        # Only one document exists, even though k=5 was requested (k > point_count boundary)
         results = vectorstore.similarity_search("query", k=5)
-        assert isinstance(results, list)
+        assert len(results) == 1
+        assert isinstance(results[0], Document)
+        assert results[0].page_content == "Placeholder"
 
     def test_stable_hash_id_is_deterministic_and_63bit(self):
         """Stable IDs must remain deterministic with a wide collision space."""
@@ -289,7 +295,9 @@ class TestVelesDBVectorStoreAdvanced:
         )
 
         assert isinstance(results, list)
+        assert len(results) >= 1
         assert len(results) <= 2
+        assert all(doc.metadata.get("category") == "language" for doc in results)
 
     def test_hybrid_search(self, temp_db_path, embeddings):
         """Test hybrid search combining vector and BM25."""
@@ -345,6 +353,8 @@ class TestVelesDBVectorStoreAdvanced:
         )
 
         assert isinstance(results, list)
+        assert len(results) >= 1
+        assert all(doc.metadata.get("type") == "database" for doc, _ in results)
 
     def test_text_search(self, temp_db_path, embeddings):
         """Test full-text BM25 search."""
@@ -486,9 +496,11 @@ class TestVelesDBVectorStoreBatch:
         )
 
         vectorstore.add_texts(["Test"])
-        
-        # Flush should not raise
+
+        # flush must persist without raising and must not lose data in-process
         vectorstore.flush()
+        info = vectorstore.get_collection_info()
+        assert info["point_count"] == 1
 
     def test_is_empty(self, temp_db_path, embeddings):
         """Test checking if collection is empty."""
@@ -520,6 +532,8 @@ class TestVelesDBVectorStoreBatch:
         results = vectorstore.query("SELECT * FROM vectors WHERE category = 'tech' LIMIT 5")
 
         assert isinstance(results, list)
+        assert len(results) >= 1
+        assert results[0].metadata.get("category") == "tech"
 
 
 class TestMultiQuerySearch:
@@ -546,8 +560,9 @@ class TestMultiQuerySearch:
             k=3,
         )
 
-        assert len(results) <= 3
+        assert len(results) == 3
         assert all(isinstance(doc, Document) for doc in results)
+        assert all(doc.page_content for doc in results)  # real content round-tripped, not empty stubs
 
     def test_multi_query_search_with_rrf(self, temp_db_path, embeddings):
         """Test multi-query search with explicit RRF fusion."""
@@ -570,7 +585,8 @@ class TestMultiQuerySearch:
             fusion_params={"k": 60},
         )
 
-        assert len(results) <= 2
+        assert 1 <= len(results) <= 2
+        assert all(isinstance(doc, Document) for doc in results)
 
     def test_multi_query_search_with_weighted(self, temp_db_path, embeddings):
         """Test multi-query search with weighted fusion."""
@@ -597,7 +613,8 @@ class TestMultiQuerySearch:
             },
         )
 
-        assert len(results) <= 2
+        assert 1 <= len(results) <= 2
+        assert all(isinstance(doc, Document) for doc in results)
 
     def test_multi_query_search_with_score(self, temp_db_path, embeddings):
         """Test multi-query search returning scores."""
@@ -646,8 +663,10 @@ class TestMultiQuerySearch:
             filter={"condition": {"type": "eq", "field": "type", "value": "leisure"}},
         )
 
-        # Should only return leisure travel docs
-        assert len(results) <= 2
+        # Filter should keep both leisure docs and exclude the business doc
+        assert 1 <= len(results) <= 2
+        types = {doc.metadata.get("type") for doc in results}
+        assert types == {"leisure"}, f"filter leaked non-leisure docs: {types}"
 
     def test_multi_query_search_empty_queries(self, temp_db_path, embeddings):
         """Test multi-query search with empty queries list."""
@@ -683,7 +702,9 @@ class TestMultiQuerySearch:
             fusion="average",
         )
 
-        assert len(results) <= 2
+        assert 1 <= len(results) <= 2
+        for doc in results:
+            assert isinstance(doc, Document)
 
     def test_multi_query_search_maximum_fusion(self, temp_db_path, embeddings):
         """Test multi-query search with maximum fusion strategy."""
@@ -704,7 +725,7 @@ class TestMultiQuerySearch:
             fusion="maximum",
         )
 
-        assert len(results) <= 2
+        assert 1 <= len(results) <= 2
 
 
 class _MockCollectionQuery:
@@ -796,6 +817,8 @@ class TestV15Features:
         )
 
         assert isinstance(results, list)
+        assert len(results) >= 1  # dense fallback returns matching nodes
+        assert all(isinstance(doc, Document) for doc in results)
 
     def test_add_texts_with_named_sparse_vectors(self, temp_db_path, embeddings):
         """add_texts accepts named sparse vectors (dict[str, dict[int, float]]),

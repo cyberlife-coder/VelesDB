@@ -150,14 +150,15 @@ class TestVectorStoreE2E:
         """Test deleting documents."""
         texts = ["Document 1", "Document 2", "Document 3"]
         ids = temp_vectorstore.add_texts(texts)
-        
+
         # Delete first document
         temp_vectorstore.delete([ids[0]])
-        
-        # Search should not return deleted document
+
+        # Search should not return the deleted document
         remaining = temp_vectorstore.similarity_search("Document 1", k=3)
-        # Verify deleted document is not in results
-        assert len(remaining) <= 3
+        contents = [doc.page_content for doc in remaining]
+        assert texts[0] not in contents
+        assert len(remaining) <= 2
 
 
 class TestDistanceMetricsE2E:

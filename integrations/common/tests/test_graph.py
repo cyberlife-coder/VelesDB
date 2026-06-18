@@ -20,7 +20,12 @@ def test_build_graph_rest_payload_with_rel_types():
 
 def test_build_graph_rest_payload_empty_rel_types():
     payload = build_graph_rest_payload("node-1", max_depth=1, expand_k=10, rel_types=[])
+    # Empty rel_types must be preserved verbatim (docstring: "empty list means
+    # all types") — guard against a regression that drops the key or substitutes
+    # a non-empty default like ["*"] / None.
+    assert "rel_types" in payload
     assert payload["rel_types"] == []
+    assert payload["rel_types"] is not None
 
 
 def test_is_timeout_exception_with_timeout():

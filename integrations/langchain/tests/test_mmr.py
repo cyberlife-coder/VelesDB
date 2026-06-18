@@ -125,7 +125,11 @@ class TestMaxMarginalRelevanceSearch:
 
     def test_as_retriever_mmr_search_type(self, store):
         retriever = store.as_retriever(
-            search_type="mmr", search_kwargs={"k": 2, "fetch_k": 3}
+            search_type="mmr",
+            search_kwargs={"k": 2, "fetch_k": 3, "lambda_mult": 0.3},
         )
         docs = retriever.invoke("anything")
+        contents = [doc.page_content for doc in docs]
         assert len(docs) == 2
+        assert contents[0] == "dup one"      # most relevant still ranked first
+        assert "different" in contents       # diversity term selected => MMR (not similarity) ran

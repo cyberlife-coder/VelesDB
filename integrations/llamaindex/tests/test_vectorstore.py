@@ -308,7 +308,9 @@ class TestVelesDBVectorStoreAdvanced:
         )
 
         assert result is not None
-        assert len(result.nodes) <= 3
+        assert 1 <= len(result.nodes) <= 3
+        assert len(result.similarities) == len(result.nodes)
+        assert len(result.ids) == len(result.nodes)
 
     def test_add_with_named_sparse_vectors(self, temp_dir):
         """add() accepts named sparse vectors (dict[str, dict[int, float]]),
@@ -479,12 +481,13 @@ class TestVelesDBVectorStoreBatch:
     def test_flush(self, temp_dir):
         """Test flushing to disk."""
         store = VelesDBVectorStore(path=temp_dir, collection_name="flush_test")
-        
+
         nodes = [TextNode(text="Test", id_="t", embedding=[0.1] * 768)]
         store.add(nodes)
 
-        # Should not raise
+        # flush must persist without raising and must not lose data in-process
         store.flush()
+        assert store.is_empty() is False
 
     def test_is_empty(self, temp_dir):
         """Test checking if empty."""
@@ -498,7 +501,7 @@ class TestVelesDBVectorStoreBatch:
     def test_velesql_query(self, temp_dir):
         """Test VelesQL query execution."""
         store = VelesDBVectorStore(path=temp_dir, collection_name="velesql_test")
-        
+
         nodes = [
             TextNode(
                 text="Tech article",
@@ -511,7 +514,9 @@ class TestVelesDBVectorStoreBatch:
 
         results = store.velesql("SELECT * FROM vectors WHERE category = 'tech' LIMIT 5")
 
-        assert hasattr(results, 'nodes')
+        assert results.nodes is not None
+        assert len(results.nodes) >= 1
+        assert any(n.metadata.get('category') == 'tech' for n in results.nodes)
 
 
 class TestMultiQuerySearch:
@@ -552,8 +557,12 @@ class TestMultiQuerySearch:
             similarity_top_k=3,
         )
 
-        assert hasattr(result, 'nodes')
-        assert len(result.nodes) <= 3
+        assert 1 <= len(result.nodes) <= 3
+        # fusion returns parallel nodes/similarities/ids of equal length
+        assert len(result.similarities) == len(result.nodes)
+        assert len(result.ids) == len(result.nodes)
+        # every fused id must be one of the three indexed nodes
+        assert set(result.ids) <= {"g1", "g2", "p1"}
 
     def test_multi_query_search_with_rrf(self, vector_store):
         """Test multi-query search with explicit RRF fusion."""
@@ -573,7 +582,11 @@ class TestMultiQuerySearch:
             fusion="rrf",
         )
 
-        assert len(result.nodes) <= 2
+        assert 1 <= len(result.nodes) <= 2  # fusion returned and deduplicated results
+        # fused results must be in descending similarity order
+        assert result.similarities == sorted(result.similarities, reverse=True)
+        # ids and similarities stay aligned with nodes
+        assert len(result.ids) == len(result.nodes) == len(result.similarities)
 
     def test_multi_query_search_with_weighted(self, vector_store):
         """Test multi-query search with weighted fusion."""
@@ -594,7 +607,11 @@ class TestMultiQuerySearch:
             fusion_params={"avg_weight": 0.5, "max_weight": 0.3, "hit_weight": 0.2},
         )
 
-        assert len(result.nodes) <= 2
+        assert hasattr(result, 'nodes')
+        assert len(result.nodes) == 2            # both uniform-direction docs match
+        returned_ids = {n.node_id for n in result.nodes}
+        assert returned_ids == {"c1", "c2"}
+        assert all(s is not None for s in result.similarities)
 
     def test_multi_query_search_empty_queries(self, vector_store):
         """Test multi-query search with empty queries list."""
@@ -626,7 +643,9 @@ class TestMultiQuerySearch:
             fusion="average",
         )
 
-        assert len(result.nodes) <= 2
+        assert len(result.nodes) == 2
+        returned_ids = {n.node_id for n in result.nodes}
+        assert returned_ids == {"db1", "db2"}
 
     def test_multi_query_search_maximum_fusion(self, vector_store):
         """Test multi-query search with maximum fusion strategy."""
@@ -646,7 +665,8 @@ class TestMultiQuerySearch:
             fusion="maximum",
         )
 
-        assert len(result.nodes) <= 2
+        assert 1 <= len(result.nodes) <= 2
+        assert set(result.ids) == {"api1", "api2"}
 
 
 class _MockCollectionQuery:
@@ -735,7 +755,7 @@ class TestV15Features:
         assert "dense2" in ids
 
     def test_query_with_sparse_vector_kwarg(self, vector_store):
-        """Test query() accepts sparse_vector kwarg for hybrid search."""
+        """Test query() accepts sparse_vector kwarg and degrades gracefully when no sparse index exists."""
         # Add nodes first
         nodes = [
             TextNode(
@@ -750,12 +770,14 @@ class TestV15Features:
             query_embedding=[0.1, 0.2, 0.3] + [0.0] * 765,
             similarity_top_k=5,
         )
-        result = vector_store.query(query, sparse_vector={0: 1.0})
+
+        with pytest.warns(UserWarning, match="does not have a sparse index"):
+            result = vector_store.query(query, sparse_vector={0: 1.0})
 
         assert isinstance(result, VectorStoreQueryResult)
-        assert hasattr(result, "nodes")
-        assert hasattr(result, "similarities")
-        assert hasattr(result, "ids")
+        assert len(result.nodes) >= 1            # dense fallback still returns the matching node
+        assert "hybrid1" in result.ids
+        assert len(result.similarities) == len(result.nodes)
 
     def test_train_pq_calls_db_train_pq(self, temp_dir):
         """Test that train_pq delegates to db.train_pq with correct args."""

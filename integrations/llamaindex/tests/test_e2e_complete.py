@@ -104,7 +104,11 @@ class TestVectorStoreE2E:
         results = temp_store.query(query)
         
         assert len(results.nodes) > 0
-        assert results.nodes[0].metadata is not None
+        # category is shared by both written nodes -> deterministic on nodes[0]
+        assert results.nodes[0].metadata.get("category") == "programming"
+        # language survives the round-trip and matches one of the written values
+        for node in results.nodes:
+            assert node.metadata.get("language") in {"python", "javascript"}
 
     def test_delete_nodes(self, temp_store):
         """Test deleting nodes."""
@@ -153,7 +157,10 @@ class TestDistanceMetricsE2E:
                 similarity_top_k=3,
             )
             results = store.query(query)
-            assert len(results.nodes) > 0
+            assert len(results.nodes) == 3
+            # query embedding is generate_embedding(2, 64), identical to n_2's
+            # stored vector -> n_2 must appear in top-3 under any valid metric
+            assert any(n.id_ == "n_2" for n in results.nodes)
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -184,7 +191,11 @@ class TestStorageModesE2E:
                 similarity_top_k=3,
             )
             results = store.query(query)
-            assert len(results.nodes) > 0
+            inserted = {f"s_{i}" for i in range(5)}
+            result_ids = [n.id_ for n in results.nodes]
+            assert 0 < len(results.nodes) <= 3  # non-empty, never exceeds similarity_top_k
+            assert set(result_ids) <= inserted  # ids round-trip, index not corrupted by the mode
+            assert len(result_ids) == len(set(result_ids))  # no duplicates
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

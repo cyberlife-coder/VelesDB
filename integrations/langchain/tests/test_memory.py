@@ -240,7 +240,9 @@ class TestVelesDBSemanticMemory:
 
         class MockEmbedding:
             def embed_query(self, text: str):
-                return [0.1, 0.2, 0.3, 0.4]
+                if "Paris" in text or "capital" in text:
+                    return [1.0, 0.0, 0.0, 0.0]
+                return [0.0, 1.0, 0.0, 0.0]
 
         with tempfile.TemporaryDirectory() as tmpdir:
             memory = VelesDBSemanticMemory(
@@ -249,6 +251,11 @@ class TestVelesDBSemanticMemory:
 
             fact_id = memory.add_fact("Paris is the capital of France")
             assert fact_id > 0
+            results = memory.query("What is the capital of France?", k=1)
+            assert len(results) == 1
+            top = results[0]
+            assert top["id"] == fact_id
+            assert "Paris" in top["content"]
 
     def test_semantic_memory_query(self):
         """Test: VelesDBSemanticMemory can query facts."""
@@ -273,6 +280,9 @@ class TestVelesDBSemanticMemory:
             results = memory.query("What is the capital of France?", k=1)
 
             assert len(results) >= 1
+            # Deterministic mock: the query embeds to [1,0,0,0] (same as the stored
+            # fact), so the top result must be the Paris fact.
+            assert "Paris" in results[0]["content"]
 
     def test_semantic_memory_add_facts_batch(self):
         """Test: VelesDBSemanticMemory can add multiple facts."""
@@ -296,7 +306,10 @@ class TestVelesDBSemanticMemory:
             ids = memory.add_facts(facts)
 
             assert len(ids) == 3
-            assert all(id > 0 for id in ids)
+            # add_facts delegates to add_fact, which increments _fact_counter per
+            # call; distinct IDs prove each fact got its own slot (a collision would
+            # silently overwrite in semantic.store).
+            assert len(set(ids)) == 3
 
 
 class TestVelesDBProceduralMemoryClear:

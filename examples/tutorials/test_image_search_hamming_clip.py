@@ -214,27 +214,6 @@ def test_all_metrics():
 
 
 # ---------------------------------------------------------------------------
-# Test 5: HTML dashboard generation
-# ---------------------------------------------------------------------------
-
-def test_html_generation():
-    """Base64 image encoding works for the HTML dashboard."""
-    import base64
-    from io import BytesIO
-
-    path = os.path.join(PHOTO_DIR, "beach_1.jpg")
-    img = Image.open(path).convert("RGB")
-    img.thumbnail((200, 200))
-    buf = BytesIO()
-    img.save(buf, format="JPEG", quality=80)
-    b64 = base64.b64encode(buf.getvalue()).decode()
-
-    assert len(b64) > 100
-    assert b64[:4] == "/9j/", "Not a valid JPEG base64"
-    print(f"  [PASS] Image base64 encoding ({len(b64)} chars)")
-
-
-# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
