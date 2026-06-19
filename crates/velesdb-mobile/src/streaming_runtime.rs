@@ -33,12 +33,10 @@ pub(crate) fn stream_runtime() -> Result<&'static Runtime, VelesError> {
         .enable_all()
         .thread_name("velesdb-stream")
         .build()
-        .map_err(|e| VelesError::Database {
-            message: format!("failed to start streaming runtime: {e}"),
-        })?;
+        .map_err(|e| VelesError::database(format!("failed to start streaming runtime: {e}")))?;
     // First writer wins; a late writer's runtime is dropped immediately.
     let _ = RUNTIME.set(rt);
-    RUNTIME.get().ok_or_else(|| VelesError::Database {
-        message: "streaming runtime unavailable".to_string(),
-    })
+    RUNTIME
+        .get()
+        .ok_or_else(|| VelesError::database("streaming runtime unavailable".to_string()))
 }

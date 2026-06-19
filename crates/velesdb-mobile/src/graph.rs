@@ -143,9 +143,10 @@ impl MobileGraphStore {
         let mut incoming = self.incoming.write();
 
         if edges.contains_key(&edge.id) {
-            return Err(crate::VelesError::Database {
-                message: format!("Edge with ID {} already exists", edge.id),
-            });
+            return Err(crate::VelesError::database(format!(
+                "Edge with ID {} already exists",
+                edge.id
+            )));
         }
 
         let source = edge.source;

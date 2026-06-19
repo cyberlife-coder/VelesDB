@@ -64,9 +64,9 @@ impl VelesSemanticMemory {
                     DistanceMetric::Cosine,
                 )?;
                 db.get_collection(collection_name.to_string())?
-                    .ok_or(VelesError::Database {
-                        message: "Failed to retrieve collection after creation".to_string(),
-                    })?
+                    .ok_or(VelesError::database(
+                        "Failed to retrieve collection after creation".to_string(),
+                    ))?
             }
         };
 
@@ -78,12 +78,8 @@ impl VelesSemanticMemory {
     /// The content text is persisted in the point payload as `{"content": ...}`
     /// so it survives a database reload.
     pub fn store(&self, id: u64, content: String, embedding: Vec<f32>) -> Result<(), VelesError> {
-        let payload =
-            serde_json::to_string(&serde_json::json!({ "content": content })).map_err(|e| {
-                VelesError::Database {
-                    message: format!("Failed to encode content payload: {e}"),
-                }
-            })?;
+        let payload = serde_json::to_string(&serde_json::json!({ "content": content }))
+            .map_err(|e| VelesError::database(format!("Failed to encode content payload: {e}")))?;
         let point = VelesPoint {
             id,
             vector: embedding,
