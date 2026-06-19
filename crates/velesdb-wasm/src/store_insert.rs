@@ -8,8 +8,12 @@ mod tests;
 
 /// Encodes a vector into the store's buffers based on storage mode.
 ///
-/// This is the single encoding path for all insert operations. SQ8 and
-/// `ProductQuantization` share the same quantization logic.
+/// This is the single encoding path for all insert operations.
+///
+/// `ProductQuantization` and `RaBitQ` deliberately share the SQ8 encode path:
+/// the browser engine has no PQ codebook training, so those modes fall back to
+/// SQ8 quantization. The fallback is surfaced once via `console.warn` at store
+/// creation (see `parsing::parse_storage_mode_inner`), so it is not silent.
 fn encode_vector(store: &mut VectorStore, vector: &[f32]) {
     match store.storage_mode {
         StorageMode::Full => {
@@ -46,13 +50,16 @@ fn encode_sq8(store: &mut VectorStore, vector: &[f32]) {
 }
 
 /// Binary quantization: packs each dimension into a single bit.
+///
+/// Values `>= 0.0` become 1, values `< 0.0` become 0 — matching the core
+/// `BinaryQuantizedVector` sign convention exactly.
 fn encode_binary(store: &mut VectorStore, vector: &[f32]) {
     let bytes_needed = store.dimension.div_ceil(8);
     for byte_idx in 0..bytes_needed {
         let mut byte = 0u8;
         for bit in 0..8 {
             let dim_idx = byte_idx * 8 + bit;
-            if dim_idx < store.dimension && vector[dim_idx] > 0.0 {
+            if dim_idx < store.dimension && vector[dim_idx] >= 0.0 {
                 byte |= 1 << bit;
             }
         }

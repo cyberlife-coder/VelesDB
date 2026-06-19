@@ -75,9 +75,10 @@ fn test_sq8_quantization_roundtrip() {
 fn test_binary_packing() {
     let mut store = VectorStore::new_with_mode(8, "hamming", "binary").unwrap();
 
-    // Insert binary vectors
+    // Core convention: value >= 0.0 -> bit 1, value < 0.0 -> bit 0.
+    // First two non-negative, rest negative.
     store
-        .insert(1, &[1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        .insert(1, &[1.0, 1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0])
         .unwrap();
 
     assert_eq!(store.len(), 1);
@@ -91,8 +92,9 @@ fn test_binary_packing() {
 fn test_binary_packing_large() {
     let mut store = VectorStore::new_with_mode(16, "hamming", "binary").unwrap();
 
-    // All ones in first byte, all zeros in second
-    let mut vec = vec![0.0f32; 16];
+    // Core convention: non-negative -> 1, negative -> 0.
+    // First 8 non-negative (bits set), last 8 negative (bits clear).
+    let mut vec = vec![-1.0f32; 16];
     for item in vec.iter_mut().take(8) {
         *item = 1.0;
     }

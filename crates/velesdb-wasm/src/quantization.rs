@@ -47,7 +47,8 @@ pub fn dequantize_sq8(data: &[u8], params: Sq8Params) -> Vec<f32> {
 
 /// Packs a vector into binary format (1 bit per dimension).
 ///
-/// Positive values (> 0) become 1, others become 0.
+/// Values `>= 0.0` become 1, values `< 0.0` become 0 — matching the core
+/// `BinaryQuantizedVector` sign convention exactly.
 /// Bits are packed 8 per byte, LSB first.
 pub fn pack_binary(vector: &[f32], dimension: usize, output: &mut Vec<u8>) {
     let bytes_needed = dimension.div_ceil(8);
@@ -55,7 +56,7 @@ pub fn pack_binary(vector: &[f32], dimension: usize, output: &mut Vec<u8>) {
         let mut byte = 0u8;
         for bit in 0..8 {
             let dim_idx = byte_idx * 8 + bit;
-            if dim_idx < dimension && vector[dim_idx] > 0.0 {
+            if dim_idx < dimension && vector[dim_idx] >= 0.0 {
                 byte |= 1 << bit;
             }
         }
@@ -110,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_binary_roundtrip() {
-        let vector = vec![1.0, -0.5, 0.0, 0.1, -1.0, 0.9, 0.0, 0.5, 1.0, -0.1];
+        let vector = vec![1.0, -0.5, 0.0, 0.1, -1.0, 0.9, -0.2, 0.5, 1.0, -0.1];
         let dimension = vector.len();
 
         let mut packed = Vec::new();
@@ -118,15 +119,15 @@ mod tests {
 
         let unpacked = unpack_binary(&packed, dimension);
 
-        // Binary only preserves sign (positive = 1.0, else = 0.0)
-        let expected: Vec<f32> = vector.iter().map(|&v| if v > 0.0 { 1.0 } else { 0.0 }).collect();
+        // Binary only preserves sign: matches core convention (>= 0.0 -> 1.0, else 0.0).
+        let expected: Vec<f32> = vector.iter().map(|&v| if v >= 0.0 { 1.0 } else { 0.0 }).collect();
         assert_eq!(unpacked, expected);
     }
 
     #[test]
     fn test_binary_packing_bits() {
-        // 8 values that should pack into: 0b10101010 = 170
-        let vector = vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
+        // Negative values -> 0, non-negative -> 1, packed LSB first into 0b10101010 = 170.
+        let vector = vec![-1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
         let mut packed = Vec::new();
         pack_binary(&vector, 8, &mut packed);
         assert_eq!(packed.len(), 1);
@@ -134,8 +135,18 @@ mod tests {
     }
 
     #[test]
+    fn test_binary_zero_packs_as_one() {
+        // Core convention: 0.0 is non-negative, so it must pack as bit 1.
+        let vector = vec![0.0, -0.1, 0.0];
+        let mut packed = Vec::new();
+        pack_binary(&vector, 3, &mut packed);
+        let unpacked = unpack_binary(&packed, 3);
+        assert_eq!(unpacked, vec![1.0, 0.0, 1.0]);
+    }
+
+    #[test]
     fn test_binary_dimension_not_multiple_of_8() {
-        let vector = vec![1.0, 0.0, 1.0, 0.0, 1.0]; // 5 dimensions
+        let vector = vec![1.0, -1.0, 1.0, -1.0, 1.0]; // 5 dimensions
         let mut packed = Vec::new();
         pack_binary(&vector, 5, &mut packed);
         assert_eq!(packed.len(), 1); // ceil(5/8) = 1 byte

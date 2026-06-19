@@ -44,10 +44,44 @@ pub fn parse_storage_mode(mode: &str) -> Result<StorageMode, JsValue> {
 
 /// Delegates to [`velesdb_core::StorageMode::from_str`] (single source of truth)
 /// and maps to the local WASM `StorageMode` enum.
+///
+/// # PQ / `RaBitQ` fallback
+///
+/// The browser engine has no Product-Quantization codebook training (that
+/// path is `persistence`-gated in core and unavailable in WASM). A request
+/// for `"pq"` or `"rabitq"` is therefore stored using the SQ8 encode/decode
+/// path. This is architecturally justified, but no longer silent: a one-time
+/// `console.warn` is emitted so the caller knows the requested mode was
+/// downgraded.
 fn parse_storage_mode_inner(mode: &str) -> Result<StorageMode, String> {
     let core: velesdb_core::StorageMode = mode.parse()?;
+    warn_if_pq_fallback(core);
     Ok(core_to_wasm_storage_mode(core))
 }
+
+/// Emits a one-time `console.warn` when PQ/`RaBitQ` is requested in WASM,
+/// where it transparently falls back to the SQ8 storage path.
+///
+/// The `console.warn` binding requires a live JS environment, so it is only
+/// invoked on the `wasm32` target. On native (test) builds this is a no-op.
+#[cfg(target_arch = "wasm32")]
+fn warn_if_pq_fallback(core: velesdb_core::StorageMode) {
+    if matches!(
+        core,
+        velesdb_core::StorageMode::ProductQuantization | velesdb_core::StorageMode::RaBitQ
+    ) {
+        web_sys::console::warn_1(&JsValue::from_str(
+            "VelesDB WASM: Product Quantization / RaBitQ is not available in the \
+             browser engine (no codebook training); storing vectors with SQ8 \
+             quantization instead.",
+        ));
+    }
+}
+
+/// Native no-op counterpart of [`warn_if_pq_fallback`]; see the `wasm32`
+/// variant for the browser behavior.
+#[cfg(not(target_arch = "wasm32"))]
+fn warn_if_pq_fallback(_core: velesdb_core::StorageMode) {}
 
 /// Validates a search quality string for API parity with Python and Server SDKs.
 ///
