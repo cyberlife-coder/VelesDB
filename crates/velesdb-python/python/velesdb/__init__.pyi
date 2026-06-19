@@ -13,6 +13,7 @@ __version__: str
 # lowercase names, in declaration order.
 DISTANCE_METRICS: Tuple[str, ...]
 STORAGE_MODES: Tuple[str, ...]
+CONDITION_TYPES: Tuple[str, ...]
 
 
 # ---------------------------------------------------------------------------

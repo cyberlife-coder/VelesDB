@@ -128,6 +128,10 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "STORAGE_MODES",
         PyTuple::new(m.py(), velesdb_core::STORAGE_MODE_NAMES)?,
     )?;
+    m.add(
+        "CONDITION_TYPES",
+        PyTuple::new(m.py(), velesdb_core::CONDITION_TYPE_NAMES)?,
+    )?;
 
     // Add version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

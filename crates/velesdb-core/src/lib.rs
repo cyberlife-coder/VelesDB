@@ -199,7 +199,7 @@ pub use collection::{
     VectorCollection,
 };
 pub use contiguous_ops::pad_to_simd_width;
-pub use distance::{DistanceMetric, DISTANCE_METRIC_NAMES};
+pub use distance::{DistanceMetric, CONDITION_TYPE_NAMES, DISTANCE_METRIC_NAMES};
 pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
 pub use point::{ComponentScores, Point, SearchResult};

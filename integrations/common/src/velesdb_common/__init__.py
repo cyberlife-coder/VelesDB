@@ -18,6 +18,7 @@ from velesdb_common.memory import (
 )
 from velesdb_common.security import (
     SecurityError,
+    ALLOWED_CONDITION_TYPES,
     ALLOWED_METRICS,
     ALLOWED_STORAGE_MODES,
     STORAGE_MODE_ALIASES,
@@ -70,6 +71,7 @@ __all__ = [
     "store_procedure",
     # security
     "SecurityError",
+    "ALLOWED_CONDITION_TYPES",
     "ALLOWED_METRICS",
     "ALLOWED_STORAGE_MODES",
     "STORAGE_MODE_ALIASES",
