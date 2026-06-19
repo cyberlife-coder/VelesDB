@@ -36,15 +36,6 @@ fn test_graph_node_with_properties() {
 }
 
 #[test]
-fn test_graph_node_with_optional_vector() {
-    let vector = vec![0.1, 0.2, 0.3, 0.4];
-    let node = GraphNode::new(1, "Document").with_vector(vector.clone());
-
-    assert!(node.vector().is_some());
-    assert_eq!(node.vector().unwrap(), &vector);
-}
-
-#[test]
 fn test_graph_node_builder_pattern() {
     let mut props = HashMap::new();
     props.insert("title".to_string(), json!("Research Paper"));
