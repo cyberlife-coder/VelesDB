@@ -13,7 +13,7 @@ from velesdb_common.security import ALLOWED_CONDITION_TYPES
 # LlamaIndex operator spellings → canonical VelesDB Core condition ``type`` tag.
 # The TARGET tags are NOT re-listed as free literals: every value here must be a
 # member of ``ALLOWED_CONDITION_TYPES`` (single-sourced from velesdb-core), which
-# the assertion below enforces at import time so this map cannot drift from the
+# the import-time guard below enforces so this map cannot drift from the
 # engine's vocabulary.
 _OPERATOR_TO_CONDITION_TYPE = {
     "eq": "eq", "==": "eq", "=": "eq",
@@ -27,10 +27,12 @@ _OPERATOR_TO_CONDITION_TYPE = {
     "is_null": "is_null", "null": "is_null",
     "is_not_null": "is_not_null", "not_null": "is_not_null",
 }
-assert set(_OPERATOR_TO_CONDITION_TYPE.values()) <= ALLOWED_CONDITION_TYPES, (
-    "filter_ops emits condition types unknown to velesdb-core: "
-    f"{sorted(set(_OPERATOR_TO_CONDITION_TYPE.values()) - ALLOWED_CONDITION_TYPES)}"
-)
+_UNKNOWN_CONDITION_TYPES = set(_OPERATOR_TO_CONDITION_TYPE.values()) - ALLOWED_CONDITION_TYPES
+if _UNKNOWN_CONDITION_TYPES:
+    raise RuntimeError(
+        "filter_ops emits condition types unknown to velesdb-core: "
+        f"{sorted(_UNKNOWN_CONDITION_TYPES)}"
+    )
 
 
 def _normalize_filter_operator(raw_operator: Any) -> str:
