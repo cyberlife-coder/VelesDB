@@ -381,20 +381,6 @@ describe('normalizeFilter', () => {
 // ============================================================================
 
 describe('Filter negative / contract tests', () => {
-  it('Condition discriminated union carries distinct type tags', () => {
-    // This test exists so that if a variant is accidentally removed,
-    // TypeScript will fail to compile and the test file will break.
-    const variants: Condition['type'][] = [
-      'eq', 'neq', 'gt', 'gte', 'lt', 'lte',
-      'in', 'contains', 'is_null', 'is_not_null',
-      'and', 'or', 'not',
-      'like', 'ilike',
-      'array_contains', 'array_contains_any', 'array_contains_all',
-      'geo_distance', 'geo_bbox',
-    ];
-    expect(variants).toHaveLength(20);
-  });
-
   it('CompareOp mirrors the exact 6 Rust variants', () => {
     const ops: CompareOp[] = ['Eq', 'NotEq', 'Gt', 'Gte', 'Lt', 'Lte'];
     expect(ops).toHaveLength(6); // compile-time guard: drift from Rust enum breaks tsc

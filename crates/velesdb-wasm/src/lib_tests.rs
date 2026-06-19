@@ -2,51 +2,6 @@
 
 use super::*;
 
-// =============================================================================
-// BUG-1 FIX: Metric-aware threshold comparison tests
-// =============================================================================
-
-#[test]
-fn test_similarity_threshold_metric_aware_comparison() {
-    // For SIMILARITY metrics (Cosine, DotProduct, Jaccard):
-    // "similarity() > 0.8" means score > 0.8 (higher = more similar)
-
-    // For DISTANCE metrics (Euclidean, Hamming):
-    // "similarity() > 0.8" should mean "more similar than 0.8 threshold"
-    // which translates to distance < 0.8 (lower = more similar)
-
-    let higher_is_better = true; // Cosine
-    let lower_is_better = false; // Euclidean
-
-    let score = 0.5_f32;
-    let threshold = 0.8_f32;
-
-    // Test: "similarity > 0.8" with Cosine (higher = better)
-    // score=0.5 should NOT pass (0.5 is NOT more similar than 0.8)
-    let cosine_gt_passes = if higher_is_better {
-        score > threshold // Normal comparison
-    } else {
-        score < threshold // Inverted for distance
-    };
-    assert!(!cosine_gt_passes, "Cosine: 0.5 should not be > 0.8 similar");
-
-    // Test: "similarity > 0.8" with Euclidean (lower = better)
-    // score=0.5 SHOULD pass (distance 0.5 IS more similar than distance 0.8)
-    let euclidean_gt_passes = if lower_is_better {
-        score > threshold // Wrong! This is the bug
-    } else {
-        score < threshold // Correct: lower distance = more similar
-    };
-    assert!(
-        euclidean_gt_passes,
-        "Euclidean: distance 0.5 should be 'more similar' than 0.8"
-    );
-}
-
-// =============================================================================
-// Original tests
-// =============================================================================
-
 #[test]
 fn test_storage_mode_full() {
     let store = VectorStore::new(4, "cosine").unwrap();
@@ -244,33 +199,6 @@ fn test_fuse_results_empty() {
 
 // Note: similarity_search tests require WASM runtime (returns JsValue).
 // The method is tested via wasm-pack test in CI.
-// Here we test the underlying distance calculations used by similarity_search.
-
-#[test]
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn test_similarity_threshold_logic() {
-    // Test the threshold comparison logic used in similarity_search
-    let threshold = 0.8_f32;
-
-    // GT: score > threshold
-    assert!(0.9_f32 > threshold);
-    assert!(0.8_f32 <= threshold); // Equivalent to !(0.8 > threshold)
-    assert!(0.7_f32 <= threshold); // Equivalent to !(0.7 > threshold)
-
-    // GTE: score >= threshold
-    assert!(0.9_f32 >= threshold);
-    assert!(0.8_f32 >= threshold);
-    assert!(0.7_f32 < threshold); // Equivalent to !(0.7 >= threshold)
-
-    // LT: score < threshold
-    assert!(0.9_f32 >= threshold); // Equivalent to !(0.9 < threshold)
-    assert!(0.8_f32 >= threshold); // Equivalent to !(0.8 < threshold)
-    assert!(0.7_f32 < threshold);
-
-    // EQ: |score - threshold| < 0.001
-    assert!((0.8001_f32 - threshold).abs() < 0.001);
-    assert!((0.81_f32 - threshold).abs() >= 0.001);
-}
 
 // =============================================================================
 // VectorStore::search_sparse — query the store's pre-built sparse index

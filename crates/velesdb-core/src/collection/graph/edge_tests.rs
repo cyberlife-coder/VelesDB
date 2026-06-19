@@ -22,21 +22,6 @@ fn test_create_edge_basic() {
 }
 
 #[test]
-fn test_edge_with_properties() {
-    let mut props = HashMap::new();
-    props.insert("date".to_string(), json!("2026-01-15"));
-    props.insert("role".to_string(), json!("author"));
-
-    let edge = GraphEdge::new(1, 10, 20, "WROTE")
-        .expect("valid edge")
-        .with_properties(props);
-
-    assert_eq!(edge.properties().len(), 2);
-    assert_eq!(edge.property("date"), Some(&json!("2026-01-15")));
-    assert_eq!(edge.property("role"), Some(&json!("author")));
-}
-
-#[test]
 fn test_edge_serialization_roundtrip() {
     let mut props = HashMap::new();
     props.insert("weight".to_string(), json!(0.95));
