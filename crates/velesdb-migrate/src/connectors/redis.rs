@@ -10,9 +10,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::config::RedisConfig;
-#[cfg(test)]
-use crate::connectors::common::extract_payload_from_object;
-use crate::connectors::common::{build_numeric_offset_batch, parse_vector_from_json};
+use crate::connectors::common::{
+    build_numeric_offset_batch, extract_payload_from_hashmap, parse_vector_from_json,
+};
 use crate::connectors::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::error::{Error, Result};
 
@@ -87,10 +87,8 @@ impl RedisConnector {
         &self,
         attrs: &HashMap<String, serde_json::Value>,
     ) -> HashMap<String, serde_json::Value> {
-        let obj =
-            serde_json::Value::Object(attrs.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
-        extract_payload_from_object(
-            &obj,
+        extract_payload_from_hashmap(
+            attrs,
             &[&self.config.vector_field],
             &self.config.payload_fields,
         )
@@ -474,11 +472,7 @@ fn build_payload(
     attrs: &HashMap<String, serde_json::Value>,
     vector_field: &str,
 ) -> HashMap<String, serde_json::Value> {
-    attrs
-        .iter()
-        .filter(|(k, _)| k.as_str() != vector_field)
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
+    extract_payload_from_hashmap(attrs, &[vector_field], &[])
 }
 
 /// Parses a `FT.INFO` RESP response to extract `num_docs` and field definitions.
@@ -656,7 +650,7 @@ fn find_string_after(parts: &[redis::Value], key: &str) -> Option<String> {
 /// Extracts a `String` from a `redis::Value::BulkString`.
 fn extract_bulk_string(value: &redis::Value) -> Option<String> {
     match value {
-        redis::Value::BulkString(bytes) => String::from_utf8(bytes.clone()).ok(),
+        redis::Value::BulkString(bytes) => std::str::from_utf8(bytes).ok().map(str::to_owned),
         redis::Value::SimpleString(s) => Some(s.clone()),
         // Some Redis versions return status strings.
         _ => None,
@@ -677,8 +671,8 @@ fn resp_value_to_json(value: &redis::Value) -> serde_json::Value {
         redis::Value::BulkString(bytes) => {
             // Preserve the original string type — do not coerce "42" to 42 or
             // "true" to true, as that would silently corrupt metadata (e.g. zip codes).
-            match String::from_utf8(bytes.clone()) {
-                Ok(s) => serde_json::Value::String(s),
+            match std::str::from_utf8(bytes) {
+                Ok(s) => serde_json::Value::String(s.to_owned()),
                 Err(_) => serde_json::Value::String(format!("<binary:{} bytes>", bytes.len())),
             }
         }

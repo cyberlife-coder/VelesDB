@@ -186,13 +186,7 @@ impl ElasticsearchConnector {
     /// will skip validation for this source rather than blocking
     /// migration.
     async fn fetch_field_similarity(&self) -> Option<String> {
-        let base = self.config.url.trim_end_matches('/');
-        let index_path = if self.config.index.starts_with('/') {
-            self.config.index.clone()
-        } else {
-            format!("/{}", self.config.index)
-        };
-        let url = format!("{base}{index_path}/_mapping");
+        let url = self.build_index_url("_mapping");
 
         let resp = match self.build_get_request(&url).send().await {
             Ok(r) => r,
