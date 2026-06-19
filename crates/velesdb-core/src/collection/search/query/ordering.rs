@@ -124,27 +124,19 @@ impl Collection {
             .then_with(|| results[i].point.id.cmp(&results[j].point.id))
         });
 
-        let sorted_results: Vec<SearchResult> =
-            indices.iter().map(|&i| results[i].clone()).collect();
-        results.clone_from_slice(&sorted_results);
+        // Pre-compute sorted scores before the permutation destroys the
+        // original-position mapping (indices[i] = original slot for output i).
+        let sorted_scores =
+            extract_sorted_similarity_scores(order_by, &similarity_scores_map, &indices);
 
-        // Write back the score from the first similarity column (any position).
-        let first_sim_idx = order_by
-            .iter()
-            .enumerate()
-            .find(|(_, ob)| {
-                matches!(
-                    ob.expr,
-                    crate::velesql::OrderByExpr::Similarity(_)
-                        | crate::velesql::OrderByExpr::SimilarityBare
-                )
-            })
-            .map(|(idx, _)| idx);
-        if let Some(sim_idx) = first_sim_idx {
-            if let Some(scores) = similarity_scores_map.get(&sim_idx) {
-                for (i, result) in results.iter_mut().enumerate() {
-                    result.score = scores[indices[i]];
-                }
+        // Apply the sort permutation in-place using cycle decomposition.
+        // Avoids cloning every SearchResult (no heap allocation for vector data).
+        apply_permutation_in_place(results, &mut indices);
+
+        // Write back pre-computed scores.
+        if let Some(scores) = sorted_scores {
+            for (result, score) in results.iter_mut().zip(scores) {
+                result.score = score;
             }
         }
 
@@ -308,6 +300,54 @@ impl Collection {
             cmp
         }
     }
+}
+
+/// Applies a permutation to `slice` in-place using cycle decomposition.
+///
+/// `perm[i]` is the original index of the element that belongs at position `i`
+/// in the output. Each cycle in the permutation is resolved by swapping elements
+/// along the cycle, which requires only O(n) `usize` bookkeeping with no heap
+/// allocation for the elements themselves.
+///
+/// `perm` is consumed (all entries set to their own index) as a side-effect.
+fn apply_permutation_in_place<T>(slice: &mut [T], perm: &mut [usize]) {
+    debug_assert_eq!(slice.len(), perm.len());
+    for i in 0..perm.len() {
+        let mut j = i;
+        while perm[j] != i {
+            let k = perm[j];
+            slice.swap(j, k);
+            perm[j] = j;
+            j = k;
+        }
+        perm[j] = j;
+    }
+}
+
+/// Returns sorted similarity scores in output order, or `None` when the query
+/// has no similarity ORDER BY column.
+///
+/// Must be called before `apply_permutation_in_place` because that call
+/// overwrites `indices` (the original-position mapping).
+fn extract_sorted_similarity_scores(
+    order_by: &[crate::velesql::SelectOrderBy],
+    similarity_scores_map: &std::collections::HashMap<usize, Vec<f32>>,
+    indices: &[usize],
+) -> Option<Vec<f32>> {
+    use crate::velesql::OrderByExpr;
+    let sim_idx = order_by
+        .iter()
+        .enumerate()
+        .find(|(_, ob)| {
+            matches!(
+                ob.expr,
+                OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare
+            )
+        })
+        .map(|(idx, _)| idx)?;
+
+    let scores = similarity_scores_map.get(&sim_idx)?;
+    Some(indices.iter().map(|&orig| scores[orig]).collect())
 }
 
 /// Context for evaluating arithmetic ORDER BY expressions (EPIC-042).
