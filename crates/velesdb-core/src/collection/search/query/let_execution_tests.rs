@@ -192,6 +192,15 @@ fn test_let_literal_binding() {
         .expect("literal query");
 
     assert_eq!(results.len(), 5);
+    // All ORDER BY keys equal (constant 0.8) -> deterministic tie-break by
+    // ascending point id (ordering.rs:118-124, EPIC-081 phase-2 invariant that
+    // matches the index-backed ordered_ids walk).
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        ids,
+        vec![0, 1, 2, 3, 4],
+        "constant ORDER BY key must fall back to ascending-id tie-break"
+    );
 }
 
 // ============================================================================
@@ -214,6 +223,19 @@ fn test_let_unused_binding_no_error() {
         .expect("unused binding should not error");
 
     assert_eq!(results.len(), 5);
+    // The unused LET binding must not change ordering vs the plain ORDER BY path.
+    let baseline = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector NEAR $v ORDER BY similarity() DESC LIMIT 5",
+            &params,
+        )
+        .expect("baseline");
+    let baseline_ids: Vec<u64> = baseline.iter().map(|r| r.point.id).collect();
+    let result_ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        baseline_ids, result_ids,
+        "unused LET binding must not change ordering vs the plain ORDER BY path"
+    );
 }
 
 // ============================================================================
@@ -235,6 +257,21 @@ fn test_let_backward_compat_no_let() {
         .expect("no-LET query");
 
     assert_eq!(results.len(), 5);
+    // Backward-compat means real similarity ordering on the no-LET (early-return) path.
+    for w in results.windows(2) {
+        assert!(
+            w[0].score >= w[1].score - 1e-6,
+            "ORDER BY similarity() DESC must yield non-increasing scores: {} then {}",
+            w[0].score,
+            w[1].score
+        );
+    }
+    // Top result must have a positive cosine similarity to the query vector.
+    assert!(
+        results[0].score > 0.0,
+        "top result should have positive similarity, got {}",
+        results[0].score
+    );
 }
 
 // ============================================================================
@@ -248,15 +285,27 @@ fn test_let_with_offset_and_limit() {
     let mut params = HashMap::new();
     params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
 
+    let full = col
+        .execute_query_str(
+            "LET s = similarity() SELECT * FROM docs WHERE vector NEAR $v ORDER BY s DESC LIMIT 5",
+            &params,
+        )
+        .expect("full ranking");
     let results = col
         .execute_query_str(
-            "LET s = similarity() \
-             SELECT * FROM docs WHERE vector NEAR $v ORDER BY s DESC LIMIT 3 OFFSET 2",
+            "LET s = similarity() SELECT * FROM docs WHERE vector NEAR $v ORDER BY s DESC LIMIT 3 OFFSET 2",
             &params,
         )
         .expect("LET + OFFSET");
-
     assert_eq!(results.len(), 3);
+    let full_ids: Vec<u64> = full.iter().map(|r| r.point.id).collect();
+    let off_ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    // OFFSET 2 must return exactly the 3rd-5th ranked items of the full ordering.
+    assert_eq!(
+        off_ids,
+        full_ids[2..5].to_vec(),
+        "OFFSET 2 must skip the top-2 and return the 3rd-5th ranked results"
+    );
 }
 
 /// LET + NOT similarity() returns explicit error (not silent wrong results).
@@ -316,6 +365,18 @@ fn test_let_with_with_clause() {
         .expect("LET + WITH");
 
     assert_eq!(results.len(), 5);
+    let baseline = col
+        .execute_query_str(
+            "LET s = similarity() SELECT * FROM docs WHERE vector NEAR $v ORDER BY s DESC LIMIT 5",
+            &params,
+        )
+        .expect("LET baseline (no WITH)");
+    let with_ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    let baseline_ids: Vec<u64> = baseline.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        with_ids, baseline_ids,
+        "WITH (mode='fast') must not alter the LET-driven ORDER BY ordering"
+    );
 }
 
 // ============================================================================

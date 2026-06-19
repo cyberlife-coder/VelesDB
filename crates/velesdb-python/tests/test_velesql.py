@@ -3,12 +3,6 @@
 import pytest
 
 
-def test_velesql_import():
-    """Test that VelesQL class can be imported."""
-    from velesdb import VelesQL
-    assert VelesQL is not None
-
-
 def test_velesql_parse_simple_select():
     """Test parsing a simple SELECT query."""
     from velesdb import VelesQL

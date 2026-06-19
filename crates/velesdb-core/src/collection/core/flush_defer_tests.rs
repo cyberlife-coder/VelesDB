@@ -68,9 +68,14 @@ fn test_flush_skips_hnsw_save_but_data_recoverable_on_reopen() {
 
     // Verify search works after recovery.
     let results = reopened.search(&[0.0, 1.0, 2.0, 3.0], 3).expect("search");
-    assert!(
-        !results.is_empty(),
-        "search should return results after gap recovery"
+    assert_eq!(
+        results.len(),
+        3,
+        "gap recovery must re-index enough vectors for a k=3 search"
+    );
+    assert_eq!(
+        results[0].point.id, 0,
+        "exact-match query must return id=0 as the nearest neighbor after recovery"
     );
 }
 

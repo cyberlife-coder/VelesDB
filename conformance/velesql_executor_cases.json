@@ -43,6 +43,36 @@
       "query": "SELECT * FROM docs WHERE category = 'other' ORDER BY year ASC",
       "expect_ids": [5, 3],
       "note": "filter selecting the complementary partition"
+    },
+    {
+      "id": "X006",
+      "query": "SELECT * FROM docs ORDER BY category ASC, year DESC",
+      "expect_ids": [3, 5, 4, 2, 1],
+      "note": "multi-column ORDER BY, mixed directions: 'other' (o<t) before 'tech', year descending within each group"
+    },
+    {
+      "id": "X007",
+      "query": "SELECT * FROM docs ORDER BY category DESC, year ASC",
+      "expect_ids": [1, 2, 4, 5, 3],
+      "note": "multi-column ORDER BY, opposite directions (category DESC, year ASC) — exercises independent per-column direction handling"
+    },
+    {
+      "id": "X008",
+      "query": "SELECT * FROM docs ORDER BY category ASC",
+      "expect_ids": [3, 5, 1, 2, 4],
+      "note": "tie-break lock: rows sharing the ORDER BY key are ordered by ascending point id (matches the index-backed ordered_ids walk, EPIC-081 phase 2)"
+    },
+    {
+      "id": "X009",
+      "query": "SELECT * FROM docs ORDER BY category ASC, year DESC LIMIT 3",
+      "expect_ids": [3, 5, 4],
+      "note": "EPIC-081 bounded top-k over a multi-column ORDER BY: bounded result equals the unbounded sort (X006) truncated to k"
+    },
+    {
+      "id": "X010",
+      "query": "SELECT * FROM docs ORDER BY year ASC LIMIT 3",
+      "expect_ids": [5, 1, 3],
+      "note": "EPIC-081 bounded top-k, ASC direction (complements the DESC regression-lock B001): full year-ASC order [5,1,3,2,4] truncated to k=3"
     }
   ],
   "known_bugs": [

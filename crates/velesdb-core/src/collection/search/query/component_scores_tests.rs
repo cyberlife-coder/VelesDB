@@ -213,28 +213,6 @@ fn test_single_component_matches_similarity_for_pure_vector() {
 // C. SearchResult component_scores field
 // ============================================================================
 
-/// Nominal: component_scores defaults to None.
-#[test]
-fn test_component_scores_default_none() {
-    let result = make_result(1, 0.5);
-    assert!(
-        result.component_scores.is_none(),
-        "Default SearchResult should have no component scores"
-    );
-}
-
-/// Nominal: component_scores can be set.
-#[test]
-fn test_component_scores_populated() {
-    let result =
-        make_result_with_components(1, 0.7, vec![("vector_score", 0.9), ("bm25_score", 0.3)]);
-    assert!(result.component_scores.is_some());
-    let scores = result.component_scores.as_ref().expect("set above");
-    assert_eq!(scores.len(), 2);
-    assert!((scores[0].1 - 0.9).abs() < 1e-5);
-    assert!((scores[1].1 - 0.3).abs() < 1e-5);
-}
-
 /// Edge: serialization backward compat — component_scores None should not
 /// appear in JSON output.
 #[test]

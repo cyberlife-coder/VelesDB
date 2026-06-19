@@ -252,9 +252,14 @@ fn test_with_mode_fast_still_returns_results() {
     let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
     let results = execute_sql_with_params(&db, sql, &params).expect("test: WITH fast");
 
-    assert!(
-        !results.is_empty(),
-        "WITH (mode = 'fast') must still return results"
+    assert_eq!(
+        results.len(),
+        3,
+        "LIMIT 3 with mode='fast' must return exactly 3 results"
+    );
+    assert_eq!(
+        results[0].point.id, 1,
+        "mode='fast' must still rank the exact-match vector (id 1) first"
     );
 }
 

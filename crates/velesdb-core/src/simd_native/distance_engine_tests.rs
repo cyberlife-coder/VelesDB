@@ -240,11 +240,15 @@ fn test_distance_engine_cross_thread() {
     let engine = DistanceEngine::new(128);
     let a = generate_vector(128, 0.0);
     let b = generate_vector(128, 1.0);
+    let expected = dot_product_native(&a, &b);
 
     let handle = std::thread::spawn(move || engine.dot_product(&a, &b));
 
     let result = handle.join().expect("thread panicked");
-    assert!(result.is_finite());
+    assert!(
+        (result - expected).abs() < 1e-5,
+        "cross-thread dot_product mismatch: expected={expected}, got={result}"
+    );
 }
 
 // ---------------------------------------------------------------------------

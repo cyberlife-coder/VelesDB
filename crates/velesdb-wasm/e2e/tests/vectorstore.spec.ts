@@ -7,11 +7,6 @@ test.describe('VelesDB WASM VectorStore', () => {
     await page.waitForFunction(() => window['VelesDB']?.ready === true, { timeout: 10000 });
   });
 
-  test('should load WASM module successfully', async ({ page }) => {
-    const ready = await page.evaluate(() => window['VelesDB'].ready);
-    expect(ready).toBe(true);
-  });
-
   test('should create VectorStore with cosine metric', async ({ page }) => {
     const result = await page.evaluate(() => {
       const { VectorStore } = window['VelesDB'];
@@ -162,6 +157,11 @@ test.describe('VelesDB WASM VectorStore', () => {
     });
 
     expect(results).toHaveLength(2);
+    // [1,0,0,0]·query = 1.0 > [0.5,0.5,0,0]·query = 0.5 -> id=1 ranks first
+    expect(results[0].id).toBe(1);
+    expect(results[1].id).toBe(2);
+    // dot product is a similarity metric: scores must be sorted descending
+    expect(results[0].score).toBeGreaterThan(results[1].score);
   });
 
   test('should handle large vectors (1536 dim - OpenAI embeddings)', async ({ page }) => {

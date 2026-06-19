@@ -230,12 +230,23 @@ fn test_zero_magnitude() {
 fn test_case_insensitivity_interval_keyword() {
     // INTERVAL keyword is case-insensitive via pest ^"INTERVAL"
     let sql = "SELECT * FROM events WHERE ts > interval '7 days'";
-    let result = Parser::parse(sql);
-    assert!(
-        result.is_ok(),
-        "Lowercase 'interval' should parse: {:?}",
-        result.err()
-    );
+    let query =
+        Parser::parse(sql).unwrap_or_else(|e| panic!("Lowercase 'interval' should parse: {e:?}"));
+    let where_clause = query
+        .select
+        .where_clause
+        .as_ref()
+        .expect("WHERE clause must be present");
+    match where_clause {
+        Condition::Comparison(cmp) => match &cmp.value {
+            Value::Temporal(TemporalExpr::Interval(iv)) => {
+                assert_eq!(iv.magnitude, 7);
+                assert_eq!(iv.unit, IntervalUnit::Days);
+            }
+            other => panic!("Expected Temporal(Interval), got {other:?}"),
+        },
+        other => panic!("Expected Comparison, got {other:?}"),
+    }
 }
 
 #[test]

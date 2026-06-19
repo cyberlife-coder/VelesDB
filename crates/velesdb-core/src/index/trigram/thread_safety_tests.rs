@@ -105,7 +105,11 @@ fn test_concurrent_reads() {
         handles.push(thread::spawn(move || {
             for _ in 0..100 {
                 let results = index_clone.search_like("document");
-                assert!(!results.is_empty());
+                assert_eq!(
+                    results.len(),
+                    100,
+                    "concurrent reads must return the full, uncorrupted result set"
+                );
             }
         }));
     }
@@ -221,9 +225,15 @@ fn test_stress_many_threads() {
         handle.join().expect("Thread panicked");
     }
 
-    // Index should still be consistent (no crashes)
+    // Each of the 16 threads inserts doc_ids t*100+i (i in 0..50); these ranges
+    // never overlap across threads, so the final count is deterministic.
+    // Survivors per thread = 50 - |{i : i % 3 == 0}| = 50 - 17 = 33.
     let count = index.doc_count();
-    assert!(count > 0, "Index should have some documents");
+    assert_eq!(
+        count,
+        16 * 33,
+        "expected 16 threads x 33 surviving docs = 528"
+    );
 }
 
 #[test]

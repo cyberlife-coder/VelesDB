@@ -239,14 +239,23 @@ fn test_repl_search_graph_without_embeddings_returns_error() {
 
 #[test]
 fn test_repl_search_invalid_vector_json_returns_error() {
-    // GIVEN: a graph collection
-    let (_dir, db) = setup_db();
+    // GIVEN: a graph collection WITH embeddings (so the no-embeddings guard
+    // does not fire and execution reaches the serde_json::from_str branch)
+    let dir = TempDir::new().expect("test: create temp dir");
+    let db = Database::open(dir.path()).expect("test: open database");
+    db.create_graph_collection_with_embeddings(
+        "kg_embed",
+        GraphSchema::schemaless(),
+        4,
+        velesdb_core::DistanceMetric::Cosine,
+    )
+    .expect("test: create graph collection with embeddings");
 
-    // WHEN: .graph search kg not_json
-    let parts: Vec<&str> = vec![".graph", "search", "kg", "not_json"];
+    // WHEN: .graph search kg_embed not_json
+    let parts: Vec<&str> = vec![".graph", "search", "kg_embed", "not_json"];
     let result = cmd_graph(&db, &parts);
 
-    // THEN: error about invalid JSON
+    // THEN: error about invalid vector JSON (not the no-embeddings guard)
     assert_error(&result);
 }
 

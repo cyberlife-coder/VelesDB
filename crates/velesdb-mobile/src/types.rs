@@ -13,8 +13,17 @@ use velesdb_core::FusionStrategy as CoreFusionStrategy;
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum VelesError {
     /// Database operation failed.
-    #[error("Database error: {message}")]
-    Database { message: String },
+    ///
+    /// `code` carries the canonical core taxonomy code (e.g. `"VELES-006"`)
+    /// when the error originated in `velesdb-core`, or an empty string for
+    /// binding-level failures (JSON parsing, runtime setup) that have no core
+    /// code. `recoverable` mirrors core's [`velesdb_core::Error::is_recoverable`].
+    #[error("[{code}] Database error: {message}")]
+    Database {
+        message: String,
+        code: String,
+        recoverable: bool,
+    },
 
     /// Collection operation failed.
     #[error("Collection error: {message}")]
@@ -25,8 +34,26 @@ pub enum VelesError {
     DimensionMismatch { expected: u32, actual: u32 },
 }
 
+impl VelesError {
+    /// Constructs a binding-level `Database` error with no core taxonomy code.
+    ///
+    /// Use for failures that originate in the mobile binding itself (JSON
+    /// parsing, runtime creation, configuration) rather than in `velesdb-core`.
+    /// Binding-level errors are treated as recoverable.
+    #[must_use]
+    pub fn database(message: String) -> Self {
+        VelesError::Database {
+            message,
+            code: String::new(),
+            recoverable: true,
+        }
+    }
+}
+
 impl From<velesdb_core::Error> for VelesError {
     fn from(err: velesdb_core::Error) -> Self {
+        let code = err.code().to_string();
+        let recoverable = err.is_recoverable();
         match err {
             velesdb_core::Error::DimensionMismatch { expected, actual } =>
             {
@@ -44,6 +71,8 @@ impl From<velesdb_core::Error> for VelesError {
             },
             other => VelesError::Database {
                 message: other.to_string(),
+                code,
+                recoverable,
             },
         }
     }
@@ -509,4 +538,47 @@ pub struct MobileAdvancedConfig {
     pub deferred_indexing: Option<MobileDeferredIndexerConfig>,
     /// Async index builder config; `None` leaves it unchanged.
     pub async_index_builder: Option<MobileAsyncIndexBuilderConfig>,
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::VelesError;
+
+    #[test]
+    fn core_error_carries_canonical_code_and_recoverability() {
+        // A core Storage error (VELES-006) is recoverable.
+        let err: VelesError = velesdb_core::Error::Storage("disk full".to_string()).into();
+        let VelesError::Database {
+            code, recoverable, ..
+        } = err
+        else {
+            panic!("expected VelesError::Database, got {err:?}");
+        };
+        assert_eq!(code, "VELES-006");
+        assert!(recoverable);
+
+        // An IndexCorrupted error (VELES-008) is non-recoverable.
+        let err: VelesError = velesdb_core::Error::IndexCorrupted("bad header".to_string()).into();
+        let VelesError::Database {
+            code, recoverable, ..
+        } = err
+        else {
+            panic!("expected VelesError::Database, got {err:?}");
+        };
+        assert_eq!(code, "VELES-008");
+        assert!(!recoverable);
+    }
+
+    #[test]
+    fn binding_level_error_has_no_core_code() {
+        let err = VelesError::database("bad JSON".to_string());
+        let VelesError::Database {
+            code, recoverable, ..
+        } = err
+        else {
+            panic!("expected VelesError::Database, got {err:?}");
+        };
+        assert!(code.is_empty());
+        assert!(recoverable);
+    }
 }

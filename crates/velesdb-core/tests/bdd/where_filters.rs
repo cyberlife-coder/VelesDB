@@ -364,14 +364,11 @@ fn test_where_vector_near_with_filter() {
     )
     .expect("test: NEAR + filter should succeed");
 
-    assert!(
-        results.len() <= 2,
-        "LIMIT 2 should cap at 2 results, got {}",
+    assert_eq!(
+        results.len(),
+        2,
+        "NEAR + category filter must return exactly 2 electronics items, got {}",
         results.len()
-    );
-    assert!(
-        !results.is_empty(),
-        "Should return at least 1 electronics result"
     );
 
     for r in &results {
@@ -392,9 +389,9 @@ fn test_where_vector_near_with_filter() {
 
     let ids = result_ids(&results);
     let electronics: HashSet<u64> = [1, 2].into_iter().collect();
-    assert!(
-        ids.is_subset(&electronics),
-        "NEAR + filter results should be within electronics ids, got {:?}",
+    assert_eq!(
+        ids, electronics,
+        "NEAR + filter must return both electronics ids (1, 2), got {:?}",
         ids
     );
 }

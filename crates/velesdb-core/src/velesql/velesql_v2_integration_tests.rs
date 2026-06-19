@@ -40,6 +40,21 @@ fn test_having_with_or_operator() {
         "Should parse HAVING with OR: {:?}",
         result.err()
     );
+
+    let query = result.expect("HAVING with OR should parse");
+    let having = query.select.having.expect("HAVING should be present");
+    assert_eq!(
+        having.conditions.len(),
+        2,
+        "OR should produce 2 having conditions, got {:?}",
+        having.conditions
+    );
+    assert_eq!(
+        having.operators,
+        vec![crate::velesql::LogicalOp::Or],
+        "OR arm must be captured as LogicalOp::Or, got {:?}",
+        having.operators
+    );
 }
 
 #[test]
@@ -81,6 +96,22 @@ fn test_orderby_multiple_columns() {
         "Should parse multi-column ORDER BY: {:?}",
         result.err()
     );
+
+    let query = result.expect("multi-column ORDER BY should parse");
+    let order_by = query
+        .select
+        .order_by
+        .as_ref()
+        .expect("ORDER BY should be present");
+    assert_eq!(
+        order_by.len(),
+        3,
+        "Expected 3 ORDER BY expressions, got {}",
+        order_by.len()
+    );
+    assert!(!order_by[0].descending, "category should default ASC");
+    assert!(order_by[1].descending, "price should be DESC");
+    assert!(!order_by[2].descending, "name should be ASC");
 }
 
 // Note: ORDER BY aggregate requires grammar extension (future work)
@@ -123,17 +154,6 @@ fn test_join_with_alias() {
     assert!(
         result.is_ok(),
         "Should parse JOIN with alias: {:?}",
-        result.err()
-    );
-}
-
-#[test]
-fn test_multiple_joins() {
-    let sql = "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id JOIN products ON orders.product_id = products.id";
-    let result = Parser::parse(sql);
-    assert!(
-        result.is_ok(),
-        "Should parse multiple JOINs: {:?}",
         result.err()
     );
 }

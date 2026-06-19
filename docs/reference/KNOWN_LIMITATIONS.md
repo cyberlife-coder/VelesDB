@@ -260,29 +260,64 @@ numeric point ID.
 
 ## Tooling / test coverage
 
-### 13. VelesQL conformance for WASM/CLI is parser-only
+### 13. VelesQL executor conformance (core, WASM, CLI)
 
-**Status**: open (coverage gap, narrowed 2026-06-14). Sources: `crates/velesdb-wasm/tests/velesql_parser_conformance.rs`, `crates/velesdb-cli/tests/velesql_parser_conformance.rs` (parser fixture); `crates/velesdb-server/tests/velesql_conformance_tests.rs` (server executor contract fixture); `crates/velesdb-core/tests/velesql_executor_conformance.rs` + `conformance/velesql_executor_cases.json` (core executor result fixture).
+**Status**: resolved (2026-06-20). Sources: `crates/velesdb-core/tests/velesql_executor_conformance.rs`, `crates/velesdb-cli/tests/velesql_executor_conformance.rs`, `crates/velesdb-wasm/src/velesql_executor_conformance_tests.rs` + the shared `conformance/velesql_executor_cases.json`; parser layer `crates/velesdb-{wasm,cli}/tests/velesql_parser_conformance.rs`; server REST-contract layer `crates/velesdb-server/tests/velesql_conformance_tests.rs`.
 
 The shared VelesQL conformance fixtures come in layers. The
 `velesql_parser_cases.json` layer (does this query parse?) is checked across
-**core, WASM, and CLI** — all three run the same `Parser::parse` assertions.
-The `velesql_contract_cases.json` layer (does this query *execute* and return
-the contracted result/error shape over REST?) is exercised at the **server**
-runtime. The `velesql_executor_cases.json` layer (does this query produce the
-exact result **rows / counts / ordering**?) now exists for the **core**
-executor, with goldens derived from `velesdb-core` as the source of truth.
+**core, WASM, and CLI**. The `velesql_contract_cases.json` layer (does this
+query *execute* and return the contracted result/error shape over REST?) is
+exercised at the **server** runtime. The `velesql_executor_cases.json` layer
+(does this query produce the exact result **rows / counts / ordering**?) is now
+run by all three executors — **core, CLI, and WASM** — with goldens derived from
+`velesdb-core` as the source of truth.
 
-**What remains open**: **WASM** and **CLI** executor result parity is **not yet
-fixture-checked** against those executor goldens. The WASM and CLI surfaces
-share the same `velesdb-core` executor, so a query that parses identically
-across the three is expected to execute identically — but for WASM/CLI that
-expectation is not yet pinned by a per-runtime executor fixture run.
+**Architecture note**: the three executors are *not* the same code path. The CLI
+delegates SELECT execution to `velesdb-core` (`Database::execute_query`), so it
+inherits core behaviour directly. WASM runs its **own** independent SELECT/ORDER
+BY pipeline (`velesql_select` / `velesql_orderby`), sharing only the AST/parser
+with core — which is exactly why a per-runtime executor golden has real value:
+it pins the WASM result set against core rather than assuming shared-executor
+equivalence.
 
-**User impact**: a result-shape divergence specific to the WASM or CLI surface
-(e.g. a serialization or projection difference) would not be caught by the
-conformance suite until executor-level fixtures cover those runtimes. Parser
-acceptance — which features parse — is fully covered for all three.
+**Coverage** (`conformance/velesql_executor_cases.json`, cases X001–X010 plus
+the B001 regression lock): scalar string-equality and integer-range WHERE
+filters, conjunctive (AND) filters, single- and multi-column ORDER BY in mixed
+directions, the deterministic ascending-id tie-break, and bounded top-k
+(`ORDER BY ... LIMIT k`, both ASC and DESC). A result-shape divergence specific
+to the WASM or CLI surface now fails CI rather than going unnoticed.
+
+---
+
+## Bindings / SDK architecture
+
+### 14. `MobileGraphStore` is a deliberate in-memory graph fork
+
+**Status**: documented (by design). Source: `crates/velesdb-mobile/src/graph.rs` (`MobileGraphStore`); core counterparts `crates/velesdb-core/src/collection/graph/edge.rs` (`EdgeStore`) and `crates/velesdb-core/src/collection/graph_collection.rs` (`GraphCollection`). Decision recorded in `docs/planning/CORE_PARITY_REMEDIATION.md` (T4).
+
+The mobile SDK's `MobileGraphStore` is a self-contained, purely in-memory graph
+engine (node/edge maps plus BFS/DFS/degree/label helpers) rather than a delegate
+to `velesdb-core`'s graph runtime. This is an intentional design decision, **not**
+an accidental rewrite: mobile needs a RAM-only graph with no filesystem path,
+WAL, or on-disk payloads, whereas core's `GraphCollection` persists nodes as JSON
+payloads and requires a path. Core today exposes an in-memory `EdgeStore` (edges
++ traversal) but has **no in-memory `GraphNode`-object store** (label + properties
++ vector CRUD), so the node half of `MobileGraphStore` has no core API to delegate
+to.
+
+What *is* single-sourced is the record types: `MobileGraphStore` is pinned to
+core via `From<velesdb_core::GraphNode / GraphEdge / TraversalResult>` conversions
+(`graph.rs`), so any field drift in the core types is a compile error in mobile —
+the type-shadowing risk (the in-scope half of T4) is closed.
+
+**User impact**: none functionally — the mobile graph API behaves as documented.
+The architectural caveat is that mobile graph semantics are maintained
+independently of core's graph engine. Full delegation is gated on core first
+shipping an in-memory `GraphStore` API (node + edge CRUD, label query, cascade
+remove, BFS/DFS); until then, copying core's graph engine into the MIT-licensed
+mobile crate would violate the Core License boundary, so the fork is the correct
+boundary-preserving choice.
 
 ---
 
@@ -290,7 +325,7 @@ acceptance — which features parse — is fully covered for all three.
 
 Each entry states:
 
-- **Status**: open / partial / documented / pre-existing.
+- **Status**: open / partial / documented / resolved / pre-existing.
 - **Source**: the file or line referenced in code.
 - **User impact**: what an operator or integrator actually sees.
 - **Resolution path or workaround** where applicable.

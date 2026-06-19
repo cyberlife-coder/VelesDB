@@ -121,6 +121,23 @@ fn test_search_with_ef_and_quality_return_valid_top_k() {
 
     assert_eq!(ef_path.len(), 10, "search_with_ef returns k=10");
     assert_eq!(quality_path.len(), 10, "search_with_quality returns k=10");
+
+    for window in ef_path.windows(2) {
+        assert!(
+            window[0].score >= window[1].score,
+            "search_with_ef results must be sorted desc on cosine: {} < {}",
+            window[0].score,
+            window[1].score
+        );
+    }
+    for window in quality_path.windows(2) {
+        assert!(
+            window[0].score >= window[1].score,
+            "search_with_quality results must be sorted desc on cosine: {} < {}",
+            window[0].score,
+            window[1].score
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

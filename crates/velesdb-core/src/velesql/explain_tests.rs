@@ -98,7 +98,7 @@ fn test_plan_with_filter() {
 
     // Assert
     assert_eq!(plan.index_used, Some(IndexType::Hnsw));
-    assert_ne!(plan.filter_strategy, FilterStrategy::None);
+    assert_eq!(plan.filter_strategy, FilterStrategy::PostFilter);
 }
 
 #[test]
@@ -271,58 +271,6 @@ fn test_plan_display_impl() {
 // =========================================================================
 // IndexLookup tests (US-003)
 // =========================================================================
-
-#[test]
-fn test_index_lookup_plan_creation() {
-    // Arrange
-    let plan = IndexLookupPlan {
-        label: "Person".to_string(),
-        property: "email".to_string(),
-        value: "alice@example.com".to_string(),
-    };
-
-    // Assert
-    assert_eq!(plan.label, "Person");
-    assert_eq!(plan.property, "email");
-    assert_eq!(plan.value, "alice@example.com");
-}
-
-#[test]
-fn test_index_lookup_node_cost() {
-    // IndexLookup should have very low cost (O(1))
-    let plan = QueryPlan {
-        root: PlanNode::IndexLookup(IndexLookupPlan {
-            label: "Person".to_string(),
-            property: "email".to_string(),
-            value: "test@test.com".to_string(),
-        }),
-        estimated_cost_ms: 0.0001,
-        index_used: Some(IndexType::Property),
-        filter_strategy: FilterStrategy::None,
-        with_options: Vec::new(),
-        let_bindings: Vec::new(),
-        fusion_info: None,
-        cache_hit: None,
-        plan_reuse_count: None,
-    };
-
-    // IndexLookup cost should be much lower than TableScan
-    let scan_plan = QueryPlan {
-        root: PlanNode::TableScan(TableScanPlan {
-            collection: "Person".to_string(),
-        }),
-        estimated_cost_ms: 1.0,
-        index_used: None,
-        filter_strategy: FilterStrategy::None,
-        with_options: Vec::new(),
-        let_bindings: Vec::new(),
-        fusion_info: None,
-        cache_hit: None,
-        plan_reuse_count: None,
-    };
-
-    assert!(plan.estimated_cost_ms < scan_plan.estimated_cost_ms);
-}
 
 #[test]
 fn test_index_lookup_render_tree() {
@@ -525,41 +473,6 @@ fn test_match_traversal_cost_with_depth() {
     let deep_cost = QueryPlan::node_cost(&PlanNode::MatchTraversal(deep));
 
     assert!(deep_cost > shallow_cost);
-}
-
-#[test]
-fn test_explain_output_struct() {
-    let plan = QueryPlan {
-        root: PlanNode::TableScan(TableScanPlan {
-            collection: "test".to_string(),
-        }),
-        estimated_cost_ms: 1.0,
-        index_used: None,
-        filter_strategy: FilterStrategy::None,
-        with_options: Vec::new(),
-        let_bindings: Vec::new(),
-        fusion_info: None,
-        cache_hit: None,
-        plan_reuse_count: None,
-    };
-
-    let output = ExplainOutput {
-        plan,
-        actual_stats: Some(ActualStats {
-            actual_rows: 100,
-            actual_time_ms: 0.5,
-            loops: 1,
-            nodes_visited: 50,
-            edges_traversed: 25,
-        }),
-        node_stats: vec![],
-        cost_factors: None,
-        calibration_source: None,
-        feedback_calibration: None,
-    };
-
-    assert_eq!(output.actual_stats.as_ref().unwrap().actual_rows, 100);
-    assert!(output.actual_stats.as_ref().unwrap().actual_time_ms < 1.0);
 }
 
 #[test]

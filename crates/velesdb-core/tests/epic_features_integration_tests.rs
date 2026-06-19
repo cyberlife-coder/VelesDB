@@ -562,16 +562,27 @@ mod cross_epic_integration {
         let mut query = create_mock_embedding(1, 128);
         normalize(&mut query);
         let vector_results = collection.search(&query, 3).expect("Vector search failed");
-        assert!(!vector_results.is_empty());
+        // Vector: query embedding equals ID 1's normalized embedding -> exact match ranks first
+        assert_eq!(vector_results.len(), 3, "k=3 over 5 docs");
+        assert_eq!(
+            vector_results[0].point.id, 1,
+            "exact-match embedding must rank first"
+        );
 
-        // Text search
+        // Text search: only doc 1's payload contains 'programming' (no stemming; doc 2 has none)
         let text_results = collection.text_search("programming", 10).unwrap();
-        assert!(!text_results.is_empty(), "Text search should find results");
+        assert_eq!(text_results.len(), 1, "only ID 1 contains 'programming'");
+        assert_eq!(text_results[0].point.id, 1);
 
-        // Hybrid search
+        // Hybrid: 5 docs total, fused RRF top-k; vector exact-match dominates
         let hybrid_results = collection
             .hybrid_search(&query, "programming", 5, Some(0.5))
             .expect("Hybrid search failed");
-        assert!(!hybrid_results.is_empty());
+        assert_eq!(
+            hybrid_results.len(),
+            5,
+            "all 5 docs surface via vector branch"
+        );
+        assert_eq!(hybrid_results[0].point.id, 1, "ID 1 wins both branches");
     }
 }

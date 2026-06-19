@@ -13,8 +13,10 @@ use crate::simd_native::{
 #[test]
 fn test_prefetch_vector_compiles_x86() {
     let vector: Vec<f32> = (0..768).map(|i| i as f32).collect();
+    let before = vector.clone();
     prefetch_vector(&vector);
-    // No crash = success
+    // Prefetch is a read-only cache hint: it must never modify its input.
+    assert_eq!(vector, before);
 }
 
 #[test]
@@ -26,30 +28,23 @@ fn test_prefetch_vector_empty() {
 
 #[test]
 fn test_prefetch_vector_null_safe() {
-    // Prefetch should handle edge cases gracefully
+    // Smallest non-empty (< 1 cache line) input must not panic/UB and must not
+    // mutate the borrowed slice.
     let small_vector: Vec<f32> = vec![1.0, 2.0, 3.0];
     prefetch_vector(&small_vector);
+    assert_eq!(small_vector, vec![1.0, 2.0, 3.0]);
 }
 
 #[test]
 fn test_prefetch_multi_cache_line_384d() {
     // 384D = 1536 bytes = 24 cache lines
     let vector: Vec<f32> = (0..384).map(|i| i as f32).collect();
+    let before = vector.clone();
     prefetch_vector_multi_cache_line(&vector);
-}
-
-#[test]
-fn test_prefetch_multi_cache_line_768d() {
-    // 768D = 3072 bytes = 48 cache lines
-    let vector: Vec<f32> = (0..768).map(|i| i as f32).collect();
-    prefetch_vector_multi_cache_line(&vector);
-}
-
-#[test]
-fn test_prefetch_multi_cache_line_1536d() {
-    // 1536D = 6144 bytes = 96 cache lines
-    let vector: Vec<f32> = (0..1536).map(|i| i as f32).collect();
-    prefetch_vector_multi_cache_line(&vector);
+    // Prefetch is a read-only hint: it must never mutate the input.
+    assert_eq!(vector, before);
+    // Companion distance math for this dimension (1536 bytes / 64 = 24, clamped).
+    assert_eq!(calculate_prefetch_distance(vector.len()), 16);
 }
 
 #[test]

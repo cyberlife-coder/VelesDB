@@ -65,7 +65,21 @@ fn test_multi_row_insert_with_vectors() {
     .expect("multi-row INSERT with vectors should succeed");
 
     let results = execute_sql(&db, "SELECT * FROM docs LIMIT 10").expect("SELECT");
-    assert_eq!(results.len(), 2);
+    assert_eq!(results.len(), 2, "Both rows should exist");
+
+    let by_id: HashMap<u64, &velesdb_core::SearchResult> =
+        results.iter().map(|r| (r.point.id, r)).collect();
+
+    let r10 = by_id.get(&10).expect("id=10 should exist");
+    let r11 = by_id.get(&11).expect("id=11 should exist");
+
+    // payload tag round-trips per row (guards swapped rows / dropped payload)
+    assert_eq!(super::helpers::payload_str(r10, "tag"), Some("alpha"));
+    assert_eq!(super::helpers::payload_str(r11, "tag"), Some("beta"));
+
+    // stored vectors round-trip (storage path is non-normalizing)
+    assert_eq!(r10.point.vector, vec![0.5, 0.5, 0.0, 0.0]);
+    assert_eq!(r11.point.vector, vec![0.0, 0.5, 0.5, 0.0]);
 }
 
 #[test]
@@ -184,6 +198,28 @@ fn test_upsert_multi_row_mixed() {
 
     let results = execute_sql(&db, "SELECT * FROM docs LIMIT 10").expect("SELECT");
     assert_eq!(results.len(), 3, "Should have 3 unique points");
+
+    let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+    assert!(
+        ids.contains(&1) && ids.contains(&2) && ids.contains(&3),
+        "ids 1,2,3 must all exist"
+    );
+
+    let point1 = results
+        .iter()
+        .find(|r| r.point.id == 1)
+        .expect("id=1 should exist");
+    let title1 = point1
+        .point
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("title"))
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        title1,
+        Some("Updated1"),
+        "id=1 must be UPDATED in place, not left as 'Original'"
+    );
 }
 
 // =========================================================================
@@ -219,6 +255,20 @@ fn test_search_with_quality_fast() {
     )
     .expect("WITH quality='fast' should succeed");
     assert_eq!(results.len(), 5);
+
+    // The 5 hits must be 5 distinct ids drawn from the 20 inserted points,
+    // returned in non-increasing score order. `len()==5` alone would not
+    // catch duplicate ids or an unsorted result set from a broken NEAR path.
+    let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids.len(), 5, "all 5 NEAR hits must be distinct ids");
+    assert!(
+        results.iter().all(|r| r.point.id < 20),
+        "every hit must be one of the 20 inserted points"
+    );
+    assert!(
+        results.windows(2).all(|w| w[0].score >= w[1].score),
+        "NEAR results must be sorted by non-increasing score"
+    );
 }
 
 #[test]
@@ -247,6 +297,20 @@ fn test_search_with_quality_accurate() {
     )
     .expect("WITH quality='accurate' should succeed");
     assert_eq!(results.len(), 5);
+
+    // The 5 hits must be 5 distinct ids drawn from the 20 inserted points,
+    // returned in non-increasing score order. `len()==5` alone would not
+    // catch duplicate ids or an unsorted result set from a broken NEAR path.
+    let ids: std::collections::HashSet<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids.len(), 5, "all 5 NEAR hits must be distinct ids");
+    assert!(
+        results.iter().all(|r| r.point.id < 20),
+        "every hit must be one of the 20 inserted points"
+    );
+    assert!(
+        results.windows(2).all(|w| w[0].score >= w[1].score),
+        "NEAR results must be sorted by non-increasing score"
+    );
 }
 
 // =========================================================================

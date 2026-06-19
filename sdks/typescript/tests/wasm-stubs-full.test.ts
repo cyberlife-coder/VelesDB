@@ -23,6 +23,7 @@ import type {
   CreateIndexOptions,
   EpisodicEvent,
   GraphCollectionConfig,
+  MultiQuerySearchOptions,
   PqTrainOptions,
   ProceduralPattern,
   SemanticEntry,
@@ -205,6 +206,18 @@ const stubCases: StubCase[] = [
     call: () => wasmStubs.wasmMatchProceduralPatterns('c', [0.1], 5),
     feature: /Agent memory/,
   },
+
+  // Binary bulk / multi-query (previously missing from stubCases)
+  {
+    name: 'wasmUpsertBatchRaw',
+    call: () => wasmStubs.wasmUpsertBatchRaw('c', [] as VectorDocument[]),
+    feature: /Binary bulk upsert \(upsertBatchRaw\)/,
+  },
+  {
+    name: 'wasmMultiQuerySearchIds',
+    call: () => wasmStubs.wasmMultiQuerySearchIds('c', [[0.1]], {} as MultiQuerySearchOptions),
+    feature: /multiQuerySearchIds/,
+  },
 ];
 
 describe.each(stubCases)('wasm-stubs: $name', ({ call, feature }) => {
@@ -224,7 +237,15 @@ describe.each(stubCases)('wasm-stubs: $name', ({ call, feature }) => {
 });
 
 describe('wasm-stubs — cardinality guard', () => {
-  it('covers all 30 stub exports (index + graph + explain + sparse + agent)', () => {
-    expect(stubCases).toHaveLength(30);
+  it('every exported stub has a test case (drift guard)', () => {
+    const exported = Object.keys(wasmStubs)
+      .filter((k) => typeof (wasmStubs as Record<string, unknown>)[k] === 'function')
+      .sort();
+    // Strip parenthetical disambiguation suffix used on wasmQueryExplain rows
+    const cased = stubCases
+      .map((c) => c.name.replace(/ \(.*\)$/, ''))
+      .filter((n, i, a) => a.indexOf(n) === i)
+      .sort();
+    expect(cased).toEqual(exported);
   });
 });

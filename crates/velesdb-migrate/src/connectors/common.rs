@@ -248,23 +248,28 @@ pub fn extract_payload_from_object(
     excluded_fields: &[&str],
     included_fields: &[String],
 ) -> HashMap<String, Value> {
-    let mut payload = HashMap::new();
+    let Value::Object(map) = source else {
+        return HashMap::new();
+    };
+    extract_payload_from_hashmap(map, excluded_fields, included_fields)
+}
 
-    if let Value::Object(map) = source {
-        for (key, val) in map {
-            // Skip excluded fields
-            if excluded_fields.iter().any(|f| f == key) {
-                continue;
-            }
-            // If included_fields is specified, only include those
-            if !included_fields.is_empty() && !included_fields.contains(key) {
-                continue;
-            }
-            payload.insert(key.clone(), val.clone());
-        }
-    }
-
-    payload
+/// Extracts payload fields from a pre-parsed `HashMap<String, Value>`.
+///
+/// Identical filtering semantics to [`extract_payload_from_object`] but
+/// operates directly on a `HashMap`, avoiding a round-trip through
+/// `serde_json::Value::Object` when the caller already has the map form.
+pub fn extract_payload_from_hashmap<'a>(
+    source: impl IntoIterator<Item = (&'a String, &'a Value)>,
+    excluded_fields: &[&str],
+    included_fields: &[String],
+) -> HashMap<String, Value> {
+    source
+        .into_iter()
+        .filter(|(key, _)| !excluded_fields.contains(&key.as_str()))
+        .filter(|(key, _)| included_fields.is_empty() || included_fields.contains(key))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
 }
 
 /// Detects the JSON type as a string for schema detection.

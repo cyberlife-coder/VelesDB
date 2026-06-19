@@ -25,6 +25,38 @@ use std::str::FromStr;
 /// slice stays exhaustive so adding a variant without updating it fails CI.
 pub const DISTANCE_METRIC_NAMES: &[&str] = &["cosine", "euclidean", "dot", "hamming", "jaccard"];
 
+/// Canonical serde `type` tags of every [`Condition`](crate::filter::Condition)
+/// variant, in declaration order.
+///
+/// Single source of truth for the filter condition-type vocabulary exported to
+/// downstream crates and bindings (the integrations' filter conversion and the
+/// MIT-side security guard) so they never re-derive the tag spelling as literals
+/// and drift when a variant is added. A unit test in `crate::filter` asserts the
+/// slice round-trips against the actual serde representation so adding a variant
+/// without updating it fails CI.
+pub const CONDITION_TYPE_NAMES: &[&str] = &[
+    "eq",
+    "neq",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "in",
+    "contains",
+    "is_null",
+    "is_not_null",
+    "and",
+    "or",
+    "not",
+    "like",
+    "ilike",
+    "array_contains",
+    "array_contains_any",
+    "array_contains_all",
+    "geo_distance",
+    "geo_bbox",
+];
+
 /// Distance metric for vector similarity calculations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]

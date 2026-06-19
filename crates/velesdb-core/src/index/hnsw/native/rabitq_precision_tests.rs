@@ -143,7 +143,10 @@ fn test_rabitq_precision_insert_after_training() {
 
     let query: Vec<f32> = (0..32).map(|j| (75 * 32 + j) as f32).collect();
     let results = hnsw.search_with_config(&query, 5, 50, &binary_path_config());
-    assert!(!results.is_empty());
+    assert_eq!(
+        results[0].0, 75,
+        "top-1 must be node 75 (post-training insert whose vector exactly matches the query) — a misaligned store slot would surface the wrong node"
+    );
 }
 
 // =========================================================================

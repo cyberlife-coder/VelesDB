@@ -18,6 +18,21 @@ fn test_simd_level_detection() {
     let level = TrigramSimdLevel::detect();
     // Should always return a valid level
     assert!(!level.name().is_empty());
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw") {
+            assert_eq!(level, TrigramSimdLevel::Avx512);
+        } else if std::is_x86_feature_detected!("avx2") {
+            assert_eq!(level, TrigramSimdLevel::Avx2);
+        } else {
+            assert_eq!(level, TrigramSimdLevel::Scalar);
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    assert_eq!(level, TrigramSimdLevel::Neon);
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    assert_eq!(level, TrigramSimdLevel::Scalar);
 }
 
 #[test]
@@ -52,8 +67,15 @@ fn test_extract_trigrams_simd_consistency() {
 fn test_extract_trigrams_simd_long_text() {
     let text = "a".repeat(1000);
     let trigrams = extract_trigrams_simd(&text);
-    // Should handle long texts without panic
-    assert!(!trigrams.is_empty());
+    // Long uniform text exercises the multi-chunk SIMD loop + tail; result must
+    // dedup to exactly the body trigram plus the four boundary trigrams.
+    assert!(trigrams.contains(b"aaa"));
+    assert_eq!(
+        trigrams,
+        HashSet::from([*b"  a", *b" aa", *b"aaa", *b"aa ", *b"a  "])
+    );
+    // SIMD dispatch must agree with the scalar reference on long input.
+    assert_eq!(trigrams, extract_trigrams_scalar(&text));
 }
 
 #[test]
@@ -127,14 +149,21 @@ fn test_extract_trigrams_scalar_basic() {
 fn test_extract_trigrams_scalar_short() {
     let trigrams = extract_trigrams_scalar("a");
     // With padding "  a  ", we get trigrams: "  a", " a ", "a  "
-    assert!(!trigrams.is_empty());
+    assert_eq!(trigrams.len(), 3);
+    assert!(trigrams.contains(b"  a"));
+    assert!(trigrams.contains(b" a "));
+    assert!(trigrams.contains(b"a  "));
 }
 
 #[test]
 fn test_extract_trigrams_scalar_two_chars() {
     let trigrams = extract_trigrams_scalar("ab");
     // With padding "  ab  ", we get trigrams
-    assert!(!trigrams.is_empty());
+    assert_eq!(trigrams.len(), 4);
+    assert!(trigrams.contains(b"  a")); // leading padding
+    assert!(trigrams.contains(b" ab"));
+    assert!(trigrams.contains(b"ab "));
+    assert!(trigrams.contains(b"b  ")); // trailing padding
 }
 
 #[test]
@@ -193,14 +222,25 @@ fn test_count_matching_trigrams_large_query() {
 
 #[test]
 fn test_extract_trigrams_unicode() {
-    let trigrams = extract_trigrams_simd("héllo");
-    assert!(!trigrams.is_empty());
+    let simd = extract_trigrams_simd("héllo");
+    let scalar = extract_trigrams_scalar("héllo");
+    assert!(!simd.is_empty());
+    // 'é' is 0xC3 0xA9 — trigrams straddle the multi-byte boundary at byte level.
+    assert_eq!(
+        simd, scalar,
+        "SIMD and scalar must agree on multi-byte UTF-8"
+    );
+    // Spot-check a boundary-crossing trigram: 'h' + first byte of 'é' + second byte of 'é'.
+    assert!(scalar.contains(&[b'h', 0xC3, 0xA9]));
 }
 
 #[test]
 fn test_extract_trigrams_spaces() {
-    let trigrams = extract_trigrams_simd("a b c");
-    assert!(!trigrams.is_empty());
+    let simd = extract_trigrams_simd("a b c");
+    assert_eq!(simd, extract_trigrams_scalar("a b c"));
+    // Spaces inside the input must coexist with the space padding
+    assert!(simd.contains(b"a b"));
+    assert!(simd.contains(b"b c"));
 }
 
 #[test]

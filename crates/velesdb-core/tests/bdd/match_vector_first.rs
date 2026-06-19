@@ -169,6 +169,10 @@ fn test_match_vector_first_basic() {
         ids.contains(&1),
         "Node 1 (Physics 101) should pass both similarity and graph filter, got: {ids:?}"
     );
+    assert!(
+        !ids.contains(&5),
+        "Node 5 (Chemistry Basics) has no CITES edge and must be excluded despite high similarity, got: {ids:?}"
+    );
 }
 
 /// GIVEN the same graph topology
@@ -230,11 +234,29 @@ fn test_match_vector_first_returns_multiple_candidates() {
 
     // Both node 1 (Physics 101) and node 3 (Rust Handbook) have CITES edges.
     // Node 1 has high similarity, node 3 has low similarity, but threshold is >0.0.
-    // At least node 1 should be present.
     let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
     assert!(
         ids.contains(&1),
         "Node 1 (high sim + CITES edge) should appear, got: {ids:?}"
+    );
+    // The load-bearing check: node 3 has very low similarity (~0.05) so it ONLY
+    // survives at threshold > 0.0; it must still be admitted because it has a
+    // CITES edge. This proves the graph-validation path runs on a node the vector
+    // filter does not carry on similarity alone (defeats a passthrough mutant).
+    assert!(
+        ids.contains(&3),
+        "Node 3 (low sim + CITES edge) should appear at threshold >0.0, got: {ids:?}"
+    );
+    // Node 5 has high similarity but no CITES edge: graph filter must exclude it.
+    assert!(
+        !ids.contains(&5),
+        "Node 5 has no CITES edge and must be excluded, got: {ids:?}"
+    );
+    // Docstring claims results are ordered by score; verify it (exercises sort_by_score).
+    let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
+    assert!(
+        scores.windows(2).all(|w| w[0] >= w[1]),
+        "Results must be ordered by descending score, got: {scores:?}"
     );
 }
 

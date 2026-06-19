@@ -44,8 +44,23 @@ fn test_execute_query_str_parses_and_executes() {
     let params = HashMap::new();
 
     let result = col.execute_query_str("SELECT * FROM col LIMIT 5;", &params);
-    assert!(result.is_ok(), "execute_query_str should succeed");
-    assert!(result.unwrap().len() <= 5);
+    let results = result.expect("execute_query_str should succeed");
+    assert_eq!(
+        results.len(),
+        5,
+        "10-point collection with LIMIT 5 must return exactly 5"
+    );
+    // Spot-check: every returned point carries the fixture's idx field in 0..10
+    for r in &results {
+        let idx = r
+            .point
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("idx"))
+            .and_then(serde_json::Value::as_u64)
+            .expect("each result must have an idx payload field");
+        assert!(idx < 10, "idx {idx} out of fixture range 0..10");
+    }
 }
 
 #[test]
@@ -54,6 +69,7 @@ fn test_execute_query_str_caches_repeated_calls() {
     let params = HashMap::new();
     let sql = "SELECT * FROM col LIMIT 3;";
 
+    let stats_before = col.query_cache.stats();
     // First call — parsed and cached
     let r1 = col
         .execute_query_str(sql, &params)
@@ -62,7 +78,22 @@ fn test_execute_query_str_caches_repeated_calls() {
     let r2 = col
         .execute_query_str(sql, &params)
         .expect("second call failed");
-    assert_eq!(r1.len(), r2.len(), "Cached and fresh results should match");
+    assert_eq!(
+        r1.len(),
+        r2.len(),
+        "repeated queries should return the same count"
+    );
+    // The second identical call must be a cache hit, not a re-parse:
+    assert_eq!(
+        col.query_cache.len(),
+        1,
+        "identical SQL must yield a single cache entry"
+    );
+    let hits = col.query_cache.stats().hits - stats_before.hits;
+    assert!(
+        hits >= 1,
+        "second identical call should register a cache hit, got {hits}"
+    );
 }
 
 #[test]
@@ -167,20 +198,6 @@ fn test_e2e_guardrails_circuit_breaker_state() {
     );
 }
 
-// ─── MATCH multi-pattern E2E ─────────────────────────────────────────────────
-
-#[test]
-fn test_e2e_match_single_pattern_no_panic() {
-    let (_dir, col) = make_collection();
-    let params = HashMap::new();
-
-    // Single pattern MATCH — exercises multi-pattern loop with 1 pattern
-    let sql = "MATCH (a) RETURN a LIMIT 5;";
-    let query = crate::velesql::Parser::parse(sql).expect("parse failed");
-    // Should not panic — may return empty or results depending on graph data
-    let _ = col.execute_query(&query, &params);
-}
-
 // ─── Multi-vector field E2E ───────────────────────────────────────────────────
 
 #[test]
@@ -214,22 +231,34 @@ fn test_e2e_similarity_named_payload_vector_field() {
         "SELECT * FROM col WHERE similarity(alt_vec, $v) > 0.0 LIMIT 10;",
         &params,
     );
-    // Should not return an "Only 'vector' field is supported" error anymore
-    match &result {
-        Err(e) => {
-            let msg = e.to_string();
-            assert!(
-                !msg.contains("Only 'vector' field is supported"),
-                "Multi-vector restriction should be removed: {msg}"
-            );
-        }
-        Ok(results) => {
-            // All results should have score >= 0.0
-            for r in results {
-                assert!(r.score >= 0.0, "Negative score: {}", r.score);
-            }
-        }
-    }
+    let results =
+        result.expect("named-field similarity should succeed (multi-vector restriction removed)");
+    assert_eq!(
+        results.len(),
+        10,
+        "all 10 points should pass the > 0.0 threshold"
+    );
+    // Point 5's alt_vec = [0.5,0.2,0.2,0.2] == query vector → cosine == 1.0.
+    // This proves the score came from the PAYLOAD vector, not the primary vector
+    // [0.5,0.1,0.1,0.1] (which would score < 1.0).
+    let p5 = results
+        .iter()
+        .find(|r| r.point.id == 5)
+        .expect("point 5 must be in results");
+    assert!(
+        (p5.score - 1.0).abs() < 1e-4,
+        "point 5 (alt_vec==query) should score ~1.0, got {}",
+        p5.score
+    );
+    // Sanity: a non-matching point scores strictly below 1.0.
+    let p0 = results
+        .iter()
+        .find(|r| r.point.id == 0)
+        .expect("point 0 must be in results");
+    assert!(
+        p0.score < p5.score,
+        "point 0 must score below the exact match"
+    );
 }
 
 // ─── CBO integration (smoke) ─────────────────────────────────────────────────

@@ -93,6 +93,7 @@ fn get_collection_stats_returns_cached_after_analyze() {
         .expect("get stats")
         .expect("should be Some");
     assert_eq!(cached.total_points, original.total_points);
+    assert_eq!(cached.total_points, 7);
 }
 
 #[test]

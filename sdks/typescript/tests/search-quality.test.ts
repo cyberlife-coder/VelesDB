@@ -179,21 +179,3 @@ describe('searchBatch() forwards per-sub-request quality', () => {
   });
 });
 
-// ============================================================================
-// Scoped limitation: text / hybrid / multi-query do NOT accept quality
-// ============================================================================
-
-describe('textSearch / hybridSearch / multiQuerySearch — quality explicitly not supported', () => {
-  it('textSearch options type does not declare `quality`', () => {
-    // Compile-time check: attempting `{ quality: 'fast' }` below would
-    // be a TypeScript error because the options type is
-    // `{ k?: number; filter?: FilterInput }`. This test documents the
-    // intentional omission — any future widening must update this
-    // test AND the core BM25 search entry points.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const backend: any = {};
-    // No assertion needed — if the type widens, the compile-time
-    // contract in src/filter + src/types changes first.
-    expect(backend).toBeDefined();
-  });
-});

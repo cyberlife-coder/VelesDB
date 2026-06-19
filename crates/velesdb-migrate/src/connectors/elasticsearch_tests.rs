@@ -90,7 +90,10 @@ fn test_elasticsearch_config_with_query() {
     let json =
         r#"{"url":"http://localhost:9200","index":"v","query":{"term":{"status":"active"}}}"#;
     let config: ElasticsearchConfig = serde_json::from_str(json).unwrap();
-    assert!(config.query.is_some());
+    assert_eq!(
+        config.query,
+        Some(serde_json::json!({"term": {"status": "active"}}))
+    );
 }
 
 #[test]

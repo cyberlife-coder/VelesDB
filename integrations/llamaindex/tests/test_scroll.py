@@ -57,11 +57,12 @@ class TestScrollNominal:
     def test_scroll_returns_tuple(self, store_with_nodes):
         # GIVEN a store with 5 nodes
         # WHEN scroll is called with no cursor
-        result = store_with_nodes.scroll(cursor=None, batch_size=100)
+        nodes, cursor = store_with_nodes.scroll(cursor=None, batch_size=100)
 
-        # THEN result is a 2-tuple
-        assert isinstance(result, tuple)
-        assert len(result) == 2
+        # THEN result contains a non-empty list of TextNodes
+        assert isinstance(nodes, list)
+        assert len(nodes) > 0  # store has 5 nodes; a silently-empty batch must fail
+        assert all(isinstance(n, TextNode) for n in nodes)
 
     def test_scroll_first_page_returns_text_nodes(self, store_with_nodes):
         # GIVEN a store with 5 nodes
@@ -147,7 +148,9 @@ class TestScrollOnePageHelper:
             pytest.skip("collection not initialised")
         batch, cursor = _scroll_one_batch(col, None, 100)
         assert isinstance(batch, list)
-        assert cursor is None or isinstance(cursor, int)
+        assert len(batch) == 5  # all 5 seeded points fit in batch_size=100
+        assert all("id" in pt for pt in batch)  # raw point-dict shape
+        assert isinstance(cursor, int)  # non-None: cursor is the last point's id, not exhaustion
 
     def test_cursor_skips_seen_points(self, store_with_nodes):
         col = store_with_nodes._collection

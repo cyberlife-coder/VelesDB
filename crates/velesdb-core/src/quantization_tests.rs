@@ -356,22 +356,11 @@ fn test_recall_accuracy_high_dimension() {
 
 #[test]
 fn test_storage_mode_enum() {
-    // Arrange & Act
-    let full = StorageMode::Full;
-    let sq8 = StorageMode::SQ8;
-    let binary = StorageMode::Binary;
-    let pq = StorageMode::ProductQuantization;
-    let default = StorageMode::default();
-
-    // Assert
-    assert_eq!(full, StorageMode::Full);
-    assert_eq!(sq8, StorageMode::SQ8);
-    assert_eq!(binary, StorageMode::Binary);
-    assert_eq!(pq, StorageMode::ProductQuantization);
-    assert_eq!(default, StorageMode::Full);
-    assert_ne!(full, sq8);
-    assert_ne!(sq8, binary);
-    assert_ne!(binary, pq);
+    // The #[default] attribute on StorageMode drives every collection created
+    // without an explicit storage mode (collection_ops/vector_ops/ddl_executor/
+    // lifecycle_create). It MUST stay on Full so the default path is non-lossy
+    // full-precision f32 — never silently quantized.
+    assert_eq!(StorageMode::default(), StorageMode::Full);
 }
 
 // =========================================================================
@@ -388,10 +377,11 @@ fn test_binary_quantize_simple_vector() {
 
     // Assert
     assert_eq!(binary.dimension(), 4);
-    // Bit pattern: 0, 1, 0, 1 = 0b0101 = 5 (reversed in byte)
-    // Actually stored as: bit 0 = vec[0], bit 1 = vec[1], etc.
-    // -1.0 -> 0, 0.5 -> 1, -0.5 -> 0, 1.0 -> 1
-    // Bits: 0b1010 when read left to right, but stored as 0b0101
+    let bits = binary.get_bits();
+    assert!(!bits[0], "-1.0 (< 0.0) should pack as bit 0");
+    assert!(bits[1], "0.5 (>= 0.0) should pack as bit 1");
+    assert!(!bits[2], "-0.5 (< 0.0) should pack as bit 0");
+    assert!(bits[3], "1.0 (>= 0.0) should pack as bit 1");
     assert_eq!(binary.data.len(), 1); // 4 bits fits in 1 byte
 }
 

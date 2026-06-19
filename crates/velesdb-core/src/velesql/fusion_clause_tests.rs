@@ -127,6 +127,20 @@ fn test_fusion_with_where_clause() {
     );
 
     let query = result.unwrap();
-    assert!(query.select.where_clause.is_some());
-    assert!(query.select.fusion_clause.is_some());
+    let fusion = query
+        .select
+        .fusion_clause
+        .as_ref()
+        .expect("FUSION clause should be present");
+    assert_eq!(fusion.strategy, crate::velesql::FusionStrategyType::Rrf);
+    assert_eq!(fusion.k, Some(60));
+
+    match query.select.where_clause {
+        Some(crate::velesql::Condition::Comparison(c)) => {
+            assert_eq!(c.column, "category");
+            assert_eq!(c.operator, crate::velesql::CompareOp::Eq);
+            assert_eq!(c.value, crate::velesql::Value::String("tech".to_string()));
+        }
+        other => panic!("Expected comparison WHERE clause, got {other:?}"),
+    }
 }

@@ -53,7 +53,7 @@ pub async fn hybrid_sparse_search<R: Runtime>(
             let coll = require_vector_collection(&db, &request.collection)?;
 
             let core_sv = parse_sparse_vector(&request.sparse_vector)?;
-            let strategy = velesdb_core::fusion::FusionStrategy::RRF { k: 60 };
+            let strategy = velesdb_core::fusion::FusionStrategy::rrf_default();
 
             let search_results =
                 coll.hybrid_sparse_search(&request.vector, &core_sv, request.top_k, "", &strategy)?;

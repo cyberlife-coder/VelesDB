@@ -6,10 +6,18 @@ from velesdb_common.security import (
     validate_named_sparse_vector,
     SecurityError,
     validate_text,
+    ALLOWED_CONDITION_TYPES,
     ALLOWED_METRICS,
     ALLOWED_STORAGE_MODES,
     STORAGE_MODE_ALIASES,
 )
+
+_CANONICAL_CONDITION_TYPES = frozenset({
+    "eq", "neq", "gt", "gte", "lt", "lte", "in", "contains",
+    "is_null", "is_not_null", "and", "or", "not", "like", "ilike",
+    "array_contains", "array_contains_any", "array_contains_all",
+    "geo_distance", "geo_bbox",
+})
 
 
 def test_validate_text_rejects_empty_string():
@@ -124,6 +132,28 @@ def test_allowed_storage_modes_equals_binding_exactly():
         raise AssertionError(
             f"ALLOWED_STORAGE_MODES {ALLOWED_STORAGE_MODES!r} "
             f"!= velesdb.STORAGE_MODES {binding!r}"
+        )
+
+
+def test_allowed_condition_types_is_frozenset():
+    assert isinstance(ALLOWED_CONDITION_TYPES, frozenset)
+
+
+def test_allowed_condition_types_exact_set():
+    """ALLOWED_CONDITION_TYPES must match the canonical core vocabulary exactly."""
+    if ALLOWED_CONDITION_TYPES != _CANONICAL_CONDITION_TYPES:
+        raise AssertionError(
+            f"ALLOWED_CONDITION_TYPES mismatch: {ALLOWED_CONDITION_TYPES!r}"
+        )
+
+
+def test_allowed_condition_types_equals_binding_exactly():
+    velesdb = pytest.importorskip("velesdb")
+    binding = frozenset(velesdb.CONDITION_TYPES)
+    if ALLOWED_CONDITION_TYPES != binding:
+        raise AssertionError(
+            f"ALLOWED_CONDITION_TYPES {ALLOWED_CONDITION_TYPES!r} "
+            f"!= velesdb.CONDITION_TYPES {binding!r}"
         )
 
 

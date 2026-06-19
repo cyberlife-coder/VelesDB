@@ -244,6 +244,13 @@ pub struct DestinationConfig {
 }
 
 /// Distance metric for `VelesDB`.
+///
+/// This enum is the migrate TOML config schema. Its accepted spellings and
+/// aliases are backward-compatibility surface and must not change. The mapping
+/// to the core type is authoritative-from-core: each variant exposes its
+/// core-canonical name via [`DistanceMetric::core_name`] and the [`From`] impl
+/// resolves it through [`velesdb_core::DistanceMetric::parse_alias`] (the
+/// single source of truth) instead of a hand-maintained match.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DistanceMetric {
@@ -261,7 +268,40 @@ pub enum DistanceMetric {
     Jaccard,
 }
 
+impl DistanceMetric {
+    /// Core-canonical name accepted by
+    /// [`velesdb_core::DistanceMetric::parse_alias`].
+    #[must_use]
+    pub const fn core_name(self) -> &'static str {
+        match self {
+            Self::Cosine => "cosine",
+            Self::Euclidean => "euclidean",
+            Self::Dot => "dot",
+            Self::Hamming => "hamming",
+            Self::Jaccard => "jaccard",
+        }
+    }
+}
+
+impl From<DistanceMetric> for velesdb_core::DistanceMetric {
+    fn from(m: DistanceMetric) -> Self {
+        // Authoritative-from-core: every `core_name` is a known core alias, so
+        // this is infallible. The `Cosine` fallback keeps the conversion total
+        // without an `unwrap`; a `core_name` regression is caught by the unit
+        // tests (`test_distance_metric_aliases_deserialize_and_map_to_core`).
+        velesdb_core::DistanceMetric::parse_alias(m.core_name())
+            .unwrap_or(velesdb_core::DistanceMetric::Cosine)
+    }
+}
+
 /// Storage mode for `VelesDB`.
+///
+/// This enum is the migrate TOML config schema. Its accepted spellings and
+/// aliases are backward-compatibility surface and must not change. The mapping
+/// to the core type is authoritative-from-core: each variant exposes its
+/// core-canonical name via [`StorageMode::core_name`] and the [`From`] impl
+/// resolves it through [`velesdb_core::StorageMode::parse_alias`] (the single
+/// source of truth) instead of a hand-maintained match.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StorageMode {
@@ -278,6 +318,32 @@ pub enum StorageMode {
     /// `RaBitQ`: 1-bit with rotation + scalar correction. 32x compression.
     #[serde(alias = "rabitq")]
     RaBitQ,
+}
+
+impl StorageMode {
+    /// Core-canonical name accepted by
+    /// [`velesdb_core::StorageMode::parse_alias`].
+    #[must_use]
+    pub const fn core_name(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::SQ8 => "sq8",
+            Self::Binary => "binary",
+            Self::Pq => "pq",
+            Self::RaBitQ => "rabitq",
+        }
+    }
+}
+
+impl From<StorageMode> for velesdb_core::StorageMode {
+    fn from(m: StorageMode) -> Self {
+        // Authoritative-from-core: every `core_name` is a known core alias, so
+        // this is infallible. The `Full` fallback keeps the conversion total
+        // without an `unwrap`; a `core_name` regression is caught by the unit
+        // tests (`test_storage_mode_aliases_deserialize_and_map_to_core`).
+        velesdb_core::StorageMode::parse_alias(m.core_name())
+            .unwrap_or(velesdb_core::StorageMode::Full)
+    }
 }
 
 /// Migration options.
@@ -501,5 +567,94 @@ options:
         let config: MigrationConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.destination.dimension, 768);
         assert_eq!(config.options.batch_size, 500);
+    }
+
+    /// Backward-compatibility guard: every TOML spelling/alias accepted before
+    /// the core-mapping was routed through `velesdb_core` must still
+    /// deserialize AND map to the same core variant.
+    #[test]
+    fn test_distance_metric_aliases_deserialize_and_map_to_core() {
+        let cases: &[(&str, DistanceMetric, velesdb_core::DistanceMetric)] = &[
+            (
+                "cosine",
+                DistanceMetric::Cosine,
+                velesdb_core::DistanceMetric::Cosine,
+            ),
+            (
+                "euclidean",
+                DistanceMetric::Euclidean,
+                velesdb_core::DistanceMetric::Euclidean,
+            ),
+            (
+                "dot",
+                DistanceMetric::Dot,
+                velesdb_core::DistanceMetric::DotProduct,
+            ),
+            (
+                "DotProduct",
+                DistanceMetric::Dot,
+                velesdb_core::DistanceMetric::DotProduct,
+            ),
+            (
+                "dot_product",
+                DistanceMetric::Dot,
+                velesdb_core::DistanceMetric::DotProduct,
+            ),
+            (
+                "hamming",
+                DistanceMetric::Hamming,
+                velesdb_core::DistanceMetric::Hamming,
+            ),
+            (
+                "jaccard",
+                DistanceMetric::Jaccard,
+                velesdb_core::DistanceMetric::Jaccard,
+            ),
+        ];
+        for (spelling, expected_cfg, expected_core) in cases {
+            let parsed: DistanceMetric = serde_json::from_value(serde_json::json!(spelling))
+                .unwrap_or_else(|e| panic!("alias '{spelling}' must still deserialize: {e}"));
+            assert!(
+                matches!(
+                    (parsed, *expected_cfg),
+                    (DistanceMetric::Cosine, DistanceMetric::Cosine)
+                        | (DistanceMetric::Euclidean, DistanceMetric::Euclidean)
+                        | (DistanceMetric::Dot, DistanceMetric::Dot)
+                        | (DistanceMetric::Hamming, DistanceMetric::Hamming)
+                        | (DistanceMetric::Jaccard, DistanceMetric::Jaccard)
+                ),
+                "alias '{spelling}' deserialized to the wrong config variant"
+            );
+            assert_eq!(
+                velesdb_core::DistanceMetric::from(parsed),
+                *expected_core,
+                "alias '{spelling}' mapped to the wrong core metric"
+            );
+        }
+    }
+
+    /// Backward-compatibility guard for storage-mode TOML spellings/aliases.
+    #[test]
+    fn test_storage_mode_aliases_deserialize_and_map_to_core() {
+        let cases: &[(&str, velesdb_core::StorageMode)] = &[
+            ("full", velesdb_core::StorageMode::Full),
+            ("sq8", velesdb_core::StorageMode::SQ8),
+            ("binary", velesdb_core::StorageMode::Binary),
+            ("pq", velesdb_core::StorageMode::ProductQuantization),
+            (
+                "product_quantization",
+                velesdb_core::StorageMode::ProductQuantization,
+            ),
+            ("rabitq", velesdb_core::StorageMode::RaBitQ),
+        ];
+        for (spelling, expected_core) in cases {
+            let parsed: StorageMode = serde_json::from_value(serde_json::json!(spelling))
+                .unwrap_or_else(|e| panic!("alias '{spelling}' must still deserialize: {e}"));
+            assert_eq!(
+                velesdb_core::StorageMode::from(parsed),
+                *expected_core,
+                "alias '{spelling}' mapped to the wrong core storage mode"
+            );
+        }
     }
 }

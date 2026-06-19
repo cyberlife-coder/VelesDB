@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-06-16 (v3.0.1)
+Last updated: 2026-06-20 (v3.1.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -106,16 +106,22 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 | Server REST contract | `conformance/velesql_contract_cases.json` | `crates/velesdb-server/tests/velesql_conformance_tests.rs` |
 | TypeScript SDK contract mapping | `conformance/velesql_contract_cases.json` | `sdks/typescript/tests/velesql-contract-fixtures.test.ts` |
 | Core executor (rows/counts/ordering) | `conformance/velesql_executor_cases.json` | `crates/velesdb-core/tests/velesql_executor_conformance.rs` |
+| CLI executor (rows/counts/ordering) | `conformance/velesql_executor_cases.json` | `crates/velesdb-cli/tests/velesql_executor_conformance.rs` |
+| WASM executor (rows/counts/ordering) | `conformance/velesql_executor_cases.json` | `crates/velesdb-wasm/src/velesql_executor_conformance_tests.rs` |
 | Core parser | `conformance/velesql_parser_cases.json` | `crates/velesdb-core/tests/velesql_parser_conformance.rs` |
 | CLI parser | `conformance/velesql_parser_cases.json` | `crates/velesdb-cli/tests/velesql_parser_conformance.rs` |
 | WASM parser | `conformance/velesql_parser_cases.json` | `crates/velesdb-wasm/tests/velesql_parser_conformance.rs` |
 
-The executor fixture (added 2026-06-14) asserts the exact result set (ids,
-count, ordering) the core executor produces for a fixed dataset, so a future
-WASM/CLI executor divergence fails CI rather than going unnoticed. WASM and CLI
-executor parity is **not yet** fixture-checked against these goldens — extending
-the executor net to those two runtimes is the open follow-up tracked in
-[KNOWN_LIMITATIONS #13](./KNOWN_LIMITATIONS.md#13-velesql-conformance-for-wasmcli-is-parser-only).
+The executor fixture (added 2026-06-14, extended 2026-06-20) asserts the exact
+result set (ids, count, ordering) each executor produces for a fixed dataset. As
+of 2026-06-20 the **WASM and CLI executors are fixture-checked against the same
+goldens too** — the CLI drives the real binary end-to-end and WASM runs its own
+SELECT/ORDER BY pipeline — so a result-shape divergence on those surfaces fails
+CI rather than going unnoticed. Coverage includes scalar WHERE filters, single-
+and multi-column ORDER BY, the ascending-id tie-break, and bounded top-k
+(`ORDER BY ... LIMIT k`); see
+[KNOWN_LIMITATIONS #13](./KNOWN_LIMITATIONS.md#13-velesql-executor-conformance-core-wasm-cli)
+(resolved).
 
 ## Enum Propagation Matrix
 
@@ -229,14 +235,14 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
 ## Recently Landed (2026-06-14)
 
 - **WASM fusion now delegates 4/5 strategies to core.** `average`/`maximum`/`weighted`/`rrf` map onto `velesdb_core::FusionStrategy::fuse` (ranking identical to core, pinned by an equivalence test); `relative_score`/`rsf` stays WASM-local by design because its N-branch equal-weight semantics differ from core's two-branch dense+sparse weighted sum. See the RSF/Weighted note above.
-- **Executor-level conformance now exists for core.** `conformance/velesql_executor_cases.json` + `crates/velesdb-core/tests/velesql_executor_conformance.rs` assert result rows/counts/ordering (not just that a query parses). Extending the same goldens to the WASM and CLI executors is the remaining step (action item 2).
+- **Executor-level conformance now exists for core.** `conformance/velesql_executor_cases.json` + `crates/velesdb-core/tests/velesql_executor_conformance.rs` assert result rows/counts/ordering (not just that a query parses). Extended to the WASM and CLI executors on 2026-06-20 (action item 2 — now done).
 - **Scalar `ORDER BY` + `LIMIT` correctness bug fixed.** A scalar (non-`similarity()`) `ORDER BY <col> ... LIMIT k` previously truncated to `k` in storage order *before* sorting; it now fetches the full matching set so the sort precedes truncation, restoring the [KNOWN_LIMITATIONS #9](./KNOWN_LIMITATIONS.md#9-bounded-query-result-materialization) bounded==unbounded guarantee. The `similarity()`-ordered HNSW fast path was untouched, so recall is unaffected. (Surfaced by the new executor conformance net above.)
 - **Point-ID hashing single-sourced for Haystack.** The Haystack `DocumentStore` now imports the canonical `velesdb_common.ids.stable_hash_id` instead of a bit-identical forked copy (behaviour-preserving; removes a re-implemented hash from an MIT package). The intentional remaining divergence — `velesdb-migrate`'s distinct `stable_point_id` — is documented in [KNOWN_LIMITATIONS #12](./KNOWN_LIMITATIONS.md#12-string--u64-point-id-hashing-differs-across-components).
 
 ## Remaining Gaps and Action Items
 
 1. Add explicit server-side end-to-end assertions for the REST error shape (`code/hint/details`) beyond parser conformance. (The CLI has no HTTP layer — it executes against embedded core — so the REST error-shape contract belongs to `velesdb-server`.)
-2. Extend the executor-level conformance net (now established for **core** via `conformance/velesql_executor_cases.json`) to the **WASM** and **CLI** runtimes so a result-shape divergence on those surfaces fails CI. (Parser conformance already covers all three; see [KNOWN_LIMITATIONS #13](./KNOWN_LIMITATIONS.md#13-velesql-conformance-for-wasmcli-is-parser-only).)
+2. ✅ **Done (2026-06-20).** The executor-level conformance net now covers **core, WASM, and CLI** — all three run `conformance/velesql_executor_cases.json`, including scalar WHERE filters, single- and multi-column ORDER BY, the ascending-id tie-break, and bounded top-k. See [KNOWN_LIMITATIONS #13](./KNOWN_LIMITATIONS.md#13-velesql-executor-conformance-core-wasm-cli) (resolved).
 3. Keep docs, fixtures, and examples synchronized on every contract version change.
 4. Promote RaBitQ from experimental to stable once the API is finalized.
 5. Surface RSF/Weighted fusion in Haystack (already exposed in LangChain and

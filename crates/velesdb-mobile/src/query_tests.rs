@@ -283,7 +283,7 @@ fn test_execute_query_invalid_sql_returns_error() {
     assert!(result.is_err(), "invalid SQL should return an error");
     let err = result.expect_err("test: error expected");
     match err {
-        VelesError::Database { message } => {
+        VelesError::Database { message, .. } => {
             assert!(
                 message.contains("parse error"),
                 "error should mention parse error, got: {message}"
@@ -353,9 +353,16 @@ fn test_train_pq_still_works_after_execute_query() {
         k: 4,
         opq: false,
     };
-    // PQ training on 1 point will likely fail (insufficient data),
-    // but the important thing is it reaches the training path without panic.
-    let _result = db.train_pq("vecs".to_string(), config);
+    // PQ training on 1 point fails (k=4 centroids > 1 vector). Assert the
+    // mobile layer reaches the core training path and wraps the error.
+    let err = db
+        .train_pq("vecs".to_string(), config)
+        .expect_err("PQ training on 1 point with k=4 must fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("PQ training failed"),
+        "expected mobile-wrapped training error, got: {msg}"
+    );
 }
 
 // =========================================================================

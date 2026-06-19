@@ -600,11 +600,21 @@ fn test_regression_match_single_node_return_bare_alias() {
         "single-node MATCH should return results"
     );
 
-    // At least one result should have projected properties.
-    let has_projected = results.iter().any(|r| !r.projected.is_empty());
+    // Both nodes are returned (full-scan); collect the bare-alias projected
+    // n.name values and require both deterministic names. This pins the
+    // alias-prefixed key (proving project_bare_alias ran on the single-node
+    // path) while remaining safe against HashSet iteration order.
+    let names: Vec<_> = results
+        .iter()
+        .filter_map(|r| r.projected.get("n.name"))
+        .collect();
     assert!(
-        has_projected,
-        "RETURN n on single-node MATCH must populate projected for at least one result"
+        names.contains(&&serde_json::json!("Alice")),
+        "RETURN n single-node must project n.name=Alice, got {names:?}"
+    );
+    assert!(
+        names.contains(&&serde_json::json!("Bob")),
+        "RETURN n single-node must project n.name=Bob, got {names:?}"
     );
 }
 
@@ -683,13 +693,22 @@ fn test_regression_where_clause_large_uint64() {
     let select_sql = format!("SELECT * FROM wtest WHERE id = {large_id} LIMIT 10");
     let results = execute_sql(&db, &select_sql);
 
-    // THEN: the query parses and executes without error
-    // (results may vary depending on filter implementation for id field,
-    //  but the parse must not fail)
-    assert!(
-        results.is_ok(),
-        "WHERE with large uint64 must not cause parse error"
-    );
+    // THEN: parse + execute must not error on a >i64::MAX literal (issue #486).
+    let rows = results.expect("WHERE with large uint64 must not cause parse error");
+    // Every returned row must be well-formed (no silent id corruption / no panic).
+    for r in &rows {
+        assert!(
+            (r.score - 1.0).abs() < f32::EPSILON,
+            "metadata match score must be 1.0"
+        );
+    }
+    // NOTE: the vector-collection WHERE-id scan path (collect_filtered_scan /
+    // scan_ids_with_filter) does NOT inject `id` into the payload before
+    // filtering, so id-equality currently returns 0 rows here (unlike the
+    // Database point_matches_filter path). Asserting rows.len()==1 FAILS today.
+    // TODO(EPIC-XXX): unify id-injection across scan paths, then tighten to:
+    //   assert_eq!(rows.len(), 1);
+    //   assert_eq!(rows[0].point.id, 10_000_000_000_000_000_000u64);
 }
 
 // ============================================================================
@@ -839,9 +858,10 @@ fn test_search_without_filter_not_degraded() {
     )
     .expect("test: unfiltered search should succeed");
 
-    assert!(
-        !results.is_empty(),
-        "unfiltered search must return results even with indexes present"
+    assert_eq!(
+        results.len(),
+        10,
+        "unfiltered NEAR search with LIMIT 10 over 50 indexed points must return exactly 10 results (not degraded to fewer)"
     );
 }
 

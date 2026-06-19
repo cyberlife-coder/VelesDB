@@ -73,6 +73,11 @@ fn test_open_after_compaction_with_torn_idx_does_not_brick() {
     // treated as absent. The fixed write path (staged rename, no rewrite
     // after the compaction commit) can no longer produce this footprint.
     let storage = MmapStorage::new(dir.path(), dim).expect("reopen must not brick open()");
+    assert_eq!(
+        storage.len(),
+        0,
+        "0-byte idx treated as absent + durably-empty WAL: recovered storage must be empty (no ghost entries) yet openable"
+    );
     drop(storage);
 }
 

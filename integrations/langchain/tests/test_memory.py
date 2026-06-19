@@ -15,7 +15,10 @@ class TestVelesDBChatMemory:
         """Test: VelesDBChatMemory can be imported."""
         from langchain_velesdb import VelesDBChatMemory
 
-        assert VelesDBChatMemory is not None
+        assert VelesDBChatMemory is not None  # guards __init__.py's `= None` ImportError fallback
+        assert callable(VelesDBChatMemory)
+        assert hasattr(VelesDBChatMemory, "save_context")
+        assert hasattr(VelesDBChatMemory, "load_memory_variables")
 
     def test_chat_memory_initialization(self):
         """Test: VelesDBChatMemory can be initialized."""
@@ -26,6 +29,8 @@ class TestVelesDBChatMemory:
             assert memory is not None
             assert memory.path == tmpdir
             assert memory.dimension == 4
+            assert memory._db is not None
+            assert memory._memory is not None
 
     def test_chat_memory_save_and_load(self):
         """Test: VelesDBChatMemory can save and load context."""
@@ -204,9 +209,13 @@ class TestVelesDBSemanticMemory:
 
     def test_semantic_memory_import(self):
         """Test: VelesDBSemanticMemory can be imported."""
+        import inspect
         from langchain_velesdb import VelesDBSemanticMemory
 
-        assert VelesDBSemanticMemory is not None
+        # On ImportError the package binds this name to None (see __init__.py
+        # optional-import block); assert the real class loaded instead.
+        assert inspect.isclass(VelesDBSemanticMemory)
+        assert VelesDBSemanticMemory.__name__ == "VelesDBSemanticMemory"
 
     def test_semantic_memory_initialization(self):
         """Test: VelesDBSemanticMemory can be initialized with mock embedding."""
@@ -222,6 +231,8 @@ class TestVelesDBSemanticMemory:
             )
             assert memory is not None
             assert memory.dimension == 4
+            assert memory._db is not None
+            assert memory._memory is not None
 
     def test_semantic_memory_add_fact(self):
         """Test: VelesDBSemanticMemory can add facts."""
@@ -229,7 +240,9 @@ class TestVelesDBSemanticMemory:
 
         class MockEmbedding:
             def embed_query(self, text: str):
-                return [0.1, 0.2, 0.3, 0.4]
+                if "Paris" in text or "capital" in text:
+                    return [1.0, 0.0, 0.0, 0.0]
+                return [0.0, 1.0, 0.0, 0.0]
 
         with tempfile.TemporaryDirectory() as tmpdir:
             memory = VelesDBSemanticMemory(
@@ -238,6 +251,11 @@ class TestVelesDBSemanticMemory:
 
             fact_id = memory.add_fact("Paris is the capital of France")
             assert fact_id > 0
+            results = memory.query("What is the capital of France?", k=1)
+            assert len(results) == 1
+            top = results[0]
+            assert top["id"] == fact_id
+            assert "Paris" in top["content"]
 
     def test_semantic_memory_query(self):
         """Test: VelesDBSemanticMemory can query facts."""
@@ -262,6 +280,9 @@ class TestVelesDBSemanticMemory:
             results = memory.query("What is the capital of France?", k=1)
 
             assert len(results) >= 1
+            # Deterministic mock: the query embeds to [1,0,0,0] (same as the stored
+            # fact), so the top result must be the Paris fact.
+            assert "Paris" in results[0]["content"]
 
     def test_semantic_memory_add_facts_batch(self):
         """Test: VelesDBSemanticMemory can add multiple facts."""
@@ -285,7 +306,10 @@ class TestVelesDBSemanticMemory:
             ids = memory.add_facts(facts)
 
             assert len(ids) == 3
-            assert all(id > 0 for id in ids)
+            # add_facts delegates to add_fact, which increments _fact_counter per
+            # call; distinct IDs prove each fact got its own slot (a collision would
+            # silently overwrite in semantic.store).
+            assert len(set(ids)) == 3
 
 
 class TestVelesDBProceduralMemoryClear:

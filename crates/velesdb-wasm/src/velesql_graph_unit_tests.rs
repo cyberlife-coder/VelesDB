@@ -21,6 +21,28 @@ fn parse_match(sql: &str) -> Query {
     Parser::parse(sql).expect("test: parse")
 }
 
+/// Seeds the default 'graph' with node 1 (Alice:Person) -[HAS]-> node 2
+/// (Bob:Profile), used by the @collection enrichment MATCH tests.
+fn seed_person_profile_graph(db: &mut DatabaseInner) {
+    for (id, name, labels) in [(1u64, "Alice", vec!["Person"]), (2, "Bob", vec!["Profile"])] {
+        let stmt = InsertNodeStatement {
+            collection: "graph".to_string(),
+            node_id: id,
+            payload: serde_json::json!({"name": name, "labels": labels}),
+        };
+        insert_node(db, &stmt).expect("test: insert node");
+    }
+    let edge = InsertEdgeStatement {
+        collection: "graph".to_string(),
+        edge_id: None,
+        source: 1,
+        target: 2,
+        label: "HAS".to_string(),
+        properties: Vec::new(),
+    };
+    insert_edge(db, &edge, &Params::new()).expect("test: insert edge");
+}
+
 #[test]
 fn test_insert_node_creates_entry() {
     let mut db = DatabaseInner::new();
@@ -55,7 +77,8 @@ fn test_delete_edge_removes_entry() {
     insert_edge(&mut db, &ins, &Params::new()).expect("test: insert");
     let del = DeleteEdgeStatement {
         collection: "kg".to_string(),
-        edge_id: 1,
+        // Auto-assigned edge id = core's canonical (source, target, label) hash.
+        edge_id: velesdb_core::hash_edge_id(1, 2, "KNOWS"),
     };
     let n = delete_edge(&mut db, &del).expect("test: delete");
     assert_eq!(n, 1);
@@ -129,23 +152,7 @@ fn test_match_at_collection_enriches_referenced_node() {
     }
 
     // Default WASM graph 'graph': node 1 (Person) -[HAS]-> node 2 (Profile).
-    for (id, name, labels) in [(1u64, "Alice", vec!["Person"]), (2, "Bob", vec!["Profile"])] {
-        let stmt = InsertNodeStatement {
-            collection: "graph".to_string(),
-            node_id: id,
-            payload: serde_json::json!({"name": name, "labels": labels}),
-        };
-        insert_node(&mut db, &stmt).expect("test: insert node");
-    }
-    let edge = InsertEdgeStatement {
-        collection: "graph".to_string(),
-        edge_id: None,
-        source: 1,
-        target: 2,
-        label: "HAS".to_string(),
-        properties: Vec::new(),
-    };
-    insert_edge(&mut db, &edge, &Params::new()).expect("test: insert edge");
+    seed_person_profile_graph(&mut db);
 
     // The second node references 'profiles' for cross-collection enrichment.
     let q = parse_match("MATCH (a:Person)-[:HAS]->(b:Profile@profiles) RETURN a, b LIMIT 10");
@@ -171,23 +178,7 @@ fn test_match_at_collection_missing_collection_is_skipped() {
     // An @collection pointing at a non-existent vector collection must not
     // fail the MATCH — the graph results are returned un-enriched.
     let mut db = DatabaseInner::new();
-    for (id, name, labels) in [(1u64, "Alice", vec!["Person"]), (2, "Bob", vec!["Profile"])] {
-        let stmt = InsertNodeStatement {
-            collection: "graph".to_string(),
-            node_id: id,
-            payload: serde_json::json!({"name": name, "labels": labels}),
-        };
-        insert_node(&mut db, &stmt).expect("test: insert node");
-    }
-    let edge = InsertEdgeStatement {
-        collection: "graph".to_string(),
-        edge_id: None,
-        source: 1,
-        target: 2,
-        label: "HAS".to_string(),
-        properties: Vec::new(),
-    };
-    insert_edge(&mut db, &edge, &Params::new()).expect("test: insert edge");
+    seed_person_profile_graph(&mut db);
 
     let q = parse_match("MATCH (a:Person)-[:HAS]->(b:Profile@nope) RETURN a, b LIMIT 10");
     let rows = execute_match(&mut db, &q, &Params::new()).expect("test: match still succeeds");

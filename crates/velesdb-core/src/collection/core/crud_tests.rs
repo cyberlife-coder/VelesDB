@@ -1012,6 +1012,27 @@ fn test_phase2_fast_path_correctness_no_secondaries() {
     assert_eq!(coll.len(), 100, "all points should be stored");
     let results = coll.search(&[0.5, 0.5, 0.5, 0.5], 10).unwrap();
     assert_eq!(results.len(), 10, "search should return k results");
+
+    // Stored vectors must survive the Phase-2 fast path byte-for-byte.
+    #[allow(clippy::cast_precision_loss)]
+    let expected =
+        |id: u64| -> Vec<f32> { (0..4).map(|d| (id as f32 + d as f32) * 0.01).collect() };
+    for id in [0u64, 50, 99] {
+        let got = coll.get(&[id]);
+        let p = got[0].as_ref().expect("stored point must be retrievable");
+        assert_eq!(
+            p.vector,
+            expected(id),
+            "fast path must store the exact vector for id {id}"
+        );
+    }
+
+    // Search must reference real stored ids (Cosine nearest is the high-id
+    // end here, not id=50, so do not over-fit to a specific top result).
+    assert!(
+        results.iter().all(|r| r.point.id < 100),
+        "search results must be valid stored ids"
+    );
 }
 
 /// Issue #425: Phase 2 must NOT skip when points carry sparse vectors.
@@ -1181,6 +1202,30 @@ fn test_parallel_sq8_quantization_correctness() {
             p.id
         );
     }
+
+    // Content correctness: the parallel result must equal a fresh sequential
+    // quantization of the same input (catches all-zero / all-128 / mis-scaled
+    // regressions). QuantizedVector has no PartialEq, so compare fields.
+    for (idx, id) in [(0usize, 0u64), (49usize, 49u64)] {
+        let expected = crate::quantization::QuantizedVector::from_f32(&points[idx].vector);
+        let actual = cache.get(&id).expect("entry must exist");
+        assert_eq!(
+            actual.data, expected.data,
+            "SQ8 data bytes must match sequential quantization for id={id}"
+        );
+        assert!(
+            actual.data.iter().any(|&b| b != 0),
+            "SQ8 data must not be all-zero for id={id}"
+        );
+        assert!(
+            (actual.min - expected.min).abs() < f32::EPSILON,
+            "min mismatch for id={id}"
+        );
+        assert!(
+            (actual.max - expected.max).abs() < f32::EPSILON,
+            "max mismatch for id={id}"
+        );
+    }
 }
 
 /// Issue #486: Parallel Binary quantization produces correct cache entries.
@@ -1218,6 +1263,31 @@ fn test_parallel_binary_quantization_correctness() {
             p.id
         );
     }
+
+    // Bit values must match the deterministic encoding (value >= 0.0 -> bit set),
+    // and must be paired with the correct id by the parallel path. Cover the
+    // sign-flip boundary at dim 0: id<25 -> [-,+,-,+]=0x0A, id>=25 -> [+,+,-,+]=0x0B.
+    for p in &points {
+        let expected = crate::quantization::BinaryQuantizedVector::from_f32(&p.vector);
+        let cached = cache.get(&p.id).unwrap();
+        assert_eq!(
+            cached.data, expected.data,
+            "binary bits for id={} must match canonical encoding (got {:?}, want {:?})",
+            p.id, cached.data, expected.data
+        );
+    }
+    // Spot-check the absolute encoding so an all-zero/flipped-bit regression in
+    // from_f32 itself is also caught (not just self-consistency):
+    assert_eq!(
+        cache.get(&0).unwrap().data,
+        vec![0x0A],
+        "id=0 vec [-2.5,0.2,-0.3,0.4] -> 0b1010"
+    );
+    assert_eq!(
+        cache.get(&49).unwrap().data,
+        vec![0x0B],
+        "id=49 vec [+,0.2,-0.3,0.4] -> 0b1011"
+    );
 }
 
 /// Issue #486: Multi-batch upsert produces searchable results without
@@ -1261,6 +1331,19 @@ fn test_multi_batch_upsert_search_correctness_without_searching_mode() {
             r.point.id
         );
     }
+
+    // Ranking correctness: id=50 is the exact match for query [0.5,...]
+    // (point vector = [id/100, 0.1, 0.1, 0.1]); the true top-10 are ids 46..=55.
+    assert!(
+        (45..=55).contains(&results[0].point.id),
+        "nearest neighbor should be near id=50, got id={}",
+        results[0].point.id
+    );
+    assert!(
+        results[0].score > 0.99,
+        "top score should be near 1.0 for the exact match, got {}",
+        results[0].score
+    );
 }
 
 /// Issue #486: upsert_bulk multi-batch also works without set_searching_mode().
@@ -1295,6 +1378,19 @@ fn test_upsert_bulk_multi_batch_search_correctness() {
         results.len(),
         10,
         "search should return 10 results after multi-batch bulk insert"
+    );
+
+    // Ranking correctness: query [0.5,...] is an exact match for id=150
+    // (point vector = [id/300, 0.1, 0.2, 0.3]); the true top-10 are ids 146..=155.
+    assert!(
+        (140..=160).contains(&results[0].point.id),
+        "nearest id to query [0.5,...] should be ~150 (id/300.0==0.5), got {}",
+        results[0].point.id
+    );
+    assert!(
+        results[0].score > 0.99,
+        "exact-match query should score near 1.0 under Cosine, got {}",
+        results[0].score
     );
 }
 

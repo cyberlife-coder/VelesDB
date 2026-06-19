@@ -4,17 +4,6 @@ use crate::velesql::ast::Value;
 use crate::velesql::Parser;
 
 #[test]
-fn test_parse_simple_scalar_subquery() {
-    let query = "SELECT * FROM products WHERE price < (SELECT AVG(price) FROM products)";
-    let result = Parser::parse(query);
-    assert!(
-        result.is_ok(),
-        "Failed to parse scalar subquery: {:?}",
-        result.err()
-    );
-}
-
-#[test]
 fn test_parse_subquery_with_where() {
     let query =
         "SELECT * FROM orders WHERE total > (SELECT AVG(total) FROM orders WHERE status = 'paid')";
@@ -121,22 +110,4 @@ fn test_correlated_subquery_outer_reference() {
         "Failed to parse subquery with different table: {:?}",
         result.err()
     );
-}
-
-#[test]
-fn test_subquery_correlations_field() {
-    // Test that the correlations field exists and is accessible
-    let query = "SELECT * FROM products WHERE price < (SELECT AVG(price) FROM products)";
-    let result = Parser::parse(query).expect("Parse failed");
-
-    if let Some(crate::velesql::Condition::Comparison(cmp)) = result.select.where_clause.as_ref() {
-        if let Value::Subquery(sub) = &cmp.value {
-            // Access correlations field - should compile and work
-            let _correlation_count = sub.correlations.len();
-            assert!(
-                sub.correlations.is_empty() || !sub.correlations.is_empty(),
-                "Correlations field should be accessible"
-            );
-        }
-    }
 }

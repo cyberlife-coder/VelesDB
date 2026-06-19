@@ -240,7 +240,15 @@ describe('RestBackend', () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         'http://localhost:8080/collections/test/points',
-        expect.objectContaining({ method: 'POST' })
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            points: [
+              { id: 1, vector: [1.0, 0.0] },
+              { id: 2, vector: [0.0, 1.0] },
+            ],
+          }),
+        })
       );
     });
 

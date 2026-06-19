@@ -20,8 +20,9 @@ Example:
 """
 
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
-import hashlib
 import logging
+
+from velesdb_common.ids import stable_hash_id
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,12 @@ if TYPE_CHECKING:
 
 
 def _generate_id(name: str, entity_type: str) -> int:
-    """Generate a deterministic ID from entity name and type."""
-    hash_input = f"{entity_type}:{name}".encode("utf-8")
-    return int(hashlib.sha256(hash_input).hexdigest()[:15], 16)
+    """Generate a deterministic ID from entity name and type.
+
+    Delegates to the canonical :func:`velesdb_common.ids.stable_hash_id` so all
+    VelesDB integrations derive the same string->id mapping (no per-package hash).
+    """
+    return stable_hash_id(f"{entity_type}:{name}")
 
 
 def _open_native_graph(vector_store: Any, collection_name: str) -> Optional[Any]:

@@ -14,9 +14,12 @@
 //!
 //! # Case coverage
 //!
-//! All five `cases` (X001–X005) are runnable by the WASM executor (scalar
-//! WHERE filter + ORDER BY on a payload column, no LIMIT-before-sort path) and
-//! are asserted against the golden ids.
+//! All ten `cases` (X001–X010) are runnable by the WASM executor (scalar WHERE
+//! filter, single- and multi-column ORDER BY, the ascending-id tie-break, and
+//! bounded top-k) and are asserted against the golden ids. WASM runs its OWN
+//! SELECT/ORDER BY pipeline (`velesql_select`/`velesql_orderby`), independent of
+//! the core executor, so these goldens pin it against the `velesdb-core` result
+//! set rather than assuming shared-executor equivalence.
 //!
 //! # known_bugs (B001)
 //!
@@ -133,7 +136,7 @@ fn assert_cases(db: &mut DatabaseInner, cases: &[Case]) {
     }
 }
 
-/// All golden `cases` (X001–X005) must reproduce the core result set exactly.
+/// All golden `cases` (X001–X010) must reproduce the core result set exactly.
 #[test]
 fn test_wasm_velesql_executor_conformance_fixture_cases() {
     let fixture = load_fixture();

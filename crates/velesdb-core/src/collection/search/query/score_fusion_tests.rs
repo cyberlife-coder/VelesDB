@@ -27,7 +27,7 @@ fn test_score_breakdown_from_vector() {
 
 #[test]
 fn test_score_breakdown_builder() {
-    let breakdown = ScoreBreakdown::new()
+    let mut breakdown = ScoreBreakdown::new()
         .with_vector(0.9)
         .with_graph(0.8)
         .with_metadata_boost(1.2);
@@ -35,6 +35,10 @@ fn test_score_breakdown_builder() {
     assert_eq!(breakdown.vector_similarity, Some(0.9));
     assert_eq!(breakdown.graph_distance, Some(0.8));
     assert_eq!(breakdown.metadata_boost, Some(1.2));
+
+    // Average base = (0.9 + 0.8)/2 = 0.85, times metadata_boost 1.2 = 1.02.
+    breakdown.compute_final(&ScoreFusionMethod::Average);
+    assert!((breakdown.final_score - 1.02).abs() < 0.001);
 }
 
 #[test]
@@ -127,7 +131,11 @@ fn test_scored_result_with_breakdown() {
 
     let result = ScoredResult::with_breakdown(1, bd);
     assert_eq!(result.id, 1);
-    assert!(result.score_breakdown.vector_similarity.is_some());
+    assert_eq!(result.score_breakdown.vector_similarity, Some(0.9));
+    assert_eq!(result.score_breakdown.graph_distance, Some(0.8));
+    // with_breakdown must propagate final_score into the top-level score field
+    assert!((result.score - 0.85).abs() < 0.001);
+    assert!((result.score_breakdown.final_score - 0.85).abs() < 0.001);
 }
 
 #[test]

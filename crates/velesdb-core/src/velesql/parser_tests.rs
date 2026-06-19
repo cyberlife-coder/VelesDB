@@ -243,14 +243,17 @@ fn test_parse_not_in_condition() {
 #[test]
 fn test_parse_in_column_named_not_is_not_negated() {
     // Column named "not" with regular IN — must NOT be a false positive for NOT IN.
-    // Grammar: where_column greedily matches "not" as identifier, then "IN" follows.
-    let result = Parser::parse("SELECT * FROM docs WHERE not IN (1, 2)");
-    // If the grammar allows this, verify negated is false. If it fails to parse
-    // (because NOT is consumed as a keyword), that's also acceptable.
-    if let Ok(query) = result {
-        if let Some(Condition::In(c)) = query.select.where_clause {
+    // Grammar: primary_expr tries not_expr before in_expr, so the PEG backtracks
+    // and where_column matches "not" as an identifier; negated must stay false.
+    let query = Parser::parse("SELECT * FROM docs WHERE not IN (1, 2)")
+        .expect("column named 'not' with IN should parse");
+    match query.select.where_clause {
+        Some(Condition::In(c)) => {
+            assert_eq!(c.column, "not");
+            assert_eq!(c.values.len(), 2);
             assert!(!c.negated, "column named 'not' with IN must not be negated");
         }
+        other => panic!("expected an IN condition, got {other:?}"),
     }
 }
 
@@ -459,9 +462,15 @@ fn test_parse_case_insensitive_boolean_values() {
     let q1 = Parser::parse("SELECT * FROM t WHERE active = true").unwrap();
     let q2 = Parser::parse("SELECT * FROM t WHERE active = TRUE").unwrap();
     let q3 = Parser::parse("SELECT * FROM t WHERE active = True").unwrap();
-    assert!(q1.select.where_clause.is_some());
-    assert!(q2.select.where_clause.is_some());
-    assert!(q3.select.where_clause.is_some());
+    for q in [q1, q2, q3] {
+        match q.select.where_clause {
+            Some(Condition::Comparison(c)) => {
+                assert_eq!(c.column, "active");
+                assert_eq!(c.value, Value::Boolean(true));
+            }
+            other => panic!("expected boolean Comparison, got {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -469,9 +478,16 @@ fn test_parse_case_insensitive_null_value() {
     let q1 = Parser::parse("SELECT * FROM t WHERE x = null").unwrap();
     let q2 = Parser::parse("SELECT * FROM t WHERE x = NULL").unwrap();
     let q3 = Parser::parse("SELECT * FROM t WHERE x = Null").unwrap();
-    assert!(q1.select.where_clause.is_some());
-    assert!(q2.select.where_clause.is_some());
-    assert!(q3.select.where_clause.is_some());
+    for q in [q1, q2, q3] {
+        match q.select.where_clause {
+            Some(Condition::Comparison(c)) => {
+                assert_eq!(c.column, "x");
+                assert_eq!(c.operator, CompareOp::Eq);
+                assert_eq!(c.value, Value::Null);
+            }
+            other => panic!("expected null Comparison, got {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -479,9 +495,17 @@ fn test_parse_case_insensitive_similarity() {
     let q1 = Parser::parse("SELECT * FROM t WHERE similarity(vec, $v) > 0.8").unwrap();
     let q2 = Parser::parse("SELECT * FROM t WHERE SIMILARITY(vec, $v) > 0.8").unwrap();
     let q3 = Parser::parse("SELECT * FROM t WHERE Similarity(vec, $v) > 0.8").unwrap();
-    assert!(q1.select.where_clause.is_some());
-    assert!(q2.select.where_clause.is_some());
-    assert!(q3.select.where_clause.is_some());
+    for q in [&q1, &q2, &q3] {
+        match q.select.where_clause.as_ref().expect("WHERE clause") {
+            Condition::Similarity(sim) => {
+                assert_eq!(sim.field, "vec");
+                assert_eq!(sim.vector, VectorExpr::Parameter("v".to_string()));
+                assert_eq!(sim.operator, CompareOp::Gt);
+                assert!((sim.threshold - 0.8).abs() < 1e-9);
+            }
+            other => panic!("Expected Similarity condition, got {other:?}"),
+        }
+    }
 }
 
 // ========== WITH clause tests ==========

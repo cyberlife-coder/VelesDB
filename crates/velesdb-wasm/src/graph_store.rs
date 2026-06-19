@@ -10,7 +10,8 @@
 //!
 //! - Nodes: `id (u64)` → optional JSON payload, optional label list.
 //! - Edges: append-only `Vec`, each entry `(id, source, target, label,
-//!   payload)`. Edge ids are monotonic counters starting at 1.
+//!   payload)`. Auto-assigned edge ids derive from core's canonical
+//!   `hash_edge_id(source, target, label)` so they match every other engine.
 //!
 //! Contention is not a concern because WASM is single-threaded.
 
@@ -46,7 +47,6 @@ pub struct WasmGraphNode {
 pub(crate) struct WasmGraphStore {
     nodes: HashMap<u64, WasmGraphNode>,
     edges: Vec<WasmEdge>,
-    next_edge_id: u64,
 }
 
 impl WasmGraphStore {
@@ -55,7 +55,6 @@ impl WasmGraphStore {
         Self {
             nodes: HashMap::new(),
             edges: Vec::new(),
-            next_edge_id: 1,
         }
     }
 
@@ -95,7 +94,9 @@ impl WasmGraphStore {
     // --- Edges -------------------------------------------------------------
 
     /// Inserts a directed edge. If `explicit_id` is `Some`, uses it; else
-    /// assigns the next monotonic id. Returns the final edge id.
+    /// derives the id via core's canonical [`velesdb_core::hash_edge_id`]
+    /// over (source, target, label) so the same logical edge matches the id
+    /// produced by every other VelesDB engine. Returns the final edge id.
     ///
     /// # Errors
     ///
@@ -103,8 +104,6 @@ impl WasmGraphStore {
     /// store. Without this check, `delete_edge_by_id(n)` would delete every
     /// duplicate at once — a data-integrity risk for user SQL like
     /// `INSERT EDGE (id = 1, ...)` executed twice (Devin Review Finding J).
-    /// Auto-assigned ids (via `next_edge_id`) are always unique by
-    /// construction and never fail this check.
     pub(crate) fn insert_edge(
         &mut self,
         explicit_id: Option<u64>,
@@ -121,17 +120,10 @@ impl WasmGraphStore {
             }
         }
         let id = explicit_id.unwrap_or_else(|| {
-            let next = self.next_edge_id;
-            self.next_edge_id = self.next_edge_id.saturating_add(1);
-            next
+            // Delegate to core's canonical edge-id derivation so the same
+            // logical edge gets the same id across every VelesDB engine.
+            velesdb_core::hash_edge_id(source, target, &label)
         });
-        if let Some(eid) = explicit_id {
-            // Keep `next_edge_id` ahead of any explicit id so future
-            // implicit inserts don't collide.
-            if eid >= self.next_edge_id {
-                self.next_edge_id = eid.saturating_add(1);
-            }
-        }
         self.edges.push(WasmEdge {
             id,
             source,
@@ -192,13 +184,12 @@ impl WasmGraphStore {
         }
     }
 
-    /// Removes every node and edge and resets the edge-id counter.
+    /// Removes every node and edge from the store.
     /// Used by `TRUNCATE COLLECTION` so the surrounding collection name
     /// keeps its identity but the graph data is wiped.
     pub(crate) fn clear(&mut self) {
         self.nodes.clear();
         self.edges.clear();
-        self.next_edge_id = 1;
     }
 }
 
@@ -219,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_edge_assigns_sequential_ids() {
+    fn test_insert_edge_auto_id_matches_core_canonical_hash() {
         let mut g = WasmGraphStore::new();
         let a = g
             .insert_edge(None, 1, 2, "KNOWS".to_string(), None)
@@ -227,7 +218,11 @@ mod tests {
         let b = g
             .insert_edge(None, 2, 3, "KNOWS".to_string(), None)
             .expect("test: insert b");
-        assert_eq!(a + 1, b);
+        // Auto-assigned ids come from core's canonical derivation, so the
+        // same (source, target, label) triple yields the same id everywhere.
+        assert_eq!(a, velesdb_core::hash_edge_id(1, 2, "KNOWS"));
+        assert_eq!(b, velesdb_core::hash_edge_id(2, 3, "KNOWS"));
+        assert_ne!(a, b, "distinct triples must yield distinct ids");
     }
 
     #[test]
@@ -276,14 +271,16 @@ mod tests {
     }
 
     #[test]
-    fn test_explicit_edge_id_updates_counter() {
+    fn test_auto_id_is_independent_of_prior_explicit_id() {
         let mut g = WasmGraphStore::new();
         g.insert_edge(Some(100), 1, 2, "X".to_string(), None)
             .expect("test: explicit id");
+        // A following auto insert derives its id from its own triple, not
+        // from any monotonic counter influenced by the explicit id.
         let next = g
             .insert_edge(None, 2, 3, "Y".to_string(), None)
             .expect("test: next");
-        assert_eq!(next, 101);
+        assert_eq!(next, velesdb_core::hash_edge_id(2, 3, "Y"));
     }
 
     // --- Finding J: duplicate explicit edge id rejection -----------------
@@ -306,8 +303,9 @@ mod tests {
 
     #[test]
     fn test_insert_edge_with_auto_assigned_id_never_collides() {
-        // Auto-assigned ids are monotonic; even after an explicit id bumps
-        // `next_edge_id`, subsequent `None` inserts keep succeeding.
+        // Auto-assigned ids derive from the canonical (source, target, label)
+        // hash; distinct triples yield distinct ids, so mixing one explicit
+        // edge with several distinct auto edges stays collision-free.
         let mut g = WasmGraphStore::new();
         g.insert_edge(Some(42), 1, 2, "KNOWS".to_string(), None)
             .expect("test: explicit");

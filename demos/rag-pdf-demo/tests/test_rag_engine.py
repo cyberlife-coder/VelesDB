@@ -70,16 +70,26 @@ class TestRAGEngine:
             assert abs(results["results"][0]["score"] - 0.95) < 1e-6
             assert "Machine learning" in results["results"][0]["text"]
 
-    @pytest.mark.asyncio
-    async def test_get_documents_list(self):
+    def test_get_documents_list(self):
         """Test listing indexed documents."""
         from src.rag_engine import RAGEngine
-        
-        engine = RAGEngine()
-        # This should work even with empty store
-        documents = await engine.list_documents()
-        
-        assert isinstance(documents, list)
+
+        with patch("src.rag_engine.VelesDBClient"), patch("src.rag_engine.EmbeddingService"):
+            engine = RAGEngine()
+            # empty store
+            assert engine.list_documents() == []
+            # seed registry
+            engine._documents["test.pdf"] = {
+                "name": "test.pdf",
+                "pages": 2,
+                "chunks": 3,
+                "chunk_ids": [1, 2, 3],
+            }
+            docs = engine.list_documents()
+            assert isinstance(docs, list)
+            assert len(docs) == 1
+            assert docs[0]["name"] == "test.pdf"
+            assert docs[0]["chunks"] == 3
 
     @pytest.mark.asyncio
     async def test_delete_document(self):

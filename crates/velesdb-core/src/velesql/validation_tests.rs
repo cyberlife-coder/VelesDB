@@ -132,18 +132,6 @@ fn test_validate_simple_query_passes() {
     assert!(result.is_ok());
 }
 
-#[test]
-fn test_validate_hybrid_query_with_and_passes() {
-    // Given: similarity() AND metadata filter
-    let query = create_query_with_similarity_and_metadata();
-
-    // When: Validation is performed
-    let result = QueryValidator::validate(&query);
-
-    // Then: No error
-    assert!(result.is_ok());
-}
-
 // ============================================================================
 // US-007: Strict mode validation
 // ============================================================================
@@ -761,13 +749,13 @@ fn test_validation_error_kind_messages() {
 #[test]
 fn test_validation_config_default() {
     let config = ValidationConfig::default();
+    // Default profile is strict and encodes the production complexity limits
+    // actually enforced by QueryValidator::validate_with_config.
     assert!(config.strict_not_similarity);
-}
-
-#[test]
-fn test_validation_config_strict() {
-    let config = ValidationConfig::strict();
-    assert!(config.strict_not_similarity);
+    assert_eq!(config.max_query_length, 16_384);
+    assert_eq!(config.max_ast_depth, 64);
+    assert_eq!(config.max_like_ilike_terms, 8);
+    assert_eq!(config.max_graph_expansion, 32);
 }
 
 #[test]

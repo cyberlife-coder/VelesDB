@@ -1080,13 +1080,16 @@ fn test_hnsw_search_with_rerank_dot_product() {
 
 #[test]
 fn test_hnsw_io_holder_is_none_for_new_index() {
-    // For newly created indices, io_holder should be None
     let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
-    // We can't directly access io_holder, but we can verify the index works
-    // and drops without issues (no io_holder to manage)
+    assert!(
+        index.io_holder.is_none(),
+        "new native index must have io_holder == None"
+    );
     index.insert(1, &[1.0, 0.0, 0.0]);
-    assert_eq!(index.len(), 1);
-    // Dropped here without io_holder cleanup needed
+    assert!(
+        index.io_holder.is_none(),
+        "io_holder must stay None after insert (native backend never borrows from disk)"
+    );
 }
 
 #[test]
@@ -1138,6 +1141,19 @@ fn test_search_with_rerank_768d_prefetch() {
 
     assert!(!results.is_empty(), "Should return results");
     assert!(results.len() <= 10, "Should not exceed k");
+    assert_eq!(
+        results[0].id, 0,
+        "Self-match: query equals vector 0, should rank top-1"
+    );
+    for sr in &results {
+        assert!(sr.score >= -1.0 && sr.score <= 1.0, "Cosine in [-1,1]");
+    }
+    for i in 1..results.len() {
+        assert!(
+            results[i - 1].score >= results[i].score,
+            "Sorted descending"
+        );
+    }
 }
 
 #[test]
@@ -1158,6 +1174,12 @@ fn test_search_with_rerank_small_dim_prefetch() {
     let results = index.search_with_rerank(&query, 5, 20).unwrap();
 
     assert!(!results.is_empty(), "Should return results");
+    assert!(results.len() <= 5, "Should not exceed k");
+    // Query equals inserted vector 0 exactly -> id 0 must be the top (exact-match) result.
+    assert_eq!(
+        results[0].id, 0,
+        "Exact-match vector should rank first after rerank"
+    );
 }
 
 // =========================================================================
@@ -1206,6 +1228,13 @@ fn test_search_batch_parallel_consistency() {
     assert_eq!(batch_results.len(), individual_results.len());
     for (batch, individual) in batch_results.iter().zip(&individual_results) {
         assert_eq!(batch.len(), individual.len(), "Result counts should match");
+        let batch_ids: std::collections::HashSet<u64> = batch.iter().map(|r| r.id).collect();
+        let individual_ids: std::collections::HashSet<u64> =
+            individual.iter().map(|r| r.id).collect();
+        assert_eq!(
+            batch_ids, individual_ids,
+            "Batch and individual results must return the same IDs"
+        );
     }
 }
 
@@ -1953,25 +1982,6 @@ fn test_brute_force_gpu_dot_product() {
     }
 }
 
-#[test]
-fn test_compute_backend_selection() {
-    // TDD: Verify compute backend selection works
-    use crate::gpu::ComputeBackend;
-
-    let backend = ComputeBackend::best_available();
-
-    // Should always return a valid backend
-    match backend {
-        ComputeBackend::Simd => {
-            // SIMD is always available
-        }
-        #[cfg(feature = "gpu")]
-        ComputeBackend::Gpu => {
-            // GPU selected when available
-        }
-    }
-}
-
 // =========================================================================
 // FT-2: Property-Based Tests with proptest
 // =========================================================================
@@ -2147,10 +2157,21 @@ fn test_manuallydrop_pattern_integrity() {
         index.insert(i as u64, &v);
     }
 
-    // Explicit drop - if ManuallyDrop is incorrectly handled, this could panic/UB
-    drop(index);
+    // Index must be fully populated and queryable right up to the drop point.
+    assert_eq!(
+        index.len(),
+        10,
+        "all 10 vectors must be present before drop"
+    );
+    let results = index.search(&vec![0.0f32; 64], 5);
+    assert!(
+        !results.is_empty() && results.len() <= 5,
+        "index must be searchable before drop"
+    );
 
-    // If we reach here, the drop order is correct
+    // Explicit drop exercises the custom Drop impl (unsafe ManuallyDrop::drop on the
+    // in-memory native inner). A regression in drop ordering would panic/abort here.
+    drop(index);
 }
 
 /// Test that loading from disk and dropping works correctly.

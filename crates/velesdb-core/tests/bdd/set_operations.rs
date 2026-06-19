@@ -10,6 +10,7 @@
 //! - **Then**: results match expected behavior
 
 use serde_json::json;
+use std::collections::HashSet;
 use velesdb_core::{Database, Point};
 
 use super::helpers::{
@@ -473,11 +474,11 @@ fn test_union_with_impossible_filter_returns_partial() {
     .expect("UNION with impossible filter should succeed");
 
     let ids = result_ids(&results);
-    assert!(
-        ids.len() <= 3,
-        "should return at most category A results: got {ids:?}"
+    assert_eq!(
+        ids,
+        HashSet::from([1u64, 2, 3]),
+        "impossible second branch contributes nothing; UNION must return exactly the 3 category-A ids, got {ids:?}"
     );
-    assert!(!ids.is_empty(), "first SELECT should contribute results");
 }
 
 // =========================================================================

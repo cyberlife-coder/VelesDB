@@ -109,8 +109,11 @@ fn search_auto_matches_cpu_search_below_gpu_threshold_cosine() {
     }
 }
 
-/// Same parity check for Euclidean — ensures the distance transform
-/// (squared-L2 → L2) is consistent across both paths.
+/// Same parity check for Euclidean — ensures search_auto returns the same
+/// transformed scores as the direct CPU path. Both sides call the identical
+/// `inner.transform_score`, so this does NOT independently validate the
+/// squared-L2 → L2 sqrt transform; it guards against wrapper-introduced
+/// score divergence in `search_auto`.
 #[test]
 fn search_auto_matches_cpu_search_below_gpu_threshold_euclidean() {
     let dim = 32;
@@ -138,6 +141,14 @@ fn search_auto_matches_cpu_search_below_gpu_threshold_euclidean() {
     let auto_ids: Vec<u64> = auto_results.iter().map(|r| r.id).collect();
     let ref_ids: Vec<u64> = ref_results.iter().map(|r| r.id).collect();
     assert_eq!(auto_ids, ref_ids, "Euclidean parity below GPU threshold");
+    for (a, b) in auto_results.iter().zip(ref_results.iter()) {
+        assert!(
+            (a.score - b.score).abs() < f32::EPSILON * 16.0,
+            "scores must match exactly: auto={} vs ref={}",
+            a.score,
+            b.score,
+        );
+    }
 }
 
 // =========================================================================

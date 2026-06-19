@@ -13,22 +13,10 @@ fn test_compute_backend_default_is_simd() {
     assert_eq!(backend, ComputeBackend::Simd);
 }
 
-#[test]
-fn test_best_available_returns_simd_without_gpu_feature() {
-    // Without GPU feature, should always return SIMD
-    #[cfg(not(feature = "gpu"))]
-    {
-        let backend = ComputeBackend::best_available();
-        assert_eq!(backend, ComputeBackend::Simd);
-    }
-}
-
+#[cfg(not(feature = "gpu"))]
 #[test]
 fn test_gpu_available_false_without_feature() {
-    #[cfg(not(feature = "gpu"))]
-    {
-        assert!(!ComputeBackend::gpu_available());
-    }
+    assert!(!ComputeBackend::gpu_available());
 }
 
 // =========================================================================
@@ -40,12 +28,23 @@ fn test_compute_backend_fallback_to_simd() {
     // best_available() must always return a valid backend (never panic).
     // On machines without GPU, it should return Simd.
     let backend = ComputeBackend::best_available();
-    // Must be one of the valid variants — Gpu variant only exists with feature
+    // Must select Gpu vs Simd consistently with the actual availability probe.
     #[cfg(feature = "gpu")]
-    assert!(
-        backend == ComputeBackend::Simd || backend == ComputeBackend::Gpu,
-        "best_available() returned unexpected variant: {backend:?}"
-    );
+    {
+        if ComputeBackend::gpu_available() {
+            assert_eq!(
+                backend,
+                ComputeBackend::Gpu,
+                "best_available() must select Gpu when gpu_available() is true"
+            );
+        } else {
+            assert_eq!(
+                backend,
+                ComputeBackend::Simd,
+                "best_available() must fall back to Simd when GPU is unavailable"
+            );
+        }
+    }
     #[cfg(not(feature = "gpu"))]
     assert_eq!(backend, ComputeBackend::Simd);
 }
@@ -58,6 +57,20 @@ fn test_gpu_available_consistency() {
     let third = ComputeBackend::gpu_available();
     assert_eq!(first, second, "gpu_available() must be consistent");
     assert_eq!(second, third, "gpu_available() must be consistent");
+    #[cfg(not(feature = "gpu"))]
+    assert!(
+        !first,
+        "gpu_available() must be false without the gpu feature"
+    );
+    #[cfg(feature = "gpu")]
+    {
+        use super::gpu::GpuAccelerator;
+        assert_eq!(
+            first,
+            GpuAccelerator::is_available(),
+            "gpu_available() must agree with the cached GpuAccelerator::is_available() probe"
+        );
+    }
 }
 
 #[cfg(feature = "gpu")]

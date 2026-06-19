@@ -43,7 +43,9 @@ fn test_comparison_gt_float() {
     };
     let cond = crate::velesql::Condition::Comparison(cmp);
     let result: Condition = cond.into();
-    assert!(matches!(result, Condition::Gt { field, .. } if field == "price"));
+    assert!(
+        matches!(result, Condition::Gt { field, value } if field == "price" && value.as_f64().is_some_and(|f| (f - 99.99).abs() < 1e-9))
+    );
 }
 
 #[test]
@@ -55,7 +57,9 @@ fn test_comparison_gte() {
     };
     let cond = crate::velesql::Condition::Comparison(cmp);
     let result: Condition = cond.into();
-    assert!(matches!(result, Condition::Gte { field, .. } if field == "count"));
+    assert!(
+        matches!(result, Condition::Gte { field, value } if field == "count" && value == Value::Number(10.into()))
+    );
 }
 
 #[test]
@@ -67,7 +71,9 @@ fn test_comparison_lt() {
     };
     let cond = crate::velesql::Condition::Comparison(cmp);
     let result: Condition = cond.into();
-    assert!(matches!(result, Condition::Lt { field, .. } if field == "score"));
+    assert!(
+        matches!(result, Condition::Lt { field, value } if field == "score" && value == Value::Number(50.into()))
+    );
 }
 
 #[test]
@@ -79,7 +85,9 @@ fn test_comparison_lte() {
     };
     let cond = crate::velesql::Condition::Comparison(cmp);
     let result: Condition = cond.into();
-    assert!(matches!(result, Condition::Lte { field, .. } if field == "level"));
+    assert!(
+        matches!(result, Condition::Lte { field, value } if field == "level" && value == Value::Number(5.into()))
+    );
 }
 
 #[test]
@@ -208,7 +216,12 @@ fn test_not_condition() {
     });
     let cond = crate::velesql::Condition::Not(Box::new(inner));
     let result: Condition = cond.into();
-    assert!(matches!(result, Condition::Not { .. }));
+    assert!(matches!(
+        result,
+        Condition::Not { ref condition }
+            if matches!(**condition, Condition::Eq { ref field, ref value }
+                if field == "deleted" && *value == serde_json::json!(true))
+    ));
 }
 
 #[test]
@@ -245,7 +258,18 @@ fn test_between_condition_integers() {
     };
     let cond = crate::velesql::Condition::Between(btw);
     let result: Condition = cond.into();
-    assert!(matches!(result, Condition::And { conditions } if conditions.len() == 2));
+    let Condition::And { conditions } = result else {
+        panic!("expected And, got {result:?}");
+    };
+    assert_eq!(conditions.len(), 2);
+    assert!(matches!(
+        &conditions[0],
+        Condition::Gte { field, value } if field == "age" && *value == serde_json::json!(18)
+    ));
+    assert!(matches!(
+        &conditions[1],
+        Condition::Lte { field, value } if field == "age" && *value == serde_json::json!(65)
+    ));
 }
 
 #[test]
@@ -257,7 +281,26 @@ fn test_between_condition_floats() {
     };
     let cond = crate::velesql::Condition::Between(btw);
     let result: Condition = cond.into();
-    assert!(matches!(result, Condition::And { conditions } if conditions.len() == 2));
+    match result {
+        Condition::And { conditions } => {
+            assert_eq!(conditions.len(), 2);
+            match &conditions[0] {
+                Condition::Gte { field, value } => {
+                    assert_eq!(field, "price");
+                    assert!((value.as_f64().expect("gte float") - 10.0).abs() < 1e-9);
+                }
+                other => panic!("expected Gte, got {other:?}"),
+            }
+            match &conditions[1] {
+                Condition::Lte { field, value } => {
+                    assert_eq!(field, "price");
+                    assert!((value.as_f64().expect("lte float") - 100.0).abs() < 1e-9);
+                }
+                other => panic!("expected Lte, got {other:?}"),
+            }
+        }
+        other => panic!("expected And, got {other:?}"),
+    }
 }
 
 #[test]
@@ -492,5 +535,24 @@ fn test_unsigned_integer_numeric_to_json() {
     };
     let cond = crate::velesql::Condition::Between(btw);
     let result: Condition = cond.into();
-    assert!(matches!(result, Condition::And { conditions } if conditions.len() == 2));
+    if let Condition::And { conditions } = &result {
+        assert_eq!(conditions.len(), 2);
+        match (&conditions[0], &conditions[1]) {
+            (
+                Condition::Gte { field, value: low },
+                Condition::Lte {
+                    field: f2,
+                    value: high,
+                },
+            ) => {
+                assert_eq!(field, "id");
+                assert_eq!(f2, "id");
+                assert_eq!(low.as_u64(), Some(10_000_000_000_000_000_000));
+                assert_eq!(high.as_u64(), Some(u64::MAX));
+            }
+            other => panic!("expected Gte AND Lte, got {other:?}"),
+        }
+    } else {
+        panic!("expected Condition::And, got {result:?}");
+    }
 }

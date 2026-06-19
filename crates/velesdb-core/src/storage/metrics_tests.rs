@@ -119,10 +119,17 @@ fn test_latency_stats_single_sample() {
     assert_eq!(stats.count, 1);
     assert_eq!(stats.min_us, 500);
     assert_eq!(stats.max_us, 500);
-    // PERF-001: LockFreeHistogram uses log2 buckets, percentiles are approximate
-    // 500µs falls in bucket 8 (256-512), midpoint ~384
-    assert!(stats.p50_us > 0, "P50 should be non-zero");
-    assert!(stats.p99_us > 0, "P99 should be non-zero");
+    // PERF-001: single-sample edge case. percentile target = count*p/100 rounds
+    // down to 0, so bucket 0 immediately satisfies the cumulative check and the
+    // value is capped to value_for_bucket(0) = 1µs. Guards this approximation.
+    assert_eq!(
+        stats.p50_us, 1,
+        "single-sample P50 collapses to bucket 0 (1µs)"
+    );
+    assert_eq!(
+        stats.p99_us, 1,
+        "single-sample P99 collapses to bucket 0 (1µs)"
+    );
 }
 
 #[test]

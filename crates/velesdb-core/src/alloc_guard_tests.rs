@@ -84,11 +84,15 @@ fn test_alloc_guard_cast() {
 
 #[test]
 fn test_alloc_guard_drop_frees_memory() {
-    // This test verifies the guard deallocates on drop
-    // We can't directly verify deallocation, but we can ensure no panic
+    // This test verifies the guard deallocates on drop across repeated cycles.
+    // Each allocation is asserted to succeed; the guard is then dropped, freeing memory.
     for _ in 0..1000 {
         let layout = Layout::from_size_align(1024, 8).unwrap();
-        let _guard = AllocGuard::new(layout);
+        let guard = AllocGuard::new(layout);
+        assert!(
+            guard.is_some(),
+            "1 KiB allocation must succeed under default ceiling"
+        );
         // guard dropped here, memory freed
     }
 }
@@ -96,17 +100,32 @@ fn test_alloc_guard_drop_frees_memory() {
 #[test]
 fn test_alloc_guard_panic_safety() {
     use std::panic;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // Set only after AllocGuard::new produced a real, non-null allocation, so the
+    // assertion fails if `new` is stubbed to None (the `expect` would unwind first)
+    // or hands back a null pointer.
+    static GUARD_BUILT: AtomicBool = AtomicBool::new(false);
 
     let layout = Layout::from_size_align(1024, 8).unwrap();
+    GUARD_BUILT.store(false, Ordering::SeqCst);
 
-    // Simulate panic during operation
+    // Simulate panic during operation, with a live AllocGuard on the stack so its
+    // RAII Drop runs during unwinding.
     let result = panic::catch_unwind(|| {
-        let _guard = AllocGuard::new(layout).expect("allocation failed");
+        let guard = AllocGuard::new(layout).expect("allocation failed");
+        assert!(!guard.as_ptr().is_null());
+        GUARD_BUILT.store(true, Ordering::SeqCst);
         panic!("simulated panic");
+        // `guard` is dropped here during unwind, freeing the allocation.
     });
 
     assert!(result.is_err());
-    // Memory should have been freed by drop during unwind
+    assert!(
+        GUARD_BUILT.load(Ordering::SeqCst),
+        "AllocGuard::new must produce a valid allocation before the panic, so its \
+         Drop runs during unwind"
+    );
 }
 
 // =========================================================================

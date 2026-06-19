@@ -22,21 +22,6 @@ fn test_create_edge_basic() {
 }
 
 #[test]
-fn test_edge_with_properties() {
-    let mut props = HashMap::new();
-    props.insert("date".to_string(), json!("2026-01-15"));
-    props.insert("role".to_string(), json!("author"));
-
-    let edge = GraphEdge::new(1, 10, 20, "WROTE")
-        .expect("valid edge")
-        .with_properties(props);
-
-    assert_eq!(edge.properties().len(), 2);
-    assert_eq!(edge.property("date"), Some(&json!("2026-01-15")));
-    assert_eq!(edge.property("role"), Some(&json!("author")));
-}
-
-#[test]
 fn test_edge_serialization_roundtrip() {
     let mut props = HashMap::new();
     props.insert("weight".to_string(), json!(0.95));
@@ -429,8 +414,21 @@ fn test_property_access() {
 #[test]
 fn test_edgestore_with_capacity_basic() {
     let store = EdgeStore::with_capacity(1000, 100);
-    // Store is empty but has capacity
     assert_eq!(store.edge_count(), 0);
+    // with_capacity pre-allocates the internal maps; HashMap::capacity()
+    // guarantees room for at least the requested number of elements.
+    assert!(
+        store.edges.capacity() >= 1000,
+        "edges map should be pre-allocated for >= expected_edges"
+    );
+    assert!(
+        store.outgoing.capacity() >= 100,
+        "outgoing map should be pre-allocated for >= expected_nodes"
+    );
+    assert!(
+        store.incoming.capacity() >= 100,
+        "incoming map should be pre-allocated for >= expected_nodes"
+    );
 }
 
 /// AC-2: EdgeStore::with_capacity reduces reallocations during bulk insert

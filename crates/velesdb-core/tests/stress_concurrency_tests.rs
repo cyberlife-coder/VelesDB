@@ -190,5 +190,13 @@ fn test_graph_concurrent_stress() {
         h.join().expect("graph thread");
     }
 
-    println!("Graph stress: {} edges", store.edge_count());
+    let final_count = store.edge_count();
+    println!("Graph stress: {final_count} edges");
+    // 1000 unique add_edge calls (10 writers x 100 ops, monotonic ids) minus
+    // at most 100 remove calls => count is always in [900, 1000]; never 0.
+    // Guards against silently-dropped concurrent writes / empty store.
+    assert!(
+        final_count > 0,
+        "concurrent writers must have inserted edges; got {final_count}"
+    );
 }

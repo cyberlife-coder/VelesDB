@@ -20,16 +20,27 @@ fn observability_types_are_root_exported() {
     // GIVEN-WHEN-THEN: each of these is a real path that the server's `lib.rs`
     // (and any future observability-focused wrapper) relies on. Resolving them
     // through the crate root proves the Facade is intact.
-    let _: Option<velesdb_core::DurationHistogram> = None;
-    let _: Option<velesdb_core::OperationalMetrics> = None;
-    let _: Option<velesdb_core::TraversalMetrics> = None;
-    let _: Option<velesdb_core::QueryStats> = None;
-    let _: Option<velesdb_core::GuardRailsMetrics> = None;
+    let _ = velesdb_core::DurationHistogram::new();
+    let _ = velesdb_core::OperationalMetrics::new();
+    let _ = velesdb_core::TraversalMetrics::new();
+    let _ = velesdb_core::QueryStats {
+        collection: String::from("facade"),
+        ..Default::default()
+    };
+    let _ = velesdb_core::GuardRailsMetrics::new();
 }
 
 #[test]
 fn guardrail_types_are_root_exported() {
-    let _: Option<velesdb_core::QueryLimits> = None;
+    let ql = velesdb_core::QueryLimits::default();
+    assert!(
+        ql.max_depth > 0,
+        "QueryLimits default must bound traversal depth"
+    );
+    assert!(
+        ql.max_cardinality > 0,
+        "QueryLimits default must bound cardinality"
+    );
 }
 
 #[test]

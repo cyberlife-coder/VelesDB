@@ -8,6 +8,32 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from velesdb_common.security import ALLOWED_CONDITION_TYPES
+
+# LlamaIndex operator spellings → canonical VelesDB Core condition ``type`` tag.
+# The TARGET tags are NOT re-listed as free literals: every value here must be a
+# member of ``ALLOWED_CONDITION_TYPES`` (single-sourced from velesdb-core), which
+# the import-time guard below enforces so this map cannot drift from the
+# engine's vocabulary.
+_OPERATOR_TO_CONDITION_TYPE = {
+    "eq": "eq", "==": "eq", "=": "eq",
+    "neq": "neq", "ne": "neq", "!=": "neq",
+    "gt": "gt", ">": "gt",
+    "gte": "gte", ">=": "gte",
+    "lt": "lt", "<": "lt",
+    "lte": "lte", "<=": "lte",
+    "in": "in",
+    "contains": "contains", "text_match": "contains",
+    "is_null": "is_null", "null": "is_null",
+    "is_not_null": "is_not_null", "not_null": "is_not_null",
+}
+_UNKNOWN_CONDITION_TYPES = set(_OPERATOR_TO_CONDITION_TYPE.values()) - ALLOWED_CONDITION_TYPES
+if _UNKNOWN_CONDITION_TYPES:
+    raise RuntimeError(
+        "filter_ops emits condition types unknown to velesdb-core: "
+        f"{sorted(_UNKNOWN_CONDITION_TYPES)}"
+    )
+
 
 def _normalize_filter_operator(raw_operator: Any) -> str:
     """Normalize LlamaIndex filter operator to VelesDB Core condition type."""
@@ -17,20 +43,8 @@ def _normalize_filter_operator(raw_operator: Any) -> str:
         raw_operator = raw_operator.value
 
     op = str(raw_operator).strip().lower()
-    op_map = {
-        "eq": "eq", "==": "eq", "=": "eq",
-        "neq": "neq", "ne": "neq", "!=": "neq",
-        "gt": "gt", ">": "gt",
-        "gte": "gte", ">=": "gte",
-        "lt": "lt", "<": "lt",
-        "lte": "lte", "<=": "lte",
-        "in": "in",
-        "contains": "contains", "text_match": "contains",
-        "is_null": "is_null", "null": "is_null",
-        "is_not_null": "is_not_null", "not_null": "is_not_null",
-    }
-    if op in op_map:
-        return op_map[op]
+    if op in _OPERATOR_TO_CONDITION_TYPE:
+        return _OPERATOR_TO_CONDITION_TYPE[op]
     raise ValueError(f"Unsupported metadata filter operator: {raw_operator}")
 
 

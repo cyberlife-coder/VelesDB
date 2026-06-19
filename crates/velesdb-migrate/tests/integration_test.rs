@@ -10,7 +10,6 @@
 #![allow(clippy::pedantic)]
 
 use std::env;
-use tempfile::TempDir;
 
 /// Helper to check if real data tests are enabled
 fn real_data_enabled() -> bool {
@@ -121,16 +120,12 @@ async fn test_supabase_extract_batch() {
 
 #[tokio::test]
 #[ignore]
-async fn test_full_migration_to_velesdb() {
+async fn test_supabase_extract_and_validate_batch() {
     if !real_data_enabled() {
         return;
     }
 
     let (url, key, table) = get_supabase_config().unwrap();
-
-    // Create temp directory for VelesDB data
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let _dest_path = temp_dir.path().to_path_buf();
 
     let config = velesdb_migrate::config::SupabaseConfig {
         url,
@@ -158,10 +153,6 @@ async fn test_full_migration_to_velesdb() {
     connector.close().await.unwrap();
 
     println!("📥 Extracted {} vectors for test", batch.points.len());
-
-    // Now test loading into VelesDB
-    // This would require velesdb-core integration
-    // For now, just verify the data is valid
 
     for point in &batch.points {
         assert!(!point.id.is_empty(), "Point should have ID");
@@ -220,11 +211,11 @@ async fn test_dimension_detection_accuracy() {
         );
     }
 
-    // Common dimensions check
-    let common_dimensions = [384, 768, 1024, 1536, 3072];
+    // Sanity floor: guard against degenerate/partial detection without
+    // whitelisting specific production model sizes.
     assert!(
-        common_dimensions.contains(&schema.dimension),
-        "Dimension {} should be a common embedding size",
+        schema.dimension >= 128,
+        "Detected dimension {} is implausibly small; detection likely failed",
         schema.dimension
     );
 

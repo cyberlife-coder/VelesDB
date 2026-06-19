@@ -92,8 +92,20 @@ fn test_ordered_float_sorting() {
 }
 
 #[test]
-#[allow(clippy::float_cmp)]
-fn test_ordered_float_inner_value() {
-    let of = OrderedFloat(42.5);
-    assert_eq!(of.0, 42.5);
+fn test_ordered_float_nan_total_ordering() {
+    // f32::total_cmp places +NaN above +inf and -NaN below -inf,
+    // and NaN with identical bits compares Equal (heap-safety invariant).
+    assert_eq!(
+        OrderedFloat(f32::NAN).cmp(&OrderedFloat(f32::INFINITY)),
+        Ordering::Greater
+    );
+    assert_eq!(
+        OrderedFloat(-f32::NAN).cmp(&OrderedFloat(f32::NEG_INFINITY)),
+        Ordering::Less
+    );
+    assert_eq!(
+        OrderedFloat(f32::NAN).cmp(&OrderedFloat(f32::NAN)),
+        Ordering::Equal
+    );
+    assert_eq!(OrderedFloat(f32::NAN), OrderedFloat(f32::NAN)); // bit-equal NaN -> Eq
 }

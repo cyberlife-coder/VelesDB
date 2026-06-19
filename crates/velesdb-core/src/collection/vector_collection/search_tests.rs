@@ -83,7 +83,12 @@ fn test_search_k_exceeds_collection_size() {
     let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 100).unwrap();
 
     // Cannot return more points than exist in the collection.
-    assert!(results.len() <= 5);
+    assert_eq!(
+        results.len(),
+        5,
+        "should return all 5 points when k > collection size"
+    );
+    assert_eq!(results[0].point.id, 1, "exact match should remain top-1");
 }
 
 #[test]
@@ -239,12 +244,36 @@ fn test_hybrid_search_with_alpha() {
     let (coll, _dir) = create_test_vc();
     seed_points(&coll);
 
-    // alpha=1.0 should heavily weight vector similarity.
-    let results = coll
+    // alpha=1.0 = pure vector: top result must be the vector NN (id=1).
+    let vec_ids: Vec<u64> = coll
         .hybrid_search(&[1.0, 0.0, 0.0, 0.0], "hello", 3, Some(1.0))
-        .unwrap();
+        .unwrap()
+        .iter()
+        .map(|r| r.point.id)
+        .collect();
+    assert_eq!(
+        vec_ids.first(),
+        Some(&1),
+        "alpha=1.0 top should be vector NN id=1"
+    );
 
-    assert!(!results.is_empty());
+    // alpha=0.0 = pure text: id=3 ("hello foo", strong text match but
+    // vector-orthogonal) surfaces into the top-3, whereas pure-vector ranking
+    // drops it — proving alpha actually re-weights the fusion.
+    let text_ids: Vec<u64> = coll
+        .hybrid_search(&[1.0, 0.0, 0.0, 0.0], "hello", 3, Some(0.0))
+        .unwrap()
+        .iter()
+        .map(|r| r.point.id)
+        .collect();
+    assert!(
+        text_ids.contains(&3),
+        "alpha=0.0 (text) should rank id=3 into top-3"
+    );
+    assert!(
+        !vec_ids.contains(&3),
+        "alpha=1.0 (vector) should NOT rank orthogonal id=3 into top-3"
+    );
 }
 
 #[test]
@@ -269,7 +298,11 @@ fn test_execute_query_select_all_with_limit() {
     let params = HashMap::new();
     let results = coll.execute_query(&query, &params).unwrap();
 
-    assert!(results.len() <= 3);
+    assert_eq!(
+        results.len(),
+        3,
+        "LIMIT 3 should return exactly 3 of the 5 seeded points"
+    );
 }
 
 #[test]
@@ -305,7 +338,11 @@ fn test_execute_query_str_basic() {
         .execute_query_str("SELECT * FROM coll LIMIT 5;", &params)
         .unwrap();
 
-    assert!(results.len() <= 5);
+    assert_eq!(
+        results.len(),
+        5,
+        "SELECT * over a 5-point collection with LIMIT 5 must return all 5 points"
+    );
 }
 
 #[test]
@@ -350,10 +387,12 @@ fn test_execute_query_str_returns_consistent_results() {
     let r1 = coll.execute_query_str(sql, &params).unwrap();
     let r2 = coll.execute_query_str(sql, &params).unwrap();
 
+    assert_eq!(r1.len(), 3, "LIMIT 3 should return exactly 3 results");
+    let r1_ids: Vec<u64> = r1.iter().map(|r| r.point.id).collect();
+    let r2_ids: Vec<u64> = r2.iter().map(|r| r.point.id).collect();
     assert_eq!(
-        r1.len(),
-        r2.len(),
-        "repeated queries should return the same count"
+        r1_ids, r2_ids,
+        "repeated queries should return identical point IDs in the same order"
     );
 }
 

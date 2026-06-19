@@ -91,15 +91,6 @@ fn test_parse_vector_invalid_csv() {
 // =========================================================================
 
 #[test]
-fn test_import_stats_default() {
-    let stats = ImportStats::default();
-    assert_eq!(stats.total, 0);
-    assert_eq!(stats.imported, 0);
-    assert_eq!(stats.errors, 0);
-    assert_eq!(stats.duration_ms, 0);
-}
-
-#[test]
 fn test_import_stats_records_per_sec() {
     let stats = ImportStats {
         total: 100,

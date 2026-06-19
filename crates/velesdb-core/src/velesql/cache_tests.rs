@@ -7,11 +7,25 @@ fn test_cache_new() {
     // Arrange & Act
     let cache = QueryCache::new(100);
 
-    // Assert
+    // Assert: fresh cache is empty with zeroed stats (no pre-seeded state).
     assert_eq!(cache.len(), 0);
     assert!(cache.is_empty());
     assert_eq!(cache.stats().hits, 0);
     assert_eq!(cache.stats().misses, 0);
+    assert_eq!(cache.stats().evictions, 0);
+
+    // Act: first parse is a miss that populates the cache.
+    let parsed = cache
+        .parse("SELECT * FROM documents")
+        .expect("valid query parses");
+
+    // Assert: construction wiring is live, not a zeroed stub.
+    assert_eq!(cache.len(), 1);
+    assert!(!cache.is_empty());
+    assert_eq!(cache.stats().misses, 1);
+    assert_eq!(cache.stats().hits, 0);
+    // Sanity: returned AST is shared via Arc (matches Arc<Query> contract).
+    let _ = parsed;
 }
 
 #[test]

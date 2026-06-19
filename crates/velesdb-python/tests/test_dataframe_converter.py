@@ -240,6 +240,11 @@ class TestQueryToDataframe:
 
     def test_empty_returns_empty_dataframe(self, pd):
         df = query_to_dataframe([], backend="pandas")
+        # query results have arbitrary schemas, so the empty fast-path returns a
+        # genuine but schema-less DataFrame (unlike to_dataframe / to_scroll_dataframe
+        # which declare structural columns). Pin both the type and the empty schema.
+        assert isinstance(df, pd.DataFrame)
+        assert list(df.columns) == []
         assert len(df) == 0
 
 

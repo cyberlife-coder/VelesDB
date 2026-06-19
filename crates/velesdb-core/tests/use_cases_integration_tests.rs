@@ -91,30 +91,6 @@ mod use_case_1_contextual_rag {
         assert!(!results.is_empty(), "Should find related documents");
         assert_eq!(results[0].point.id, 0, "First result should be exact match");
     }
-
-    #[test]
-    fn test_contextual_rag_similarity_threshold() {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let db = Database::open(temp_dir.path()).expect("Failed to open database");
-
-        let collection = create_and_get_collection(&db, "documents", 128, DistanceMetric::Cosine);
-
-        for id in 0u64..10 {
-            let mut embedding = create_mock_embedding(id, 128);
-            normalize(&mut embedding);
-            collection
-                .upsert(vec![Point::new(
-                    id,
-                    embedding,
-                    Some(json!({"title": format!("Document {}", id)})),
-                )])
-                .expect("Failed to upsert");
-        }
-
-        let query_sql = "SELECT * FROM documents WHERE similarity(vector, $q) > 0.75 LIMIT 20";
-        let parsed = Parser::parse(query_sql);
-        assert!(parsed.is_ok(), "Query should parse: {:?}", parsed.err());
-    }
 }
 
 // =============================================================================
@@ -249,6 +225,10 @@ mod use_case_3_knowledge_discovery {
         let results = collection.search(&query, 5).expect("Search failed");
 
         assert!(!results.is_empty());
+        assert_eq!(
+            results[0].point.id, 1,
+            "exact-match vector should rank first"
+        );
     }
 }
 
@@ -301,7 +281,11 @@ mod use_case_4_document_clustering {
         let mut query = create_mock_embedding(0, 128);
         normalize(&mut query);
         let results = collection.search(&query, 10).expect("Search failed");
-        assert!(!results.is_empty());
+        assert_eq!(results.len(), 7, "all 7 points fit within k=10");
+        assert_eq!(
+            results[0].point.id, 0,
+            "exact-match vector should be top result"
+        );
     }
 }
 
@@ -451,7 +435,15 @@ mod use_case_6_recommendation_engine {
         normalize(&mut preference);
         let recommendations = collection.search(&preference, 5).expect("Search failed");
 
-        assert!(!recommendations.is_empty());
+        assert_eq!(
+            recommendations.len(),
+            5,
+            "all 5 items should be returned for k=5"
+        );
+        assert_eq!(
+            recommendations[0].point.id, 1,
+            "preference vector is identical to item 1, so item 1 must rank first"
+        );
     }
 }
 
@@ -575,6 +567,19 @@ mod use_case_8_trend_analysis {
 
         collection.upsert(articles).expect("Failed to upsert");
         assert_eq!(collection.len(), 20);
+
+        let mut query = create_mock_embedding(0, 128);
+        normalize(&mut query);
+        let results = collection.search(&query, 5).expect("Search failed");
+        assert!(!results.is_empty(), "Should retrieve articles");
+        assert_eq!(
+            results[0].point.id, 0,
+            "Exact-match query should rank its own article first"
+        );
+        assert!(
+            results[0].score > 0.99,
+            "Exact match should have very high cosine score"
+        );
     }
 }
 
@@ -638,6 +643,15 @@ mod use_case_9_impact_analysis {
 
         collection.upsert(points).expect("Failed to upsert");
         assert_eq!(collection.len(), 5);
+
+        let mut query = create_mock_embedding(1, 64);
+        normalize(&mut query);
+        let results = collection.search(&query, 1).expect("Search failed");
+        assert!(!results.is_empty(), "Should find the matching component");
+        assert_eq!(
+            results[0].point.id, 1,
+            "Querying with component 1's own embedding must return it as the exact top match"
+        );
     }
 }
 

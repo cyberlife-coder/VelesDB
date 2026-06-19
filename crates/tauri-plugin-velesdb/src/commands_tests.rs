@@ -12,37 +12,55 @@ use toml;
 #[test]
 fn test_parse_metric_cosine() {
     let result = parse_metric("cosine");
-    assert!(result.is_ok());
+    assert!(matches!(
+        result,
+        Ok(velesdb_core::distance::DistanceMetric::Cosine)
+    ));
 }
 
 #[test]
 fn test_parse_metric_euclidean() {
     let result = parse_metric("euclidean");
-    assert!(result.is_ok());
+    assert!(matches!(
+        result,
+        Ok(velesdb_core::distance::DistanceMetric::Euclidean)
+    ));
 }
 
 #[test]
 fn test_parse_metric_l2_alias() {
     let result = parse_metric("l2");
-    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap(),
+        velesdb_core::distance::DistanceMetric::Euclidean
+    );
 }
 
 #[test]
 fn test_parse_metric_dot() {
     let result = parse_metric("dot");
-    assert!(result.is_ok());
+    assert!(matches!(
+        result,
+        Ok(velesdb_core::distance::DistanceMetric::DotProduct)
+    ));
 }
 
 #[test]
 fn test_parse_metric_hamming() {
     let result = parse_metric("hamming");
-    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap(),
+        velesdb_core::distance::DistanceMetric::Hamming
+    );
 }
 
 #[test]
 fn test_parse_metric_jaccard() {
     let result = parse_metric("jaccard");
-    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap(),
+        velesdb_core::distance::DistanceMetric::Jaccard
+    );
 }
 
 #[test]
@@ -55,9 +73,13 @@ fn test_parse_metric_invalid() {
 
 #[test]
 fn test_parse_metric_case_insensitive() {
-    assert!(parse_metric("COSINE").is_ok());
-    assert!(parse_metric("Euclidean").is_ok());
-    assert!(parse_metric("DOT").is_ok());
+    use velesdb_core::distance::DistanceMetric;
+    assert_eq!(parse_metric("COSINE").unwrap(), DistanceMetric::Cosine);
+    assert_eq!(
+        parse_metric("Euclidean").unwrap(),
+        DistanceMetric::Euclidean
+    );
+    assert_eq!(parse_metric("DOT").unwrap(), DistanceMetric::DotProduct);
 }
 
 #[test]
@@ -395,19 +417,19 @@ fn test_hybrid_search_request_deserialize() {
 #[test]
 fn test_parse_storage_mode_full() {
     let result = parse_storage_mode("full");
-    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), velesdb_core::StorageMode::Full);
 }
 
 #[test]
 fn test_parse_storage_mode_sq8() {
     let result = parse_storage_mode("sq8");
-    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), velesdb_core::StorageMode::SQ8);
 }
 
 #[test]
 fn test_parse_storage_mode_binary() {
     let result = parse_storage_mode("binary");
-    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), velesdb_core::StorageMode::Binary);
 }
 
 #[test]
@@ -700,32 +722,6 @@ fn test_default_permissions_count_matches_commands() {
          This may indicate orphaned permissions or missing command registrations.",
         permissions.len(),
         registered.len()
-    );
-}
-
-/// Legacy test using simple string contains (kept for backward compatibility).
-/// Prefer `test_all_commands_have_default_permissions_toml_parsed` for new code.
-#[test]
-fn test_all_commands_have_default_permissions() {
-    let default_toml = include_str!("../permissions/default.toml");
-
-    for cmd in commands_registered_in_lib_rs() {
-        let permission = format!("allow-{}", cmd.replace('_', "-"));
-        assert!(
-            default_toml.contains(&permission),
-            "Missing permission '{permission}' in default.toml for command '{cmd}'.\n\
-             Add '\"{permission}\"' to the [default] permissions array."
-        );
-    }
-}
-
-/// Test that `delete_points` permission is specifically included (regression for #169)
-#[test]
-fn test_delete_points_permission_exists() {
-    let default_toml = include_str!("../permissions/default.toml");
-    assert!(
-        default_toml.contains("allow-delete-points"),
-        "Regression: 'allow-delete-points' permission missing from default.toml (Issue #169)"
     );
 }
 

@@ -369,19 +369,6 @@ def test_filter_documents_returns_all_when_none() -> None:
     assert len(store.filter_documents()) == 2
 
 
-def test_filter_documents_passes_filter_to_scroll() -> None:
-    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_filter_arg")
-    store.write_documents([
-        Document(id="fa", content="alpha", embedding=[0.1]),
-    ])
-    # A real Haystack 2.x filter shape — the fake scroll ignores the
-    # translated VelesDB filter, but this exercises the translator end-to-end.
-    results = store.filter_documents(
-        filters={"field": "meta.source", "operator": "==", "value": "wiki"}
-    )
-    assert len(results) == 1
-
-
 def test_scale_score_not_applied_for_non_cosine_metric() -> None:
     store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_score_nc", metric="euclidean")
     store.write_documents([Document(id="z", content="raw", embedding=[1.0])])

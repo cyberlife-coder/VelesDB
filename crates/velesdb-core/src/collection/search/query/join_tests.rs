@@ -172,8 +172,17 @@ fn test_joined_to_search_results() {
 
     assert_eq!(search_results.len(), 1);
     let payload = search_results[0].point.payload.as_ref().unwrap();
-    assert!(payload.get("price").is_some());
-    assert!(payload.get("available").is_some());
+    let price = payload
+        .get("price")
+        .and_then(serde_json::Value::as_f64)
+        .expect("test: price field");
+    assert!((price - 99.99).abs() < 0.01);
+    assert_eq!(
+        payload
+            .get("available")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
 }
 
 // ========== REGRESSION TESTS FOR PR #85 BUGS ==========
@@ -205,8 +214,8 @@ fn test_extract_join_keys_u64_overflow_safety() {
     let keys = extract_join_keys(&[result], &condition);
 
     assert!(
-        keys.is_empty() || keys.iter().all(|(_, k)| *k >= 0),
-        "Large u64 IDs should not produce negative join keys: {:?}",
+        keys.is_empty(),
+        "u64::MAX exceeds i64::MAX and must be filtered out by extract_join_keys, got: {:?}",
         keys
     );
 }

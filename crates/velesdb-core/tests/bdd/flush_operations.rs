@@ -165,5 +165,29 @@ fn test_flush_empty_database() {
     let (_dir, db) = create_test_db();
 
     let results = execute_sql(&db, "FLUSH").expect("FLUSH on empty DB should succeed");
-    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results.len(),
+        1,
+        "FLUSH returns one status result even with no collections"
+    );
+
+    let status = results[0]
+        .point
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("status"))
+        .and_then(serde_json::Value::as_str);
+    assert_eq!(status, Some("flushed"));
+
+    let full = results[0]
+        .point
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("full"))
+        .and_then(serde_json::Value::as_bool);
+    assert_eq!(
+        full,
+        Some(false),
+        "bare FLUSH on empty DB should not be full"
+    );
 }

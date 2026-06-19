@@ -19,7 +19,7 @@ fn test_vector_to_bytes_empty() {
 fn test_vector_to_bytes_single_element() {
     let vector = vec![1.0f32];
     let bytes = vector_to_bytes(&vector);
-    assert_eq!(bytes.len(), 4); // f32 = 4 bytes
+    assert_eq!(bytes, &1.0f32.to_le_bytes()); // verifies LE encoding (0x3F800000), not just length
 }
 
 #[test]
@@ -27,6 +27,11 @@ fn test_vector_to_bytes_multiple_elements() {
     let vector = vec![1.0f32, 2.0, 3.0, 4.0];
     let bytes = vector_to_bytes(&vector);
     assert_eq!(bytes.len(), 16); // 4 * 4 bytes
+    let expected: Vec<u8> = [1.0f32, 2.0, 3.0, 4.0]
+        .iter()
+        .flat_map(|f| f.to_le_bytes())
+        .collect();
+    assert_eq!(bytes, expected.as_slice());
 }
 
 #[test]
@@ -114,34 +119,21 @@ fn test_bytes_to_vector_unaligned_source_is_safe() {
     assert_eq!(original, recovered);
 }
 
-/// EPIC-032/US-001: Verify vector_to_bytes output is naturally aligned.
+/// EPIC-032/US-001: Verify vector_to_bytes returns a zero-copy view aliasing
+/// the input, which (as a consequence) is naturally f32-aligned.
 #[test]
 fn test_vector_to_bytes_output_alignment() {
     let vector = vec![1.0f32, 2.0, 3.0, 4.0];
     let bytes = vector_to_bytes(&vector);
-
-    // The pointer should be f32-aligned since it comes from a Vec<f32>
-    let ptr_addr = bytes.as_ptr() as usize;
+    // vector_to_bytes returns a zero-copy view: same address, byte length = size_of_val.
     assert_eq!(
-        ptr_addr % std::mem::align_of::<f32>(),
-        0,
-        "vector_to_bytes output should be f32-aligned"
+        bytes.as_ptr() as usize,
+        vector.as_ptr() as usize,
+        "vector_to_bytes must return a zero-copy view aliasing the input pointer"
     );
-}
-
-/// EPIC-032/US-001: Verify recovered vector is always properly aligned.
-#[test]
-fn test_bytes_to_vector_output_alignment() {
-    let bytes = [0u8; 16];
-    let vector = bytes_to_vector(&bytes, 4);
-
-    // The resulting Vec<f32> must be properly aligned
-    let ptr_addr = vector.as_ptr() as usize;
-    assert_eq!(
-        ptr_addr % std::mem::align_of::<f32>(),
-        0,
-        "bytes_to_vector output must be f32-aligned"
-    );
+    assert_eq!(bytes.len(), std::mem::size_of_val(vector.as_slice()));
+    // The aliased pointer is therefore f32-aligned (allocator invariant, retained by the view).
+    assert_eq!(bytes.as_ptr() as usize % std::mem::align_of::<f32>(), 0);
 }
 
 /// EPIC-032/US-001: Test with various dimensions to verify alignment invariant.

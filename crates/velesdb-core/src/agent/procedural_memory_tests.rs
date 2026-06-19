@@ -60,6 +60,10 @@ mod tests {
         let zero = vec![0.0_f32; 4];
         let results = pm.recall(&zero, 1, 0.0).unwrap();
         assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, 1);
+        assert_eq!(results[0].name, "no-vec procedure");
+        assert_eq!(results[0].steps.len(), 2);
+        assert!((results[0].confidence - 0.6).abs() < 0.01);
     }
 
     #[test]

@@ -1,6 +1,5 @@
 //! Tests for DDL and extended DML executor (Phase 5).
 
-use super::dml_executor::hash_edge_id;
 use super::*;
 use crate::velesql::{
     AlterCollectionStatement, CompareOp, Comparison, Condition, CreateCollectionKind,
@@ -9,6 +8,7 @@ use crate::velesql::{
     InsertEdgeStatement, Query, SchemaDefinition, SelectEdgesStatement, Value,
     VectorCollectionParams,
 };
+use crate::wire::hash_edge_id;
 use tempfile::tempdir;
 
 // =========================================================================
@@ -599,6 +599,16 @@ fn test_insert_edge_auto_generates_id_when_none() {
 
     let gc = db.get_graph_collection("autoid_g").expect("get");
     assert_eq!(gc.edge_count(), 1);
+
+    let edges = gc.get_edges(None);
+    assert_eq!(edges.len(), 1);
+    assert_eq!(
+        edges[0].id(),
+        hash_edge_id(1, 2, "LINKED"),
+        "auto-generated ID must be the FNV-1a hash of (source, target, label)"
+    );
+    assert_eq!(edges[0].source(), 1);
+    assert_eq!(edges[0].target(), 2);
 }
 
 // =========================================================================

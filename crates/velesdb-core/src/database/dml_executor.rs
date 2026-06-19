@@ -144,7 +144,7 @@ fn build_graph_edge(
 ) -> Result<crate::collection::GraphEdge> {
     let edge_id = stmt
         .edge_id
-        .unwrap_or_else(|| hash_edge_id(stmt.source, stmt.target, &stmt.label));
+        .unwrap_or_else(|| crate::wire::hash_edge_id(stmt.source, stmt.target, &stmt.label));
     let edge = crate::collection::GraphEdge::new(edge_id, stmt.source, stmt.target, &stmt.label)?;
 
     if stmt.properties.is_empty() {
@@ -152,44 +152,6 @@ fn build_graph_edge(
     }
     let props = resolve_edge_properties(&stmt.properties)?;
     Ok(edge.with_properties(props))
-}
-
-/// Generates a deterministic edge ID from (source, target, label) using FNV-1a.
-///
-/// # Determinism
-///
-/// The same (source, target, label) triple always produces the same ID.
-/// This means re-inserting the same edge without an explicit `id` is
-/// idempotent (overwrites the existing edge). To create multiple edges
-/// with the same (source, target, label), provide explicit `id` values
-/// in the SQL:
-///
-/// ```sql
-/// INSERT EDGE INTO kg (id = 100, source = 1, target = 2, label = 'KNOWS');
-/// INSERT EDGE INTO kg (id = 101, source = 1, target = 2, label = 'KNOWS');
-/// ```
-pub(super) fn hash_edge_id(source: u64, target: u64, label: &str) -> u64 {
-    // FNV-1a offset basis and prime for u64
-    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME: u64 = 0x0100_0000_01b3;
-
-    let mut hash = OFFSET_BASIS;
-    // Mix source bytes
-    for byte in source.to_le_bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    // Mix target bytes
-    for byte in target.to_le_bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    // Mix label bytes
-    for byte in label.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
 }
 
 /// Resolves AST `Value` properties into a `HashMap<String, serde_json::Value>`.

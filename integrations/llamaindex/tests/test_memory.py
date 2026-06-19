@@ -41,14 +41,17 @@ class TestSemanticMemory:
         """VelesDBSemanticMemory can be imported."""
         from llamaindex_velesdb.memory import VelesDBSemanticMemory
 
-        assert VelesDBSemanticMemory is not None
+        assert callable(getattr(VelesDBSemanticMemory, "add_fact", None))
+        assert callable(getattr(VelesDBSemanticMemory, "query", None))
+        assert callable(getattr(VelesDBSemanticMemory, "clear", None))
 
     def test_init(self, tmp_db):
         """Initialisation succeeds with a valid path and dimension."""
         from llamaindex_velesdb.memory import VelesDBSemanticMemory
 
         memory = VelesDBSemanticMemory(db_path=tmp_db, dimension=SMALL_DIM)
-        assert memory is not None
+        assert memory._dimension == SMALL_DIM
+        assert memory._memory is not None
 
     def test_empty_db_path_raises(self):
         """Empty db_path must raise ValueError at construction time."""
@@ -62,8 +65,9 @@ class TestSemanticMemory:
         from llamaindex_velesdb.memory import VelesDBSemanticMemory
 
         memory = VelesDBSemanticMemory(db_path=tmp_db, dimension=SMALL_DIM)
-        # No return value to check; just assert no exception is raised.
         memory.add_fact(1, "Paris is the capital of France", UNIT_EMBEDDING)
+        results = memory.query(UNIT_EMBEDDING, top_k=1)
+        assert any("Paris is the capital of France" in r["content"] for r in results)
 
     def test_add_fact_empty_text_raises(self, tmp_db):
         """add_fact with empty text must raise ValueError."""
@@ -90,6 +94,10 @@ class TestSemanticMemory:
         results = memory.query(UNIT_EMBEDDING, top_k=1)
         assert isinstance(results, list)
         assert len(results) >= 1
+        top = results[0]
+        assert top["id"] == 1
+        assert top["content"] == "Paris is the capital of France"
+        assert top["score"] > 0.0
 
     def test_query_result_keys(self, tmp_db):
         """query results expose id, content, and score keys."""
@@ -103,6 +111,8 @@ class TestSemanticMemory:
         assert "id" in first
         assert "content" in first
         assert "score" in first
+        assert first["content"] == "Water is wet"
+        assert first["score"] > 0.0
 
     def test_query_empty_collection_returns_empty(self, tmp_db):
         """query on an empty collection returns an empty list."""
@@ -135,8 +145,11 @@ class TestSemanticMemory:
         memory = VelesDBSemanticMemory(db_path=tmp_db, dimension=SMALL_DIM)
         memory.add_fact(1, "Fact before clear", UNIT_EMBEDDING)
         memory.clear()
-        # After clear the object must still be usable.
+        # clear() only resets the in-process handle; the underlying
+        # collection (and the pre-clear fact) must survive.
         memory.add_fact(2, "Fact after clear", UNIT_EMBEDDING)
+        results = memory.query(UNIT_EMBEDDING, top_k=5)
+        assert len(results) >= 2
 
     def test_query_after_clear_still_works(self, tmp_db):
         """query remains usable after clear."""
@@ -147,6 +160,7 @@ class TestSemanticMemory:
         # query on a freshly cleared handle must not raise.
         results = memory.query(UNIT_EMBEDDING, top_k=1)
         assert isinstance(results, list)
+        assert results == []
 
 
 # ---------------------------------------------------------------------------
@@ -157,18 +171,13 @@ class TestSemanticMemory:
 class TestEpisodicMemory:
     """Tests for VelesDBEpisodicMemory."""
 
-    def test_import(self):
-        """VelesDBEpisodicMemory can be imported."""
-        from llamaindex_velesdb.memory import VelesDBEpisodicMemory
-
-        assert VelesDBEpisodicMemory is not None
-
     def test_init(self, tmp_db):
         """Initialisation succeeds with a valid path and dimension."""
         from llamaindex_velesdb.memory import VelesDBEpisodicMemory
 
         memory = VelesDBEpisodicMemory(db_path=tmp_db, dimension=SMALL_DIM)
-        assert memory is not None
+        assert memory._dimension == SMALL_DIM
+        assert memory._event_counter > 0
 
     def test_record_event_returns_positive_id(self, tmp_db):
         """record_event returns a positive numeric event ID."""
@@ -264,13 +273,18 @@ class TestEpisodicMemory:
         )
 
     def test_recall_after_clear_still_works(self, tmp_db):
-        """recall is functional immediately after clear."""
+        """recall still finds events persisted before clear() (clear resets the
+        in-process handle/counter but does NOT delete persisted data)."""
         from llamaindex_velesdb.memory import VelesDBEpisodicMemory
 
         memory = VelesDBEpisodicMemory(db_path=tmp_db, dimension=SMALL_DIM)
+        memory.record_event("user_message", {"text": "before clear"}, UNIT_EMBEDDING)
         memory.clear()
+        # The reinitialized handle must still read the persisted event.
         results = memory.recall(UNIT_EMBEDDING, top_k=1)
         assert isinstance(results, list)
+        assert len(results) >= 1
+        assert "before clear" in results[0]["description"]
 
     def test_recent_is_chronological_oldest_first(self, tmp_db):
         """recent() must return events oldest-first across multiple turns."""
@@ -311,18 +325,13 @@ class TestEpisodicMemory:
 class TestProceduralMemory:
     """Tests for VelesDBProceduralMemory."""
 
-    def test_import(self):
-        """VelesDBProceduralMemory can be imported."""
-        from llamaindex_velesdb.memory import VelesDBProceduralMemory
-
-        assert VelesDBProceduralMemory is not None
-
     def test_init(self, tmp_db):
         """Initialisation succeeds with a valid path and dimension."""
         from llamaindex_velesdb.memory import VelesDBProceduralMemory
 
         memory = VelesDBProceduralMemory(db_path=tmp_db, dimension=SMALL_DIM)
-        assert memory is not None
+        assert memory._name_to_id == {}
+        assert memory._dimension == SMALL_DIM
 
     def test_learn_stores_procedure(self, tmp_db):
         """learn succeeds and the name is tracked in _name_to_id."""
@@ -432,6 +441,11 @@ class TestProceduralMemory:
         memory = VelesDBProceduralMemory(db_path=tmp_db, dimension=SMALL_DIM)
         memory.learn("greet", ["say hello"], embedding=UNIT_EMBEDDING)
         memory.reinforce("greet", success=True)
+        results = memory.recall(UNIT_EMBEDDING, top_k=1)
+        assert len(results) == 1
+        assert results[0]["name"] == "greet"
+        # initial confidence is 0.5; FixedRate success_delta is +0.1 -> must be > 0.5
+        assert results[0]["confidence"] > 0.5
 
     def test_reinforce_unknown_procedure_raises(self, tmp_db):
         """reinforce with an unknown name must raise KeyError."""
@@ -586,7 +600,14 @@ class TestFormatProceduralResults:
         from velesdb_common.memory import format_procedural_results
 
         raw = [
-            {"id": 3, "name": "proc1", "steps": ["a", "b"], "confidence": 0.9, "score": 0.85},
+            {
+                "id": 3,
+                "name": "proc1",
+                "steps": ["a", "b"],
+                "confidence": 0.9,
+                "score": 0.85,
+                "internal_field": "secret",
+            },
         ]
         formatted = format_procedural_results(raw)
         assert len(formatted) == 1
@@ -596,6 +617,8 @@ class TestFormatProceduralResults:
         assert result["steps"] == ["a", "b"]
         assert result["confidence"] == 0.9
         assert result["score"] == 0.85
+        assert "internal_field" not in result
+        assert set(result.keys()) == {"id", "name", "steps", "confidence", "score"}
 
     def test_empty_input_returns_empty_list(self):
         """format_procedural_results of an empty list returns an empty list."""

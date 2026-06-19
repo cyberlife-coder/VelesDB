@@ -54,10 +54,11 @@ class TestPDFProcessor:
         
         chunks = processor.chunk_text(text, document_name="test.pdf", page_number=1)
         
-        # No chunk should split a word
+        # No chunk should split a word — every emitted token must be an intact original word
+        original_words = set(text.split())
         for chunk in chunks:
-            words = chunk["text"].split()
-            assert all(" " not in word for word in words)
+            for word in chunk["text"].split():
+                assert word in original_words, f"chunk split a word: {word!r}"
 
     def test_process_pdf_end_to_end(self, sample_pdf_path: Path):
         """Test full PDF processing pipeline."""

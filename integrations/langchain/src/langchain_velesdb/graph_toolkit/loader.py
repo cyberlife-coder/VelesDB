@@ -4,9 +4,10 @@ Handles conversion from extracted data to VelesDB graph storage format.
 """
 
 from typing import List, Optional, Dict, TYPE_CHECKING
-import hashlib
 import logging
 import velesdb
+
+from velesdb_common.ids import stable_hash_id
 
 if TYPE_CHECKING:
     from velesdb import Database, Collection
@@ -18,9 +19,12 @@ logger = logging.getLogger(__name__)
 
 
 def _generate_id(name: str, entity_type: str) -> int:
-    """Generate a deterministic ID from entity name and type."""
-    hash_input = f"{entity_type}:{name}".encode("utf-8")
-    return int(hashlib.sha256(hash_input).hexdigest()[:15], 16)
+    """Generate a deterministic ID from entity name and type.
+
+    Delegates to the canonical :func:`velesdb_common.ids.stable_hash_id` so all
+    VelesDB integrations derive the same string->id mapping (no per-package hash).
+    """
+    return stable_hash_id(f"{entity_type}:{name}")
 
 
 class GraphLoader:

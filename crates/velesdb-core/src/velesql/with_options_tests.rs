@@ -4,6 +4,7 @@
 //! - WITH(max_groups=N) for GROUP BY limit
 //! - Parsing and execution of max_groups option
 
+use crate::velesql::ast::WithValue;
 use crate::velesql::Parser;
 
 #[test]
@@ -30,7 +31,11 @@ fn test_with_max_groups_parsing() {
         .find(|opt| opt.key == "max_groups")
         .expect("max_groups option should be present");
 
-    assert_eq!(max_groups.key, "max_groups");
+    assert_eq!(
+        max_groups.value,
+        WithValue::Integer(100),
+        "max_groups value must parse as Integer(100)"
+    );
 }
 
 #[test]
@@ -51,6 +56,10 @@ fn test_with_multiple_options() {
         .expect("WITH clause should be present");
 
     assert_eq!(with_clause.options.len(), 2);
+    assert_eq!(with_clause.options[0].key, "max_groups");
+    assert_eq!(with_clause.options[0].value, WithValue::Integer(500));
+    assert_eq!(with_clause.options[1].key, "timeout_ms");
+    assert_eq!(with_clause.options[1].value, WithValue::Integer(1000));
 }
 
 #[test]
@@ -77,5 +86,9 @@ fn test_with_group_limit_option() {
         .find(|opt| opt.key == "group_limit")
         .expect("group_limit option should be present");
 
-    assert_eq!(group_limit.key, "group_limit");
+    assert_eq!(
+        group_limit.value,
+        WithValue::Integer(50),
+        "group_limit value must be parsed as Integer(50)"
+    );
 }

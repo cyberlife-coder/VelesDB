@@ -3,7 +3,7 @@
 //! Also covers collection name resolution across all DML variants
 //! (regression tests from Devin review).
 
-use crate::velesql::{DmlStatement, Parser, Value};
+use crate::velesql::{CompareOp, Condition, DmlStatement, Parser, Value};
 
 #[test]
 fn test_parse_insert_statement() {
@@ -35,9 +35,17 @@ fn test_parse_update_statement_with_where() {
         DmlStatement::Update(update) => {
             assert_eq!(update.table, "products");
             assert_eq!(update.assignments.len(), 2);
-            assert!(update.where_clause.is_some());
             assert_eq!(update.assignments[0].column, "price");
+            assert_eq!(update.assignments[0].value, Value::Float(3.0));
             assert_eq!(update.assignments[1].column, "active");
+            assert_eq!(update.assignments[1].value, Value::Boolean(true));
+            let where_clause = update.where_clause.expect("Expected WHERE clause");
+            let Condition::Comparison(cmp) = where_clause else {
+                panic!("Expected Comparison condition");
+            };
+            assert_eq!(cmp.column, "id");
+            assert_eq!(cmp.operator, CompareOp::Eq);
+            assert_eq!(cmp.value, Value::Integer(1));
         }
         DmlStatement::Insert(_) => panic!("Expected UPDATE statement"),
         _ => panic!("Unexpected DML variant"),

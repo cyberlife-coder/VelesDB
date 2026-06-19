@@ -65,29 +65,9 @@ fn test_train_quantizer_missing_quantizer_keyword() {
 }
 
 #[test]
-fn test_is_train_true_for_train_statement() {
-    let query = Parser::parse("TRAIN QUANTIZER ON my_collection WITH (m=8)").unwrap();
-    assert!(query.is_train());
-}
-
-#[test]
 fn test_is_train_false_for_select() {
     let query = Parser::parse("SELECT * FROM docs LIMIT 10").unwrap();
     assert!(!query.is_train());
-}
-
-#[test]
-fn test_train_collection_name() {
-    let query = Parser::parse("TRAIN QUANTIZER ON my_collection WITH (m=8)").unwrap();
-    let train = query.train.as_ref().unwrap();
-    assert_eq!(train.collection, "my_collection");
-}
-
-#[test]
-fn test_train_param_m_integer() {
-    let query = Parser::parse("TRAIN QUANTIZER ON my_collection WITH (m=8)").unwrap();
-    let train = query.train.as_ref().unwrap();
-    assert_eq!(train.params.get("m"), Some(&WithValue::Integer(8)));
 }
 
 #[test]

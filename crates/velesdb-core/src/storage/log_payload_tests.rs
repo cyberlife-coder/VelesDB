@@ -389,9 +389,17 @@ fn test_wal_position_stored_in_snapshot() {
     let data = std::fs::read(&snapshot_path).expect("Read failed");
 
     // Assert - WAL position should be at offset 5 (after magic + version)
-    // and should be > 0 (some data was written)
-    let wal_pos = u64::from_le_bytes(data[5..13].try_into().unwrap());
-    assert!(wal_pos > 0, "WAL position should be recorded");
+    // and must equal the exact WAL file length on disk. Pins both the
+    // offset-5 little-endian layout and the stored value, catching
+    // endianness inversion, off-by-one offsets, and stale/garbage writes.
+    let wal_size = std::fs::metadata(temp.path().join("payloads.log"))
+        .expect("WAL metadata")
+        .len();
+    let wal_pos = u64::from_le_bytes(data[5..13].try_into().expect("slice 5..13"));
+    assert_eq!(
+        wal_pos, wal_size,
+        "snapshot WAL position must equal WAL file length"
+    );
 }
 
 // -------------------------------------------------------------------------
@@ -453,9 +461,11 @@ fn test_snapshot_truncated_data() {
 
     // Act & Assert - Should handle truncated data gracefully
     let result = LogPayloadStorage::new(temp.path());
-    assert!(
-        result.is_ok(),
-        "Should handle truncated snapshot gracefully"
+    let storage = result.expect("Should handle truncated snapshot gracefully");
+    assert_eq!(
+        storage.ids().len(),
+        0,
+        "WAL fallback from truncated snapshot must yield empty storage"
     );
 }
 
@@ -479,7 +489,16 @@ fn test_snapshot_wrong_magic() {
 
     // Act & Assert - Should reject and fall back to WAL
     let result = LogPayloadStorage::new(temp.path());
-    assert!(result.is_ok(), "Should handle wrong magic gracefully");
+    assert!(
+        result.is_ok(),
+        "Should reject wrong magic and fall back to WAL"
+    );
+    let storage = result.unwrap();
+    assert_eq!(
+        storage.ids().len(),
+        0,
+        "Bad-magic snapshot must be rejected; empty WAL yields empty index"
+    );
 }
 
 #[test]
@@ -506,6 +525,12 @@ fn test_snapshot_unsupported_version() {
         result.is_ok(),
         "Should handle unsupported version gracefully"
     );
+    let storage = result.expect("Should fall back to WAL on unsupported version");
+    assert_eq!(
+        storage.ids().len(),
+        0,
+        "Rejected future-version snapshot must fall back to the empty WAL, leaving an empty index"
+    );
 }
 
 #[test]
@@ -525,7 +550,12 @@ fn test_snapshot_random_garbage() {
 
     // Act & Assert - Should handle garbage gracefully
     let result = LogPayloadStorage::new(temp.path());
-    assert!(result.is_ok(), "Should handle garbage data gracefully");
+    let storage = result.expect("Should handle garbage data gracefully");
+    assert_eq!(
+        storage.ids().len(),
+        0,
+        "Garbage snapshot must be discarded; empty-WAL fallback yields zero entries"
+    );
 }
 
 #[test]
@@ -551,7 +581,12 @@ fn test_snapshot_entry_count_overflow() {
 
     // Act & Assert - Should NOT panic on overflow, should fall back to WAL
     let result = LogPayloadStorage::new(temp.path());
-    assert!(result.is_ok(), "Should handle overflow gracefully");
+    let storage = result.expect("Should handle overflow gracefully");
+    assert_eq!(
+        storage.ids().len(),
+        0,
+        "Overflow guard must fall back to a clean empty WAL state"
+    );
 }
 
 // -------------------------------------------------------------------------
@@ -804,6 +839,18 @@ fn test_store_batch_deferred_multiple_batches() {
         .expect("test: batch 3");
 
     assert_eq!(storage.ids().len(), 3);
+    assert_eq!(
+        storage.retrieve(1).expect("test: retrieve 1"),
+        Some(json!({"batch": 1}))
+    );
+    assert_eq!(
+        storage.retrieve(2).expect("test: retrieve 2"),
+        Some(json!({"batch": 2}))
+    );
+    assert_eq!(
+        storage.retrieve(3).expect("test: retrieve 3"),
+        Some(json!({"batch": 3}))
+    );
 }
 
 /// Empty `store_batch_deferred` is a no-op.

@@ -110,11 +110,8 @@ pub(crate) fn to_result_row(
         }
     }
 
-    let data_json = serde_json::to_string(&serde_json::Value::Object(map)).map_err(|e| {
-        VelesError::Database {
-            message: format!("Failed to serialize row to JSON: {e}"),
-        }
-    })?;
+    let data_json = serde_json::to_string(&serde_json::Value::Object(map))
+        .map_err(|e| VelesError::database(format!("Failed to serialize row to JSON: {e}")))?;
 
     Ok(QueryResultRow {
         id: result.point.id,
@@ -144,9 +141,8 @@ pub(crate) fn parse_params(
 ) -> Result<HashMap<String, serde_json::Value>, VelesError> {
     params_json
         .map(|json| {
-            serde_json::from_str(&json).map_err(|e| VelesError::Database {
-                message: format!("Invalid params JSON: {e}"),
-            })
+            serde_json::from_str(&json)
+                .map_err(|e| VelesError::database(format!("Invalid params JSON: {e}")))
         })
         .transpose()
         .map(Option::unwrap_or_default)

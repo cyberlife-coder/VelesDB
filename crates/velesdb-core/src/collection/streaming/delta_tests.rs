@@ -156,8 +156,21 @@ fn merge_delta_dedup_prefers_delta() {
     let merged = merge_with_delta(hnsw, &buf, &[1.0, 0.0], 10, DistanceMetric::Cosine);
 
     let ids: Vec<u64> = merged.iter().map(|(id, _)| *id).collect();
-    // id=1 must appear exactly once (from delta, not HNSW)
+    // id=1 must appear exactly once (deduplicated)
     assert_eq!(ids.iter().filter(|&&id| id == 1).count(), 1);
+
+    // ...and the surviving id=1 score must come from the delta brute-force
+    // (Cosine([1,0],[1,0]) ≈ 1.0), NOT the HNSW input score (0.5).
+    let id1_score = merged
+        .iter()
+        .find(|(id, _)| *id == 1)
+        .expect("id=1 must be present")
+        .1;
+    let expected_delta_score = DistanceMetric::Cosine.calculate(&[1.0, 0.0], &[1.0, 0.0]);
+    assert!(
+        (id1_score - expected_delta_score).abs() < 1e-5,
+        "delta score ({id1_score}) should win over HNSW score (0.5)"
+    );
 }
 
 #[test]

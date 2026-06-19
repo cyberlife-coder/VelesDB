@@ -385,7 +385,7 @@ fn v2_path_maintains_recall() {
     let overlap = std_ids.intersection(&v2_ids).count();
     let recall = overlap as f64 / k as f64;
     assert!(
-        recall >= 0.7,
-        "V2 recall ({recall:.2}) must be >= 0.70 vs standard path"
+        recall >= 0.90,
+        "V2 path search must match standard path within parity floor: got {recall:.2}"
     );
 }

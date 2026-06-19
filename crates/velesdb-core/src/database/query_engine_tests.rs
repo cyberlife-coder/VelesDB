@@ -60,7 +60,11 @@ fn test_execute_query_with_limit() {
         .execute_query(&query, &std::collections::HashMap::new())
         .unwrap();
 
-    assert!(results.len() <= 2);
+    assert_eq!(
+        results.len(),
+        2,
+        "LIMIT 2 over 5 inserted points must return exactly 2 rows"
+    );
 }
 
 #[test]
@@ -77,9 +81,18 @@ fn test_execute_query_nonexistent_collection_returns_error() {
 }
 
 #[test]
-fn test_execute_query_invalid_syntax_returns_error() {
-    let result = Parser::parse("SELECTT * FROMM nothing");
-    assert!(result.is_err());
+fn test_execute_query_validation_error_returns_query_error() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection_typed("t", &crate::CollectionType::MetadataOnly)
+        .unwrap();
+    // Parses fine, but similarity() without a score context (no NEAR / similarity in WHERE)
+    // is rejected by QueryValidator -> execute_query maps it to Error::Query.
+    let query = Parser::parse("SELECT similarity() FROM t WHERE name = 'x'").unwrap();
+    let err = db
+        .execute_query(&query, &std::collections::HashMap::new())
+        .unwrap_err();
+    assert!(matches!(err, crate::Error::Query(_)));
 }
 
 // =========================================================================

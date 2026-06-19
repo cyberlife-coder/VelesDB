@@ -44,10 +44,11 @@ mod tests {
     fn test_string_table_get_id() {
         // Arrange
         let mut table = StringTable::new();
-        table.intern("existing");
+        let id = table.intern("existing");
 
         // Act & Assert
-        assert!(table.get_id("existing").is_some());
+        // get_id returns the SAME id intern() assigned (not just "some id")
+        assert_eq!(table.get_id("existing"), Some(id));
         assert!(table.get_id("missing").is_none());
     }
 
@@ -96,6 +97,9 @@ mod tests {
 
         // Assert
         assert_eq!(store.row_count(), 1);
+        // Values must be both stored and retrievable at row 0 (defeats a counter-only stub)
+        assert_eq!(store.filter_eq_int("price", 100), vec![0]);
+        assert_eq!(store.filter_eq_string("category", "tech"), vec![0]);
     }
 
     // =========================================================================
@@ -917,6 +921,16 @@ mod tests {
 
         // Assert
         assert!(result.is_ok());
+        // TTL must be recorded as a future expiry: row stays live, nothing expires
+        assert_eq!(
+            store.expire_rows().expired_count,
+            0,
+            "3600s TTL must not be expired immediately"
+        );
+        assert!(
+            store.get_row_idx_by_pk(123).is_some(),
+            "row must remain live after setting a future TTL"
+        );
     }
 
     #[test]
@@ -2251,25 +2265,6 @@ mod array_column_tests {
     // ---- ColumnType::Array creation and validation ----
 
     #[test]
-    fn test_column_type_array_of_string() {
-        let ct = ColumnType::Array(Box::new(ColumnType::String));
-        assert_eq!(ct, ColumnType::Array(Box::new(ColumnType::String)));
-    }
-
-    #[test]
-    fn test_column_type_array_of_int() {
-        let ct = ColumnType::Array(Box::new(ColumnType::Int));
-        assert_ne!(ct, ColumnType::Array(Box::new(ColumnType::String)));
-    }
-
-    #[test]
-    fn test_column_type_array_clone() {
-        let ct = ColumnType::Array(Box::new(ColumnType::Float));
-        let cloned = ct.clone();
-        assert_eq!(ct, cloned);
-    }
-
-    #[test]
     fn test_reject_nested_arrays() {
         let nested = ColumnType::Array(Box::new(ColumnType::Array(Box::new(ColumnType::Int))));
         let result = ColumnStore::with_schema_validated(&[("nested", nested)]);
@@ -2280,8 +2275,13 @@ mod array_column_tests {
 
     #[test]
     fn test_typed_column_array_new_is_empty() {
-        let col = TypedColumn::new_array(ColumnType::String, 0);
-        assert!(col.is_empty());
+        // Preallocated capacity must not be counted as length: is_empty()/len()
+        // report LENGTH, not CAPACITY.
+        let col = TypedColumn::new_array(ColumnType::String, 8);
+        assert!(
+            col.is_empty(),
+            "a freshly built array column is empty regardless of preallocated capacity"
+        );
         assert_eq!(col.len(), 0);
     }
 

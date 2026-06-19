@@ -391,23 +391,11 @@ async fn apply_checkpoint_state(
 }
 
 fn map_core_metric(m: crate::config::DistanceMetric) -> velesdb_core::DistanceMetric {
-    match m {
-        crate::config::DistanceMetric::Cosine => velesdb_core::DistanceMetric::Cosine,
-        crate::config::DistanceMetric::Euclidean => velesdb_core::DistanceMetric::Euclidean,
-        crate::config::DistanceMetric::Dot => velesdb_core::DistanceMetric::DotProduct,
-        crate::config::DistanceMetric::Hamming => velesdb_core::DistanceMetric::Hamming,
-        crate::config::DistanceMetric::Jaccard => velesdb_core::DistanceMetric::Jaccard,
-    }
+    m.into()
 }
 
 fn map_core_storage_mode(m: crate::config::StorageMode) -> velesdb_core::StorageMode {
-    match m {
-        crate::config::StorageMode::Full => velesdb_core::StorageMode::Full,
-        crate::config::StorageMode::SQ8 => velesdb_core::StorageMode::SQ8,
-        crate::config::StorageMode::Binary => velesdb_core::StorageMode::Binary,
-        crate::config::StorageMode::Pq => velesdb_core::StorageMode::ProductQuantization,
-        crate::config::StorageMode::RaBitQ => velesdb_core::StorageMode::RaBitQ,
-    }
+    m.into()
 }
 
 async fn open_destination_db(
@@ -509,32 +497,26 @@ pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
 }
 
 /// Normalises a source-reported metric label into its canonical lowercase
-/// identifier (matches `velesdb_core::DistanceMetric::from_str` aliases).
+/// identifier.
+///
+/// Delegates to [`velesdb_core::DistanceMetric::parse_alias`] — the single
+/// source of truth for metric aliases — so this crate cannot drift from the
+/// core vocabulary. Connectors already normalise their vendor-specific labels
+/// into the core vocabulary before populating `SourceSchema.metric`.
 ///
 /// Returns `None` when the label is empty or unknown — unknown values are
 /// intentionally preserved verbatim to [`check_metric_fidelity`] so the
 /// mismatch error carries the original string for diagnostics.
 fn canonicalise_source_metric(raw: &str) -> Option<&'static str> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "cosine" | "cos" | "cosinesimilarity" => Some("cosine"),
-        "euclidean" | "euclid" | "l2" | "l2_distance" => Some("euclidean"),
-        "dot" | "dotproduct" | "ip" | "inner_product" => Some("dot"),
-        "hamming" => Some("hamming"),
-        "jaccard" => Some("jaccard"),
-        _ => None,
-    }
+    velesdb_core::DistanceMetric::parse_alias(raw).map(velesdb_core::DistanceMetric::canonical_name)
 }
 
 /// Returns the canonical lowercase string for a destination
 /// `DistanceMetric` selected in `MigrationConfig`.
 fn canonicalise_dest_metric(metric: crate::config::DistanceMetric) -> &'static str {
-    match metric {
-        crate::config::DistanceMetric::Cosine => "cosine",
-        crate::config::DistanceMetric::Euclidean => "euclidean",
-        crate::config::DistanceMetric::Dot => "dot",
-        crate::config::DistanceMetric::Hamming => "hamming",
-        crate::config::DistanceMetric::Jaccard => "jaccard",
-    }
+    // Single-sourced through the core type so the destination label always
+    // matches the core canonical name used on the source side.
+    velesdb_core::DistanceMetric::from(metric).canonical_name()
 }
 
 /// Verifies that the metric reported by the source (when present)

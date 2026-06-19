@@ -98,7 +98,10 @@ fn test_extract_match_query_nested_and() {
 fn test_extract_metadata_filter_comparison() {
     let cond = make_comparison("category", 1);
     let result = Collection::extract_metadata_filter(&cond);
-    assert!(result.is_some());
+    assert!(matches!(result, Some(Condition::Comparison(_))));
+    if let Some(Condition::Comparison(c)) = result {
+        assert_eq!(c.column, "category");
+    }
 }
 
 #[test]

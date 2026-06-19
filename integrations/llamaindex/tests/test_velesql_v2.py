@@ -64,9 +64,11 @@ class TestVelesQLv2BasicSearch:
             similarity_top_k=2,
         )
         result = vector_store.query(query)
-        
-        assert result.nodes is not None
-        assert len(result.nodes) <= 2
+
+        assert len(result.nodes) == 2
+        # Query vector is byte-identical to doc1's embedding, so under cosine
+        # doc1 has similarity 1.0 and must rank first.
+        assert result.nodes[0].node_id == "doc1"
 
     def test_query_with_similarity_scores(self, vector_store):
         """Test that query returns similarity scores."""
@@ -75,11 +77,11 @@ class TestVelesQLv2BasicSearch:
             similarity_top_k=3,
         )
         result = vector_store.query(query)
-        
+
         assert result.similarities is not None
-        # Scores should be in descending order (higher is better for cosine)
-        if len(result.similarities) > 1:
-            assert result.similarities[0] >= result.similarities[-1]
+        assert len(result.similarities) == 3  # 3 nodes inserted, top_k=3
+        # Scores must come back ranked best-first (higher cosine = better)
+        assert result.similarities[0] >= result.similarities[1] >= result.similarities[2]
 
 
 class TestVelesQLv2Filters:
@@ -132,10 +134,11 @@ class TestVelesQLv2Filters:
             filters=filters,
         )
         result = vector_store.query(query)
-        
-        # Query should execute without error
-        assert result is not None
-        assert isinstance(result.nodes, list)
+
+        # Filter must actually be applied by the engine: only python nodes returned.
+        assert len(result.nodes) == 2
+        assert {n.node_id for n in result.nodes} == {"py1", "py2"}
+        assert all(n.metadata.get("language") == "python" for n in result.nodes)
 
 
 class TestVelesQLv2Integration:
