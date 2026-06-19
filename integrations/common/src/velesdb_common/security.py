@@ -34,15 +34,28 @@ MAX_PATH_LENGTH = 4096           # Max path length
 # binding lists whenever the wheel is present.
 _FALLBACK_METRICS = frozenset({"cosine", "euclidean", "dot", "hamming", "jaccard"})
 _FALLBACK_STORAGE_MODES = frozenset({"full", "sq8", "binary", "pq", "rabitq"})
+# Canonical filter condition-type tags (velesdb-core ``Condition`` serde tags),
+# single-sourced from the binding (``velesdb.CONDITION_TYPES``). The literal here
+# is only the offline fallback used when the native wheel is unavailable. This is
+# the SINGLE MIT-side definition; ``filter_ops`` imports it instead of re-listing
+# the vocabulary.
+_FALLBACK_CONDITION_TYPES = frozenset({
+    "eq", "neq", "gt", "gte", "lt", "lte", "in", "contains",
+    "is_null", "is_not_null", "and", "or", "not", "like", "ilike",
+    "array_contains", "array_contains_any", "array_contains_all",
+    "geo_distance", "geo_bbox",
+})
 
 try:
     import velesdb as _velesdb
 
     ALLOWED_METRICS = frozenset(_velesdb.DISTANCE_METRICS)
     ALLOWED_STORAGE_MODES = frozenset(_velesdb.STORAGE_MODES)
+    ALLOWED_CONDITION_TYPES = frozenset(_velesdb.CONDITION_TYPES)
 except (ImportError, AttributeError):
     ALLOWED_METRICS = _FALLBACK_METRICS
     ALLOWED_STORAGE_MODES = _FALLBACK_STORAGE_MODES
+    ALLOWED_CONDITION_TYPES = _FALLBACK_CONDITION_TYPES
 # Aliases accepted by the Rust core via ``from_str_with_aliases()``.
 # Maps alias → canonical name (same set of aliases as Rust).
 STORAGE_MODE_ALIASES: dict[str, str] = {
@@ -569,6 +582,7 @@ def validate_named_sparse_vector(sparse_vector: Any) -> dict:
 # (langchain_velesdb.security / llamaindex_velesdb.security) via
 # ``from velesdb_common.security import *``.
 __all__ = [
+    "ALLOWED_CONDITION_TYPES",
     "ALLOWED_STORAGE_MODES",
     "STORAGE_MODE_ALIASES",
     "DEFAULT_TIMEOUT_MS",
