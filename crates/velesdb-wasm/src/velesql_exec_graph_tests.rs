@@ -129,14 +129,21 @@ fn test_select_edges_filter_by_label() {
 fn test_delete_edge_by_id_returns_deletion() {
     let mut db = DatabaseInner::new();
     seed_graph(&mut db);
-    let r = execute(&mut db, "DELETE EDGE 1 FROM graph", None).expect("test: delete edge");
+    // The Alice->Bob edge auto-assigns the canonical (source, target, label) id.
+    let alice_bob = velesdb_core::hash_edge_id(1, 2, "KNOWS");
+    let r = execute(
+        &mut db,
+        &format!("DELETE EDGE {alice_bob} FROM graph"),
+        None,
+    )
+    .expect("test: delete edge");
     assert_eq!(r.kind(), "deletion");
     let after =
         execute(&mut db, "SELECT EDGES FROM graph", None).expect("test: edges after delete");
     assert_eq!(
         after.row_count(),
         1,
-        "exactly one edge must remain after deleting edge id 1"
+        "exactly one edge must remain after deleting the Alice->Bob edge"
     );
     let rows = after.rows_json();
     assert!(

@@ -213,6 +213,9 @@ pub use validation::{
     validate_collection_name, validate_dimension, validate_dimension_match,
     MAX_COLLECTION_NAME_LENGTH, MAX_DIMENSION, MIN_DIMENSION,
 };
+// Canonical cross-engine edge-id derivation (FNV-1a over raw LE bytes).
+// Lives in `wire` so persistence-free targets (WASM) can delegate to it.
+pub use wire::hash_edge_id;
 
 #[cfg(feature = "persistence")]
 pub use column_store::{

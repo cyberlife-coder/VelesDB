@@ -174,8 +174,10 @@ fn build_edge(
     let fk_str = value_to_id_str(fk_value)?;
     let to_node_id = stable_point_id(&fk_str);
 
-    let key = format!("{from_node_id}-{to_node_id}-{}", relation.edge_label);
-    let id = crate::pipeline::fnv1a64(key.as_bytes());
+    // Delegate to core's canonical edge-id derivation (FNV-1a over the raw
+    // LE bytes of source, target, label) so the same logical edge gets the
+    // same id as every other VelesDB engine.
+    let id = velesdb_core::hash_edge_id(from_node_id, to_node_id, &relation.edge_label);
 
     let edge = velesdb_core::GraphEdge::new(id, from_node_id, to_node_id, &relation.edge_label)
         .inspect_err(|e| warn!("Failed to create edge {}: {}", id, e))
