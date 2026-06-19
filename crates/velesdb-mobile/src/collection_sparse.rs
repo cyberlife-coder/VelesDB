@@ -36,9 +36,7 @@ impl VelesCollection {
                 usize::try_from(limit).unwrap_or(usize::MAX),
                 &idx_name,
             )
-            .map_err(|e| VelesError::Database {
-                message: format!("Sparse search failed: {e}"),
-            })?;
+            .map_err(|e| VelesError::database(format!("Sparse search failed: {e}")))?;
 
         Ok(results
             .into_iter()
@@ -85,9 +83,7 @@ impl VelesCollection {
                 &idx_name,
                 &strategy,
             )
-            .map_err(|e| VelesError::Database {
-                message: format!("Hybrid sparse search failed: {e}"),
-            })?;
+            .map_err(|e| VelesError::database(format!("Hybrid sparse search failed: {e}")))?;
 
         Ok(results
             .into_iter()
@@ -107,9 +103,9 @@ impl VelesCollection {
         strategy: FusionStrategy,
     ) -> Result<Vec<SearchResult>, VelesError> {
         if vectors.is_empty() {
-            return Err(VelesError::Database {
-                message: "multi_query_search requires at least one vector".to_string(),
-            });
+            return Err(VelesError::database(
+                "multi_query_search requires at least one vector".to_string(),
+            ));
         }
 
         let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
@@ -123,9 +119,7 @@ impl VelesCollection {
                 core_strategy,
                 None,
             )
-            .map_err(|e| VelesError::Database {
-                message: format!("Multi-query search failed: {e}"),
-            })?;
+            .map_err(|e| VelesError::database(format!("Multi-query search failed: {e}")))?;
 
         Ok(results
             .into_iter()
@@ -148,9 +142,9 @@ impl VelesCollection {
         strategy: FusionStrategy,
     ) -> Result<Vec<SearchResult>, VelesError> {
         if vectors.is_empty() {
-            return Err(VelesError::Database {
-                message: "multi_query_search requires at least one vector".to_string(),
-            });
+            return Err(VelesError::database(
+                "multi_query_search requires at least one vector".to_string(),
+            ));
         }
 
         let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
@@ -163,9 +157,7 @@ impl VelesCollection {
                 usize::try_from(limit).unwrap_or(usize::MAX),
                 core_strategy,
             )
-            .map_err(|e| VelesError::Database {
-                message: format!("Multi-query search failed: {e}"),
-            })?;
+            .map_err(|e| VelesError::database(format!("Multi-query search failed: {e}")))?;
 
         Ok(results
             .into_iter()
@@ -186,15 +178,13 @@ impl VelesCollection {
         filter_json: String,
     ) -> Result<Vec<SearchResult>, VelesError> {
         if vectors.is_empty() {
-            return Err(VelesError::Database {
-                message: "multi_query_search requires at least one vector".to_string(),
-            });
+            return Err(VelesError::database(
+                "multi_query_search requires at least one vector".to_string(),
+            ));
         }
 
-        let filter: velesdb_core::Filter =
-            serde_json::from_str(&filter_json).map_err(|e| VelesError::Database {
-                message: format!("Invalid filter JSON: {e}"),
-            })?;
+        let filter: velesdb_core::Filter = serde_json::from_str(&filter_json)
+            .map_err(|e| VelesError::database(format!("Invalid filter JSON: {e}")))?;
 
         let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
         let core_strategy: CoreFusionStrategy = strategy.into();
@@ -207,9 +197,7 @@ impl VelesCollection {
                 core_strategy,
                 Some(&filter),
             )
-            .map_err(|e| VelesError::Database {
-                message: format!("Multi-query search failed: {e}"),
-            })?;
+            .map_err(|e| VelesError::database(format!("Multi-query search failed: {e}")))?;
 
         Ok(results
             .into_iter()
@@ -236,9 +224,7 @@ impl VelesCollection {
             .payload
             .map(|s| serde_json::from_str(&s))
             .transpose()
-            .map_err(|e| VelesError::Database {
-                message: format!("Invalid JSON payload: {e}"),
-            })?;
+            .map_err(|e| VelesError::database(format!("Invalid JSON payload: {e}")))?;
 
         let core_sv = Self::to_core_sparse_vector(&sparse_vector);
         let mut sparse_map = std::collections::BTreeMap::new();

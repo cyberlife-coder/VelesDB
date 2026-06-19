@@ -283,7 +283,7 @@ fn test_execute_query_invalid_sql_returns_error() {
     assert!(result.is_err(), "invalid SQL should return an error");
     let err = result.expect_err("test: error expected");
     match err {
-        VelesError::Database { message } => {
+        VelesError::Database { message, .. } => {
             assert!(
                 message.contains("parse error"),
                 "error should mention parse error, got: {message}"

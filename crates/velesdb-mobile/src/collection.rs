@@ -184,9 +184,7 @@ impl VelesCollection {
         let results = self
             .inner
             .text_search(&query, usize::try_from(limit).unwrap_or(usize::MAX))
-            .map_err(|e| VelesError::Database {
-                message: format!("Text search failed: {e}"),
-            })?;
+            .map_err(|e| VelesError::database(format!("Text search failed: {e}")))?;
 
         Ok(results
             .into_iter()
@@ -252,10 +250,8 @@ impl VelesCollection {
         filter_json: String,
     ) -> Result<Vec<SearchResult>, VelesError> {
         // Parse filter JSON
-        let filter: velesdb_core::Filter =
-            serde_json::from_str(&filter_json).map_err(|e| VelesError::Database {
-                message: format!("Invalid filter JSON: {e}"),
-            })?;
+        let filter: velesdb_core::Filter = serde_json::from_str(&filter_json)
+            .map_err(|e| VelesError::database(format!("Invalid filter JSON: {e}")))?;
 
         let results = self.inner.search_with_filter(
             &vector,
@@ -294,8 +290,8 @@ impl VelesCollection {
                 s.filter
                     .as_ref()
                     .map(|f_json| {
-                        serde_json::from_str(f_json).map_err(|e| VelesError::Database {
-                            message: format!("Invalid filter JSON in batch: {e}"),
+                        serde_json::from_str(f_json).map_err(|e| {
+                            VelesError::database(format!("Invalid filter JSON in batch: {e}"))
                         })
                     })
                     .transpose()
@@ -343,10 +339,8 @@ impl VelesCollection {
         limit: u32,
         filter_json: String,
     ) -> Result<Vec<SearchResult>, VelesError> {
-        let filter: velesdb_core::Filter =
-            serde_json::from_str(&filter_json).map_err(|e| VelesError::Database {
-                message: format!("Invalid filter JSON: {e}"),
-            })?;
+        let filter: velesdb_core::Filter = serde_json::from_str(&filter_json)
+            .map_err(|e| VelesError::database(format!("Invalid filter JSON: {e}")))?;
 
         let results = self
             .inner
@@ -355,9 +349,7 @@ impl VelesCollection {
                 usize::try_from(limit).unwrap_or(usize::MAX),
                 &filter,
             )
-            .map_err(|e| VelesError::Database {
-                message: format!("Text search with filter failed: {e}"),
-            })?;
+            .map_err(|e| VelesError::database(format!("Text search with filter failed: {e}")))?;
 
         Ok(results
             .into_iter()
@@ -386,10 +378,8 @@ impl VelesCollection {
         vector_weight: f32,
         filter_json: String,
     ) -> Result<Vec<SearchResult>, VelesError> {
-        let filter: velesdb_core::Filter =
-            serde_json::from_str(&filter_json).map_err(|e| VelesError::Database {
-                message: format!("Invalid filter JSON: {e}"),
-            })?;
+        let filter: velesdb_core::Filter = serde_json::from_str(&filter_json)
+            .map_err(|e| VelesError::database(format!("Invalid filter JSON: {e}")))?;
 
         let results = self.inner.hybrid_search_with_filter(
             &vector,
@@ -434,27 +424,21 @@ impl VelesCollection {
         params_json: Option<String>,
     ) -> Result<Vec<SearchResult>, VelesError> {
         // Parse the VelesQL query
-        let parsed =
-            velesdb_core::velesql::Parser::parse(&query_str).map_err(|e| VelesError::Database {
-                message: format!("VelesQL parse error: {}", e.message),
-            })?;
+        let parsed = velesdb_core::velesql::Parser::parse(&query_str)
+            .map_err(|e| VelesError::database(format!("VelesQL parse error: {}", e.message)))?;
 
         // Parse params from JSON if provided
         let params: std::collections::HashMap<String, serde_json::Value> = params_json
             .map(|json| serde_json::from_str(&json))
             .transpose()
-            .map_err(|e| VelesError::Database {
-                message: format!("Invalid params JSON: {e}"),
-            })?
+            .map_err(|e| VelesError::database(format!("Invalid params JSON: {e}")))?
             .unwrap_or_default();
 
         // Execute the query
-        let results =
-            self.inner
-                .execute_query(&parsed, &params)
-                .map_err(|e| VelesError::Database {
-                    message: format!("Query execution failed: {e}"),
-                })?;
+        let results = self
+            .inner
+            .execute_query(&parsed, &params)
+            .map_err(|e| VelesError::database(format!("Query execution failed: {e}")))?;
 
         Ok(results
             .into_iter()
@@ -509,12 +493,11 @@ impl VelesCollection {
         let core_points: Result<Vec<velesdb_core::Point>, VelesError> =
             points.into_iter().map(parse_point).collect();
 
-        let queued =
-            self.inner
-                .stream_insert_batch(core_points?)
-                .map_err(|e| VelesError::Database {
-                    message: format!("Stream insert failed (buffer full or not configured): {e}"),
-                })?;
+        let queued = self.inner.stream_insert_batch(core_points?).map_err(|e| {
+            VelesError::database(format!(
+                "Stream insert failed (buffer full or not configured): {e}"
+            ))
+        })?;
         Ok(u64::try_from(queued).unwrap_or(u64::MAX))
     }
 
@@ -628,9 +611,7 @@ fn parse_point(p: VelesPoint) -> Result<velesdb_core::Point, VelesError> {
         .payload
         .map(|s| serde_json::from_str(&s))
         .transpose()
-        .map_err(|e| VelesError::Database {
-            message: format!("Invalid JSON payload: {e}"),
-        })?;
+        .map_err(|e| VelesError::database(format!("Invalid JSON payload: {e}")))?;
     Ok(velesdb_core::Point::new(p.id, p.vector, payload))
 }
 

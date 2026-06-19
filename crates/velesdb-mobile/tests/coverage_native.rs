@@ -133,7 +133,7 @@ fn stream_insert_without_enable_returns_error() {
     }]);
 
     let err = result.expect_err("stream_insert without enable must fail");
-    let velesdb_mobile::VelesError::Database { message } = err else {
+    let velesdb_mobile::VelesError::Database { message, .. } = err else {
         panic!("expected VelesError::Database, got {err:?}");
     };
     assert!(
@@ -163,7 +163,7 @@ fn upsert_with_invalid_json_payload_errors() {
     });
 
     let err = result.expect_err("invalid JSON payload must fail");
-    let velesdb_mobile::VelesError::Database { message } = err else {
+    let velesdb_mobile::VelesError::Database { message, .. } = err else {
         panic!("expected VelesError::Database, got {err:?}");
     };
     assert!(
