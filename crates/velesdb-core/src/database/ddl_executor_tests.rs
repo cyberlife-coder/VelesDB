@@ -1,6 +1,5 @@
 //! Tests for DDL and extended DML executor (Phase 5).
 
-use super::dml_executor::hash_edge_id;
 use super::*;
 use crate::velesql::{
     AlterCollectionStatement, CompareOp, Comparison, Condition, CreateCollectionKind,
@@ -9,6 +8,7 @@ use crate::velesql::{
     InsertEdgeStatement, Query, SchemaDefinition, SelectEdgesStatement, Value,
     VectorCollectionParams,
 };
+use crate::wire::hash_edge_id;
 use tempfile::tempdir;
 
 // =========================================================================
