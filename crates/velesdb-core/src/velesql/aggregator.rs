@@ -83,7 +83,12 @@ impl ColumnAgg {
     }
 
     fn new_batch(sum: f64, count: u64, min: f64, max: f64) -> Self {
-        Self { sum, count, min, max }
+        Self {
+            sum,
+            count,
+            min,
+            max,
+        }
     }
 
     #[inline]
