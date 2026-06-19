@@ -225,24 +225,17 @@ pub fn hybrid_search_fuse(
     let sparse: Vec<(u64, f32)> = serde_wasm_bindgen::from_value(sparse_results)
         .map_err(|e| JsValue::from_str(&format!("Invalid sparse_results: {e}")))?;
 
-    // RRF: score(d) = sum over lists of 1 / (k + rank_in_list)
-    // N-06: rrf_k is a smoothing constant typically in [10, 100]; the precision
-    // loss from u32 → f32 is negligible (< 1 ULP for values < 2^24).
-    let k_f32 = rrf_k as f32;
-    let mut scores: std::collections::HashMap<u64, f32> = std::collections::HashMap::new();
+    // Delegate to the canonical RRF in velesdb-core so the browser engine
+    // reproduces core's ranking 1:1 (single source of truth for fusion math)
+    // instead of re-deriving the formula here.
+    let fused = velesdb_core::FusionStrategy::RRF { k: rrf_k }
+        .fuse(vec![dense, sparse])
+        .map_err(|e| JsValue::from_str(&format!("Fusion error: {e}")))?;
 
-    for (rank, &(doc_id, _)) in dense.iter().enumerate() {
-        *scores.entry(doc_id).or_insert(0.0) += 1.0 / (k_f32 + (rank as f32) + 1.0);
-    }
-    for (rank, &(doc_id, _)) in sparse.iter().enumerate() {
-        *scores.entry(doc_id).or_insert(0.0) += 1.0 / (k_f32 + (rank as f32) + 1.0);
-    }
-
-    let mut results: Vec<SparseSearchResult> = scores
+    let mut results: Vec<SparseSearchResult> = fused
         .into_iter()
         .map(|(doc_id, score)| SparseSearchResult { doc_id, score })
         .collect();
-    results.sort_by(|a, b| b.score.total_cmp(&a.score));
     results.truncate(k);
 
     serde_wasm_bindgen::to_value(&results)
