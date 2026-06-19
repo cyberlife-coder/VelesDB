@@ -106,26 +106,42 @@ impl Layer {
         }
 
         // Phase 2: Reorder the adjacency lists themselves.
-        // Extract all lists, then place each at its new position.
+        // Extract all lists (releases write locks), then apply the old→new
+        // permutation in-place via cycle decomposition so that slot new_id
+        // ends up with the list that was at old_id — without allocating a
+        // second full-size Vec<Vec<NodeId>>.
         let mut extracted: Vec<Vec<NodeId>> = self
             .neighbors
             .iter()
             .map(|lock| std::mem::take(&mut *lock.write()))
             .collect();
 
-        // Build reordered lists: new slot `old_to_new[old]` gets `extracted[old]`
-        let mut reordered: Vec<Vec<NodeId>> = vec![Vec::new(); extracted.len()];
-        for (old_id, list) in extracted.drain(..).enumerate() {
-            if old_id < count {
-                reordered[old_to_new[old_id]] = list;
+        // Build inverse mapping: new_to_old[new_id] = old_id, so the
+        // cycle-decomposition below can be driven forward ("output slot i
+        // receives element from slot new_to_old[i]").
+        let n = count.min(extracted.len());
+        let mut new_to_old: Vec<usize> = (0..n).collect();
+        for (old, &new) in old_to_new.iter().enumerate() {
+            if old < extracted.len() && new < n {
+                new_to_old[new] = old;
             }
         }
 
-        // Write back
-        for (i, lock) in self.neighbors.iter().enumerate() {
-            if i < reordered.len() {
-                *lock.write() = std::mem::take(&mut reordered[i]);
+        // Apply permutation to the first `n` slots in-place.
+        for i in 0..n {
+            let mut j = i;
+            while new_to_old[j] != i {
+                let k = new_to_old[j];
+                extracted.swap(j, k);
+                new_to_old[j] = j;
+                j = k;
             }
+            new_to_old[j] = j;
+        }
+
+        // Write back all slots (slots >= n were already cleared by mem::take).
+        for (i, lock) in self.neighbors.iter().enumerate() {
+            *lock.write() = std::mem::take(&mut extracted[i]);
         }
     }
 }

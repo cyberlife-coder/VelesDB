@@ -58,6 +58,71 @@ impl AggregateResult {
     }
 }
 
+/// Running aggregate state for a single column.
+///
+/// Collocates sum, count, min, and max together so that the `Aggregator`
+/// can maintain them with a single `HashMap` lookup per value instead of four
+/// separate lookups across four maps. This also eliminates the cross-map
+/// synchronisation invariant that previously required `debug_assert` guards.
+#[derive(Debug, Clone)]
+struct ColumnAgg {
+    sum: f64,
+    count: u64,
+    min: f64,
+    max: f64,
+}
+
+impl ColumnAgg {
+    fn new(value: f64) -> Self {
+        Self {
+            sum: value,
+            count: 1,
+            min: value,
+            max: value,
+        }
+    }
+
+    fn new_batch(sum: f64, count: u64, min: f64, max: f64) -> Self {
+        Self { sum, count, min, max }
+    }
+
+    #[inline]
+    fn update(&mut self, value: f64) {
+        self.sum += value;
+        self.count += 1;
+        if value < self.min {
+            self.min = value;
+        }
+        if value > self.max {
+            self.max = value;
+        }
+    }
+
+    #[inline]
+    fn update_batch(&mut self, batch_sum: f64, batch_count: u64, batch_min: f64, batch_max: f64) {
+        self.sum += batch_sum;
+        self.count += batch_count;
+        if batch_min < self.min {
+            self.min = batch_min;
+        }
+        if batch_max > self.max {
+            self.max = batch_max;
+        }
+    }
+
+    #[inline]
+    fn merge_from(&mut self, other: &Self) {
+        self.sum += other.sum;
+        self.count += other.count;
+        if other.min < self.min {
+            self.min = other.min;
+        }
+        if other.max > self.max {
+            self.max = other.max;
+        }
+    }
+}
+
 /// Streaming aggregator - O(1) memory, single-pass.
 ///
 /// Based on online algorithms for computing aggregates without
@@ -66,14 +131,8 @@ impl AggregateResult {
 pub struct Aggregator {
     /// Running count for COUNT(*).
     count: u64,
-    /// Running sums by column.
-    sums: HashMap<String, f64>,
-    /// Running counts by column (for AVG calculation).
-    counts: HashMap<String, u64>,
-    /// Running minimums by column.
-    mins: HashMap<String, f64>,
-    /// Running maximums by column.
-    maxs: HashMap<String, f64>,
+    /// Per-column running aggregates (sum, count, min, max in one entry).
+    columns: HashMap<String, ColumnAgg>,
 }
 
 impl Aggregator {
@@ -90,62 +149,18 @@ impl Aggregator {
 
     /// Process a value for a specific column's aggregation.
     ///
-    /// Updates SUM, MIN, MAX, and count for AVG calculation.
-    /// Optimized to avoid String allocation in hot path when column already exists.
-    ///
-    /// HashMap synchronization invariants are checked with `debug_assert!`;
-    /// inconsistent state is handled by returning early in release builds.
+    /// Updates SUM, MIN, MAX, and count for AVG calculation in a single
+    /// HashMap lookup (fast path) or one allocation (slow path on first
+    /// occurrence of the column).
     pub fn process_value(&mut self, column: &str, value: &serde_json::Value) {
         if let Some(num) = Self::extract_number(value) {
-            self.accumulate_value(column, num, 1);
-        }
-    }
-
-    /// Accumulates a numeric value (or batch aggregate) into the column's running stats.
-    ///
-    /// Handles both the fast path (column already tracked) and slow path
-    /// (first occurrence, requires allocation).
-    fn accumulate_value(&mut self, column: &str, value: f64, count: u64) {
-        // Fast path: column already tracked - no allocation
-        if let Some(sum) = self.sums.get_mut(column) {
-            *sum += value;
-            let Some(col_count) = self.counts.get_mut(column) else {
-                debug_assert!(
-                    false,
-                    "Invariant violated: counts must contain all keys present in sums"
-                );
-                return;
-            };
-            *col_count += count;
-            let Some(min) = self.mins.get_mut(column) else {
-                debug_assert!(
-                    false,
-                    "Invariant violated: mins must contain all keys present in sums"
-                );
-                return;
-            };
-            if value < *min {
-                *min = value;
+            match self.columns.get_mut(column) {
+                Some(agg) => agg.update(num),
+                None => {
+                    self.columns.insert(column.to_string(), ColumnAgg::new(num));
+                }
             }
-            let Some(max) = self.maxs.get_mut(column) else {
-                debug_assert!(
-                    false,
-                    "Invariant violated: maxs must contain all keys present in sums"
-                );
-                return;
-            };
-            if value > *max {
-                *max = value;
-            }
-            return;
         }
-
-        // Slow path: first time seeing this column - allocate once
-        let col_owned = column.to_string();
-        self.sums.insert(col_owned.clone(), value);
-        self.counts.insert(col_owned.clone(), count);
-        self.mins.insert(col_owned.clone(), value);
-        self.maxs.insert(col_owned, value);
     }
 
     /// Extract a numeric value from JSON.
@@ -164,9 +179,6 @@ impl Aggregator {
     /// # Arguments
     /// * `column` - Column name for the aggregation
     /// * `values` - Slice of f64 values to aggregate
-    ///
-    /// HashMap synchronization invariants are checked with `debug_assert!`;
-    /// inconsistent state is handled by returning early in release builds.
     pub fn process_batch(&mut self, column: &str, values: &[f64]) {
         if values.is_empty() {
             return;
@@ -178,63 +190,15 @@ impl Aggregator {
         let batch_min = values.iter().copied().fold(f64::INFINITY, f64::min);
         let batch_max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 
-        self.accumulate_batch(column, batch_sum, batch_count, batch_min, batch_max);
-    }
-
-    /// Accumulates pre-computed batch aggregates into the column's running stats.
-    ///
-    /// Handles both the fast path (column already tracked) and slow path
-    /// (first occurrence, requires allocation).
-    fn accumulate_batch(
-        &mut self,
-        column: &str,
-        batch_sum: f64,
-        batch_count: u64,
-        batch_min: f64,
-        batch_max: f64,
-    ) {
-        // Fast path: column already tracked
-        if let Some(sum) = self.sums.get_mut(column) {
-            *sum += batch_sum;
-            // Reason: All 4 HashMaps (sums, counts, mins, maxs) are always inserted
-            // together in the slow path below — missing key here is a logic bug.
-            let Some(count) = self.counts.get_mut(column) else {
-                debug_assert!(
-                    false,
-                    "Invariant violated: counts must contain all keys present in sums"
+        match self.columns.get_mut(column) {
+            Some(agg) => agg.update_batch(batch_sum, batch_count, batch_min, batch_max),
+            None => {
+                self.columns.insert(
+                    column.to_string(),
+                    ColumnAgg::new_batch(batch_sum, batch_count, batch_min, batch_max),
                 );
-                return;
-            };
-            *count += batch_count;
-            let Some(min) = self.mins.get_mut(column) else {
-                debug_assert!(
-                    false,
-                    "Invariant violated: mins must contain all keys present in sums"
-                );
-                return;
-            };
-            if batch_min < *min {
-                *min = batch_min;
             }
-            let Some(max) = self.maxs.get_mut(column) else {
-                debug_assert!(
-                    false,
-                    "Invariant violated: maxs must contain all keys present in sums"
-                );
-                return;
-            };
-            if batch_max > *max {
-                *max = batch_max;
-            }
-            return;
         }
-
-        // Slow path: first time seeing this column
-        let col_owned = column.to_string();
-        self.sums.insert(col_owned.clone(), batch_sum);
-        self.counts.insert(col_owned.clone(), batch_count);
-        self.mins.insert(col_owned.clone(), batch_min);
-        self.maxs.insert(col_owned, batch_max);
     }
 
     /// Merge another aggregator into this one (for parallel aggregation).
@@ -242,32 +206,13 @@ impl Aggregator {
     /// Combines counts, sums, mins, maxs from the other aggregator.
     /// Used in map-reduce pattern for parallel processing.
     pub fn merge(&mut self, other: Self) {
-        // Merge COUNT(*)
         self.count += other.count;
-
-        // Merge sums
-        for (col, sum) in other.sums {
-            *self.sums.entry(col).or_insert(0.0) += sum;
-        }
-
-        // Merge counts (for AVG calculation)
-        for (col, count) in other.counts {
-            *self.counts.entry(col).or_insert(0) += count;
-        }
-
-        // Merge mins (take minimum of both)
-        for (col, min) in other.mins {
-            let current = self.mins.entry(col).or_insert(min);
-            if min < *current {
-                *current = min;
-            }
-        }
-
-        // Merge maxs (take maximum of both)
-        for (col, max) in other.maxs {
-            let current = self.maxs.entry(col).or_insert(max);
-            if max > *current {
-                *current = max;
+        for (col, other_agg) in other.columns {
+            match self.columns.get_mut(&col) {
+                Some(agg) => agg.merge_from(&other_agg),
+                None => {
+                    self.columns.insert(col, other_agg);
+                }
             }
         }
     }
@@ -275,25 +220,30 @@ impl Aggregator {
     /// Finalize aggregation and return results.
     #[must_use]
     pub fn finalize(self) -> AggregateResult {
-        // Calculate averages from sums and counts
-        let avgs: HashMap<String, f64> = self
-            .sums
-            .iter()
-            .filter_map(|(col, sum)| {
-                self.counts
-                    .get(col)
-                    .filter(|&&c| c > 0)
-                    .map(|&c| (col.clone(), sum / c as f64))
-            })
-            .collect();
+        let cap = self.columns.len();
+        let mut sums = HashMap::with_capacity(cap);
+        let mut counts = HashMap::with_capacity(cap);
+        let mut avgs = HashMap::with_capacity(cap);
+        let mut mins = HashMap::with_capacity(cap);
+        let mut maxs = HashMap::with_capacity(cap);
+
+        for (col, agg) in self.columns {
+            if agg.count > 0 {
+                avgs.insert(col.clone(), agg.sum / agg.count as f64);
+            }
+            sums.insert(col.clone(), agg.sum);
+            counts.insert(col.clone(), agg.count);
+            mins.insert(col.clone(), agg.min);
+            maxs.insert(col, agg.max);
+        }
 
         AggregateResult {
             count: self.count,
-            counts: self.counts,
-            sums: self.sums,
+            counts,
+            sums,
             avgs,
-            mins: self.mins,
-            maxs: self.maxs,
+            mins,
+            maxs,
         }
     }
 }
