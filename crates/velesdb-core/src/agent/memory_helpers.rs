@@ -13,19 +13,16 @@ use std::collections::HashSet;
 
 use super::error::AgentMemoryError;
 
-/// Reserved payload key carrying the durable expiry timestamp (epoch seconds).
+/// Canonical durable TTL payload key — re-exported from [`crate::collection::expiry`].
 ///
 /// Written by the `*_with_ttl` store paths so a TTL survives a process
 /// restart: the in-memory [`MemoryTtl`](super::ttl::MemoryTtl) map is just a
 /// cache rebuilt from this field at subsystem construction. Payloads without
 /// this key (or with a non-u64 value) have no TTL.
 ///
-/// The key is namespaced (`_veles_` prefix, like the `_semantic_memory`
-/// system collections) so a user metadata field named `expires_at` — a common
-/// business field — is never interpreted as a TTL. User-facing metadata paths
-/// (`SemanticMemory::store_with_metadata` / `update_metadata`) strip this
-/// reserved key, mirroring how the `content` parameter owns `content`.
-pub(super) const EXPIRES_AT_KEY: &str = "_veles_expires_at";
+/// The key is namespaced (`_veles_` prefix) so a user metadata field named
+/// `expires_at` — a common business field — is never interpreted as a TTL.
+pub(super) use crate::collection::expiry::EXPIRES_AT_KEY;
 
 /// Looks up a `Collection` by name, returning an `AgentMemoryError` if absent.
 pub(super) fn get_collection(db: &Database, name: &str) -> Result<Collection, AgentMemoryError> {
