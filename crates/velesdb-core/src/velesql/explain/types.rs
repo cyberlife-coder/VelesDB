@@ -65,6 +65,14 @@ pub enum PlanNode {
     Sequence(Vec<PlanNode>),
     /// MATCH graph traversal (EPIC-046 US-004).
     MatchTraversal(MatchTraversalPlan),
+    /// Cross-store JOIN operation.
+    Join(JoinPlanNode),
+    /// GROUP BY aggregation grouping.
+    GroupBy(GroupByPlan),
+    /// Aggregate function computation (COUNT, SUM, ...).
+    Aggregate(AggregatePlan),
+    /// ORDER BY sort operation.
+    Sort(SortPlan),
 }
 
 /// Vector search plan details.
@@ -147,6 +155,37 @@ pub struct MatchTraversalPlan {
     pub has_similarity: bool,
     /// Similarity threshold (if any).
     pub similarity_threshold: Option<f32>,
+}
+
+/// Cross-store JOIN plan details.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JoinPlanNode {
+    /// Join type label (`Inner`, `Left`, `Right`, `Full`) preserved verbatim
+    /// from the parsed `JoinType` so the REST wire string stays `{Type}Join`.
+    pub join_type: String,
+    /// Table/store being joined.
+    pub table: String,
+}
+
+/// GROUP BY plan details.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupByPlan {
+    /// Columns the rows are grouped by.
+    pub columns: Vec<String>,
+}
+
+/// Aggregate-computation plan details.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AggregatePlan {
+    /// Aggregate function names in SELECT-list order (e.g. `Count`, `Sum`).
+    pub functions: Vec<String>,
+}
+
+/// ORDER BY sort plan details.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SortPlan {
+    /// Sort keys as `"column DIRECTION"` display pairs (e.g. `price DESC`).
+    pub keys: Vec<String>,
 }
 
 /// Fusion strategy info for EXPLAIN output (issue #471).
@@ -349,4 +388,62 @@ pub enum FilterStrategy {
     PreFilter,
     /// Post-filtering: filter after vector search (low selectivity).
     PostFilter,
+}
+
+/// Logical operation of a flattened EXPLAIN [`PlanStep`].
+///
+/// This is the canonical, single-sourced step vocabulary derived from the
+/// [`PlanNode`] tree. [`PlanStep::rest_operation`](crate::velesql::PlanStep)
+/// maps each kind to the exact REST `operation` wire string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum PlanStepKind {
+    /// ANN vector search.
+    VectorSearch,
+    /// Full collection scan (no index).
+    TableScan,
+    /// Property index lookup.
+    IndexLookup,
+    /// Metadata filter.
+    Filter,
+    /// Cross-store join.
+    Join,
+    /// GROUP BY grouping.
+    GroupBy,
+    /// Aggregate computation.
+    Aggregate,
+    /// ORDER BY sort.
+    Sort,
+    /// LIMIT (with folded OFFSET) pagination.
+    Limit,
+    /// OFFSET skip (rendered standalone only when no Limit folds it).
+    Offset,
+    /// MATCH graph traversal.
+    MatchTraversal,
+}
+
+/// A flattened, structured EXPLAIN plan step.
+///
+/// Produced by [`QueryPlan::to_plan_steps`](crate::velesql::QueryPlan) — the
+/// single source of truth for both the REST `/query/explain` step list and any
+/// other structured consumer. The text tree ([`QueryPlan::to_tree`]) and this
+/// step list both derive from the same [`PlanNode`] tree.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlanStep {
+    /// 1-based step number in pipeline order.
+    pub step: usize,
+    /// Logical operation kind.
+    pub operation: PlanStepKind,
+    /// Join type label (`Inner`/`Left`/...), set only for [`PlanStepKind::Join`]
+    /// so `rest_operation` can reproduce the `{Type}Join` wire string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join_type: Option<String>,
+    /// Human-readable description of what the step does.
+    pub description: String,
+    /// Estimated rows produced, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_rows: Option<u64>,
+    /// How the row estimate was produced (`"histogram"`, `"cardinality"`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimation_method: Option<String>,
 }

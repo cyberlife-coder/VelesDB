@@ -1868,6 +1868,17 @@ tree now explicitly surfaces the similarity-as-predicate routing decision
 (see **Order by Similarity** above) — the `VectorSearch` node appears even
 though the SQL text has no `NEAR`.
 
+#### REST plan single-sourced from core (next minor release)
+
+The REST `/query/explain` step list is now produced directly from the engine
+plan via `QueryPlan::to_plan_steps()`, the same `PlanNode` tree the CLI
+`.explain` renders — it is no longer reconstructed from the parsed AST. The
+wire `operation` vocabulary is unchanged (additive): a full scan still reports
+`FullScan` and joins still report `{Type}Join`. As a side effect, `GROUP BY`,
+aggregation, `ORDER BY`, and `JOIN` steps now also appear in the CLI/Python
+`to_tree()` output (previously only the REST view surfaced them), and an
+indexed-equality predicate may surface an `IndexLookup` step.
+
 Returns a single row with:
 
 | Field | Type | Description |

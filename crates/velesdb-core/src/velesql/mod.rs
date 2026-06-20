@@ -269,9 +269,10 @@ pub(crate) use explain::strip_vector_predicates;
 #[cfg(feature = "persistence")]
 pub use explain::{
     build_leaf_node_stats, fallback_selectivity_threshold, set_fallback_selectivity_threshold,
-    ActualStats, ExplainOutput, FeedbackCalibration, FilterPlan, FilterStrategy, FusionInfo,
-    IndexLookupPlan, IndexType, LimitPlan, MatchTraversalPlan, NodeStats, OffsetPlan, PlanNode,
-    QueryPlan, TableScanPlan, VectorSearchPlan, DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD,
+    ActualStats, AggregatePlan, ExplainOutput, FeedbackCalibration, FilterPlan, FilterStrategy,
+    FusionInfo, GroupByPlan, IndexLookupPlan, IndexType, JoinPlanNode, LimitPlan,
+    MatchTraversalPlan, NodeStats, OffsetPlan, PlanNode, PlanStep, PlanStepKind, QueryPlan,
+    SortPlan, TableScanPlan, VectorSearchPlan, DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD,
 };
 pub use parser::match_clause;
 pub use parser::Parser;

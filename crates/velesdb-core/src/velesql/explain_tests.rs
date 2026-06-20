@@ -1206,6 +1206,144 @@ fn test_match_query_plan_has_no_implicit_limit() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// to_plan_steps(): single-sourced structured EXPLAIN steps (C11)
+// ---------------------------------------------------------------------------
+
+fn plan_steps_for(query: &str) -> Vec<PlanStep> {
+    let parsed = crate::velesql::Parser::parse(query).expect("parse query");
+    QueryPlan::from_query(&parsed).to_plan_steps()
+}
+
+#[test]
+fn test_plan_steps_scan_maps_to_fullscan_wire_string() {
+    let steps = plan_steps_for("SELECT * FROM docs");
+    let first = steps.first().expect("at least one step");
+    assert_eq!(first.operation, PlanStepKind::TableScan);
+    // REST vocabulary is preserved: TableScan kind renders as "FullScan".
+    assert_eq!(first.rest_operation(), "FullScan");
+}
+
+#[test]
+fn test_plan_steps_default_limit_step() {
+    let steps = plan_steps_for("SELECT * FROM docs");
+    let limit = steps
+        .iter()
+        .find(|s| s.operation == PlanStepKind::Limit)
+        .expect("a Limit step");
+    assert_eq!(limit.rest_operation(), "Limit");
+    assert_eq!(limit.estimated_rows, Some(10));
+    assert!(
+        limit.description.contains("LIMIT 10 (default)"),
+        "default limit description: {}",
+        limit.description
+    );
+}
+
+#[test]
+fn test_plan_steps_offset_is_folded_into_limit() {
+    let steps = plan_steps_for("SELECT * FROM docs LIMIT 5 OFFSET 20");
+    assert!(
+        steps.iter().all(|s| s.operation != PlanStepKind::Offset),
+        "OFFSET must be folded into the Limit step, not emitted standalone"
+    );
+    let limit = steps
+        .iter()
+        .find(|s| s.operation == PlanStepKind::Limit)
+        .expect("a Limit step");
+    assert_eq!(limit.estimated_rows, Some(5));
+    assert!(
+        limit.description.contains("LIMIT 5") && limit.description.contains("OFFSET 20"),
+        "limit step folds offset: {}",
+        limit.description
+    );
+}
+
+#[test]
+fn test_plan_steps_join_preserves_typed_wire_string() {
+    let steps = plan_steps_for("SELECT * FROM orders JOIN customers ON orders.cid = customers.id");
+    let join = steps
+        .iter()
+        .find(|s| s.operation == PlanStepKind::Join)
+        .expect("a Join step");
+    // Default JOIN is INNER; wire string stays "{Type}Join" -> "InnerJoin".
+    assert_eq!(join.rest_operation(), "InnerJoin");
+}
+
+#[test]
+fn test_plan_steps_group_aggregate_sort_pipeline_order() {
+    let steps = plan_steps_for(
+        "SELECT category, COUNT(*) FROM docs GROUP BY category ORDER BY COUNT(*) DESC LIMIT 5",
+    );
+    let kinds: Vec<PlanStepKind> = steps.iter().map(|s| s.operation).collect();
+    for expected in [
+        PlanStepKind::GroupBy,
+        PlanStepKind::Aggregate,
+        PlanStepKind::Sort,
+        PlanStepKind::Limit,
+    ] {
+        assert!(
+            kinds.contains(&expected),
+            "missing {expected:?} in {kinds:?}"
+        );
+    }
+    // Pipeline order: group -> aggregate -> sort -> limit.
+    let pos = |k: PlanStepKind| kinds.iter().position(|x| *x == k).expect("kind present");
+    assert!(pos(PlanStepKind::GroupBy) < pos(PlanStepKind::Aggregate));
+    assert!(pos(PlanStepKind::Aggregate) < pos(PlanStepKind::Sort));
+    assert!(pos(PlanStepKind::Sort) < pos(PlanStepKind::Limit));
+}
+
+#[test]
+fn test_plan_steps_vector_search_estimated_rows_is_none() {
+    // The VectorSearch step no longer echoes the LIMIT; the estimate is on the
+    // Limit step, where it is unambiguous.
+    let steps = plan_steps_for("SELECT * FROM docs WHERE vector NEAR $v LIMIT 10");
+    let vs = steps
+        .iter()
+        .find(|s| s.operation == PlanStepKind::VectorSearch)
+        .expect("a VectorSearch step");
+    assert_eq!(vs.estimated_rows, None);
+    let limit = steps
+        .iter()
+        .find(|s| s.operation == PlanStepKind::Limit)
+        .expect("a Limit step");
+    assert_eq!(limit.estimated_rows, Some(10));
+}
+
+#[test]
+fn test_plan_steps_standalone_offset_without_limit() {
+    // A plan with OFFSET but no LIMIT (compound/MATCH shape) surfaces a
+    // dedicated Offset step rather than folding into a nonexistent Limit.
+    let plan = QueryPlan {
+        root: PlanNode::Sequence(vec![
+            PlanNode::TableScan(TableScanPlan {
+                collection: "docs".to_string(),
+            }),
+            PlanNode::Offset(OffsetPlan { count: 7 }),
+        ]),
+        estimated_cost_ms: 1.0,
+        index_used: None,
+        filter_strategy: FilterStrategy::None,
+        with_options: vec![],
+        let_bindings: vec![],
+        fusion_info: None,
+        cache_hit: None,
+        plan_reuse_count: None,
+    };
+    let steps = plan.to_plan_steps();
+    let offset = steps
+        .iter()
+        .find(|s| s.operation == PlanStepKind::Offset)
+        .expect("a standalone Offset step");
+    assert_eq!(offset.rest_operation(), "Offset");
+    assert!(offset.description.contains('7'), "{}", offset.description);
+    assert!(
+        steps.iter().all(|s| s.operation != PlanStepKind::Limit),
+        "no Limit step should be present"
+    );
+}
+
 #[test]
 fn test_compound_query_plan_has_no_implicit_limit() {
     let query = crate::velesql::Parser::parse("SELECT * FROM a UNION SELECT * FROM b")

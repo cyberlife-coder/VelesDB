@@ -5,6 +5,47 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **REST `EXPLAIN` single-sourced from core.** `POST /query/explain` no longer
+  reconstructs the plan from the parsed AST; it now maps the engine's canonical
+  query plan via the new `velesdb_core::velesql::QueryPlan::to_plan_steps()` —
+  the same `PlanNode` tree the CLI `.explain` renders. The response **shape**
+  (keys/structure) and the `operation` vocabulary are unchanged (`FullScan`,
+  `{Type}Join`, `Filter`, `GroupBy`, `Aggregate`, `Sort`, `Limit`, ... are all
+  preserved), and `docs/openapi.{json,yaml}` are unchanged. The `features` and
+  `estimated_cost` response objects remain server-derived (single-sourcing them
+  is a follow-up).
+- **CLI/Python `EXPLAIN` now shows `JOIN` / `GROUP BY` / aggregation / `ORDER BY`
+  steps.** The core `PlanNode` tree gained `Join`, `GroupBy`, `Aggregate`, and
+  `Sort` nodes, so `QueryPlan::to_tree()` now renders them (previously only the
+  REST view surfaced these). Filter row estimates flow natively from the plan,
+  removing the prior server-side estimation merge.
+- The `VectorSearch` step's `estimated_rows` is now `null` (it previously echoed
+  the query `LIMIT`). The limit estimate is still reported on the `Limit` step,
+  where it is unambiguous.
+
+### Added
+- `velesdb_core::velesql::QueryPlan::to_plan_steps() -> Vec<PlanStep>` — the
+  canonical, structured EXPLAIN step list (with `PlanStep`/`PlanStepKind` and the
+  `PlanStep::rest_operation()` wire mapping), single-sourced with `to_tree()`.
+
+### Fixed
+- An indexed-equality predicate may now surface an `IndexLookup` step in REST
+  `EXPLAIN`, which the prior AST reconstruction never emitted.
+- A query with `OFFSET` but no `LIMIT` (compound/`MATCH`) now surfaces a proper
+  `Offset` step instead of the previous degenerate `Apply LIMIT 0 OFFSET N`.
+
+> Known follow-ups (deliberately out of scope, recorded for future work):
+> - The pre-existing in-response inconsistency between `plan[].operation`
+>   (`FullScan`) and `node_stats[].node_label` (`TableScan`) is left as-is;
+>   reconciling it is a breaking relabel deferred behind the SemVer boundary.
+> - `velesdb-wasm` keeps its own AST-walking `EXPLAIN` renderer with an
+>   independent vocabulary (`Scan`, `NestedLoopJoin`, `GraphPatternMatch`, ...):
+>   the core `QueryPlan`/`to_plan_steps` machinery is `persistence`-gated and
+>   unavailable in the no-persistence WASM build, so full convergence is deferred.
+
 ## [3.1.0] — 2026-06-20
 
 Minor release. Single-sources several ecosystem components onto `velesdb-core`

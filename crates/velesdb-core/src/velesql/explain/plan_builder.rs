@@ -9,8 +9,9 @@ use super::filter_strategy::{estimate_filter_stats, resolve_filter_strategy};
 use super::formatter;
 use super::node_stats;
 use super::types::{
-    FilterPlan, FilterStrategy, FusionInfo, IndexLookupPlan, IndexType, LimitPlan,
-    MatchTraversalPlan, OffsetPlan, PlanNode, QueryPlan, TableScanPlan, VectorSearchPlan,
+    AggregatePlan, FilterPlan, FilterStrategy, FusionInfo, GroupByPlan, IndexLookupPlan, IndexType,
+    JoinPlanNode, LimitPlan, MatchTraversalPlan, OffsetPlan, PlanNode, QueryPlan, SortPlan,
+    TableScanPlan, VectorSearchPlan,
 };
 use crate::collection::search::query::match_planner::{
     CollectionStats, MatchExecutionStrategy, MatchQueryPlanner,
@@ -78,8 +79,9 @@ impl QueryPlan {
             stmt,
             has_vector_search,
             stats,
-            implicit_limit,
         );
+        Self::append_post_filter_nodes(&mut nodes, stmt);
+        Self::push_pagination_nodes(&mut nodes, stmt, implicit_limit);
 
         let mut plan = Self::assemble_plan_with_stats(
             nodes,
@@ -307,7 +309,6 @@ impl QueryPlan {
         stmt: &SelectStatement,
         has_vector_search: bool,
         stats: Option<&CoreCollectionStats>,
-        implicit_limit: bool,
     ) -> FilterStrategy {
         let mut filter_strategy = FilterStrategy::None;
 
@@ -341,12 +342,67 @@ impl QueryPlan {
             }));
         }
 
+        filter_strategy
+    }
+
+    /// Appends post-filter pipeline nodes (JOIN, GROUP BY, aggregation, ORDER
+    /// BY) in the order they execute, mirroring the previous server-side
+    /// reconstruction so the single-sourced plan is step-compatible.
+    fn append_post_filter_nodes(nodes: &mut Vec<PlanNode>, stmt: &SelectStatement) {
+        for join in &stmt.joins {
+            nodes.push(PlanNode::Join(JoinPlanNode {
+                join_type: format!("{:?}", join.join_type),
+                table: join.table.clone(),
+            }));
+        }
+        if let Some(ref group_by) = stmt.group_by {
+            nodes.push(PlanNode::GroupBy(GroupByPlan {
+                columns: group_by.columns.clone(),
+            }));
+        }
+        let functions = Self::aggregate_function_names(&stmt.columns);
+        if !functions.is_empty() {
+            nodes.push(PlanNode::Aggregate(AggregatePlan { functions }));
+        }
+        if let Some(ref order_by) = stmt.order_by {
+            let keys = order_by
+                .iter()
+                .map(|o| {
+                    let (col, dir) = o.to_display_pair();
+                    format!("{col} {dir}")
+                })
+                .collect();
+            nodes.push(PlanNode::Sort(SortPlan { keys }));
+        }
+    }
+
+    /// Returns the aggregate function names in SELECT-list order, or an empty
+    /// vec when the projection has no aggregates.
+    fn aggregate_function_names(columns: &crate::velesql::ast::SelectColumns) -> Vec<String> {
+        use crate::velesql::ast::SelectColumns;
+        let aggregations = match columns {
+            SelectColumns::Aggregations(aggs) => aggs.as_slice(),
+            SelectColumns::Mixed { aggregations, .. } => aggregations.as_slice(),
+            _ => &[],
+        };
+        aggregations
+            .iter()
+            .map(|a| format!("{:?}", a.function_type))
+            .collect()
+    }
+
+    /// Appends the OFFSET (when present) and LIMIT pagination nodes last, so the
+    /// pipeline order is scan → filter → joins → group → aggregate → sort →
+    /// offset → limit.
+    fn push_pagination_nodes(
+        nodes: &mut Vec<PlanNode>,
+        stmt: &SelectStatement,
+        implicit_limit: bool,
+    ) {
         if let Some(offset) = stmt.offset {
             nodes.push(PlanNode::Offset(OffsetPlan { count: offset }));
         }
         Self::push_limit_node(nodes, stmt, implicit_limit);
-
-        filter_strategy
     }
 
     /// Pushes the Limit node for a statement.

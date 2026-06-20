@@ -994,28 +994,58 @@ Analyze query execution plan without running the query.
 }
 ```
 
-**Response:**
+**Response:** the plan is a flat, ordered list of steps, single-sourced from
+the engine's query plan (the same plan the CLI `.explain` renders):
 ```json
 {
-  "plan": {
-    "type": "VectorSearch",
-    "collection": "docs",
-    "metric": "cosine",
-    "limit": 10,
-    "estimated_cost": 0.05,
-    "children": []
+  "query": "SELECT * FROM docs WHERE vector NEAR $v LIMIT 10",
+  "query_type": "SELECT",
+  "collection": "docs",
+  "plan": [
+    {
+      "step": 1,
+      "operation": "VectorSearch",
+      "description": "ANN search using HNSW index with NEAR clause",
+      "estimated_rows": null
+    },
+    {
+      "step": 2,
+      "operation": "Filter",
+      "description": "Apply WHERE clause predicates",
+      "estimated_rows": 42,
+      "estimation_method": "histogram"
+    },
+    {
+      "step": 3,
+      "operation": "Limit",
+      "description": "Apply LIMIT 10 OFFSET 0",
+      "estimated_rows": 10
+    }
+  ],
+  "estimated_cost": {
+    "uses_index": true,
+    "index_name": "HNSW",
+    "selectivity": 0.01,
+    "complexity": "O(log n)"
   },
-  "timing_ms": 0.12
+  "features": { "has_vector_search": true, "has_filter": true }
 }
 ```
 
-**Plan Node Types:**
-- `TableScan` - Full collection scan
+Set `"analyze": true` to execute the query and add `actual_time_ms`,
+`actual_stats`, and per-node `node_stats` to the response.
+
+**`operation` values:**
+- `FullScan` - full collection scan (no index)
 - `VectorSearch` - HNSW approximate nearest neighbor
-- `IndexLookup` - Property index lookup
-- `Filter` - Post-search filtering
-- `Limit` - Result limiting
-- `Offset` - Result offsetting
+- `IndexLookup` - property index lookup
+- `Filter` - metadata filtering
+- `{Type}Join` - cross-store join (`InnerJoin`, `LeftJoin`, `RightJoin`, `FullJoin`)
+- `GroupBy` - GROUP BY grouping
+- `Aggregate` - aggregate computation (COUNT, SUM, ...)
+- `Sort` - ORDER BY sort
+- `Limit` - result limiting (folds OFFSET into its description)
+- `MatchTraversal` - MATCH graph traversal
 
 ---
 

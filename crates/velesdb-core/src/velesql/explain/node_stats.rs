@@ -78,6 +78,8 @@ pub(super) fn node_cost(node: &PlanNode) -> f64 {
         PlanNode::Limit(_) | PlanNode::Offset(_) => 0.001,
         PlanNode::TableScan(_) => 1.0,
         PlanNode::IndexLookup(_) => 0.0001, // O(1) lookup is very fast
+        PlanNode::Join(_) => 0.1,           // cross-store probe is the costliest post-scan op
+        PlanNode::GroupBy(_) | PlanNode::Aggregate(_) | PlanNode::Sort(_) => 0.02,
         PlanNode::Sequence(nodes) => nodes.iter().map(node_cost).sum(),
         PlanNode::MatchTraversal(mt) => {
             // Cost depends on depth and strategy
@@ -104,6 +106,10 @@ fn node_label_and_weight(node: &PlanNode) -> (&'static str, f64) {
         PlanNode::Filter(_) => ("Filter", 0.03),
         PlanNode::Limit(_) => ("Limit", 0.01),
         PlanNode::Offset(_) => ("Offset", 0.01),
+        PlanNode::Join(_) => ("Join", 0.05),
+        PlanNode::GroupBy(_) => ("GroupBy", 0.02),
+        PlanNode::Aggregate(_) => ("Aggregate", 0.02),
+        PlanNode::Sort(_) => ("Sort", 0.02),
         PlanNode::Sequence(_) => ("Sequence", 0.0),
     }
 }
