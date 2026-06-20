@@ -88,7 +88,7 @@ See [rust/README.md](./rust/README.md) for expected output.
 VelesDB as a single-engine hybrid dense+sparse VectorStore for LangChain:
 
 ```bash
-pip install velesdb langchain-core
+pip install velesdb langchain-velesdb langchain-core
 cd examples/langchain
 python hybrid_search.py
 ```
@@ -100,7 +100,7 @@ See [langchain/README.md](./langchain/README.md) for details.
 VelesDB as a LlamaIndex VectorStore with Product Quantization support:
 
 ```bash
-pip install velesdb llama-index-core
+pip install velesdb llama-index-vector-stores-velesdb llama-index-core
 cd examples/llamaindex
 python hybrid_search.py
 ```
@@ -232,4 +232,4 @@ GROUP BY category
 
 ## License
 
-MIT License
+Example code is provided under the MIT License; the VelesDB engine itself is under the VelesDB Core License 1.0.

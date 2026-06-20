@@ -212,12 +212,12 @@ results = vector_store.query_with_ef(
 
 #### `query_ids(query_embedding, top_k)`
 
-Search returning only node IDs and scores — no payloads transferred.
+Search returning only node IDs — no payloads transferred.
 Faster than `query()` when only IDs are needed (e.g., for post-processing pipelines).
 
 ```python
-hits = vector_store.query_ids(query_embedding=embedding, top_k=50)
-# [{"id": "abc", "score": 0.92}, ...]
+ids = vector_store.query_ids(query_embedding=embedding, top_k=50)
+# ["abc", "def", ...]  -- flat list of node-id strings, ordered by descending similarity
 ```
 
 ### Hybrid Search (Vector + BM25)
