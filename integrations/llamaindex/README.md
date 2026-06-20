@@ -338,7 +338,7 @@ Source: `benchmarks/baseline.json`.
 
 ## Agent Memory (optional)
 
-`llamaindex-velesdb` re-exports three agent-memory wrappers around VelesDB's
+`llama-index-vector-stores-velesdb` re-exports three agent-memory wrappers around VelesDB's
 native memory subsystems. They are imported lazily — if the underlying
 `velesdb` native extension isn't installed, the import becomes a no-op and
 the symbols are exposed as `None`.
