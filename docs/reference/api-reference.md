@@ -1010,13 +1010,6 @@ the engine's query plan (the same plan the CLI `.explain` renders):
     },
     {
       "step": 2,
-      "operation": "Filter",
-      "description": "Apply WHERE clause predicates",
-      "estimated_rows": 42,
-      "estimation_method": "histogram"
-    },
-    {
-      "step": 3,
       "operation": "Limit",
       "description": "Apply LIMIT 10 OFFSET 0",
       "estimated_rows": 10
@@ -1028,9 +1021,14 @@ the engine's query plan (the same plan the CLI `.explain` renders):
     "selectivity": 0.01,
     "complexity": "O(log n)"
   },
-  "features": { "has_vector_search": true, "has_filter": true }
+  "features": { "has_vector_search": true, "has_filter": false }
 }
 ```
+
+A non-vector `WHERE` predicate (e.g. `... vector NEAR $v AND price > 100 ...`)
+adds a `Filter` step between `VectorSearch` and `Limit`, carrying
+`estimated_rows` and `estimation_method` (`"histogram"`/`"cardinality"`) when
+collection statistics are available.
 
 Set `"analyze": true` to execute the query and add `actual_time_ms`,
 `actual_stats`, and per-node `node_stats` to the response.

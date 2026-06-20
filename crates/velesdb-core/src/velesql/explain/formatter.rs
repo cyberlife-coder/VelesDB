@@ -119,30 +119,43 @@ impl QueryPlan {
             PlanNode::MatchTraversal(mt) => {
                 Self::render_match_traversal_node(mt, output, prefix, connector, &child_prefix);
             }
-            PlanNode::Join(j) => Self::render_leaf_with_child(
-                output,
-                (prefix, &child_prefix, connector),
-                &format!("{}Join", j.join_type),
-                ("Table", &j.table),
-            ),
+            PlanNode::Join(_)
+            | PlanNode::GroupBy(_)
+            | PlanNode::Aggregate(_)
+            | PlanNode::Sort(_) => {
+                Self::render_post_filter_node(node, output, (prefix, &child_prefix, connector));
+            }
+        }
+    }
+
+    /// Renders a post-filter node (Join/GroupBy/Aggregate/Sort) as a label plus
+    /// one child line. Split out of [`Self::render_node`] to keep it small.
+    fn render_post_filter_node(node: &PlanNode, output: &mut String, frame: (&str, &str, &str)) {
+        match node {
+            PlanNode::Join(j) => {
+                Self::render_leaf_with_child(
+                    output,
+                    frame,
+                    &format!("{}Join", j.join_type),
+                    ("Table", &j.table),
+                );
+            }
             PlanNode::GroupBy(g) => Self::render_leaf_with_child(
                 output,
-                (prefix, &child_prefix, connector),
+                frame,
                 "GroupBy",
                 ("Columns", &format!("[{}]", g.columns.join(", "))),
             ),
             PlanNode::Aggregate(a) => Self::render_leaf_with_child(
                 output,
-                (prefix, &child_prefix, connector),
+                frame,
                 "Aggregate",
                 ("Functions", &format!("[{}]", a.functions.join(", "))),
             ),
-            PlanNode::Sort(s) => Self::render_leaf_with_child(
-                output,
-                (prefix, &child_prefix, connector),
-                "Sort",
-                ("Keys", &s.keys.join(", ")),
-            ),
+            PlanNode::Sort(s) => {
+                Self::render_leaf_with_child(output, frame, "Sort", ("Keys", &s.keys.join(", ")));
+            }
+            _ => {}
         }
     }
 

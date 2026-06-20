@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `VectorSearch` step's `estimated_rows` is now `null` (it previously echoed
   the query `LIMIT`). The limit estimate is still reported on the `Limit` step,
   where it is unambiguous.
+- A `vector NEAR` query that also carries a non-vector `WHERE` predicate (e.g.
+  `vector NEAR $v AND price > 100`) now surfaces a dedicated `Filter` step in the
+  REST/CLI `EXPLAIN` plan. The prior AST reconstruction suppressed it (its
+  `has_filter` flag was `false` whenever a vector search was present), yielding
+  `[VectorSearch, Limit]`; the single-sourced plan reports the filter that
+  actually runs, `[VectorSearch, Filter, Limit]`.
 
 ### Added
 - `velesdb_core::velesql::QueryPlan::to_plan_steps() -> Vec<PlanStep>` — the
