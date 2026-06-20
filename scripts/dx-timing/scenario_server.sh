@@ -8,7 +8,7 @@ set -euo pipefail
 
 START=$(date +%s.%N)
 
-cargo install --quiet --locked velesdb-server@3.1.0
+cargo install --quiet --locked velesdb-server@3.2.0
 
 DATA_DIR=$(mktemp -d -t velesdb_dx_server_XXXX)
 trap 'rm -rf "$DATA_DIR"' EXIT
