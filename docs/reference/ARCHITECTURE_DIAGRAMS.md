@@ -1,4 +1,4 @@
-# VelesDB Architecture Diagrams — v3.2.0
+# VelesDB Architecture Diagrams — v3.2.1
 
 ## 1. Workspace Dependency Graph
 

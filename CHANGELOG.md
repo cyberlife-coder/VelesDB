@@ -5,6 +5,21 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.1] — 2026-06-20
+
+Patch release. Maintenance only — no engine/API change (`velesdb-core` and the
+REST/OpenAPI surface are functionally identical to 3.2.0).
+
+### Fixed
+- **TypeScript SDK pulls the matching WASM runtime.** `@wiscale/velesdb-sdk`
+  now depends on `@wiscale/velesdb-wasm` `^3.0.0` (was `^2.0.0`), so consumers
+  of the 3.x SDK get the 3.x WASM runtime instead of a stale 2.x. The 2.0.0 →
+  3.x WASM API is purely additive, so this is transparent for SDK consumers.
+- **Docs: correct LlamaIndex package name.** The integration is published on
+  PyPI as `llama-index-vector-stores-velesdb`; the docs previously referenced
+  the non-existent `llamaindex-velesdb` (a 404 for anyone following the install
+  instructions).
+
 ## [3.2.0] — 2026-06-20
 
 Minor release. Single-sources the server `EXPLAIN` plan onto `velesdb-core`
