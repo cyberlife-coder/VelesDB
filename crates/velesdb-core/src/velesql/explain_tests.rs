@@ -1345,6 +1345,77 @@ fn test_plan_steps_standalone_offset_without_limit() {
 }
 
 #[test]
+fn test_plan_steps_hybrid_vector_filter_emits_filter_step() {
+    // A vector NEAR query carrying a non-vector predicate surfaces a Filter step
+    // (the prior AST reconstruction suppressed it whenever a vector search ran).
+    let steps = plan_steps_for("SELECT * FROM docs WHERE vector NEAR $v AND price > 100 LIMIT 10");
+    let ops: Vec<PlanStepKind> = steps.iter().map(|s| s.operation).collect();
+    assert!(ops.contains(&PlanStepKind::VectorSearch), "{ops:?}");
+    assert!(
+        ops.contains(&PlanStepKind::Filter),
+        "filter step expected: {ops:?}"
+    );
+    assert!(ops.contains(&PlanStepKind::Limit), "{ops:?}");
+}
+
+#[test]
+fn test_rest_operation_wire_strings_client_visible() {
+    // Lock the wire strings the prior pass left unguarded (TableScan/Limit/Offset/
+    // Join are already covered elsewhere).
+    let mk = |op: PlanStepKind| PlanStep {
+        step: 1,
+        operation: op,
+        join_type: None,
+        description: String::new(),
+        estimated_rows: None,
+        estimation_method: None,
+    };
+    assert_eq!(
+        mk(PlanStepKind::VectorSearch).rest_operation(),
+        "VectorSearch"
+    );
+    assert_eq!(
+        mk(PlanStepKind::IndexLookup).rest_operation(),
+        "IndexLookup"
+    );
+    assert_eq!(mk(PlanStepKind::Filter).rest_operation(), "Filter");
+    assert_eq!(
+        mk(PlanStepKind::MatchTraversal).rest_operation(),
+        "MatchTraversal"
+    );
+}
+
+#[test]
+fn test_to_tree_multi_column_order_by_keys_in_order() {
+    let query = crate::velesql::Parser::parse("SELECT * FROM docs ORDER BY a ASC, b DESC LIMIT 5")
+        .expect("parse multi-column ORDER BY");
+    let tree = QueryPlan::from_query(&query).to_tree();
+    assert!(tree.contains("Sort"), "{tree}");
+    assert!(
+        tree.contains("Keys: a ASC, b DESC"),
+        "multi-column sort keys must keep grammar order: {tree}"
+    );
+}
+
+#[test]
+fn test_explain_step_from_plan_step_preserves_filter_estimate() {
+    // Exercises the api_types From<&PlanStep> conversion (otherwise untested):
+    // the Filter step's native estimate + method must survive to the REST DTO.
+    let ps = PlanStep {
+        step: 2,
+        operation: PlanStepKind::Filter,
+        join_type: None,
+        description: "Apply WHERE clause predicates".to_string(),
+        estimated_rows: Some(42),
+        estimation_method: Some("histogram".to_string()),
+    };
+    let es = crate::api_types::ExplainStep::from(&ps);
+    assert_eq!(es.operation, "Filter");
+    assert_eq!(es.estimated_rows, Some(42));
+    assert_eq!(es.estimation_method.as_deref(), Some("histogram"));
+}
+
+#[test]
 fn test_compound_query_plan_has_no_implicit_limit() {
     let query = crate::velesql::Parser::parse("SELECT * FROM a UNION SELECT * FROM b")
         .expect("parse compound query");
