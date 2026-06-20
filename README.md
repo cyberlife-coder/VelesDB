@@ -507,7 +507,7 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | **Mobile** | [velesdb-mobile](crates/velesdb-mobile) — iOS (Swift) & Android (Kotlin) | [Build instructions](docs/guides/INSTALLATION.md#-mobile-iosandroid) |
 | **Desktop** | [tauri-plugin](crates/tauri-plugin-velesdb) — Tauri v2 AI-powered apps | `cargo add tauri-plugin-velesdb` |
 | **LangChain** | [langchain-velesdb](integrations/langchain) — Official VectorStore | [From source](integrations/langchain/README.md) |
-| **LlamaIndex** | [llamaindex-velesdb](integrations/llamaindex) — Document indexing | [From source](integrations/llamaindex/README.md) |
+| **LlamaIndex** | [llama-index-vector-stores-velesdb](integrations/llamaindex) — Document indexing | [From source](integrations/llamaindex/README.md) |
 | **Haystack** | [haystack-velesdb](integrations/haystack) — Haystack 2.x DocumentStore | [From source](integrations/haystack/README.md) |
 | **Migration** | [velesdb-migrate](crates/velesdb-migrate) — From Qdrant, Pinecone, Supabase | `cargo install velesdb-migrate` |
 
