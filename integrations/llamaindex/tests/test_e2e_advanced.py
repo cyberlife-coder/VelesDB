@@ -41,7 +41,7 @@ except ImportError:
 
 pytestmark = pytest.mark.skipif(
     not VELESDB_LLAMAINDEX_AVAILABLE,
-    reason="llamaindex-velesdb not installed",
+    reason="llama-index-vector-stores-velesdb not installed",
 )
 
 _DIM = 64

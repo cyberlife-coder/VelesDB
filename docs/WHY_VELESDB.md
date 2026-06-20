@@ -103,7 +103,7 @@ See [BENCHMARKS.md](./BENCHMARKS.md) for detailed numbers and methodology.
 | iOS / Android | `velesdb-mobile` (UniFFI) | Stable |
 | Tauri Desktop | `tauri-plugin-velesdb` | Stable |
 | LangChain | `langchain-velesdb` | Stable |
-| LlamaIndex | `llamaindex-velesdb` | Stable |
+| LlamaIndex | `llama-index-vector-stores-velesdb` | Stable |
 
 ---
 
