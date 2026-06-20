@@ -136,7 +136,7 @@ results = collection.search_request(velesdb.SearchOptions(vector=query_vector, t
 ```toml
 # Cargo.toml
 [dependencies]
-velesdb-core = "1.14"
+velesdb-core = "3.2"
 ```
 
 ### As CLI Tools
@@ -421,7 +421,7 @@ docker run -v velesdb_data:/data velesdb
 
 ## 📚 Next Steps
 
-- **[Quick Start](../README.md#-your-first-vector-search)** - Your first vector search
+- **[Quick Start](../README.md#getting-started-in-60-seconds)** - Your first vector search
 - **[VelesQL Guide](../VELESQL_SPEC.md)** - SQL-like query language
 - **[API Reference](../reference/api-reference.md)** - REST API documentation
 - **[Benchmarks](../BENCHMARKS.md)** - Performance metrics

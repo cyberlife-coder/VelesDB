@@ -16,7 +16,7 @@ Companion article:
     GitHub:    https://github.com/cyberlife-coder/VelesDB
     Docs:      https://velesdb.com/en/
 
-VelesDB is source-available under the Elastic License 2.0.
+VelesDB is source-available under the VelesDB Core License 1.0.
 GitHub stars welcome: https://github.com/cyberlife-coder/VelesDB
 
 Author: Julien Lange (WiScale France)

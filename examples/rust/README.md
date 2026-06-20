@@ -32,38 +32,38 @@ cargo run --bin multimodel_search
 Inserted 5 documents
 
 --- Example 1: Basic Vector Search ---
-  ID: 1, Score: 0.9987, Title: Introduction to Rust
-  ID: 3, Score: 0.9940, Title: Graph Algorithms in Practice
-  ID: 2, Score: 0.9847, Title: Vector Databases Explained
+  ID: 1, Score: 0.1499, Title: Introduction to Rust
+  ID: 5, Score: 0.0867, Title: Building Search Engines
+  ID: 4, Score: 0.0676, Title: Machine Learning with Rust
 
 --- Example 2: VelesQL with Similarity ---
   Found 2 results with category='programming'
-    ID: 1, Score: 0.9987
-    ID: 4, Score: 0.9725
+    ID: 1, Score: 0.1499
+    ID: 4, Score: 0.0676
 
 --- Example 3: ORDER BY Similarity ---
   Results ordered by similarity:
-    ID: 1, Score: 0.9987
-    ID: 3, Score: 0.9940
-    ID: 2, Score: 0.9847
-    ID: 4, Score: 0.9725
-    ID: 5, Score: 0.9431
+    ID: 1, Score: 0.1499
+    ID: 5, Score: 0.0867
+    ID: 4, Score: 0.0676
 
 --- Example 4: Hybrid Search ---
   Hybrid search results (vector + text 'rust'):
-    ID: 1, Score: 0.xxxx, Title: Introduction to Rust
-    ID: 4, Score: 0.xxxx, Title: Machine Learning with Rust
-    ...
+    ID: 1, Score: 0.0167, Title: Introduction to Rust
+    ID: 4, Score: 0.0162, Title: Machine Learning with Rust
+    ID: 5, Score: 0.0115, Title: Building Search Engines
+    ID: 2, Score: 0.0111, Title: Vector Databases Explained
+    ID: 3, Score: 0.0109, Title: Graph Algorithms in Practice
 
 --- Example 5: Text Search ---
   Text search results for 'programming':
-    ID: 1, Score: 0.xxxx, Title: Introduction to Rust
-    ID: 4, Score: 0.xxxx, Title: Machine Learning with Rust
+    ID: 1, Score: 1.2321, Title: Introduction to Rust
+    ID: 4, Score: 0.8337, Title: Machine Learning with Rust
 
 === Example Complete ===
 ```
 
-Exact scores will vary by platform.
+The embeddings are generated from fixed seeds, so the result order and IDs are deterministic; the exact score digits may differ by a small amount across platforms.
 
 ## VelesDB Features Demonstrated
 
