@@ -23,8 +23,7 @@ use crate::AppState;
 
 use super::super::helpers::{error_response, get_collection_or_404};
 
-/// Reserved payload key carrying the durable expiry timestamp (epoch seconds).
-const EXPIRES_AT_KEY: &str = "_veles_expires_at";
+use velesdb_core::EXPIRES_AT_KEY;
 
 /// Request body for `POST /collections/{name}/relations`.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -141,7 +140,14 @@ pub async fn relate_points(
     }
 }
 
+/// Maximum collision retries before giving up on edge-ID allocation.
+const MAX_EDGE_RETRIES: u32 = 1_000;
+
 /// Assigns a collision-free edge ID and inserts the edge, retrying on `EdgeExists`.
+///
+/// Returns an `INTERNAL_SERVER_ERROR` response when [`MAX_EDGE_RETRIES`]
+/// consecutive IDs are all taken — this indicates a corrupted ID-space seed and
+/// should never occur in practice.
 #[allow(clippy::result_large_err)]
 fn insert_edge_with_retry(
     coll: &velesdb_core::collection::AnyCollection,
@@ -149,7 +155,7 @@ fn insert_edge_with_retry(
     properties: std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<u64, axum::response::Response> {
     let mut next_id = coll.max_edge_id().map_or(1, |m| m.saturating_add(1));
-    loop {
+    for _ in 0..MAX_EDGE_RETRIES {
         if coll.edge_exists(next_id) {
             next_id = next_id.saturating_add(1);
             continue;
@@ -176,6 +182,10 @@ fn insert_edge_with_retry(
             }
         }
     }
+    Err(error_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "edge id allocation exhausted after too many retries".to_string(),
+    ))
 }
 
 /// Remove a relation edge by ID.

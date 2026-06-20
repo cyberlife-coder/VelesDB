@@ -54,7 +54,7 @@ impl LockFreeHistogram {
         }
     }
 
-    /// Records a value in microseconds. Wait-free operation.
+    /// Records a value in microseconds. Lock-free operation.
     #[inline]
     pub fn record(&self, value_us: u64) {
         let bucket = Self::bucket_for(value_us);
@@ -62,33 +62,8 @@ impl LockFreeHistogram {
         self.count.fetch_add(1, Ordering::Relaxed);
         self.sum.fetch_add(value_us, Ordering::Relaxed);
 
-        // Update min (CAS loop)
-        let mut current_min = self.min.load(Ordering::Relaxed);
-        while value_us < current_min {
-            match self.min.compare_exchange_weak(
-                current_min,
-                value_us,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(actual) => current_min = actual,
-            }
-        }
-
-        // Update max (CAS loop)
-        let mut current_max = self.max.load(Ordering::Relaxed);
-        while value_us > current_max {
-            match self.max.compare_exchange_weak(
-                current_max,
-                value_us,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(actual) => current_max = actual,
-            }
-        }
+        self.min.fetch_min(value_us, Ordering::Relaxed);
+        self.max.fetch_max(value_us, Ordering::Relaxed);
     }
 
     /// Returns the bucket index for a value (log2 scale).
