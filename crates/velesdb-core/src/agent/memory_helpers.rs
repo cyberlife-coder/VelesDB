@@ -379,9 +379,20 @@ pub(super) fn seed_edge_counter(collection: &Collection) -> std::sync::atomic::A
     std::sync::atomic::AtomicU64::new(next)
 }
 
+/// Maximum number of edge-ID allocation attempts before giving up.
+///
+/// Each iteration either succeeds or advances the counter by one, so
+/// this caps the worst-case number of counter increments. Exhaustion
+/// indicates an unusually dense pre-existing edge space (e.g. a
+/// corrupted counter seed) and is surfaced as a `CollectionError`.
+const MAX_EDGE_ID_RETRIES: u32 = 1_000;
+
 /// Adds a relation edge between two memory points, allocating a fresh edge
 /// id from `next_edge_id` (skipping ids taken by direct graph writes; the
 /// `EdgeExists` retry covers the residual allocation race).
+///
+/// Returns `CollectionError` when [`MAX_EDGE_ID_RETRIES`] consecutive ids
+/// are all already taken — this should never happen in practice.
 pub(super) fn add_relation_edge(
     collection: &Collection,
     next_edge_id: &std::sync::atomic::AtomicU64,
@@ -390,7 +401,7 @@ pub(super) fn add_relation_edge(
     properties: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Result<u64, AgentMemoryError> {
     let (from_id, to_id) = endpoints;
-    loop {
+    for _ in 0..MAX_EDGE_ID_RETRIES {
         let edge_id = next_edge_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if collection.edge_exists(edge_id) {
             continue; // taken by a direct graph write — no junk WAL entry
@@ -409,6 +420,10 @@ pub(super) fn add_relation_edge(
             Err(e) => return Err(AgentMemoryError::CollectionError(e.to_string())),
         }
     }
+    Err(AgentMemoryError::CollectionError(
+        "edge id allocation exhausted after too many retries (possible id-space corruption)"
+            .to_string(),
+    ))
 }
 
 /// Compensates the `relate()` check-then-add window: when an endpoint was
@@ -572,6 +587,82 @@ pub(super) fn execute_velesql(
         .into_iter()
         .filter(|r| !ttl.is_expired(kind, r.point.id))
         .collect())
+}
+
+/// Adds a durable relation edge between two live memory points.
+///
+/// This is the shared implementation for `SemanticMemory::relate`,
+/// `EpisodicMemory::relate`, and `ProceduralMemory::relate`. The `kind`
+/// parameter scopes liveness checks to the owning subsystem so an expired
+/// semantic id never matches a live episodic id with the same number.
+///
+/// # Errors
+///
+/// Returns `NotFound` when either endpoint is missing or expired, or
+/// `CollectionError` when the edge write fails.
+pub(super) fn relate_memory_points(
+    db: &Database,
+    collection_name: &str,
+    from_id: u64,
+    to_id: u64,
+    rel_type: &str,
+    properties: Option<&serde_json::Map<String, serde_json::Value>>,
+    ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
+    next_edge_id: &std::sync::atomic::AtomicU64,
+) -> Result<u64, AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    for id in [from_id, to_id] {
+        ensure_live(&collection, collection_name, ttl, kind, id)?;
+    }
+    let edge_id = add_relation_edge(&collection, next_edge_id, (from_id, to_id), rel_type, properties)?;
+    // Close the check-then-add window: an endpoint deleted concurrently
+    // (its cascade may have run before our edge landed) must not leave a
+    // dangling, WAL-durable edge behind.
+    verify_relation_endpoints(&collection, edge_id, (from_id, to_id))?;
+    Ok(edge_id)
+}
+
+/// Returns the outgoing relation edges of a memory point, filtering out edges
+/// whose target is TTL-expired in the given subsystem.
+///
+/// Shared by `SemanticMemory::relations`, `EpisodicMemory::relations`, and
+/// `ProceduralMemory::relations`.
+///
+/// # Errors
+///
+/// Returns `CollectionError` when the collection cannot be resolved.
+pub(super) fn relations_of(
+    db: &Database,
+    collection_name: &str,
+    id: u64,
+    ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
+) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    Ok(collection
+        .get_outgoing_edges(id)
+        .into_iter()
+        .filter(|edge| !ttl.is_expired(kind, edge.target()))
+        .collect())
+}
+
+/// Removes a relation edge from a memory collection.
+///
+/// Returns `true` when the edge existed and was removed. Shared by
+/// `SemanticMemory::unrelate`, `EpisodicMemory::unrelate`, and
+/// `ProceduralMemory::unrelate`.
+///
+/// # Errors
+///
+/// Returns `CollectionError` when the collection cannot be resolved.
+pub(super) fn unrelate_edge(
+    db: &Database,
+    collection_name: &str,
+    edge_id: u64,
+) -> Result<bool, AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    Ok(collection.remove_edge(edge_id))
 }
 
 #[cfg(test)]
