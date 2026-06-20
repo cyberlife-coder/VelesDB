@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | **Last Updated**: 2026-06-20 (VelesDB v3.1.0)
+**Version**: 3.10.0 | **Last Updated**: 2026-06-20 (VelesDB v3.2.0)
 
 ---
 
@@ -1868,7 +1868,7 @@ tree now explicitly surfaces the similarity-as-predicate routing decision
 (see **Order by Similarity** above) — the `VectorSearch` node appears even
 though the SQL text has no `NEAR`.
 
-#### REST plan single-sourced from core (next minor release)
+#### v3.2.0 — REST plan single-sourced from core
 
 The REST `/query/explain` step list is now produced directly from the engine
 plan via `QueryPlan::to_plan_steps()`, the same `PlanNode` tree the CLI
