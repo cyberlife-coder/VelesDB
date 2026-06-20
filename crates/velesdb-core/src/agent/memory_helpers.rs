@@ -586,6 +586,19 @@ pub(super) fn execute_velesql(
         .collect())
 }
 
+/// Borrowed handle to a memory subsystem's storage and TTL state.
+///
+/// Bundles the per-subsystem context — database, collection name, TTL map,
+/// [`MemoryKind`](super::ttl::MemoryKind), and edge-ID allocator — so the
+/// relation helpers keep small signatures.
+pub(super) struct MemorySubsystem<'a> {
+    pub db: &'a Database,
+    pub collection_name: &'a str,
+    pub ttl: &'a super::ttl::MemoryTtl,
+    pub kind: super::ttl::MemoryKind,
+    pub next_edge_id: &'a std::sync::atomic::AtomicU64,
+}
+
 /// Adds a durable relation edge between two live memory points.
 ///
 /// This is the shared implementation for `SemanticMemory::relate`,
@@ -597,28 +610,26 @@ pub(super) fn execute_velesql(
 ///
 /// Returns `NotFound` when either endpoint is missing or expired, or
 /// `CollectionError` when the edge write fails.
-// All 9 parameters carry distinct roles: (db, collection), (from, to) endpoints,
-// edge (rel_type, properties), and TTL context (ttl, kind, next_edge_id).
-// Grouping them into a struct would add indirection without clarity.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn relate_memory_points(
-    db: &Database,
-    collection_name: &str,
+    subsystem: &MemorySubsystem<'_>,
     from_id: u64,
     to_id: u64,
     rel_type: &str,
     properties: Option<&serde_json::Map<String, serde_json::Value>>,
-    ttl: &super::ttl::MemoryTtl,
-    kind: super::ttl::MemoryKind,
-    next_edge_id: &std::sync::atomic::AtomicU64,
 ) -> Result<u64, AgentMemoryError> {
-    let collection = get_collection(db, collection_name)?;
+    let collection = get_collection(subsystem.db, subsystem.collection_name)?;
     for id in [from_id, to_id] {
-        ensure_live(&collection, collection_name, ttl, kind, id)?;
+        ensure_live(
+            &collection,
+            subsystem.collection_name,
+            subsystem.ttl,
+            subsystem.kind,
+            id,
+        )?;
     }
     let edge_id = add_relation_edge(
         &collection,
-        next_edge_id,
+        subsystem.next_edge_id,
         (from_id, to_id),
         rel_type,
         properties,

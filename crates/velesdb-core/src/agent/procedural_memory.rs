@@ -315,15 +315,17 @@ impl ProceduralMemory {
         properties: Option<&serde_json::Map<String, serde_json::Value>>,
     ) -> Result<u64, AgentMemoryError> {
         memory_helpers::relate_memory_points(
-            &self.db,
-            &self.collection_name,
+            &memory_helpers::MemorySubsystem {
+                db: &self.db,
+                collection_name: &self.collection_name,
+                ttl: &self.ttl,
+                kind: MemoryKind::Procedural,
+                next_edge_id: &self.next_edge_id,
+            },
             from_id,
             to_id,
             rel_type,
             properties,
-            &self.ttl,
-            MemoryKind::Procedural,
-            &self.next_edge_id,
         )
     }
 
