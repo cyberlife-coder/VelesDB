@@ -1,0 +1,44 @@
+#!/bin/bash
+# =============================================================================
+# VelesDB-Core Commit-msg Hook — garde-fou anti-attribution IA
+# =============================================================================
+# Rejette tout commit attribué à un assistant IA (règle CLAUDE.md #5) :
+#   - auteur dont le nom ou l'email contient "claude" ou "anthropic"
+#   - message contenant un trailer "Co-Authored-By: …(Claude|Anthropic)…",
+#     une ligne "Claude-Session:", ou une mention "Generated with …Claude".
+#
+# Filet de sécurité LOCAL (commits CLI). Le guard CI "Git Flow" couvre les
+# commits poussés depuis d'autres environnements (ex. sessions cloud).
+#
+# Pour activer : git config core.hooksPath .githooks
+# =============================================================================
+
+set -e
+
+RED='\033[0;31m'
+NC='\033[0m'
+
+msg_file="$1"
+
+# 1. Identité de l'auteur (nom <email> timestamp)
+author="$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)"
+if printf '%s' "$author" | grep -qiE 'anthropic|claude'; then
+    echo -e "${RED}❌ Commit refusé : auteur attribué à une IA → ${author}${NC}" >&2
+    echo -e "${RED}   Règle CLAUDE.md #5 (aucune attribution IA). Corrige l'auteur :${NC}" >&2
+    echo    "     git config user.name  'cyberlife-coder'" >&2
+    echo    "     git config user.email '174732281+cyberlife-coder@users.noreply.github.com'" >&2
+    exit 1
+fi
+
+# 2. Trailers IA dans le message de commit.
+# Ancré en début de ligne : un vrai trailer est en colonne 0 (dernier
+# paragraphe), ce qui évite de bloquer une prose qui *mentionne* ces motifs
+# (ex. ce hook, ou de la doc sur la règle).
+if grep -qiE '^[[:space:]]*Co-Authored-By:.*(claude|anthropic)|^[[:space:]]*Claude-Session:|🤖[[:space:]]*Generated with|Generated with \[Claude' "$msg_file"; then
+    echo -e "${RED}❌ Commit refusé : attribution IA dans le message (CLAUDE.md #5).${NC}" >&2
+    echo -e "${RED}   Retire les lignes 'Co-Authored-By: Claude…', 'Claude-Session:'${NC}" >&2
+    echo -e "${RED}   et '🤖 Generated with …'.${NC}" >&2
+    exit 1
+fi
+
+exit 0

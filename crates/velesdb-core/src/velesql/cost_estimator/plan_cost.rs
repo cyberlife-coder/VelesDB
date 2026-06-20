@@ -29,7 +29,12 @@ impl CostEstimator<'_> {
                 let c = self.estimate_plan_cost(n);
                 Cost::new(acc.io_cost + c.io_cost, acc.cpu_cost + c.cpu_cost)
             }),
-            PlanNode::Limit(_) | PlanNode::Offset(_) => self.estimate_limit_offset_cost(),
+            PlanNode::Limit(_)
+            | PlanNode::Offset(_)
+            | PlanNode::Join(_)
+            | PlanNode::GroupBy(_)
+            | PlanNode::Aggregate(_)
+            | PlanNode::Sort(_) => self.estimate_limit_offset_cost(),
         }
     }
 

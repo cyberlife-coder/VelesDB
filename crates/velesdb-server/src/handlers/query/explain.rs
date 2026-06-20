@@ -2,7 +2,7 @@
 
 use axum::{extract::State, response::IntoResponse, Json};
 use std::sync::Arc;
-use velesdb_core::velesql::{Condition, SelectColumns, DEFAULT_SELECT_LIMIT};
+use velesdb_core::velesql::{Condition, QueryPlan, SelectColumns};
 
 use crate::types::{
     ActualStatsResponse, ExplainCost, ExplainFeatures, ExplainRequest, ExplainResponse,
@@ -54,6 +54,21 @@ pub async fn explain(
     explain_plan_only(&state, &req, &parsed)
 }
 
+/// Computes the EXPLAIN preamble shared by the plan-only and ANALYZE paths:
+/// detected query features, estimated cost, and the query-type label.
+fn explain_preamble(
+    parsed: &velesdb_core::velesql::Query,
+) -> (ExplainFeatures, ExplainCost, &'static str) {
+    let features = detect_explain_features(&parsed.select);
+    let estimated_cost = estimate_cost(features.has_vector_search);
+    let query_type = if parsed.is_match_query() {
+        "MATCH"
+    } else {
+        "SELECT"
+    };
+    (features, estimated_cost, query_type)
+}
+
 /// Build an EXPLAIN-only response (no execution).
 fn explain_plan_only(
     state: &AppState,
@@ -61,24 +76,15 @@ fn explain_plan_only(
     parsed: &velesdb_core::velesql::Query,
 ) -> axum::response::Response {
     let select = &parsed.select;
-    let features = detect_explain_features(select);
-    let mut plan = build_explain_plan(parsed, &features);
-    let estimated_cost = estimate_cost(features.has_vector_search);
-    let query_type = if parsed.is_match_query() {
-        "MATCH"
-    } else {
-        "SELECT"
-    };
+    let (features, estimated_cost, query_type) = explain_preamble(parsed);
 
-    let (cache_hit, plan_reuse_count) =
-        state
-            .db
-            .explain_query(parsed)
-            .ok()
-            .map_or((None, None), |qp| {
-                merge_core_estimation(&mut plan, &qp);
-                (qp.cache_hit, qp.plan_reuse_count)
-            });
+    // Single-sourced from core: the plan steps come from the canonical
+    // `QueryPlan`, not a server-side AST reconstruction. The DB-less fallback
+    // keeps EXPLAIN working when the collection cannot be resolved.
+    let (plan, cache_hit, plan_reuse_count) = match state.db.explain_query(parsed) {
+        Ok(qp) => (core_plan_steps(&qp), qp.cache_hit, qp.plan_reuse_count),
+        Err(_) => (core_plan_steps(&QueryPlan::from_query(parsed)), None, None),
+    };
 
     Json(ExplainResponse {
         query: req.query.clone(),
@@ -104,22 +110,15 @@ fn explain_with_analyze(
     parsed: &velesdb_core::velesql::Query,
 ) -> axum::response::Response {
     let select = &parsed.select;
-    let features = detect_explain_features(select);
-    let mut plan = build_explain_plan(parsed, &features);
-    let estimated_cost = estimate_cost(features.has_vector_search);
-    let query_type = if parsed.is_match_query() {
-        "MATCH"
-    } else {
-        "SELECT"
-    };
+    let (features, estimated_cost, query_type) = explain_preamble(parsed);
 
     let output = match run_analyze_query(state, parsed, &req.params) {
         Ok(o) => o,
         Err(resp) => return *resp,
     };
 
-    // Merge core estimation metadata into server plan (graceful: already have output).
-    merge_core_estimation(&mut plan, &output.plan);
+    // Single-sourced from core: steps derive from the executed plan.
+    let plan = core_plan_steps(&output.plan);
 
     let (actual_stats_resp, actual_time, node_stats_resp) = extract_analyze_stats(&output);
 
@@ -213,163 +212,12 @@ fn detect_explain_features(select: &velesdb_core::velesql::SelectStatement) -> E
     }
 }
 
-/// Build the execution plan steps for an EXPLAIN response.
-fn build_explain_plan(
-    parsed: &velesdb_core::velesql::Query,
-    features: &ExplainFeatures,
-) -> Vec<ExplainStep> {
-    let select = &parsed.select;
-    let mut plan = Vec::new();
-    let mut step_num = 1;
-
-    plan.push(build_source_step(select, features, step_num));
-    step_num += 1;
-
-    append_filter_and_join_steps(select, features, &mut plan, &mut step_num);
-    append_aggregation_steps(features, &mut plan, &mut step_num);
-    // MATCH and compound queries have no implicit default LIMIT.
-    let implicit_limit = parsed.match_clause.is_none() && parsed.compound.is_none();
-    append_pagination_step(select, &mut plan, step_num, implicit_limit);
-
-    plan
-}
-
-fn build_source_step(
-    select: &velesdb_core::velesql::SelectStatement,
-    features: &ExplainFeatures,
-    step_num: usize,
-) -> ExplainStep {
-    if features.has_vector_search {
-        ExplainStep {
-            step: step_num,
-            operation: "VectorSearch".to_string(),
-            description: "ANN search using HNSW index with NEAR clause".to_string(),
-            estimated_rows: select.limit.map(|l| l as usize),
-            estimation_method: None,
-        }
-    } else {
-        ExplainStep {
-            step: step_num,
-            operation: "FullScan".to_string(),
-            description: format!("Scan collection '{}'", select.from),
-            estimated_rows: None,
-            estimation_method: None,
-        }
-    }
-}
-
-fn append_filter_and_join_steps(
-    select: &velesdb_core::velesql::SelectStatement,
-    features: &ExplainFeatures,
-    plan: &mut Vec<ExplainStep>,
-    step_num: &mut usize,
-) {
-    if features.has_filter {
-        plan.push(ExplainStep {
-            step: *step_num,
-            operation: "Filter".to_string(),
-            description: "Apply WHERE clause predicates".to_string(),
-            estimated_rows: None,
-            estimation_method: None,
-        });
-        *step_num += 1;
-    }
-
-    for join in &select.joins {
-        plan.push(ExplainStep {
-            step: *step_num,
-            operation: format!("{:?}Join", join.join_type),
-            description: format!("Join with '{}'", join.table),
-            estimated_rows: None,
-            estimation_method: None,
-        });
-        *step_num += 1;
-    }
-}
-
-fn append_aggregation_steps(
-    features: &ExplainFeatures,
-    plan: &mut Vec<ExplainStep>,
-    step_num: &mut usize,
-) {
-    if features.has_group_by {
-        plan.push(ExplainStep {
-            step: *step_num,
-            operation: "GroupBy".to_string(),
-            description: "Group rows by specified columns".to_string(),
-            estimated_rows: None,
-            estimation_method: None,
-        });
-        *step_num += 1;
-    }
-
-    if features.has_aggregation {
-        plan.push(ExplainStep {
-            step: *step_num,
-            operation: "Aggregate".to_string(),
-            description: "Compute aggregate functions (COUNT, SUM, etc.)".to_string(),
-            estimated_rows: None,
-            estimation_method: None,
-        });
-        *step_num += 1;
-    }
-
-    if features.has_order_by {
-        plan.push(ExplainStep {
-            step: *step_num,
-            operation: "Sort".to_string(),
-            description: "Sort results by ORDER BY clause".to_string(),
-            estimated_rows: None,
-            estimation_method: None,
-        });
-        *step_num += 1;
-    }
-}
-
-/// Appends the LIMIT/OFFSET step.
+/// Maps a core [`QueryPlan`] into the REST [`ExplainStep`] list.
 ///
-/// Plain SELECT statements (`implicit_limit == true`) without an explicit
-/// LIMIT surface the engine default ([`DEFAULT_SELECT_LIMIT`]) so the plan
-/// matches what execution actually returns. MATCH and compound queries
-/// (`implicit_limit == false`) have no implicit limit.
-fn append_pagination_step(
-    select: &velesdb_core::velesql::SelectStatement,
-    plan: &mut Vec<ExplainStep>,
-    step_num: usize,
-    implicit_limit: bool,
-) {
-    let Some((limit, is_default)) = resolve_pagination_limit(select, implicit_limit) else {
-        return;
-    };
-    let marker = if is_default { " (default)" } else { "" };
-    let estimated_rows = (select.limit.is_some() || is_default).then_some(limit as usize);
-    plan.push(ExplainStep {
-        step: step_num,
-        operation: "Limit".to_string(),
-        description: format!(
-            "Apply LIMIT {limit}{marker} OFFSET {}",
-            select.offset.unwrap_or(0)
-        ),
-        estimated_rows,
-        estimation_method: None,
-    });
-}
-
-/// Resolves the effective LIMIT for the pagination step.
-///
-/// Returns `(limit, is_default)`, or `None` when no step should be emitted
-/// (no LIMIT, no OFFSET, and no implicit default — MATCH/compound queries).
-fn resolve_pagination_limit(
-    select: &velesdb_core::velesql::SelectStatement,
-    implicit_limit: bool,
-) -> Option<(u64, bool)> {
-    match select.limit {
-        Some(limit) => Some((limit, false)),
-        None if implicit_limit => Some((DEFAULT_SELECT_LIMIT, true)),
-        // OFFSET without LIMIT on a no-default query keeps the LIMIT 0 display.
-        None if select.offset.is_some() => Some((0, false)),
-        None => None,
-    }
+/// The plan steps are single-sourced from `velesdb-core` (`to_plan_steps`),
+/// so the server no longer reconstructs them from the parsed AST.
+fn core_plan_steps(plan: &QueryPlan) -> Vec<ExplainStep> {
+    plan.to_plan_steps().iter().map(ExplainStep::from).collect()
 }
 
 /// Estimate execution cost based on query features.
@@ -403,38 +251,5 @@ pub(super) fn condition_has_vector_search(cond: &Condition) -> bool {
         }
         Condition::Group(inner) | Condition::Not(inner) => condition_has_vector_search(inner),
         _ => false,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Core plan merge helpers (Task 2.2)
-// ---------------------------------------------------------------------------
-
-/// Recursively extracts the first `FilterPlan` from a core `PlanNode` tree.
-fn extract_filter_plan(
-    node: &velesdb_core::velesql::PlanNode,
-) -> Option<&velesdb_core::velesql::FilterPlan> {
-    match node {
-        velesdb_core::velesql::PlanNode::Filter(fp) => Some(fp),
-        velesdb_core::velesql::PlanNode::Sequence(nodes) => {
-            nodes.iter().find_map(extract_filter_plan)
-        }
-        _ => None,
-    }
-}
-
-/// Merges core `FilterPlan` estimation data into server `ExplainStep` entries.
-///
-/// Copies `estimated_rows` and `estimation_method` from the core plan's
-/// `FilterPlan` into every server step whose `operation` is `"Filter"`.
-#[allow(clippy::cast_possible_truncation)]
-fn merge_core_estimation(plan: &mut [ExplainStep], core_plan: &velesdb_core::velesql::QueryPlan) {
-    if let Some(fp) = extract_filter_plan(&core_plan.root) {
-        for step in plan.iter_mut() {
-            if step.operation == "Filter" {
-                step.estimated_rows = fp.estimated_rows.map(|r| r as usize);
-                step.estimation_method = fp.estimation_method.clone();
-            }
-        }
     }
 }

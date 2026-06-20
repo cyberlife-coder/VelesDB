@@ -124,23 +124,13 @@ impl OperationalMetrics {
 
     /// Decrements active connections.
     ///
-    /// Uses a CAS loop to saturate at 0, preventing underflow wrap to `u64::MAX`.
+    /// Uses `fetch_update` to saturate at 0, preventing underflow wrap to `u64::MAX`.
     pub fn dec_connections(&self) {
-        // BUG-3 FIX: Use CAS loop to prevent underflow
-        loop {
-            let current = self.active_connections.load(Ordering::Relaxed);
-            if current == 0 {
-                return; // Already at 0, don't underflow
-            }
-            if self
-                .active_connections
-                .compare_exchange_weak(current, current - 1, Ordering::Relaxed, Ordering::Relaxed)
-                .is_ok()
-            {
-                return;
-            }
-            // CAS failed, retry
-        }
+        self.active_connections
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| {
+                Some(x.saturating_sub(1))
+            })
+            .ok();
     }
 
     /// Exports metrics in Prometheus text format.

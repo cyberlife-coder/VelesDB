@@ -197,6 +197,8 @@ pub use collection::{
     TraversalResult,
     ValueType,
     VectorCollection,
+    // Durable TTL payload key (shared across all collection types and external crates)
+    EXPIRES_AT_KEY,
 };
 pub use contiguous_ops::pad_to_simd_width;
 pub use distance::{DistanceMetric, CONDITION_TYPE_NAMES, DISTANCE_METRIC_NAMES};

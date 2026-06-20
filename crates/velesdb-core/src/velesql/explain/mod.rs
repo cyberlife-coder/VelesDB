@@ -16,6 +16,7 @@ mod filter_strategy;
 mod formatter;
 mod node_stats;
 mod plan_builder;
+mod step;
 mod types;
 
 pub(crate) use filter_strategy::strip_vector_predicates;

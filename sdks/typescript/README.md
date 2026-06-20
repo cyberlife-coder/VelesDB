@@ -2,7 +2,7 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v3.1.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
+**v3.2.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
 
 ## What's New (unreleased)
 

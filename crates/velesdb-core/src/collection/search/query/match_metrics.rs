@@ -108,18 +108,8 @@ impl MatchMetrics {
     fn record_depth(&self, depth: u32) {
         self.depth_sum
             .fetch_add(u64::from(depth), Ordering::Relaxed);
-        let mut current_max = self.max_depth_reached.load(Ordering::Relaxed);
-        while u64::from(depth) > current_max {
-            match self.max_depth_reached.compare_exchange_weak(
-                current_max,
-                u64::from(depth),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(actual) => current_max = actual,
-            }
-        }
+        self.max_depth_reached
+            .fetch_max(u64::from(depth), Ordering::Relaxed);
     }
 
     /// Returns the average latency in milliseconds.

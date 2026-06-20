@@ -3184,6 +3184,132 @@ async fn test_explain_select_without_limit_exposes_default_limit_step() {
     );
 }
 
+#[tokio::test]
+async fn test_explain_group_by_order_by_steps_preserved() {
+    let temp_dir = TempDir::new().unwrap();
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "explain_agg",
+                        "dimension": 4,
+                        "metric": "cosine"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // GROUP BY + aggregate + ORDER BY: the single-sourced plan (core
+    // `to_plan_steps`) must still surface the GroupBy/Aggregate/Sort steps the
+    // server previously reconstructed from the AST (additive preservation).
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query/explain")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "SELECT category, COUNT(*) FROM explain_agg GROUP BY category ORDER BY COUNT(*) DESC LIMIT 5"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let ops: Vec<&str> = json["plan"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["operation"].as_str())
+        .collect();
+    for expected in ["GroupBy", "Aggregate", "Sort", "Limit"] {
+        assert!(
+            ops.contains(&expected),
+            "single-sourced plan must keep the {expected} step: {ops:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_explain_hybrid_vector_filter_surfaces_filter_step() {
+    let temp_dir = TempDir::new().unwrap();
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({ "name": "explain_hybrid", "dimension": 4, "metric": "cosine" })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // A vector NEAR query with a scalar predicate must surface BOTH a
+    // VectorSearch and a Filter step (single-sourced from the core plan; the
+    // old AST reconstruction suppressed the Filter whenever a vector ran).
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query/explain")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "SELECT * FROM explain_hybrid WHERE category = 'tech' AND vector NEAR $v LIMIT 10"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let ops: Vec<&str> = json["plan"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["operation"].as_str())
+        .collect();
+    for expected in ["VectorSearch", "Filter", "Limit"] {
+        assert!(
+            ops.contains(&expected),
+            "hybrid vector+filter plan must include {expected}: {ops:?}"
+        );
+    }
+}
+
 // ============================================================================
 // GuardRails — rate limit (429)
 // ============================================================================
