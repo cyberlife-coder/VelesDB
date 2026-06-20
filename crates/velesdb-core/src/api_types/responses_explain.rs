@@ -141,6 +141,20 @@ pub struct ExplainStep {
     pub estimation_method: Option<String>,
 }
 
+#[cfg(feature = "persistence")]
+impl From<&crate::velesql::PlanStep> for ExplainStep {
+    #[allow(clippy::cast_possible_truncation)]
+    fn from(s: &crate::velesql::PlanStep) -> Self {
+        Self {
+            step: s.step,
+            operation: s.rest_operation(),
+            description: s.description.clone(),
+            estimated_rows: s.estimated_rows.map(|r| r as usize),
+            estimation_method: s.estimation_method.clone(),
+        }
+    }
+}
+
 /// Estimated cost metrics for the query.
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
