@@ -616,7 +616,13 @@ pub(super) fn relate_memory_points(
     for id in [from_id, to_id] {
         ensure_live(&collection, collection_name, ttl, kind, id)?;
     }
-    let edge_id = add_relation_edge(&collection, next_edge_id, (from_id, to_id), rel_type, properties)?;
+    let edge_id = add_relation_edge(
+        &collection,
+        next_edge_id,
+        (from_id, to_id),
+        rel_type,
+        properties,
+    )?;
     // Close the check-then-add window: an endpoint deleted concurrently
     // (its cascade may have run before our edge landed) must not leave a
     // dangling, WAL-durable edge behind.

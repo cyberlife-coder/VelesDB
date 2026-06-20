@@ -58,9 +58,9 @@ mod set_operations_execution_tests;
 
 pub use any_collection::AnyCollection;
 pub use collection_config::{CollectionConfig, CURRENT_SCHEMA_VERSION};
-pub use expiry::EXPIRES_AT_KEY;
 pub use core::{IndexInfo, ScrollBatch, MAX_DIMENSION, MIN_DIMENSION};
 pub use diagnostics::{CollectionDiagnostics, IndexHealth};
+pub use expiry::EXPIRES_AT_KEY;
 pub use graph::{
     ConcurrentEdgeStore, EdgeStore, EdgeType, GraphEdge, GraphNode, GraphSchema, NodeType,
     PropertyIndex, RangeIndex, TraversalConfig, TraversalPath, TraversalResult, ValueType,
