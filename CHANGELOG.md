@@ -5,6 +5,66 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] — 2026-06-20
+
+Minor release. Single-sources several ecosystem components onto `velesdb-core`
+(the source of truth) and adds the supporting public API. **No breaking Rust API
+changes** — every addition is additive and the core config structs are
+`#[non_exhaustive]`.
+
+> ⚠️ **Potentially breaking for externally-persisted derived IDs.** The
+> auto-derived identifiers produced by the WASM, `velesdb-migrate`, and
+> LangChain/LlamaIndex layers now match `velesdb-core`'s canonical hashing (they
+> previously diverged per engine). This is a correctness/convergence fix — core's
+> own IDs are unchanged and there is **no on-disk format change** — but if you
+> persisted these auto-derived IDs into an external store, re-ingesting the same
+> logical edge/entity will now yield a different ID. Rebuild affected persisted
+> graphs.
+
+### Added
+- `velesdb_core::wire::hash_edge_id(source, target, label)` — the canonical
+  edge-ID hash, exported at the crate root and `wasm32`-safe (lives in `wire/`,
+  not behind the `persistence` feature).
+- `velesdb_core::CONDITION_TYPE_NAMES` and `DISTANCE_METRIC_NAMES` — the canonical
+  filter-condition and distance-metric name vocabularies; surfaced in Python as
+  `velesdb.CONDITION_TYPES`.
+- Mobile `VelesError::Database` now carries `code` (the core `VELES-###` taxonomy
+  code) and `recoverable` (mirrors `velesdb_core::Error::is_recoverable`), exposed
+  over UniFFI.
+
+### Changed
+- **Edge IDs single-sourced.** WASM and `velesdb-migrate` auto edge IDs now use
+  `velesdb_core::wire::hash_edge_id` (was a monotonic counter / a string-hash);
+  core IDs are unchanged.
+- **Fusion single-sourced.** WASM sparse RRF and the Tauri sparse path now
+  delegate to `velesdb_core::FusionStrategy::fuse` (ranking identical to core).
+- **WASM binary 1-bit quantization** sign convention now matches core (`>= 0.0`
+  sets the bit; `0.0` now sets the bit). In-memory only — no persisted artifact.
+- **Migrate metric canonicalization** routes through `DistanceMetric::parse_alias`;
+  the TOML schema is unchanged. Migrate-only aliases `cos`/`euclid`/`l2_distance`/
+  `inner_product`/`cosinesimilarity` are dropped; `l2`/`ip`/`inner` now resolve.
+- **Mobile error `Display`** now prepends the `[VELES-###]` code.
+
+### Fixed
+- **LangChain & LlamaIndex graph IDs** now use the canonical
+  `velesdb_common.ids.stable_hash_id` (60-bit → 63-bit); persisted graphs created
+  by older versions must be rebuilt.
+- **WASM PQ/RaBitQ fallback** no longer silently degrades to SQ8 — it emits a
+  one-time `console.warn` (the fallback behaviour itself is unchanged).
+
+### Performance
+- In-place permutation in scalar `ORDER BY`, and fewer intermediate allocations in
+  the aggregator, window-partition, and layer hot paths (no behavioural change).
+
+### Internal
+- Executor-level VelesQL conformance extended to multi-column `ORDER BY`, the
+  ascending-id tie-break, and bounded top-k, now running across the core, CLI, and
+  WASM executors (`conformance/velesql_executor_cases.json`).
+- `MobileGraphStore` documented as a deliberate RAM-only graph fork
+  (`KNOWN_LIMITATIONS.md` #14).
+- Test-authenticity audit: removed redundant/fake tests and corrected several
+  assertions across the workspace.
+
 ## [3.0.1] — 2026-06-16
 
 Maintenance release. **No functional changes** — the published artifacts are
