@@ -37,18 +37,7 @@ impl TraversalMetrics {
             .fetch_add(edges_scanned, Ordering::Relaxed);
 
         // Update max depth if this traversal went deeper
-        let mut current_max = self.max_depth_reached.load(Ordering::Relaxed);
-        while depth > current_max {
-            match self.max_depth_reached.compare_exchange_weak(
-                current_max,
-                depth,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(actual) => current_max = actual,
-            }
-        }
+        self.max_depth_reached.fetch_max(depth, Ordering::Relaxed);
     }
 
     /// Exports traversal metrics in Prometheus format.

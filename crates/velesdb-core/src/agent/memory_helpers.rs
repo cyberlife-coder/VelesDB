@@ -597,6 +597,10 @@ pub(super) fn execute_velesql(
 ///
 /// Returns `NotFound` when either endpoint is missing or expired, or
 /// `CollectionError` when the edge write fails.
+// All 9 parameters carry distinct roles: (db, collection), (from, to) endpoints,
+// edge (rel_type, properties), and TTL context (ttl, kind, next_edge_id).
+// Grouping them into a struct would add indirection without clarity.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn relate_memory_points(
     db: &Database,
     collection_name: &str,
