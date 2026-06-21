@@ -201,7 +201,18 @@ impl Collection {
                     },
                     FusionStrategyType::Average => crate::fusion::FusionStrategy::Average,
                     FusionStrategyType::Maximum => crate::fusion::FusionStrategy::Maximum,
-                    FusionStrategyType::Weighted => crate::fusion::FusionStrategy::rrf_default(),
+                    FusionStrategyType::Weighted => {
+                        // 'weighted' = weighted Reciprocal Rank Fusion over the two
+                        // branches (branch 0 = dense NEAR, branch 1 = sparse), honoring
+                        // the dense_w/sparse_w from the FUSION clause. Falls back to RRF
+                        // on a validation error (e.g. a negative weight).
+                        let dw = fc.dense_weight.unwrap_or(0.5);
+                        let sw = fc.sparse_weight.unwrap_or(0.5);
+                        #[allow(clippy::cast_precision_loss)]
+                        let k = fc.k.unwrap_or(60) as f32;
+                        crate::fusion::FusionStrategy::weighted_rrf(vec![dw, sw], k)
+                            .unwrap_or_else(|_| crate::fusion::FusionStrategy::rrf_default())
+                    }
                 }
             })
     }
