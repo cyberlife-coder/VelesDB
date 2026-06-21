@@ -752,3 +752,32 @@ fn test_normal_paths_unaffected_by_guards() {
     let flat = cv.gather_flat(&[0, 2]);
     assert_eq!(flat, vec![1.0, 2.0, 3.0, 7.0, 8.0, 9.0]);
 }
+
+/// `insert_at` with a non-contiguous index leaves gap slots zero-initialized.
+///
+/// `ContiguousVectors` uses `alloc_zeroed` internally, so any index never
+/// explicitly written must read back as an all-zero vector. This property
+/// is relied upon by callers (e.g. HNSW dense-ID assignment) that check
+/// "was this slot ever written?" by testing against the zero vector. This
+/// test pins the guarantee so regressions are caught immediately.
+#[test]
+fn test_insert_at_gap_slots_are_zero_initialized() {
+    let dim = 3;
+    let mut cv = ContiguousVectors::new(dim, 10).expect("test: allocation");
+
+    // Insert at index 5, leaving indices 0-4 as gaps.
+    cv.insert_at(5, &[1.0, 2.0, 3.0]).expect("test: insert_at");
+
+    // The inserted slot reads back correctly.
+    assert_eq!(cv.get(5), Some(&[1.0, 2.0, 3.0][..]));
+
+    // Gap slots (0-4) are zero-initialized due to `alloc_zeroed`.
+    let zero = vec![0.0_f32; dim];
+    for gap in 0..5 {
+        assert_eq!(
+            cv.get(gap),
+            Some(zero.as_slice()),
+            "gap slot {gap} must be zero-initialized"
+        );
+    }
+}
