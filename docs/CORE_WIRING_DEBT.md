@@ -148,8 +148,10 @@ design — see entry 2 history and `notify_auto_reindex_after_bulk`).
   REST `POST /collections` request now accepts `deferred_indexing` and
   `async_index_builder` objects (applied via `apply_advanced_config`), so
   the gap is the embedded/TOML surface, not the server API.
-- No Python binding exposes a `DeferredIndexingOptions` or
-  `AsyncIndexBuilderOptions` dataclass.
+- Python configures both per-collection at runtime via
+  `collection.apply_advanced_config({"deferred_indexing": {...}, "async_index_builder": {...}})`
+  (see Section 6 PR-3); the remaining gap is the embedded/TOML `VelesConfig`
+  surface and a create-time dataclass, not post-creation configuration.
 
 **Why wiring is non-trivial**:
 - Both subsystems have subtle interactions with crash recovery: if
@@ -339,8 +341,10 @@ on: Python (`velesdb-python/src/streaming_runtime.rs` + `collection/mutation.rs`
 (`POST /collections/{name}/stream/enable` + `/stream/insert`), the TS SDK
 (`enableStreaming()`/`streamInsert()`, REST backend) and Tauri. WASM is N/A (no
 async fs / persistence layer; throws `NOT_SUPPORTED`). The CLI reaches it ⚠️ via
-the embedded core path with no dedicated REPL command. Only the
-LangChain/LlamaIndex/Haystack integrations do not yet expose it. See
+the embedded core path with no dedicated REPL command. LangChain
+(`add_texts_streaming`/`stream_insert`) and LlamaIndex
+(`add_streaming`/`stream_insert`) now expose it; only the Haystack
+integration does not yet. See
 `docs/reference/ECOSYSTEM_PARITY.md` (Streaming Ingestion row).
 
 **Explicitly deferred (not worth closing now)**:
@@ -361,7 +365,7 @@ consistency-cleanup PR. Each binding glue must pass that crate's CI line
 |---|---|---|---|---|
 | `WalBatchConfig` | No | Transferred to velesdb-premium | 13-17 commits, 3-5 days | Enterprise tier |
 | `AutoReindexConfig` | Yes | Wired — persisted in schema v2 (W2) + restored on open | done | Community |
-| `deferred_indexing` / `async_index_builder` | REST-only (no TOML/Python) | RFC pending | Unscoped | Community (future sprint) |
+| `deferred_indexing` / `async_index_builder` | REST + Python (apply_advanced_config); no TOML/create-time | RFC pending | Unscoped | Community (future sprint) |
 | `SearchConfig` global defaults | Partial | Consolidation cleanup | 1-2 commits | Community (future sprint) |
 | `LimitsConfig` (5/5 fields) | Yes | Wired — all 5 fields enforced (creation + runtime ingest/search caps) 2026-06-14 | done | Community |
 | Binding API-parity gaps (6.1–6.11) | DONE | Closed via 4 PRs #1096/#1098/#1099 + consistency (6.11 = verified no-gap); see §6 | 4 PRs (embedded-ops / ops-observability / recall-gated / consistency) | Community |

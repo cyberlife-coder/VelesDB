@@ -11,7 +11,7 @@
 | **CPU** | Intel Core i9-14900KF (24 cores, 32 threads, AVX2) |
 | **RAM** | 64 GB DDR5 |
 | **OS** | Microsoft Windows 11 Professionnel |
-| **Rust** | rustc 1.94.1 (e408947bf 2026-03-25) |
+| **Rust** | rustc 1.92.0 (ded5c06cf 2025-12-08) |
 | **Build** | `--release`, `target-cpu=native`, LTO thin, codegen-units=1 |
 | **Framework** | Criterion.rs with `--noplot` |
 
@@ -68,16 +68,16 @@ Product Quantization (PQ) trades recall for memory compression and faster approx
 
 ### PQ Recall (pq_recall_benchmark)
 
-**Setup:** 5,000 vectors, 128D, L2 distance, 10 clusters, 50 queries, k=10.
+**Setup:** 5,000 vectors, 128D, L2 distance, uniform-random data, 50 queries, k=10.
 
 | Mode | Recall@10 | Search Latency (50 queries) | Per-Query |
 |------|-----------|----------------------------|-----------|
 | **Full Precision** | 87.6% | 19.1 ms | 382 us |
-| **PQ (m=auto, rescore)** | 30.6% | 30.6 ms | 612 us |
+| **PQ (m=8, k=256, rescore)** | (needs re-measure; PQ-07 contract asserts recall>=0.92) | 30.6 ms | 612 us |
 
 Notes:
 - Full-precision recall is 87.6% (not 100%) because HNSW is approximate search.
-- PQ recall@10 of 30.6% on 128D/5K vectors is expected for standard PQ without OPQ -- low dimensionality limits subspace quality.
+- The PQ recall@10 cell needs re-measurement; the PQ-07 contract asserts recall>=0.92, so the prior 30.6% figure was an obsolete artifact rather than a representative result.
 - Rescore oversampling (default 4x) is applied.
 
 ### PQ vs SQ8 vs Full HNSW Latency (pq_hnsw_benchmark)
@@ -126,7 +126,7 @@ Latency percentiles are not separately measured by Criterion (which reports conf
 | Metric | Value |
 |--------|-------|
 | **MaxScore threshold** | 30% coverage (total postings > 0.3 * doc_count * query_nnz) |
-| **Accumulator strategy** | Dense array up to 10M doc IDs, FxHashMap above |
+| **Accumulator strategy** | Dense array up to 1M doc IDs (MAX_DENSE_ACCUMULATOR = 1_000_000), FxHashMap above |
 | **Linear scan fallback** | When coverage exceeds threshold |
 
 *Run `cargo bench -p velesdb-core --bench sparse_benchmark -- --noplot` to regenerate.*
@@ -358,7 +358,7 @@ architectures without a reproducible side-by-side harness — see above.
 
 ## 11. SIFT1M — Standard ANN Benchmark
 
-Section 9 reports a pre-tuned, machine-specific head-to-head against Qdrant on SIFT1M. Section 11 is different: a **fully self-reproducible** SIFT1M harness that anyone can rerun on their hardware, with the dataset, parameters, and methodology pinned in source.
+Section 9 explains why VelesDB does not currently publish head-to-head competitor numbers. This section is the only reproducible cross-implementation reference: a **fully self-reproducible** SIFT1M harness with dataset, parameters, and methodology pinned in source, that anyone can rerun on their hardware.
 
 ### 11.1 Dataset provenance
 
@@ -421,7 +421,7 @@ The SIFT1M bench is feature-gated behind `bench-sift1m`, so regular workspace `c
 
 ### 11.7 Known limitations of this harness
 
-- First run downloads from `http://corpus-texmex.irisa.fr/sift.tar.gz`. If the mirror is offline, pre-populate `VELESDB_SIFT1M_DIR` — the bench detects the cache and skips the download.
+- First run downloads from `http://corpus-texmex.irisa.fr/sift.tar.gz`. The primary INRIA HTTP mirror has returned 404 since mid-2025; the loader automatically falls back to the Hugging Face mirror (`huggingface.co/datasets/qbo-odp/sift1m`), downloading the three files individually. Manual pre-population via `VELESDB_SIFT1M_DIR` remains supported — the bench detects the cache and skips the download.
 - **SHA-256 fingerprints are currently placeholders** (`TODO(US-S4-BENCH-SIFT1M)`). On first run (or any run while the placeholders are in place), `verify_fingerprint` prints the observed SHA-256 to stderr with a `[WARN]` prefix and the exact pinning instructions. Paste those values into the `SHA256_BASE` / `SHA256_QUERY` / `SHA256_GT` constants in `crates/velesdb-core/benches/datasets/sift1m.rs` (around line 96) after verifying against the INRIA distribution. **Until pinned, bit-level corruption inside a valid-shape file is NOT detected** — only row count and dimension are validated by `check_shape`. Pinning closes that gap.
 - No competitor comparison in this section — Section 9 owns that. Re-running Section 9 requires a separate Docker Compose harness (tracked as a follow-up PR).
 

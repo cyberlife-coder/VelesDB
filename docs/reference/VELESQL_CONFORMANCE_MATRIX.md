@@ -60,7 +60,7 @@ incorrect or empty results at execution time.
 
 | Feature | Parser source | Status | Notes |
 |---------|--------------|--------|-------|
-| Scalar subqueries | `grammar.pest:subquery_expr`, `ast/values.rs:Subquery` | Parsed only | EPIC-039; no executor support |
+| Scalar subqueries | `grammar.pest:subquery_expr`, `ast/values.rs:Subquery` | Parsed, then rejected at validation with V010 (SubqueryNotExecutable) | EPIC-039 |
 
 ## Not Parsed (Not in Grammar)
 
