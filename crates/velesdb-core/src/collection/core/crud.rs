@@ -383,7 +383,8 @@ impl Collection {
         quant_done: bool,
     ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
         let mut sparse_batch = Vec::new();
-        let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> = HashMap::with_capacity(points.len());
+        let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> =
+            HashMap::with_capacity(points.len());
         let skip_bm25 = self.text_index.is_empty() && !points.iter().any(|p| p.payload.is_some());
         let needs_label_updates = Self::needs_label_updates(points, old_payloads);
         let mut label_updates = Self::alloc_label_buffer(needs_label_updates, points.len());

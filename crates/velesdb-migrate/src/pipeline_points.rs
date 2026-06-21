@@ -25,7 +25,11 @@ pub(crate) fn stable_point_id(id: &str) -> u64 {
         Ok(n) => n,
         Err(_) => {
             let hashed = super::pipeline::fnv1a64(id.as_bytes());
-            tracing::debug!(source_id = id, point_id = hashed, "non-numeric ID mapped via FNV-1a hash");
+            tracing::debug!(
+                source_id = id,
+                point_id = hashed,
+                "non-numeric ID mapped via FNV-1a hash"
+            );
             hashed
         }
     }
