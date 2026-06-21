@@ -4,7 +4,7 @@ This roadmap commits to **what we are building**, **why**, and **when**. It is u
 
 It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` issues but **not committed** until they reach a milestone here.
 
-> **Last updated:** 2026-06-12 — covers v3.2.1 (current) → v1.19 horizon.
+> **Last updated:** 2026-06-21 — covers v3.2.1 (current). The horizon framing below predates the v2.0→v3.x line and is being re-baselined.
 
 ---
 
@@ -17,7 +17,7 @@ It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` i
 | 1 | [Haystack 2.x DocumentStore integration (#349)](https://github.com/cyberlife-coder/VelesDB/issues/349) | At least one BDD test passing in CI; published in `integrations/haystack/`; first community contribution merged | ✅ Shipped in v1.14.0 / v1.14.1 — PR [#672](https://github.com/cyberlife-coder/VelesDB/pull/672) by [@CrepuscularIRIS](https://github.com/CrepuscularIRIS); `pip install haystack-velesdb` live on PyPI |
 | 2 | [Onboarding time-to-first-search < 5 min (#379)](https://github.com/cyberlife-coder/VelesDB/issues/379) | Measured on clean Ubuntu/macOS/Windows; documented in `docs/quickstart/timing-results.md`; verified via reproducible Docker harness | ✅ Shipped in v1.13.7 (Phase 6) — median across 4 paths under 26 s; [`scripts/dx-timing/run_all.sh`](scripts/dx-timing/run_all.sh) reproduces it |
 | 3 | [CBO calibration loop (#469)](https://github.com/cyberlife-coder/VelesDB/issues/469) | `COST_UNIT_TO_MS` recalibrated from real query timings; method documented in `BENCHMARKS.md`; removes `KNOWN_LIMITATIONS.md #1` | ⚠️ Phase 2 shipped in v1.15.0 — empirical EMA reported in `EXPLAIN ANALYZE` output (PR [#784](https://github.com/cyberlife-coder/VelesDB/pull/784)); full `COST_UNIT_TO_MS` empirical pin and removal of `KNOWN_LIMITATIONS.md #1` carried forward (Horizon 4) |
-| 4 | [Python DataFrame + Polars integration (#429)](https://github.com/cyberlife-coder/VelesDB/issues/429) | `upsert_dataframe(df)` + `search().to_polars()` round-trip; one notebook in `examples/python/` | ❌ Not shipped — carried forward (Horizon 4) |
+| 4 | [Python DataFrame + Polars integration (#429)](https://github.com/cyberlife-coder/VelesDB/issues/429) | `upsert_dataframe(df)` + `search().to_polars()` round-trip; one notebook in `examples/python/` | ✅ Shipped — `Collection.upsert_from_dataframe(df)` (pandas/polars auto-detected) and `to_dataframe(backend="polars")` round-trip via `velesdb.dataframe_converter`. |
 | 5 | [PyO3 SearchOptions builder (#717)](https://github.com/cyberlife-coder/VelesDB/issues/717) | Replace the wide-kwarg `Collection.search` signature with a builder pattern + deprecation cycle; remove the `clippy::too_many_arguments` allow-list | ✅ Shipped in v1.15.0 — fluent `SearchOptions` builder exposed in Python SDK (PR [#761](https://github.com/cyberlife-coder/VelesDB/pull/761), closes #717) |
 
 **Also shipped in v1.14.x:** MSRV bump 1.83 → 1.89 (#714), Dockerfile auto-sync (#715), full Python RAG framework trio (Haystack via #672), doc consistency sweep (#722), `haystack-velesdb` PyPI publishing (#723), Haystack `DuplicatePolicy.SKIP` contract fix (#726), full v1.14.2 doc alignment + fictional MSI installer removed + 14-entry tooling extension (#730), Haystack runtime gaps closed — `@component` decorator on retriever example + Haystack-filter→VelesDB-filter translator + real-Haystack CI (#731).
@@ -34,7 +34,7 @@ It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` i
 |---|------|-----|--------|
 | 1 | [HNSW <30µs index-only target (#377)](https://github.com/cyberlife-coder/VelesDB/issues/377) | Push the index-only micro-bench from 55µs to <30µs to widen the headroom on the 450µs full-path number | ✅ Shipped in v1.15.0 — `ANALYZE` now triggers in-place HNSW node reorder when fragmentation exceeds threshold; 10K-probe recall@10 off-by-one fixed (PR [#785](https://github.com/cyberlife-coder/VelesDB/pull/785), closes #377) |
 | 2 | [SDK parity: TypeScript/LangChain/LlamaIndex (#380)](https://github.com/cyberlife-coder/VelesDB/issues/380) | Close the cross-language gap so any framework user gets the same API surface | ✅ Shipped in v1.15.0 — TypeScript REST backend gains `sparseIndexName` and RSF weights (PR [#779](https://github.com/cyberlife-coder/VelesDB/pull/779), closes #380) |
-| 3 | **Reproducible head-to-head benchmark vs Qdrant + Chroma + pgvector** (Docker Compose) | Pre-seed audit P0: turn marketing claims into proven numbers | ❌ Not shipped — carried forward (Horizon 4) |
+| 3 | **Reproducible head-to-head benchmark vs Qdrant + Chroma + pgvector** (Docker Compose) | Pre-seed audit P0: turn marketing claims into proven numbers | ⚠️ Partially shipped — a reproducible Docker Compose head-to-head vs pgvector lives in `benchmarks/` (docker-compose.yml + benchmark_docker.py); the Qdrant + Chroma legs are still pending. |
 | 4 | **External `unsafe` audit** (SIMD module, Cure53 / independent Rust safety expert) | Required for "data sovereignty" enterprise positioning | ❌ Pending funding (~5-15 k€); carried forward (Horizon 4) |
 | 5 | **`velesdb-migrate` rework decision** (12,108 LOC, 9 connectors) | Workspace inflation without measured user base — decide keep / extract / archive based on crates.io download counts, GitHub stars attributable to migration tooling, opened issues count. See `docs/reference/KNOWN_LIMITATIONS.md` § 4 | ❌ Decision deferred — carried forward (Horizon 4) |
 
@@ -66,11 +66,10 @@ Carry-forward open items from Horizons 1–3 plus the first enterprise-readiness
 
 | # | Item | Why |
 |---|------|-----|
-| 1 | [Python DataFrame + Polars integration (#429)](https://github.com/cyberlife-coder/VelesDB/issues/429) | `upsert_dataframe(df)` + `search().to_polars()` — the last ergonomics gap for data-science workflows |
-| 2 | [CBO calibration — full `COST_UNIT_TO_MS` pin (#469)](https://github.com/cyberlife-coder/VelesDB/issues/469) | Pin the cost constant from a micro-benchmark; removes `KNOWN_LIMITATIONS.md #1` |
-| 3 | **Reproducible head-to-head benchmark vs Qdrant + Chroma + pgvector** (Docker Compose) | Pre-seed audit P0: turn marketing claims into proven numbers |
-| 4 | **External `unsafe` audit** (SIMD module, Cure53 / independent Rust safety expert) | Required for "data sovereignty" enterprise positioning; budget-conditional (~5-15 k€) |
-| 5 | **`velesdb-migrate` rework decision** | Evaluate keep / extract / archive based on crates.io download counts, GitHub stars, open-issue count |
+| 1 | [CBO calibration — full `COST_UNIT_TO_MS` pin (#469)](https://github.com/cyberlife-coder/VelesDB/issues/469) | Pin the cost constant from a micro-benchmark; removes `KNOWN_LIMITATIONS.md #1` |
+| 2 | **Reproducible head-to-head benchmark vs Qdrant + Chroma + pgvector** (Docker Compose) | Pre-seed audit P0: turn marketing claims into proven numbers |
+| 3 | **External `unsafe` audit** (SIMD module, Cure53 / independent Rust safety expert) | Required for "data sovereignty" enterprise positioning; budget-conditional (~5-15 k€) |
+| 4 | **`velesdb-migrate` rework decision** | Evaluate keep / extract / archive based on crates.io download counts, GitHub stars, open-issue count |
 
 **Tentative scope (enterprise feature gate):**
 

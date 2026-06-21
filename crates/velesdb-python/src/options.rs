@@ -220,12 +220,12 @@ impl HnswOptions {
 /// All fields are optional — unspecified fields fall back to the
 /// engine defaults (max_collections=1000, max_dimensions=4096, etc.).
 ///
-/// Enforcement status in v1.13:
+/// Enforcement status:
 /// - `max_collections` — enforced at collection creation (Commit 7)
 /// - `max_dimensions` — enforced at collection creation (Commit 7)
-/// - `max_vectors_per_collection` — parsed but not yet enforced
-/// - `max_payload_size` — parsed but not yet enforced
-/// - `max_perfect_mode_vectors` — parsed but not yet enforced
+/// - `max_vectors_per_collection` — enforced at the runtime ingest/search boundary (GuardRail VELES-027)
+/// - `max_payload_size` — enforced at the runtime ingest/search boundary (GuardRail VELES-027)
+/// - `max_perfect_mode_vectors` — enforced at the runtime ingest/search boundary (GuardRail VELES-027)
 ///
 /// See `docs/CORE_WIRING_DEBT.md` for the enforcement roadmap.
 #[pyclass(module = "velesdb", from_py_object)]
