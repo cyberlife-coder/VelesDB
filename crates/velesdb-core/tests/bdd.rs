@@ -69,6 +69,8 @@ mod hybrid_vector_first_exact;
 mod index_management;
 #[path = "bdd/introspection.rs"]
 mod introspection;
+#[path = "bdd/join_exact_conformance.rs"]
+mod join_exact_conformance;
 #[path = "bdd/match_graph_first.rs"]
 mod match_graph_first;
 #[path = "bdd/match_relationship_semantics.rs"]
@@ -93,16 +95,22 @@ mod recall_contract;
 mod recall_contract_multimetric;
 #[path = "bdd/regression.rs"]
 mod regression;
+#[path = "bdd/scalar_filter_exact.rs"]
+mod scalar_filter_exact;
 #[path = "bdd/secondary_index_bitmap_in.rs"]
 mod secondary_index_bitmap_in;
 #[path = "bdd/set_operations.rs"]
 mod set_operations;
 #[path = "bdd/sparse_near_conformance.rs"]
 mod sparse_near_conformance;
+#[path = "bdd/temporal_computed_orderby.rs"]
+mod temporal_computed_orderby;
 #[path = "bdd/vector_group_by.rs"]
 mod vector_group_by;
 #[path = "bdd/vector_search.rs"]
 mod vector_search;
+#[path = "bdd/velesql_reject_conformance.rs"]
+mod velesql_reject_conformance;
 #[path = "bdd/where_filters.rs"]
 mod where_filters;
 #[path = "bdd/where_params.rs"]
