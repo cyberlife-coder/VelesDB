@@ -258,7 +258,7 @@ impl Collection {
         // Delete IDs whose final occurrence has payload=None
         for (i, p) in points.iter().enumerate() {
             if dedup_map.get(&p.id) == Some(&i) && p.payload.is_none() {
-                let _ = storage.delete(p.id);
+                storage.delete(p.id)?;
             }
         }
         Ok(())
@@ -478,7 +478,7 @@ impl Collection {
             if let Some(payload) = &point.payload {
                 payload_storage.store(point.id, payload)?;
             } else {
-                let _ = payload_storage.delete(point.id);
+                payload_storage.delete(point.id)?;
             }
             self.update_text_index(point)?;
             self.update_secondary_indexes_on_upsert(
