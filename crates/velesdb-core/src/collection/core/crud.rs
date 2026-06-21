@@ -209,7 +209,7 @@ impl Collection {
         points: &[Point],
         storage: &LogPayloadStorage,
     ) -> Vec<Option<serde_json::Value>> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = std::collections::HashSet::with_capacity(points.len());
         points
             .iter()
             .map(|p| {
@@ -258,7 +258,7 @@ impl Collection {
         // Delete IDs whose final occurrence has payload=None
         for (i, p) in points.iter().enumerate() {
             if dedup_map.get(&p.id) == Some(&i) && p.payload.is_none() {
-                let _ = storage.delete(p.id);
+                storage.delete(p.id)?;
             }
         }
         Ok(())
@@ -383,7 +383,8 @@ impl Collection {
         quant_done: bool,
     ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
         let mut sparse_batch = Vec::new();
-        let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> = HashMap::new();
+        let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> =
+            HashMap::with_capacity(points.len());
         let skip_bm25 = self.text_index.is_empty() && !points.iter().any(|p| p.payload.is_some());
         let needs_label_updates = Self::needs_label_updates(points, old_payloads);
         let mut label_updates = Self::alloc_label_buffer(needs_label_updates, points.len());
@@ -478,7 +479,7 @@ impl Collection {
             if let Some(payload) = &point.payload {
                 payload_storage.store(point.id, payload)?;
             } else {
-                let _ = payload_storage.delete(point.id);
+                payload_storage.delete(point.id)?;
             }
             self.update_text_index(point)?;
             self.update_secondary_indexes_on_upsert(
