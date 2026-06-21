@@ -12,16 +12,23 @@ use crate::pipeline::MigrationStats;
 ///
 /// **Strategy:** Numeric strings (`"12345"`) are parsed directly to u64.
 /// Non-numeric strings (UUIDs, slugs, etc.) are hashed via FNV-1a to a
-/// deterministic u64. Hash collisions are theoretically possible but
-/// extremely rare for typical ID spaces.
+/// deterministic u64. Hash collisions are statistically rare (< 0.0001% for
+/// 1 M IDs) but are non-zero; monitor debug logs for the hashed-ID messages
+/// to detect unusual ID patterns that could increase collision risk.
 ///
 /// # Cross-version stability guarantee
 ///
 /// Changing this function would silently corrupt checkpoint-resumed migrations
 /// because IDs would no longer match previously-inserted points.
 pub(crate) fn stable_point_id(id: &str) -> u64 {
-    id.parse::<u64>()
-        .unwrap_or_else(|_| super::pipeline::fnv1a64(id.as_bytes()))
+    match id.parse::<u64>() {
+        Ok(n) => n,
+        Err(_) => {
+            let hashed = super::pipeline::fnv1a64(id.as_bytes());
+            tracing::debug!(source_id = id, point_id = hashed, "non-numeric ID mapped via FNV-1a hash");
+            hashed
+        }
+    }
 }
 
 /// Prepares extracted points for insertion, optionally using parallel workers.
