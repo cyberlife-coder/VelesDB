@@ -1966,6 +1966,12 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `nodes_visited` | u64 | For MATCH queries, the measured graph-traversal node count (start nodes examined + nodes reached by following edges); 0 for non-MATCH queries |
 | `edges_traversed` | u64 | For MATCH queries, the measured number of edges followed during traversal; 0 for non-MATCH queries |
 
+> **Note:** `nodes_visited` / `edges_traversed` are measured for the **GraphFirst**
+> MATCH execution strategy. A similarity-anchored MATCH (a `similarity()` predicate
+> on the start node) is planned as **VectorFirst** and validates candidates with a
+> bounded existence check rather than a full walk, so it reports `0` for both
+> counters today. The **Parallel** strategy reports its GraphFirst leg's counts.
+
 **`feedback_calibration` fields (v1.15.0+, EXPLAIN ANALYZE only):**
 
 | Field | Type | Description |

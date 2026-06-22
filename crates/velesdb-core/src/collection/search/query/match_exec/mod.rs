@@ -279,11 +279,12 @@ impl Collection {
             )?;
         }
 
-        // EXPLAIN ANALYZE: surface real traversal counters into the query
-        // context. `edges_traversed` is the number of edges actually followed;
-        // `nodes_visited` is the start nodes examined plus the nodes reached by
-        // following those edges. Non-graph queries never reach here, so they
-        // keep the 0/0 default.
+        // Record traversal counters into the query context for EXPLAIN ANALYZE
+        // to read back. This runs on every GraphFirst MATCH (not only ANALYZE),
+        // but it is two relaxed atomic stores once per query — negligible, and
+        // the per-edge hot loop is untouched. `edges_traversed` is the edges
+        // actually followed; `nodes_visited` is the start nodes examined plus
+        // the edge endpoints reached. Non-graph queries never reach here.
         if let Some(qc) = ctx {
             let edges = u64::from(iteration_count);
             qc.record_traversal(u64::from(start_nodes_visited) + edges, edges);

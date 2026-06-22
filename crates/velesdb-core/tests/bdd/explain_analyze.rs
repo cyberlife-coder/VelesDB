@@ -388,3 +388,68 @@ fn test_explain_analyze_select_reports_zero_traversal_counters() {
         "SELECT performs no graph traversal"
     );
 }
+
+/// GIVEN a similarity-anchored MATCH (a `similarity()` predicate on the start
+///       node), which the planner executes via the VectorFirst strategy
+/// WHEN `explain_analyze_query`
+/// THEN it executes (rows > 0) but reports `0/0` graph counters — VectorFirst
+///      validates candidates with a bounded existence check that is not
+///      instrumented (documented limitation). This pins that behavior so it
+///      cannot silently drift (and confirms the query is VectorFirst-planned).
+#[test]
+fn test_explain_analyze_vector_first_match_reports_zero_traversal_counters() {
+    let (_dir, db) = create_test_db();
+    execute_sql(
+        &db,
+        "CREATE COLLECTION papers (dimension = 4, metric = 'cosine');",
+    )
+    .expect("test: CREATE papers");
+    let vc = db
+        .get_vector_collection("papers")
+        .expect("test: get papers");
+    vc.upsert(vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            Some(json!({"_labels": ["Document"]})),
+        ),
+        Point::new(
+            2,
+            vec![0.9, 0.1, 0.0, 0.0],
+            Some(json!({"_labels": ["Reference"]})),
+        ),
+    ])
+    .expect("test: upsert papers");
+    let edge = velesdb_core::GraphEdge::new(100, 1, 2, "CITES").expect("test: create CITES edge");
+    vc.add_edge(edge).expect("test: add CITES edge");
+
+    let query = Parser::parse(
+        "MATCH (doc:Document)-[:CITES]->(ref) WHERE similarity(doc.embedding, $v) > 0.5 \
+         RETURN doc, ref LIMIT 10",
+    )
+    .expect("test: parse VectorFirst MATCH");
+    let mut params = HashMap::new();
+    params.insert("_collection".to_string(), json!("papers"));
+    params.insert("v".to_string(), json!([1.0, 0.0, 0.0, 0.0]));
+
+    let stats = db
+        .explain_analyze_query(&query, &params)
+        .expect("test: explain_analyze VectorFirst MATCH")
+        .actual_stats
+        .expect("test: actual_stats should be Some");
+
+    assert!(
+        stats.actual_rows > 0,
+        "VectorFirst MATCH returns node 1 (Document with a CITES edge)"
+    );
+    // Documented limitation: the VectorFirst graph-existence check is not
+    // instrumented, so both counters are 0 (unlike GraphFirst).
+    assert_eq!(
+        stats.nodes_visited, 0,
+        "VectorFirst reports 0 nodes_visited (documented limitation)"
+    );
+    assert_eq!(
+        stats.edges_traversed, 0,
+        "VectorFirst reports 0 edges_traversed (documented limitation)"
+    );
+}

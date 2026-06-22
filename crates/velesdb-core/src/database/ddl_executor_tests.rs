@@ -903,24 +903,13 @@ fn test_alter_collection_set_auto_reindex_false_disables() {
 }
 
 #[test]
-fn test_alter_collection_validates_unknown_option_before_feature_gap() {
+fn test_alter_collection_rejects_unknown_option() {
     let dir = tempdir().expect("tempdir");
     let db = Database::open(dir.path()).expect("open");
+    create_alter_collection(&db, "alter_unknown");
 
-    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
-        name: "alter_unknown".to_string(),
-        kind: CreateCollectionKind::Vector(VectorCollectionParams {
-            dimension: 32,
-            metric: "cosine".to_string(),
-            storage: None,
-            m: None,
-            ef_construction: None,
-        }),
-    });
-    execute_ddl(&db, create).expect("create");
-
-    // Unknown options must return the specific "Unsupported ALTER
-    // option" diagnostic; nothing is applied or persisted.
+    // Unknown options return the specific "Unsupported ALTER option"
+    // diagnostic; nothing is applied or persisted.
     let alter = DdlStatement::AlterCollection(AlterCollectionStatement {
         collection: "alter_unknown".to_string(),
         options: vec![("nonexistent_option".to_string(), "value".to_string())],
@@ -938,33 +927,53 @@ fn test_alter_collection_validates_unknown_option_before_feature_gap() {
 }
 
 #[test]
-fn test_alter_collection_validates_value_type_before_feature_gap() {
+fn test_alter_collection_rejects_non_bool_value() {
     let dir = tempdir().expect("tempdir");
     let db = Database::open(dir.path()).expect("open");
+    create_alter_collection(&db, "alter_bad_value");
 
-    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
-        name: "alter_bad_value".to_string(),
-        kind: CreateCollectionKind::Vector(VectorCollectionParams {
-            dimension: 32,
-            metric: "cosine".to_string(),
-            storage: None,
-            m: None,
-            ef_construction: None,
-        }),
-    });
-    execute_ddl(&db, create).expect("create");
-
-    // Malformed values must return the type-specific diagnostic; nothing
-    // is applied or persisted.
+    // Malformed values return the type-specific diagnostic; nothing is applied.
     let alter = DdlStatement::AlterCollection(AlterCollectionStatement {
         collection: "alter_bad_value".to_string(),
         options: vec![("auto_reindex".to_string(), "not_a_bool".to_string())],
     });
     let err = execute_ddl(&db, alter).expect_err("bad value must error");
-    let err_msg = err.to_string();
     assert!(
-        err_msg.contains("auto_reindex must be 'true' or 'false'"),
-        "must reject invalid bool value specifically: {err_msg}"
+        err.to_string()
+            .contains("auto_reindex must be 'true' or 'false'"),
+        "must reject invalid bool value specifically: {err}"
+    );
+}
+
+#[test]
+fn test_alter_collection_multi_option_is_atomic_on_error() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+    create_alter_collection(&db, "alter_atomic");
+
+    // A valid option followed by an invalid one must leave the collection
+    // untouched: every option is validated before any is applied.
+    let alter = DdlStatement::AlterCollection(AlterCollectionStatement {
+        collection: "alter_atomic".to_string(),
+        options: vec![
+            ("auto_reindex".to_string(), "true".to_string()),
+            ("nonexistent_option".to_string(), "x".to_string()),
+        ],
+    });
+    let err = execute_ddl(&db, alter).expect_err("multi-option with a bad key must error");
+    assert!(
+        err.to_string().contains("Unsupported ALTER option"),
+        "got: {err}"
+    );
+
+    let vc = db.get_vector_collection("alter_atomic").expect("get");
+    assert!(
+        vc.auto_reindex_manager().is_none(),
+        "the valid auto_reindex=true must NOT be applied when a later option fails"
+    );
+    assert!(
+        vc.config().auto_reindex_config.is_none(),
+        "no policy must be persisted after the failed ALTER"
     );
 }
 

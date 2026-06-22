@@ -324,9 +324,13 @@ pub struct ActualStats {
     /// Number of loop iterations.
     pub loops: u64,
     /// Measured nodes visited during MATCH graph traversal (start nodes examined
-    /// plus nodes reached by following edges); 0 for non-graph queries.
+    /// plus nodes reached by following edges). Measured for the GraphFirst
+    /// traversal strategy; a similarity-anchored (VectorFirst) MATCH validates
+    /// candidates with a bounded existence check and reports 0. 0 for non-graph
+    /// queries.
     pub nodes_visited: u64,
-    /// Measured edges followed during MATCH graph traversal; 0 for non-graph queries.
+    /// Measured edges followed during MATCH graph traversal (GraphFirst strategy;
+    /// VectorFirst-planned MATCH reports 0). 0 for non-graph queries.
     pub edges_traversed: u64,
 }
 

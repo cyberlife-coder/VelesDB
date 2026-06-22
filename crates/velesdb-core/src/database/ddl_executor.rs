@@ -225,8 +225,6 @@ impl Database {
         Ok(vec![result])
     }
 
-    /// Executes an ALTER COLLECTION SET statement.
-    ///
     /// Executes an `ALTER COLLECTION <name> SET (<key> = <value>, ...)` statement.
     ///
     /// Currently supports the `auto_reindex` (boolean) option: it attaches or
@@ -235,10 +233,10 @@ impl Database {
     /// on the collection and persists the policy via `flush()`, so the setting
     /// survives a restart (restored automatically on the next `Collection::open`).
     ///
-    /// Validation order returns the most actionable error first:
-    ///   1. Collection existence — `Error::CollectionNotFound`.
-    ///   2. Per-option syntax (unknown key, unparseable value) —
-    ///      `Error::Query` via [`apply_alter_option`].
+    /// Error/apply order: the collection existence check runs first, then EVERY
+    /// option is parsed and validated ([`parse_alter_option`]) before any is
+    /// applied — so a malformed later option leaves the collection untouched
+    /// (no half-applied state). Validated options are then applied and persisted.
     ///
     /// # Errors
     ///
@@ -252,14 +250,36 @@ impl Database {
         // Step 1: existence check.
         let collection = self.resolve_writable_collection(&stmt.collection)?;
 
-        // Step 2: apply each option to the live collection (validates as it goes).
-        for (key, value) in &stmt.options {
-            apply_alter_option(&collection, key, value)?;
-        }
+        // Step 2: parse + validate EVERY option before mutating anything, so a
+        // malformed later option never leaves earlier options half-applied.
+        let options = stmt
+            .options
+            .iter()
+            .map(|(key, value)| parse_alter_option(key, value))
+            .collect::<Result<Vec<_>>>()?;
 
-        // Step 3: persist the mutated config so the change survives a restart.
+        // Step 3: apply the validated options to the live collection, then
+        // persist so the change survives a restart.
+        for option in options {
+            option.apply(&collection);
+        }
         collection.flush()?;
         Ok(Vec::new())
+    }
+}
+
+/// A parsed, validated `ALTER COLLECTION SET` option ready to apply.
+enum AlterOption {
+    /// `auto_reindex = true|false`.
+    AutoReindex(bool),
+}
+
+impl AlterOption {
+    /// Applies the option's side effect to the live collection.
+    fn apply(self, collection: &Collection) {
+        match self {
+            Self::AutoReindex(enabled) => apply_auto_reindex(collection, enabled),
+        }
     }
 }
 
@@ -359,15 +379,16 @@ fn build_typed_schema(definitions: &[SchemaDefinition]) -> GraphSchema {
     schema
 }
 
-/// Applies a single `ALTER COLLECTION SET` option to the live collection.
+/// Parses and validates a single `ALTER COLLECTION SET` option into a typed
+/// [`AlterOption`] WITHOUT applying any side effect (so the caller can validate
+/// every option before mutating the collection).
 ///
-/// Supported options: `auto_reindex` (boolean). The caller persists the change
-/// via `flush()` after all options are applied.
+/// Supported options: `auto_reindex` (boolean).
 ///
 /// # Errors
 ///
 /// Returns `Error::Query` for unknown option keys or unparseable values.
-fn apply_alter_option(collection: &Collection, key: &str, value: &str) -> Result<()> {
+fn parse_alter_option(key: &str, value: &str) -> Result<AlterOption> {
     match key {
         "auto_reindex" => {
             let enabled = value.parse::<bool>().map_err(|_| {
@@ -375,8 +396,7 @@ fn apply_alter_option(collection: &Collection, key: &str, value: &str) -> Result
                     "auto_reindex must be 'true' or 'false', got '{value}'"
                 ))
             })?;
-            apply_auto_reindex(collection, enabled);
-            Ok(())
+            Ok(AlterOption::AutoReindex(enabled))
         }
         _ => Err(Error::Query(format!(
             "Unsupported ALTER option: '{key}'. Supported: auto_reindex"
