@@ -157,7 +157,7 @@ impl MatchQueryPlanner {
         let order_refs = return_clause.order_by.as_ref().is_some_and(|items| {
             items
                 .iter()
-                .any(|item| column_targets_alias(&item.expression, aliases))
+                .any(|item| order_by_expr_targets_alias(&item.expr, aliases))
         });
         item_refs || order_refs
     }
@@ -392,6 +392,19 @@ impl MatchQueryPlanner {
 fn column_targets_alias(column: &str, aliases: &[&str]) -> bool {
     let prefix = column.split('.').next().unwrap_or(column);
     aliases.contains(&prefix)
+}
+
+/// Checks whether an ORDER BY expression targets one of `aliases` (used to keep
+/// alias-referencing ORDER BY on the planner's VectorFirst path).
+fn order_by_expr_targets_alias(expr: &crate::velesql::OrderByExpr, aliases: &[&str]) -> bool {
+    use crate::velesql::OrderByExpr;
+    match expr {
+        OrderByExpr::Field(f) => column_targets_alias(f, aliases),
+        OrderByExpr::Similarity(s) => column_targets_alias(&s.field, aliases),
+        OrderByExpr::SimilarityBare | OrderByExpr::Aggregate(_) | OrderByExpr::Arithmetic(_) => {
+            false
+        }
+    }
 }
 
 // Tests moved to match_planner_tests.rs per project rules

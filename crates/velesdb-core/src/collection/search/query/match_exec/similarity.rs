@@ -412,46 +412,11 @@ impl Collection {
         }
     }
 
-    /// Applies ORDER BY to match results (EPIC-045 US-005).
-    ///
-    /// Supports ordering by:
-    /// - `similarity()` - Vector similarity score
-    /// - Property path (e.g., `n.name`)
-    /// - Depth
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::error::Error::GraphNotSupported`] (VELES-018) when the
-    /// expression is not `similarity()`, `depth`, or a valid `alias.property`
-    /// path, so an unsupported clause fails loudly instead of being silently
-    /// dropped (which would return rows in an unintended order).
-    pub fn order_match_results(
-        &self,
-        results: &mut [MatchResult],
-        order_by: &str,
-        descending: bool,
-    ) -> Result<()> {
-        match order_by {
-            "similarity()" | "similarity" => {
-                results.sort_unstable_by(|a, b| {
-                    let cmp = a.score.unwrap_or(0.0).total_cmp(&b.score.unwrap_or(0.0));
-                    Self::apply_direction(cmp, descending)
-                });
-                Ok(())
-            }
-            "depth" => {
-                results.sort_unstable_by(|a, b| {
-                    Self::apply_direction(a.depth.cmp(&b.depth), descending)
-                });
-                Ok(())
-            }
-            _ => self.order_match_results_by_property(results, order_by, descending),
-        }
-    }
-
     /// Applies sort direction to a comparison (reverses when `descending`).
+    ///
+    /// Shared with the structured ORDER BY evaluator in `order_by.rs`.
     #[inline]
-    fn apply_direction(cmp: std::cmp::Ordering, descending: bool) -> std::cmp::Ordering {
+    pub(super) fn apply_direction(cmp: std::cmp::Ordering, descending: bool) -> std::cmp::Ordering {
         if descending {
             cmp.reverse()
         } else {
@@ -466,7 +431,7 @@ impl Collection {
     /// Returns [`crate::error::Error::GraphNotSupported`] (VELES-018) when the
     /// expression is not a valid `alias.property` path, so an unsupported
     /// clause is reported instead of leaving the results unordered.
-    fn order_match_results_by_property(
+    pub(super) fn order_match_results_by_property(
         &self,
         results: &mut [MatchResult],
         order_by: &str,

@@ -153,8 +153,11 @@ pub struct ReturnItem {
 /// ORDER BY item.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderByItem {
-    /// Expression to order by.
-    pub expression: String,
+    /// Structured expression to order by. Carrying the structured
+    /// [`OrderByExpr`](crate::velesql::OrderByExpr) (rather than a stringified
+    /// form) lets the executor evaluate arithmetic and `similarity(field, $v)`,
+    /// not just string-match property paths.
+    pub expr: crate::velesql::OrderByExpr,
     /// Sort order.
     pub descending: bool,
 }

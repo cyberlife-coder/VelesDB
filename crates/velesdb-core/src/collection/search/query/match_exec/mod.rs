@@ -13,6 +13,7 @@
 
 mod expand;
 mod index_prefilter;
+mod order_by;
 mod similarity;
 mod start_nodes;
 mod vector_first;

@@ -82,7 +82,7 @@ impl Collection {
                     *top_k,
                     *threshold,
                 )?;
-                self.finalize_match_results(match_clause, vf_results, ctx)
+                self.finalize_match_results(match_clause, vf_results, ctx, params)
             }
             super::match_planner::MatchExecutionStrategy::Parallel {
                 ref vector_hint, ..
@@ -126,7 +126,7 @@ impl Collection {
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<SearchResult>> {
         let match_results = self.execute_match_with_context(match_clause, params, Some(ctx))?;
-        self.finalize_match_results(match_clause, match_results, ctx)
+        self.finalize_match_results(match_clause, match_results, ctx, params)
     }
 
     /// Executes the Parallel MATCH strategy (Wave 6 Phase D).
@@ -176,7 +176,7 @@ impl Collection {
         drop(config);
 
         let merged = merge_match_results(graph_results, vector_results, higher_is_better);
-        self.finalize_match_results(match_clause, merged, ctx)
+        self.finalize_match_results(match_clause, merged, ctx, params)
     }
 
     /// Applies ORDER BY, conversion to `SearchResult`, cardinality check,
@@ -188,6 +188,7 @@ impl Collection {
         match_clause: &crate::velesql::MatchClause,
         match_results: Vec<super::match_exec::MatchResult>,
         ctx: &crate::guardrails::QueryContext,
+        params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
@@ -196,7 +197,7 @@ impl Collection {
         let mut sorted = match_results;
         if let Some(order_by) = match_clause.return_clause.order_by.as_ref() {
             for item in order_by.iter().rev() {
-                self.order_match_results(&mut sorted, &item.expression, item.descending)
+                self.order_match_results(&mut sorted, &item.expr, item.descending, params)
                     .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
             }
         }

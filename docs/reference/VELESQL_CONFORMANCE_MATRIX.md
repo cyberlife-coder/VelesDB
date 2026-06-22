@@ -61,7 +61,7 @@ incorrect or empty results at execution time.
 | Feature | Parser source | Status | Notes |
 |---------|--------------|--------|-------|
 | Scalar subqueries | `grammar.pest:subquery_expr`, `ast/values.rs:Subquery` | Parsed, then rejected at validation with V010 (SubqueryNotExecutable) | EPIC-039 |
-| MATCH `ORDER BY` expression other than `similarity()` / `depth` / `alias.property` | `parser/match_parser.rs:order_by_expr_to_string` | Parsed, then rejected at execution with VELES-018 (GraphNotSupported) | EPIC-045 |
+| MATCH `ORDER BY` aggregate (no `GROUP BY`) or bare alias | `match_exec/order_by.rs` | Parsed, then rejected at execution with VELES-018 (GraphNotSupported). Supported MATCH `ORDER BY`: `similarity()`, `similarity(field, $v)`, `depth`, `alias.property`, arithmetic over a property | EPIC-045 |
 | `NEAR_FUSED` multi-vector fusion via SQL | `grammar.pest:vector_fused_search`, `ast/condition.rs:VectorFusedSearch` | Parsed, then rejected at validation with V012 (NearFusedNotExecutable); use the `multi_query_search` engine API | EPIC-040 |
 
 ## Not Parsed (Not in Grammar)

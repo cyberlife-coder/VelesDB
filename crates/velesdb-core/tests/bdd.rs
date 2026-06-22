@@ -73,6 +73,8 @@ mod introspection;
 mod join_exact_conformance;
 #[path = "bdd/match_graph_first.rs"]
 mod match_graph_first;
+#[path = "bdd/match_order_by_exact.rs"]
+mod match_order_by_exact;
 #[path = "bdd/match_relationship_semantics.rs"]
 mod match_relationship_semantics;
 #[path = "bdd/match_traversal_exact.rs"]

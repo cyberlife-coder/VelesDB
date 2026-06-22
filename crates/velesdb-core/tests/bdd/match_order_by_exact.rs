@@ -1,0 +1,108 @@
+//! BDD tests pinning bare-MATCH `ORDER BY` over ARITHMETIC and explicit
+//! `similarity(field, $v)` expressions EXACTLY.
+//!
+//! These forms used to be silently dropped / rejected (VELES-018); they now
+//! sort. Verified against source: the structured `OrderByExpr` is carried into
+//! the MATCH AST (graph_pattern.rs `OrderByItem.expr`) and evaluated in
+//! `match_exec/order_by.rs` by reusing `ordering::evaluate_arithmetic`
+//! (arithmetic) and `extraction::resolve_vector` + the configured metric
+//! (similarity). Aggregates without GROUP BY stay rejected (see
+//! `velesql_reject_conformance.rs`).
+//!
+//! Dataset (`odocs`, 2-dim cosine, all `:Doc`):
+//!   id 1: year 2005, vector [1.0, 0.0]   (low year, closest to [1,0])
+//!   id 2: year 2020, vector [0.0, 1.0]   (high year, farthest from [1,0])
+//!   id 3: year 2015, vector [0.7, 0.7]   (mid year, mid similarity)
+
+use std::collections::HashMap;
+
+use serde_json::json;
+use velesdb_core::{Database, Point};
+
+use super::helpers::{create_test_db, execute_sql_with_params};
+
+/// Builds the fixed `odocs` collection described in the module doc-comment.
+fn setup_order_docs(db: &Database) {
+    db.create_vector_collection("odocs", 2, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create odocs");
+    let vc = db.get_vector_collection("odocs").expect("test: get odocs");
+    vc.upsert(vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0],
+            Some(json!({"_labels": ["Doc"], "name": "A", "year": 2005})),
+        ),
+        Point::new(
+            2,
+            vec![0.0, 1.0],
+            Some(json!({"_labels": ["Doc"], "name": "B", "year": 2020})),
+        ),
+        Point::new(
+            3,
+            vec![0.7, 0.7],
+            Some(json!({"_labels": ["Doc"], "name": "C", "year": 2015})),
+        ),
+    ])
+    .expect("test: upsert odocs");
+}
+
+/// Routes a bare-MATCH query to `odocs`, optionally binding `$v`.
+fn run_ids(db: &Database, sql: &str, v: Option<&[f32]>) -> Vec<u64> {
+    let mut params = HashMap::new();
+    params.insert("_collection".to_string(), json!("odocs"));
+    if let Some(v) = v {
+        params.insert("v".to_string(), json!(v));
+    }
+    execute_sql_with_params(db, sql, &params)
+        .expect("test: execute MATCH ORDER BY")
+        .iter()
+        .map(|r| r.point.id)
+        .collect()
+}
+
+#[test]
+fn scenario_match_order_by_arithmetic_property_sorts() {
+    let (_dir, db) = create_test_db();
+    setup_order_docs(&db);
+
+    // `year - 2000` DESC => 2020(id2), 2015(id3), 2005(id1). The bound node's
+    // `year` resolves against its payload via the reused arithmetic evaluator.
+    let ids = run_ids(
+        &db,
+        "MATCH (d:Doc) RETURN d.name ORDER BY year - 2000 DESC LIMIT 10",
+        None,
+    );
+    assert_eq!(ids, vec![2u64, 3, 1], "ORDER BY year - 2000 DESC");
+}
+
+#[test]
+fn scenario_match_order_by_similarity_field_vec_sorts() {
+    let (_dir, db) = create_test_db();
+    setup_order_docs(&db);
+
+    // similarity(embedding, [1,0]) DESC => id1 (1.0), id3 (~0.707), id2 (0.0).
+    let ids = run_ids(
+        &db,
+        "MATCH (d:Doc) RETURN d.name ORDER BY similarity(embedding, $v) DESC LIMIT 10",
+        Some(&[1.0, 0.0]),
+    );
+    assert_eq!(
+        ids,
+        vec![1u64, 3, 2],
+        "ORDER BY similarity(embedding, $v) DESC"
+    );
+}
+
+#[test]
+fn scenario_match_order_by_arithmetic_asc_reverses() {
+    let (_dir, db) = create_test_db();
+    setup_order_docs(&db);
+
+    // ASC must reverse the DESC order, proving apply_direction is honored.
+    let ids = run_ids(
+        &db,
+        "MATCH (d:Doc) RETURN d.name ORDER BY year - 2000 ASC LIMIT 10",
+        None,
+    );
+    assert_eq!(ids, vec![1u64, 3, 2], "ORDER BY year - 2000 ASC");
+}

@@ -303,6 +303,32 @@ fn scenario_match_unsupported_order_by_expression_rejected() {
     );
 }
 
+#[test]
+fn scenario_match_order_by_aggregate_rejected() {
+    let (_dir, db) = create_test_db();
+    setup_doc_nodes(&db);
+
+    // An aggregate in a bare-MATCH ORDER BY has no GROUP BY semantics, so it is
+    // rejected (VELES-018) rather than silently ignored — unlike arithmetic and
+    // similarity(field, $v), which now sort.
+    let mut params = std::collections::HashMap::new();
+    params.insert("_collection".to_string(), json!("kgdocs"));
+    let err = execute_sql_with_params(
+        &db,
+        "MATCH (d:Doc) RETURN d.name ORDER BY COUNT(*) DESC LIMIT 3",
+        &params,
+    )
+    .expect_err("test: MATCH ORDER BY aggregate must be rejected");
+    assert!(
+        err.to_string().contains("VELES-018"),
+        "expected VELES-018 graph-not-supported code, got: {err}"
+    );
+    assert!(
+        err.to_string().contains("ORDER BY"),
+        "expected ORDER BY context in the message, got: {err}"
+    );
+}
+
 // =========================================================================
 // 9. NEAR_FUSED via SQL -> V012 NearFusedNotExecutable
 //

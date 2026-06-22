@@ -28,12 +28,13 @@ SemVer impact before the next release.
   evaluation + per-candidate existence-BFS; Parallel sums both legs). Non-graph
   queries report `0/0`. The REST/OpenAPI response shape is unchanged.
   *(Behavior change: the reported counter values change.)*
-- **`MATCH ... ORDER BY` of an unsupported expression now errors (VELES-018).**
-  A bare graph `MATCH` whose `RETURN`-clause `ORDER BY` referenced anything other
-  than `similarity()`, `depth`, or a valid `alias.property` path was silently
-  dropped, returning rows in traversal order. It is now rejected with
-  `VELES-018` instead of returning mis-ordered results.
-  *(Behavior change: previously-silent queries now error.)*
+- **`MATCH ... ORDER BY` now sorts arithmetic and `similarity(field, $v)`, and
+  errors on the rest.** Previously only `similarity()`, `depth`, and
+  `alias.property` sorted; arithmetic over a property (e.g. `ORDER BY year - 2000`)
+  and explicit `similarity(field, $v)` were silently dropped (mis-ordered rows).
+  They now sort. Aggregates (no `GROUP BY`) and bare aliases are rejected with
+  `VELES-018` instead of being silently ignored.
+  *(Behavior change: previously-silent queries now sort or error.)*
 
 ### Changed
 - **`NEAR_FUSED` via SQL is now rejected (V012) instead of a silent full scan.**
