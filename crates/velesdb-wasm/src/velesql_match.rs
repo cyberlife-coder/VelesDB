@@ -541,21 +541,18 @@ fn make_binding(node: &NodePattern, id: u64, data: &WasmGraphNode, fallback: &st
 
 // --- Row builders --------------------------------------------------------
 
-/// Builds a MATCH candidate (anchor id + alias-keyed JSON + row) so ORDER BY
-/// can sort the full set before LIMIT truncation (Finding 8). `anchor` is the
-/// starting node id, the deterministic tie-break baseline mirroring core.
+/// Builds a MATCH candidate (bound-node-id baseline + alias-keyed JSON + row)
+/// so ORDER BY can sort the full set before LIMIT truncation (Finding 8).
+/// `baseline` is the row's bound node ids in pattern order — a per-row-unique
+/// deterministic tie-break, mirroring core keying on the full match identity.
 fn candidate_from_map(
-    anchor: u64,
+    baseline: Vec<u64>,
     map: serde_json::Map<String, serde_json::Value>,
 ) -> Result<MatchCandidate, String> {
     let value = serde_json::Value::Object(map);
     let row = QueryResultRow::synthetic(value.clone())?;
     Ok(MatchCandidate {
-        anchor,
-        // The WASM MATCH path performs no vector scoring; zero-arg
-        // similarity() therefore orders by this constant (parity with core
-        // when match scores are absent).
-        score: 0.0,
+        baseline,
         value,
         row,
     })
@@ -571,7 +568,7 @@ fn build_match_row_single(
     let mut map = serde_json::Map::new();
     map.insert(alias, node_json(id, data));
     enrich_row(&mut map, cross);
-    candidate_from_map(id, map)
+    candidate_from_map(vec![id], map)
 }
 
 fn build_match_row_pair(
@@ -587,7 +584,7 @@ fn build_match_row_pair(
     map.insert(alias_a, node_json(a_id, a_data));
     map.insert(alias_b, node_json(b_id, b_data));
     enrich_row(&mut map, &ctx.cross);
-    candidate_from_map(a_id, map)
+    candidate_from_map(vec![a_id, b_id], map)
 }
 
 fn build_match_row_triple(
@@ -607,7 +604,7 @@ fn build_match_row_triple(
     map.insert(alias_b, node_json(b_id, b_data));
     map.insert(alias_c, node_json(c_id, c_data));
     enrich_row(&mut map, &ctx.cross);
-    candidate_from_map(a_id, map)
+    candidate_from_map(vec![a_id, b_id, c_id], map)
 }
 
 /// Builds the JSON shape returned for a single MATCH-bound node.

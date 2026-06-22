@@ -196,23 +196,10 @@ impl Collection {
 
         let mut sorted = match_results;
         if let Some(order_by) = match_clause.return_clause.order_by.as_ref() {
-            // Deterministic baseline keyed by `(node_id, depth, path)` — a total
-            // order over connected matches: a single-node match has a unique
-            // node_id (empty path); a multi-node match is fixed by its edge-id
-            // path (edge ids are unique, so the path determines the whole route).
-            // node_id alone is NOT unique for multi-node patterns (the matched
-            // node repeats across results that differ only in their bindings).
-            // Combined with the stable per-column sorts below applied
-            // least-significant-first (`.rev()`), this yields correct
-            // multi-column ordering with a deterministic tie-break for rows equal
-            // on every ORDER BY key. Only applied when ORDER BY is present so
-            // traversal-order output is otherwise preserved.
-            sorted.sort_unstable_by(|a, b| {
-                a.node_id
-                    .cmp(&b.node_id)
-                    .then_with(|| a.depth.cmp(&b.depth))
-                    .then_with(|| a.path.cmp(&b.path))
-            });
+            // Establish a deterministic baseline before the per-column sorts, so
+            // rows equal on every ORDER BY key resolve identically. Only when
+            // ORDER BY is present, so traversal-order output is otherwise kept.
+            sort_match_baseline(&mut sorted);
             for item in order_by.iter().rev() {
                 self.order_match_results(&mut sorted, &item.expr, item.descending, params)
                     .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
@@ -239,6 +226,22 @@ impl Collection {
         self.guard_rails.circuit_breaker.record_success();
         Ok(results)
     }
+}
+
+/// Deterministic ORDER BY tie-break baseline keyed by `(node_id, depth, path)` —
+/// a total order over connected matches: a single-node match has a unique
+/// `node_id` (empty path); a multi-node match is fixed by its edge-id `path`
+/// (edge ids are unique, so the path determines the whole route). `node_id`
+/// alone is NOT unique for multi-node patterns (the matched node repeats across
+/// results that differ only in their bindings). Applied before the stable
+/// per-column sorts so rows equal on every ORDER BY key order deterministically.
+fn sort_match_baseline(results: &mut [super::match_exec::MatchResult]) {
+    results.sort_unstable_by(|a, b| {
+        a.node_id
+            .cmp(&b.node_id)
+            .then_with(|| a.depth.cmp(&b.depth))
+            .then_with(|| a.path.cmp(&b.path))
+    });
 }
 
 /// Extracts labels, property names, and predicate types from a MATCH clause

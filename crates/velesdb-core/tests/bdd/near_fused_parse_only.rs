@@ -376,6 +376,26 @@ fn near_fused_under_not_is_rejected() {
     );
 }
 
+/// LET bindings + NEAR_FUSED is rejected: LET routes execution away from the
+/// fused early-return path, so without the guard the fused vectors would be
+/// silently dropped to a non-fused scan (the same silent-drop class as the
+/// SPARSE_NEAR guard). It must error instead.
+#[test]
+fn let_binding_with_near_fused_is_rejected() {
+    let (_dir, db) = create_test_db();
+    setup_nf(&db, "nf_let");
+    let err = execute_sql(
+        &db,
+        "LET score = similarity() SELECT * FROM nf_let \
+         WHERE vector NEAR_FUSED [[0.8,0.6],[0.6,0.8]] LIMIT 3",
+    )
+    .expect_err("test: LET + NEAR_FUSED must be rejected");
+    assert!(
+        err.to_string().contains("NEAR_FUSED"),
+        "expected LET+NEAR_FUSED reject, got: {err}"
+    );
+}
+
 // ============================================================================
 // Finding 13(b) — fusion executes correctly under a DISTANCE metric (Euclidean)
 // ============================================================================

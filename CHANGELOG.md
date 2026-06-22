@@ -25,10 +25,12 @@ release.
 ### Fixed
 - **`EXPLAIN ANALYZE` reports real graph traversal counters.** `nodes_visited`
   and `edges_traversed` for `MATCH` queries were a fabricated proxy equal to the
-  result-row count; they now report the measured walk — edges followed and nodes
+  result-row count; they now report the actual walk — edges followed and nodes
   reached — across all MATCH strategies (GraphFirst walk; VectorFirst candidate
-  evaluation + per-candidate existence-BFS; Parallel sums both legs). Non-graph
-  queries report `0/0`. The REST/OpenAPI response shape is unchanged.
+  evaluation + per-candidate existence-BFS; Parallel sums both legs). The values
+  are an approximate lower bound (the VectorFirst existence-BFS uses `limit(1)`
+  and undercounts the frontier; Parallel double-counts nodes touched by both
+  legs). Non-graph queries report `0/0`. The REST/OpenAPI response shape is unchanged.
   *(Behavior change: the reported counter values change.)*
 - **`MATCH ... ORDER BY` now sorts arithmetic and `similarity(field, $v)`, and
   errors on the rest.** Previously only `similarity()`, `depth`, and

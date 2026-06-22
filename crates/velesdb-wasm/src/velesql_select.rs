@@ -301,8 +301,9 @@ fn build_id_to_idx(store: &crate::vector_store::VectorStore) -> HashMap<u64, usi
 /// Fusion-path collector: returns every scored row verbatim, skipping
 /// the residual WHERE re-check because [`fusion_branch_from_residual`]
 /// already applied it (Devin Review Finding Q). Only used when there is
-/// no similarity predicate to re-evaluate row-wise.
-fn collect_vector_rows_unfiltered(
+/// no similarity predicate to re-evaluate row-wise. Shared with the
+/// `NEAR_FUSED` path (`velesql_fused`) so both hydrate rows identically.
+pub(crate) fn collect_vector_rows_unfiltered(
     scored: &[(u64, f32)],
     store: &crate::vector_store::VectorStore,
 ) -> Result<Vec<OwnedScanRow>, String> {

@@ -65,7 +65,9 @@ pub(crate) fn execute_fused_search(
     let strategy = config_to_strategy(&fused.fusion);
     let fused_scores = strategy.fuse(branches).unwrap_or_default();
 
-    collect_rows(&fused_scores, &borrowed)
+    // Hydrate rows via the shared collector (same id->idx map + drop-unknown
+    // semantics as the single-vector fusion path).
+    crate::velesql_select::collect_vector_rows_unfiltered(&fused_scores, &borrowed)
 }
 
 /// Resolves and dimension-checks each fused query vector. Rejects an empty
@@ -132,29 +134,6 @@ fn passing_ids(
         }
     }
     Ok(Some(keep))
-}
-
-/// Hydrates fused (id, score) pairs into owned rows, dropping any id no longer
-/// in the store (defensive — fusion never invents ids).
-fn collect_rows(
-    fused: &[(u64, f32)],
-    store: &crate::vector_store::VectorStore,
-) -> Result<Vec<OwnedScanRow>, String> {
-    let id_to_idx: std::collections::HashMap<u64, usize> = store
-        .ids
-        .iter()
-        .enumerate()
-        .map(|(i, &id)| (id, i))
-        .collect();
-    let mut out = Vec::with_capacity(fused.len());
-    for &(id, score) in fused {
-        let Some(&idx) = id_to_idx.get(&id) else {
-            continue;
-        };
-        let payload = store.payloads.get(idx).and_then(|p| p.as_ref());
-        out.push((id, score, payload.cloned()));
-    }
-    Ok(out)
 }
 
 /// Maps a `NEAR_FUSED` [`FusionConfig`] to a [`FusionStrategy`], mirroring
@@ -282,14 +261,28 @@ mod tests {
     fn test_fused_returns_fused_ranking() {
         let mut db = DatabaseInner::new();
         seed(&mut db);
+        // Both query vectors point at id 12 ([0,1,0,0]): $a is exactly it and
+        // $b is dominated by the y-axis. So id 12 is the unambiguous top of the
+        // fused ranking even though it is stored THIRD — a no-op that returned
+        // storage order (10,11,12,13), the bug class this path exists to kill,
+        // would put 10 first and fail the assertion below.
         let rows = run(
             &db,
             "SELECT * FROM vecs WHERE vector NEAR_FUSED [$a, $b]",
-            r#"{"a": [1.0, 0.0, 0.0, 0.0], "b": [0.0, 1.0, 0.0, 0.0]}"#,
+            r#"{"a": [0.0, 1.0, 0.0, 0.0], "b": [0.1, 0.9, 0.0, 0.0]}"#,
         );
-        // Every stored id appears in the fused ranking (RRF default).
-        let ids: std::collections::HashSet<u64> = rows.iter().map(|(id, _, _)| *id).collect();
-        assert_eq!(ids.len(), 4);
+        let ids: Vec<u64> = rows.iter().map(|(id, _, _)| *id).collect();
+        assert_eq!(ids.len(), 4, "all four ids present in the fused ranking");
+        assert_eq!(
+            ids[0], 12,
+            "id 12 (favored by both query vectors) must be the top fused result, not storage-order id 10"
+        );
+        // Fused output is ordered by descending fused score (a real ranking).
+        let scores: Vec<f32> = rows.iter().map(|(_, s, _)| *s).collect();
+        assert!(
+            scores.windows(2).all(|w| w[0] >= w[1]),
+            "rows must be sorted by descending fused score, got {scores:?}"
+        );
     }
 
     #[test]

@@ -81,6 +81,10 @@ fn scenario_match_order_by_similarity_field_vec_sorts() {
     setup_order_docs(&db);
 
     // similarity(embedding, [1,0]) DESC => id1 (1.0), id3 (~0.707), id2 (0.0).
+    // `embedding` is a BARE field leaf: with one vector per node it scores the
+    // matched node's vector (the leaf name is not used to pick among vectors).
+    // An alias-qualified `b.embedding` would instead resolve the node bound to
+    // `b` via the result bindings (see sort_match_by_similarity).
     let ids = run_ids(
         &db,
         "MATCH (d:Doc) RETURN d.name ORDER BY similarity(embedding, $v) DESC LIMIT 10",

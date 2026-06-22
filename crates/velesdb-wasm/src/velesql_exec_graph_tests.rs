@@ -233,14 +233,19 @@ fn test_match_single_node_order_by_property_asc() {
 fn test_match_order_by_arithmetic_rejected() {
     let mut db = DatabaseInner::new();
     seed_graph(&mut db);
-    // Arithmetic ORDER BY is not evaluable in the WASM MATCH path; it must be
-    // rejected with a clear error rather than silently ignored.
+    // Bare-property arithmetic ORDER BY parses (a dotted `a.age - 2000` would be
+    // a parse error instead) but is not evaluable in the WASM MATCH path, so it
+    // must be rejected by the ORDER BY evaluator rather than silently ignored.
     let err = execute(
         &mut db,
-        "MATCH (a:Person) RETURN a ORDER BY a.age - 2000",
+        "MATCH (a:Person) RETURN a ORDER BY age - 2000",
         None,
     );
-    assert!(err.is_err(), "arithmetic MATCH ORDER BY must error");
+    assert!(
+        err.expect_err("arithmetic MATCH ORDER BY must error")
+            .contains("arithmetic"),
+        "the error must come from the ORDER BY evaluator (mention 'arithmetic'), not an incidental failure"
+    );
 }
 
 // =========================================================================

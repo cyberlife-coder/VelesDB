@@ -64,6 +64,7 @@ incorrect or empty results at execution time.
 |---------|--------------|--------|-------|
 | Scalar subqueries | `grammar.pest:subquery_expr`, `ast/values.rs:Subquery` | Parsed, then rejected at validation with V010 (SubqueryNotExecutable) | EPIC-039 |
 | MATCH `ORDER BY` aggregate (no `GROUP BY`) or bare alias | `match_exec/order_by.rs` | Parsed, then rejected at execution with VELES-018 (GraphNotSupported). Supported MATCH `ORDER BY`: `similarity()`, `similarity(field, $v)`, `depth`, `alias.property`, arithmetic over a bare property identifier (e.g. `year - 2000`) | EPIC-045 |
+| MATCH `ORDER BY` in the WASM/browser executor | `velesdb-wasm/src/velesql_match_orderby.rs` | Reduced subset of the row above: only `depth` and `alias.property` are honored. `similarity()`, `similarity(field, $v)`, arithmetic, and aggregate forms are rejected with an error because the browser MATCH path materializes no vector scores | Core supports the full set; this is a documented WASM-only divergence |
 
 ## Not Parsed (Not in Grammar)
 

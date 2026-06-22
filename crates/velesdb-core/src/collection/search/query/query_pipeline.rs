@@ -120,6 +120,11 @@ impl Collection {
     fn validate_let_binding_support(extracted: &ExtractedComponents) -> Result<()> {
         let unsupported = if extracted.sparse_vector_search.is_some() {
             Some("SPARSE_NEAR")
+        } else if extracted.fused_search.is_some() {
+            // NEAR_FUSED routes through the fused early-return path, which LET
+            // bypasses — without this guard the fused vectors would be silently
+            // dropped to a non-fused scan (same class as the SPARSE_NEAR guard).
+            Some("NEAR_FUSED")
         } else if extracted.is_not_similarity_query {
             Some("NOT similarity()")
         } else if extracted.is_union_query {

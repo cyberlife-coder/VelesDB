@@ -1965,15 +1965,17 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `actual_rows` | u64 | Number of rows returned by execution |
 | `actual_time_ms` | f64 | Wall-clock execution time in milliseconds |
 | `loops` | u64 | Number of execution iterations (always 1) |
-| `nodes_visited` | u64 | For MATCH queries, the measured graph-traversal node count (start nodes examined + nodes reached by following edges); 0 for non-MATCH queries |
-| `edges_traversed` | u64 | For MATCH queries, the measured number of edges followed during traversal; 0 for non-MATCH queries |
+| `nodes_visited` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) graph-traversal node count (start nodes examined + nodes reached by following edges); 0 for non-MATCH queries |
+| `edges_traversed` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) count of edges followed during traversal; 0 for non-MATCH queries |
 
-> **Note:** `nodes_visited` / `edges_traversed` are measured graph-traversal
-> counts across all MATCH strategies. For **GraphFirst** they are the start nodes
-> examined plus the edges/nodes reached; for the similarity-anchored
-> **VectorFirst** strategy (a `similarity()` predicate on the start node) they
-> are the candidate nodes evaluated plus the per-candidate existence-BFS
-> edges/nodes; the **Parallel** strategy sums both legs.
+> **Note:** `nodes_visited` / `edges_traversed` are an **approximate, best-effort
+> lower bound** on the graph traversal across all MATCH strategies — not exact
+> figures. For **GraphFirst** they are the start nodes examined plus the
+> edges/nodes reached; for the similarity-anchored **VectorFirst** strategy (a
+> `similarity()` predicate on the start node) they are the candidate nodes
+> evaluated plus the per-candidate existence-BFS edges/nodes — each BFS uses
+> `limit(1)` and so undercounts the true frontier; the **Parallel** strategy sums
+> both legs (a node touched by both is counted twice).
 
 **`feedback_calibration` fields (v1.15.0+, EXPLAIN ANALYZE only):**
 

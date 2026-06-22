@@ -242,8 +242,10 @@ fn scenario_select_edges_nested_and_rejected() {
 // =========================================================================
 // 8. Bare-MATCH RETURN ORDER BY of an unsupported expression -> VELES-018
 //
-// `order_match_results` (collection/search/query/match_exec/similarity.rs)
-// supports ORDER BY similarity(), depth, or a valid `alias.property` path.
+// `order_match_results` (collection/search/query/match_exec/order_by.rs)
+// supports ORDER BY similarity(), similarity(field, $v), depth, a valid
+// `alias.property` path, and arithmetic over a bare property identifier;
+// aggregates (no GROUP BY) and bare aliases are rejected (VELES-018).
 // Any other expression that the parser accepts (e.g. a bare alias `d`) used
 // to be silently dropped (tracing::warn + no reorder), returning rows in
 // traversal order. It must now error so callers never get mis-ordered rows.
