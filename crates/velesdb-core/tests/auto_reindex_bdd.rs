@@ -295,3 +295,45 @@ fn detach_without_prior_attach_returns_none() {
         "detach on a clean collection must return None, not panic"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Persistence — ALTER COLLECTION SET auto_reindex survives a reopen
+// ---------------------------------------------------------------------------
+
+#[test]
+fn alter_set_auto_reindex_persists_across_reopen() {
+    let dir = TempDir::new().expect("tempdir");
+
+    // First session: enable auto_reindex via ALTER, confirm it attached.
+    {
+        let db = Database::open(dir.path()).expect("open");
+        db.create_vector_collection("docs", 4, DistanceMetric::Cosine)
+            .expect("create");
+        let query =
+            velesdb_core::velesql::Parser::parse("ALTER COLLECTION docs SET (auto_reindex = true)")
+                .expect("parse ALTER");
+        db.execute_query(&query, &std::collections::HashMap::new())
+            .expect("ALTER must succeed");
+        let coll = db.get_vector_collection("docs").expect("collection");
+        assert!(
+            coll.auto_reindex_manager().is_some_and(|m| m.is_enabled()),
+            "manager attached and enabled after ALTER"
+        );
+    }
+
+    // Second session: reopening restores the manager from the persisted config.
+    {
+        let db = Database::open(dir.path()).expect("reopen");
+        let coll = db
+            .get_vector_collection("docs")
+            .expect("collection after reopen");
+        assert!(
+            coll.auto_reindex_manager().is_some(),
+            "auto_reindex manager restored from persisted config on reopen"
+        );
+        assert!(
+            coll.config().auto_reindex_config.is_some_and(|c| c.enabled),
+            "persisted auto_reindex_config remains enabled after reopen"
+        );
+    }
+}

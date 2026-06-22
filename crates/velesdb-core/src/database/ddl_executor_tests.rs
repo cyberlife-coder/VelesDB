@@ -835,16 +835,21 @@ fn test_hash_edge_id_collision_resistance() {
 }
 
 // =========================================================================
-// ALTER COLLECTION — execution returns feature-gap error (US-300)
+// ALTER COLLECTION — auto_reindex apply + persist
 // =========================================================================
 
-#[test]
-fn test_alter_collection_rejects_with_us300_reference() {
-    let dir = tempdir().expect("tempdir");
-    let db = Database::open(dir.path()).expect("open");
+/// Builds an `ALTER COLLECTION <name> SET (auto_reindex = <enabled>)` statement.
+fn alter_auto_reindex(name: &str, enabled: bool) -> DdlStatement {
+    DdlStatement::AlterCollection(AlterCollectionStatement {
+        collection: name.to_string(),
+        options: vec![("auto_reindex".to_string(), enabled.to_string())],
+    })
+}
 
+/// Creates a 32-dim vector collection for ALTER tests.
+fn create_alter_collection(db: &Database, name: &str) {
     let create = DdlStatement::CreateCollection(CreateCollectionStatement {
-        name: "alter_test".to_string(),
+        name: name.to_string(),
         kind: CreateCollectionKind::Vector(VectorCollectionParams {
             dimension: 32,
             metric: "cosine".to_string(),
@@ -853,33 +858,47 @@ fn test_alter_collection_rejects_with_us300_reference() {
             ef_construction: None,
         }),
     });
-    execute_ddl(&db, create).expect("create");
+    execute_ddl(db, create).expect("create");
+}
 
-    // ALTER COLLECTION SET execution is documented as not implemented
-    // under US-300. The error message must expose the ticket, the
-    // collection name, and the option list for debuggability.
-    let alter = DdlStatement::AlterCollection(AlterCollectionStatement {
-        collection: "alter_test".to_string(),
-        options: vec![("auto_reindex".to_string(), "true".to_string())],
-    });
-    let err = execute_ddl(&db, alter).expect_err("ALTER must return a feature-gap error");
+#[test]
+fn test_alter_collection_set_auto_reindex_true_attaches_manager() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+    create_alter_collection(&db, "alter_test");
 
-    let err_msg = err.to_string();
+    let results =
+        execute_ddl(&db, alter_auto_reindex("alter_test", true)).expect("ALTER true must succeed");
+    assert!(results.is_empty(), "ALTER returns no rows");
+
+    let vc = db.get_vector_collection("alter_test").expect("get");
+    let manager = vc
+        .auto_reindex_manager()
+        .expect("auto_reindex manager must be attached after ALTER");
+    assert!(manager.is_enabled(), "auto_reindex must be enabled");
     assert!(
-        err_msg.contains("US-300"),
-        "error must reference US-300: {err_msg}"
+        vc.config().auto_reindex_config.is_some_and(|c| c.enabled),
+        "persisted config reflects the enabled policy"
     );
+}
+
+#[test]
+fn test_alter_collection_set_auto_reindex_false_disables() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+    create_alter_collection(&db, "alter_disable");
+
+    execute_ddl(&db, alter_auto_reindex("alter_disable", true)).expect("enable");
+    execute_ddl(&db, alter_auto_reindex("alter_disable", false)).expect("disable");
+
+    let vc = db.get_vector_collection("alter_disable").expect("get");
+    let manager = vc
+        .auto_reindex_manager()
+        .expect("manager stays attached (disabled config) for a symmetric round-trip");
+    assert!(!manager.is_enabled(), "auto_reindex must be disabled");
     assert!(
-        err_msg.contains("not yet implemented"),
-        "error must state feature is not implemented: {err_msg}"
-    );
-    assert!(
-        err_msg.contains("alter_test"),
-        "error must include target collection name: {err_msg}"
-    );
-    assert!(
-        err_msg.contains("auto_reindex=true"),
-        "error must echo the requested option: {err_msg}"
+        vc.config().auto_reindex_config.is_some_and(|c| !c.enabled),
+        "persisted config reflects the disabled policy"
     );
 }
 
@@ -901,7 +920,7 @@ fn test_alter_collection_validates_unknown_option_before_feature_gap() {
     execute_ddl(&db, create).expect("create");
 
     // Unknown options must return the specific "Unsupported ALTER
-    // option" diagnostic before the feature-gap error.
+    // option" diagnostic; nothing is applied or persisted.
     let alter = DdlStatement::AlterCollection(AlterCollectionStatement {
         collection: "alter_unknown".to_string(),
         options: vec![("nonexistent_option".to_string(), "value".to_string())],
@@ -935,8 +954,8 @@ fn test_alter_collection_validates_value_type_before_feature_gap() {
     });
     execute_ddl(&db, create).expect("create");
 
-    // Malformed values must return the type-specific diagnostic rather
-    // than the feature-gap error.
+    // Malformed values must return the type-specific diagnostic; nothing
+    // is applied or persisted.
     let alter = DdlStatement::AlterCollection(AlterCollectionStatement {
         collection: "alter_bad_value".to_string(),
         options: vec![("auto_reindex".to_string(), "not_a_bool".to_string())],

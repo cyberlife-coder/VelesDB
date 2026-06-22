@@ -157,11 +157,11 @@ fn test_truncate_then_insert() {
 }
 
 // ============================================================================
-// ALTER COLLECTION — execution returns feature-gap error (US-300)
+// ALTER COLLECTION — auto_reindex apply + persist
 // ============================================================================
 
 #[test]
-fn test_alter_collection_set_option_returns_feature_gap_error() {
+fn test_alter_collection_set_auto_reindex_succeeds() {
     let (_dir, db) = create_test_db();
 
     execute_sql(
@@ -170,21 +170,16 @@ fn test_alter_collection_set_option_returns_feature_gap_error() {
     )
     .expect("create");
 
-    // `ALTER COLLECTION SET` execution is tracked under US-300 and not
-    // currently implemented. The grammar still parses the statement so
-    // documentation examples remain valid; the execution path returns a
-    // diagnostic error that names the tracking ticket.
-    let err = execute_sql(&db, "ALTER COLLECTION alter_test SET (auto_reindex = true)")
-        .expect_err("ALTER COLLECTION SET must return a feature-gap error");
+    // ALTER COLLECTION SET (auto_reindex = true) attaches and persists the
+    // policy on the collection, returning no rows.
+    let results = execute_sql(&db, "ALTER COLLECTION alter_test SET (auto_reindex = true)")
+        .expect("ALTER COLLECTION SET auto_reindex must succeed");
+    assert!(results.is_empty(), "ALTER returns no rows");
 
-    let err_msg = err.to_string();
+    let vc = db.get_vector_collection("alter_test").expect("get collection");
     assert!(
-        err_msg.contains("US-300"),
-        "error must reference US-300: {err_msg}"
-    );
-    assert!(
-        err_msg.contains("not yet implemented"),
-        "error must state feature is not implemented: {err_msg}"
+        vc.auto_reindex_manager().is_some_and(|m| m.is_enabled()),
+        "auto_reindex must be attached and enabled after ALTER"
     );
 }
 

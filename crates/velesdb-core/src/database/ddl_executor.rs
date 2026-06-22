@@ -8,6 +8,7 @@
 //! module.
 
 use crate::collection::graph::{EdgeType, GraphSchema, NodeType, ValueType};
+use crate::collection::Collection;
 use crate::velesql::{
     AlterCollectionStatement, AnalyzeStatement, CreateCollectionKind, CreateIndexStatement,
     DdlStatement, DropIndexStatement, GraphSchemaMode, SchemaDefinition, TruncateStatement,
@@ -226,52 +227,39 @@ impl Database {
 
     /// Executes an ALTER COLLECTION SET statement.
     ///
-    /// Currently supports only the `auto_reindex` option (boolean).
-    /// Executes an `ALTER COLLECTION ... SET <key> = <value>` statement.
+    /// Executes an `ALTER COLLECTION <name> SET (<key> = <value>, ...)` statement.
     ///
-    /// Persistence of `ALTER COLLECTION SET` options is tracked under
-    /// US-300 and is not currently implemented. The grammar accepts the
-    /// syntax so existing documentation examples and tests parse without
-    /// error, but the execution path returns a diagnostic error so that
-    /// callers cannot mistakenly assume the option took effect.
+    /// Currently supports the `auto_reindex` (boolean) option: it attaches or
+    /// re-configures an
+    /// [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager)
+    /// on the collection and persists the policy via `flush()`, so the setting
+    /// survives a restart (restored automatically on the next `Collection::open`).
     ///
-    /// Validation order is chosen to return the most actionable error
-    /// first:
+    /// Validation order returns the most actionable error first:
     ///   1. Collection existence — `Error::CollectionNotFound`.
     ///   2. Per-option syntax (unknown key, unparseable value) —
     ///      `Error::Query` via [`apply_alter_option`].
-    ///   3. Feature-gap rejection referencing US-300.
     ///
     /// # Errors
     ///
-    /// Returns `Error::CollectionNotFound` or `Error::Query` as described
-    /// above. A successful result is not currently possible.
+    /// Returns `Error::CollectionNotFound` for an unknown collection,
+    /// `Error::Query` for an unsupported option key or unparseable value, or a
+    /// storage error if persisting the change fails.
     fn execute_alter_collection(
         &self,
         stmt: &AlterCollectionStatement,
     ) -> Result<Vec<SearchResult>> {
         // Step 1: existence check.
-        let _collection = self.resolve_writable_collection(&stmt.collection)?;
+        let collection = self.resolve_writable_collection(&stmt.collection)?;
 
-        // Step 2: per-option syntax validation.
+        // Step 2: apply each option to the live collection (validates as it goes).
         for (key, value) in &stmt.options {
-            apply_alter_option(key, value)?;
+            apply_alter_option(&collection, key, value)?;
         }
 
-        // Step 3: feature-gap rejection (US-300).
-        let option_list = stmt
-            .options
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        Err(Error::Query(format!(
-            "ALTER COLLECTION SET is parsed but not yet implemented \
-             (tracked under US-300). Requested options on collection '{}': \
-             [{}]. Workaround: drop and recreate the collection with \
-             CREATE COLLECTION.",
-            stmt.collection, option_list
-        )))
+        // Step 3: persist the mutated config so the change survives a restart.
+        collection.flush()?;
+        Ok(Vec::new())
     }
 }
 
@@ -371,29 +359,41 @@ fn build_typed_schema(definitions: &[SchemaDefinition]) -> GraphSchema {
     schema
 }
 
-/// Validates the syntax of a single `ALTER COLLECTION` option.
+/// Applies a single `ALTER COLLECTION SET` option to the live collection.
 ///
-/// Returns `Ok(())` when the option key is recognized and the value
-/// parses into the expected type. The parsed value is discarded because
-/// `execute_alter_collection` rejects the entire statement with a
-/// feature-gap error (US-300). This function is kept separate so that
-/// malformed options surface a specific diagnostic before the generic
-/// feature-gap error.
-///
-/// Supported options: `auto_reindex` (boolean).
+/// Supported options: `auto_reindex` (boolean). The caller persists the change
+/// via `flush()` after all options are applied.
 ///
 /// # Errors
 ///
 /// Returns `Error::Query` for unknown option keys or unparseable values.
-fn apply_alter_option(key: &str, value: &str) -> Result<()> {
+fn apply_alter_option(collection: &Collection, key: &str, value: &str) -> Result<()> {
     match key {
-        "auto_reindex" => value.parse::<bool>().map(|_| ()).map_err(|_| {
-            Error::Query(format!(
-                "auto_reindex must be 'true' or 'false', got '{value}'"
-            ))
-        }),
+        "auto_reindex" => {
+            let enabled = value.parse::<bool>().map_err(|_| {
+                Error::Query(format!(
+                    "auto_reindex must be 'true' or 'false', got '{value}'"
+                ))
+            })?;
+            apply_auto_reindex(collection, enabled);
+            Ok(())
+        }
         _ => Err(Error::Query(format!(
             "Unsupported ALTER option: '{key}'. Supported: auto_reindex"
         ))),
     }
+}
+
+/// Attaches an `AutoReindexManager` reflecting the requested enabled flag,
+/// preserving any thresholds already configured on the collection.
+///
+/// The current policy is read and its guard dropped before `attach_auto_reindex`
+/// takes its own config write lock (see `CONCURRENCY_MODEL.md` lock ordering).
+fn apply_auto_reindex(collection: &Collection, enabled: bool) {
+    let mut cfg = collection.config().auto_reindex_config.unwrap_or_default();
+    cfg.enabled = enabled;
+    let manager = std::sync::Arc::new(
+        crate::collection::auto_reindex::AutoReindexManager::new(cfg),
+    );
+    collection.attach_auto_reindex(manager);
 }

@@ -2285,6 +2285,11 @@ ALTER COLLECTION docs SET (auto_reindex = false)
 | `auto_reindex` | boolean | Enable/disable automatic HNSW parameter tuning |
 
 Unknown options are rejected with an error message listing supported options.
+The change is applied to the live collection and persisted immediately, so it
+survives a restart — the auto-reindex policy is restored automatically on the
+next collection open. Setting `auto_reindex = false` keeps the policy attached
+but disabled (preserving any previously configured thresholds for a symmetric
+round-trip).
 
 ### FLUSH (v3.6+)
 
