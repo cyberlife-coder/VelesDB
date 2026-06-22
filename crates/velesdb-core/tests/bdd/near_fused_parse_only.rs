@@ -1,26 +1,21 @@
-//! BDD tests for the two `NEAR_FUSED` surfaces: the rejected SQL surface and
-//! the engine-level multi-vector fusion API.
+//! BDD tests for the two `NEAR_FUSED` surfaces — the SQL surface and the
+//! engine-level multi-vector fusion API — which must agree.
 //!
 //! Contract under test (two surfaces):
 //!
-//! 1. **VelesQL `NEAR_FUSED` parses but is REJECTED at validation (V012).** The
-//!    grammar (`grammar.pest` `vector_fused_search`) and parser
-//!    (`condition_vectors.rs::parse_vector_fused_search`) accept
-//!    `vector NEAR_FUSED [[..],[..]] [USING FUSION ...]` and build a
-//!    `Condition::VectorFusedSearch`, but it has NO executor: left unchecked it
-//!    would silently degrade to an unranked full scan
-//!    (`extraction.rs::extract_vector_search` extracts no query vector;
-//!    `where_eval.rs` treats `VectorFusedSearch(_)` as always-true). Rather than
-//!    return wrong rows, `validation.rs::reject_near_fused` rejects it with V012.
-//!    The full reject contract lives in `velesql_reject_conformance.rs`.
+//! 1. **VelesQL `NEAR_FUSED` executes real multi-vector fusion.** The grammar
+//!    (`grammar.pest` `vector_fused_search`) and parser
+//!    (`condition_vectors.rs::parse_vector_fused_search`) build a
+//!    `Condition::VectorFusedSearch`; `query/fused_dispatch.rs::dispatch_fused_query`
+//!    routes it to `Collection::multi_query_search` (the same fusion as the
+//!    engine API), honoring `USING FUSION` and any residual metadata filter.
 //!
-//! 2. **Multi-vector fusion is engine-API-only.** The fusion that `NEAR_FUSED`
-//!    *looks* like it should perform is reachable solely through
-//!    `VectorCollection::multi_query_search`, which DOES fuse.
+//! 2. **Engine-API parity.** `VectorCollection::multi_query_search` performs the
+//!    same fusion directly; the SQL and engine surfaces agree (diagonal id3 top).
 
 use velesdb_core::{Database, FusionStrategy, Point};
 
-use super::helpers::{create_test_db, result_ids};
+use super::helpers::{create_test_db, execute_sql, result_ids};
 
 /// dim-2 fixture: id1 axis-x, id2 axis-y, id3 the diagonal near both axes.
 /// Inserted in storage order 1,2,3 so an unranked scan yields {1,2,3}.
@@ -43,7 +38,7 @@ fn setup_nf(db: &Database, name: &str) {
 }
 
 // ============================================================================
-// Surface 1 — VelesQL NEAR_FUSED parse-only no-op (regression lock)
+// Surface 1 — VelesQL NEAR_FUSED parses and executes real fusion
 // ============================================================================
 
 /// LOCK: `NEAR_FUSED [[..],[..]]` PARSES into `Condition::VectorFusedSearch`
@@ -71,23 +66,65 @@ fn near_fused_empty_array_is_parse_error() {
     );
 }
 
-/// REJECT (V012): a `NEAR_FUSED` query run through the SQL pipeline is now
-/// rejected at validation rather than silently degrading to an unranked full
-/// scan (which would return wrong rows). Ground truth: `execute_sql` returns
-/// Err whose message carries the V012 marker. The full reject contract — incl.
-/// the USING FUSION variant — lives in `velesql_reject_conformance.rs`.
+/// EXECUTES real fusion via SQL: `NEAR_FUSED [[0.8,0.6],[0.6,0.8]]` routes to
+/// multi_query_search, so the diagonal id3 (closest to BOTH query vectors) is the
+/// top fused result — the SAME ground truth as the engine-API test below.
 #[test]
-fn near_fused_via_sql_is_rejected_v012() {
+fn near_fused_via_sql_fuses_top_is_diagonal() {
     let (_dir, db) = create_test_db();
     setup_nf(&db, "nf");
-    let err = super::helpers::execute_sql(
+    let results = execute_sql(
         &db,
-        "SELECT * FROM nf WHERE vector NEAR_FUSED [[1.0,0.0],[0.0,1.0]] LIMIT 10",
+        "SELECT * FROM nf WHERE vector NEAR_FUSED [[0.8,0.6],[0.6,0.8]] LIMIT 3",
     )
-    .expect_err("test: NEAR_FUSED via SQL must be rejected, not a no-op scan");
-    assert!(
-        err.to_string().contains("V012"),
-        "expected V012 NearFusedNotExecutable, got: {err}"
+    .expect("test: NEAR_FUSED via SQL must execute");
+    assert_eq!(
+        results[0].point.id, 3,
+        "diagonal id3 must be the top fused result"
+    );
+    assert_eq!(
+        results.len(),
+        3,
+        "fusion returns up to top_k ranked results"
+    );
+    assert_eq!(
+        result_ids(&results),
+        [1u64, 2, 3].into_iter().collect(),
+        "all three points retrieved across branches"
+    );
+}
+
+/// The `USING FUSION 'rrf' (k=60)` clause is honored (maps to `RRF{k:60}`), not
+/// ignored: id3 still tops the fused ranking.
+#[test]
+fn near_fused_via_sql_using_fusion_rrf_executes() {
+    let (_dir, db) = create_test_db();
+    setup_nf(&db, "nf_uf");
+    let results = execute_sql(
+        &db,
+        "SELECT * FROM nf_uf WHERE vector NEAR_FUSED [[0.8,0.6],[0.6,0.8]] \
+         USING FUSION 'rrf' (k = 60) LIMIT 3",
+    )
+    .expect("test: NEAR_FUSED USING FUSION must execute");
+    assert_eq!(results[0].point.id, 3, "USING FUSION 'rrf' fuses to id3");
+}
+
+/// A residual metadata predicate (`AND content = 'xy'`) is threaded into
+/// multi_query_search as a pre-fusion filter, so only the matching row survives.
+#[test]
+fn near_fused_via_sql_with_metadata_filter() {
+    let (_dir, db) = create_test_db();
+    setup_nf(&db, "nf_md");
+    let results = execute_sql(
+        &db,
+        "SELECT * FROM nf_md WHERE vector NEAR_FUSED [[0.8,0.6],[0.6,0.8]] \
+         AND content = 'xy' LIMIT 3",
+    )
+    .expect("test: NEAR_FUSED with metadata filter must execute");
+    assert_eq!(
+        result_ids(&results),
+        [3u64].into_iter().collect(),
+        "only id3 (content='xy') survives the pre-fusion metadata filter"
     );
 }
 

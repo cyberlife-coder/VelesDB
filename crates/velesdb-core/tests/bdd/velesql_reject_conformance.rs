@@ -329,46 +329,5 @@ fn scenario_match_order_by_aggregate_rejected() {
     );
 }
 
-// =========================================================================
-// 9. NEAR_FUSED via SQL -> V012 NearFusedNotExecutable
-//
-// NEAR_FUSED parses into Condition::VectorFusedSearch but has no executor: it
-// would silently degrade to an unranked full scan that ignores the query
-// vectors and the USING FUSION clause. Validation rejects it (V012). Real
-// multi-vector fusion is available via the multi_query_search engine API.
-// See also near_fused_parse_only.rs.
-// =========================================================================
-
-#[test]
-fn scenario_near_fused_rejected_with_v012() {
-    let (_dir, db) = create_test_db();
-    setup_products(&db);
-
-    let err = execute_sql(
-        &db,
-        "SELECT * FROM products WHERE vector NEAR_FUSED [[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0]] LIMIT 10",
-    )
-    .expect_err("test: NEAR_FUSED via SQL must be rejected");
-    assert!(
-        err.to_string().contains("V012"),
-        "expected V012 NearFusedNotExecutable code, got: {err}"
-    );
-}
-
-#[test]
-fn scenario_near_fused_using_fusion_rejected_with_v012() {
-    let (_dir, db) = create_test_db();
-    setup_products(&db);
-
-    // The USING FUSION clause does not make NEAR_FUSED executable; still V012.
-    let err = execute_sql(
-        &db,
-        "SELECT * FROM products WHERE vector NEAR_FUSED [[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0]] \
-         USING FUSION 'rrf' LIMIT 10",
-    )
-    .expect_err("test: NEAR_FUSED USING FUSION via SQL must be rejected");
-    assert!(
-        err.to_string().contains("V012"),
-        "expected V012 even with the USING FUSION clause, got: {err}"
-    );
-}
+// NEAR_FUSED via SQL now EXECUTES real multi-vector fusion (it is no longer
+// rejected); its execution + ranking contract lives in near_fused_parse_only.rs.

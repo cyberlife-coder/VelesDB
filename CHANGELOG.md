@@ -7,10 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-VelesQL conformance closeout. Two correctness fixes, one reject-contract change,
-and one new DDL capability. **Three behavior changes** (flagged below) replace
-silent wrong/no-op behavior with explicit errors or real values — review the
-SemVer impact before the next release.
+VelesQL conformance closeout plus three feature completions (real EXPLAIN
+counters incl. VectorFirst, MATCH `ORDER BY` arithmetic / `similarity(field, $v)`,
+and executable SQL `NEAR_FUSED` fusion) and one new DDL capability. Several
+**behavior changes** (flagged below) replace silent wrong/no-op behavior with
+explicit errors or real values — review the SemVer impact before the next
+release.
 
 ### Added
 - **`ALTER COLLECTION <name> SET (auto_reindex = true|false)` now applies and
@@ -35,14 +37,14 @@ SemVer impact before the next release.
   They now sort. Aggregates (no `GROUP BY`) and bare aliases are rejected with
   `VELES-018` instead of being silently ignored.
   *(Behavior change: previously-silent queries now sort or error.)*
-
-### Changed
-- **`NEAR_FUSED` via SQL is now rejected (V012) instead of a silent full scan.**
-  `NEAR_FUSED` parsed into a condition with no executor and silently degraded to
-  an unranked full scan that ignored the query vectors and the `USING FUSION`
-  clause. It is now rejected at validation with `V012`. Real multi-vector fusion
-  remains available via the `multi_query_search` engine API.
-  *(Behavior change: previously-silent queries now error.)*
+- **`NEAR_FUSED` multi-vector fusion now executes via SQL.** It previously parsed
+  into a condition with no executor and silently degraded to an unranked full
+  scan that ignored the query vectors and `USING FUSION`. A SQL `NEAR_FUSED` now
+  routes to the engine's multi-vector fusion (`multi_query_search`): per-vector
+  search + ranking fusion, honoring `USING FUSION 'rrf'/'average'/'maximum'`
+  (others fall back to RRF) and any residual metadata predicate as a pre-fusion
+  filter.
+  *(Behavior change: previously-silent full scans now return fused rankings.)*
 
 ## [3.2.1] — 2026-06-20
 

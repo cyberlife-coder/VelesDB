@@ -154,8 +154,11 @@ impl Collection {
         }
     }
 
-    /// Applies DISTINCT, ORDER BY, and LIMIT to sparse/hybrid results.
-    fn finalize_sparse_results(
+    /// Applies DISTINCT, ORDER BY, OFFSET, and LIMIT to ranked results.
+    ///
+    /// Shared by the sparse/hybrid path and the NEAR_FUSED fusion path — both
+    /// produce an already-ranked set that needs the same SQL-standard finalize.
+    pub(super) fn finalize_sparse_results(
         &self,
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,

@@ -200,7 +200,7 @@ VelesQL is a SQL-like query language with vector and graph extensions. It suppor
 | `vector NEAR $v` (similarity search) | Yes | No |
 | `MATCH` (graph traversal) | Yes | No |
 | `USING FUSION` (hybrid search) | Yes | No |
-| `NEAR_FUSED` (multi-vector fusion) | No (engine API only) | No |
+| `NEAR_FUSED` (multi-vector fusion) | Yes | No |
 | `SPARSE_NEAR` (sparse vector search) | Yes | No |
 | `TRAIN QUANTIZER ON ...` | Yes | No |
 | Subqueries / CTEs | No | Yes |

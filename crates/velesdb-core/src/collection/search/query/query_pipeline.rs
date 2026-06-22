@@ -272,6 +272,7 @@ impl Collection {
         let mut filter_condition = None;
         let mut graph_match_predicates = Vec::new();
         let mut sparse_vector_search = None;
+        let mut fused_search = None;
 
         let is_union_query = stmt
             .where_clause
@@ -286,6 +287,7 @@ impl Collection {
             Self::validate_similarity_query_structure(cond)?;
             Self::collect_graph_match_predicates(cond, &mut graph_match_predicates);
             sparse_vector_search = Self::extract_sparse_vector_search(cond).cloned();
+            fused_search = self.extract_fused_vectors(cond, params)?;
 
             let mut extracted_cond = cond.clone();
             vector_search = self.extract_vector_search(&mut extracted_cond, params)?;
@@ -300,6 +302,7 @@ impl Collection {
             filter_condition,
             graph_match_predicates,
             sparse_vector_search,
+            fused_search,
             is_union_query,
             is_not_similarity_query,
         })

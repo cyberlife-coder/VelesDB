@@ -40,6 +40,12 @@ impl Collection {
             return Ok(Some(results));
         }
 
+        // NEAR_FUSED multi-vector fusion, routed to multi_query_search.
+        if extracted.fused_search.is_some() {
+            let results = self.dispatch_fused_query(stmt, params, extracted, limit, ctx)?;
+            return Ok(Some(results));
+        }
+
         Ok(None)
     }
 
