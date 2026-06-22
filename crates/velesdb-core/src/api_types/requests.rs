@@ -569,10 +569,11 @@ mod tests {
 
     #[test]
     fn sparse_dict_rejects_oversized_nnz() {
-        let map: BTreeMap<String, f32> = (0..=MAX_SPARSE_NNZ)
-            .map(|i| (i.to_string(), 1.0))
-            .collect();
-        let err = SparseVectorInput::Dict(map).into_sparse_vector().unwrap_err();
+        let map: BTreeMap<String, f32> =
+            (0..=MAX_SPARSE_NNZ).map(|i| (i.to_string(), 1.0)).collect();
+        let err = SparseVectorInput::Dict(map)
+            .into_sparse_vector()
+            .unwrap_err();
         assert!(err.contains("too large"), "expected size error, got: {err}");
     }
 
@@ -595,7 +596,10 @@ mod tests {
         }
         .into_sparse_vector()
         .unwrap_err();
-        assert!(err.contains("mismatch"), "expected mismatch error, got: {err}");
+        assert!(
+            err.contains("mismatch"),
+            "expected mismatch error, got: {err}"
+        );
     }
 
     #[test]
@@ -606,6 +610,9 @@ mod tests {
         }
         .into_sparse_vector()
         .unwrap_err();
-        assert!(err.contains("not finite"), "expected finite error, got: {err}");
+        assert!(
+            err.contains("not finite"),
+            "expected finite error, got: {err}"
+        );
     }
 }
