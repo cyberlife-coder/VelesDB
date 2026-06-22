@@ -142,13 +142,21 @@ pub enum SparseVectorInput {
     Dict(BTreeMap<String, f32>),
 }
 
+/// Maximum non-zero entries (NNZ) allowed in a single sparse vector.
+///
+/// Prevents memory amplification: a 100 MB JSON body of sparse indices/values
+/// can decompress to a much larger in-memory `Vec<(u32, f32)>`. Sparse NLP
+/// embeddings (SPLADE, BM25) typically have < 1 K NNZ; 65 536 gives a 60× headroom
+/// over typical workloads while bounding worst-case allocation to ~512 KB per vector.
+pub const MAX_SPARSE_NNZ: usize = 65_536;
+
 impl SparseVectorInput {
     /// Converts this input into a core `SparseVector`, validating at the API boundary.
     ///
     /// # Errors
     ///
     /// Returns a descriptive error string on mismatched lengths, non-finite values,
-    /// or dict keys that cannot be parsed as `u32`.
+    /// NNZ exceeding [`MAX_SPARSE_NNZ`], or dict keys that cannot be parsed as `u32`.
     pub fn into_sparse_vector(self) -> Result<crate::sparse_index::SparseVector, String> {
         match self {
             Self::Parallel { indices, values } => Self::convert_parallel(indices, values),
@@ -160,6 +168,12 @@ impl SparseVectorInput {
         indices: Vec<u32>,
         values: Vec<f32>,
     ) -> Result<crate::sparse_index::SparseVector, String> {
+        if indices.len() > MAX_SPARSE_NNZ {
+            return Err(format!(
+                "Sparse vector too large: {} non-zero entries (max {MAX_SPARSE_NNZ})",
+                indices.len()
+            ));
+        }
         if indices.len() != values.len() {
             return Err(format!(
                 "Sparse vector indices/values length mismatch: {} indices vs {} values",
@@ -181,6 +195,12 @@ impl SparseVectorInput {
     fn convert_dict(
         map: BTreeMap<String, f32>,
     ) -> Result<crate::sparse_index::SparseVector, String> {
+        if map.len() > MAX_SPARSE_NNZ {
+            return Err(format!(
+                "Sparse vector too large: {} non-zero entries (max {MAX_SPARSE_NNZ})",
+                map.len()
+            ));
+        }
         let mut pairs = Vec::with_capacity(map.len());
         for (key, value) in map {
             if !value.is_finite() {
@@ -529,4 +549,63 @@ pub struct GuardRailsConfigRequest {
     /// Circuit breaker: recovery time in seconds.
     #[cfg_attr(feature = "openapi", schema(example = 30))]
     pub circuit_recovery_seconds: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sparse_parallel_rejects_oversized_nnz() {
+        let n = MAX_SPARSE_NNZ + 1;
+        let err = SparseVectorInput::Parallel {
+            indices: vec![0u32; n],
+            values: vec![1.0f32; n],
+        }
+        .into_sparse_vector()
+        .unwrap_err();
+        assert!(err.contains("too large"), "expected size error, got: {err}");
+    }
+
+    #[test]
+    fn sparse_dict_rejects_oversized_nnz() {
+        let map: BTreeMap<String, f32> = (0..=MAX_SPARSE_NNZ)
+            .map(|i| (i.to_string(), 1.0))
+            .collect();
+        let err = SparseVectorInput::Dict(map).into_sparse_vector().unwrap_err();
+        assert!(err.contains("too large"), "expected size error, got: {err}");
+    }
+
+    #[test]
+    fn sparse_parallel_accepts_max_nnz() {
+        let n = MAX_SPARSE_NNZ;
+        let sv = SparseVectorInput::Parallel {
+            indices: (0..n as u32).collect(),
+            values: vec![1.0f32; n],
+        }
+        .into_sparse_vector();
+        assert!(sv.is_ok());
+    }
+
+    #[test]
+    fn sparse_parallel_rejects_length_mismatch() {
+        let err = SparseVectorInput::Parallel {
+            indices: vec![0, 1],
+            values: vec![1.0],
+        }
+        .into_sparse_vector()
+        .unwrap_err();
+        assert!(err.contains("mismatch"), "expected mismatch error, got: {err}");
+    }
+
+    #[test]
+    fn sparse_parallel_rejects_non_finite_value() {
+        let err = SparseVectorInput::Parallel {
+            indices: vec![0],
+            values: vec![f32::NAN],
+        }
+        .into_sparse_vector()
+        .unwrap_err();
+        assert!(err.contains("not finite"), "expected finite error, got: {err}");
+    }
 }
