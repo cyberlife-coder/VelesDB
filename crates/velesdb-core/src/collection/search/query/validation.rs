@@ -58,11 +58,17 @@ impl Collection {
         // filter. Reject shapes it cannot execute — more than one fused, a fused
         // mixed with NEAR / similarity() / SPARSE_NEAR, or a fused under OR/NOT —
         // so the fused vectors are never silently dropped to a non-fused scan.
+        // `vector_or_sparse_count` includes SPARSE_NEAR leaves (which
+        // `is_vector_leaf` omits) so "NEAR_FUSED AND SPARSE_NEAR" is rejected
+        // just like "NEAR_FUSED AND NEAR / similarity()".
         let fused_count =
             count_matching_leaves(condition, |c| matches!(c, Condition::VectorFusedSearch(_)));
+        let vector_or_sparse_count = count_matching_leaves(condition, |c| {
+            is_vector_leaf(c) || matches!(c, Condition::SparseVectorSearch(_))
+        });
         if fused_count > 0
             && (fused_count > 1
-                || similarity_count > fused_count
+                || vector_or_sparse_count > fused_count
                 || fused_under_or_or_not(condition))
         {
             return Err(Error::Config(
@@ -170,7 +176,11 @@ fn fused_under_or_or_not(condition: &Condition) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::velesql::{CompareOp, Comparison, SimilarityCondition, Value, VectorExpr};
+    use crate::sparse_index::SparseVector;
+    use crate::velesql::{
+        CompareOp, Comparison, FusionConfig, SimilarityCondition, SparseVectorExpr,
+        SparseVectorSearch, Value, VectorExpr, VectorFusedSearch,
+    };
 
     fn make_similarity_condition() -> Condition {
         Condition::Similarity(SimilarityCondition {
@@ -262,6 +272,35 @@ mod tests {
             Box::new(make_compare_condition()),
         );
         assert!(Collection::validate_similarity_query_structure(&cond).is_ok());
+    }
+
+    fn make_fused_condition() -> Condition {
+        let vectors = vec![
+            VectorExpr::Literal(vec![0.1, 0.2]),
+            VectorExpr::Literal(vec![0.3]),
+        ];
+        let fusion = FusionConfig::rrf();
+        Condition::VectorFusedSearch(VectorFusedSearch { vectors, fusion })
+    }
+
+    fn make_sparse_condition() -> Condition {
+        Condition::SparseVectorSearch(SparseVectorSearch {
+            vector: SparseVectorExpr::Literal(SparseVector::new(vec![(1, 0.5), (3, 0.2)])),
+            index_name: None,
+        })
+    }
+
+    #[test]
+    fn test_validate_fused_and_sparse_fails() {
+        // NEAR_FUSED AND SPARSE_NEAR must reject: SPARSE_NEAR would otherwise
+        // bypass the isolation guard and silently drop the fused vectors.
+        let cond = Condition::And(
+            Box::new(make_fused_condition()),
+            Box::new(make_sparse_condition()),
+        );
+        let result = Collection::validate_similarity_query_structure(&cond);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("NEAR_FUSED"));
     }
 
     #[test]

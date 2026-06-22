@@ -773,9 +773,11 @@ literals (`[0.1, 0.2, ...]`).
 | Strategy | Best For | Parameters |
 |----------|----------|------------|
 | `rrf` | General-purpose ensemble (default) | `k` (default: 60) |
-| `rsf` | Normalized score blending | `dense_weight`, `sparse_weight` |
-| `weighted` | Explicit priority tuning | `weight_1`, `weight_2`, ... |
+| `average` | Balanced score blending | (none) |
 | `maximum` | Conservative high-precision | (none) |
+
+Only `rrf`, `average`, and `maximum` are honored. Any other strategy name
+(e.g. `rsf`, `weighted`) falls back to RRF; weight parameters are not read.
 
 ### Similarity Function (v1.3+)
 

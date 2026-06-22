@@ -187,6 +187,63 @@ fn test_match_with_where_filters_starting_node() {
 }
 
 // =========================================================================
+// MATCH — RETURN ORDER BY (Finding 8: sort BEFORE limit)
+// =========================================================================
+
+#[test]
+fn test_match_single_node_order_by_property_sorts_before_limit() {
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    // Three Person nodes (Alice, Bob, Carol). ORDER BY a.name DESC then LIMIT 1
+    // must return Carol — proving the sort runs over the full candidate set
+    // before the limit truncates (the bug truncated to the first-traversed
+    // node, Alice).
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person) RETURN a ORDER BY a.name DESC LIMIT 1",
+        None,
+    )
+    .expect("test: match order by");
+    assert_eq!(r.row_count(), 1);
+    let json = r.row(0).expect("test: row").data_json();
+    assert!(
+        json.contains("Carol"),
+        "DESC+LIMIT 1 must pick the last name (Carol), got: {json}"
+    );
+}
+
+#[test]
+fn test_match_single_node_order_by_property_asc() {
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person) RETURN a ORDER BY a.name ASC",
+        None,
+    )
+    .expect("test: match order by asc");
+    assert_eq!(r.row_count(), 3);
+    let first = r.row(0).expect("test: row 0").data_json();
+    let last = r.row(2).expect("test: row 2").data_json();
+    assert!(first.contains("Alice"), "ASC first must be Alice: {first}");
+    assert!(last.contains("Carol"), "ASC last must be Carol: {last}");
+}
+
+#[test]
+fn test_match_order_by_arithmetic_rejected() {
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    // Arithmetic ORDER BY is not evaluable in the WASM MATCH path; it must be
+    // rejected with a clear error rather than silently ignored.
+    let err = execute(
+        &mut db,
+        "MATCH (a:Person) RETURN a ORDER BY a.age - 2000",
+        None,
+    );
+    assert!(err.is_err(), "arithmetic MATCH ORDER BY must error");
+}
+
+// =========================================================================
 // MATCH — nominal (2-hop)
 // =========================================================================
 

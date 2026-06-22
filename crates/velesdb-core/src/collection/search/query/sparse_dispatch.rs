@@ -171,10 +171,15 @@ impl Collection {
             self.apply_order_by(&mut results, order_by, params)?;
         }
         // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
+        // Intentional saturating clamp (also reached by the NEAR_FUSED path): an
+        // out-of-`usize`-range offset saturates to `usize::MAX`, yielding an
+        // empty page rather than an error.
         if let Some(offset) = stmt.offset {
             let skip = usize::try_from(offset).unwrap_or(usize::MAX);
             results = results.into_iter().skip(skip).collect();
         }
+        // Intentional saturating clamp: a missing or out-of-range limit collapses
+        // to `MAX_LIMIT` rather than erroring.
         let final_limit =
             usize::try_from(stmt.limit.unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT))
                 .unwrap_or(MAX_LIMIT)

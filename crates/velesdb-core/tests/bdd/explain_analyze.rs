@@ -438,18 +438,28 @@ fn test_explain_analyze_vector_first_match_reports_real_traversal_counters() {
         .actual_stats
         .expect("test: actual_stats should be Some");
 
-    assert!(
-        stats.actual_rows > 0,
-        "VectorFirst MATCH returns node 1 (Document with a CITES edge)"
+    assert_eq!(
+        stats.actual_rows, 1,
+        "exactly node 1 matches (Document with a CITES edge)"
     );
-    // VectorFirst now reports real counts: candidate nodes evaluated plus the
-    // per-candidate existence-BFS edges/nodes reached (was 0 before).
+    // VectorFirst counters are a documented APPROXIMATE LOWER BOUND, not an exact
+    // figure: the per-candidate existence-BFS uses limit(1) and so undercounts the
+    // frontier (see explain/types.rs ActualStats doc). Here the bound is tight and
+    // deterministic: vector_first.rs counts `examined` candidates (>= 1 — node 1 is
+    // evaluated) via add_traversal(examined, 0), then the limit(1) BFS over node 1's
+    // single CITES edge adds add_traversal(1, 1) (vector_first.rs:263). So
+    // nodes_visited >= 2 (>= 1 candidate + 1 BFS-reached node) and edges_traversed
+    // >= 1 (the one CITES edge). Asserting exact equality would be fragile against
+    // how many candidates the planner's top_k surfaces, so a precise lower bound is
+    // the strongest deterministic guard.
     assert!(
-        stats.nodes_visited > 0,
-        "VectorFirst reports real nodes_visited (candidates + BFS-reached)"
+        stats.nodes_visited >= 2,
+        "nodes_visited >= 2 (>=1 candidate examined + 1 BFS-reached), got {}",
+        stats.nodes_visited
     );
     assert!(
-        stats.edges_traversed > 0,
-        "VectorFirst reports real edges_traversed (BFS hits)"
+        stats.edges_traversed >= 1,
+        "edges_traversed >= 1 (the CITES edge followed by the existence BFS), got {}",
+        stats.edges_traversed
     );
 }

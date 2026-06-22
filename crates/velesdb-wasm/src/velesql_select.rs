@@ -43,7 +43,11 @@ pub(crate) fn execute(
         return crate::velesql_join::execute(db, &query.select, params);
     }
 
-    let rows = if let Some(vs) = find_vector_search(query.select.where_clause.as_ref()) {
+    let rows = if let Some(vfs) =
+        crate::velesql_fused::find_fused_search(query.select.where_clause.as_ref())
+    {
+        crate::velesql_fused::execute_fused_search(db, &query.select, vfs, params)?
+    } else if let Some(vs) = find_vector_search(query.select.where_clause.as_ref()) {
         execute_vector_search(db, &query.select, vs, params)?
     } else {
         execute_plain(db, &query.select, params)?
@@ -242,7 +246,13 @@ fn resolve_query_vector(
     Ok(q)
 }
 
-fn score_all(query: &[f32], store: &crate::vector_store::VectorStore) -> Vec<(u64, f32)> {
+/// Brute-force scores every stored vector against `query` and sorts by the
+/// metric's natural direction. Shared with the `NEAR_FUSED` path
+/// (`velesql_fused`) so the single-vector and per-branch scans stay identical.
+pub(crate) fn score_all(
+    query: &[f32],
+    store: &crate::vector_store::VectorStore,
+) -> Vec<(u64, f32)> {
     let mut scored = vector_ops::compute_scores(
         query,
         &store.ids,

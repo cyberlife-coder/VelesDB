@@ -45,6 +45,13 @@ release.
   (others fall back to RRF) and any residual metadata predicate as a pre-fusion
   filter.
   *(Behavior change: previously-silent full scans now return fused rankings.)*
+- **`NEAR_FUSED` isolation is now enforced with an error.** A `WHERE` may contain
+  exactly one `NEAR_FUSED`, only `AND`-ed with a metadata filter. More than one
+  `NEAR_FUSED`, mixing it with another vector predicate (`NEAR` /
+  `similarity()` / `SPARSE_NEAR`), or placing it under `OR`/`NOT` previously
+  parsed and silently degraded to a non-fused scan; these shapes are now
+  rejected.
+  *(Behavior change: previously-silent degraded queries now error.)*
 
 ## [3.2.1] — 2026-06-20
 

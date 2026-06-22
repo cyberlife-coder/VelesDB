@@ -196,6 +196,23 @@ impl Collection {
 
         let mut sorted = match_results;
         if let Some(order_by) = match_clause.return_clause.order_by.as_ref() {
+            // Deterministic baseline keyed by `(node_id, depth, path)` — a total
+            // order over connected matches: a single-node match has a unique
+            // node_id (empty path); a multi-node match is fixed by its edge-id
+            // path (edge ids are unique, so the path determines the whole route).
+            // node_id alone is NOT unique for multi-node patterns (the matched
+            // node repeats across results that differ only in their bindings).
+            // Combined with the stable per-column sorts below applied
+            // least-significant-first (`.rev()`), this yields correct
+            // multi-column ordering with a deterministic tie-break for rows equal
+            // on every ORDER BY key. Only applied when ORDER BY is present so
+            // traversal-order output is otherwise preserved.
+            sorted.sort_unstable_by(|a, b| {
+                a.node_id
+                    .cmp(&b.node_id)
+                    .then_with(|| a.depth.cmp(&b.depth))
+                    .then_with(|| a.path.cmp(&b.path))
+            });
             for item in order_by.iter().rev() {
                 self.order_match_results(&mut sorted, &item.expr, item.descending, params)
                     .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
@@ -436,6 +453,117 @@ mod tests {
         let mut r = MatchResult::new(node_id, 0, Vec::new());
         r.score = score;
         r
+    }
+
+    // --- Parallel strategy EXPLAIN counter path (Finding 10) ---
+    //
+    // The Parallel strategy cannot be reached end-to-end without a >10k-node,
+    // avg_degree>5, threshold>0.8 fixture (match_planner::should_use_parallel),
+    // which is impractical as a unit test. So we exercise `execute_match_parallel`
+    // DIRECTLY on a small fixture and assert the documented counter contract
+    // (ActualStats doc: "Parallel sums both legs"): the QueryContext counters
+    // after the parallel run equal the sum of the two legs run independently.
+    #[cfg(feature = "persistence")]
+    mod parallel_counters {
+        use super::super::super::match_planner::MatchExecutionStrategy;
+        use crate::collection::graph::GraphEdge;
+        use crate::collection::types::Collection;
+        use crate::distance::DistanceMetric;
+        use crate::point::Point;
+        use crate::velesql::{MatchClause, Parser};
+        use std::collections::HashMap;
+        use std::path::PathBuf;
+
+        /// 3-node `:Doc` chain (1->2->3 via LINK) with vectors for the VectorFirst
+        /// leg; similarity is on the start node `a` so the leg surfaces candidates.
+        fn setup_parallel_collection() -> (tempfile::TempDir, Collection) {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let col = Collection::create(PathBuf::from(dir.path()), 2, DistanceMetric::Cosine)
+                .expect("create collection");
+            col.upsert(vec![
+                Point::new(
+                    1,
+                    vec![1.0, 0.0],
+                    Some(serde_json::json!({"_labels": ["Doc"]})),
+                ),
+                Point::new(
+                    2,
+                    vec![0.7, 0.7],
+                    Some(serde_json::json!({"_labels": ["Doc"]})),
+                ),
+                Point::new(
+                    3,
+                    vec![0.0, 1.0],
+                    Some(serde_json::json!({"_labels": ["Doc"]})),
+                ),
+            ])
+            .expect("upsert");
+            col.add_edge(GraphEdge::new(10, 1, 2, "LINK").expect("edge"))
+                .expect("add edge");
+            col.add_edge(GraphEdge::new(11, 2, 3, "LINK").expect("edge"))
+                .expect("add edge");
+            (dir, col)
+        }
+
+        fn parallel_match_clause() -> MatchClause {
+            Parser::parse(
+                "MATCH (a:Doc)-[:LINK]->(b:Doc) WHERE similarity(a, $v) > 0.0 RETURN a, b LIMIT 10",
+            )
+            .expect("parse parallel MATCH")
+            .match_clause
+            .expect("MATCH clause present")
+        }
+
+        fn vector_first_hint() -> MatchExecutionStrategy {
+            MatchExecutionStrategy::VectorFirst {
+                similarity_alias: "a".to_string(),
+                top_k: 10,
+                threshold: 0.0,
+            }
+        }
+
+        #[test]
+        fn parallel_counters_sum_both_legs() {
+            let (_dir, col) = setup_parallel_collection();
+            let mc = parallel_match_clause();
+            let hint = vector_first_hint();
+            let mut params = HashMap::new();
+            params.insert("v".to_string(), serde_json::json!([1.0, 0.0]));
+
+            // Leg 1 in isolation: GraphFirst (execute_match_with_context).
+            let graph_ctx = col.guard_rails.create_context();
+            col.execute_match_with_context(&mc, &params, Some(&graph_ctx))
+                .expect("graph leg");
+            let graph_nodes = graph_ctx.traversal_nodes_visited();
+            let graph_edges = graph_ctx.traversal_edges_traversed();
+
+            // Leg 2 in isolation: VectorFirst (execute_match_vector_first).
+            let vec_ctx = col.guard_rails.create_context();
+            col.execute_match_vector_first(&mc, &params, &vec_ctx, "a", 10, 0.0)
+                .expect("vector leg");
+            let vec_nodes = vec_ctx.traversal_nodes_visited();
+            let vec_edges = vec_ctx.traversal_edges_traversed();
+
+            // Both legs must actually traverse, else the sum assertion is vacuous.
+            assert!(graph_edges > 0, "graph leg must follow LINK edges");
+            assert!(vec_nodes > 0, "vector leg must evaluate candidates");
+
+            // Parallel run accumulates BOTH legs into one shared context.
+            let par_ctx = col.guard_rails.create_context();
+            col.execute_match_parallel(&mc, &params, &par_ctx, &hint)
+                .expect("parallel run");
+
+            assert_eq!(
+                par_ctx.traversal_nodes_visited(),
+                graph_nodes + vec_nodes,
+                "Parallel nodes_visited must equal the sum of both legs"
+            );
+            assert_eq!(
+                par_ctx.traversal_edges_traversed(),
+                graph_edges + vec_edges,
+                "Parallel edges_traversed must equal the sum of both legs"
+            );
+        }
     }
 
     // --- higher_is_better = true (cosine / dot-product) ---

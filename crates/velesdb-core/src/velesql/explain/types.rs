@@ -323,15 +323,19 @@ pub struct ActualStats {
     pub actual_time_ms: f64,
     /// Number of loop iterations.
     pub loops: u64,
-    /// Measured nodes visited during MATCH graph traversal. For GraphFirst this
-    /// is start nodes examined plus nodes reached by following edges; for the
+    /// Approximate, best-effort count of nodes visited during MATCH graph
+    /// traversal — a lower bound, not an exact figure. For GraphFirst this is
+    /// start nodes examined plus nodes reached by following edges; for the
     /// similarity-anchored VectorFirst strategy it is the candidate nodes
-    /// evaluated plus per-candidate existence-BFS nodes reached (Parallel sums
-    /// both legs). 0 for non-graph queries.
+    /// evaluated plus per-candidate existence-BFS nodes reached, where each BFS
+    /// uses `limit(1)` and so undercounts the true frontier; Parallel sums both
+    /// legs (so a node touched by both is counted twice). 0 for non-graph
+    /// queries.
     pub nodes_visited: u64,
-    /// Measured edges followed during MATCH graph traversal (GraphFirst walk
-    /// edges; VectorFirst per-candidate BFS edges; Parallel both). 0 for
-    /// non-graph queries.
+    /// Approximate, best-effort count of edges followed during MATCH graph
+    /// traversal — a lower bound, not an exact figure (GraphFirst walk edges;
+    /// VectorFirst per-candidate BFS edges, undercounted by the `limit(1)`
+    /// frontier; Parallel sums both legs). 0 for non-graph queries.
     pub edges_traversed: u64,
 }
 

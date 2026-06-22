@@ -112,7 +112,10 @@ fn extract_payload_field(
 /// always compute ASC first and then reverse for DESC via the outer
 /// `compare_with_spec`, producing "null > non-null" here gives the correct
 /// "NULLS LAST in ASC" / "NULLS FIRST in DESC" behaviour.
-fn compare_json_with_nulls(
+///
+/// Shared with the MATCH `ORDER BY` path (`velesql_match_orderby`) so node and
+/// row ordering apply identical NULL semantics.
+pub(crate) fn compare_json_with_nulls(
     left: Option<&serde_json::Value>,
     right: Option<&serde_json::Value>,
 ) -> Ordering {

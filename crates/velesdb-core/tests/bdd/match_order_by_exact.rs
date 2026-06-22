@@ -108,6 +108,52 @@ fn scenario_match_order_by_arithmetic_asc_reverses() {
 }
 
 #[test]
+fn scenario_match_order_by_arithmetic_missing_property_uses_zero_fallback() {
+    // Finding 12: arithmetic over a property MISSING on some nodes must use the
+    // 0.0 fallback (ordering.rs resolve_payload_variable map_or(0.0, ..)) and still
+    // produce a deterministic TOTAL order with a node_id tie-break — never a panic.
+    let (_dir, db) = create_test_db();
+    setup_order_docs(&db); // ids 1 (2005), 2 (2020), 3 (2015) all carry `year`.
+    let vc = db.get_vector_collection("odocs").expect("test: get odocs");
+    // ids 4 & 5 LACK `year` => year resolves to 0.0 => key -2000, sort last; they
+    // tie at -2000 and must break by node_id ascending (4 before 5).
+    vc.upsert(vec![
+        Point::new(
+            4,
+            vec![0.3, 0.9],
+            Some(json!({"_labels": ["Doc"], "name": "D"})),
+        ),
+        Point::new(
+            5,
+            vec![0.9, 0.3],
+            Some(json!({"_labels": ["Doc"], "name": "E"})),
+        ),
+    ])
+    .expect("test: upsert missing-year docs");
+
+    let mut params = HashMap::new();
+    params.insert("_collection".to_string(), json!("odocs"));
+    let ids: Vec<u64> = execute_sql_with_params(
+        &db,
+        "MATCH (d:Doc) RETURN d.name ORDER BY year - 2000 DESC LIMIT 10",
+        &params,
+    )
+    .expect("test: execute MATCH ORDER BY arithmetic with missing property")
+    .iter()
+    .map(|r| r.point.id)
+    .collect();
+
+    // year-2000 DESC: id2 (20) > id3 (15) > id1 (5) > [id4, id5 both -2000].
+    // The two fallback rows tie at -2000 and break by node_id ascending (the
+    // deterministic baseline in finalize_match_results), so 4 precedes 5.
+    assert_eq!(
+        ids,
+        vec![2u64, 3, 1, 4, 5],
+        "missing `year` => 0.0 fallback (key -2000), total order with node_id tie-break"
+    );
+}
+
+#[test]
 fn scenario_match_order_by_similarity_field_vec_sorts_euclidean() {
     // On a DISTANCE metric (Euclidean: lower = more similar), `similarity(...) DESC`
     // must still be most-similar-first — the metric direction is honored.

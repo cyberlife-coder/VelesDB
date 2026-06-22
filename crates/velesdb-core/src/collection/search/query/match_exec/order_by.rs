@@ -5,7 +5,7 @@
 //! SELECT-side scoring helpers instead of re-implementing them.
 
 use super::super::ordering::{evaluate_arithmetic, ScoreContext};
-use super::MatchResult;
+use super::{parse_property_path, MatchResult};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::storage::{PayloadStorage, VectorStorage};
@@ -59,7 +59,7 @@ impl Collection {
 
     /// Sorts by the pre-computed match score (zero-arg `similarity()`).
     fn sort_match_by_score(results: &mut [MatchResult], descending: bool) {
-        results.sort_unstable_by(|a, b| {
+        results.sort_by(|a, b| {
             let cmp = a.score.unwrap_or(0.0).total_cmp(&b.score.unwrap_or(0.0));
             Self::apply_direction(cmp, descending)
         });
@@ -67,17 +67,22 @@ impl Collection {
 
     /// Sorts by traversal depth.
     fn sort_match_by_depth(results: &mut [MatchResult], descending: bool) {
-        results.sort_unstable_by(|a, b| Self::apply_direction(a.depth.cmp(&b.depth), descending));
+        results.sort_by(|a, b| Self::apply_direction(a.depth.cmp(&b.depth), descending));
     }
 
-    /// Sorts by `similarity(field, $v)`: each bound node's vector vs the resolved
-    /// query vector under the collection's configured metric.
+    /// Sorts by `similarity(field, $v)`: each result's scored node's vector vs
+    /// the resolved query vector under the collection's configured metric.
+    ///
+    /// `sim.field` selects which node is scored: an `alias.property` path scores
+    /// the node bound to `alias` (the property denotes that node's single
+    /// vector); a bare field scores each result's anchor `node_id`. A result
+    /// whose alias is unbound, or whose node has a missing/mismatched vector,
+    /// scores as least similar (`f32::NEG_INFINITY`).
     ///
     /// The per-node key is normalized so a LARGER key always means "more
     /// similar" — distance metrics (lower = closer, `!higher_is_better`) are
     /// negated — so `DESC` is most-similar-first regardless of metric, matching
-    /// the SELECT-side `ORDER BY similarity()`. A node with a missing/mismatched
-    /// vector sorts as least similar. The metric is read before the
+    /// the SELECT-side `ORDER BY similarity()`. The metric is read before the
     /// vector-storage lock (config precedes vector_storage in the lock order;
     /// see `CONCURRENCY_MODEL.md`).
     fn sort_match_by_similarity(
@@ -90,10 +95,15 @@ impl Collection {
         let query_vector = Self::resolve_vector(&sim.vector, params)?;
         let metric = self.config.read().metric;
         let higher_is_better = metric.higher_is_better();
+        // `alias.property` => score the node bound to `alias`; bare => the anchor.
+        let alias = parse_property_path(&sim.field).map(|(alias, _)| alias);
         let vector_storage = self.vector_storage.read();
-        results.sort_unstable_by(|a, b| {
+        results.sort_by(|a, b| {
             let score = |r: &MatchResult| -> f32 {
-                let Some(v) = vector_storage.retrieve(r.node_id).ok().flatten() else {
+                let Some(node_id) = resolve_scored_node_id(r, alias) else {
+                    return f32::NEG_INFINITY;
+                };
+                let Some(v) = vector_storage.retrieve(node_id).ok().flatten() else {
                     return f32::NEG_INFINITY;
                 };
                 if v.len() != query_vector.len() || v.is_empty() {
@@ -121,7 +131,7 @@ impl Collection {
         descending: bool,
     ) {
         let payload_storage = self.payload_storage.read();
-        results.sort_unstable_by(|a, b| {
+        results.sort_by(|a, b| {
             let score = |r: &MatchResult| -> f32 {
                 let payload = payload_storage.retrieve(r.node_id).ok().flatten();
                 let ctx = ScoreContext::new(r.score.unwrap_or(0.0), payload.as_ref());
@@ -129,5 +139,15 @@ impl Collection {
             };
             Self::apply_direction(score(a).total_cmp(&score(b)), descending)
         });
+    }
+}
+
+/// Resolves which node id to score for `similarity(field, $v)` on one result:
+/// the node bound to `alias` when `field` is an `alias.property` path, else the
+/// result's anchor `node_id`. Returns `None` when the alias is not bound.
+fn resolve_scored_node_id(result: &MatchResult, alias: Option<&str>) -> Option<u64> {
+    match alias {
+        Some(alias) => result.bindings.get(alias).copied(),
+        None => Some(result.node_id),
     }
 }

@@ -10,6 +10,7 @@ use velesdb_core::velesql::{
 
 use crate::database::{DatabaseInner, SharedStore};
 use crate::graph_store::{WasmEdge, WasmGraphNode, WasmGraphStore};
+use crate::velesql_match_orderby::{order_and_limit, MatchCandidate};
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::Params;
 
@@ -126,7 +127,6 @@ fn execute_single_node(
     let store = inferred_graph_store(db, pattern)?;
     let borrowed = store.borrow();
     let candidates = borrowed.candidate_nodes(label.as_deref());
-    let limit = clause.return_clause.limit.unwrap_or(u64::MAX);
     let mut out = Vec::new();
     for nid in candidates {
         let Some(node_data) = borrowed.get_node(nid) else {
@@ -136,12 +136,23 @@ fn execute_single_node(
         if !matches_where_in_match_scope(clause.where_clause.as_ref(), &bindings, params)? {
             continue;
         }
-        if (out.len() as u64) >= limit {
-            break;
-        }
         out.push(build_match_row_single(node, nid, node_data, &cross)?);
     }
-    Ok(out)
+    finalize_candidates(out, clause)
+}
+
+/// Sorts the collected candidates per the RETURN `ORDER BY` (Finding 8: sort
+/// BEFORE LIMIT), truncates to LIMIT, then projects to result rows.
+fn finalize_candidates(
+    mut candidates: Vec<MatchCandidate>,
+    clause: &MatchClause,
+) -> Result<Vec<QueryResultRow>, String> {
+    order_and_limit(
+        &mut candidates,
+        clause.return_clause.order_by.as_deref(),
+        clause.return_clause.limit,
+    )?;
+    Ok(candidates.into_iter().map(|c| c.row).collect())
 }
 
 fn execute_1_hop(
@@ -167,7 +178,6 @@ fn execute_1_hop(
         lb: first_label(&pattern.nodes[1]),
         cross,
     };
-    let limit = clause.return_clause.limit.unwrap_or(u64::MAX);
     let mut out = Vec::new();
     for sid in borrowed.candidate_nodes(ctx.la.as_deref()) {
         expand_one_hop(
@@ -176,14 +186,10 @@ fn execute_1_hop(
             &ctx,
             clause.where_clause.as_ref(),
             params,
-            limit,
             &mut out,
         )?;
-        if (out.len() as u64) >= limit {
-            break;
-        }
     }
-    Ok(out)
+    finalize_candidates(out, clause)
 }
 
 struct OneHopContext<'p> {
@@ -195,15 +201,13 @@ struct OneHopContext<'p> {
     cross: Vec<CrossRef>,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn expand_one_hop(
     store: &WasmGraphStore,
     sid: u64,
     ctx: &OneHopContext<'_>,
     where_clause: Option<&Condition>,
     params: &Params,
-    limit: u64,
-    out: &mut Vec<QueryResultRow>,
+    out: &mut Vec<MatchCandidate>,
 ) -> Result<(), String> {
     let default_node = WasmGraphNode::default();
     let a_node = store.get_node(sid).unwrap_or(&default_node);
@@ -223,9 +227,6 @@ fn expand_one_hop(
         ];
         if !matches_where_in_match_scope(where_clause, &bindings, params)? {
             continue;
-        }
-        if (out.len() as u64) >= limit {
-            return Ok(());
         }
         out.push(build_match_row_pair(ctx, sid, a_node, other, b_node)?);
     }
@@ -294,16 +295,12 @@ fn execute_2_hop(
     let store = inferred_graph_store(db, pattern)?;
     let borrowed = store.borrow();
     let ctx = TwoHopContext::new(pattern, cross);
-    let limit = clause.return_clause.limit.unwrap_or(u64::MAX);
     let where_clause = clause.where_clause.as_ref();
     let mut out = Vec::new();
     for a_id in borrowed.candidate_nodes(ctx.la.as_deref()) {
-        expand_from_a(&borrowed, a_id, &ctx, where_clause, params, limit, &mut out)?;
-        if (out.len() as u64) >= limit {
-            break;
-        }
+        expand_from_a(&borrowed, a_id, &ctx, where_clause, params, &mut out)?;
     }
-    Ok(out)
+    finalize_candidates(out, clause)
 }
 
 struct TwoHopContext<'p> {
@@ -334,15 +331,13 @@ impl<'p> TwoHopContext<'p> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn expand_from_a(
     store: &WasmGraphStore,
     a_id: u64,
     ctx: &TwoHopContext<'_>,
     where_clause: Option<&Condition>,
     params: &Params,
-    limit: u64,
-    out: &mut Vec<QueryResultRow>,
+    out: &mut Vec<MatchCandidate>,
 ) -> Result<(), String> {
     for edge_ab in directed_filter_edges(store, a_id, ctx.r1) {
         let b_id = other_endpoint(&edge_ab, a_id);
@@ -352,20 +347,7 @@ fn expand_from_a(
         if !matches_label(b_node, ctx.lb.as_deref()) {
             continue;
         }
-        expand_from_b(
-            store,
-            a_id,
-            b_id,
-            b_node,
-            ctx,
-            where_clause,
-            params,
-            limit,
-            out,
-        )?;
-        if (out.len() as u64) >= limit {
-            return Ok(());
-        }
+        expand_from_b(store, a_id, b_id, b_node, ctx, where_clause, params, out)?;
     }
     Ok(())
 }
@@ -379,8 +361,7 @@ fn expand_from_b(
     ctx: &TwoHopContext<'_>,
     where_clause: Option<&Condition>,
     params: &Params,
-    limit: u64,
-    out: &mut Vec<QueryResultRow>,
+    out: &mut Vec<MatchCandidate>,
 ) -> Result<(), String> {
     let default_node = WasmGraphNode::default();
     let a_node = store.get_node(a_id).unwrap_or(&default_node);
@@ -402,9 +383,6 @@ fn expand_from_b(
         ];
         if !matches_where_in_match_scope(where_clause, &bindings, params)? {
             continue;
-        }
-        if (out.len() as u64) >= limit {
-            return Ok(());
         }
         out.push(build_match_row_triple(
             ctx, a_id, a_node, b_id, b_node, c_id, c_node,
@@ -563,17 +541,37 @@ fn make_binding(node: &NodePattern, id: u64, data: &WasmGraphNode, fallback: &st
 
 // --- Row builders --------------------------------------------------------
 
+/// Builds a MATCH candidate (anchor id + alias-keyed JSON + row) so ORDER BY
+/// can sort the full set before LIMIT truncation (Finding 8). `anchor` is the
+/// starting node id, the deterministic tie-break baseline mirroring core.
+fn candidate_from_map(
+    anchor: u64,
+    map: serde_json::Map<String, serde_json::Value>,
+) -> Result<MatchCandidate, String> {
+    let value = serde_json::Value::Object(map);
+    let row = QueryResultRow::synthetic(value.clone())?;
+    Ok(MatchCandidate {
+        anchor,
+        // The WASM MATCH path performs no vector scoring; zero-arg
+        // similarity() therefore orders by this constant (parity with core
+        // when match scores are absent).
+        score: 0.0,
+        value,
+        row,
+    })
+}
+
 fn build_match_row_single(
     node: &NodePattern,
     id: u64,
     data: &WasmGraphNode,
     cross: &[CrossRef],
-) -> Result<QueryResultRow, String> {
+) -> Result<MatchCandidate, String> {
     let alias = node.alias.clone().unwrap_or_else(|| "a".to_string());
     let mut map = serde_json::Map::new();
     map.insert(alias, node_json(id, data));
     enrich_row(&mut map, cross);
-    QueryResultRow::synthetic(serde_json::Value::Object(map))
+    candidate_from_map(id, map)
 }
 
 fn build_match_row_pair(
@@ -582,14 +580,14 @@ fn build_match_row_pair(
     a_data: &WasmGraphNode,
     b_id: u64,
     b_data: &WasmGraphNode,
-) -> Result<QueryResultRow, String> {
+) -> Result<MatchCandidate, String> {
     let alias_a = ctx.na.alias.clone().unwrap_or_else(|| "a".to_string());
     let alias_b = ctx.nb.alias.clone().unwrap_or_else(|| "b".to_string());
     let mut map = serde_json::Map::new();
     map.insert(alias_a, node_json(a_id, a_data));
     map.insert(alias_b, node_json(b_id, b_data));
     enrich_row(&mut map, &ctx.cross);
-    QueryResultRow::synthetic(serde_json::Value::Object(map))
+    candidate_from_map(a_id, map)
 }
 
 fn build_match_row_triple(
@@ -600,7 +598,7 @@ fn build_match_row_triple(
     b_data: &WasmGraphNode,
     c_id: u64,
     c_data: &WasmGraphNode,
-) -> Result<QueryResultRow, String> {
+) -> Result<MatchCandidate, String> {
     let alias_a = ctx.na.alias.clone().unwrap_or_else(|| "a".to_string());
     let alias_b = ctx.nb.alias.clone().unwrap_or_else(|| "b".to_string());
     let alias_c = ctx.nc.alias.clone().unwrap_or_else(|| "c".to_string());
@@ -609,7 +607,7 @@ fn build_match_row_triple(
     map.insert(alias_b, node_json(b_id, b_data));
     map.insert(alias_c, node_json(c_id, c_data));
     enrich_row(&mut map, &ctx.cross);
-    QueryResultRow::synthetic(serde_json::Value::Object(map))
+    candidate_from_map(a_id, map)
 }
 
 /// Builds the JSON shape returned for a single MATCH-bound node.
