@@ -57,7 +57,7 @@ roaring = { version = "0.11", features = ["serde"] }
 # API
 axum = "0.8"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.7", features = ["cors", "trace"] }
 
 # Configuration
 figment = { version = "0.10", features = ["toml", "env"] }
