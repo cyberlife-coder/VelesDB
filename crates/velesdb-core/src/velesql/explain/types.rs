@@ -323,9 +323,10 @@ pub struct ActualStats {
     pub actual_time_ms: f64,
     /// Number of loop iterations.
     pub loops: u64,
-    /// Number of nodes visited (for graph traversal).
+    /// Measured nodes visited during MATCH graph traversal (start nodes examined
+    /// plus nodes reached by following edges); 0 for non-graph queries.
     pub nodes_visited: u64,
-    /// Number of edges traversed.
+    /// Measured edges followed during MATCH graph traversal; 0 for non-graph queries.
     pub edges_traversed: u64,
 }
 

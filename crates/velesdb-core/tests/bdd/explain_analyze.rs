@@ -286,19 +286,96 @@ fn test_explain_analyze_match_graph_returns_nonzero_traversal_counts() {
         .actual_stats
         .expect("test: actual_stats should be Some");
     assert!(stats.actual_rows > 0, "MATCH should return results");
-    // NOTE: until per-node/per-edge graph traversal instrumentation lands
-    // (#467-#469), the engine reports nodes_visited and edges_traversed as a
-    // proxy equal to actual_rows (query_engine.rs `if is_match { (actual_rows,
-    // actual_rows) }`). Pin that relationship so a future real implementation
-    // that returns distinct counts (e.g. intermediate hops, not just matched
-    // rows) deliberately fails here and forces this expectation to be revisited.
+    // Real traversal counts (no longer a proxy for actual_rows). The graph is
+    // 1->2 and 2->3 (KNOWS), all three nodes :Person:
+    //   - start nodes {1,2,3} examined        => 3
+    //   - edges followed (1->2, 2->3)         => 2
+    //   - nodes_visited = 3 start + 2 reached => 5
+    //   - actual_rows = 2 matched (a)-[:KNOWS]->(b) pairs
+    assert_eq!(stats.actual_rows, 2, "two (a)-[:KNOWS]->(b) pairs match");
     assert_eq!(
-        stats.nodes_visited, stats.actual_rows,
-        "nodes_visited is currently a proxy for actual_rows (see #467-#469)"
+        stats.edges_traversed, 2,
+        "two KNOWS edges are followed (1->2, 2->3)"
     );
     assert_eq!(
-        stats.edges_traversed, stats.actual_rows,
-        "edges_traversed is currently a proxy for actual_rows (see #467-#469)"
+        stats.nodes_visited, 5,
+        "3 start nodes examined + 2 nodes reached = 5"
     );
     assert!(stats.actual_time_ms > 0.0, "execution takes time");
+}
+
+/// GIVEN a fan-out graph where one KNOWS edge points at a non-`:Person` node
+/// WHEN `explain_analyze_query` on `MATCH (a:Person)-[:KNOWS]->(b:Person)`
+/// THEN `edges_traversed` (all followed edges, incl. the filtered one) is
+///      STRICTLY GREATER than `actual_rows` (matched pairs) — proving the
+///      counter is the real traversal count, not a result-row proxy.
+#[test]
+fn test_explain_analyze_match_edges_traversed_exceed_rows() {
+    let (_dir, db) = create_test_db();
+
+    execute_sql(
+        &db,
+        "CREATE GRAPH COLLECTION kg (dimension = 4, metric = 'cosine') SCHEMALESS;",
+    )
+    .expect("test: CREATE GRAPH COLLECTION");
+    let gc = db.get_graph_collection("kg").expect("test: get kg");
+
+    // Nodes 1..4 are :Person; node 5 is :Other (filtered by the (b:Person) end).
+    for id in 1..=4u64 {
+        gc.upsert_node_payload(id, &json!({"_labels": ["Person"], "name": format!("p{id}")}))
+            .expect("test: upsert person node");
+    }
+    gc.upsert_node_payload(5, &json!({"_labels": ["Other"], "name": "x"}))
+        .expect("test: upsert other node");
+
+    // Node 1 fans out to 2, 3, 4 (Person) and 5 (Other), all via KNOWS.
+    for (eid, dst) in [(1u64, 2u64), (2, 3), (3, 4), (4, 5)] {
+        let edge = velesdb_core::GraphEdge::new(eid, 1, dst, "KNOWS")
+            .expect("test: create fan-out edge");
+        gc.add_edge(edge).expect("test: add fan-out edge");
+    }
+
+    let query = Parser::parse("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b LIMIT 10")
+        .expect("test: parse MATCH");
+    let mut params = HashMap::new();
+    params.insert("_collection".to_string(), json!("kg"));
+
+    let stats = db
+        .explain_analyze_query(&query, &params)
+        .expect("test: explain_analyze MATCH fan-out")
+        .actual_stats
+        .expect("test: actual_stats should be Some");
+
+    // 4 edges followed from node 1; only 3 reach a :Person target (5 is :Other).
+    assert_eq!(stats.actual_rows, 3, "three (a)-[:KNOWS]->(b:Person) pairs");
+    assert_eq!(stats.edges_traversed, 4, "all four KNOWS edges are followed");
+    assert!(
+        stats.edges_traversed > stats.actual_rows,
+        "edges_traversed must exceed actual_rows (real count, not a proxy)"
+    );
+    // start nodes {1,2,3,4} (4) + 4 nodes reached = 8.
+    assert_eq!(stats.nodes_visited, 8, "4 start nodes + 4 reached = 8");
+}
+
+/// GIVEN a non-graph (vector SELECT) query
+/// WHEN `explain_analyze_query`
+/// THEN both graph traversal counters are exactly 0 (no traversal occurred),
+///      guarding against graph counters leaking into SELECT/vector EXPLAIN.
+#[test]
+fn test_explain_analyze_select_reports_zero_traversal_counters() {
+    let (_dir, db) = create_test_db();
+    setup_vector_collection(&db);
+
+    let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
+    let stats = explain_analyze(
+        &db,
+        "SELECT * FROM docs WHERE vector NEAR $v LIMIT 3;",
+        &params,
+    )
+    .expect("test: explain_analyze SELECT")
+    .actual_stats
+    .expect("test: actual_stats should be Some");
+
+    assert_eq!(stats.nodes_visited, 0, "SELECT performs no graph traversal");
+    assert_eq!(stats.edges_traversed, 0, "SELECT performs no graph traversal");
 }

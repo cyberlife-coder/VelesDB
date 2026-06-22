@@ -37,6 +37,38 @@ impl Collection {
         )?))
     }
 
+    /// Like [`execute_query`](Self::execute_query) but also returns the
+    /// graph-traversal counters `(nodes_visited, edges_traversed)` measured
+    /// during MATCH execution. Non-MATCH (SELECT/vector) queries report
+    /// `(_, 0, 0)`. Used by EXPLAIN ANALYZE to report real counts instead of a
+    /// result-row proxy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query cannot be executed.
+    pub(crate) fn execute_query_counted(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<(Vec<SearchResult>, u64, u64)> {
+        // Only a standalone MATCH query carries traversal counters. Run it
+        // through the same context + dispatch as execute_query, then read the
+        // counters the executor recorded into the query context. is_match_query
+        // guarantees try_dispatch_match returns Some.
+        if query.is_match_query() && query.compound.is_none() {
+            let ctx = self.prepare_query_context(query, "default")?;
+            let results = self
+                .try_dispatch_match(query, params, &ctx)?
+                .unwrap_or_default();
+            return Ok((
+                results,
+                ctx.traversal_nodes_visited(),
+                ctx.traversal_edges_traversed(),
+            ));
+        }
+        Ok((self.execute_query(query, params)?, 0, 0))
+    }
+
     /// Computes the effective `(limit, fetch_limit)` from a SELECT statement.
     ///
     /// `limit` is the final row count requested by the user (capped at [`MAX_LIMIT`]);
@@ -343,16 +375,11 @@ impl Collection {
         let plan = QueryPlan::from_query(query);
 
         let start = std::time::Instant::now();
-        let results = self.execute_query(query, params)?;
+        let (results, nodes_visited, edges_traversed) = self.execute_query_counted(query, params)?;
         let elapsed = start.elapsed();
 
         let actual_rows = results.len() as u64;
         let actual_time_ms = elapsed.as_secs_f64() * 1000.0;
-        let (nodes_visited, edges_traversed) = if query.is_match_query() {
-            (actual_rows, actual_rows)
-        } else {
-            (0, 0)
-        };
 
         let stats = ActualStats {
             actual_rows,

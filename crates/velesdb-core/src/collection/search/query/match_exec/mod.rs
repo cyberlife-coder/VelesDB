@@ -254,6 +254,7 @@ impl Collection {
             .map_or(super::MAX_LIMIT, |l| l as usize);
         let mut all_results: Vec<MatchResult> = Vec::new();
         let mut iteration_count: u32 = 0;
+        let mut start_nodes_visited: u32 = 0;
         let mut reported_cardinality: usize = 0;
 
         // Hoist payload_storage lock once for the entire query.
@@ -273,8 +274,19 @@ impl Collection {
                 limit,
                 &mut all_results,
                 &mut iteration_count,
+                &mut start_nodes_visited,
                 &mut reported_cardinality,
             )?;
+        }
+
+        // EXPLAIN ANALYZE: surface real traversal counters into the query
+        // context. `edges_traversed` is the number of edges actually followed;
+        // `nodes_visited` is the start nodes examined plus the nodes reached by
+        // following those edges. Non-graph queries never reach here, so they
+        // keep the 0/0 default.
+        if let Some(qc) = ctx {
+            let edges = u64::from(iteration_count);
+            qc.record_traversal(u64::from(start_nodes_visited) + edges, edges);
         }
 
         Ok(all_results)
@@ -294,12 +306,15 @@ impl Collection {
         limit: usize,
         all_results: &mut Vec<MatchResult>,
         iteration_count: &mut u32,
+        start_nodes_visited: &mut u32,
         reported_cardinality: &mut usize,
     ) -> Result<()> {
         let start_nodes = self.find_start_nodes(pattern)?;
         if start_nodes.is_empty() {
             return Ok(());
         }
+        *start_nodes_visited = start_nodes_visited
+            .saturating_add(u32::try_from(start_nodes.len()).unwrap_or(u32::MAX));
 
         // S4-08: Compute index pre-filter once per pattern.
         let prefilter = match_clause
