@@ -5,6 +5,43 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+VelesQL conformance closeout. Two correctness fixes, one reject-contract change,
+and one new DDL capability. **Three behavior changes** (flagged below) replace
+silent wrong/no-op behavior with explicit errors or real values — review the
+SemVer impact before the next release.
+
+### Added
+- **`ALTER COLLECTION <name> SET (auto_reindex = true|false)` now applies and
+  persists.** Previously parsed but rejected with a feature-gap error, it now
+  attaches (or re-configures) an `AutoReindexManager` on the collection and
+  persists the policy, so the setting survives a restart (restored on the next
+  open). Setting `false` keeps the policy attached but disabled, preserving any
+  configured thresholds. Unknown options and non-bool values still error.
+
+### Fixed
+- **`EXPLAIN ANALYZE` reports real graph traversal counters.** `nodes_visited`
+  and `edges_traversed` for `MATCH` queries were a fabricated proxy equal to the
+  result-row count; they now report the measured walk counts (`edges_traversed`
+  = edges followed, `nodes_visited` = start nodes examined + nodes reached).
+  Non-graph queries report `0/0`. The REST/OpenAPI response shape is unchanged.
+  *(Behavior change: the reported counter values change.)*
+- **`MATCH ... ORDER BY` of an unsupported expression now errors (VELES-018).**
+  A bare graph `MATCH` whose `RETURN`-clause `ORDER BY` referenced anything other
+  than `similarity()`, `depth`, or a valid `alias.property` path was silently
+  dropped, returning rows in traversal order. It is now rejected with
+  `VELES-018` instead of returning mis-ordered results.
+  *(Behavior change: previously-silent queries now error.)*
+
+### Changed
+- **`NEAR_FUSED` via SQL is now rejected (V012) instead of a silent full scan.**
+  `NEAR_FUSED` parsed into a condition with no executor and silently degraded to
+  an unranked full scan that ignored the query vectors and the `USING FUSION`
+  clause. It is now rejected at validation with `V012`. Real multi-vector fusion
+  remains available via the `multi_query_search` engine API.
+  *(Behavior change: previously-silent queries now error.)*
+
 ## [3.2.1] — 2026-06-20
 
 Patch release. Maintenance only — no engine/API change (`velesdb-core` and the
