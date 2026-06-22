@@ -61,6 +61,7 @@ incorrect or empty results at execution time.
 | Feature | Parser source | Status | Notes |
 |---------|--------------|--------|-------|
 | Scalar subqueries | `grammar.pest:subquery_expr`, `ast/values.rs:Subquery` | Parsed, then rejected at validation with V010 (SubqueryNotExecutable) | EPIC-039 |
+| MATCH `ORDER BY` expression other than `similarity()` / `depth` / `alias.property` | `parser/match_parser.rs:order_by_expr_to_string` | Parsed, then rejected at execution with VELES-018 (GraphNotSupported) | EPIC-045 |
 
 ## Not Parsed (Not in Grammar)
 

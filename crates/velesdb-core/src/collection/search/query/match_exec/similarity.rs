@@ -418,23 +418,32 @@ impl Collection {
     /// - `similarity()` - Vector similarity score
     /// - Property path (e.g., `n.name`)
     /// - Depth
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::GraphNotSupported`] (VELES-018) when the
+    /// expression is not `similarity()`, `depth`, or a valid `alias.property`
+    /// path, so an unsupported clause fails loudly instead of being silently
+    /// dropped (which would return rows in an unintended order).
     pub fn order_match_results(
         &self,
         results: &mut [MatchResult],
         order_by: &str,
         descending: bool,
-    ) {
+    ) -> Result<()> {
         match order_by {
             "similarity()" | "similarity" => {
                 results.sort_unstable_by(|a, b| {
                     let cmp = a.score.unwrap_or(0.0).total_cmp(&b.score.unwrap_or(0.0));
                     Self::apply_direction(cmp, descending)
                 });
+                Ok(())
             }
             "depth" => {
                 results.sort_unstable_by(|a, b| {
                     Self::apply_direction(a.depth.cmp(&b.depth), descending)
                 });
+                Ok(())
             }
             _ => self.order_match_results_by_property(results, order_by, descending),
         }
@@ -450,17 +459,24 @@ impl Collection {
         }
     }
 
-    /// ORDER BY a property path (e.g. `n.name`); warns and leaves order
-    /// unchanged when the expression is not a recognized property path.
+    /// ORDER BY a property path (e.g. `n.name`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::GraphNotSupported`] (VELES-018) when the
+    /// expression is not a valid `alias.property` path, so an unsupported
+    /// clause is reported instead of leaving the results unordered.
     fn order_match_results_by_property(
         &self,
         results: &mut [MatchResult],
         order_by: &str,
         descending: bool,
-    ) {
+    ) -> Result<()> {
         let Some((alias, property)) = parse_property_path(order_by) else {
-            tracing::warn!("Unsupported MATCH ORDER BY expression '{}'", order_by);
-            return;
+            return Err(crate::error::Error::GraphNotSupported(format!(
+                "MATCH ORDER BY expression '{order_by}' is not supported \
+                 (use similarity(), depth, or alias.property)"
+            )));
         };
         let payload_storage = self.payload_storage.read();
         results.sort_unstable_by(|a, b| {
@@ -476,6 +492,7 @@ impl Collection {
             let cmp = super::super::compare_json_values(a_value.as_ref(), b_value.as_ref());
             Self::apply_direction(cmp, descending)
         });
+        Ok(())
     }
 
     /// Converts `MatchResults` to `SearchResults` for unified API (EPIC-045 US-002).

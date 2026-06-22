@@ -196,7 +196,8 @@ impl Collection {
         let mut sorted = match_results;
         if let Some(order_by) = match_clause.return_clause.order_by.as_ref() {
             for item in order_by.iter().rev() {
-                self.order_match_results(&mut sorted, &item.expression, item.descending);
+                self.order_match_results(&mut sorted, &item.expression, item.descending)
+                    .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
             }
         }
 

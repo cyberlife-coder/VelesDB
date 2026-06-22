@@ -240,7 +240,11 @@ grammar and parser; queries that violate them are rejected at parse time.
 - **`WHERE`** filtering, including `similarity(node.embedding, $param)`.
 - **`RETURN`** of: an alias (`a`), a property access (`a.title`), `*`, or the
   zero-argument `similarity()` pseudo-function — each optionally `AS`-aliased.
-- **`ORDER BY`** (including `ORDER BY similarity() DESC`) and **`LIMIT`**.
+- **`ORDER BY`** — the supported expressions are the zero-arg `similarity()`,
+  `depth`, or a valid `alias.property` path (e.g. `ORDER BY similarity() DESC`).
+  Any other ORDER BY expression is rejected with error `VELES-018` rather than
+  being silently ignored.
+- **`LIMIT`**.
 - **Cross-collection payload enrichment** via `alias@collection` (see above).
 
 ### Not supported

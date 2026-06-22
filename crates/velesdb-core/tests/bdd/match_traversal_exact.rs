@@ -286,3 +286,36 @@ fn test_not_match_outgoing_friend_complement_set() {
         "node 1 is the only FRIEND source; its complement is {{2,3,4,5}}"
     );
 }
+
+/// GIVEN the fixed graph
+/// WHEN matching `(a:Start)-[:KNOWS*1..3]->(c) RETURN c ORDER BY c.name DESC`
+/// THEN the supported `alias.property` ORDER BY still SORTS the terminal nodes
+///      (2:B, 3:C, 4:D) by name descending -> D, C, B. Regression guard for the
+///      VELES-018 fix: a supported ORDER BY must keep working, not error.
+#[test]
+fn test_match_order_by_property_still_sorts_through_bare_match() {
+    let (_dir, db) = create_test_db();
+    setup_social_graph(&db);
+
+    let results = run(
+        &db,
+        "MATCH (a:Start)-[:KNOWS*1..3]->(c) RETURN c ORDER BY c.name DESC LIMIT 10",
+    );
+
+    let names: Vec<String> = results
+        .iter()
+        .filter_map(|r| {
+            r.point
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+    assert_eq!(
+        names,
+        vec!["D".to_string(), "C".to_string(), "B".to_string()],
+        "terminal nodes 2,3,4 ordered by name DESC are D, C, B"
+    );
+}
