@@ -581,7 +581,7 @@ mod tests {
     fn sparse_parallel_accepts_max_nnz() {
         let n = MAX_SPARSE_NNZ;
         let sv = SparseVectorInput::Parallel {
-            indices: (0..n as u32).collect(),
+            indices: (0..u32::try_from(n).unwrap()).collect(),
             values: vec![1.0f32; n],
         }
         .into_sparse_vector();
