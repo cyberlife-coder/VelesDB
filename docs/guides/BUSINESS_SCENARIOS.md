@@ -158,6 +158,11 @@ LIMIT 5
 ## Multi-Vector Fusion Search (NEAR_FUSED)
 **Goal:** Search using multiple query vectors simultaneously with intelligent result fusion
 
+> ⚠️ **`NEAR_FUSED` is not executable via VelesQL.** The SQL form below parses
+> but is rejected at validation with error `V012`. Perform multi-vector fusion
+> through the `multi_query_search` engine API (Rust/SDK) instead; the SQL
+> snippets here illustrate the intended shape only.
+
 ```sql
 -- Multi-modal search: combine text + image embeddings
 SELECT * FROM products

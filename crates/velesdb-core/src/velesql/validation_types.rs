@@ -126,6 +126,9 @@ pub enum ValidationErrorKind {
     /// missing, or whose implicit binding to the FROM rows violates a guard
     /// (G1 inverted direction, G2 cross-predicate alias, G3 @collection).
     GraphMatchAnchorMismatch,
+    /// `NEAR_FUSED` multi-vector fusion used via the SQL surface; parsed but not
+    /// executable (it would silently degrade to an unranked full scan).
+    NearFusedNotExecutable,
 }
 
 impl ValidationErrorKind {
@@ -144,6 +147,7 @@ impl ValidationErrorKind {
             Self::InvalidLetBinding => "V009",
             Self::SubqueryNotExecutable => "V010",
             Self::GraphMatchAnchorMismatch => "V011",
+            Self::NearFusedNotExecutable => "V012",
         }
     }
 
@@ -168,6 +172,9 @@ impl ValidationErrorKind {
             Self::SubqueryNotExecutable => "Subqueries are parsed but not yet executable",
             Self::GraphMatchAnchorMismatch => {
                 "MATCH predicate anchor must be an alias declared in FROM/JOIN"
+            }
+            Self::NearFusedNotExecutable => {
+                "NEAR_FUSED multi-vector fusion is not executable via VelesQL"
             }
         }
     }

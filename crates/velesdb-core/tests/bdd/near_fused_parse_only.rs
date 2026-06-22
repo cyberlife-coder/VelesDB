@@ -1,24 +1,21 @@
-//! BDD tests locking the `NEAR_FUSED` parse-only no-op and contrasting it with
+//! BDD tests for the two `NEAR_FUSED` surfaces: the rejected SQL surface and
 //! the engine-level multi-vector fusion API.
 //!
 //! Contract under test (two surfaces):
 //!
-//! 1. **VelesQL `NEAR_FUSED` is parse-only.** The grammar
-//!    (`grammar.pest` `vector_fused_search`) and parser
+//! 1. **VelesQL `NEAR_FUSED` parses but is REJECTED at validation (V012).** The
+//!    grammar (`grammar.pest` `vector_fused_search`) and parser
 //!    (`condition_vectors.rs::parse_vector_fused_search`) accept
 //!    `vector NEAR_FUSED [[..],[..]] [USING FUSION ...]` and build a
-//!    `Condition::VectorFusedSearch`, but execution NEVER fuses on it:
-//!    - `extraction.rs::extract_vector_search` has no `VectorFusedSearch` arm
-//!      (`_ => Ok(None)`), so no query vector is ever extracted from it.
-//!    - `where_eval.rs:214` treats `VectorFusedSearch(_) => Ok(true)`, i.e. an
-//!      always-true predicate.
-//!    The net effect: a `SELECT ... WHERE vector NEAR_FUSED [...]` is an
-//!    unranked full scan returning every row, NOT a fusion ranking. These tests
-//!    LOCK that behavior; if `NEAR_FUSED` is ever wired to real fusion they must
-//!    be updated.
+//!    `Condition::VectorFusedSearch`, but it has NO executor: left unchecked it
+//!    would silently degrade to an unranked full scan
+//!    (`extraction.rs::extract_vector_search` extracts no query vector;
+//!    `where_eval.rs` treats `VectorFusedSearch(_)` as always-true). Rather than
+//!    return wrong rows, `validation.rs::reject_near_fused` rejects it with V012.
+//!    The full reject contract lives in `velesql_reject_conformance.rs`.
 //!
-//! 2. **Multi-vector fusion is engine-API-only.** The same fusion that
-//!    `NEAR_FUSED` *looks* like it should perform is reachable solely through
+//! 2. **Multi-vector fusion is engine-API-only.** The fusion that `NEAR_FUSED`
+//!    *looks* like it should perform is reachable solely through
 //!    `VectorCollection::multi_query_search`, which DOES fuse.
 
 use velesdb_core::{Database, FusionStrategy, Point};
@@ -74,66 +71,23 @@ fn near_fused_empty_array_is_parse_error() {
     );
 }
 
-/// LOCK (the core no-op): a two-vector `NEAR_FUSED` query is an UNRANKED FULL
-/// SCAN, not a fusion ranking — it returns every stored row because
-/// `where_eval.rs:214` evaluates `VectorFusedSearch(_) => Ok(true)` and
-/// `extraction.rs` extracts no query vector from it. Ground truth: with 3
-/// stored points {1,2,3}, the result id-set is exactly {1,2,3}.
-/// CORRECT behavior would be a fused ranking over the two query vectors;
-/// update this test if `NEAR_FUSED` is ever wired to real fusion.
+/// REJECT (V012): a `NEAR_FUSED` query run through the SQL pipeline is now
+/// rejected at validation rather than silently degrading to an unranked full
+/// scan (which would return wrong rows). Ground truth: `execute_sql` returns
+/// Err whose message carries the V012 marker. The full reject contract — incl.
+/// the USING FUSION variant — lives in `velesql_reject_conformance.rs`.
 #[test]
-fn near_fused_returns_unranked_full_scan() {
+fn near_fused_via_sql_is_rejected_v012() {
     let (_dir, db) = create_test_db();
     setup_nf(&db, "nf");
-    let results = super::helpers::execute_sql(
+    let err = super::helpers::execute_sql(
         &db,
         "SELECT * FROM nf WHERE vector NEAR_FUSED [[1.0,0.0],[0.0,1.0]] LIMIT 10",
     )
-    .expect("test: execute NEAR_FUSED query");
-    assert_eq!(
-        result_ids(&results),
-        [1u64, 2, 3].into_iter().collect(),
-        "NEAR_FUSED is parse-only: must return all rows as an unranked scan"
-    );
-}
-
-/// LOCK: the parse-only no-op is independent of the `USING FUSION` clause —
-/// supplying `USING FUSION 'rrf'` changes nothing; it is still an unranked
-/// full scan over all rows. Ground truth: result id-set is exactly {1,2,3}.
-#[test]
-fn near_fused_with_using_fusion_clause_still_no_op() {
-    let (_dir, db) = create_test_db();
-    setup_nf(&db, "nf_using");
-    let results = super::helpers::execute_sql(
-        &db,
-        "SELECT * FROM nf_using WHERE vector NEAR_FUSED [[1.0,0.0],[0.0,1.0]] \
-         USING FUSION 'rrf' LIMIT 10",
-    )
-    .expect("test: execute NEAR_FUSED USING FUSION query");
-    assert_eq!(
-        result_ids(&results),
-        [1u64, 2, 3].into_iter().collect(),
-        "USING FUSION does not activate fusion: NEAR_FUSED remains a no-op scan"
-    );
-}
-
-/// LOCK: because `NEAR_FUSED` contributes no ranking, the query is sensitive
-/// ONLY to the scan's row set and `LIMIT`, never to the query vectors. A
-/// completely different pair of query vectors yields the SAME id-set as the
-/// scan above. Ground truth: result id-set is exactly {1,2,3}.
-#[test]
-fn near_fused_ignores_query_vectors() {
-    let (_dir, db) = create_test_db();
-    setup_nf(&db, "nf_ignore");
-    let results = super::helpers::execute_sql(
-        &db,
-        "SELECT * FROM nf_ignore WHERE vector NEAR_FUSED [[0.123,0.999],[0.5,0.5]] LIMIT 10",
-    )
-    .expect("test: execute NEAR_FUSED with unrelated vectors");
-    assert_eq!(
-        result_ids(&results),
-        [1u64, 2, 3].into_iter().collect(),
-        "NEAR_FUSED ranking is a no-op: arbitrary query vectors return the same scan"
+    .expect_err("test: NEAR_FUSED via SQL must be rejected, not a no-op scan");
+    assert!(
+        err.to_string().contains("V012"),
+        "expected V012 NearFusedNotExecutable, got: {err}"
     );
 }
 

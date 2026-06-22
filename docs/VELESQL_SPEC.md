@@ -35,7 +35,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | NOW() / INTERVAL temporal | Stable | 2.1 |
 | MATCH graph traversal | Stable | 2.1 |
 | SPARSE_NEAR sparse vector search | Stable | 2.2 |
-| NEAR_FUSED multi-vector fusion | Stable | 2.2 |
+| NEAR_FUSED multi-vector fusion | Parsed, rejected in SQL (V012); engine API only | 2.2 |
 | TRAIN QUANTIZER command | Stable | 2.2 |
 | ORDER BY arithmetic scoring | Stable | 3.0 |
 | LET score bindings | Stable | 3.2 |
@@ -736,11 +736,19 @@ with MaxScore DAAT for efficient top-K retrieval.
 
 ### Multi-Vector Fusion (NEAR_FUSED, v2.2+)
 
+> ⚠️ **Parsed but rejected in SQL (V012).** `NEAR_FUSED` is accepted by the
+> grammar but is **not executable via VelesQL** — it is rejected at validation
+> with error `V012` (left unchecked it would silently degrade to an unranked
+> full scan). Multi-vector fusion is available through the `multi_query_search`
+> engine API; for dense + sparse hybrid search use `USING FUSION` (above).
+
 `NEAR_FUSED` combines multiple embedding vectors into a single similarity search
-using a fusion strategy. Useful for multi-modal search (text + image embeddings)
-or ensemble approaches.
+using a fusion strategy (multi-modal or ensemble search). The syntax below
+**parses but is rejected at execution**:
 
 ```sql
+-- NOTE: the NEAR_FUSED examples below PARSE but are REJECTED at validation with
+-- error V012 — use the multi_query_search engine API for real fusion.
 -- Two-vector fusion with RRF
 SELECT * FROM products
 WHERE vector NEAR_FUSED [$text_emb, $image_emb]

@@ -46,6 +46,10 @@ impl QueryValidator {
         // clause (SELECT, compound operands, or DML) before further validation.
         reject_subqueries(query)?;
 
+        // NEAR_FUSED parses but is not executable via SQL (it would silently
+        // degrade to a full scan); reject it in any WHERE clause.
+        reject_near_fused(query)?;
+
         // Non-SELECT statements: only check LET bindings.
         if !requires_select_validation(query) {
             return reject_let_on_non_select(query);
@@ -518,6 +522,29 @@ fn reject_subqueries(query: &Query) -> Result<(), ValidationError> {
             "subquery",
             "Compute the value separately and pass it as a literal or $parameter, \
              or rewrite the predicate without a subquery",
+        ));
+    }
+    Ok(())
+}
+
+/// Rejects `NEAR_FUSED` used via the SQL surface (V012).
+///
+/// `NEAR_FUSED` parses into a `VectorFusedSearch` condition but has no executor:
+/// left unchecked it silently degrades to an unranked full scan that ignores the
+/// query vectors and the `USING FUSION` clause. Reject it in any WHERE clause so
+/// callers get a clear error plus the working alternative (the
+/// `multi_query_search` engine API) instead of wrong rows.
+fn reject_near_fused(query: &Query) -> Result<(), ValidationError> {
+    if where_clauses(query)
+        .into_iter()
+        .any(Condition::has_vector_fused_search)
+    {
+        return Err(ValidationError::new(
+            ValidationErrorKind::NearFusedNotExecutable,
+            None,
+            "NEAR_FUSED",
+            "Use the multi_query_search engine API for multi-vector fusion, \
+             or combine dense + sparse vectors via USING FUSION",
         ));
     }
     Ok(())

@@ -282,6 +282,37 @@ impl Condition {
         }
     }
 
+    /// Returns `true` if this condition (or any nested sub-condition) contains a
+    /// `NEAR_FUSED` multi-vector fused search.
+    ///
+    /// `NEAR_FUSED` parses into [`Self::VectorFusedSearch`] but is not executable
+    /// via VelesQL (it would silently degrade to an unranked full scan), so
+    /// validation rejects it with V012.
+    #[must_use]
+    pub fn has_vector_fused_search(&self) -> bool {
+        match self {
+            Self::VectorFusedSearch(_) => true,
+            Self::And(l, r) | Self::Or(l, r) => {
+                l.has_vector_fused_search() || r.has_vector_fused_search()
+            }
+            Self::Group(inner) | Self::Not(inner) => inner.has_vector_fused_search(),
+            Self::VectorSearch(_)
+            | Self::SparseVectorSearch(_)
+            | Self::Contains(_)
+            | Self::ContainsText(_)
+            | Self::Comparison(_)
+            | Self::In(_)
+            | Self::Between(_)
+            | Self::Like(_)
+            | Self::IsNull(_)
+            | Self::Match(_)
+            | Self::GraphMatch(_)
+            | Self::Similarity(_)
+            | Self::GeoDistance(_)
+            | Self::GeoBbox(_) => false,
+        }
+    }
+
     /// Returns `true` if this condition (or any nested sub-condition) compares
     /// against a subquery value.
     ///
