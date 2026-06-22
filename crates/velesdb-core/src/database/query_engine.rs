@@ -214,7 +214,8 @@ impl Database {
 
         let plan = self.explain_query(query)?;
         let start = std::time::Instant::now();
-        let (results, nodes_visited, edges_traversed) = self.execute_query_counted(query, params)?;
+        let (results, nodes_visited, edges_traversed) =
+            self.execute_query_counted(query, params)?;
         let elapsed = start.elapsed();
 
         let actual_rows = results.len() as u64;

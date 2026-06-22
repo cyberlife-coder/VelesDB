@@ -176,7 +176,9 @@ fn test_alter_collection_set_auto_reindex_succeeds() {
         .expect("ALTER COLLECTION SET auto_reindex must succeed");
     assert!(results.is_empty(), "ALTER returns no rows");
 
-    let vc = db.get_vector_collection("alter_test").expect("get collection");
+    let vc = db
+        .get_vector_collection("alter_test")
+        .expect("get collection");
     assert!(
         vc.auto_reindex_manager().is_some_and(|m| m.is_enabled()),
         "auto_reindex must be attached and enabled after ALTER"

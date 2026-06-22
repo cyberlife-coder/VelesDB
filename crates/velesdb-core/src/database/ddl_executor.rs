@@ -392,8 +392,8 @@ fn apply_alter_option(collection: &Collection, key: &str, value: &str) -> Result
 fn apply_auto_reindex(collection: &Collection, enabled: bool) {
     let mut cfg = collection.config().auto_reindex_config.unwrap_or_default();
     cfg.enabled = enabled;
-    let manager = std::sync::Arc::new(
-        crate::collection::auto_reindex::AutoReindexManager::new(cfg),
-    );
+    let manager = std::sync::Arc::new(crate::collection::auto_reindex::AutoReindexManager::new(
+        cfg,
+    ));
     collection.attach_auto_reindex(manager);
 }

@@ -287,8 +287,12 @@ fn scenario_match_unsupported_order_by_expression_rejected() {
     // applied. It must be rejected (VELES-018) rather than silently ignored.
     let mut params = std::collections::HashMap::new();
     params.insert("_collection".to_string(), json!("kgdocs"));
-    let err = execute_sql_with_params(&db, "MATCH (d:Doc) RETURN d.name ORDER BY d LIMIT 3", &params)
-        .expect_err("test: unsupported MATCH ORDER BY expression must be rejected");
+    let err = execute_sql_with_params(
+        &db,
+        "MATCH (d:Doc) RETURN d.name ORDER BY d LIMIT 3",
+        &params,
+    )
+    .expect_err("test: unsupported MATCH ORDER BY expression must be rejected");
     assert!(
         err.to_string().contains("VELES-018"),
         "expected VELES-018 graph-not-supported code, got: {err}"

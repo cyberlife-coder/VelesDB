@@ -322,16 +322,19 @@ fn test_explain_analyze_match_edges_traversed_exceed_rows() {
 
     // Nodes 1..4 are :Person; node 5 is :Other (filtered by the (b:Person) end).
     for id in 1..=4u64 {
-        gc.upsert_node_payload(id, &json!({"_labels": ["Person"], "name": format!("p{id}")}))
-            .expect("test: upsert person node");
+        gc.upsert_node_payload(
+            id,
+            &json!({"_labels": ["Person"], "name": format!("p{id}")}),
+        )
+        .expect("test: upsert person node");
     }
     gc.upsert_node_payload(5, &json!({"_labels": ["Other"], "name": "x"}))
         .expect("test: upsert other node");
 
     // Node 1 fans out to 2, 3, 4 (Person) and 5 (Other), all via KNOWS.
     for (eid, dst) in [(1u64, 2u64), (2, 3), (3, 4), (4, 5)] {
-        let edge = velesdb_core::GraphEdge::new(eid, 1, dst, "KNOWS")
-            .expect("test: create fan-out edge");
+        let edge =
+            velesdb_core::GraphEdge::new(eid, 1, dst, "KNOWS").expect("test: create fan-out edge");
         gc.add_edge(edge).expect("test: add fan-out edge");
     }
 
@@ -348,7 +351,10 @@ fn test_explain_analyze_match_edges_traversed_exceed_rows() {
 
     // 4 edges followed from node 1; only 3 reach a :Person target (5 is :Other).
     assert_eq!(stats.actual_rows, 3, "three (a)-[:KNOWS]->(b:Person) pairs");
-    assert_eq!(stats.edges_traversed, 4, "all four KNOWS edges are followed");
+    assert_eq!(
+        stats.edges_traversed, 4,
+        "all four KNOWS edges are followed"
+    );
     assert!(
         stats.edges_traversed > stats.actual_rows,
         "edges_traversed must exceed actual_rows (real count, not a proxy)"
@@ -377,5 +383,8 @@ fn test_explain_analyze_select_reports_zero_traversal_counters() {
     .expect("test: actual_stats should be Some");
 
     assert_eq!(stats.nodes_visited, 0, "SELECT performs no graph traversal");
-    assert_eq!(stats.edges_traversed, 0, "SELECT performs no graph traversal");
+    assert_eq!(
+        stats.edges_traversed, 0,
+        "SELECT performs no graph traversal"
+    );
 }

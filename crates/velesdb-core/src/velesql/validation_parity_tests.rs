@@ -120,7 +120,10 @@ mod tests {
         // the multi-similarity-in-OR rule, so a single fused search still passes
         // IT — the two validators are intentionally orthogonal here.
         let err = QueryValidator::validate(&query).expect_err("NEAR_FUSED must be rejected (V012)");
-        assert!(err.to_string().contains("V012"), "expected V012, got: {err}");
+        assert!(
+            err.to_string().contains("V012"),
+            "expected V012, got: {err}"
+        );
         assert!(
             crate::collection::Collection::validate_similarity_query_structure(&condition).is_ok()
         );
