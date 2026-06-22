@@ -744,6 +744,10 @@ vector runs its own search and the rankings are fused. `USING FUSION 'rrf'`
 fall back to RRF. An optional `AND <metadata>` predicate is applied as a
 pre-fusion filter.
 
+`NEAR_FUSED` must be the **only vector predicate** in the `WHERE`: combining it
+with `OR`/`NOT`, or with another `NEAR` / `similarity()` / `SPARSE_NEAR`, is
+rejected (it can only be `AND`-ed with a metadata filter).
+
 ```sql
 -- Two-vector fusion with RRF
 SELECT * FROM products

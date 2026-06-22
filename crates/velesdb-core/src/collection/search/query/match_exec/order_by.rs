@@ -73,8 +73,13 @@ impl Collection {
     /// Sorts by `similarity(field, $v)`: each bound node's vector vs the resolved
     /// query vector under the collection's configured metric.
     ///
-    /// Reads the metric before taking the vector-storage lock (config precedes
-    /// vector_storage in the lock order; see `CONCURRENCY_MODEL.md`).
+    /// The per-node key is normalized so a LARGER key always means "more
+    /// similar" — distance metrics (lower = closer, `!higher_is_better`) are
+    /// negated — so `DESC` is most-similar-first regardless of metric, matching
+    /// the SELECT-side `ORDER BY similarity()`. A node with a missing/mismatched
+    /// vector sorts as least similar. The metric is read before the
+    /// vector-storage lock (config precedes vector_storage in the lock order;
+    /// see `CONCURRENCY_MODEL.md`).
     fn sort_match_by_similarity(
         &self,
         results: &mut [MatchResult],
@@ -84,20 +89,22 @@ impl Collection {
     ) -> Result<()> {
         let query_vector = Self::resolve_vector(&sim.vector, params)?;
         let metric = self.config.read().metric;
+        let higher_is_better = metric.higher_is_better();
         let vector_storage = self.vector_storage.read();
         results.sort_unstable_by(|a, b| {
             let score = |r: &MatchResult| -> f32 {
-                vector_storage
-                    .retrieve(r.node_id)
-                    .ok()
-                    .flatten()
-                    .map_or(0.0, |v| {
-                        if v.len() == query_vector.len() && !v.is_empty() {
-                            metric.calculate(&v, &query_vector)
-                        } else {
-                            0.0
-                        }
-                    })
+                let Some(v) = vector_storage.retrieve(r.node_id).ok().flatten() else {
+                    return f32::NEG_INFINITY;
+                };
+                if v.len() != query_vector.len() || v.is_empty() {
+                    return f32::NEG_INFINITY;
+                }
+                let raw = metric.calculate(&v, &query_vector);
+                if higher_is_better {
+                    raw
+                } else {
+                    -raw
+                }
             };
             Self::apply_direction(score(a).total_cmp(&score(b)), descending)
         });

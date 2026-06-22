@@ -335,6 +335,27 @@ pub struct ActualStats {
     pub edges_traversed: u64,
 }
 
+impl ActualStats {
+    /// Builds `ActualStats` from a counted execution: result-row count, measured
+    /// wall-clock duration, and the graph-traversal counters (`loops` is always
+    /// 1). Shared by the Database- and Collection-level EXPLAIN ANALYZE paths.
+    #[must_use]
+    pub fn from_counted(
+        actual_rows: u64,
+        elapsed: std::time::Duration,
+        nodes_visited: u64,
+        edges_traversed: u64,
+    ) -> Self {
+        Self {
+            actual_rows,
+            actual_time_ms: elapsed.as_secs_f64() * 1000.0,
+            loops: 1,
+            nodes_visited,
+            edges_traversed,
+        }
+    }
+}
+
 /// Per-plan-node **estimated** execution statistics.
 ///
 /// All values in this struct are synthetic heuristics derived from the

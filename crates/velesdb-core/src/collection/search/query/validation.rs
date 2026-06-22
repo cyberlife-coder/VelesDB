@@ -53,6 +53,25 @@ impl Collection {
             ));
         }
 
+        // NEAR_FUSED routes to the multi-vector fusion executor, which can only
+        // honor a single fused predicate optionally AND-ed with a metadata
+        // filter. Reject shapes it cannot execute — more than one fused, a fused
+        // mixed with NEAR / similarity() / SPARSE_NEAR, or a fused under OR/NOT —
+        // so the fused vectors are never silently dropped to a non-fused scan.
+        let fused_count =
+            count_matching_leaves(condition, |c| matches!(c, Condition::VectorFusedSearch(_)));
+        if fused_count > 0
+            && (fused_count > 1
+                || similarity_count > fused_count
+                || fused_under_or_or_not(condition))
+        {
+            return Err(Error::Config(
+                "NEAR_FUSED must be the only vector predicate and cannot appear under OR/NOT; \
+                 combine it only with AND <metadata filter>."
+                    .to_string(),
+            ));
+        }
+
         // EPIC-044 US-002: similarity() OR metadata IS now supported (union mode)
         // Only block when multiple similarity() are in OR (handled above)
 
@@ -133,6 +152,19 @@ impl Collection {
                 )
         }) > 0
     }
+}
+
+/// True if any `NEAR_FUSED` leaf sits under an `OR` or `NOT`, where the fusion
+/// executor (which only walks AND/Group) would not reach it.
+fn fused_under_or_or_not(condition: &Condition) -> bool {
+    fn has_fused(c: &Condition) -> bool {
+        count_matching_leaves(c, |x| matches!(x, Condition::VectorFusedSearch(_))) > 0
+    }
+    any_subtree(condition, &|c| match c {
+        Condition::Or(l, r) => has_fused(l) || has_fused(r),
+        Condition::Not(inner) => has_fused(inner),
+        _ => false,
+    })
 }
 
 #[cfg(test)]

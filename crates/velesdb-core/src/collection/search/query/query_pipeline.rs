@@ -378,22 +378,9 @@ impl Collection {
         let plan = QueryPlan::from_query(query);
 
         let start = std::time::Instant::now();
-        let (results, nodes_visited, edges_traversed) =
-            self.execute_query_counted(query, params)?;
-        let elapsed = start.elapsed();
-
-        let actual_rows = results.len() as u64;
-        let actual_time_ms = elapsed.as_secs_f64() * 1000.0;
-
-        let stats = ActualStats {
-            actual_rows,
-            actual_time_ms,
-            loops: 1,
-            nodes_visited,
-            edges_traversed,
-        };
-
-        let node_stats = build_leaf_node_stats(&plan.root, actual_rows, actual_time_ms);
+        let (results, nodes, edges) = self.execute_query_counted(query, params)?;
+        let stats = ActualStats::from_counted(results.len() as u64, start.elapsed(), nodes, edges);
+        let node_stats = build_leaf_node_stats(&plan.root, stats.actual_rows, stats.actual_time_ms);
         let mut output = ExplainOutput::with_stats(plan, stats, node_stats);
 
         // Issue #469 Phase 2: attach EMA-calibrated ms_per_cost_unit if the

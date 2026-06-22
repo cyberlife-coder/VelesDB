@@ -190,3 +190,43 @@ fn multi_query_search_returns_ranking_not_scan() {
         "all three points are retrieved across the two branches"
     );
 }
+
+// ============================================================================
+// Isolation contract — NEAR_FUSED must be the sole vector predicate
+// ============================================================================
+
+/// NEAR_FUSED under OR is rejected (not silently degraded to a metadata scan
+/// that drops the fused vectors — the defect the executor cannot honor).
+#[test]
+fn near_fused_under_or_is_rejected() {
+    let (_dir, db) = create_test_db();
+    setup_nf(&db, "nf_or");
+    let err = execute_sql(
+        &db,
+        "SELECT * FROM nf_or WHERE vector NEAR_FUSED [[0.8,0.6],[0.6,0.8]] OR content = 'x' LIMIT 3",
+    )
+    .expect_err("test: NEAR_FUSED under OR must be rejected");
+    assert!(
+        err.to_string()
+            .contains("NEAR_FUSED must be the only vector predicate"),
+        "expected isolation reject, got: {err}"
+    );
+}
+
+/// NEAR mixed with NEAR_FUSED is rejected (not silently dropping the NEAR leg).
+#[test]
+fn near_fused_mixed_with_near_is_rejected() {
+    let (_dir, db) = create_test_db();
+    setup_nf(&db, "nf_mix");
+    let err = execute_sql(
+        &db,
+        "SELECT * FROM nf_mix WHERE vector NEAR [1.0,0.0] \
+         AND vector NEAR_FUSED [[0.8,0.6],[0.6,0.8]] LIMIT 3",
+    )
+    .expect_err("test: NEAR + NEAR_FUSED must be rejected");
+    assert!(
+        err.to_string()
+            .contains("NEAR_FUSED must be the only vector predicate"),
+        "expected isolation reject, got: {err}"
+    );
+}

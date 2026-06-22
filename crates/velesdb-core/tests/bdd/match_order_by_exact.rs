@@ -106,3 +106,51 @@ fn scenario_match_order_by_arithmetic_asc_reverses() {
     );
     assert_eq!(ids, vec![1u64, 3, 2], "ORDER BY year - 2000 ASC");
 }
+
+#[test]
+fn scenario_match_order_by_similarity_field_vec_sorts_euclidean() {
+    // On a DISTANCE metric (Euclidean: lower = more similar), `similarity(...) DESC`
+    // must still be most-similar-first — the metric direction is honored.
+    let (_dir, db) = create_test_db();
+    db.create_vector_collection("edist", 2, velesdb_core::DistanceMetric::Euclidean)
+        .expect("test: create edist");
+    let vc = db.get_vector_collection("edist").expect("test: get edist");
+    vc.upsert(vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0],
+            Some(json!({"_labels": ["Doc"], "name": "A"})),
+        ),
+        Point::new(
+            2,
+            vec![0.0, 1.0],
+            Some(json!({"_labels": ["Doc"], "name": "B"})),
+        ),
+        Point::new(
+            3,
+            vec![0.7, 0.7],
+            Some(json!({"_labels": ["Doc"], "name": "C"})),
+        ),
+    ])
+    .expect("test: upsert edist");
+
+    // Distances to [1,0]: id1=0, id3≈0.76, id2≈1.41 → DESC (most similar first)
+    // = id1, id3, id2. The pre-fix raw-distance sort would invert this.
+    let mut params = HashMap::new();
+    params.insert("_collection".to_string(), json!("edist"));
+    params.insert("v".to_string(), json!([1.0_f32, 0.0]));
+    let ids: Vec<u64> = execute_sql_with_params(
+        &db,
+        "MATCH (d:Doc) RETURN d.name ORDER BY similarity(embedding, $v) DESC LIMIT 10",
+        &params,
+    )
+    .expect("test: execute Euclidean similarity ORDER BY")
+    .iter()
+    .map(|r| r.point.id)
+    .collect();
+    assert_eq!(
+        ids,
+        vec![1u64, 3, 2],
+        "Euclidean similarity DESC must be most-similar-first"
+    );
+}
