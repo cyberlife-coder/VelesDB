@@ -23,10 +23,9 @@ SemVer impact before the next release.
 ### Fixed
 - **`EXPLAIN ANALYZE` reports real graph traversal counters.** `nodes_visited`
   and `edges_traversed` for `MATCH` queries were a fabricated proxy equal to the
-  result-row count; they now report the measured walk counts (`edges_traversed`
-  = edges followed, `nodes_visited` = start nodes examined + nodes reached) for
-  the GraphFirst execution strategy. A similarity-anchored (VectorFirst) MATCH
-  validates candidates with a bounded existence check and reports `0`; non-graph
+  result-row count; they now report the measured walk — edges followed and nodes
+  reached — across all MATCH strategies (GraphFirst walk; VectorFirst candidate
+  evaluation + per-candidate existence-BFS; Parallel sums both legs). Non-graph
   queries report `0/0`. The REST/OpenAPI response shape is unchanged.
   *(Behavior change: the reported counter values change.)*
 - **`MATCH ... ORDER BY` of an unsupported expression now errors (VELES-018).**

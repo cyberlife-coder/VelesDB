@@ -140,15 +140,16 @@ impl QueryContext {
         self.memory_used.load(Ordering::Relaxed)
     }
 
-    /// Records the graph-traversal counters measured during MATCH execution.
+    /// Accumulates graph-traversal counters measured during MATCH execution.
     ///
-    /// Called once per MATCH execution so EXPLAIN ANALYZE can report real
-    /// `nodes_visited` / `edges_traversed` instead of a result-row proxy.
-    pub fn record_traversal(&self, nodes_visited: u64, edges_traversed: u64) {
+    /// Uses `fetch_add` so multiple traversal phases compose: a multi-pattern
+    /// MATCH, and the `GraphFirst` + `VectorFirst` legs of the Parallel
+    /// strategy, each add their own counts. Read back by EXPLAIN ANALYZE.
+    pub fn add_traversal(&self, nodes_visited: u64, edges_traversed: u64) {
         self.traversal_nodes_visited
-            .store(nodes_visited, Ordering::Relaxed);
+            .fetch_add(nodes_visited, Ordering::Relaxed);
         self.traversal_edges_traversed
-            .store(edges_traversed, Ordering::Relaxed);
+            .fetch_add(edges_traversed, Ordering::Relaxed);
     }
 
     /// Returns graph nodes visited during MATCH traversal (0 if no traversal ran).

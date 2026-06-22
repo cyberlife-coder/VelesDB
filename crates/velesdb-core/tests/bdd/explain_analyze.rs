@@ -392,12 +392,12 @@ fn test_explain_analyze_select_reports_zero_traversal_counters() {
 /// GIVEN a similarity-anchored MATCH (a `similarity()` predicate on the start
 ///       node), which the planner executes via the VectorFirst strategy
 /// WHEN `explain_analyze_query`
-/// THEN it executes (rows > 0) but reports `0/0` graph counters — VectorFirst
-///      validates candidates with a bounded existence check that is not
-///      instrumented (documented limitation). This pins that behavior so it
-///      cannot silently drift (and confirms the query is VectorFirst-planned).
+/// THEN it executes (rows > 0) AND reports real graph counters (> 0) —
+///      VectorFirst counts the candidate nodes it evaluates plus the
+///      per-candidate existence-BFS hits. Confirms the query is
+///      VectorFirst-planned and that the strategy is instrumented.
 #[test]
-fn test_explain_analyze_vector_first_match_reports_zero_traversal_counters() {
+fn test_explain_analyze_vector_first_match_reports_real_traversal_counters() {
     let (_dir, db) = create_test_db();
     execute_sql(
         &db,
@@ -442,14 +442,14 @@ fn test_explain_analyze_vector_first_match_reports_zero_traversal_counters() {
         stats.actual_rows > 0,
         "VectorFirst MATCH returns node 1 (Document with a CITES edge)"
     );
-    // Documented limitation: the VectorFirst graph-existence check is not
-    // instrumented, so both counters are 0 (unlike GraphFirst).
-    assert_eq!(
-        stats.nodes_visited, 0,
-        "VectorFirst reports 0 nodes_visited (documented limitation)"
+    // VectorFirst now reports real counts: candidate nodes evaluated plus the
+    // per-candidate existence-BFS edges/nodes reached (was 0 before).
+    assert!(
+        stats.nodes_visited > 0,
+        "VectorFirst reports real nodes_visited (candidates + BFS-reached)"
     );
-    assert_eq!(
-        stats.edges_traversed, 0,
-        "VectorFirst reports 0 edges_traversed (documented limitation)"
+    assert!(
+        stats.edges_traversed > 0,
+        "VectorFirst reports real edges_traversed (BFS hits)"
     );
 }
