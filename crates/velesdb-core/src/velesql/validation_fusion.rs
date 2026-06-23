@@ -60,6 +60,25 @@ fn fusion_error(fragment: impl Into<String>, suggestion: impl Into<String>) -> V
     )
 }
 
+/// Rejects a negative weight pair, labelling the error with `strategy_label`
+/// and naming the offending `weights` (e.g. `"Weighted vector_weight/graph_weight"`).
+/// Generic over the weight float type (`dense`/`sparse` are `f32`,
+/// `vector`/`graph` are `f64`).
+fn reject_negative_pair<T: PartialOrd + Default + Copy>(
+    strategy_label: &str,
+    a: T,
+    b: T,
+    weights: &str,
+) -> Result<(), ValidationError> {
+    if a < T::default() || b < T::default() {
+        return Err(fusion_error(
+            strategy_label,
+            format!("USING FUSION {weights} must be non-negative"),
+        ));
+    }
+    Ok(())
+}
+
 /// Validates the USING FUSION clause (if any) against the WHERE condition.
 pub(super) fn validate_fusion(stmt: &SelectStatement) -> Result<(), ValidationError> {
     let mut counts = BranchCounts::default();
@@ -111,12 +130,12 @@ fn validate_fusion_weights(fc: &super::ast::FusionClause) -> Result<(), Validati
 fn validate_rsf_weights(fc: &super::ast::FusionClause) -> Result<(), ValidationError> {
     let dw = fc.dense_weight.unwrap_or(0.5);
     let sw = fc.sparse_weight.unwrap_or(0.5);
-    if dw < 0.0 || sw < 0.0 {
-        return Err(fusion_error(
-            "USING FUSION(strategy='rsf')",
-            "USING FUSION RSF dense_weight/sparse_weight must be non-negative",
-        ));
-    }
+    reject_negative_pair(
+        "USING FUSION(strategy='rsf')",
+        dw,
+        sw,
+        "RSF dense_weight/sparse_weight",
+    )?;
     if (dw + sw - 1.0).abs() > WEIGHT_SUM_EPSILON {
         return Err(fusion_error(
             "USING FUSION(strategy='rsf')",
@@ -140,20 +159,20 @@ fn validate_rsf_weights(fc: &super::ast::FusionClause) -> Result<(), ValidationE
 fn validate_weighted_weights(fc: &super::ast::FusionClause) -> Result<(), ValidationError> {
     let dw = fc.dense_weight.unwrap_or(0.5);
     let sw = fc.sparse_weight.unwrap_or(0.5);
-    if dw < 0.0 || sw < 0.0 {
-        return Err(fusion_error(
-            "USING FUSION(strategy='weighted')",
-            "USING FUSION Weighted dense_weight/sparse_weight must be non-negative",
-        ));
-    }
+    reject_negative_pair(
+        "USING FUSION(strategy='weighted')",
+        dw,
+        sw,
+        "Weighted dense_weight/sparse_weight",
+    )?;
     let vw = fc.vector_weight.unwrap_or(0.5);
     let gw = fc.graph_weight.unwrap_or(0.5);
-    if vw < 0.0 || gw < 0.0 {
-        return Err(fusion_error(
-            "USING FUSION(strategy='weighted')",
-            "USING FUSION Weighted vector_weight/graph_weight must be non-negative",
-        ));
-    }
+    reject_negative_pair(
+        "USING FUSION(strategy='weighted')",
+        vw,
+        gw,
+        "Weighted vector_weight/graph_weight",
+    )?;
     Ok(())
 }
 
