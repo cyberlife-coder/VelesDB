@@ -55,6 +55,13 @@ pub fn execute_query(
         });
     }
 
+    // Aggregation (GROUP BY / COUNT / SUM / ...) routes through the dedicated
+    // aggregate engine; the standard SELECT projection path returns empty rows
+    // for aggregate columns, so without this the REPL would print raw rows.
+    if !parsed.is_match_query() && parsed.select.is_aggregation_query() {
+        return run_aggregation_query(db, &parsed, active_collection, start);
+    }
+
     let kind = query_kind(&parsed);
 
     let results = if parsed.is_match_query() {
@@ -106,20 +113,73 @@ fn route_match_query(
     parsed: &velesdb_core::velesql::Query,
     active_collection: Option<&str>,
 ) -> Result<Vec<velesdb_core::SearchResult>> {
+    let params = params_with_active_collection(
+        parsed,
+        active_collection,
+        "MATCH queries require an active collection. Use: .use <collection_name>",
+    )?;
+    db.execute_query(parsed, &params)
+        .map_err(|e| anyhow::anyhow!("Query error: {e}"))
+}
+
+/// Builds the params map for a query, injecting the active collection as the
+/// `_collection` key when the query has no explicit `FROM` (the REPL selects the
+/// target via `.use <collection>`). `requires_msg` is the error shown when no
+/// active collection is set.
+fn params_with_active_collection(
+    parsed: &velesdb_core::velesql::Query,
+    active_collection: Option<&str>,
+    requires_msg: &str,
+) -> Result<HashMap<String, serde_json::Value>> {
     let mut params = HashMap::new();
     if parsed.select.from.is_empty() {
-        let col_name = active_collection.ok_or_else(|| {
-            anyhow::anyhow!(
-                "MATCH queries require an active collection. Use: .use <collection_name>"
-            )
-        })?;
+        let col_name = active_collection.ok_or_else(|| anyhow::anyhow!("{requires_msg}"))?;
         params.insert(
             "_collection".to_string(),
             serde_json::Value::String(col_name.to_string()),
         );
     }
-    db.execute_query(parsed, &params)
-        .map_err(|e| anyhow::anyhow!("Query error: {e}"))
+    Ok(params)
+}
+
+/// Routes a `GROUP BY` / scalar-aggregate SELECT through the aggregate engine and
+/// renders the JSON result (object or array-of-groups) into display rows.
+fn run_aggregation_query(
+    db: &Database,
+    parsed: &velesdb_core::velesql::Query,
+    active_collection: Option<&str>,
+    start: Instant,
+) -> Result<QueryResult> {
+    let params = params_with_active_collection(
+        parsed,
+        active_collection,
+        "Aggregation queries require an active collection. Use: .use <collection_name>",
+    )?;
+    let value = db
+        .execute_aggregate(parsed, &params)
+        .map_err(|e| anyhow::anyhow!("Query error: {e}"))?;
+    Ok(QueryResult {
+        rows: aggregate_value_to_rows(value),
+        duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+        kind: QueryKind::Select,
+    })
+}
+
+/// Converts the JSON from [`Database::execute_aggregate`] into display rows: a
+/// top-level array yields one row per group; any other value is a single row.
+fn aggregate_value_to_rows(value: serde_json::Value) -> Vec<HashMap<String, serde_json::Value>> {
+    match value {
+        serde_json::Value::Array(items) => items.into_iter().map(json_object_to_row).collect(),
+        other => vec![json_object_to_row(other)],
+    }
+}
+
+/// Flattens a JSON object into a display row; non-objects map to a `value` cell.
+fn json_object_to_row(value: serde_json::Value) -> HashMap<String, serde_json::Value> {
+    match value {
+        serde_json::Value::Object(map) => map.into_iter().collect(),
+        other => HashMap::from([("value".to_string(), other)]),
+    }
 }
 
 /// Convert a single [`velesdb_core::SearchResult`] into a display row.
@@ -166,3 +226,7 @@ pub(crate) fn contains_param_vector(condition: &velesdb_core::velesql::Condition
         _ => false,
     }
 }
+
+#[cfg(test)]
+#[path = "repl_execute_tests.rs"]
+mod repl_execute_tests;
