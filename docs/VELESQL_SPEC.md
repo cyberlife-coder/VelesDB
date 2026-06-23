@@ -1975,6 +1975,7 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `loops` | u64 | Number of execution iterations (always 1) |
 | `nodes_visited` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) graph-traversal node count (start nodes examined + nodes reached by following edges); 0 for non-MATCH queries |
 | `edges_traversed` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) count of edges followed during traversal; 0 for non-MATCH queries |
+| `traversal_counters_approximate` | bool | `true` when `nodes_visited` / `edges_traversed` are strategy-dependent approximations (a lower bound), not exact measured counts; `false` for non-graph queries where both counters are 0. |
 
 > **Note:** `nodes_visited` / `edges_traversed` are an **approximate, best-effort
 > lower bound** on the graph traversal across all MATCH strategies — not exact
@@ -2005,10 +2006,11 @@ for how the planner attaches it.
 | Field | Type | Description |
 |-------|------|-------------|
 | `node_label` | string | Plan node type (e.g. "VectorSearch", "Filter") |
-| `actual_time_ms` | f64 | Estimated wall-clock time for this node |
-| `actual_rows_in` | u64 | Rows entering this node |
-| `actual_rows_out` | u64 | Rows leaving this node |
+| `actual_time_ms` | f64 | **Estimated** (not measured) wall-clock time for this node, derived by distributing the plan-global `actual_time_ms` across nodes via fixed weight fractions. Heuristic until per-node instrumentation lands (#467). |
+| `actual_rows_in` | u64 | **Estimated** (heuristic) rows entering this node, not a measured count. |
+| `actual_rows_out` | u64 | **Estimated** (heuristic) rows leaving this node, not a measured count. |
 | `loops` | u64 | Loop iterations for this node |
+| `estimated` | bool | Always `true` until instrumented timing lands (#467): the `actual_*` row/time values above are heuristic estimates, not real per-node measurements. The `actual_` prefix is kept for API stability. |
 
 **Filter plan fields (v3.9+):**
 

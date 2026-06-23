@@ -2233,13 +2233,23 @@ components:
   schemas:
     ActualStatsResponse:
       type: object
-      description: Actual execution statistics for EXPLAIN ANALYZE responses.
+      description: |-
+        Actual execution statistics for EXPLAIN ANALYZE responses.
+
+        `actual_rows`, `actual_time_ms`, and `loops` are measured. The graph
+        traversal counters `nodes_visited` / `edges_traversed` are **strategy-
+        dependent approximations** (a lower bound, not an exact figure):
+        `VectorFirst` undercounts via its `limit(1)` existence-BFS frontier and
+        `Parallel` double-counts a node touched by both legs. The
+        `traversal_counters_approximate` flag exposes this honesty contract in a
+        machine-readable form (backlog #26), mirroring [`NodeStatsResponse::estimated`].
       required:
       - actual_rows
       - actual_time_ms
       - loops
       - nodes_visited
       - edges_traversed
+      - traversal_counters_approximate
       properties:
         actual_rows:
           type: integer
@@ -2253,7 +2263,9 @@ components:
         edges_traversed:
           type: integer
           format: int64
-          description: Number of edges traversed.
+          description: |-
+            Approximate number of edges traversed during MATCH graph traversal.
+            See `traversal_counters_approximate`; 0 for non-graph queries.
           minimum: 0
         loops:
           type: integer
@@ -2263,8 +2275,16 @@ components:
         nodes_visited:
           type: integer
           format: int64
-          description: Number of nodes visited (for graph traversal).
+          description: |-
+            Approximate number of nodes visited during MATCH graph traversal.
+            See `traversal_counters_approximate`; 0 for non-graph queries.
           minimum: 0
+        traversal_counters_approximate:
+          type: boolean
+          description: |-
+            When `true`, `nodes_visited` and `edges_traversed` are strategy-dependent
+            approximations (a lower bound), not exact measured counts. Always `false`
+            for non-graph queries, where both counters are 0.
     AddEdgeRequest:
       type: object
       description: Request to add an edge to the graph.
