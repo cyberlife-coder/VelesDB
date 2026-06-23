@@ -1570,3 +1570,115 @@ fn test_full_scan_fallback_filters_by_labels() {
         large_base
     );
 }
+
+/// Builds a single-node `(n:Person)` MATCH clause with `RETURN n ORDER BY n.age`
+/// and an optional LIMIT, mirroring the AST the parser produces.
+#[cfg(test)]
+fn person_order_by_age_clause(descending: bool, limit: Option<u64>) -> crate::velesql::MatchClause {
+    crate::velesql::MatchClause {
+        patterns: vec![crate::velesql::GraphPattern {
+            name: None,
+            nodes: vec![crate::velesql::NodePattern::new()
+                .with_alias("n")
+                .with_label("Person")],
+            relationships: vec![],
+        }],
+        where_clause: None,
+        return_clause: crate::velesql::ReturnClause {
+            items: vec![crate::velesql::ReturnItem {
+                expression: "n".to_string(),
+                alias: None,
+            }],
+            order_by: Some(vec![crate::velesql::OrderByItem {
+                expr: crate::velesql::OrderByExpr::Field("n.age".to_string()),
+                descending,
+            }]),
+            limit,
+        },
+    }
+}
+
+/// Regression (parity backlog #1): the direct `execute_match` entry point — used
+/// by the graph REST `/match` endpoint and the Python/TS SDK bindings — must
+/// apply RETURN `ORDER BY`, not return raw traversal order. Before the fix only
+/// the SQL `/query` pipeline (`finalize_match_results`) ordered MATCH results,
+/// so `/match` and the SDKs silently ignored the clause and returned traversal
+/// order. Ages are scrambled vs id order so any traversal order differs from the
+/// requested age-descending order.
+#[test]
+fn test_execute_match_applies_order_by() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection");
+
+    let ages = [(1_u64, 30), (2, 10), (3, 50), (4, 20), (5, 40)];
+    let nodes: Vec<Point> = ages
+        .iter()
+        .map(|(id, age)| {
+            Point::new(
+                *id,
+                vec![1.0, 0.0, 0.0, 0.0],
+                Some(serde_json::json!({"_labels": ["Person"], "age": age})),
+            )
+        })
+        .collect();
+    collection.upsert(nodes).expect("upsert Person nodes");
+
+    let params = std::collections::HashMap::new();
+    let results = collection
+        .execute_match(&person_order_by_age_clause(true, Some(100)), &params)
+        .expect("execute_match should succeed");
+
+    let ordered_ids: Vec<u64> = results.iter().map(|r| r.node_id).collect();
+    assert_eq!(
+        ordered_ids,
+        vec![3, 5, 1, 4, 2],
+        "execute_match must order by n.age DESC (ages 50,40,30,20,10), not traversal order"
+    );
+}
+
+/// Regression (parity backlog #1): `execute_match_with_similarity` (the
+/// vector-body `/match` path) must let RETURN `ORDER BY` override the implicit
+/// similarity-score sort. Query vector scores ids 3>2>1, but `ORDER BY n.age
+/// DESC` (ages 50,30,10 -> ids 2,3,1) must win.
+#[test]
+fn test_execute_match_with_similarity_order_by_overrides_score() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let collection = Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine)
+        .expect("collection");
+
+    let rows = [
+        (1_u64, vec![1.0, 0.0, 0.0, 0.0], 10),
+        (2, vec![1.0, 1.0, 0.0, 0.0], 50),
+        (3, vec![1.0, 1.0, 1.0, 0.0], 30),
+    ];
+    let nodes: Vec<Point> = rows
+        .iter()
+        .map(|(id, v, age)| {
+            Point::new(
+                *id,
+                v.clone(),
+                Some(serde_json::json!({"_labels": ["Person"], "age": age})),
+            )
+        })
+        .collect();
+    collection.upsert(nodes).expect("upsert Person nodes");
+
+    let params = std::collections::HashMap::new();
+    let query_vector = vec![1.0, 1.0, 1.0, 1.0];
+    let results = collection
+        .execute_match_with_similarity(
+            &person_order_by_age_clause(true, Some(100)),
+            &query_vector,
+            0.0,
+            &params,
+        )
+        .expect("execute_match_with_similarity should succeed");
+
+    let ordered_ids: Vec<u64> = results.iter().map(|r| r.node_id).collect();
+    assert_eq!(
+        ordered_ids,
+        vec![2, 3, 1],
+        "ORDER BY n.age DESC must override the vector score sort (which would be 3,2,1)"
+    );
+}

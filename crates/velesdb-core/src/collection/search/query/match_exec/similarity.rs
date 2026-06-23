@@ -314,7 +314,9 @@ impl Collection {
         similarity_threshold: f32,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
-        let results = self.execute_match(match_clause, params)?;
+        // Raw traversal results (no ORDER BY/LIMIT yet): the similarity score is
+        // computed below, then the shared finalize step applies ORDER BY + LIMIT.
+        let results = self.execute_match_with_context(match_clause, params, None)?;
 
         if results.is_empty() {
             return Ok(results);
@@ -345,6 +347,14 @@ impl Collection {
         )?;
 
         Self::sort_by_score(&mut scored_results, higher_is_better);
+
+        // A RETURN ORDER BY (when present) overrides the implicit score sort;
+        // then apply the shared post-sort LIMIT so this vector branch matches
+        // the SQL `/query` pipeline instead of returning score-ordered results.
+        self.apply_match_order_by(&mut scored_results, match_clause, params)?;
+        if let Some(limit) = super::super::match_dispatch::match_return_limit(match_clause) {
+            scored_results.truncate(limit);
+        }
 
         Ok(scored_results)
     }
