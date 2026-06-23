@@ -27,7 +27,9 @@ release.
   - **RSF / Weighted weights are validated.** `strategy='rsf'` whose
     `dense_weight` + `sparse_weight` do not sum to ~1.0 (and any negative
     weight) previously degraded to plain RRF at execution time; they now error
-    at validate-time so `EXPLAIN` and execution agree.
+    at validate-time so `EXPLAIN` and execution agree. On the `NEAR` + `MATCH`
+    `weighted` path a negative `vector_weight` / `graph_weight` was silently
+    clamped to `1.0`; it is now rejected at validate-time as well.
   - **`NEAR_FUSED` rejects `weighted` / `rsf`.** Those strategies are
     ill-defined over N homogeneous query vectors; they previously fell back to
     RRF, discarding the weights silently. They are now rejected.
@@ -49,7 +51,11 @@ release.
   vector-similarity and BM25 streams; `weighted` normalizes
   `vector_weight` / `graph_weight` so `graph_weight` actually weights the BM25
   branch; `rrf` (and unset) keep the prior behavior. `EXPLAIN` reports the
-  strategy that executes.
+  strategy that executes. The same fix now also covers the **anchored**
+  `NEAR` + graph `MATCH` + text `MATCH` hybrid (AND-required graph predicate):
+  it previously always ran RRF over the anchor set, ignoring `strategy` /
+  `graph_weight`; it now honors them while the anchor-restricted result set is
+  unchanged.
   *(Behavior change: non-`rrf` FUSION on NEAR+MATCH changes rankings.)*
 
 ### Added

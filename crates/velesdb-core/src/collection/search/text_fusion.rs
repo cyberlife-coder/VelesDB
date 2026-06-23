@@ -50,6 +50,80 @@ impl Collection {
         }
     }
 
+    /// Routes an anchored dense-NEAR + text-MATCH hybrid (graph anchor set)
+    /// through the requested fusion strategy (#6, anchored path).
+    ///
+    /// The anchor-restricted candidate set is identical for every strategy
+    /// (both branches are confined to `anchor_ids`); only the score/rank
+    /// fusion of the two streams changes. Falls back to the existing
+    /// anchored RRF when no FUSION clause is present or the strategy is `rrf`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match.
+    pub(crate) fn hybrid_search_with_anchors_clause(
+        &self,
+        vector_query: &[f32],
+        text_query: &str,
+        k: usize,
+        fusion: Option<&FusionClause>,
+        anchor_ids: &std::collections::HashSet<u64>,
+    ) -> Result<Vec<SearchResult>> {
+        let Some(fc) = fusion else {
+            return self.hybrid_search_with_anchors(
+                vector_query,
+                text_query,
+                k,
+                None,
+                None,
+                anchor_ids,
+            );
+        };
+        match fc.strategy {
+            FusionStrategyType::Rrf => {
+                let vw = fc.vector_weight.map(cast_weight);
+                self.hybrid_search_with_anchors(vector_query, text_query, k, vw, fc.k, anchor_ids)
+            }
+            FusionStrategyType::Weighted => {
+                let vw = normalized_vector_weight(fc);
+                self.hybrid_search_with_anchors(
+                    vector_query,
+                    text_query,
+                    k,
+                    Some(vw),
+                    fc.k,
+                    anchor_ids,
+                )
+            }
+            FusionStrategyType::Maximum | FusionStrategyType::Average | FusionStrategyType::Rsf => {
+                let strategy = score_fusion_strategy(fc);
+                self.anchored_hybrid_score_fused(vector_query, text_query, k, &strategy, anchor_ids)
+            }
+        }
+    }
+
+    /// Score-level fusion of the anchor-restricted vector and BM25 streams.
+    fn anchored_hybrid_score_fused(
+        &self,
+        vector_query: &[f32],
+        text_query: &str,
+        k: usize,
+        strategy: &FusionStrategy,
+        anchor_ids: &std::collections::HashSet<u64>,
+    ) -> Result<Vec<SearchResult>> {
+        let overfetch_k = k.saturating_mul(4).max(k + 10);
+        let (vector_scored, text_stream) =
+            self.anchored_hybrid_streams(vector_query, text_query, anchor_ids, overfetch_k)?;
+        let vector_stream: ScoreStream = vector_scored.iter().map(|sr| (sr.id, sr.score)).collect();
+        if vector_stream.is_empty() && text_stream.is_empty() {
+            return Ok(Vec::new());
+        }
+        let fused = strategy
+            .fuse(vec![vector_stream, text_stream])
+            .map_err(|e| Error::Config(format!("Fusion error: {e}")))?;
+        Ok(self.resolve_fused_results(&fused, k))
+    }
+
     /// Plain weighted-RRF hybrid, honoring an optional metadata filter.
     fn hybrid_search_default(
         &self,
