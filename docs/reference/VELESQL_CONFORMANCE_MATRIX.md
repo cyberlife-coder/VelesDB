@@ -4,7 +4,7 @@ This document lists every VelesQL feature with its parser and executor status.
 A feature can be **Parsed** (the grammar + AST accept it) without being
 **Executed** (the query engine acts on it at runtime).
 
-> Last updated: 2026-06-20 (v3.10.0 / VelesDB v3.2.1)
+> Last updated: 2026-06-22 (VelesDB Unreleased, post-v3.2.1)
 
 ## Fully Supported (Parsed AND Executed)
 
@@ -29,7 +29,9 @@ A feature can be **Parsed** (the grammar + AST accept it) without being
 | `GROUP BY` | `ast/aggregation.rs:GroupByClause` | `velesql/aggregator.rs` | |
 | `HAVING` | `ast/aggregation.rs:HavingClause` | `velesql/aggregator.rs` | |
 | Aggregate functions | `ast/aggregation.rs` | `velesql/aggregator.rs` | COUNT, SUM, AVG, MIN, MAX |
-| `USING FUSION(strategy=...)` | `ast/fusion.rs:FusionClause` | `search/query/hybrid_sparse.rs` | RRF, RSF |
+| `USING FUSION(strategy=...)` | `ast/fusion.rs:FusionClause` | `search/query/sparse_dispatch.rs:resolve_fusion_strategy` + `hybrid_sparse.rs` | Honored: RRF, RSF, average, maximum, weighted (RSF/weighted use `dense_weight`/`sparse_weight`) |
+| `WHERE vector NEAR_FUSED [...]` | `grammar.pest:vector_fused_search` | `search/query/fused_dispatch.rs` | Executable multi-vector fusion via `multi_query_search`; honors `rrf`/`average`/`maximum` (others fall back to RRF). Must be the only vector predicate, `AND`-able with a metadata filter only |
+| `ALTER COLLECTION ... SET (auto_reindex=...)` | `ast/ddl.rs` | `database/ddl_executor.rs:execute_alter_collection` | Applies and persists the auto-reindex policy (restored on next open) |
 | `WITH (key=value)` hints | `ast/with_clause.rs:WithClause` | `query_engine.rs` | ef_search, mode, quantization |
 | `TRAIN QUANTIZER ON <coll>` | `ast/train.rs` | `database/training.rs` | PQ training |
 | `MATCH (a)-[r]->(b)` | `ast/mod.rs:MatchClause` | `search/query/match_exec.rs` | Graph traversal |
@@ -61,6 +63,8 @@ incorrect or empty results at execution time.
 | Feature | Parser source | Status | Notes |
 |---------|--------------|--------|-------|
 | Scalar subqueries | `grammar.pest:subquery_expr`, `ast/values.rs:Subquery` | Parsed, then rejected at validation with V010 (SubqueryNotExecutable) | EPIC-039 |
+| MATCH `ORDER BY` aggregate (no `GROUP BY`) or bare alias | `match_exec/order_by.rs` | Parsed, then rejected at execution with VELES-018 (GraphNotSupported). Supported MATCH `ORDER BY`: `similarity()`, `similarity(field, $v)`, `depth`, `alias.property`, arithmetic over a bare property identifier (e.g. `year - 2000`) | EPIC-045 |
+| MATCH `ORDER BY` in the WASM/browser executor | `velesdb-wasm/src/velesql_match_orderby.rs` | Reduced subset of the row above: only `depth` and `alias.property` are honored. `similarity()`, `similarity(field, $v)`, arithmetic, and aggregate forms are rejected with an error because the browser MATCH path materializes no vector scores | Core supports the full set; this is a documented WASM-only divergence |
 
 ## Not Parsed (Not in Grammar)
 
@@ -69,6 +73,7 @@ parse errors.
 
 | Feature | Notes |
 |---------|-------|
+| MATCH `ORDER BY` arithmetic over a dotted path (e.g. `d.year - 2000`) | Parse error; only arithmetic over a bare property identifier (e.g. `year - 2000`) is accepted |
 | CTEs (`WITH name AS (SELECT ...)`) | VelesQL `WITH` is for query hints, not CTEs |
 | Subqueries in `FROM` clause | Only collection names allowed in `FROM` |
 | `CASE WHEN ... THEN ... END` | Not in grammar |

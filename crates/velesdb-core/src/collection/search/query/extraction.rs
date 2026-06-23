@@ -71,6 +71,37 @@ impl Collection {
         }
     }
 
+    /// Extracts a `NEAR_FUSED` multi-vector search from the WHERE clause: the
+    /// resolved query vectors plus the fusion config, routed to
+    /// [`multi_query_search`](Self::multi_query_search). Walks the same
+    /// AND/Group recursion as [`extract_vector_search`](Self::extract_vector_search)
+    /// and reuses [`resolve_vector`](Self::resolve_vector) for each `VectorExpr`.
+    #[allow(clippy::self_only_used_in_recursion)]
+    pub(crate) fn extract_fused_vectors(
+        &self,
+        condition: &Condition,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Option<(Vec<Vec<f32>>, crate::velesql::FusionConfig)>> {
+        match condition {
+            Condition::VectorFusedSearch(vfs) => {
+                let vectors = vfs
+                    .vectors
+                    .iter()
+                    .map(|v| Self::resolve_vector(v, params))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Some((vectors, vfs.fusion.clone())))
+            }
+            Condition::And(left, right) => {
+                if let Some(v) = self.extract_fused_vectors(left, params)? {
+                    return Ok(Some(v));
+                }
+                self.extract_fused_vectors(right, params)
+            }
+            Condition::Group(inner) => self.extract_fused_vectors(inner, params),
+            _ => Ok(None),
+        }
+    }
+
     /// Extract ALL similarity conditions from WHERE clause (EPIC-044 US-001).
     /// Returns Vec of (field, vector, operator, threshold) for cascade filtering.
     ///

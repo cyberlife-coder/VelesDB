@@ -97,7 +97,8 @@ SELECT * FROM docs WHERE vector SPARSE_NEAR $sv USING 'splade' LIMIT 5;
 -- Dense + sparse in one query
 SELECT * FROM docs WHERE vector NEAR $q AND vector SPARSE_NEAR $sv LIMIT 5;
 
--- Multi-vector fusion (RRF over several query vectors)
+-- Multi-vector fusion (RRF over several query vectors) — runs real fusion
+-- (routes to multi_query_search); honors 'rrf'/'average'/'maximum'.
 SELECT * FROM docs
 WHERE vector NEAR_FUSED [$v1, $v2] USING FUSION 'rrf' (k = 60)
 LIMIT 10;
@@ -116,7 +117,7 @@ SELECT * FROM docs
 WHERE vector NEAR $q AND content MATCH 'database'
 LIMIT 10 USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3);
 
--- Inline NEAR_FUSED with a bare strategy string (no params)
+-- Inline NEAR_FUSED with a bare strategy string (weighted/rsf fall back to RRF).
 SELECT * FROM products WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'weighted' LIMIT 20;
 ```
 

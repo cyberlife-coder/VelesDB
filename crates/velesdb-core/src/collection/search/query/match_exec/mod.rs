@@ -13,6 +13,7 @@
 
 mod expand;
 mod index_prefilter;
+mod order_by;
 mod similarity;
 mod start_nodes;
 mod vector_first;
@@ -277,6 +278,18 @@ impl Collection {
             )?;
         }
 
+        // Accumulate traversal counters into the query context for EXPLAIN
+        // ANALYZE to read back. Runs on every GraphFirst MATCH (not only
+        // ANALYZE), but it is one relaxed atomic-add per query — negligible, and
+        // the per-edge hot loop is untouched. `nodes_visited` = start nodes
+        // (added per pattern in execute_single_pattern) + the edge endpoints
+        // reached here; `edges_traversed` = edges actually followed. Non-graph
+        // queries never reach here.
+        if let Some(qc) = ctx {
+            let edges = u64::from(iteration_count);
+            qc.add_traversal(edges, edges);
+        }
+
         Ok(all_results)
     }
 
@@ -300,6 +313,8 @@ impl Collection {
         if start_nodes.is_empty() {
             return Ok(());
         }
+        // Count the start nodes this pattern examines toward nodes_visited.
+        ctx.inspect(|qc| qc.add_traversal(start_nodes.len() as u64, 0));
 
         // S4-08: Compute index pre-filter once per pattern.
         let prefilter = match_clause

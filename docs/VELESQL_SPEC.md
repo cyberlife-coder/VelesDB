@@ -737,8 +737,16 @@ with MaxScore DAAT for efficient top-K retrieval.
 ### Multi-Vector Fusion (NEAR_FUSED, v2.2+)
 
 `NEAR_FUSED` combines multiple embedding vectors into a single similarity search
-using a fusion strategy. Useful for multi-modal search (text + image embeddings)
-or ensemble approaches.
+using a fusion strategy (multi-modal or ensemble search). It is executed by
+routing to the engine's multi-vector fusion (`multi_query_search`): each query
+vector runs its own search and the rankings are fused. `USING FUSION 'rrf'`
+(default, `k=60`), `'average'`, and `'maximum'` are honored; other strategies
+fall back to RRF. An optional `AND <metadata>` predicate is applied as a
+pre-fusion filter.
+
+`NEAR_FUSED` must be the **only vector predicate** in the `WHERE`: combining it
+with `OR`/`NOT`, or with another `NEAR` / `similarity()` / `SPARSE_NEAR`, is
+rejected (it can only be `AND`-ed with a metadata filter).
 
 ```sql
 -- Two-vector fusion with RRF
@@ -765,9 +773,11 @@ literals (`[0.1, 0.2, ...]`).
 | Strategy | Best For | Parameters |
 |----------|----------|------------|
 | `rrf` | General-purpose ensemble (default) | `k` (default: 60) |
-| `rsf` | Normalized score blending | `dense_weight`, `sparse_weight` |
-| `weighted` | Explicit priority tuning | `weight_1`, `weight_2`, ... |
+| `average` | Balanced score blending | (none) |
 | `maximum` | Conservative high-precision | (none) |
+
+Only `rrf`, `average`, and `maximum` are honored. Any other strategy name
+(e.g. `rsf`, `weighted`) falls back to RRF; weight parameters are not read.
 
 ### Similarity Function (v1.3+)
 
@@ -1955,8 +1965,17 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `actual_rows` | u64 | Number of rows returned by execution |
 | `actual_time_ms` | f64 | Wall-clock execution time in milliseconds |
 | `loops` | u64 | Number of execution iterations (always 1) |
-| `nodes_visited` | u64 | For MATCH queries, currently set to the result row count (not a real traversal counter); 0 for non-MATCH queries |
-| `edges_traversed` | u64 | For MATCH queries, currently set to the result row count (not a real traversal counter); 0 for non-MATCH queries |
+| `nodes_visited` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) graph-traversal node count (start nodes examined + nodes reached by following edges); 0 for non-MATCH queries |
+| `edges_traversed` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) count of edges followed during traversal; 0 for non-MATCH queries |
+
+> **Note:** `nodes_visited` / `edges_traversed` are an **approximate, best-effort
+> lower bound** on the graph traversal across all MATCH strategies — not exact
+> figures. For **GraphFirst** they are the start nodes examined plus the
+> edges/nodes reached; for the similarity-anchored **VectorFirst** strategy (a
+> `similarity()` predicate on the start node) they are the candidate nodes
+> evaluated plus the per-candidate existence-BFS edges/nodes — each BFS uses
+> `limit(1)` and so undercounts the true frontier; the **Parallel** strategy sums
+> both legs (a node touched by both is counted twice).
 
 **`feedback_calibration` fields (v1.15.0+, EXPLAIN ANALYZE only):**
 
@@ -2277,6 +2296,11 @@ ALTER COLLECTION docs SET (auto_reindex = false)
 | `auto_reindex` | boolean | Enable/disable automatic HNSW parameter tuning |
 
 Unknown options are rejected with an error message listing supported options.
+The change is applied to the live collection and persisted immediately, so it
+survives a restart — the auto-reindex policy is restored automatically on the
+next collection open. Setting `auto_reindex = false` keeps the policy attached
+but disabled (preserving any previously configured thresholds for a symmetric
+round-trip).
 
 ### FLUSH (v3.6+)
 

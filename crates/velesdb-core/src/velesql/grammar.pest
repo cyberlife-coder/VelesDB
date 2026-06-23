@@ -293,6 +293,9 @@ sort_direction = { ^"DESC" | ^"ASC" }
 // Arithmetic expressions for ORDER BY (EPIC-042)
 // Precedence: additive (+, -) < multiplicative (*, /)
 // arithmetic_atom subsumes: float, integer, similarity(), identifier
+// TODO(EPIC-045): dotted-identifier arithmetic in MATCH ORDER BY is not yet
+// supported — arithmetic_atom admits only a bare `identifier`, so `year - 2000`
+// parses but `d.year - 2000` is a parse error (property_access matches first).
 order_by_arithmetic = { arithmetic_additive }
 arithmetic_additive = { arithmetic_multiplicative ~ ((add_op | sub_op) ~ arithmetic_multiplicative)* }
 arithmetic_multiplicative = { arithmetic_atom ~ ((mul_op | div_op) ~ arithmetic_atom)* }

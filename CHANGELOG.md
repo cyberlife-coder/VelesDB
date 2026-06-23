@@ -5,6 +5,56 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+VelesQL conformance closeout plus three feature completions (real EXPLAIN
+counters incl. VectorFirst, MATCH `ORDER BY` arithmetic / `similarity(field, $v)`,
+and executable SQL `NEAR_FUSED` fusion) and one new DDL capability. Several
+**behavior changes** (flagged below) replace silent wrong/no-op behavior with
+explicit errors or real values — review the SemVer impact before the next
+release.
+
+### Added
+- **`ALTER COLLECTION <name> SET (auto_reindex = true|false)` now applies and
+  persists.** Previously parsed but rejected with a feature-gap error, it now
+  attaches (or re-configures) an `AutoReindexManager` on the collection and
+  persists the policy, so the setting survives a restart (restored on the next
+  open). Setting `false` keeps the policy attached but disabled, preserving any
+  configured thresholds. Unknown options and non-bool values still error.
+
+### Fixed
+- **`EXPLAIN ANALYZE` reports real graph traversal counters.** `nodes_visited`
+  and `edges_traversed` for `MATCH` queries were a fabricated proxy equal to the
+  result-row count; they now report the actual walk — edges followed and nodes
+  reached — across all MATCH strategies (GraphFirst walk; VectorFirst candidate
+  evaluation + per-candidate existence-BFS; Parallel sums both legs). The values
+  are an approximate lower bound (the VectorFirst existence-BFS uses `limit(1)`
+  and undercounts the frontier; Parallel double-counts nodes touched by both
+  legs). Non-graph queries report `0/0`. The REST/OpenAPI response shape is unchanged.
+  *(Behavior change: the reported counter values change.)*
+- **`MATCH ... ORDER BY` now sorts arithmetic and `similarity(field, $v)`, and
+  errors on the rest.** Previously only `similarity()`, `depth`, and
+  `alias.property` sorted; arithmetic over a property (e.g. `ORDER BY year - 2000`)
+  and explicit `similarity(field, $v)` were silently dropped (mis-ordered rows).
+  They now sort. Aggregates (no `GROUP BY`) and bare aliases are rejected with
+  `VELES-018` instead of being silently ignored.
+  *(Behavior change: previously-silent queries now sort or error.)*
+- **`NEAR_FUSED` multi-vector fusion now executes via SQL.** It previously parsed
+  into a condition with no executor and silently degraded to an unranked full
+  scan that ignored the query vectors and `USING FUSION`. A SQL `NEAR_FUSED` now
+  routes to the engine's multi-vector fusion (`multi_query_search`): per-vector
+  search + ranking fusion, honoring `USING FUSION 'rrf'/'average'/'maximum'`
+  (others fall back to RRF) and any residual metadata predicate as a pre-fusion
+  filter.
+  *(Behavior change: previously-silent full scans now return fused rankings.)*
+- **`NEAR_FUSED` isolation is now enforced with an error.** A `WHERE` may contain
+  exactly one `NEAR_FUSED`, only `AND`-ed with a metadata filter. More than one
+  `NEAR_FUSED`, mixing it with another vector predicate (`NEAR` /
+  `similarity()` / `SPARSE_NEAR`), or placing it under `OR`/`NOT` previously
+  parsed and silently degraded to a non-fused scan; these shapes are now
+  rejected.
+  *(Behavior change: previously-silent degraded queries now error.)*
+
 ## [3.2.1] — 2026-06-20
 
 Patch release. Maintenance only — no engine/API change (`velesdb-core` and the

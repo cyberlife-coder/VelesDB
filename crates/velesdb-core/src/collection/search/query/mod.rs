@@ -43,6 +43,7 @@ mod execution_paths;
 mod extraction;
 #[cfg(test)]
 mod extraction_tests;
+mod fused_dispatch;
 mod graph_prefilter;
 mod hybrid_sparse;
 #[cfg(test)]

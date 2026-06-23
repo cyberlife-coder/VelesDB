@@ -26,6 +26,10 @@ pub struct QueryContext {
     current_cardinality: AtomicUsize,
     /// Estimated memory usage in bytes.
     memory_used: AtomicUsize,
+    /// Graph nodes visited during MATCH traversal (for EXPLAIN ANALYZE).
+    traversal_nodes_visited: AtomicU64,
+    /// Graph edges traversed during MATCH traversal (for EXPLAIN ANALYZE).
+    traversal_edges_traversed: AtomicU64,
 }
 
 impl QueryContext {
@@ -38,6 +42,8 @@ impl QueryContext {
             current_depth: AtomicU64::new(0),
             current_cardinality: AtomicUsize::new(0),
             memory_used: AtomicUsize::new(0),
+            traversal_nodes_visited: AtomicU64::new(0),
+            traversal_edges_traversed: AtomicU64::new(0),
         }
     }
 
@@ -132,5 +138,29 @@ impl QueryContext {
     #[must_use]
     pub fn memory_used(&self) -> usize {
         self.memory_used.load(Ordering::Relaxed)
+    }
+
+    /// Accumulates graph-traversal counters measured during MATCH execution.
+    ///
+    /// Uses `fetch_add` so multiple traversal phases compose: a multi-pattern
+    /// MATCH, and the `GraphFirst` + `VectorFirst` legs of the Parallel
+    /// strategy, each add their own counts. Read back by EXPLAIN ANALYZE.
+    pub fn add_traversal(&self, nodes_visited: u64, edges_traversed: u64) {
+        self.traversal_nodes_visited
+            .fetch_add(nodes_visited, Ordering::Relaxed);
+        self.traversal_edges_traversed
+            .fetch_add(edges_traversed, Ordering::Relaxed);
+    }
+
+    /// Returns graph nodes visited during MATCH traversal (0 if no traversal ran).
+    #[must_use]
+    pub fn traversal_nodes_visited(&self) -> u64 {
+        self.traversal_nodes_visited.load(Ordering::Relaxed)
+    }
+
+    /// Returns graph edges traversed during MATCH traversal (0 if no traversal ran).
+    #[must_use]
+    pub fn traversal_edges_traversed(&self) -> u64 {
+        self.traversal_edges_traversed.load(Ordering::Relaxed)
     }
 }
