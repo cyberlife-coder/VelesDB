@@ -23,7 +23,7 @@ use crate::types::{
 };
 use crate::AppState;
 
-use aggregation::{execute_aggregation_query, is_aggregation_query};
+use aggregation::execute_aggregation_query;
 use explain::condition_has_vector_search;
 use velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
 
@@ -109,7 +109,7 @@ pub async fn query(
     };
 
     // BUG-1 FIX: Detect aggregation queries and route to execute_aggregate
-    if is_aggregation_query(&parsed.select) {
+    if parsed.select.is_aggregation_query() {
         return execute_aggregation_query(&state, &collection_name, &parsed, &req.params, start);
     }
 
@@ -385,7 +385,7 @@ pub fn detect_query_type(query: &Query) -> QueryType {
         return QueryType::Graph;
     }
 
-    if is_aggregation_query(&query.select) {
+    if query.select.is_aggregation_query() {
         return QueryType::Aggregation;
     }
 

@@ -5,7 +5,7 @@
 
 use axum::{http::StatusCode, response::IntoResponse, Json};
 use std::sync::Arc;
-use velesdb_core::velesql::{Query, SelectColumns};
+use velesdb_core::velesql::Query;
 
 use crate::handlers::helpers::notify_query_timing;
 use crate::types::{
@@ -14,32 +14,6 @@ use crate::types::{
 use crate::AppState;
 
 use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
-
-/// Returns `true` if the query contains aggregation functions or GROUP BY,
-/// but NOT if it's a vector-search GROUP BY (which is handled as post-processing
-/// in `execute_query`, not `execute_aggregate`).
-pub(crate) fn is_aggregation_query(select: &velesdb_core::velesql::SelectStatement) -> bool {
-    let has_aggs = match &select.columns {
-        SelectColumns::Aggregations(_) => true,
-        SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
-        _ => false,
-    };
-    let is_agg_query = has_aggs || select.group_by.is_some();
-
-    // Vector-search GROUP BY (NEAR + GROUP BY) is handled as post-processing
-    // inside execute_query, not execute_aggregate. Route it to the standard path.
-    if is_agg_query {
-        let has_vector_near = select
-            .where_clause
-            .as_ref()
-            .is_some_and(velesdb_core::velesql::Condition::has_vector_search);
-        if has_vector_near && select.group_by.is_some() {
-            return false;
-        }
-    }
-
-    is_agg_query
-}
 
 fn aggregation_result_count(result: &serde_json::Value) -> usize {
     match result {
@@ -157,7 +131,7 @@ pub async fn aggregate(
         }
     };
 
-    if parsed.is_match_query() || !is_aggregation_query(&parsed.select) {
+    if parsed.is_match_query() || !parsed.select.is_aggregation_query() {
         state.operational_metrics.inc_errors();
         return velesql_error(
             StatusCode::UNPROCESSABLE_ENTITY,

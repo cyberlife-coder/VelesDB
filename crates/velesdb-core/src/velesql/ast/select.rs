@@ -377,4 +377,31 @@ impl SelectStatement {
             fusion_clause: None,
         }
     }
+
+    /// Returns `true` when this SELECT must run through the aggregation engine
+    /// (scalar aggregates or `GROUP BY`) rather than the row-projection path.
+    ///
+    /// `NEAR ... GROUP BY` (vector-search grouping) is post-processed inside the
+    /// standard execute path, not the aggregate engine, so it returns `false`.
+    /// Single source of truth shared by the server `/query` handler and the CLI
+    /// REPL so every surface routes aggregation identically.
+    #[must_use]
+    pub fn is_aggregation_query(&self) -> bool {
+        let has_aggs = match &self.columns {
+            SelectColumns::Aggregations(_) => true,
+            SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
+            _ => false,
+        };
+        let is_agg_query = has_aggs || self.group_by.is_some();
+        if is_agg_query && self.group_by.is_some() {
+            let has_vector_near = self
+                .where_clause
+                .as_ref()
+                .is_some_and(Condition::has_vector_search);
+            if has_vector_near {
+                return false;
+            }
+        }
+        is_agg_query
+    }
 }

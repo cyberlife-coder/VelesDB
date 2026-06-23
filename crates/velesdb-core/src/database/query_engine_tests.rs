@@ -250,3 +250,62 @@ fn test_join_row_budget_order_by_uses_ceiling() {
     let budget = Database::join_row_budget(&select, &PushdownAnalysis::default());
     assert_eq!(budget, JOIN_ROW_CEILING);
 }
+
+// =========================================================================
+// Database::execute_aggregate (single-source aggregation entry)
+// =========================================================================
+
+/// `Database::execute_aggregate` resolves the target collection from the
+/// `_collection` param when the query has no explicit `FROM` (the convention the
+/// CLI REPL and SDKs use to inject the active collection), and runs GROUP BY.
+#[test]
+fn test_execute_aggregate_resolves_collection_via_param() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("orders", 2, DistanceMetric::Cosine)
+        .unwrap();
+    let coll = db.get_vector_collection("orders").unwrap();
+    let points: Vec<Point> = [(10, "x"), (11, "x"), (12, "y"), (13, "y")]
+        .into_iter()
+        .map(|(id, cat)| {
+            Point::new(
+                id,
+                vec![1.0, 0.0],
+                Some(serde_json::json!({ "category": cat })),
+            )
+        })
+        .collect();
+    coll.upsert(points).unwrap();
+
+    // Parse with FROM (the grammar requires it), then clear it to simulate the
+    // programmatic / REPL convention of supplying the target via `_collection`.
+    let mut query =
+        Parser::parse("SELECT category, COUNT(*) AS n FROM orders GROUP BY category").unwrap();
+    query.select.from = String::new();
+    let mut params = std::collections::HashMap::new();
+    params.insert(
+        "_collection".to_string(),
+        serde_json::Value::String("orders".to_string()),
+    );
+
+    let value = db.execute_aggregate(&query, &params).unwrap();
+    let groups = value
+        .as_array()
+        .expect("GROUP BY returns an array of groups");
+    assert_eq!(groups.len(), 2, "two category groups (a, b); got {value:?}");
+}
+
+/// `Database::execute_aggregate` surfaces a `CollectionNotFound` error for an
+/// unresolved target rather than silently returning an empty result.
+#[test]
+fn test_execute_aggregate_unknown_collection_errors() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    let query = Parser::parse("SELECT COUNT(*) AS n FROM ghost").unwrap();
+    let params = std::collections::HashMap::new();
+    let err = db.execute_aggregate(&query, &params).unwrap_err();
+    assert!(
+        matches!(err, crate::Error::CollectionNotFound(_)),
+        "expected CollectionNotFound, got {err:?}"
+    );
+}
