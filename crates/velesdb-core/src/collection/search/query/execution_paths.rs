@@ -185,25 +185,20 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         if let Some(text_query) = Self::extract_match_query(cond) {
             let fusion = search_opts.fusion_clause.as_ref();
-            #[allow(clippy::cast_possible_truncation)]
-            let vector_weight = fusion.and_then(|fc| fc.vector_weight).map(|w| w as f32);
-            let rrf_k = fusion.and_then(|fc| fc.k);
             // Bug #474: Extract co-occurring metadata filters (e.g. `category = 'tech'`)
-            // before calling hybrid_search. Without this, metadata conditions alongside
-            // MATCH are silently dropped.
-            if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
-                let filter =
-                    crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
-                return self.hybrid_search_with_filter(
-                    vector,
-                    &text_query,
-                    execution_limit,
-                    vector_weight,
-                    &filter,
-                    rrf_k,
-                );
-            }
-            return self.hybrid_search(vector, &text_query, execution_limit, vector_weight, rrf_k);
+            // before fusing. Without this, metadata conditions alongside MATCH
+            // are silently dropped.
+            // Bug #6: route through hybrid_search_with_clause so the FUSION
+            // strategy / graph_weight take effect instead of always running RRF.
+            let filter = Self::extract_metadata_filter(cond)
+                .map(|c| crate::filter::Filter::new(crate::filter::Condition::from(c)));
+            return self.hybrid_search_with_clause(
+                vector,
+                &text_query,
+                execution_limit,
+                fusion,
+                filter.as_ref(),
+            );
         }
         let cbo_search_k = execution_limit
             .saturating_mul(cbo_over_fetch)
