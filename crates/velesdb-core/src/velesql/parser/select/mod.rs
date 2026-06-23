@@ -171,11 +171,24 @@ impl Parser {
             Rule::group_by_clause => stmt.group_by = Some(Self::parse_group_by_clause(pair)),
             Rule::having_clause => stmt.having = Some(Self::parse_having_clause(pair)?),
             Rule::order_by_clause => stmt.order_by = Some(Self::parse_order_by_clause(pair)?),
+            _ => Self::dispatch_trailing_clause(pair, stmt)?,
+        }
+        Ok(())
+    }
+
+    /// Dispatches the trailing optional clauses (LIMIT, OFFSET, WITH, USING
+    /// FUSION). Split out of `dispatch_optional_clause` to keep both functions
+    /// within the cyclomatic-complexity budget.
+    fn dispatch_trailing_clause(
+        pair: pest::iterators::Pair<Rule>,
+        stmt: &mut SelectStmtBuilder,
+    ) -> Result<(), ParseError> {
+        match pair.as_rule() {
             Rule::limit_clause => stmt.limit = Some(Self::parse_limit_clause(pair)?),
             Rule::offset_clause => stmt.offset = Some(Self::parse_offset_clause(pair)?),
             Rule::with_clause => stmt.with_clause = Some(Self::parse_with_clause(pair)?),
             Rule::using_fusion_clause => {
-                stmt.fusion_clause = Some(Self::parse_using_fusion_clause(pair));
+                stmt.fusion_clause = Some(Self::parse_using_fusion_clause(pair)?);
             }
             _ => {}
         }
