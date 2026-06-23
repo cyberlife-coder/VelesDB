@@ -47,6 +47,8 @@ mod explain_configurable_threshold;
 mod explain_cost_calibrated;
 #[path = "bdd/flush_operations.rs"]
 mod flush_operations;
+#[path = "bdd/fusion_correctness.rs"]
+mod fusion_correctness;
 #[path = "bdd/fusion_rrf_conformance.rs"]
 mod fusion_rrf_conformance;
 #[path = "bdd/fusion_weighted_bug.rs"]

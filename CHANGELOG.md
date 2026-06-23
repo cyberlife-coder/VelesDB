@@ -14,6 +14,44 @@ and executable SQL `NEAR_FUSED` fusion) and one new DDL capability. Several
 explicit errors or real values — review the SemVer impact before the next
 release.
 
+### Changed
+- **`USING FUSION` is now validated; misconfigured clauses error instead of
+  silently degrading.** Five correctness flips, all surfaced at validate-time
+  (or parse-time) so the previous silent fallbacks are unreachable:
+  - **Single-branch `USING FUSION` is rejected.** Applying `USING FUSION(...)`
+    to a query with fewer than two fusable branches (e.g. `similarity()`-only,
+    pure `NEAR`, or metadata-only) was a decorative no-op — the clause was
+    threaded through and discarded. It now requires at least two fusable
+    branches (`NEAR` + `MATCH`, `NEAR` + `SPARSE_NEAR`, …) or a single
+    `NEAR_FUSED`, and errors otherwise.
+  - **RSF / Weighted weights are validated.** `strategy='rsf'` whose
+    `dense_weight` + `sparse_weight` do not sum to ~1.0 (and any negative
+    weight) previously degraded to plain RRF at execution time; they now error
+    at validate-time so `EXPLAIN` and execution agree.
+  - **`NEAR_FUSED` rejects `weighted` / `rsf`.** Those strategies are
+    ill-defined over N homogeneous query vectors; they previously fell back to
+    RRF, discarding the weights silently. They are now rejected.
+  - **Unknown fusion strategy names and option keys are rejected.** The SQL
+    parser previously mapped any unknown `strategy=...` to RRF and discarded
+    unknown option keys (`dense_wieght`, …), so a typo silently changed
+    semantics. Unknown names/keys now error at parse-time.
+  - **`relative_score` is accepted as an alias of `rsf`**, and
+    `dense_weight` / `sparse_weight` as long-name aliases of `dense_w` /
+    `sparse_w`. The documented long-name weights are no longer silently dropped
+    (which used to run a 50/50 blend).
+  *(Behavior change: several previously-accepted FUSION queries now error.)*
+
+### Fixed
+- **`USING FUSION(strategy = ...)` now takes effect on the dense-`NEAR` +
+  text-`MATCH` hybrid.** The hybrid path always ran plain weighted RRF and
+  ignored `strategy`, `graph_weight`, and (for `weighted`) the text-branch
+  weighting. `maximum` / `average` / `rsf` now run score-level fusion of the
+  vector-similarity and BM25 streams; `weighted` normalizes
+  `vector_weight` / `graph_weight` so `graph_weight` actually weights the BM25
+  branch; `rrf` (and unset) keep the prior behavior. `EXPLAIN` reports the
+  strategy that executes.
+  *(Behavior change: non-`rrf` FUSION on NEAR+MATCH changes rankings.)*
+
 ### Added
 - **`ALTER COLLECTION <name> SET (auto_reindex = true|false)` now applies and
   persists.** Previously parsed but rejected with a feature-gap error, it now
