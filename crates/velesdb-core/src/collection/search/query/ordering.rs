@@ -12,6 +12,27 @@ use crate::point::SearchResult;
 use crate::velesql::{ArithmeticExpr, ArithmeticOp};
 use std::cmp::Ordering;
 
+/// Looks up a (possibly dotted) field path inside a JSON payload.
+///
+/// A bare name (`"source"`) is a top-level lookup; a dotted path
+/// (`"meta.source"`) walks nested objects segment by segment. Returns `None`
+/// when any segment is missing or a non-object is traversed. Shared by ORDER BY
+/// field comparison and score-variable payload resolution so both honor the same
+/// nested-path semantics as projection/filter/aggregation.
+fn get_nested_payload<'a>(
+    payload: &'a serde_json::Value,
+    path: &str,
+) -> Option<&'a serde_json::Value> {
+    let mut current = payload;
+    for segment in path.split('.') {
+        match current {
+            serde_json::Value::Object(map) => current = map.get(segment)?,
+            _ => return None,
+        }
+    }
+    Some(current)
+}
+
 /// Compare two JSON values for sorting with total ordering.
 ///
 /// Ordering priority (ascending): Null < Bool < Number < String < Array < Object
@@ -156,10 +177,8 @@ impl Collection {
             match &ob.expr {
                 OrderByExpr::Similarity(sim) => {
                     let order_vec = Self::resolve_vector(&sim.vector, params)?;
-                    let scores: Vec<f32> = results
-                        .iter()
-                        .map(|r| self.compute_metric_score(&r.point.vector, &order_vec))
-                        .collect();
+                    let scores =
+                        self.similarity_scores_for_field(results, &sim.field, &order_vec)?;
                     map.insert(idx, scores);
                 }
                 OrderByExpr::SimilarityBare => {
@@ -171,6 +190,45 @@ impl Collection {
             }
         }
         Ok(map)
+    }
+
+    /// Scores every result row against `order_vec` using the vector selected by
+    /// `field`: the default vector when `field == "vector"`, otherwise the named
+    /// payload vector for that row's point id (multi-vector support, P1-A).
+    ///
+    /// A row whose named vector is missing, `None`, or length-mismatched scores
+    /// as least similar (mirroring the MATCH-side `ORDER BY similarity()`): the
+    /// metric-appropriate worst key — `NEG_INFINITY` for higher-is-better
+    /// metrics, `INFINITY` (largest distance) for lower-is-better metrics — so it
+    /// sorts last under DESC regardless of metric.
+    fn similarity_scores_for_field(
+        &self,
+        results: &[SearchResult],
+        field: &str,
+        order_vec: &[f32],
+    ) -> Result<Vec<f32>> {
+        let worst = if self.config.read().metric.higher_is_better() {
+            f32::NEG_INFINITY
+        } else {
+            f32::INFINITY
+        };
+        results
+            .iter()
+            .map(|r| {
+                let vec: std::borrow::Cow<[f32]> = if field == "vector" {
+                    std::borrow::Cow::Borrowed(&r.point.vector)
+                } else {
+                    match self.get_vector_for_field(r.point.id, field)? {
+                        Some(v) => std::borrow::Cow::Owned(v),
+                        None => return Ok(worst),
+                    }
+                };
+                if vec.len() != order_vec.len() || vec.is_empty() {
+                    return Ok(worst);
+                }
+                Ok(self.compute_metric_score(&vec, order_vec))
+            })
+            .collect()
     }
 
     /// Compares two result indices across all ORDER BY columns.
@@ -227,12 +285,12 @@ impl Collection {
             .point
             .payload
             .as_ref()
-            .and_then(|p| p.get(field_name));
+            .and_then(|p| get_nested_payload(p, field_name));
         let val_j = results[j]
             .point
             .payload
             .as_ref()
-            .and_then(|p| p.get(field_name));
+            .and_then(|p| get_nested_payload(p, field_name));
         compare_json_values(val_i, val_j)
     }
 
@@ -419,11 +477,17 @@ impl<'a> ScoreContext<'a> {
     /// Resolution priority:
     /// 1. LET bindings (highest — user-defined score aliases).
     /// 2. Built-in component scores (`vector_score`, `bm25_score`, etc.).
-    /// 3. `search_score` (fused/primary score) for built-in names.
+    /// 3. For a built-in absent from a *tagged* result (component_scores `Some`),
+    ///    the component defaults to `0.0` (per VELESQL_SPEC); on an *untagged*
+    ///    result (component_scores `None`) it falls back to `search_score`.
     /// 4. Payload fields for non-built-in names.
     ///
     /// `fused_score` and `similarity` always resolve to `search_score` (they
     /// represent the combined result, not an individual component).
+    ///
+    /// `graph_score` is reserved: it is never populated as a component, so it
+    /// resolves to `0.0` on tagged results (and to `search_score` only on the
+    /// legacy untagged path).
     fn resolve_variable(&self, name: &str) -> f32 {
         // Priority 1: LET bindings override everything.
         if let Some(val) = self.lookup_let_binding(name) {
@@ -432,11 +496,24 @@ impl<'a> ScoreContext<'a> {
         match name {
             // fused_score and similarity always use the primary fused score.
             "fused_score" | "similarity" => self.search_score,
-            // Component-aware built-ins: check component_scores first.
-            "vector_score" | "graph_score" | "bm25_score" | "sparse_score" => {
-                self.lookup_component(name).unwrap_or(self.search_score)
-            }
+            // Component-aware built-ins: a tagged result (component_scores Some)
+            // defaults an absent component to 0.0; only the untagged legacy path
+            // falls back to the primary search_score.
+            "vector_score" | "graph_score" | "bm25_score" | "sparse_score" => self
+                .lookup_component(name)
+                .unwrap_or_else(|| self.absent_component_default()),
             _ => self.resolve_payload_variable(name),
+        }
+    }
+
+    /// Default for a built-in component absent from this result: `0.0` when the
+    /// result carries a component breakdown (`component_scores` is `Some`),
+    /// otherwise the primary `search_score` (legacy untagged compatibility).
+    fn absent_component_default(&self) -> f32 {
+        if self.component_scores.is_some() {
+            0.0
+        } else {
+            self.search_score
         }
     }
 
@@ -459,7 +536,7 @@ impl<'a> ScoreContext<'a> {
     /// Resolves a variable name from the payload.
     fn resolve_payload_variable(&self, name: &str) -> f32 {
         self.payload
-            .and_then(|p| p.get(name))
+            .and_then(|p| get_nested_payload(p, name))
             .and_then(serde_json::Value::as_f64)
             .map_or(0.0, |v| {
                 #[allow(clippy::cast_possible_truncation)]
