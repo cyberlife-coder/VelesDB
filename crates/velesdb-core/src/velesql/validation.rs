@@ -73,6 +73,7 @@ impl QueryValidator {
         Self::validate_similarity_context(stmt)?;
         Self::validate_qualified_wildcards(stmt)?;
         Self::validate_vector_group_by(stmt)?;
+        super::validation_fusion::validate_fusion(stmt)?;
         stmt.where_clause.as_ref().map_or(Ok(()), |condition| {
             // V011 anchor rule (explicit and implicit binding, guards
             // G1/G2/G3) lives in `validation_anchor.rs`.

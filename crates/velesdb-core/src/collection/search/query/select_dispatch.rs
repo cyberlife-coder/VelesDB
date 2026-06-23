@@ -400,23 +400,15 @@ impl Collection {
             return Ok(None);
         };
 
-        let vector_weight = stmt
-            .fusion_clause
-            .as_ref()
-            .and_then(|fc| fc.vector_weight)
-            .map(|w| {
-                #[allow(clippy::cast_possible_truncation)]
-                let w_f32 = w as f32;
-                w_f32
-            });
-        let rrf_k = stmt.fusion_clause.as_ref().and_then(|fc| fc.k);
-
-        let results = self.hybrid_search_with_anchors(
+        // Route through the strategy-honoring helper so maximum/average/rsf/
+        // weighted are applied to the anchor-restricted streams (#6, anchored).
+        // The anchor set constrains both branches identically, so only the
+        // fusion of the two score streams changes; rrf/unset stays byte-identical.
+        let results = self.hybrid_search_with_anchors_clause(
             vector,
             &text_query,
             limit,
-            vector_weight,
-            rrf_k,
+            stmt.fusion_clause.as_ref(),
             &anchor_ids,
         )?;
         Ok(Some(results))

@@ -22,6 +22,7 @@ mod sparse;
 #[cfg(test)]
 mod sparse_tests;
 mod text;
+mod text_fusion;
 #[cfg(test)]
 mod text_tests;
 mod vector;

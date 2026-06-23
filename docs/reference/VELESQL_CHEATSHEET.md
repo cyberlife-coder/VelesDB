@@ -117,8 +117,9 @@ SELECT * FROM docs
 WHERE vector NEAR $q AND content MATCH 'database'
 LIMIT 10 USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3);
 
--- Inline NEAR_FUSED with a bare strategy string (weighted/rsf fall back to RRF).
-SELECT * FROM products WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'weighted' LIMIT 20;
+-- Inline NEAR_FUSED with a bare strategy string (rrf/average/maximum only;
+-- weighted/rsf are rejected). USING FUSION needs >=2 branches or a NEAR_FUSED.
+SELECT * FROM products WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'rrf' LIMIT 20;
 ```
 
 ---

@@ -777,7 +777,8 @@ literals (`[0.1, 0.2, ...]`).
 | `maximum` | Conservative high-precision | (none) |
 
 Only `rrf`, `average`, and `maximum` are honored. Any other strategy name
-(e.g. `rsf`, `weighted`) falls back to RRF; weight parameters are not read.
+(e.g. `rsf`, `weighted`) is **rejected at validation** — per-branch dense/sparse
+weights are ill-defined over N homogeneous query vectors.
 
 ### Similarity Function (v1.3+)
 
@@ -1508,9 +1509,15 @@ USING FUSION(strategy = 'rrf', k = 60)
 | Strategy | Description | Parameters | Use Case |
 |----------|-------------|------------|----------|
 | `rrf` | Reciprocal Rank Fusion | `k` (default: 60) | Balanced ranking (default) |
-| `weighted` | Weighted combination | `vector_weight`, `graph_weight` | Custom importance |
+| `weighted` | Weighted combination | vector+text: `vector_weight`, `graph_weight`; dense+sparse: `dense_weight`, `sparse_weight` | Custom importance |
 | `maximum` | Take highest score | (none) | Best match wins |
-| `rsf` | Reciprocal Score Fusion | `dense_weight`, `sparse_weight` | Dense + sparse blending |
+| `rsf` | Relative Score Fusion | `dense_weight`, `sparse_weight` (must sum to 1.0) | Dense + sparse blending |
+
+> **USING FUSION requires at least two fusable branches** (e.g. `vector NEAR`
+> + `MATCH`, or `vector NEAR` + `vector SPARSE_NEAR`) or a single `NEAR_FUSED`
+> predicate. Applied to a single-branch query it is rejected at validation.
+> `dense_w`/`sparse_w` are accepted as short aliases of `dense_weight`/`sparse_weight`.
+> Unknown strategy names and unknown option keys are rejected (no silent RRF fallback).
 
 ### Examples
 
@@ -1533,9 +1540,10 @@ SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
 LIMIT 10 USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 
--- Maximum score fusion
+-- Maximum score fusion (requires two fusable branches; USING FUSION on a
+-- single-branch query — e.g. similarity()-only or pure NEAR — is rejected)
 SELECT * FROM docs
-WHERE similarity(embedding, $q1) > 0.5
+WHERE vector NEAR $q AND content MATCH 'transformers'
 LIMIT 10 USING FUSION(strategy = 'maximum')
 ```
 
@@ -3074,9 +3082,11 @@ SELECT * FROM docs
 WHERE vector NEAR $dense_query AND vector SPARSE_NEAR $sparse_query
 LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
--- Multi-vector fusion (text + image embeddings) — inline NEAR_FUSED form
+-- Multi-vector fusion (text + image embeddings) — inline NEAR_FUSED form.
+-- NEAR_FUSED supports only rrf, average, or maximum; 'weighted'/'rsf' are
+-- rejected (ill-defined over homogeneous query vectors).
 SELECT * FROM products
-WHERE vector NEAR_FUSED [$text_emb, $image_emb] USING FUSION 'weighted'
+WHERE vector NEAR_FUSED [$text_emb, $image_emb] USING FUSION 'rrf'
 LIMIT 20
 ```
 
