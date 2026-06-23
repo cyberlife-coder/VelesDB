@@ -292,7 +292,7 @@ fn test_execute_aggregate_resolves_collection_via_param() {
     let groups = value
         .as_array()
         .expect("GROUP BY returns an array of groups");
-    assert_eq!(groups.len(), 2, "two category groups (a, b); got {value:?}");
+    assert_eq!(groups.len(), 2, "two category groups (x, y); got {value:?}");
 }
 
 /// `Database::execute_aggregate` surfaces a `CollectionNotFound` error for an
