@@ -3310,6 +3310,53 @@ async fn test_explain_hybrid_vector_filter_surfaces_filter_step() {
     }
 }
 
+#[tokio::test]
+async fn test_explain_match_query_surfaces_traversal_with_strategy() {
+    // Backlog #14: EXPLAIN of a MATCH query must surface a MatchTraversal step
+    // with a non-empty strategy, not a bare TableScan mislabeled MATCH.
+    let temp_dir = TempDir::new().unwrap();
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query/explain")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "MATCH (a)-[:KNOWS]->(b) RETURN b LIMIT 5"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["query_type"], "MATCH");
+
+    let steps = json["plan"].as_array().unwrap();
+    let traversal = steps
+        .iter()
+        .find(|s| s["operation"] == "MatchTraversal")
+        .unwrap_or_else(|| panic!("expected a MatchTraversal step, got: {steps:?}"));
+    let desc = traversal["description"].as_str().unwrap();
+    assert!(
+        desc.starts_with("Graph traversal: ") && desc.len() > "Graph traversal: ".len(),
+        "traversal strategy must be non-empty: {desc}"
+    );
+    assert!(
+        !steps.iter().any(|s| s["operation"] == "TableScan"),
+        "MATCH EXPLAIN must not contain a TableScan: {steps:?}"
+    );
+}
+
 // ============================================================================
 // GuardRails — rate limit (429)
 // ============================================================================

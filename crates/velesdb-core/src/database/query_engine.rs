@@ -192,7 +192,19 @@ impl Database {
         let primary = &query.select.from;
         let core_stats = self.get_collection_stats(primary).ok().flatten();
         let indexed = self.indexed_fields_for(primary);
-        crate::velesql::QueryPlan::from_query_with_stats(query, &indexed, core_stats.as_ref())
+        // For MATCH queries thread the live graph CollectionStats so the
+        // MatchTraversal strategy reflects the real graph shape (backlog #14).
+        let match_stats = query
+            .match_clause
+            .is_some()
+            .then(|| self.match_stats_for(primary))
+            .flatten();
+        crate::velesql::QueryPlan::from_query_with_all_stats(
+            query,
+            &indexed,
+            core_stats.as_ref(),
+            match_stats.as_ref(),
+        )
     }
 
     /// Executes a query with instrumentation and returns both plan and actual stats.

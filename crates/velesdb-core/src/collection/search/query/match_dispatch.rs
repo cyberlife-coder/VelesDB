@@ -26,7 +26,7 @@ impl Collection {
     /// from the live collection data structures for cost-based strategy selection.
     // Reason: usize->f64 casts are for cost-estimation ratios, not precise calculations.
     #[allow(clippy::cast_precision_loss)]
-    fn compute_match_collection_stats(&self) -> super::match_planner::CollectionStats {
+    pub(crate) fn compute_match_collection_stats(&self) -> super::match_planner::CollectionStats {
         let total_nodes = self.len();
         let total_edges = self.edge_store.len();
         let avg_degree = if total_nodes > 0 {

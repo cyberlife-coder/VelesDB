@@ -377,10 +377,13 @@ impl Collection {
     ) -> Result<crate::velesql::ExplainOutput> {
         use crate::velesql::{build_leaf_node_stats, ActualStats, ExplainOutput, QueryPlan};
 
-        // Use from_query() (not from_select/from_match) to include LET bindings,
-        // keeping the plan consistent with the Database-level explain path.
+        // Thread the live indexed-field set and (for MATCH) the real graph
+        // CollectionStats so the plan emits IndexLookup / a MatchTraversal node
+        // with a calibrated strategy instead of a bare TableScan (backlog #14).
         // Cache fields are unavailable at the Collection level and remain None.
-        let plan = QueryPlan::from_query(query);
+        let indexed = self.indexed_field_names();
+        let match_stats = self.compute_match_collection_stats();
+        let plan = QueryPlan::from_query_with_all_stats(query, &indexed, None, Some(&match_stats));
 
         let start = std::time::Instant::now();
         let (results, nodes, edges) = self.execute_query_counted(query, params)?;
