@@ -1789,7 +1789,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request or batch too large",
             "content": {
               "application/json": {
                 "schema": {
