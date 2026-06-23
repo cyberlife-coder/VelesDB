@@ -5,6 +5,7 @@
 //! filtering, result finalization, and fusion strategy resolution.
 
 use super::{distinct, Collection, ExtractedComponents, Result, SearchResult, MAX_LIMIT};
+use tracing::warn;
 
 impl Collection {
     /// Dispatches sparse-only or hybrid dense+sparse search.
@@ -202,7 +203,15 @@ impl Collection {
                         let dw = fc.dense_weight.unwrap_or(0.5);
                         let sw = fc.sparse_weight.unwrap_or(0.5);
                         crate::fusion::FusionStrategy::relative_score(dw, sw)
-                            .unwrap_or_else(|_| crate::fusion::FusionStrategy::rrf_default())
+                            .unwrap_or_else(|e| {
+                                warn!(
+                                    dense_weight = dw,
+                                    sparse_weight = sw,
+                                    error = %e,
+                                    "RSF fusion strategy invalid; falling back to RRF"
+                                );
+                                crate::fusion::FusionStrategy::rrf_default()
+                            })
                     }
                     FusionStrategyType::Rrf => crate::fusion::FusionStrategy::RRF {
                         k: fc.k.unwrap_or(60),
@@ -219,7 +228,16 @@ impl Collection {
                         #[allow(clippy::cast_precision_loss)]
                         let k = fc.k.unwrap_or(60) as f32;
                         crate::fusion::FusionStrategy::weighted_rrf(vec![dw, sw], k)
-                            .unwrap_or_else(|_| crate::fusion::FusionStrategy::rrf_default())
+                            .unwrap_or_else(|e| {
+                                warn!(
+                                    dense_weight = dw,
+                                    sparse_weight = sw,
+                                    k,
+                                    error = %e,
+                                    "Weighted RRF fusion strategy invalid; falling back to RRF"
+                                );
+                                crate::fusion::FusionStrategy::rrf_default()
+                            })
                     }
                 }
             })
