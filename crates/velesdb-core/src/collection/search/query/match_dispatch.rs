@@ -195,16 +195,8 @@ impl Collection {
             .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
 
         let mut sorted = match_results;
-        if let Some(order_by) = match_clause.return_clause.order_by.as_ref() {
-            // Establish a deterministic baseline before the per-column sorts, so
-            // rows equal on every ORDER BY key resolve identically. Only when
-            // ORDER BY is present, so traversal-order output is otherwise kept.
-            sort_match_baseline(&mut sorted);
-            for item in order_by.iter().rev() {
-                self.order_match_results(&mut sorted, &item.expr, item.descending, params)
-                    .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-            }
-        }
+        self.apply_match_order_by(&mut sorted, match_clause, params)
+            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
 
         let mut results = self
             .match_results_to_search_results(sorted)
@@ -213,8 +205,7 @@ impl Collection {
         ctx.check_cardinality(results.len())
             .map_err(crate::error::Error::from)
             .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
-        if let Some(limit) = match_clause.return_clause.limit {
-            let limit = usize::try_from(limit).unwrap_or(MAX_LIMIT).min(MAX_LIMIT);
+        if let Some(limit) = match_return_limit(match_clause) {
             results.truncate(limit);
         }
         // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
@@ -226,6 +217,40 @@ impl Collection {
         self.guard_rails.circuit_breaker.record_success();
         Ok(results)
     }
+
+    /// Applies RETURN `ORDER BY` (with the deterministic `(node_id, depth, path)`
+    /// tie-break baseline) to raw MATCH results in place. Sorts only when an
+    /// ORDER BY is present, so traversal-order output is otherwise preserved.
+    ///
+    /// Single source of truth shared by the SQL `/query` finalize path and the
+    /// direct `execute_match` / `execute_match_with_similarity` entry points
+    /// (REST `/match`, the SDKs) so every surface orders identically.
+    pub(in crate::collection::search::query) fn apply_match_order_by(
+        &self,
+        results: &mut [super::match_exec::MatchResult],
+        match_clause: &crate::velesql::MatchClause,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<()> {
+        if let Some(order_by) = match_clause.return_clause.order_by.as_ref() {
+            sort_match_baseline(results);
+            for item in order_by.iter().rev() {
+                self.order_match_results(results, &item.expr, item.descending, params)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Computes the effective RETURN `LIMIT` for a MATCH query, clamped to the
+/// server-wide `MAX_LIMIT` ceiling. `None` means no LIMIT was specified, so the
+/// caller leaves the result set unbounded (subject only to `MAX_LIMIT` upstream).
+pub(in crate::collection::search::query) fn match_return_limit(
+    match_clause: &crate::velesql::MatchClause,
+) -> Option<usize> {
+    match_clause
+        .return_clause
+        .limit
+        .map(|l| usize::try_from(l).unwrap_or(MAX_LIMIT).min(MAX_LIMIT))
 }
 
 /// Deterministic ORDER BY tie-break baseline keyed by `(node_id, depth, path)` —

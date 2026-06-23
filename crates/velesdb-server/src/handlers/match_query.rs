@@ -366,4 +366,59 @@ mod tests {
         assert!(json.contains("John Doe"));
         assert!(json.contains("author.name"));
     }
+
+    /// Regression (parity backlog #1): the graph REST `/match` handler must honor
+    /// `RETURN ... ORDER BY`, matching the SQL `/query` pipeline. This exercises
+    /// the exact handler path (`parse_match_clause` -> `execute_match`) that
+    /// previously bypassed the ordering finalize step and returned raw traversal
+    /// order. Ages are scrambled vs id order so traversal order != requested
+    /// age-descending order.
+    #[test]
+    fn test_match_handler_applies_return_order_by() {
+        use velesdb_core::collection::VectorCollection;
+        use velesdb_core::{DistanceMetric, Point, StorageMode};
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let coll = VectorCollection::create(
+            temp.path().to_path_buf(),
+            "people",
+            4,
+            DistanceMetric::Cosine,
+            StorageMode::default(),
+        )
+        .expect("create collection");
+
+        let ages = [(1_u64, 30), (2, 10), (3, 50), (4, 20), (5, 40)];
+        let points: Vec<Point> = ages
+            .iter()
+            .map(|(id, age)| {
+                Point::new(
+                    *id,
+                    vec![1.0, 0.0, 0.0, 0.0],
+                    Some(serde_json::json!({"_labels": ["Person"], "age": age})),
+                )
+            })
+            .collect();
+        coll.upsert(points).expect("upsert Person nodes");
+
+        let collection = MatchCollection::Vector(coll);
+        let request = MatchQueryRequest {
+            query: "MATCH (n:Person) RETURN n ORDER BY n.age DESC LIMIT 10".to_string(),
+            params: HashMap::new(),
+            vector: None,
+            threshold: None,
+        };
+        let clause = parse_match_clause(&request.query).expect("parse MATCH clause");
+        let results = execute_match(&collection, &clause, &request).expect("execute_match");
+
+        let ids: Vec<u64> = results
+            .iter()
+            .map(|r| *r.bindings.get("n").expect("binding 'n'"))
+            .collect();
+        assert_eq!(
+            ids,
+            vec![3, 5, 1, 4, 2],
+            "/match must honor RETURN ORDER BY n.age DESC (ages 50,40,30,20,10)"
+        );
+    }
 }

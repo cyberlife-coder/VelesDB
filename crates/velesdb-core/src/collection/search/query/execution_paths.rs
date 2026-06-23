@@ -12,7 +12,10 @@ impl Collection {
         let anchor_alias = Self::resolve_anchor_alias(predicate, from_aliases)?;
         let clause = Self::build_anchor_match_clause(predicate);
 
-        let matches = self.execute_match(&clause, params)?;
+        // Anchor evaluation needs the full unordered match set (it collects bound
+        // ids into a set), so use the raw primitive rather than the ORDER BY/LIMIT
+        // entry point.
+        let matches = self.execute_match_with_context(&clause, params, None)?;
         let mut ids = HashSet::with_capacity(matches.len());
         for m in matches {
             if let Some(id) = m.bindings.get(&anchor_alias) {

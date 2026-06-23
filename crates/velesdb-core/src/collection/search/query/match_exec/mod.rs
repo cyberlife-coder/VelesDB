@@ -213,12 +213,23 @@ impl Collection {
     ///
     /// Returns an error if the query cannot be executed.
     /// Executes a MATCH query without guard-rail context (backward-compatible entry point).
+    ///
+    /// Direct entry point for the graph REST `/match` endpoint and the SDK
+    /// bindings. Applies RETURN `ORDER BY` and the post-sort `LIMIT` so these
+    /// surfaces match the SQL `/query` pipeline (which finalizes via
+    /// `finalize_match_results`); without it the result would be raw traversal
+    /// order with the ordering clause silently ignored.
     pub fn execute_match(
         &self,
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
-        self.execute_match_with_context(match_clause, params, None)
+        let mut results = self.execute_match_with_context(match_clause, params, None)?;
+        self.apply_match_order_by(&mut results, match_clause, params)?;
+        if let Some(limit) = super::match_dispatch::match_return_limit(match_clause) {
+            results.truncate(limit);
+        }
+        Ok(results)
     }
 
     /// Executes a MATCH query on this collection (EPIC-045 US-002, EPIC-048).
