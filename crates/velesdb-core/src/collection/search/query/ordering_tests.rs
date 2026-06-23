@@ -563,6 +563,108 @@ mod tests {
             );
         }
 
+        /// Bug #4 regression: ORDER BY a nested/dotted payload field must sort.
+        /// Previously `compare_payload_field` did a flat lookup, so `meta.source`
+        /// compared Equal for every row and the sort was a silent no-op.
+        #[test]
+        fn test_order_by_nested_payload_field_sorts() {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let col = Collection::create(PathBuf::from(dir.path()), 4, DistanceMetric::Cosine)
+                .expect("create collection");
+
+            let points = vec![
+                Point {
+                    id: 1,
+                    vector: vec![1.0, 0.0, 0.0, 0.0],
+                    payload: Some(serde_json::json!({"meta": {"source": "charlie"}})),
+                    sparse_vectors: None,
+                },
+                Point {
+                    id: 2,
+                    vector: vec![0.9, 0.1, 0.0, 0.0],
+                    payload: Some(serde_json::json!({"meta": {"source": "bravo"}})),
+                    sparse_vectors: None,
+                },
+                Point {
+                    id: 3,
+                    vector: vec![0.8, 0.2, 0.0, 0.0],
+                    payload: Some(serde_json::json!({"meta": {"source": "alpha"}})),
+                    sparse_vectors: None,
+                },
+            ];
+            col.upsert(points).expect("upsert");
+
+            let query = "SELECT * FROM t ORDER BY meta.source ASC LIMIT 10";
+            let parsed = Parser::parse(query).expect("parse");
+            let params = HashMap::new();
+            let results = col.execute_query(&parsed, &params).expect("execute");
+
+            let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+            // alpha(id 3) < bravo(id 2) < charlie(id 1)
+            assert_eq!(
+                ids,
+                vec![3, 2, 1],
+                "ORDER BY nested payload meta.source ASC must sort, got {ids:?}"
+            );
+        }
+
+        /// Bug #5 regression: ORDER BY similarity(named_field, $v) must score the
+        /// NAMED payload vector, not the default vector. Multiple rows survive the
+        /// WHERE filter so the ORDER BY of the survivors is what is under test; the
+        /// `image_vec` ranking is deliberately the REVERSE of the default-vector
+        /// ranking, so a default-vector sort would invert the expected order.
+        #[test]
+        fn test_order_by_similarity_named_vector_field() {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let col = Collection::create(PathBuf::from(dir.path()), 4, DistanceMetric::Cosine)
+                .expect("create collection");
+
+            // For $q = [1,0,0,0]:
+            //   image_vec cosine: id1=0.6, id2=0.8, id3=1.0  (image ranking 3>2>1)
+            //   default cosine:   id1=1.0, id2=0.8, id3=0.6  (default ranking 1>2>3)
+            // All three clear the > 0.5 image_vec filter, so the survivor set is
+            // {1,2,3} and only the ORDER BY decides the sequence.
+            let points = vec![
+                Point {
+                    id: 1,
+                    vector: vec![1.0, 0.0, 0.0, 0.0],
+                    payload: Some(serde_json::json!({"image_vec": [0.6, 0.8, 0.0, 0.0]})),
+                    sparse_vectors: None,
+                },
+                Point {
+                    id: 2,
+                    vector: vec![0.8, 0.6, 0.0, 0.0],
+                    payload: Some(serde_json::json!({"image_vec": [0.8, 0.6, 0.0, 0.0]})),
+                    sparse_vectors: None,
+                },
+                Point {
+                    id: 3,
+                    vector: vec![0.6, 0.8, 0.0, 0.0],
+                    payload: Some(serde_json::json!({"image_vec": [1.0, 0.0, 0.0, 0.0]})),
+                    sparse_vectors: None,
+                },
+            ];
+            col.upsert(points).expect("upsert");
+
+            let mut params = HashMap::new();
+            params.insert("q".to_string(), serde_json::json!([1.0, 0.0, 0.0, 0.0]));
+
+            let query = "SELECT * FROM t WHERE similarity(image_vec, $q) > 0.5 \
+                         ORDER BY similarity(image_vec, $q) DESC LIMIT 10";
+            let parsed = Parser::parse(query).expect("parse");
+            let results = col.execute_query(&parsed, &params).expect("execute");
+            let by_image: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+
+            // image_vec similarity DESC => 3 (1.0) > 2 (0.8) > 1 (0.6).
+            // A default-vector sort would yield 1 > 2 > 3 (the reverse).
+            assert_eq!(
+                by_image,
+                vec![3, 2, 1],
+                "ORDER BY similarity(image_vec,$q) must rank by the NAMED vector \
+                 (3,2,1), got {by_image:?}"
+            );
+        }
+
         /// EPIC-042: Integration test for arithmetic ORDER BY with execute_query.
         /// Verifies that `ORDER BY 0.7 * similarity() + 0.3 * priority DESC`
         /// returns results sorted by the weighted combination.

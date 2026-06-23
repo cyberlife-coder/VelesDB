@@ -23,6 +23,28 @@ release.
   configured thresholds. Unknown options and non-bool values still error.
 
 ### Fixed
+- **Unpopulated built-in score variables now default to `0`, not the primary
+  score.** In `ORDER BY`/`LET` arithmetic, a built-in score component absent from
+  a result's component breakdown (e.g. `bm25_score` on a `NEAR`-only query) used
+  to resolve to the fused/primary `search_score` instead of `0`, so a hybrid
+  formula like `0.7 * vector_score + 0.3 * bm25_score` evaluated to the full
+  vector score rather than `0.7 ×` it. Tagged results now default an absent
+  component to `0` (per `VELESQL_SPEC`); untagged legacy results keep the
+  `search_score` fallback. `graph_score` (never populated) is reserved and
+  resolves to `0` on tagged results.
+  *(Behavior change: hybrid `ORDER BY`/`LET` scores using an unpopulated
+  component change ranking.)*
+- **`ORDER BY similarity(field, $v)` now scores the named vector field.** The
+  `SELECT`-side `ORDER BY similarity(image_vec, $q)` ignored the field and always
+  scored the default vector, so rows were ranked by the wrong vector. It now
+  resolves each row's named payload vector (missing/length-mismatched vectors
+  sort last, matching the `MATCH`-side convention).
+  *(Behavior change: queries ordering by a named/secondary vector re-rank.)*
+- **`ORDER BY` on a nested/dotted payload field now sorts.** `ORDER BY meta.source`
+  did a flat top-level lookup, so every row compared equal and the sort was a
+  silent no-op. Dotted paths now walk nested objects (consistent with
+  projection/filter/aggregation).
+  *(Behavior change: previously-unsorted queries now sort.)*
 - **`EXPLAIN ANALYZE` reports real graph traversal counters.** `nodes_visited`
   and `edges_traversed` for `MATCH` queries were a fabricated proxy equal to the
   result-row count; they now report the actual walk — edges followed and nodes
