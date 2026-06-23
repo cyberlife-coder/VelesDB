@@ -30,6 +30,7 @@ use axum::{
 use futures::stream::{self, Stream};
 use std::convert::Infallible;
 use std::time::Instant;
+use tracing::warn;
 
 use std::sync::Arc;
 
@@ -151,6 +152,18 @@ fn build_sse_events(
     }
 }
 
+/// Serializes an SSE event payload to JSON, logging a warning if serialization fails.
+///
+/// All current event types contain only primitives and are practically infallible.
+/// The fallback exists as a safety net: it emits a well-formed JSON error object
+/// rather than the misleading `"{}"` that would silently mask a real schema bug.
+fn serialize_sse_event<T: serde::Serialize>(event: &T, event_type: &str) -> String {
+    serde_json::to_string(event).unwrap_or_else(|e| {
+        warn!(event_type, error = %e, "SSE event serialization failed; sending error fallback");
+        r#"{"error":"internal: event serialization failed"}"#.to_string()
+    })
+}
+
 fn build_success_events(
     results: Vec<TraversalResultItem>,
     start_time: Instant,
@@ -169,7 +182,7 @@ fn build_success_events(
             depth: item.depth,
             path: item.path,
         };
-        let event_data = serde_json::to_string(&node_event).unwrap_or_else(|_| "{}".to_string());
+        let event_data = serialize_sse_event(&node_event, "node");
         events.push(Ok(Event::default().event("node").data(event_data)));
 
         if (i + 1) % STATS_INTERVAL == 0 {
@@ -177,8 +190,7 @@ fn build_success_events(
                 nodes_visited: i + 1,
                 elapsed_ms: elapsed_ms(start_time),
             };
-            let stats_data =
-                serde_json::to_string(&stats_event).unwrap_or_else(|_| "{}".to_string());
+            let stats_data = serialize_sse_event(&stats_event, "stats");
             events.push(Ok(Event::default().event("stats").data(stats_data)));
         }
     }
@@ -188,7 +200,7 @@ fn build_success_events(
         max_depth_reached: max_depth,
         elapsed_ms: elapsed_ms(start_time),
     };
-    let done_data = serde_json::to_string(&done_event).unwrap_or_else(|_| "{}".to_string());
+    let done_data = serialize_sse_event(&done_event, "done");
     events.push(Ok(Event::default().event("done").data(done_data)));
 
     events
@@ -196,7 +208,7 @@ fn build_success_events(
 
 fn build_error_events(error: String) -> Vec<Result<Event, Infallible>> {
     let error_event = StreamErrorEvent { error };
-    let error_data = serde_json::to_string(&error_event).unwrap_or_else(|_| "{}".to_string());
+    let error_data = serialize_sse_event(&error_event, "error");
     vec![Ok(Event::default().event("error").data(error_data))]
 }
 
