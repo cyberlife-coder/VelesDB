@@ -28,31 +28,9 @@ pub fn execute_query(
     let parsed = velesdb_core::velesql::Parser::parse(query)
         .map_err(|e| anyhow::anyhow!("Parse error: {}", e.message))?;
 
-    // Check if there's a vector search requiring parameters (SELECT or MATCH WHERE).
-    let has_param_vector = parsed
-        .select
-        .where_clause
-        .as_ref()
-        .is_some_and(contains_param_vector)
-        || parsed
-            .match_clause
-            .as_ref()
-            .and_then(|m| m.where_clause.as_ref())
-            .is_some_and(contains_param_vector);
-
-    if has_param_vector {
-        // Vector search with parameter requires external input
-        println!(
-            "{}",
-            "Note: Vector search with $parameter requires REST API. Use literal vectors or metadata-only queries."
-                .yellow()
-        );
-        let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-        return Ok(QueryResult {
-            rows: Vec::new(),
-            duration_ms,
-            kind: QueryKind::Select,
-        });
+    // $parameter vectors can't be supplied from the REPL (use the REST API).
+    if has_param_vector(&parsed) {
+        return Ok(param_vector_unsupported_result(start));
     }
 
     // Aggregation (GROUP BY / COUNT / SUM / ...) routes through the dedicated
@@ -62,24 +40,81 @@ pub fn execute_query(
         return run_aggregation_query(db, &parsed, active_collection, start);
     }
 
-    let kind = query_kind(&parsed);
+    run_row_query(db, &parsed, active_collection, start)
+}
 
-    let results = if parsed.is_match_query() {
-        route_match_query(db, &parsed, active_collection)?
+/// Returns `true` when a SELECT or MATCH `WHERE` references a `$parameter`
+/// vector, which the REPL cannot supply (the user must use the REST API).
+fn has_param_vector(parsed: &velesdb_core::velesql::Query) -> bool {
+    parsed
+        .select
+        .where_clause
+        .as_ref()
+        .is_some_and(contains_param_vector)
+        || parsed
+            .match_clause
+            .as_ref()
+            .and_then(|m| m.where_clause.as_ref())
+            .is_some_and(contains_param_vector)
+}
+
+/// The placeholder result shown when a query needs a `$parameter` vector the
+/// REPL cannot supply.
+fn param_vector_unsupported_result(start: Instant) -> QueryResult {
+    println!(
+        "{}",
+        "Note: Vector search with $parameter requires REST API. Use literal vectors or metadata-only queries."
+            .yellow()
+    );
+    QueryResult {
+        rows: Vec::new(),
+        duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+        kind: QueryKind::Select,
+    }
+}
+
+/// Runs a row-returning query (MATCH, plain SELECT, or DML/DDL) and builds the
+/// display rows. Plain `SELECT`s are projected through the core projection
+/// engine (column selection, `AS` aliases, window functions) for parity with the
+/// REST `/query` API; MATCH and DML/DDL keep the raw id+score+payload rendering.
+fn run_row_query(
+    db: &Database,
+    parsed: &velesdb_core::velesql::Query,
+    active_collection: Option<&str>,
+    start: Instant,
+) -> Result<QueryResult> {
+    let kind = query_kind(parsed);
+    let rows = if parsed.is_match_query() {
+        let results = route_match_query(db, parsed, active_collection)?;
+        results.into_iter().map(result_to_row).collect()
     } else {
-        let params = HashMap::new();
-        db.execute_query(&parsed, &params)
-            .map_err(|e| anyhow::anyhow!("Query error: {e}"))?
+        let results = db
+            .execute_query(parsed, &HashMap::new())
+            .map_err(|e| anyhow::anyhow!("Query error: {e}"))?;
+        if matches!(kind, QueryKind::Select) {
+            project_select_rows(&results, &parsed.select.columns)
+        } else {
+            results.into_iter().map(result_to_row).collect()
+        }
     };
-
-    let rows = results.into_iter().map(result_to_row).collect();
-    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-
     Ok(QueryResult {
         rows,
-        duration_ms,
+        duration_ms: start.elapsed().as_secs_f64() * 1000.0,
         kind,
     })
+}
+
+/// Projects plain `SELECT` results through the core projection engine, matching
+/// the REST API (only the requested columns, with `AS` aliases and window
+/// functions) instead of always emitting id+score+full payload.
+fn project_select_rows(
+    results: &[velesdb_core::SearchResult],
+    columns: &velesdb_core::velesql::SelectColumns,
+) -> Vec<HashMap<String, serde_json::Value>> {
+    velesdb_core::collection::search::query::projection::project_results(results, columns)
+        .into_iter()
+        .map(json_object_to_row)
+        .collect()
 }
 
 /// Determine the [`QueryKind`] of a parsed query for display purposes.

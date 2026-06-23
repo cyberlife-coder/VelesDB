@@ -66,3 +66,40 @@ fn test_execute_query_routes_group_by_having_aggregation() {
         "COUNT(*) for category 'a' must be 2; row={row:?}"
     );
 }
+
+/// Regression (parity backlog #3): a plain `SELECT <col>` must project only the
+/// requested column (matching the REST `/query` API), not return id + score +
+/// the full payload. Pre-fix the REPL's `result_to_row` ignored the column list.
+#[test]
+fn test_execute_query_projects_selected_columns() {
+    let dir = TempDir::new().expect("temp dir");
+    let db = Database::open(dir.path()).expect("open db");
+    db.create_collection("docs", 2, DistanceMetric::Cosine)
+        .expect("create collection");
+    let coll = db.get_vector_collection("docs").expect("vector collection");
+    coll.upsert(vec![Point::new(
+        1,
+        vec![1.0, 0.0],
+        Some(serde_json::json!({"title": "alpha", "category": "x"})),
+    )])
+    .expect("upsert");
+
+    let result =
+        execute_query(&db, "SELECT category FROM docs", None).expect("select should succeed");
+
+    assert_eq!(result.rows.len(), 1, "one matching row");
+    let row = &result.rows[0];
+    assert_eq!(
+        row.get("category"),
+        Some(&serde_json::json!("x")),
+        "the projected column must be present; row={row:?}"
+    );
+    assert!(
+        !row.contains_key("title"),
+        "a non-selected payload field must be dropped; row={row:?}"
+    );
+    assert!(
+        !row.contains_key("id") && !row.contains_key("score"),
+        "id/score must not be auto-appended for an explicit column list; row={row:?}"
+    );
+}
