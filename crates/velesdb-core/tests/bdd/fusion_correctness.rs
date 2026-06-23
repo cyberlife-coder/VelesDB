@@ -171,6 +171,27 @@ fn bug10_explain_text_hybrid_matches_execution() {
     assert_eq!(rrf, "RRF", "EXPLAIN must report executed RRF");
 }
 
+/// A negative `graph_weight` on the weighted NEAR + MATCH path must be
+/// rejected at validate-time instead of being silently clamped (the weighted
+/// vector+text path normalizes `vector_weight/(vector_weight+graph_weight)`, so
+/// a negative `graph_weight` would otherwise pass and degrade to `1.0`).
+#[test]
+fn bug10_weighted_negative_graph_weight_rejected() {
+    let (_dir, db) = create_test_db();
+    setup_hybrid_docs(&db);
+
+    let err = execute_sql(
+        &db,
+        "SELECT * FROM docs WHERE vector NEAR [1.0, 0.0] AND content MATCH 'learning' \
+         LIMIT 2 USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = -0.2)",
+    )
+    .expect_err("test: negative graph_weight must be rejected");
+    assert!(
+        err.to_string().contains("FUSION"),
+        "expected FUSION validation marker, got: {err}"
+    );
+}
+
 // ============================================================================
 // #15 — NEAR_FUSED rejects weighted/rsf; relative_score alias; unknown reject
 // ============================================================================

@@ -129,7 +129,14 @@ fn validate_rsf_weights(fc: &super::ast::FusionClause) -> Result<(), ValidationE
     Ok(())
 }
 
-/// Weighted dense/sparse weights must be non-negative.
+/// Weighted weights must be non-negative on both the dense/sparse and the
+/// vector/graph (NEAR + MATCH) branches.
+///
+/// The NEAR + MATCH `weighted` path normalizes
+/// `vector_weight / (vector_weight + graph_weight)`, so a negative
+/// `graph_weight` (or `vector_weight`) would otherwise pass validation and be
+/// silently clamped to `1.0` at execution time. Rejecting it here keeps the
+/// execution-time fallback unreachable.
 fn validate_weighted_weights(fc: &super::ast::FusionClause) -> Result<(), ValidationError> {
     let dw = fc.dense_weight.unwrap_or(0.5);
     let sw = fc.sparse_weight.unwrap_or(0.5);
@@ -137,6 +144,14 @@ fn validate_weighted_weights(fc: &super::ast::FusionClause) -> Result<(), Valida
         return Err(fusion_error(
             "USING FUSION(strategy='weighted')",
             "USING FUSION Weighted dense_weight/sparse_weight must be non-negative",
+        ));
+    }
+    let vw = fc.vector_weight.unwrap_or(0.5);
+    let gw = fc.graph_weight.unwrap_or(0.5);
+    if vw < 0.0 || gw < 0.0 {
+        return Err(fusion_error(
+            "USING FUSION(strategy='weighted')",
+            "USING FUSION Weighted vector_weight/graph_weight must be non-negative",
         ));
     }
     Ok(())
