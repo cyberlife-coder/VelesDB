@@ -252,7 +252,7 @@ impl Collection {
         ctx: Option<&QueryContext>,
     ) -> Result<Vec<MatchResult>> {
         if match_clause.patterns.is_empty() {
-            return Err(Error::Config(
+            return Err(Error::Query(
                 "MATCH query must have at least one pattern".to_string(),
             ));
         }

@@ -26,8 +26,8 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns `Error::Config` if the field is not `"vector"` and the payload
-    /// either has no such field or the value is not a JSON array of numbers.
+    /// Returns `Error::Query` if the field is not `"vector"` and the payload
+    /// value exists but is not a JSON array of numbers.
     pub(crate) fn get_vector_for_field(
         &self,
         point_id: u64,
@@ -55,7 +55,7 @@ impl Collection {
 
         let Some(array) = value.as_array() else {
             // Field exists but is not an array — this IS a data error.
-            return Err(Error::Config(format!(
+            return Err(Error::Query(format!(
                 "similarity() field '{}' is not a numeric array in payload.",
                 field
             )));
@@ -68,7 +68,7 @@ impl Collection {
 
         match vec {
             Some(v) => Ok(Some(v)),
-            None => Err(Error::Config(format!(
+            None => Err(Error::Query(format!(
                 "similarity() field '{}' contains non-numeric values.",
                 field
             ))),

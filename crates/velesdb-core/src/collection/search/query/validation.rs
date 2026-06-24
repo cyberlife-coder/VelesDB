@@ -46,7 +46,7 @@ impl Collection {
 
         // Multiple similarity() in OR is not supported (would require union of vector searches)
         if similarity_count > 1 && Self::has_multiple_similarity_in_or(condition) {
-            return Err(Error::Config(
+            return Err(Error::Query(
                 "Multiple similarity() conditions in OR are not supported. \
                 Use AND to apply filters sequentially, or split into separate queries."
                     .to_string(),
@@ -71,7 +71,7 @@ impl Collection {
                 || vector_or_sparse_count > fused_count
                 || fused_under_or_or_not(condition))
         {
-            return Err(Error::Config(
+            return Err(Error::Query(
                 "NEAR_FUSED must be the only vector predicate and cannot appear under OR/NOT; \
                  combine it only with AND <metadata filter>."
                     .to_string(),

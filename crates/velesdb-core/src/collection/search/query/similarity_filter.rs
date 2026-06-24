@@ -280,7 +280,7 @@ impl Collection {
                 // Extract from inside NOT
                 let conditions = self.extract_all_similarity_conditions(inner, params)?;
                 conditions.into_iter().next().ok_or_else(|| {
-                    crate::error::Error::Config(
+                    crate::error::Error::Query(
                         "NOT clause does not contain a similarity condition".to_string(),
                     )
                 })
@@ -290,7 +290,7 @@ impl Collection {
                 self.extract_not_similarity_condition(left, params)
                     .or_else(|_| self.extract_not_similarity_condition(right, params))
             }
-            _ => Err(crate::error::Error::Config(
+            _ => Err(crate::error::Error::Query(
                 "Expected NOT similarity() condition".to_string(),
             )),
         }

@@ -162,7 +162,7 @@ impl Collection {
             SelectColumns::Aggregations(aggs) => aggs,
             SelectColumns::Mixed { aggregations, .. } => aggregations,
             _ => {
-                return Err(crate::error::Error::Config(
+                return Err(crate::error::Error::Query(
                     "execute_aggregate requires aggregation functions in SELECT".to_string(),
                 ))
             }
@@ -186,7 +186,7 @@ impl Collection {
         }
 
         if stmt.having.is_some() {
-            return Err(crate::error::Error::Config(
+            return Err(crate::error::Error::Query(
                 "HAVING clause requires GROUP BY clause".to_string(),
             ));
         }

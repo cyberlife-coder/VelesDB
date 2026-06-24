@@ -39,11 +39,11 @@ impl Collection {
         from_aliases: &[String],
     ) -> Result<String> {
         let first_node = predicate.pattern.nodes.first().ok_or_else(|| {
-            crate::error::Error::Config("MATCH predicate requires at least one node".to_string())
+            crate::error::Error::Query("MATCH predicate requires at least one node".to_string())
         })?;
 
         let anchor_alias = first_node.alias.clone().ok_or_else(|| {
-            crate::error::Error::Config(
+            crate::error::Error::Query(
                 "MATCH predicate in SELECT WHERE requires an alias on the first node, \
                  e.g. MATCH (d:Doc)-[:REL]->(x)"
                     .to_string(),
@@ -76,7 +76,7 @@ impl Collection {
             .filter_map(|node| node.alias.as_deref())
             .find(|alias| from_aliases.iter().any(|f| f == alias));
         if let Some(declared) = declared {
-            return Err(crate::error::Error::Config(format!(
+            return Err(crate::error::Error::Query(format!(
                 "MATCH predicate anchor alias '{anchor_alias}' must be the declared \
                  FROM/JOIN alias '{declared}' used elsewhere in the pattern"
             )));
@@ -89,7 +89,7 @@ impl Collection {
             .first()
             .is_some_and(|node| node.collection.is_some())
         {
-            return Err(crate::error::Error::Config(format!(
+            return Err(crate::error::Error::Query(format!(
                 "MATCH predicate anchor alias '{anchor_alias}' has a @collection \
                  override; anchor on one of the FROM/JOIN aliases: {from_aliases:?}"
             )));

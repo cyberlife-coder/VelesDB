@@ -35,7 +35,7 @@ impl Collection {
         let first_node = pattern
             .nodes
             .first()
-            .ok_or_else(|| Error::Config("Pattern must have at least one node".to_string()))?;
+            .ok_or_else(|| Error::Query("Pattern must have at least one node".to_string()))?;
 
         // Fast path: use label index when labels are specified.
         if !first_node.labels.is_empty() {

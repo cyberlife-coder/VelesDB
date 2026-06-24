@@ -293,7 +293,7 @@ impl Collection {
 ///
 /// # Errors
 ///
-/// Returns `Error::Config` when no similarity condition is found.
+/// Returns `Error::Query` when no similarity condition is found.
 fn extract_similarity_condition(where_clause: Option<&Condition>) -> Result<&SimilarityCondition> {
     fn find_sim(cond: &Condition) -> Option<&SimilarityCondition> {
         match cond {
@@ -305,7 +305,7 @@ fn extract_similarity_condition(where_clause: Option<&Condition>) -> Result<&Sim
     }
 
     where_clause.and_then(find_sim).ok_or_else(|| {
-        Error::Config(
+        Error::Query(
             "VectorFirst strategy requires a similarity condition in WHERE clause".to_string(),
         )
     })
