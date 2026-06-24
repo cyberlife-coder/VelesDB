@@ -156,6 +156,38 @@ release.
   parsed and silently degraded to a non-fused scan; these shapes are now
   rejected.
   *(Behavior change: previously-silent degraded queries now error.)*
+- **WASM `SELECT` now projects columns, aliases, and window functions.** A
+  plain/vector `SELECT` in the browser runtime always returned `id` + `score` +
+  the full payload, ignoring the projection list: `SELECT category` returned
+  every field, `SELECT title AS name` kept `title`, and
+  `ROW_NUMBER()/RANK() OVER (...)` columns were dropped entirely. The finalize
+  path now runs core's window evaluator before sorting and projects each row by
+  the parsed `SELECT` list (id-precedence, dotted-path lookup, alias handling,
+  similarity-score materialization), matching the REST surface.
+  *(Behavior change: WASM `SELECT` rows now carry only the requested columns.)*
+- **WASM `SELECT ORDER BY` arithmetic now sorts, and a LIMIT-less `SELECT`
+  defaults to 10 rows.** `ORDER BY (price - 2 * score)` (and other arithmetic /
+  score-variable expressions) used to map to a no-op `Equal` comparison, so rows
+  came back in scan order; they now evaluate the formula per row (mirroring
+  core's arithmetic semantics, division-by-zero → 0). `ORDER BY
+  similarity(field, $v)` against a named vector — which WASM does not store —
+  and aggregate `ORDER BY` outside aggregation are now **rejected loudly**
+  instead of silently no-op'ing (parity with the MATCH path). A `SELECT` with no
+  `LIMIT` now caps at `DEFAULT_SELECT_LIMIT` (10) like every other surface,
+  rather than returning every row.
+  *(Behavior change: WASM ORDER BY re-orders / errors, and unbounded SELECTs cap
+  at 10.)*
+- **WASM single-vector `NEAR` + `USING FUSION` no longer leaks filtered rows.**
+  A `vector NEAR $v AND <metadata> USING FUSION(...)` query fused the real vector
+  ranking against a synthetic constant-`1.0` payload branch and returned the
+  fused UNION, so rows failing the `WHERE` metadata predicate leaked into the
+  result (and `weighted`/`rsf` rankings were meaningless). The metadata predicate
+  is now applied as a **hard filter** (parity with core), so only matching rows
+  survive; `weighted` / `rsf` over a single-vector `NEAR` (which has no second
+  scored branch in WASM) are **rejected** with a clear error. `rrf` / `maximum`
+  / `average` keep ranking the (now hard-filtered) vector results.
+  *(Behavior change: WASM fused single-`NEAR` queries drop WHERE-failing rows;
+  weighted/rsf single-branch fusion errors.)*
 
 ## [3.2.1] — 2026-06-20
 

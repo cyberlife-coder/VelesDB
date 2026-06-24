@@ -65,7 +65,7 @@ fn test_similarity_combined_with_payload_filter() {
 // =========================================================================
 
 #[test]
-fn test_fusion_rrf_returns_ranked_results() {
+fn test_fusion_rrf_applies_metadata_as_hard_filter() {
     let mut db = db_with_vectors();
     let r = execute(
         &mut db,
@@ -73,17 +73,53 @@ fn test_fusion_rrf_returns_ranked_results() {
         Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
     )
     .expect("test: rrf fusion");
-    // RRF fuses the union of the NEAR branch (all ids) and the cat='a' payload branch.
+    // #9(b): a single-vector NEAR has no real second scored branch, so the
+    // metadata predicate `cat='a'` is a HARD filter (parity with core), not a
+    // soft fusion branch. Only cat='a' rows survive; the previous UNION-leak
+    // (4 rows) is gone.
     assert_eq!(
         r.row_count(),
-        4,
-        "RRF fuses the union of the NEAR branch (all ids) and the cat='a' payload branch"
+        2,
+        "metadata predicate is a hard filter under single-vector NEAR fusion"
     );
     let ids: Vec<u64> = (0..r.row_count() as usize)
         .map(|i| r.row(i).expect("test: row").id())
         .collect();
-    for id in [1u64, 2, 3, 4] {
-        assert!(ids.contains(&id), "fused result must contain id {id}");
+    assert!(ids.contains(&1) && ids.contains(&2));
+    assert!(!ids.contains(&3) && !ids.contains(&4));
+}
+
+#[test]
+fn test_weighted_fusion_single_branch_does_not_leak_filtered_rows() {
+    // #9: `vector NEAR $v AND cat='tech' USING FUSION(weighted)` over a
+    // single-vector NEAR has no real second scored branch. The result must
+    // contain ONLY cat='tech' rows (no WHERE-failing leak) and never extra
+    // rows polluted by a constant-1.0 fusion branch — or error loudly.
+    let mut db = db_with_vectors();
+    let result = execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE vector NEAR $q AND cat = 'a' LIMIT 10 \
+         USING FUSION (strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3)",
+        Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+    );
+    match result {
+        Ok(r) => {
+            let ids: Vec<u64> = (0..r.row_count() as usize)
+                .map(|i| r.row(i).expect("test: row").id())
+                .collect();
+            assert!(
+                ids.iter().all(|id| *id == 1 || *id == 2),
+                "only cat='a' rows (1, 2) may appear, got {ids:?}"
+            );
+            assert!(
+                !ids.contains(&3) && !ids.contains(&4),
+                "cat='b' rows must not leak through fusion"
+            );
+        }
+        Err(msg) => assert!(
+            msg.to_lowercase().contains("fusion"),
+            "rejection must name fusion, got: {msg}"
+        ),
     }
 }
 
