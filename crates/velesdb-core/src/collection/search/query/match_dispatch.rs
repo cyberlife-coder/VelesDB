@@ -307,6 +307,12 @@ impl Collection {
         self.apply_match_order_by(&mut sorted, match_clause, params)
             .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
 
+        // Final cardinality check for MATCH path (EPIC-048 US-003), matching
+        // `finalize_match_results` so the ordered surface rejects oversized
+        // result sets identically to the SQL path.
+        ctx.check_cardinality(sorted.len())
+            .map_err(crate::error::Error::from)
+            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
         if let Some(limit) = match_return_limit(match_clause) {
             sorted.truncate(limit);
         }
