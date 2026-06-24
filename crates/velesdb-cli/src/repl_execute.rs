@@ -3,12 +3,12 @@
 //! Extracted from `repl.rs` to keep module size under 500 NLOC.
 
 use anyhow::Result;
-use colored::Colorize;
 use instant::Instant;
 use std::collections::HashMap;
 use velesdb_core::Database;
 
 use crate::repl::{QueryKind, QueryResult};
+use crate::session::SessionSettings;
 
 /// Execute a `VelesQL` query and return results.
 ///
@@ -21,16 +21,25 @@ pub fn execute_query(
     db: &Database,
     query: &str,
     active_collection: Option<&str>,
+    session: Option<&SessionSettings>,
 ) -> Result<QueryResult> {
     let start = Instant::now();
 
     // Parse the query
-    let parsed = velesdb_core::velesql::Parser::parse(query)
+    let mut parsed = velesdb_core::velesql::Parser::parse(query)
         .map_err(|e| anyhow::anyhow!("Parse error: {}", e.message))?;
 
     // $parameter vectors can't be supplied from the REPL (use the REST API).
+    // Returning Err (not Ok-empty) makes the REPL print a red error and scripts
+    // exit non-zero instead of silently treating 0 rows as success.
     if has_param_vector(&parsed) {
-        return Ok(param_vector_unsupported_result(start));
+        return Err(param_vector_unsupported_error());
+    }
+
+    // Apply REPL session settings (mode/ef_search into the AST WITH-options,
+    // max_results as a LIMIT cap). Inline overrides always win.
+    if let Some(session) = session {
+        apply_session_settings(&mut parsed, session);
     }
 
     // Aggregation (GROUP BY / COUNT / SUM / ...) routes through the dedicated
@@ -41,6 +50,58 @@ pub fn execute_query(
     }
 
     run_row_query(db, &parsed, active_collection, start)
+}
+
+/// Applies REPL session settings to a parsed query before execution.
+///
+/// `mode` and an explicit `ef_search` are injected into the SELECT `WITH`
+/// options (only when not already present — an inline `WITH(...)` always wins),
+/// and `max_results` caps the effective `LIMIT`. Match/aggregate queries are not
+/// touched (those clauses only steer the vector-search pipeline).
+pub fn apply_session_settings(
+    parsed: &mut velesdb_core::velesql::Query,
+    session: &SessionSettings,
+) {
+    if parsed.is_match_query() {
+        return;
+    }
+    inject_session_with_options(&mut parsed.select, session);
+    cap_limit_to_max_results(&mut parsed.select, session.max_results());
+}
+
+/// Injects the session `mode`/`ef_search` into the SELECT `WITH` options,
+/// preserving any inline override (inline wins).
+fn inject_session_with_options(
+    select: &mut velesdb_core::velesql::SelectStatement,
+    session: &SessionSettings,
+) {
+    use velesdb_core::velesql::{WithClause, WithValue};
+
+    let with = select.with_clause.get_or_insert_with(WithClause::new);
+    if with.get_mode().is_none() {
+        with.options.push(velesdb_core::velesql::WithOption {
+            key: "mode".to_string(),
+            value: WithValue::String(session.mode_str()),
+        });
+    }
+    if let Some(ef) = session.ef_search() {
+        if with.get_ef_search().is_none() {
+            with.options.push(velesdb_core::velesql::WithOption {
+                key: "ef_search".to_string(),
+                value: WithValue::Integer(i64::try_from(ef).unwrap_or(i64::MAX)),
+            });
+        }
+    }
+}
+
+/// Caps the effective `LIMIT` at the session `max_results`: a missing `LIMIT`
+/// becomes `max_results`, and a larger explicit `LIMIT` is reduced to it.
+fn cap_limit_to_max_results(
+    select: &mut velesdb_core::velesql::SelectStatement,
+    max_results: usize,
+) {
+    let cap = max_results as u64;
+    select.limit = Some(select.limit.map_or(cap, |l| l.min(cap)));
 }
 
 /// Returns `true` when a SELECT or MATCH `WHERE` references a `$parameter`
@@ -58,19 +119,14 @@ fn has_param_vector(parsed: &velesdb_core::velesql::Query) -> bool {
             .is_some_and(contains_param_vector)
 }
 
-/// The placeholder result shown when a query needs a `$parameter` vector the
-/// REPL cannot supply.
-fn param_vector_unsupported_result(start: Instant) -> QueryResult {
-    println!(
-        "{}",
-        "Note: Vector search with $parameter requires REST API. Use literal vectors or metadata-only queries."
-            .yellow()
-    );
-    QueryResult {
-        rows: Vec::new(),
-        duration_ms: start.elapsed().as_secs_f64() * 1000.0,
-        kind: QueryKind::Select,
-    }
+/// The error returned when a query needs a `$parameter` vector the REPL cannot
+/// supply. Surfaced as an `Err` so the REPL prints it red and scripts exit
+/// non-zero rather than seeing an empty (silently-successful) result.
+fn param_vector_unsupported_error() -> anyhow::Error {
+    anyhow::anyhow!(
+        "Vector search with $parameter requires the REST API. \
+         Use literal vectors or metadata-only queries."
+    )
 }
 
 /// Runs a row-returning query (MATCH, plain SELECT, or DML/DDL) and builds the
