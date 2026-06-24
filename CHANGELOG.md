@@ -67,6 +67,19 @@ release.
   *(Behavior change: several previously-accepted FUSION queries now error.)*
 
 ### Fixed
+- **TypeScript SDK `velesql()` builder now emits parseable VelesQL.** Three
+  builder bugs produced strings the core parser rejected or that dropped
+  intent: `nearVector({ topK })` emitted a non-existent `vector NEAR $q TOP n`
+  (there is no `TOP` keyword — `topK` now maps to `LIMIT`); `toVelesQL()`
+  always prefixed `MATCH` and placed `ORDER BY` / `LIMIT` **before** the
+  mandatory `RETURN` (MATCH output now always emits `RETURN` first, defaulting
+  to `RETURN *`); and `.fusion(...)` rendered an inert `/* FUSION x */` comment
+  that dropped the strategy and weights (now a real
+  `USING FUSION(strategy='...', ...)` clause). A new `from()` / `select()`
+  SELECT mode covers vector / hybrid search (the README "vector similarity with
+  filters" example, previously a hard parse error). A round-trip test now feeds
+  every builder output through the real `@wiscale/velesdb-wasm` parser.
+  *(Behavior change: builder output strings changed — see the SDK README.)*
 - **`USING FUSION(strategy = ...)` now takes effect on the dense-`NEAR` +
   text-`MATCH` hybrid.** The hybrid path always ran plain weighted RRF and
   ignored `strategy`, `graph_weight`, and (for `weighted`) the text-branch
@@ -82,6 +95,16 @@ release.
   *(Behavior change: non-`rrf` FUSION on NEAR+MATCH changes rankings.)*
 
 ### Added
+- **TypeScript SDK: typed `db.setAutoReindex()` / `db.alterCollection()` and a
+  typed `nearFused()` builder.** `db.setAutoReindex(name, bool)` and
+  `db.alterCollection(name, { autoReindex })` route a valid
+  `ALTER COLLECTION ... SET(auto_reindex=...)` through the existing `/query`
+  path (previously only reachable via a raw `db.query()` string). The query
+  builder gains `nearFused(paramNames, vectors, { strategy })` for multi-vector
+  fused search; its `strategy` type only allows `rrf` / `average` / `maximum`,
+  so the `weighted` / `relative_score` trap (which the engine silently degrades
+  to RRF over homogeneous query vectors) is a **compile-time error**. Purely
+  additive.
 - **`ALTER COLLECTION <name> SET (auto_reindex = true|false)` now applies and
   persists.** Previously parsed but rejected with a feature-gap error, it now
   attaches (or re-configures) an `AutoReindexManager` on the collection and
