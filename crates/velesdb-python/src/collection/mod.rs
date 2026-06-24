@@ -177,7 +177,8 @@ impl Collection {
     /// Get collection configuration info.
     ///
     /// Returns:
-    ///     Dict with name, dimension, metric, storage_mode, point_count, and metadata_only
+    ///     Dict with name, dimension, metric, storage_mode, point_count,
+    ///     metadata_only, and auto_reindex
     fn info(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let config = self.inner.config();
         let dict = PyDict::new(py);
@@ -193,6 +194,11 @@ impl Collection {
         );
         let _ = dict.set_item(PyString::intern(py, "point_count"), config.point_count);
         let _ = dict.set_item(PyString::intern(py, "metadata_only"), config.metadata_only);
+        let auto_reindex = config
+            .auto_reindex_config
+            .as_ref()
+            .is_some_and(|c| c.enabled);
+        let _ = dict.set_item(PyString::intern(py, "auto_reindex"), auto_reindex);
         Ok(dict.into_any().unbind())
     }
 
