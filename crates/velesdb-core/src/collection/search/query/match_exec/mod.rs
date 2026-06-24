@@ -260,10 +260,7 @@ impl Collection {
         // Documented contract (VELESQL_SPEC "Default LIMIT"): MATCH ... RETURN
         // has no implicit LIMIT 10 — results are bounded only by the
         // server-wide MAX_LIMIT ceiling shared with compound queries.
-        let limit = match_clause
-            .return_clause
-            .limit
-            .map_or(super::MAX_LIMIT, |l| l as usize);
+        let limit = traversal_limit(match_clause);
         let mut all_results: Vec<MatchResult> = Vec::new();
         let mut iteration_count: u32 = 0;
         let mut reported_cardinality: usize = 0;
@@ -434,6 +431,25 @@ impl Collection {
         }
         Ok(())
     }
+}
+
+/// Computes the traversal-phase candidate cap for a MATCH clause.
+///
+/// Without a RETURN `ORDER BY`, the LIMIT applies to traversal order, so the
+/// early-break at `return_clause.limit` is correct and stops traversal as soon
+/// as enough rows are collected. WITH an `ORDER BY`, the post-sort LIMIT must
+/// select the GLOBAL top-K, so traversal must visit the full candidate set
+/// (bounded only by the shared `MAX_LIMIT` ceiling and the guard-rails) before
+/// the sort — otherwise the LIMIT would be applied to the first-K-traversed
+/// rows instead of the globally ordered set (backlog #1b).
+fn traversal_limit(match_clause: &MatchClause) -> usize {
+    if match_clause.return_clause.order_by.is_some() {
+        return super::MAX_LIMIT;
+    }
+    match_clause
+        .return_clause
+        .limit
+        .map_or(super::MAX_LIMIT, |l| l as usize)
 }
 
 // Tests moved to match_exec_tests.rs per project rules

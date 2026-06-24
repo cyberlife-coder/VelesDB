@@ -90,39 +90,38 @@ impl MatchQueryPlanner {
     #[must_use]
     pub fn plan(match_clause: &MatchClause, stats: &CollectionStats) -> MatchExecutionStrategy {
         let has_similarity = Self::has_similarity_condition(match_clause.where_clause.as_ref());
-        let similarity_info = Self::extract_similarity_info(match_clause.where_clause.as_ref());
-        let similarity_on_start =
-            Self::is_similarity_on_start(match_clause, similarity_info.as_ref());
         let start_labels = Self::extract_start_labels(match_clause);
         let max_depth = Self::count_hops(match_clause);
-        // Audit 2026-06 F2: VectorFirst (alone or as a Parallel leg) validates
-        // candidates without binding relationship aliases, so `r.prop` would
-        // silently resolve against node payloads. Force GraphFirst whenever
-        // WHERE or RETURN references a relationship alias of the pattern.
-        let edge_alias_referenced = Self::references_relationship_alias(match_clause);
-
-        if has_similarity && similarity_on_start && !edge_alias_referenced {
-            Self::plan_vector_first(match_clause, stats, similarity_info)
-        } else if !has_similarity {
-            MatchExecutionStrategy::GraphFirst {
-                start_labels,
-                max_depth,
-            }
-        } else if !edge_alias_referenced
-            && Self::should_use_parallel(stats, similarity_info.as_ref())
+        // A vector strategy may short-cut ONLY for a start-similarity condition,
+        // and NEVER when:
+        //   * WHERE/RETURN references a relationship alias — VectorFirst validates
+        //     candidates without binding edge aliases, so `r.prop` would silently
+        //     resolve against node payloads (audit 2026-06 F2); or
+        //   * an ORDER BY targets a non-similarity key (payload field, arithmetic,
+        //     aggregate) — VectorFirst's approximate-HNSW, LIMIT-bounded prefix
+        //     cannot yield the global top-K, which only GraphFirst's exact label
+        //     enumeration + post-sort LIMIT guarantees (backlog #1b).
+        if has_similarity
+            && !Self::references_relationship_alias(match_clause)
+            && !order_by_needs_full_candidates(&match_clause.return_clause)
         {
-            Self::plan_parallel(
-                match_clause,
-                stats,
-                similarity_info,
-                start_labels,
-                max_depth,
-            )
-        } else {
-            MatchExecutionStrategy::GraphFirst {
-                start_labels,
-                max_depth,
+            let similarity_info = Self::extract_similarity_info(match_clause.where_clause.as_ref());
+            if Self::is_similarity_on_start(match_clause, similarity_info.as_ref()) {
+                return Self::plan_vector_first(match_clause, stats, similarity_info);
             }
+            if Self::should_use_parallel(stats, similarity_info.as_ref()) {
+                return Self::plan_parallel(
+                    match_clause,
+                    stats,
+                    similarity_info,
+                    start_labels,
+                    max_depth,
+                );
+            }
+        }
+        MatchExecutionStrategy::GraphFirst {
+            start_labels,
+            max_depth,
         }
     }
 
@@ -392,6 +391,27 @@ impl MatchQueryPlanner {
 fn column_targets_alias(column: &str, aliases: &[&str]) -> bool {
     let prefix = column.split('.').next().unwrap_or(column);
     aliases.contains(&prefix)
+}
+
+/// Whether the RETURN `ORDER BY` needs the full WHERE-matching candidate set
+/// rather than the similarity-ranked prefix `VectorFirst` produces.
+///
+/// `VectorFirst` fetches a similarity-top-K subset via approximate HNSW, so it
+/// can only honor an `ORDER BY` that *is* the start-node similarity (its natural
+/// output). An `ORDER BY` on a payload field, arithmetic, or aggregate requires
+/// every WHERE-matching node to be ranked, which only `GraphFirst`'s exact
+/// enumeration guarantees (backlog #1b). `Similarity`/`SimilarityBare` orderings
+/// stay on `VectorFirst` (no perf regression for the canonical top-K).
+fn order_by_needs_full_candidates(return_clause: &crate::velesql::ReturnClause) -> bool {
+    use crate::velesql::OrderByExpr;
+    return_clause.order_by.as_ref().is_some_and(|items| {
+        items.iter().any(|item| {
+            matches!(
+                item.expr,
+                OrderByExpr::Field(_) | OrderByExpr::Aggregate(_) | OrderByExpr::Arithmetic(_)
+            )
+        })
+    })
 }
 
 /// Checks whether an ORDER BY expression targets one of `aliases` (used to keep

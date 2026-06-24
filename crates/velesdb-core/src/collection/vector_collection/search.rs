@@ -377,6 +377,23 @@ impl VectorCollection {
             .execute_match_with_similarity(match_clause, query_vector, threshold, params)
     }
 
+    /// Executes a MATCH query through the cost-based planner, returning ordered
+    /// [`MatchResult`](crate::collection::search::query::match_exec::MatchResult)s
+    /// with RETURN `ORDER BY`, deterministic tie-break, and post-sort LIMIT
+    /// applied — identical to the SQL `/query` path (backlog #1).
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if a guard-rail pre-check fails.
+    /// - Returns an error if traversal, ordering, or execution fails.
+    pub fn match_query_ordered(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> crate::error::Result<Vec<crate::collection::search::query::match_exec::MatchResult>> {
+        self.inner.match_query_ordered(match_clause, params)
+    }
+
     /// Executes an aggregation query (GROUP BY / COUNT / SUM / AVG / MIN / MAX).
     ///
     /// # Errors
