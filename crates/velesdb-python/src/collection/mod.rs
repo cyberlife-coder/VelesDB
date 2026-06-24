@@ -117,19 +117,23 @@ impl Collection {
         top_k: usize,
         filter: Option<&Filter>,
         sparse_index_name: Option<&str>,
+        fusion: Option<&CoreFusionStrategy>,
     ) -> PyResult<Vec<SearchResult>> {
         use crate::collection_helpers::core_err;
         use pyo3::exceptions::PyValueError;
 
         let index_name =
             sparse_index_name.unwrap_or(velesdb_core::sparse_index::DEFAULT_SPARSE_INDEX_NAME);
+        // Hybrid dense+sparse honors a caller-supplied fusion strategy
+        // (backlog #24); other paths ignore it. Default preserves RRF k=60.
+        let fusion = fusion.unwrap_or(&DEFAULT_FUSION);
 
         match (dense, sparse, filter) {
             (Some(d), Some(s), Some(f)) => {
                 // No native hybrid_sparse_search_with_filter — run unfiltered then post-filter
                 let mut results = self
                     .inner
-                    .hybrid_sparse_search(&d, &s, top_k, index_name, &DEFAULT_FUSION)
+                    .hybrid_sparse_search(&d, &s, top_k, index_name, fusion)
                     .map_err(core_err)?;
                 results.retain(|r| {
                     r.point
@@ -141,7 +145,7 @@ impl Collection {
             }
             (Some(d), Some(s), None) => self
                 .inner
-                .hybrid_sparse_search(&d, &s, top_k, index_name, &DEFAULT_FUSION)
+                .hybrid_sparse_search(&d, &s, top_k, index_name, fusion)
                 .map_err(core_err),
             (Some(d), None, Some(f)) => self
                 .inner
@@ -173,7 +177,8 @@ impl Collection {
     /// Get collection configuration info.
     ///
     /// Returns:
-    ///     Dict with name, dimension, metric, storage_mode, point_count, and metadata_only
+    ///     Dict with name, dimension, metric, storage_mode, point_count,
+    ///     metadata_only, and auto_reindex
     fn info(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let config = self.inner.config();
         let dict = PyDict::new(py);
@@ -189,6 +194,11 @@ impl Collection {
         );
         let _ = dict.set_item(PyString::intern(py, "point_count"), config.point_count);
         let _ = dict.set_item(PyString::intern(py, "metadata_only"), config.metadata_only);
+        let auto_reindex = config
+            .auto_reindex_config
+            .as_ref()
+            .is_some_and(|c| c.enabled);
+        let _ = dict.set_item(PyString::intern(py, "auto_reindex"), auto_reindex);
         Ok(dict.into_any().unbind())
     }
 

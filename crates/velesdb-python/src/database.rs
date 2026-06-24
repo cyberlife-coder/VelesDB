@@ -569,10 +569,21 @@ impl Database {
     ///
     /// - ``SELECT … FROM … WHERE …``
     /// - ``CREATE [GRAPH|METADATA] COLLECTION …``
+    /// - ``CREATE INDEX ON <collection> (<field>)`` / ``DROP INDEX …``
+    /// - ``ALTER COLLECTION <name> SET (auto_reindex = true|false)``
+    ///   (see :py:meth:`set_auto_reindex` for a typed helper)
     /// - ``DROP COLLECTION [IF EXISTS] …``
     /// - ``INSERT EDGE INTO …``
     /// - ``DELETE FROM … WHERE …``
     /// - ``DELETE EDGE … FROM …``
+    ///
+    /// Hybrid fusion note:
+    ///     Typed hybrid dense+sparse search (``search_request`` with both
+    ///     ``vector`` and ``sparse_vector``) uses Reciprocal Rank Fusion
+    ///     (RRF, k=60) by default. To choose another strategy, pass a
+    ///     :py:class:`FusionStrategy` via ``SearchOptions(fusion=...)`` /
+    ///     ``with_fusion(...)``, or run raw VelesQL with a
+    ///     ``USING FUSION(...)`` clause through this method.
     ///
     /// Args:
     ///     sql: VelesQL query string.
@@ -628,6 +639,40 @@ impl Database {
             .detach(move || inner.execute_query(&parsed, &rust_params))
             .map_err(core_err)?;
         Ok(search_results_to_multimodel_dicts(py, results))
+    }
+
+    /// Toggle automatic re-indexing on a collection at runtime.
+    ///
+    /// Routes a validated ``ALTER COLLECTION <name> SET (auto_reindex = …)``
+    /// statement through the VelesQL DDL executor and persists the change so
+    /// it survives a restart. This is the typed counterpart to running the
+    /// raw ALTER statement via :py:meth:`execute_query`.
+    ///
+    /// Args:
+    ///     name: Collection name.
+    ///     enabled: ``True`` to enable auto-reindex, ``False`` to disable it.
+    ///
+    /// Raises:
+    ///     ValueError: If the collection name fails to parse.
+    ///     RuntimeError: If the collection does not exist or the change fails.
+    ///
+    /// Example:
+    ///     >>> db.set_auto_reindex("documents", True)
+    ///     >>> db.get_collection("documents").info()["auto_reindex"]
+    ///     True
+    #[pyo3(signature = (name, enabled))]
+    fn set_auto_reindex(&self, py: Python<'_>, name: &str, enabled: bool) -> PyResult<()> {
+        use crate::collection::query::parse_velesql;
+
+        // Backtick-quote the identifier so names with hyphens/spaces parse,
+        // doubling any embedded backtick per the grammar's escaping rule.
+        let quoted = name.replace('`', "``");
+        let sql = format!("ALTER COLLECTION `{quoted}` SET (auto_reindex = {enabled})");
+        let parsed = parse_velesql(&sql)?;
+        let inner = Arc::clone(&self.inner);
+        py.detach(move || inner.execute_query(&parsed, &std::collections::HashMap::new()))
+            .map_err(core_err)?;
+        Ok(())
     }
 
     /// Get an existing graph collection by name.

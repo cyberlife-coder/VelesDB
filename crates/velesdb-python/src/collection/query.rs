@@ -45,18 +45,30 @@ pub(crate) fn parse_velesql(query_str: &str) -> PyResult<velesdb_core::velesql::
     })
 }
 
-/// Builds an EXPLAIN dict from a parsed VelesQL query.
+/// Validates a parsed VelesQL query, mapping validation failures to a typed
+/// `ValueError` so EXPLAIN rejects semantically-invalid queries instead of
+/// silently building a plan (mirrors `Database::explain_analyze_query`).
+pub(crate) fn validate_query(parsed: &velesdb_core::velesql::Query) -> PyResult<()> {
+    velesdb_core::velesql::QueryValidator::validate(parsed)
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Builds an EXPLAIN dict from a parsed VelesQL query, threading the live
+/// indexed-field set and calibrated collection statistics so the plan emits
+/// `IndexLookup` nodes and a calibrated cost for SELECT, and a real traversal
+/// strategy for MATCH (backlog #14) — mirroring `Database::explain_query`.
 pub(crate) fn build_explain_dict(
     py: Python<'_>,
     parsed: &velesdb_core::velesql::Query,
+    indexed_fields: &std::collections::HashSet<String>,
+    stats: Option<&velesdb_core::collection::stats::CollectionStats>,
 ) -> Py<PyAny> {
-    let plan = if let Some(match_clause) = parsed.match_clause.as_ref() {
-        let stats =
-            velesdb_core::collection::search::query::match_planner::CollectionStats::default();
-        velesdb_core::velesql::QueryPlan::from_match(match_clause, &stats)
-    } else {
-        velesdb_core::velesql::QueryPlan::from_select(&parsed.select)
-    };
+    let plan = velesdb_core::velesql::QueryPlan::from_query_with_all_stats(
+        parsed,
+        indexed_fields,
+        stats,
+        None,
+    );
 
     let dict = PyDict::new(py);
     let _ = dict.set_item(
@@ -337,16 +349,27 @@ impl Collection {
             if let Some(ref qv) = qv {
                 inner.execute_match_with_similarity(&mc, qv, threshold, &p)
             } else {
-                inner.execute_match(&mc, &p)
+                // Route through the cost-based planner so RETURN ORDER BY,
+                // deterministic tie-break, and post-sort LIMIT match the SQL
+                // /query path exactly (backlog #1).
+                inner.match_query_ordered(&mc, &p)
             }
         })
     }
 
     /// Return query execution plan (EXPLAIN).
+    ///
+    /// The plan is calibrated with this collection's live indexed-field set
+    /// and statistics, so a SELECT whose WHERE targets an indexed field shows
+    /// an `IndexLookup` node and a MATCH reports a real traversal strategy.
+    /// Semantically invalid queries raise `ValueError`.
     #[pyo3(signature = (query_str))]
     fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<Py<PyAny>> {
         let parsed = parse_velesql(query_str)?;
-        Ok(build_explain_dict(py, &parsed))
+        validate_query(&parsed)?;
+        let indexed = self.inner.config().indexed_fields.iter().cloned().collect();
+        let stats = self.inner.analyze().ok();
+        Ok(build_explain_dict(py, &parsed, &indexed, stats.as_ref()))
     }
 
     /// Execute a query with instrumentation and return plan + actual stats (EXPLAIN ANALYZE).
