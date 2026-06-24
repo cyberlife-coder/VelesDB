@@ -4210,7 +4210,7 @@ async fn test_search_with_generous_timeout_returns_200() {
 }
 
 /// Negative: a search with `timeout_ms: 0` yields an immediate timeout.
-/// The handler must return 408 Request Timeout with a VELES-QUERY-TIMEOUT
+/// The handler must return 408 Request Timeout with the canonical VELES-027
 /// error code, not 200 with the results. The `tokio::time::timeout`
 /// wrapper fires on the very next runtime tick after the worker is
 /// spawned, so this deterministic test will always see the elapsed
@@ -4252,8 +4252,8 @@ async fn test_search_with_zero_timeout_returns_408() {
     let json: Value = serde_json::from_slice(&body).expect("test: parse json");
     assert_eq!(
         json["code"].as_str(),
-        Some("VELES-QUERY-TIMEOUT"),
-        "error code must be VELES-QUERY-TIMEOUT, got: {}",
+        Some("VELES-027"),
+        "timeout error code must be the canonical VELES-027, got: {}",
         json["code"]
     );
     let error_msg = json["error"].as_str().expect("error field");
