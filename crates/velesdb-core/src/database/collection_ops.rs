@@ -200,6 +200,27 @@ impl Database {
         std::collections::HashSet::new()
     }
 
+    /// Returns the live graph `CollectionStats` (node/edge counts, average
+    /// degree, label selectivity) for the named collection, used by the
+    /// `MatchQueryPlanner` to choose a traversal strategy in EXPLAIN of a
+    /// MATCH query (backlog #14). `None` when the collection does not exist.
+    #[must_use]
+    pub(crate) fn match_stats_for(
+        &self,
+        name: &str,
+    ) -> Option<crate::collection::search::query::match_planner::CollectionStats> {
+        if let Some(vc) = self.vector_colls.read().get(name) {
+            return Some(vc.inner.compute_match_collection_stats());
+        }
+        if let Some(gc) = self.graph_colls.read().get(name) {
+            return Some(gc.inner.compute_match_collection_stats());
+        }
+        if let Some(mc) = self.metadata_colls.read().get(name) {
+            return Some(mc.inner.compute_match_collection_stats());
+        }
+        None
+    }
+
     /// Returns the analyze generation for a named collection, if it exists
     /// (issue #608).
     ///

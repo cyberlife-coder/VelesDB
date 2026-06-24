@@ -109,10 +109,33 @@ impl QueryPlan {
         indexed_fields: &HashSet<String>,
         stats: Option<&CoreCollectionStats>,
     ) -> Self {
-        // MATCH and compound queries have no implicit default LIMIT.
-        let implicit_limit = query.match_clause.is_none() && query.compound.is_none();
-        let mut plan =
-            Self::build_select_plan(&query.select, indexed_fields, stats, implicit_limit);
+        Self::from_query_with_all_stats(query, indexed_fields, stats, None)
+    }
+
+    /// Creates a full query plan from a `Query`, threading both calibrated
+    /// `CoreCollectionStats` (SELECT cost estimation) and graph
+    /// `CollectionStats` (MATCH traversal-strategy selection).
+    ///
+    /// MATCH queries route through [`Self::from_match`] so the EXPLAIN/exec
+    /// path emits a `MatchTraversal` node with a real strategy instead of a
+    /// bare `TableScan` mislabeled MATCH (backlog #14). `match_stats` is `None`
+    /// on the pure-AST path (default graph stats); the Database layer supplies
+    /// the live graph stats from `compute_match_collection_stats`.
+    #[must_use]
+    pub fn from_query_with_all_stats(
+        query: &crate::velesql::ast::Query,
+        indexed_fields: &HashSet<String>,
+        stats: Option<&CoreCollectionStats>,
+        match_stats: Option<&CollectionStats>,
+    ) -> Self {
+        let mut plan = if let Some(ref match_clause) = query.match_clause {
+            let default_stats = CollectionStats::default();
+            Self::from_match(match_clause, match_stats.unwrap_or(&default_stats))
+        } else {
+            // Compound queries have no implicit default LIMIT either.
+            let implicit_limit = query.compound.is_none();
+            Self::build_select_plan(&query.select, indexed_fields, stats, implicit_limit)
+        };
         plan.let_bindings = Self::format_let_bindings(&query.let_bindings);
         plan
     }

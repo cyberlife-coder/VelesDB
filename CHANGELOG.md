@@ -65,8 +65,26 @@ release.
   persists the policy, so the setting survives a restart (restored on the next
   open). Setting `false` keeps the policy attached but disabled, preserving any
   configured thresholds. Unknown options and non-bool values still error.
+- **EXPLAIN ANALYZE now flags approximate graph-traversal counters.** The REST
+  `actual_stats` object carries a new machine-readable boolean
+  `traversal_counters_approximate` (mirroring `node_stats.estimated`): `true`
+  when `nodes_visited` / `edges_traversed` are strategy-dependent approximations
+  (a lower bound — `VectorFirst` undercounts via its `limit(1)` BFS frontier,
+  `Parallel` double-counts shared nodes), `false` for non-graph queries where
+  both counters are 0. The `node_stats` heuristic time/row fields and the
+  `VELESQL_SPEC` are relabeled so the estimated values are no longer presented as
+  measured/actual. *(Additive: the field is appended to `actual_stats`.)*
 
 ### Fixed
+- **EXPLAIN of a MATCH query now shows the graph traversal and its strategy.**
+  `EXPLAIN`/`EXPLAIN ANALYZE` of a MATCH query (REST `/query/explain`, core
+  `Database`/`Collection` explain paths) previously emitted a bare empty
+  `TableScan` mislabeled `MATCH` because the plan builder never routed MATCH
+  clauses through the traversal planner. The plan now carries a `MatchTraversal`
+  step with a real, non-empty strategy (`GraphFirst` / `VectorFirst` /
+  `Parallel`), and the Database/Collection explain paths thread the live graph
+  `CollectionStats` so the chosen strategy reflects the actual graph shape.
+  *(Behavior change: the EXPLAIN plan steps for MATCH queries change.)*
 - **Unpopulated built-in score variables now default to `0`, not the primary
   score.** In `ORDER BY`/`LET` arithmetic, a built-in score component absent from
   a result's component breakdown (e.g. `bm25_score` on a `NEAR`-only query) used

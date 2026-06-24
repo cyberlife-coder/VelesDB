@@ -3392,13 +3392,14 @@
     "schemas": {
       "ActualStatsResponse": {
         "type": "object",
-        "description": "Actual execution statistics for EXPLAIN ANALYZE responses.",
+        "description": "Actual execution statistics for EXPLAIN ANALYZE responses.\n\n`actual_rows`, `actual_time_ms`, and `loops` are measured. The graph\ntraversal counters `nodes_visited` / `edges_traversed` are **strategy-\ndependent approximations** (a lower bound, not an exact figure):\n`VectorFirst` undercounts via its `limit(1)` existence-BFS frontier and\n`Parallel` double-counts a node touched by both legs. The\n`traversal_counters_approximate` flag exposes this honesty contract in a\nmachine-readable form (backlog #26), mirroring [`NodeStatsResponse::estimated`].",
         "required": [
           "actual_rows",
           "actual_time_ms",
           "loops",
           "nodes_visited",
-          "edges_traversed"
+          "edges_traversed",
+          "traversal_counters_approximate"
         ],
         "properties": {
           "actual_rows": {
@@ -3415,7 +3416,7 @@
           "edges_traversed": {
             "type": "integer",
             "format": "int64",
-            "description": "Number of edges traversed.",
+            "description": "Approximate number of edges traversed during MATCH graph traversal.\nSee `traversal_counters_approximate`; 0 for non-graph queries.",
             "minimum": 0
           },
           "loops": {
@@ -3427,8 +3428,12 @@
           "nodes_visited": {
             "type": "integer",
             "format": "int64",
-            "description": "Number of nodes visited (for graph traversal).",
+            "description": "Approximate number of nodes visited during MATCH graph traversal.\nSee `traversal_counters_approximate`; 0 for non-graph queries.",
             "minimum": 0
+          },
+          "traversal_counters_approximate": {
+            "type": "boolean",
+            "description": "When `true`, `nodes_visited` and `edges_traversed` are strategy-dependent\napproximations (a lower bound), not exact measured counts. Always `false`\nfor non-graph queries, where both counters are 0."
           }
         }
       },
