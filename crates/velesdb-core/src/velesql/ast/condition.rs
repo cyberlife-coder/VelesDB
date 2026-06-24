@@ -298,32 +298,37 @@ impl Condition {
     }
 
     /// Returns `true` if this condition (or any nested sub-condition) compares
-    /// against a **correlated** subquery (one referencing an outer column).
+    /// against a subquery that is **genuinely correlated** against `outer_tables`
+    /// (its inner WHERE references one of the outer query's tables/aliases).
     ///
-    /// Scalar (non-correlated) subqueries are executable and resolved before the
-    /// outer query runs; correlated ones are rejected by validation.
+    /// Scalar (non-correlated) subqueries — including those whose inner WHERE
+    /// merely filters on a payload path like `meta.cat` — are executable and
+    /// resolved before the outer query runs; correlated ones are rejected by
+    /// validation.
     #[must_use]
-    pub fn has_correlated_subquery(&self) -> bool {
-        self.leaf_has_correlated_subquery()
+    pub fn has_correlated_subquery(&self, outer_tables: &[&str]) -> bool {
+        self.leaf_has_correlated_subquery(outer_tables)
             || match self {
                 Self::And(l, r) | Self::Or(l, r) => {
-                    l.has_correlated_subquery() || r.has_correlated_subquery()
+                    l.has_correlated_subquery(outer_tables)
+                        || r.has_correlated_subquery(outer_tables)
                 }
-                Self::Group(inner) | Self::Not(inner) => inner.has_correlated_subquery(),
+                Self::Group(inner) | Self::Not(inner) => {
+                    inner.has_correlated_subquery(outer_tables)
+                }
                 _ => false,
             }
     }
 
     /// Returns `true` if a value compared directly in this condition is a
-    /// correlated subquery (no nested logical operators).
-    fn leaf_has_correlated_subquery(&self) -> bool {
+    /// subquery correlated against `outer_tables` (no nested logical operators).
+    fn leaf_has_correlated_subquery(&self, outer_tables: &[&str]) -> bool {
+        let is_corr = |v: &Value| v.is_correlated_subquery_with(outer_tables);
         match self {
-            Self::Comparison(c) => c.value.is_correlated_subquery(),
-            Self::Between(c) => [&c.low, &c.high]
-                .into_iter()
-                .any(Value::is_correlated_subquery),
-            Self::In(c) => c.values.iter().any(Value::is_correlated_subquery),
-            Self::Contains(c) => c.values.iter().any(Value::is_correlated_subquery),
+            Self::Comparison(c) => is_corr(&c.value),
+            Self::Between(c) => [&c.low, &c.high].into_iter().any(&is_corr),
+            Self::In(c) => c.values.iter().any(&is_corr),
+            Self::Contains(c) => c.values.iter().any(&is_corr),
             _ => false,
         }
     }

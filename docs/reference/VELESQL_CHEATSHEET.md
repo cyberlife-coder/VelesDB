@@ -176,8 +176,9 @@ Payload sub-fields use dot paths: `payload.author.name = 'Ada'`.
 
 A `(SELECT ...)` in a value position is executed and substituted as a literal
 before the outer query runs. It must return exactly one row and one column
-(0 rows -> `NULL`; more rows/columns -> `VELES-010`). Correlated subqueries
-(referencing an outer column) are not supported.
+(0 rows -> `NULL`; more rows/columns -> `VELES-010`). A subquery referencing one
+of the outer query's tables/aliases is **correlated** and rejected (V010); a
+dotted **payload path** like `meta.cat` is *not* a correlation.
 
 ```sql
 -- Aggregate subquery in WHERE
@@ -186,9 +187,14 @@ SELECT * FROM orders WHERE amount > (SELECT AVG(amount) FROM orders) LIMIT 10;
 -- Single-column row subquery
 SELECT * FROM orders WHERE amount >= (SELECT amount FROM orders WHERE id = 1);
 
--- HAVING and INSERT/UPDATE value positions also accept a scalar subquery
+-- Payload-path filter inside the subquery (not correlated)
+SELECT * FROM orders WHERE amount > (SELECT AVG(amount) FROM orders WHERE meta.cat = 5);
+
+-- HAVING, INSERT/UPDATE values, and UPDATE/DELETE WHERE accept a scalar subquery
 INSERT INTO orders (id, vector, amount)
 VALUES (6, $v, (SELECT MAX(amount) FROM orders));
+UPDATE orders SET flagged = true WHERE amount > (SELECT AVG(amount) FROM orders);
+DELETE FROM orders WHERE id = (SELECT oid FROM orders WHERE tag = 3);
 ```
 
 Resolved in `velesdb-core`, so REST `/query` and the CLI REPL support it; WASM

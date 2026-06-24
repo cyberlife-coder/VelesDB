@@ -511,8 +511,8 @@ fn requires_select_validation(query: &Query) -> bool {
 /// rejected here so it never silently evaluates to NULL.
 fn reject_subqueries(query: &Query) -> Result<(), ValidationError> {
     let in_where = where_clauses(query)
-        .into_iter()
-        .any(Condition::has_correlated_subquery);
+        .iter()
+        .any(|(scope, cond)| cond.has_correlated_subquery(scope));
     if in_where || query.has_correlated_having_subquery() {
         return Err(ValidationError::new(
             ValidationErrorKind::SubqueryNotExecutable,
@@ -525,28 +525,44 @@ fn reject_subqueries(query: &Query) -> Result<(), ValidationError> {
     Ok(())
 }
 
-/// Collects every WHERE clause in the query: the main SELECT, compound
-/// operands (UNION/INTERSECT/EXCEPT), and DML statements (UPDATE/DELETE/SELECT EDGES).
-fn where_clauses(query: &Query) -> Vec<&Condition> {
-    let mut clauses: Vec<&Condition> = query.select.where_clause.as_ref().into_iter().collect();
+/// Collects every WHERE clause in the query — the main SELECT, compound operands
+/// (UNION/INTERSECT/EXCEPT), and DML statements (UPDATE/DELETE/SELECT EDGES) —
+/// each paired with its **outer-table scope** (the names a nested subquery would
+/// have to reference to be correlated).
+fn where_clauses(query: &Query) -> Vec<(Vec<&str>, &Condition)> {
+    let mut clauses: Vec<(Vec<&str>, &Condition)> = query
+        .select
+        .where_clause
+        .as_ref()
+        .map(|c| (query.select.outer_table_scope(), c))
+        .into_iter()
+        .collect();
     if let Some(ref compound) = query.compound {
-        clauses.extend(
-            compound
-                .operations
-                .iter()
-                .filter_map(|(_, stmt)| stmt.where_clause.as_ref()),
-        );
+        clauses.extend(compound.operations.iter().filter_map(|(_, stmt)| {
+            stmt.where_clause
+                .as_ref()
+                .map(|c| (stmt.outer_table_scope(), c))
+        }));
     }
     clauses.extend(dml_where_clauses(query.dml.as_ref()));
     clauses
 }
 
-/// Returns the optional WHERE clauses carried by a DML statement.
-fn dml_where_clauses(dml: Option<&DmlStatement>) -> Vec<&Condition> {
+/// Returns the WHERE clauses carried by a DML statement, each paired with the
+/// target table as its outer-table scope.
+fn dml_where_clauses(dml: Option<&DmlStatement>) -> Vec<(Vec<&str>, &Condition)> {
     match dml {
-        Some(DmlStatement::Update(u)) => u.where_clause.iter().collect(),
-        Some(DmlStatement::Delete(d)) => vec![&d.where_clause],
-        Some(DmlStatement::SelectEdges(s)) => s.where_clause.iter().collect(),
+        Some(DmlStatement::Update(u)) => u
+            .where_clause
+            .iter()
+            .map(|c| (vec![u.table.as_str()], c))
+            .collect(),
+        Some(DmlStatement::Delete(d)) => vec![(vec![d.table.as_str()], &d.where_clause)],
+        Some(DmlStatement::SelectEdges(s)) => s
+            .where_clause
+            .iter()
+            .map(|c| (vec![s.collection.as_str()], c))
+            .collect(),
         _ => Vec::new(),
     }
 }

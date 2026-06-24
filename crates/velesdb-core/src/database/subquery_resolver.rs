@@ -49,22 +49,27 @@ impl Database {
             return Ok(None);
         }
         let mut rewritten = query.clone();
-        self.rewrite_query_subqueries(&mut rewritten, params, 0)?;
+        let scope = query.select.outer_table_scope();
+        self.rewrite_query_subqueries(&mut rewritten, params, 0, &scope)?;
         Ok(Some(rewritten))
     }
 
     /// Rewrites all subquery leaves of `query` in place at recursion `depth`.
+    ///
+    /// `outer_tables` are the names a nested subquery would have to reference to
+    /// be genuinely correlated (and so left for the validator to reject).
     fn rewrite_query_subqueries(
         &self,
         query: &mut Query,
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
+        outer_tables: &[&str],
     ) -> Result<()> {
         if let Some(cond) = query.select.where_clause.as_mut() {
-            self.rewrite_condition(cond, params, depth)?;
+            self.rewrite_condition(cond, params, depth, outer_tables)?;
         }
         if let Some(having) = query.select.having.as_mut() {
-            self.rewrite_having(having, params, depth)?;
+            self.rewrite_having(having, params, depth, outer_tables)?;
         }
         if let Some(dml) = query.dml.as_mut() {
             self.rewrite_dml(dml, params, depth)?;
@@ -78,16 +83,17 @@ impl Database {
         cond: &mut Condition,
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
+        outer_tables: &[&str],
     ) -> Result<()> {
         match cond {
             Condition::And(l, r) | Condition::Or(l, r) => {
-                self.rewrite_condition(l, params, depth)?;
-                self.rewrite_condition(r, params, depth)
+                self.rewrite_condition(l, params, depth, outer_tables)?;
+                self.rewrite_condition(r, params, depth, outer_tables)
             }
             Condition::Group(inner) | Condition::Not(inner) => {
-                self.rewrite_condition(inner, params, depth)
+                self.rewrite_condition(inner, params, depth, outer_tables)
             }
-            other => self.rewrite_leaf_condition(other, params, depth),
+            other => self.rewrite_leaf_condition(other, params, depth, outer_tables),
         }
     }
 
@@ -97,15 +103,20 @@ impl Database {
         cond: &mut Condition,
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
+        outer_tables: &[&str],
     ) -> Result<()> {
         match cond {
-            Condition::Comparison(c) => self.rewrite_value(&mut c.value, params, depth),
-            Condition::Between(c) => {
-                self.rewrite_value(&mut c.low, params, depth)?;
-                self.rewrite_value(&mut c.high, params, depth)
+            Condition::Comparison(c) => {
+                self.rewrite_value(&mut c.value, params, depth, outer_tables)
             }
-            Condition::In(c) => self.rewrite_values(&mut c.values, params, depth),
-            Condition::Contains(c) => self.rewrite_values(&mut c.values, params, depth),
+            Condition::Between(c) => {
+                self.rewrite_value(&mut c.low, params, depth, outer_tables)?;
+                self.rewrite_value(&mut c.high, params, depth, outer_tables)
+            }
+            Condition::In(c) => self.rewrite_values(&mut c.values, params, depth, outer_tables),
+            Condition::Contains(c) => {
+                self.rewrite_values(&mut c.values, params, depth, outer_tables)
+            }
             _ => Ok(()),
         }
     }
@@ -116,14 +127,17 @@ impl Database {
         having: &mut HavingClause,
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
+        outer_tables: &[&str],
     ) -> Result<()> {
         for cond in &mut having.conditions {
-            self.rewrite_value(&mut cond.value, params, depth)?;
+            self.rewrite_value(&mut cond.value, params, depth, outer_tables)?;
         }
         Ok(())
     }
 
-    /// Substitutes subquery values in INSERT/UPSERT rows and UPDATE assignments.
+    /// Substitutes subquery values in INSERT/UPSERT rows, UPDATE assignments,
+    /// and UPDATE/DELETE `WHERE` clauses. DML value/`WHERE` subqueries are scoped
+    /// to the DML target table.
     fn rewrite_dml(
         &self,
         dml: &mut DmlStatement,
@@ -133,32 +147,41 @@ impl Database {
         match dml {
             DmlStatement::Insert(s) | DmlStatement::Upsert(s) => {
                 for row in &mut s.rows {
-                    self.rewrite_values(row, params, depth)?;
+                    self.rewrite_values(row, params, depth, &[s.table.as_str()])?;
                 }
                 Ok(())
             }
             DmlStatement::Update(s) => {
+                let scope = [s.table.as_str()];
                 for assignment in &mut s.assignments {
-                    self.rewrite_value(&mut assignment.value, params, depth)?;
+                    self.rewrite_value(&mut assignment.value, params, depth, &scope)?;
+                }
+                if let Some(cond) = s.where_clause.as_mut() {
+                    self.rewrite_condition(cond, params, depth, &scope)?;
                 }
                 Ok(())
+            }
+            DmlStatement::Delete(s) => {
+                self.rewrite_condition(&mut s.where_clause, params, depth, &[s.table.as_str()])
             }
             _ => Ok(()),
         }
     }
 
-    /// Substitutes a single value if it is a scalar (non-correlated) subquery.
+    /// Substitutes a single value if it is a scalar subquery that is *not*
+    /// genuinely correlated against `outer_tables`.
     ///
-    /// Literals are left untouched; correlated subqueries are also left in place
-    /// so the validator rejects them with the canonical V010 message.
+    /// Literals are left untouched; genuinely correlated subqueries are also left
+    /// in place so the validator rejects them with the canonical V010 message.
     fn rewrite_value(
         &self,
         value: &mut Value,
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
+        outer_tables: &[&str],
     ) -> Result<()> {
         if let Value::Subquery(subquery) = value {
-            if subquery.correlations.is_empty() {
+            if !subquery.references_outer_table(outer_tables) {
                 *value = self.execute_scalar_subquery(subquery, params, depth)?;
             }
         }
@@ -171,9 +194,10 @@ impl Database {
         values: &mut [Value],
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
+        outer_tables: &[&str],
     ) -> Result<()> {
         for value in values {
-            self.rewrite_value(value, params, depth)?;
+            self.rewrite_value(value, params, depth, outer_tables)?;
         }
         Ok(())
     }
@@ -191,8 +215,16 @@ impl Database {
             )));
         }
         let mut inner = Query::from_select(subquery.select.clone());
-        // Resolve nested subqueries first (depth-bounded recursion).
-        self.rewrite_query_subqueries(&mut inner, params, depth + 1)?;
+        // Resolve nested subqueries first (depth-bounded recursion). A nested
+        // subquery is correlated only against this inner query's own scope.
+        let inner_scope: Vec<String> = inner
+            .select
+            .outer_table_scope()
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let inner_scope: Vec<&str> = inner_scope.iter().map(String::as_str).collect();
+        self.rewrite_query_subqueries(&mut inner, params, depth + 1, &inner_scope)?;
         self.run_scalar_subquery(&inner, params)
     }
 
@@ -219,11 +251,12 @@ impl Database {
 /// to reject (V010), and excluding them here keeps `resolve_subqueries` from
 /// returning `Some` (and recursing) when nothing is actually resolvable.
 fn query_has_resolvable_subquery(query: &Query) -> bool {
+    let scope = query.select.outer_table_scope();
     let where_resolvable = query
         .select
         .where_clause
         .as_ref()
-        .is_some_and(condition_has_resolvable_subquery);
+        .is_some_and(|c| condition_has_resolvable_subquery(c, &scope));
     where_resolvable
         || having_has_resolvable_subquery(query)
         || dml_has_resolvable_subquery(query.dml.as_ref())
@@ -234,20 +267,31 @@ fn having_has_resolvable_subquery(query: &Query) -> bool {
     query.has_having_subquery() && !query.has_correlated_having_subquery()
 }
 
-/// Returns `true` if a condition carries a scalar (non-correlated) subquery.
-fn condition_has_resolvable_subquery(cond: &Condition) -> bool {
-    cond.has_subquery() && !cond.has_correlated_subquery()
+/// Returns `true` if a condition carries a scalar subquery that is *not*
+/// genuinely correlated against `outer_tables` (and so can be resolved).
+fn condition_has_resolvable_subquery(cond: &Condition, outer_tables: &[&str]) -> bool {
+    cond.has_subquery() && !cond.has_correlated_subquery(outer_tables)
 }
 
-/// Returns `true` if an INSERT/UPSERT row or UPDATE assignment carries a scalar
-/// (non-correlated) subquery. DML subqueries cannot be correlated (no outer row
-/// scope), so any subquery here is resolvable.
+/// Returns `true` if a DML statement carries a scalar (non-correlated) subquery
+/// in an INSERT/UPSERT row, an UPDATE assignment, or an UPDATE/DELETE `WHERE`
+/// clause. Value-position DML subqueries cannot be correlated (no outer row
+/// scope); `WHERE`-clause subqueries must be non-correlated to be resolvable.
 fn dml_has_resolvable_subquery(dml: Option<&DmlStatement>) -> bool {
     match dml {
         Some(DmlStatement::Insert(s) | DmlStatement::Upsert(s)) => {
             s.rows.iter().any(|row| row.iter().any(Value::is_subquery))
         }
-        Some(DmlStatement::Update(s)) => s.assignments.iter().any(|a| a.value.is_subquery()),
+        Some(DmlStatement::Update(s)) => {
+            let scope = [s.table.as_str()];
+            s.assignments.iter().any(|a| a.value.is_subquery())
+                || s.where_clause
+                    .as_ref()
+                    .is_some_and(|c| condition_has_resolvable_subquery(c, &scope))
+        }
+        Some(DmlStatement::Delete(s)) => {
+            condition_has_resolvable_subquery(&s.where_clause, &[s.table.as_str()])
+        }
         _ => false,
     }
 }
