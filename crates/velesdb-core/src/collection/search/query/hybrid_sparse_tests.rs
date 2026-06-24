@@ -186,6 +186,92 @@ fn test_hybrid_empty_sparse_branch() {
 }
 
 // -----------------------------------------------------------------------
+// ORDER BY sparse_score on a SPARSE_NEAR query (backlog #20)
+// -----------------------------------------------------------------------
+
+/// On a plain `SPARSE_NEAR` query, ranking by the built-in `sparse_score`
+/// variable requires the **arithmetic** form (`sparse_score * 1.0`), which
+/// resolves the component variable. The setup gives each sparse-bearing point a
+/// term-1 weight of `1.0 + id`, so higher ids score strictly higher and the
+/// query must come back in descending-score order (id 11 first). This locks the
+/// SPEC's documented arithmetic-form behavior.
+#[test]
+fn test_sparse_near_order_by_sparse_score_arithmetic_desc() {
+    let (_dir, col) = setup_hybrid_collection();
+
+    let results = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector SPARSE_NEAR {1: 1.0} ORDER BY sparse_score * 1.0 DESC LIMIT 6",
+            &HashMap::new(),
+        )
+        .expect("SPARSE_NEAR ORDER BY sparse_score * 1.0 DESC must execute");
+
+    assert!(
+        !results.is_empty(),
+        "SPARSE_NEAR ORDER BY sparse_score must return sparse-bearing rows"
+    );
+    // sparse_score DESC => non-increasing scores.
+    for w in results.windows(2) {
+        assert!(
+            w[0].score >= w[1].score - 1e-6,
+            "ORDER BY sparse_score * 1.0 DESC must yield non-increasing scores: {} then {}",
+            w[0].score,
+            w[1].score
+        );
+    }
+    // Highest term-1 weight (id 11, weight 12.0) must rank first.
+    assert_eq!(
+        results[0].point.id, 11,
+        "highest term-1 weight (id 11) must be first under sparse_score * 1.0 DESC"
+    );
+}
+
+/// A **bare** `ORDER BY sparse_score DESC` ranks by the sparse component score,
+/// resolved from the component breakdown exactly like the arithmetic form — it is
+/// no longer a silent payload-field no-op.
+#[test]
+fn test_sparse_near_order_by_bare_sparse_score_sorts_desc() {
+    let (_dir, col) = setup_hybrid_collection();
+
+    let results = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector SPARSE_NEAR {1: 1.0} ORDER BY sparse_score DESC LIMIT 6",
+            &HashMap::new(),
+        )
+        .expect("bare SPARSE_NEAR ORDER BY sparse_score must execute");
+
+    // Sparse-bearing points are ids 0-5 and 10-11; only ids >= 2 carry a term-1
+    // hit in the candidate window. The bare ordering now resolves the built-in
+    // sparse_score, so rows come back in DESCENDING sparse-score order — identical
+    // to the arithmetic form `ORDER BY sparse_score * 1.0 DESC`.
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        ids,
+        vec![11, 10, 5, 4, 3, 2],
+        "bare ORDER BY sparse_score DESC ranks by the sparse component score"
+    );
+}
+
+/// A LET clause on the same SPARSE_NEAR query is rejected with an explicit
+/// error (not silently dropped) — the counterpart to the positive test above.
+#[test]
+fn test_sparse_near_let_binding_returns_error() {
+    let (_dir, col) = setup_hybrid_collection();
+
+    let result = col.execute_query_str(
+        "LET s = sparse_score SELECT * FROM docs WHERE vector SPARSE_NEAR {1: 1.0} ORDER BY s DESC LIMIT 5",
+        &HashMap::new(),
+    );
+
+    assert!(result.is_err(), "LET + SPARSE_NEAR must return an error");
+    let msg = result.expect_err("checked is_err").to_string();
+    assert!(
+        msg.contains("SPARSE_NEAR"),
+        "expected SPARSE_NEAR rejection, got: {msg}"
+    );
+}
+
+// -----------------------------------------------------------------------
 // Sparse vector parameter resolution
 // -----------------------------------------------------------------------
 

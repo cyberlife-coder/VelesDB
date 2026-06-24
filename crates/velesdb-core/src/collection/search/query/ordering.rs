@@ -249,7 +249,7 @@ impl Collection {
                     .get(&idx)
                     .map_or(Ordering::Equal, |scores| scores[i].total_cmp(&scores[j])),
                 OrderByExpr::Field(field_name) => {
-                    Self::compare_field_or_let(field_name, i, j, results, per_result_let)
+                    Self::compare_field_expr(field_name, i, j, results, per_result_let)
                 }
                 OrderByExpr::Aggregate(_) => Ordering::Equal,
                 // Design: Arithmetic ORDER BY uses direct numeric ordering without
@@ -314,6 +314,52 @@ impl Collection {
         Self::compare_payload_field(field_name, i, j, results)
     }
 
+    /// Compares a bare `ORDER BY` field. A built-in score variable
+    /// (`sparse_score`, `bm25_score`, …) resolves from each result's component
+    /// scores — exactly as the arithmetic ORDER BY path does — so
+    /// `ORDER BY sparse_score DESC` actually ranks instead of silently no-op'ing
+    /// as an absent payload field. Anything else is a LET binding or payload.
+    fn compare_field_expr(
+        field_name: &str,
+        i: usize,
+        j: usize,
+        results: &[SearchResult],
+        per_result_let: &[Vec<(String, f32)>],
+    ) -> Ordering {
+        if is_builtin_score_variable(field_name) {
+            Self::compare_score_variable(field_name, i, j, results, per_result_let)
+        } else {
+            Self::compare_field_or_let(field_name, i, j, results, per_result_let)
+        }
+    }
+
+    /// Compares two results by a built-in score variable, resolving each via the
+    /// same `ScoreContext::resolve_variable` the arithmetic path uses (LET first,
+    /// then the component breakdown with the absent-component default).
+    fn compare_score_variable(
+        name: &str,
+        i: usize,
+        j: usize,
+        results: &[SearchResult],
+        per_result_let: &[Vec<(String, f32)>],
+    ) -> Ordering {
+        let ctx_i = ScoreContext::with_let_bindings(
+            results[i].score,
+            results[i].point.payload.as_ref(),
+            results[i].component_scores.as_deref(),
+            per_result_let.get(i).map(Vec::as_slice),
+        );
+        let ctx_j = ScoreContext::with_let_bindings(
+            results[j].score,
+            results[j].point.payload.as_ref(),
+            results[j].component_scores.as_deref(),
+            per_result_let.get(j).map(Vec::as_slice),
+        );
+        ctx_i
+            .resolve_variable(name)
+            .total_cmp(&ctx_j.resolve_variable(name))
+    }
+
     /// Compares two results by an arithmetic expression with full context.
     fn compare_arithmetic(
         expr: &crate::velesql::ArithmeticExpr,
@@ -358,6 +404,17 @@ impl Collection {
             cmp
         }
     }
+}
+
+/// Whether `name` is a built-in score variable resolved from the component-score
+/// breakdown (rather than a payload field), matching the names
+/// `ScoreContext::resolve_variable` recognizes. Bare such names in `ORDER BY`
+/// route through score resolution so e.g. `ORDER BY sparse_score DESC` ranks.
+fn is_builtin_score_variable(name: &str) -> bool {
+    matches!(
+        name,
+        "vector_score" | "graph_score" | "bm25_score" | "sparse_score" | "fused_score"
+    )
 }
 
 /// Applies a permutation to `slice` in-place using cycle decomposition.

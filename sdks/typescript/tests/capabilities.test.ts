@@ -32,6 +32,8 @@ const ALL_CAPABILITY_KEYS: readonly (keyof CapabilityMap)[] = [
   'pqTraining',
   'velesqlQuery',
   'collectionIntrospection',
+  'velesqlMatchOrderBy',
+  'velesqlAlterCollection',
 ] as const;
 
 describe('CapabilityMap — structural contract', () => {
@@ -51,6 +53,16 @@ describe('CapabilityMap — structural contract', () => {
     expect(Object.isFrozen(REST_CAPABILITIES)).toBe(true);
     expect(Object.isFrozen(WASM_CAPABILITIES)).toBe(true);
   });
+
+  it('exposes velesqlFusionStrategies as a frozen string array on both maps', () => {
+    for (const map of [REST_CAPABILITIES, WASM_CAPABILITIES]) {
+      expect(Array.isArray(map.velesqlFusionStrategies)).toBe(true);
+      expect(Object.isFrozen(map.velesqlFusionStrategies)).toBe(true);
+      for (const s of map.velesqlFusionStrategies) {
+        expect(typeof s).toBe('string');
+      }
+    }
+  });
 });
 
 describe('REST_CAPABILITIES — full-feature contract', () => {
@@ -69,6 +81,15 @@ describe('REST_CAPABILITIES — full-feature contract', () => {
     expect(REST_CAPABILITIES.pqTraining).toBe(true);
     expect(REST_CAPABILITIES.velesqlQuery).toBe(true);
     expect(REST_CAPABILITIES.collectionIntrospection).toBe(true);
+    expect(REST_CAPABILITIES.velesqlMatchOrderBy).toBe(true);
+    expect(REST_CAPABILITIES.velesqlAlterCollection).toBe(true);
+    expect([...REST_CAPABILITIES.velesqlFusionStrategies]).toEqual([
+      'rrf',
+      'weighted',
+      'maximum',
+      'rsf',
+      'average',
+    ]);
   });
 });
 
@@ -93,6 +114,10 @@ describe('WASM_CAPABILITIES — focused subset', () => {
     // not advertised so callers route VelesQL workloads to REST upfront.
     expect(WASM_CAPABILITIES.velesqlQuery).toBe(false);
     expect(WASM_CAPABILITIES.collectionIntrospection).toBe(false);
+    // VelesQL sub-capabilities are all off when velesqlQuery is false.
+    expect(WASM_CAPABILITIES.velesqlMatchOrderBy).toBe(false);
+    expect(WASM_CAPABILITIES.velesqlAlterCollection).toBe(false);
+    expect(WASM_CAPABILITIES.velesqlFusionStrategies).toHaveLength(0);
   });
 });
 
