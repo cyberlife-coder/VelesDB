@@ -364,6 +364,34 @@ release.
   no-persistence WASM build, so the renderer mirrors the vocabulary rather than
   re-exporting it. *(Behavior change: WASM EXPLAIN row keys/labels change.)*
 
+### Documentation
+- **VelesQL `LET` clause docs reconciled with the engine's real support.** The
+  spec's `LET`-before-`MATCH` example and `GRAPH_PATTERNS.md`'s "LET before MATCH
+  has no effect" note were stale — the engine **rejects** `LET` on `MATCH`,
+  `SPARSE_NEAR`, `NEAR_FUSED`, `NOT similarity()`, and `OR`/union queries with an
+  explicit error. `docs/VELESQL_SPEC.md` now enumerates these unsupported shapes
+  in the LET Rules section and documents that ranking by a built-in score on an
+  excluded shape (e.g. `sparse_score` on a `SPARSE_NEAR` query) requires the
+  **arithmetic** form (`ORDER BY sparse_score * 1.0 DESC`); a *bare*
+  `ORDER BY sparse_score` parses as a payload-field reference and is a ranking
+  no-op (falls back to ascending-id tie-break). Locked by two new core tests.
+- **WASM README parity claims made truthful.** The feature table and prose now
+  state that the WASM executor projects columns/aliases/window functions, sorts
+  `SELECT ORDER BY` arithmetic and `similarity()`, applies a default `LIMIT 10`,
+  emits `VELES-*` error codes, and uses the core EXPLAIN plan vocabulary, while
+  enumerating the genuine REST-only carve-outs it loudly rejects (`LET` bindings,
+  scalar subqueries, single-`NEAR` `weighted`/`rsf` FUSION, and named-vector
+  `ORDER BY similarity(field, $v)`).
+- **CLI `.hybrid-sparse` usage and `.help` now list all accepted fusion
+  strategies** (`weighted` and `relative_score` were accepted but undocumented,
+  shown only as `rrf|average|max`).
+- **TypeScript `capabilities()` gains VelesQL sub-capability fields**
+  (`velesqlFusionStrategies`, `velesqlMatchOrderBy`, `velesqlAlterCollection`)
+  so clients can branch on finer-grained support.
+- **Python `Collection.search()` docstring** now states that hybrid dense+sparse
+  search fuses with RRF (k=60) and that fusion overrides require
+  `search_request(SearchOptions(fusion=...))`.
+
 ## [3.2.1] — 2026-06-20
 
 Patch release. Maintenance only — no engine/API change (`velesdb-core` and the
