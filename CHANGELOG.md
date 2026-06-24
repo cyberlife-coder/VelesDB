@@ -15,6 +15,25 @@ explicit errors or real values — review the SemVer impact before the next
 release.
 
 ### Changed
+- **Graph / `MATCH` REST error responses now use the canonical `VELES-XXX`
+  error codes and correct 4xx HTTP statuses instead of bespoke strings and
+  blanket 500s.** `POST /collections/{name}/match` previously hand-rolled
+  invented codes (`COLLECTION_NOT_FOUND`, `PARSE_ERROR`, `EXECUTION_ERROR`,
+  `NOT_MATCH_QUERY`, `INVALID_THRESHOLD`) with a `hint`/`details` body and
+  mapped every execution failure to `500`. It now routes through the shared
+  `auto_core_error_response`, so a missing collection returns `404` +
+  `VELES-002`, a parse error / non-MATCH query / invalid threshold / unbound
+  bind parameter returns `400` + `VELES-010`, etc. The graph edge mutation
+  handlers (`POST .../graph/edges`, `.../graph/edges/batch`) likewise route
+  through it, so a duplicate edge now returns `409` + `VELES-019` instead of a
+  generic `500` string. The search timeout response carries the canonical
+  `VELES-027` code (was the malformed `VELES-QUERY-TIMEOUT`), and the
+  guard-rail rate-limit (`429`) / circuit-breaker (`503`) responses now include
+  the `VELES-027` code in the body (previously `code: null`). *(Behavior change:
+  HTTP status codes for several `/match` and graph-mutation client errors move
+  from `500` to `404`/`400`/`409`; the `code` field values change; the `/match`
+  error body drops the `hint`/`details` fields in favor of the standard
+  `{ "error", "code" }` shape. SemVer-observable for REST consumers.)*
 - **Query-shape and bind-parameter rejections now classify as `VELES-010`
   (`Query`) instead of `VELES-009` (`Config`).** Live query-path failures that
   describe a malformed *query* — an unsupported query shape (multiple

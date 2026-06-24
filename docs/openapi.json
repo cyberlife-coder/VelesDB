@@ -1682,7 +1682,7 @@
           "graph"
         ],
         "summary": "Execute a MATCH query on a collection.",
-        "description": "# Endpoint\n\n`POST /collections/{name}/match`\n\n# Example Request\n\n```json\n{\n  \"query\": \"MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name\",\n  \"params\": {\n    \"v\": [0.1, 0.2, 0.3]\n  }\n}\n```\n\n# Errors\n\nReturns error tuple with status code and JSON error in these cases:\n- `404 NOT_FOUND` - Collection not found\n- `400 BAD_REQUEST` - Parse error or not a MATCH query\n- `500 INTERNAL_SERVER_ERROR` - Execution error",
+        "description": "# Endpoint\n\n`POST /collections/{name}/match`\n\n# Example Request\n\n```json\n{\n  \"query\": \"MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name\",\n  \"params\": {\n    \"v\": [0.1, 0.2, 0.3]\n  }\n}\n```\n\n# Errors\n\nAll failures are mapped through the canonical `auto_core_error_response`,\nso the JSON body carries the `VELES-XXX` code and the HTTP status is\nderived from the core error variant:\n- `404 NOT_FOUND` (`VELES-002`) — collection not found\n- `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,\n  invalid threshold, or an unbound query parameter\n- other core variants map per [`super::helpers::http_status_for_error`]",
         "operationId": "match_query",
         "parameters": [
           {
@@ -1721,7 +1721,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MatchQueryError"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1731,7 +1731,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MatchQueryError"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1741,7 +1741,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MatchQueryError"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -4808,34 +4808,6 @@
             "type": "integer",
             "description": "Total number of indexes.",
             "minimum": 0
-          }
-        }
-      },
-      "MatchQueryError": {
-        "type": "object",
-        "description": "Error response for MATCH query.",
-        "required": [
-          "error",
-          "code"
-        ],
-        "properties": {
-          "code": {
-            "type": "string",
-            "description": "Error code."
-          },
-          "details": {
-            "description": "Optional details for diagnostics."
-          },
-          "error": {
-            "type": "string",
-            "description": "Error message."
-          },
-          "hint": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Actionable hint for developers."
           }
         }
       },

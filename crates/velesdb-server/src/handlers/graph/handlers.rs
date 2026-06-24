@@ -10,10 +10,12 @@ use std::sync::Arc;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::IntoResponse,
     Json,
 };
 use velesdb_core::collection::graph::{GraphEdge, TraversalConfig};
 
+use crate::handlers::helpers::auto_core_error_response;
 use crate::types::ErrorResponse;
 use crate::AppState;
 
@@ -156,22 +158,23 @@ pub async fn add_edge(
     Path(name): Path<String>,
     State(state): State<Arc<AppState>>,
     Json(request): Json<AddEdgeRequest>,
-) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let edge = build_edge(request)?;
+) -> axum::response::Response {
+    let edge = match build_edge(request) {
+        Ok(e) => e,
+        Err(resp) => return resp.into_response(),
+    };
 
-    let coll = graph_preamble(&state, &name)?;
+    let coll = match graph_preamble(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp.into_response(),
+    };
 
-    coll.add_edge(edge).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to add edge: {e}"),
-                code: None,
-            }),
-        )
-    })?;
-
-    Ok(StatusCode::CREATED)
+    // Route the core error through `auto_core_error_response` so e.g.
+    // `EdgeExists` surfaces as 409 + VELES-019 instead of a generic 500 string.
+    match coll.add_edge(edge) {
+        Ok(()) => StatusCode::CREATED.into_response(),
+        Err(e) => auto_core_error_response(&e),
+    }
 }
 
 /// Converts an [`AddEdgeRequest`] into a core [`GraphEdge`], validating the
@@ -225,26 +228,28 @@ pub async fn add_edges_batch(
     Path(name): Path<String>,
     State(state): State<Arc<AppState>>,
     Json(request): Json<AddEdgesBatchRequest>,
-) -> Result<(StatusCode, Json<AddEdgesBatchResponse>), (StatusCode, Json<ErrorResponse>)> {
-    let edges = request
+) -> axum::response::Response {
+    let edges = match request
         .edges
         .into_iter()
         .map(build_edge)
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(edges) => edges,
+        Err(resp) => return resp.into_response(),
+    };
 
-    let coll = graph_preamble(&state, &name)?;
+    let coll = match graph_preamble(&state, &name) {
+        Ok(c) => c,
+        Err(resp) => return resp.into_response(),
+    };
 
-    let added = coll.add_edges_batch(edges).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to add edges: {e}"),
-                code: None,
-            }),
-        )
-    })?;
-
-    Ok((StatusCode::CREATED, Json(AddEdgesBatchResponse { added })))
+    // Route the core error through `auto_core_error_response` so e.g.
+    // `EdgeExists` surfaces as 409 + VELES-019 instead of a generic 500 string.
+    match coll.add_edges_batch(edges) {
+        Ok(added) => (StatusCode::CREATED, Json(AddEdgesBatchResponse { added })).into_response(),
+        Err(e) => auto_core_error_response(&e),
+    }
 }
 
 /// Traverse the graph using BFS or DFS from a source node.

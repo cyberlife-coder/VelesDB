@@ -1094,10 +1094,13 @@ paths:
 
         # Errors
 
-        Returns error tuple with status code and JSON error in these cases:
-        - `404 NOT_FOUND` - Collection not found
-        - `400 BAD_REQUEST` - Parse error or not a MATCH query
-        - `500 INTERNAL_SERVER_ERROR` - Execution error
+        All failures are mapped through the canonical `auto_core_error_response`,
+        so the JSON body carries the `VELES-XXX` code and the HTTP status is
+        derived from the core error variant:
+        - `404 NOT_FOUND` (`VELES-002`) — collection not found
+        - `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,
+          invalid threshold, or an unbound query parameter
+        - other core variants map per [`super::helpers::http_status_for_error`]
       operationId: match_query
       parameters:
       - name: name
@@ -1124,19 +1127,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MatchQueryError'
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MatchQueryError'
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MatchQueryError'
+                $ref: '#/components/schemas/ErrorResponse'
   /collections/{name}/points:
     post:
       tags:
@@ -3375,26 +3378,6 @@ components:
           type: integer
           description: Total number of indexes.
           minimum: 0
-    MatchQueryError:
-      type: object
-      description: Error response for MATCH query.
-      required:
-      - error
-      - code
-      properties:
-        code:
-          type: string
-          description: Error code.
-        details:
-          description: Optional details for diagnostics.
-        error:
-          type: string
-          description: Error message.
-        hint:
-          type:
-          - string
-          - 'null'
-          description: Actionable hint for developers.
     MatchQueryMeta:
       type: object
       description: Metadata section for MATCH query responses.
