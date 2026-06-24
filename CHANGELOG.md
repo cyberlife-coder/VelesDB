@@ -224,6 +224,17 @@ release.
   through the VelesQL DDL executor (persisted), the typed counterpart to running
   the raw statement via `execute_query`. `Collection.info()` now also reports the
   current `auto_reindex` flag. *(Additive.)*
+- **VelesQL conformance fixture pins the full `VelesqlErrorResponse` shape.**
+  Conformance cases C002 (`VELESQL_MISSING_COLLECTION`), C003
+  (`VELESQL_COLLECTION_NOT_FOUND`), and C007 (`VELESQL_AGGREGATION_ERROR`) now
+  assert all four fields of the semantic error body (`code`, `message`, `hint`,
+  `details`), not just the `code`. The server conformance test loop in
+  `crates/velesdb-server/tests/velesql_conformance_tests.rs` deserializes the
+  three new optional fields from the JSON fixture and asserts them when present.
+  Parse errors (`QueryErrorResponse`, cases C004/C013) retain their own
+  parser-specific shape and are not extended. Closes
+  `ECOSYSTEM_PARITY.md` action item 1. *(Additive: fixture and test only; no
+  server behaviour changed.)*
 
 ### Fixed
 - **Python `match_query` honors `RETURN ... ORDER BY` and the post-sort
