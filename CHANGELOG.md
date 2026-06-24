@@ -223,6 +223,21 @@ release.
   / `average` keep ranking the (now hard-filtered) vector results.
   *(Behavior change: WASM fused single-`NEAR` queries drop WHERE-failing rows;
   weighted/rsf single-branch fusion errors.)*
+- **WASM `EXPLAIN` now uses the core plan vocabulary.** The browser EXPLAIN
+  renderer emitted divergent node labels (`Scan`, `NestedLoopJoin`,
+  `LimitOffset`, `GraphPatternMatch`) under `{step, node, detail}` keys that did
+  not match the REST `/query/explain` taxonomy. Rows now carry the same wire keys
+  as the REST `ExplainStep` (`step`, `operation`, `description`, `estimated_rows`,
+  `estimation_method`) and the same `operation` vocabulary as core's
+  `PlanStep::rest_operation()` (`VectorSearch`, `FullScan`, `Filter`,
+  `{Type}Join`, `GroupBy`, `Aggregate`, `Sort`, `Limit`, `Offset`,
+  `MatchTraversal`); the leading scan carries an `estimated_rows` row-count hint.
+  WASM-only concerns with no core plan node (`FUSION`, `DISTINCT`) fold into a
+  step's description rather than inventing an out-of-taxonomy operation. Core's
+  `to_plan_steps()` itself is `persistence`-gated and unreachable from the
+  no-persistence WASM build, so the renderer mirrors the vocabulary rather than
+  re-exporting it. *(Behavior change: WASM EXPLAIN row keys/labels change.)*
+
 ## [3.2.1] — 2026-06-20
 
 Patch release. Maintenance only — no engine/API change (`velesdb-core` and the
