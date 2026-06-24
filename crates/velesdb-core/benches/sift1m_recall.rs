@@ -31,7 +31,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use velesdb_core::distance::DistanceMetric;
-use velesdb_core::{HnswIndex, HnswParams, ScoredResult, VectorIndex};
+use velesdb_core::{HnswIndex, HnswParams, ScoredResult, SearchQuality, VectorIndex};
 
 #[path = "datasets/mod.rs"]
 mod datasets;
@@ -66,6 +66,7 @@ fn bench_sift1m_recall_at_10(c: &mut Criterion) {
 
     run_latency_sweep(c, &index, &data);
     report_recall(&index, &data);
+    report_recall_quality(&index, &data);
 }
 
 /// Dispatches to the subset loader when BOTH env vars are set (smoke mode).
@@ -185,6 +186,50 @@ fn measure_recall_at_10(
         // comment in `run_latency_sweep` for the reason we bypass
         // `SearchQuality::Custom` here.
         let Ok(results) = index.search_raw(q, K, ef) else {
+            continue;
+        };
+        sum += intersection_ratio(&results, gt, K);
+        counted += 1;
+    }
+    if counted == 0 {
+        0.0
+    } else {
+        sum / counted as f64
+    }
+}
+
+/// Reports recall@10 for the PRODUCTION search path (`search_with_quality`),
+/// which adds quality-aware ef scaling + exact re-ranking on top of the raw
+/// graph traversal measured by [`report_recall`]. This is the recall a real
+/// query gets at the `Accurate` / `Perfect` quality levels — distinct from the
+/// apples-to-apples plain-HNSW numbers above (different question, see module
+/// docs). Printed as `RECALL_REPORT_QUALITY\tmode=<M>\trecall@10=<R>`.
+fn report_recall_quality(index: &HnswIndex, data: &Sift1M) {
+    for (label, quality) in [
+        ("Accurate", SearchQuality::Accurate),
+        ("Perfect", SearchQuality::Perfect),
+    ] {
+        let recall = measure_recall_quality(index, &data.query, &data.groundtruth, quality);
+        println!("RECALL_REPORT_QUALITY\tmode={label}\trecall@10={recall:.4}");
+    }
+}
+
+/// Like [`measure_recall_at_10`] but drives the production
+/// [`HnswIndex::search_with_quality`] path instead of `search_raw`.
+fn measure_recall_quality(
+    index: &HnswIndex,
+    queries: &[Vec<f32>],
+    groundtruth: &[Vec<u32>],
+    quality: SearchQuality,
+) -> f64 {
+    let mut sum = 0.0_f64;
+    let mut counted = 0_usize;
+    for (q, gt) in queries.iter().zip(groundtruth.iter()) {
+        // Skip rows with no in-range groundtruth (subset mode), as above.
+        if gt.is_empty() {
+            continue;
+        }
+        let Ok(results) = index.search_with_quality(q, K, quality) else {
             continue;
         };
         sum += intersection_ratio(&results, gt, K);

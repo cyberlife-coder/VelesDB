@@ -380,18 +380,28 @@ Section 9 explains why VelesDB does not currently publish head-to-head competito
 
 ### 11.3 Measured results
 
-First reproducible run, **VelesDB v3.3.0**, plain-HNSW `search_raw` path (M=16, ef_construction=200, L2), full 1M base × 10K queries. Host: **Apple Silicon (M-series, ARM64/NEON), rustc release build** — the i9-14900KF `target-cpu=native` reference run is tracked separately (latency is hardware-specific; **recall is hardware-independent**, so the recall column is portable).
+First reproducible run, **VelesDB v3.3.0** (M=16, ef_construction=200, L2), full 1M base × 10K queries. Host: **Apple Silicon (M-series, ARM64/NEON), rustc release build**, measured on an **otherwise-idle machine, single bench process** (Criterion 20-sample with 95% CIs; latency stable within ±1% run-to-run). The i9-14900KF `target-cpu=native` reference run is tracked separately — latency is hardware-specific; **recall is hardware-independent**, so the recall columns are portable.
+
+**Plain-HNSW path** (`search_raw`, fixed `ef_search`, no reranking — the apples-to-apples methodology comparable to the libraries below):
 
 | ef_search | Recall@10 | p50 latency (Criterion median) |
 |-----------|-----------|--------------------------------|
-| 64 | 0.9012 | 73.0 µs |
-| 128 | 0.9435 | 134.1 µs |
-| 256 | 0.9656 | 243.1 µs |
-| 512 | 0.9759 | 451.1 µs |
+| 64 | 0.9012 | 71.8 µs |
+| 128 | 0.9435 | 130.5 µs |
+| 256 | 0.9659 | 235.8 µs |
+| 512 | 0.9759 | 433.3 µs |
+
+**Production path** (`search_with_quality` — quality-aware ef scaling + exact-SIMD reranking; the recall a real application query gets):
+
+| Mode | ef_search (at 1M) | Recall@10 |
+|------|-------------------|-----------|
+| Accurate | ~1024 | 0.9803 |
+| Perfect | ~8192 | 0.9994 |
 
 Notes:
-- These are the **plain-HNSW, no-rerank** numbers (apples-to-apples with the libraries below). VelesDB's production search path (`search_with_quality`) adds quality-aware ef scaling + exact-SIMD reranking and scores higher — measured separately by `benches/recall_comprehensive.rs`. Do not compare these against the 10K production-path recall figures elsewhere in this doc; they answer different questions.
-- Recall climbs monotonically with `ef_search`, as expected. Recall@10 at ef=128 (0.9435) clears the ≥ 0.90 regression floor (§11.5) with margin.
+- The two paths answer different questions: the plain path is for cross-implementation comparison; the production path is what an application actually calls. Don't compare the plain numbers against the 10K production-path figures elsewhere in this doc.
+- Recall climbs monotonically with `ef_search`; ef=128 (0.9435) clears the ≥ 0.90 regression floor (§11.5) with margin.
+- **`Perfect` reaches 0.9994 — not literally 1.0 — at 1M scale.** The exact-1.0 guarantee is validated by the contract test at ≤ 100K (synthetic data, `scale_recall_100k.rs`). On real SIFT1M at 1M, ~0.06% of true neighbours fall outside even the ef=8192 candidate pool, and exact reranking can only reorder the candidates the graph surfaced — it cannot recover a neighbour the traversal never visited. So "100%" is a ≤100K guarantee, not a 1M one.
 
 Literature reference points (published by the respective libraries on similar hardware — **not VelesDB numbers**, orientation only):
 
