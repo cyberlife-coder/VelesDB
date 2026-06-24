@@ -349,6 +349,35 @@ describe('VelesDB — index management delegations', () => {
     await db.dropIndex('c', 'L', 'p');
     expect(backend.dropIndex).toHaveBeenCalledWith('c', 'L', 'p');
   });
+
+  it('setAutoReindex routes a valid ALTER COLLECTION ... SET(auto_reindex=...) (#27)', async () => {
+    await db.setAutoReindex('docs', true);
+    expect(backend.query).toHaveBeenCalledWith(
+      'docs',
+      'ALTER COLLECTION docs SET(auto_reindex=true)',
+      undefined,
+      undefined
+    );
+
+    await db.setAutoReindex('docs', false);
+    expect(backend.query).toHaveBeenCalledWith(
+      'docs',
+      'ALTER COLLECTION docs SET(auto_reindex=false)',
+      undefined,
+      undefined
+    );
+  });
+
+  it('alterCollection emits the typed SET clause and rejects empty options', async () => {
+    await db.alterCollection('docs', { autoReindex: true });
+    expect(backend.query).toHaveBeenCalledWith(
+      'docs',
+      'ALTER COLLECTION docs SET(auto_reindex=true)',
+      undefined,
+      undefined
+    );
+    await expect(db.alterCollection('docs', {})).rejects.toThrow(ValidationError);
+  });
 });
 
 describe('VelesDB — graph delegations (graph-methods.ts)', () => {

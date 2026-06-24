@@ -35,3 +35,17 @@ export interface CreateIndexOptions {
   /** Index type: 'hash' (default) or 'range' */
   indexType?: IndexType;
 }
+
+/**
+ * Mutable collection settings toggled at runtime via `ALTER COLLECTION`.
+ *
+ * Used by {@link VelesDB.alterCollection}. Only the keys you set are
+ * emitted into the `SET(...)` clause.
+ */
+export interface AlterCollectionOptions {
+  /**
+   * Enable/disable automatic index rebuilds after writes.
+   * Emits `auto_reindex=<bool>`.
+   */
+  autoReindex?: boolean;
+}
