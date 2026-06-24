@@ -895,25 +895,48 @@ SELECT * FROM logs WHERE created_at < NOW() - INTERVAL '30 days'
 
 ### Scalar Subqueries (v3.2+)
 
-> ⚠️ **Parsed but rejected at validation.** A scalar subquery in `WHERE`/`HAVING`
-> is accepted by the grammar (EPIC-039) but is rejected before execution by
-> semantic validation with error code V010 (`SubqueryNotExecutable`, message
-> 'Subqueries are parsed but not yet executable'). Earlier versions silently
-> resolved it to `NULL`; the engine now returns a `ValidationError` instead of
-> producing wrong/empty results. Compute the value in your application and pass it
-> as a bind parameter or literal.
-
-A scalar subquery in WHERE is intended to compare against a computed value from
-another (or the same) collection, returning exactly one row and one column.
+A scalar subquery in `WHERE`/`HAVING` (or an `INSERT`/`UPDATE` value) is
+**executed and substituted as a literal** before the outer query runs
+(EPIC-039). It compares against a value computed from another (or the same)
+collection, and must return **exactly one row and one column**.
 
 ```sql
--- Parsed, but REJECTED at validation with error V010 (SubqueryNotExecutable)
+-- Executes: the subquery resolves to AVG(amount), then the outer filter runs.
 SELECT * FROM orders
 WHERE amount > (SELECT AVG(amount) FROM orders)
 ```
 
 A subquery is enclosed in parentheses and contains a full SELECT statement
-(with optional WHERE, GROUP BY, HAVING, LIMIT).
+(with optional WHERE, GROUP BY, HAVING, LIMIT). It runs through the core query
+engine, so the same query executes identically on the REST `/query` endpoint and
+the CLI REPL (both route through `Database::execute_query`).
+
+**Cardinality contract:**
+
+| Subquery result | Behavior |
+|-----------------|----------|
+| Exactly one row, one column | resolves to that scalar value |
+| **0 rows** | resolves to `NULL` (a comparison against `NULL` is never true, so the outer query returns no matching rows) |
+| **> 1 row** | error `VELES-010` (Query): *returned N rows but must return at most one row* |
+| **> 1 column** (e.g. `SELECT *`, multiple columns) | error `VELES-010` (Query): *must select exactly one column* |
+
+**Supported forms:**
+
+- Aggregate subqueries — `(SELECT AVG(amount) FROM t)`, `COUNT(*)`, `MIN`/`MAX`/`SUM`.
+- Single-column row projection — `(SELECT amount FROM t WHERE id = 1)`.
+- `WHERE`, `HAVING`, `BETWEEN`, `IN (...)`, `CONTAINS (...)` value positions.
+- `INSERT ... VALUES (..., (SELECT MAX(x) FROM t))` and `UPDATE ... SET c = (SELECT ...)`.
+- Nesting up to 8 levels deep (a deeper nest errors with `VELES-010`).
+
+**Not yet supported (rejected at validation with `V010`):**
+
+- **Correlated subqueries** — a subquery whose inner `WHERE` references an outer
+  column (e.g. `(SELECT AVG(x) FROM s WHERE outer.id = 5)`). Rewrite without the
+  outer reference.
+
+> **Surface note.** Scalar subqueries are resolved in `velesdb-core`, so the
+> REST `/query` endpoint and the CLI REPL support them. **WASM** uses a separate
+> executor that does not yet resolve subqueries and still rejects them.
 
 ### Graph Match Predicate in WHERE
 

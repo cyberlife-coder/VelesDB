@@ -172,6 +172,30 @@ Payload sub-fields use dot paths: `payload.author.name = 'Ada'`.
 
 ---
 
+## Scalar subqueries
+
+A `(SELECT ...)` in a value position is executed and substituted as a literal
+before the outer query runs. It must return exactly one row and one column
+(0 rows -> `NULL`; more rows/columns -> `VELES-010`). Correlated subqueries
+(referencing an outer column) are not supported.
+
+```sql
+-- Aggregate subquery in WHERE
+SELECT * FROM orders WHERE amount > (SELECT AVG(amount) FROM orders) LIMIT 10;
+
+-- Single-column row subquery
+SELECT * FROM orders WHERE amount >= (SELECT amount FROM orders WHERE id = 1);
+
+-- HAVING and INSERT/UPDATE value positions also accept a scalar subquery
+INSERT INTO orders (id, vector, amount)
+VALUES (6, $v, (SELECT MAX(amount) FROM orders));
+```
+
+Resolved in `velesdb-core`, so REST `/query` and the CLI REPL support it; WASM
+still rejects subqueries.
+
+---
+
 ## Aggregation, grouping & windows
 
 ```sql

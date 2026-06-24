@@ -71,21 +71,24 @@ fn setup_graph(db: &Database) {
 }
 
 // =========================================================================
-// 1. WHERE scalar subquery -> V010 SubqueryNotExecutable
+// 1. WHERE *correlated* subquery -> V010 SubqueryNotExecutable
+//
+// Scalar (non-correlated) subqueries are now executed and substituted as
+// literals (EPIC-039). A correlated subquery (referencing an outer column) is
+// still not executable and must be rejected with V010.
 // =========================================================================
 
 #[test]
-fn scenario_where_scalar_subquery_rejected_with_v010() {
+fn scenario_where_correlated_subquery_rejected_with_v010() {
     let (_dir, db) = create_test_db();
     setup_products(&db);
 
-    // The subquery parses but is not executable; validation must reject it
-    // instead of silently evaluating the predicate to NULL.
     let err = execute_sql(
         &db,
-        "SELECT * FROM products WHERE price > (SELECT AVG(price) FROM products) LIMIT 10",
+        "SELECT * FROM products WHERE price > \
+         (SELECT AVG(price) FROM sub WHERE products.price = 5) LIMIT 10",
     )
-    .expect_err("test: WHERE scalar subquery must be rejected");
+    .expect_err("test: WHERE correlated subquery must be rejected");
     assert!(
         err.to_string().contains("V010"),
         "expected V010 subquery code, got: {err}"
