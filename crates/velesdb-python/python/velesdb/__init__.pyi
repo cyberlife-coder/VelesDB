@@ -474,6 +474,8 @@ class Collection:
         - Sparse only: ``search(sparse_vector={0: 1.5}, top_k=10)``
         - Hybrid: ``search(vector, sparse_vector={...}, top_k=10)``
 
+        Hybrid (dense + sparse) fuses the two branches with RRF (k=60); this method exposes no fusion override, use ``search_request`` with ``SearchOptions(fusion=...)`` for weighted/RSF fusion.
+
         Args:
             vector: Dense query vector. Optional if sparse_vector is given.
             sparse_vector: Sparse query as dict[int, float]. Optional if vector is given.

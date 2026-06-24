@@ -172,7 +172,8 @@ pub fn print_help() {
     );
     println!(
         "  {} Dense+sparse hybrid",
-        ".hybrid-sparse <name> <dense> <sparse> [k] [--strategy rrf|average|max]".yellow()
+        ".hybrid-sparse <name> <dense> <sparse> [k] [--strategy rrf|average|max|weighted|relative_score]"
+            .yellow()
     );
     println!("  {}        Show query guard-rails", ".guardrails".yellow());
     println!("  {}   Agent memory (preview)", ".agent [cmd]".yellow());

@@ -77,7 +77,7 @@ pub(crate) fn cmd_hybrid_sparse(db: &Database, parts: &[&str]) -> CommandResult 
     if parts.len() < 4 {
         println!(
             "Usage: .hybrid-sparse <collection> <dense_json> <sparse_json> [k] \
-             [--strategy rrf|average|max] [--index <name>]\n"
+             [--strategy rrf|average|max|weighted|relative_score] [--index <name>]\n"
         );
         println!("  Dense vector:  {}", "[0.1, 0.2, ...]".italic().white());
         println!(
