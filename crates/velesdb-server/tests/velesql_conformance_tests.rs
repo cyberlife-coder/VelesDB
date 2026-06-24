@@ -29,6 +29,12 @@ struct ConformanceCase {
     body: Value,
     expected_status: u16,
     expected_error_code: Option<String>,
+    /// Assert `error.message` in `VelesqlErrorResponse` semantic errors.
+    expected_error_message: Option<String>,
+    /// Assert `error.hint` in `VelesqlErrorResponse` semantic errors.
+    expected_error_hint: Option<String>,
+    /// Assert `error.details` in `VelesqlErrorResponse` semantic errors (exact match).
+    expected_error_details: Option<Value>,
     expect_contract_meta: Option<bool>,
 }
 
@@ -140,6 +146,32 @@ async fn test_velesql_contract_conformance_fixture_cases() {
                 json["error"]["code"],
                 error_code.as_str(),
                 "case {} returned unexpected error code",
+                case.id
+            );
+        }
+
+        if let Some(msg) = &case.expected_error_message {
+            assert_eq!(
+                json["error"]["message"],
+                msg.as_str(),
+                "case {} returned unexpected error message",
+                case.id
+            );
+        }
+
+        if let Some(hint) = &case.expected_error_hint {
+            assert_eq!(
+                json["error"]["hint"],
+                hint.as_str(),
+                "case {} returned unexpected error hint",
+                case.id
+            );
+        }
+
+        if let Some(details) = &case.expected_error_details {
+            assert_eq!(
+                json["error"]["details"], *details,
+                "case {} returned unexpected error details",
                 case.id
             );
         }

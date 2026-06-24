@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-06-20 (v3.2.1)
+Last updated: 2026-06-24 (v3.2.1)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -241,7 +241,7 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
 
 ## Remaining Gaps and Action Items
 
-1. Add explicit server-side end-to-end assertions for the REST error shape (`code/hint/details`) beyond parser conformance. (The CLI has no HTTP layer — it executes against embedded core — so the REST error-shape contract belongs to `velesdb-server`.)
+1. ✅ **Done (2026-06-24).** Explicit server-side assertions for the full REST `VelesqlErrorResponse` shape (`code`/`message`/`hint`/`details`) are now enforced in `crates/velesdb-server/tests/velesql_conformance_tests.rs` via the shared fixture. Cases C002 (`VELESQL_MISSING_COLLECTION`), C003 (`VELESQL_COLLECTION_NOT_FOUND`), and C007 (`VELESQL_AGGREGATION_ERROR`) each assert all four fields, pinning the complete error body contract for the `/query` and `/aggregate` semantic-error paths. Parse errors (`QueryErrorResponse`) retain their own parser-specific shape and are tested separately by C004/C013 (status code only, by design — the parser error format is defined at `E0XX` layer). (The CLI has no HTTP layer — it executes against embedded core — so this contract belongs exclusively to `velesdb-server`.)
 2. ✅ **Done (2026-06-20).** The executor-level conformance net now covers **core, WASM, and CLI** — all three run `conformance/velesql_executor_cases.json`, including scalar WHERE filters, single- and multi-column ORDER BY, the ascending-id tie-break, and bounded top-k. See [KNOWN_LIMITATIONS #13](./KNOWN_LIMITATIONS.md#13-velesql-executor-conformance-core-wasm-cli) (resolved).
 3. Keep docs, fixtures, and examples synchronized on every contract version change.
 4. Promote RaBitQ from experimental to stable once the API is finalized.
