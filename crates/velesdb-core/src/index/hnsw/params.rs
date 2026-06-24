@@ -330,8 +330,11 @@ pub enum SearchQuality {
     Balanced,
     /// Accurate search with `ef_search=512`. ~100% recall.
     Accurate,
-    /// Perfect recall mode with `ef_search=4096` for guaranteed 100% recall.
-    /// Uses large candidate pool with exact SIMD re-ranking.
+    /// Highest-recall mode: `ef_search=4096` base with a large candidate pool
+    /// and exact SIMD re-ranking. Reaches exactly 1.0 on the ≤100K contract
+    /// tests; on a real 1M corpus (SIFT1M) it measures ~0.9994 — re-ranking can
+    /// only reorder candidates the graph surfaced, so the rare true neighbour
+    /// outside the ef=8192 pool at 1M is not recovered. See docs/BENCHMARKS.md §11.
     Perfect,
     /// Custom `ef_search` value.
     Custom(usize),
@@ -379,7 +382,8 @@ impl SearchQuality {
     /// # Large-scale optimization (v0.9+)
     ///
     /// - **Accurate**: 512 base (was 256), scales with k×16 for ≥95% recall at 100K+
-    /// - **Perfect**: 4096 base (was 2048), scales with k×100 for guaranteed 100% at 100K+
+    /// - **Perfect**: 4096 base (was 2048), scales with k×100 for ~100% recall
+    ///   (exactly 1.0 on the ≤100K contract tests; ~0.9994 on 1M SIFT1M)
     /// - **Adaptive**: returns `min_ef` (first phase); caller handles second phase
     #[must_use]
     pub fn ef_search(&self, k: usize) -> usize {
@@ -390,7 +394,7 @@ impl SearchQuality {
             Self::Balanced | Self::AutoTune => 160.max(k * 5),
             // Increased from 256 to 512 for better recall at 100K+ scale
             Self::Accurate => 512.max(k * 16),
-            // Increased from 2048 to 4096 for guaranteed 100% recall at 100K+
+            // Increased from 2048 to 4096 for ~100% recall (1.0 ≤100K; ~0.9994 at 1M)
             Self::Perfect => 4096.max(k * 100),
             Self::Custom(ef) => (*ef).max(k),
             // Adaptive: start with min_ef (first phase)
