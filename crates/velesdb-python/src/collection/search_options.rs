@@ -29,6 +29,8 @@
 
 use pyo3::prelude::*;
 
+use crate::FusionStrategy;
+
 /// Options for a vector search request.
 ///
 /// Use as the argument to :py:meth:`Collection.search_request` (v1.15+).
@@ -68,6 +70,13 @@ pub struct SearchOptions {
     /// sizes small.
     #[pyo3(get, set)]
     pub include_vectors: bool,
+    /// Optional fusion strategy applied when both ``vector`` and
+    /// ``sparse_vector`` are provided (typed hybrid dense+sparse search).
+    /// When ``None`` the default Reciprocal Rank Fusion (RRF, k=60) is used,
+    /// preserving the historical behavior.  Has no effect on dense-only or
+    /// sparse-only searches.
+    #[pyo3(get, set)]
+    pub fusion: Option<FusionStrategy>,
 }
 
 #[pymethods]
@@ -85,6 +94,8 @@ impl SearchOptions {
     ///     filter: Metadata pre-filter dict.
     ///     sparse_index_name: Named sparse index to query.
     ///     include_vectors: Include raw vectors in results (default: False).
+    ///     fusion: Optional :py:class:`FusionStrategy` for hybrid dense+sparse
+    ///         fusion (default: RRF k=60).
     #[new]
     #[pyo3(signature = (
         vector = None,
@@ -94,6 +105,7 @@ impl SearchOptions {
         filter = None,
         sparse_index_name = None,
         include_vectors = false,
+        fusion = None,
     ))]
     pub fn new(
         vector: Option<Py<PyAny>>,
@@ -102,6 +114,7 @@ impl SearchOptions {
         filter: Option<Py<PyAny>>,
         sparse_index_name: Option<String>,
         include_vectors: bool,
+        fusion: Option<FusionStrategy>,
     ) -> Self {
         Self {
             vector,
@@ -110,6 +123,7 @@ impl SearchOptions {
             filter,
             sparse_index_name,
             include_vectors,
+            fusion,
         }
     }
 
@@ -170,6 +184,14 @@ impl SearchOptions {
     /// Sets whether raw vectors are included in results and returns `self`.
     pub fn with_include_vectors(slf: Py<Self>, py: Python<'_>, include: bool) -> Py<Self> {
         slf.bind(py).borrow_mut().include_vectors = include;
+        slf
+    }
+
+    /// Sets the hybrid dense+sparse fusion strategy and returns `self`.
+    ///
+    /// Pass ``None`` to fall back to the default RRF (k=60).
+    pub fn with_fusion(slf: Py<Self>, py: Python<'_>, fusion: Option<FusionStrategy>) -> Py<Self> {
+        slf.bind(py).borrow_mut().fusion = fusion;
         slf
     }
 }
