@@ -199,8 +199,18 @@ Current codes:
 - `VELESQL_COLLECTION_NOT_FOUND`
 - `VELESQL_EXECUTION_ERROR`
 - `VELESQL_AGGREGATION_ERROR`
+- `VELESQL_VALIDATION_ERROR`
+- `VELESQL_MUTATION_ERROR`
+- `VELESQL_EXPLAIN_ANALYZE_ERROR`
 
-`/collections/{name}/match` keeps compatibility fields (`error`, `code`) and now also returns `hint` and optional `details`.
+`/collections/{name}/match` no longer emits the bespoke `*_ERROR`
+strings (`COLLECTION_NOT_FOUND` / `PARSE_ERROR` / `EXECUTION_ERROR` / …).
+It now returns the canonical `{ "error", "code" }` body with a
+`VELES-XXX` code (e.g. `VELES-002` for a missing collection, `VELES-010`
+for a parse error or unbound parameter, `VELES-019` for a duplicate
+edge), and the HTTP status is derived from the error variant. Guard-rail
+rejections (rate limit `429`, circuit breaker `503`) and query timeouts
+(`408`) carry the `VELES-027` code.
 
 Syntax errors still use parser-specific payload (`QueryErrorResponse` with `type/message/position/query`).
 
