@@ -7,14 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-VelesQL conformance closeout plus three feature completions (real EXPLAIN
-counters incl. VectorFirst, MATCH `ORDER BY` arithmetic / `similarity(field, $v)`,
-and executable SQL `NEAR_FUSED` fusion) and one new DDL capability. Several
-**behavior changes** (flagged below) replace silent wrong/no-op behavior with
-explicit errors or real values — review the SemVer impact before the next
-release.
+## [3.3.0] — 2026-06-24
+
+A VelesQL correctness + cross-surface parity release. It closes a large backlog
+of silent-wrong-result and clause-drop bugs across the core engine, REST server,
+CLI, WASM, and the Python / TypeScript SDKs, and adds executable scalar
+subqueries plus several typed SDK ergonomics. Versioned **3.3.0 (MINOR)**: most
+changes fix previously-wrong behavior, but several are **client-observable**
+(error codes, REST statuses, and query results change). See
+[docs/guides/MIGRATION_v3.3.0.md](docs/guides/MIGRATION_v3.3.0.md) before
+upgrading.
 
 ### Changed
+- **New request hard-limits (`400`).** Upserts are capped at 100 000 points per
+  request (`MAX_UPSERT_BATCH_SIZE`) and sparse vectors at 65 536 non-zeros
+  (`MAX_SPARSE_NNZ`); larger requests are rejected with `400` instead of being
+  accepted and degrading the server.
 - **Graph / `MATCH` REST error responses now use the canonical `VELES-XXX`
   error codes and correct 4xx HTTP statuses instead of bespoke strings and
   blanket 500s.** `POST /collections/{name}/match` previously hand-rolled
