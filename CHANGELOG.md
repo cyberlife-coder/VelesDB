@@ -86,6 +86,21 @@ release.
   *(Behavior change: several previously-accepted FUSION queries now error.)*
 
 ### Fixed
+- **The ordered `MATCH` path (`match_query_ordered`) now enforces the final
+  cardinality guard the SQL `/query` path already had.** `finalize_match_ordering`
+  (used by non-SQL callers — REST `/match`, the SDKs) omitted the
+  `check_cardinality()` call that `finalize_match_results` runs after sorting and
+  before LIMIT truncation, so a traversal exceeding the configured cardinality
+  limit returned an oversized result set where the SQL path rejects it. The
+  guard now runs identically on both paths, returning `VELES-027` (`GuardRail`).
+- **WASM aggregate queries now honor `ORDER BY`.** `SELECT cat, COUNT(*) … GROUP
+  BY cat ORDER BY COUNT(*)` (or `ORDER BY` a group key / aggregate alias)
+  returned groups in undefined order on the WASM executor — the aggregate
+  finalize path applied LIMIT without sorting. Grouped rows are now sorted by the
+  ORDER BY key(s) (group-key column or aggregate output column, by alias or
+  default name) before LIMIT, mirroring core's aggregate ORDER BY semantics.
+  Similarity / arithmetic ORDER BY forms (not applicable to grouped rows) are
+  skipped, matching core.
 - **TypeScript SDK `velesql()` builder now emits parseable VelesQL.** Three
   builder bugs produced strings the core parser rejected or that dropped
   intent: `nearVector({ topK })` emitted a non-existent `vector NEAR $q TOP n`

@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 
 use velesdb_core::velesql::{
     AggregateArg, AggregateFunction, AggregateType, CompareOp, DistinctMode, HavingClause,
-    HavingCondition, LogicalOp, SelectColumns, SelectStatement, Value,
+    HavingCondition, LogicalOp, OrderByExpr, SelectColumns, SelectOrderBy, SelectStatement, Value,
 };
 
 use crate::velesql_result::QueryResultRow;
@@ -133,7 +133,7 @@ fn project_for_distinct(
 // --- Aggregation ----------------------------------------------------------
 
 /// Full aggregation pipeline: group rows, compute aggregates, apply HAVING,
-/// serialize each group to a synthetic row.
+/// apply ORDER BY, serialize each group to a synthetic row.
 fn aggregate(
     stmt: &SelectStatement,
     rows: &[ScannedRow<'_>],
@@ -147,7 +147,7 @@ fn aggregate(
     let groups = materialize_groups(&group_cols, rows, &stmt.columns);
     let aggregates = extract_aggregates(&stmt.columns);
     let plain_cols = extract_plain_columns(&stmt.columns);
-    let mut out: Vec<QueryResultRow> = Vec::with_capacity(groups.len());
+    let mut json_rows: Vec<serde_json::Value> = Vec::with_capacity(groups.len());
     for (key, group_rows) in groups {
         if let Some(row) = finalize_group(
             stmt,
@@ -158,10 +158,67 @@ fn aggregate(
             &group_rows,
             params,
         )? {
-            out.push(row);
+            json_rows.push(row);
         }
     }
-    Ok(out)
+    if let Some(order_by) = stmt.order_by.as_deref() {
+        sort_aggregate_rows(&mut json_rows, order_by);
+    }
+    json_rows
+        .into_iter()
+        .map(QueryResultRow::synthetic)
+        .collect()
+}
+
+/// Sorts grouped aggregate rows by the SELECT's ORDER BY, mirroring core's
+/// `Collection::sort_aggregation_results`: each ORDER BY key resolves to a
+/// JSON field on the group row (a group-key column or an aggregate output
+/// column), compared with the same total JSON ordering. Multi-key sort is
+/// stable so equal leading keys preserve earlier-key order. Similarity /
+/// arithmetic ORDER BY forms are not applicable to grouped rows and are
+/// skipped, matching core.
+fn sort_aggregate_rows(rows: &mut [serde_json::Value], order_by: &[SelectOrderBy]) {
+    let keys: Vec<(String, bool)> = order_by
+        .iter()
+        .filter_map(|clause| aggregate_order_key(&clause.expr).map(|k| (k, clause.descending)))
+        .collect();
+    if keys.is_empty() {
+        return;
+    }
+    rows.sort_by(|a, b| compare_aggregate_rows(a, b, &keys));
+}
+
+/// Resolves an ORDER BY expression to the JSON field name used by the
+/// aggregate output row, or `None` for forms that do not apply to grouped
+/// rows (similarity / arithmetic), matching core's `sort_aggregation_results`.
+fn aggregate_order_key(expr: &OrderByExpr) -> Option<String> {
+    match expr {
+        OrderByExpr::Field(name) => Some(name.clone()),
+        OrderByExpr::Aggregate(agg) => Some(
+            agg.alias
+                .clone()
+                .unwrap_or_else(|| aggregate_default_name(agg)),
+        ),
+        _ => None,
+    }
+}
+
+/// Total order over two aggregate rows for the resolved `(field, descending)`
+/// keys, using the same NULL-aware JSON comparator as the plain SELECT and
+/// MATCH ORDER BY paths (`compare_json_with_nulls`) for consistent ordering.
+fn compare_aggregate_rows(
+    a: &serde_json::Value,
+    b: &serde_json::Value,
+    keys: &[(String, bool)],
+) -> std::cmp::Ordering {
+    for (field, descending) in keys {
+        let ord = crate::velesql_orderby::compare_json_with_nulls(a.get(field), b.get(field));
+        let ord = if *descending { ord.reverse() } else { ord };
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+    }
+    std::cmp::Ordering::Equal
 }
 
 /// Returns the final row set after partitioning, adding the implicit global
@@ -187,7 +244,7 @@ fn finalize_group(
     aggregates: &[AggregateFunction],
     group_rows: &[ScannedRow<'_>],
     params: &Params,
-) -> Result<Option<QueryResultRow>, String> {
+) -> Result<Option<serde_json::Value>, String> {
     let mut payload = serde_json::Map::new();
     write_group_keys(&mut payload, group_cols, key);
     write_plain_columns(&mut payload, plain_cols, group_rows);
@@ -195,9 +252,7 @@ fn finalize_group(
     if !passes_having(aggregates, stmt.having.as_ref(), group_rows, params)? {
         return Ok(None);
     }
-    Ok(Some(QueryResultRow::synthetic(serde_json::Value::Object(
-        payload,
-    ))?))
+    Ok(Some(serde_json::Value::Object(payload)))
 }
 
 /// Partitions the row set into groups keyed by the GROUP BY columns.

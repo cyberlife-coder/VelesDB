@@ -347,6 +347,42 @@ fn test_match_cardinality_enforced_below_100_iterations() {
 }
 
 #[test]
+fn test_match_query_ordered_cardinality_enforced() {
+    // The ordered MATCH path (`match_query_ordered`, used by non-SQL callers
+    // such as REST `/match` and the SDKs) must enforce the SAME final
+    // cardinality guard as the SQL `execute_query` path. Without it, an
+    // oversized ordered result set would be returned where the SQL path rejects.
+    let dir = TempDir::new().unwrap();
+    let mut col = create_test_collection(&dir);
+
+    // 3 edges: 0→1, 0→2, 0→3 — BFS from 0 yields 3 results.
+    for target in 1u64..=3 {
+        let edge = GraphEdge::new(target * 100, 0, target, "LINKS").expect("edge");
+        col.add_edge(edge).expect("add_edge");
+    }
+
+    let limits = QueryLimits {
+        max_cardinality: 2, // 3 results > 2 → must be rejected
+        ..QueryLimits::default()
+    };
+    col.guard_rails = Arc::new(GuardRails::with_limits(limits));
+
+    let match_clause = Parser::parse("MATCH (a)-[r]->(b) RETURN b ORDER BY depth LIMIT 10;")
+        .expect("parse failed")
+        .match_clause
+        .expect("query should be a MATCH statement");
+    let params = HashMap::new();
+
+    let result = col.match_query_ordered(&match_clause, &params);
+    assert!(
+        result.is_err(),
+        "Cardinality guard-rail should fire for the ordered MATCH path"
+    );
+    let err = result.unwrap_err();
+    assert_eq!(err.code(), "VELES-027");
+}
+
+#[test]
 fn test_per_client_rate_limiting_is_independent() {
     // Each client_id has its own token bucket; exhausting one must not affect others.
     let dir = TempDir::new().unwrap();
