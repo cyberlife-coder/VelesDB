@@ -291,11 +291,19 @@ runtime guardrail (default 10), and never above the parse-time budget of 32.
 
 ### `LET` before `MATCH`
 
-`LET x = 0.5 MATCH (a)-[:R]->(b) RETURN b` **parses** — the `LET` binding is
-attached to the statement (the grammar allows `let_clause*` before any statement).
-However, `LET` bindings are only consumed by `SELECT` arithmetic; they have **no
-effect inside a `MATCH`**. The clause is not rejected, but referencing the binding
-from within the MATCH does nothing.
+`LET x = 0.5 MATCH (a)-[:R]->(b) RETURN b` **parses** — the grammar allows
+`let_clause*` before any statement — but is **rejected at execution**. MATCH runs
+on a dedicated traversal path that bypasses LET evaluation, so the engine returns
+an explicit error rather than silently discarding the binding:
+
+```
+Error: LET bindings are not supported with MATCH queries in this version
+```
+
+Rank graph rows with `RETURN ... ORDER BY` instead. `LET` bindings are supported
+only on `SELECT` queries (dense `NEAR`, text `MATCH '...'`, hybrid, scalar-filter);
+see the LET Clause section of `docs/VELESQL_SPEC.md` for the full list of
+unsupported shapes.
 
 ### Hybrid fusion entry points
 

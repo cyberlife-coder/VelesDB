@@ -1427,6 +1427,45 @@ LET <name> = <arithmetic_expression>
 - LET names take **highest priority** in variable resolution (overrides component scores).
 - Case-insensitive keyword (`LET`, `let`, `Let` all work).
 
+#### Unsupported query shapes
+
+LET bindings are evaluated in the SELECT finalization stage. Query shapes that
+take a dedicated early-return execution path bypass that stage, so the engine
+**rejects** (rather than silently dropping) a LET clause on any of these:
+
+| Shape | Trigger | Error |
+|-------|---------|-------|
+| Graph pattern | `MATCH (...) RETURN ...` | `LET bindings are not supported with MATCH queries in this version` |
+| Sparse vector | `WHERE vector SPARSE_NEAR ...` | `LET bindings are not supported with SPARSE_NEAR queries in this version` |
+| Multi-vector fusion | `WHERE vector NEAR_FUSED ...` | `LET bindings are not supported with NEAR_FUSED queries in this version` |
+| Negated similarity | `WHERE NOT similarity(...) ...` | `LET bindings are not supported with NOT similarity() queries in this version` |
+| OR / union | `WHERE similarity(...) OR ...` | `LET bindings are not supported with OR/union queries in this version` |
+
+LET **is** supported on dense `NEAR`, text `MATCH '...'`, hybrid `NEAR + MATCH`
+text, and scalar-filter SELECTs.
+
+##### Ordering by a built-in score on the excluded shapes
+
+These shapes reject only the `LET ... = ...` clause, but `ORDER BY` still runs
+in their own finalization. One caveat applies to the built-in score variables
+(`vector_score`, `bm25_score`, `sparse_score`, `graph_score`, `fused_score`):
+
+- A **bare** score variable in `ORDER BY` (e.g. `ORDER BY sparse_score DESC`) is
+  parsed as a payload-field reference. Since no payload field of that name
+  exists, every row compares equal and the rows fall back to the deterministic
+  ascending-id tie-break — i.e. the clause is a **no-op** for ranking.
+- Wrap the score in an **arithmetic expression** to rank by it. For example, on
+  a `SPARSE_NEAR` query, `ORDER BY sparse_score * 1.0 DESC` sorts by the sparse
+  score, because the arithmetic path resolves the built-in component variable.
+
+```sql
+-- Ranks by sparse score (arithmetic form resolves the built-in variable):
+SELECT * FROM docs
+WHERE vector SPARSE_NEAR $sparse
+ORDER BY sparse_score * 1.0 DESC
+LIMIT 5
+```
+
 ### Expression Support
 
 LET expressions support the same arithmetic as ORDER BY:
@@ -1462,10 +1501,20 @@ WHERE vector NEAR $query AND content MATCH 'AI'
 ORDER BY boosted DESC
 LIMIT 5
 
--- LET with MATCH graph query
-LET x = similarity()
-MATCH (a)-[r]->(b)
-RETURN a
+-- A LET clause on a MATCH graph query is REJECTED (see "Unsupported query
+-- shapes" above). MATCH runs on a dedicated traversal path that bypasses
+-- LET evaluation, so the engine returns an explicit error rather than
+-- silently discarding the binding:
+--   LET x = similarity() MATCH (a)-[r]->(b) RETURN a LIMIT 5
+--   -> Error: LET bindings are not supported with MATCH queries in this version
+-- Rank graph rows with RETURN ... ORDER BY instead.
+
+-- Sparse vector queries also reject LET. To rank by the built-in sparse_score
+-- variable without a LET clause, wrap it in an arithmetic expression (a bare
+-- `ORDER BY sparse_score` is treated as a payload field and is a ranking no-op):
+SELECT * FROM docs
+WHERE vector SPARSE_NEAR $sparse
+ORDER BY sparse_score * 1.0 DESC
 LIMIT 5
 ```
 
