@@ -662,19 +662,21 @@ Build type-safe VelesQL queries with a fluent API instead of raw strings.
 ```typescript
 import { velesql } from '@wiscale/velesdb-sdk';
 
-// Vector similarity with filters
+// Vector similarity with filters — use SELECT mode via from()
 const builder = velesql()
-  .match('d', 'Document')
+  .from('documents', 'd')
   .nearVector('$queryVector', queryVector)
   .andWhere('d.category = $cat', { cat: 'tech' })
   .orderBy('similarity()', 'DESC')
   .limit(10);
 
 const queryString = builder.toVelesQL();
+// => "SELECT * FROM documents WHERE vector NEAR $queryVector AND d.category = $cat ORDER BY similarity() DESC LIMIT 10"
 const params = builder.getParams();
 const results = await db.query('documents', queryString, params);
 
-// Graph traversal with relationships
+// Graph traversal with relationships (MATCH mode — RETURN is mandatory
+// and precedes ORDER BY / LIMIT)
 const graphQuery = velesql()
   .match('p', 'Person')
   .rel('KNOWS')
@@ -683,9 +685,45 @@ const graphQuery = velesql()
   .return(['p.name', 'f.name'])
   .toVelesQL();
 // => "MATCH (p:Person)-[:KNOWS]->(f:Person) WHERE p.age > 25 RETURN p.name, f.name"
+
+// Hybrid (vector NEAR + text MATCH) with a real USING FUSION clause
+const hybrid = velesql()
+  .from('docs')
+  .nearVector('$q', queryVector)
+  .andWhere("content MATCH 'invoice'")
+  .limit(10)
+  .fusion('weighted', { vectorWeight: 0.7, graphWeight: 0.3 })
+  .toVelesQL();
+// => "SELECT * FROM docs WHERE vector NEAR $q AND content MATCH 'invoice' LIMIT 10 USING FUSION(strategy='weighted', vector_weight=0.7, graph_weight=0.3)"
+
+// Multi-vector fused search — strategy is typed to rrf | average | maximum
+const fused = velesql()
+  .from('docs')
+  .nearFused(['$a', '$b'], [vectorA, vectorB], { strategy: 'average' })
+  .limit(10)
+  .toVelesQL();
+// => "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'average' LIMIT 10"
 ```
 
-Builder methods: `match()`, `rel()`, `to()`, `where()`, `andWhere()`, `orWhere()`, `nearVector()`, `limit()`, `offset()`, `orderBy()`, `return()`, `returnAll()`, `fusion()`.
+> **Mode matters.** Call `from(collection)` for vector / hybrid / fused
+> SELECT queries; call `match(alias, label)` for graph patterns. MATCH mode
+> always emits a `RETURN` (defaulting to `RETURN *`) and supports no
+> `OFFSET`. `nearVector({ topK })` maps to `LIMIT` (VelesQL has no `TOP`
+> keyword). `nearFused()` only accepts `rrf` / `average` / `maximum` —
+> `weighted` / `relative_score` are a compile error because the engine
+> would silently degrade them to RRF.
+
+Builder methods: `match()`, `from()`, `select()`, `rel()`, `to()`, `where()`, `andWhere()`, `orWhere()`, `nearVector()`, `nearFused()`, `limit()`, `offset()`, `orderBy()`, `return()`, `returnAll()`, `fusion()`.
+
+#### Collection settings — `db.setAutoReindex()` / `db.alterCollection()`
+
+Toggle a collection's mutable settings at runtime via typed helpers that
+emit `ALTER COLLECTION ... SET(...)`:
+
+```typescript
+await db.setAutoReindex('docs', true);             // auto_reindex=true
+await db.alterCollection('docs', { autoReindex: false });
+```
 
 ---
 

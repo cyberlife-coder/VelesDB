@@ -38,6 +38,23 @@ export interface NearVectorOptions {
   topK?: number;
 }
 
+/**
+ * Fusion strategies valid for `NEAR_FUSED` (multi-vector) search.
+ *
+ * Deliberately a STRICT subset of {@link FusionStrategy}: only `rrf`,
+ * `average`, and `maximum` are meaningful when fusing N homogeneous query
+ * vectors. `weighted`/`relative_score` have no per-branch weights to apply
+ * here and the core silently downgrades them to RRF (the "weighted -> RRF"
+ * trap). Restricting the type makes that misuse a COMPILE error.
+ */
+export type NearFusedStrategy = 'rrf' | 'average' | 'maximum';
+
+/** Options for the {@link VelesQLBuilder.nearFused} multi-vector clause */
+export interface NearFusedOptions {
+  /** Fusion strategy (default: `rrf`). Only `rrf`/`average`/`maximum` allowed. */
+  strategy?: NearFusedStrategy;
+}
+
 /** Fusion configuration */
 export interface FusionOptions {
   strategy: FusionStrategy;
@@ -49,10 +66,16 @@ export interface FusionOptions {
 /** Internal state for the query builder */
 interface BuilderState {
   matchClauses: string[];
+  /** SELECT-mode source table/collection (set via {@link VelesQLBuilder.from}). */
+  fromClause?: string;
+  /** SELECT-mode projection columns (set via {@link VelesQLBuilder.select}). */
+  selectColumns?: string[];
   whereClauses: string[];
   whereOperators: string[];
   params: Record<string, unknown>;
   limitValue?: number;
+  /** topK from {@link VelesQLBuilder.nearVector}, applied as a LIMIT fallback. */
+  topKValue?: number;
   offsetValue?: number;
   orderByClause?: string;
   returnClause?: string;
@@ -76,10 +99,13 @@ export class VelesQLBuilder {
   constructor(state?: Partial<BuilderState>) {
     this.state = {
       matchClauses: state?.matchClauses ?? [],
+      fromClause: state?.fromClause,
+      selectColumns: state?.selectColumns,
       whereClauses: state?.whereClauses ?? [],
       whereOperators: state?.whereOperators ?? [],
       params: state?.params ?? {},
       limitValue: state?.limitValue,
+      topKValue: state?.topKValue,
       offsetValue: state?.offsetValue,
       orderByClause: state?.orderByClause,
       returnClause: state?.returnClause,
@@ -114,6 +140,47 @@ export class VelesQLBuilder {
       matchClauses: [...this.state.matchClauses, nodePattern],
       currentNode: alias,
     });
+  }
+
+  /**
+   * Start a SELECT-mode query against a collection/table.
+   *
+   * Use this for vector search and hybrid (NEAR + MATCH / fusion) queries,
+   * which are expressed as `SELECT ... FROM <collection> WHERE ...` in
+   * VelesQL — not as graph `MATCH` patterns. When `from()` is set the
+   * builder emits a `SELECT` statement instead of a `MATCH`.
+   *
+   * @param collection - Source collection/table name
+   * @param alias - Optional alias (kept for `WHERE`/`ORDER BY` references)
+   *
+   * @example
+   * ```typescript
+   * velesql()
+   *   .from('documents', 'd')
+   *   .nearVector('$q', embedding)
+   *   .andWhere('d.category = $cat', { cat: 'tech' })
+   *   .orderBy('score', 'DESC')
+   *   .limit(10)
+   *   .toVelesQL();
+   * // => "SELECT * FROM documents WHERE vector NEAR $q AND d.category = $cat ORDER BY score DESC LIMIT 10"
+   * ```
+   */
+  from(collection: string, alias?: string): VelesQLBuilder {
+    return this.clone({
+      fromClause: collection,
+      currentNode: alias,
+    });
+  }
+
+  /**
+   * Set the SELECT projection columns (SELECT mode only).
+   *
+   * Without this the query projects `*`.
+   *
+   * @param columns - Column expressions to project
+   */
+  select(columns: string[]): VelesQLBuilder {
+    return this.clone({ selectColumns: [...columns] });
   }
 
   /**
@@ -240,23 +307,74 @@ export class VelesQLBuilder {
     vector: number[] | Float32Array,
     options?: NearVectorOptions
   ): VelesQLBuilder {
+    // VelesQL has no `TOP` keyword — `topK` maps to a LIMIT fallback,
+    // applied at render time only when no explicit `.limit()` was set.
     const cleanParamName = paramName.startsWith('$') ? paramName.slice(1) : paramName;
-    const topKSuffix = options?.topK ? ` TOP ${options.topK}` : '';
-    const condition = `vector NEAR $${cleanParamName}${topKSuffix}`;
-    
-    const newParams = { ...this.state.params, [cleanParamName]: vector };
-    
-    if (this.state.whereClauses.length === 0) {
-      return this.clone({
-        whereClauses: [condition],
-        params: newParams,
-      });
+    return this.appendCondition(
+      `vector NEAR $${cleanParamName}`,
+      { [cleanParamName]: vector },
+      { topKValue: options?.topK ?? this.state.topKValue }
+    );
+  }
+
+  /**
+   * Add a multi-vector `NEAR_FUSED` clause for fused similarity search.
+   *
+   * Fuses several query vectors into one ranking. The strategy is typed as
+   * {@link NearFusedStrategy} (`rrf` | `average` | `maximum`) so the
+   * `weighted`/`relative_score` trap — which the engine silently downgrades
+   * to RRF — is a COMPILE-TIME error rather than a silent surprise.
+   *
+   * @param paramNames - Parameter names, one per query vector (e.g. `['$a', '$b']`)
+   * @param vectors - One vector per param name (same order)
+   * @param options - Fusion options (strategy)
+   *
+   * @example
+   * ```typescript
+   * velesql()
+   *   .from('docs')
+   *   .nearFused(['$a', '$b'], [vecA, vecB], { strategy: 'average' })
+   *   .limit(10)
+   *   .toVelesQL();
+   * // => "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'average' LIMIT 10"
+   * ```
+   */
+  nearFused(
+    paramNames: string[],
+    vectors: Array<number[] | Float32Array>,
+    options?: NearFusedOptions
+  ): VelesQLBuilder {
+    if (paramNames.length !== vectors.length) {
+      throw new Error('nearFused requires one vector per parameter name');
     }
-    
+    if (paramNames.length < 2) {
+      throw new Error('nearFused requires at least two query vectors');
+    }
+    const clean = paramNames.map(p => (p.startsWith('$') ? p.slice(1) : p));
+    const params: Record<string, unknown> = {};
+    clean.forEach((name, i) => {
+      params[name] = vectors[i];
+    });
+    const fusionSuffix = options?.strategy ? ` USING FUSION '${options.strategy}'` : '';
+    const list = clean.map(name => `$${name}`).join(', ');
+    return this.appendCondition(`vector NEAR_FUSED [${list}]${fusionSuffix}`, params);
+  }
+
+  /** Append a WHERE condition (AND-joined) and merge params. */
+  private appendCondition(
+    condition: string,
+    params: Record<string, unknown>,
+    extra?: Partial<BuilderState>
+  ): VelesQLBuilder {
+    const newParams = { ...this.state.params, ...params };
+    if (this.state.whereClauses.length === 0) {
+      return this.clone({ whereClauses: [condition], params: newParams, ...extra });
+    }
     return this.clone({
       whereClauses: [...this.state.whereClauses, condition],
       whereOperators: [...this.state.whereOperators, 'AND'],
       params: newParams,
+      ...extra,
     });
   }
 
@@ -354,50 +472,88 @@ export class VelesQLBuilder {
   }
 
   /**
-   * Build the VelesQL query string
+   * Build the VelesQL query string.
+   *
+   * Emits a `SELECT` statement when {@link from} was called, otherwise a
+   * graph `MATCH` statement. Both clause orders are dictated by the VelesQL
+   * grammar so the output round-trips through the core parser:
+   *   - SELECT: `SELECT … FROM … [WHERE …] [ORDER BY …] [LIMIT] [OFFSET] [USING FUSION(…)]`
+   *   - MATCH:  `MATCH … [WHERE …] RETURN … [ORDER BY …] [LIMIT]`
+   *     (`RETURN` is mandatory; `MATCH` supports no `OFFSET`.)
    */
   toVelesQL(): string {
-    if (this.state.matchClauses.length === 0) {
-      throw new Error('Query must have at least one MATCH clause');
-    }
+    return this.state.fromClause !== undefined
+      ? this.buildSelect()
+      : this.buildMatch();
+  }
 
-    const parts: string[] = [];
+  /** Resolve the effective LIMIT, falling back to a `nearVector({topK})`. */
+  private resolveLimit(): number | undefined {
+    return this.state.limitValue ?? this.state.topKValue;
+  }
 
-    // MATCH clause
-    parts.push(`MATCH ${this.state.matchClauses.join(', ')}`);
+  private buildSelect(): string {
+    const projection = this.state.selectColumns?.length
+      ? this.state.selectColumns.join(', ')
+      : '*';
+    const parts: string[] = [`SELECT ${projection} FROM ${this.state.fromClause}`];
 
-    // WHERE clause
     if (this.state.whereClauses.length > 0) {
-      const whereStr = this.buildWhereClause();
-      parts.push(`WHERE ${whereStr}`);
+      parts.push(`WHERE ${this.buildWhereClause()}`);
     }
-
-    // ORDER BY
     if (this.state.orderByClause) {
       parts.push(`ORDER BY ${this.state.orderByClause}`);
     }
-
-    // LIMIT
-    if (this.state.limitValue !== undefined) {
-      parts.push(`LIMIT ${this.state.limitValue}`);
+    const limit = this.resolveLimit();
+    if (limit !== undefined) {
+      parts.push(`LIMIT ${limit}`);
     }
-
-    // OFFSET
     if (this.state.offsetValue !== undefined) {
       parts.push(`OFFSET ${this.state.offsetValue}`);
     }
-
-    // RETURN
-    if (this.state.returnClause) {
-      parts.push(`RETURN ${this.state.returnClause}`);
-    }
-
-    // FUSION (as comment/hint for now)
     if (this.state.fusionOptions) {
-      parts.push(`/* FUSION ${this.state.fusionOptions.strategy} */`);
+      parts.push(this.buildFusionClause(this.state.fusionOptions));
+    }
+    return parts.join(' ');
+  }
+
+  private buildMatch(): string {
+    if (this.state.matchClauses.length === 0) {
+      throw new Error('Query must call match() or from() before toVelesQL()');
     }
 
+    const parts: string[] = [`MATCH ${this.state.matchClauses.join(', ')}`];
+
+    if (this.state.whereClauses.length > 0) {
+      parts.push(`WHERE ${this.buildWhereClause()}`);
+    }
+
+    // RETURN is mandatory in MATCH mode and MUST precede ORDER BY/LIMIT.
+    parts.push(`RETURN ${this.state.returnClause ?? '*'}`);
+
+    if (this.state.orderByClause) {
+      parts.push(`ORDER BY ${this.state.orderByClause}`);
+    }
+    const limit = this.resolveLimit();
+    if (limit !== undefined) {
+      parts.push(`LIMIT ${limit}`);
+    }
     return parts.join(' ');
+  }
+
+  /** Render a real `USING FUSION(...)` clause from fusion options. */
+  private buildFusionClause(options: FusionOptions): string {
+    const args: string[] = [`strategy='${options.strategy}'`];
+    if (options.k !== undefined) {
+      args.push(`k=${options.k}`);
+    }
+    if (options.vectorWeight !== undefined) {
+      args.push(`vector_weight=${options.vectorWeight}`);
+    }
+    if (options.graphWeight !== undefined) {
+      args.push(`graph_weight=${options.graphWeight}`);
+    }
+    return `USING FUSION(${args.join(', ')})`;
   }
 
   private formatLabel(label?: string | string[]): string {
