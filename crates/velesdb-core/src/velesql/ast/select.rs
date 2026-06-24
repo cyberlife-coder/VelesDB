@@ -353,6 +353,19 @@ pub struct SimilarityOrderBy {
 }
 
 impl SelectStatement {
+    /// Returns the table names and aliases visible as *outer* scope for a nested
+    /// subquery: the `FROM` collection plus any `FROM`/JOIN aliases.
+    ///
+    /// A subquery's inner WHERE is only **correlated** when it references one of
+    /// these names; a dotted payload path whose prefix is not in this set is a
+    /// plain payload filter, not a correlation (EPIC-039).
+    #[must_use]
+    pub fn outer_table_scope(&self) -> Vec<&str> {
+        std::iter::once(self.from.as_str())
+            .chain(self.from_alias.iter().map(String::as_str))
+            .collect()
+    }
+
     /// Returns an empty `SelectStatement` with all fields at their defaults.
     ///
     /// Used by [`crate::velesql::Query::new_dml`],

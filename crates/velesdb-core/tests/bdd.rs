@@ -103,6 +103,8 @@ mod recall_contract_multimetric;
 mod regression;
 #[path = "bdd/scalar_filter_exact.rs"]
 mod scalar_filter_exact;
+#[path = "bdd/scalar_subqueries.rs"]
+mod scalar_subqueries;
 #[path = "bdd/secondary_index_bitmap_in.rs"]
 mod secondary_index_bitmap_in;
 #[path = "bdd/set_operations.rs"]

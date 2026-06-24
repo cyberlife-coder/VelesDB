@@ -129,13 +129,15 @@ def test_explain_rejects_invalid_query(temp_db_path):
     collection = db.create_collection("explain_invalid", dimension=2, metric="cosine")
     collection.upsert([{"id": 1, "vector": [1.0, 0.0], "payload": {"amount": 5}}])
 
-    # A query that parses but is semantically invalid (a WHERE subquery, which
-    # VelesQL parses yet rejects at validation) must be rejected by explain()
-    # rather than silently building a plan.
+    # A query that parses but is semantically invalid (a *correlated* subquery —
+    # its inner WHERE references the outer table, which VelesQL parses yet rejects
+    # at validation) must be rejected by explain() rather than silently building a
+    # plan. (Plain scalar subqueries are now executable, so a correlated one is
+    # used here as the still-rejected invalid shape.)
     with pytest.raises(ValueError):
         collection.explain(
             "SELECT * FROM explain_invalid WHERE amount > "
-            "(SELECT AVG(amount) FROM explain_invalid) LIMIT 5"
+            "(SELECT AVG(amount) FROM other_t WHERE explain_invalid.amount = 5) LIMIT 5"
         )
 
 

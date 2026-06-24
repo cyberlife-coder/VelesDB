@@ -124,6 +124,27 @@ release.
   so the `weighted` / `relative_score` trap (which the engine silently degrades
   to RRF over homogeneous query vectors) is a **compile-time error**. Purely
   additive.
+- **Scalar subqueries are now executable end-to-end (EPIC-039).** A
+  `(SELECT ...)` in a `WHERE`/`HAVING` predicate or an `INSERT`/`UPDATE` value is
+  executed and substituted as a literal before the outer query runs, instead of
+  being rejected at validation with `V010`. The inner SELECT must return exactly
+  one row and one column: 0 rows resolve to `NULL` (a comparison against `NULL`
+  is never true), and more than one row or column errors with a clear
+  cardinality message (`VELES-010`). Aggregate subqueries
+  (`(SELECT AVG(amount) FROM t)`), single-column row projections
+  (`(SELECT amount FROM t WHERE id = 1)`), `BETWEEN`/`IN`/`CONTAINS` value
+  positions, `INSERT`/`UPDATE` values, and **`UPDATE`/`DELETE` `WHERE`**
+  predicates are all supported; nesting is bounded at 8 levels.
+  `UPDATE … WHERE col > (SELECT … )` and `DELETE … WHERE id = (SELECT … )` now
+  resolve the subquery to a literal *before* the mutation runs (previously the
+  predicate silently saw `NULL` and matched no rows). A subquery whose inner
+  `WHERE` filters on a **payload path** (e.g. `… WHERE meta.cat = 5`) is a plain
+  payload filter, not a correlation, so it executes instead of being wrongly
+  rejected. Resolution lives in `velesdb-core`, so the REST `/query` endpoint and
+  the CLI REPL gain it for free (both route through `Database::execute_query`).
+  **Correlated** subqueries (whose inner `WHERE` references one of the *outer*
+  query's tables/aliases) remain rejected at validation with `V010`. WASM, which
+  has a separate executor, still rejects subqueries.
 - **`ALTER COLLECTION <name> SET (auto_reindex = true|false)` now applies and
   persists.** Previously parsed but rejected with a feature-gap error, it now
   attaches (or re-configures) an `AutoReindexManager` on the collection and

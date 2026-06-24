@@ -30,6 +30,11 @@ impl Database {
         query: &crate::velesql::Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
+        // Resolve scalar subqueries (EPIC-039) in WHERE/HAVING before validation
+        // so the aggregate engine sees a subquery-free AST.
+        if let Some(rewritten) = self.resolve_subqueries(query, params)? {
+            return self.execute_aggregate(&rewritten, params);
+        }
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
         let name = aggregate_target_collection(query, params)?;
         let collection = self

@@ -1440,11 +1440,12 @@ fn test_validation_error_kind_message_invalid_let() {
 }
 
 // ============================================================================
-// FU-2: Subqueries parse but are not executable (V010)
+// FU-2: Scalar subqueries are executable (EPIC-039); correlated ones are not.
 //
-// A WHERE-clause subquery parses, then silently evaluates to NULL during
-// filtering (wrong/empty results, or a silently no-op UPDATE). Validation
-// must reject it instead.
+// A scalar (non-correlated) WHERE/HAVING subquery is resolved to a literal
+// before validation, so validation now ACCEPTS it. A *correlated* subquery
+// (referencing an outer column) is still rejected with V010 because it is not
+// yet executable.
 // ============================================================================
 
 fn validate_sql(sql: &str) -> Result<(), ValidationError> {
@@ -1453,43 +1454,40 @@ fn validate_sql(sql: &str) -> Result<(), ValidationError> {
 }
 
 fn assert_subquery_rejected(sql: &str) {
-    let err = validate_sql(sql).expect_err("subquery WHERE clause should be rejected");
+    let err = validate_sql(sql).expect_err("correlated subquery should be rejected");
     assert_eq!(err.kind, ValidationErrorKind::SubqueryNotExecutable);
 }
 
 #[test]
-fn test_scalar_subquery_in_where_is_rejected() {
-    assert_subquery_rejected(
-        "SELECT * FROM products WHERE price > (SELECT AVG(price) FROM products) LIMIT 10",
-    );
+fn test_scalar_subquery_in_where_is_accepted() {
+    // Non-correlated: resolved before validation, so validation passes.
+    assert!(validate_sql(
+        "SELECT * FROM products WHERE price > (SELECT AVG(price) FROM products) LIMIT 10"
+    )
+    .is_ok());
 }
 
 #[test]
-fn test_between_subquery_in_where_is_rejected() {
-    assert_subquery_rejected(
-        "SELECT * FROM docs WHERE id BETWEEN (SELECT AVG(id) FROM docs) AND 100 LIMIT 10",
-    );
+fn test_between_scalar_subquery_in_where_is_accepted() {
+    assert!(validate_sql(
+        "SELECT * FROM docs WHERE id BETWEEN (SELECT AVG(id) FROM other) AND 100 LIMIT 10"
+    )
+    .is_ok());
 }
 
 #[test]
-fn test_subquery_nested_in_and_is_rejected() {
-    assert_subquery_rejected(
-        "SELECT * FROM docs WHERE category = 'tech' AND id > (SELECT AVG(id) FROM docs) LIMIT 10",
-    );
+fn test_scalar_subquery_nested_in_and_is_accepted() {
+    assert!(validate_sql(
+        "SELECT * FROM docs WHERE category = 'tech' AND id > (SELECT AVG(id) FROM other) LIMIT 10"
+    )
+    .is_ok());
 }
 
 #[test]
-fn test_update_where_subquery_is_rejected() {
-    // Previously this returned "executed successfully" while matching nothing.
-    assert_subquery_rejected("UPDATE docs SET x = 1 WHERE id > (SELECT AVG(id) FROM docs)");
-}
-
-#[test]
-fn test_subquery_in_compound_operand_is_rejected() {
-    // The subquery sits in the UNION's right-hand SELECT, exercising the
-    // compound-operand branch of where_clauses().
+fn test_correlated_subquery_in_where_is_rejected() {
+    // The inner WHERE references the outer table `docs`, making it correlated.
     assert_subquery_rejected(
-        "SELECT id FROM a WHERE x = 1 UNION SELECT id FROM b WHERE y > (SELECT AVG(z) FROM b)",
+        "SELECT * FROM docs WHERE id > (SELECT AVG(id) FROM sub WHERE docs.id = 5)",
     );
 }
 
