@@ -60,6 +60,77 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<SearchResult>> {
+        let raw = self.dispatch_match_strategy(match_clause, params, ctx)?;
+        self.finalize_match_results(match_clause, raw, ctx, params)
+    }
+
+    /// Public ordered-MATCH entry point: runs the full cost-based planner
+    /// pipeline (guard-rail pre-check, strategy selection, metrics, RETURN
+    /// `ORDER BY` with deterministic tie-break, and post-sort LIMIT) and
+    /// returns ordered [`MatchResult`]s.
+    ///
+    /// This is the SINGLE method non-SQL surfaces (REST `/match`, the Python /
+    /// TypeScript SDKs) should call so they rank identically to the SQL `/query`
+    /// path instead of re-implementing ordering or returning raw traversal order
+    /// (backlog #1). Unlike the backward-compatible [`execute_match`] /
+    /// [`execute_match_with_similarity`] entry points (which run without a
+    /// guard-rail context), this routes through the planner and enforces
+    /// guard-rails.
+    ///
+    /// [`execute_match`]: Self::execute_match
+    /// [`execute_match_with_similarity`]: Self::execute_match_with_similarity
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a guard-rail pre-check fails, or if traversal,
+    /// ordering, or a guard-rail check during execution fails.
+    pub fn match_query_ordered(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<super::match_exec::MatchResult>> {
+        self.guard_rails
+            .pre_check("default")
+            .map_err(crate::error::Error::from)?;
+        let ctx = self.guard_rails.create_context();
+        self.dispatch_match_ordered(match_clause, params, &ctx)
+    }
+
+    /// Runs the cost-based MATCH planner and the selected execution strategy,
+    /// returning the ordered, post-sort-LIMITed [`MatchResult`]s **before**
+    /// conversion to [`SearchResult`].
+    ///
+    /// Single source of truth for non-SQL surfaces (REST `/match`, the SDKs)
+    /// that need ordered graph rows: it shares the SAME planner, metrics,
+    /// deterministic tie-break, and post-sort LIMIT as the SQL `/query` path
+    /// ([`dispatch_match_query`](Self::dispatch_match_query)), the only
+    /// difference being the return type (`MatchResult` vs the converted
+    /// `SearchResult`). Without it those surfaces re-implement ordering or
+    /// return raw traversal order (backlog #1).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if traversal, ordering, or a guard-rail check fails.
+    pub(in crate::collection::search::query) fn dispatch_match_ordered(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<Vec<super::match_exec::MatchResult>> {
+        let raw = self.dispatch_match_strategy(match_clause, params, ctx)?;
+        self.finalize_match_ordering(match_clause, raw, ctx, params)
+    }
+
+    /// Selects and runs the planner strategy, returning RAW (unordered,
+    /// unconverted) [`MatchResult`]s plus recording metrics and the advisor
+    /// query pattern. Shared by the SQL `SearchResult` path and the ordered
+    /// `MatchResult` path so strategy dispatch lives in exactly one place.
+    fn dispatch_match_strategy(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<Vec<super::match_exec::MatchResult>> {
         let start = std::time::Instant::now();
 
         // W6-A2: Cost-based strategy selection.
@@ -67,30 +138,7 @@ impl Collection {
         let strategy = super::match_planner::MatchQueryPlanner::plan(match_clause, &stats);
         tracing::debug!(strategy = ?strategy, "MATCH execution strategy selected");
 
-        // Dispatch based on strategy.
-        let result = match &strategy {
-            super::match_planner::MatchExecutionStrategy::VectorFirst {
-                similarity_alias,
-                top_k,
-                threshold,
-            } => {
-                let vf_results = self.execute_match_vector_first(
-                    match_clause,
-                    params,
-                    ctx,
-                    similarity_alias,
-                    *top_k,
-                    *threshold,
-                )?;
-                self.finalize_match_results(match_clause, vf_results, ctx, params)
-            }
-            super::match_planner::MatchExecutionStrategy::Parallel {
-                ref vector_hint, ..
-            } => self.execute_match_parallel(match_clause, params, ctx, vector_hint),
-            super::match_planner::MatchExecutionStrategy::GraphFirst { .. } => {
-                self.execute_match_pipeline(match_clause, params, ctx)
-            }
-        };
+        let result = self.run_match_strategy(match_clause, params, ctx, &strategy);
 
         // W6-A3: Record metrics.
         let max_depth = super::match_planner::MatchQueryPlanner::count_hops(match_clause);
@@ -115,18 +163,34 @@ impl Collection {
         result
     }
 
-    /// Executes the MATCH pipeline: traversal, ordering, conversion, and limits.
-    ///
-    /// Factored out of `dispatch_match_query` so metrics recording wraps the
-    /// entire operation cleanly.
-    fn execute_match_pipeline(
+    /// Dispatches to the strategy-specific traversal, returning RAW results.
+    fn run_match_strategy(
         &self,
         match_clause: &crate::velesql::MatchClause,
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
-    ) -> Result<Vec<SearchResult>> {
-        let match_results = self.execute_match_with_context(match_clause, params, Some(ctx))?;
-        self.finalize_match_results(match_clause, match_results, ctx, params)
+        strategy: &super::match_planner::MatchExecutionStrategy,
+    ) -> Result<Vec<super::match_exec::MatchResult>> {
+        match strategy {
+            super::match_planner::MatchExecutionStrategy::VectorFirst {
+                similarity_alias,
+                top_k,
+                threshold,
+            } => self.execute_match_vector_first(
+                match_clause,
+                params,
+                ctx,
+                similarity_alias,
+                *top_k,
+                *threshold,
+            ),
+            super::match_planner::MatchExecutionStrategy::Parallel {
+                ref vector_hint, ..
+            } => self.execute_match_parallel(match_clause, params, ctx, vector_hint),
+            super::match_planner::MatchExecutionStrategy::GraphFirst { .. } => {
+                self.execute_match_with_context(match_clause, params, Some(ctx))
+            }
+        }
     }
 
     /// Executes the Parallel MATCH strategy (Wave 6 Phase D).
@@ -143,7 +207,7 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
         vector_hint: &super::match_planner::MatchExecutionStrategy,
-    ) -> Result<Vec<SearchResult>> {
+    ) -> Result<Vec<super::match_exec::MatchResult>> {
         // Phase 1: GraphFirst path.
         let graph_results = self.execute_match_with_context(match_clause, params, Some(ctx))?;
 
@@ -175,8 +239,11 @@ impl Collection {
         let higher_is_better = config.metric.higher_is_better();
         drop(config);
 
-        let merged = merge_match_results(graph_results, vector_results, higher_is_better);
-        self.finalize_match_results(match_clause, merged, ctx, params)
+        Ok(merge_match_results(
+            graph_results,
+            vector_results,
+            higher_is_better,
+        ))
     }
 
     /// Applies ORDER BY, conversion to `SearchResult`, cardinality check,
@@ -216,6 +283,35 @@ impl Collection {
             .update_graph_latency(graph_latency_us);
         self.guard_rails.circuit_breaker.record_success();
         Ok(results)
+    }
+
+    /// Applies the timeout guard, RETURN `ORDER BY` (deterministic tie-break),
+    /// and the post-sort LIMIT to raw `MatchResult`s, returning ordered rows
+    /// WITHOUT converting to `SearchResult`.
+    ///
+    /// Shares the exact ordering ([`apply_match_order_by`](Self::apply_match_order_by))
+    /// and LIMIT ([`match_return_limit`]) logic with the SQL `SearchResult`
+    /// finalize path, so the ordered `MatchResult` surface ranks identically.
+    fn finalize_match_ordering(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        match_results: Vec<super::match_exec::MatchResult>,
+        ctx: &crate::guardrails::QueryContext,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<super::match_exec::MatchResult>> {
+        ctx.check_timeout()
+            .map_err(crate::error::Error::from)
+            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+
+        let mut sorted = match_results;
+        self.apply_match_order_by(&mut sorted, match_clause, params)
+            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+
+        if let Some(limit) = match_return_limit(match_clause) {
+            sorted.truncate(limit);
+        }
+        self.guard_rails.circuit_breaker.record_success();
+        Ok(sorted)
     }
 
     /// Applies RETURN `ORDER BY` (with the deterministic `(node_id, depth, path)`

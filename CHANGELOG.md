@@ -85,6 +85,16 @@ release.
   effective `LIMIT`. Previously these were stored and displayed but never applied.
   `timeout_ms` and `rerank` have no execution channel yet, so `\set` now warns
   that they are display-only instead of implying they take effect.
+- **`match_query_ordered` ordered-MATCH entry point on the collection types.**
+  A new public `Collection::match_query_ordered` (re-exported on
+  `VectorCollection` and `GraphCollection`) runs a MATCH clause through the
+  cost-based planner and returns ordered `MatchResult`s with RETURN `ORDER BY`,
+  the deterministic `(node_id, depth, path)` tie-break, and the post-sort
+  `LIMIT` applied — identical to the SQL `/query` path. It is the single source
+  of truth for non-SQL surfaces (REST `/match`, the SDKs) that need ordered
+  graph rows, so they rank identically instead of re-implementing ordering or
+  returning raw traversal order. *(Additive: new method; existing
+  `execute_match` / `execute_match_with_similarity` are unchanged.)*
 
 ### Fixed
 - **EXPLAIN of a MATCH query now shows the graph traversal and its strategy.**
@@ -141,6 +151,18 @@ release.
   They now sort. Aggregates (no `GROUP BY`) and bare aliases are rejected with
   `VELES-018` instead of being silently ignored.
   *(Behavior change: previously-silent queries now sort or error.)*
+- **`MATCH ... ORDER BY ... LIMIT` now returns the GLOBAL top-K.** Traversal
+  early-broke once it had `LIMIT` candidates and only *then* sorted, so an
+  `ORDER BY` LIMIT selected the sorted-top-K of the first-K rows *traversed*
+  rather than the globally ordered set (e.g. `ORDER BY year DESC LIMIT 2` could
+  return the two lowest years that happened to be visited first). When an
+  `ORDER BY` is present, traversal now visits the full candidate set (bounded by
+  the shared `MAX_LIMIT` ceiling and the guard-rails) before sorting and
+  applying the LIMIT; without an `ORDER BY`, the LIMIT-on-traversal-order
+  early-break is preserved. Affects the SQL `/query` path and every surface that
+  finalizes through it.
+  *(Behavior change: `MATCH ORDER BY ... LIMIT` results change when the global
+  top-K differs from the first-K traversed.)*
 - **`NEAR_FUSED` multi-vector fusion now executes via SQL.** It previously parsed
   into a condition with no executor and silently degraded to an unranked full
   scan that ignored the query vectors and `USING FUSION`. A SQL `NEAR_FUSED` now

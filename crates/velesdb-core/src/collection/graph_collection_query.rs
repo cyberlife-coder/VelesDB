@@ -83,4 +83,23 @@ impl GraphCollection {
             params,
         )
     }
+
+    /// Executes a MATCH query through the cost-based planner, returning ordered
+    /// [`MatchResult`]s with RETURN `ORDER BY`, deterministic tie-break, and
+    /// post-sort LIMIT applied — identical to the SQL `/query` path (backlog #1).
+    ///
+    /// This is the single ordered-MATCH entry point non-SQL surfaces should
+    /// route through so every surface ranks identically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a guard-rail pre-check fails, or if traversal,
+    /// ordering, or execution fails.
+    pub fn match_query_ordered(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<MatchResult>> {
+        self.inner.match_query_ordered(match_clause, params)
+    }
 }
