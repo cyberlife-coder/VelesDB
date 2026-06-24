@@ -351,10 +351,14 @@ export class VelesQLBuilder {
       throw new Error('nearFused requires at least two query vectors');
     }
     const clean = paramNames.map(p => (p.startsWith('$') ? p.slice(1) : p));
-    const params: Record<string, unknown> = {};
-    clean.forEach((name, i) => {
-      params[name] = vectors[i];
-    });
+    // Pair each cleaned name with its vector without a computed index access:
+    // `Object.fromEntries` keeps every name an own property (no `params[name]=`
+    // prototype setter), and `queue.shift()` consumes vectors in order (lengths
+    // are validated equal above, so it never yields `undefined`).
+    const queue = [...vectors];
+    const params: Record<string, unknown> = Object.fromEntries(
+      clean.map((name): [string, unknown] => [name, queue.shift()])
+    );
     const fusionSuffix = options?.strategy ? ` USING FUSION '${options.strategy}'` : '';
     const list = clean.map(name => `$${name}`).join(', ');
     return this.appendCondition(`vector NEAR_FUSED [${list}]${fusionSuffix}`, params);
