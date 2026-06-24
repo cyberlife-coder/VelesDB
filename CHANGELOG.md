@@ -74,6 +74,17 @@ release.
   both counters are 0. The `node_stats` heuristic time/row fields and the
   `VELESQL_SPEC` are relabeled so the estimated values are no longer presented as
   measured/actual. *(Additive: the field is appended to `actual_stats`.)*
+- **CLI `query execute` accepts `--collection`/`-c`.** A bare `MATCH` (or any
+  query without a `FROM` clause) can now target a collection from the one-shot
+  `velesdb query execute <db> "..." --collection <name>` command, mirroring the
+  REST `/query` collection field. Previously such queries failed with the
+  REPL-only "use a collection" error and no way to specify one.
+- **CLI REPL now applies session settings to queries.** `\set mode` /
+  `\set ef_search` are injected into a vector query's `WITH(...)` options before
+  execution (an inline `WITH(...)` always wins), and `\set max_results` caps the
+  effective `LIMIT`. Previously these were stored and displayed but never applied.
+  `timeout_ms` and `rerank` have no execution channel yet, so `\set` now warns
+  that they are display-only instead of implying they take effect.
 
 ### Fixed
 - **EXPLAIN of a MATCH query now shows the graph traversal and its strategy.**
@@ -85,6 +96,13 @@ release.
   `Parallel`), and the Database/Collection explain paths thread the live graph
   `CollectionStats` so the chosen strategy reflects the actual graph shape.
   *(Behavior change: the EXPLAIN plan steps for MATCH queries change.)*
+- **CLI `$parameter` vector queries now error instead of silently succeeding.**
+  A REPL/`query execute` `SELECT`/`MATCH` whose `WHERE` references a `$param`
+  vector (unsupplyable from the CLI) used to print a yellow note and return zero
+  rows with a success exit code, so scripts treated it as an empty result. It now
+  returns an error (red message, non-zero exit) while keeping the guidance to use
+  literal vectors or the REST API.
+  *(Behavior change: such CLI queries now exit non-zero.)*
 - **Unpopulated built-in score variables now default to `0`, not the primary
   score.** In `ORDER BY`/`LET` arithmetic, a built-in score component absent from
   a result's component breakdown (e.g. `bm25_score` on a `NEAR`-only query) used

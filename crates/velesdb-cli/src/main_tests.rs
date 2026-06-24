@@ -178,3 +178,45 @@ fn test_progress_explicit_false_disables() {
         "false",
     ]));
 }
+
+// =========================================================================
+// query execute --collection (parity backlog #18b): a bare MATCH in
+// `query execute` must be able to pick a target collection, mirroring the
+// REST /query collection body field.
+// =========================================================================
+
+fn parse_query_execute_collection(args: &[&str]) -> Option<String> {
+    match Cli::try_parse_from(args)
+        .expect("query execute args should parse")
+        .command
+    {
+        Commands::QueryCmd {
+            action: QueryCommands::Execute { collection, .. },
+        } => collection,
+        _ => panic!("expected `query execute`"),
+    }
+}
+
+#[test]
+fn test_query_execute_collection_defaults_none() {
+    assert_eq!(
+        parse_query_execute_collection(&["velesdb", "query", "execute", "db", "SELECT * FROM t"]),
+        None
+    );
+}
+
+#[test]
+fn test_query_execute_collection_flag() {
+    assert_eq!(
+        parse_query_execute_collection(&[
+            "velesdb",
+            "query",
+            "execute",
+            "db",
+            "MATCH (a)-[:KNOWS]->(b) RETURN a, b LIMIT 10",
+            "--collection",
+            "g",
+        ]),
+        Some("g".to_string())
+    );
+}

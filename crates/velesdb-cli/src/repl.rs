@@ -182,7 +182,12 @@ fn handle_dot_command(db: &Database, line: &str, config: &mut ReplConfig) -> Loo
 
 /// Execute a `VelesQL` query line and print its result or error.
 fn run_query(db: &Database, line: &str, config: &ReplConfig) {
-    match execute_query(db, line, config.session.active_collection()) {
+    match execute_query(
+        db,
+        line,
+        config.session.active_collection(),
+        Some(&config.session),
+    ) {
         Ok(result) => {
             let fmt = match config.format {
                 OutputFormat::Table => "table",
@@ -205,13 +210,16 @@ fn run_query(db: &Database, line: &str, config: &ReplConfig) {
 
 /// Execute a `VelesQL` query and return results.
 ///
-/// Delegates to [`crate::repl_execute::execute_query`].
+/// Delegates to [`crate::repl_execute::execute_query`]. `session` is `Some` in
+/// the interactive REPL (so `\set` settings are applied) and `None` for one-shot
+/// `query execute` (no session).
 pub fn execute_query(
     db: &Database,
     query: &str,
     active_collection: Option<&str>,
+    session: Option<&SessionSettings>,
 ) -> Result<QueryResult> {
-    crate::repl_execute::execute_query(db, query, active_collection)
+    crate::repl_execute::execute_query(db, query, active_collection, session)
 }
 
 /// Print query results in the specified format
