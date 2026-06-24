@@ -1,6 +1,6 @@
 # Graph Patterns Guide
 
-*Version 3.2.1 -- May 2026*
+*Version 3.3.0 -- May 2026*
 
 Practical guide for using VelesQL `MATCH` graph patterns in VelesDB.
 
@@ -240,7 +240,13 @@ grammar and parser; queries that violate them are rejected at parse time.
 - **`WHERE`** filtering, including `similarity(node.embedding, $param)`.
 - **`RETURN`** of: an alias (`a`), a property access (`a.title`), `*`, or the
   zero-argument `similarity()` pseudo-function — each optionally `AS`-aliased.
-- **`ORDER BY`** (including `ORDER BY similarity() DESC`) and **`LIMIT`**.
+- **`ORDER BY`** — supported expressions: the zero-arg `similarity()`, `depth`,
+  a valid `alias.property` path, `similarity(field, $vec)`, and arithmetic over a
+  **bare** property identifier (e.g. `ORDER BY year - 2000 DESC`). Arithmetic over
+  a dotted path (e.g. `ORDER BY d.year - 2000`) is a parse error. Aggregates (no
+  `GROUP BY`) and bare aliases are rejected with error `VELES-018` rather than
+  silently ignored.
+- **`LIMIT`**.
 - **Cross-collection payload enrichment** via `alias@collection` (see above).
 
 ### Not supported
@@ -285,11 +291,19 @@ runtime guardrail (default 10), and never above the parse-time budget of 32.
 
 ### `LET` before `MATCH`
 
-`LET x = 0.5 MATCH (a)-[:R]->(b) RETURN b` **parses** — the `LET` binding is
-attached to the statement (the grammar allows `let_clause*` before any statement).
-However, `LET` bindings are only consumed by `SELECT` arithmetic; they have **no
-effect inside a `MATCH`**. The clause is not rejected, but referencing the binding
-from within the MATCH does nothing.
+`LET x = 0.5 MATCH (a)-[:R]->(b) RETURN b` **parses** — the grammar allows
+`let_clause*` before any statement — but is **rejected at execution**. MATCH runs
+on a dedicated traversal path that bypasses LET evaluation, so the engine returns
+an explicit error rather than silently discarding the binding:
+
+```
+Error: LET bindings are not supported with MATCH queries in this version
+```
+
+Rank graph rows with `RETURN ... ORDER BY` instead. `LET` bindings are supported
+only on `SELECT` queries (dense `NEAR`, text `MATCH '...'`, hybrid, scalar-filter);
+see the LET Clause section of `docs/VELESQL_SPEC.md` for the full list of
+unsupported shapes.
 
 ### Hybrid fusion entry points
 

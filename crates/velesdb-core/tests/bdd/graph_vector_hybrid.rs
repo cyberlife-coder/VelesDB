@@ -416,6 +416,83 @@ fn test_orderby_similarity_without_near_scores_all_anchors() {
 }
 
 // =========================================================================
+// B2. Anchored hybrid (NEAR + graph MATCH + text MATCH) honors FUSION strategy
+// =========================================================================
+
+/// Creates a "notes" collection where every note cites a hub (id 99) and the
+/// text/vector score streams disagree, so RRF rank-fusion and Maximum
+/// score-fusion rank the anchors differently.
+///
+/// | id | vector       | content              | vector rank | bm25 rank |
+/// |----|--------------|----------------------|-------------|-----------|
+/// | 1  | `[1.0, 0.0]` | "learning"           | 1 (closest) | low       |
+/// | 2  | `[0.2, 0.98]`| "learning learning   | low         | 1 (best)  |
+/// |    |              |  learning systems"   |             |           |
+fn setup_anchored_hybrid_notes(db: &Database) {
+    db.create_vector_collection("notes", 2, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create notes collection");
+    let vc = db
+        .get_vector_collection("notes")
+        .expect("test: get notes collection");
+    vc.upsert(vec![
+        Point::new(1, vec![1.0, 0.0], Some(json!({"content": "learning"}))),
+        Point::new(
+            2,
+            vec![0.2, 0.98],
+            Some(json!({"content": "learning learning learning systems"})),
+        ),
+        // Hub: cited by 1 and 2, matches neither branch strongly.
+        Point::new(99, vec![0.0, 0.01], Some(json!({"content": "hub"}))),
+    ])
+    .expect("test: upsert notes corpus");
+    for (edge_id, source) in [(700u64, 1u64), (701, 2)] {
+        let edge = GraphEdge::new(edge_id, source, 99, "CITES").expect("test: create edge");
+        vc.add_edge(edge).expect("test: add CITES edge");
+    }
+}
+
+/// GIVEN notes whose vector-similarity and BM25 score streams disagree, all
+///       sharing an AND-required graph CITES anchor
+/// WHEN running the anchored hybrid `NEAR + MATCH (graph) + content MATCH`
+///      with `USING FUSION(strategy='maximum')` vs `strategy='rrf'`
+/// THEN the anchored path honors the requested strategy (scores/order differ),
+///      while the predicate-filtered result SET is identical (bug #6, anchored).
+#[test]
+fn test_anchored_hybrid_honors_fusion_strategy() {
+    let (_dir, db) = create_test_db();
+    setup_anchored_hybrid_notes(&db);
+
+    let q = "SELECT * FROM notes AS n \
+             WHERE vector NEAR [1.0, 0.0] AND MATCH (n)-[:CITES]->(h) \
+             AND content MATCH 'learning' LIMIT 10";
+    let rrf = execute_sql(&db, &format!("{q} USING FUSION(strategy = 'rrf', k = 60)"))
+        .expect("anchored rrf hybrid must execute");
+    let maximum = execute_sql(&db, &format!("{q} USING FUSION(strategy = 'maximum')"))
+        .expect("anchored maximum hybrid must execute");
+
+    // The predicate-filtered SET is identical: only nodes citing the hub AND
+    // matching the text (ids 1 and 2; the hub 99 never matches 'learning').
+    assert_eq!(
+        result_ids(&rrf),
+        [1u64, 2].into_iter().collect(),
+        "rrf anchored set must be the citing text-matching notes"
+    );
+    assert_eq!(
+        result_ids(&maximum),
+        result_ids(&rrf),
+        "strategy must not change the anchored predicate-filtered SET"
+    );
+
+    // The fusion strategy must change the ranking/scores (it was ignored before).
+    let rrf_scored: Vec<(u64, f32)> = rrf.iter().map(|r| (r.point.id, r.score)).collect();
+    let max_scored: Vec<(u64, f32)> = maximum.iter().map(|r| (r.point.id, r.score)).collect();
+    assert_ne!(
+        rrf_scored, max_scored,
+        "anchored hybrid must honor strategy='maximum' (different ranking than rrf)"
+    );
+}
+
+// =========================================================================
 // C. Flagship: implicit anchor binding (V011 relaxation, guards G1/G2/G3)
 // =========================================================================
 

@@ -30,9 +30,11 @@ mod join_pushdown;
 mod metadata_ops;
 mod persistence;
 mod query_engine;
+mod query_engine_agg;
 mod query_engine_dml;
 mod query_join;
 mod stats;
+mod subquery_resolver;
 mod training;
 mod vector_ops;
 

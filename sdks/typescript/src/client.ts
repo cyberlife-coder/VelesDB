@@ -15,6 +15,7 @@ import type {
   SparseSearchNamedOptions,
   SparseVector,
   CreateIndexOptions,
+  AlterCollectionOptions,
   IndexInfo,
   AddEdgeRequest,
   GetEdgesOptions,
@@ -386,6 +387,45 @@ export class VelesDB {
   async dropIndex(collection: string, label: string, property: string): Promise<boolean> {
     this.ensureInitialized();
     return this.backend.dropIndex(collection, label, property);
+  }
+
+  // ========================================================================
+  // Collection settings (ALTER COLLECTION)
+  // ========================================================================
+
+  /**
+   * Toggle a collection's mutable settings at runtime via
+   * `ALTER COLLECTION <name> SET(...)`.
+   *
+   * Typed wrapper over the raw VelesQL DDL; routes through the same
+   * `/query` path as `db.query()`.
+   *
+   * @example
+   * ```typescript
+   * await db.alterCollection('docs', { autoReindex: true });
+   * ```
+   */
+  async alterCollection(collection: string, options: AlterCollectionOptions): Promise<void> {
+    this.ensureInitialized();
+    const sets: string[] = [];
+    if (options.autoReindex !== undefined) {
+      sets.push(`auto_reindex=${options.autoReindex}`);
+    }
+    if (sets.length === 0) {
+      throw new ValidationError('alterCollection requires at least one option');
+    }
+    const sql = `ALTER COLLECTION ${collection} SET(${sets.join(', ')})`;
+    await searchMethods.query(this.backend, collection, sql);
+  }
+
+  /**
+   * Enable or disable automatic index rebuilds on a collection.
+   *
+   * Convenience wrapper over {@link alterCollection}; emits
+   * `ALTER COLLECTION <name> SET(auto_reindex=<enabled>)`.
+   */
+  async setAutoReindex(collection: string, enabled: boolean): Promise<void> {
+    return this.alterCollection(collection, { autoReindex: enabled });
   }
 
   // ========================================================================

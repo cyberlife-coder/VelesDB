@@ -3310,6 +3310,135 @@ async fn test_explain_hybrid_vector_filter_surfaces_filter_step() {
     }
 }
 
+#[tokio::test]
+async fn test_explain_match_query_surfaces_traversal_with_strategy() {
+    // Backlog #14: EXPLAIN of a MATCH query must surface a MatchTraversal step
+    // with a non-empty strategy, not a bare TableScan mislabeled MATCH.
+    let temp_dir = TempDir::new().unwrap();
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query/explain")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "MATCH (a)-[:KNOWS]->(b) RETURN b LIMIT 5"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["query_type"], "MATCH");
+
+    let steps = json["plan"].as_array().unwrap();
+    let traversal = steps
+        .iter()
+        .find(|s| s["operation"] == "MatchTraversal")
+        .unwrap_or_else(|| panic!("expected a MatchTraversal step, got: {steps:?}"));
+    let desc = traversal["description"].as_str().unwrap();
+    assert!(
+        desc.starts_with("Graph traversal: ") && desc.len() > "Graph traversal: ".len(),
+        "traversal strategy must be non-empty: {desc}"
+    );
+    assert!(
+        !steps.iter().any(|s| s["operation"] == "TableScan"),
+        "MATCH EXPLAIN must not contain a TableScan: {steps:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_explain_analyze_match_flags_approximate_traversal_counters() {
+    // Backlog #26: EXPLAIN ANALYZE of a MATCH query must carry a machine-readable
+    // boolean flag declaring that the traversal counters are approximate.
+    let temp_dir = TempDir::new().unwrap();
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({ "name": "explain_match_analyze", "dimension": 4, "metric": "cosine" })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/explain_match_analyze/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "points": [
+                            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"_labels": ["Doc"], "title": "a"}},
+                            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"_labels": ["Doc"], "title": "b"}}
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query/explain")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "MATCH (d:Doc) RETURN d LIMIT 5",
+                        "analyze": true,
+                        "params": {"_collection": "explain_match_analyze"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let actual_stats = &json["actual_stats"];
+    assert!(
+        actual_stats.is_object(),
+        "EXPLAIN ANALYZE must return actual_stats: {json}"
+    );
+    assert_eq!(
+        actual_stats["traversal_counters_approximate"],
+        Value::Bool(true),
+        "MATCH traversal counters must be flagged approximate: {actual_stats}"
+    );
+}
+
 // ============================================================================
 // GuardRails — rate limit (429)
 // ============================================================================
@@ -4081,7 +4210,7 @@ async fn test_search_with_generous_timeout_returns_200() {
 }
 
 /// Negative: a search with `timeout_ms: 0` yields an immediate timeout.
-/// The handler must return 408 Request Timeout with a VELES-QUERY-TIMEOUT
+/// The handler must return 408 Request Timeout with the canonical VELES-027
 /// error code, not 200 with the results. The `tokio::time::timeout`
 /// wrapper fires on the very next runtime tick after the worker is
 /// spawned, so this deterministic test will always see the elapsed
@@ -4123,8 +4252,8 @@ async fn test_search_with_zero_timeout_returns_408() {
     let json: Value = serde_json::from_slice(&body).expect("test: parse json");
     assert_eq!(
         json["code"].as_str(),
-        Some("VELES-QUERY-TIMEOUT"),
-        "error code must be VELES-QUERY-TIMEOUT, got: {}",
+        Some("VELES-027"),
+        "timeout error code must be the canonical VELES-027, got: {}",
         json["code"]
     );
     let error_msg = json["error"].as_str().expect("error field");

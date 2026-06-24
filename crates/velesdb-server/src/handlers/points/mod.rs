@@ -87,6 +87,14 @@ fn merge_named_sparse_vectors(
     Ok(())
 }
 
+/// Maximum number of points in a single JSON upsert request.
+///
+/// Consistent with `MAX_BULK_DELETE_SIZE` and `MAX_SCROLL_BATCH_SIZE`.
+/// The 100 MB body limit on the route already bounds bytes; this constant
+/// bounds the point *count* to prevent memory amplification from metadata-only
+/// or tiny-vector collections where 100 MB of JSON can represent millions of points.
+const MAX_UPSERT_BATCH_SIZE: usize = 100_000;
+
 /// Upsert points to a collection.
 #[utoipa::path(
     post,
@@ -99,7 +107,7 @@ fn merge_named_sparse_vectors(
     responses(
         (status = 200, description = "Points upserted", body = Object),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 400, description = "Invalid request", body = ErrorResponse)
+        (status = 400, description = "Invalid request or batch too large", body = ErrorResponse)
     )
 )]
 pub async fn upsert_points(
@@ -107,6 +115,16 @@ pub async fn upsert_points(
     Path(name): Path<String>,
     Json(req): Json<UpsertPointsRequest>,
 ) -> impl IntoResponse {
+    if req.points.len() > MAX_UPSERT_BATCH_SIZE {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Batch too large: {} points (max {MAX_UPSERT_BATCH_SIZE})",
+                req.points.len()
+            ),
+        );
+    }
+
     let collection = match get_vector_collection_or_404(&state, &name) {
         Ok(c) => c,
         Err(resp) => return resp,
@@ -416,5 +434,31 @@ pub async fn bulk_delete_points(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("bulk_delete task panicked: {join_err}"),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upsert_batch_constant_matches_expected_value() {
+        assert_eq!(MAX_UPSERT_BATCH_SIZE, 100_000);
+    }
+
+    #[test]
+    fn scroll_batch_constant_matches_expected_value() {
+        assert_eq!(MAX_SCROLL_BATCH_SIZE, 10_000);
+    }
+
+    #[test]
+    fn bulk_delete_batch_constant_matches_expected_value() {
+        assert_eq!(MAX_BULK_DELETE_SIZE, 10_000);
+    }
+
+    #[test]
+    fn upsert_batch_limit_is_larger_than_delete_limit() {
+        // Upsert is intentionally higher: ingestion workloads need larger batches.
+        assert!(MAX_UPSERT_BATCH_SIZE > MAX_BULK_DELETE_SIZE);
     }
 }

@@ -37,6 +37,38 @@ impl Collection {
         )?))
     }
 
+    /// Like [`execute_query`](Self::execute_query) but also returns the
+    /// graph-traversal counters `(nodes_visited, edges_traversed)` measured
+    /// during MATCH execution. Non-MATCH (SELECT/vector) queries report
+    /// `(_, 0, 0)`. Used by EXPLAIN ANALYZE to report real counts instead of a
+    /// result-row proxy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query cannot be executed.
+    pub(crate) fn execute_query_counted(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<(Vec<SearchResult>, u64, u64)> {
+        // Only a standalone MATCH query carries traversal counters. Run it
+        // through the same context + dispatch as execute_query, then read the
+        // counters the executor recorded into the query context. is_match_query
+        // guarantees try_dispatch_match returns Some.
+        if query.is_match_query() && query.compound.is_none() {
+            let ctx = self.prepare_query_context(query, "default")?;
+            let results = self
+                .try_dispatch_match(query, params, &ctx)?
+                .unwrap_or_default();
+            return Ok((
+                results,
+                ctx.traversal_nodes_visited(),
+                ctx.traversal_edges_traversed(),
+            ));
+        }
+        Ok((self.execute_query(query, params)?, 0, 0))
+    }
+
     /// Computes the effective `(limit, fetch_limit)` from a SELECT statement.
     ///
     /// `limit` is the final row count requested by the user (capped at [`MAX_LIMIT`]);
@@ -88,6 +120,11 @@ impl Collection {
     fn validate_let_binding_support(extracted: &ExtractedComponents) -> Result<()> {
         let unsupported = if extracted.sparse_vector_search.is_some() {
             Some("SPARSE_NEAR")
+        } else if extracted.fused_search.is_some() {
+            // NEAR_FUSED routes through the fused early-return path, which LET
+            // bypasses — without this guard the fused vectors would be silently
+            // dropped to a non-fused scan (same class as the SPARSE_NEAR guard).
+            Some("NEAR_FUSED")
         } else if extracted.is_not_similarity_query {
             Some("NOT similarity()")
         } else if extracted.is_union_query {
@@ -240,6 +277,7 @@ impl Collection {
         let mut filter_condition = None;
         let mut graph_match_predicates = Vec::new();
         let mut sparse_vector_search = None;
+        let mut fused_search = None;
 
         let is_union_query = stmt
             .where_clause
@@ -254,6 +292,7 @@ impl Collection {
             Self::validate_similarity_query_structure(cond)?;
             Self::collect_graph_match_predicates(cond, &mut graph_match_predicates);
             sparse_vector_search = Self::extract_sparse_vector_search(cond).cloned();
+            fused_search = self.extract_fused_vectors(cond, params)?;
 
             let mut extracted_cond = cond.clone();
             vector_search = self.extract_vector_search(&mut extracted_cond, params)?;
@@ -268,6 +307,7 @@ impl Collection {
             filter_condition,
             graph_match_predicates,
             sparse_vector_search,
+            fused_search,
             is_union_query,
             is_not_similarity_query,
         })
@@ -337,32 +377,18 @@ impl Collection {
     ) -> Result<crate::velesql::ExplainOutput> {
         use crate::velesql::{build_leaf_node_stats, ActualStats, ExplainOutput, QueryPlan};
 
-        // Use from_query() (not from_select/from_match) to include LET bindings,
-        // keeping the plan consistent with the Database-level explain path.
+        // Thread the live indexed-field set and (for MATCH) the real graph
+        // CollectionStats so the plan emits IndexLookup / a MatchTraversal node
+        // with a calibrated strategy instead of a bare TableScan (backlog #14).
         // Cache fields are unavailable at the Collection level and remain None.
-        let plan = QueryPlan::from_query(query);
+        let indexed = self.indexed_field_names();
+        let match_stats = self.compute_match_collection_stats();
+        let plan = QueryPlan::from_query_with_all_stats(query, &indexed, None, Some(&match_stats));
 
         let start = std::time::Instant::now();
-        let results = self.execute_query(query, params)?;
-        let elapsed = start.elapsed();
-
-        let actual_rows = results.len() as u64;
-        let actual_time_ms = elapsed.as_secs_f64() * 1000.0;
-        let (nodes_visited, edges_traversed) = if query.is_match_query() {
-            (actual_rows, actual_rows)
-        } else {
-            (0, 0)
-        };
-
-        let stats = ActualStats {
-            actual_rows,
-            actual_time_ms,
-            loops: 1,
-            nodes_visited,
-            edges_traversed,
-        };
-
-        let node_stats = build_leaf_node_stats(&plan.root, actual_rows, actual_time_ms);
+        let (results, nodes, edges) = self.execute_query_counted(query, params)?;
+        let stats = ActualStats::from_counted(results.len() as u64, start.elapsed(), nodes, edges);
+        let node_stats = build_leaf_node_stats(&plan.root, stats.actual_rows, stats.actual_time_ms);
         let mut output = ExplainOutput::with_stats(plan, stats, node_stats);
 
         // Issue #469 Phase 2: attach EMA-calibrated ms_per_cost_unit if the

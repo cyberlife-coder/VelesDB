@@ -194,6 +194,9 @@ class SearchOptions:
             (``conditions``) / ``not`` (``condition``) for composition.
         sparse_index_name: Named sparse index to query.
         include_vectors: Include raw vectors in results (default: False).
+        fusion: Optional :class:`FusionStrategy` applied to hybrid dense+sparse
+            search (both ``vector`` and ``sparse_vector`` set). Defaults to
+            RRF (k=60); has no effect on dense-only or sparse-only searches.
 
     Example:
         >>> cond = {"type": "eq", "field": "lang", "value": "en"}
@@ -207,6 +210,7 @@ class SearchOptions:
     filter: Optional[Dict[str, Any]]
     sparse_index_name: Optional[str]
     include_vectors: bool
+    fusion: Optional["FusionStrategy"]
 
     def __init__(
         self,
@@ -217,6 +221,7 @@ class SearchOptions:
         filter: Optional[Dict[str, Any]] = None,
         sparse_index_name: Optional[str] = None,
         include_vectors: bool = False,
+        fusion: Optional["FusionStrategy"] = None,
     ) -> None: ...
     def with_vector(
         self, vector: Optional[Union[List[float], "np.ndarray"]]
@@ -228,6 +233,7 @@ class SearchOptions:
     def with_filter(self, filter: Optional[Dict[str, Any]]) -> "SearchOptions": ...
     def with_sparse_index_name(self, name: Optional[str]) -> "SearchOptions": ...
     def with_include_vectors(self, include: bool) -> "SearchOptions": ...
+    def with_fusion(self, fusion: Optional["FusionStrategy"]) -> "SearchOptions": ...
 
 
 class SearchResult:
@@ -273,7 +279,7 @@ class Collection:
 
         Returns:
             Dict with name, dimension, metric, storage_mode, point_count,
-            and metadata_only keys.
+            metadata_only, and auto_reindex keys.
         """
         ...
 
@@ -467,6 +473,8 @@ class Collection:
         - Dense only: ``search(vector, top_k=10)``
         - Sparse only: ``search(sparse_vector={0: 1.5}, top_k=10)``
         - Hybrid: ``search(vector, sparse_vector={...}, top_k=10)``
+
+        Hybrid (dense + sparse) fuses the two branches with RRF (k=60); this method exposes no fusion override, use ``search_request`` with ``SearchOptions(fusion=...)`` for weighted/RSF fusion.
 
         Args:
             vector: Dense query vector. Optional if sparse_vector is given.
@@ -737,11 +745,21 @@ class Collection:
         vector: Optional[Union[List[float], "np.ndarray"]] = None,
         threshold: float = 0.0,
     ) -> List[Dict[str, Any]]:
-        """Execute a MATCH graph query."""
+        """Execute a MATCH graph query.
+
+        ``RETURN ... ORDER BY`` and a post-sort ``LIMIT`` are honored,
+        ranking results identically to the SQL ``execute_query`` path.
+        """
         ...
 
     def explain(self, query_str: str) -> Dict[str, Any]:
-        """Return execution plan for a VelesQL query."""
+        """Return execution plan for a VelesQL query.
+
+        The plan is calibrated with this collection's indexed fields and
+        statistics: a SELECT whose WHERE targets an indexed field shows an
+        ``IndexLookup`` node and a MATCH reports a real traversal strategy.
+        Raises ``ValueError`` for a semantically invalid query.
+        """
         ...
 
     def explain_analyze(
@@ -1069,12 +1087,41 @@ class Database:
     ) -> List[Dict[str, Any]]:
         """Execute a VelesQL query string (SELECT, DDL, DML).
 
+        Supported statements include SELECT, CREATE/DROP COLLECTION,
+        CREATE/DROP INDEX, INSERT/DELETE (rows and edges), and
+        ``ALTER COLLECTION <name> SET (auto_reindex = true|false)``
+        (see :meth:`set_auto_reindex` for a typed helper).
+
+        Hybrid fusion note:
+            Typed hybrid dense+sparse search (``search_request`` with both
+            ``vector`` and ``sparse_vector``) uses Reciprocal Rank Fusion
+            (RRF, k=60) by default. Pass a :class:`FusionStrategy` via
+            ``SearchOptions(fusion=...)`` / ``with_fusion(...)``, or run raw
+            VelesQL with a ``USING FUSION(...)`` clause here, to select another
+            strategy.
+
         Args:
             sql: VelesQL query string.
             params: Optional parameter bindings (e.g., {"$v": [0.1, 0.2]}).
 
         Returns:
             List of result dicts for SELECT queries, empty list for DDL/DML.
+        """
+        ...
+
+    def set_auto_reindex(self, name: str, enabled: bool) -> None:
+        """Toggle automatic re-indexing on a collection at runtime.
+
+        Routes a validated ``ALTER COLLECTION <name> SET (auto_reindex = …)``
+        statement through the VelesQL DDL executor and persists the change.
+
+        Args:
+            name: Collection name.
+            enabled: True to enable auto-reindex, False to disable it.
+
+        Raises:
+            ValueError: If the collection name fails to parse.
+            RuntimeError: If the collection does not exist or the change fails.
         """
         ...
 
@@ -1562,6 +1609,9 @@ class PyGraphCollection:
     ) -> List[Dict[str, Any]]:
         """Execute a MATCH graph traversal query.
 
+        ``RETURN ... ORDER BY`` and a post-sort ``LIMIT`` are honored,
+        ranking results identically to the SQL ``query`` path.
+
         Args:
             query_str: VelesQL MATCH query (Cypher-like syntax)
             params: Query parameters
@@ -1575,6 +1625,9 @@ class PyGraphCollection:
 
     def explain(self, query_str: str) -> Dict[str, Any]:
         """Return query execution plan (EXPLAIN).
+
+        MATCH queries report a real traversal strategy; a semantically
+        invalid query raises ``ValueError``.
 
         Args:
             query_str: VelesQL query string

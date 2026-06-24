@@ -51,11 +51,30 @@ impl SessionSettings {
         self.mode
     }
 
+    /// Returns the current mode as the `WITH(mode=...)` string the core parser
+    /// understands (`fast`/`balanced`/`accurate`/`perfect`/`autotune`/`custom:<ef>`/
+    /// `adaptive:<min>:<max>`), so the session mode can be injected into a query.
+    #[must_use]
+    pub fn mode_str(&self) -> String {
+        format_quality(self.mode)
+    }
+
+    /// Gets the explicitly-set ef_search override, if any.
+    ///
+    /// `None` means "use the mode default"; the session only injects an explicit
+    /// `ef_search` into a query's WITH clause, leaving the mode to drive the rest.
+    #[must_use]
+    pub fn ef_search(&self) -> Option<usize> {
+        self.ef_search
+    }
+
     /// Gets the effective ef_search value.
     ///
-    /// Uses a default `k=10` for the quality profile's ef calculation.
+    /// Uses a default `k=10` for the quality profile's ef calculation. The query
+    /// path injects the explicit [`Self::ef_search`] override and lets the `mode`
+    /// drive the rest, so this resolved value is used only in tests.
     #[must_use]
-    #[allow(dead_code)] // Reason: public API for session-aware query execution (used in tests)
+    #[allow(dead_code)] // Reason: resolved ef preview for tests; query path injects the explicit override + mode
     pub fn effective_ef_search(&self) -> usize {
         self.ef_search.unwrap_or_else(|| self.mode.ef_search(10))
     }
@@ -76,7 +95,6 @@ impl SessionSettings {
 
     /// Gets max results.
     #[must_use]
-    #[allow(dead_code)] // Reason: public API for session-aware query execution (used in tests)
     pub fn max_results(&self) -> usize {
         self.max_results
     }
@@ -270,6 +288,20 @@ fn parse_parameterized_mode(value: &str) -> Result<SearchQuality, String> {
         "Invalid mode '{value}'. Valid: fast, balanced, accurate, \
          perfect, autotune, custom:<ef>, adaptive:<min>:<max>"
     ))
+}
+
+/// Returns `true` for settings that `\set` stores and displays but that have no
+/// channel into `Database::execute_query` today, so the REPL warns they are
+/// display-only rather than silently claiming they affect queries.
+///
+/// `mode`, `ef_search` and `max_results` ARE wired (injected into the query AST
+/// / applied as a LIMIT cap); `timeout_ms` and `rerank` are not.
+#[must_use]
+pub fn is_unwired_setting(key: &str) -> bool {
+    matches!(
+        key.to_lowercase().as_str(),
+        "timeout_ms" | "timeout" | "rerank"
+    )
 }
 
 fn parse_bool(value: &str) -> Result<bool, String> {

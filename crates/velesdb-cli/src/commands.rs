@@ -364,6 +364,11 @@ pub enum QueryCommands {
         /// `VelesQL` query to execute
         query: String,
 
+        /// Target collection for queries without a FROM clause (e.g. bare MATCH),
+        /// mirroring the REST `/query` collection field
+        #[arg(short, long)]
+        collection: Option<String>,
+
         /// Output format (table, json)
         #[arg(short, long, default_value = "table")]
         format: String,

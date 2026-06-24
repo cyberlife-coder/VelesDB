@@ -218,8 +218,9 @@ fn dispatch_query_cmd(action: QueryCommands) -> anyhow::Result<()> {
         QueryCommands::Execute {
             path,
             query,
+            collection,
             format,
-        } => dispatch_query(&path, &query, &format),
+        } => dispatch_query(&path, &query, collection.as_deref(), &format),
         QueryCommands::Search {
             path,
             collection,
@@ -253,9 +254,18 @@ fn dispatch_query_cmd(action: QueryCommands) -> anyhow::Result<()> {
 }
 
 /// Handles the `query` subcommand inline (trivial delegation).
-fn dispatch_query(path: &std::path::Path, query: &str, format: &str) -> anyhow::Result<()> {
+///
+/// `collection` targets queries without a `FROM` clause (e.g. a bare MATCH),
+/// mirroring the REST `/query` collection field. One-shot `query execute` has no
+/// REPL session, so no session settings are applied.
+fn dispatch_query(
+    path: &std::path::Path,
+    query: &str,
+    collection: Option<&str>,
+    format: &str,
+) -> anyhow::Result<()> {
     let db = velesdb_core::Database::open(path)?;
-    let result = repl::execute_query(&db, query, None)?;
+    let result = repl::execute_query(&db, query, collection, None)?;
     repl::print_result(&result, format);
     Ok(())
 }

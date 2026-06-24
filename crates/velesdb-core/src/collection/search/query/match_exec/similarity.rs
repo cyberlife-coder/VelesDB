@@ -314,7 +314,9 @@ impl Collection {
         similarity_threshold: f32,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
-        let results = self.execute_match(match_clause, params)?;
+        // Raw traversal results (no ORDER BY/LIMIT yet): the similarity score is
+        // computed below, then the shared finalize step applies ORDER BY + LIMIT.
+        let results = self.execute_match_with_context(match_clause, params, None)?;
 
         if results.is_empty() {
             return Ok(results);
@@ -345,6 +347,14 @@ impl Collection {
         )?;
 
         Self::sort_by_score(&mut scored_results, higher_is_better);
+
+        // A RETURN ORDER BY (when present) overrides the implicit score sort;
+        // then apply the shared post-sort LIMIT so this vector branch matches
+        // the SQL `/query` pipeline instead of returning score-ordered results.
+        self.apply_match_order_by(&mut scored_results, match_clause, params)?;
+        if let Some(limit) = super::super::match_dispatch::match_return_limit(match_clause) {
+            scored_results.truncate(limit);
+        }
 
         Ok(scored_results)
     }
@@ -401,10 +411,9 @@ impl Collection {
     /// ascending for distance metrics.
     pub(super) fn sort_by_score(results: &mut [MatchResult], higher_is_better: bool) {
         if higher_is_better {
-            results
-                .sort_unstable_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+            results.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
         } else {
-            results.sort_unstable_by(|a, b| {
+            results.sort_by(|a, b| {
                 a.score
                     .unwrap_or(f32::MAX)
                     .total_cmp(&b.score.unwrap_or(f32::MAX))
@@ -412,37 +421,11 @@ impl Collection {
         }
     }
 
-    /// Applies ORDER BY to match results (EPIC-045 US-005).
-    ///
-    /// Supports ordering by:
-    /// - `similarity()` - Vector similarity score
-    /// - Property path (e.g., `n.name`)
-    /// - Depth
-    pub fn order_match_results(
-        &self,
-        results: &mut [MatchResult],
-        order_by: &str,
-        descending: bool,
-    ) {
-        match order_by {
-            "similarity()" | "similarity" => {
-                results.sort_unstable_by(|a, b| {
-                    let cmp = a.score.unwrap_or(0.0).total_cmp(&b.score.unwrap_or(0.0));
-                    Self::apply_direction(cmp, descending)
-                });
-            }
-            "depth" => {
-                results.sort_unstable_by(|a, b| {
-                    Self::apply_direction(a.depth.cmp(&b.depth), descending)
-                });
-            }
-            _ => self.order_match_results_by_property(results, order_by, descending),
-        }
-    }
-
     /// Applies sort direction to a comparison (reverses when `descending`).
+    ///
+    /// Shared with the structured ORDER BY evaluator in `order_by.rs`.
     #[inline]
-    fn apply_direction(cmp: std::cmp::Ordering, descending: bool) -> std::cmp::Ordering {
+    pub(super) fn apply_direction(cmp: std::cmp::Ordering, descending: bool) -> std::cmp::Ordering {
         if descending {
             cmp.reverse()
         } else {
@@ -450,20 +433,27 @@ impl Collection {
         }
     }
 
-    /// ORDER BY a property path (e.g. `n.name`); warns and leaves order
-    /// unchanged when the expression is not a recognized property path.
-    fn order_match_results_by_property(
+    /// ORDER BY a property path (e.g. `n.name`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::GraphNotSupported`] (VELES-018) when the
+    /// expression is not a valid `alias.property` path, so an unsupported
+    /// clause is reported instead of leaving the results unordered.
+    pub(super) fn order_match_results_by_property(
         &self,
         results: &mut [MatchResult],
         order_by: &str,
         descending: bool,
-    ) {
+    ) -> Result<()> {
         let Some((alias, property)) = parse_property_path(order_by) else {
-            tracing::warn!("Unsupported MATCH ORDER BY expression '{}'", order_by);
-            return;
+            return Err(crate::error::Error::GraphNotSupported(format!(
+                "MATCH ORDER BY expression '{order_by}' is not supported \
+                 (use similarity(), depth, or alias.property)"
+            )));
         };
         let payload_storage = self.payload_storage.read();
-        results.sort_unstable_by(|a, b| {
+        results.sort_by(|a, b| {
             let get_value = |r: &MatchResult| -> Option<serde_json::Value> {
                 let node_id = *r.bindings.get(alias)?;
                 let payload = payload_storage.retrieve(node_id).ok().flatten()?;
@@ -476,6 +466,7 @@ impl Collection {
             let cmp = super::super::compare_json_values(a_value.as_ref(), b_value.as_ref());
             Self::apply_direction(cmp, descending)
         });
+        Ok(())
     }
 
     /// Converts `MatchResults` to `SearchResults` for unified API (EPIC-045 US-002).

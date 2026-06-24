@@ -10,6 +10,11 @@ use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 use std::collections::HashSet;
 
+/// Anchor-restricted hybrid streams: scored vector branch + `(id, score)` BM25
+/// branch, both confined to the anchor set (shared by the RRF and score-level
+/// anchored hybrid paths).
+type AnchoredHybridStreams = (Vec<crate::scored_result::ScoredResult>, Vec<(u64, f32)>);
+
 /// Resolves `(weight, text_weight, rrf_constant)` from optional caller inputs.
 ///
 /// `vector_weight` defaults to 0.5; `rrf_k` defaults to 60.
@@ -392,12 +397,43 @@ impl Collection {
         rrf_k: Option<u32>,
         anchor_ids: &HashSet<u64>,
     ) -> Result<Vec<SearchResult>> {
+        let (weight, text_weight, rrf_constant) = resolve_rrf_params(vector_weight, rrf_k);
+        let overfetch_k = k.saturating_mul(4).max(k + 10);
+        let (vector_scored, text_results) =
+            self.anchored_hybrid_streams(vector_query, text_query, anchor_ids, overfetch_k)?;
+
+        let (fused_scores, component_map) = Self::compute_rrf_scores_with_components(
+            &vector_scored,
+            &text_results,
+            weight,
+            text_weight,
+            rrf_constant,
+        );
+
+        let scored_ids = Self::top_k_from_scores(fused_scores, k);
+        Ok(self.resolve_scored_ids_with_components(&scored_ids, &component_map))
+    }
+
+    /// Builds the anchor-restricted vector-similarity and BM25 score streams
+    /// shared by the RRF and score-level anchored hybrid paths.
+    ///
+    /// Both branches are confined to `anchor_ids`, so the candidate set is
+    /// identical regardless of the downstream fusion strategy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match.
+    pub(crate) fn anchored_hybrid_streams(
+        &self,
+        vector_query: &[f32],
+        text_query: &str,
+        anchor_ids: &HashSet<u64>,
+        overfetch_k: usize,
+    ) -> Result<AnchoredHybridStreams> {
         let config = self.config.read();
         validate_dimension_match(config.dimension, vector_query.len())?;
         drop(config);
 
-        let (weight, text_weight, rrf_constant) = resolve_rrf_params(vector_weight, rrf_k);
-        let overfetch_k = k.saturating_mul(4).max(k + 10);
         // Vector branch: restrict retrieval to anchor set.
         let anchor_search =
             self.search_near_with_anchor_ids(vector_query, anchor_ids, None, overfetch_k)?;
@@ -413,16 +449,7 @@ impl Collection {
             .filter(|(id, _)| anchor_ids.contains(id))
             .collect();
 
-        let (fused_scores, component_map) = Self::compute_rrf_scores_with_components(
-            &vector_scored,
-            &text_results,
-            weight,
-            text_weight,
-            rrf_constant,
-        );
-
-        let scored_ids = Self::top_k_from_scores(fused_scores, k);
-        Ok(self.resolve_scored_ids_with_components(&scored_ids, &component_map))
+        Ok((vector_scored, text_results))
     }
 
     /// Resolves scored IDs with filter and optional per-component score breakdown.

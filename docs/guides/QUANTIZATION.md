@@ -120,7 +120,7 @@ After:  [idx_1, idx_2, ..., idx_m]  → m × 1 = 8 bytes (m=8)
 
 | Parameter | Default | Description |
 |-----------|--------|-------------|
-| `m` | 8 | Number of subspaces (must divide the dimension) |
+| `m` | 8 (recommended; required, no struct default) | Number of subspaces (must divide the dimension) |
 | `k` | 256 | Codebook size per subspace (centroids) |
 | `opq_enabled` | `false` | Enables Optimized PQ (OPQ rotation) |
 | `rescore_oversampling` | `Some(4)` | Oversampling factor for rescoring |

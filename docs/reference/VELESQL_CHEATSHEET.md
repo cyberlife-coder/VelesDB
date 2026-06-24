@@ -1,7 +1,7 @@
 # VelesQL Cheat Sheet
 
 > **Date:** 2026-06-03
-> **VelesDB version:** 3.2.1
+> **VelesDB version:** 3.3.0
 > See the full specification in [`docs/VELESQL_SPEC.md`](../VELESQL_SPEC.md).
 
 > Every `sql` block below is **parsed** against the real grammar by an automated
@@ -97,7 +97,8 @@ SELECT * FROM docs WHERE vector SPARSE_NEAR $sv USING 'splade' LIMIT 5;
 -- Dense + sparse in one query
 SELECT * FROM docs WHERE vector NEAR $q AND vector SPARSE_NEAR $sv LIMIT 5;
 
--- Multi-vector fusion (RRF over several query vectors)
+-- Multi-vector fusion (RRF over several query vectors) — runs real fusion
+-- (routes to multi_query_search); honors 'rrf'/'average'/'maximum'.
 SELECT * FROM docs
 WHERE vector NEAR_FUSED [$v1, $v2] USING FUSION 'rrf' (k = 60)
 LIMIT 10;
@@ -116,8 +117,9 @@ SELECT * FROM docs
 WHERE vector NEAR $q AND content MATCH 'database'
 LIMIT 10 USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3);
 
--- Inline NEAR_FUSED with a bare strategy string (no params)
-SELECT * FROM products WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'weighted' LIMIT 20;
+-- Inline NEAR_FUSED with a bare strategy string (rrf/average/maximum only;
+-- weighted/rsf are rejected). USING FUSION needs >=2 branches or a NEAR_FUSED.
+SELECT * FROM products WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'rrf' LIMIT 20;
 ```
 
 ---
@@ -167,6 +169,36 @@ SELECT * FROM docs WHERE (lang = 'en' OR lang = 'fr') AND NOT archived = true LI
 ```
 
 Payload sub-fields use dot paths: `payload.author.name = 'Ada'`.
+
+---
+
+## Scalar subqueries
+
+A `(SELECT ...)` in a value position is executed and substituted as a literal
+before the outer query runs. It must return exactly one row and one column
+(0 rows -> `NULL`; more rows/columns -> `VELES-010`). A subquery referencing one
+of the outer query's tables/aliases is **correlated** and rejected (V010); a
+dotted **payload path** like `meta.cat` is *not* a correlation.
+
+```sql
+-- Aggregate subquery in WHERE
+SELECT * FROM orders WHERE amount > (SELECT AVG(amount) FROM orders) LIMIT 10;
+
+-- Single-column row subquery
+SELECT * FROM orders WHERE amount >= (SELECT amount FROM orders WHERE id = 1);
+
+-- Payload-path filter inside the subquery (not correlated)
+SELECT * FROM orders WHERE amount > (SELECT AVG(amount) FROM orders WHERE meta.cat = 5);
+
+-- HAVING, INSERT/UPDATE values, and UPDATE/DELETE WHERE accept a scalar subquery
+INSERT INTO orders (id, vector, amount)
+VALUES (6, $v, (SELECT MAX(amount) FROM orders));
+UPDATE orders SET flagged = true WHERE amount > (SELECT AVG(amount) FROM orders);
+DELETE FROM orders WHERE id = (SELECT oid FROM orders WHERE tag = 3);
+```
+
+Resolved in `velesdb-core`, so REST `/query` and the CLI REPL support it; WASM
+still rejects subqueries.
 
 ---
 

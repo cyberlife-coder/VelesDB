@@ -23,7 +23,8 @@ use crate::database::DatabaseInner;
 use crate::vector_ops;
 use crate::velesql_aggregate;
 use crate::velesql_fusion;
-use crate::velesql_orderby::{self, SortableRow};
+use crate::velesql_orderby;
+use crate::velesql_project;
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_scan::OwnedScanRow;
 use crate::velesql_similarity::{self, SimilarityEvaluator};
@@ -43,7 +44,11 @@ pub(crate) fn execute(
         return crate::velesql_join::execute(db, &query.select, params);
     }
 
-    let rows = if let Some(vs) = find_vector_search(query.select.where_clause.as_ref()) {
+    let rows = if let Some(vfs) =
+        crate::velesql_fused::find_fused_search(query.select.where_clause.as_ref())
+    {
+        crate::velesql_fused::execute_fused_search(db, &query.select, vfs, params)?
+    } else if let Some(vs) = find_vector_search(query.select.where_clause.as_ref()) {
         execute_vector_search(db, &query.select, vs, params)?
     } else {
         execute_plain(db, &query.select, params)?
@@ -155,19 +160,6 @@ impl WhereFilters {
             params,
         )
     }
-
-    /// Returns `true` if this filter set has no `similarity()` predicate.
-    ///
-    /// Used by the fusion path to short-circuit `collect_vector_rows`'
-    /// post-filter: when fusion has already applied the residual WHERE
-    /// via `fusion_branch_from_residual` AND there is no similarity leaf
-    /// to re-evaluate, the post-filter is fully redundant and can be
-    /// skipped (Devin Review Finding Q). The non-fusion path must still
-    /// apply the post-filter — this accessor is only consulted under a
-    /// fusion-active branch.
-    fn has_no_similarity(&self) -> bool {
-        self.eval.is_none()
-    }
 }
 
 // --- Vector NEAR ---------------------------------------------------------
@@ -188,15 +180,11 @@ fn execute_vector_search(
     let residual_without_vector = strip_vector_search(stmt.where_clause.as_ref());
     let filters = WhereFilters::build(db, stmt, params, Some(residual_without_vector.clone()))?;
 
-    // Finding Q: when fusion is active AND the filter set has no
-    // similarity predicate to re-evaluate row-wise, the residual WHERE
-    // has already been applied by `fusion_branch_from_residual` — the
-    // post-filter in `collect_vector_rows` would duplicate that work.
-    // We skip it by passing `None` for the filter set in that case.
-    // The non-fusion path (and fusion + similarity) still applies
-    // `filters.passes()` so correctness is preserved.
-    let mut fusion_residual_already_applied = false;
+    // #9: a single-vector NEAR has no real second scored branch. Mirror core,
+    // where a `NEAR + metadata` query applies the metadata predicate as a HARD
+    // filter and the FUSION clause is structurally inapplicable.
     if let Some(clause) = &stmt.fusion_clause {
+        reject_single_branch_weighted_fusion(clause)?;
         scored = apply_fusion(
             &scored,
             clause,
@@ -204,13 +192,35 @@ fn execute_vector_search(
             filters.residual.as_ref(),
             params,
         )?;
-        fusion_residual_already_applied = filters.has_no_similarity();
     }
 
-    if fusion_residual_already_applied {
-        collect_vector_rows_unfiltered(&scored, &borrowed)
-    } else {
-        collect_vector_rows(&scored, &borrowed, &filters, params)
+    // #9(b): ALWAYS enforce the metadata residual as a final filter. The old
+    // `fusion_residual_already_applied` short-circuit returned the fused UNION
+    // verbatim, leaking rows that fail the WHERE predicate (the synthetic
+    // payload branch scored them 1.0). `collect_vector_rows` re-applies
+    // `filters.passes()`, so WHERE-failing rows are dropped — matching core's
+    // hard-filter semantics.
+    collect_vector_rows(&scored, &borrowed, &filters, params)
+}
+
+/// Rejects weight-sensitive fusion strategies (`weighted` / `rsf`) on a
+/// single-vector NEAR. WASM has no BM25/graph branch to fuse against, so these
+/// strategies would otherwise fuse the real vector ranking against a synthetic
+/// constant-1.0 branch — meaningless rankings. `rrf` / `maximum` / `average`
+/// preserve the vector order under a constant second branch and are left as a
+/// (now hard-filtered) no-op for demo parity (#9a).
+fn reject_single_branch_weighted_fusion(
+    clause: &velesdb_core::velesql::FusionClause,
+) -> Result<(), String> {
+    use velesdb_core::velesql::FusionStrategyType;
+    match clause.strategy {
+        FusionStrategyType::Weighted | FusionStrategyType::Rsf => Err(
+            "USING FUSION(strategy='weighted'|'rsf') requires two scored branches; a \
+             single-vector NEAR has none in WASM (no BM25/graph scoring). Use a \
+             metadata filter without FUSION, or 'rrf'."
+                .to_string(),
+        ),
+        _ => Ok(()),
     }
 }
 
@@ -242,7 +252,13 @@ fn resolve_query_vector(
     Ok(q)
 }
 
-fn score_all(query: &[f32], store: &crate::vector_store::VectorStore) -> Vec<(u64, f32)> {
+/// Brute-force scores every stored vector against `query` and sorts by the
+/// metric's natural direction. Shared with the `NEAR_FUSED` path
+/// (`velesql_fused`) so the single-vector and per-branch scans stay identical.
+pub(crate) fn score_all(
+    query: &[f32],
+    store: &crate::vector_store::VectorStore,
+) -> Vec<(u64, f32)> {
     let mut scored = vector_ops::compute_scores(
         query,
         &store.ids,
@@ -291,8 +307,9 @@ fn build_id_to_idx(store: &crate::vector_store::VectorStore) -> HashMap<u64, usi
 /// Fusion-path collector: returns every scored row verbatim, skipping
 /// the residual WHERE re-check because [`fusion_branch_from_residual`]
 /// already applied it (Devin Review Finding Q). Only used when there is
-/// no similarity predicate to re-evaluate row-wise.
-fn collect_vector_rows_unfiltered(
+/// no similarity predicate to re-evaluate row-wise. Shared with the
+/// `NEAR_FUSED` path (`velesql_fused`) so both hydrate rows identically.
+pub(crate) fn collect_vector_rows_unfiltered(
     scored: &[(u64, f32)],
     store: &crate::vector_store::VectorStore,
 ) -> Result<Vec<OwnedScanRow>, String> {
@@ -390,37 +407,49 @@ fn finalize_aggregated(
         .map(|(id, score, p)| (*id, *score, p.as_ref()))
         .collect();
     let out = velesql_aggregate::apply(stmt, &scanned, params)?;
-    Ok(apply_limit_offset(stmt, out))
+    // Aggregation output is not row-capped by core: a LIMIT-less GROUP BY
+    // returns every group. Pass `u64::MAX` so the default-10 SELECT cap
+    // never silently truncates group rows.
+    Ok(apply_limit_offset(stmt, out, u64::MAX))
 }
 
+/// Finalizes a non-aggregated SELECT: window functions, ORDER BY, column
+/// projection (including `AS` aliases), then OFFSET/LIMIT.
+///
+/// Routed through velesdb-core's single source of truth — `window_evaluator`
+/// injects window aliases into the payload, `velesql_orderby::sort_rows`
+/// evaluates arithmetic / rejects unevaluable ORDER BY forms, and
+/// `projection::project_results` materializes exactly the SELECT columns. This
+/// replaced the old path that always emitted `id + score + full payload`,
+/// dropping projection, aliases, and window functions (#3b).
 fn finalize_plain(
     stmt: &SelectStatement,
     rows: Vec<OwnedScanRow>,
 ) -> Result<Vec<QueryResultRow>, String> {
-    // INVARIANT: `QueryResultRow::build` only fails on serde_json encoding
-    // errors, which cannot occur here (all inputs are typed primitives and
-    // already-validated JSON payloads). We still propagate the error via
-    // `?` rather than `.expect()` (Devin Review Finding N) so a future
-    // change to the payload representation fails cleanly.
-    let mut sortable: Vec<SortableRow> = rows
-        .into_iter()
-        .map(|(id, score, payload)| {
-            QueryResultRow::build(id, score, payload.as_ref()).map(|row| SortableRow {
-                id,
-                score,
-                payload,
-                row,
-            })
-        })
-        .collect::<Result<_, _>>()?;
-    velesql_orderby::sort_rows(stmt, &mut sortable);
-    let rows: Vec<QueryResultRow> = sortable.into_iter().map(|s| s.row).collect();
-    Ok(apply_limit_offset(stmt, rows))
+    let mut results = velesql_project::to_search_results(rows);
+    velesql_project::inject_window_functions(stmt, &mut results)?;
+    velesql_orderby::sort_rows(stmt, &mut results)?;
+    let projected = velesql_project::project(stmt, &results)?;
+    Ok(apply_limit_offset(
+        stmt,
+        projected,
+        velesdb_core::velesql::DEFAULT_SELECT_LIMIT,
+    ))
 }
 
-fn apply_limit_offset(stmt: &SelectStatement, rows: Vec<QueryResultRow>) -> Vec<QueryResultRow> {
+/// Applies OFFSET/LIMIT, using `default_limit` when the statement omits LIMIT.
+///
+/// Mirror of core (`query_pipeline.rs`): a LIMIT-less plain SELECT defaults to
+/// `DEFAULT_SELECT_LIMIT` (10), not "every row" — previously WASM used
+/// `u64::MAX`, diverging from every other surface (#8b). Aggregation passes
+/// `u64::MAX` so a LIMIT-less GROUP BY still returns every group.
+fn apply_limit_offset(
+    stmt: &SelectStatement,
+    rows: Vec<QueryResultRow>,
+    default_limit: u64,
+) -> Vec<QueryResultRow> {
     let offset = usize::try_from(stmt.offset.unwrap_or(0)).unwrap_or(usize::MAX);
-    let limit = usize::try_from(stmt.limit.unwrap_or(u64::MAX)).unwrap_or(usize::MAX);
+    let limit = usize::try_from(stmt.limit.unwrap_or(default_limit)).unwrap_or(usize::MAX);
     rows.into_iter().skip(offset).take(limit).collect()
 }
 

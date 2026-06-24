@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::collection::query::{
     build_explain_analyze_dict, build_explain_dict, convert_params, parse_velesql,
-    run_velesql_match, run_velesql_select, run_velesql_select_ids,
+    run_velesql_match, run_velesql_select, run_velesql_select_ids, validate_query,
 };
 use crate::collection_helpers::core_err;
 use crate::graph_collection::PyGraphCollection;
@@ -85,7 +85,10 @@ impl PyGraphCollection {
             if let Some(ref qv) = qv {
                 inner.execute_match_with_similarity(&mc, qv, threshold, &p)
             } else {
-                inner.execute_match(&mc, &p)
+                // Route through the cost-based planner so RETURN ORDER BY,
+                // deterministic tie-break, and post-sort LIMIT match the SQL
+                // /query path exactly (backlog #1).
+                inner.match_query_ordered(&mc, &p)
             }
         })
     }
@@ -100,7 +103,12 @@ impl PyGraphCollection {
     #[pyo3(signature = (query_str))]
     fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<Py<PyAny>> {
         let parsed = parse_velesql(query_str)?;
-        Ok(build_explain_dict(py, &parsed))
+        validate_query(&parsed)?;
+        // GraphCollection does not expose the calibrated stats / indexed-field
+        // set publicly; MATCH still reports a real strategy via from_match's
+        // default graph stats.
+        let indexed = std::collections::HashSet::new();
+        Ok(build_explain_dict(py, &parsed, &indexed, None))
     }
 
     /// Execute a query with instrumentation and return plan + actual stats (EXPLAIN ANALYZE).

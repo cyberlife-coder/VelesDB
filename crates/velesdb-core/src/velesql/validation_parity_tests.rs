@@ -111,10 +111,13 @@ mod tests {
     }
 
     #[test]
-    fn test_parity_single_fused_search_allowed() {
+    fn test_parity_single_fused_search_now_executable() {
         let condition = vector_fused_condition();
         let query = make_query(Some(condition.clone()));
 
+        // A single NEAR_FUSED is executable via SQL (routed to multi-vector
+        // fusion), so the full validator passes it; the structural similarity
+        // validator (multi-similarity-in-OR rule) also allows a single fused.
         assert!(QueryValidator::validate(&query).is_ok());
         assert!(
             crate::collection::Collection::validate_similarity_query_structure(&condition).is_ok()
@@ -196,19 +199,11 @@ mod tests {
 
     #[test]
     fn test_parity_all_vector_types_counted() {
-        // Ensure all vector search types are counted equally
-        let conditions = vec![
-            similarity_condition(),
-            vector_search_condition(),
-            vector_fused_condition(),
-        ];
-
-        for cond in conditions {
-            // Create OR with metadata - should pass (single vector search)
-            let or_with_meta =
-                Condition::Or(Box::new(cond.clone()), Box::new(metadata_condition()));
+        // similarity() and NEAR may be OR-ed with metadata (union mode): both
+        // validators allow it.
+        for cond in [similarity_condition(), vector_search_condition()] {
+            let or_with_meta = Condition::Or(Box::new(cond), Box::new(metadata_condition()));
             let query = make_query(Some(or_with_meta.clone()));
-
             assert!(
                 QueryValidator::validate(&query).is_ok(),
                 "Single vector search OR metadata should be allowed"
@@ -219,5 +214,25 @@ mod tests {
                 "Single vector search OR metadata should be allowed"
             );
         }
+
+        // NEAR_FUSED is stricter — it must be the sole vector predicate — so
+        // OR-ing it with metadata is rejected by the structural validator
+        // (isolation rule), while a standalone NEAR_FUSED is accepted.
+        let fused_or_meta = Condition::Or(
+            Box::new(vector_fused_condition()),
+            Box::new(metadata_condition()),
+        );
+        assert!(
+            crate::collection::Collection::validate_similarity_query_structure(&fused_or_meta)
+                .is_err(),
+            "NEAR_FUSED under OR must be rejected (isolation rule)"
+        );
+        assert!(
+            crate::collection::Collection::validate_similarity_query_structure(
+                &vector_fused_condition()
+            )
+            .is_ok(),
+            "standalone NEAR_FUSED is accepted"
+        );
     }
 }

@@ -66,6 +66,22 @@ export interface CapabilityMap {
   velesqlQuery: boolean;
   /** Collection introspection endpoints (`collectionSanity`, `getCollectionStats`, `analyzeCollection`, `getCollectionConfig`). */
   collectionIntrospection: boolean;
+  /**
+   * `USING FUSION(strategy='...')` strategies the backend's query path
+   * accepts. Empty when `velesqlQuery` is `false`. The core SQL parser
+   * accepts `rrf`, `weighted`, `maximum`, `rsf`, `average`.
+   */
+  velesqlFusionStrategies: readonly string[];
+  /**
+   * `MATCH (...) RETURN ... ORDER BY ... [LIMIT n]` is honored end-to-end
+   * (sorted, then limited) by the backend's query path.
+   */
+  velesqlMatchOrderBy: boolean;
+  /**
+   * `ALTER COLLECTION <name> SET(...)` is supported via the typed
+   * {@link VelesDB.alterCollection} / {@link VelesDB.setAutoReindex} helpers.
+   */
+  velesqlAlterCollection: boolean;
 }
 
 /**
@@ -90,6 +106,9 @@ export const REST_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   pqTraining: true,
   velesqlQuery: true,
   collectionIntrospection: true,
+  velesqlFusionStrategies: Object.freeze(['rrf', 'weighted', 'maximum', 'rsf', 'average']),
+  velesqlMatchOrderBy: true,
+  velesqlAlterCollection: true,
 });
 
 /**
@@ -123,4 +142,9 @@ export const WASM_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   pqTraining: false,
   velesqlQuery: false,
   collectionIntrospection: false,
+  // `velesqlQuery` is false on this backend, so the VelesQL sub-capabilities
+  // are all unavailable.
+  velesqlFusionStrategies: Object.freeze([]),
+  velesqlMatchOrderBy: false,
+  velesqlAlterCollection: false,
 });

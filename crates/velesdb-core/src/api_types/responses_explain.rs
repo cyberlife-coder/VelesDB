@@ -52,6 +52,14 @@ pub struct ExplainResponse {
 }
 
 /// Actual execution statistics for EXPLAIN ANALYZE responses.
+///
+/// `actual_rows`, `actual_time_ms`, and `loops` are measured. The graph
+/// traversal counters `nodes_visited` / `edges_traversed` are **strategy-
+/// dependent approximations** (a lower bound, not an exact figure):
+/// `VectorFirst` undercounts via its `limit(1)` existence-BFS frontier and
+/// `Parallel` double-counts a node touched by both legs. The
+/// `traversal_counters_approximate` flag exposes this honesty contract in a
+/// machine-readable form (backlog #26), mirroring [`NodeStatsResponse::estimated`].
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct ActualStatsResponse {
@@ -61,10 +69,16 @@ pub struct ActualStatsResponse {
     pub actual_time_ms: f64,
     /// Number of loop iterations.
     pub loops: u64,
-    /// Number of nodes visited (for graph traversal).
+    /// Approximate number of nodes visited during MATCH graph traversal.
+    /// See `traversal_counters_approximate`; 0 for non-graph queries.
     pub nodes_visited: u64,
-    /// Number of edges traversed.
+    /// Approximate number of edges traversed during MATCH graph traversal.
+    /// See `traversal_counters_approximate`; 0 for non-graph queries.
     pub edges_traversed: u64,
+    /// When `true`, `nodes_visited` and `edges_traversed` are strategy-dependent
+    /// approximations (a lower bound), not exact measured counts. Always `false`
+    /// for non-graph queries, where both counters are 0.
+    pub traversal_counters_approximate: bool,
 }
 
 #[cfg(feature = "persistence")]
@@ -76,6 +90,9 @@ impl From<&crate::velesql::ActualStats> for ActualStatsResponse {
             loops: s.loops,
             nodes_visited: s.nodes_visited,
             edges_traversed: s.edges_traversed,
+            // Graph traversal counters are only present (and only approximate)
+            // when a MATCH query actually walked the graph (backlog #26).
+            traversal_counters_approximate: s.nodes_visited > 0 || s.edges_traversed > 0,
         }
     }
 }

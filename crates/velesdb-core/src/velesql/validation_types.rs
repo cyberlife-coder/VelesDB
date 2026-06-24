@@ -126,6 +126,11 @@ pub enum ValidationErrorKind {
     /// missing, or whose implicit binding to the FROM rows violates a guard
     /// (G1 inverted direction, G2 cross-predicate alias, G3 @collection).
     GraphMatchAnchorMismatch,
+    /// USING FUSION clause is misconfigured: applied to fewer than two fusable
+    /// branches, weights that do not sum to 1.0 (RSF) or are negative, or a
+    /// strategy not allowed for the query shape (e.g. weighted/rsf on
+    /// NEAR_FUSED).
+    FusionMisconfigured,
 }
 
 impl ValidationErrorKind {
@@ -144,6 +149,7 @@ impl ValidationErrorKind {
             Self::InvalidLetBinding => "V009",
             Self::SubqueryNotExecutable => "V010",
             Self::GraphMatchAnchorMismatch => "V011",
+            Self::FusionMisconfigured => "V012",
         }
     }
 
@@ -169,6 +175,7 @@ impl ValidationErrorKind {
             Self::GraphMatchAnchorMismatch => {
                 "MATCH predicate anchor must be an alias declared in FROM/JOIN"
             }
+            Self::FusionMisconfigured => "USING FUSION clause is misconfigured",
         }
     }
 }

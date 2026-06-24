@@ -66,7 +66,7 @@ impl Collection {
 
         let n = count(condition);
         if n > 1 {
-            return Err(Error::Config(format!(
+            return Err(Error::Query(format!(
                 "Query contains {n} SPARSE_NEAR clauses; only one is supported per query. \
                  Use separate queries for each sparse search."
             )));
@@ -91,10 +91,10 @@ impl Collection {
             SparseVectorExpr::Literal(sv) => Ok(sv.clone()),
             SparseVectorExpr::Parameter(name) => {
                 let val = params.get(name).ok_or_else(|| {
-                    Error::Config(format!("Missing sparse vector parameter: ${name}"))
+                    Error::Query(format!("Missing sparse vector parameter: ${name}"))
                 })?;
                 let obj = val.as_object().ok_or_else(|| {
-                    Error::Config(format!(
+                    Error::Query(format!(
                         "Invalid sparse vector parameter ${name}: expected object with \
                          indices/values or {{index: weight}} map"
                     ))
@@ -120,17 +120,17 @@ impl Collection {
             return Ok(None);
         };
         let indices: Vec<u32> = serde_json::from_value(indices_val.clone()).map_err(|e| {
-            Error::Config(format!(
+            Error::Query(format!(
                 "Invalid sparse vector parameter ${name}.indices: {e}"
             ))
         })?;
         let values: Vec<f32> = serde_json::from_value(values_val.clone()).map_err(|e| {
-            Error::Config(format!(
+            Error::Query(format!(
                 "Invalid sparse vector parameter ${name}.values: {e}"
             ))
         })?;
         if indices.len() != values.len() {
-            return Err(Error::Config(format!(
+            return Err(Error::Query(format!(
                 "Sparse vector parameter ${name}: indices and values must have equal length"
             )));
         }
@@ -147,13 +147,13 @@ impl Collection {
         let mut pairs = Vec::with_capacity(obj.len());
         for (k, v) in obj {
             let idx: u32 = k.parse().map_err(|_| {
-                Error::Config(format!(
+                Error::Query(format!(
                     "Invalid sparse vector parameter ${name}: key '{k}' is not a valid u32 index"
                 ))
             })?;
             #[allow(clippy::cast_possible_truncation)]
             let weight = v.as_f64().ok_or_else(|| {
-                Error::Config(format!(
+                Error::Query(format!(
                     "Invalid sparse vector parameter ${name}: value for key '{k}' is not a number"
                 ))
             })? as f32;

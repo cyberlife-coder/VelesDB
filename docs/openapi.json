@@ -11,7 +11,7 @@
       "name": "VelesDB Core License 1.0",
       "url": "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"
     },
-    "version": "3.2.1"
+    "version": "3.3.0"
   },
   "servers": [
     {
@@ -1682,7 +1682,7 @@
           "graph"
         ],
         "summary": "Execute a MATCH query on a collection.",
-        "description": "# Endpoint\n\n`POST /collections/{name}/match`\n\n# Example Request\n\n```json\n{\n  \"query\": \"MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name\",\n  \"params\": {\n    \"v\": [0.1, 0.2, 0.3]\n  }\n}\n```\n\n# Errors\n\nReturns error tuple with status code and JSON error in these cases:\n- `404 NOT_FOUND` - Collection not found\n- `400 BAD_REQUEST` - Parse error or not a MATCH query\n- `500 INTERNAL_SERVER_ERROR` - Execution error",
+        "description": "# Endpoint\n\n`POST /collections/{name}/match`\n\n# Example Request\n\n```json\n{\n  \"query\": \"MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name\",\n  \"params\": {\n    \"v\": [0.1, 0.2, 0.3]\n  }\n}\n```\n\n# Errors\n\nAll failures are mapped through the canonical `auto_core_error_response`,\nso the JSON body carries the `VELES-XXX` code and the HTTP status is\nderived from the core error variant:\n- `404 NOT_FOUND` (`VELES-002`) — collection not found\n- `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,\n  invalid threshold, or an unbound query parameter\n- other core variants map per [`super::helpers::http_status_for_error`]",
         "operationId": "match_query",
         "parameters": [
           {
@@ -1721,7 +1721,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MatchQueryError"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1731,7 +1731,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MatchQueryError"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1741,7 +1741,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MatchQueryError"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1789,7 +1789,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request or batch too large",
             "content": {
               "application/json": {
                 "schema": {
@@ -3392,13 +3392,14 @@
     "schemas": {
       "ActualStatsResponse": {
         "type": "object",
-        "description": "Actual execution statistics for EXPLAIN ANALYZE responses.",
+        "description": "Actual execution statistics for EXPLAIN ANALYZE responses.\n\n`actual_rows`, `actual_time_ms`, and `loops` are measured. The graph\ntraversal counters `nodes_visited` / `edges_traversed` are **strategy-\ndependent approximations** (a lower bound, not an exact figure):\n`VectorFirst` undercounts via its `limit(1)` existence-BFS frontier and\n`Parallel` double-counts a node touched by both legs. The\n`traversal_counters_approximate` flag exposes this honesty contract in a\nmachine-readable form (backlog #26), mirroring [`NodeStatsResponse::estimated`].",
         "required": [
           "actual_rows",
           "actual_time_ms",
           "loops",
           "nodes_visited",
-          "edges_traversed"
+          "edges_traversed",
+          "traversal_counters_approximate"
         ],
         "properties": {
           "actual_rows": {
@@ -3415,7 +3416,7 @@
           "edges_traversed": {
             "type": "integer",
             "format": "int64",
-            "description": "Number of edges traversed.",
+            "description": "Approximate number of edges traversed during MATCH graph traversal.\nSee `traversal_counters_approximate`; 0 for non-graph queries.",
             "minimum": 0
           },
           "loops": {
@@ -3427,8 +3428,12 @@
           "nodes_visited": {
             "type": "integer",
             "format": "int64",
-            "description": "Number of nodes visited (for graph traversal).",
+            "description": "Approximate number of nodes visited during MATCH graph traversal.\nSee `traversal_counters_approximate`; 0 for non-graph queries.",
             "minimum": 0
+          },
+          "traversal_counters_approximate": {
+            "type": "boolean",
+            "description": "When `true`, `nodes_visited` and `edges_traversed` are strategy-dependent\napproximations (a lower bound), not exact measured counts. Always `false`\nfor non-graph queries, where both counters are 0."
           }
         }
       },
@@ -4803,34 +4808,6 @@
             "type": "integer",
             "description": "Total number of indexes.",
             "minimum": 0
-          }
-        }
-      },
-      "MatchQueryError": {
-        "type": "object",
-        "description": "Error response for MATCH query.",
-        "required": [
-          "error",
-          "code"
-        ],
-        "properties": {
-          "code": {
-            "type": "string",
-            "description": "Error code."
-          },
-          "details": {
-            "description": "Optional details for diagnostics."
-          },
-          "error": {
-            "type": "string",
-            "description": "Error message."
-          },
-          "hint": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Actionable hint for developers."
           }
         }
       },

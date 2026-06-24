@@ -79,6 +79,7 @@ mod velesql_ddl;
 mod velesql_delete;
 mod velesql_exec;
 mod velesql_explain;
+mod velesql_fused;
 mod velesql_fusion;
 mod velesql_graph;
 mod velesql_helpers;
@@ -87,7 +88,9 @@ mod velesql_introspection;
 mod velesql_join;
 mod velesql_logic;
 mod velesql_match;
+mod velesql_match_orderby;
 mod velesql_orderby;
+mod velesql_project;
 mod velesql_result;
 mod velesql_scan;
 mod velesql_select;
@@ -96,6 +99,7 @@ mod velesql_similarity;
 mod velesql_update;
 mod velesql_value;
 mod velesql_where;
+mod wasm_error;
 
 pub use agent::SemanticMemory;
 pub use database::{WasmCollectionHandle, WasmDatabase};
@@ -184,6 +188,10 @@ mod velesql_exec_join_tests;
 #[cfg(test)]
 #[path = "velesql_exec_hybrid_tests.rs"]
 mod velesql_exec_hybrid_tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_behavior_tests.rs"]
+mod velesql_exec_behavior_tests;
 
 #[cfg(test)]
 #[path = "velesql_exec_graph_tests.rs"]

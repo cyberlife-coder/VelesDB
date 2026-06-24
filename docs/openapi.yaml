@@ -8,7 +8,7 @@ info:
   license:
     name: VelesDB Core License 1.0
     url: https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE
-  version: 3.2.1
+  version: 3.3.0
 servers:
 - url: /
   description: Local server
@@ -1094,10 +1094,13 @@ paths:
 
         # Errors
 
-        Returns error tuple with status code and JSON error in these cases:
-        - `404 NOT_FOUND` - Collection not found
-        - `400 BAD_REQUEST` - Parse error or not a MATCH query
-        - `500 INTERNAL_SERVER_ERROR` - Execution error
+        All failures are mapped through the canonical `auto_core_error_response`,
+        so the JSON body carries the `VELES-XXX` code and the HTTP status is
+        derived from the core error variant:
+        - `404 NOT_FOUND` (`VELES-002`) — collection not found
+        - `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,
+          invalid threshold, or an unbound query parameter
+        - other core variants map per [`super::helpers::http_status_for_error`]
       operationId: match_query
       parameters:
       - name: name
@@ -1124,19 +1127,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MatchQueryError'
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MatchQueryError'
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MatchQueryError'
+                $ref: '#/components/schemas/ErrorResponse'
   /collections/{name}/points:
     post:
       tags:
@@ -1164,7 +1167,7 @@ paths:
               schema:
                 type: object
         '400':
-          description: Invalid request
+          description: Invalid request or batch too large
           content:
             application/json:
               schema:
@@ -2233,13 +2236,23 @@ components:
   schemas:
     ActualStatsResponse:
       type: object
-      description: Actual execution statistics for EXPLAIN ANALYZE responses.
+      description: |-
+        Actual execution statistics for EXPLAIN ANALYZE responses.
+
+        `actual_rows`, `actual_time_ms`, and `loops` are measured. The graph
+        traversal counters `nodes_visited` / `edges_traversed` are **strategy-
+        dependent approximations** (a lower bound, not an exact figure):
+        `VectorFirst` undercounts via its `limit(1)` existence-BFS frontier and
+        `Parallel` double-counts a node touched by both legs. The
+        `traversal_counters_approximate` flag exposes this honesty contract in a
+        machine-readable form (backlog #26), mirroring [`NodeStatsResponse::estimated`].
       required:
       - actual_rows
       - actual_time_ms
       - loops
       - nodes_visited
       - edges_traversed
+      - traversal_counters_approximate
       properties:
         actual_rows:
           type: integer
@@ -2253,7 +2266,9 @@ components:
         edges_traversed:
           type: integer
           format: int64
-          description: Number of edges traversed.
+          description: |-
+            Approximate number of edges traversed during MATCH graph traversal.
+            See `traversal_counters_approximate`; 0 for non-graph queries.
           minimum: 0
         loops:
           type: integer
@@ -2263,8 +2278,16 @@ components:
         nodes_visited:
           type: integer
           format: int64
-          description: Number of nodes visited (for graph traversal).
+          description: |-
+            Approximate number of nodes visited during MATCH graph traversal.
+            See `traversal_counters_approximate`; 0 for non-graph queries.
           minimum: 0
+        traversal_counters_approximate:
+          type: boolean
+          description: |-
+            When `true`, `nodes_visited` and `edges_traversed` are strategy-dependent
+            approximations (a lower bound), not exact measured counts. Always `false`
+            for non-graph queries, where both counters are 0.
     AddEdgeRequest:
       type: object
       description: Request to add an edge to the graph.
@@ -3355,26 +3378,6 @@ components:
           type: integer
           description: Total number of indexes.
           minimum: 0
-    MatchQueryError:
-      type: object
-      description: Error response for MATCH query.
-      required:
-      - error
-      - code
-      properties:
-        code:
-          type: string
-          description: Error code.
-        details:
-          description: Optional details for diagnostics.
-        error:
-          type: string
-          description: Error message.
-        hint:
-          type:
-          - string
-          - 'null'
-          description: Actionable hint for developers.
     MatchQueryMeta:
       type: object
       description: Metadata section for MATCH query responses.

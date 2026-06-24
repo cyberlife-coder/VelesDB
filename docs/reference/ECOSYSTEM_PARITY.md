@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-06-20 (v3.2.1)
+Last updated: 2026-06-24 (v3.3.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -31,7 +31,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 |---------------|------|--------|--------|------|--------|-----|--------|-------|-----------|------------|----------|
 | **Vector CRUD** (insert, upsert, delete, get) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Batch Operations** (batch_insert, batch_upsert) | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Streaming Ingestion** (enableStreaming / stream_insert) | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Streaming Ingestion** (enableStreaming / stream_insert) | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️ | ✅ | ✅ | ⚠️ | ⚠️ | ❌ |
 | **Vector Search** (k-NN, filtered, batch) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Multi-Query Fusion** (RRF) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
 | **Multi-Query Fusion** (RSF / Weighted) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
@@ -56,10 +56,10 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 
 - **Cross-Collection MATCH**: Core and Server support `@collection` annotation on MATCH node patterns. Python bindings support via `_collection` param. CLI supports via `\use`. WASM, Mobile, Tauri, and integrations do not yet expose this feature.
 - **Batch Operations**: WASM and Mobile use streaming chunked inserts instead of single-call bulk to stay within memory constraints. WASM additionally exposes a single-call raw-bulk path via `VectorStore.insertBatchRaw` (see the Raw-Bulk Insert note).
-- **Streaming Ingestion** (2026-06-14): Core, Server (`POST /collections/{name}/stream/enable` + `/stream/insert`), Python, Tauri, Mobile (`enableStreaming()` / `streamInsert()` on its own tokio streaming runtime), and the TS SDK (`enableStreaming()` / `streamInsert()`, REST backend) support the bounded ingestion channel. The CLI reaches it ⚠️ via the embedded core path with no dedicated REPL command. WASM throws `NOT_SUPPORTED` (no persistence layer). Only the LangChain/LlamaIndex/Haystack integrations do not yet expose it.
+- **Streaming Ingestion** (2026-06-14): Core, Server (`POST /collections/{name}/stream/enable` + `/stream/insert`), Python, Tauri, Mobile (`enableStreaming()` / `streamInsert()` on its own tokio streaming runtime), and the TS SDK (`enableStreaming()` / `streamInsert()`, REST backend) support the bounded ingestion channel. The CLI reaches it ⚠️ via the embedded core path with no dedicated REPL command. WASM throws `NOT_SUPPORTED` (no persistence layer). LangChain and LlamaIndex expose ⚠️ streaming via `stream_insert()`/`add_texts_streaming()`/`add_streaming()`, which forward to `collection.stream_insert` (caller is responsible for `enable_streaming`; covered by mock-collection unit tests). Only the Haystack integration does not yet expose it.
 - **Raw-Bulk Insert** (2026-06-14): the zero-copy raw-bulk path is now exposed by Core (`upsert_bulk_from_raw`), Server (`POST /collections/{name}/points/raw`, VRB1 binary), the TS SDK (`upsertBatchRaw`), WASM (`VectorStore.insertBatchRaw(ids, vectors, dim)`, writing into its in-memory buffer), and the CLI (`velesdb data import <file.bin>`, VRB1 binary). Mobile remains a follow-up. All surfaces share the one `velesdb_core::wire::vrb1` codec.
-- **Multi-Query Fusion (RSF/Weighted)** (2026-06-14): WASM's multi-query `fuse_results` now delegates **4 of its 5 strategies** (`average`, `maximum`, `weighted`, `rrf`) to the canonical `velesdb_core::FusionStrategy::fuse`, so the browser engine reproduces core's ranking 1:1 for those (`crates/velesdb-wasm/src/fusion.rs`; equivalence pinned by `test_fuse_results_matches_core_ordering`). The fifth strategy, `relative_score` / `rsf`, is **intentionally kept WASM-local**: core's `RelativeScore` is a two-branch (dense + sparse) weighted sum that zero-fills documents missing from a branch and discards branches beyond index 1, whereas WASM's is an N-branch equal-weight average that skips missing branches. The two semantics yield different rankings, so converging WASM onto core would silently change WASM search results — that convergence is a product decision deferred to a follow-up, and `relative_score` behaviour is unchanged. (This is the multi-query fusion entry point; the VelesQL `USING FUSION (...)` clause executor in `velesql_fusion.rs` already builds every strategy — including RSF — directly from `velesdb_core::fusion::FusionStrategy`.) LangChain and LlamaIndex expose RSF/Weighted through `multi_query_search(fusion=...)`, which delegates to the shared `velesdb_common.fusion.build_fusion_strategy` (builds `weighted()` and `relative_score()`). Haystack remains ⚠️: fusion is reachable only via the underlying `velesdb` Python wrapper, not through the `DocumentStore` protocol.
-- **Sparse Vector Search (named indexes) — LangChain/LlamaIndex**: ⚠️ query-side only. Both integrations forward a `sparse_index_name` argument to the underlying `collection.search`/`hybrid_search`, so an existing named sparse index can be *queried*. Creating named sparse indexes is not exposed by the integrations (use the core `velesdb` API), and this path is not yet covered by integration tests.
+- **Multi-Query Fusion (RSF/Weighted)** (2026-06-14): WASM's multi-query `fuse_results` now delegates **4 of its 5 strategies** (`average`, `maximum`, `weighted`, `rrf`) to the canonical `velesdb_core::FusionStrategy::fuse`, so the browser engine reproduces core's ranking 1:1 for those (`crates/velesdb-wasm/src/fusion.rs`; equivalence pinned by `test_fuse_results_matches_core_ordering`). The fifth strategy, `relative_score` / `rsf`, is **intentionally kept WASM-local**: core's `RelativeScore` is a two-branch (dense + sparse) weighted sum that zero-fills documents missing from a branch and discards branches beyond index 1, whereas WASM's is an N-branch equal-weight average that skips missing branches. The two semantics yield different rankings, so converging WASM onto core would silently change WASM search results — that convergence is a product decision deferred to a follow-up, and `relative_score` behaviour is unchanged. (This is the multi-query fusion entry point; the VelesQL `USING FUSION (...)` clause executor in `velesql_fusion.rs` already builds every strategy — including RSF — directly from `velesdb_core::fusion::FusionStrategy`.) LangChain and LlamaIndex expose RSF/Weighted through `multi_query_search(fusion=...)`, which delegates to the shared `velesdb_common.fusion.build_fusion_strategy` (builds `weighted()` and `relative_score()`). Haystack reaches RSF/Weighted/RRF/etc. fusion via its own `VelesDBDocumentStore.embedding_retrieval(fusion=..., fusion_params=...)`, which delegates to `velesdb_common.fusion.build_fusion_strategy` and `Collection.multi_query_search`.
+- **Sparse Vector Search (named indexes) — LangChain/LlamaIndex**: ⚠️ query-side only. Both integrations forward a `sparse_index_name` argument to the underlying `collection.search`/`hybrid_search`, so an existing named sparse index can be *queried*. Named sparse indexes are also created on the upsert/write path: passing a named mapping such as `{"bge_m3": {0: 1.5}}` to `add_texts`/`add`/`add_bulk` (LC/LI) or `write_documents` (Haystack) creates the named index, validated by `velesdb_common.security.validate_named_sparse_vector`.
 - **Graph Operations (WASM)**: Basic node/edge CRUD is supported; multi-hop traversal and MATCH queries are limited.
 - **VelesQL (LangChain/LlamaIndex/Haystack)**: Pass-through to Python bindings works for simple queries; full parser integration is not surfaced in the integration API.
 - **Haystack DocumentStore protocol limits**: The Haystack 2.x `DocumentStore` ABC exposes `write_documents`, `filter_documents`, `embedding_retrieval`, `count_documents`, and `delete_documents`. BM25 / hybrid retrieval requires a separate `Retriever` component (planned follow-up). Graph collections, agent memory, and sparse-named indexes are intentionally `N/A` because they have no idiomatic mapping in Haystack's protocol and are reachable through the raw `velesdb` Python wrapper if needed.
@@ -167,7 +167,7 @@ All 5 variants (`Full`, `SQ8`, `Binary`, `ProductQuantization`, `RaBitQ`) are su
 
 ### FusionStrategy — 10/10 (100%)
 
-All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are supported in all 10 components (Haystack reaches them via the underlying `velesdb` Python wrapper, not the `DocumentStore` protocol).
+All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are supported in all 10 components (Haystack reaches RSF/Weighted/RRF/etc. fusion via its own `VelesDBDocumentStore.embedding_retrieval(fusion=..., fusion_params=...)`, which delegates to `velesdb_common.fusion.build_fusion_strategy` and `Collection.multi_query_search`).
 
 | Component | Status |
 |-----------|--------|
@@ -245,9 +245,12 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
 2. ✅ **Done (2026-06-20).** The executor-level conformance net now covers **core, WASM, and CLI** — all three run `conformance/velesql_executor_cases.json`, including scalar WHERE filters, single- and multi-column ORDER BY, the ascending-id tie-break, and bounded top-k. See [KNOWN_LIMITATIONS #13](./KNOWN_LIMITATIONS.md#13-velesql-executor-conformance-core-wasm-cli) (resolved).
 3. Keep docs, fixtures, and examples synchronized on every contract version change.
 4. Promote RaBitQ from experimental to stable once the API is finalized.
-5. Surface RSF/Weighted fusion in Haystack (already exposed in LangChain and
-   LlamaIndex via the shared `velesdb_common.fusion` module).
-6. Expose named-sparse-index *creation* in LangChain/LlamaIndex (query-side
-   `sparse_index_name` targeting already works) and add Haystack support.
+5. ✅ **Done.** RSF/Weighted fusion is exposed in Haystack via
+   `embedding_retrieval(fusion=...)` through `velesdb_common.fusion` (already
+   exposed in LangChain and LlamaIndex via the shared `velesdb_common.fusion`
+   module).
+6. ✅ **Done.** Named-sparse-index *creation* is exposed on the upsert/write path
+   of LangChain, LlamaIndex, and Haystack (query-side `sparse_index_name`
+   targeting already works).
 7. Propagate `@collection` cross-collection MATCH to WASM, Mobile, Tauri, LangChain, LlamaIndex, and Haystack.
 8. Add cross-collection vector search (`similarity()` on `@collection`-annotated nodes).

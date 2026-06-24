@@ -13,7 +13,7 @@ use axum::{body::Bytes, extract::Path, extract::State, http::StatusCode, respons
 use std::sync::Arc;
 use velesdb_core::wire::vrb1;
 
-use super::upsert_result_to_response;
+use super::{upsert_result_to_response, MAX_UPSERT_BATCH_SIZE};
 use crate::handlers::helpers::{error_response, get_vector_collection_or_404};
 use crate::types::ErrorResponse;
 use crate::AppState;
@@ -53,6 +53,16 @@ pub async fn upsert_points_raw(
         Ok(b) => b,
         Err(err) => return error_response(StatusCode::BAD_REQUEST, err.to_string()),
     };
+
+    if batch.ids.len() > MAX_UPSERT_BATCH_SIZE {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Batch too large: {} points (max {MAX_UPSERT_BATCH_SIZE})",
+                batch.ids.len()
+            ),
+        );
+    }
 
     let dimension = batch.dimension;
     let ids = batch.ids;

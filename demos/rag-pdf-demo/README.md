@@ -230,7 +230,7 @@ Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.11.1 (500 iterations â
 | Qdrant | ~10-50ms | Self-hosted |
 | FAISS | ~1ms | In-memory only |
 
-> **Note**: Run `python benchmark_latency.py` to measure performance on your hardware.
+> **Note**: `benchmark_latency.py` is a legacy REST-era client that targets a running `velesdb-server` on `localhost:8080`; this demo now runs VelesDB embedded (in-process, no server), so the script only works if you separately start a `velesdb-server`.
 
 ## ðŸ§ª Testing
 

@@ -192,7 +192,19 @@ impl Database {
         let primary = &query.select.from;
         let core_stats = self.get_collection_stats(primary).ok().flatten();
         let indexed = self.indexed_fields_for(primary);
-        crate::velesql::QueryPlan::from_query_with_stats(query, &indexed, core_stats.as_ref())
+        // For MATCH queries thread the live graph CollectionStats so the
+        // MatchTraversal strategy reflects the real graph shape (backlog #14).
+        let match_stats = query
+            .match_clause
+            .is_some()
+            .then(|| self.match_stats_for(primary))
+            .flatten();
+        crate::velesql::QueryPlan::from_query_with_all_stats(
+            query,
+            &indexed,
+            core_stats.as_ref(),
+            match_stats.as_ref(),
+        )
     }
 
     /// Executes a query with instrumentation and returns both plan and actual stats.
@@ -214,28 +226,13 @@ impl Database {
 
         let plan = self.explain_query(query)?;
         let start = std::time::Instant::now();
-        let results = self.execute_query(query, params)?;
-        let elapsed = start.elapsed();
-
-        let actual_rows = results.len() as u64;
-        let actual_time_ms = elapsed.as_secs_f64() * 1000.0;
-        let is_match = query.is_match_query();
-        let (nodes_visited, edges_traversed) = if is_match {
-            (actual_rows, actual_rows)
-        } else {
-            (0, 0)
-        };
-
-        let stats = ActualStats {
-            actual_rows,
-            actual_time_ms,
-            loops: 1,
-            nodes_visited,
-            edges_traversed,
-        };
-
-        let node_stats =
-            crate::velesql::build_leaf_node_stats(&plan.root, actual_rows, actual_time_ms);
+        let (results, nodes, edges) = self.execute_query_counted(query, params)?;
+        let stats = ActualStats::from_counted(results.len() as u64, start.elapsed(), nodes, edges);
+        let node_stats = crate::velesql::build_leaf_node_stats(
+            &plan.root,
+            stats.actual_rows,
+            stats.actual_time_ms,
+        );
         Ok(ExplainOutput::with_stats(plan, stats, node_stats))
     }
 
@@ -253,6 +250,12 @@ impl Database {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
+        // Resolve scalar subqueries (EPIC-039) into literals *before* validation
+        // so the validator and every downstream path see a subquery-free AST.
+        if let Some(rewritten) = self.resolve_subqueries(query, params)? {
+            return self.execute_query(&rewritten, params);
+        }
+
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
 
         if let Some(results) = self.dispatch_non_select(query, params)? {
@@ -302,38 +305,69 @@ impl Database {
             StatementType::Ddl(ddl) => Ok(Some(self.execute_ddl(ddl)?)),
             StatementType::Train(train) => Ok(Some(self.execute_train(train)?)),
             StatementType::Dml(dml) => Ok(Some(self.execute_dml(dml, params)?)),
-            StatementType::Match => {
-                // Route MATCH queries to the target collection.
-                // Resolution order:
-                // 1. select.from (e.g. "SELECT * FROM kg WHERE MATCH ...")
-                // 2. "_collection" key in params (programmatic API)
-                // 3. Error with guidance
-                let collection_name = if !query.select.from.is_empty() {
-                    query.select.from.clone()
-                } else if let Some(serde_json::Value::String(name)) = params.get("_collection") {
-                    name.clone()
-                } else {
-                    return Err(Error::Query(
-                        "MATCH query requires a target collection. Either use \
-                         SELECT ... FROM <collection> WHERE MATCH ..., or pass \
-                         {\"_collection\": \"name\"} in params."
-                            .to_string(),
-                    ));
-                };
-                let coll = self.resolve_collection(&collection_name)?;
-                let mut results = coll.execute_query(query, params)?;
-
-                // Cross-collection enrichment: if any node pattern has a
-                // @collection annotation, look up payloads from those
-                // collections and merge into the projected fields.
-                if let Some(mc) = &query.match_clause {
-                    self.enrich_match_results_cross_collection(mc, &mut results);
-                }
-
-                Ok(Some(results))
-            }
+            StatementType::Match => Ok(Some(self.execute_match_routed(query, params)?.0)),
             StatementType::Select => Ok(None),
         }
+    }
+
+    /// Resolves the target collection for a MATCH query.
+    ///
+    /// Resolution order: `SELECT ... FROM <collection> WHERE MATCH ...`, then a
+    /// `"_collection"` key in `params` (programmatic API), else a guidance error.
+    fn resolve_match_collection(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<crate::collection::Collection> {
+        let collection_name = if !query.select.from.is_empty() {
+            query.select.from.clone()
+        } else if let Some(serde_json::Value::String(name)) = params.get("_collection") {
+            name.clone()
+        } else {
+            return Err(Error::Query(
+                "MATCH query requires a target collection. Either use \
+                 SELECT ... FROM <collection> WHERE MATCH ..., or pass \
+                 {\"_collection\": \"name\"} in params."
+                    .to_string(),
+            ));
+        };
+        self.resolve_collection(&collection_name)
+    }
+
+    /// Routes a MATCH query to its target collection and applies cross-collection
+    /// enrichment, returning results plus the graph-traversal counters
+    /// `(nodes_visited, edges_traversed)` measured during execution (for
+    /// EXPLAIN ANALYZE; the plain execution path discards them).
+    fn execute_match_routed(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<(Vec<SearchResult>, u64, u64)> {
+        let coll = self.resolve_match_collection(query, params)?;
+        let (mut results, nodes_visited, edges_traversed) =
+            coll.execute_query_counted(query, params)?;
+        // Cross-collection enrichment: if any node pattern has a @collection
+        // annotation, look up payloads from those collections and merge them
+        // into the projected fields.
+        if let Some(mc) = &query.match_clause {
+            self.enrich_match_results_cross_collection(mc, &mut results);
+        }
+        Ok((results, nodes_visited, edges_traversed))
+    }
+
+    /// Executes a query and returns graph-traversal counters for EXPLAIN ANALYZE.
+    ///
+    /// MATCH queries report real `(nodes_visited, edges_traversed)`; every other
+    /// statement type reports `(_, 0, 0)` (no graph traversal occurred).
+    fn execute_query_counted(
+        &self,
+        query: &Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<(Vec<SearchResult>, u64, u64)> {
+        if query.is_match_query() {
+            return self.execute_match_routed(query, params);
+        }
+        Ok((self.execute_query(query, params)?, 0, 0))
     }
 
     /// Executes the SELECT portion of a query, resolving JOINs if present.

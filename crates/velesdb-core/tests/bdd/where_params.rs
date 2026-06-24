@@ -453,19 +453,36 @@ fn scenario_having_missing_param_errors() {
 }
 
 #[test]
-fn scenario_having_scalar_subquery_rejected_by_validation() {
-    // GIVEN a parsed aggregation query whose HAVING threshold is a subquery
+fn scenario_having_scalar_subquery_accepted_by_validation() {
+    // GIVEN a parsed aggregation query whose HAVING threshold is a scalar
+    // (non-correlated) subquery — now executable (EPIC-039)
     let query = Parser::parse(
         "SELECT category, COUNT(*) FROM products GROUP BY category \
-         HAVING COUNT(*) > (SELECT AVG(stock) FROM products)",
+         HAVING COUNT(*) > (SELECT AVG(stock) FROM other)",
     )
     .expect("test: HAVING subquery must parse");
 
     // WHEN validating it (the same gate the server runs before execution)
-    let result = QueryValidator::validate(&query);
+    // THEN validation accepts it; the executor resolves the scalar before
+    // running the aggregation
+    assert!(
+        QueryValidator::validate(&query).is_ok(),
+        "scalar HAVING subquery must pass validation"
+    );
+}
 
-    // THEN V010 rejects the subquery instead of silently filtering all groups
-    let err = result.expect_err("HAVING subquery must be rejected by validation");
+#[test]
+fn scenario_having_correlated_subquery_rejected_by_validation() {
+    // A correlated HAVING subquery (referencing the outer table) is not yet
+    // executable and must be rejected with V010.
+    let query = Parser::parse(
+        "SELECT category, COUNT(*) FROM products GROUP BY category \
+         HAVING COUNT(*) > (SELECT AVG(stock) FROM sub WHERE products.category = 5)",
+    )
+    .expect("test: HAVING subquery must parse");
+
+    let err = QueryValidator::validate(&query)
+        .expect_err("correlated HAVING subquery must be rejected by validation");
     assert!(
         err.to_string().contains("V010"),
         "error should carry the V010 subquery code, got: {err}"

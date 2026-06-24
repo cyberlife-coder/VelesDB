@@ -5,6 +5,408 @@ All notable changes to VelesDB will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [3.3.0] — 2026-06-24
+
+A VelesQL correctness + cross-surface parity release. It closes a large backlog
+of silent-wrong-result and clause-drop bugs across the core engine, REST server,
+CLI, WASM, and the Python / TypeScript SDKs, and adds executable scalar
+subqueries plus several typed SDK ergonomics. Versioned **3.3.0 (MINOR)**: most
+changes fix previously-wrong behavior, but several are **client-observable**
+(error codes, REST statuses, and query results change). See
+[docs/guides/MIGRATION_v3.3.0.md](docs/guides/MIGRATION_v3.3.0.md) before
+upgrading.
+
+### Changed
+- **New request hard-limits (`400`).** Upserts are capped at 100 000 points per
+  request (`MAX_UPSERT_BATCH_SIZE`) and sparse vectors at 65 536 non-zeros
+  (`MAX_SPARSE_NNZ`); larger requests are rejected with `400` instead of being
+  accepted and degrading the server.
+- **Graph / `MATCH` REST error responses now use the canonical `VELES-XXX`
+  error codes and correct 4xx HTTP statuses instead of bespoke strings and
+  blanket 500s.** `POST /collections/{name}/match` previously hand-rolled
+  invented codes (`COLLECTION_NOT_FOUND`, `PARSE_ERROR`, `EXECUTION_ERROR`,
+  `NOT_MATCH_QUERY`, `INVALID_THRESHOLD`) with a `hint`/`details` body and
+  mapped every execution failure to `500`. It now routes through the shared
+  `auto_core_error_response`, so a missing collection returns `404` +
+  `VELES-002`, a parse error / non-MATCH query / invalid threshold / unbound
+  bind parameter returns `400` + `VELES-010`, etc. The graph edge mutation
+  handlers (`POST .../graph/edges`, `.../graph/edges/batch`) likewise route
+  through it, so a duplicate edge now returns `409` + `VELES-019` instead of a
+  generic `500` string. The search timeout response carries the canonical
+  `VELES-027` code (was the malformed `VELES-QUERY-TIMEOUT`), and the
+  guard-rail rate-limit (`429`) / circuit-breaker (`503`) responses now include
+  the `VELES-027` code in the body (previously `code: null`). *(Behavior change:
+  HTTP status codes for several `/match` and graph-mutation client errors move
+  from `500` to `404`/`400`/`409`; the `code` field values change; the `/match`
+  error body drops the `hint`/`details` fields in favor of the standard
+  `{ "error", "code" }` shape. SemVer-observable for REST consumers.)*
+- **Query-shape and bind-parameter rejections now classify as `VELES-010`
+  (`Query`) instead of `VELES-009` (`Config`).** Live query-path failures that
+  describe a malformed *query* — an unsupported query shape (multiple
+  `similarity()` under `OR`, `NEAR_FUSED` mixed with another vector predicate or
+  under `OR`/`NOT`, more than one `SPARSE_NEAR`, an empty MATCH pattern, a MATCH
+  anchor-alias mismatch, `HAVING` without `GROUP BY`, an aggregate `SELECT`
+  missing aggregations) and a missing or malformed bind parameter (a `$v` /
+  `$sv` not provided, a vector param that is not a numeric array, a sparse param
+  that is not a valid index/value map) — were built as `Error::Config` and so
+  surfaced with the engine code `VELES-009`. They now build as `Error::Query`
+  (`VELES-010`). Genuine engine/collection-configuration errors (distance
+  metric, HNSW params, EXPLAIN threshold, group-count cap, NOT-similarity scan
+  ceiling) stay `VELES-009`. *(Behavior change: the `code` field and the
+  TypeScript SDK error class change from `ConfigError` to `QueryError` for these
+  rejections.)*
+- **Misconfigured `USING FUSION` clauses now carry a fusion-specific validation
+  code/message (`V012`, `FusionMisconfigured`) instead of the misleading `V006`
+  (`similarity() requires a vector search context`).** Single-branch FUSION,
+  RSF weights that do not sum to 1.0, negative weights, and `weighted`/`rsf` on
+  `NEAR_FUSED` now report an honest fusion classification. The engine-level class
+  is unchanged (`VELES-010`, `Query`); only the embedded validation code and
+  message change. *(Behavior change: the embedded validation `code` for these
+  rejections changes from `V006` to `V012`.)*
+- **`USING FUSION` is now validated; misconfigured clauses error instead of
+  silently degrading.** Five correctness flips, all surfaced at validate-time
+  (or parse-time) so the previous silent fallbacks are unreachable:
+  - **Single-branch `USING FUSION` is rejected.** Applying `USING FUSION(...)`
+    to a query with fewer than two fusable branches (e.g. `similarity()`-only,
+    pure `NEAR`, or metadata-only) was a decorative no-op — the clause was
+    threaded through and discarded. It now requires at least two fusable
+    branches (`NEAR` + `MATCH`, `NEAR` + `SPARSE_NEAR`, …) or a single
+    `NEAR_FUSED`, and errors otherwise.
+  - **RSF / Weighted weights are validated.** `strategy='rsf'` whose
+    `dense_weight` + `sparse_weight` do not sum to ~1.0 (and any negative
+    weight) previously degraded to plain RRF at execution time; they now error
+    at validate-time so `EXPLAIN` and execution agree. On the `NEAR` + `MATCH`
+    `weighted` path a negative `vector_weight` / `graph_weight` was silently
+    clamped to `1.0`; it is now rejected at validate-time as well.
+  - **`NEAR_FUSED` rejects `weighted` / `rsf`.** Those strategies are
+    ill-defined over N homogeneous query vectors; they previously fell back to
+    RRF, discarding the weights silently. They are now rejected.
+  - **Unknown fusion strategy names and option keys are rejected.** The SQL
+    parser previously mapped any unknown `strategy=...` to RRF and discarded
+    unknown option keys (`dense_wieght`, …), so a typo silently changed
+    semantics. Unknown names/keys now error at parse-time.
+  - **`relative_score` is accepted as an alias of `rsf`**, and
+    `dense_weight` / `sparse_weight` as long-name aliases of `dense_w` /
+    `sparse_w`. The documented long-name weights are no longer silently dropped
+    (which used to run a 50/50 blend).
+  *(Behavior change: several previously-accepted FUSION queries now error.)*
+
+### Fixed
+- **A bare built-in score variable in `ORDER BY` now ranks instead of silently
+  no-op'ing.** `ORDER BY sparse_score DESC` (and `vector_score` / `bm25_score` /
+  `graph_score` / `fused_score`) was parsed as a payload-field reference, found no
+  such field, and fell back to the ascending-id tie-break — a silent ranking
+  no-op. Bare score variables now resolve from the result's component-score
+  breakdown, identical to the arithmetic form (`ORDER BY sparse_score * 1.0 DESC`).
+  *(Behavior change: queries ordering by a bare score variable now actually sort.)*
+- **The ordered `MATCH` path (`match_query_ordered`) now enforces the final
+  cardinality guard the SQL `/query` path already had.** `finalize_match_ordering`
+  (used by non-SQL callers — REST `/match`, the SDKs) omitted the
+  `check_cardinality()` call that `finalize_match_results` runs after sorting and
+  before LIMIT truncation, so a traversal exceeding the configured cardinality
+  limit returned an oversized result set where the SQL path rejects it. The
+  guard now runs identically on both paths, returning `VELES-027` (`GuardRail`).
+- **WASM aggregate queries now honor `ORDER BY`.** `SELECT cat, COUNT(*) … GROUP
+  BY cat ORDER BY COUNT(*)` (or `ORDER BY` a group key / aggregate alias)
+  returned groups in undefined order on the WASM executor — the aggregate
+  finalize path applied LIMIT without sorting. Grouped rows are now sorted by the
+  ORDER BY key(s) (group-key column or aggregate output column, by alias or
+  default name) before LIMIT, mirroring core's aggregate ORDER BY semantics.
+  Similarity / arithmetic ORDER BY forms (not applicable to grouped rows) are
+  skipped, matching core.
+- **TypeScript SDK `velesql()` builder now emits parseable VelesQL.** Three
+  builder bugs produced strings the core parser rejected or that dropped
+  intent: `nearVector({ topK })` emitted a non-existent `vector NEAR $q TOP n`
+  (there is no `TOP` keyword — `topK` now maps to `LIMIT`); `toVelesQL()`
+  always prefixed `MATCH` and placed `ORDER BY` / `LIMIT` **before** the
+  mandatory `RETURN` (MATCH output now always emits `RETURN` first, defaulting
+  to `RETURN *`); and `.fusion(...)` rendered an inert `/* FUSION x */` comment
+  that dropped the strategy and weights (now a real
+  `USING FUSION(strategy='...', ...)` clause). A new `from()` / `select()`
+  SELECT mode covers vector / hybrid search (the README "vector similarity with
+  filters" example, previously a hard parse error). A round-trip test now feeds
+  every builder output through the real `@wiscale/velesdb-wasm` parser.
+  *(Behavior change: builder output strings changed — see the SDK README.)*
+- **`USING FUSION(strategy = ...)` now takes effect on the dense-`NEAR` +
+  text-`MATCH` hybrid.** The hybrid path always ran plain weighted RRF and
+  ignored `strategy`, `graph_weight`, and (for `weighted`) the text-branch
+  weighting. `maximum` / `average` / `rsf` now run score-level fusion of the
+  vector-similarity and BM25 streams; `weighted` normalizes
+  `vector_weight` / `graph_weight` so `graph_weight` actually weights the BM25
+  branch; `rrf` (and unset) keep the prior behavior. `EXPLAIN` reports the
+  strategy that executes. The same fix now also covers the **anchored**
+  `NEAR` + graph `MATCH` + text `MATCH` hybrid (AND-required graph predicate):
+  it previously always ran RRF over the anchor set, ignoring `strategy` /
+  `graph_weight`; it now honors them while the anchor-restricted result set is
+  unchanged.
+  *(Behavior change: non-`rrf` FUSION on NEAR+MATCH changes rankings.)*
+
+### Added
+- **TypeScript SDK: typed `db.setAutoReindex()` / `db.alterCollection()` and a
+  typed `nearFused()` builder.** `db.setAutoReindex(name, bool)` and
+  `db.alterCollection(name, { autoReindex })` route a valid
+  `ALTER COLLECTION ... SET(auto_reindex=...)` through the existing `/query`
+  path (previously only reachable via a raw `db.query()` string). The query
+  builder gains `nearFused(paramNames, vectors, { strategy })` for multi-vector
+  fused search; its `strategy` type only allows `rrf` / `average` / `maximum`,
+  so the `weighted` / `relative_score` trap (which the engine silently degrades
+  to RRF over homogeneous query vectors) is a **compile-time error**. Purely
+  additive.
+- **Scalar subqueries are now executable end-to-end (EPIC-039).** A
+  `(SELECT ...)` in a `WHERE`/`HAVING` predicate or an `INSERT`/`UPDATE` value is
+  executed and substituted as a literal before the outer query runs, instead of
+  being rejected at validation with `V010`. The inner SELECT must return exactly
+  one row and one column: 0 rows resolve to `NULL` (a comparison against `NULL`
+  is never true), and more than one row or column errors with a clear
+  cardinality message (`VELES-010`). Aggregate subqueries
+  (`(SELECT AVG(amount) FROM t)`), single-column row projections
+  (`(SELECT amount FROM t WHERE id = 1)`), `BETWEEN`/`IN`/`CONTAINS` value
+  positions, `INSERT`/`UPDATE` values, and **`UPDATE`/`DELETE` `WHERE`**
+  predicates are all supported; nesting is bounded at 8 levels.
+  `UPDATE … WHERE col > (SELECT … )` and `DELETE … WHERE id = (SELECT … )` now
+  resolve the subquery to a literal *before* the mutation runs (previously the
+  predicate silently saw `NULL` and matched no rows). A subquery whose inner
+  `WHERE` filters on a **payload path** (e.g. `… WHERE meta.cat = 5`) is a plain
+  payload filter, not a correlation, so it executes instead of being wrongly
+  rejected. Resolution lives in `velesdb-core`, so the REST `/query` endpoint and
+  the CLI REPL gain it for free (both route through `Database::execute_query`).
+  **Correlated** subqueries (whose inner `WHERE` references one of the *outer*
+  query's tables/aliases) remain rejected at validation with `V010`. WASM, which
+  has a separate executor, still rejects subqueries.
+- **`ALTER COLLECTION <name> SET (auto_reindex = true|false)` now applies and
+  persists.** Previously parsed but rejected with a feature-gap error, it now
+  attaches (or re-configures) an `AutoReindexManager` on the collection and
+  persists the policy, so the setting survives a restart (restored on the next
+  open). Setting `false` keeps the policy attached but disabled, preserving any
+  configured thresholds. Unknown options and non-bool values still error.
+- **EXPLAIN ANALYZE now flags approximate graph-traversal counters.** The REST
+  `actual_stats` object carries a new machine-readable boolean
+  `traversal_counters_approximate` (mirroring `node_stats.estimated`): `true`
+  when `nodes_visited` / `edges_traversed` are strategy-dependent approximations
+  (a lower bound — `VectorFirst` undercounts via its `limit(1)` BFS frontier,
+  `Parallel` double-counts shared nodes), `false` for non-graph queries where
+  both counters are 0. The `node_stats` heuristic time/row fields and the
+  `VELESQL_SPEC` are relabeled so the estimated values are no longer presented as
+  measured/actual. *(Additive: the field is appended to `actual_stats`.)*
+- **CLI `query execute` accepts `--collection`/`-c`.** A bare `MATCH` (or any
+  query without a `FROM` clause) can now target a collection from the one-shot
+  `velesdb query execute <db> "..." --collection <name>` command, mirroring the
+  REST `/query` collection field. Previously such queries failed with the
+  REPL-only "use a collection" error and no way to specify one.
+- **CLI REPL now applies session settings to queries.** `\set mode` /
+  `\set ef_search` are injected into a vector query's `WITH(...)` options before
+  execution (an inline `WITH(...)` always wins), and `\set max_results` caps the
+  effective `LIMIT`. Previously these were stored and displayed but never applied.
+  `timeout_ms` and `rerank` have no execution channel yet, so `\set` now warns
+  that they are display-only instead of implying they take effect.
+- **`match_query_ordered` ordered-MATCH entry point on the collection types.**
+  A new public `Collection::match_query_ordered` (re-exported on
+  `VectorCollection` and `GraphCollection`) runs a MATCH clause through the
+  cost-based planner and returns ordered `MatchResult`s with RETURN `ORDER BY`,
+  the deterministic `(node_id, depth, path)` tie-break, and the post-sort
+  `LIMIT` applied — identical to the SQL `/query` path. It is the single source
+  of truth for non-SQL surfaces (REST `/match`, the SDKs) that need ordered
+  graph rows, so they rank identically instead of re-implementing ordering or
+  returning raw traversal order. *(Additive: new method; existing
+  `execute_match` / `execute_match_with_similarity` are unchanged.)*
+- **WASM errors now carry a machine-readable `code`.** Browser rejections were
+  bare `Error(message)` strings, so clients could not narrow them — contradicting
+  `ERROR_CODES.md`, which promises an `error.code` on every client surface. A
+  dimension-mismatch search now rejects with a structured `Error` whose
+  non-enumerable `code` property is `"VELES-004"`, an invalid collection name
+  with `"VELES-034"`, and a `VelesQL` parse failure (`VelesQL.parse`) with
+  `"VELES-010"`. The code is single-sourced from `velesdb_core::Error::code()`
+  (no WASM-local taxonomy); the property is non-enumerable so it does not appear
+  in `JSON.stringify(error)`. *(Additive: the `message` text is unchanged.)*
+- **Python `SearchOptions` accepts a `fusion=` strategy for typed hybrid
+  dense+sparse search.** A new optional `fusion: Optional[FusionStrategy]`
+  field (plus a `with_fusion()` builder) is threaded through `search_request`
+  so RSF / weighted hybrid fusion is reachable without raw `USING FUSION` SQL.
+  When omitted (or `None`) the search keeps the historical Reciprocal Rank
+  Fusion (RRF, k=60), so behavior is unchanged for existing callers.
+  *(Additive: new optional field/builder; default preserved.)*
+- **Python `Database.set_auto_reindex(name, enabled)` toggles auto-reindex at
+  runtime.** Routes a validated `ALTER COLLECTION <name> SET (auto_reindex = …)`
+  through the VelesQL DDL executor (persisted), the typed counterpart to running
+  the raw statement via `execute_query`. `Collection.info()` now also reports the
+  current `auto_reindex` flag. *(Additive.)*
+
+### Fixed
+- **Python `match_query` honors `RETURN ... ORDER BY` and the post-sort
+  `LIMIT`.** The Python bindings now route a non-similarity `MATCH` through the
+  core `match_query_ordered` cost-based planner (the SQL `/query` single source
+  of truth) instead of a bare traversal entry point, so `ORDER BY` + post-sort
+  `LIMIT` rank identically to the SQL path on both `Collection` and
+  `GraphCollection`.
+- **Python `explain()` reports calibrated SELECT plans, real MATCH strategies,
+  and rejects invalid queries.** `Collection.explain` now threads the
+  collection's live indexed-field set and statistics through the core planner,
+  so a SELECT whose `WHERE` targets an indexed field emits an `IndexLookup` node
+  with a calibrated cost, and a MATCH reports a real traversal strategy instead
+  of a bare/zeroed plan. Semantically invalid queries (e.g. a `WHERE` subquery)
+  now raise `ValueError` instead of silently building a plan.
+- **EXPLAIN of a MATCH query now shows the graph traversal and its strategy.**
+  `EXPLAIN`/`EXPLAIN ANALYZE` of a MATCH query (REST `/query/explain`, core
+  `Database`/`Collection` explain paths) previously emitted a bare empty
+  `TableScan` mislabeled `MATCH` because the plan builder never routed MATCH
+  clauses through the traversal planner. The plan now carries a `MatchTraversal`
+  step with a real, non-empty strategy (`GraphFirst` / `VectorFirst` /
+  `Parallel`), and the Database/Collection explain paths thread the live graph
+  `CollectionStats` so the chosen strategy reflects the actual graph shape.
+  *(Behavior change: the EXPLAIN plan steps for MATCH queries change.)*
+- **CLI `$parameter` vector queries now error instead of silently succeeding.**
+  A REPL/`query execute` `SELECT`/`MATCH` whose `WHERE` references a `$param`
+  vector (unsupplyable from the CLI) used to print a yellow note and return zero
+  rows with a success exit code, so scripts treated it as an empty result. It now
+  returns an error (red message, non-zero exit) while keeping the guidance to use
+  literal vectors or the REST API.
+  *(Behavior change: such CLI queries now exit non-zero.)*
+- **Unpopulated built-in score variables now default to `0`, not the primary
+  score.** In `ORDER BY`/`LET` arithmetic, a built-in score component absent from
+  a result's component breakdown (e.g. `bm25_score` on a `NEAR`-only query) used
+  to resolve to the fused/primary `search_score` instead of `0`, so a hybrid
+  formula like `0.7 * vector_score + 0.3 * bm25_score` evaluated to the full
+  vector score rather than `0.7 ×` it. Tagged results now default an absent
+  component to `0` (per `VELESQL_SPEC`); untagged legacy results keep the
+  `search_score` fallback. `graph_score` (never populated) is reserved and
+  resolves to `0` on tagged results.
+  *(Behavior change: hybrid `ORDER BY`/`LET` scores using an unpopulated
+  component change ranking.)*
+- **`ORDER BY similarity(field, $v)` now scores the named vector field.** The
+  `SELECT`-side `ORDER BY similarity(image_vec, $q)` ignored the field and always
+  scored the default vector, so rows were ranked by the wrong vector. It now
+  resolves each row's named payload vector (missing/length-mismatched vectors
+  sort last, matching the `MATCH`-side convention).
+  *(Behavior change: queries ordering by a named/secondary vector re-rank.)*
+- **`ORDER BY` on a nested/dotted payload field now sorts.** `ORDER BY meta.source`
+  did a flat top-level lookup, so every row compared equal and the sort was a
+  silent no-op. Dotted paths now walk nested objects (consistent with
+  projection/filter/aggregation).
+  *(Behavior change: previously-unsorted queries now sort.)*
+- **`EXPLAIN ANALYZE` reports real graph traversal counters.** `nodes_visited`
+  and `edges_traversed` for `MATCH` queries were a fabricated proxy equal to the
+  result-row count; they now report the actual walk — edges followed and nodes
+  reached — across all MATCH strategies (GraphFirst walk; VectorFirst candidate
+  evaluation + per-candidate existence-BFS; Parallel sums both legs). The values
+  are an approximate lower bound (the VectorFirst existence-BFS uses `limit(1)`
+  and undercounts the frontier; Parallel double-counts nodes touched by both
+  legs). Non-graph queries report `0/0`. The REST/OpenAPI response shape is unchanged.
+  *(Behavior change: the reported counter values change.)*
+- **`MATCH ... ORDER BY` now sorts arithmetic and `similarity(field, $v)`, and
+  errors on the rest.** Previously only `similarity()`, `depth`, and
+  `alias.property` sorted; arithmetic over a property (e.g. `ORDER BY year - 2000`)
+  and explicit `similarity(field, $v)` were silently dropped (mis-ordered rows).
+  They now sort. Aggregates (no `GROUP BY`) and bare aliases are rejected with
+  `VELES-018` instead of being silently ignored.
+  *(Behavior change: previously-silent queries now sort or error.)*
+- **`MATCH ... ORDER BY ... LIMIT` now returns the GLOBAL top-K.** Traversal
+  early-broke once it had `LIMIT` candidates and only *then* sorted, so an
+  `ORDER BY` LIMIT selected the sorted-top-K of the first-K rows *traversed*
+  rather than the globally ordered set (e.g. `ORDER BY year DESC LIMIT 2` could
+  return the two lowest years that happened to be visited first). When an
+  `ORDER BY` is present, traversal now visits the full candidate set (bounded by
+  the shared `MAX_LIMIT` ceiling and the guard-rails) before sorting and
+  applying the LIMIT; without an `ORDER BY`, the LIMIT-on-traversal-order
+  early-break is preserved. A start-`similarity()` `MATCH` that `ORDER BY`s a
+  non-similarity field — which would otherwise pick the approximate-HNSW
+  `VectorFirst` strategy and rank only a similarity-bounded prefix — now routes
+  to `GraphFirst`'s exact enumeration, so the global top-K holds (deterministically)
+  across all traversal strategies. Affects the SQL `/query` path and every
+  surface that finalizes through it.
+  *(Behavior change: `MATCH ORDER BY ... LIMIT` results change when the global
+  top-K differs from the first-K traversed.)*
+- **`NEAR_FUSED` multi-vector fusion now executes via SQL.** It previously parsed
+  into a condition with no executor and silently degraded to an unranked full
+  scan that ignored the query vectors and `USING FUSION`. A SQL `NEAR_FUSED` now
+  routes to the engine's multi-vector fusion (`multi_query_search`): per-vector
+  search + ranking fusion, honoring `USING FUSION 'rrf'/'average'/'maximum'`
+  (others fall back to RRF) and any residual metadata predicate as a pre-fusion
+  filter.
+  *(Behavior change: previously-silent full scans now return fused rankings.)*
+- **`NEAR_FUSED` isolation is now enforced with an error.** A `WHERE` may contain
+  exactly one `NEAR_FUSED`, only `AND`-ed with a metadata filter. More than one
+  `NEAR_FUSED`, mixing it with another vector predicate (`NEAR` /
+  `similarity()` / `SPARSE_NEAR`), or placing it under `OR`/`NOT` previously
+  parsed and silently degraded to a non-fused scan; these shapes are now
+  rejected.
+  *(Behavior change: previously-silent degraded queries now error.)*
+- **WASM `SELECT` now projects columns, aliases, and window functions.** A
+  plain/vector `SELECT` in the browser runtime always returned `id` + `score` +
+  the full payload, ignoring the projection list: `SELECT category` returned
+  every field, `SELECT title AS name` kept `title`, and
+  `ROW_NUMBER()/RANK() OVER (...)` columns were dropped entirely. The finalize
+  path now runs core's window evaluator before sorting and projects each row by
+  the parsed `SELECT` list (id-precedence, dotted-path lookup, alias handling,
+  similarity-score materialization), matching the REST surface.
+  *(Behavior change: WASM `SELECT` rows now carry only the requested columns.)*
+- **WASM `SELECT ORDER BY` arithmetic now sorts, and a LIMIT-less `SELECT`
+  defaults to 10 rows.** `ORDER BY (price - 2 * score)` (and other arithmetic /
+  score-variable expressions) used to map to a no-op `Equal` comparison, so rows
+  came back in scan order; they now evaluate the formula per row (mirroring
+  core's arithmetic semantics, division-by-zero → 0). `ORDER BY
+  similarity(field, $v)` against a named vector — which WASM does not store —
+  and aggregate `ORDER BY` outside aggregation are now **rejected loudly**
+  instead of silently no-op'ing (parity with the MATCH path). A `SELECT` with no
+  `LIMIT` now caps at `DEFAULT_SELECT_LIMIT` (10) like every other surface,
+  rather than returning every row.
+  *(Behavior change: WASM ORDER BY re-orders / errors, and unbounded SELECTs cap
+  at 10.)*
+- **WASM single-vector `NEAR` + `USING FUSION` no longer leaks filtered rows.**
+  A `vector NEAR $v AND <metadata> USING FUSION(...)` query fused the real vector
+  ranking against a synthetic constant-`1.0` payload branch and returned the
+  fused UNION, so rows failing the `WHERE` metadata predicate leaked into the
+  result (and `weighted`/`rsf` rankings were meaningless). The metadata predicate
+  is now applied as a **hard filter** (parity with core), so only matching rows
+  survive; `weighted` / `rsf` over a single-vector `NEAR` (which has no second
+  scored branch in WASM) are **rejected** with a clear error. `rrf` / `maximum`
+  / `average` keep ranking the (now hard-filtered) vector results.
+  *(Behavior change: WASM fused single-`NEAR` queries drop WHERE-failing rows;
+  weighted/rsf single-branch fusion errors.)*
+- **WASM `EXPLAIN` now uses the core plan vocabulary.** The browser EXPLAIN
+  renderer emitted divergent node labels (`Scan`, `NestedLoopJoin`,
+  `LimitOffset`, `GraphPatternMatch`) under `{step, node, detail}` keys that did
+  not match the REST `/query/explain` taxonomy. Rows now carry the same wire keys
+  as the REST `ExplainStep` (`step`, `operation`, `description`, `estimated_rows`,
+  `estimation_method`) and the same `operation` vocabulary as core's
+  `PlanStep::rest_operation()` (`VectorSearch`, `FullScan`, `Filter`,
+  `{Type}Join`, `GroupBy`, `Aggregate`, `Sort`, `Limit`, `Offset`,
+  `MatchTraversal`); the leading scan carries an `estimated_rows` row-count hint.
+  WASM-only concerns with no core plan node (`FUSION`, `DISTINCT`) fold into a
+  step's description rather than inventing an out-of-taxonomy operation. Core's
+  `to_plan_steps()` itself is `persistence`-gated and unreachable from the
+  no-persistence WASM build, so the renderer mirrors the vocabulary rather than
+  re-exporting it. *(Behavior change: WASM EXPLAIN row keys/labels change.)*
+
+### Documentation
+- **VelesQL `LET` clause docs reconciled with the engine's real support.** The
+  spec's `LET`-before-`MATCH` example and `GRAPH_PATTERNS.md`'s "LET before MATCH
+  has no effect" note were stale — the engine **rejects** `LET` on `MATCH`,
+  `SPARSE_NEAR`, `NEAR_FUSED`, `NOT similarity()`, and `OR`/union queries with an
+  explicit error. `docs/VELESQL_SPEC.md` now enumerates these unsupported shapes
+  in the LET Rules section and documents that ranking by a built-in score on an
+  excluded shape (e.g. `sparse_score` on a `SPARSE_NEAR` query) requires the
+  **arithmetic** form (`ORDER BY sparse_score * 1.0 DESC`); a *bare*
+  `ORDER BY sparse_score` parses as a payload-field reference and is a ranking
+  no-op (falls back to ascending-id tie-break). Locked by two new core tests.
+- **WASM README parity claims made truthful.** The feature table and prose now
+  state that the WASM executor projects columns/aliases/window functions, sorts
+  `SELECT ORDER BY` arithmetic and `similarity()`, applies a default `LIMIT 10`,
+  emits `VELES-*` error codes, and uses the core EXPLAIN plan vocabulary, while
+  enumerating the genuine REST-only carve-outs it loudly rejects (`LET` bindings,
+  scalar subqueries, single-`NEAR` `weighted`/`rsf` FUSION, and named-vector
+  `ORDER BY similarity(field, $v)`).
+- **CLI `.hybrid-sparse` usage and `.help` now list all accepted fusion
+  strategies** (`weighted` and `relative_score` were accepted but undocumented,
+  shown only as `rrf|average|max`).
+- **TypeScript `capabilities()` gains VelesQL sub-capability fields**
+  (`velesqlFusionStrategies`, `velesqlMatchOrderBy`, `velesqlAlterCollection`)
+  so clients can branch on finer-grained support.
+- **Python `Collection.search()` docstring** now states that hybrid dense+sparse
+  search fuses with RRF (k=60) and that fusion overrides require
+  `search_request(SearchOptions(fusion=...))`.
+
 ## [3.2.1] — 2026-06-20
 
 Patch release. Maintenance only — no engine/API change (`velesdb-core` and the

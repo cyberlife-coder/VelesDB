@@ -323,10 +323,41 @@ pub struct ActualStats {
     pub actual_time_ms: f64,
     /// Number of loop iterations.
     pub loops: u64,
-    /// Number of nodes visited (for graph traversal).
+    /// Approximate, best-effort count of nodes visited during MATCH graph
+    /// traversal — a lower bound, not an exact figure. For GraphFirst this is
+    /// start nodes examined plus nodes reached by following edges; for the
+    /// similarity-anchored VectorFirst strategy it is the candidate nodes
+    /// evaluated plus per-candidate existence-BFS nodes reached, where each BFS
+    /// uses `limit(1)` and so undercounts the true frontier; Parallel sums both
+    /// legs (so a node touched by both is counted twice). 0 for non-graph
+    /// queries.
     pub nodes_visited: u64,
-    /// Number of edges traversed.
+    /// Approximate, best-effort count of edges followed during MATCH graph
+    /// traversal — a lower bound, not an exact figure (GraphFirst walk edges;
+    /// VectorFirst per-candidate BFS edges, undercounted by the `limit(1)`
+    /// frontier; Parallel sums both legs). 0 for non-graph queries.
     pub edges_traversed: u64,
+}
+
+impl ActualStats {
+    /// Builds `ActualStats` from a counted execution: result-row count, measured
+    /// wall-clock duration, and the graph-traversal counters (`loops` is always
+    /// 1). Shared by the Database- and Collection-level EXPLAIN ANALYZE paths.
+    #[must_use]
+    pub fn from_counted(
+        actual_rows: u64,
+        elapsed: std::time::Duration,
+        nodes_visited: u64,
+        edges_traversed: u64,
+    ) -> Self {
+        Self {
+            actual_rows,
+            actual_time_ms: elapsed.as_secs_f64() * 1000.0,
+            loops: 1,
+            nodes_visited,
+            edges_traversed,
+        }
+    }
 }
 
 /// Per-plan-node **estimated** execution statistics.

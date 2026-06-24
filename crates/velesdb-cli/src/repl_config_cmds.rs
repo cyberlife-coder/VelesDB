@@ -70,10 +70,28 @@ pub(crate) fn cmd_set(config: &mut ReplConfig, parts: &[&str]) -> CommandResult 
     let key = parts[1];
     let value = parts[2];
     match config.session.set(key, value) {
-        Ok(()) => println!("{} = {}\n", key.cyan(), value.green()),
+        Ok(()) => {
+            println!("{} = {}", key.cyan(), value.green());
+            warn_if_unwired(key);
+            println!();
+        }
         Err(e) => return CommandResult::Error(e),
     }
     CommandResult::Continue
+}
+
+/// Warns that a stored setting is display-only because it has no channel into
+/// `Database::execute_query` yet, so `\set` does not silently claim it applies.
+fn warn_if_unwired(key: &str) {
+    if crate::session::is_unwired_setting(key) {
+        println!(
+            "{}",
+            format!(
+                "Note: '{key}' is recorded but not yet applied to query execution (display-only)."
+            )
+            .yellow()
+        );
+    }
 }
 
 pub(crate) fn cmd_show(config: &ReplConfig, parts: &[&str]) -> CommandResult {

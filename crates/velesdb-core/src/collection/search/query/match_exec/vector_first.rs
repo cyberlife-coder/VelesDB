@@ -91,6 +91,7 @@ impl Collection {
     ) -> Result<Vec<MatchResult>> {
         let payload_guard = self.payload_storage.read();
         let mut results = Vec::new();
+        let mut examined = 0u64;
 
         for candidate in candidates {
             if results.len() >= limit {
@@ -98,14 +99,19 @@ impl Collection {
             }
             ctx.check_timeout()
                 .map_err(|e| Error::GuardRail(e.to_string()))?;
+            examined += 1;
 
             if let Some(mr) =
-                self.try_match_candidate(candidate, match_clause, params, &payload_guard)?
+                self.try_match_candidate(candidate, match_clause, params, ctx, &payload_guard)?
             {
                 results.push(mr);
             }
         }
 
+        // VectorFirst counts the candidate nodes it evaluated toward
+        // nodes_visited (the per-candidate BFS adds the nodes/edges it reaches),
+        // so EXPLAIN ANALYZE reports real traversal counts for this strategy too.
+        ctx.add_traversal(examined, 0);
         Self::sort_by_score(&mut results, higher_is_better);
         Ok(results)
     }
@@ -118,6 +124,7 @@ impl Collection {
         candidate: &crate::point::SearchResult,
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
+        ctx: &QueryContext,
         payload_guard: &crate::storage::LogPayloadStorage,
     ) -> Result<Option<MatchResult>> {
         let node_id = candidate.point.id;
@@ -132,7 +139,14 @@ impl Collection {
         let graph_ok = if pattern.relationships.is_empty() {
             self.candidate_passes_where(node_id, match_clause, params, payload_guard, pattern)?
         } else {
-            self.candidate_has_graph_path(node_id, match_clause, params, payload_guard, pattern)?
+            self.candidate_has_graph_path(
+                node_id,
+                match_clause,
+                params,
+                ctx,
+                payload_guard,
+                pattern,
+            )?
         };
 
         if !graph_ok {
@@ -226,6 +240,7 @@ impl Collection {
         node_id: u64,
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
+        ctx: &QueryContext,
         payload_guard: &crate::storage::LogPayloadStorage,
         pattern: &crate::velesql::GraphPattern,
     ) -> Result<bool> {
@@ -244,6 +259,8 @@ impl Collection {
         }
 
         for hit in concurrent_bfs_stream(&self.edge_store, node_id, config) {
+            // Each BFS hit is a node reached by following edges (EXPLAIN ANALYZE).
+            ctx.add_traversal(1, 1);
             if let Some(target_pattern) = pattern.nodes.get(hit.depth as usize) {
                 if let Some(ref alias) = target_pattern.alias {
                     bindings.insert(alias.clone(), hit.target_id);
@@ -276,7 +293,7 @@ impl Collection {
 ///
 /// # Errors
 ///
-/// Returns `Error::Config` when no similarity condition is found.
+/// Returns `Error::Query` when no similarity condition is found.
 fn extract_similarity_condition(where_clause: Option<&Condition>) -> Result<&SimilarityCondition> {
     fn find_sim(cond: &Condition) -> Option<&SimilarityCondition> {
         match cond {
@@ -288,7 +305,7 @@ fn extract_similarity_condition(where_clause: Option<&Condition>) -> Result<&Sim
     }
 
     where_clause.and_then(find_sim).ok_or_else(|| {
-        Error::Config(
+        Error::Query(
             "VectorFirst strategy requires a similarity condition in WHERE clause".to_string(),
         )
     })

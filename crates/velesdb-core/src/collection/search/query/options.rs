@@ -80,6 +80,10 @@ pub(in crate::collection::search::query) struct ExtractedComponents {
         Vec<crate::velesql::GraphMatchPredicate>,
     pub(in crate::collection::search::query) sparse_vector_search:
         Option<crate::velesql::SparseVectorSearch>,
+    /// `NEAR_FUSED` multi-vector fusion: resolved query vectors + fusion config,
+    /// routed to `multi_query_search`. `None` for non-fused queries.
+    pub(in crate::collection::search::query) fused_search:
+        Option<(Vec<Vec<f32>>, crate::velesql::FusionConfig)>,
     pub(in crate::collection::search::query) is_union_query: bool,
     pub(in crate::collection::search::query) is_not_similarity_query: bool,
 }

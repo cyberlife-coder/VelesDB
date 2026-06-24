@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | **Last Updated**: 2026-06-20 (VelesDB v3.2.1)
+**Version**: 3.10.0 | **Last Updated**: 2026-06-24 (VelesDB v3.3.0)
 
 ---
 
@@ -50,7 +50,7 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | DISTINCT modifier | Stable | 3.3 |
 | ILIKE case-insensitive pattern | Stable | 3.3 |
 | FROM / JOIN aliases | Stable (INNER JOIN) | 2.0 |
-| Scalar subqueries | Parsed only — **not executed** (see below) | 3.2 |
+| Scalar subqueries | Executed and substituted as a literal; correlated ones rejected (V010, see below) | 3.2 |
 | SQL comments (`--`) | Stable | 1.0 |
 | Identifier quoting (backtick, double-quote) | Stable | 1.3 |
 | SHOW COLLECTIONS | Stable | 3.4 |
@@ -737,8 +737,16 @@ with MaxScore DAAT for efficient top-K retrieval.
 ### Multi-Vector Fusion (NEAR_FUSED, v2.2+)
 
 `NEAR_FUSED` combines multiple embedding vectors into a single similarity search
-using a fusion strategy. Useful for multi-modal search (text + image embeddings)
-or ensemble approaches.
+using a fusion strategy (multi-modal or ensemble search). It is executed by
+routing to the engine's multi-vector fusion (`multi_query_search`): each query
+vector runs its own search and the rankings are fused. `USING FUSION 'rrf'`
+(default, `k=60`), `'average'`, and `'maximum'` are honored; other strategies
+fall back to RRF. An optional `AND <metadata>` predicate is applied as a
+pre-fusion filter.
+
+`NEAR_FUSED` must be the **only vector predicate** in the `WHERE`: combining it
+with `OR`/`NOT`, or with another `NEAR` / `similarity()` / `SPARSE_NEAR`, is
+rejected (it can only be `AND`-ed with a metadata filter).
 
 ```sql
 -- Two-vector fusion with RRF
@@ -765,9 +773,12 @@ literals (`[0.1, 0.2, ...]`).
 | Strategy | Best For | Parameters |
 |----------|----------|------------|
 | `rrf` | General-purpose ensemble (default) | `k` (default: 60) |
-| `rsf` | Normalized score blending | `dense_weight`, `sparse_weight` |
-| `weighted` | Explicit priority tuning | `weight_1`, `weight_2`, ... |
+| `average` | Balanced score blending | (none) |
 | `maximum` | Conservative high-precision | (none) |
+
+Only `rrf`, `average`, and `maximum` are honored. Any other strategy name
+(e.g. `rsf`, `weighted`) is **rejected at validation** — per-branch dense/sparse
+weights are ill-defined over N homogeneous query vectors.
 
 ### Similarity Function (v1.3+)
 
@@ -884,26 +895,59 @@ SELECT * FROM logs WHERE created_at < NOW() - INTERVAL '30 days'
 
 ### Scalar Subqueries (v3.2+)
 
-> ⚠️ **Parsed but not executed.** A scalar subquery in `WHERE` is accepted by the
-> parser (EPIC-039) but has **no executor support**: at evaluation time it
-> resolves to `NULL`, so the surrounding comparison silently yields empty or
-> incorrect results — no error is raised. This matches the
-> [conformance matrix](reference/VELESQL_CONFORMANCE_MATRIX.md) ("Parsed only").
-> Do not rely on subqueries in production; compute the value in your application
-> and pass it as a bind parameter instead. The syntax below documents what the
-> grammar accepts, not a working feature.
-
-A scalar subquery in WHERE is intended to compare against a computed value from
-another (or the same) collection, returning exactly one row and one column.
+A scalar subquery in `WHERE`/`HAVING` (or an `INSERT`/`UPDATE` value) is
+**executed and substituted as a literal** before the outer query runs
+(EPIC-039). It compares against a value computed from another (or the same)
+collection, and must return **exactly one row and one column**.
 
 ```sql
--- Parsed, but NOT executed — the subquery evaluates to NULL at runtime
+-- Executes: the subquery resolves to AVG(amount), then the outer filter runs.
 SELECT * FROM orders
 WHERE amount > (SELECT AVG(amount) FROM orders)
 ```
 
 A subquery is enclosed in parentheses and contains a full SELECT statement
-(with optional WHERE, GROUP BY, HAVING, LIMIT).
+(with optional WHERE, GROUP BY, HAVING, LIMIT). It runs through the core query
+engine, so the same query executes identically on the REST `/query` endpoint and
+the CLI REPL (both route through `Database::execute_query`).
+
+**Cardinality contract:**
+
+| Subquery result | Behavior |
+|-----------------|----------|
+| Exactly one row, one column | resolves to that scalar value |
+| **0 rows** | resolves to `NULL` (a comparison against `NULL` is never true, so the outer query returns no matching rows) |
+| **> 1 row** | error `VELES-010` (Query): *returned N rows but must return at most one row* |
+| **> 1 column** (e.g. `SELECT *`, multiple columns) | error `VELES-010` (Query): *must select exactly one column* |
+
+**Supported forms:**
+
+- Aggregate subqueries — `(SELECT AVG(amount) FROM t)`, `COUNT(*)`, `MIN`/`MAX`/`SUM`.
+- Single-column row projection — `(SELECT amount FROM t WHERE id = 1)`.
+- `WHERE`, `HAVING`, `BETWEEN`, `IN (...)`, `CONTAINS (...)` value positions.
+- `INSERT ... VALUES (..., (SELECT MAX(x) FROM t))` and `UPDATE ... SET c = (SELECT ...)`.
+- **`UPDATE ... WHERE` and `DELETE ... WHERE`** predicates — the subquery is
+  resolved to a literal *before* the mutation runs, so
+  `UPDATE t SET flagged = true WHERE amount > (SELECT AVG(amount) FROM t)` updates
+  exactly the matching rows, and `DELETE FROM t WHERE id = (SELECT … )` deletes
+  the resolved id (`DELETE … WHERE id` still requires the resolved value to be an
+  integer).
+- A subquery whose **inner `WHERE` filters on a payload path** — e.g.
+  `(SELECT AVG(price) FROM t WHERE meta.cat = 5)` — is a plain payload filter on
+  the subquery's own collection, **not** a correlation, so it executes normally.
+- Nesting up to 8 levels deep (a deeper nest errors with `VELES-010`).
+
+**Not yet supported (rejected at validation with `V010`):**
+
+- **Correlated subqueries** — a subquery whose inner `WHERE` references one of the
+  *outer* query's tables/aliases (e.g. with the outer query `... FROM orders ...`,
+  the inner `(SELECT AVG(x) FROM s WHERE orders.id = 5)`). A dotted reference is
+  only correlated when its prefix names an outer table/alias; a payload path such
+  as `meta.cat` is not. Rewrite without the outer reference.
+
+> **Surface note.** Scalar subqueries are resolved in `velesdb-core`, so the
+> REST `/query` endpoint and the CLI REPL support them. **WASM** uses a separate
+> executor that does not yet resolve subqueries and still rejects them.
 
 ### Graph Match Predicate in WHERE
 
@@ -1383,6 +1427,40 @@ LET <name> = <arithmetic_expression>
 - LET names take **highest priority** in variable resolution (overrides component scores).
 - Case-insensitive keyword (`LET`, `let`, `Let` all work).
 
+#### Unsupported query shapes
+
+LET bindings are evaluated in the SELECT finalization stage. Query shapes that
+take a dedicated early-return execution path bypass that stage, so the engine
+**rejects** (rather than silently dropping) a LET clause on any of these:
+
+| Shape | Trigger | Error |
+|-------|---------|-------|
+| Graph pattern | `MATCH (...) RETURN ...` | `LET bindings are not supported with MATCH queries in this version` |
+| Sparse vector | `WHERE vector SPARSE_NEAR ...` | `LET bindings are not supported with SPARSE_NEAR queries in this version` |
+| Multi-vector fusion | `WHERE vector NEAR_FUSED ...` | `LET bindings are not supported with NEAR_FUSED queries in this version` |
+| Negated similarity | `WHERE NOT similarity(...) ...` | `LET bindings are not supported with NOT similarity() queries in this version` |
+| OR / union | `WHERE similarity(...) OR ...` | `LET bindings are not supported with OR/union queries in this version` |
+
+LET **is** supported on dense `NEAR`, text `MATCH '...'`, hybrid `NEAR + MATCH`
+text, and scalar-filter SELECTs.
+
+##### Ordering by a built-in score on the excluded shapes
+
+These shapes reject only the `LET ... = ...` clause, but `ORDER BY` still runs
+in their own finalization. A **bare** built-in score variable in `ORDER BY`
+(`vector_score`, `bm25_score`, `sparse_score`, `graph_score`, `fused_score`)
+ranks by that component score, resolved from the result's component breakdown —
+identical to the arithmetic form. (An absent component defaults to `0` on a
+tagged result, per the score-variable rules above.)
+
+```sql
+-- Ranks by sparse score (bare and arithmetic forms are equivalent):
+SELECT * FROM docs
+WHERE vector SPARSE_NEAR $sparse
+ORDER BY sparse_score DESC
+LIMIT 5
+```
+
 ### Expression Support
 
 LET expressions support the same arithmetic as ORDER BY:
@@ -1418,10 +1496,20 @@ WHERE vector NEAR $query AND content MATCH 'AI'
 ORDER BY boosted DESC
 LIMIT 5
 
--- LET with MATCH graph query
-LET x = similarity()
-MATCH (a)-[r]->(b)
-RETURN a
+-- A LET clause on a MATCH graph query is REJECTED (see "Unsupported query
+-- shapes" above). MATCH runs on a dedicated traversal path that bypasses
+-- LET evaluation, so the engine returns an explicit error rather than
+-- silently discarding the binding:
+--   LET x = similarity() MATCH (a)-[r]->(b) RETURN a LIMIT 5
+--   -> Error: LET bindings are not supported with MATCH queries in this version
+-- Rank graph rows with RETURN ... ORDER BY instead.
+
+-- Sparse vector queries also reject LET, but `ORDER BY` runs: rank by the
+-- built-in sparse_score variable directly (the bare form resolves the component
+-- score, just like the arithmetic form `ORDER BY sparse_score * 1.0 DESC`):
+SELECT * FROM docs
+WHERE vector SPARSE_NEAR $sparse
+ORDER BY sparse_score DESC
 LIMIT 5
 ```
 
@@ -1499,9 +1587,18 @@ USING FUSION(strategy = 'rrf', k = 60)
 | Strategy | Description | Parameters | Use Case |
 |----------|-------------|------------|----------|
 | `rrf` | Reciprocal Rank Fusion | `k` (default: 60) | Balanced ranking (default) |
-| `weighted` | Weighted combination | `vector_weight`, `graph_weight` | Custom importance |
+| `weighted` | Weighted combination | vector+text: `vector_weight`, `graph_weight`; dense+sparse: `dense_weight`, `sparse_weight` | Custom importance |
 | `maximum` | Take highest score | (none) | Best match wins |
-| `rsf` | Reciprocal Score Fusion | `dense_weight`, `sparse_weight` | Dense + sparse blending |
+| `rsf` | Relative Score Fusion | `dense_weight`, `sparse_weight` (must sum to 1.0) | Dense + sparse blending |
+
+> **USING FUSION requires at least two fusable branches** (e.g. `vector NEAR`
+> + `MATCH`, or `vector NEAR` + `vector SPARSE_NEAR`) or a single `NEAR_FUSED`
+> predicate. Applied to a single-branch query it is rejected at validation with
+> error code `V012` (`FusionMisconfigured`). The same code covers RSF weights
+> that do not sum to 1.0, negative weights, and `weighted`/`rsf` on a
+> `NEAR_FUSED` predicate.
+> `dense_w`/`sparse_w` are accepted as short aliases of `dense_weight`/`sparse_weight`.
+> Unknown strategy names and unknown option keys are rejected (no silent RRF fallback).
 
 ### Examples
 
@@ -1524,9 +1621,10 @@ SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
 LIMIT 10 USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 
--- Maximum score fusion
+-- Maximum score fusion (requires two fusable branches; USING FUSION on a
+-- single-branch query — e.g. similarity()-only or pure NEAR — is rejected)
 SELECT * FROM docs
-WHERE similarity(embedding, $q1) > 0.5
+WHERE vector NEAR $q AND content MATCH 'transformers'
 LIMIT 10 USING FUSION(strategy = 'maximum')
 ```
 
@@ -1956,8 +2054,18 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `actual_rows` | u64 | Number of rows returned by execution |
 | `actual_time_ms` | f64 | Wall-clock execution time in milliseconds |
 | `loops` | u64 | Number of execution iterations (always 1) |
-| `nodes_visited` | u64 | For MATCH queries, currently set to the result row count (not a real traversal counter); 0 for non-MATCH queries |
-| `edges_traversed` | u64 | For MATCH queries, currently set to the result row count (not a real traversal counter); 0 for non-MATCH queries |
+| `nodes_visited` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) graph-traversal node count (start nodes examined + nodes reached by following edges); 0 for non-MATCH queries |
+| `edges_traversed` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) count of edges followed during traversal; 0 for non-MATCH queries |
+| `traversal_counters_approximate` | bool | `true` when `nodes_visited` / `edges_traversed` are strategy-dependent approximations (a lower bound), not exact measured counts; `false` for non-graph queries where both counters are 0. |
+
+> **Note:** `nodes_visited` / `edges_traversed` are an **approximate, best-effort
+> lower bound** on the graph traversal across all MATCH strategies — not exact
+> figures. For **GraphFirst** they are the start nodes examined plus the
+> edges/nodes reached; for the similarity-anchored **VectorFirst** strategy (a
+> `similarity()` predicate on the start node) they are the candidate nodes
+> evaluated plus the per-candidate existence-BFS edges/nodes — each BFS uses
+> `limit(1)` and so undercounts the true frontier; the **Parallel** strategy sums
+> both legs (a node touched by both is counted twice).
 
 **`feedback_calibration` fields (v1.15.0+, EXPLAIN ANALYZE only):**
 
@@ -1979,10 +2087,11 @@ for how the planner attaches it.
 | Field | Type | Description |
 |-------|------|-------------|
 | `node_label` | string | Plan node type (e.g. "VectorSearch", "Filter") |
-| `actual_time_ms` | f64 | Estimated wall-clock time for this node |
-| `actual_rows_in` | u64 | Rows entering this node |
-| `actual_rows_out` | u64 | Rows leaving this node |
+| `actual_time_ms` | f64 | **Estimated** (not measured) wall-clock time for this node, derived by distributing the plan-global `actual_time_ms` across nodes via fixed weight fractions. Heuristic until per-node instrumentation lands (#467). |
+| `actual_rows_in` | u64 | **Estimated** (heuristic) rows entering this node, not a measured count. |
+| `actual_rows_out` | u64 | **Estimated** (heuristic) rows leaving this node, not a measured count. |
 | `loops` | u64 | Loop iterations for this node |
+| `estimated` | bool | Always `true` until instrumented timing lands (#467): the `actual_*` row/time values above are heuristic estimates, not real per-node measurements. The `actual_` prefix is kept for API stability. |
 
 **Filter plan fields (v3.9+):**
 
@@ -2278,6 +2387,11 @@ ALTER COLLECTION docs SET (auto_reindex = false)
 | `auto_reindex` | boolean | Enable/disable automatic HNSW parameter tuning |
 
 Unknown options are rejected with an error message listing supported options.
+The change is applied to the live collection and persisted immediately, so it
+survives a restart — the auto-reindex policy is restored automatically on the
+next collection open. Setting `auto_reindex = false` keeps the policy attached
+but disabled (preserving any previously configured thresholds for a symmetric
+round-trip).
 
 ### FLUSH (v3.6+)
 
@@ -2892,7 +3006,7 @@ VelesQL returns structured errors:
 | BETWEEN | `column BETWEEN low AND high` | `WHERE price BETWEEN 50 AND 200` |
 | LIKE / ILIKE | `column [I]LIKE 'pattern'` | `WHERE title LIKE 'rust%'`, `WHERE name ILIKE '%rust%'` |
 | IS NULL / IS NOT NULL | `column IS [NOT] NULL` | `WHERE email IS NOT NULL` |
-| Scalar subquery ⚠️ parsed only, not executed | `column op (SELECT … LIMIT 1)` | `WHERE views > (SELECT AVG(views) FROM stats LIMIT 1)` — evaluates to NULL at runtime |
+| Scalar subquery | `column op (SELECT … )` | `WHERE views > (SELECT AVG(views) FROM stats)` — executed and substituted as a literal; **correlated** subqueries rejected with V010 (SubqueryNotExecutable) |
 | Graph match predicate | `MATCH (...)` in WHERE | `WHERE MATCH (a:Person)-[:KNOWS]->(b) AND a.id = $u` |
 | GEO_DISTANCE | `GEO_DISTANCE(col, lat, lng) op meters` | `WHERE GEO_DISTANCE(location, 48.8566, 2.3522) < 500` |
 | GEO_BBOX | `GEO_BBOX(col, lat_min, lng_min, lat_max, lng_max)` | `WHERE GEO_BBOX(location, 48.8, 2.3, 48.9, 2.4)` |
@@ -3051,9 +3165,11 @@ SELECT * FROM docs
 WHERE vector NEAR $dense_query AND vector SPARSE_NEAR $sparse_query
 LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 
--- Multi-vector fusion (text + image embeddings) — inline NEAR_FUSED form
+-- Multi-vector fusion (text + image embeddings) — inline NEAR_FUSED form.
+-- NEAR_FUSED supports only rrf, average, or maximum; 'weighted'/'rsf' are
+-- rejected (ill-defined over homogeneous query vectors).
 SELECT * FROM products
-WHERE vector NEAR_FUSED [$text_emb, $image_emb] USING FUSION 'weighted'
+WHERE vector NEAR_FUSED [$text_emb, $image_emb] USING FUSION 'rrf'
 LIMIT 20
 ```
 

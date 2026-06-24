@@ -73,6 +73,7 @@ impl QueryValidator {
         Self::validate_similarity_context(stmt)?;
         Self::validate_qualified_wildcards(stmt)?;
         Self::validate_vector_group_by(stmt)?;
+        super::validation_fusion::validate_fusion(stmt)?;
         stmt.where_clause.as_ref().map_or(Ok(()), |condition| {
             // V011 anchor rule (explicit and implicit binding, guards
             // G1/G2/G3) lives in `validation_anchor.rs`.
@@ -501,50 +502,67 @@ fn requires_select_validation(query: &Query) -> bool {
         && !query.is_admin_query()
 }
 
-/// Rejects subqueries appearing in any WHERE or HAVING clause of the query.
+/// Rejects **correlated** subqueries in any WHERE or HAVING clause.
 ///
-/// Subqueries are parsed but not yet executed: left unchecked, a predicate like
-/// `WHERE price > (SELECT AVG(price) FROM products)` silently evaluates to NULL,
-/// yielding wrong/empty results (or a silently no-op UPDATE) instead of an error.
-/// `HAVING COUNT(*) > (SELECT ...)` would likewise silently filter every group.
+/// Scalar (non-correlated) subqueries are now executed and substituted as
+/// literals before validation runs (EPIC-039), so a well-formed predicate like
+/// `WHERE price > (SELECT AVG(price) FROM products)` is accepted. A *correlated*
+/// subquery (one referencing an outer column) is not yet executable and is
+/// rejected here so it never silently evaluates to NULL.
 fn reject_subqueries(query: &Query) -> Result<(), ValidationError> {
     let in_where = where_clauses(query)
-        .into_iter()
-        .any(Condition::has_subquery);
-    if in_where || query.has_having_subquery() {
+        .iter()
+        .any(|(scope, cond)| cond.has_correlated_subquery(scope));
+    if in_where || query.has_correlated_having_subquery() {
         return Err(ValidationError::new(
             ValidationErrorKind::SubqueryNotExecutable,
             None,
             "subquery",
-            "Compute the value separately and pass it as a literal or $parameter, \
-             or rewrite the predicate without a subquery",
+            "correlated subqueries (referencing an outer column) are not supported; \
+             rewrite the predicate without a reference to the outer query",
         ));
     }
     Ok(())
 }
 
-/// Collects every WHERE clause in the query: the main SELECT, compound
-/// operands (UNION/INTERSECT/EXCEPT), and DML statements (UPDATE/DELETE/SELECT EDGES).
-fn where_clauses(query: &Query) -> Vec<&Condition> {
-    let mut clauses: Vec<&Condition> = query.select.where_clause.as_ref().into_iter().collect();
+/// Collects every WHERE clause in the query — the main SELECT, compound operands
+/// (UNION/INTERSECT/EXCEPT), and DML statements (UPDATE/DELETE/SELECT EDGES) —
+/// each paired with its **outer-table scope** (the names a nested subquery would
+/// have to reference to be correlated).
+fn where_clauses(query: &Query) -> Vec<(Vec<&str>, &Condition)> {
+    let mut clauses: Vec<(Vec<&str>, &Condition)> = query
+        .select
+        .where_clause
+        .as_ref()
+        .map(|c| (query.select.outer_table_scope(), c))
+        .into_iter()
+        .collect();
     if let Some(ref compound) = query.compound {
-        clauses.extend(
-            compound
-                .operations
-                .iter()
-                .filter_map(|(_, stmt)| stmt.where_clause.as_ref()),
-        );
+        clauses.extend(compound.operations.iter().filter_map(|(_, stmt)| {
+            stmt.where_clause
+                .as_ref()
+                .map(|c| (stmt.outer_table_scope(), c))
+        }));
     }
     clauses.extend(dml_where_clauses(query.dml.as_ref()));
     clauses
 }
 
-/// Returns the optional WHERE clauses carried by a DML statement.
-fn dml_where_clauses(dml: Option<&DmlStatement>) -> Vec<&Condition> {
+/// Returns the WHERE clauses carried by a DML statement, each paired with the
+/// target table as its outer-table scope.
+fn dml_where_clauses(dml: Option<&DmlStatement>) -> Vec<(Vec<&str>, &Condition)> {
     match dml {
-        Some(DmlStatement::Update(u)) => u.where_clause.iter().collect(),
-        Some(DmlStatement::Delete(d)) => vec![&d.where_clause],
-        Some(DmlStatement::SelectEdges(s)) => s.where_clause.iter().collect(),
+        Some(DmlStatement::Update(u)) => u
+            .where_clause
+            .iter()
+            .map(|c| (vec![u.table.as_str()], c))
+            .collect(),
+        Some(DmlStatement::Delete(d)) => vec![(vec![d.table.as_str()], &d.where_clause)],
+        Some(DmlStatement::SelectEdges(s)) => s
+            .where_clause
+            .iter()
+            .map(|c| (vec![s.collection.as_str()], c))
+            .collect(),
         _ => Vec::new(),
     }
 }

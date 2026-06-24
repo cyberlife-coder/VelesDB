@@ -60,10 +60,10 @@ entry.
 
 ```bash
 # Download
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v3.2.1/velesdb-3.2.1-amd64.deb
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v3.3.0/velesdb-3.3.0-amd64.deb
 
 # Install
-sudo dpkg -i velesdb-3.2.1-amd64.deb
+sudo dpkg -i velesdb-3.3.0-amd64.deb
 
 # Verify
 velesdb --version
@@ -136,7 +136,7 @@ results = collection.search_request(velesdb.SearchOptions(vector=query_vector, t
 ```toml
 # Cargo.toml
 [dependencies]
-velesdb-core = "1.14"
+velesdb-core = "3.2"
 ```
 
 ### As CLI Tools
@@ -160,13 +160,13 @@ GitHub Container Registry, so you don't need to build locally:
 
 ```bash
 # Pull a specific release (recommended for reproducibility)
-docker pull ghcr.io/cyberlife-coder/velesdb:3.2.1
+docker pull ghcr.io/cyberlife-coder/velesdb:3.3.0
 
 # ...or the latest stable release
 docker pull ghcr.io/cyberlife-coder/velesdb:latest
 
 docker run -d --name velesdb -p 8080:8080 -v velesdb_data:/data \
-  ghcr.io/cyberlife-coder/velesdb:3.2.1
+  ghcr.io/cyberlife-coder/velesdb:3.3.0
 ```
 
 ### Build locally
@@ -421,7 +421,7 @@ docker run -v velesdb_data:/data velesdb
 
 ## 📚 Next Steps
 
-- **[Quick Start](../README.md#-your-first-vector-search)** - Your first vector search
+- **[Quick Start](../README.md#getting-started-in-60-seconds)** - Your first vector search
 - **[VelesQL Guide](../VELESQL_SPEC.md)** - SQL-like query language
 - **[API Reference](../reference/api-reference.md)** - REST API documentation
 - **[Benchmarks](../BENCHMARKS.md)** - Performance metrics

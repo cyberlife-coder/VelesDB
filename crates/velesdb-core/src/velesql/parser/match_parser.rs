@@ -3,7 +3,7 @@
 //! Extracted from select.rs to reduce file size and improve modularity.
 
 use super::{extract_identifier, Rule};
-use crate::velesql::ast::{OrderByExpr, Query};
+use crate::velesql::ast::Query;
 use crate::velesql::error::ParseError;
 use crate::velesql::graph_pattern::{
     Direction, GraphPattern, MatchClause, NodePattern, RelationshipPattern, ReturnClause,
@@ -47,7 +47,9 @@ impl Parser {
         }))
     }
 
-    /// Converts a parsed ORDER BY clause into MATCH-compatible `OrderByItem`s.
+    /// Converts a parsed ORDER BY clause into MATCH-compatible `OrderByItem`s,
+    /// carrying the structured `OrderByExpr` so the executor can evaluate
+    /// arithmetic and `similarity(field, $v)` (not just property paths).
     fn convert_order_by_to_match(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<Vec<crate::velesql::graph_pattern::OrderByItem>, ParseError> {
@@ -55,27 +57,10 @@ impl Parser {
         Ok(order_by
             .into_iter()
             .map(|ob| crate::velesql::graph_pattern::OrderByItem {
-                expression: Self::order_by_expr_to_string(ob.expr),
+                expr: ob.expr,
                 descending: ob.descending,
             })
             .collect())
-    }
-
-    /// Converts an `OrderByExpr` into its string representation.
-    fn order_by_expr_to_string(expr: OrderByExpr) -> String {
-        match expr {
-            OrderByExpr::Field(f) => f,
-            OrderByExpr::Similarity(s) => {
-                let vec_str = match &s.vector {
-                    crate::velesql::ast::VectorExpr::Parameter(name) => format!("${name}"),
-                    crate::velesql::ast::VectorExpr::Literal(vals) => format!("{vals:?}"),
-                };
-                format!("similarity({}, {vec_str})", s.field)
-            }
-            OrderByExpr::SimilarityBare => "similarity()".to_string(),
-            OrderByExpr::Aggregate(a) => format!("{:?}()", a.function_type),
-            OrderByExpr::Arithmetic(expr) => format!("{expr}"),
-        }
     }
 
     /// Extracts the integer value from a limit clause pair.

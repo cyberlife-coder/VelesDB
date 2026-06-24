@@ -187,7 +187,10 @@ pub(crate) fn apply_pre_check(
             status,
             Json(ErrorResponse {
                 error: msg,
-                code: None,
+                // Guard-rail violations map to VELES-027 (the core
+                // `Error::GuardRail` code) so SDK clients can discriminate
+                // rate-limit / circuit-breaker rejections by code.
+                code: Some("VELES-027".to_string()),
             }),
         )
             .into_response());
@@ -236,5 +239,30 @@ mod tests {
         };
         let resp = core_error_response(StatusCode::BAD_REQUEST, &err);
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Backlog #13(d): a rate-limit pre-check rejection must return 429 with the
+    /// canonical `VELES-027` guard-rail code in the body (previously `code: None`).
+    #[tokio::test]
+    async fn test_apply_pre_check_rate_limit_carries_veles_027() {
+        let limits = velesdb_core::guardrails::QueryLimits {
+            rate_limit_qps: 1,
+            ..Default::default()
+        };
+        let guard_rails = velesdb_core::guardrails::GuardRails::with_limits(limits);
+
+        // First call consumes the only token; the second trips the limiter.
+        guard_rails
+            .pre_check("client")
+            .expect("first pre-check allowed");
+        let response =
+            apply_pre_check(&guard_rails, "client").expect_err("second pre-check must reject");
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read rate-limit body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert_eq!(json["code"], "VELES-027");
     }
 }

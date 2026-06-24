@@ -32,12 +32,7 @@ impl VelesQL {
     pub fn parse(query: &str) -> Result<ParsedQuery, JsValue> {
         velesdb_core::velesql::Parser::parse(query)
             .map(|q| ParsedQuery { inner: q })
-            .map_err(|e| {
-                JsValue::from_str(&format!(
-                    "VelesQL syntax error at position {}: {} (near '{}')",
-                    e.position, e.message, e.fragment
-                ))
-            })
+            .map_err(|e| crate::wasm_error::WasmError::from(e).into_js_value())
     }
 
     /// Validate a `VelesQL` query without full parsing.

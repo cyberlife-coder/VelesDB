@@ -83,6 +83,7 @@ impl Collection {
             filter,
             sparse_index_name,
             include_vectors,
+            None,
         );
         self.search_request(py, &opts)
     }
@@ -121,6 +122,7 @@ impl Collection {
         let top_k = opts.top_k;
         let sparse_index_name = opts.sparse_index_name.clone();
         let include_vectors = opts.include_vectors;
+        let fusion = opts.fusion.as_ref().map(FusionStrategy::inner);
 
         // Phase 2: Release GIL during Rust computation
         let results = py.detach(|| {
@@ -130,6 +132,7 @@ impl Collection {
                 top_k,
                 filter_obj.as_ref(),
                 sparse_index_name.as_deref(),
+                fusion.as_ref(),
             )
         })?;
 

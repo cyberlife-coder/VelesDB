@@ -32,14 +32,14 @@ cargo run
 ✅ Ingested 8 products
 
 🔍 Products similar to ID 101:
-  - Fitness Tracker (score: 0.998) - $59.99
-  - Smart Watch (score: 0.995) - $199.99
-  - Bluetooth Speaker (score: 0.993) - $49.99
+  - Bluetooth Speaker (score: 0.999) - $49.99
+  - Running Shoes X1 (score: 0.997) - $129.99
+  - Yoga Mat Premium (score: 0.993) - $39.99
 
 🎯 Recommendations in 'electronics' under $100.00:
-  - Wireless Headphones Pro (score: 0.969) - $79.99
-  - Fitness Tracker (score: 0.967) - $59.99
-  - Bluetooth Speaker (score: 0.962) - $49.99
+  - Wireless Headphones Pro (score: 0.999) - $79.99
+  - Bluetooth Speaker (score: 0.997) - $49.99
+  - Fitness Tracker (score: 0.962) - $59.99
 
 📝 VelesQL Query Parsing:
   ✅ Similarity search: parses correctly

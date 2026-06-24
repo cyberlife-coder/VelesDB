@@ -353,6 +353,19 @@ pub struct SimilarityOrderBy {
 }
 
 impl SelectStatement {
+    /// Returns the table names and aliases visible as *outer* scope for a nested
+    /// subquery: the `FROM` collection plus any `FROM`/JOIN aliases.
+    ///
+    /// A subquery's inner WHERE is only **correlated** when it references one of
+    /// these names; a dotted payload path whose prefix is not in this set is a
+    /// plain payload filter, not a correlation (EPIC-039).
+    #[must_use]
+    pub fn outer_table_scope(&self) -> Vec<&str> {
+        std::iter::once(self.from.as_str())
+            .chain(self.from_alias.iter().map(String::as_str))
+            .collect()
+    }
+
     /// Returns an empty `SelectStatement` with all fields at their defaults.
     ///
     /// Used by [`crate::velesql::Query::new_dml`],
@@ -376,5 +389,32 @@ impl SelectStatement {
             having: None,
             fusion_clause: None,
         }
+    }
+
+    /// Returns `true` when this SELECT must run through the aggregation engine
+    /// (scalar aggregates or `GROUP BY`) rather than the row-projection path.
+    ///
+    /// `NEAR ... GROUP BY` (vector-search grouping) is post-processed inside the
+    /// standard execute path, not the aggregate engine, so it returns `false`.
+    /// Single source of truth shared by the server `/query` handler and the CLI
+    /// REPL so every surface routes aggregation identically.
+    #[must_use]
+    pub fn is_aggregation_query(&self) -> bool {
+        let has_aggs = match &self.columns {
+            SelectColumns::Aggregations(_) => true,
+            SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
+            _ => false,
+        };
+        let is_agg_query = has_aggs || self.group_by.is_some();
+        if is_agg_query && self.group_by.is_some() {
+            let has_vector_near = self
+                .where_clause
+                .as_ref()
+                .is_some_and(Condition::has_vector_search);
+            if has_vector_near {
+                return false;
+            }
+        }
+        is_agg_query
     }
 }

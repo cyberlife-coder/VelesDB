@@ -138,7 +138,7 @@ version incompatibility, or internal bugs:
 
 - **Variant**: `Config(String)`
 - **Message**: `Configuration error: {details}`
-- **Cause**: Invalid configuration parameters (e.g., unsupported distance metric, invalid HNSW parameters).
+- **Cause**: Invalid **engine/collection configuration** (e.g., unsupported distance metric, invalid HNSW parameters, invalid EXPLAIN threshold). This code is reserved for configuration of the engine itself — not for a malformed query. A query the caller wrote wrong (unsupported query shape, missing/malformed bind parameter) is reported as `VELES-010` (`Query`), not `VELES-009`.
 - **Resolution**: Review the configuration values. Consult `CollectionConfig` documentation for valid parameter ranges.
 - **Recoverable**: Yes
 
@@ -146,7 +146,7 @@ version incompatibility, or internal bugs:
 
 - **Variant**: `Query(String)`
 - **Message**: `Query error: {details}`
-- **Cause**: A VelesQL query failed to parse or execute. This wraps parse errors with position and context information.
+- **Cause**: A VelesQL query failed to parse, validate, or execute. This wraps parse errors with position and context information, and also covers **query-shape and bind-parameter rejections** at execution time: an unsupported query shape (e.g. multiple `similarity()` under `OR`, `NEAR_FUSED` mixed with another vector predicate, `HAVING` without `GROUP BY`, an empty MATCH pattern) and a missing or malformed bind parameter (e.g. `$v` not provided, a sparse-vector parameter that is not a valid index/value map). USING FUSION misconfigurations carry the embedded validation code `V012` (`FusionMisconfigured`).
 - **Resolution**: Check the VelesQL syntax. Refer to `docs/VELESQL_SPEC.md` for the grammar specification. The error message includes the position of the parsing failure.
 - **Recoverable**: Yes
 

@@ -73,26 +73,30 @@ fn test_resolve_variable_falls_back_to_search_score() {
     );
 }
 
-/// Edge: component scores present but variable not in the list -> fallback.
+/// Edge: component scores present but variable not in the list -> defaults to 0.
+/// Bug #7: on a TAGGED result an absent built-in component defaults to 0.0 (per
+/// VELESQL_SPEC), NOT the primary search_score — otherwise `bm25_score` on a
+/// NEAR-only query would leak the vector score into hybrid formulas.
 #[test]
-fn test_resolve_variable_missing_component_falls_back() {
+fn test_resolve_variable_missing_component_defaults_to_zero() {
     let components: smallvec::SmallVec<[(&'static str, f32); 4]> =
         smallvec::smallvec![("vector_score", 0.9_f32),];
     let ctx = ScoreContext::with_components(0.65, None, Some(&components));
 
-    // bm25_score not in components -> should fall back to search_score
+    // bm25_score not in a tagged component set -> defaults to 0.0
     let expr = ArithmeticExpr::Variable("bm25_score".to_string());
     let val = evaluate_arithmetic(&expr, &ctx);
 
     assert!(
-        (val - 0.65).abs() < 1e-5,
-        "Missing component should fall back to search_score (0.65), got {val}"
+        val.abs() < 1e-6,
+        "Missing component on a tagged result must default to 0.0, got {val}"
     );
 }
 
-/// Edge: empty component_scores vec treated like None.
+/// Edge: empty (but `Some`) component_scores still counts as tagged, so an
+/// absent built-in defaults to 0.0 rather than the primary search_score.
 #[test]
-fn test_resolve_variable_empty_components_falls_back() {
+fn test_resolve_variable_empty_components_default_to_zero() {
     let components: smallvec::SmallVec<[(&'static str, f32); 4]> = smallvec::smallvec![];
     let ctx = ScoreContext::with_components(0.80, None, Some(&components));
 
@@ -100,8 +104,47 @@ fn test_resolve_variable_empty_components_falls_back() {
     let val = evaluate_arithmetic(&expr, &ctx);
 
     assert!(
-        (val - 0.80).abs() < 1e-5,
-        "Empty components should fall back to search_score (0.80), got {val}"
+        val.abs() < 1e-6,
+        "Absent component on a tagged (empty) result must default to 0.0, got {val}"
+    );
+}
+
+/// Bug #7 regression: when component_scores is Some (result was tagged), an
+/// absent built-in component must resolve to 0.0, NOT the primary search_score.
+/// `0.7 * vector_score + 0.3 * bm25_score` on a NEAR-only result (no bm25
+/// component) must equal `0.7 * vector_score`, per VELESQL_SPEC (defaults to 0).
+#[test]
+fn test_absent_builtin_component_resolves_to_zero_when_tagged() {
+    let components: smallvec::SmallVec<[(&'static str, f32); 4]> =
+        smallvec::smallvec![("vector_score", 0.9_f32),];
+    let ctx = ScoreContext::with_components(0.9, None, Some(&components));
+
+    // bm25_score absent from a tagged result => 0.0.
+    let expr = ArithmeticExpr::Variable("bm25_score".to_string());
+    let val = evaluate_arithmetic(&expr, &ctx);
+    assert!(
+        val.abs() < 1e-6,
+        "absent bm25_score on a tagged result must be 0.0, got {val}"
+    );
+
+    // 0.7 * vector_score + 0.3 * bm25_score == 0.7 * 0.9 == 0.63 (NOT 0.9).
+    let weighted = ArithmeticExpr::BinaryOp {
+        left: Box::new(ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::Literal(0.7)),
+            op: ArithmeticOp::Mul,
+            right: Box::new(ArithmeticExpr::Variable("vector_score".to_string())),
+        }),
+        op: ArithmeticOp::Add,
+        right: Box::new(ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::Literal(0.3)),
+            op: ArithmeticOp::Mul,
+            right: Box::new(ArithmeticExpr::Variable("bm25_score".to_string())),
+        }),
+    };
+    let w = evaluate_arithmetic(&weighted, &ctx);
+    assert!(
+        (w - 0.63).abs() < 1e-5,
+        "0.7*vector_score + 0.3*bm25_score must be 0.63 (bm25 defaults to 0), got {w}"
     );
 }
 

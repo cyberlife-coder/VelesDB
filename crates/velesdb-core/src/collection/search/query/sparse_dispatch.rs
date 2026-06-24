@@ -5,6 +5,7 @@
 //! filtering, result finalization, and fusion strategy resolution.
 
 use super::{distinct, Collection, ExtractedComponents, Result, SearchResult, MAX_LIMIT};
+use tracing::warn;
 
 impl Collection {
     /// Dispatches sparse-only or hybrid dense+sparse search.
@@ -154,8 +155,11 @@ impl Collection {
         }
     }
 
-    /// Applies DISTINCT, ORDER BY, and LIMIT to sparse/hybrid results.
-    fn finalize_sparse_results(
+    /// Applies DISTINCT, ORDER BY, OFFSET, and LIMIT to ranked results.
+    ///
+    /// Shared by the sparse/hybrid path and the NEAR_FUSED fusion path — both
+    /// produce an already-ranked set that needs the same SQL-standard finalize.
+    pub(super) fn finalize_sparse_results(
         &self,
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
@@ -168,10 +172,15 @@ impl Collection {
             self.apply_order_by(&mut results, order_by, params)?;
         }
         // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
+        // Intentional saturating clamp (also reached by the NEAR_FUSED path): an
+        // out-of-`usize`-range offset saturates to `usize::MAX`, yielding an
+        // empty page rather than an error.
         if let Some(offset) = stmt.offset {
             let skip = usize::try_from(offset).unwrap_or(usize::MAX);
             results = results.into_iter().skip(skip).collect();
         }
+        // Intentional saturating clamp: a missing or out-of-range limit collapses
+        // to `MAX_LIMIT` rather than erroring.
         let final_limit =
             usize::try_from(stmt.limit.unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT))
                 .unwrap_or(MAX_LIMIT)
@@ -193,15 +202,43 @@ impl Collection {
                     FusionStrategyType::Rsf => {
                         let dw = fc.dense_weight.unwrap_or(0.5);
                         let sw = fc.sparse_weight.unwrap_or(0.5);
-                        crate::fusion::FusionStrategy::relative_score(dw, sw)
-                            .unwrap_or_else(|_| crate::fusion::FusionStrategy::rrf_default())
+                        crate::fusion::FusionStrategy::relative_score(dw, sw).unwrap_or_else(|e| {
+                            warn!(
+                                dense_weight = dw,
+                                sparse_weight = sw,
+                                error = %e,
+                                "RSF fusion strategy invalid; falling back to RRF"
+                            );
+                            crate::fusion::FusionStrategy::rrf_default()
+                        })
                     }
                     FusionStrategyType::Rrf => crate::fusion::FusionStrategy::RRF {
                         k: fc.k.unwrap_or(60),
                     },
                     FusionStrategyType::Average => crate::fusion::FusionStrategy::Average,
                     FusionStrategyType::Maximum => crate::fusion::FusionStrategy::Maximum,
-                    FusionStrategyType::Weighted => crate::fusion::FusionStrategy::rrf_default(),
+                    FusionStrategyType::Weighted => {
+                        // 'weighted' = weighted Reciprocal Rank Fusion over the two
+                        // branches (branch 0 = dense NEAR, branch 1 = sparse), honoring
+                        // the dense_w/sparse_w from the FUSION clause. Falls back to RRF
+                        // on a validation error (e.g. a negative weight).
+                        let dw = fc.dense_weight.unwrap_or(0.5);
+                        let sw = fc.sparse_weight.unwrap_or(0.5);
+                        #[allow(clippy::cast_precision_loss)]
+                        let k = fc.k.unwrap_or(60) as f32;
+                        crate::fusion::FusionStrategy::weighted_rrf(vec![dw, sw], k).unwrap_or_else(
+                            |e| {
+                                warn!(
+                                    dense_weight = dw,
+                                    sparse_weight = sw,
+                                    k,
+                                    error = %e,
+                                    "Weighted RRF fusion strategy invalid; falling back to RRF"
+                                );
+                                crate::fusion::FusionStrategy::rrf_default()
+                            },
+                        )
+                    }
                 }
             })
     }

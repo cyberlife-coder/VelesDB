@@ -13,6 +13,7 @@
 
 mod expand;
 mod index_prefilter;
+mod order_by;
 mod similarity;
 mod start_nodes;
 mod vector_first;
@@ -212,12 +213,23 @@ impl Collection {
     ///
     /// Returns an error if the query cannot be executed.
     /// Executes a MATCH query without guard-rail context (backward-compatible entry point).
+    ///
+    /// Direct entry point for the graph REST `/match` endpoint and the SDK
+    /// bindings. Applies RETURN `ORDER BY` and the post-sort `LIMIT` so these
+    /// surfaces match the SQL `/query` pipeline (which finalizes via
+    /// `finalize_match_results`); without it the result would be raw traversal
+    /// order with the ordering clause silently ignored.
     pub fn execute_match(
         &self,
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
-        self.execute_match_with_context(match_clause, params, None)
+        let mut results = self.execute_match_with_context(match_clause, params, None)?;
+        self.apply_match_order_by(&mut results, match_clause, params)?;
+        if let Some(limit) = super::match_dispatch::match_return_limit(match_clause) {
+            results.truncate(limit);
+        }
+        Ok(results)
     }
 
     /// Executes a MATCH query on this collection (EPIC-045 US-002, EPIC-048).
@@ -240,7 +252,7 @@ impl Collection {
         ctx: Option<&QueryContext>,
     ) -> Result<Vec<MatchResult>> {
         if match_clause.patterns.is_empty() {
-            return Err(Error::Config(
+            return Err(Error::Query(
                 "MATCH query must have at least one pattern".to_string(),
             ));
         }
@@ -248,10 +260,7 @@ impl Collection {
         // Documented contract (VELESQL_SPEC "Default LIMIT"): MATCH ... RETURN
         // has no implicit LIMIT 10 — results are bounded only by the
         // server-wide MAX_LIMIT ceiling shared with compound queries.
-        let limit = match_clause
-            .return_clause
-            .limit
-            .map_or(super::MAX_LIMIT, |l| l as usize);
+        let limit = traversal_limit(match_clause);
         let mut all_results: Vec<MatchResult> = Vec::new();
         let mut iteration_count: u32 = 0;
         let mut reported_cardinality: usize = 0;
@@ -277,6 +286,18 @@ impl Collection {
             )?;
         }
 
+        // Accumulate traversal counters into the query context for EXPLAIN
+        // ANALYZE to read back. Runs on every GraphFirst MATCH (not only
+        // ANALYZE), but it is one relaxed atomic-add per query — negligible, and
+        // the per-edge hot loop is untouched. `nodes_visited` = start nodes
+        // (added per pattern in execute_single_pattern) + the edge endpoints
+        // reached here; `edges_traversed` = edges actually followed. Non-graph
+        // queries never reach here.
+        if let Some(qc) = ctx {
+            let edges = u64::from(iteration_count);
+            qc.add_traversal(edges, edges);
+        }
+
         Ok(all_results)
     }
 
@@ -300,6 +321,8 @@ impl Collection {
         if start_nodes.is_empty() {
             return Ok(());
         }
+        // Count the start nodes this pattern examines toward nodes_visited.
+        ctx.inspect(|qc| qc.add_traversal(start_nodes.len() as u64, 0));
 
         // S4-08: Compute index pre-filter once per pattern.
         let prefilter = match_clause
@@ -408,6 +431,25 @@ impl Collection {
         }
         Ok(())
     }
+}
+
+/// Computes the traversal-phase candidate cap for a MATCH clause.
+///
+/// Without a RETURN `ORDER BY`, the LIMIT applies to traversal order, so the
+/// early-break at `return_clause.limit` is correct and stops traversal as soon
+/// as enough rows are collected. WITH an `ORDER BY`, the post-sort LIMIT must
+/// select the GLOBAL top-K, so traversal must visit the full candidate set
+/// (bounded only by the shared `MAX_LIMIT` ceiling and the guard-rails) before
+/// the sort — otherwise the LIMIT would be applied to the first-K-traversed
+/// rows instead of the globally ordered set (backlog #1b).
+fn traversal_limit(match_clause: &MatchClause) -> usize {
+    if match_clause.return_clause.order_by.is_some() {
+        return super::MAX_LIMIT;
+    }
+    match_clause
+        .return_clause
+        .limit
+        .map_or(super::MAX_LIMIT, |l| l as usize)
 }
 
 // Tests moved to match_exec_tests.rs per project rules

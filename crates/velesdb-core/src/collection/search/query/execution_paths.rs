@@ -12,7 +12,10 @@ impl Collection {
         let anchor_alias = Self::resolve_anchor_alias(predicate, from_aliases)?;
         let clause = Self::build_anchor_match_clause(predicate);
 
-        let matches = self.execute_match(&clause, params)?;
+        // Anchor evaluation needs the full unordered match set (it collects bound
+        // ids into a set), so use the raw primitive rather than the ORDER BY/LIMIT
+        // entry point.
+        let matches = self.execute_match_with_context(&clause, params, None)?;
         let mut ids = HashSet::with_capacity(matches.len());
         for m in matches {
             if let Some(id) = m.bindings.get(&anchor_alias) {
@@ -36,11 +39,11 @@ impl Collection {
         from_aliases: &[String],
     ) -> Result<String> {
         let first_node = predicate.pattern.nodes.first().ok_or_else(|| {
-            crate::error::Error::Config("MATCH predicate requires at least one node".to_string())
+            crate::error::Error::Query("MATCH predicate requires at least one node".to_string())
         })?;
 
         let anchor_alias = first_node.alias.clone().ok_or_else(|| {
-            crate::error::Error::Config(
+            crate::error::Error::Query(
                 "MATCH predicate in SELECT WHERE requires an alias on the first node, \
                  e.g. MATCH (d:Doc)-[:REL]->(x)"
                     .to_string(),
@@ -73,7 +76,7 @@ impl Collection {
             .filter_map(|node| node.alias.as_deref())
             .find(|alias| from_aliases.iter().any(|f| f == alias));
         if let Some(declared) = declared {
-            return Err(crate::error::Error::Config(format!(
+            return Err(crate::error::Error::Query(format!(
                 "MATCH predicate anchor alias '{anchor_alias}' must be the declared \
                  FROM/JOIN alias '{declared}' used elsewhere in the pattern"
             )));
@@ -86,7 +89,7 @@ impl Collection {
             .first()
             .is_some_and(|node| node.collection.is_some())
         {
-            return Err(crate::error::Error::Config(format!(
+            return Err(crate::error::Error::Query(format!(
                 "MATCH predicate anchor alias '{anchor_alias}' has a @collection \
                  override; anchor on one of the FROM/JOIN aliases: {from_aliases:?}"
             )));
@@ -182,25 +185,20 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         if let Some(text_query) = Self::extract_match_query(cond) {
             let fusion = search_opts.fusion_clause.as_ref();
-            #[allow(clippy::cast_possible_truncation)]
-            let vector_weight = fusion.and_then(|fc| fc.vector_weight).map(|w| w as f32);
-            let rrf_k = fusion.and_then(|fc| fc.k);
             // Bug #474: Extract co-occurring metadata filters (e.g. `category = 'tech'`)
-            // before calling hybrid_search. Without this, metadata conditions alongside
-            // MATCH are silently dropped.
-            if let Some(metadata_cond) = Self::extract_metadata_filter(cond) {
-                let filter =
-                    crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
-                return self.hybrid_search_with_filter(
-                    vector,
-                    &text_query,
-                    execution_limit,
-                    vector_weight,
-                    &filter,
-                    rrf_k,
-                );
-            }
-            return self.hybrid_search(vector, &text_query, execution_limit, vector_weight, rrf_k);
+            // before fusing. Without this, metadata conditions alongside MATCH
+            // are silently dropped.
+            // Bug #6: route through hybrid_search_with_clause so the FUSION
+            // strategy / graph_weight take effect instead of always running RRF.
+            let filter = Self::extract_metadata_filter(cond)
+                .map(|c| crate::filter::Filter::new(crate::filter::Condition::from(c)));
+            return self.hybrid_search_with_clause(
+                vector,
+                &text_query,
+                execution_limit,
+                fusion,
+                filter.as_ref(),
+            );
         }
         let cbo_search_k = execution_limit
             .saturating_mul(cbo_over_fetch)

@@ -486,7 +486,7 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | v1.16 — `audit-2026q2` security-hardening wave (9 PRs), first-party embedding adapters (Python + TypeScript), multi-arch GHCR image | ✅ Shipped |
 | v1.17 — VelesQL error hints with did-you-mean suggestions, payload-WAL torn-tail crash recovery, OpenAPI id-type accuracy | ✅ Shipped |
 | v1.18 — Engine artifacts realigned to VelesDB Core License 1.0, agent-memory parity (Python/Tauri bindings, TS procedural recall) | ✅ Shipped |
-| v1.19 (next) — Agent-memory graph dimension (`relate()` API + the NEAR + MATCH flagship query verbatim), GraphFirst anchored retrieval, PQ/RaBitQ quantization wired end-to-end across restarts, durable TTL on every read path, `GET /metrics` by default | 🚧 In progress |
+| v2.0.0 — Agent-memory graph dimension (`relate()` API + the NEAR + MATCH flagship query verbatim), GraphFirst anchored retrieval, PQ/RaBitQ quantization wired end-to-end across restarts, durable TTL on every read path, `GET /metrics` by default | ✅ Shipped |
 
 > VelesDB Core is open-source. Enterprise features (distributed replication, managed cloud, RBAC) are available separately via [VelesDB Premium](https://velesdb.com).
 

@@ -85,7 +85,7 @@ class VelesDBClient:
         Returns:
             Result dict with ``{"deleted": name}``.
         """
-        self._db.drop_collection(name)
+        self._db.delete_collection(name)
         return {"deleted": name}
 
     # ------------------------------------------------------------------

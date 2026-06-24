@@ -5,7 +5,8 @@
 
 use velesdb_core::velesql::{
     AggregateArg, AggregateFunction, AggregateType, Column, CompareOp, DistinctMode, GroupByClause,
-    HavingClause, HavingCondition, SelectColumns, SelectStatement, Value,
+    HavingClause, HavingCondition, OrderByExpr, SelectColumns, SelectOrderBy, SelectStatement,
+    Value,
 };
 
 use crate::velesql_aggregate::{apply, compute_aggregate, needs_aggregation_pipeline, ScannedRow};
@@ -97,6 +98,75 @@ fn test_group_by_count() {
             .any(|j| j.contains("\"cat\":\"b\"") && j.contains("\"n\":1")),
         "expected group cat=b with n=1, got {json:?}"
     );
+}
+
+/// Helper: index of the first row whose JSON contains `needle`.
+fn pos(rows: &[crate::velesql_result::QueryResultRow], needle: &str) -> usize {
+    rows.iter()
+        .position(|r| r.data_json_ref().contains(needle))
+        .unwrap_or_else(|| panic!("expected a row containing {needle}"))
+}
+
+#[test]
+fn test_group_by_order_by_count_desc() {
+    // GROUP BY cat ORDER BY COUNT(*) DESC must return groups in
+    // count-descending order. cat "a" has 3 rows, "b" has 1, "c" has 2.
+    let raw = vec![
+        row(1, 0.0, &serde_json::json!({"cat": "a"})),
+        row(2, 0.0, &serde_json::json!({"cat": "b"})),
+        row(3, 0.0, &serde_json::json!({"cat": "a"})),
+        row(4, 0.0, &serde_json::json!({"cat": "c"})),
+        row(5, 0.0, &serde_json::json!({"cat": "a"})),
+        row(6, 0.0, &serde_json::json!({"cat": "c"})),
+    ];
+    let rows = scanned(&raw);
+    let mut s = base_select();
+    let count_star = AggregateFunction {
+        function_type: AggregateType::Count,
+        argument: AggregateArg::Wildcard,
+        alias: None,
+    };
+    s.columns = SelectColumns::Aggregations(vec![count_star.clone()]);
+    s.group_by = Some(GroupByClause {
+        columns: vec!["cat".to_string()],
+    });
+    s.order_by = Some(vec![SelectOrderBy {
+        expr: OrderByExpr::Aggregate(count_star),
+        descending: true,
+    }]);
+    let out = apply(&s, &rows, &Params::new()).expect("test: agg order by");
+    assert_eq!(out.len(), 3);
+    // Count-descending: a (3) before c (2) before b (1).
+    assert!(pos(&out, "\"cat\":\"a\"") < pos(&out, "\"cat\":\"c\""));
+    assert!(pos(&out, "\"cat\":\"c\"") < pos(&out, "\"cat\":\"b\""));
+}
+
+#[test]
+fn test_group_by_order_by_group_key_asc() {
+    // ORDER BY a group key (cat ASC) must sort groups alphabetically.
+    let raw = vec![
+        row(1, 0.0, &serde_json::json!({"cat": "c"})),
+        row(2, 0.0, &serde_json::json!({"cat": "a"})),
+        row(3, 0.0, &serde_json::json!({"cat": "b"})),
+    ];
+    let rows = scanned(&raw);
+    let mut s = base_select();
+    s.columns = SelectColumns::Aggregations(vec![AggregateFunction {
+        function_type: AggregateType::Count,
+        argument: AggregateArg::Wildcard,
+        alias: Some("n".to_string()),
+    }]);
+    s.group_by = Some(GroupByClause {
+        columns: vec!["cat".to_string()],
+    });
+    s.order_by = Some(vec![SelectOrderBy {
+        expr: OrderByExpr::Field("cat".to_string()),
+        descending: false,
+    }]);
+    let out = apply(&s, &rows, &Params::new()).expect("test: agg order by key");
+    assert_eq!(out.len(), 3);
+    assert!(pos(&out, "\"cat\":\"a\"") < pos(&out, "\"cat\":\"b\""));
+    assert!(pos(&out, "\"cat\":\"b\"") < pos(&out, "\"cat\":\"c\""));
 }
 
 #[test]

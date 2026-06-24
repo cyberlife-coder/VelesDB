@@ -91,4 +91,4 @@ Short answer: **partially yes**.
 - Full IVF/partitioned coarse stage (true IVF/IMI) is still not present.
 - Disk-backed graph/search path (DiskANN-style) is still not present.
 - FP16/BF16 compute paths and dimension-specialized kernel generation are still future work.
-- Benchmark-driven auto-tuning (SLO-aware latency/recall controller) should be added to harden adaptive policies.
+- A latency-aware rerank controller is in place (`rerank_latency_target_us` + `adapt_rerank_k_to_latency`); a full benchmark-driven, recall-aware SLO controller is still future work.

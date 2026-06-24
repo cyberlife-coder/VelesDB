@@ -14,7 +14,7 @@ use crate::velesql::Condition;
 /// - Finite values outside f32 range or non-numeric values produce an error.
 fn json_value_to_f32(v: &serde_json::Value, param_name: &str) -> Result<f32> {
     v.as_f64().and_then(f64_to_f32).ok_or_else(|| {
-        Error::Config(format!(
+        Error::Query(format!(
             "Invalid vector parameter ${param_name}: value out of f32 range or not a number"
         ))
     })
@@ -67,6 +67,37 @@ impl Collection {
                 self.extract_vector_search(right, params)
             }
             Condition::Group(inner) => self.extract_vector_search(inner, params),
+            _ => Ok(None),
+        }
+    }
+
+    /// Extracts a `NEAR_FUSED` multi-vector search from the WHERE clause: the
+    /// resolved query vectors plus the fusion config, routed to
+    /// [`multi_query_search`](Self::multi_query_search). Walks the same
+    /// AND/Group recursion as [`extract_vector_search`](Self::extract_vector_search)
+    /// and reuses [`resolve_vector`](Self::resolve_vector) for each `VectorExpr`.
+    #[allow(clippy::self_only_used_in_recursion)]
+    pub(crate) fn extract_fused_vectors(
+        &self,
+        condition: &Condition,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Option<(Vec<Vec<f32>>, crate::velesql::FusionConfig)>> {
+        match condition {
+            Condition::VectorFusedSearch(vfs) => {
+                let vectors = vfs
+                    .vectors
+                    .iter()
+                    .map(|v| Self::resolve_vector(v, params))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Some((vectors, vfs.fusion.clone())))
+            }
+            Condition::And(left, right) => {
+                if let Some(v) = self.extract_fused_vectors(left, params)? {
+                    return Ok(Some(v));
+                }
+                self.extract_fused_vectors(right, params)
+            }
+            Condition::Group(inner) => self.extract_fused_vectors(inner, params),
             _ => Ok(None),
         }
     }
@@ -205,9 +236,9 @@ impl Collection {
     ) -> Result<Vec<f32>> {
         let val = params
             .get(name)
-            .ok_or_else(|| Error::Config(format!("Missing query parameter: ${name}")))?;
+            .ok_or_else(|| Error::Query(format!("Missing query parameter: ${name}")))?;
         let serde_json::Value::Array(arr) = val else {
-            return Err(Error::Config(format!(
+            return Err(Error::Query(format!(
                 "Invalid vector parameter ${name}: expected array"
             )));
         };

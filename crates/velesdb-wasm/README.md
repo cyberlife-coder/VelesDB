@@ -281,7 +281,11 @@ The WASM build is optimized for client-side use cases but has some limitations c
 | Knowledge Graph (nodes, edges, traversal) | ✅ | ✅ |
 | Agent Memory (SemanticMemory) | ✅ | ✅ |
 | VelesQL parsing and validation | ✅ | ✅ |
-| VelesQL query execution | ✅ | ✅ |
+| VelesQL query execution | ✅ (see carve-outs below) | ✅ |
+| Column projection / aliases / window functions | ✅ | ✅ |
+| Aggregate `ORDER BY` (over a GROUP BY) | ✅ | ✅ |
+| Machine-readable error codes (`VELES-*`) | ✅ | ✅ |
+| `EXPLAIN` (core plan vocabulary) | ✅ | ✅ |
 | JOIN operations | ✅ (INNER, LEFT) | ✅ |
 | Aggregations (GROUP BY / HAVING) | ✅ | ✅ |
 | Set operations (UNION / INTERSECT / EXCEPT) | ✅ | ✅ |
@@ -295,14 +299,40 @@ The WASM build is optimized for client-side use cases but has some limitations c
 VelesQL parsing, validation, **and execution** are all available in WASM. You can
 parse queries and inspect their AST client-side, and you can run queries against
 a `WasmDatabase` via `executeQuery()`. The single-collection executor supports
-`SELECT` (with `WHERE`, `NEAR`, `similarity()`), `GROUP BY`/`HAVING`,
-aggregations, `ORDER BY`, `UNION`/`INTERSECT`/`EXCEPT`, `INNER`/`LEFT JOIN`,
+`SELECT` (with `WHERE`, `NEAR`, `similarity()`), **column projection / aliases /
+window functions** (`ROW_NUMBER`/`RANK`/`DENSE_RANK`), `GROUP BY`/`HAVING`,
+aggregations, `ORDER BY` (payload columns, `similarity()`, arithmetic
+expressions, and aggregate ORDER BY over a GROUP BY), a default `LIMIT 10`,
+`UNION`/`INTERSECT`/`EXCEPT`, `INNER`/`LEFT JOIN`,
 `INSERT`/`UPSERT`/`UPDATE`/`DELETE`, DDL, and 1–2 hop `MATCH` graph traversal.
+`EXPLAIN` uses the same plan vocabulary as the REST server (core
+`QueryPlan::to_plan_steps()`), and execution errors carry machine-readable
+`VELES-*` codes.
 
-The only VelesQL features that still require the REST server are
-**cross-collection `MATCH` (`@collection`)** — which needs Database-level query
-routing — and `MATCH` traversals beyond 2 hops. `RIGHT`/`FULL JOIN` and
-`TRAIN QUANTIZER` are rejected with a descriptive error.
+#### Features that require the REST server (rejected with a descriptive error)
+
+These are **loud rejections**, not silent no-ops — WASM never returns a
+wrong-but-quiet result for an unsupported shape:
+
+- **Cross-collection `MATCH` (`@collection`)** — needs Database-level routing.
+- **`MATCH` traversals beyond 2 hops.**
+- **`RIGHT` / `FULL JOIN`** and **`TRAIN QUANTIZER`.**
+- **`LET` score bindings** — `LET x = ... SELECT ...` is rejected (`LET bindings
+  are not supported in WASM`).
+- **Scalar subqueries** — `WHERE x = (SELECT ...)` is rejected (`Subqueries are
+  not supported in WASM`).
+- **`USING FUSION(strategy='weighted'|'rsf')` on a single-vector `NEAR`** — WASM
+  has no BM25/graph branch to fuse against, so these weight-sensitive strategies
+  are rejected (use `rrf`/`maximum`/`average`, or a metadata filter without
+  `FUSION`). On a multi-vector `NEAR_FUSED` query the strategy is **not**
+  rejected, but only `rrf` / `average` / `maximum` are honored — `weighted` /
+  `rsf` silently fall back to RRF (matching core's `fused_config_to_strategy`).
+- **`ORDER BY similarity(field, $v)`** (a named/secondary vector) — WASM stores
+  only the primary vector, so the named-vector form is rejected on both the
+  `SELECT` and `MATCH` paths. Use `ORDER BY similarity()` (the search score) or a
+  payload column. The `MATCH` path performs no vector scoring, so it additionally
+  rejects bare `similarity()` and arithmetic `ORDER BY` (order by `depth` or
+  `alias.property` instead).
 
 ```javascript
 import { VelesQL } from '@wiscale/velesdb-wasm';

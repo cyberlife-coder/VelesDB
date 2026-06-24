@@ -1206,6 +1206,31 @@ fn test_match_query_plan_has_no_implicit_limit() {
     );
 }
 
+#[test]
+fn test_match_query_from_query_emits_traversal_with_strategy() {
+    // Backlog #14: from_query (the EXPLAIN/exec path) must route a MATCH query
+    // through the traversal planner, not produce a bare TableScan mislabeled
+    // MATCH. The plan must carry a MatchTraversal step with a non-empty strategy.
+    let query =
+        crate::velesql::Parser::parse("MATCH (a)-[:KNOWS]->(b) RETURN b LIMIT 5").expect("parse");
+    let plan = QueryPlan::from_query(&query);
+
+    let steps = plan.to_plan_steps();
+    let traversal = steps
+        .iter()
+        .find(|s| s.operation == PlanStepKind::MatchTraversal)
+        .unwrap_or_else(|| panic!("expected a MatchTraversal step, got: {steps:?}"));
+    assert!(
+        traversal.description.len() > "Graph traversal: ".len(),
+        "traversal strategy must be non-empty: {}",
+        traversal.description
+    );
+    assert!(
+        !steps.iter().any(|s| s.operation == PlanStepKind::TableScan),
+        "MATCH plan must not contain a TableScan: {steps:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // to_plan_steps(): single-sourced structured EXPLAIN steps (C11)
 // ---------------------------------------------------------------------------

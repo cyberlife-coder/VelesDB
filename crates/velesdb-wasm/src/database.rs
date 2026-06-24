@@ -17,6 +17,7 @@ use crate::graph_store::WasmGraphStore;
 use crate::parsing;
 use crate::store_new;
 use crate::vector_store::VectorStore;
+use crate::wasm_error::WasmError;
 
 // ---------------------------------------------------------------------------
 // Shared inner store
@@ -70,10 +71,12 @@ impl DatabaseInner {
     ///
     /// Without this, the lifecycle methods only ran a `HashMap` existence
     /// check, silently accepting names core would reject (path traversal,
-    /// reserved device names, forbidden characters). Mapped to a `String`
-    /// error for native-target testability.
-    fn validate_name(name: &str) -> Result<(), String> {
-        velesdb_core::validate_collection_name(name).map_err(|e| e.to_string())
+    /// reserved device names, forbidden characters). Returns a structured
+    /// [`WasmError`] carrying core's `VELES-034` code instead of pre-flattening
+    /// to a bare string (backlog #22), so the FFI layer can surface
+    /// `error.code` to browser clients.
+    pub(crate) fn validate_name(name: &str) -> Result<(), WasmError> {
+        velesdb_core::validate_collection_name(name).map_err(WasmError::from)
     }
 
     pub(crate) fn create_collection(
@@ -99,7 +102,7 @@ impl DatabaseInner {
         metric: &str,
         mode: crate::StorageMode,
     ) -> Result<(), String> {
-        Self::validate_name(name)?;
+        Self::validate_name(name).map_err(|e| e.message().to_owned())?;
         if self.collections.contains_key(name) {
             return Err(format!("Collection '{name}' already exists"));
         }
@@ -130,7 +133,7 @@ impl DatabaseInner {
     /// that does not require vector similarity search. Mirrors the Mobile
     /// bindings surface (`create_metadata_collection`).
     pub(crate) fn create_metadata_collection(&mut self, name: &str) -> Result<(), String> {
-        Self::validate_name(name)?;
+        Self::validate_name(name).map_err(|e| e.message().to_owned())?;
         if self.collections.contains_key(name) {
             return Err(format!("Collection '{name}' already exists"));
         }
@@ -258,6 +261,10 @@ impl WasmDatabase {
         dimension: usize,
         metric: &str,
     ) -> Result<(), JsValue> {
+        // Validate the name through the structured path first so an invalid
+        // name surfaces `error.code === "VELES-034"` to JS (backlog #22);
+        // remaining failures (metric, already-exists) keep their string form.
+        DatabaseInner::validate_name(name).map_err(WasmError::into_js_value)?;
         self.inner
             .create_collection(name, dimension, metric)
             .map_err(|e| JsValue::from_str(&e))
@@ -273,6 +280,7 @@ impl WasmDatabase {
     /// Returns an error if the collection already exists.
     #[wasm_bindgen(js_name = createMetadataCollection)]
     pub fn create_metadata_collection(&mut self, name: &str) -> Result<(), JsValue> {
+        DatabaseInner::validate_name(name).map_err(WasmError::into_js_value)?;
         self.inner
             .create_metadata_collection(name)
             .map_err(|e| JsValue::from_str(&e))

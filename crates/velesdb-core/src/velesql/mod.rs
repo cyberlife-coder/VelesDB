@@ -85,6 +85,7 @@ mod validation;
 mod validation_anchor;
 #[cfg(test)]
 mod validation_anchor_tests;
+mod validation_fusion;
 #[cfg(test)]
 mod validation_parity_tests;
 #[cfg(test)]
