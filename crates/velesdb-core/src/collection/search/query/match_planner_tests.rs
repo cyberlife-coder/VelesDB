@@ -75,6 +75,24 @@ fn test_planner_chooses_vector_first_for_start_similarity() {
 }
 
 #[test]
+fn test_planner_routes_similarity_with_payload_order_by_to_graph_first() {
+    // Backlog #1b: a start-similarity MATCH that ORDER BYs a non-similarity
+    // payload field must use GraphFirst's exact enumeration — VectorFirst's
+    // approximate HNSW prefix cannot answer a global payload ordering.
+    let query = crate::velesql::Parser::parse(
+        "MATCH (a:Person) WHERE similarity(a.embedding, $v) > 0.8 \
+         RETURN a ORDER BY a.year DESC LIMIT 10",
+    )
+    .expect("test: parse similarity + payload ORDER BY");
+    let match_clause = query.match_clause.expect("test: match clause present");
+    let strategy = MatchQueryPlanner::plan(&match_clause, &default_stats());
+    assert!(
+        matches!(strategy, MatchExecutionStrategy::GraphFirst { .. }),
+        "similarity + ORDER BY payload must route to GraphFirst (exact), not VectorFirst"
+    );
+}
+
+#[test]
 fn test_estimate_selectivity() {
     assert!((MatchQueryPlanner::estimate_selectivity(0.9) - 0.1).abs() < 0.01);
     assert!((MatchQueryPlanner::estimate_selectivity(0.5) - 0.5).abs() < 0.01);

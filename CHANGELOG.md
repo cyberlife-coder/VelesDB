@@ -159,8 +159,12 @@ release.
   `ORDER BY` is present, traversal now visits the full candidate set (bounded by
   the shared `MAX_LIMIT` ceiling and the guard-rails) before sorting and
   applying the LIMIT; without an `ORDER BY`, the LIMIT-on-traversal-order
-  early-break is preserved. Affects the SQL `/query` path and every surface that
-  finalizes through it.
+  early-break is preserved. A start-`similarity()` `MATCH` that `ORDER BY`s a
+  non-similarity field — which would otherwise pick the approximate-HNSW
+  `VectorFirst` strategy and rank only a similarity-bounded prefix — now routes
+  to `GraphFirst`'s exact enumeration, so the global top-K holds (deterministically)
+  across all traversal strategies. Affects the SQL `/query` path and every
+  surface that finalizes through it.
   *(Behavior change: `MATCH ORDER BY ... LIMIT` results change when the global
   top-K differs from the first-K traversed.)*
 - **`NEAR_FUSED` multi-vector fusion now executes via SQL.** It previously parsed

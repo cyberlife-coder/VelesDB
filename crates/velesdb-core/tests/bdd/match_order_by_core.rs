@@ -105,3 +105,66 @@ fn scenario_match_query_ordered_matches_sql_path() {
     );
     assert_eq!(ordered, vec![6u64, 5], "ordered top-2 by year DESC");
 }
+
+// --- A VectorFirst-selecting MATCH under a payload ORDER BY (backlog #1b) ---
+//
+// A start-similarity single-node MATCH would otherwise select the VectorFirst
+// strategy, which fetches only an approximate-HNSW, similarity-ranked prefix —
+// it cannot yield the global top-K under an ORDER BY on a non-similarity field.
+// The planner now routes such queries to GraphFirst's EXACT label enumeration,
+// making the result deterministic (no HNSW recall dependence).
+//
+// Dataset (`vdocs`, 2-dim cosine): vectors fan from 0deg (id 1, best cosine to
+// the query [1,0]) to ~50deg (id 6, worst cosine but still cos>=0.64 > 0.5),
+// while `year` ascends with id. So the global year-DESC top-2 (ids 6, 5 — the
+// least-similar, highest-year) is disjoint from the similarity-top-2 (ids 1, 2).
+
+/// Builds `vdocs`: ids 1..=6, `year = 2000 + id`, vectors fanning 0..~50deg.
+fn setup_vdocs(db: &Database) {
+    db.create_vector_collection("vdocs", 2, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create vdocs");
+    let vc = db.get_vector_collection("vdocs").expect("test: get vdocs");
+    let points: Vec<Point> = (1..=DOC_COUNT)
+        .map(|id| {
+            #[allow(clippy::cast_precision_loss)]
+            let angle = (id - 1) as f32 * (50.0_f32.to_radians() / (DOC_COUNT - 1) as f32);
+            Point::new(
+                id,
+                vec![angle.cos(), angle.sin()],
+                Some(json!({"_labels": ["Doc"], "year": 2000 + id})),
+            )
+        })
+        .collect();
+    vc.upsert(points).expect("test: upsert vdocs");
+}
+
+fn vdocs_ids(db: &Database, sql: &str) -> Vec<u64> {
+    let mut params = HashMap::new();
+    params.insert("_collection".to_string(), json!("vdocs"));
+    params.insert("q".to_string(), json!([1.0, 0.0]));
+    let query = Parser::parse(sql).expect("test: parse vdocs MATCH");
+    db.execute_query(&query, &params)
+        .expect("test: execute vdocs MATCH")
+        .iter()
+        .map(|r| r.point.id)
+        .collect()
+}
+
+/// #1b (VectorFirst-selecting query): a start-similarity MATCH with an ORDER BY
+/// on the `year` payload must return the GLOBAL year-DESC top-2 (ids 6, 5), not
+/// the year-sort of the similarity-ranked prefix (ids 2, 1).
+#[test]
+fn scenario_similarity_match_order_by_payload_returns_global_top_k() {
+    let (_dir, db) = create_test_db();
+    setup_vdocs(&db);
+    let ids = vdocs_ids(
+        &db,
+        "MATCH (d:Doc) WHERE similarity(d, $q) > 0.5 RETURN d ORDER BY d.year DESC LIMIT 2",
+    );
+    assert_eq!(
+        ids,
+        vec![6u64, 5],
+        "similarity MATCH + ORDER BY year DESC LIMIT 2 must be the GLOBAL top-2, \
+         not the year-sort of the similarity-ranked prefix"
+    );
+}
