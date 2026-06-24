@@ -127,8 +127,33 @@ release.
   `"VELES-010"`. The code is single-sourced from `velesdb_core::Error::code()`
   (no WASM-local taxonomy); the property is non-enumerable so it does not appear
   in `JSON.stringify(error)`. *(Additive: the `message` text is unchanged.)*
+- **Python `SearchOptions` accepts a `fusion=` strategy for typed hybrid
+  dense+sparse search.** A new optional `fusion: Optional[FusionStrategy]`
+  field (plus a `with_fusion()` builder) is threaded through `search_request`
+  so RSF / weighted hybrid fusion is reachable without raw `USING FUSION` SQL.
+  When omitted (or `None`) the search keeps the historical Reciprocal Rank
+  Fusion (RRF, k=60), so behavior is unchanged for existing callers.
+  *(Additive: new optional field/builder; default preserved.)*
+- **Python `Database.set_auto_reindex(name, enabled)` toggles auto-reindex at
+  runtime.** Routes a validated `ALTER COLLECTION <name> SET (auto_reindex = …)`
+  through the VelesQL DDL executor (persisted), the typed counterpart to running
+  the raw statement via `execute_query`. `Collection.info()` now also reports the
+  current `auto_reindex` flag. *(Additive.)*
 
 ### Fixed
+- **Python `match_query` honors `RETURN ... ORDER BY` and the post-sort
+  `LIMIT`.** The Python bindings now route a non-similarity `MATCH` through the
+  core `match_query_ordered` cost-based planner (the SQL `/query` single source
+  of truth) instead of a bare traversal entry point, so `ORDER BY` + post-sort
+  `LIMIT` rank identically to the SQL path on both `Collection` and
+  `GraphCollection`.
+- **Python `explain()` reports calibrated SELECT plans, real MATCH strategies,
+  and rejects invalid queries.** `Collection.explain` now threads the
+  collection's live indexed-field set and statistics through the core planner,
+  so a SELECT whose `WHERE` targets an indexed field emits an `IndexLookup` node
+  with a calibrated cost, and a MATCH reports a real traversal strategy instead
+  of a bare/zeroed plan. Semantically invalid queries (e.g. a `WHERE` subquery)
+  now raise `ValueError` instead of silently building a plan.
 - **EXPLAIN of a MATCH query now shows the graph traversal and its strategy.**
   `EXPLAIN`/`EXPLAIN ANALYZE` of a MATCH query (REST `/query/explain`, core
   `Database`/`Collection` explain paths) previously emitted a bare empty
