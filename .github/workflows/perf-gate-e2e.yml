@@ -251,3 +251,35 @@ jobs:
           name: perf-report-100k-${{ github.sha }}
           path: perf-report-100k.json
           retention-days: 90
+
+  # ===========================================================================
+  # Scheduled Rust 100K multi-mode recall gate
+  #
+  # The Python job above re-checks 100K recall on the production search path for
+  # the default quality. This job complements it with the native Rust gate
+  # (`tests/scale_recall_100k.rs`), which validates ALL four quality modes
+  # (Fast ≥ 0.90, Balanced ≥ 0.95, Accurate ≥ 0.98, Perfect = 1.00) against a
+  # brute-force ground truth. Those tests are `#[ignore]` (too slow for the PR
+  # suite), so without this job they never ran in CI.
+  # ===========================================================================
+  recall-100k-rust:
+    name: Scheduled Rust 100K recall (Fast/Balanced/Accurate/Perfect)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537 # stable
+        with:
+          toolchain: "1.89"
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: "velesdb-perf-gate"
+
+      - name: Run 100K multi-mode recall gate (brute-force ground truth)
+        # The four tests assert their per-mode thresholds internally, so a
+        # recall regression at scale fails the job. Single-threaded: the suite
+        # shares filesystem state (CLAUDE.md).
+        run: |
+          cargo test -p velesdb-core --test scale_recall_100k \
+            --features persistence -- --ignored --nocapture --test-threads=1

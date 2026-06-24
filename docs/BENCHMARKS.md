@@ -378,17 +378,38 @@ Section 9 explains why VelesDB does not currently publish head-to-head competito
 - **Recall@10** = mean over 10,000 queries of `|retrieved_top10 ∩ groundtruth_top10| / 10`.
 - **Latency** measured by Criterion (20 samples / ef value, mean + 95% CI). Recall measured in a separate pass after the timing pass so the timing loop is not polluted by intersection bookkeeping.
 
-### 11.3 Expected ranges
+### 11.3 Measured results
 
-First-run numbers will be populated in this section after the initial bench run on the reference hardware (i9-14900KF, 64 GB DDR5, rustc 1.94, `target-cpu=native`). Until then, literature reference points (published by the respective libraries on similar hardware — **not VelesDB numbers**):
+First reproducible run, **VelesDB v3.3.0** (M=16, ef_construction=200, L2), full 1M base × 10K queries. Host: **Apple Silicon (M-series, ARM64/NEON), rustc release build**, measured on an **otherwise-idle machine, single bench process** (Criterion 20-sample with 95% CIs; latency stable within ±1% run-to-run). The i9-14900KF `target-cpu=native` reference run is tracked separately — latency is hardware-specific; **recall is hardware-independent**, so the recall columns are portable.
+
+**Plain-HNSW path** (`search_raw`, fixed `ef_search`, no reranking — the apples-to-apples methodology comparable to the libraries below):
+
+| ef_search | Recall@10 | p50 latency (Criterion median) |
+|-----------|-----------|--------------------------------|
+| 64 | 0.9012 | 71.8 µs |
+| 128 | 0.9435 | 130.5 µs |
+| 256 | 0.9659 | 235.8 µs |
+| 512 | 0.9759 | 433.3 µs |
+
+**Production path** (`search_with_quality` — quality-aware ef scaling + exact-SIMD reranking; the recall a real application query gets):
+
+| Mode | ef_search (at 1M) | Recall@10 |
+|------|-------------------|-----------|
+| Accurate | ~1024 | 0.9803 |
+| Perfect | ~8192 | 0.9994 |
+
+Notes:
+- The two paths answer different questions: the plain path is for cross-implementation comparison; the production path is what an application actually calls. Don't compare the plain numbers against the 10K production-path figures elsewhere in this doc.
+- Recall climbs monotonically with `ef_search`; ef=128 (0.9435) clears the ≥ 0.90 regression floor (§11.5) with margin.
+- **`Perfect` reaches 0.9994 — not literally 1.0 — at 1M scale.** The exact-1.0 guarantee is validated by the contract test at ≤ 100K (synthetic data, `scale_recall_100k.rs`). On real SIFT1M at 1M, ~0.06% of true neighbours fall outside even the ef=8192 candidate pool, and exact reranking can only reorder the candidates the graph surfaced — it cannot recover a neighbour the traversal never visited. So "100%" is a ≤100K guarantee, not a 1M one.
+
+Literature reference points (published by the respective libraries on similar hardware — **not VelesDB numbers**, orientation only):
 
 | Library | Config | Recall@10 | Per-query latency |
 |---------|--------|-----------|-------------------|
 | HNSWlib | M=16, ef=128 | ≈ 0.99 | ≈ 0.1–0.3 ms |
 | Faiss IVF+PQ | nlist=1024, nprobe=16 | 0.85–0.95 | ≈ 0.5–1 ms |
 | ScaNN | default | 0.98–0.99 | ≈ 0.1–0.2 ms |
-
-These are orientation only. VelesDB numbers will replace this table after the first reproducible run.
 
 ### 11.4 How to run
 
@@ -417,7 +438,10 @@ cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m 2>&1 \
 
 ### 11.6 CI coverage
 
-The SIFT1M bench is feature-gated behind `bench-sift1m`, so regular workspace `cargo check` / `cargo clippy` runs do NOT discover this code. To prevent silent API drift (e.g., [`HnswIndex::search_raw`] signature changes), CI runs a dedicated `Bench SIFT1M Compile Check` job (see `.github/workflows/ci.yml`) that invokes `cargo check -p velesdb-core --benches --features bench-sift1m` and the same for `--tests ... --test sift1m_loader_unit_tests`. The job only type-checks — it does not download the dataset or run any benchmark.
+Two layers of CI coverage:
+
+- **Per-PR compile check** — the SIFT1M bench is feature-gated behind `bench-sift1m`, so regular workspace `cargo check` / `cargo clippy` runs do NOT discover this code. To prevent silent API drift (e.g., [`HnswIndex::search_raw`] signature changes), CI runs a dedicated `Bench SIFT1M Compile Check` job (see `.github/workflows/ci.yml`) that invokes `cargo check -p velesdb-core --benches --features bench-sift1m` and the same for `--tests ... --test sift1m_loader_unit_tests`. The job only type-checks — it does not download the dataset or run any benchmark.
+- **Nightly recall gate** — `.github/workflows/bench-sift1m-nightly.yml` (`SIFT1M Recall (nightly)`) downloads the dataset, builds the full 1M index, runs the ef sweep, and **gates Recall@10 ≥ 0.90 at ef=128** (§11.5). Latency is reported but not gated (runner variance). This is the job that keeps the §11.3 numbers from silently regressing.
 
 ### 11.7 Known limitations of this harness
 

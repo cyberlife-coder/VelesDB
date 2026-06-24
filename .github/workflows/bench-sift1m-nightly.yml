@@ -1,0 +1,105 @@
+name: SIFT1M Recall (nightly)
+
+# Runs the canonical ANN benchmark — INRIA TEXMEX SIFT1M (1M × 128D, L2) — and
+# gates Recall@10. Until this workflow existed, SIFT1M was *compile-checked
+# only* (see ci.yml `bench-sift1m-compile`): the harness existed but never ran,
+# so the repo published no SIFT1M numbers — the one artifact every ANN library
+# (HNSWlib / Faiss / ScaNN) reports.
+#
+# This is heavyweight (≈168 MB dataset download on first run + a full 1M index
+# build), so it runs nightly and on manual dispatch — never on PRs.
+#
+# Recall@10 is hardware-independent, so it is GATED at the documented
+# regression threshold (≥ 0.90 at ef=128, see docs/BENCHMARKS.md §11). Latency
+# is reported but NOT gated: GitHub-hosted runners are noisy and several×
+# slower than the reference machine.
+
+on:
+  schedule:
+    - cron: "0 5 * * *" # nightly 05:00 UTC (offset from perf-gate-e2e at 03:17)
+  workflow_dispatch:
+
+concurrency:
+  group: bench-sift1m-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: "1.89"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Recall@10 regression floor at ef=128 (docs/BENCHMARKS.md §11).
+  SIFT1M_RECALL_MIN: 0.90
+
+jobs:
+  sift1m-recall:
+    name: SIFT1M Recall@10 ≥ 0.90 (ef=128)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537 # stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: "velesdb-sift1m"
+
+      - name: Run SIFT1M recall + latency sweep
+        # First run downloads ~168 MB (tarball mirror, then Hugging Face
+        # fallback) into target/bench-data/sift1m/. The bench prints
+        # grep-friendly `RECALL_REPORT\tef=<E>\trecall@10=<R>` lines.
+        run: |
+          cargo bench -p velesdb-core --bench sift1m_recall \
+            --features bench-sift1m -- --noplot 2>&1 | tee sift1m.log
+
+      - name: Gate Recall@10 at ef=128
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import sys
+
+          recall_min = float(os.environ["SIFT1M_RECALL_MIN"])
+          recalls = {}
+          with open("sift1m.log", encoding="utf-8", errors="replace") as f:
+              for line in f:
+                  m = re.search(r"RECALL_REPORT\s+ef=(\d+)\s+recall@10=([0-9.]+)", line)
+                  if m:
+                      recalls[int(m.group(1))] = float(m.group(2))
+
+          if not recalls:
+              sys.exit("FAIL: no RECALL_REPORT lines in sift1m.log (bench did not run?)")
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          lines = ["## SIFT1M Recall@10 (1M × 128D, L2, plain-HNSW path)", ""]
+          for ef in sorted(recalls):
+              lines.append(f"- ef={ef}: recall@10 = **{recalls[ef]:.4f}**")
+          lines += ["", f"Gate: ef=128 ≥ {recall_min}", ""]
+          if summary:
+              with open(summary, "a", encoding="utf-8") as s:
+                  s.write("\n".join(lines) + "\n")
+          print("\n".join(lines))
+
+          r128 = recalls.get(128)
+          if r128 is None:
+              sys.exit("FAIL: no ef=128 recall in report")
+          if r128 < recall_min:
+              sys.exit(f"FAIL: recall@10 {r128:.4f} < {recall_min} at ef=128")
+          print("PASS")
+          PY
+
+      - name: Upload SIFT1M log + criterion results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sift1m-recall-${{ github.sha }}
+          path: |
+            sift1m.log
+            target/criterion/
+          retention-days: 30
