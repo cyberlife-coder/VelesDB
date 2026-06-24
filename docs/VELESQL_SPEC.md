@@ -1515,7 +1515,10 @@ USING FUSION(strategy = 'rrf', k = 60)
 
 > **USING FUSION requires at least two fusable branches** (e.g. `vector NEAR`
 > + `MATCH`, or `vector NEAR` + `vector SPARSE_NEAR`) or a single `NEAR_FUSED`
-> predicate. Applied to a single-branch query it is rejected at validation.
+> predicate. Applied to a single-branch query it is rejected at validation with
+> error code `V012` (`FusionMisconfigured`). The same code covers RSF weights
+> that do not sum to 1.0, negative weights, and `weighted`/`rsf` on a
+> `NEAR_FUSED` predicate.
 > `dense_w`/`sparse_w` are accepted as short aliases of `dense_weight`/`sparse_weight`.
 > Unknown strategy names and unknown option keys are rejected (no silent RRF fallback).
 

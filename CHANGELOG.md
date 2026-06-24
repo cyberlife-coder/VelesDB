@@ -15,6 +15,29 @@ explicit errors or real values — review the SemVer impact before the next
 release.
 
 ### Changed
+- **Query-shape and bind-parameter rejections now classify as `VELES-010`
+  (`Query`) instead of `VELES-009` (`Config`).** Live query-path failures that
+  describe a malformed *query* — an unsupported query shape (multiple
+  `similarity()` under `OR`, `NEAR_FUSED` mixed with another vector predicate or
+  under `OR`/`NOT`, more than one `SPARSE_NEAR`, an empty MATCH pattern, a MATCH
+  anchor-alias mismatch, `HAVING` without `GROUP BY`, an aggregate `SELECT`
+  missing aggregations) and a missing or malformed bind parameter (a `$v` /
+  `$sv` not provided, a vector param that is not a numeric array, a sparse param
+  that is not a valid index/value map) — were built as `Error::Config` and so
+  surfaced with the engine code `VELES-009`. They now build as `Error::Query`
+  (`VELES-010`). Genuine engine/collection-configuration errors (distance
+  metric, HNSW params, EXPLAIN threshold, group-count cap, NOT-similarity scan
+  ceiling) stay `VELES-009`. *(Behavior change: the `code` field and the
+  TypeScript SDK error class change from `ConfigError` to `QueryError` for these
+  rejections.)*
+- **Misconfigured `USING FUSION` clauses now carry a fusion-specific validation
+  code/message (`V012`, `FusionMisconfigured`) instead of the misleading `V006`
+  (`similarity() requires a vector search context`).** Single-branch FUSION,
+  RSF weights that do not sum to 1.0, negative weights, and `weighted`/`rsf` on
+  `NEAR_FUSED` now report an honest fusion classification. The engine-level class
+  is unchanged (`VELES-010`, `Query`); only the embedded validation code and
+  message change. *(Behavior change: the embedded validation `code` for these
+  rejections changes from `V006` to `V012`.)*
 - **`USING FUSION` is now validated; misconfigured clauses error instead of
   silently degrading.** Five correctness flips, all surfaced at validate-time
   (or parse-time) so the previous silent fallbacks are unreachable:

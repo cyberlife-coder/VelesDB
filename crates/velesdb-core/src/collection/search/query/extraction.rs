@@ -14,7 +14,7 @@ use crate::velesql::Condition;
 /// - Finite values outside f32 range or non-numeric values produce an error.
 fn json_value_to_f32(v: &serde_json::Value, param_name: &str) -> Result<f32> {
     v.as_f64().and_then(f64_to_f32).ok_or_else(|| {
-        Error::Config(format!(
+        Error::Query(format!(
             "Invalid vector parameter ${param_name}: value out of f32 range or not a number"
         ))
     })
@@ -236,9 +236,9 @@ impl Collection {
     ) -> Result<Vec<f32>> {
         let val = params
             .get(name)
-            .ok_or_else(|| Error::Config(format!("Missing query parameter: ${name}")))?;
+            .ok_or_else(|| Error::Query(format!("Missing query parameter: ${name}")))?;
         let serde_json::Value::Array(arr) = val else {
-            return Err(Error::Config(format!(
+            return Err(Error::Query(format!(
                 "Invalid vector parameter ${name}: expected array"
             )));
         };

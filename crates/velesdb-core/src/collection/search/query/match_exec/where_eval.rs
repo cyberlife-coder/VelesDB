@@ -80,7 +80,7 @@ pub(super) fn resolve_query_vector(
         VectorExpr::Parameter(name) => {
             let param_value = params
                 .get(name)
-                .ok_or_else(|| Error::Config(format!("Missing vector parameter: ${name}")))?;
+                .ok_or_else(|| Error::Query(format!("Missing vector parameter: ${name}")))?;
 
             match param_value {
                 serde_json::Value::Array(arr) => Ok(arr
@@ -93,7 +93,7 @@ pub(super) fn resolve_query_vector(
                         })
                     })
                     .collect()),
-                _ => Err(Error::Config(format!(
+                _ => Err(Error::Query(format!(
                     "Parameter ${name} must be a vector array"
                 ))),
             }
@@ -463,7 +463,7 @@ impl Collection {
             Value::Parameter(name) => {
                 let param_value = params
                     .get(name)
-                    .ok_or_else(|| Error::Config(format!("Missing parameter: ${name}")))?;
+                    .ok_or_else(|| Error::Query(format!("Missing parameter: ${name}")))?;
 
                 Ok(match param_value {
                     serde_json::Value::Number(n) => {
@@ -481,7 +481,7 @@ impl Collection {
                     serde_json::Value::Bool(b) => Value::Boolean(*b),
                     serde_json::Value::Null => Value::Null,
                     _ => {
-                        return Err(Error::Config(format!(
+                        return Err(Error::Query(format!(
                             "Unsupported parameter type for ${name}: {param_value:?}",
                         )));
                     }
