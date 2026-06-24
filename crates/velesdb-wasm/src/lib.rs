@@ -99,6 +99,7 @@ mod velesql_similarity;
 mod velesql_update;
 mod velesql_value;
 mod velesql_where;
+mod wasm_error;
 
 pub use agent::SemanticMemory;
 pub use database::{WasmCollectionHandle, WasmDatabase};

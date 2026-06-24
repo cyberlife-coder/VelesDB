@@ -95,6 +95,15 @@ release.
   graph rows, so they rank identically instead of re-implementing ordering or
   returning raw traversal order. *(Additive: new method; existing
   `execute_match` / `execute_match_with_similarity` are unchanged.)*
+- **WASM errors now carry a machine-readable `code`.** Browser rejections were
+  bare `Error(message)` strings, so clients could not narrow them — contradicting
+  `ERROR_CODES.md`, which promises an `error.code` on every client surface. A
+  dimension-mismatch search now rejects with a structured `Error` whose
+  non-enumerable `code` property is `"VELES-004"`, an invalid collection name
+  with `"VELES-034"`, and a `VelesQL` parse failure (`VelesQL.parse`) with
+  `"VELES-010"`. The code is single-sourced from `velesdb_core::Error::code()`
+  (no WASM-local taxonomy); the property is non-enumerable so it does not appear
+  in `JSON.stringify(error)`. *(Additive: the `message` text is unchanged.)*
 
 ### Fixed
 - **EXPLAIN of a MATCH query now shows the graph traversal and its strategy.**
@@ -214,6 +223,20 @@ release.
   / `average` keep ranking the (now hard-filtered) vector results.
   *(Behavior change: WASM fused single-`NEAR` queries drop WHERE-failing rows;
   weighted/rsf single-branch fusion errors.)*
+- **WASM `EXPLAIN` now uses the core plan vocabulary.** The browser EXPLAIN
+  renderer emitted divergent node labels (`Scan`, `NestedLoopJoin`,
+  `LimitOffset`, `GraphPatternMatch`) under `{step, node, detail}` keys that did
+  not match the REST `/query/explain` taxonomy. Rows now carry the same wire keys
+  as the REST `ExplainStep` (`step`, `operation`, `description`, `estimated_rows`,
+  `estimation_method`) and the same `operation` vocabulary as core's
+  `PlanStep::rest_operation()` (`VectorSearch`, `FullScan`, `Filter`,
+  `{Type}Join`, `GroupBy`, `Aggregate`, `Sort`, `Limit`, `Offset`,
+  `MatchTraversal`); the leading scan carries an `estimated_rows` row-count hint.
+  WASM-only concerns with no core plan node (`FUSION`, `DISTINCT`) fold into a
+  step's description rather than inventing an out-of-taxonomy operation. Core's
+  `to_plan_steps()` itself is `persistence`-gated and unreachable from the
+  no-persistence WASM build, so the renderer mirrors the vocabulary rather than
+  re-exporting it. *(Behavior change: WASM EXPLAIN row keys/labels change.)*
 
 ## [3.2.1] — 2026-06-20
 
