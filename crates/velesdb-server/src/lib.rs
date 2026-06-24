@@ -248,7 +248,6 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             handlers::match_query::MatchQueryResponse,
             handlers::match_query::MatchQueryResultItem,
             handlers::match_query::MatchQueryMeta,
-            handlers::match_query::MatchQueryError,
             handlers::points::BulkDeleteRequest,
             handlers::points::relations::RelateRequest,
             handlers::points::relations::RelateResponse,

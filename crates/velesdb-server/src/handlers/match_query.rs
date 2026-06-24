@@ -6,7 +6,7 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    response::IntoResponse,
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -14,8 +14,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use utoipa::ToSchema;
 use velesdb_core::api_types::serde_id;
+use velesdb_core::Error;
 
-use crate::types::VELESQL_CONTRACT_VERSION;
+use crate::handlers::helpers::auto_core_error_response;
+use crate::types::{ErrorResponse, VELESQL_CONTRACT_VERSION};
 use crate::AppState;
 
 /// Request body for MATCH query execution.
@@ -71,21 +73,6 @@ pub struct MatchQueryMeta {
     pub velesql_contract_version: String,
 }
 
-/// Error response for MATCH query.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct MatchQueryError {
-    /// Error message.
-    pub error: String,
-    /// Error code.
-    pub code: String,
-    /// Actionable hint for developers.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hint: Option<String>,
-    /// Optional details for diagnostics.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<serde_json::Value>,
-}
-
 /// Execute a MATCH query on a collection.
 ///
 /// # Endpoint
@@ -105,10 +92,13 @@ pub struct MatchQueryError {
 ///
 /// # Errors
 ///
-/// Returns error tuple with status code and JSON error in these cases:
-/// - `404 NOT_FOUND` - Collection not found
-/// - `400 BAD_REQUEST` - Parse error or not a MATCH query
-/// - `500 INTERNAL_SERVER_ERROR` - Execution error
+/// All failures are mapped through the canonical `auto_core_error_response`,
+/// so the JSON body carries the `VELES-XXX` code and the HTTP status is
+/// derived from the core error variant:
+/// - `404 NOT_FOUND` (`VELES-002`) — collection not found
+/// - `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,
+///   invalid threshold, or an unbound query parameter
+/// - other core variants map per [`super::helpers::http_status_for_error`]
 #[utoipa::path(
     post,
     path = "/collections/{name}/match",
@@ -117,102 +107,76 @@ pub struct MatchQueryError {
     request_body = MatchQueryRequest,
     responses(
         (status = 200, description = "Match query results", body = MatchQueryResponse),
-        (status = 400, description = "Parse error or invalid query", body = MatchQueryError),
-        (status = 404, description = "Collection not found", body = MatchQueryError),
-        (status = 500, description = "Internal server error", body = MatchQueryError)
+        (status = 400, description = "Parse error or invalid query", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
 pub async fn match_query(
     Path(collection_name): Path<String>,
     State(state): State<Arc<AppState>>,
     Json(request): Json<MatchQueryRequest>,
-) -> Result<Json<MatchQueryResponse>, (StatusCode, Json<MatchQueryError>)> {
+) -> axum::response::Response {
+    match run_match(&state, &collection_name, &request) {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => auto_core_error_response(&e),
+    }
+}
+
+/// Resolve, parse, validate, and execute a MATCH request, surfacing every
+/// failure as a `velesdb_core::Error` so the handler can route it through
+/// `auto_core_error_response` (canonical VELES code + HTTP status).
+fn run_match(
+    state: &AppState,
+    collection_name: &str,
+    request: &MatchQueryRequest,
+) -> Result<MatchQueryResponse, Error> {
     let start = std::time::Instant::now();
 
-    let collection = resolve_match_collection(&state, &collection_name).ok_or_else(|| {
-        mk_match_error(
-            StatusCode::NOT_FOUND,
-            format!("Collection '{}' not found", collection_name),
-            "COLLECTION_NOT_FOUND",
-            "Create the collection first or correct the collection name in the route",
-            Some(serde_json::json!({ "collection": collection_name })),
-        )
-    })?;
+    let collection = resolve_match_collection(state, collection_name)
+        .ok_or_else(|| Error::CollectionNotFound(collection_name.to_string()))?;
 
     let match_clause = parse_match_clause(&request.query)?;
     validate_threshold(request.threshold)?;
 
-    let results = execute_match(&collection, &match_clause, &request)?;
+    let results = execute_match(&collection, &match_clause, request)?;
 
     let count = results.len();
     #[allow(clippy::cast_possible_truncation)]
     let took_ms = start.elapsed().as_millis() as u64;
 
-    Ok(Json(MatchQueryResponse {
+    Ok(MatchQueryResponse {
         results,
         took_ms,
         count,
         meta: MatchQueryMeta {
             velesql_contract_version: VELESQL_CONTRACT_VERSION.to_string(),
         },
-    }))
-}
-
-/// Build a match query error tuple.
-fn mk_match_error(
-    status: StatusCode,
-    error: String,
-    code: &str,
-    hint: &str,
-    details: Option<serde_json::Value>,
-) -> (StatusCode, Json<MatchQueryError>) {
-    (
-        status,
-        Json(MatchQueryError {
-            error,
-            code: code.to_string(),
-            hint: Some(hint.to_string()),
-            details,
-        }),
-    )
+    })
 }
 
 /// Parse a query string and extract the MATCH clause.
-fn parse_match_clause(
-    query_str: &str,
-) -> Result<velesdb_core::velesql::MatchClause, (StatusCode, Json<MatchQueryError>)> {
-    let query = velesdb_core::velesql::Parser::parse(query_str).map_err(|e| {
-        mk_match_error(
-            StatusCode::BAD_REQUEST,
-            format!("Parse error: {}", e),
-            "PARSE_ERROR",
-            "Check MATCH syntax and bound parameters",
-            None,
-        )
-    })?;
-
+///
+/// Both a syntax error and a non-MATCH query are client-side query mistakes,
+/// so they map to `Error::Query` (`VELES-010`, 400).
+fn parse_match_clause(query_str: &str) -> Result<velesdb_core::velesql::MatchClause, Error> {
+    let query = velesdb_core::velesql::Parser::parse(query_str)?;
     query.match_clause.ok_or_else(|| {
-        mk_match_error(
-            StatusCode::BAD_REQUEST,
-            "Query is not a MATCH query".to_string(),
-            "NOT_MATCH_QUERY",
-            "Use MATCH (...) RETURN ... or call /query for SELECT statements",
-            None,
+        Error::Query(
+            "Query is not a MATCH query. Use MATCH (...) RETURN ... \
+             or call /query for SELECT statements."
+                .to_string(),
         )
     })
 }
 
 /// Validate that threshold (if provided) is in [0.0, 1.0].
-fn validate_threshold(threshold: Option<f32>) -> Result<(), (StatusCode, Json<MatchQueryError>)> {
+fn validate_threshold(threshold: Option<f32>) -> Result<(), Error> {
     if let Some(t) = threshold {
         if !(0.0..=1.0).contains(&t) {
-            return Err(mk_match_error(
-                StatusCode::BAD_REQUEST,
-                format!("Invalid threshold: {}. Must be between 0.0 and 1.0", t),
-                "INVALID_THRESHOLD",
-                "Provide threshold in inclusive range [0.0, 1.0]",
-                Some(serde_json::json!({ "threshold": t })),
-            ));
+            return Err(Error::Query(format!(
+                "Invalid threshold: {t}. Must be between 0.0 and 1.0"
+            )));
         }
     }
     Ok(())
@@ -240,7 +204,7 @@ fn execute_match(
     collection: &MatchCollection,
     match_clause: &velesdb_core::velesql::MatchClause,
     request: &MatchQueryRequest,
-) -> Result<Vec<MatchQueryResultItem>, (StatusCode, Json<MatchQueryError>)> {
+) -> Result<Vec<MatchQueryResultItem>, Error> {
     let raw_results = if let Some(ref vector) = request.vector {
         let threshold = request.threshold.unwrap_or(0.0);
         match collection {
@@ -258,27 +222,17 @@ fn execute_match(
         }
     };
 
-    raw_results
-        .map(|results| {
-            results
-                .into_iter()
-                .map(|r| MatchQueryResultItem {
-                    bindings: r.bindings,
-                    score: r.score,
-                    depth: r.depth,
-                    projected: r.projected,
-                })
-                .collect()
-        })
-        .map_err(|e| {
-            mk_match_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Execution error: {}", e),
-                "EXECUTION_ERROR",
-                "Validate graph labels/properties and parameter types for this collection",
-                None,
-            )
-        })
+    raw_results.map(|results| {
+        results
+            .into_iter()
+            .map(|r| MatchQueryResultItem {
+                bindings: r.bindings,
+                score: r.score,
+                depth: r.depth,
+                projected: r.projected,
+            })
+            .collect()
+    })
 }
 
 #[cfg(test)]
