@@ -51,9 +51,13 @@ fn count_branches(cond: &Condition, counts: &mut BranchCounts) {
 }
 
 /// Builds a FUSION applicability/misconfiguration validation error (#10/#16).
+///
+/// Tagged `FusionMisconfigured` (V012) so a bad fusion clause carries an honest,
+/// fusion-specific code/message — never the misleading V006 "similarity()
+/// requires a vector search context" classification.
 fn fusion_error(fragment: impl Into<String>, suggestion: impl Into<String>) -> ValidationError {
     ValidationError::new(
-        ValidationErrorKind::SimilarityWithoutContext,
+        ValidationErrorKind::FusionMisconfigured,
         None,
         fragment,
         suggestion,

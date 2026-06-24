@@ -30,6 +30,14 @@ release.
   ceiling) stay `VELES-009`. *(Behavior change: the `code` field and the
   TypeScript SDK error class change from `ConfigError` to `QueryError` for these
   rejections.)*
+- **Misconfigured `USING FUSION` clauses now carry a fusion-specific validation
+  code/message (`V012`, `FusionMisconfigured`) instead of the misleading `V006`
+  (`similarity() requires a vector search context`).** Single-branch FUSION,
+  RSF weights that do not sum to 1.0, negative weights, and `weighted`/`rsf` on
+  `NEAR_FUSED` now report an honest fusion classification. The engine-level class
+  is unchanged (`VELES-010`, `Query`); only the embedded validation code and
+  message change. *(Behavior change: the embedded validation `code` for these
+  rejections changes from `V006` to `V012`.)*
 - **`USING FUSION` is now validated; misconfigured clauses error instead of
   silently degrading.** Five correctness flips, all surfaced at validate-time
   (or parse-time) so the previous silent fallbacks are unreachable:
