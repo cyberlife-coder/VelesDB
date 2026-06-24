@@ -4,7 +4,7 @@ This roadmap commits to **what we are building**, **why**, and **when**. It is u
 
 It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` issues but **not committed** until they reach a milestone here.
 
-> **Last updated:** 2026-06-21 — covers v3.2.1 (current). The horizon framing below predates the v2.0→v3.x line and is being re-baselined.
+> **Last updated:** 2026-06-21 — covers v3.3.0 (current). The horizon framing below predates the v2.0→v3.x line and is being re-baselined.
 
 ---
 
