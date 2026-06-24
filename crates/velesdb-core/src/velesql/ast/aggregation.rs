@@ -85,6 +85,14 @@ impl HavingClause {
     pub fn has_subquery(&self) -> bool {
         self.conditions.iter().any(|cond| cond.value.is_subquery())
     }
+
+    /// Returns `true` if any HAVING threshold value is a **correlated** subquery.
+    #[must_use]
+    pub fn has_correlated_subquery(&self) -> bool {
+        self.conditions
+            .iter()
+            .any(|cond| cond.value.is_correlated_subquery())
+    }
 }
 
 /// A single HAVING condition.

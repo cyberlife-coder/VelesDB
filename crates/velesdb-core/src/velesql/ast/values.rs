@@ -158,11 +158,23 @@ impl IntervalValue {
 impl Value {
     /// Returns `true` if this value is a subquery.
     ///
-    /// Subqueries parse but are not yet executable; callers use this to reject
-    /// them before they silently evaluate to `Value::Null`.
+    /// Scalar (non-correlated) subqueries are executed and substituted before
+    /// the outer query runs (EPIC-039); callers use this to locate the leaves
+    /// that need resolution.
     #[must_use]
     pub fn is_subquery(&self) -> bool {
         matches!(self, Self::Subquery(_))
+    }
+
+    /// Returns `true` if this value is a **correlated** subquery (one that
+    /// references an outer column).
+    ///
+    /// Correlated subqueries are not yet executable; validation rejects them
+    /// while accepting scalar (non-correlated) subqueries, which the executor
+    /// resolves into literals.
+    #[must_use]
+    pub fn is_correlated_subquery(&self) -> bool {
+        matches!(self, Self::Subquery(sq) if !sq.correlations.is_empty())
     }
 
     /// Converts this VelesQL value to a JSON value.

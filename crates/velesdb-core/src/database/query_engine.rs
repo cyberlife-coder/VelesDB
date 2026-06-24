@@ -250,6 +250,12 @@ impl Database {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
+        // Resolve scalar subqueries (EPIC-039) into literals *before* validation
+        // so the validator and every downstream path see a subquery-free AST.
+        if let Some(rewritten) = self.resolve_subqueries(query, params)? {
+            return self.execute_query(&rewritten, params);
+        }
+
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
 
         if let Some(results) = self.dispatch_non_select(query, params)? {

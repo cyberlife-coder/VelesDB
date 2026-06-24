@@ -502,23 +502,24 @@ fn requires_select_validation(query: &Query) -> bool {
         && !query.is_admin_query()
 }
 
-/// Rejects subqueries appearing in any WHERE or HAVING clause of the query.
+/// Rejects **correlated** subqueries in any WHERE or HAVING clause.
 ///
-/// Subqueries are parsed but not yet executed: left unchecked, a predicate like
-/// `WHERE price > (SELECT AVG(price) FROM products)` silently evaluates to NULL,
-/// yielding wrong/empty results (or a silently no-op UPDATE) instead of an error.
-/// `HAVING COUNT(*) > (SELECT ...)` would likewise silently filter every group.
+/// Scalar (non-correlated) subqueries are now executed and substituted as
+/// literals before validation runs (EPIC-039), so a well-formed predicate like
+/// `WHERE price > (SELECT AVG(price) FROM products)` is accepted. A *correlated*
+/// subquery (one referencing an outer column) is not yet executable and is
+/// rejected here so it never silently evaluates to NULL.
 fn reject_subqueries(query: &Query) -> Result<(), ValidationError> {
     let in_where = where_clauses(query)
         .into_iter()
-        .any(Condition::has_subquery);
-    if in_where || query.has_having_subquery() {
+        .any(Condition::has_correlated_subquery);
+    if in_where || query.has_correlated_having_subquery() {
         return Err(ValidationError::new(
             ValidationErrorKind::SubqueryNotExecutable,
             None,
             "subquery",
-            "Compute the value separately and pass it as a literal or $parameter, \
-             or rewrite the predicate without a subquery",
+            "correlated subqueries (referencing an outer column) are not supported; \
+             rewrite the predicate without a reference to the outer query",
         ));
     }
     Ok(())

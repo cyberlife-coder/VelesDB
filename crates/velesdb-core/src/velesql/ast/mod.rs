@@ -89,6 +89,25 @@ pub struct Query {
 }
 
 impl Query {
+    /// Wraps a bare [`SelectStatement`] into a plain SELECT [`Query`].
+    ///
+    /// Used to execute the inner SELECT of a scalar subquery (EPIC-039), which
+    /// the parser stores as a `SelectStatement` rather than a full `Query`.
+    #[must_use]
+    pub fn from_select(select: SelectStatement) -> Self {
+        Self {
+            let_bindings: Vec::new(),
+            select,
+            compound: None,
+            match_clause: None,
+            dml: None,
+            train: None,
+            ddl: None,
+            introspection: None,
+            admin: None,
+        }
+    }
+
     /// Returns true if this is a MATCH query.
     #[must_use]
     pub fn is_match_query(&self) -> bool {
@@ -142,14 +161,10 @@ impl Query {
         matches!(self.dml, Some(DmlStatement::SelectEdges(_)))
     }
 
-    /// Returns `true` if any HAVING threshold value — in the main SELECT or
-    /// in compound operands (UNION/INTERSECT/EXCEPT) — is a scalar subquery.
-    ///
-    /// HAVING thresholds are not part of the WHERE condition tree, so
-    /// [`Condition::has_subquery`] never visits them; V010 validation checks
-    /// both.
-    #[must_use]
-    pub fn has_having_subquery(&self) -> bool {
+    /// Iterates every HAVING clause of the query — the main SELECT plus every
+    /// compound operand (UNION/INTERSECT/EXCEPT). HAVING thresholds live outside
+    /// the WHERE condition tree, so callers that walk WHERE must check these too.
+    fn having_clauses(&self) -> impl Iterator<Item = &HavingClause> {
         let compound_stmts = self
             .compound
             .iter()
@@ -157,7 +172,20 @@ impl Query {
         std::iter::once(&self.select)
             .chain(compound_stmts)
             .filter_map(|stmt| stmt.having.as_ref())
-            .any(HavingClause::has_subquery)
+    }
+
+    /// Returns `true` if any HAVING threshold value is a scalar subquery.
+    #[must_use]
+    pub fn has_having_subquery(&self) -> bool {
+        self.having_clauses().any(HavingClause::has_subquery)
+    }
+
+    /// Returns `true` if any HAVING threshold is a **correlated** subquery
+    /// (rejected by validation).
+    #[must_use]
+    pub fn has_correlated_having_subquery(&self) -> bool {
+        self.having_clauses()
+            .any(HavingClause::has_correlated_subquery)
     }
 
     /// Returns true if this is an INSERT NODE query.
