@@ -2,6 +2,7 @@
 //!
 //! Provides search functionality extracted from the main store.
 
+use crate::wasm_error::WasmError;
 use crate::{fusion, text_search, vector_ops, DistanceMetric, StorageMode};
 use serde::Serialize;
 use wasm_bindgen::JsValue;
@@ -47,15 +48,24 @@ pub(crate) fn sort_scored_triples<T>(results: &mut [(u64, f32, T)], higher_is_be
     }
 }
 
-/// Validates query dimension matches store dimension.
+/// Validates query dimension matches store dimension, returning a structured
+/// [`WasmError`] (carrying `VELES-004`) on mismatch.
 ///
-/// Delegates the check to core's [`velesdb_core::validate_dimension_match`]
-/// (single source of truth) and maps its error to a `JsValue` at the FFI
-/// boundary, instead of re-implementing the comparison locally.
+/// Single source of truth for the dimension check: delegates to core's
+/// [`velesdb_core::validate_dimension_match`] and preserves the core error's
+/// machine-readable `code` instead of pre-flattening it to a bare string
+/// (backlog #22). The `wasm32` FFI wrapper [`validate_dimension`] renders this
+/// as a structured JS `Error`.
+#[inline]
+pub fn validate_dimension_structured(query_len: usize, store_dim: usize) -> Result<(), WasmError> {
+    velesdb_core::validate_dimension_match(store_dim, query_len).map_err(WasmError::from)
+}
+
+/// FFI wrapper over [`validate_dimension_structured`] that renders the
+/// structured error as a JS `Error` with a non-enumerable `code` property.
 #[inline]
 pub fn validate_dimension(query_len: usize, store_dim: usize) -> Result<(), JsValue> {
-    velesdb_core::validate_dimension_match(store_dim, query_len)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    validate_dimension_structured(query_len, store_dim).map_err(WasmError::into_js_value)
 }
 
 /// Validates that a flat multi-vector buffer holds exactly

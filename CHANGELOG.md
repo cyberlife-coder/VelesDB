@@ -95,6 +95,15 @@ release.
   graph rows, so they rank identically instead of re-implementing ordering or
   returning raw traversal order. *(Additive: new method; existing
   `execute_match` / `execute_match_with_similarity` are unchanged.)*
+- **WASM errors now carry a machine-readable `code`.** Browser rejections were
+  bare `Error(message)` strings, so clients could not narrow them — contradicting
+  `ERROR_CODES.md`, which promises an `error.code` on every client surface. A
+  dimension-mismatch search now rejects with a structured `Error` whose
+  non-enumerable `code` property is `"VELES-004"`, an invalid collection name
+  with `"VELES-034"`, and a `VelesQL` parse failure (`VelesQL.parse`) with
+  `"VELES-010"`. The code is single-sourced from `velesdb_core::Error::code()`
+  (no WASM-local taxonomy); the property is non-enumerable so it does not appear
+  in `JSON.stringify(error)`. *(Additive: the `message` text is unchanged.)*
 
 ### Fixed
 - **EXPLAIN of a MATCH query now shows the graph traversal and its strategy.**
@@ -214,7 +223,6 @@ release.
   / `average` keep ranking the (now hard-filtered) vector results.
   *(Behavior change: WASM fused single-`NEAR` queries drop WHERE-failing rows;
   weighted/rsf single-branch fusion errors.)*
-
 ## [3.2.1] — 2026-06-20
 
 Patch release. Maintenance only — no engine/API change (`velesdb-core` and the
