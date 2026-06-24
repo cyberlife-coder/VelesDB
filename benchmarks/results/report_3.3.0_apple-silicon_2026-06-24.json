@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "tool": "velesdb_benchmark.py",
+  "machine": {
+    "cpu": "unknown",
+    "ram": "unknown",
+    "os": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+    "python": "3.14.5",
+    "velesdb": "3.3.0",
+    "numpy": "2.5.0",
+    "date": "2026-06-24"
+  },
+  "protocol": {
+    "wal": true,
+    "recall_target": ">=95%",
+    "seed": 42,
+    "search_rounds": 200,
+    "warmup_discarded": true,
+    "batch_size": 5000
+  },
+  "results": [
+    {
+      "dataset": "10K x 384D",
+      "num_vectors": 10000,
+      "dimension": 384,
+      "insert_total_s": 32.03,
+      "insert_rate": 312,
+      "search_avg_us": 440,
+      "search_p50_us": 418,
+      "search_p99_us": 845,
+      "search_min_us": 356,
+      "search_max_us": 1126,
+      "search_rounds": 200,
+      "db_size_mb": 31.4
+    }
+  ],
+  "recall": {
+    "dataset": "10K x 384D (clustered)",
+    "recall_at_10_mean": 0.986,
+    "recall_at_10_min": 0.9,
+    "recall_queries": 100
+  }
+}

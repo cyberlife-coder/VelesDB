@@ -62,7 +62,7 @@ Find similar items, users, or content using vector similarity for personalized r
 
 ## Comparison with Competitors
 
-VelesDB is 50-100x faster than cloud alternatives like Pinecone. While Pinecone has 45ms p50 latency, VelesDB achieves 0.89ms. VelesDB is also completely free to self-host, compared to $70-700/month for cloud solutions.`;
+VelesDB runs fully in-process as a single binary, delivering sub-millisecond local vector search with no network round-trip. Because it is self-hosted, there are no per-query cloud costs and your data never leaves your infrastructure.`;
 
 function App() {
   const [results, setResults] = useState<SearchResult | null>(null);
@@ -179,7 +179,7 @@ function App() {
       <div className="bg-gradient-to-r from-primary-900/20 via-dark-900/40 to-accent-900/20 border-b border-dark-800">
         <div className="max-w-4xl mx-auto px-4 py-2 text-center text-sm">
           <span className="text-yellow-400">⚡</span>
-          <span className="text-dark-100 ml-2">50-100x faster than cloud alternatives</span>
+          <span className="text-dark-100 ml-2">Sub-millisecond local vector search</span>
           <span className="text-dark-500 mx-2">|</span>
           <span className="text-emerald-300">$0 self-hosted</span>
           <span className="text-dark-500 mx-2">|</span>
