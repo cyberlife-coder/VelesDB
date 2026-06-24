@@ -1447,22 +1447,17 @@ text, and scalar-filter SELECTs.
 ##### Ordering by a built-in score on the excluded shapes
 
 These shapes reject only the `LET ... = ...` clause, but `ORDER BY` still runs
-in their own finalization. One caveat applies to the built-in score variables
-(`vector_score`, `bm25_score`, `sparse_score`, `graph_score`, `fused_score`):
-
-- A **bare** score variable in `ORDER BY` (e.g. `ORDER BY sparse_score DESC`) is
-  parsed as a payload-field reference. Since no payload field of that name
-  exists, every row compares equal and the rows fall back to the deterministic
-  ascending-id tie-break — i.e. the clause is a **no-op** for ranking.
-- Wrap the score in an **arithmetic expression** to rank by it. For example, on
-  a `SPARSE_NEAR` query, `ORDER BY sparse_score * 1.0 DESC` sorts by the sparse
-  score, because the arithmetic path resolves the built-in component variable.
+in their own finalization. A **bare** built-in score variable in `ORDER BY`
+(`vector_score`, `bm25_score`, `sparse_score`, `graph_score`, `fused_score`)
+ranks by that component score, resolved from the result's component breakdown —
+identical to the arithmetic form. (An absent component defaults to `0` on a
+tagged result, per the score-variable rules above.)
 
 ```sql
--- Ranks by sparse score (arithmetic form resolves the built-in variable):
+-- Ranks by sparse score (bare and arithmetic forms are equivalent):
 SELECT * FROM docs
 WHERE vector SPARSE_NEAR $sparse
-ORDER BY sparse_score * 1.0 DESC
+ORDER BY sparse_score DESC
 LIMIT 5
 ```
 
@@ -1509,12 +1504,12 @@ LIMIT 5
 --   -> Error: LET bindings are not supported with MATCH queries in this version
 -- Rank graph rows with RETURN ... ORDER BY instead.
 
--- Sparse vector queries also reject LET. To rank by the built-in sparse_score
--- variable without a LET clause, wrap it in an arithmetic expression (a bare
--- `ORDER BY sparse_score` is treated as a payload field and is a ranking no-op):
+-- Sparse vector queries also reject LET, but `ORDER BY` runs: rank by the
+-- built-in sparse_score variable directly (the bare form resolves the component
+-- score, just like the arithmetic form `ORDER BY sparse_score * 1.0 DESC`):
 SELECT * FROM docs
 WHERE vector SPARSE_NEAR $sparse
-ORDER BY sparse_score * 1.0 DESC
+ORDER BY sparse_score DESC
 LIMIT 5
 ```
 

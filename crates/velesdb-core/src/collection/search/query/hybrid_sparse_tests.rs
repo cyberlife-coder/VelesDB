@@ -226,12 +226,11 @@ fn test_sparse_near_order_by_sparse_score_arithmetic_desc() {
     );
 }
 
-/// Documents the caveat the SPEC warns about: a **bare** `ORDER BY sparse_score`
-/// is parsed as a payload-field reference (no such field exists), so it is a
-/// ranking no-op and the rows fall back to the deterministic ascending-id
-/// tie-break rather than sorting by the sparse score.
+/// A **bare** `ORDER BY sparse_score DESC` ranks by the sparse component score,
+/// resolved from the component breakdown exactly like the arithmetic form — it is
+/// no longer a silent payload-field no-op.
 #[test]
-fn test_sparse_near_order_by_bare_sparse_score_is_noop() {
+fn test_sparse_near_order_by_bare_sparse_score_sorts_desc() {
     let (_dir, col) = setup_hybrid_collection();
 
     let results = col
@@ -242,13 +241,14 @@ fn test_sparse_near_order_by_bare_sparse_score_is_noop() {
         .expect("bare SPARSE_NEAR ORDER BY sparse_score must execute");
 
     // Sparse-bearing points are ids 0-5 and 10-11; only ids >= 2 carry a term-1
-    // hit in the candidate window. The bare ordering is a no-op, so rows come
-    // back in ascending-id tie-break order, NOT descending sparse score.
+    // hit in the candidate window. The bare ordering now resolves the built-in
+    // sparse_score, so rows come back in DESCENDING sparse-score order — identical
+    // to the arithmetic form `ORDER BY sparse_score * 1.0 DESC`.
     let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
     assert_eq!(
         ids,
-        vec![2, 3, 4, 5, 10, 11],
-        "bare ORDER BY sparse_score is a ranking no-op: rows fall back to ascending id"
+        vec![11, 10, 5, 4, 3, 2],
+        "bare ORDER BY sparse_score DESC ranks by the sparse component score"
     );
 }
 

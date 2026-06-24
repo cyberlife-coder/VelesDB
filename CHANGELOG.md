@@ -86,6 +86,13 @@ release.
   *(Behavior change: several previously-accepted FUSION queries now error.)*
 
 ### Fixed
+- **A bare built-in score variable in `ORDER BY` now ranks instead of silently
+  no-op'ing.** `ORDER BY sparse_score DESC` (and `vector_score` / `bm25_score` /
+  `graph_score` / `fused_score`) was parsed as a payload-field reference, found no
+  such field, and fell back to the ascending-id tie-break — a silent ranking
+  no-op. Bare score variables now resolve from the result's component-score
+  breakdown, identical to the arithmetic form (`ORDER BY sparse_score * 1.0 DESC`).
+  *(Behavior change: queries ordering by a bare score variable now actually sort.)*
 - **The ordered `MATCH` path (`match_query_ordered`) now enforces the final
   cardinality guard the SQL `/query` path already had.** `finalize_match_ordering`
   (used by non-SQL callers — REST `/match`, the SDKs) omitted the
