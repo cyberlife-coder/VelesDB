@@ -1,72 +1,102 @@
-//! ORDER BY expansion for the WASM VelesQL executor (S4-13).
+//! ORDER BY execution for the WASM VelesQL executor (S4-13, #8).
 //!
 //! Supports ordering on any payload column (not just `id` / `score`),
-//! multi-key sort, ASC/DESC per key, and explicit null handling:
-//! nulls sort last in ASC and first in DESC (matches Postgres default).
+//! multi-key sort, ASC/DESC per key, explicit null handling (nulls sort last
+//! in ASC and first in DESC, matching Postgres default), and arithmetic
+//! expressions over the per-row score + payload.
 //!
-//! The row set passed in is a list of `(sort_keys, final_row)` pairs built
-//! by the caller (`velesql_select`), so this module is pure sorting and
-//! does not touch the row-building logic.
+//! Sorting operates on core [`SearchResult`] values so the same rows can be
+//! projected through velesdb-core's projection engine afterwards (#3b). The
+//! arithmetic evaluator mirrors core's `ordering::evaluate_arithmetic`: score
+//! variables resolve to the row's search score, payload variables to their
+//! numeric value (0.0 when missing/non-numeric), and division by zero yields
+//! 0.0.
+//!
+//! Genuinely unevaluable forms — `similarity(field, $v)` against a named
+//! vector, which WASM does not store, and aggregate ORDER BY outside an
+//! aggregation pipeline — are **rejected loudly** rather than silently
+//! degrading to scan order, matching the MATCH path (#8a).
 
 use std::cmp::Ordering;
 
-use velesdb_core::velesql::{OrderByExpr, SelectOrderBy, SelectStatement};
+use velesdb_core::point::SearchResult;
+use velesdb_core::velesql::{
+    ArithmeticExpr, ArithmeticOp, OrderByExpr, SelectOrderBy, SelectStatement,
+};
 
-use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::json_values_cmp;
 
-/// A row bundled with the JSON values used to compute its ORDER BY keys.
-///
-/// The outer code builds one `SortableRow` per result row; this module only
-/// sorts them according to the ORDER BY spec.
-pub(crate) struct SortableRow {
-    /// Point id — used for `ORDER BY id`.
-    pub id: u64,
-    /// Similarity / relevance score — used for `ORDER BY similarity()` /
-    /// `ORDER BY score`.
-    pub score: f32,
-    /// Payload — used for arbitrary column sorts.
-    pub payload: Option<serde_json::Value>,
-    /// The serialized row to return to the caller after sorting.
-    pub row: QueryResultRow,
-}
+/// Maximum recursion depth for arithmetic evaluation (mirrors core's
+/// `MAX_ARITHMETIC_DEPTH`).
+const MAX_ARITHMETIC_DEPTH: u8 = 64;
 
-/// Sorts a row set in place according to the SELECT's ORDER BY clause.
+/// Sorts a result set in place according to the SELECT's ORDER BY clause.
 ///
-/// Does nothing when the statement has no ORDER BY. Invalid expressions
-/// (e.g. aggregate / arithmetic / similarity with explicit args) fall back
-/// to stable no-op sort so the executor never fails silently on shape.
-pub(crate) fn sort_rows(stmt: &SelectStatement, rows: &mut [SortableRow]) {
+/// Returns `Err` for ORDER BY shapes WASM cannot evaluate (named-vector
+/// `similarity(field, $v)` or aggregate expressions outside aggregation), so
+/// the executor fails loud instead of returning scan order (#8a).
+pub(crate) fn sort_rows(stmt: &SelectStatement, rows: &mut [SearchResult]) -> Result<(), String> {
     let Some(specs) = stmt.order_by.as_ref() else {
-        return;
+        return Ok(());
     };
     if specs.is_empty() {
-        return;
+        return Ok(());
     }
+    validate_order_by(specs)?;
     rows.sort_by(|a, b| compare_rows(a, b, specs));
+    Ok(())
+}
+
+/// Rejects ORDER BY expressions WASM cannot evaluate before sorting begins.
+fn validate_order_by(specs: &[SelectOrderBy]) -> Result<(), String> {
+    for spec in specs {
+        match &spec.expr {
+            OrderByExpr::Similarity(_) => {
+                return Err(
+                    "ORDER BY similarity(field, $vec) is not supported in WASM: named/secondary \
+                     vectors are not stored. Use ORDER BY similarity() (the search score) or a \
+                     payload column."
+                        .to_string(),
+                );
+            }
+            OrderByExpr::Aggregate(_) => {
+                return Err(
+                    "ORDER BY aggregate is only valid in an aggregation (GROUP BY) query"
+                        .to_string(),
+                );
+            }
+            OrderByExpr::Field(_) | OrderByExpr::SimilarityBare | OrderByExpr::Arithmetic(_) => {}
+            // `OrderByExpr` is non_exhaustive: any future variant is unproven
+            // on the WASM surface, so reject rather than silently no-op.
+            _ => return Err("ORDER BY expression is not supported in WASM".to_string()),
+        }
+    }
+    Ok(())
 }
 
 /// Strict total order used by `sort_by` over a multi-key ORDER BY.
-fn compare_rows(a: &SortableRow, b: &SortableRow, specs: &[SelectOrderBy]) -> Ordering {
+fn compare_rows(a: &SearchResult, b: &SearchResult, specs: &[SelectOrderBy]) -> Ordering {
     for spec in specs {
         let ord = compare_with_spec(a, b, spec);
         if ord != Ordering::Equal {
             return ord;
         }
     }
-    Ordering::Equal
+    // Deterministic tie-break by ascending id, matching core's ORDER BY.
+    a.point.id.cmp(&b.point.id)
 }
 
-fn compare_with_spec(a: &SortableRow, b: &SortableRow, spec: &SelectOrderBy) -> Ordering {
+fn compare_with_spec(a: &SearchResult, b: &SearchResult, spec: &SelectOrderBy) -> Ordering {
     let ord = match &spec.expr {
         OrderByExpr::Field(name) => compare_field(a, b, name),
         OrderByExpr::SimilarityBare => compare_scores(a, b),
-        OrderByExpr::Similarity(_) | OrderByExpr::Aggregate(_) | OrderByExpr::Arithmetic(_) => {
-            // These expressions aren't materialized in WASM — treat them as
-            // equal so the comparison degrades to a stable no-op rather than
-            // producing a misleading order.
-            Ordering::Equal
+        OrderByExpr::Arithmetic(expr) => {
+            let va = eval_arithmetic(expr, a);
+            let vb = eval_arithmetic(expr, b);
+            compare_f32(va, vb)
         }
+        // Similarity / Aggregate were rejected by `validate_order_by`; treat
+        // as equal defensively (the non_exhaustive enum may add variants).
         _ => Ordering::Equal,
     };
     if spec.descending {
@@ -77,41 +107,116 @@ fn compare_with_spec(a: &SortableRow, b: &SortableRow, spec: &SelectOrderBy) -> 
 }
 
 /// Compares a pair of rows by the given column. `id` and `score` are
-/// resolved from their dedicated struct fields.
-fn compare_field(a: &SortableRow, b: &SortableRow, name: &str) -> Ordering {
+/// resolved from their dedicated fields; everything else from the payload.
+fn compare_field(a: &SearchResult, b: &SearchResult, name: &str) -> Ordering {
     if name == "id" {
-        return a.id.cmp(&b.id);
+        return a.point.id.cmp(&b.point.id);
     }
     if name == "score" {
         return compare_scores(a, b);
     }
-    let va = extract_payload_field(a.payload.as_ref(), name);
-    let vb = extract_payload_field(b.payload.as_ref(), name);
+    let va = extract_payload_field(a, name);
+    let vb = extract_payload_field(b, name);
     compare_json_with_nulls(va.as_ref(), vb.as_ref())
 }
 
-/// Compares two f32 scores (NaN-safe, NaN sorts last in ASC).
-fn compare_scores(a: &SortableRow, b: &SortableRow) -> Ordering {
-    match (a.score.is_nan(), b.score.is_nan()) {
+/// Compares two rows by search score (NaN-safe, NaN sorts last in ASC).
+fn compare_scores(a: &SearchResult, b: &SearchResult) -> Ordering {
+    compare_f32(a.score, b.score)
+}
+
+/// NaN-safe f32 comparison (NaN sorts last in ASC).
+fn compare_f32(a: f32, b: f32) -> Ordering {
+    match (a.is_nan(), b.is_nan()) {
         (true, true) => Ordering::Equal,
-        (true, false) => Ordering::Greater, // NaN last
+        (true, false) => Ordering::Greater,
         (false, true) => Ordering::Less,
-        (false, false) => a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal),
+        (false, false) => a.partial_cmp(&b).unwrap_or(Ordering::Equal),
     }
 }
 
-/// Pulls a column from the payload (supports dot-nested paths via filter).
-fn extract_payload_field(
-    payload: Option<&serde_json::Value>,
-    column: &str,
-) -> Option<serde_json::Value> {
-    payload.and_then(|p| crate::filter::get_nested_field(p, column).cloned())
+/// Pulls a column from the payload (supports dot-nested paths).
+fn extract_payload_field(result: &SearchResult, column: &str) -> Option<serde_json::Value> {
+    result
+        .point
+        .payload
+        .as_ref()
+        .and_then(|p| crate::filter::get_nested_field(p, column).cloned())
+}
+
+/// Evaluates an arithmetic ORDER BY expression for a single row, mirroring
+/// core's `ordering::evaluate_arithmetic` semantics.
+fn eval_arithmetic(expr: &ArithmeticExpr, result: &SearchResult) -> f32 {
+    eval_arithmetic_inner(expr, result, 0)
+}
+
+fn eval_arithmetic_inner(expr: &ArithmeticExpr, result: &SearchResult, depth: u8) -> f32 {
+    if depth >= MAX_ARITHMETIC_DEPTH {
+        return 0.0;
+    }
+    match expr {
+        #[allow(clippy::cast_possible_truncation)]
+        ArithmeticExpr::Literal(v) => *v as f32,
+        ArithmeticExpr::Variable(name) => resolve_variable(name, result),
+        // Only bare similarity() reaches arithmetic (validation rejects the
+        // named form); it resolves to the row search score.
+        ArithmeticExpr::Similarity(_) => result.score,
+        ArithmeticExpr::BinaryOp { left, op, right } => {
+            let l = eval_arithmetic_inner(left, result, depth + 1);
+            let r = eval_arithmetic_inner(right, result, depth + 1);
+            apply_op(*op, l, r)
+        }
+        // `ArithmeticExpr` is non_exhaustive; an unknown future variant has no
+        // defined WASM semantics, so contribute a neutral 0.0 to the sort key.
+        _ => 0.0,
+    }
+}
+
+/// Applies a binary arithmetic operator; division by zero yields 0.0.
+fn apply_op(op: ArithmeticOp, l: f32, r: f32) -> f32 {
+    match op {
+        ArithmeticOp::Add => l + r,
+        ArithmeticOp::Sub => l - r,
+        ArithmeticOp::Mul => l * r,
+        ArithmeticOp::Div => {
+            if r == 0.0 {
+                0.0
+            } else {
+                l / r
+            }
+        }
+        // `ArithmeticOp` is non_exhaustive; a future operator has no defined
+        // WASM semantics, so fall back to the left operand rather than guess.
+        _ => l,
+    }
+}
+
+/// Resolves a variable name to a numeric value for arithmetic ORDER BY.
+///
+/// Score built-ins (`score`, `similarity`, `vector_score`, …) resolve to the
+/// row search score — WASM scores only the primary vector, so absent
+/// component scores fall back to the search score (core's legacy/untagged
+/// path). Any other name is a payload field (0.0 when missing/non-numeric).
+fn resolve_variable(name: &str, result: &SearchResult) -> f32 {
+    match name {
+        "score" | "similarity" | "fused_score" | "vector_score" | "graph_score" | "bm25_score"
+        | "sparse_score" => result.score,
+        _ => extract_payload_field(result, name)
+            .as_ref()
+            .and_then(serde_json::Value::as_f64)
+            .map_or(0.0, |v| {
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    v as f32
+                }
+            }),
+    }
 }
 
 /// Postgres-style NULL ordering: null sorts AFTER non-null in ASC. Since we
-/// always compute ASC first and then reverse for DESC via the outer
-/// `compare_with_spec`, producing "null > non-null" here gives the correct
-/// "NULLS LAST in ASC" / "NULLS FIRST in DESC" behaviour.
+/// always compute ASC first and reverse for DESC via `compare_with_spec`,
+/// producing "null > non-null" here gives "NULLS LAST in ASC" / "NULLS FIRST
+/// in DESC".
 ///
 /// Shared with the MATCH `ORDER BY` path (`velesql_match_orderby`) so node and
 /// row ordering apply identical NULL semantics.
@@ -135,15 +240,11 @@ pub(crate) fn compare_json_with_nulls(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use velesdb_core::velesql::{OrderByExpr, SelectOrderBy};
+    use velesdb_core::point::Point;
+    use velesdb_core::velesql::{ArithmeticExpr, ArithmeticOp, OrderByExpr, SelectOrderBy};
 
-    fn mk(id: u64, score: f32, payload: serde_json::Value) -> SortableRow {
-        SortableRow {
-            id,
-            score,
-            payload: Some(payload),
-            row: QueryResultRow::synthetic(serde_json::json!({"id": id})).expect("test: row"),
-        }
+    fn mk(id: u64, score: f32, payload: serde_json::Value) -> SearchResult {
+        SearchResult::new(Point::new(id, Vec::new(), Some(payload)), score)
     }
 
     fn by_field(name: &str, desc: bool) -> Vec<SelectOrderBy> {
@@ -153,6 +254,12 @@ mod tests {
         }]
     }
 
+    fn sort(stmt_order: Vec<SelectOrderBy>, rows: &mut [SearchResult]) {
+        let mut stmt = SelectStatement::empty();
+        stmt.order_by = Some(stmt_order);
+        sort_rows(&stmt, rows).expect("test: sort");
+    }
+
     #[test]
     fn test_sort_by_id_asc() {
         let mut rows = vec![
@@ -160,40 +267,21 @@ mod tests {
             mk(1, 0.0, serde_json::json!({})),
             mk(2, 0.0, serde_json::json!({})),
         ];
-        let mut stmt = velesdb_core::velesql::SelectStatement::empty();
-        stmt.order_by = Some(by_field("id", false));
-        sort_rows(&stmt, &mut rows);
-        assert_eq!(rows[0].id, 1);
-        assert_eq!(rows[2].id, 3);
+        sort(by_field("id", false), &mut rows);
+        assert_eq!(rows[0].point.id, 1);
+        assert_eq!(rows[2].point.id, 3);
     }
 
     #[test]
-    fn test_sort_by_id_desc() {
-        let mut rows = vec![
-            mk(3, 0.0, serde_json::json!({})),
-            mk(1, 0.0, serde_json::json!({})),
-            mk(2, 0.0, serde_json::json!({})),
-        ];
-        let mut stmt = velesdb_core::velesql::SelectStatement::empty();
-        stmt.order_by = Some(by_field("id", true));
-        sort_rows(&stmt, &mut rows);
-        assert_eq!(rows[0].id, 3);
-        assert_eq!(rows[2].id, 1);
-    }
-
-    #[test]
-    fn test_sort_by_payload_column() {
+    fn test_sort_by_payload_column_desc() {
         let mut rows = vec![
             mk(1, 0.0, serde_json::json!({"price": 20})),
             mk(2, 0.0, serde_json::json!({"price": 10})),
             mk(3, 0.0, serde_json::json!({"price": 30})),
         ];
-        let mut stmt = velesdb_core::velesql::SelectStatement::empty();
-        stmt.order_by = Some(by_field("price", false));
-        sort_rows(&stmt, &mut rows);
-        assert_eq!(rows[0].id, 2);
-        assert_eq!(rows[1].id, 1);
-        assert_eq!(rows[2].id, 3);
+        sort(by_field("price", true), &mut rows);
+        assert_eq!(rows[0].point.id, 3);
+        assert_eq!(rows[2].point.id, 2);
     }
 
     #[test]
@@ -203,50 +291,9 @@ mod tests {
             mk(2, 0.0, serde_json::json!({})),
             mk(3, 0.0, serde_json::json!({"x": 1})),
         ];
-        let mut stmt = velesdb_core::velesql::SelectStatement::empty();
-        stmt.order_by = Some(by_field("x", false));
-        sort_rows(&stmt, &mut rows);
-        assert_eq!(rows[0].id, 3); // x=1
-        assert_eq!(rows[1].id, 1); // x=5
-        assert_eq!(rows[2].id, 2); // null last
-    }
-
-    #[test]
-    fn test_sort_nulls_first_desc() {
-        let mut rows = vec![
-            mk(1, 0.0, serde_json::json!({"x": 5})),
-            mk(2, 0.0, serde_json::json!({})),
-            mk(3, 0.0, serde_json::json!({"x": 1})),
-        ];
-        let mut stmt = velesdb_core::velesql::SelectStatement::empty();
-        stmt.order_by = Some(by_field("x", true));
-        sort_rows(&stmt, &mut rows);
-        assert_eq!(rows[0].id, 2); // null first in DESC
-    }
-
-    #[test]
-    fn test_sort_multi_key() {
-        let mut rows = vec![
-            mk(1, 0.0, serde_json::json!({"cat": "a", "p": 10})),
-            mk(2, 0.0, serde_json::json!({"cat": "a", "p": 5})),
-            mk(3, 0.0, serde_json::json!({"cat": "b", "p": 1})),
-        ];
-        let mut stmt = velesdb_core::velesql::SelectStatement::empty();
-        stmt.order_by = Some(vec![
-            SelectOrderBy {
-                expr: OrderByExpr::Field("cat".to_string()),
-                descending: false,
-            },
-            SelectOrderBy {
-                expr: OrderByExpr::Field("p".to_string()),
-                descending: true,
-            },
-        ]);
-        sort_rows(&stmt, &mut rows);
-        // cat=a first, then p DESC: (a, 10) < (a, 5) < (b, 1)
-        assert_eq!(rows[0].id, 1);
-        assert_eq!(rows[1].id, 2);
-        assert_eq!(rows[2].id, 3);
+        sort(by_field("x", false), &mut rows);
+        assert_eq!(rows[0].point.id, 3);
+        assert_eq!(rows[2].point.id, 2);
     }
 
     #[test]
@@ -256,13 +303,64 @@ mod tests {
             mk(2, 0.9, serde_json::json!({})),
             mk(3, 0.5, serde_json::json!({})),
         ];
-        let mut stmt = velesdb_core::velesql::SelectStatement::empty();
+        sort(
+            vec![SelectOrderBy {
+                expr: OrderByExpr::SimilarityBare,
+                descending: true,
+            }],
+            &mut rows,
+        );
+        assert_eq!(rows[0].point.id, 2);
+        assert_eq!(rows[2].point.id, 1);
+    }
+
+    #[test]
+    fn test_sort_by_arithmetic_formula() {
+        // ORDER BY (price - 2*score) ASC.
+        let expr = ArithmeticExpr::BinaryOp {
+            left: Box::new(ArithmeticExpr::Variable("price".to_string())),
+            op: ArithmeticOp::Sub,
+            right: Box::new(ArithmeticExpr::BinaryOp {
+                left: Box::new(ArithmeticExpr::Literal(2.0)),
+                op: ArithmeticOp::Mul,
+                right: Box::new(ArithmeticExpr::Variable("score".to_string())),
+            }),
+        };
+        let mut rows = vec![
+            mk(1, 1.0, serde_json::json!({"price": 10})), // 10 - 2 = 8
+            mk(2, 0.0, serde_json::json!({"price": 1})),  // 1
+            mk(3, 0.0, serde_json::json!({"price": 30})), // 30
+        ];
+        sort(
+            vec![SelectOrderBy {
+                expr: OrderByExpr::Arithmetic(expr),
+                descending: false,
+            }],
+            &mut rows,
+        );
+        assert_eq!(rows[0].point.id, 2); // 1
+        assert_eq!(rows[1].point.id, 1); // 8
+        assert_eq!(rows[2].point.id, 3); // 30
+    }
+
+    #[test]
+    fn test_sort_named_similarity_is_rejected() {
+        use velesdb_core::velesql::{SimilarityOrderBy, VectorExpr};
+        let mut rows = vec![mk(1, 0.5, serde_json::json!({}))];
+        let mut stmt = SelectStatement::empty();
         stmt.order_by = Some(vec![SelectOrderBy {
-            expr: OrderByExpr::SimilarityBare,
+            expr: OrderByExpr::Similarity(SimilarityOrderBy {
+                field: "image_vec".to_string(),
+                vector: VectorExpr::Parameter("q".to_string()),
+            }),
             descending: true,
         }]);
-        sort_rows(&stmt, &mut rows);
-        assert_eq!(rows[0].id, 2);
-        assert_eq!(rows[2].id, 1);
+        let err = sort_rows(&stmt, &mut rows);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_division_by_zero_yields_zero() {
+        assert_eq!(apply_op(ArithmeticOp::Div, 5.0, 0.0), 0.0);
     }
 }

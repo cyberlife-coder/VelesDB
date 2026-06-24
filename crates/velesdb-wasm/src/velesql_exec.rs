@@ -18,7 +18,9 @@
 //! | `UNION [ALL] / INTERSECT / EXCEPT`          | full             |
 //! | `JOIN` (INNER, LEFT) + `ON ...=...`         | full             |
 //! | `WHERE similarity(v, $q) > t`               | full             |
-//! | `FUSION` (rrf, weighted, maximum)           | full             |
+//! | `FUSION` over `NEAR_FUSED` (rrf/max/avg)    | full             |
+//! | `FUSION` over single-vector `NEAR` (rrf)    | metadata = hard filter; clause is a no-op |
+//! | `FUSION` weighted / rsf over single `NEAR`  | **rejected** (no second scored branch) |
 //! | `INSERT / UPSERT INTO coll (…) VALUES`      | full             |
 //! | `UPDATE coll SET … WHERE …`                 | full             |
 //! | `DELETE FROM coll WHERE …`                  | full             |

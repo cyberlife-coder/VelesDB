@@ -85,10 +85,12 @@ impl QueryResultRow {
 }
 
 impl QueryResultRow {
-    /// Builds a row from the core primitives.
+    /// Builds a row by merging the full payload at top level.
     ///
-    /// Never leaks its arguments on the JS side — the JSON is formed inside
-    /// the constructor.
+    /// Superseded in production by [`from_projected`](Self::from_projected),
+    /// which emits exactly the SELECT columns (#3b); retained as a test-only
+    /// constructor for the set-operation and result-shape suites.
+    #[cfg(test)]
     pub(crate) fn build(
         id: u64,
         score: f32,
@@ -106,6 +108,29 @@ impl QueryResultRow {
         }
         let data_json = serde_json::to_string(&serde_json::Value::Object(map))
             .map_err(|e| format!("Failed to serialize row to JSON: {e}"))?;
+        Ok(Self {
+            id,
+            score,
+            data_json,
+        })
+    }
+
+    /// Builds a row from a core projection result, preserving the real `id`
+    /// and `score` for the JS getters while exposing only the projected
+    /// columns in `data_json`.
+    ///
+    /// Used by the plain-SELECT pipeline after
+    /// [`velesdb_core::collection::search::query::projection::project_results`]
+    /// has reduced the payload to exactly the requested columns (#3b). Unlike
+    /// [`build`](Self::build), this does NOT re-merge the full payload — the
+    /// projected object is the authoritative row body.
+    pub(crate) fn from_projected(
+        id: u64,
+        score: f32,
+        projected: &serde_json::Value,
+    ) -> Result<Self, String> {
+        let data_json = serde_json::to_string(projected)
+            .map_err(|e| format!("Failed to serialize projected row to JSON: {e}"))?;
         Ok(Self {
             id,
             score,

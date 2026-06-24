@@ -90,6 +90,7 @@ mod velesql_logic;
 mod velesql_match;
 mod velesql_match_orderby;
 mod velesql_orderby;
+mod velesql_project;
 mod velesql_result;
 mod velesql_scan;
 mod velesql_select;
@@ -186,6 +187,10 @@ mod velesql_exec_join_tests;
 #[cfg(test)]
 #[path = "velesql_exec_hybrid_tests.rs"]
 mod velesql_exec_hybrid_tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_behavior_tests.rs"]
+mod velesql_exec_behavior_tests;
 
 #[cfg(test)]
 #[path = "velesql_exec_graph_tests.rs"]
