@@ -9,6 +9,7 @@ members = [
     "crates/velesdb-migrate",
     "crates/velesdb-mobile",
     "crates/tauri-plugin-velesdb",
+    "crates/velesdb-memory",
 ]
 exclude = [
     "demos/tauri-rag-app/src-tauri",
