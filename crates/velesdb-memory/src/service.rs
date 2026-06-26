@@ -309,6 +309,7 @@ impl<E: Embedder> MemoryService<E> {
         let mut predicate = String::from("vector NEAR $q");
         for (index, filter) in filters.iter().enumerate() {
             validate_field(&filter.field)?;
+            validate_scalar(&filter.value)?;
             let key = format!("p{index}");
             // Field is a validated identifier; the value is bound, never inlined.
             let _ = write!(
@@ -467,13 +468,30 @@ fn to_recollection(result: &SearchResult) -> Recollection {
     }
 }
 
-/// Accept only plain identifier field names, so a filter field can be safely
-/// placed into the query text (its value is always a bound parameter).
+/// Accept only plain, non-reserved identifier field names, so a filter field
+/// can be safely placed into the query text (its value is always a bound
+/// parameter). Rejects the reserved system columns the docs promise are off
+/// limits: `content` (the fact payload) and any `_veles_`-prefixed engine key
+/// (e.g. durable TTL).
 fn validate_field(field: &str) -> Result<(), MemoryError> {
-    let valid = !field.is_empty() && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if valid {
+    let plain = !field.is_empty() && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let reserved = field == "content" || field.starts_with("_veles_");
+    if plain && !reserved {
         Ok(())
     } else {
         Err(MemoryError::InvalidFilter(field.to_owned()))
+    }
+}
+
+/// Reject non-scalar filter values. Only strings, numbers, and booleans can be
+/// compared against a `ColumnStore` column; binding an array/object/null would
+/// fail deep in the query engine and surface as an opaque internal error instead
+/// of a clear client-input error.
+fn validate_scalar(value: &Value) -> Result<(), MemoryError> {
+    match value {
+        Value::String(_) | Value::Number(_) | Value::Bool(_) => Ok(()),
+        _ => Err(MemoryError::InvalidFilter(format!(
+            "value must be a string, number, or boolean, got {value}"
+        ))),
     }
 }

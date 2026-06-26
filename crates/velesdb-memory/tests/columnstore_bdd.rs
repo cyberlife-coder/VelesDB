@@ -296,3 +296,50 @@ fn recall_where_rejects_non_identifier_field() {
         .expect_err("a non-identifier field must be rejected");
     assert!(matches!(err, MemoryError::InvalidFilter(_)));
 }
+
+#[test]
+fn recall_where_rejects_reserved_field() {
+    let (_dir, svc, _) = seeded_timestamps();
+    // Reserved system columns the docs promise are off limits.
+    for reserved in ["content", "_veles_expires_at", "_veles_hub"] {
+        let err = svc
+            .recall_where(
+                "project",
+                10,
+                &[ColumnFilter {
+                    field: reserved.to_string(),
+                    op: ColumnOp::Eq,
+                    value: json!(1),
+                }],
+            )
+            .expect_err("a reserved field must be rejected");
+        assert!(
+            matches!(err, MemoryError::InvalidFilter(_)),
+            "reserved field {reserved} must be InvalidFilter"
+        );
+    }
+}
+
+#[test]
+fn recall_where_rejects_non_scalar_value() {
+    let (_dir, svc, _) = seeded_timestamps();
+    // An array/object/null value can't be compared against a column; it must be
+    // a clear client-input error (InvalidFilter), not an opaque internal error.
+    for bad in [json!([1, 2, 3]), json!({"x": 1}), json!(null)] {
+        let err = svc
+            .recall_where(
+                "project",
+                10,
+                &[ColumnFilter {
+                    field: "ts".to_string(),
+                    op: ColumnOp::Eq,
+                    value: bad.clone(),
+                }],
+            )
+            .expect_err("a non-scalar value must be rejected");
+        assert!(
+            matches!(err, MemoryError::InvalidFilter(_)),
+            "non-scalar value {bad} must be InvalidFilter"
+        );
+    }
+}
