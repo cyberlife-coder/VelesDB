@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! # VelesDB-memory
 //!
 //! Local-first **memory** layer for AI agents, exposed through a single MCP
