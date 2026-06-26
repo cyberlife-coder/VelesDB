@@ -31,6 +31,13 @@ const MAX_WHY_HOPS: usize = 10;
 /// async runtime work most cleanly on a non-generic handler).
 pub type DynEmbedder = Box<dyn Embedder + Send + Sync>;
 
+/// Shared extraction backend for the `remember_extracted` tool. `Arc` so the
+/// cloneable server hands the same backend to every call; held as an `Option`
+/// so a server with no backend reports extraction as unconfigured rather than
+/// failing to start. The trait is dependency-free; only the ready-made
+/// [`crate::OllamaExtractor`] backend pulls a feature.
+pub type DynExtractor = Arc<dyn crate::extract::Extractor + Send + Sync>;
+
 // --- Tool parameter / result DTOs ------------------------------------------
 //
 // Output shapes reuse the domain types from `crate::service` directly (they
@@ -135,12 +142,32 @@ struct WhyParams {
     filter: Option<Metadata>,
 }
 
+/// Parameters for the `remember_extracted` tool.
+#[derive(Deserialize, JsonSchema)]
+struct RememberExtractedParams {
+    /// Raw text to extract atomic facts from and store as a connected graph.
+    text: String,
+    /// Optional structured metadata applied to every extracted fact.
+    metadata: Option<Metadata>,
+}
+
+/// Result of the `remember_extracted` tool.
+#[derive(Serialize, JsonSchema)]
+struct RememberExtractedResult {
+    /// Stable ids of the stored facts, in extraction order.
+    ids: Vec<u64>,
+}
+
 // --- The server ------------------------------------------------------------
 
 /// MCP server wrapping a [`MemoryService`].
 #[derive(Clone)]
 pub struct McpServer {
     service: Arc<MemoryService<DynEmbedder>>,
+    /// Optional extraction backend powering `remember_extracted`. `None` unless
+    /// a backend is attached via [`Self::with_extractor`]; the tool then reports
+    /// extraction as unconfigured.
+    extractor: Option<DynExtractor>,
     tool_router: ToolRouter<McpServer>,
 }
 
@@ -151,8 +178,17 @@ impl McpServer {
     pub fn new(service: MemoryService<DynEmbedder>) -> Self {
         Self {
             service: Arc::new(service),
+            extractor: None,
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Attach an extraction backend, enabling the `remember_extracted` tool.
+    /// Without it the tool reports that extraction is not configured.
+    #[must_use]
+    pub fn with_extractor(mut self, extractor: DynExtractor) -> Self {
+        self.extractor = Some(extractor);
+        self
     }
 
     #[tool(
@@ -257,6 +293,49 @@ impl McpServer {
             .map_err(to_error)?;
         Ok(Json(explanation))
     }
+
+    #[tool(
+        name = "remember_extracted",
+        description = "Store a passage of raw text by extracting its atomic facts and auto-building the fact↔topic graph, so `why` can later connect them with no manual links. Requires the server to be started with an extraction backend (set VELESDB_MEMORY_EXTRACTOR; build with --features extract). Returns the stored facts' ids."
+    )]
+    async fn remember_extracted(
+        &self,
+        Parameters(params): Parameters<RememberExtractedParams>,
+    ) -> Result<Json<RememberExtractedResult>, ErrorData> {
+        if params.text.len() > MAX_FACT_BYTES {
+            return Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                format!("text exceeds maximum size of {MAX_FACT_BYTES} bytes"),
+                None,
+            ));
+        }
+        let Some(extractor) = self.extractor.clone() else {
+            return Err(ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                "extraction backend not configured: start the server with \
+                 VELESDB_MEMORY_EXTRACTOR set (built with --features extract)",
+                None,
+            ));
+        };
+        // Extraction makes a blocking network call (up to the extractor's
+        // timeout), so run it off the async worker pool to keep the stdio loop
+        // responsive to other tool calls and cancellations.
+        let service = Arc::clone(&self.service);
+        let RememberExtractedParams { text, metadata } = params;
+        let ids = tokio::task::spawn_blocking(move || {
+            service.remember_extracted(&text, &extractor, metadata.as_ref())
+        })
+        .await
+        .map_err(|join| {
+            ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("extraction task failed: {join}"),
+                None,
+            )
+        })?
+        .map_err(to_error)?;
+        Ok(Json(RememberExtractedResult { ids }))
+    }
 }
 
 /// `#[tool_handler]` generates `call_tool` / `list_tools` from the router;
@@ -291,9 +370,10 @@ impl ServerHandler for McpServer {
 fn to_error(err: crate::error::MemoryError) -> ErrorData {
     use crate::error::MemoryError;
     let code = match &err {
-        MemoryError::EmptyFact | MemoryError::UnknownMemory(_) | MemoryError::InvalidFilter(_) => {
-            ErrorCode::INVALID_PARAMS
-        }
+        MemoryError::EmptyFact
+        | MemoryError::UnknownMemory(_)
+        | MemoryError::ReservedKey(_)
+        | MemoryError::InvalidFilter(_) => ErrorCode::INVALID_PARAMS,
         _ => ErrorCode::INTERNAL_ERROR,
     };
     ErrorData::new(code, err.to_string(), None)
@@ -674,5 +754,69 @@ mod tests {
             }))
             .await
             .expect("why with huge max_hops must succeed (silently capped)");
+    }
+
+    // --- Auto-extraction tool ---------------------------------------------------
+
+    #[tokio::test]
+    async fn remember_extracted_builds_a_graph_through_the_server() {
+        use crate::extract::{ExtractError, ExtractedFact, Extractor};
+
+        struct Stub;
+        impl Extractor for Stub {
+            fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+                Ok(vec![
+                    ExtractedFact {
+                        text: "Alice ships the parser in Rust.".to_owned(),
+                        entities: vec!["rust".to_owned()],
+                    },
+                    ExtractedFact {
+                        text: "Bob maintains the Rust toolchain.".to_owned(),
+                        entities: vec!["rust".to_owned()],
+                    },
+                ])
+            }
+        }
+
+        let (_dir, srv) = server();
+        let srv = srv.with_extractor(Arc::new(Stub) as DynExtractor);
+
+        let Json(res) = srv
+            .remember_extracted(Parameters(RememberExtractedParams {
+                text: "Alice and Bob work in Rust.".to_owned(),
+                metadata: None,
+            }))
+            .await
+            .expect("remember_extracted");
+        assert_eq!(res.ids.len(), 2, "both facts stored");
+
+        // why reaches the sibling fact via the shared topic, seed is a real fact.
+        let Json(why) = srv
+            .why(Parameters(WhyParams {
+                decision: "parser in rust".to_owned(),
+                max_hops: Some(2),
+                filter: None,
+            }))
+            .await
+            .expect("why");
+        assert!(why.nodes.len() > 1, "graph is alive through the server");
+        assert!(
+            !why.nodes[0].content.starts_with("Entity:"),
+            "seed is a fact, not a hub"
+        );
+    }
+
+    #[tokio::test]
+    async fn remember_extracted_without_backend_returns_internal_error() {
+        let (_dir, srv) = server(); // no extractor attached
+        let err = srv
+            .remember_extracted(Parameters(RememberExtractedParams {
+                text: "anything".to_owned(),
+                metadata: None,
+            }))
+            .await
+            .map(|_| ())
+            .expect_err("extraction with no backend must error");
+        assert_eq!(err.code, ErrorCode::INTERNAL_ERROR);
     }
 }
