@@ -45,10 +45,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut multihop_vector: u32 = 0; // vector recall finds the (2-hop) ticket
     let mut multihop_graph: u32 = 0; // why() finds the (2-hop) ticket
     for chain in &chains {
-        if recall_finds(&svc, &chain.question, chain.decision)? {
+        // One vector recall per chain; test both the 1-hop and 2-hop answers
+        // against the same result set (re-running the identical query would be
+        // wasted work).
+        let hits = svc.recall(&chain.question, RECALL_K, None)?;
+        if hits.iter().any(|hit| hit.id == chain.decision) {
             direct_vector += 1;
         }
-        if recall_finds(&svc, &chain.question, chain.ticket)? {
+        if hits.iter().any(|hit| hit.id == chain.ticket) {
             multihop_vector += 1;
         }
         if why_finds(&svc, &chain.question, chain.ticket)? {
@@ -89,18 +93,6 @@ fn build_corpus(svc: &MemoryService<HashEmbedder>) -> Result<Vec<Chain>, MemoryE
         });
     }
     Ok(chains)
-}
-
-/// Does a pure vector recall of `question` surface memory `target`?
-fn recall_finds(
-    svc: &MemoryService<HashEmbedder>,
-    question: &str,
-    target: u64,
-) -> Result<bool, MemoryError> {
-    Ok(svc
-        .recall(question, RECALL_K, None)?
-        .iter()
-        .any(|hit| hit.id == target))
 }
 
 /// Does `why()` (vector seed + graph traversal) surface memory `target`?

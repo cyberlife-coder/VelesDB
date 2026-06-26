@@ -59,15 +59,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for node in &explanation.nodes {
         println!("   hop {}  {}", node.hop, node.content);
     }
-    let reached_ticket = explanation.nodes.iter().any(|n| n.id == ticket);
-    println!(
-        "   └─ the graph reached EPIC-317: {}",
-        if reached_ticket {
-            "the very ticket the decision fixed."
-        } else {
-            "(unexpected)"
-        }
+    assert!(
+        explanation.nodes.iter().any(|n| n.id == ticket),
+        "the graph must reach the linked ticket",
     );
+    println!("   └─ the graph reached EPIC-317 — the very ticket the decision fixed.");
 
     println!("\nThe vector was blind to it. The graph connected it. Offline. One binary.");
 
