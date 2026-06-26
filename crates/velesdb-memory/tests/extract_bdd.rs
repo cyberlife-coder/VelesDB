@@ -105,6 +105,36 @@ fn shared_topic_collapses_onto_one_hub() {
 }
 
 #[test]
+fn recall_excludes_entity_hubs() {
+    let (_dir, svc) = service();
+    svc.remember_extracted("Alice and Bob both work in Rust.", &StubExtractor, None)
+        .expect("extract and remember");
+    // `rust` is both a stored topic hub and a word in the facts; unfiltered
+    // recall must return the facts, never the internal `Entity: rust` hub.
+    let hits = svc.recall("rust", 8, None).expect("recall");
+    assert!(!hits.is_empty(), "the facts are recalled");
+    assert!(
+        hits.iter().all(|hit| !hit.content.starts_with("Entity:")),
+        "recall must not surface entity hubs: {:?}",
+        hits.iter().map(|hit| &hit.content).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn why_seed_is_a_fact_not_a_hub() {
+    let (_dir, svc) = service();
+    svc.remember_extracted("Alice and Bob both work in Rust.", &StubExtractor, None)
+        .expect("extract and remember");
+    let explanation = svc.why("rust", 2, None).expect("why");
+    assert!(!explanation.nodes.is_empty(), "why finds a seed");
+    assert!(
+        !explanation.nodes[0].content.starts_with("Entity:"),
+        "the seed (primary answer) must be a real fact, got {:?}",
+        explanation.nodes[0].content
+    );
+}
+
+#[test]
 fn empty_text_is_rejected() {
     let (_dir, svc) = service();
     assert!(matches!(

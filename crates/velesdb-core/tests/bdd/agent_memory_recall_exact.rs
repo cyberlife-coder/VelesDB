@@ -147,6 +147,53 @@ fn test_query_filtered_honors_metadata_filter_exact() {
     assert_eq!(recalled_ids(&rows), vec![10, 20, 30], "only red, ranked");
 }
 
+/// GIVEN the same five facts (10,20,30 = red; 40,50 = blue). WHEN
+/// `query_excluding(q, 10, {team:blue})`. THEN exactly [10,20,30] in similarity
+/// order — the negative counterpart of `query_filtered`: blue rows are dropped,
+/// the rest keep their cosine ranking. AND an empty exclude drops nothing.
+#[test]
+fn test_query_excluding_drops_matching_payload() {
+    let (_dir, _db, memory) = setup();
+    let teams = [
+        (10_u64, "red"),
+        (20, "red"),
+        (30, "red"),
+        (40, "blue"),
+        (50, "blue"),
+    ];
+    let offs = [0.0_f32, 0.3, 0.7, 1.2, 3.0];
+    for ((id, team), off) in teams.into_iter().zip(offs) {
+        let mut meta = Map::new();
+        meta.insert("team".to_string(), Value::String(team.to_string()));
+        memory
+            .semantic()
+            .store_with_metadata(id, "fact", &[1.0, off, 0.0, 0.0], &meta)
+            .expect("store with metadata");
+    }
+    let mut exclude = Map::new();
+    exclude.insert("team".to_string(), json!("blue"));
+
+    let rows = memory
+        .semantic()
+        .query_excluding(&Q, 10, &exclude)
+        .expect("query_excluding");
+    assert_eq!(
+        recalled_ids(&rows),
+        vec![10, 20, 30],
+        "blue dropped, ranked"
+    );
+
+    let all = memory
+        .semantic()
+        .query_excluding(&Q, 10, &Map::new())
+        .expect("query_excluding empty");
+    assert_eq!(
+        recalled_ids(&all),
+        vec![10, 20, 30, 40, 50],
+        "empty exclude drops nothing"
+    );
+}
+
 /// GIVEN the five facts (no filter). WHEN paginating with k=2: page0 =
 /// offset 0, page1 = offset 2, page2 = offset 4. THEN the pages are exact,
 /// contiguous, non-overlapping slices of the global similarity order

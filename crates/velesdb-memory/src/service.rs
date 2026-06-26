@@ -20,6 +20,14 @@ use crate::error::MemoryError;
 use crate::extract::Extractor;
 use crate::id;
 
+/// Reserved metadata key recording the *kind* of a memory.
+const KIND_FIELD: &str = "kind";
+/// `kind` value tagging an entity hub auto-created by
+/// [`MemoryService::remember_extracted`]. Hubs are internal graph scaffolding —
+/// they connect facts that share a topic — so they are excluded from unfiltered
+/// recall and from `why` seeds and never surface as a user-facing result.
+const KIND_ENTITY: &str = "entity";
+
 /// A typed link from a freshly remembered fact to an existing memory.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct Link {
@@ -229,7 +237,10 @@ impl<E: Embedder> MemoryService<E> {
             return Ok(id);
         }
         let mut meta = Map::new();
-        meta.insert("kind".to_string(), Value::String("entity".to_string()));
+        meta.insert(
+            KIND_FIELD.to_string(),
+            Value::String(KIND_ENTITY.to_string()),
+        );
         let id = self.remember(&format!("Entity: {key}"), &[], Some(&meta))?;
         entity_ids.insert(key, id);
         Ok(id)
@@ -280,6 +291,9 @@ impl<E: Embedder> MemoryService<E> {
     /// A highly selective filter may return fewer than `k` hits even when more
     /// matches exist — raise `k` for fuller coverage with a narrow filter.
     ///
+    /// Entity hubs created by [`Self::remember_extracted`] are never returned:
+    /// they are internal graph scaffolding, not facts the caller stored.
+    ///
     /// # Errors
     /// Returns [`MemoryError`] if the semantic query fails.
     pub fn recall(
@@ -309,15 +323,19 @@ impl<E: Embedder> MemoryService<E> {
         filter: Option<&Metadata>,
     ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
         match filter {
+            // An include filter already excludes hubs: a hub only carries
+            // `{kind: entity}`, so it can never match a user's metadata filter.
             Some(meta) => self
                 .memory
                 .semantic()
                 .query_filtered(embedding, k, meta, 0)
                 .map_err(MemoryError::from),
+            // Unfiltered recall must still drop entity hubs explicitly, or a hub
+            // like `Entity: rust` would rank for the topic and evict a real fact.
             None => self
                 .memory
                 .semantic()
-                .query(embedding, k)
+                .query_excluding(embedding, k, &hub_exclude_filter())
                 .map_err(MemoryError::from),
         }
     }
@@ -443,4 +461,16 @@ impl<E: Embedder> MemoryService<E> {
         }
         Ok(())
     }
+}
+
+/// The metadata filter that excludes entity hubs from unfiltered recall and
+/// `why` seeds — the negative counterpart [`MemoryService::search`] applies so
+/// internal `{kind: entity}` scaffolding never surfaces as a result.
+fn hub_exclude_filter() -> Metadata {
+    let mut exclude = Map::new();
+    exclude.insert(
+        KIND_FIELD.to_string(),
+        Value::String(KIND_ENTITY.to_string()),
+    );
+    exclude
 }

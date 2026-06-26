@@ -400,6 +400,41 @@ impl SemanticMemory {
             .collect())
     }
 
+    /// Queries semantic memory, dropping points whose payload matches `exclude`.
+    ///
+    /// A point is excluded when it matches *all* key-value pairs in `exclude`
+    /// (the negative counterpart of [`Self::query_filtered`]); an empty `exclude`
+    /// drops nothing. Ranked by vector similarity, TTL-expired points removed.
+    /// Mirrors [`Self::query_filtered`]'s generous over-fetch so exclusions and
+    /// TTL eviction don't shrink the result below `k` when more matches exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when embedding dimension is invalid or collection access fails.
+    pub fn query_excluding(
+        &self,
+        query_embedding: &[f32],
+        k: usize,
+        exclude: &Map<String, Value>,
+    ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
+        let fetch_k = k
+            .saturating_add(self.ttl.expired_count(MemoryKind::Semantic))
+            .saturating_mul(2)
+            .max(k.saturating_add(8));
+
+        memory_helpers::validate_dimension(self.dimension, query_embedding.len())?;
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        let raw = memory_helpers::search_collection(&collection, query_embedding, fetch_k)?;
+
+        Ok(raw
+            .into_iter()
+            .filter(|r| !self.ttl.is_expired(MemoryKind::Semantic, r.point.id))
+            .filter(|r| exclude.is_empty() || !payload_matches(&r.point, exclude))
+            .take(k)
+            .map(|r| (r.point.id, r.score, extract_content(&r.point)))
+            .collect())
+    }
+
     /// Stores multiple semantic memory points in one batch.
     ///
     /// Each tuple is `(id, content, embedding)`. All embeddings are
