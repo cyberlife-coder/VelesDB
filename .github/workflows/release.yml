@@ -229,8 +229,8 @@ jobs:
     environment: crates-io
     env:
       # velesdb-memory is intentionally absent: it is versioned independently
-      # (0.x) and published on its own cadence via `cargo publish -p
-      # velesdb-memory`, so it does not ride the workspace 3.x release tag.
+      # (0.x) and ships on its own `velesdb-memory-vX.Y.Z` tag via
+      # release-memory.yml, so it does not ride the workspace 3.x release tag.
       CRATES_TO_PUBLISH: "velesdb-core velesdb-server velesdb-cli velesdb-migrate velesdb-mobile tauri-plugin-velesdb"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
