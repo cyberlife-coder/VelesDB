@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
+use rmcp::model::{ErrorCode, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -227,12 +227,21 @@ impl ServerHandler for McpServer {
 
 /// Map a domain error to an MCP error.
 ///
-/// Takes the error by value so it can be used directly as `.map_err(to_error)`
-/// at every call site (no per-site closure); the error is consumed into its
-/// `Display` form.
+/// Client-input errors (`EmptyFact`, `UnknownLinkTarget`) become
+/// `invalid_params` (-32602) so callers can distinguish bad input from a
+/// server fault without parsing the message string. Everything else is
+/// `internal_error` (-32603).
+///
+/// Takes the error by value so it can be used as `.map_err(to_error)` at every
+/// call site without a per-site closure.
 #[allow(clippy::needless_pass_by_value)]
 fn to_error(err: crate::error::MemoryError) -> ErrorData {
-    ErrorData::internal_error(err.to_string(), None)
+    use crate::error::MemoryError;
+    let code = match &err {
+        MemoryError::EmptyFact | MemoryError::UnknownLinkTarget(_) => ErrorCode::INVALID_PARAMS,
+        _ => ErrorCode::INTERNAL_ERROR,
+    };
+    ErrorData::new(code, err.to_string(), None)
 }
 
 #[cfg(test)]
@@ -411,5 +420,48 @@ mod tests {
 
         assert!(recalled.memories.iter().any(|m| m.id == kept.id));
         assert!(recalled.memories.iter().all(|m| m.id != dropped.id));
+    }
+
+    // --- Error-code mapping -------------------------------------------------
+
+    #[tokio::test]
+    async fn empty_fact_returns_invalid_params_not_internal_error() {
+        let (_dir, srv) = server();
+        let err = srv
+            .remember(Parameters(RememberParams {
+                fact: "   ".to_owned(),
+                links: Vec::new(),
+                metadata: None,
+            }))
+            .await
+            .map(|_| ())
+            .expect_err("whitespace fact must be rejected");
+        assert_eq!(
+            err.code,
+            ErrorCode::INVALID_PARAMS,
+            "EmptyFact must map to invalid_params so clients distinguish bad input from server faults"
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_link_target_returns_invalid_params_not_internal_error() {
+        let (_dir, srv) = server();
+        let err = srv
+            .remember(Parameters(RememberParams {
+                fact: "a decision".to_owned(),
+                links: vec![Link {
+                    target: 9_999_999,
+                    relation: "x".to_owned(),
+                }],
+                metadata: None,
+            }))
+            .await
+            .map(|_| ())
+            .expect_err("unknown link target must be rejected");
+        assert_eq!(
+            err.code,
+            ErrorCode::INVALID_PARAMS,
+            "UnknownLinkTarget must map to invalid_params"
+        );
     }
 }
