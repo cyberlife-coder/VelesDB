@@ -97,8 +97,11 @@ update_cargo_versions() {
     sed -i "s/^version = \".*\"/version = \"$new_version\"/" Cargo.toml
     
     # Mettre à jour les versions dans les crates
+    # velesdb-memory est exclu : il est versionné indépendamment (0.x) et publié
+    # via son propre tag velesdb-memory-vX.Y.Z (release-memory.yml), il ne doit
+    # pas être aligné sur la version 3.x du workspace.
     for cargo_file in crates/*/Cargo.toml; do
-        if [ -f "$cargo_file" ]; then
+        if [ -f "$cargo_file" ] && [ "$cargo_file" != "crates/velesdb-memory/Cargo.toml" ]; then
             sed -i "s/^version = \".*\"/version = \"$new_version\"/" "$cargo_file"
         fi
     done
