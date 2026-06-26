@@ -112,7 +112,8 @@ impl<E: Embedder> MemoryService<E> {
         links: &[Link],
         metadata: Option<&Metadata>,
     ) -> Result<u64, MemoryError> {
-        if fact.trim().is_empty() {
+        let fact = fact.trim();
+        if fact.is_empty() {
             return Err(MemoryError::EmptyFact);
         }
         self.ensure_link_targets_exist(links)?;
@@ -174,7 +175,8 @@ impl<E: Embedder> MemoryService<E> {
         k: usize,
         filter: Option<&Metadata>,
     ) -> Result<Vec<Recollection>, MemoryError> {
-        if query.trim().is_empty() {
+        let query = query.trim();
+        if query.is_empty() {
             return Ok(Vec::new());
         }
         let embedding = self.embedder.embed(query)?;
@@ -243,7 +245,8 @@ impl<E: Embedder> MemoryService<E> {
         max_hops: usize,
         filter: Option<&Metadata>,
     ) -> Result<Explanation, MemoryError> {
-        if decision.trim().is_empty() {
+        let decision = decision.trim();
+        if decision.is_empty() {
             return Ok(Explanation::default());
         }
         let embedding = self.embedder.embed(decision)?;
