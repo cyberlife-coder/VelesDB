@@ -8,12 +8,13 @@ mod common;
 
 use common::{meta, service};
 use serde_json::json;
+use tempfile::TempDir;
+use velesdb_memory::{HashEmbedder, MemoryService};
 
-// --- Nominal: vector + `ColumnStore` -----------------------------------------
-
-#[test]
-fn recall_filters_to_the_matching_metadata() {
-    let (_dir, svc) = service();
+/// Seed one `veles`-project and one `acme`-project "auth bug" fact; returns the
+/// service plus the two ids.
+fn seeded_two_projects() -> (TempDir, MemoryService<HashEmbedder>, u64, u64) {
+    let (dir, svc) = service();
     let veles = svc
         .remember(
             "auth bug in the login flow",
@@ -28,6 +29,14 @@ fn recall_filters_to_the_matching_metadata() {
             Some(&meta(&[("project", json!("acme"))])),
         )
         .expect("remember acme");
+    (dir, svc, veles, other)
+}
+
+// --- Nominal: vector + `ColumnStore` -----------------------------------------
+
+#[test]
+fn recall_filters_to_the_matching_metadata() {
+    let (_dir, svc, veles, other) = seeded_two_projects();
 
     let hits = svc
         .recall(
@@ -49,21 +58,7 @@ fn recall_filters_to_the_matching_metadata() {
 
 #[test]
 fn recall_without_filter_returns_all_projects() {
-    let (_dir, svc) = service();
-    let veles = svc
-        .remember(
-            "auth bug in the login flow",
-            &[],
-            Some(&meta(&[("project", json!("veles"))])),
-        )
-        .expect("remember veles");
-    let other = svc
-        .remember(
-            "auth bug in the login flow too",
-            &[],
-            Some(&meta(&[("project", json!("acme"))])),
-        )
-        .expect("remember acme");
+    let (_dir, svc, veles, other) = seeded_two_projects();
 
     let hits = svc
         .recall("auth bug login", 10, None)

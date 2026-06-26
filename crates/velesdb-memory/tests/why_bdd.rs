@@ -34,6 +34,16 @@ fn seeded_chain() -> (TempDir, MemoryService<HashEmbedder>, u64, u64, u64) {
     (dir, svc, decision, pr, ticket)
 }
 
+/// Node ids of the subgraph `why(DECISION, hops)` returns.
+fn why_ids(svc: &MemoryService<HashEmbedder>, hops: usize) -> Vec<u64> {
+    svc.why(DECISION, hops, None)
+        .expect("why")
+        .nodes
+        .iter()
+        .map(|n| n.id)
+        .collect()
+}
+
 // --- Nominal ---------------------------------------------------------------
 
 #[test]
@@ -108,8 +118,7 @@ fn why_with_zero_hops_returns_only_the_seed() {
 fn why_stops_at_the_hop_budget() {
     let (_dir, svc, decision, pr, ticket) = seeded_chain();
 
-    let explanation = svc.why(DECISION, 1, None).expect("why");
-    let ids: Vec<u64> = explanation.nodes.iter().map(|n| n.id).collect();
+    let ids = why_ids(&svc, 1);
 
     assert!(
         ids.contains(&decision) && ids.contains(&pr),
@@ -166,8 +175,7 @@ fn why_via_links_argument_builds_the_same_graph() {
         )
         .expect("remember decision with link");
 
-    let explanation = svc.why(DECISION, 1, None).expect("why");
-    let ids: Vec<u64> = explanation.nodes.iter().map(|n| n.id).collect();
+    let ids = why_ids(&svc, 1);
 
     assert!(
         ids.contains(&decision) && ids.contains(&pr),

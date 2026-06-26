@@ -250,6 +250,21 @@ mod tests {
         (dir, McpServer::new(service))
     }
 
+    /// Run a one-hop `why(DECISION)` through the server, returning the seed
+    /// subgraph's node ids and its edge count.
+    async fn why_one_hop(srv: &McpServer) -> (Vec<u64>, usize) {
+        let Json(why) = srv
+            .why(Parameters(WhyParams {
+                decision: DECISION.to_owned(),
+                max_hops: Some(1),
+                filter: None,
+            }))
+            .await
+            .expect("why");
+        let ids: Vec<u64> = why.nodes.iter().map(|n| n.id).collect();
+        (ids, why.edges.len())
+    }
+
     #[tokio::test]
     async fn remember_then_recall_roundtrips_through_the_server() {
         let (_dir, srv) = server();
@@ -301,18 +316,9 @@ mod tests {
         .await
         .expect("relate");
 
-        let Json(why) = srv
-            .why(Parameters(WhyParams {
-                decision: DECISION.to_owned(),
-                max_hops: Some(1),
-                filter: None,
-            }))
-            .await
-            .expect("why");
-
-        let ids: Vec<u64> = why.nodes.iter().map(|n| n.id).collect();
+        let (ids, edges) = why_one_hop(&srv).await;
         assert!(ids.contains(&decision.id) && ids.contains(&pr.id));
-        assert_eq!(why.edges.len(), 1);
+        assert_eq!(edges, 1);
     }
 
     #[tokio::test]
@@ -365,16 +371,7 @@ mod tests {
             .await
             .expect("remember decision with link");
 
-        let Json(why) = srv
-            .why(Parameters(WhyParams {
-                decision: DECISION.to_owned(),
-                max_hops: Some(1),
-                filter: None,
-            }))
-            .await
-            .expect("why");
-
-        let ids: Vec<u64> = why.nodes.iter().map(|n| n.id).collect();
+        let (ids, _) = why_one_hop(&srv).await;
         assert!(ids.contains(&decision.id) && ids.contains(&pr.id));
     }
 
