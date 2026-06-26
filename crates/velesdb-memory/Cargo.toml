@@ -1,6 +1,8 @@
 [package]
 name = "velesdb-memory"
-version.workspace = true
+# Independent of the workspace version: velesdb-memory is a young MCP wrapper
+# with its own release cadence, decoupled from the core engine's 3.x line.
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license-file = "../../LICENSE"
@@ -12,6 +14,9 @@ description = "VelesDB-memory: local-first MCP memory server for AI agents (reme
 readme = "README.md"
 keywords = ["mcp", "agent-memory", "local-first", "knowledge-graph", "ai"]
 categories = ["database", "command-line-utilities"]
+# The demo gif is served from the repo via raw.githubusercontent in the README;
+# shipping it in the .crate would only add dead weight to every download.
+exclude = ["media/"]
 
 [dependencies]
 velesdb-core = { workspace = true, features = ["persistence"] }
