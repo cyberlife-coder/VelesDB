@@ -111,6 +111,53 @@ claude mcp add velesdb-memory \
 } } }
 ```
 
+## Using the tools
+
+Once configured, your agent discovers the five tools automatically (via MCP
+`tools/list`). Each takes JSON and returns JSON:
+
+```jsonc
+// remember — store a fact; returns a stable, content-derived id
+//            (re-remembering identical text is idempotent — same id, updated in place)
+remember { "fact": "we chose parking_lot to avoid lock poisoning",
+           "metadata": { "project": "checkout" },                  // optional → enables filtering
+           "links":   [ { "target": 1234, "relation": "decided_in" } ] }  // optional typed edges
+→ { "id": 9876543210 }
+
+// relate — add a typed edge between two existing memories
+relate { "from": 9876543210, "to": 1234, "relation": "depends_on" }
+→ { "edge_id": 42 }
+
+// recall — semantic search; optional exact-match metadata filter (ColumnStore)
+recall { "query": "billing retries", "limit": 5, "filter": { "project": "checkout" } }
+→ { "memories": [ { "id": 9876543210, "score": 0.59, "content": "…" }, … ] }
+
+// why — the differentiator: best match + its connected subgraph (multi-hop)
+why { "decision": "why did we choose parking_lot", "max_hops": 2,
+      "filter": { "project": "checkout" } }
+→ { "nodes": [ { "id": …, "content": "…", "hop": 0 }, … ],
+    "edges": [ { "from": …, "to": …, "relation": "decided_in" }, … ] }
+
+// forget — delete a memory by id
+forget { "id": 9876543210 } → { "id": 9876543210 }
+```
+
+`limit` defaults to 10 (capped at 1000); `max_hops` defaults to 2 (capped at 10);
+`links`, `metadata`, and `filter` are optional.
+
+**IDs & linking.** `remember` returns a stable id derived from the fact's
+content. Pass it to `relate` / `forget`, or as a `links[].target` on a later
+`remember` — that is how the graph gets built, and what `why` traverses.
+
+**A natural agent pattern.** At the end of a task, `remember` the decision with
+`metadata` (project, author, status) and a `link` to the PR or ticket. Days
+later, `why("…")` recovers not just the decision but the PR, ticket, and
+benchmark linked to it — where `recall` alone returns only look-alike text.
+
+> **Embedding the library directly?** The same operations are available as a
+> Rust API (`MemoryService::remember/recall/relate/forget/why`) — see the
+> rustdoc on [docs.rs](https://docs.rs/velesdb-memory).
+
 ## Embedding backend
 
 `remember` / `relate` / `why` / `forget` behave the same regardless of the
