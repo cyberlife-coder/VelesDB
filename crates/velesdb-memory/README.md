@@ -52,21 +52,33 @@ links and reaches it. That gap is the product.
 ### Benchmark
 
 `cargo run --release -p velesdb-memory --example bench_multihop` isolates the
-graph's contribution — one corpus, the same embeddings, only the graph toggled:
+graph's contribution — 24 `decision → PR → problem` chains, the same embedder
+throughout, only the graph toggled. Each question (`"why did we adopt <tech>"`)
+has a 1-hop answer (the decision, shares words) and a 2-hop answer (the original
+problem, shares none):
 
-| question type     | vector-only | vector + graph |
-|-------------------|:-----------:|:--------------:|
-| direct (1-hop)    |    100%     |      100%      |
-| multi-hop (2-hop) |     0%      |      100%      |
+| embedder | direct recall | multi-hop, vector-only | multi-hop, **vector + graph** |
+|----------|:-------------:|:----------------------:|:-----------------------------:|
+| `hash` (deterministic) | 100% | 0% | **100%** |
+| real model (Ollama `all-minilm`) | 100% | 33% | **100%** |
 
-The direct-retrieval control confirms the vector engine is healthy (100%) — the
-multi-hop 0% is the *vector approach's* structural blind spot, not a defect.
+Read it this way: the **direct** control confirms the vector engine is healthy
+(100% — it aces look-alike retrieval). On **multi-hop**, a real semantic embedder
+still recovers only a third of the answers (the problem shares no words with the
+question); the graph recovers all of them — **+67 pp** with a real model
+(structurally +100 pp with the deterministic one). Run the real one yourself:
 
-> **Honest caveat.** This example uses the deterministic `hash` embedder, which
-> has no real semantics, so it maximizes the gap. With a real embedder a vector
-> baseline would score above zero but still well below the graph. The
-> apples-to-apples figure (real embedder + LoCoMo) is tracked as PLAN 2B — quote
-> that one externally, not this one.
+```bash
+cargo build --release -p velesdb-memory --features ollama && ollama pull all-minilm
+VELESDB_MEMORY_EMBEDDER=ollama \
+  cargo run --release -p velesdb-memory --features ollama --example bench_multihop
+```
+
+> **Not `LoCoMo`.** The apples-to-apples comparison vs mem0/Zep tests an
+> end-to-end *extraction* pipeline (turning raw text into a graph), which this
+> server intentionally doesn't ship — it's bring-your-own-links. This benchmark
+> measures the *engine's* contribution on controlled data; a LoCoMo run would
+> need an extraction layer on top. Tracked as PLAN 2B.
 
 ## Install
 
