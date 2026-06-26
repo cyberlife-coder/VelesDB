@@ -246,7 +246,7 @@ impl ServerHandler for McpServer {
 
 /// Map a domain error to an MCP error.
 ///
-/// Client-input errors (`EmptyFact`, `UnknownLinkTarget`) become
+/// Client-input errors (`EmptyFact`, `UnknownMemory`) become
 /// `invalid_params` (-32602) so callers can distinguish bad input from a
 /// server fault without parsing the message string. Everything else is
 /// `internal_error` (-32603).
@@ -257,7 +257,7 @@ impl ServerHandler for McpServer {
 fn to_error(err: crate::error::MemoryError) -> ErrorData {
     use crate::error::MemoryError;
     let code = match &err {
-        MemoryError::EmptyFact | MemoryError::UnknownLinkTarget(_) => ErrorCode::INVALID_PARAMS,
+        MemoryError::EmptyFact | MemoryError::UnknownMemory(_) => ErrorCode::INVALID_PARAMS,
         _ => ErrorCode::INTERNAL_ERROR,
     };
     ErrorData::new(code, err.to_string(), None)
@@ -480,7 +480,38 @@ mod tests {
         assert_eq!(
             err.code,
             ErrorCode::INVALID_PARAMS,
-            "UnknownLinkTarget must map to invalid_params"
+            "UnknownMemory must map to invalid_params"
+        );
+    }
+
+    #[tokio::test]
+    async fn relate_to_unknown_endpoint_returns_invalid_params_not_internal_error() {
+        let (_dir, srv) = server();
+        let Json(stored) = srv
+            .remember(Parameters(RememberParams {
+                fact: "an existing memory".to_owned(),
+                links: Vec::new(),
+                metadata: None,
+            }))
+            .await
+            .expect("remember");
+
+        // Relating an existing memory to a non-existent one is bad client input,
+        // not a server fault — the agent must see invalid_params so it can fix
+        // the id rather than retry a phantom internal error.
+        let err = srv
+            .relate(Parameters(RelateParams {
+                from: stored.id,
+                to: 9_999_999,
+                relation: "references".to_owned(),
+            }))
+            .await
+            .map(|_| ())
+            .expect_err("relate to a missing endpoint must be rejected");
+        assert_eq!(
+            err.code,
+            ErrorCode::INVALID_PARAMS,
+            "relate to an unknown endpoint must map to invalid_params"
         );
     }
 
