@@ -46,6 +46,13 @@ tokio = { workspace = true }
 name = "velesdb-memory"
 path = "src/main.rs"
 
+# Real-data LoCoMo benchmark. Needs a local Ollama (all-minilm + a generative
+# model), so it only builds with the `ollama` feature.
+[[example]]
+name = "locomo"
+path = "examples/locomo/main.rs"
+required-features = ["ollama"]
+
 [lib]
 name = "velesdb_memory"
 path = "src/lib.rs"
