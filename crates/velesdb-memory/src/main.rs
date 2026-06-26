@@ -9,19 +9,23 @@ use rmcp::ServiceExt;
 use velesdb_memory::mcp::{DynEmbedder, McpServer};
 use velesdb_memory::{HashEmbedder, MemoryService, DEFAULT_DIMENSION};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store_path = std::env::var("VELESDB_MEMORY_PATH")
         .unwrap_or_else(|_| "./velesdb-memory-store".to_owned());
 
+    // All synchronous setup (env probing, blocking HTTP to Ollama, disk open)
+    // runs here, before the async runtime starts, so we never block a tokio
+    // worker thread on a synchronous operation.
     let embedder = build_embedder()?;
     let service = MemoryService::open(&store_path, embedder)?;
 
-    let running = McpServer::new(service)
-        .serve((tokio::io::stdin(), tokio::io::stdout()))
-        .await?;
-    running.waiting().await?;
-    Ok(())
+    tokio::runtime::Runtime::new()?.block_on(async move {
+        let running = McpServer::new(service)
+            .serve((tokio::io::stdin(), tokio::io::stdout()))
+            .await?;
+        running.waiting().await?;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })
 }
 
 /// Select the embedding backend from `VELESDB_MEMORY_EMBEDDER`: `hash`
