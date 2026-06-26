@@ -9,7 +9,7 @@ mod common;
 use common::{meta, service};
 use serde_json::json;
 use tempfile::TempDir;
-use velesdb_memory::{HashEmbedder, MemoryService};
+use velesdb_memory::{ColumnFilter, ColumnOp, HashEmbedder, MemoryError, MemoryService};
 
 /// Seed one `veles`-project and one `acme`-project "auth bug" fact; returns the
 /// service plus the two ids.
@@ -204,4 +204,95 @@ fn filter_with_no_match_returns_empty() {
         .expect("recall");
 
     assert!(hits.is_empty(), "no fact matches the filter");
+}
+
+// --- Nominal: fused vector + `ColumnStore` range (recall_where) ---------------
+
+/// Seed three "project kickoff" facts at ascending `ts` timestamps.
+fn seeded_timestamps() -> (TempDir, MemoryService<HashEmbedder>, [u64; 3]) {
+    let (dir, svc) = service();
+    let early = svc
+        .remember(
+            "project kickoff meeting",
+            &[],
+            Some(&meta(&[("ts", json!(100))])),
+        )
+        .expect("remember early");
+    let mid = svc
+        .remember(
+            "project kickoff follow-up",
+            &[],
+            Some(&meta(&[("ts", json!(200))])),
+        )
+        .expect("remember mid");
+    let late = svc
+        .remember(
+            "project kickoff retrospective",
+            &[],
+            Some(&meta(&[("ts", json!(300))])),
+        )
+        .expect("remember late");
+    (dir, svc, [early, mid, late])
+}
+
+#[test]
+fn recall_where_filters_by_numeric_range() {
+    let (_dir, svc, [early, mid, late]) = seeded_timestamps();
+
+    let hits = svc
+        .recall_where(
+            "project kickoff",
+            10,
+            &[ColumnFilter {
+                field: "ts".to_string(),
+                op: ColumnOp::Ge,
+                value: json!(200),
+            }],
+        )
+        .expect("recall_where range");
+
+    let ids: Vec<u64> = hits.iter().map(|h| h.id).collect();
+    assert!(
+        ids.contains(&mid) && ids.contains(&late),
+        "ts >= 200 facts present"
+    );
+    assert!(!ids.contains(&early), "ts = 100 fact excluded by the range");
+    assert!(
+        hits.iter().all(|h| !h.content.is_empty()),
+        "content is lifted from payload"
+    );
+}
+
+// --- Edge: empty query / zero budget ------------------------------------------
+
+#[test]
+fn recall_where_empty_query_or_zero_k_is_empty() {
+    let (_dir, svc, _) = seeded_timestamps();
+    assert!(svc
+        .recall_where("   ", 10, &[])
+        .expect("blank query")
+        .is_empty());
+    assert!(svc
+        .recall_where("project", 0, &[])
+        .expect("zero k")
+        .is_empty());
+}
+
+// --- Negative: an unsafe field name is rejected, not interpolated --------------
+
+#[test]
+fn recall_where_rejects_non_identifier_field() {
+    let (_dir, svc, _) = seeded_timestamps();
+    let err = svc
+        .recall_where(
+            "project",
+            10,
+            &[ColumnFilter {
+                field: "ts; DROP TABLE".to_string(),
+                op: ColumnOp::Ge,
+                value: json!(1),
+            }],
+        )
+        .expect_err("a non-identifier field must be rejected");
+    assert!(matches!(err, MemoryError::InvalidFilter(_)));
 }
