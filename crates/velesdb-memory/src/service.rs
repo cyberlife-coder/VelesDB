@@ -163,10 +163,8 @@ impl<E: Embedder> MemoryService<E> {
     /// optionally narrowed to an exact-match metadata `filter` (`ColumnStore`
     /// facet) — e.g. `{ "project": "veles", "status": "resolved" }`.
     ///
-    /// The filter is applied *after* vector ranking, so a highly selective
-    /// filter over a large, dissimilar corpus may return fewer than `k` hits
-    /// even when more matches exist further down the ranking — raise `k` if you
-    /// need exhaustive filtered recall.
+    /// A highly selective filter may return fewer than `k` hits even when more
+    /// matches exist — raise `k` for fuller coverage with a narrow filter.
     ///
     /// # Errors
     /// Returns [`MemoryError`] if the semantic query fails.
