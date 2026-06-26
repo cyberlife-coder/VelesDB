@@ -151,3 +151,20 @@ fn recall_with_empty_query_returns_empty() {
 
     assert!(hits.is_empty(), "a blank query recalls nothing");
 }
+
+#[test]
+fn remember_trims_whitespace_for_idempotence() {
+    let (_dir, svc) = service();
+
+    let id_bare = svc
+        .remember("hello world", &[], None)
+        .expect("remember bare");
+    let id_padded = svc
+        .remember("  hello world  ", &[], None)
+        .expect("remember padded");
+
+    assert_eq!(
+        id_bare, id_padded,
+        "leading/trailing whitespace must not change the stable id"
+    );
+}
