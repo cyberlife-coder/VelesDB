@@ -20,13 +20,17 @@ use crate::error::MemoryError;
 use crate::extract::Extractor;
 use crate::id;
 
-/// Reserved metadata key recording the *kind* of a memory.
-const KIND_FIELD: &str = "kind";
-/// `kind` value tagging an entity hub auto-created by
-/// [`MemoryService::remember_extracted`]. Hubs are internal graph scaffolding —
-/// they connect facts that share a topic — so they are excluded from unfiltered
-/// recall and from `why` seeds and never surface as a user-facing result.
-const KIND_ENTITY: &str = "entity";
+/// Reserved metadata key marking an entity hub auto-created by
+/// [`MemoryService::remember_extracted`] (value `true`). Namespaced under the
+/// system `_veles_` prefix so it can never collide with a caller's own metadata,
+/// and rejected from caller-supplied metadata/filters (see [`is_reserved_key`]).
+/// Hubs are internal graph scaffolding — they connect facts that share a topic —
+/// so they are excluded from unfiltered recall and from `why` seeds.
+const HUB_FIELD: &str = "_veles_hub";
+/// Salt mixed into a hub's stable id so the hub id space is disjoint from
+/// natural fact ids: a caller fact whose text happens to equal a hub's display
+/// content (`Entity: rust`) can never collide with, or overwrite, the hub.
+const HUB_ID_SALT: &str = "\u{0}_veles_entity_hub\u{0}";
 
 /// A typed link from a freshly remembered fact to an existing memory.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -113,6 +117,8 @@ impl<E: Embedder> MemoryService<E> {
     ///
     /// # Errors
     /// Returns [`MemoryError::EmptyFact`] for empty/whitespace facts,
+    /// [`MemoryError::ReservedKey`] if `metadata` names a reserved key
+    /// (`content` or any `_veles_`-prefixed system key),
     /// [`MemoryError::UnknownMemory`] if a link points at a missing memory,
     /// or a storage error if persistence fails.
     pub fn remember(
@@ -125,6 +131,7 @@ impl<E: Embedder> MemoryService<E> {
         if fact.is_empty() {
             return Err(MemoryError::EmptyFact);
         }
+        reject_reserved_keys(metadata)?;
         self.ensure_link_targets_exist(links)?;
         let fact_id = id::stable_id(fact);
         let embedding = self.embedder.embed(fact)?;
@@ -153,8 +160,8 @@ impl<E: Embedder> MemoryService<E> {
     ///
     /// # Errors
     /// Returns [`MemoryError::EmptyFact`] for empty/whitespace `text`,
-    /// [`MemoryError::Extract`] if extraction fails, or a storage error if
-    /// persistence fails.
+    /// [`MemoryError::Extract`] if extraction fails, [`MemoryError::ReservedKey`]
+    /// if `metadata` names a reserved key, or a storage error if persistence fails.
     pub fn remember_extracted<X: Extractor>(
         &self,
         text: &str,
@@ -169,6 +176,7 @@ impl<E: Embedder> MemoryService<E> {
         let mut fact_ids = Vec::new();
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64)> = HashSet::new();
+        let mut seeded: HashSet<u64> = HashSet::new();
         for fact in &facts {
             let content = fact.text.trim();
             if content.is_empty() {
@@ -176,7 +184,13 @@ impl<E: Embedder> MemoryService<E> {
             }
             let fact_id = self.remember(content, &[], metadata)?;
             fact_ids.push(fact_id);
-            self.wire_entities(fact_id, &fact.entities, &mut entity_ids, &mut edges)?;
+            self.wire_entities(
+                fact_id,
+                &fact.entities,
+                &mut entity_ids,
+                &mut edges,
+                &mut seeded,
+            )?;
         }
         Ok(fact_ids)
     }
@@ -191,12 +205,13 @@ impl<E: Embedder> MemoryService<E> {
         entities: &[String],
         entity_ids: &mut HashMap<String, u64>,
         edges: &mut HashSet<(u64, u64)>,
+        seeded: &mut HashSet<u64>,
     ) -> Result<(), MemoryError> {
         for entity in entities {
             // Skip blank or punctuation-only topics: they would persist as junk
             // hubs (`Entity: -`) yet can never carry a meaningful multi-hop link.
             if entity.chars().any(char::is_alphanumeric) {
-                self.wire_entity(fact_id, entity, entity_ids, edges)?;
+                self.wire_entity(fact_id, entity, entity_ids, edges, seeded)?;
             }
         }
         Ok(())
@@ -210,23 +225,58 @@ impl<E: Embedder> MemoryService<E> {
         entity: &str,
         entity_ids: &mut HashMap<String, u64>,
         edges: &mut HashSet<(u64, u64)>,
+        seeded: &mut HashSet<u64>,
     ) -> Result<(), MemoryError> {
         let entity_id = self.entity_hub(entity, entity_ids)?;
         if entity_id == fact_id {
             return Ok(());
         }
-        if edges.insert((fact_id, entity_id)) {
-            self.relate(fact_id, entity_id, "about")?;
+        // Fold already-persisted edges into the dedup set so re-ingesting the
+        // same text never creates duplicate parallel edges (core `relate` does
+        // not dedup by endpoint+label, only by edge id).
+        self.seed_existing_edges(fact_id, edges, seeded)?;
+        self.seed_existing_edges(entity_id, edges, seeded)?;
+        self.add_edge(fact_id, entity_id, "about", edges)?;
+        self.add_edge(entity_id, fact_id, "mentions", edges)?;
+        Ok(())
+    }
+
+    /// Create the edge `from -> to` labelled `label`, unless `edges` already
+    /// records that endpoint pair (in-call and persisted dedup).
+    fn add_edge(
+        &self,
+        from: u64,
+        to: u64,
+        label: &str,
+        edges: &mut HashSet<(u64, u64)>,
+    ) -> Result<(), MemoryError> {
+        if edges.insert((from, to)) {
+            self.relate(from, to, label)?;
         }
-        if edges.insert((entity_id, fact_id)) {
-            self.relate(entity_id, fact_id, "mentions")?;
+        Ok(())
+    }
+
+    /// Load `node`'s already-persisted outgoing edges into `edges` once per call
+    /// (tracked by `seeded`), so the dedup set reflects the stored graph and a
+    /// repeated ingest is idempotent rather than edge-duplicating.
+    fn seed_existing_edges(
+        &self,
+        node: u64,
+        edges: &mut HashSet<(u64, u64)>,
+        seeded: &mut HashSet<u64>,
+    ) -> Result<(), MemoryError> {
+        if !seeded.insert(node) {
+            return Ok(());
+        }
+        for edge in self.memory.semantic().relations(node)? {
+            edges.insert((node, edge.target()));
         }
         Ok(())
     }
 
     /// Get or create the hub memory for a topic, caching its id per call. The
-    /// hub content is canonical (`Entity: <topic>`), so its stable id is the same
-    /// across calls and the same topic never spawns a duplicate hub.
+    /// hub id is a deterministic function of the (normalized) topic, so the same
+    /// topic resolves to the same hub across calls — never a duplicate.
     fn entity_hub(
         &self,
         entity: &str,
@@ -236,13 +286,24 @@ impl<E: Embedder> MemoryService<E> {
         if let Some(&id) = entity_ids.get(&key) {
             return Ok(id);
         }
-        let mut meta = Map::new();
-        meta.insert(
-            KIND_FIELD.to_string(),
-            Value::String(KIND_ENTITY.to_string()),
-        );
-        let id = self.remember(&format!("Entity: {key}"), &[], Some(&meta))?;
+        let id = self.remember_hub(&key)?;
         entity_ids.insert(key, id);
+        Ok(id)
+    }
+
+    /// Idempotently store the hub memory for topic `key`. The id is salted so the
+    /// hub id space is disjoint from natural fact ids (no caller fact can collide
+    /// with or overwrite a hub), while the stored content stays human-readable.
+    /// Marked with the reserved [`HUB_FIELD`] so recall and `why` seeds exclude
+    /// it; goes straight to [`Self::store`] to bypass the caller-facing reserved-
+    /// key rejection in [`Self::remember`].
+    fn remember_hub(&self, key: &str) -> Result<u64, MemoryError> {
+        let id = id::stable_id(&format!("{HUB_ID_SALT}{key}"));
+        let content = format!("Entity: {key}");
+        let embedding = self.embedder.embed(&content)?;
+        let mut meta = Map::new();
+        meta.insert(HUB_FIELD.to_string(), Value::Bool(true));
+        self.store(id, &content, &embedding, Some(&meta))?;
         Ok(id)
     }
 
@@ -306,6 +367,7 @@ impl<E: Embedder> MemoryService<E> {
         if query.is_empty() {
             return Ok(Vec::new());
         }
+        reject_reserved_keys(filter)?;
         let embedding = self.embedder.embed(query)?;
         let hits = self.search(&embedding, k, filter)?;
         Ok(hits
@@ -388,6 +450,7 @@ impl<E: Embedder> MemoryService<E> {
         if decision.is_empty() {
             return Ok(Explanation::default());
         }
+        reject_reserved_keys(filter)?;
         let embedding = self.embedder.embed(decision)?;
         let seeds = self.search(&embedding, 1, filter)?;
         let Some((seed_id, _score, seed_content)) = seeds.into_iter().next() else {
@@ -465,12 +528,30 @@ impl<E: Embedder> MemoryService<E> {
 
 /// The metadata filter that excludes entity hubs from unfiltered recall and
 /// `why` seeds — the negative counterpart [`MemoryService::search`] applies so
-/// internal `{kind: entity}` scaffolding never surfaces as a result.
+/// internal `_veles_hub` scaffolding never surfaces as a result.
 fn hub_exclude_filter() -> Metadata {
     let mut exclude = Map::new();
-    exclude.insert(
-        KIND_FIELD.to_string(),
-        Value::String(KIND_ENTITY.to_string()),
-    );
+    exclude.insert(HUB_FIELD.to_string(), Value::Bool(true));
     exclude
+}
+
+/// True for metadata keys the memory layer reserves: the engine's `content`
+/// payload, and any `_veles_`-namespaced system key (durable TTL, entity hubs).
+/// Callers may neither set these in `remember` metadata nor filter on them, so
+/// they can't overwrite a system field or collide with internal scaffolding.
+fn is_reserved_key(key: &str) -> bool {
+    key == "content" || key.starts_with("_veles_")
+}
+
+/// Reject caller-supplied metadata/filters that name a reserved key.
+fn reject_reserved_keys(metadata: Option<&Metadata>) -> Result<(), MemoryError> {
+    let Some(meta) = metadata else {
+        return Ok(());
+    };
+    for key in meta.keys() {
+        if is_reserved_key(key) {
+            return Err(MemoryError::ReservedKey(key.clone()));
+        }
+    }
+    Ok(())
 }

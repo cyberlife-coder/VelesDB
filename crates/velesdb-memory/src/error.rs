@@ -26,6 +26,11 @@ pub enum MemoryError {
     #[error("memory {0} does not exist")]
     UnknownMemory(u64),
 
+    /// Caller metadata or a recall filter named a reserved key (`content` or a
+    /// `_veles_`-prefixed system key), which callers may not set or filter on.
+    #[error("metadata key '{0}' is reserved")]
+    ReservedKey(String),
+
     /// Failure producing a text embedding.
     #[error("embedding error: {0}")]
     Embed(#[from] EmbedError),

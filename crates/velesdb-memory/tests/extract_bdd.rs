@@ -6,11 +6,19 @@
 //! a deterministic, network-free `Extractor`: feed it a paragraph, and `why()`
 //! reaches a sibling fact through a shared topic with no manual `relate()`.
 
+use serde_json::Value;
 use tempfile::TempDir;
 use velesdb_memory::{
-    ExtractError, ExtractedFact, Extractor, HashEmbedder, MemoryError, MemoryService,
+    ExtractError, ExtractedFact, Extractor, HashEmbedder, MemoryError, MemoryService, Metadata,
     DEFAULT_DIMENSION,
 };
+
+/// Build a one-key metadata map for tests.
+fn meta(key: &str, value: Value) -> Metadata {
+    let mut m = Metadata::new();
+    m.insert(key.to_string(), value);
+    m
+}
 
 /// A canned extractor: two facts that share the topic `rust` (and nothing else),
 /// so the only path from one to the other is through the shared hub.
@@ -150,4 +158,63 @@ fn extractor_failure_is_surfaced() {
         svc.remember_extracted("anything", &FailingExtractor, None),
         Err(MemoryError::Extract(ExtractError::Backend(_)))
     ));
+}
+
+#[test]
+fn user_metadata_kind_entity_is_not_excluded() {
+    // The hub marker is the reserved `_veles_hub`, NOT `kind`, so a caller may
+    // legitimately use kind="entity" in its own taxonomy without its fact being
+    // silently dropped from recall by the hub-exclusion filter.
+    let (_dir, svc) = service();
+    let id = svc
+        .remember(
+            "Orders entity is processed nightly",
+            &[],
+            Some(&meta("kind", Value::String("entity".to_string()))),
+        )
+        .expect("remember with kind=entity");
+    let hits = svc
+        .recall("orders entity nightly", 8, None)
+        .expect("recall");
+    assert!(
+        hits.iter().any(|h| h.id == id),
+        "a user fact tagged kind=entity must still be recalled"
+    );
+}
+
+#[test]
+fn reserved_veles_key_is_rejected() {
+    let (_dir, svc) = service();
+    // A caller may not set a `_veles_`-namespaced system key (e.g. forge a hub).
+    assert!(matches!(
+        svc.remember("sneaky", &[], Some(&meta("_veles_hub", Value::Bool(true)))),
+        Err(MemoryError::ReservedKey(k)) if k == "_veles_hub"
+    ));
+    // `content` is reserved too.
+    assert!(matches!(
+        svc.recall(
+            "q",
+            5,
+            Some(&meta("content", Value::String("x".to_string())))
+        ),
+        Err(MemoryError::ReservedKey(_))
+    ));
+}
+
+#[test]
+fn reingesting_the_same_text_does_not_duplicate_edges() {
+    let (_dir, svc) = service();
+    svc.remember_extracted("Alice and Bob both work in Rust.", &StubExtractor, None)
+        .expect("first ingest");
+    let after_first = svc.why("parser shipped in rust", 2, None).expect("why 1");
+    // Re-ingest identical text: facts and hubs are deterministic, so the graph
+    // must be unchanged — not gain a second parallel about/mentions edge.
+    svc.remember_extracted("Alice and Bob both work in Rust.", &StubExtractor, None)
+        .expect("second ingest");
+    let after_second = svc.why("parser shipped in rust", 2, None).expect("why 2");
+    assert_eq!(
+        after_first.edges.len(),
+        after_second.edges.len(),
+        "re-ingestion must be idempotent: no duplicate edges"
+    );
 }

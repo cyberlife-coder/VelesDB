@@ -223,7 +223,13 @@ fn json_slice<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
 #[cfg(feature = "extract")]
 fn balanced_slice(text: &str) -> Option<&str> {
     let bytes = text.as_bytes();
-    let start = bytes.iter().position(|&b| b == b'[' || b == b'{')?;
+    // Prefer an array: the expected reply is a JSON list, and prose before it
+    // ("Result {ok}: [...]") may carry a stray `{` that would mis-slice the
+    // object span instead of the array. Fall back to the first `{` if no `[`.
+    let start = bytes
+        .iter()
+        .position(|&b| b == b'[')
+        .or_else(|| bytes.iter().position(|&b| b == b'{'))?;
     let open = bytes[start];
     let close = if open == b'[' { b']' } else { b'}' };
     let mut depth = 0u32;

@@ -275,7 +275,7 @@ impl McpServer {
                 None,
             ));
         }
-        let Some(extractor) = self.extractor.as_ref() else {
+        let Some(extractor) = self.extractor.clone() else {
             return Err(ErrorData::new(
                 ErrorCode::INTERNAL_ERROR,
                 "extraction backend not configured: start the server with \
@@ -283,10 +283,23 @@ impl McpServer {
                 None,
             ));
         };
-        let ids = self
-            .service
-            .remember_extracted(&params.text, extractor, params.metadata.as_ref())
-            .map_err(to_error)?;
+        // Extraction makes a blocking network call (up to the extractor's
+        // timeout), so run it off the async worker pool to keep the stdio loop
+        // responsive to other tool calls and cancellations.
+        let service = Arc::clone(&self.service);
+        let RememberExtractedParams { text, metadata } = params;
+        let ids = tokio::task::spawn_blocking(move || {
+            service.remember_extracted(&text, &extractor, metadata.as_ref())
+        })
+        .await
+        .map_err(|join| {
+            ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("extraction task failed: {join}"),
+                None,
+            )
+        })?
+        .map_err(to_error)?;
         Ok(Json(RememberExtractedResult { ids }))
     }
 }
@@ -323,7 +336,9 @@ impl ServerHandler for McpServer {
 fn to_error(err: crate::error::MemoryError) -> ErrorData {
     use crate::error::MemoryError;
     let code = match &err {
-        MemoryError::EmptyFact | MemoryError::UnknownMemory(_) => ErrorCode::INVALID_PARAMS,
+        MemoryError::EmptyFact | MemoryError::UnknownMemory(_) | MemoryError::ReservedKey(_) => {
+            ErrorCode::INVALID_PARAMS
+        }
         _ => ErrorCode::INTERNAL_ERROR,
     };
     ErrorData::new(code, err.to_string(), None)
