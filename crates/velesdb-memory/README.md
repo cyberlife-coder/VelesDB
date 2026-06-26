@@ -24,6 +24,48 @@ By design the server exposes **memory semantics only** — never raw database
 capabilities (`query`, `create_collection`, `upsert`, `traverse`). See
 [License](#license).
 
+## See it (offline, one command)
+
+```bash
+cargo run -p velesdb-memory --example wow_offline
+```
+
+```text
+recall("why we chose parking_lot")   [vector similarity only]
+   0.47  we chose parking_lot to avoid lock poisoning after a panic
+   0.18  PR #42 swaps the std Mutex for parking_lot
+   └─ EPIC-317 is nowhere here — it shares no words with the question.
+
+why("why we chose parking_lot")      [vector seed + graph traversal]
+   hop 0  we chose parking_lot ...
+   hop 1  PR #42 ...
+   hop 2  EPIC-317: intermittent CI hang under load
+   └─ the graph reached the very ticket the decision fixed.
+```
+
+A vector search ranks by resemblance; the ticket shares no words with the
+question, so a pure similarity search is blind to it. `why()` follows the typed
+links and reaches it. That gap is the product.
+
+### Benchmark
+
+`cargo run --release -p velesdb-memory --example bench_multihop` isolates the
+graph's contribution — one corpus, the same embeddings, only the graph toggled:
+
+| question type     | vector-only | vector + graph |
+|-------------------|:-----------:|:--------------:|
+| direct (1-hop)    |    100%     |      100%      |
+| multi-hop (2-hop) |     0%      |      100%      |
+
+The direct-retrieval control confirms the vector engine is healthy (100%) — the
+multi-hop 0% is the *vector approach's* structural blind spot, not a defect.
+
+> **Honest caveat.** This example uses the deterministic `hash` embedder, which
+> has no real semantics, so it maximizes the gap. With a real embedder a vector
+> baseline would score above zero but still well below the graph. The
+> apples-to-apples figure (real embedder + LoCoMo) is tracked as PLAN 2B — quote
+> that one externally, not this one.
+
 ## Install
 
 ```bash
