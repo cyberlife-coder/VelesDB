@@ -1,48 +1,62 @@
-# VelesDB-memory — "wow" clip (source of truth, regenerable).
-# Render from this directory:
-#   cd crates/velesdb-memory/media && vhs wow.tape
-# Produces wow.gif (committed, used in the README) and wow.mp4 (not committed —
-# a launch/social asset, regenerate when needed). Fully offline, reproducible.
-# Needs: vhs + the JetBrains Mono font (brew install vhs --cask font-jetbrains-mono).
+# VelesDB-memory — "wow" clip (source of truth). Real semantic recall, shown
+# with a LOCAL model so the scores are genuine — still offline, no API key.
+#
+# Render from the repo root:   vhs crates/velesdb-memory/media/wow.tape
+# Needs: vhs + JetBrains Mono + a local Ollama with the embedding model:
+#   brew install vhs && brew install --cask font-jetbrains-mono
+#   ollama pull all-minilm
+# (The example also runs with no Ollama at all — `cargo run -p velesdb-memory
+#  --example wow_offline` uses the deterministic embedder; the scores differ but
+#  the wedge is identical.)
 
-Output wow.gif
-Output wow.mp4
+Output crates/velesdb-memory/media/wow.gif
+Output crates/velesdb-memory/media/wow.mp4
 
 Require cargo
 
 Set Shell "bash"
 Set FontFamily "JetBrains Mono"
-Set FontSize 22
-Set Width 1280
-Set Height 760
+Set FontSize 24
+Set Width 1300
+Set Height 880
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 45ms
-Set Margin 24
-Set Padding 24
+Set TypingSpeed 50ms
+Set Margin 26
+Set Padding 26
 Set BorderRadius 10
 
-# Pre-build hidden so the run lands instantly on camera.
+# Hidden setup: build once with the real-embedder feature, point it at the local
+# model, clear the screen. The commands below are then instant and clean.
 Hide
-Type "cargo build -q -p velesdb-memory --example wow_offline 2>/dev/null"
+Type "cargo build -q --features ollama -p velesdb-memory --example wow_offline 2>/dev/null"
 Enter
-Sleep 2s
+Sleep 4s
+Type "export VELESDB_MEMORY_EMBEDDER=ollama"
+Enter
 Type "clear"
 Enter
 Show
 
-Sleep 600ms
-Type "# Your AI agent forgets WHY — and a similarity search can't connect the dots."
-Sleep 1500ms
+Sleep 700ms
+Type "# memory backed by a real local model (Ollama all-minilm) — still offline"
+Sleep 400ms
 Enter
-Sleep 1500ms
-
-Type "cargo run -q -p velesdb-memory --example wow_offline"
-Sleep 800ms
-Enter
-# Let the recall (miss) → why (graph reaches the ticket) contrast land and read.
-Sleep 7s
-
-Type "# The vector was blind. The graph connected it. Offline. One binary.  → velesdb.com"
 Sleep 1200ms
+
+# Beat 1 — vector: the work surfaces from both projects, never the person.
+Type "./target/debug/examples/wow_offline recall"
+Sleep 500ms
 Enter
-Sleep 3s
+Sleep 3800ms
+
+# Beat 2 — ColumnStore: an exact-match metadata filter scopes it to one project.
+Type "./target/debug/examples/wow_offline filter"
+Sleep 500ms
+Enter
+Sleep 3500ms
+
+# Beat 3 — graph: why() hops topic → PR → author and lands on the person.
+Type "./target/debug/examples/wow_offline why"
+Sleep 500ms
+Enter
+Sleep 5200ms
