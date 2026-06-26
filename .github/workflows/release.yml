@@ -228,8 +228,10 @@ jobs:
       (github.event_name == 'push' || inputs.publish_crates)
     environment: crates-io
     env:
-      # velesdb-memory is last: it depends on velesdb-core, which is published first.
-      CRATES_TO_PUBLISH: "velesdb-core velesdb-server velesdb-cli velesdb-migrate velesdb-mobile tauri-plugin-velesdb velesdb-memory"
+      # velesdb-memory is intentionally absent: it is versioned independently
+      # (0.x) and published on its own cadence via `cargo publish -p
+      # velesdb-memory`, so it does not ride the workspace 3.x release tag.
+      CRATES_TO_PUBLISH: "velesdb-core velesdb-server velesdb-cli velesdb-migrate velesdb-mobile tauri-plugin-velesdb"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: dtolnay/rust-toolchain@stable # Intentionally unpinned - uses toolchain input
