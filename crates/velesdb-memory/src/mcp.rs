@@ -20,6 +20,12 @@ use crate::service::{Explanation, Link, MemoryService, Metadata, Recollection};
 const DEFAULT_RECALL_LIMIT: usize = 10;
 /// Default hop budget for `why` traversal.
 const DEFAULT_WHY_HOPS: usize = 2;
+/// Maximum accepted fact size — prevents allocating huge embeddings (1 MiB).
+const MAX_FACT_BYTES: usize = 1_048_576;
+/// Cap on the `recall` limit — prevents unbounded vector scans.
+const MAX_RECALL_LIMIT: usize = 1_000;
+/// Cap on `why` hop depth — prevents exponential graph fans.
+const MAX_WHY_HOPS: usize = 10;
 
 /// Boxed embedder so the served type is concrete (the rmcp macros and the
 /// async runtime work most cleanly on a non-generic handler).
@@ -142,6 +148,13 @@ impl McpServer {
         &self,
         Parameters(params): Parameters<RememberParams>,
     ) -> Result<Json<RememberResult>, ErrorData> {
+        if params.fact.len() > MAX_FACT_BYTES {
+            return Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                format!("fact exceeds maximum size of {MAX_FACT_BYTES} bytes"),
+                None,
+            ));
+        }
         let id = self
             .service
             .remember(&params.fact, &params.links, params.metadata.as_ref())
@@ -157,7 +170,10 @@ impl McpServer {
         &self,
         Parameters(params): Parameters<RecallParams>,
     ) -> Result<Json<RecallResult>, ErrorData> {
-        let limit = params.limit.unwrap_or(DEFAULT_RECALL_LIMIT);
+        let limit = params
+            .limit
+            .unwrap_or(DEFAULT_RECALL_LIMIT)
+            .min(MAX_RECALL_LIMIT);
         let memories = self
             .service
             .recall(&params.query, limit, params.filter.as_ref())
@@ -197,7 +213,10 @@ impl McpServer {
         &self,
         Parameters(params): Parameters<WhyParams>,
     ) -> Result<Json<Explanation>, ErrorData> {
-        let max_hops = params.max_hops.unwrap_or(DEFAULT_WHY_HOPS);
+        let max_hops = params
+            .max_hops
+            .unwrap_or(DEFAULT_WHY_HOPS)
+            .min(MAX_WHY_HOPS);
         let explanation = self
             .service
             .why(&params.decision, max_hops, params.filter.as_ref())
@@ -463,5 +482,64 @@ mod tests {
             ErrorCode::INVALID_PARAMS,
             "UnknownLinkTarget must map to invalid_params"
         );
+    }
+
+    // --- Input size guards -----------------------------------------------------
+
+    #[tokio::test]
+    async fn oversized_fact_returns_invalid_params() {
+        let (_dir, srv) = server();
+        let huge = "x".repeat(MAX_FACT_BYTES + 1);
+        let err = srv
+            .remember(Parameters(RememberParams {
+                fact: huge,
+                links: Vec::new(),
+                metadata: None,
+            }))
+            .await
+            .map(|_| ())
+            .expect_err("oversized fact must be rejected");
+        assert_eq!(
+            err.code,
+            ErrorCode::INVALID_PARAMS,
+            "oversized fact must map to invalid_params"
+        );
+    }
+
+    #[tokio::test]
+    async fn recall_limit_is_capped_at_max() {
+        let (_dir, srv) = server();
+        // The call must succeed (capped, not rejected).
+        let Json(result) = srv
+            .recall(Parameters(RecallParams {
+                query: "anything".to_owned(),
+                limit: Some(usize::MAX),
+                filter: None,
+            }))
+            .await
+            .expect("recall with huge limit must succeed (silently capped)");
+        // Empty store — just verify no error, not result length.
+        let _ = result;
+    }
+
+    #[tokio::test]
+    async fn why_hop_depth_is_capped_at_max() {
+        let (_dir, srv) = server();
+        srv.remember(Parameters(RememberParams {
+            fact: DECISION.to_owned(),
+            links: Vec::new(),
+            metadata: None,
+        }))
+        .await
+        .expect("remember");
+        // Must not hang or explode with an astronomical hop value.
+        let Json(_) = srv
+            .why(Parameters(WhyParams {
+                decision: DECISION.to_owned(),
+                max_hops: Some(usize::MAX),
+                filter: None,
+            }))
+            .await
+            .expect("why with huge max_hops must succeed (silently capped)");
     }
 }
