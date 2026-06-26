@@ -123,6 +123,33 @@ claude mcp add velesdb-memory \
 } } }
 ```
 
+**Codex CLI** — `codex mcp add`, or a `[mcp_servers.*]` table in `~/.codex/config.toml`
+
+```bash
+codex mcp add velesdb-memory \
+  --env VELESDB_MEMORY_PATH="$HOME/.velesdb-memory" \
+  -- /path/to/velesdb-memory
+```
+
+```toml
+# equivalent ~/.codex/config.toml entry
+[mcp_servers.velesdb-memory]
+command = "/path/to/velesdb-memory"
+args = []
+env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
+```
+
+**opencode** — `opencode.json` (per project) or `~/.config/opencode/opencode.json` (global)
+
+```json
+{ "mcp": { "velesdb-memory": {
+  "type": "local",
+  "command": ["/path/to/velesdb-memory"],
+  "enabled": true,
+  "environment": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
+} } }
+```
+
 ## Using the tools
 
 Once configured, your agent discovers the five tools automatically (via MCP
