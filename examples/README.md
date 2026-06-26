@@ -13,6 +13,7 @@ This directory contains examples demonstrating various VelesDB features and inte
 | [llamaindex/](./llamaindex/) | Python | Intermediate | LlamaIndex VectorStore with Product Quantization |
 | [haystack/](../integrations/haystack/examples/) | Python | Intermediate | Haystack 2.x DocumentStore + RAG pipeline (lives under `integrations/haystack/`) |
 | [agent_memory/](./agent_memory/) | Python / Rust / TS | Intermediate | Agent memory: semantic + episodic + procedural, namespaced TTL, snapshots |
+| [velesdb-memory/](../crates/velesdb-memory/examples/) | Rust | Beginner | MCP memory server: offline `why` wedge demo + multi-hop graph benchmark |
 | [python/](./python/) | Python | Beginner | SDK usage patterns (fusion, graph, hybrid) |
 | [python_example.py](./python_example.py) | Python | Beginner | REST API client (legacy) |
 | [wasm-browser-demo/](./wasm-browser-demo/) | HTML/JS | Beginner | Browser-based vector search, no server needed |
@@ -80,6 +81,23 @@ cargo run --bin multimodel_search
 ```
 
 See [rust/README.md](./rust/README.md) for expected output.
+
+### MCP Memory Server (`crates/velesdb-memory/examples/`) -- Beginner
+
+Two offline, network-free examples for the **`velesdb-memory`** MCP server — the
+wedge being that the graph reaches what a pure vector search misses:
+
+```bash
+# The "wow": recall is blind to the 2-hop ticket; why() reaches it via the graph
+cargo run -p velesdb-memory --example wow_offline
+
+# Reproducible benchmark: the graph's contribution to multi-hop answer recall
+cargo run --release -p velesdb-memory --example bench_multihop
+```
+
+See [crates/velesdb-memory/README.md](../crates/velesdb-memory/README.md) for the
+full MCP server, client setup, and the benchmark's honest caveat (the figure to
+quote externally is the real-embedder + LoCoMo run, not the deterministic one).
 
 ## Python Examples
 
