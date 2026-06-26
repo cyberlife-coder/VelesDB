@@ -10,6 +10,8 @@ documentation.workspace = true
 authors.workspace = true
 description = "VelesDB-memory: local-first MCP memory server for AI agents (remember/recall/relate/forget/why)."
 readme = "README.md"
+keywords = ["mcp", "agent-memory", "local-first", "knowledge-graph", "ai"]
+categories = ["database", "command-line-utilities"]
 
 [dependencies]
 velesdb-core = { workspace = true, features = ["persistence"] }
