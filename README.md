@@ -605,6 +605,7 @@ cd examples/ecommerce_recommendation && cargo run --release
 | Demo | Description | Tech |
 |------|-------------|------|
 | [ecommerce_recommendation](examples/ecommerce_recommendation/) | Vector + Graph + ColumnStore (5K products) | Rust |
+| [velesdb-memory](crates/velesdb-memory/) | MCP memory server — the graph answers *why* a decision was made | Rust |
 | [rag-pdf-demo](demos/rag-pdf-demo/) | PDF document Q&A with RAG | Python, FastAPI |
 | [tauri-rag-app](demos/tauri-rag-app/) | Desktop RAG application | Tauri v2, React |
 | [wasm-browser-demo](examples/wasm-browser-demo/) | In-browser vector search | WASM, vanilla JS |
