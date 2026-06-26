@@ -75,14 +75,18 @@ VELESDB_MEMORY_EMBEDDER=ollama \
   cargo run --release -p velesdb-memory --features ollama --example bench_multihop
 ```
 
-> **Engine isolation, not extraction.** `bench_multihop` measures the *engine's*
+> **Engine isolation, and extraction.** `bench_multihop` measures the *engine's*
 > contribution on controlled data with the graph pre-wired, so the numbers
 > reflect retrieval, not an LLM. For end-to-end *extraction* (turning raw text
-> into the graph automatically), the server ships an opt-in layer: the
-> `remember_extracted` tool and `MemoryService::remember_extracted`, backed by
-> the dependency-free `Extractor` trait (bring your own LLM) or the built-in
-> `OllamaExtractor` behind `--features extract`. The core stays
-> bring-your-own-links; extraction is a commodity on top.
+> into the graph automatically), the server ships an opt-in layer — the
+> `remember_extracted` tool / `MemoryService::remember_extracted`, backed by the
+> dependency-free `Extractor` trait (bring your own LLM) or the built-in
+> `OllamaExtractor` behind `--features extract`. The apples-to-apples comparison
+> on the real [LoCoMo](https://github.com/snap-research/locomo) dataset lives in
+> [`examples/locomo/`](examples/locomo/README.md): it builds a fact↔entity graph
+> from the conversations and scores the graph's QA contribution with a hybrid
+> LLM-judge + deterministic metric. The core stays bring-your-own-links;
+> extraction is a commodity on top.
 
 ## Install
 

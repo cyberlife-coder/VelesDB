@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use velesdb_core::agent::AgentMemory;
-use velesdb_core::Database;
+use velesdb_core::{Database, SearchResult};
 
 /// Structured metadata attached to a memory (the `ColumnStore` facet): exact-match
 /// fields like `project`, `author`, `type`, `status`, `date`. `content` and
@@ -50,6 +50,53 @@ pub struct Recollection {
     pub score: f32,
     /// Stored fact content.
     pub content: String,
+}
+
+/// Comparison operator for a [`ColumnFilter`] in [`MemoryService::recall_where`].
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ColumnOp {
+    /// `=`
+    Eq,
+    /// `!=`
+    Ne,
+    /// `<`
+    Lt,
+    /// `<=`
+    Le,
+    /// `>`
+    Gt,
+    /// `>=`
+    Ge,
+}
+
+impl ColumnOp {
+    /// The `VelesQL` operator token.
+    fn as_sql(self) -> &'static str {
+        match self {
+            Self::Eq => "=",
+            Self::Ne => "!=",
+            Self::Lt => "<",
+            Self::Le => "<=",
+            Self::Gt => ">",
+            Self::Ge => ">=",
+        }
+    }
+}
+
+/// A structured predicate over a memory's metadata column, for the fused
+/// vector+`ColumnStore` recall [`MemoryService::recall_where`]. Unlike the
+/// exact-match filter on [`MemoryService::recall`], this supports ranges and
+/// comparisons (e.g. `timestamp >= …`), so temporal and numeric facets become
+/// queryable, not just equal-matchable.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct ColumnFilter {
+    /// Metadata field name (alphanumeric/underscore).
+    pub field: String,
+    /// Comparison operator.
+    pub op: ColumnOp,
+    /// Value to compare against (numbers, strings, booleans).
+    pub value: Value,
 }
 
 /// A node in an [`Explanation`] subgraph.
@@ -402,6 +449,71 @@ impl<E: Embedder> MemoryService<E> {
         }
     }
 
+    /// Fused recall: semantic `NEAR` search combined with structured
+    /// `ColumnStore` predicates over metadata columns — ranges and comparisons,
+    /// not just the equality of [`Self::recall`]. One query spanning the vector
+    /// and column facets (e.g. "most similar facts **with `timestamp` in this
+    /// window**"), which a vector-only or equality-only recall cannot express.
+    ///
+    /// Filter *values* are bound as query parameters (never interpolated), so
+    /// they cannot inject; filter *field names* are validated to be plain
+    /// identifiers. Results come back in similarity order.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError::InvalidFilter`] if a filter field is not a plain
+    /// identifier, [`MemoryError::Embed`] if the query cannot be embedded, or a
+    /// storage error if the query fails. An empty query or `k == 0` yields `[]`.
+    pub fn recall_where(
+        &self,
+        query: &str,
+        k: usize,
+        filters: &[ColumnFilter],
+    ) -> Result<Vec<Recollection>, MemoryError> {
+        let query = query.trim();
+        if query.is_empty() || k == 0 {
+            return Ok(Vec::new());
+        }
+        let embedding = self.embedder.embed(query)?;
+        let (sql, params) = self.build_fused_query(&embedding, k, filters)?;
+        let results = self
+            .memory
+            .query_semantic(&sql, &params)
+            .map_err(MemoryError::from)?;
+        Ok(results.iter().map(to_recollection).collect())
+    }
+
+    /// Build the `VelesQL` for [`Self::recall_where`]: a `NEAR` predicate plus
+    /// one bound parameter per filter, against the semantic collection.
+    fn build_fused_query(
+        &self,
+        embedding: &[f32],
+        k: usize,
+        filters: &[ColumnFilter],
+    ) -> Result<(String, HashMap<String, Value>), MemoryError> {
+        use std::fmt::Write as _;
+        let mut params: HashMap<String, Value> = HashMap::new();
+        params.insert("q".to_string(), json!(embedding));
+        let mut predicate = String::from("vector NEAR $q");
+        for (index, filter) in filters.iter().enumerate() {
+            validate_field(&filter.field)?;
+            validate_scalar(&filter.value)?;
+            let key = format!("p{index}");
+            // Field is a validated identifier; the value is bound, never inlined.
+            let _ = write!(
+                predicate,
+                " AND {} {} ${key}",
+                filter.field,
+                filter.op.as_sql()
+            );
+            params.insert(key, filter.value.clone());
+        }
+        let sql = format!(
+            "SELECT * FROM {} WHERE {predicate} LIMIT {k}",
+            self.memory.semantic().collection_name()
+        );
+        Ok((sql, params))
+    }
+
     /// Create a typed edge `from -> to`. Returns the edge id.
     ///
     /// Both endpoints are validated to exist first, so the tool reports an
@@ -554,4 +666,50 @@ fn reject_reserved_keys(metadata: Option<&Metadata>) -> Result<(), MemoryError> 
         }
     }
     Ok(())
+}
+
+/// Map a core search result to a [`Recollection`], lifting the fact text out of
+/// the reserved `content` payload key.
+fn to_recollection(result: &SearchResult) -> Recollection {
+    let content = result
+        .point
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.get("content"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    Recollection {
+        id: result.point.id,
+        score: result.score,
+        content,
+    }
+}
+
+/// Accept only plain, non-reserved identifier field names, so a filter field
+/// can be safely placed into the query text (its value is always a bound
+/// parameter). Rejects the reserved system columns the docs promise are off
+/// limits: `content` (the fact payload) and any `_veles_`-prefixed engine key
+/// (e.g. durable TTL).
+fn validate_field(field: &str) -> Result<(), MemoryError> {
+    let plain = !field.is_empty() && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let reserved = field == "content" || field.starts_with("_veles_");
+    if plain && !reserved {
+        Ok(())
+    } else {
+        Err(MemoryError::InvalidFilter(field.to_owned()))
+    }
+}
+
+/// Reject non-scalar filter values. Only strings, numbers, and booleans can be
+/// compared against a `ColumnStore` column; binding an array/object/null would
+/// fail deep in the query engine and surface as an opaque internal error instead
+/// of a clear client-input error.
+fn validate_scalar(value: &Value) -> Result<(), MemoryError> {
+    match value {
+        Value::String(_) | Value::Number(_) | Value::Bool(_) => Ok(()),
+        _ => Err(MemoryError::InvalidFilter(format!(
+            "value must be a string, number, or boolean, got {value}"
+        ))),
+    }
 }

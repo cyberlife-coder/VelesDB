@@ -40,5 +40,6 @@ pub use error::MemoryError;
 pub use extract::OllamaExtractor;
 pub use extract::{ExtractError, ExtractedFact, Extractor};
 pub use service::{
-    Explanation, Link, MemoryEdge, MemoryNode, MemoryService, Metadata, Recollection,
+    ColumnFilter, ColumnOp, Explanation, Link, MemoryEdge, MemoryNode, MemoryService, Metadata,
+    Recollection,
 };

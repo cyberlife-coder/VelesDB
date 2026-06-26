@@ -39,4 +39,9 @@ pub enum MemoryError {
     /// [`crate::service::MemoryService::remember_extracted`].
     #[error("extraction error: {0}")]
     Extract(#[from] ExtractError),
+
+    /// A fused-recall filter referenced a field name that is not a plain
+    /// identifier, named a reserved key, or carried a non-scalar value.
+    #[error("invalid filter field: {0}")]
+    InvalidFilter(String),
 }
