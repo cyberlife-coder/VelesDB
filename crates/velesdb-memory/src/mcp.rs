@@ -83,7 +83,7 @@ struct RecallWhereParams {
     query: String,
     /// Maximum number of memories to return (default 10).
     limit: Option<usize>,
-    /// Structured `ColumnStore` predicates (ranges/comparisons) ANDed together,
+    /// Structured `ColumnStore` predicates (ranges/comparisons) combined with AND,
     /// e.g. a date window `[{"field":"ts","op":"ge","value":20230101},
     /// {"field":"ts","op":"le","value":20231231}]`. Each `op` is one of
     /// `eq`/`ne`/`lt`/`le`/`gt`/`ge`.
