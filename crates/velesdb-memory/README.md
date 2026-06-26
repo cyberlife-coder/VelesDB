@@ -26,6 +26,8 @@ capabilities (`query`, `create_collection`, `upsert`, `traverse`). See
 
 ## See it (offline, one command)
 
+![velesdb-memory wow demo: a vector recall misses the 2-hop ticket; why() reaches it through the graph](media/wow.gif)
+
 ```bash
 cargo run -p velesdb-memory --example wow_offline
 ```
