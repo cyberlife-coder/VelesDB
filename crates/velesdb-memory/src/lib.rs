@@ -36,5 +36,6 @@ pub use embedder::{EmbedError, Embedder, HashEmbedder};
 pub use embedder::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
 pub use error::MemoryError;
 pub use service::{
-    Explanation, Link, MemoryEdge, MemoryNode, MemoryService, Metadata, Recollection,
+    ColumnFilter, ColumnOp, Explanation, Link, MemoryEdge, MemoryNode, MemoryService, Metadata,
+    Recollection,
 };

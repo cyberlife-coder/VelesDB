@@ -74,11 +74,14 @@ VELESDB_MEMORY_EMBEDDER=ollama \
   cargo run --release -p velesdb-memory --features ollama --example bench_multihop
 ```
 
-> **Not `LoCoMo`.** The apples-to-apples comparison vs mem0/Zep tests an
-> end-to-end *extraction* pipeline (turning raw text into a graph), which this
-> server intentionally doesn't ship — it's bring-your-own-links. This benchmark
-> measures the *engine's* contribution on controlled data; a LoCoMo run would
-> need an extraction layer on top. Tracked as PLAN 2B.
+> **This vs `LoCoMo`.** `bench_multihop` isolates the *engine's* contribution on
+> controlled, synthetic chains — no extraction step. For the apples-to-apples
+> comparison on the real [LoCoMo](https://github.com/snap-research/locomo)
+> dataset (which needs an extraction layer the server intentionally doesn't ship
+> — it's bring-your-own-links), see [`examples/locomo/`](examples/locomo/README.md):
+> it builds a fact↔entity graph from the conversations and scores the graph's
+> contribution to long-conversation QA with a hybrid LLM-judge + deterministic
+> metric.
 
 ## Install
 
