@@ -78,6 +78,26 @@ fn relate_two_existing_memories_returns_edge_id() {
 }
 
 #[test]
+fn relate_with_unknown_endpoint_errors_without_creating_a_dangling_edge() {
+    let (_dir, svc) = service();
+    let real = svc
+        .remember("ticket EPIC-317 tracks the lock rework", &[], None)
+        .expect("remember real");
+
+    // Either endpoint missing must be rejected as client input, not silently
+    // create an edge dangling off a memory that was never stored.
+    let bad_target = svc
+        .relate(real, 999, "references")
+        .expect_err("relate to a missing target must error");
+    assert!(matches!(bad_target, MemoryError::UnknownMemory(999)));
+
+    let bad_source = svc
+        .relate(999, real, "references")
+        .expect_err("relate from a missing source must error");
+    assert!(matches!(bad_source, MemoryError::UnknownMemory(999)));
+}
+
+#[test]
 fn forget_removes_the_fact_from_recall() {
     let (_dir, svc) = service();
     let id = svc
@@ -131,7 +151,7 @@ fn remember_with_unknown_link_target_errors_and_stores_nothing() {
             None,
         )
         .expect_err("unknown link target must error");
-    assert!(matches!(err, MemoryError::UnknownLinkTarget(999)));
+    assert!(matches!(err, MemoryError::UnknownMemory(999)));
 
     // The fact must not have been persisted (no partial write).
     let hits = svc.recall("a decision", 5, None).expect("recall");

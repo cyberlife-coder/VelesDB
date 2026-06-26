@@ -104,7 +104,7 @@ impl<E: Embedder> MemoryService<E> {
     ///
     /// # Errors
     /// Returns [`MemoryError::EmptyFact`] for empty/whitespace facts,
-    /// [`MemoryError::UnknownLinkTarget`] if a link points at a missing memory,
+    /// [`MemoryError::UnknownMemory`] if a link points at a missing memory,
     /// or a storage error if persistence fails.
     pub fn remember(
         &self,
@@ -128,12 +128,18 @@ impl<E: Embedder> MemoryService<E> {
         Ok(fact_id)
     }
 
+    /// Fail with [`MemoryError::UnknownMemory`] unless memory `id` exists.
+    fn ensure_exists(&self, id: u64) -> Result<(), MemoryError> {
+        if self.memory.semantic().get(id)?.is_none() {
+            return Err(MemoryError::UnknownMemory(id));
+        }
+        Ok(())
+    }
+
     /// Fail unless every link target already exists (keeps `remember` atomic).
     fn ensure_link_targets_exist(&self, links: &[Link]) -> Result<(), MemoryError> {
         for link in links {
-            if self.memory.semantic().get(link.target)?.is_none() {
-                return Err(MemoryError::UnknownLinkTarget(link.target));
-            }
+            self.ensure_exists(link.target)?;
         }
         Ok(())
     }
@@ -211,9 +217,17 @@ impl<E: Embedder> MemoryService<E> {
 
     /// Create a typed edge `from -> to`. Returns the edge id.
     ///
+    /// Both endpoints are validated to exist first, so the tool reports an
+    /// unknown id as client input (`UnknownMemory`) rather than a generic
+    /// storage fault — and the graph never gains an edge dangling off a memory
+    /// that was never stored.
+    ///
     /// # Errors
-    /// Returns [`MemoryError`] if the edge cannot be created.
+    /// Returns [`MemoryError::UnknownMemory`] if either endpoint is missing, or
+    /// a storage error if the edge cannot be created.
     pub fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
+        self.ensure_exists(from)?;
+        self.ensure_exists(to)?;
         self.memory
             .semantic()
             .relate(from, to, relation, None)

@@ -20,9 +20,10 @@ pub enum MemoryError {
     #[error("fact text must not be empty")]
     EmptyFact,
 
-    /// A `remember` link referenced a memory id that does not exist.
-    #[error("link target {0} does not exist")]
-    UnknownLinkTarget(u64),
+    /// A `remember` link or a `relate` endpoint referenced a memory id that
+    /// does not exist.
+    #[error("memory {0} does not exist")]
+    UnknownMemory(u64),
 
     /// Failure producing a text embedding.
     #[error("embedding error: {0}")]
