@@ -18,10 +18,9 @@ const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 /// Derive a stable `u64` id from arbitrary text via FNV-1a 64-bit.
 #[must_use]
 pub fn stable_id(text: &str) -> u64 {
-    text.bytes()
-        .fold(FNV_OFFSET, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
-        })
+    text.bytes().fold(FNV_OFFSET, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
+    })
 }
 
 #[cfg(test)]
