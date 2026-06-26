@@ -23,6 +23,7 @@
 
 pub mod embedder;
 pub mod error;
+pub mod extract;
 pub mod id;
 pub mod mcp;
 pub mod service;
@@ -35,6 +36,9 @@ pub use embedder::{EmbedError, Embedder, HashEmbedder};
 #[cfg(feature = "ollama")]
 pub use embedder::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
 pub use error::MemoryError;
+#[cfg(feature = "extract")]
+pub use extract::OllamaExtractor;
+pub use extract::{ExtractError, ExtractedFact, Extractor};
 pub use service::{
     Explanation, Link, MemoryEdge, MemoryNode, MemoryService, Metadata, Recollection,
 };

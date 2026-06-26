@@ -4,6 +4,7 @@ use velesdb_core::agent::AgentMemoryError;
 use velesdb_core::Error as CoreError;
 
 use crate::embedder::EmbedError;
+use crate::extract::ExtractError;
 
 /// Errors returned by [`crate::service::MemoryService`].
 #[derive(Debug, thiserror::Error)]
@@ -28,4 +29,9 @@ pub enum MemoryError {
     /// Failure producing a text embedding.
     #[error("embedding error: {0}")]
     Embed(#[from] EmbedError),
+
+    /// Failure extracting facts from raw text in
+    /// [`crate::service::MemoryService::remember_extracted`].
+    #[error("extraction error: {0}")]
+    Extract(#[from] ExtractError),
 }

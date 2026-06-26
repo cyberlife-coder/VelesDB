@@ -1,6 +1,6 @@
 //! The memory service: five operations over the in-core Agent Memory SDK.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -17,6 +17,7 @@ pub type Metadata = Map<String, Value>;
 
 use crate::embedder::Embedder;
 use crate::error::MemoryError;
+use crate::extract::Extractor;
 use crate::id;
 
 /// A typed link from a freshly remembered fact to an existing memory.
@@ -126,6 +127,112 @@ impl<E: Embedder> MemoryService<E> {
                 .relate(fact_id, link.target, &link.relation, None)?;
         }
         Ok(fact_id)
+    }
+
+    /// Remember a passage of raw `text` by running it through an [`Extractor`]
+    /// and storing every fact it yields, **auto-wiring the fact↔entity graph**.
+    ///
+    /// This is the commodity on top of [`Self::remember`]'s bring-your-own-links
+    /// core: each extracted fact is stored (tagged with `metadata`), each salient
+    /// topic becomes a deduplicated hub memory, and every fact is linked to its
+    /// topics with a bidirectional `about`/`mentions` edge. Two facts sharing a
+    /// topic therefore become reachable from one another, so [`Self::why`] has a
+    /// real graph to traverse with no manual `relate()`.
+    ///
+    /// Entity hubs are content-addressed, so the same topic seen across many
+    /// calls collapses onto one hub. Returns the ids of the stored facts (entity
+    /// hubs excluded), in extraction order.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError::EmptyFact`] for empty/whitespace `text`,
+    /// [`MemoryError::Extract`] if extraction fails, or a storage error if
+    /// persistence fails.
+    pub fn remember_extracted<X: Extractor>(
+        &self,
+        text: &str,
+        extractor: &X,
+        metadata: Option<&Metadata>,
+    ) -> Result<Vec<u64>, MemoryError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(MemoryError::EmptyFact);
+        }
+        let facts = extractor.extract(text)?;
+        let mut fact_ids = Vec::new();
+        let mut entity_ids: HashMap<String, u64> = HashMap::new();
+        let mut edges: HashSet<(u64, u64)> = HashSet::new();
+        for fact in &facts {
+            let content = fact.text.trim();
+            if content.is_empty() {
+                continue;
+            }
+            let fact_id = self.remember(content, &[], metadata)?;
+            fact_ids.push(fact_id);
+            self.wire_entities(fact_id, &fact.entities, &mut entity_ids, &mut edges)?;
+        }
+        Ok(fact_ids)
+    }
+
+    /// Link `fact_id` to each of its topics with a deduplicated edge in *both*
+    /// directions. `why()` only follows outgoing edges, so the fact→topic edge
+    /// alone leaves hubs as dead ends; the topic→fact edge is what lets a walk
+    /// hop from one fact, through a shared topic, to its sibling facts.
+    fn wire_entities(
+        &self,
+        fact_id: u64,
+        entities: &[String],
+        entity_ids: &mut HashMap<String, u64>,
+        edges: &mut HashSet<(u64, u64)>,
+    ) -> Result<(), MemoryError> {
+        for entity in entities {
+            // Skip blank or punctuation-only topics: they would persist as junk
+            // hubs (`Entity: -`) yet can never carry a meaningful multi-hop link.
+            if entity.chars().any(char::is_alphanumeric) {
+                self.wire_entity(fact_id, entity, entity_ids, edges)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Wire one topic to `fact_id`: resolve its hub, then add the deduplicated
+    /// `about`/`mentions` pair (skipping a hub that is the fact itself).
+    fn wire_entity(
+        &self,
+        fact_id: u64,
+        entity: &str,
+        entity_ids: &mut HashMap<String, u64>,
+        edges: &mut HashSet<(u64, u64)>,
+    ) -> Result<(), MemoryError> {
+        let entity_id = self.entity_hub(entity, entity_ids)?;
+        if entity_id == fact_id {
+            return Ok(());
+        }
+        if edges.insert((fact_id, entity_id)) {
+            self.relate(fact_id, entity_id, "about")?;
+        }
+        if edges.insert((entity_id, fact_id)) {
+            self.relate(entity_id, fact_id, "mentions")?;
+        }
+        Ok(())
+    }
+
+    /// Get or create the hub memory for a topic, caching its id per call. The
+    /// hub content is canonical (`Entity: <topic>`), so its stable id is the same
+    /// across calls and the same topic never spawns a duplicate hub.
+    fn entity_hub(
+        &self,
+        entity: &str,
+        entity_ids: &mut HashMap<String, u64>,
+    ) -> Result<u64, MemoryError> {
+        let key = entity.trim().to_lowercase();
+        if let Some(&id) = entity_ids.get(&key) {
+            return Ok(id);
+        }
+        let mut meta = Map::new();
+        meta.insert("kind".to_string(), Value::String("entity".to_string()));
+        let id = self.remember(&format!("Entity: {key}"), &[], Some(&meta))?;
+        entity_ids.insert(key, id);
+        Ok(id)
     }
 
     /// Fail with [`MemoryError::UnknownMemory`] unless memory `id` exists.

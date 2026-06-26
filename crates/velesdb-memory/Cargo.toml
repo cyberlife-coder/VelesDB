@@ -36,6 +36,10 @@ ureq = { version = "2", optional = true, default-features = false }
 # Real on-device semantic recall via a local Ollama embeddings endpoint. Off by
 # default so the shipped binary stays tiny, zero-dependency, and fully offline.
 ollama = ["dep:ureq"]
+# Batteries-included text → facts+entities extraction (OllamaExtractor) so the
+# fact↔entity graph self-builds. Off by default: the Extractor trait is always
+# available for bring-your-own-LLM; only this local backend pulls the HTTP dep.
+extract = ["dep:ureq"]
 
 [dev-dependencies]
 tempfile = "3"
