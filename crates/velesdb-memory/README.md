@@ -6,7 +6,7 @@ recalls them semantically, and — the differentiator — **connects** them so i
 can answer *why* a decision was made, not just retrieve look-alike text.
 
 Built on [VelesDB](https://velesdb.com)'s in-core Agent Memory SDK, which fuses
-three engines behind five memory tools:
+three engines behind its memory tools:
 
 | Tool       | What it does                                               | Engines |
 |------------|------------------------------------------------------------|---------|
@@ -15,6 +15,7 @@ three engines behind five memory tools:
 | `relate`   | create a typed edge between two memories                   | Graph |
 | `forget`   | delete a memory                                            | — |
 | `why`      | recall a decision **+ its connected subgraph** (multi-hop) | Vector + Graph + ColumnStore |
+| `remember_extracted` | extract facts from raw text + **auto-build the graph** (opt-in backend) | Vector + Graph |
 
 `why` is the wedge: it surfaces related memories (the PR, the ticket, the
 benchmark) reachable through typed links **even when they share no words** with
@@ -74,11 +75,14 @@ VELESDB_MEMORY_EMBEDDER=ollama \
   cargo run --release -p velesdb-memory --features ollama --example bench_multihop
 ```
 
-> **Not `LoCoMo`.** The apples-to-apples comparison vs mem0/Zep tests an
-> end-to-end *extraction* pipeline (turning raw text into a graph), which this
-> server intentionally doesn't ship — it's bring-your-own-links. This benchmark
-> measures the *engine's* contribution on controlled data; a LoCoMo run would
-> need an extraction layer on top. Tracked as PLAN 2B.
+> **Engine isolation, not extraction.** `bench_multihop` measures the *engine's*
+> contribution on controlled data with the graph pre-wired, so the numbers
+> reflect retrieval, not an LLM. For end-to-end *extraction* (turning raw text
+> into the graph automatically), the server ships an opt-in layer: the
+> `remember_extracted` tool and `MemoryService::remember_extracted`, backed by
+> the dependency-free `Extractor` trait (bring your own LLM) or the built-in
+> `OllamaExtractor` behind `--features extract`. The core stays
+> bring-your-own-links; extraction is a commodity on top.
 
 ## Install
 
@@ -152,7 +156,7 @@ env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
 
 ## Using the tools
 
-Once configured, your agent discovers the five tools automatically (via MCP
+Once configured, your agent discovers the tools automatically (via MCP
 `tools/list`). Each takes JSON and returns JSON:
 
 ```jsonc
@@ -179,6 +183,11 @@ why { "decision": "why did we choose parking_lot", "max_hops": 2,
 
 // forget — delete a memory by id
 forget { "id": 9876543210 } → { "id": 9876543210 }
+
+// remember_extracted — extract facts from raw text and auto-wire the graph
+//   (opt-in: needs a server built with --features extract + VELESDB_MEMORY_EXTRACTOR)
+remember_extracted { "text": "Met Dana at the Rust meetup; she now leads the parser rewrite." }
+→ { "ids": [ 11122233, 44455566 ] }   // stored facts; topics become shared graph hubs
 ```
 
 `limit` defaults to 10 (capped at 1000); `max_hops` defaults to 2 (capped at 10);
@@ -224,6 +233,27 @@ Env vars: `VELESDB_MEMORY_OLLAMA_URL` (default `http://localhost:11434`),
 `VELESDB_MEMORY_OLLAMA_MODEL` (default `all-minilm`). The embedding dimension is
 probed from the model, so a store is fixed to one embedder — don't switch
 embedders on an existing store.
+
+## Auto-extraction backend (opt-in)
+
+By default the graph is **bring-your-own-links**: you wire edges with `relate`
+or `links`. The `remember_extracted` tool turns that into a commodity — a local
+LLM reads raw text and the server stores its facts + auto-builds the fact↔topic
+graph. It is off by default (it pulls an HTTP dependency), so the standard
+binary stays tiny and offline:
+
+```bash
+cargo build --release -p velesdb-memory --features extract
+VELESDB_MEMORY_EXTRACTOR=ollama \
+VELESDB_MEMORY_EXTRACTOR_MODEL=qwen3.6:35b-mlx \
+  /path/to/velesdb-memory
+```
+
+Env vars: `VELESDB_MEMORY_EXTRACTOR` (`ollama` to enable), `VELESDB_MEMORY_EXTRACTOR_URL`
+(default `http://localhost:11434`), `VELESDB_MEMORY_EXTRACTOR_MODEL` (required, a
+generative model). Without a backend the tool returns a clear "not configured"
+error. To plug a different model, implement the dependency-free `Extractor`
+trait and pass it to `MemoryService::remember_extracted` from Rust.
 
 ## License
 

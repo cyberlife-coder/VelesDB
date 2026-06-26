@@ -51,6 +51,15 @@ pub trait Extractor {
     fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError>;
 }
 
+/// Forward [`Extractor`] through an [`Arc`], so a shared `Arc<dyn Extractor>`
+/// (e.g. one held by the MCP server) satisfies the `X: Extractor` bound on
+/// [`crate::MemoryService::remember_extracted`].
+impl<T: Extractor + ?Sized> Extractor for std::sync::Arc<T> {
+    fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        (**self).extract(text)
+    }
+}
+
 // --- Optional batteries-included backend: a local Ollama generative model -----
 //
 // Enabled with `--features extract`. The default build omits this backend (and
