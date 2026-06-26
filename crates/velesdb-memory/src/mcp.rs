@@ -14,7 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::embedder::Embedder;
-use crate::service::{Explanation, Link, MemoryService, Metadata, Recollection};
+use crate::service::{ColumnFilter, Explanation, Link, MemoryService, Metadata, Recollection};
 
 /// Default number of memories returned by `recall`.
 const DEFAULT_RECALL_LIMIT: usize = 10;
@@ -74,6 +74,21 @@ struct RecallParams {
 struct RecallResult {
     /// Recalled memories, most similar first.
     memories: Vec<Recollection>,
+}
+
+/// Parameters for the `recall_where` tool.
+#[derive(Deserialize, JsonSchema)]
+struct RecallWhereParams {
+    /// Natural-language query to match semantically.
+    query: String,
+    /// Maximum number of memories to return (default 10).
+    limit: Option<usize>,
+    /// Structured `ColumnStore` predicates (ranges/comparisons) combined with AND,
+    /// e.g. a date window `[{"field":"ts","op":"ge","value":20230101},
+    /// {"field":"ts","op":"le","value":20231231}]`. Each `op` is one of
+    /// `eq`/`ne`/`lt`/`le`/`gt`/`ge`.
+    #[serde(default)]
+    filters: Vec<ColumnFilter>,
 }
 
 /// Parameters for the `relate` tool.
@@ -182,6 +197,25 @@ impl McpServer {
     }
 
     #[tool(
+        name = "recall_where",
+        description = "Fused recall: semantically similar memories (vector) constrained by structured ColumnStore predicates over metadata — ranges and comparisons, not just equality. Each filter is {field, op (eq/ne/lt/le/gt/ge), value}, ANDed. Use for time-windowed or numeric-scoped recall, e.g. facts about a topic with `ts` in a date range. Most similar first."
+    )]
+    async fn recall_where(
+        &self,
+        Parameters(params): Parameters<RecallWhereParams>,
+    ) -> Result<Json<RecallResult>, ErrorData> {
+        let limit = params
+            .limit
+            .unwrap_or(DEFAULT_RECALL_LIMIT)
+            .min(MAX_RECALL_LIMIT);
+        let memories = self
+            .service
+            .recall_where(&params.query, limit, &params.filters)
+            .map_err(to_error)?;
+        Ok(Json(RecallResult { memories }))
+    }
+
+    #[tool(
         name = "relate",
         description = "Create a typed link from one memory to another. Returns the edge id."
     )]
@@ -257,7 +291,9 @@ impl ServerHandler for McpServer {
 fn to_error(err: crate::error::MemoryError) -> ErrorData {
     use crate::error::MemoryError;
     let code = match &err {
-        MemoryError::EmptyFact | MemoryError::UnknownMemory(_) => ErrorCode::INVALID_PARAMS,
+        MemoryError::EmptyFact | MemoryError::UnknownMemory(_) | MemoryError::InvalidFilter(_) => {
+            ErrorCode::INVALID_PARAMS
+        }
         _ => ErrorCode::INTERNAL_ERROR,
     };
     ErrorData::new(code, err.to_string(), None)
@@ -267,6 +303,7 @@ fn to_error(err: crate::error::MemoryError) -> ErrorData {
 mod tests {
     use super::*;
     use crate::embedder::HashEmbedder;
+    use crate::service::ColumnOp;
     use tempfile::TempDir;
 
     const DECISION: &str = "we chose parking_lot to avoid lock poisoning";
@@ -441,7 +478,72 @@ mod tests {
         assert!(recalled.memories.iter().all(|m| m.id != dropped.id));
     }
 
+    /// Build a `{"ts": <n>}` metadata map.
+    fn ts_meta(ts: i64) -> Metadata {
+        let mut meta = Metadata::new();
+        meta.insert("ts".to_owned(), serde_json::json!(ts));
+        meta
+    }
+
+    #[tokio::test]
+    async fn recall_where_filters_by_range_through_the_server() {
+        let (_dir, srv) = server();
+        for (fact, ts) in [
+            ("kickoff in january", 20_230_115),
+            ("kickoff in june", 20_230_615),
+        ] {
+            srv.remember(Parameters(RememberParams {
+                fact: fact.to_owned(),
+                links: Vec::new(),
+                metadata: Some(ts_meta(ts)),
+            }))
+            .await
+            .expect("remember");
+        }
+
+        let Json(res) = srv
+            .recall_where(Parameters(RecallWhereParams {
+                query: "kickoff".to_owned(),
+                limit: None,
+                filters: vec![ColumnFilter {
+                    field: "ts".to_owned(),
+                    op: ColumnOp::Ge,
+                    value: serde_json::json!(20_230_601),
+                }],
+            }))
+            .await
+            .expect("recall_where");
+
+        assert!(
+            res.memories.iter().any(|m| m.content.contains("june")),
+            "the june fact is within the ts range"
+        );
+        assert!(
+            res.memories.iter().all(|m| !m.content.contains("january")),
+            "the january fact is below the ts range and excluded"
+        );
+    }
+
     // --- Error-code mapping -------------------------------------------------
+
+    #[tokio::test]
+    async fn recall_where_invalid_field_returns_invalid_params() {
+        let (_dir, srv) = server();
+        let err = srv
+            .recall_where(Parameters(RecallWhereParams {
+                query: "anything".to_owned(),
+                limit: None,
+                filters: vec![ColumnFilter {
+                    field: "ts; DROP TABLE".to_owned(),
+                    op: ColumnOp::Ge,
+                    value: serde_json::json!(1),
+                }],
+            }))
+            .await
+            .map(|_| ())
+            .expect_err("a non-identifier filter field must be rejected");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    }
 
     #[tokio::test]
     async fn empty_fact_returns_invalid_params_not_internal_error() {

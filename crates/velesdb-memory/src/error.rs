@@ -28,4 +28,9 @@ pub enum MemoryError {
     /// Failure producing a text embedding.
     #[error("embedding error: {0}")]
     Embed(#[from] EmbedError),
+
+    /// A fused-recall filter referenced a field name that is not a plain
+    /// identifier (alphanumeric/underscore).
+    #[error("invalid filter field: {0}")]
+    InvalidFilter(String),
 }
