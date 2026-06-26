@@ -117,7 +117,7 @@ impl<E: Embedder> MemoryService<E> {
         }
         self.ensure_link_targets_exist(links)?;
         let fact_id = id::stable_id(fact);
-        let embedding = self.embedder.embed(fact);
+        let embedding = self.embedder.embed(fact)?;
         self.store(fact_id, fact, &embedding, metadata)?;
         for link in links {
             self.memory
@@ -179,7 +179,7 @@ impl<E: Embedder> MemoryService<E> {
         if query.trim().is_empty() {
             return Ok(Vec::new());
         }
-        let embedding = self.embedder.embed(query);
+        let embedding = self.embedder.embed(query)?;
         let hits = self.search(&embedding, k, filter)?;
         Ok(hits
             .into_iter()
@@ -248,7 +248,7 @@ impl<E: Embedder> MemoryService<E> {
         if decision.trim().is_empty() {
             return Ok(Explanation::default());
         }
-        let embedding = self.embedder.embed(decision);
+        let embedding = self.embedder.embed(decision)?;
         let seeds = self.search(&embedding, 1, filter)?;
         let Some((seed_id, _score, seed_content)) = seeds.into_iter().next() else {
             return Ok(Explanation::default());

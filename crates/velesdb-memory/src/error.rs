@@ -3,6 +3,8 @@
 use velesdb_core::agent::AgentMemoryError;
 use velesdb_core::Error as CoreError;
 
+use crate::embedder::EmbedError;
+
 /// Errors returned by [`crate::service::MemoryService`].
 #[derive(Debug, thiserror::Error)]
 pub enum MemoryError {
@@ -21,4 +23,8 @@ pub enum MemoryError {
     /// A `remember` link referenced a memory id that does not exist.
     #[error("link target {0} does not exist")]
     UnknownLinkTarget(u64),
+
+    /// Failure producing a text embedding.
+    #[error("embedding error: {0}")]
+    Embed(#[from] EmbedError),
 }

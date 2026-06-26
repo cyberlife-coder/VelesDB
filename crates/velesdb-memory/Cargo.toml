@@ -9,6 +9,7 @@ homepage.workspace = true
 documentation.workspace = true
 authors.workspace = true
 description = "VelesDB-memory: local-first MCP memory server for AI agents (remember/recall/relate/forget/why)."
+readme = "README.md"
 
 [dependencies]
 velesdb-core = { workspace = true, features = ["persistence"] }
@@ -20,6 +21,14 @@ serde_json = { workspace = true }
 # Pinned to rmcp's schemars (1.2.x) so domain types and MCP DTOs share one
 # JsonSchema derive — no duplicate wire/domain structs.
 schemars = "1"
+# Optional real-recall backend (off by default). HTTP-only to a local Ollama;
+# `default-features = false` drops TLS to keep the binary small.
+ureq = { version = "2", optional = true, default-features = false }
+
+[features]
+# Real on-device semantic recall via a local Ollama embeddings endpoint. Off by
+# default so the shipped binary stays tiny, zero-dependency, and fully offline.
+ollama = ["dep:ureq"]
 
 [dev-dependencies]
 tempfile = "3"

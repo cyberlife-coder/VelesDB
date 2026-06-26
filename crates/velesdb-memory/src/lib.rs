@@ -30,7 +30,9 @@ pub mod service;
 /// SDK's own default so the server, library, and tests never restate the value.
 pub const DEFAULT_DIMENSION: usize = velesdb_core::agent::DEFAULT_DIMENSION;
 
-pub use embedder::{Embedder, HashEmbedder};
+pub use embedder::{EmbedError, Embedder, HashEmbedder};
+#[cfg(feature = "ollama")]
+pub use embedder::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
 pub use error::MemoryError;
 pub use service::{
     Explanation, Link, MemoryEdge, MemoryNode, MemoryService, Metadata, Recollection,
