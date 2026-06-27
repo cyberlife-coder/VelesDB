@@ -120,6 +120,11 @@ name = "velesdb-memory"
 expression = "LicenseRef-ELv2"
 license-files = []
 
+[[licenses.clarify]]
+name = "velesdb-node"
+expression = "LicenseRef-ELv2"
+license-files = []
+
 
 [bans]
 multiple-versions = "warn"
