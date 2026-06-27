@@ -73,8 +73,9 @@ git push origin vX.Y.Z
 |-------------|---------|
 | **GitHub Release** | Binaries Linux/Windows/macOS + .deb |
 | **crates.io** | velesdb-core, velesdb-cli, velesdb-server, velesdb-migrate, velesdb-mobile, tauri-plugin-velesdb |
+| **crates.io (independent `velesdb-memory-v*` tag)** | velesdb-memory (0.1.0 cadence, via `release-memory.yml`) |
 | **PyPI** | velesdb |
-| **npm** | @wiscale/velesdb-wasm, @wiscale/velesdb-sdk |
+| **npm** | @wiscale/velesdb-wasm, @wiscale/velesdb-sdk, @wiscale/velesdb-memory-node (napi prebuilds; publish job TBD, see note) |
 
 ### 7. Vérifier le déploiement
 

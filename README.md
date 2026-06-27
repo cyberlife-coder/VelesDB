@@ -504,6 +504,8 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | **Python** | [velesdb-python](crates/velesdb-python) — PyO3 bindings + NumPy | `pip install velesdb` |
 | **TypeScript** | [typescript-sdk](sdks/typescript) — Node.js & Browser SDK | `npm install @wiscale/velesdb-sdk` |
 | **WASM** | [velesdb-wasm](crates/velesdb-wasm) — Browser-side vector search | `npm install @wiscale/velesdb-wasm` |
+| **Agent memory (MCP)** | [velesdb-memory](crates/velesdb-memory) — local-first MCP memory server (`why()` wedge) | `cargo install velesdb-memory` |
+| **Agent memory (Node)** | [velesdb-node](crates/velesdb-node) — in-process napi binding of the memory wedge | `npm install @wiscale/velesdb-memory-node` |
 | **Mobile** | [velesdb-mobile](crates/velesdb-mobile) — iOS (Swift) & Android (Kotlin) | [Build instructions](docs/guides/INSTALLATION.md#-mobile-iosandroid) |
 | **Desktop** | [tauri-plugin](crates/tauri-plugin-velesdb) — Tauri v2 AI-powered apps | `cargo add tauri-plugin-velesdb` |
 | **LangChain** | [langchain-velesdb](integrations/langchain) — Official VectorStore | [From source](integrations/langchain/README.md) |

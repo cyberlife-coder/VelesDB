@@ -93,6 +93,8 @@ VelesDB provides a complete ecosystem of SDKs and integrations:
 | [velesdb-python](../crates/velesdb-python/README.md) | SDK | Python bindings (PyO3) |
 | [velesdb-mobile](../crates/velesdb-mobile/README.md) | SDK | iOS/Android (UniFFI) |
 | [TypeScript SDK](../sdks/typescript/README.md) | SDK | TypeScript/JavaScript client |
+| [velesdb-memory](../crates/velesdb-memory/README.md) | Server | MCP agent-memory server (`why()` wedge) |
+| [velesdb-node](../crates/velesdb-node/README.md) | SDK | Node.js agent-memory binding (napi-rs) |
 | [tauri-plugin-velesdb](../crates/tauri-plugin-velesdb/README.md) | Plugin | Tauri desktop integration |
 | [LangChain](../integrations/langchain/README.md) | Integration | LangChain VectorStore |
 | [LlamaIndex](../integrations/llamaindex/README.md) | Integration | LlamaIndex VectorStore |

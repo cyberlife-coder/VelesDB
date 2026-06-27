@@ -12,9 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First release of the local-first MCP memory server for AI agents.
 
 ### Added
-- Five MCP tools over stdio mapping onto VelesDB's in-core Agent Memory SDK:
-  `remember`, `recall`, `relate`, `forget`, and `why` (vector recall + multi-hop
-  graph traversal — the connected-subgraph differentiator).
+- MCP tools over stdio mapping onto VelesDB's in-core Agent Memory SDK:
+  `remember`, `recall`, `recall_where` (fused vector + ColumnStore range/filter
+  recall), `relate`, `forget`, `why` (vector recall + multi-hop graph traversal —
+  the connected-subgraph differentiator), and `remember_extracted` (auto text →
+  fact↔topic graph via an `Extractor`).
+- The same high-level `MemoryService` is consumed beyond the MCP server by the
+  Python binding (`velesdb-python`) and the Node.js binding (`velesdb-node` /
+  `@wiscale/velesdb-memory-node`); the library is feature-gated (`default-features
+  = false` drops the rmcp/tokio MCP stack) so bindings link a lean core.
+- `recall_where` activates a secondary bitmap-prefilter index on first use, so
+  filtered recall stays flat as the collection grows (instead of an O(n) scan).
 - Pluggable embeddings: a deterministic, offline `HashEmbedder` by default and an
   optional on-device `OllamaEmbedder` (`--features ollama`).
 - Structured metadata (ColumnStore facet) with exact-match filtering on `recall`
