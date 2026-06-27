@@ -1,0 +1,40 @@
+[package]
+name = "velesdb-node"
+# Tracks velesdb-memory's independent 0.1.0 cadence (the npm package version),
+# not the workspace 3.x engine line. Never crates.io-published (publish=false).
+version = "0.1.0"
+# Never cargo-published: this cdylib ships to npm as @wiscale/velesdb-memory-node
+# per-platform prebuilds, not to crates.io.
+publish = false
+edition = { workspace = true }
+rust-version = { workspace = true }
+# A LOCAL Core-License copy (NOT ../../LICENSE) so the npm `files` whitelist can
+# bundle it into the published package and every per-platform sub-package.
+license-file = "LICENSE"
+repository = { workspace = true }
+homepage = { workspace = true }
+documentation = { workspace = true }
+authors = { workspace = true }
+description = "Node.js (napi-rs) binding for VelesDB-memory: local-first agent memory (remember/recall/relate/forget/why) with the why() graph wedge."
+keywords = ["napi", "agent-memory", "local-first", "knowledge-graph", "ai"]
+categories = ["database", "api-bindings"]
+
+[lib]
+name = "velesdb_node"
+crate-type = ["cdylib"]
+
+[dependencies]
+# The high-level memory wedge ONLY. `default-features = false` drops the MCP
+# server stack (rmcp/tokio-server) — the license boundary AND the lean prebuild.
+# `ollama`+`extract` compile the real embedder + auto-extraction into the default
+# prebuild (full PyO3 parity). We MUST NOT depend on velesdb-core directly.
+velesdb-memory = { path = "../velesdb-memory", default-features = false, features = ["ollama", "extract"] }
+napi = { version = "3", default-features = false, features = ["napi9", "serde-json"] }
+napi-derive = "3"
+serde_json = { workspace = true }
+
+[build-dependencies]
+napi-build = "2"
+
+[lints]
+workspace = true
