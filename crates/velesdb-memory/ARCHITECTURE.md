@@ -85,11 +85,12 @@ There are **two distinct memory layers**, exposed by different surfaces:
 | Layer | Type | Operations | Exposed by |
 |---|---|---|---|
 | **Primitive** | `SemanticMemory` / `EpisodicMemory` / `ProceduralMemory` | store / query / record / learn / `relate` / `query_excluding` | Python SDK, TS SDK, WASM, core |
-| **High-level** | `MemoryService` | remember / recall / relate / forget / **why** / **remember_extracted** | **velesdb-memory MCP server only** |
+| **High-level** | `MemoryService` | remember / recall / recall_where / relate / forget / **why** / **remember_extracted** | MCP server, Python (PyO3), Node (napi) |
 
-The high-level service maps five (now six) intent-level operations onto the
-primitive SDK. The wedge (`why`) and auto-extraction live **only** in the MCP
-layer today — surfacing them in Python/npm is the planned next step (P2).
+The high-level service maps these intent-level operations onto the primitive
+SDK. The wedge (`why`) and auto-extraction ship in all three bindings: the MCP
+server, the Python SDK (`velesdb-python`, `MemoryService` pyclass), and the
+Node.js binding (`velesdb-node`, npm `@wiscale/velesdb-memory-node`).
 
 ---
 
@@ -192,9 +193,9 @@ scaffolding: marked with the reserved `_veles_hub` key and **excluded from
 
 ## 8. Roadmap edges (not yet built)
 
-- **P2** — expose the high-level `MemoryService` (remember/recall/why/
-  remember_extracted) in the **Python and npm SDKs**; today they expose only the
-  primitive layer.
+- ~~**P2** — expose the high-level `MemoryService` in the Python and npm SDKs.~~
+  **DONE:** Python (`velesdb-python`, #1242) and Node (`velesdb-node` /
+  `@wiscale/velesdb-memory-node`, #1245) both ship the full wedge surface.
 - The `why` subgraph still includes intermediate topic-hub *nodes* (the
   connecting topic); collapsing them to direct fact→fact links is an optional
   presentation refinement.

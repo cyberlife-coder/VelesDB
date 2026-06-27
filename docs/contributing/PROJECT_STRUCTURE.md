@@ -96,6 +96,14 @@ velesdb-core/
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │
+│   ├── velesdb-memory/        # MCP agent-memory server (MemoryService why() wedge)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │
+│   ├── velesdb-node/          # Node.js napi binding of the memory wedge
+│   │   ├── Cargo.toml         # @wiscale/velesdb-memory-node (depends on velesdb-memory only)
+│   │   └── src/
+│   │
 │   └── tauri-plugin-velesdb/  # Tauri v2 desktop integration
 │       ├── Cargo.toml
 │       └── src/

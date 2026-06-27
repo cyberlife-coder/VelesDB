@@ -27,6 +27,8 @@ the Core-licensed `velesdb-core` crate and does not redistribute the engine.
 | `velesdb-mobile` (iOS/Android libs) | yes | **Core License 1.0** |
 | `velesdb-cli` (binary) | yes | **Core License 1.0** |
 | `velesdb-migrate` (binary) | yes | **Core License 1.0** |
+| `velesdb-memory` (MCP memory server; embeds engine) | yes | **Core License 1.0** |
+| `velesdb-node` / `@wiscale/velesdb-memory-node` (napi addon; statically links engine) | yes (engine in `.node`) | **Core License 1.0** |
 | `tauri-plugin-velesdb` (Rust) | yes | **Core License 1.0** |
 | `@wiscale/velesdb-sdk` (TS, bundles WASM) | yes | **Core License 1.0** |
 | `@wiscale/tauri-plugin-velesdb` (guest-js) | no (IPC glue) — kept Core as first-party product SDK | **Core License 1.0** |

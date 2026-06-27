@@ -78,9 +78,11 @@ The workspace is laid out as eight crates with one-way dependencies (no cycles).
 | **`velesdb-mobile`** | iOS / Android bindings via UniFFI. | Swift + Kotlin | One binding crate, two outputs. |
 | **`velesdb-cli`** | Interactive REPL for VelesQL. | Single binary | Wraps `velesdb-core`. |
 | **`velesdb-migrate`** | Migration tooling: import from Pinecone / Qdrant / Milvus / Weaviate / Chroma / Elasticsearch / Redis. | CLI tool | Strategic candidate to extract to a separate repo (see ROADMAP.md Horizon 4). |
+| **`velesdb-memory`** | Local-first MCP agent-memory server: the high-level `MemoryService` wedge (remember/recall/recall_where/relate/forget/why/remember_extracted). | MCP server + Rust/Python/Node API | Independent `0.1.0` cadence. Depends on `velesdb-core` (not the engine's `3.x` line). |
+| **`velesdb-node`** | Node.js (napi-rs) binding of the memory wedge. | `@wiscale/velesdb-memory-node` (npm) | Depends on `velesdb-memory` only (never `velesdb-core` directly) — the license boundary. |
 | **`tauri-plugin-velesdb`** | Tauri desktop integration. | Plugin | Used by `demos/tauri-rag-app`. |
 
-The dependency graph is strictly downward: `server`, `python`, `wasm`, `mobile`, `cli`, `migrate`, `tauri-plugin` all depend on `velesdb-core` and never on each other.
+The dependency graph is strictly downward: `server`, `python`, `wasm`, `mobile`, `cli`, `migrate`, `memory`, `tauri-plugin` all depend on `velesdb-core` and never on each other. `velesdb-node` is the one exception by design — it depends only on `velesdb-memory` (which re-exposes memory semantics), keeping the raw engine behind the license boundary.
 
 ---
 
