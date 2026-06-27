@@ -72,8 +72,13 @@ impl Embedder for HashEmbedder {
     }
 }
 
+/// A boxed, object-safe embedder. Lets a non-generic `MemoryService<DynEmbedder>`
+/// be stored behind a concrete type — the MCP server and the language bindings
+/// both need this, since handler/pyclass types can't carry a generic `E`.
+pub type DynEmbedder = Box<dyn Embedder + Send + Sync>;
+
 /// Forward [`Embedder`] through a box, enabling a non-generic
-/// `MemoryService<Box<dyn Embedder + Send + Sync>>` for the MCP server.
+/// `MemoryService<DynEmbedder>` for the MCP server and bindings.
 impl<T: Embedder + ?Sized> Embedder for Box<T> {
     fn dimension(&self) -> usize {
         (**self).dimension()

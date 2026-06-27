@@ -60,6 +60,11 @@ impl<T: Extractor + ?Sized> Extractor for std::sync::Arc<T> {
     }
 }
 
+/// A shared, object-safe extractor. The MCP server and the language bindings
+/// hold one of these (an `Option`), so the extraction tool can be attached at
+/// runtime without the type being generic.
+pub type DynExtractor = std::sync::Arc<dyn Extractor + Send + Sync>;
+
 // --- Optional batteries-included backend: a local Ollama generative model -----
 //
 // Enabled with `--features extract`. The default build omits this backend (and

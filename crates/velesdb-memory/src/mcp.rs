@@ -13,7 +13,6 @@ use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::embedder::Embedder;
 use crate::service::{ColumnFilter, Explanation, Link, MemoryService, Metadata, Recollection};
 
 /// Default number of memories returned by `recall`.
@@ -27,16 +26,12 @@ const MAX_RECALL_LIMIT: usize = 1_000;
 /// Cap on `why` hop depth — prevents exponential graph fans.
 const MAX_WHY_HOPS: usize = 10;
 
-/// Boxed embedder so the served type is concrete (the rmcp macros and the
-/// async runtime work most cleanly on a non-generic handler).
-pub type DynEmbedder = Box<dyn Embedder + Send + Sync>;
-
-/// Shared extraction backend for the `remember_extracted` tool. `Arc` so the
-/// cloneable server hands the same backend to every call; held as an `Option`
-/// so a server with no backend reports extraction as unconfigured rather than
-/// failing to start. The trait is dependency-free; only the ready-made
-/// [`crate::OllamaExtractor`] backend pulls a feature.
-pub type DynExtractor = Arc<dyn crate::extract::Extractor + Send + Sync>;
+/// Re-exported from their canonical homes ([`crate::embedder`] /
+/// [`crate::extract`]) so existing `mcp::DynEmbedder` / `mcp::DynExtractor`
+/// paths keep working: the boxed embedder and the shared, runtime-attached
+/// extraction backend the server stores.
+pub use crate::embedder::DynEmbedder;
+pub use crate::extract::DynExtractor;
 
 // --- Tool parameter / result DTOs ------------------------------------------
 //
