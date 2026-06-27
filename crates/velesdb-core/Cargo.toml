@@ -189,6 +189,10 @@ name = "filter_benchmark"
 harness = false
 
 [[bench]]
+name = "recall_where_scaling_benchmark"
+harness = false
+
+[[bench]]
 name = "velesql_benchmark"
 harness = false
 
