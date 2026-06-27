@@ -2226,6 +2226,167 @@ class AgentMemory:
     def __repr__(self) -> str: ...
 
 
+class MemoryService:
+    """Local-first agent memory with the ``why()`` graph wedge.
+
+    Stores and retrieves facts using vector similarity (``hash`` embedder,
+    offline/deterministic; or ``ollama`` for real semantic recall).  A typed
+    edge graph lets :meth:`why` return the multi-hop subgraph that explains a
+    decision — the wedge plain ``recall`` misses.
+
+    Example:
+        >>> from velesdb import MemoryService
+        >>> mem = MemoryService("./agent_mem")
+        >>> pr = mem.remember("PR #42 swaps the mutex for parking_lot")
+        >>> d  = mem.remember("we chose parking_lot to avoid lock poisoning",
+        ...                   links=[(pr, "decided_in")])
+        >>> mem.why("why did we choose parking_lot")["nodes"]
+    """
+
+    def __init__(
+        self,
+        path: str,
+        embedder: str = "hash",
+        ollama_url: Optional[str] = None,
+        ollama_model: Optional[str] = None,
+    ) -> None:
+        """Open or create a memory store at ``path``.
+
+        Args:
+            path: Store directory (created if missing; memory never leaves it).
+            embedder: ``"hash"`` (default, offline/deterministic) or
+                ``"ollama"`` (real semantic recall via a local model).
+            ollama_url: Ollama server URL (used when ``embedder="ollama"``).
+            ollama_model: Ollama model name (used when ``embedder="ollama"``).
+
+        Raises:
+            ValueError: If ``embedder`` is not ``"hash"`` or ``"ollama"``.
+            RuntimeError: If the store cannot be opened or the Ollama embedder
+                cannot be initialised.
+        """
+        ...
+
+    def remember(
+        self,
+        fact: str,
+        links: Optional[List[Tuple[int, str]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Store a fact and return its stable id (content-addressed / idempotent).
+
+        Args:
+            fact: The text to remember.
+            links: Optional list of ``(target_id, relation)`` tuples that
+                create typed outgoing edges from this fact.
+            metadata: Optional dict of key/value pairs for later filtering.
+                Keys starting with ``_veles_`` are reserved.
+
+        Returns:
+            Stable integer id for the stored fact.
+
+        Raises:
+            ValueError: If ``fact`` is empty or ``metadata`` contains a
+                reserved key.
+            KeyError: If a ``links`` target id does not exist.
+        """
+        ...
+
+    def recall(
+        self,
+        query: str,
+        k: int = 10,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Recall up to ``k`` memories similar to ``query``.
+
+        Args:
+            query: Free-text query.
+            k: Maximum number of results (default: 10).
+            filter: Optional exact-match metadata filter dict.
+
+        Returns:
+            List of ``{"id": int, "score": float, "content": str}`` dicts,
+            ordered by descending similarity score.
+        """
+        ...
+
+    def relate(self, from_id: int, to_id: int, relation: str) -> int:
+        """Create a typed edge ``from_id → to_id``.
+
+        Args:
+            from_id: Source memory id.
+            to_id: Target memory id.
+            relation: Edge label (e.g. ``"decided_in"``).
+
+        Returns:
+            The new edge id.
+
+        Raises:
+            KeyError: If either id does not exist.
+        """
+        ...
+
+    def forget(self, id: int) -> None:
+        """Delete a memory by id.
+
+        Args:
+            id: The memory id to remove.
+
+        Raises:
+            KeyError: If no memory with ``id`` exists.
+        """
+        ...
+
+    def why(
+        self,
+        decision: str,
+        max_hops: int = 2,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Explain a decision: best-matching memory plus its connected subgraph.
+
+        ``max_hops`` is silently capped at 10 to prevent unbounded traversal
+        on dense graphs (same limit as the MCP server).
+
+        Args:
+            decision: Free-text question or decision to explain.
+            max_hops: Maximum graph hops from the seed memory (default: 2,
+                capped at 10).
+            filter: Optional exact-match metadata filter for the seed lookup.
+
+        Returns:
+            ``{"nodes": [{"id": int, "content": str, "hop": int}, ...],
+               "edges": [{"from": int, "to": int, "relation": str}, ...]}``
+        """
+        ...
+
+    def remember_extracted(
+        self,
+        text: str,
+        model: str,
+        url: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> List[int]:
+        """Extract atomic facts from ``text`` via Ollama and store them.
+
+        Automatically builds the fact↔topic graph. Requires a running Ollama
+        server with ``model`` available.
+
+        Args:
+            text: Raw text to extract facts from.
+            model: Ollama model to use for extraction.
+            url: Ollama server URL (default: ``http://localhost:11434``).
+            metadata: Optional metadata applied to every extracted fact.
+
+        Returns:
+            List of stable ids for the stored facts.
+
+        Raises:
+            RuntimeError: If Ollama is unreachable or extraction fails.
+        """
+        ...
+
+
 # ---------------------------------------------------------------------------
 # Typed options dataclasses (Wave 3 Commit 10)
 # ---------------------------------------------------------------------------
