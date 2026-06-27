@@ -206,9 +206,11 @@ content. Pass it to `relate` / `forget`, or as a `links[].target` on a later
 later, `why("…")` recovers not just the decision but the PR, ticket, and
 benchmark linked to it — where `recall` alone returns only look-alike text.
 
-> **Embedding the library directly?** The same operations are available as a
-> Rust API (`MemoryService::remember/recall/relate/forget/why`) — see the
-> rustdoc on [docs.rs](https://docs.rs/velesdb-memory).
+> **Embedding the library directly?** The same wedge is available without the
+> MCP server: as a **Rust** API (`MemoryService::remember/recall/relate/forget/why`,
+> see the rustdoc on [docs.rs](https://docs.rs/velesdb-memory)), in **Python**
+> (`from velesdb import MemoryService`), and in **Node.js**
+> (`npm install @wiscale/velesdb-memory-node`).
 
 ## Embedding backend
 

@@ -13,7 +13,7 @@ Complete installation instructions for all platforms and deployment methods.
 | **macOS (Apple Silicon)** | `.tar.gz` portable (`velesdb-aarch64-apple-darwin.tar.gz`) | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) ✅ |
 | **Python** | `pip` | [PyPI](https://pypi.org/project/velesdb/) ✅ |
 | **Rust** | `cargo` | [crates.io](https://crates.io/crates/velesdb-core) ✅ |
-| **npm** | WASM/SDK | [npm @wiscale](https://www.npmjs.com/org/wiscale) ✅ |
+| **npm** | WASM/SDK (`@wiscale/velesdb-sdk`, `@wiscale/velesdb-wasm`) + agent memory (`@wiscale/velesdb-memory-node`) | [npm @wiscale](https://www.npmjs.com/org/wiscale) ✅ |
 | **Docker** | Container | [Build from source](#-docker-installation) |
 | **iOS** | XCFramework | [Build from source](#-mobile-iosandroid) |
 | **Android** | AAR/SO | [Build from source](#-mobile-iosandroid) |

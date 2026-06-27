@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Node.js binding for the agent-memory wedge (`@wiscale/velesdb-memory-node`).**
+  A new `crates/velesdb-node` napi-rs addon exposes the high-level `MemoryService`
+  in-process to Node (remember/recall/recallWhere/relate/forget/why/
+  rememberExtracted), mirroring the Python binding. Depends on `velesdb-memory`
+  only (never `velesdb-core`) — the license boundary; in-process, not a service.
+  All ops are async; `u64` ids cross as decimal strings (JS 2^53). (#1245)
+- **`MemoryService` wedge exposed in the Python SDK.** `from velesdb import
+  MemoryService` brings remember/recall/relate/forget/why/remember_extracted to
+  Python, reusing the same hardened Rust as the MCP server. (#1242)
+- **Indexed prefilter for filtered semantic recall (`recall_where`).** Filtered
+  recall now activates a secondary bitmap-prefilter index on first use instead of
+  an O(n) post-filter scan, so latency stays flat as the collection grows. (#1244)
 - **VelesQL conformance fixture pins the full `VelesqlErrorResponse` shape.**
   Conformance cases C002 (`VELESQL_MISSING_COLLECTION`), C003
   (`VELESQL_COLLECTION_NOT_FOUND`), and C007 (`VELESQL_AGGREGATION_ERROR`) now
