@@ -149,7 +149,9 @@ impl MemoryStore {
         AsyncTask::new(Job::new(move || {
             let k = guards::clamp_limit(k.unwrap_or(10));
             let filter = convert::to_metadata(filter)?;
-            let hits = svc.recall(&query, k, filter.as_ref()).map_err(to_napi_err)?;
+            let hits = svc
+                .recall(&query, k, filter.as_ref())
+                .map_err(to_napi_err)?;
             Ok(hits.into_iter().map(RecollectionJs::from).collect())
         }))
     }
@@ -157,7 +159,10 @@ impl MemoryStore {
     /// Fused vector + `ColumnStore` recall: like [`recall`](Self::recall) but the
     /// `filters` support ranges/comparisons (`gt`, `le`, …), so temporal/numeric
     /// facets become queryable. (No `PyO3` counterpart — napi-specific surface.)
-    #[napi(js_name = "recallWhere", ts_return_type = "Promise<Array<RecollectionJs>>")]
+    #[napi(
+        js_name = "recallWhere",
+        ts_return_type = "Promise<Array<RecollectionJs>>"
+    )]
     pub fn recall_where(
         &self,
         query: String,
@@ -217,7 +222,10 @@ impl MemoryStore {
 
     /// Extract atomic facts from raw `text` with a local Ollama `model` and store
     /// them, auto-building the fact↔topic graph. Resolves to the stored ids.
-    #[napi(js_name = "rememberExtracted", ts_return_type = "Promise<Array<string>>")]
+    #[napi(
+        js_name = "rememberExtracted",
+        ts_return_type = "Promise<Array<string>>"
+    )]
     pub fn remember_extracted(
         &self,
         text: String,
