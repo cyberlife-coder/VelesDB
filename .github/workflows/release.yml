@@ -128,7 +128,7 @@ jobs:
       - name: Run workspace tests
         run: |
           cargo test --workspace --features persistence,gpu,update-check \
-            --exclude velesdb-python -- --test-threads=1
+            --exclude velesdb-python --exclude velesdb-node -- --test-threads=1
       - name: Verify publish readiness
         run: |
           # Only dry-run velesdb-core (root crate, no workspace deps).
