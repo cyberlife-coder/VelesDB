@@ -20,16 +20,21 @@ use velesdb_memory::{
 
 use crate::collection::query::convert_params;
 
+/// Hard cap on `why()` hop depth — mirrors `MAX_WHY_HOPS` in the MCP server so
+/// the Python binding can never trigger unbounded graph traversal.
+const MAX_WHY_HOPS: usize = 10;
+
 /// Map a [`MemoryError`] to the most specific Python exception: caller-input
 /// errors → `ValueError`, a missing memory id → `KeyError`, the rest →
 /// `RuntimeError`.
-fn to_py_err(e: &MemoryError) -> PyErr {
+fn to_py_err(e: MemoryError) -> PyErr {
+    let msg = e.to_string();
     match e {
         MemoryError::EmptyFact | MemoryError::InvalidFilter(_) | MemoryError::ReservedKey(_) => {
-            PyValueError::new_err(e.to_string())
+            PyValueError::new_err(msg)
         }
-        MemoryError::UnknownMemory(_) => PyKeyError::new_err(e.to_string()),
-        _ => PyRuntimeError::new_err(e.to_string()),
+        MemoryError::UnknownMemory(_) => PyKeyError::new_err(msg),
+        _ => PyRuntimeError::new_err(msg),
     }
 }
 
@@ -130,7 +135,7 @@ impl PyMemoryService {
         ollama_model: Option<String>,
     ) -> PyResult<Self> {
         let emb = build_embedder(embedder, ollama_url, ollama_model)?;
-        let svc = MemoryService::open(&path, emb).map_err(|e| to_py_err(&e))?;
+        let svc = MemoryService::open(&path, emb).map_err(to_py_err)?;
         Ok(Self { svc })
     }
 
@@ -153,7 +158,7 @@ impl PyMemoryService {
         py.detach(|| {
             self.svc
                 .remember(fact, &links, metadata.as_ref())
-                .map_err(|e| to_py_err(&e))
+                .map_err(to_py_err)
         })
     }
 
@@ -171,7 +176,7 @@ impl PyMemoryService {
         let hits = py.detach(|| {
             self.svc
                 .recall(query, k, filter.as_ref())
-                .map_err(|e| to_py_err(&e))
+                .map_err(to_py_err)
         })?;
         let list = PyList::empty(py);
         for hit in &hits {
@@ -182,20 +187,19 @@ impl PyMemoryService {
 
     /// Create a typed edge `from_id -> to_id`. Returns the edge id.
     fn relate(&self, py: Python<'_>, from_id: u64, to_id: u64, relation: &str) -> PyResult<u64> {
-        py.detach(|| {
-            self.svc
-                .relate(from_id, to_id, relation)
-                .map_err(|e| to_py_err(&e))
-        })
+        py.detach(|| self.svc.relate(from_id, to_id, relation).map_err(to_py_err))
     }
 
     /// Delete a memory by id.
     fn forget(&self, py: Python<'_>, id: u64) -> PyResult<()> {
-        py.detach(|| self.svc.forget(id).map_err(|e| to_py_err(&e)))
+        py.detach(|| self.svc.forget(id).map_err(to_py_err))
     }
 
     /// Explain a decision: the best-matching memory plus its connected subgraph
     /// (multi-hop). Returns `{nodes, edges}` — the wedge a plain recall misses.
+    ///
+    /// `max_hops` is silently capped at 10 to prevent unbounded traversal on
+    /// dense graphs (same limit as the MCP server).
     #[pyo3(signature = (decision, max_hops = 2, filter = None))]
     fn why(
         &self,
@@ -204,11 +208,12 @@ impl PyMemoryService {
         max_hops: usize,
         filter: Option<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Py<PyAny>> {
+        let max_hops = max_hops.min(MAX_WHY_HOPS);
         let filter = to_metadata(py, filter)?;
         let explanation = py.detach(|| {
             self.svc
                 .why(decision, max_hops, filter.as_ref())
-                .map_err(|e| to_py_err(&e))
+                .map_err(to_py_err)
         })?;
         explanation_to_dict(py, &explanation)
     }
@@ -230,7 +235,7 @@ impl PyMemoryService {
         py.detach(|| {
             self.svc
                 .remember_extracted(text, &extractor, metadata.as_ref())
-                .map_err(|e| to_py_err(&e))
+                .map_err(to_py_err)
         })
     }
 }

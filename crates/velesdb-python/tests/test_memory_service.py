@@ -69,3 +69,12 @@ def test_unknown_link_target_raises_key_error(mem):
 def test_unknown_embedder_raises_value_error():
     with pytest.raises(ValueError):
         MemoryService(tempfile.mkdtemp(), embedder="nope")
+
+
+def test_why_huge_max_hops_is_silently_capped(mem):
+    # The binding caps max_hops at 10 (same as the MCP server) to prevent
+    # unbounded graph traversal; passing usize::MAX must not hang or error.
+    fid = mem.remember("rust is a systems language")
+    why = mem.why("rust", max_hops=10_000)
+    node_ids = [n["id"] for n in why["nodes"]]
+    assert fid in node_ids
