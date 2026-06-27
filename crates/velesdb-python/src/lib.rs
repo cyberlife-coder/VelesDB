@@ -27,6 +27,7 @@
 //! ```
 
 mod agent;
+mod agent_memory_service;
 mod collection;
 mod collection_helpers;
 mod database;
@@ -107,6 +108,8 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<agent::PySemanticMemory>()?;
     m.add_class::<agent::PyEpisodicMemory>()?;
     m.add_class::<agent::PyProceduralMemory>()?;
+    // High-level memory wedge (remember/recall/relate/forget/why + extraction).
+    m.add_class::<agent_memory_service::PyMemoryService>()?;
 
     // VelesQL query language classes (EPIC-056/US-001)
     velesql::register_velesql_module(m)?;

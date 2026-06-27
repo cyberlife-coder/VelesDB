@@ -25,6 +25,10 @@ pub mod embedder;
 pub mod error;
 pub mod extract;
 pub mod id;
+/// The MCP server transport. Gated behind the default `mcp` feature so library
+/// consumers (e.g. the language bindings) can depend on the memory core without
+/// pulling the `rmcp`/`tokio` server stack.
+#[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod service;
 
@@ -32,13 +36,15 @@ pub mod service;
 /// SDK's own default so the server, library, and tests never restate the value.
 pub const DEFAULT_DIMENSION: usize = velesdb_core::agent::DEFAULT_DIMENSION;
 
-pub use embedder::{EmbedError, Embedder, HashEmbedder};
+pub use embedder::{DynEmbedder, EmbedError, Embedder, HashEmbedder};
 #[cfg(feature = "ollama")]
 pub use embedder::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
 pub use error::MemoryError;
 #[cfg(feature = "extract")]
 pub use extract::OllamaExtractor;
-pub use extract::{ExtractError, ExtractedFact, Extractor};
+pub use extract::{DynExtractor, ExtractError, ExtractedFact, Extractor};
+#[cfg(feature = "mcp")]
+pub use mcp::McpServer;
 pub use service::{
     ColumnFilter, ColumnOp, Explanation, Link, MemoryEdge, MemoryNode, MemoryService, Metadata,
     Recollection,
