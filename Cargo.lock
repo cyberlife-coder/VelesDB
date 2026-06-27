@@ -6734,6 +6734,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "velesdb-core",
+ "velesdb-memory",
 ]
 
 [[package]]

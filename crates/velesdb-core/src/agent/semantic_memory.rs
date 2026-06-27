@@ -94,6 +94,29 @@ impl SemanticMemory {
         self.dimension
     }
 
+    /// Ensures a secondary index exists on `field` so filtered recall takes the
+    /// indexed bitmap prefilter instead of a linear post-filter scan.
+    ///
+    /// Idempotent and cheap to call on every filtered query: when the index is
+    /// already present this is a single `has_secondary_index` read. The first
+    /// call backfills existing payloads and records `field` in the persisted
+    /// `indexed_fields` authority (so the index is rebuilt on the next `open`,
+    /// not silently lost); subsequent upserts maintain it incrementally.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the collection is missing or persisting the index
+    /// authority fails.
+    pub fn ensure_index(&self, field: &str) -> Result<(), AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        if !collection.has_secondary_index(field) {
+            collection
+                .create_index(field)
+                .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Stores a semantic memory point.
     ///
     /// # Errors

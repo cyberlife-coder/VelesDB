@@ -475,6 +475,15 @@ impl<E: Embedder> MemoryService<E> {
         }
         let embedding = self.embedder.embed(query)?;
         let (sql, params) = self.build_fused_query(&embedding, k, filters)?;
+        // `build_fused_query` has validated every field name; ensure each one is
+        // indexed so the planner uses a bitmap prefilter instead of an O(n)
+        // post-filter scan. Idempotent and incrementally maintained thereafter.
+        for filter in filters {
+            self.memory
+                .semantic()
+                .ensure_index(&filter.field)
+                .map_err(MemoryError::from)?;
+        }
         let results = self
             .memory
             .query_semantic(&sql, &params)
