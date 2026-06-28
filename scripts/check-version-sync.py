@@ -20,6 +20,7 @@ TARGETS: "list[tuple[str, str]]" = [
     ("integrations/langchain/pyproject.toml", "toml"),
     ("integrations/llamaindex/pyproject.toml", "toml"),
     ("integrations/haystack/pyproject.toml", "toml"),
+    ("integrations/langgraph/pyproject.toml", "toml"),
     # Haystack `__init__.py` carries its own `__version__` constant exposed
     # to users at runtime (`haystack_velesdb.__version__`); must track
     # pyproject.toml. Devin found this drifting at "1.0.0" while pyproject
@@ -79,6 +80,7 @@ TARGETS: "list[tuple[str, str]]" = [
     # Python RAG framework integrations stay in lock-step with their pyproject.
     ("integrations/langchain/src/langchain_velesdb/__init__.py", "py_init_version"),
     ("integrations/llamaindex/src/llamaindex_velesdb/__init__.py", "py_init_version"),
+    ("integrations/langgraph/src/langgraph_velesdb/__init__.py", "py_init_version"),
     # OpenAPI YAML spec mirror of the JSON spec. The JSON variant has been
     # policed since v1.14.0; the YAML variant was missed and was found at
     # 1.13.1 during the v1.14.2 audit.
