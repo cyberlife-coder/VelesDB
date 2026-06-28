@@ -289,9 +289,14 @@ jobs:
           merge-multiple: true
 
       - name: Stage native binaries into per-platform npm dirs
+        # Each per-platform package is published separately, so it must carry the
+        # VelesDB Core License text itself — `create-npm-dirs` does not copy it.
+        # npm always includes a top-level LICENSE file regardless of `files`, so
+        # dropping it (and the README) into each dir is enough.
         run: |
           npx napi create-npm-dirs
           npx napi artifacts --output-dir ./artifacts
+          for d in npm/*/; do cp LICENSE README.md "$d"; done
           ls -R ./npm
 
       - name: Publish to npm
