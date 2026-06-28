@@ -41,7 +41,7 @@ RS
 # Pin to the latest released version on crates.io. Bump alongside each
 # workspace release; the timing measurement is meant to track the path a
 # fresh dev hits when they `cargo add velesdb-core` today.
-cargo add --quiet velesdb-core@3.3.0
+cargo add --quiet velesdb-core@3.4.0
 cargo add --quiet serde_json@1
 cargo run --quiet --release
 
