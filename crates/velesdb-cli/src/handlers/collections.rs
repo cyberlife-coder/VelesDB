@@ -61,11 +61,9 @@ pub fn handle_create_metadata_collection(path: &Path, name: &str) -> Result<()> 
 pub fn handle_delete_collection(path: &Path, name: &str, force: bool) -> Result<()> {
     let db = velesdb_core::Database::open(path)?;
 
-    if !force {
-        if !confirm_deletion(name)? {
-            println!("{} Deletion cancelled.", "\u{2139}\u{fe0f}".cyan());
-            return Ok(());
-        }
+    if !force && !confirm_deletion(name)? {
+        println!("{} Deletion cancelled.", "\u{2139}\u{fe0f}".cyan());
+        return Ok(());
     }
 
     db.delete_collection(name)?;
