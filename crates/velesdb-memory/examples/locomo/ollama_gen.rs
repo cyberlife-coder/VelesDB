@@ -7,13 +7,20 @@
 
 use std::error::Error;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 const DEFAULT_MODEL: &str = "qwen3.6:35b-mlx";
 const OLLAMA_URL: &str = "http://localhost:11434/api/generate";
 const ATTEMPTS: u32 = 3;
+
+/// The judging model, run through the authenticated `claude` CLI (no API key /
+/// HTTPS client needed). A stronger, vendor-neutral judge than the local model,
+/// aligning accuracy numbers with how published `LoCoMo` results are scored.
+const JUDGE_MODEL: &str = "claude-opus-4-8";
 
 /// Per-process counter making temp-file names unique, so two runs sharing a
 /// cache dir never write the same `.tmp` and race the rename.
@@ -108,9 +115,75 @@ impl Generator {
         Err(last)
     }
 
-    /// Content-addressed cache key over model + prompt (stable across runs).
+    /// Judge `prompt` with Claude Opus 4.8 via the `claude` CLI, cached on disk
+    /// keyed by the judge model so its verdicts never collide with the local
+    /// model's (and a re-judge reuses cached answers, only the verdicts re-run).
+    pub fn judge(&self, prompt: &str) -> Result<String, Box<dyn Error>> {
+        let key = self.key_for(JUDGE_MODEL, prompt);
+        let path = self.cache_dir.join(format!("{key}.txt"));
+        if let Ok(cached) = fs::read_to_string(&path) {
+            if !cached.trim().is_empty() {
+                return Ok(cached);
+            }
+        }
+        let answer = self.call_claude(prompt)?;
+        if !answer.trim().is_empty() {
+            self.store(&key, &path, &answer)?;
+        }
+        Ok(answer)
+    }
+
+    /// Invoke `claude -p --model <JUDGE_MODEL>`, feeding the prompt on stdin and
+    /// returning trimmed stdout, with bounded retries for transient failures.
+    fn call_claude(&self, prompt: &str) -> Result<String, Box<dyn Error>> {
+        let mut last: Box<dyn Error> = "no attempt made".into();
+        for attempt in 1..=ATTEMPTS {
+            match self.claude_once(prompt) {
+                Ok(text) => return Ok(text),
+                Err(e) => {
+                    last = format!("claude judge failed (attempt {attempt}/{ATTEMPTS}): {e}").into()
+                }
+            }
+        }
+        Err(last)
+    }
+
+    /// One `claude -p` invocation.
+    #[allow(clippy::unused_self)]
+    fn claude_once(&self, prompt: &str) -> Result<String, Box<dyn Error>> {
+        let mut child = Command::new("claude")
+            .args(["-p", "--model", JUDGE_MODEL, "--output-format", "text"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        child
+            .stdin
+            .take()
+            .ok_or("claude stdin unavailable")?
+            .write_all(prompt.as_bytes())?;
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
+            return Err(format!(
+                "claude exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+            .into());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Content-addressed cache key over the local model + prompt.
     fn key(&self, prompt: &str) -> String {
-        let mut hash = fnv1a(self.model.as_bytes());
+        self.key_for(&self.model, prompt)
+    }
+
+    /// Content-addressed cache key over an explicit `model` + prompt, so callers
+    /// using a different judging model get a disjoint cache namespace.
+    #[allow(clippy::unused_self)]
+    fn key_for(&self, model: &str, prompt: &str) -> String {
+        let mut hash = fnv1a(model.as_bytes());
         hash = fnv1a_continue(hash, b"\0");
         hash = fnv1a_continue(hash, prompt.as_bytes());
         format!("{hash:016x}")

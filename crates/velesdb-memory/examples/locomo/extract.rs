@@ -35,8 +35,14 @@ struct RawFact {
 }
 
 /// Extract facts for every session of `sample`, in order. Cached per session by
-/// the generator, so re-runs and resumes cost no GPU.
-pub fn extract_sample(generator: &Generator, sample: &Sample) -> Result<Vec<Fact>, Box<dyn Error>> {
+/// the generator, so re-runs and resumes cost no GPU. `version` selects the
+/// extraction prompt: `1` (topic-oriented, original) or `2` (specific-referent
+/// oriented, for sharper high-IDF cross-session links).
+pub fn extract_sample(
+    generator: &Generator,
+    sample: &Sample,
+    version: u8,
+) -> Result<Vec<Fact>, Box<dyn Error>> {
     let speakers = speaker_names(sample);
     let mut facts = Vec::new();
     for session in &sample.sessions {
@@ -45,6 +51,7 @@ pub fn extract_sample(generator: &Generator, sample: &Sample) -> Result<Vec<Fact
             &sample.sample_id,
             session,
             &speakers,
+            version,
         )?);
     }
     Ok(facts)
@@ -69,12 +76,13 @@ fn extract_session(
     sample_id: &str,
     session: &Session,
     speakers: &HashSet<String>,
+    version: u8,
 ) -> Result<Vec<Fact>, Box<dyn Error>> {
     if session.turns.is_empty() {
         return Ok(Vec::new());
     }
     let valid_ids: HashSet<&str> = session.turns.iter().map(|t| t.dia_id.as_str()).collect();
-    let prompt = build_prompt(sample_id, session, speakers);
+    let prompt = build_prompt(sample_id, session, speakers, version);
     let reply = generator.generate(&prompt)?;
     let Some(raw) = json_slice::<Vec<RawFact>>(&reply) else {
         // Surface the drop rather than silently undercounting the graph.
@@ -128,7 +136,15 @@ fn sanitise(
 }
 
 /// Build the extraction prompt: numbered dialogue plus a strict JSON contract.
-fn build_prompt(sample_id: &str, session: &Session, speakers: &HashSet<String>) -> String {
+/// `version` swaps only the entity-tagging guidance (the part that shapes the
+/// graph): `1` asks for recurring topics, `2` asks for specific, canonical
+/// cross-session referents so high-IDF links connect answer-bearing facts.
+fn build_prompt(
+    sample_id: &str,
+    session: &Session,
+    speakers: &HashSet<String>,
+    version: u8,
+) -> String {
     use std::fmt::Write as _;
     let mut dialogue = String::new();
     for turn in &session.turns {
@@ -146,17 +162,39 @@ fn build_prompt(sample_id: &str, session: &Session, speakers: &HashSet<String>) 
 session {idx}, dated {date}). The speakers are {names}.\n\n\
 Dialogue (each line is [dia_id] speaker: text):\n{dialogue}\n\
 Extract the atomic, standalone facts a person would remember. Rewrite each as a \
-self-contained sentence (resolve pronouns to names; keep absolute dates). For \
-each fact also list 1-4 key TOPICS it concerns: the recurring subjects, \
-activities, events, interests, plans, places, organisations, or named people \
-OTHER than the speakers that a later question might reference. Use short, \
-canonical, lowercase noun phrases (e.g. \"adoption\", \"charity race\", \
-\"therapy\", \"new job\") so the same topic recurs as the SAME tag across \
-sessions. Never use the speakers' own names or generic filler as a topic.\n\n\
+self-contained sentence (resolve pronouns to names; keep absolute dates). \
+{entity_clause}\n\n\
 Return ONLY a JSON array, no prose, each item exactly:\n\
 {{\"fact\": string, \"dia_ids\": [string], \"entities\": [string]}}",
         idx = session.index,
         date = session.date_time,
         names = names.join(" and "),
+        entity_clause = entity_clause(version),
     )
+}
+
+/// The entity-tagging instruction for a prompt version. This single clause is
+/// the lever the extraction experiment turns: V1's recurring topics make a dense
+/// but distractor-prone graph; V2's specific canonical referents aim for sparse
+/// but answer-bearing high-IDF links.
+fn entity_clause(version: u8) -> &'static str {
+    if version >= 2 {
+        "For each fact also list 1-4 SPECIFIC REFERENTS it involves: the concrete, \
+named things a later question would pin on — named people OTHER than the speakers, \
+pets, places, organisations, products, named events, or specific possessions, \
+plans, or conditions. Prefer the specific name over its category (\"max\" not \
+\"dog\"; \"boston marathon\" not \"race\"; \"acme corp\" not \"work\"). CANONICALISE \
+hard: give the SAME real-world thing the SAME lowercase tag every time it appears, \
+resolving pronouns, paraphrases, and synonyms to one canonical name, so it recurs \
+identically across sessions. Avoid broad standalone abstractions (\"health\", \
+\"work\", \"fun\", \"family\") that would link unrelated facts. Never tag the \
+speakers' own names."
+    } else {
+        "For each fact also list 1-4 key TOPICS it concerns: the recurring subjects, \
+activities, events, interests, plans, places, organisations, or named people \
+OTHER than the speakers that a later question might reference. Use short, \
+canonical, lowercase noun phrases (e.g. \"adoption\", \"charity race\", \
+\"therapy\", \"new job\") so the same topic recurs as the SAME tag across \
+sessions. Never use the speakers' own names or generic filler as a topic."
+    }
 }

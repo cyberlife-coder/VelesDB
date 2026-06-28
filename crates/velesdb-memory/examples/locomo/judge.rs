@@ -14,28 +14,114 @@ use crate::parse::{normalize, tokens};
 
 const ABSTAIN: &str = "NO_ANSWER";
 
-/// Generate a concise answer from the retrieved fact texts, or the abstain
-/// token when the facts don't contain the answer.
+/// Generate a concise answer from the retrieved facts (each a `(YYYYMMDD ts,
+/// text)` pair), or the abstain token when the facts don't contain the answer.
+/// When `date_context` is set, every dated fact is prefixed with its date and
+/// the facts are ordered chronologically — the session date is retrieved but
+/// otherwise invisible to the answerer, which makes temporal questions
+/// unanswerable despite high evidence recall.
+// benchmark harness: ablation knobs threaded through the harness
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub fn answer(
     generator: &Generator,
     question: &str,
-    facts: &[String],
+    facts: &[(i64, String)],
+    date_context: bool,
+    now_ts: i64,
+    scaffold: bool,
+    cot: bool,
+    claude_gen: bool,
 ) -> Result<String, Box<dyn Error>> {
     let context = if facts.is_empty() {
         "(no facts retrieved)".to_string()
     } else {
-        facts
+        let mut ordered: Vec<&(i64, String)> = facts.iter().collect();
+        if date_context {
+            // Chronological so interval/ordering questions read naturally.
+            ordered.sort_by_key(|(ts, _)| *ts);
+        }
+        ordered
             .iter()
-            .map(|f| format!("- {f}"))
+            .map(
+                |(ts, text)| match date_context.then(|| fmt_date(*ts)).flatten() {
+                    Some(date) => format!("- [{date}] {text}"),
+                    None => format!("- {text}"),
+                },
+            )
             .collect::<Vec<_>>()
             .join("\n")
     };
+    if scaffold {
+        // Temporal reasoning scaffold: a dated, chronological timeline + a "now"
+        // anchor + explicit date-arithmetic, ending in a parseable FINAL line.
+        let now = fmt_date(now_ts).unwrap_or_else(|| "unknown".to_string());
+        let prompt = format!(
+            "You answer a temporal question from a dated memory timeline (each line \
+is '- [YYYY-MM-DD] fact', in chronological order). Today's date is {now}.\n\n\
+Timeline:\n{context}\n\nQuestion: {question}\n\n\
+Reason step by step: pick the relevant dated fact(s), then compute the interval, \
+ordering, or date the question asks for. If the timeline does not contain the \
+answer, the final answer is {ABSTAIN}. End with a line exactly of the form:\n\
+FINAL: <answer in a few words>"
+        );
+        let raw = gen(generator, &prompt, claude_gen)?;
+        return Ok(extract_final(&raw));
+    }
+    if cot {
+        // General chain-of-thought: reason over the facts, then a parseable FINAL.
+        let prompt = format!(
+            "Answer the question using ONLY the memory facts below.\n\n\
+Facts:\n{context}\n\nQuestion: {question}\n\n\
+Think step by step: identify the relevant fact(s) and how they connect to the \
+question, then determine the answer. If the facts do not contain the answer, the \
+final answer is {ABSTAIN}. End with a line exactly of the form:\n\
+FINAL: <answer in a few words>"
+        );
+        let raw = gen(generator, &prompt, claude_gen)?;
+        return Ok(extract_final(&raw));
+    }
     let prompt = format!(
         "Answer the question using ONLY the memory facts below. If the facts do \
 not contain the answer, reply exactly {ABSTAIN}. Be concise: a few words, no \
 explanation.\n\nFacts:\n{context}\n\nQuestion: {question}\nAnswer:"
     );
-    generator.generate(&prompt)
+    gen(generator, &prompt, claude_gen)
+}
+
+/// Generate an answer with either the strong external model (Claude via CLI) or
+/// the local model, depending on `claude_gen`.
+fn gen(generator: &Generator, prompt: &str, claude_gen: bool) -> Result<String, Box<dyn Error>> {
+    if claude_gen {
+        generator.judge(prompt)
+    } else {
+        generator.generate(prompt)
+    }
+}
+
+/// Extract the answer from a scaffolded reply: the text after the last `FINAL:`
+/// line (case-insensitive), or the whole reply if no such line is present.
+fn extract_final(text: &str) -> String {
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.len() >= 6 && trimmed[..6].eq_ignore_ascii_case("final:") {
+            return trimmed[6..].trim().to_string();
+        }
+    }
+    text.trim().to_string()
+}
+
+/// Render a `YYYYMMDD` session key as `YYYY-MM-DD`, or `None` when unknown (0)
+/// or malformed, so an undated fact is shown without a misleading date prefix.
+fn fmt_date(ts: i64) -> Option<String> {
+    if ts <= 0 {
+        return None;
+    }
+    let (year, month, day) = (ts / 10_000, (ts / 100) % 100, ts % 100);
+    if (1..=12).contains(&month) && (1..=31).contains(&day) {
+        Some(format!("{year:04}-{month:02}-{day:02}"))
+    } else {
+        None
+    }
 }
 
 /// True when the model declined to answer (the correct move on adversarial QA).
@@ -60,6 +146,7 @@ pub fn judge_correct(
     question: &str,
     gold: &str,
     candidate: &str,
+    use_claude: bool,
 ) -> Result<bool, Box<dyn Error>> {
     if abstained(candidate) {
         return Ok(false);
@@ -71,7 +158,14 @@ fine; extra correct detail is fine). Reply with exactly one word: CORRECT or \
 INCORRECT.\n\nQuestion: {question}\nReference answer: {gold}\nCandidate answer: \
 {candidate}\nVerdict:"
     );
-    let verdict = normalize(&generator.generate(&prompt)?);
+    // The judge can run on the stronger Claude model (vendor-neutral, fairer) or
+    // the local model; the candidate answer itself is always the local system.
+    let raw = if use_claude {
+        generator.judge(&prompt)?
+    } else {
+        generator.generate(&prompt)?
+    };
+    let verdict = normalize(&raw);
     // Compare the leading word so "incorrect" never matches "correct" by
     // substring, and a stray verbose reply still grades on its first verdict word.
     let head: String = verdict
