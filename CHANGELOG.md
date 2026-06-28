@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.4.0] — 2026-06-28
+
 ### Added
+- **New public `SemanticMemory` methods on `velesdb-core`.** `query_excluding`
+  (recall while excluding a set of ids — powers hub-exclusion in auto-extraction,
+  #1241) and `ensure_index` (lazily build a field's bitmap prefilter index, #1244).
+  Additive API; this is the minor bump that lets the `velesdb-memory` 0.2.0 wedge
+  build against a *published* core (crate publish compiles against crates.io, where
+  these methods must exist).
 - **Node.js binding for the agent-memory wedge (`@wiscale/velesdb-memory-node`).**
   A new `crates/velesdb-node` napi-rs addon exposes the high-level `MemoryService`
   in-process to Node (remember/recall/recallWhere/relate/forget/why/
