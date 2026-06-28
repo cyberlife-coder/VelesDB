@@ -66,6 +66,32 @@ Each is a real run that shows what plain recall misses and `why()` recovers:
 > the offline `hash` default — the reason is connected by a *decision*, not by surface
 > similarity, which is exactly what a vector store cannot follow.
 
+## How it compares — and who it's for
+
+velesdb-memory is **embedded memory, not a cloud memory service.** On the LoCoMo QA
+benchmark it sits in the **same tier as Mem0** and well ahead of Zep on a sober,
+neutral-judge basis — but the real difference is the *architecture*, not the score:
+
+| | **velesdb-memory** | Mem0 | Zep / Graphiti |
+|---|---|---|---|
+| Shape | one embedded binary (vector + graph + column) | orchestrator over Qdrant + Postgres | orchestrator (graph-centric) |
+| Runs | **100% local / offline** | cloud LLM in the loop | cloud LLM in the loop |
+| Explains | **`why()` returns the evidence path** | returns an answer | returns an answer |
+| LoCoMo (neutral PISA basis) | ~57-58% | ~55% | ~34% |
+
+*Mem0's ~92% / Zep's ~84% headlines run on cloud GPT-4o with contested methodology; on
+the neutral basis the whole field sits far lower and close together — we do **not** claim
+to beat those headlines, we claim the same tier on radically better architecture.*
+
+**Choose velesdb-memory when local-first is a requirement, not a preference:**
+- **Regulated / sovereign data** (health, legal, finance, defense) — context can't transit a third-party LLM API; `why()` gives both data residency and an auditable recall trail.
+- **Air-gapped / on-prem / edge** — a self-contained binary against a local model is the only shape that deploys with no outbound internet.
+- **Cost-sensitive, high-volume agents** — running extraction + recall on a local stack removes the per-token cloud bill.
+
+If you're cloud-native and want the largest community, Mem0 is the default reach. If your
+data can't leave the box — or you need to *audit why* it recalled something — this is the
+one that fits. (Deeper positioning: [`POSITIONING.md`](POSITIONING.md).)
+
 ### Benchmark
 
 `cargo run --release -p velesdb-memory --example bench_multihop` isolates the

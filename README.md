@@ -107,6 +107,8 @@ Built-in memory for AI agents — semantic, episodic, and procedural. No externa
 
 Most "agent memory" is vector recall: it finds text that *looks like* your query. VelesDB's high-level `MemoryService` adds the part that's missing — it **connects** memories with typed links, so it can answer *why* something happened by walking the graph to context that shares **no words** with your question. The store is on disk, so it works across sessions. Offline, deterministic, no API key, no model download:
 
+Where Mem0 and Zep are cloud-coupled orchestrators (a service mesh over Qdrant + Postgres, with a cloud LLM in the loop), this is **one local binary** — same tier as Mem0 on LoCoMo QA (~57-58% vs ~55%, neutral basis), ahead of Zep, but fully offline with an auditable `why()` evidence path. Pick it when your data can't leave the box.
+
 ![recall() finds the booking but misses the reason; why() reaches it through typed links, across a session restart](examples/agent_memory/why_across_sessions.gif)
 
 ```python
