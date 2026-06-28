@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 
 use serde_json::{Map, Value};
-use velesdb_memory::mcp::DynEmbedder;
+use velesdb_memory::DynEmbedder;
 use velesdb_memory::{ColumnFilter, ColumnOp, MemoryService, OllamaEmbedder, DEFAULT_OLLAMA_URL};
 
 const CITIES: &[&str] = &[

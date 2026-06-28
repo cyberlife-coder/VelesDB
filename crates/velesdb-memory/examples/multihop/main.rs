@@ -21,7 +21,7 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use serde::Deserialize;
-use velesdb_memory::mcp::DynEmbedder;
+use velesdb_memory::DynEmbedder;
 use velesdb_memory::{MemoryService, OllamaEmbedder, DEFAULT_OLLAMA_URL};
 
 #[derive(Deserialize)]

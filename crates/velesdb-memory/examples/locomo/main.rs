@@ -39,7 +39,7 @@ mod retrieval;
 use std::error::Error;
 use std::path::PathBuf;
 
-use velesdb_memory::mcp::DynEmbedder;
+use velesdb_memory::DynEmbedder;
 use velesdb_memory::{MemoryService, OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
 
 use dataset::{Category, Sample};

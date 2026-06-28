@@ -8,17 +8,17 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { MemoryStore } from '../index.js'
+import { MemoryService } from '../index.js'
 
-/** Fresh store in an isolated temp dir (one MemoryStore per path). */
+/** Fresh store in an isolated temp dir (one MemoryService per path). */
 function freshStore() {
   const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
-  const store = MemoryStore.open(dir, 'hash')
+  const store = MemoryService.open(dir, 'hash')
   return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
 }
 
 test('surface allowlist — exactly the 8 supported methods, no engine leak', () => {
-  const instanceMethods = Object.getOwnPropertyNames(MemoryStore.prototype)
+  const instanceMethods = Object.getOwnPropertyNames(MemoryService.prototype)
     .filter((m) => m !== 'constructor')
     .sort()
   assert.deepEqual(instanceMethods, [
@@ -30,10 +30,10 @@ test('surface allowlist — exactly the 8 supported methods, no engine leak', ()
     'rememberExtracted',
     'why',
   ])
-  assert.equal(typeof MemoryStore.open, 'function', 'open is the static factory')
+  assert.equal(typeof MemoryService.open, 'function', 'open is the static factory')
   // No raw-engine ops crossed the license boundary.
   for (const banned of ['query', 'upsert', 'createCollection', 'traverse']) {
-    assert.equal(MemoryStore.prototype[banned], undefined, `${banned} must not be exposed`)
+    assert.equal(MemoryService.prototype[banned], undefined, `${banned} must not be exposed`)
   }
 })
 

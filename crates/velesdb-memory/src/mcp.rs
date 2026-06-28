@@ -20,12 +20,11 @@ use crate::service::{MemoryService, Metadata};
 /// Default number of memories returned by `recall`.
 const DEFAULT_RECALL_LIMIT: usize = 10;
 
-/// Re-exported from their canonical homes ([`crate::embedder`] /
-/// [`crate::extract`]) so existing `mcp::DynEmbedder` / `mcp::DynExtractor`
-/// paths keep working: the boxed embedder and the shared, runtime-attached
-/// extraction backend the server stores.
-pub use crate::embedder::DynEmbedder;
-pub use crate::extract::DynExtractor;
+// The boxed embedder and the shared, runtime-attached extraction backend the
+// server stores — imported for internal use only. The canonical public paths are
+// `velesdb_memory::DynEmbedder` / `velesdb_memory::DynExtractor` (crate root).
+use crate::embedder::DynEmbedder;
+use crate::extract::DynExtractor;
 
 // --- Tool parameter / result DTOs ------------------------------------------
 //

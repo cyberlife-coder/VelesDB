@@ -24,7 +24,8 @@
 pub mod embedder;
 pub mod error;
 pub mod extract;
-pub mod id;
+/// Content-addressed memory ids — internal; ids surface through the service API.
+pub(crate) mod id;
 /// Resource caps (DoS limits) shared by every adapter — the single source of
 /// truth for fact size, recall limit, and `why` hop depth.
 pub mod limits;

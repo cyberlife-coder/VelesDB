@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use velesdb_memory::mcp::DynEmbedder;
+use velesdb_memory::DynEmbedder;
 use velesdb_memory::{ColumnFilter, ColumnOp, MemoryService, OllamaEmbedder, DEFAULT_OLLAMA_URL};
 
 // benchmark harness: field name mirrors dataset JSON key

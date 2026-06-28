@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 
 use serde_json::{Map, Value};
-use velesdb_memory::mcp::DynEmbedder;
+use velesdb_memory::DynEmbedder;
 use velesdb_memory::MemoryService;
 
 use crate::bm25::Bm25Index;

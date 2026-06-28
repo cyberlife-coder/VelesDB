@@ -78,7 +78,11 @@ fn build_embedder(
 /// Local-first agent memory with the `why()` graph wedge.
 ///
 /// All methods are async (return a Promise) and run off the event-loop thread.
-#[napi]
+///
+/// Exposed to JS as `MemoryService` (matching the `PyO3` binding and the core
+/// type); the Rust struct keeps a distinct name only to avoid colliding with the
+/// imported [`velesdb_memory::MemoryService`] it wraps.
+#[napi(js_name = "MemoryService")]
 pub struct MemoryStore {
     inner: Arc<MemoryService<DynEmbedder>>,
 }
