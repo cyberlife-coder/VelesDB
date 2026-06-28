@@ -174,9 +174,6 @@ pub fn retrieved_dia_ids(
 fn is_temporal_question(question: &str) -> bool {
     const CUES: &[&str] = &[
         "when ",
-        "when did",
-        "when was",
-        "when will",
         "what year",
         "which year",
         "what month",

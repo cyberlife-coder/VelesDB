@@ -86,12 +86,11 @@ impl Bm25Index {
     }
 }
 
-/// Lowercase alphanumeric tokenisation, dropping 1-char tokens (matches the
-/// spirit of the entity tagging — short fragments carry no lexical signal).
+/// Lowercase alphanumeric tokenisation (shared `parse::tokens`), dropping 1-char
+/// tokens — short fragments carry no lexical signal for BM25.
 fn tokenize(text: &str) -> Vec<String> {
-    text.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
+    crate::parse::tokens(text)
+        .into_iter()
         .filter(|t| t.len() >= 2)
-        .map(ToString::to_string)
         .collect()
 }

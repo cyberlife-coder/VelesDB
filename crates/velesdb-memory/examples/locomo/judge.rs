@@ -160,11 +160,7 @@ INCORRECT.\n\nQuestion: {question}\nReference answer: {gold}\nCandidate answer: 
     );
     // The judge can run on the stronger Claude model (vendor-neutral, fairer) or
     // the local model; the candidate answer itself is always the local system.
-    let raw = if use_claude {
-        generator.judge(&prompt)?
-    } else {
-        generator.generate(&prompt)?
-    };
+    let raw = gen(generator, &prompt, use_claude)?;
     let verdict = normalize(&raw);
     // Compare the leading word so "incorrect" never matches "correct" by
     // substring, and a stray verbose reply still grades on its first verdict word.

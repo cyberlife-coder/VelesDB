@@ -65,6 +65,9 @@ impl Category {
         Self::Adversarial,
     ];
 
+    /// Number of categories — the single source of truth for per-category arrays.
+    pub const COUNT: usize = Self::ALL.len();
+
     /// Dense index into per-category tallies.
     pub fn index(self) -> usize {
         match self {

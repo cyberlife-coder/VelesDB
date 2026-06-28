@@ -45,17 +45,22 @@ impl Cell {
 /// Per-category extraction-vs-retrieval coverage report.
 #[derive(Default)]
 pub struct DiagnoseReport {
-    cells: [Cell; 5],
+    cells: [Cell; Category::COUNT],
 }
 
 impl DiagnoseReport {
     /// Measure one question and fold it in (answerable, evidence-bearing only).
-    pub fn record(&mut self, store: &Store, qa: &Qa, cfg: EvalCfg) -> Result<(), Box<dyn Error>> {
+    pub fn record(
+        &mut self,
+        store: &Store,
+        extracted_ids: &HashSet<&str>,
+        qa: &Qa,
+        cfg: EvalCfg,
+    ) -> Result<(), Box<dyn Error>> {
         if qa.category.is_adversarial() || qa.evidence.is_empty() {
             return Ok(());
         }
         let gold: HashSet<&str> = qa.evidence.iter().map(String::as_str).collect();
-        let extracted_ids = store.extracted_dia_ids();
         let extracted = coverage(&gold, |id| extracted_ids.contains(id));
 
         // Retrieval coverage uses the real budgeted fused retrieval (graph on).

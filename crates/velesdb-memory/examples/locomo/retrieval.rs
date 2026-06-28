@@ -27,10 +27,6 @@ struct Cell {
     vector_sum: f64,
     /// Sum of per-question fused evidence recall@k (0..=1).
     fused_sum: f64,
-    /// Questions whose vector top-`k` contained ≥1 evidence fact.
-    vector_hit: u32,
-    /// Questions whose fused top-`k` contained ≥1 evidence fact.
-    fused_hit: u32,
     /// Questions where fusion *raised* evidence recall (the graph's upside).
     fused_better: u32,
     /// Questions where fusion *lowered* it — a distractor evicted evidence
@@ -43,12 +39,6 @@ impl Cell {
         self.n += 1;
         self.vector_sum += vector;
         self.fused_sum += fused;
-        if vector > 0.0 {
-            self.vector_hit += 1;
-        }
-        if fused > 0.0 {
-            self.fused_hit += 1;
-        }
         if fused > vector + f64::EPSILON {
             self.fused_better += 1;
         } else if fused + f64::EPSILON < vector {
@@ -61,8 +51,6 @@ impl Cell {
             n: self.n + other.n,
             vector_sum: self.vector_sum + other.vector_sum,
             fused_sum: self.fused_sum + other.fused_sum,
-            vector_hit: self.vector_hit + other.vector_hit,
-            fused_hit: self.fused_hit + other.fused_hit,
             fused_better: self.fused_better + other.fused_better,
             fused_worse: self.fused_worse + other.fused_worse,
         }
@@ -72,7 +60,7 @@ impl Cell {
 /// Per-category budgeted-recall report for the retrieval benchmark.
 #[derive(Default)]
 pub struct RetrievalReport {
-    cells: [Cell; 5],
+    cells: [Cell; Category::COUNT],
 }
 
 impl RetrievalReport {

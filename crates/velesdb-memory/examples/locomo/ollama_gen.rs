@@ -141,7 +141,8 @@ impl Generator {
             match self.claude_once(prompt) {
                 Ok(text) => return Ok(text),
                 Err(e) => {
-                    last = format!("claude judge failed (attempt {attempt}/{ATTEMPTS}): {e}").into()
+                    last =
+                        format!("claude judge failed (attempt {attempt}/{ATTEMPTS}): {e}").into();
                 }
             }
         }

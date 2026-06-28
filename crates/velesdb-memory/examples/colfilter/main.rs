@@ -8,8 +8,9 @@
 //! **year** — a metadata column. A question scopes a year window; the gold answers
 //! are the holders inside it. A time-blind vector retriever cannot disambiguate
 //! (all holders of the role look alike); `recall_where(year ≥ lo AND year ≤ hi)`
-//! filters by the column. Three arms: vector-only, vector + `ColumnStore` filter,
-//! and + graph BFS. Metric: answer-bearing recall@k, split by the *hard* subset
+//! filters by the column. Two arms: vector-only vs vector + `ColumnStore` filter.
+//! (The graph leg is exercised separately by the `triengine` example, which stacks
+//! all three engines.) Metric: answer-bearing recall@k, split by the *hard* subset
 //! (≥2 in-window answers, where the range predicate is genuinely required) vs the
 //! single-answer subset (where vector already suffices).
 //!

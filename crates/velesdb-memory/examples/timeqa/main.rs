@@ -202,9 +202,10 @@ fn dated_sentences(ctx: &str) -> Vec<(String, Option<i64>)> {
     sentences(ctx)
         .into_iter()
         .map(|s| {
-            let y = sentence_year(&s).or(last);
-            if let Some(found) = sentence_year(&s) {
-                last = Some(found);
+            let found = sentence_year(&s);
+            let y = found.or(last);
+            if let Some(f) = found {
+                last = Some(f);
             }
             (s, y)
         })

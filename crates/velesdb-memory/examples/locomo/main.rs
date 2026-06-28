@@ -139,12 +139,15 @@ fn run_diagnose(
             args.extract_version,
             &args.embed_model,
         )?;
+        // The extracted-id set is store-wide and invariant across this store's
+        // questions — build it once, not per QA.
+        let extracted_ids = store.extracted_dia_ids();
         for qa in sample
             .qa
             .iter()
             .take(qa_limit(args.max_qa, sample.qa.len()))
         {
-            report.record(&store, qa, args.cfg)?;
+            report.record(&store, &extracted_ids, qa, args.cfg)?;
         }
         finish(store, position);
     }
@@ -332,68 +335,14 @@ impl Args {
         let mut i = 0;
         while i < raw.len() {
             let flag = &raw[i];
-            if flag == "--explanation" {
-                args.explanation = true;
-                i += 1;
-                continue;
-            }
-            if flag == "--retrieval" {
-                args.retrieval = true;
-                i += 1;
-                continue;
-            }
-            if flag == "--diagnose" {
-                args.diagnose = true;
-                i += 1;
-                continue;
-            }
-            if flag == "--multihop-only" {
-                args.cfg.multihop_only = true;
-                i += 1;
-                continue;
-            }
-            if flag == "--idf-weight" {
-                args.cfg.idf_weight = true;
+            // Boolean ablation toggles: one table, one place to add a knob.
+            if let Some(slot) = args.bool_flag(flag) {
+                *slot = true;
                 i += 1;
                 continue;
             }
             if flag == "--extract-v2" {
                 args.extract_version = 2;
-                i += 1;
-                continue;
-            }
-            if flag == "--date-context" {
-                args.cfg.date_context = true;
-                i += 1;
-                continue;
-            }
-            if flag == "--date-route" {
-                args.cfg.date_routed = true;
-                i += 1;
-                continue;
-            }
-            if flag == "--temporal-scaffold" {
-                args.cfg.temporal_scaffold = true;
-                i += 1;
-                continue;
-            }
-            if flag == "--cot" {
-                args.cfg.cot = true;
-                i += 1;
-                continue;
-            }
-            if flag == "--bm25" {
-                args.cfg.bm25 = true;
-                i += 1;
-                continue;
-            }
-            if flag == "--claude-judge" {
-                args.cfg.claude_judge = true;
-                i += 1;
-                continue;
-            }
-            if flag == "--claude-gen" {
-                args.cfg.claude_gen = true;
                 i += 1;
                 continue;
             }
@@ -407,6 +356,27 @@ impl Args {
             return Err("--k must be at least 1".into());
         }
         Ok(args)
+    }
+
+    /// Map a boolean ablation flag to its slot — the single source of truth for
+    /// the toggles (`--extract-v2` is handled separately; it sets a version, not a
+    /// bool).
+    fn bool_flag(&mut self, flag: &str) -> Option<&mut bool> {
+        Some(match flag {
+            "--explanation" => &mut self.explanation,
+            "--retrieval" => &mut self.retrieval,
+            "--diagnose" => &mut self.diagnose,
+            "--multihop-only" => &mut self.cfg.multihop_only,
+            "--idf-weight" => &mut self.cfg.idf_weight,
+            "--date-context" => &mut self.cfg.date_context,
+            "--date-route" => &mut self.cfg.date_routed,
+            "--temporal-scaffold" => &mut self.cfg.temporal_scaffold,
+            "--cot" => &mut self.cfg.cot,
+            "--bm25" => &mut self.cfg.bm25,
+            "--claude-judge" => &mut self.cfg.claude_judge,
+            "--claude-gen" => &mut self.cfg.claude_gen,
+            _ => return None,
+        })
     }
 
     /// Apply one `--flag value` pair (string/float flags here, ints delegated).
