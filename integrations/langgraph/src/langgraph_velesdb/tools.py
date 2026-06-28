@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from langchain_core.tools import BaseTool, StructuredTool
+from langchain_core.tools import BaseTool, StructuredTool  # nosemgrep: ai.python.detect-langchain.detect-langchain  # this package IS the LangChain connector
 
 try:
     from velesdb import MemoryService
