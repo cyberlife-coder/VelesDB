@@ -103,6 +103,29 @@ ORDER BY similarity() DESC LIMIT 5
 
 Built-in memory for AI agents — semantic, episodic, and procedural. No external services needed.
 
+### The wedge: `why()` — connected memory that survives restarts
+
+Most "agent memory" is vector recall: it finds text that *looks like* your query. VelesDB's high-level `MemoryService` adds the part that's missing — it **connects** memories with typed links, so it can answer *why* something happened by walking the graph to context that shares **no words** with your question. The store is on disk, so it works across sessions. Offline, deterministic, no API key, no model download:
+
+![recall() finds the booking but misses the reason; why() reaches it through typed links, across a session restart](https://raw.githubusercontent.com/cyberlife-coder/VelesDB/develop/examples/agent_memory/why_across_sessions.gif)
+
+```python
+from velesdb import MemoryService            # pip install velesdb
+
+mem = MemoryService("./agent_memory")        # a real on-disk store; survives restarts
+reason = mem.remember("Robert is recovering from knee surgery")
+mem.remember("Booked the aisle seat on Robert's flight", links=[(reason, "because")])
+
+# A *new* process, weeks later, reopens the same store and asks why:
+mem.why("why the aisle seat on Robert's flight?")   # walks booking → reason — recall() can't
+```
+
+The same wedge ships in **Python** (`pip install velesdb`), **Node** (`npm i @wiscale/velesdb-memory-node`), and as a local **[MCP server](crates/velesdb-memory)**. Full runnable demo: [`examples/agent_memory/why_across_sessions.py`](examples/agent_memory/why_across_sessions.py).
+
+---
+
+For the lower-level building blocks (episodic, procedural, TTL, snapshots):
+
 ```python
 from velesdb import Database, AgentMemory
 
