@@ -194,10 +194,17 @@ impl McpServer {
                 None,
             ));
         }
-        let id = self
-            .service
-            .remember(&params.fact, &params.links, params.metadata.as_ref())
-            .map_err(to_error)?;
+        let service = Arc::clone(&self.service);
+        let RememberParams {
+            fact,
+            links,
+            metadata,
+        } = params;
+        let id =
+            tokio::task::spawn_blocking(move || service.remember(&fact, &links, metadata.as_ref()))
+                .await
+                .map_err(join_error)?
+                .map_err(to_error)?;
         Ok(Json(RememberResult { id }))
     }
 
@@ -213,10 +220,13 @@ impl McpServer {
             .limit
             .unwrap_or(DEFAULT_RECALL_LIMIT)
             .min(MAX_RECALL_LIMIT);
-        let memories = self
-            .service
-            .recall(&params.query, limit, params.filter.as_ref())
-            .map_err(to_error)?;
+        let service = Arc::clone(&self.service);
+        let RecallParams { query, filter, .. } = params;
+        let memories =
+            tokio::task::spawn_blocking(move || service.recall(&query, limit, filter.as_ref()))
+                .await
+                .map_err(join_error)?
+                .map_err(to_error)?;
         Ok(Json(RecallResult { memories }))
     }
 
@@ -232,10 +242,13 @@ impl McpServer {
             .limit
             .unwrap_or(DEFAULT_RECALL_LIMIT)
             .min(MAX_RECALL_LIMIT);
-        let memories = self
-            .service
-            .recall_where(&params.query, limit, &params.filters)
-            .map_err(to_error)?;
+        let service = Arc::clone(&self.service);
+        let RecallWhereParams { query, filters, .. } = params;
+        let memories =
+            tokio::task::spawn_blocking(move || service.recall_where(&query, limit, &filters))
+                .await
+                .map_err(join_error)?
+                .map_err(to_error)?;
         Ok(Json(RecallResult { memories }))
     }
 
@@ -247,9 +260,11 @@ impl McpServer {
         &self,
         Parameters(params): Parameters<RelateParams>,
     ) -> Result<Json<RelateResult>, ErrorData> {
-        let edge_id = self
-            .service
-            .relate(params.from, params.to, &params.relation)
+        let service = Arc::clone(&self.service);
+        let RelateParams { from, to, relation } = params;
+        let edge_id = tokio::task::spawn_blocking(move || service.relate(from, to, &relation))
+            .await
+            .map_err(join_error)?
             .map_err(to_error)?;
         Ok(Json(RelateResult { edge_id }))
     }
@@ -259,8 +274,13 @@ impl McpServer {
         &self,
         Parameters(params): Parameters<ForgetParams>,
     ) -> Result<Json<ForgetResult>, ErrorData> {
-        self.service.forget(params.id).map_err(to_error)?;
-        Ok(Json(ForgetResult { id: params.id }))
+        let service = Arc::clone(&self.service);
+        let id = params.id;
+        tokio::task::spawn_blocking(move || service.forget(id))
+            .await
+            .map_err(join_error)?
+            .map_err(to_error)?;
+        Ok(Json(ForgetResult { id }))
     }
 
     #[tool(
@@ -275,10 +295,15 @@ impl McpServer {
             .max_hops
             .unwrap_or(DEFAULT_WHY_HOPS)
             .min(MAX_WHY_HOPS);
-        let explanation = self
-            .service
-            .why(&params.decision, max_hops, params.filter.as_ref())
-            .map_err(to_error)?;
+        let service = Arc::clone(&self.service);
+        let WhyParams {
+            decision, filter, ..
+        } = params;
+        let explanation =
+            tokio::task::spawn_blocking(move || service.why(&decision, max_hops, filter.as_ref()))
+                .await
+                .map_err(join_error)?
+                .map_err(to_error)?;
         Ok(Json(explanation))
     }
 
@@ -314,13 +339,7 @@ impl McpServer {
             service.remember_extracted(&text, &extractor, metadata.as_ref())
         })
         .await
-        .map_err(|join| {
-            ErrorData::new(
-                ErrorCode::INTERNAL_ERROR,
-                format!("extraction task failed: {join}"),
-                None,
-            )
-        })?
+        .map_err(join_error)?
         .map_err(to_error)?;
         Ok(Json(RememberExtractedResult { ids }))
     }
@@ -343,6 +362,20 @@ impl ServerHandler for McpServer {
         );
         info
     }
+}
+
+/// Map a `spawn_blocking` join failure (a panicked or cancelled tool task) to an
+/// MCP error. Every tool body runs on the blocking pool, so they all funnel
+/// through this on the (rare) task-failure path.
+///
+/// Takes the error by value so it can be used as `.map_err(join_error)`.
+#[allow(clippy::needless_pass_by_value)]
+fn join_error(join: tokio::task::JoinError) -> ErrorData {
+    ErrorData::new(
+        ErrorCode::INTERNAL_ERROR,
+        format!("memory task failed: {join}"),
+        None,
+    )
 }
 
 /// Map a domain error to an MCP error.
