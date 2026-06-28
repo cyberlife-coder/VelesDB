@@ -11,7 +11,7 @@
 //! ## License boundary
 //! Depends on `velesdb-memory` (memory semantics only), never `velesdb-core`. The
 //! addon is an in-process library, not a network service, so it stays inside the
-//! VelesDB Core License 1.0 "no hosted/managed service" restriction.
+//! `VelesDB` Core License 1.0 "no hosted/managed service" restriction.
 
 #![deny(unsafe_code)]
 // napi's panic→JS-error conversion relies on `panic = "unwind"` (the

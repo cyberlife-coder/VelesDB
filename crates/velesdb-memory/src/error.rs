@@ -6,6 +6,20 @@ use velesdb_core::Error as CoreError;
 use crate::embedder::EmbedError;
 use crate::extract::ExtractError;
 
+/// The transport-neutral class of a [`MemoryError`] — the single source of
+/// truth every adapter maps onto its own error channel (JSON-RPC code, napi
+/// status, `PyO3` exception type), so the taxonomy can never drift between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCategory {
+    /// The caller supplied bad input (empty fact, reserved key, malformed
+    /// filter) — a 4xx-style fault.
+    InvalidInput,
+    /// A referenced memory id does not exist.
+    NotFound,
+    /// An internal storage / embedding / extraction failure — a 5xx-style fault.
+    Internal,
+}
+
 /// Errors returned by [`crate::service::MemoryService`].
 #[derive(Debug, thiserror::Error)]
 pub enum MemoryError {
@@ -44,4 +58,22 @@ pub enum MemoryError {
     /// identifier, named a reserved key, or carried a non-scalar value.
     #[error("invalid filter field: {0}")]
     InvalidFilter(String),
+}
+
+impl MemoryError {
+    /// Classify this error into a transport-neutral [`ErrorCategory`]. Adapters
+    /// map the *category*, not the variant, so the client-facing taxonomy stays
+    /// identical across the MCP server and every binding.
+    #[must_use]
+    pub fn category(&self) -> ErrorCategory {
+        match self {
+            Self::EmptyFact | Self::ReservedKey(_) | Self::InvalidFilter(_) => {
+                ErrorCategory::InvalidInput
+            }
+            Self::UnknownMemory(_) => ErrorCategory::NotFound,
+            Self::Storage(_) | Self::Memory(_) | Self::Embed(_) | Self::Extract(_) => {
+                ErrorCategory::Internal
+            }
+        }
+    }
 }

@@ -6,7 +6,7 @@
 //! callers branch on the prefix; the status keeps `err.code` meaningful too.
 
 use napi::{Error, Status};
-use velesdb_memory::MemoryError;
+use velesdb_memory::{ErrorCategory, MemoryError};
 
 /// Bad caller input (empty fact, reserved key, malformed filter, bad id).
 pub const CODE_INVALID_INPUT: &str = "INVALID_INPUT";
@@ -15,18 +15,15 @@ pub const CODE_NOT_FOUND: &str = "NOT_FOUND";
 /// An internal/storage/embedding/extraction failure.
 pub const CODE_INTERNAL: &str = "INTERNAL";
 
-/// Map every [`MemoryError`] variant to a `napi::Error` carrying a stable code.
+/// Map a [`MemoryError`] to a `napi::Error` carrying a stable code, driven by
+/// its [`ErrorCategory`] so the JS-facing taxonomy stays identical to the MCP
+/// server's and the `PyO3` binding's.
 pub fn to_napi_err(e: MemoryError) -> Error {
     let msg = e.to_string();
-    let (status, code) = match e {
-        MemoryError::EmptyFact | MemoryError::InvalidFilter(_) | MemoryError::ReservedKey(_) => {
-            (Status::InvalidArg, CODE_INVALID_INPUT)
-        }
-        MemoryError::UnknownMemory(_) => (Status::InvalidArg, CODE_NOT_FOUND),
-        MemoryError::Storage(_)
-        | MemoryError::Memory(_)
-        | MemoryError::Embed(_)
-        | MemoryError::Extract(_) => (Status::GenericFailure, CODE_INTERNAL),
+    let (status, code) = match e.category() {
+        ErrorCategory::InvalidInput => (Status::InvalidArg, CODE_INVALID_INPUT),
+        ErrorCategory::NotFound => (Status::InvalidArg, CODE_NOT_FOUND),
+        ErrorCategory::Internal => (Status::GenericFailure, CODE_INTERNAL),
     };
     Error::new(status, format!("[{code}] {msg}"))
 }

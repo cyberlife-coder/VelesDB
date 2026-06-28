@@ -13,18 +13,12 @@ use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::service::{ColumnFilter, Explanation, Link, MemoryService, Metadata, Recollection};
+use crate::limits::{DEFAULT_WHY_HOPS, MAX_FACT_BYTES, MAX_RECALL_LIMIT, MAX_WHY_HOPS};
+use crate::model::{ColumnFilter, Explanation, Link, Recollection};
+use crate::service::{MemoryService, Metadata};
 
 /// Default number of memories returned by `recall`.
 const DEFAULT_RECALL_LIMIT: usize = 10;
-/// Default hop budget for `why` traversal.
-const DEFAULT_WHY_HOPS: usize = 2;
-/// Maximum accepted fact size — prevents allocating huge embeddings (1 MiB).
-const MAX_FACT_BYTES: usize = 1_048_576;
-/// Cap on the `recall` limit — prevents unbounded vector scans.
-const MAX_RECALL_LIMIT: usize = 1_000;
-/// Cap on `why` hop depth — prevents exponential graph fans.
-const MAX_WHY_HOPS: usize = 10;
 
 /// Re-exported from their canonical homes ([`crate::embedder`] /
 /// [`crate::extract`]) so existing `mcp::DynEmbedder` / `mcp::DynExtractor`
@@ -354,22 +348,21 @@ impl ServerHandler for McpServer {
 
 /// Map a domain error to an MCP error.
 ///
-/// Client-input errors (`EmptyFact`, `UnknownMemory`) become
-/// `invalid_params` (-32602) so callers can distinguish bad input from a
-/// server fault without parsing the message string. Everything else is
-/// `internal_error` (-32603).
+/// Map a [`MemoryError`](crate::error::MemoryError) onto a JSON-RPC error,
+/// driven by its transport-neutral [`ErrorCategory`](crate::error::ErrorCategory)
+/// so the MCP taxonomy can never drift from the bindings'. Client-input errors
+/// become `invalid_params` (-32602); genuine faults `internal_error` (-32603).
+/// JSON-RPC defines no "not found" code, so a missing id is reported as
+/// `invalid_params` (a bad id is, from the protocol's view, a bad parameter).
 ///
 /// Takes the error by value so it can be used as `.map_err(to_error)` at every
 /// call site without a per-site closure.
 #[allow(clippy::needless_pass_by_value)]
 fn to_error(err: crate::error::MemoryError) -> ErrorData {
-    use crate::error::MemoryError;
-    let code = match &err {
-        MemoryError::EmptyFact
-        | MemoryError::UnknownMemory(_)
-        | MemoryError::ReservedKey(_)
-        | MemoryError::InvalidFilter(_) => ErrorCode::INVALID_PARAMS,
-        _ => ErrorCode::INTERNAL_ERROR,
+    use crate::error::ErrorCategory;
+    let code = match err.category() {
+        ErrorCategory::InvalidInput | ErrorCategory::NotFound => ErrorCode::INVALID_PARAMS,
+        ErrorCategory::Internal => ErrorCode::INTERNAL_ERROR,
     };
     ErrorData::new(code, err.to_string(), None)
 }
@@ -378,7 +371,7 @@ fn to_error(err: crate::error::MemoryError) -> ErrorData {
 mod tests {
     use super::*;
     use crate::embedder::HashEmbedder;
-    use crate::service::ColumnOp;
+    use crate::model::ColumnOp;
     use tempfile::TempDir;
 
     const DECISION: &str = "we chose parking_lot to avoid lock poisoning";
