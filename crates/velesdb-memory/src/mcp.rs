@@ -10,12 +10,10 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{ErrorCode, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 use crate::limits::{DEFAULT_WHY_HOPS, MAX_FACT_BYTES, MAX_RECALL_LIMIT, MAX_WHY_HOPS};
-use crate::model::{ColumnFilter, Explanation, Link, Recollection};
-use crate::service::{MemoryService, Metadata};
+use crate::model::Explanation;
+use crate::service::MemoryService;
 
 /// Default number of memories returned by `recall`.
 const DEFAULT_RECALL_LIMIT: usize = 10;
@@ -28,123 +26,15 @@ use crate::extract::DynExtractor;
 
 // --- Tool parameter / result DTOs ------------------------------------------
 //
-// Output shapes reuse the domain types from `crate::service` directly (they
-// derive `Serialize` + `JsonSchema`), so there is no duplicate wire/domain
-// struct. Only request envelopes and small id-results live here.
-
-/// Parameters for the `remember` tool.
-#[derive(Deserialize, JsonSchema)]
-struct RememberParams {
-    /// The fact to store in memory.
-    fact: String,
-    /// Optional typed links from this fact to existing memories.
-    #[serde(default)]
-    links: Vec<Link>,
-    /// Optional structured metadata for later filtering (e.g.
-    /// `{"project": "veles", "author": "julien", "status": "open"}`).
-    metadata: Option<Metadata>,
-}
-
-/// Result of the `remember` tool.
-#[derive(Serialize, JsonSchema)]
-struct RememberResult {
-    /// Stable id assigned to the remembered fact.
-    id: u64,
-}
-
-/// Parameters for the `recall` tool.
-#[derive(Deserialize, JsonSchema)]
-struct RecallParams {
-    /// Natural-language query to match semantically.
-    query: String,
-    /// Maximum number of memories to return (default 10).
-    limit: Option<usize>,
-    /// Optional exact-match metadata filter (e.g.
-    /// `{"project": "veles", "status": "resolved"}`).
-    filter: Option<Metadata>,
-}
-
-/// Result of the `recall` tool.
-#[derive(Serialize, JsonSchema)]
-struct RecallResult {
-    /// Recalled memories, most similar first.
-    memories: Vec<Recollection>,
-}
-
-/// Parameters for the `recall_where` tool.
-#[derive(Deserialize, JsonSchema)]
-struct RecallWhereParams {
-    /// Natural-language query to match semantically.
-    query: String,
-    /// Maximum number of memories to return (default 10).
-    limit: Option<usize>,
-    /// Structured `ColumnStore` predicates (ranges/comparisons) combined with AND,
-    /// e.g. a date window `[{"field":"ts","op":"ge","value":20230101},
-    /// {"field":"ts","op":"le","value":20231231}]`. Each `op` is one of
-    /// `eq`/`ne`/`lt`/`le`/`gt`/`ge`.
-    #[serde(default)]
-    filters: Vec<ColumnFilter>,
-}
-
-/// Parameters for the `relate` tool.
-#[derive(Deserialize, JsonSchema)]
-struct RelateParams {
-    /// Source memory id.
-    from: u64,
-    /// Target memory id.
-    to: u64,
-    /// Relationship label.
-    relation: String,
-}
-
-/// Result of the `relate` tool.
-#[derive(Serialize, JsonSchema)]
-struct RelateResult {
-    /// Id of the created edge.
-    edge_id: u64,
-}
-
-/// Parameters for the `forget` tool.
-#[derive(Deserialize, JsonSchema)]
-struct ForgetParams {
-    /// Id of the memory to forget.
-    id: u64,
-}
-
-/// Result of the `forget` tool.
-#[derive(Serialize, JsonSchema)]
-struct ForgetResult {
-    /// Id of the forgotten memory.
-    id: u64,
-}
-
-/// Parameters for the `why` tool.
-#[derive(Deserialize, JsonSchema)]
-struct WhyParams {
-    /// The decision (or fact) to explain.
-    decision: String,
-    /// How many hops of typed links to follow (default 2).
-    max_hops: Option<usize>,
-    /// Optional exact-match metadata filter to scope the seed (e.g.
-    /// `{"project": "veles"}`).
-    filter: Option<Metadata>,
-}
-
-/// Parameters for the `remember_extracted` tool.
-#[derive(Deserialize, JsonSchema)]
-struct RememberExtractedParams {
-    /// Raw text to extract atomic facts from and store as a connected graph.
-    text: String,
-    /// Optional structured metadata applied to every extracted fact.
-    metadata: Option<Metadata>,
-}
-
-/// Result of the `remember_extracted` tool.
-#[derive(Serialize, JsonSchema)]
-struct RememberExtractedResult {
-    /// Stable ids of the stored facts, in extraction order.
-    ids: Vec<u64>,
-}
+// The request envelopes and small id-results live in their own module so this
+// file stays focused on the server and tool wiring; output shapes reuse the
+// domain types from `crate::model` directly (no duplicate wire/domain struct).
+mod dto;
+use dto::{
+    ForgetParams, ForgetResult, RecallParams, RecallResult, RecallWhereParams, RelateParams,
+    RelateResult, RememberExtractedParams, RememberExtractedResult, RememberParams, RememberResult,
+    WhyParams,
+};
 
 // --- The server ------------------------------------------------------------
 
@@ -403,7 +293,8 @@ fn to_error(err: crate::error::MemoryError) -> ErrorData {
 mod tests {
     use super::*;
     use crate::embedder::HashEmbedder;
-    use crate::model::ColumnOp;
+    use crate::model::{ColumnFilter, ColumnOp, Link};
+    use crate::service::Metadata;
     use tempfile::TempDir;
 
     const DECISION: &str = "we chose parking_lot to avoid lock poisoning";
