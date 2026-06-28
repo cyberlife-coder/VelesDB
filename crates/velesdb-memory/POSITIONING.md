@@ -42,7 +42,7 @@ Today's leading agent-memory tools are not databases — they are orchestrators.
 
 **"Mem0 reports 92% on LoCoMo — you're only ~55%. That's a big gap."**
 
-It isn't a real gap — it's apples to oranges. Mem0's 92% headline runs on **cloud GPT-4o**; our numbers run on a **fully local** qwen-35b. The honest comparison is same-basis: the neutral PISA paper puts Mem0 at ~55% and Zep at ~34% on LoCoMo, and our local measurement lands at ~51-55% — i.e. the same tier as Mem0, *measured soberly*. (Mem0's own 92% and Zep's ~84% are vendor headlines on contested methodology; Zep's was retracted.) So the real trade is: you give up roughly nothing on quality, and in return you get full locality, a single embedded engine instead of a service mesh, no per-token cloud bill, and an explainable evidence path. We will not claim a higher score — we claim the same quality on radically better architecture.
+It isn't a real gap — it's apples to oranges. Mem0's 92% headline runs on **cloud GPT-4o**; our numbers run on a **fully local** qwen-35b. The honest comparison is same-basis: the neutral PISA paper puts Mem0 at ~55% and Zep at ~34% on LoCoMo, and our local measurement lands at ~57-58% (best config, 2-conversation subset) — i.e. the same tier as Mem0, *measured soberly*. (Mem0's own 92% and Zep's ~84% are vendor headlines on contested methodology; Zep's was retracted.) So the real trade is: you give up roughly nothing on quality, and in return you get full locality, a single embedded engine instead of a service mesh, no per-token cloud bill, and an explainable evidence path. We will not claim a higher score — we claim the same quality on radically better architecture.
 
 ## 7. Where local-first is a hard requirement
 

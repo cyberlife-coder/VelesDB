@@ -50,6 +50,22 @@ A vector search ranks by resemblance; the ticket shares no words with the
 question, so a pure similarity search is blind to it. `why()` follows the typed
 links and reaches it. That gap is the product.
 
+### Four runnable demos of the wedge
+
+Each is a real run that shows what plain recall misses and `why()` recovers:
+
+| Demo | What it shows |
+|---|---|
+| [`why_across_sessions.py`](../../examples/agent_memory/why_across_sessions.py) | the reason survives a process restart — recall of the top 5 of 16 memories stays blind, `why()` reaches it |
+| [`why_magic_constant.py`](../../examples/agent_memory/why_magic_constant.py) | *why* a magic constant has its value — a business reason that shares no words with the code |
+| [`memory_builds_its_own_graph.py`](../../examples/agent_memory/memory_builds_its_own_graph.py) | paste raw prose → a local model auto-wires the graph (no `relate()`), `why()` walks it to the root cause |
+| [`why_magic_constant.mjs`](../velesdb-node/examples/why_magic_constant.mjs) (Node) | the same engine and wedge in the `@wiscale/velesdb-memory-node` binding |
+
+> **Not a weak-embedder trick.** In each retrieval demo, recall stays blind to the
+> reason **even under a real semantic embedder** (`ollama` / `all-minilm`), not just
+> the offline `hash` default — the reason is connected by a *decision*, not by surface
+> similarity, which is exactly what a vector store cannot follow.
+
 ### Benchmark
 
 `cargo run --release -p velesdb-memory --example bench_multihop` isolates the

@@ -32,7 +32,7 @@ the Core-licensed `velesdb-core` crate and does not redistribute the engine.
 | `tauri-plugin-velesdb` (Rust) | yes | **Core License 1.0** |
 | `@wiscale/velesdb-sdk` (TS, bundles WASM) | yes | **Core License 1.0** |
 | `@wiscale/tauri-plugin-velesdb` (guest-js) | no (IPC glue) — kept Core as first-party product SDK | **Core License 1.0** |
-| `integrations/*` (langchain, llamaindex, haystack, common) | no (Python connectors) | MIT |
+| `integrations/*` (langchain, langgraph, llamaindex, haystack, common) | no (Python connectors) | MIT |
 | `examples/*`, `demos/*` | no (sample code, meant to be copied) | MIT |
 
 `velesdb-wasm` is `publish = false` on crates.io; it reaches users only as the

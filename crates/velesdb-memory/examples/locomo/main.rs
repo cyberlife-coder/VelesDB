@@ -189,7 +189,13 @@ fn run_eval(
         finish(store, position);
         total_facts += facts;
     }
-    report.print(args.cfg, generator.model(), take, total_facts);
+    report.print(
+        args.cfg,
+        generator.model(),
+        &args.embed_model,
+        take,
+        total_facts,
+    );
     let (injected, contexts) = eval::graph_activity();
     println!(
         "graph activity: traversal injected {injected} fact(s) across {contexts} graph-mode context(s)"

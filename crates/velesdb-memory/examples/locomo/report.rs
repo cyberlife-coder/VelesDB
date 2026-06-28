@@ -73,10 +73,17 @@ impl Report {
     }
 
     /// Print the full comparison table and the headline delta.
-    pub fn print(&self, cfg: EvalCfg, model: &str, samples: usize, facts: usize) {
+    pub fn print(
+        &self,
+        cfg: EvalCfg,
+        model: &str,
+        embed_model: &str,
+        samples: usize,
+        facts: usize,
+    ) {
         println!("\nVelesDB-memory — LoCoMo benchmark (graph contribution)");
         println!(
-            "judge/extractor: {model}   ·   embedder: ollama / all-minilm   ·   \
+            "judge/extractor: {model}   ·   embedder: ollama / {embed_model}   ·   \
 {samples} conversation(s), {facts} extracted facts"
         );
         println!(
