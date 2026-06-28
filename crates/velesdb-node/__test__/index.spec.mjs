@@ -32,8 +32,9 @@ test('surface allowlist — exactly the 8 supported methods, no engine leak', ()
   ])
   assert.equal(typeof MemoryService.open, 'function', 'open is the static factory')
   // No raw-engine ops crossed the license boundary.
+  const exposed = new Set(Object.getOwnPropertyNames(MemoryService.prototype))
   for (const banned of ['query', 'upsert', 'createCollection', 'traverse']) {
-    assert.equal(MemoryService.prototype[banned], undefined, `${banned} must not be exposed`)
+    assert.ok(!exposed.has(banned), `${banned} must not be exposed`)
   }
 })
 
