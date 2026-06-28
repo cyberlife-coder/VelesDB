@@ -702,8 +702,7 @@ fn to_recollection(result: &SearchResult) -> Recollection {
 /// (e.g. durable TTL).
 fn validate_field(field: &str) -> Result<(), MemoryError> {
     let plain = !field.is_empty() && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    let reserved = field == "content" || field.starts_with("_veles_");
-    if plain && !reserved {
+    if plain && !is_reserved_key(field) {
         Ok(())
     } else {
         Err(MemoryError::InvalidFilter(field.to_owned()))

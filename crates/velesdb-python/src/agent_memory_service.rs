@@ -15,14 +15,10 @@ use std::collections::HashMap;
 use velesdb_memory::{
     DynEmbedder, Explanation, HashEmbedder, Link, MemoryError, MemoryService, Metadata,
     OllamaEmbedder, OllamaExtractor, Recollection, DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL,
-    DEFAULT_OLLAMA_URL,
+    DEFAULT_OLLAMA_URL, MAX_FACT_BYTES, MAX_WHY_HOPS,
 };
 
 use crate::collection::query::convert_params;
-
-/// Hard cap on `why()` hop depth — mirrors `MAX_WHY_HOPS` in the MCP server so
-/// the Python binding can never trigger unbounded graph traversal.
-const MAX_WHY_HOPS: usize = 10;
 
 /// Map a [`MemoryError`] to the most specific Python exception: caller-input
 /// errors → `ValueError`, a missing memory id → `KeyError`, the rest →
@@ -229,6 +225,12 @@ impl PyMemoryService {
         url: Option<String>,
         metadata: Option<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Vec<u64>> {
+        if text.len() > MAX_FACT_BYTES {
+            return Err(PyValueError::new_err(format!(
+                "text exceeds maximum size of {MAX_FACT_BYTES} bytes ({} given)",
+                text.len()
+            )));
+        }
         let metadata = to_metadata(py, metadata)?;
         let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
         let extractor = OllamaExtractor::new(url, model);

@@ -36,6 +36,19 @@ pub mod service;
 /// SDK's own default so the server, library, and tests never restate the value.
 pub const DEFAULT_DIMENSION: usize = velesdb_core::agent::DEFAULT_DIMENSION;
 
+/// Maximum accepted fact size — prevents allocating huge embeddings (1 MiB).
+///
+/// The single source of truth shared by the MCP server, the Node.js binding,
+/// and the Python binding so all enforcement points stay in lock-step.
+pub const MAX_FACT_BYTES: usize = 1_048_576;
+
+/// Cap on the `recall` / `recallWhere` `k` parameter — prevents unbounded
+/// vector scans. Callers supplying a larger `k` are silently clamped.
+pub const MAX_RECALL_LIMIT: usize = 1_000;
+
+/// Cap on `why()` hop depth — prevents exponential graph fans.
+pub const MAX_WHY_HOPS: usize = 10;
+
 pub use embedder::{DynEmbedder, EmbedError, Embedder, HashEmbedder};
 #[cfg(feature = "ollama")]
 pub use embedder::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};

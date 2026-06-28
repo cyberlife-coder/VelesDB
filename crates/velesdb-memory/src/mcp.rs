@@ -14,17 +14,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::service::{ColumnFilter, Explanation, Link, MemoryService, Metadata, Recollection};
+use crate::{MAX_FACT_BYTES, MAX_RECALL_LIMIT, MAX_WHY_HOPS};
 
 /// Default number of memories returned by `recall`.
 const DEFAULT_RECALL_LIMIT: usize = 10;
 /// Default hop budget for `why` traversal.
 const DEFAULT_WHY_HOPS: usize = 2;
-/// Maximum accepted fact size — prevents allocating huge embeddings (1 MiB).
-const MAX_FACT_BYTES: usize = 1_048_576;
-/// Cap on the `recall` limit — prevents unbounded vector scans.
-const MAX_RECALL_LIMIT: usize = 1_000;
-/// Cap on `why` hop depth — prevents exponential graph fans.
-const MAX_WHY_HOPS: usize = 10;
 
 /// Re-exported from their canonical homes ([`crate::embedder`] /
 /// [`crate::extract`]) so existing `mcp::DynEmbedder` / `mcp::DynExtractor`

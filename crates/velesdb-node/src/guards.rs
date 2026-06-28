@@ -2,18 +2,12 @@
 //! scheduled on the libuv pool (so an oversized input is rejected immediately
 //! rather than after a thread-pool slot is committed).
 //!
-//! The canonical caps live as private consts in `velesdb-memory`'s `mcp` module,
-//! which is gated behind the (off-here) `mcp` feature, so they are re-declared.
-//! Keep these in sync with `crates/velesdb-memory/src/mcp.rs`.
+//! The canonical values live in `velesdb_memory` so all language bindings and
+//! the MCP server share a single source of truth without manual syncing.
 
 use crate::error::invalid_input;
 
-/// Max bytes for a single remembered fact (matches mcp.rs `MAX_FACT_BYTES`).
-pub const MAX_FACT_BYTES: usize = 1_048_576;
-/// Max results a recall may return; core does not cap `k`, so the adapter does.
-pub const MAX_RECALL_LIMIT: usize = 1_000;
-/// Max `why()` hop depth (matches mcp.rs / the `PyO3` binding's cap).
-pub const MAX_WHY_HOPS: usize = 10;
+pub use velesdb_memory::{MAX_FACT_BYTES, MAX_RECALL_LIMIT, MAX_WHY_HOPS};
 
 /// Reject a fact larger than [`MAX_FACT_BYTES`] before scheduling work.
 pub fn check_fact(fact: &str) -> napi::Result<()> {
