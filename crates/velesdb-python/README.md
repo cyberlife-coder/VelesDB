@@ -5,7 +5,26 @@
 [![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](./LICENSE)
 [![Version](https://img.shields.io/badge/version-3.4.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
 
-Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) — a high-performance vector database for AI applications. The current published wheel is `velesdb` v2.0.0; `numpy>=1.20` ships as a hard runtime dependency since v1.13.8 so a single `pip install velesdb` is sufficient.
+Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) — a high-performance vector database for AI applications. `numpy>=1.20` ships as a hard runtime dependency since v1.13.8, so a single `pip install velesdb` is sufficient.
+
+## Agent memory: the `why()` wedge
+
+Beyond raw vector search, VelesDB ships a high-level **`MemoryService`** — local-first agent memory whose differentiator is **`why()`**: it answers a question with the best-matching memory *plus the connected subgraph* reachable through typed links — context that shares **no words** with the question, which a plain vector recall is blind to. The store is on disk, so it works across process restarts.
+
+![recall() finds the booking but misses the reason; why() reaches it through typed links, across a session restart](https://raw.githubusercontent.com/cyberlife-coder/VelesDB/develop/examples/agent_memory/why_across_sessions.gif)
+
+```python
+from velesdb import MemoryService            # offline, deterministic, no API key
+
+mem = MemoryService("./agent_memory")        # a real on-disk store; survives restarts
+reason = mem.remember("Robert is recovering from knee surgery")
+mem.remember("Booked the aisle seat on Robert's flight", links=[(reason, "because")])
+
+# A new process, weeks later, reopens the same store and asks why:
+mem.why("why the aisle seat on Robert's flight?")   # walks booking → reason — recall() can't
+```
+
+Full runnable demo: [`examples/agent_memory/why_across_sessions.py`](https://github.com/cyberlife-coder/VelesDB/blob/develop/examples/agent_memory/why_across_sessions.py). The same wedge ships for [Node](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) and as a local [MCP server](https://github.com/cyberlife-coder/VelesDB/tree/develop/crates/velesdb-memory).
 
 ## Features
 

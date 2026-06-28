@@ -9,6 +9,12 @@ Python binding; no network service.
 the best-matching memory *plus its connected subgraph* — related facts a plain
 vector recall is blind to.
 
+![recall() finds the booking but misses the reason; why() reaches it through typed links, across a session restart](https://raw.githubusercontent.com/cyberlife-coder/VelesDB/develop/examples/agent_memory/why_across_sessions.gif)
+
+> The store is on disk, so memory survives process restarts — a new session
+> reopens it and `why()` still walks the graph to context that shares no words
+> with the question.
+
 ## Install
 
 ```bash
