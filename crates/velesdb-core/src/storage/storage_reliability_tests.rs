@@ -9,6 +9,7 @@
 use super::sharded_index::ShardedIndex;
 use super::*;
 use rustc_hash::FxHashMap;
+use serial_test::serial;
 use std::io::Write as _;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -460,6 +461,9 @@ fn test_898_replay_torn_tail_recovers_prior_entries() {
 }
 
 #[test]
+// Reads/writes the process-global `wal_replay_corrupt_entries` metric; serialize
+// the whole metric-asserting group so parallel tests can't pollute the counter.
+#[serial(wal_corrupt_metric)]
 fn test_898_replay_midstream_crc_corruption_skips_and_continues() {
     // First entry valid, second fully-framed but CRC-corrupt, third valid.
     // Policy: skip the corrupt mid-stream entry, recover the rest.
@@ -768,6 +772,7 @@ fn test_898_store_batch_offset_overflow_leaves_next_offset_unchanged() {
 }
 
 #[test]
+#[serial(wal_corrupt_metric)]
 fn test_898b_torn_tail_crc_fail_at_eof_no_corrupt_metric() {
     // A fully-framed but CRC-failing record that is the LAST record is a normal
     // post-crash torn tail: replay stops cleanly, recovers prior entries, and
@@ -801,6 +806,7 @@ fn test_898b_torn_tail_crc_fail_at_eof_no_corrupt_metric() {
 }
 
 #[test]
+#[serial(wal_corrupt_metric)]
 fn test_898b_midstream_crc_fail_with_valid_after_increments_metric() {
     // Counterpart to the torn-tail test: a CRC-failing record followed by a
     // validly framed record IS genuine mid-stream corruption and MUST increment

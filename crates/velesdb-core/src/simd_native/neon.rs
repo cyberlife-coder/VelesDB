@@ -98,6 +98,8 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     // - Condition 2: `add(len)` yields the one-past-the-end pointer, which is valid for comparison.
     // SAFETY: Establish loop bounds for the 16-element-wide main body and scalar tail.
     let end_main = unsafe { a.as_ptr().add(len / 16 * 16) };
+    // SAFETY: `add(len)` yields the one-past-the-end pointer (Condition 2 above),
+    // valid to form for comparison against the advancing pointer in the tail loop.
     let end_ptr = unsafe { a.as_ptr().add(len) };
 
     // SAFETY: 4-accumulator ILP loop using NEON intrinsics. All pointer bounds
@@ -459,6 +461,8 @@ fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     // - Condition 2: `add(len)` yields the one-past-the-end pointer, which is valid for comparison.
     // SAFETY: Establish loop bounds for the 16-element-wide main body and scalar tail.
     let end_main = unsafe { a.as_ptr().add(len / 16 * 16) };
+    // SAFETY: `add(len)` yields the one-past-the-end pointer (Condition 2 above),
+    // valid to form for comparison against the advancing pointer in the tail loop.
     let end_ptr = unsafe { a.as_ptr().add(len) };
 
     // SAFETY: 4-accumulator ILP loop using NEON intrinsics. All pointer bounds

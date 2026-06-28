@@ -29,7 +29,7 @@
 //! extraction pipeline, which this server intentionally does not ship — see the
 //! crate README and PLAN 2B.
 
-use velesdb_memory::mcp::DynEmbedder;
+use velesdb_memory::DynEmbedder;
 use velesdb_memory::{HashEmbedder, MemoryError, MemoryService, DEFAULT_DIMENSION};
 
 const RECALL_K: usize = 10;

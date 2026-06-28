@@ -21,10 +21,10 @@ Prebuilt binaries ship for macOS (arm64/x64), Linux (x64/arm64 gnu), and Windows
 ## Usage
 
 ```js
-import { MemoryStore } from '@wiscale/velesdb-memory-node'
+import { MemoryService } from '@wiscale/velesdb-memory-node'
 
 // Offline "hash" embedder by default; pass "ollama" for real semantic recall.
-const mem = MemoryStore.open('./agent_mem')
+const mem = MemoryService.open('./agent_mem')
 
 const pr = await mem.remember('PR #42 swaps the mutex for parking_lot')
 const decision = await mem.remember(

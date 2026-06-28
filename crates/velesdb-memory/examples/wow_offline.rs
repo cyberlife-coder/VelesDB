@@ -13,7 +13,7 @@
 //! project (`ColumnStore`). `why()` then hops topic → PR → author and lands on the
 //! right person. Network-free, deterministic, single binary.
 
-use velesdb_memory::mcp::DynEmbedder;
+use velesdb_memory::DynEmbedder;
 use velesdb_memory::{HashEmbedder, MemoryService, Metadata, DEFAULT_DIMENSION};
 
 const DIM: &str = "\x1b[2m";

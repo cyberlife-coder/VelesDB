@@ -1,6 +1,6 @@
 //! LLM-free measurement of the graph's *explanation* value.
 //!
-//! LoCoMo's answer-accuracy cannot isolate the multi-hop graph's real strength:
+//! `LoCoMo`'s answer-accuracy cannot isolate the multi-hop graph's real strength:
 //! connecting evidence that lies scattered across sessions. Here we measure it
 //! directly. For every question with ≥2 gold `evidence` `dia_id`s we ask: of
 //! those evidence facts, what fraction does plain top-`k` **vector** recall
@@ -103,6 +103,7 @@ graph completed missing evidence on {}/{} questions",
         println!("  (coverage = share of a question's gold evidence dia_ids present in the retrieved facts)");
     }
 
+    #[allow(clippy::unused_self)]
     fn print_row(&self, label: &str, cell: Coverage) {
         println!(
             "  {:<13}{:>5}   {:>9.0}% {:>9.0}% {:>9}",

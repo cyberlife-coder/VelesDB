@@ -88,6 +88,29 @@ VELESDB_MEMORY_EMBEDDER=ollama \
 > LLM-judge + deterministic metric. The core stays bring-your-own-links;
 > extraction is a commodity on top.
 
+### On public benchmarks — each engine, measured
+
+The controlled demo above proves the *idea*; these run the same engines on
+**public, third-party datasets** with **generation-free** metrics (pure retrieval
+recall — no LLM in the scoring loop, so the number is the memory, not a model).
+Each engine is isolated against a pure-vector baseline. Full method, tables and
+honest limits in [`BENCHMARK.md`](BENCHMARK.md) and [`POSITIONING.md`](POSITIONING.md);
+every figure reproduces from the bundled examples.
+
+| Engine | Public benchmark | What it measures | Vector → fused |
+|---|---|---|---|
+| **Graph** (`why()` BFS) | HotpotQA (3 000 dev, distractor) | retrieving *both* bridge facts of a multi-hop question | **+7.2pp** both-facts on bridge questions (+5.6pp all types) |
+| **Graph** — *replicated* | 2WikiMultiHopQA (1 000 dev) | same metric, second independent dataset | **+3.1pp** on bridged types (+2.1pp overall) |
+| **ColumnStore** (`recall_where`) | TimeQA (real Wikipedia bios) | time-scoped recall a year-range filter can do and cosine can't | **+9.7pp** gold-sentence recall |
+| **Tri-engine** (compound) | synthetic, multi-hop **and** time-scoped | do the engines *stack*? | **+29pp** together — more than the sum of each alone |
+
+Read it straight: the graph helps exactly where a second hop is required — and the
+lift survives moving to a *different* multi-hop dataset (more modest there, +2.1pp
+overall, stated as measured — not a one-dataset fluke). The ColumnStore wins where
+the answer hinges on a number cosine cannot rank. And on a task that needs *both*,
+they compound rather than merely coexist. A pure vector store / RAG orchestrator
+has none of these — it ranks by similarity and stops.
+
 ## Install
 
 ```bash

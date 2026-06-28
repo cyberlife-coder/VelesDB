@@ -10,148 +10,31 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{ErrorCode, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
-use crate::service::{ColumnFilter, Explanation, Link, MemoryService, Metadata, Recollection};
+use crate::limits::{DEFAULT_WHY_HOPS, MAX_FACT_BYTES, MAX_RECALL_LIMIT, MAX_WHY_HOPS};
+use crate::model::Explanation;
+use crate::service::MemoryService;
 
 /// Default number of memories returned by `recall`.
 const DEFAULT_RECALL_LIMIT: usize = 10;
-/// Default hop budget for `why` traversal.
-const DEFAULT_WHY_HOPS: usize = 2;
-/// Maximum accepted fact size — prevents allocating huge embeddings (1 MiB).
-const MAX_FACT_BYTES: usize = 1_048_576;
-/// Cap on the `recall` limit — prevents unbounded vector scans.
-const MAX_RECALL_LIMIT: usize = 1_000;
-/// Cap on `why` hop depth — prevents exponential graph fans.
-const MAX_WHY_HOPS: usize = 10;
 
-/// Re-exported from their canonical homes ([`crate::embedder`] /
-/// [`crate::extract`]) so existing `mcp::DynEmbedder` / `mcp::DynExtractor`
-/// paths keep working: the boxed embedder and the shared, runtime-attached
-/// extraction backend the server stores.
-pub use crate::embedder::DynEmbedder;
-pub use crate::extract::DynExtractor;
+// The boxed embedder and the shared, runtime-attached extraction backend the
+// server stores — imported for internal use only. The canonical public paths are
+// `velesdb_memory::DynEmbedder` / `velesdb_memory::DynExtractor` (crate root).
+use crate::embedder::DynEmbedder;
+use crate::extract::DynExtractor;
 
 // --- Tool parameter / result DTOs ------------------------------------------
 //
-// Output shapes reuse the domain types from `crate::service` directly (they
-// derive `Serialize` + `JsonSchema`), so there is no duplicate wire/domain
-// struct. Only request envelopes and small id-results live here.
-
-/// Parameters for the `remember` tool.
-#[derive(Deserialize, JsonSchema)]
-struct RememberParams {
-    /// The fact to store in memory.
-    fact: String,
-    /// Optional typed links from this fact to existing memories.
-    #[serde(default)]
-    links: Vec<Link>,
-    /// Optional structured metadata for later filtering (e.g.
-    /// `{"project": "veles", "author": "julien", "status": "open"}`).
-    metadata: Option<Metadata>,
-}
-
-/// Result of the `remember` tool.
-#[derive(Serialize, JsonSchema)]
-struct RememberResult {
-    /// Stable id assigned to the remembered fact.
-    id: u64,
-}
-
-/// Parameters for the `recall` tool.
-#[derive(Deserialize, JsonSchema)]
-struct RecallParams {
-    /// Natural-language query to match semantically.
-    query: String,
-    /// Maximum number of memories to return (default 10).
-    limit: Option<usize>,
-    /// Optional exact-match metadata filter (e.g.
-    /// `{"project": "veles", "status": "resolved"}`).
-    filter: Option<Metadata>,
-}
-
-/// Result of the `recall` tool.
-#[derive(Serialize, JsonSchema)]
-struct RecallResult {
-    /// Recalled memories, most similar first.
-    memories: Vec<Recollection>,
-}
-
-/// Parameters for the `recall_where` tool.
-#[derive(Deserialize, JsonSchema)]
-struct RecallWhereParams {
-    /// Natural-language query to match semantically.
-    query: String,
-    /// Maximum number of memories to return (default 10).
-    limit: Option<usize>,
-    /// Structured `ColumnStore` predicates (ranges/comparisons) combined with AND,
-    /// e.g. a date window `[{"field":"ts","op":"ge","value":20230101},
-    /// {"field":"ts","op":"le","value":20231231}]`. Each `op` is one of
-    /// `eq`/`ne`/`lt`/`le`/`gt`/`ge`.
-    #[serde(default)]
-    filters: Vec<ColumnFilter>,
-}
-
-/// Parameters for the `relate` tool.
-#[derive(Deserialize, JsonSchema)]
-struct RelateParams {
-    /// Source memory id.
-    from: u64,
-    /// Target memory id.
-    to: u64,
-    /// Relationship label.
-    relation: String,
-}
-
-/// Result of the `relate` tool.
-#[derive(Serialize, JsonSchema)]
-struct RelateResult {
-    /// Id of the created edge.
-    edge_id: u64,
-}
-
-/// Parameters for the `forget` tool.
-#[derive(Deserialize, JsonSchema)]
-struct ForgetParams {
-    /// Id of the memory to forget.
-    id: u64,
-}
-
-/// Result of the `forget` tool.
-#[derive(Serialize, JsonSchema)]
-struct ForgetResult {
-    /// Id of the forgotten memory.
-    id: u64,
-}
-
-/// Parameters for the `why` tool.
-#[derive(Deserialize, JsonSchema)]
-struct WhyParams {
-    /// The decision (or fact) to explain.
-    decision: String,
-    /// How many hops of typed links to follow (default 2).
-    max_hops: Option<usize>,
-    /// Optional exact-match metadata filter to scope the seed (e.g.
-    /// `{"project": "veles"}`).
-    filter: Option<Metadata>,
-}
-
-/// Parameters for the `remember_extracted` tool.
-#[derive(Deserialize, JsonSchema)]
-struct RememberExtractedParams {
-    /// Raw text to extract atomic facts from and store as a connected graph.
-    text: String,
-    /// Optional structured metadata applied to every extracted fact.
-    metadata: Option<Metadata>,
-}
-
-/// Result of the `remember_extracted` tool.
-#[derive(Serialize, JsonSchema)]
-struct RememberExtractedResult {
-    /// Stable ids of the stored facts, in extraction order.
-    ids: Vec<u64>,
-}
+// The request envelopes and small id-results live in their own module so this
+// file stays focused on the server and tool wiring; output shapes reuse the
+// domain types from `crate::model` directly (no duplicate wire/domain struct).
+mod dto;
+use dto::{
+    ForgetParams, ForgetResult, RecallParams, RecallResult, RecallWhereParams, RelateParams,
+    RelateResult, RememberExtractedParams, RememberExtractedResult, RememberParams, RememberResult,
+    WhyParams,
+};
 
 // --- The server ------------------------------------------------------------
 
@@ -201,10 +84,17 @@ impl McpServer {
                 None,
             ));
         }
-        let id = self
-            .service
-            .remember(&params.fact, &params.links, params.metadata.as_ref())
-            .map_err(to_error)?;
+        let service = Arc::clone(&self.service);
+        let RememberParams {
+            fact,
+            links,
+            metadata,
+        } = params;
+        let id =
+            tokio::task::spawn_blocking(move || service.remember(&fact, &links, metadata.as_ref()))
+                .await
+                .map_err(join_error)?
+                .map_err(to_error)?;
         Ok(Json(RememberResult { id }))
     }
 
@@ -220,10 +110,13 @@ impl McpServer {
             .limit
             .unwrap_or(DEFAULT_RECALL_LIMIT)
             .min(MAX_RECALL_LIMIT);
-        let memories = self
-            .service
-            .recall(&params.query, limit, params.filter.as_ref())
-            .map_err(to_error)?;
+        let service = Arc::clone(&self.service);
+        let RecallParams { query, filter, .. } = params;
+        let memories =
+            tokio::task::spawn_blocking(move || service.recall(&query, limit, filter.as_ref()))
+                .await
+                .map_err(join_error)?
+                .map_err(to_error)?;
         Ok(Json(RecallResult { memories }))
     }
 
@@ -239,10 +132,13 @@ impl McpServer {
             .limit
             .unwrap_or(DEFAULT_RECALL_LIMIT)
             .min(MAX_RECALL_LIMIT);
-        let memories = self
-            .service
-            .recall_where(&params.query, limit, &params.filters)
-            .map_err(to_error)?;
+        let service = Arc::clone(&self.service);
+        let RecallWhereParams { query, filters, .. } = params;
+        let memories =
+            tokio::task::spawn_blocking(move || service.recall_where(&query, limit, &filters))
+                .await
+                .map_err(join_error)?
+                .map_err(to_error)?;
         Ok(Json(RecallResult { memories }))
     }
 
@@ -254,9 +150,11 @@ impl McpServer {
         &self,
         Parameters(params): Parameters<RelateParams>,
     ) -> Result<Json<RelateResult>, ErrorData> {
-        let edge_id = self
-            .service
-            .relate(params.from, params.to, &params.relation)
+        let service = Arc::clone(&self.service);
+        let RelateParams { from, to, relation } = params;
+        let edge_id = tokio::task::spawn_blocking(move || service.relate(from, to, &relation))
+            .await
+            .map_err(join_error)?
             .map_err(to_error)?;
         Ok(Json(RelateResult { edge_id }))
     }
@@ -266,8 +164,13 @@ impl McpServer {
         &self,
         Parameters(params): Parameters<ForgetParams>,
     ) -> Result<Json<ForgetResult>, ErrorData> {
-        self.service.forget(params.id).map_err(to_error)?;
-        Ok(Json(ForgetResult { id: params.id }))
+        let service = Arc::clone(&self.service);
+        let id = params.id;
+        tokio::task::spawn_blocking(move || service.forget(id))
+            .await
+            .map_err(join_error)?
+            .map_err(to_error)?;
+        Ok(Json(ForgetResult { id }))
     }
 
     #[tool(
@@ -282,10 +185,15 @@ impl McpServer {
             .max_hops
             .unwrap_or(DEFAULT_WHY_HOPS)
             .min(MAX_WHY_HOPS);
-        let explanation = self
-            .service
-            .why(&params.decision, max_hops, params.filter.as_ref())
-            .map_err(to_error)?;
+        let service = Arc::clone(&self.service);
+        let WhyParams {
+            decision, filter, ..
+        } = params;
+        let explanation =
+            tokio::task::spawn_blocking(move || service.why(&decision, max_hops, filter.as_ref()))
+                .await
+                .map_err(join_error)?
+                .map_err(to_error)?;
         Ok(Json(explanation))
     }
 
@@ -321,13 +229,7 @@ impl McpServer {
             service.remember_extracted(&text, &extractor, metadata.as_ref())
         })
         .await
-        .map_err(|join| {
-            ErrorData::new(
-                ErrorCode::INTERNAL_ERROR,
-                format!("extraction task failed: {join}"),
-                None,
-            )
-        })?
+        .map_err(join_error)?
         .map_err(to_error)?;
         Ok(Json(RememberExtractedResult { ids }))
     }
@@ -352,24 +254,37 @@ impl ServerHandler for McpServer {
     }
 }
 
+/// Map a `spawn_blocking` join failure (a panicked or cancelled tool task) to an
+/// MCP error. Every tool body runs on the blocking pool, so they all funnel
+/// through this on the (rare) task-failure path.
+///
+/// Takes the error by value so it can be used as `.map_err(join_error)`.
+#[allow(clippy::needless_pass_by_value)]
+fn join_error(join: tokio::task::JoinError) -> ErrorData {
+    ErrorData::new(
+        ErrorCode::INTERNAL_ERROR,
+        format!("memory task failed: {join}"),
+        None,
+    )
+}
+
 /// Map a domain error to an MCP error.
 ///
-/// Client-input errors (`EmptyFact`, `UnknownMemory`) become
-/// `invalid_params` (-32602) so callers can distinguish bad input from a
-/// server fault without parsing the message string. Everything else is
-/// `internal_error` (-32603).
+/// Map a [`MemoryError`](crate::error::MemoryError) onto a JSON-RPC error,
+/// driven by its transport-neutral [`ErrorCategory`](crate::error::ErrorCategory)
+/// so the MCP taxonomy can never drift from the bindings'. Client-input errors
+/// become `invalid_params` (-32602); genuine faults `internal_error` (-32603).
+/// JSON-RPC defines no "not found" code, so a missing id is reported as
+/// `invalid_params` (a bad id is, from the protocol's view, a bad parameter).
 ///
 /// Takes the error by value so it can be used as `.map_err(to_error)` at every
 /// call site without a per-site closure.
 #[allow(clippy::needless_pass_by_value)]
 fn to_error(err: crate::error::MemoryError) -> ErrorData {
-    use crate::error::MemoryError;
-    let code = match &err {
-        MemoryError::EmptyFact
-        | MemoryError::UnknownMemory(_)
-        | MemoryError::ReservedKey(_)
-        | MemoryError::InvalidFilter(_) => ErrorCode::INVALID_PARAMS,
-        _ => ErrorCode::INTERNAL_ERROR,
+    use crate::error::ErrorCategory;
+    let code = match err.category() {
+        ErrorCategory::InvalidInput | ErrorCategory::NotFound => ErrorCode::INVALID_PARAMS,
+        ErrorCategory::Internal => ErrorCode::INTERNAL_ERROR,
     };
     ErrorData::new(code, err.to_string(), None)
 }
@@ -378,7 +293,8 @@ fn to_error(err: crate::error::MemoryError) -> ErrorData {
 mod tests {
     use super::*;
     use crate::embedder::HashEmbedder;
-    use crate::service::ColumnOp;
+    use crate::model::{ColumnFilter, ColumnOp, Link};
+    use crate::service::Metadata;
     use tempfile::TempDir;
 
     const DECISION: &str = "we chose parking_lot to avoid lock poisoning";

@@ -7,6 +7,40 @@ released on its own `velesdb-memory-vX.Y.Z` tag.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - Unreleased
+
+Benchmark milestone: the tri-engine is no longer just *wired* — each leg is
+*measured* to beat pure-vector retrieval on its specialty, generation-free, on
+public/real data, and the engines are shown to compound.
+
+### Added
+- **Generation-free retrieval benchmarks** isolating each engine's contribution,
+  reproducible from bundled examples (`examples/{multihop,timeqa,colfilter,triengine}`):
+  - **Graph (`why()` BFS) — multi-hop supporting-fact recall.** On **HotpotQA**
+    (3 000 dev, distractor) fused vector+graph lifts supporting-fact recall
+    **+3.3pp** overall and **+5.6pp** on retrieving *both* bridge facts, with an
+    idf-weighted bridge that suppresses the flooding a naive boost causes. The
+    win **replicates on a second independent dataset, 2WikiMultiHopQA**,
+    concentrated on the genuinely multi-hop question types.
+  - **ColumnStore (`recall_where` numeric range) — time-scoped recall.** On real
+    **TimeQA** Wikipedia bios, the year-range predicate lifts gold-sentence recall
+    **+9.7pp** (+18.6pp on a controlled synthetic pilot) where cosine alone cannot
+    disambiguate candidates that differ only by a number.
+  - **Tri-engine compounding capstone** (`examples/triengine`): on a task that is
+    multi-hop *and* time-scoped at once, Graph and ColumnStore together lift recall
+    more than the sum of their individual gains — the engines stack.
+- **LoCoMo harness** (`examples/locomo/`) extended into a tuning/diagnostic
+  workbench: retrieval-only and explanation modes, per-category diagnostics, BM25
+  baseline, idf-weighted graph fusion, date-context/date-routing and a temporal
+  scaffold, an optional Claude judge/generator, and a configurable evidence budget.
+- Positioning and benchmark write-ups (`POSITIONING.md`, `BENCHMARK.md`) grounding
+  every claim in a reproducible measurement, with each engine's honest limit
+  disclosed.
+
+### Notes
+- No public API change — this release adds benchmarks, examples and documentation
+  around the existing `MemoryService` / MCP surface introduced in 0.1.0.
+
 ## [0.1.0] - Unreleased
 
 First release of the local-first MCP memory server for AI agents.
@@ -35,4 +69,5 @@ First release of the local-first MCP memory server for AI agents.
 - License boundary by construction: memory semantics only, never raw database
   capabilities.
 
+[0.2.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/velesdb-memory-v0.2.0
 [0.1.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/velesdb-memory-v0.1.0

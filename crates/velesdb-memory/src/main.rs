@@ -8,8 +8,8 @@
 //! `remember_extracted` tool (auto text → fact↔topic graph).
 
 use rmcp::ServiceExt;
-use velesdb_memory::mcp::{DynEmbedder, McpServer};
-use velesdb_memory::{HashEmbedder, MemoryService, DEFAULT_DIMENSION};
+use velesdb_memory::mcp::McpServer;
+use velesdb_memory::{DynEmbedder, HashEmbedder, MemoryService, DEFAULT_DIMENSION};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store_path = std::env::var("VELESDB_MEMORY_PATH")
@@ -61,8 +61,7 @@ fn build_server(
 /// Build the Ollama-backed extractor from `VELESDB_MEMORY_EXTRACTOR_URL`
 /// (default local) and the required `VELESDB_MEMORY_EXTRACTOR_MODEL`.
 #[cfg(feature = "extract")]
-fn build_ollama_extractor() -> Result<velesdb_memory::mcp::DynExtractor, Box<dyn std::error::Error>>
-{
+fn build_ollama_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std::error::Error>> {
     use std::sync::Arc;
     use velesdb_memory::extract::DEFAULT_OLLAMA_URL;
     use velesdb_memory::OllamaExtractor;
