@@ -84,7 +84,7 @@ Be skeptical of vendor headlines: Mem0's own ~92% and Zep's (later retracted, [c
 
 LoCoMo's headline metric is generation-capped (everyone clusters ~55% because a small local model is the ceiling). To measure the *memory* itself — independent of any generator — we evaluate on **[HotpotQA](https://hotpotqa.github.io/)** (distractor setting), the standard multi-hop benchmark with **sentence-level supporting-fact annotations**. The metric is purely retrieval: of a question's two gold supporting-fact sentences, how many does the system surface? No LLM answers, no judge — so this isolates the tri-engine's multi-hop retrieval, which is exactly where the graph is supposed to help.
 
-## Setup
+## Setup (HotpotQA)
 
 Each question carries 10 paragraphs (2 gold + 8 distractors) split into sentences. We ingest every sentence as a memory, build an entity graph from the paragraph **titles** (each sentence links to its own title and to any other title it mentions — that mention is the multi-hop *bridge*), then retrieve a top-`k` budget two ways: pure **vector** similarity vs the **fused** vector + graph (`why()`), where a graph bridge is weighted by the inverse-document-frequency of the connecting title (a rare, specific bridge counts; a common one is downweighted). Embedder: `mxbai-embed-large`, local. Fully generation-free.
 
