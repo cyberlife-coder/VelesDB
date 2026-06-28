@@ -193,6 +193,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # HARDENING (tracked, not yet enabled): no *-unknown-linux-musl target, so
+        # Alpine / musl Node users (the default `node` Docker base) get no prebuilt
+        # binary and `require` fails. Add `x86_64-unknown-linux-musl` (and arm64
+        # musl) here + in package.json `napi.targets` + the root optionalDependencies.
+        # Deferred because a misconfigured musl leg would block this whole job
+        # (publish-npm `needs` every build leg green) — enable with a CI dry-run.
         include:
           - target: aarch64-apple-darwin
             host: macos-latest
@@ -245,6 +251,10 @@ jobs:
         run: npx napi build --platform --release --profile release-node --target ${{ matrix.target }} ${{ matrix.cross && '--use-napi-cross' || '' }}
 
       - name: Smoke-test the addon (native targets only)
+        # HARDENING (tracked): this skips x86_64-apple-darwin (Rosetta on the arm
+        # runner) and the aarch64 cross target, so two binaries publish without a
+        # load test. To close: run the smoke test under an emulator (QEMU for arm64,
+        # or a native x86 mac runner) so every shipped .node is load-verified.
         if: ${{ !matrix.cross && matrix.target != 'x86_64-apple-darwin' }}
         run: node --test __test__/
 
@@ -303,7 +313,18 @@ jobs:
         # `prepublishOnly` (napi prepublish -t npm) publishes the per-platform
         # @wiscale/velesdb-memory-node-<triple> packages and injects them as
         # optionalDependencies before the root package is published here. The
-        # already-published guard mirrors release.yml so a re-run is idempotent.
+        # already-published guard below mirrors release.yml so a re-run is idempotent
+        # for the ROOT package.
+        #
+        # HARDENING (tracked): the per-platform sub-packages are published by
+        # prepublishOnly with NO skip-if-exists guard. If a run dies after some
+        # sub-packages publish but before the root, a re-run hits "cannot overwrite
+        # version" on the published sub-packages and cannot cleanly recover. To close:
+        # change prepublishOnly to `napi prepublish -t npm --skip-optional-publish`
+        # (napi >=3.7 keeps the optionalDependencies injection, only skips the publish)
+        # and publish each `npm/*/` here in an explicit loop with the same
+        # publish-or-skip-if-already-on-npm guard used for the root. Verify with a
+        # `--dry-run` first.
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.validate.outputs.version }}
