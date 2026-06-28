@@ -78,3 +78,36 @@ def test_why_huge_max_hops_is_silently_capped(mem):
     why = mem.why("rust", max_hops=10_000)
     node_ids = [n["id"] for n in why["nodes"]]
     assert fid in node_ids
+
+
+def test_recall_where_eq_matches_metadata_filter(mem):
+    # An `eq` column filter equals the exact-match recall filter (same engine).
+    keep = mem.remember("auth bug in login", metadata={"project": "veles"})
+    mem.remember("auth bug elsewhere", metadata={"project": "acme"})
+    hits = mem.recall_where("auth bug", [("project", "eq", "veles")], k=5)
+    ids = {h["id"] for h in hits}
+    assert keep in ids
+    assert all(h["id"] == keep for h in hits)
+
+
+def test_recall_where_numeric_range_filters(mem):
+    # A year range a vector store cannot express; the ColumnStore predicate can.
+    inrange = mem.remember("alice was CEO in 2003", metadata={"year": 2003})
+    mem.remember("bob was CEO in 2010", metadata={"year": 2010})
+    hits = mem.recall_where(
+        "who was CEO", [("year", "ge", 2000), ("year", "le", 2005)], k=5
+    )
+    ids = {h["id"] for h in hits}
+    assert inrange in ids
+    assert all(h["id"] == inrange for h in hits)
+
+
+def test_recall_where_unknown_op_raises_value_error(mem):
+    with pytest.raises(ValueError):
+        mem.recall_where("q", [("year", "bogus", 1)], k=5)
+
+
+def test_oversized_fact_raises_value_error(mem):
+    # Facts above the shared 1 MiB cap are rejected before any embedding work.
+    with pytest.raises(ValueError):
+        mem.remember("x" * (1024 * 1024 + 1))

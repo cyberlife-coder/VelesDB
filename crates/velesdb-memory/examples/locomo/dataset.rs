@@ -1,4 +1,4 @@
-//! LoCoMo dataset loader.
+//! `LoCoMo` dataset loader.
 //!
 //! Parses `data/locomo10.json` (snap-research/locomo) into typed [`Sample`]s.
 //! The on-disk `conversation` object mixes `speaker_a`/`speaker_b` with
@@ -12,7 +12,7 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-/// LoCoMo question categories, as labelled in the dataset's `category` field.
+/// `LoCoMo` question categories, as labelled in the dataset's `category` field.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Category {
     MultiHop,
@@ -33,6 +33,11 @@ impl Category {
             5 => Some(Self::Adversarial),
             _ => None,
         }
+    }
+
+    /// Parse a category from its report label (for the `--only` filter).
+    pub fn from_label(label: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.label() == label)
     }
 
     /// Short human label for report rows.
@@ -59,6 +64,9 @@ impl Category {
         Self::SingleHop,
         Self::Adversarial,
     ];
+
+    /// Number of categories — the single source of truth for per-category arrays.
+    pub const COUNT: usize = Self::ALL.len();
 
     /// Dense index into per-category tallies.
     pub fn index(self) -> usize {
@@ -96,7 +104,7 @@ impl Session {
     }
 }
 
-/// Parse a LoCoMo `date_time` like `"1:56 pm on 8 May, 2023"` into `YYYYMMDD`.
+/// Parse a `LoCoMo` `date_time` like `"1:56 pm on 8 May, 2023"` into `YYYYMMDD`.
 fn date_key(date_time: &str) -> i64 {
     let Some((_, tail)) = date_time.split_once(" on ") else {
         return 0;
@@ -147,7 +155,9 @@ pub struct Qa {
     pub category: Category,
 }
 
-/// One LoCoMo conversation plus its QA set.
+/// One `LoCoMo` conversation plus its QA set.
+// benchmark harness: field name mirrors dataset JSON key
+#[allow(clippy::struct_field_names)]
 pub struct Sample {
     pub sample_id: String,
     pub sessions: Vec<Session>,

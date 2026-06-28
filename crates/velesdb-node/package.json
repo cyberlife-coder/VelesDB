@@ -40,9 +40,9 @@
     "README.md"
   ],
   "scripts": {
-    "build": "napi build --platform --release --profile release-node",
+    "build": "napi build --platform --profile release-node",
     "build:debug": "napi build --platform",
-    "test": "node --test __test__/",
+    "test": "node --test __test__/*.spec.mjs",
     "prepublishOnly": "napi prepublish -t npm"
   },
   "devDependencies": {

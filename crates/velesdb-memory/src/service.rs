@@ -4,8 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use velesdb_core::agent::AgentMemory;
 use velesdb_core::{Database, SearchResult};
@@ -19,6 +17,7 @@ use crate::embedder::Embedder;
 use crate::error::MemoryError;
 use crate::extract::Extractor;
 use crate::id;
+use crate::model::{ColumnFilter, Explanation, Link, MemoryEdge, MemoryNode, Recollection};
 
 /// Reserved metadata key marking an entity hub auto-created by
 /// [`MemoryService::remember_extracted`] (value `true`). Namespaced under the
@@ -31,107 +30,6 @@ const HUB_FIELD: &str = "_veles_hub";
 /// natural fact ids: a caller fact whose text happens to equal a hub's display
 /// content (`Entity: rust`) can never collide with, or overwrite, the hub.
 const HUB_ID_SALT: &str = "\u{0}_veles_entity_hub\u{0}";
-
-/// A typed link from a freshly remembered fact to an existing memory.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct Link {
-    /// Id of the memory being linked to.
-    pub target: u64,
-    /// Relationship label (e.g. `"decided_in"`, `"references"`, `"depends_on"`).
-    pub relation: String,
-}
-
-/// One semantically recalled memory.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct Recollection {
-    /// Stable id of the memory.
-    pub id: u64,
-    /// Similarity score (higher is closer).
-    pub score: f32,
-    /// Stored fact content.
-    pub content: String,
-}
-
-/// Comparison operator for a [`ColumnFilter`] in [`MemoryService::recall_where`].
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum ColumnOp {
-    /// `=`
-    Eq,
-    /// `!=`
-    Ne,
-    /// `<`
-    Lt,
-    /// `<=`
-    Le,
-    /// `>`
-    Gt,
-    /// `>=`
-    Ge,
-}
-
-impl ColumnOp {
-    /// The `VelesQL` operator token.
-    fn as_sql(self) -> &'static str {
-        match self {
-            Self::Eq => "=",
-            Self::Ne => "!=",
-            Self::Lt => "<",
-            Self::Le => "<=",
-            Self::Gt => ">",
-            Self::Ge => ">=",
-        }
-    }
-}
-
-/// A structured predicate over a memory's metadata column, for the fused
-/// vector+`ColumnStore` recall [`MemoryService::recall_where`]. Unlike the
-/// exact-match filter on [`MemoryService::recall`], this supports ranges and
-/// comparisons (e.g. `timestamp >= …`), so temporal and numeric facets become
-/// queryable, not just equal-matchable.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct ColumnFilter {
-    /// Metadata field name (alphanumeric/underscore).
-    pub field: String,
-    /// Comparison operator.
-    pub op: ColumnOp,
-    /// Value to compare against (numbers, strings, booleans).
-    pub value: Value,
-}
-
-/// A node in an [`Explanation`] subgraph.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct MemoryNode {
-    /// Stable id of the memory.
-    pub id: u64,
-    /// Stored fact content.
-    pub content: String,
-    /// Distance in hops from the seed memory (the seed is hop `0`).
-    pub hop: usize,
-}
-
-/// A typed edge in an [`Explanation`] subgraph.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct MemoryEdge {
-    /// Source memory id.
-    pub from: u64,
-    /// Target memory id.
-    pub to: u64,
-    /// Relationship label.
-    pub relation: String,
-}
-
-/// The connected answer to a `why` question: the best-matching seed memory plus
-/// everything reachable from it within a hop budget. This connected subgraph is
-/// the differentiator — it surfaces related memories a purely vector recall is
-/// blind to (no textual similarity required).
-#[derive(Debug, Clone, Default, Serialize, JsonSchema)]
-pub struct Explanation {
-    /// Memories in the subgraph, seed first.
-    pub nodes: Vec<MemoryNode>,
-    /// Typed edges connecting the nodes.
-    pub edges: Vec<MemoryEdge>,
-}
 
 /// Local-first agent memory backed by a single `VelesDB` instance.
 ///

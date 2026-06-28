@@ -2,7 +2,7 @@
 name = "velesdb-memory"
 # Independent of the workspace version: velesdb-memory is a young MCP wrapper
 # with its own release cadence, decoupled from the core engine's 3.x line.
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license-file = "../../LICENSE"
@@ -72,3 +72,23 @@ path = "src/lib.rs"
 
 [lints]
 workspace = true
+
+[[example]]
+name = "multihop"
+path = "examples/multihop/main.rs"
+required-features = ["ollama"]
+
+[[example]]
+name = "colfilter"
+path = "examples/colfilter/main.rs"
+required-features = ["ollama"]
+
+[[example]]
+name = "timeqa"
+path = "examples/timeqa/main.rs"
+required-features = ["ollama"]
+
+[[example]]
+name = "triengine"
+path = "examples/triengine/main.rs"
+required-features = ["ollama"]

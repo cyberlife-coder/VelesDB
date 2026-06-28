@@ -13,28 +13,39 @@ use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 
 use velesdb_memory::{
-    DynEmbedder, Explanation, HashEmbedder, Link, MemoryError, MemoryService, Metadata,
-    OllamaEmbedder, OllamaExtractor, Recollection, DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL,
-    DEFAULT_OLLAMA_URL,
+    limits, ColumnFilter, ColumnOp, DynEmbedder, ErrorCategory, Explanation, HashEmbedder, Link,
+    MemoryError, MemoryService, Metadata, OllamaEmbedder, OllamaExtractor, Recollection,
+    DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::collection::query::convert_params;
+use crate::utils::python_to_json;
 
-/// Hard cap on `why()` hop depth — mirrors `MAX_WHY_HOPS` in the MCP server so
-/// the Python binding can never trigger unbounded graph traversal.
-const MAX_WHY_HOPS: usize = 10;
-
-/// Map a [`MemoryError`] to the most specific Python exception: caller-input
-/// errors → `ValueError`, a missing memory id → `KeyError`, the rest →
-/// `RuntimeError`.
+/// Map a [`MemoryError`] to the most specific Python exception, driven by its
+/// transport-neutral [`ErrorCategory`] so the taxonomy stays identical to the
+/// MCP server and the Node binding: caller-input → `ValueError`, a missing
+/// memory id → `KeyError`, the rest → `RuntimeError`.
 fn to_py_err(e: MemoryError) -> PyErr {
     let msg = e.to_string();
-    match e {
-        MemoryError::EmptyFact | MemoryError::InvalidFilter(_) | MemoryError::ReservedKey(_) => {
-            PyValueError::new_err(msg)
-        }
-        MemoryError::UnknownMemory(_) => PyKeyError::new_err(msg),
-        _ => PyRuntimeError::new_err(msg),
+    match e.category() {
+        ErrorCategory::InvalidInput => PyValueError::new_err(msg),
+        ErrorCategory::NotFound => PyKeyError::new_err(msg),
+        ErrorCategory::Internal => PyRuntimeError::new_err(msg),
+    }
+}
+
+/// Parse a column-filter operator token (`eq`/`ne`/`lt`/`le`/`gt`/`ge`).
+fn parse_op(op: &str) -> PyResult<ColumnOp> {
+    match op.to_ascii_lowercase().as_str() {
+        "eq" => Ok(ColumnOp::Eq),
+        "ne" => Ok(ColumnOp::Ne),
+        "lt" => Ok(ColumnOp::Lt),
+        "le" => Ok(ColumnOp::Le),
+        "gt" => Ok(ColumnOp::Gt),
+        "ge" => Ok(ColumnOp::Ge),
+        other => Err(PyValueError::new_err(format!(
+            "unknown filter op '{other}' (expected eq/ne/lt/le/gt/ge)"
+        ))),
     }
 }
 
@@ -149,6 +160,13 @@ impl PyMemoryService {
         links: Option<Vec<(u64, String)>>,
         metadata: Option<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<u64> {
+        if fact.len() > limits::MAX_FACT_BYTES {
+            return Err(PyValueError::new_err(format!(
+                "fact exceeds {} bytes ({} given)",
+                limits::MAX_FACT_BYTES,
+                fact.len()
+            )));
+        }
         let links: Vec<Link> = links
             .unwrap_or_default()
             .into_iter()
@@ -172,12 +190,44 @@ impl PyMemoryService {
         k: usize,
         filter: Option<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Py<PyAny>> {
+        let k = limits::clamp_recall_limit(k);
         let filter = to_metadata(py, filter)?;
         let hits = py.detach(|| {
             self.svc
                 .recall(query, k, filter.as_ref())
                 .map_err(to_py_err)
         })?;
+        let list = PyList::empty(py);
+        for hit in &hits {
+            list.append(recollection_to_dict(py, hit)?)?;
+        }
+        Ok(list.into())
+    }
+
+    /// Fused vector + `ColumnStore` recall: like [`recall`](Self::recall) but the
+    /// `filters` support ranges/comparisons, so numeric/temporal facets become
+    /// queryable. `filters` is a list of `(field, op, value)` tuples where `op`
+    /// is one of `eq`/`ne`/`lt`/`le`/`gt`/`ge`. Returns `{id, score, content}`.
+    #[pyo3(signature = (query, filters, k = 10))]
+    fn recall_where(
+        &self,
+        py: Python<'_>,
+        query: &str,
+        filters: Vec<(String, String, Py<PyAny>)>,
+        k: usize,
+    ) -> PyResult<Py<PyAny>> {
+        let k = limits::clamp_recall_limit(k);
+        let filters: Vec<ColumnFilter> = filters
+            .into_iter()
+            .map(|(field, op, value)| {
+                Ok(ColumnFilter {
+                    field,
+                    op: parse_op(&op)?,
+                    value: python_to_json(py, &value)?,
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let hits = py.detach(|| self.svc.recall_where(query, k, &filters).map_err(to_py_err))?;
         let list = PyList::empty(py);
         for hit in &hits {
             list.append(recollection_to_dict(py, hit)?)?;
@@ -208,7 +258,7 @@ impl PyMemoryService {
         max_hops: usize,
         filter: Option<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Py<PyAny>> {
-        let max_hops = max_hops.min(MAX_WHY_HOPS);
+        let max_hops = limits::clamp_hops(max_hops);
         let filter = to_metadata(py, filter)?;
         let explanation = py.detach(|| {
             self.svc

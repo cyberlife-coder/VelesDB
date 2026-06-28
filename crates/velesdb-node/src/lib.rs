@@ -11,7 +11,7 @@
 //! ## License boundary
 //! Depends on `velesdb-memory` (memory semantics only), never `velesdb-core`. The
 //! addon is an in-process library, not a network service, so it stays inside the
-//! VelesDB Core License 1.0 "no hosted/managed service" restriction.
+//! `VelesDB` Core License 1.0 "no hosted/managed service" restriction.
 
 #![deny(unsafe_code)]
 // napi's panic→JS-error conversion relies on `panic = "unwind"` (the
@@ -78,7 +78,11 @@ fn build_embedder(
 /// Local-first agent memory with the `why()` graph wedge.
 ///
 /// All methods are async (return a Promise) and run off the event-loop thread.
-#[napi]
+///
+/// Exposed to JS as `MemoryService` (matching the `PyO3` binding and the core
+/// type); the Rust struct keeps a distinct name only to avoid colliding with the
+/// imported [`velesdb_memory::MemoryService`] it wraps.
+#[napi(js_name = "MemoryService")]
 pub struct MemoryStore {
     inner: Arc<MemoryService<DynEmbedder>>,
 }
