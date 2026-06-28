@@ -11,8 +11,8 @@
 
 - **Dataset:** LoCoMo conversations + QA, as published by Snap Research (fetched on demand, git-ignored).
 - **Pipeline (the fused tri-engine retrieval):** a local LLM extracts atomic facts from each session, tagged with their source `dia_id`s and session date. Facts are ingested into velesdb-memory as a fact↔entity graph. At query time we fuse three engines — **Vector** similarity, **Graph** traversal (`why()`), and a **ColumnStore** date-window filter — then take a top-`k` budget of evidence into the answerer.
-- **Local stack (100% local, no cloud):** embedder `mxbai-embed-large` and generator `qwen3.6:35b-mlx`, both served via Ollama.
-- **Judge — and why a neutral one:** answers are graded by **Claude Opus 4.8**, a vendor-neutral model stronger than our own generator. This matters: when we judged with the local qwen model, it *under*-scored correct answers by ~21pp on the temporal category. Letting a system grade itself with its own (weaker) model distorts results; we don't.
+- **Local stack:** the memory, retrieval, and generation all run 100% locally — embedder `mxbai-embed-large` and generator `qwen3.6:35b-mlx`, both served via Ollama. The only non-local step is *grading* (next line), not the system under test.
+- **Judge — and why a neutral one:** answers are graded by **Claude Opus 4.8** (a vendor-neutral model, run via the cloud `claude` CLI) stronger than our own generator. This matters: when we judged with the local qwen model, it *under*-scored correct answers by ~21pp on the temporal category. Letting a system grade itself with its own (weaker) model distorts results; we don't.
 
 ## Headline results
 

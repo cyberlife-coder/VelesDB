@@ -107,7 +107,9 @@ Built-in memory for AI agents — semantic, episodic, and procedural. No externa
 
 Most "agent memory" is vector recall: it finds text that *looks like* your query. VelesDB's high-level `MemoryService` adds the part that's missing — it **connects** memories with typed links, so it can answer *why* something happened by walking the graph to context that shares **no words** with your question. The store is on disk, so it works across sessions. Offline, deterministic, no API key, no model download:
 
-![recall() finds the booking but misses the reason; why() reaches it through typed links, across a session restart](https://raw.githubusercontent.com/cyberlife-coder/VelesDB/develop/examples/agent_memory/why_across_sessions.gif)
+Where Mem0 and Zep are cloud-coupled orchestrators (a service mesh over Qdrant + Postgres, with a cloud LLM in the loop), this is **one local binary** — same tier as Mem0 on LoCoMo QA (~57-58% vs ~55%, neutral basis), ahead of Zep, but fully offline with an auditable `why()` evidence path. Pick it when your data can't leave the box.
+
+![recall() finds the booking but misses the reason; why() reaches it through typed links, across a session restart](examples/agent_memory/why_across_sessions.gif)
 
 ```python
 from velesdb import MemoryService            # pip install velesdb
@@ -120,7 +122,18 @@ mem.remember("Booked the aisle seat on Robert's flight", links=[(reason, "becaus
 mem.why("why the aisle seat on Robert's flight?")   # walks booking → reason — recall() can't
 ```
 
-The same wedge ships in **Python** (`pip install velesdb`), **Node** (`npm i @wiscale/velesdb-memory-node`), and as a local **[MCP server](crates/velesdb-memory)**. Full runnable demo: [`examples/agent_memory/why_across_sessions.py`](examples/agent_memory/why_across_sessions.py).
+The same wedge ships in **Python** (`pip install velesdb`), **Node** (`npm i @wiscale/velesdb-memory-node`), and as a local **[MCP server](crates/velesdb-memory)**.
+
+**Four runnable ways to see it** — each shows what plain vector recall misses and `why()` recovers:
+
+| Demo | What it shows |
+|---|---|
+| [`why_across_sessions.py`](examples/agent_memory/why_across_sessions.py) | the reason survives a process restart — recall of the top 5 of 16 memories stays blind, `why()` reaches it |
+| [`why_magic_constant.py`](examples/agent_memory/why_magic_constant.py) | *why* a magic constant has its value — a business reason that shares no words with the code |
+| [`memory_builds_its_own_graph.py`](examples/agent_memory/memory_builds_its_own_graph.py) | paste raw prose → a local model auto-wires the graph (no `relate()`), `why()` walks it to the root cause |
+| [`why_magic_constant.mjs`](crates/velesdb-node/examples/why_magic_constant.mjs) | the same engine and wedge in the **Node** binding |
+
+> **Not a weak-embedder trick.** In each retrieval demo, recall stays blind to the reason **even under a real semantic embedder** (`ollama` / `all-minilm`), not just the offline `hash` default — the reason is connected by a decision, not by surface similarity, which is exactly what a vector store cannot follow.
 
 ---
 
@@ -182,7 +195,7 @@ ORDER BY similarity() DESC LIMIT 10
 
 ## Known Limitations
 
-VelesDB is honest about its boundaries. The following are current scope limits of the open-source Community Edition — each is either a deliberate design trade-off or a feature tracked for a separate Enterprise edition. We list them here so you can make an informed technical choice.
+VelesDB is honest about its boundaries. The following are current scope limits of the source-available Community Edition — each is either a deliberate design trade-off or a feature tracked for a separate Enterprise edition. We list them here so you can make an informed technical choice.
 
 | # | Limitation | Scope | Tracked |
 |---|------------|-------|---------|
@@ -511,7 +524,7 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | v1.18 — Engine artifacts realigned to VelesDB Core License 1.0, agent-memory parity (Python/Tauri bindings, TS procedural recall) | ✅ Shipped |
 | v2.0.0 — Agent-memory graph dimension (`relate()` API + the NEAR + MATCH flagship query verbatim), GraphFirst anchored retrieval, PQ/RaBitQ quantization wired end-to-end across restarts, durable TTL on every read path, `GET /metrics` by default | ✅ Shipped |
 
-> VelesDB Core is open-source. Enterprise features (distributed replication, managed cloud, RBAC) are available separately via [VelesDB Premium](https://velesdb.com).
+> VelesDB Core is source-available (readable, modifiable, redistributable under the VelesDB Core License 1.0 — not an OSI-approved license; see [docs/LICENSING.md](docs/LICENSING.md)). Enterprise features (distributed replication, managed cloud, RBAC) are available separately via [VelesDB Premium](https://velesdb.com).
 
 > We ship weekly. [Full changelog](CHANGELOG.md) | [Contributing guide](CONTRIBUTING.md)
 

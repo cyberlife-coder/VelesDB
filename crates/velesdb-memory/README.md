@@ -50,6 +50,48 @@ A vector search ranks by resemblance; the ticket shares no words with the
 question, so a pure similarity search is blind to it. `why()` follows the typed
 links and reaches it. That gap is the product.
 
+### Four runnable demos of the wedge
+
+Each is a real run that shows what plain recall misses and `why()` recovers:
+
+| Demo | What it shows |
+|---|---|
+| [`why_across_sessions.py`](../../examples/agent_memory/why_across_sessions.py) | the reason survives a process restart — recall of the top 5 of 16 memories stays blind, `why()` reaches it |
+| [`why_magic_constant.py`](../../examples/agent_memory/why_magic_constant.py) | *why* a magic constant has its value — a business reason that shares no words with the code |
+| [`memory_builds_its_own_graph.py`](../../examples/agent_memory/memory_builds_its_own_graph.py) | paste raw prose → a local model auto-wires the graph (no `relate()`), `why()` walks it to the root cause |
+| [`why_magic_constant.mjs`](../velesdb-node/examples/why_magic_constant.mjs) (Node) | the same engine and wedge in the `@wiscale/velesdb-memory-node` binding |
+
+> **Not a weak-embedder trick.** In each retrieval demo, recall stays blind to the
+> reason **even under a real semantic embedder** (`ollama` / `all-minilm`), not just
+> the offline `hash` default — the reason is connected by a *decision*, not by surface
+> similarity, which is exactly what a vector store cannot follow.
+
+## How it compares — and who it's for
+
+velesdb-memory is **embedded memory, not a cloud memory service.** On the LoCoMo QA
+benchmark it sits in the **same tier as Mem0** and well ahead of Zep on a sober,
+neutral-judge basis — but the real difference is the *architecture*, not the score:
+
+| | **velesdb-memory** | Mem0 | Zep / Graphiti |
+|---|---|---|---|
+| Shape | one embedded binary (vector + graph + column) | orchestrator over Qdrant + Postgres | orchestrator (graph-centric) |
+| Runs | **100% local / offline** | cloud LLM in the loop | cloud LLM in the loop |
+| Explains | **`why()` returns the evidence path** | returns an answer | returns an answer |
+| LoCoMo (neutral PISA basis) | ~57-58% | ~55% | ~34% |
+
+*Mem0's ~92% / Zep's ~84% headlines run on cloud GPT-4o with contested methodology; on
+the neutral basis the whole field sits far lower and close together — we do **not** claim
+to beat those headlines, we claim the same tier on radically better architecture.*
+
+**Choose velesdb-memory when local-first is a requirement, not a preference:**
+- **Regulated / sovereign data** (health, legal, finance, defense) — context can't transit a third-party LLM API; `why()` gives both data residency and an auditable recall trail.
+- **Air-gapped / on-prem / edge** — a self-contained binary against a local model is the only shape that deploys with no outbound internet.
+- **Cost-sensitive, high-volume agents** — running extraction + recall on a local stack removes the per-token cloud bill.
+
+If you're cloud-native and want the largest community, Mem0 is the default reach. If your
+data can't leave the box — or you need to *audit why* it recalled something — this is the
+one that fits. (Deeper positioning: [`POSITIONING.md`](POSITIONING.md).)
+
 ### Benchmark
 
 `cargo run --release -p velesdb-memory --example bench_multihop` isolates the
