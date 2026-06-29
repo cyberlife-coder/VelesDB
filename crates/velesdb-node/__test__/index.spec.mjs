@@ -20,7 +20,7 @@ function freshStore() {
 test('surface allowlist — exactly the 8 supported methods, no engine leak', () => {
   const instanceMethods = Object.getOwnPropertyNames(MemoryService.prototype)
     .filter((m) => m !== 'constructor')
-    .sort()
+    .sort((a, b) => a.localeCompare(b))
   assert.deepEqual(instanceMethods, [
     'forget',
     'recall',
