@@ -36,6 +36,9 @@ exclude_paths:
   - "crates/**/benches/**"
   # Generated code (pest parser, build scripts)
   - "crates/**/build.rs"
+  # Generated lock files — machine-written, NLOC/duplication are meaningless
+  - "**/package-lock.json"
+  - "**/Cargo.lock"
   # Conformance test data (JSON fixtures, not source code)
   - "conformance/**"
   # Demo/example apps (illustrative, not production)
