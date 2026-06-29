@@ -82,6 +82,7 @@ impl<E: Embedder> MemoryService<E> {
         let embedding = self.embedder.embed(fact)?;
         self.store(fact_id, fact, &embedding, metadata)?;
         for link in links {
+            validate_relation(&link.relation)?;
             self.memory
                 .semantic()
                 .relate(fact_id, link.target, &link.relation, None)?;
@@ -118,7 +119,7 @@ impl<E: Embedder> MemoryService<E> {
             return Err(MemoryError::EmptyFact);
         }
         let facts = extractor.extract(text)?;
-        let mut fact_ids = Vec::new();
+        let mut fact_ids = Vec::with_capacity(facts.len());
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64)> = HashSet::new();
         let mut seeded: HashSet<u64> = HashSet::new();
@@ -432,6 +433,7 @@ impl<E: Embedder> MemoryService<E> {
     /// Returns [`MemoryError::UnknownMemory`] if either endpoint is missing, or
     /// a storage error if the edge cannot be created.
     pub fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
+        validate_relation(relation)?;
         self.ensure_exists(from)?;
         self.ensure_exists(to)?;
         self.memory
@@ -496,15 +498,16 @@ impl<E: Embedder> MemoryService<E> {
         };
         let mut visited: HashSet<u64> = HashSet::from([seed_id]);
         let mut frontier = vec![seed_id];
+        let mut next: Vec<u64> = Vec::new();
         for hop in 1..=max_hops {
-            let mut next = Vec::new();
+            next.clear();
             for node_id in frontier.drain(..) {
                 self.expand(node_id, hop, &mut explanation, &mut visited, &mut next)?;
             }
             if next.is_empty() {
                 break;
             }
-            frontier = next;
+            std::mem::swap(&mut frontier, &mut next);
         }
         Ok(explanation)
     }
@@ -619,4 +622,33 @@ fn validate_scalar(value: &Value) -> Result<(), MemoryError> {
             "value must be a string, number, or boolean, got {value}"
         ))),
     }
+}
+
+/// Maximum byte length for a relation label (prevents oversized graph edge labels
+/// from reaching the storage layer).
+const MAX_RELATION_BYTES: usize = 512;
+
+/// Validate a caller-supplied relation label: non-empty, within the size cap, and
+/// containing only printable, non-control ASCII characters (32–126) or non-ASCII
+/// Unicode. This prevents null bytes and control characters from reaching the
+/// storage layer while permitting natural-language labels like `"decided_in"` or
+/// `"is a friend of"`.
+fn validate_relation(label: &str) -> Result<(), MemoryError> {
+    if label.is_empty() {
+        return Err(MemoryError::InvalidRelation(
+            "relation label must not be empty".to_owned(),
+        ));
+    }
+    if label.len() > MAX_RELATION_BYTES {
+        return Err(MemoryError::InvalidRelation(format!(
+            "relation label exceeds maximum of {MAX_RELATION_BYTES} bytes ({} given)",
+            label.len()
+        )));
+    }
+    if label.chars().any(|c| c.is_ascii() && c.is_ascii_control()) {
+        return Err(MemoryError::InvalidRelation(
+            "relation label must not contain ASCII control characters".to_owned(),
+        ));
+    }
+    Ok(())
 }
