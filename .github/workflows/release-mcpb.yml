@@ -1,0 +1,200 @@
+name: Publish MCPB to MCP Registry
+
+# Builds velesdb-memory as standalone binaries, packages each platform as an
+# MCPB bundle (.mcpb = zip with manifest.json + bin/), attaches them to the
+# GitHub Release, then generates a multi-package server.json (registryType=mcpb,
+# one entry per platform with its fileSha256) and publishes it to the official
+# MCP registry via GitHub OIDC.
+#
+# Why mcpb and not cargo: the MCP registry does NOT support registryType=cargo;
+# it supports npm/pypi/nuget/oci/mcpb. mcpb (a GitHub-release binary bundle) is
+# the on-brand path for a single offline Rust binary — no Node, no Docker.
+#
+# Triggers: velesdb-memory-vX.Y.Z tags, or manual workflow_dispatch with a
+# version that already has a matching git tag / release.
+
+on:
+  push:
+    tags:
+      - 'velesdb-memory-v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'velesdb-memory version to (re)package as mcpb, e.g. 0.2.0 (a velesdb-memory-vVERSION tag/release must exist)'
+        required: true
+
+permissions:
+  contents: write   # create/update the GitHub Release and upload .mcpb assets
+  id-token: write   # GitHub OIDC for mcp-publisher (proves io.github.cyberlife-coder/*)
+
+env:
+  BIN: velesdb-memory
+  SERVER_NAME: io.github.cyberlife-coder/velesdb-memory
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - id: v
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/velesdb-memory-v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=velesdb-memory-v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved velesdb-memory version: $VERSION"
+
+  build:
+    name: Build mcpb (${{ matrix.target }})
+    needs: version
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin,      host: macos-latest,   os: darwin,  arch: arm64 }
+          - { target: x86_64-apple-darwin,       host: macos-latest,   os: darwin,  arch: amd64 }
+          - { target: x86_64-unknown-linux-gnu,  host: ubuntu-latest,  os: linux,   arch: amd64 }
+          - { target: aarch64-unknown-linux-gnu, host: ubuntu-latest,  os: linux,   arch: arm64 }
+          - { target: x86_64-pc-windows-msvc,    host: windows-latest, os: win32,   arch: amd64 }
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install aarch64 linux cross linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Build velesdb-memory (default features = mcp)
+        run: cargo build --release --locked -p velesdb-memory --bin ${{ env.BIN }} --target ${{ matrix.target }}
+
+      - name: Assemble .mcpb bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.version.outputs.version }}"
+          OS="${{ matrix.os }}"
+          STAGE="mcpb-stage"
+          rm -rf "$STAGE" && mkdir -p "$STAGE/bin"
+
+          if [ "$OS" = "win32" ]; then
+            EXE="${{ env.BIN }}.exe"
+            CMD="bin/${{ env.BIN }}.exe"
+          else
+            EXE="${{ env.BIN }}"
+            CMD="bin/${{ env.BIN }}"
+          fi
+          cp "target/${{ matrix.target }}/release/${EXE}" "$STAGE/bin/${EXE}"
+
+          # manifest.json (MCPB spec, binary server)
+          cat > "$STAGE/manifest.json" <<JSON
+          {
+            "manifest_version": "0.3",
+            "name": "velesdb-memory",
+            "version": "${VERSION}",
+            "description": "Offline agentic memory: remember/recall/relate/forget/why over a fused vector+graph+columnar engine.",
+            "author": { "name": "Wiscale", "email": "contact@wiscale.fr" },
+            "homepage": "https://github.com/cyberlife-coder/VelesDB",
+            "license": "LicenseRef-VelesDB-Core-1.0",
+            "server": {
+              "type": "binary",
+              "entry_point": "${CMD}",
+              "mcp_config": {
+                "command": "${CMD}",
+                "args": [],
+                "env": {}
+              }
+            },
+            "compatibility": { "platforms": ["${OS}"] }
+          }
+          JSON
+          cp README.md "$STAGE/README.md" 2>/dev/null || true
+
+          ASSET="${{ env.BIN }}-${VERSION}-${{ matrix.target }}.mcpb"
+          ( cd "$STAGE" && zip -r -q "../${ASSET}" . )
+          echo "ASSET=${ASSET}" >> "$GITHUB_ENV"
+          echo "Built ${ASSET}"
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcpb-${{ matrix.target }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  release-and-publish:
+    name: Release bundles + publish server.json
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download all bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: bundles
+          merge-multiple: true
+
+      - name: Attach .mcpb bundles to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Ensure a release exists for the tag, then upload (clobber) the bundles.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --notes "velesdb-memory $TAG — MCPB bundles for the MCP registry." || true
+          fi
+          gh release upload "$TAG" bundles/*.mcpb --clobber
+
+      - name: Generate server.json (one mcpb package per platform)
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/cyberlife-coder/VelesDB/releases/download/${TAG}"
+          PKGS="[]"
+          declare -A OSMAP=( [aarch64-apple-darwin]=darwin [x86_64-apple-darwin]=darwin [x86_64-unknown-linux-gnu]=linux [aarch64-unknown-linux-gnu]=linux [x86_64-pc-windows-msvc]=win32 )
+          declare -A ARCHMAP=( [aarch64-apple-darwin]=arm64 [x86_64-apple-darwin]=amd64 [x86_64-unknown-linux-gnu]=amd64 [aarch64-unknown-linux-gnu]=arm64 [x86_64-pc-windows-msvc]=amd64 )
+          for f in bundles/*.mcpb; do
+            fname="$(basename "$f")"
+            target="${fname#${BIN}-${VERSION}-}"; target="${target%.mcpb}"
+            sha="$(sha256sum "$f" | cut -d' ' -f1)"
+            PKGS="$(jq --arg id "${BASE}/${fname}" --arg sha "$sha" --arg os "${OSMAP[$target]}" --arg arch "${ARCHMAP[$target]}" \
+              '. += [{"registryType":"mcpb","identifier":$id,"version":"'"$VERSION"'","fileSha256":$sha,"transport":{"type":"stdio"},"runtimeHint":($os+"/"+$arch)}]' <<< "$PKGS")"
+          done
+          jq -n --arg name "$SERVER_NAME" --arg ver "$VERSION" --argjson pkgs "$PKGS" '{
+            "$schema":"https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+            "name":$name,
+            "title":"VelesDB Memory",
+            "description":"Offline agentic memory: remember/recall/relate/forget/why over a fused vector+graph+columnar engine",
+            "version":$ver,
+            "repository":{"url":"https://github.com/cyberlife-coder/VelesDB","source":"github"},
+            "packages":$pkgs
+          }' > server.json
+          echo "Generated server.json:"; cat server.json
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        run: ./mcp-publisher publish
