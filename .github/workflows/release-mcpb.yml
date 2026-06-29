@@ -125,7 +125,23 @@ jobs:
           cp README.md "$STAGE/README.md" 2>/dev/null || true
 
           ASSET="${{ env.BIN }}-${VERSION}-${{ matrix.target }}.mcpb"
-          ( cd "$STAGE" && zip -r -q "../${ASSET}" . )
+          # Portable zip (no `zip` binary on Windows runners). Python is present on
+          # every runner; preserve the exec bit for bin/* so the extracted binary runs.
+          python3 - "$STAGE" "$ASSET" <<'PYZIP'
+          import os, sys, zipfile
+          stage, asset = sys.argv[1], sys.argv[2]
+          with zipfile.ZipFile(asset, "w", zipfile.ZIP_DEFLATED) as z:
+              for root, _, files in os.walk(stage):
+                  for f in files:
+                      full = os.path.join(root, f)
+                      arc = os.path.relpath(full, stage).replace(os.sep, "/")
+                      zi = zipfile.ZipInfo(arc)
+                      zi.compress_type = zipfile.ZIP_DEFLATED
+                      zi.external_attr = ((0o100755 if arc.startswith("bin/") else 0o100644) << 16)
+                      with open(full, "rb") as fh:
+                          z.writestr(zi, fh.read())
+          print("zipped", asset)
+          PYZIP
           echo "ASSET=${ASSET}" >> "$GITHUB_ENV"
           echo "Built ${ASSET}"
 
