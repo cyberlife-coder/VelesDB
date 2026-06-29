@@ -51,6 +51,7 @@ pub enum ColumnOp {
 
 impl ColumnOp {
     /// The `VelesQL` operator token.
+    #[must_use]
     pub(crate) fn as_sql(self) -> &'static str {
         match self {
             Self::Eq => "=",

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.cyberlife-coder/velesdb-memory",
+  "title": "VelesDB Memory",
+  "description": "Agentic memory for AI agents in one tiny offline binary. remember/recall/relate/forget/why over a tri-engine that fuses vector search, a knowledge graph, and a columnar store — why() walks the graph to reconnect a decision with its context across sessions, surfacing linked facts that share no words with the query.",
+  "version": "0.2.0",
+  "repository": {
+    "url": "https://github.com/cyberlife-coder/VelesDB",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "cargo",
+      "registryBaseUrl": "https://crates.io",
+      "identifier": "velesdb-memory",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "VELESDB_MEMORY_PATH",
+          "description": "Directory where the local memory store lives (the memory never leaves this machine).",
+          "isRequired": false,
+          "default": "~/.velesdb-memory"
+        },
+        {
+          "name": "VELESDB_MEMORY_EMBEDDER",
+          "description": "Embedding backend: 'hash' (default, offline, zero-dep) or 'ollama' (real semantic recall via a local model; binary must be built --features ollama).",
+          "isRequired": false,
+          "default": "hash"
+        }
+      ]
+    }
+  ]
+}

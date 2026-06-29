@@ -1,0 +1,42 @@
+# Smithery listing for velesdb-memory — a LOCAL stdio MCP server.
+# The server is a single Rust binary (`velesdb-memory`) installed with
+# `cargo install velesdb-memory`. It runs on the user's own machine over stdio,
+# so the memory store never leaves the host — this is a local server, not a
+# hosted/container deployment (which the VelesDB Core License forbids exposing
+# to third parties anyway).
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required: []
+    properties:
+      memoryPath:
+        type: string
+        description: Directory where the local memory store lives. Defaults to ~/.velesdb-memory.
+      embedder:
+        type: string
+        enum: [hash, ollama]
+        default: hash
+        description: >-
+          Embedding backend. 'hash' is offline and zero-dependency (default).
+          'ollama' gives real semantic recall via a local model and requires a
+          binary built with --features ollama plus a running Ollama.
+      ollamaModel:
+        type: string
+        default: all-minilm
+        description: Ollama model name, used only when embedder is 'ollama'.
+  commandFunction: |
+    (config) => ({
+      command: 'velesdb-memory',
+      args: [],
+      env: {
+        ...(config.memoryPath ? { VELESDB_MEMORY_PATH: config.memoryPath } : {}),
+        ...(config.embedder ? { VELESDB_MEMORY_EMBEDDER: config.embedder } : {}),
+        ...(config.embedder === 'ollama' && config.ollamaModel
+          ? { VELESDB_MEMORY_OLLAMA_MODEL: config.ollamaModel }
+          : {})
+      }
+    })
+  exampleConfig:
+    memoryPath: ~/.velesdb-memory
+    embedder: hash

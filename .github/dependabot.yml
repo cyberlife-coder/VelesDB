@@ -38,54 +38,11 @@ updates:
         applies-to: security-updates
         patterns: ["*"]
 
-  - package-ecosystem: "npm"
-    directory: "/examples/react-wasm-search"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    labels: ["dependencies", "javascript"]
-    open-pull-requests-limit: 3
-    target-branch: "develop"
-    groups:
-      npm-react-example-non-major:
-        applies-to: version-updates
-        update-types: ["minor", "patch"]
-      security-npm-react-example:
-        applies-to: security-updates
-        patterns: ["*"]
-
-  - package-ecosystem: "npm"
-    directory: "/examples/node-express-rag"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    labels: ["dependencies", "javascript"]
-    open-pull-requests-limit: 3
-    target-branch: "develop"
-    groups:
-      npm-node-example-non-major:
-        applies-to: version-updates
-        update-types: ["minor", "patch"]
-      security-npm-node-example:
-        applies-to: security-updates
-        patterns: ["*"]
-
-  - package-ecosystem: "npm"
-    directory: "/demos/tauri-rag-app"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    labels: ["dependencies", "javascript"]
-    open-pull-requests-limit: 3
-    target-branch: "develop"
-    groups:
-      npm-tauri-demo-non-major:
-        applies-to: version-updates
-        update-types: ["minor", "patch"]
-      security-npm-tauri-demo:
-        applies-to: security-updates
-        patterns: ["*"]
-
+  # Example/demo npm packages (examples/*, demos/*) are intentionally NOT tracked:
+  # they ship nothing, so keeping their deps current has ~zero value, and ci.yml is
+  # path-filtered to skip examples/** — so their bumps can never satisfy the required
+  # "CI Success" check and pile up as unmergeable PRs. The shipped SDK
+  # (/sdks/typescript) and the product python wheel ARE tracked, above/below.
   - package-ecosystem: "pip"
     directory: "/crates/velesdb-python"
     schedule:
@@ -119,6 +76,15 @@ updates:
     labels: ["ci", "dependencies"]
     open-pull-requests-limit: 3
     target-branch: "develop"
+    ignore:
+      # cache-apt-pkgs-action v1.6.2 added `empty_packages_behavior: error`, which
+      # fails (exit 3) on an apt cache-HIT — every job that caches glib/gtk/webkit
+      # hits this once the shared cache is warm, breaking Lint/Tests/Bench. It's a
+      # CI-speed action with no value to us in v1.6.2+, and adapting all ~15 call
+      # sites isn't worth the ROI. Pin v1.6.1; revisit if a later release fixes the
+      # cache-hit regression. (Security updates still flow via the security-gha group.)
+      - dependency-name: "awalsh128/cache-apt-pkgs-action"
+        versions: [">=1.6.2"]
     groups:
       gha-non-major:
         applies-to: version-updates

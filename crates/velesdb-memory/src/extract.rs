@@ -166,13 +166,14 @@ impl RawFact {
         if text.is_empty() {
             return None;
         }
-        let mut seen = std::collections::HashSet::new();
-        let entities = self
+        let mut entities: Vec<String> = self
             .entities
             .into_iter()
             .map(|entity| entity.trim().to_lowercase())
-            .filter(|entity| !entity.is_empty() && seen.insert(entity.clone()))
+            .filter(|entity| !entity.is_empty())
             .collect();
+        entities.sort_unstable();
+        entities.dedup();
         Some(ExtractedFact { text, entities })
     }
 }
@@ -210,8 +211,20 @@ fn parse_generate_response(body: &str) -> Result<String, ExtractError> {
 /// A short, single-line preview of model output for error messages.
 #[cfg(feature = "extract")]
 fn truncate(text: &str) -> String {
-    let oneline = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    oneline.chars().take(120).collect()
+    let mut out = String::new();
+    let mut first = true;
+    for word in text.split_whitespace() {
+        if out.len() >= 120 {
+            break;
+        }
+        if !first {
+            out.push(' ');
+        }
+        out.push_str(word);
+        first = false;
+    }
+    out.truncate(120);
+    out
 }
 
 /// Parse `text` into `T`, first slicing out the outermost JSON array/object.
