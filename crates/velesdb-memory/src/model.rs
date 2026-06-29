@@ -12,6 +12,7 @@ use serde_json::Value;
 
 /// A typed link from a freshly remembered fact to an existing memory.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub struct Link {
     /// Id of the memory being linked to.
     pub target: u64,
@@ -21,6 +22,7 @@ pub struct Link {
 
 /// One semantically recalled memory.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub struct Recollection {
     /// Stable id of the memory.
     pub id: u64,
@@ -83,6 +85,7 @@ pub struct ColumnFilter {
 
 /// A node in an [`Explanation`] subgraph.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub struct MemoryNode {
     /// Stable id of the memory.
     pub id: u64,
@@ -94,6 +97,7 @@ pub struct MemoryNode {
 
 /// A typed edge in an [`Explanation`] subgraph.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub struct MemoryEdge {
     /// Source memory id.
     pub from: u64,
