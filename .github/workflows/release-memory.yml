@@ -224,6 +224,13 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
           targets: ${{ matrix.target }}
+      # The repo pins rust-toolchain.toml = stable, so cargo compiles with the
+      # `stable` toolchain — but the step above adds the cross target's std to the
+      # pinned `RUST_VERSION` toolchain, not `stable`. Add it to `stable` (the one
+      # cargo actually uses) so cross targets (aarch64-linux-gnu, x86_64-apple-darwin)
+      # find core/std instead of failing with E0463. (Verified locally.)
+      - name: Add cross target std to the stable toolchain
+        run: rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: "release-memory-node-${{ matrix.target }}"
@@ -248,7 +255,7 @@ jobs:
         # napi reads the profile from package.json's build script; pass the
         # target explicitly for cross/host builds. --use-napi-cross supplies the
         # zig-based sysroot for the one cross target (no Docker needed).
-        run: npx napi build --platform --release --profile release-node --target ${{ matrix.target }} ${{ matrix.cross && '--use-napi-cross' || '' }}
+        run: npx napi build --platform --profile release-node --target ${{ matrix.target }} ${{ matrix.cross && '--use-napi-cross' || '' }}
 
       - name: Smoke-test the addon (native targets only)
         # HARDENING (tracked): this skips x86_64-apple-darwin (Rosetta on the arm
