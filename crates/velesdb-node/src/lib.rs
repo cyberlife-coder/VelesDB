@@ -239,6 +239,7 @@ impl MemoryStore {
     ) -> AsyncTask<Job<Vec<String>>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
+            guards::check_fact(&text)?;
             let metadata = convert::to_metadata(metadata)?;
             let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
             let extractor = OllamaExtractor::new(url, model);
