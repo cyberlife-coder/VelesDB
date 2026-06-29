@@ -1,0 +1,43 @@
+name: Publish to MCP Registry
+
+# Registers the velesdb-memory MCP server (server.json at repo root) on the
+# official MCP registry (registry.modelcontextprotocol.io).
+#
+# Auth = GitHub OIDC: the io.github.cyberlife-coder/* namespace is proven by the
+# repository's own OIDC identity, so there is NO interactive login and NO secret
+# to manage. The underlying cargo package (velesdb-memory) is published
+# separately by release-memory.yml; this job only registers the server manifest.
+#
+# Triggers:
+#   - push of a velesdb-memory-vX.Y.Z tag (registers each memory release), and
+#   - manual workflow_dispatch (to (re)publish the current server.json on demand,
+#     e.g. to register 0.2.0 which was tagged before this workflow existed).
+#
+# Prereq: server.json `version` must match a velesdb-memory version already live
+# on crates.io (the registry validates the package exists). Bump it alongside the
+# crate on each memory release.
+
+on:
+  push:
+    tags: ["velesdb-memory-v*"]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # required for GitHub OIDC authentication
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json to MCP Registry
+        run: ./mcp-publisher publish

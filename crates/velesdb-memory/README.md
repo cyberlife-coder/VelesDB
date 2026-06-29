@@ -155,14 +155,26 @@ has none of these — it ranks by similarity and stops.
 
 ## Install
 
+**One command (recommended, with a Rust toolchain present):**
+
 ```bash
-# Default build: tiny, zero-dependency, fully offline.
-cargo build --release -p velesdb-memory
-# → target/release/velesdb-memory
+cargo install velesdb-memory
+# → installs the `velesdb-memory` MCP server binary onto your PATH
 ```
 
-The binary speaks MCP over **stdio**, so client and server run on the same
-machine and the memory never leaves it.
+The binary is tiny, zero-dependency, and fully offline. It speaks MCP over
+**stdio**, so client and server run on the same machine and the memory never
+leaves it.
+
+**From the workspace (for hacking on the server itself):**
+
+```bash
+cargo build --release -p velesdb-memory   # → target/release/velesdb-memory
+```
+
+> Prebuilt, no-Rust binaries (GitHub Releases + `curl | sh` + Homebrew) are a
+> tracked follow-up — until then, `cargo install velesdb-memory` is the
+> supported one-liner.
 
 ## Configure your client
 
@@ -340,3 +352,31 @@ raw database capabilities (`query`, `create_collection`, `upsert`, `traverse`).
 Run locally over stdio, you operate the software for yourself: this is the
 license's expressly-permitted **embedded, local-first use** — not a hosted
 service to third parties.
+
+### License FAQ
+
+**Is this open source?** It is **source-available**: the full source is
+readable, modifiable, and redistributable under the **VelesDB Core License 1.0**
+(a derivative of the Elastic License 2.0). It is not an OSI-approved license.
+
+**Can I use it at work / in a commercial product?** **Yes.** Running the server
+locally, or embedding the library inside your own application where *your* users
+only ever receive results (a memory, a `why()` subgraph), is expressly permitted
+— the license's **embedded, local-first use** clause.
+
+**What's actually forbidden?** Re-hosting VelesDB as a multi-tenant *service*
+where third parties drive the database (run arbitrary queries, manage
+collections/indexes/graph nodes). This server makes that impossible by design:
+it exposes **memory semantics only** (`remember/recall/relate/forget/why`),
+never raw `query` / `create_collection` / `upsert` / `traverse`.
+
+**Why this license?** So that *you* can embed agent memory locally and freely,
+while a third party cannot turn *our* engine into a memory-as-a-service and
+resell it. The moat protects the project, not your usage.
+
+**What do I owe when I redistribute?** Keep the LICENSE file and copyright
+notices, and add a [velesdb.com](https://velesdb.com) attribution in any public
+app that ships the binary. Internal, dev, and test use need no attribution.
+
+> Full terms and the canonical FAQ: [LICENSE](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE).
+> Questions: contact@wiscale.fr.
