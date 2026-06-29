@@ -119,6 +119,15 @@ updates:
     labels: ["ci", "dependencies"]
     open-pull-requests-limit: 3
     target-branch: "develop"
+    ignore:
+      # cache-apt-pkgs-action v1.6.2 added `empty_packages_behavior: error`, which
+      # fails (exit 3) on an apt cache-HIT — every job that caches glib/gtk/webkit
+      # hits this once the shared cache is warm, breaking Lint/Tests/Bench. It's a
+      # CI-speed action with no value to us in v1.6.2+, and adapting all ~15 call
+      # sites isn't worth the ROI. Pin v1.6.1; revisit if a later release fixes the
+      # cache-hit regression. (Security updates still flow via the security-gha group.)
+      - dependency-name: "awalsh128/cache-apt-pkgs-action"
+        versions: [">=1.6.2"]
     groups:
       gha-non-major:
         applies-to: version-updates
