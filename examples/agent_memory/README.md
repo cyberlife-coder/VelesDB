@@ -21,11 +21,39 @@ no model download, and no internet.
 
 | File | Language | What it shows | How to run |
 |------|----------|---------------|------------|
+| `wedge_quickstart.py` | Python | **The differentiator:** `MemoryService.why()` reaches a 2-hop memory that plain `recall()` misses. Start here. | `python wedge_quickstart.py` |
 | `agent_loop.py` | Python | Full agent loop: semantic + episodic + procedural, plus a TTL + snapshot cycle. Doubles as a smoke test (prints a trace and exits 0). | `python agent_loop.py` |
 | `snapshot_ttl.rs` | Rust | `velesdb-core` public API: namespaced TTL, `auto_expire`, snapshot save/load round-trip. | `cargo run --bin snapshot_ttl` |
 | `agent_memory.ts` | TypeScript | `db.agentMemory()` SDK facade: `storeFact` / `recordEvent` / `learnProcedure` and their recall counterparts. Needs a running `velesdb-server`. | `npx tsx agent_memory.ts` |
 
-## Python (`agent_loop.py`) — start here
+## The wedge — `why()` (start here)
+
+`wedge_quickstart.py` uses the high-level `MemoryService` (`remember` / `recall` /
+`relate` / `forget` / `why`) and shows the one thing pure vector search can't do:
+
+```bash
+cd crates/velesdb-python && maturin develop && cd -   # or: pip install velesdb
+python examples/agent_memory/wedge_quickstart.py
+```
+
+```text
+recall('why did we choose parking_lot')   [vector similarity only]
+   0.28  we chose parking_lot to avoid lock poisoning after a panic
+   0.16  PR #42 swaps the std Mutex for parking_lot
+   └─ EPIC-317 is nowhere here: it shares no words with the question.
+
+why('why did we choose parking_lot')      [vector seed + graph traversal]
+   hop 0  we chose parking_lot ...
+   hop 1  PR #42 ...
+   hop 2  EPIC-317: intermittent CI hang under load
+   └─ the graph reached the very ticket the decision fixed.
+```
+
+`recall` ranks by resemblance, so the ticket (which shares no words with the
+question) is invisible to it. `why` seeds on the closest memory and walks the
+typed links to reach it. That connected context is the differentiator.
+
+## Python (`agent_loop.py`) — the primitive layer
 
 Self-contained; it is also the smoke test for this directory.
 

@@ -521,6 +521,38 @@ mod tests {
     }
 
     #[test]
+    fn test_ensure_index_creates_and_is_idempotent() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let mut meta = serde_json::Map::new();
+        meta.insert("project".to_string(), serde_json::json!("veles"));
+        sm.store_with_metadata(1, "auth bug", &emb, &meta).unwrap();
+
+        let collection = db
+            .get_vector_collection(sm.collection_name())
+            .expect("semantic collection exists")
+            .inner;
+        assert!(
+            !collection.has_secondary_index("project"),
+            "no secondary index before ensure_index — recall would post-filter O(n)"
+        );
+
+        sm.ensure_index("project").expect("ensure_index");
+        assert!(
+            collection.has_secondary_index("project"),
+            "ensure_index activates the bitmap prefilter index on the field"
+        );
+
+        // Idempotent: a second call is a cheap no-op that still succeeds.
+        sm.ensure_index("project")
+            .expect("ensure_index is idempotent");
+        assert!(collection.has_secondary_index("project"));
+    }
+
+    #[test]
     fn test_query_filtered_skips_expired() {
         let dir = tempdir().unwrap();
         let db = Arc::new(Database::open(dir.path()).unwrap());

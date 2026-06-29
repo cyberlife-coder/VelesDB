@@ -9,6 +9,8 @@ members = [
     "crates/velesdb-migrate",
     "crates/velesdb-mobile",
     "crates/tauri-plugin-velesdb",
+    "crates/velesdb-memory",
+    "crates/velesdb-node",
 ]
 exclude = [
     "demos/tauri-rag-app/src-tauri",
@@ -17,7 +19,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "3.3.0"
+version = "3.4.0"
 edition = "2021"
 rust-version = "1.89"
 license-file = "LICENSE"
@@ -77,13 +79,22 @@ base64 = "0.22"
 smallvec = { version = "1", features = ["serde"] }
 
 # Internal workspace crates
-velesdb-core = { path = "crates/velesdb-core", version = "3.3.0", default-features = false }
+velesdb-core = { path = "crates/velesdb-core", version = "3.4.0", default-features = false }
 
 [profile.release]
 lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# napi-rs converts Rust panics into JS exceptions via catch_unwind, which is a
+# no-op under `panic = "abort"` (the default release profile above) — any panic
+# would SIGABRT the whole Node host. The velesdb-node addon is built with this
+# profile (`napi build --profile release-node`) so panics unwind into JS errors.
+# `panic` cannot be overridden in a per-package profile, hence a whole profile.
+[profile.release-node]
+inherits = "release"
+panic = "unwind"
 
 [profile.bench]
 lto = true

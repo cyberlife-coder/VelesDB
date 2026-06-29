@@ -36,6 +36,9 @@ exclude_paths:
   - "crates/**/benches/**"
   # Generated code (pest parser, build scripts)
   - "crates/**/build.rs"
+  # Generated lock files — machine-written, NLOC/duplication are meaningless
+  - "**/package-lock.json"
+  - "**/Cargo.lock"
   # Conformance test data (JSON fixtures, not source code)
   - "conformance/**"
   # Demo/example apps (illustrative, not production)
@@ -53,6 +56,7 @@ exclude_paths:
   # Example applications (illustrative, not production) — random usage,
   # LangChain imports, complexity are all acceptable in demo code
   - "examples/**"
+  - "crates/**/examples/**"
   # Changelog files — Keep-a-Changelog format requires repeated headings
   # (### Added, ### Fixed, etc.) per version section
   - "CHANGELOG.md"

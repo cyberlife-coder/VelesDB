@@ -1,0 +1,51 @@
+{
+  "name": "@wiscale/velesdb-memory-node",
+  "version": "0.2.0",
+  "description": "Local-first agent memory for Node.js (napi-rs): remember/recall/relate/forget/why with the why() knowledge-graph wedge, plus auto-extraction.",
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "Julien Lange <contact@wiscale.fr>",
+  "homepage": "https://velesdb.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cyberlife-coder/velesdb.git",
+    "directory": "crates/velesdb-node"
+  },
+  "keywords": [
+    "agent-memory",
+    "local-first",
+    "knowledge-graph",
+    "vector-database",
+    "ai",
+    "napi-rs"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "binaryName": "velesdb-memory-node",
+    "targets": [
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "napi build --platform --profile release-node",
+    "build:debug": "napi build --platform",
+    "test": "node --test __test__/*.spec.mjs",
+    "prepublishOnly": "napi prepublish -t npm"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0"
+  }
+}

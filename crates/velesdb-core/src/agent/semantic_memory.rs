@@ -94,6 +94,29 @@ impl SemanticMemory {
         self.dimension
     }
 
+    /// Ensures a secondary index exists on `field` so filtered recall takes the
+    /// indexed bitmap prefilter instead of a linear post-filter scan.
+    ///
+    /// Idempotent and cheap to call on every filtered query: when the index is
+    /// already present this is a single `has_secondary_index` read. The first
+    /// call backfills existing payloads and records `field` in the persisted
+    /// `indexed_fields` authority (so the index is rebuilt on the next `open`,
+    /// not silently lost); subsequent upserts maintain it incrementally.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the collection is missing or persisting the index
+    /// authority fails.
+    pub fn ensure_index(&self, field: &str) -> Result<(), AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        if !collection.has_secondary_index(field) {
+            collection
+                .create_index(field)
+                .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Stores a semantic memory point.
     ///
     /// # Errors
@@ -398,6 +421,52 @@ impl SemanticMemory {
             .take(k)
             .map(|r| (r.point.id, r.score, extract_content(&r.point)))
             .collect())
+    }
+
+    /// Queries semantic memory, dropping points whose payload matches `exclude`.
+    ///
+    /// A point is excluded when it matches *all* key-value pairs in `exclude`
+    /// (the negative counterpart of [`Self::query_filtered`]); an empty `exclude`
+    /// drops nothing. Ranked by vector similarity, TTL-expired points removed.
+    ///
+    /// Unlike a positive filter, an exclude set can be arbitrarily large (e.g.
+    /// every internal hub), so a fixed over-fetch could be entirely consumed by
+    /// excluded points and return fewer than `k` survivors. To avoid that, the
+    /// fetch window **grows geometrically** until `k` survivors are found or the
+    /// collection is exhausted — so a real match is never starved out by a dense
+    /// band of excluded neighbours.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when embedding dimension is invalid or collection access fails.
+    pub fn query_excluding(
+        &self,
+        query_embedding: &[f32],
+        k: usize,
+        exclude: &Map<String, Value>,
+    ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
+        memory_helpers::validate_dimension(self.dimension, query_embedding.len())?;
+        if exclude.is_empty() || k == 0 {
+            return self.query(query_embedding, k);
+        }
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        let base = k.saturating_add(self.ttl.expired_count(MemoryKind::Semantic));
+        let mut fetch_k = base.saturating_mul(2).max(k.saturating_add(8));
+        loop {
+            let raw = memory_helpers::search_collection(&collection, query_embedding, fetch_k)?;
+            let exhausted = raw.len() < fetch_k;
+            let kept: Vec<(u64, f32, String)> = raw
+                .into_iter()
+                .filter(|r| !self.ttl.is_expired(MemoryKind::Semantic, r.point.id))
+                .filter(|r| !payload_matches(&r.point, exclude))
+                .take(k)
+                .map(|r| (r.point.id, r.score, extract_content(&r.point)))
+                .collect();
+            if kept.len() >= k || exhausted {
+                return Ok(kept);
+            }
+            fetch_k = fetch_k.saturating_mul(2);
+        }
     }
 
     /// Stores multiple semantic memory points in one batch.

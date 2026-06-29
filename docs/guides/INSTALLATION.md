@@ -13,7 +13,7 @@ Complete installation instructions for all platforms and deployment methods.
 | **macOS (Apple Silicon)** | `.tar.gz` portable (`velesdb-aarch64-apple-darwin.tar.gz`) | [GitHub Releases](https://github.com/cyberlife-coder/VelesDB/releases) ✅ |
 | **Python** | `pip` | [PyPI](https://pypi.org/project/velesdb/) ✅ |
 | **Rust** | `cargo` | [crates.io](https://crates.io/crates/velesdb-core) ✅ |
-| **npm** | WASM/SDK | [npm @wiscale](https://www.npmjs.com/org/wiscale) ✅ |
+| **npm** | WASM/SDK (`@wiscale/velesdb-sdk`, `@wiscale/velesdb-wasm`) + agent memory (`@wiscale/velesdb-memory-node`) | [npm @wiscale](https://www.npmjs.com/org/wiscale) ✅ |
 | **Docker** | Container | [Build from source](#-docker-installation) |
 | **iOS** | XCFramework | [Build from source](#-mobile-iosandroid) |
 | **Android** | AAR/SO | [Build from source](#-mobile-iosandroid) |
@@ -60,10 +60,10 @@ entry.
 
 ```bash
 # Download
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v3.3.0/velesdb-3.3.0-amd64.deb
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v3.4.0/velesdb-3.4.0-amd64.deb
 
 # Install
-sudo dpkg -i velesdb-3.3.0-amd64.deb
+sudo dpkg -i velesdb-3.4.0-amd64.deb
 
 # Verify
 velesdb --version
@@ -160,13 +160,13 @@ GitHub Container Registry, so you don't need to build locally:
 
 ```bash
 # Pull a specific release (recommended for reproducibility)
-docker pull ghcr.io/cyberlife-coder/velesdb:3.3.0
+docker pull ghcr.io/cyberlife-coder/velesdb:3.4.0
 
 # ...or the latest stable release
 docker pull ghcr.io/cyberlife-coder/velesdb:latest
 
 docker run -d --name velesdb -p 8080:8080 -v velesdb_data:/data \
-  ghcr.io/cyberlife-coder/velesdb:3.3.0
+  ghcr.io/cyberlife-coder/velesdb:3.4.0
 ```
 
 ### Build locally

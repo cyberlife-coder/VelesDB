@@ -1,0 +1,94 @@
+[package]
+name = "velesdb-memory"
+# Independent of the workspace version: velesdb-memory is a young MCP wrapper
+# with its own release cadence, decoupled from the core engine's 3.x line.
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+license-file = "../../LICENSE"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+authors.workspace = true
+description = "VelesDB-memory: local-first MCP memory server for AI agents (remember/recall/relate/forget/why)."
+readme = "README.md"
+keywords = ["mcp", "agent-memory", "local-first", "knowledge-graph", "ai"]
+categories = ["database", "command-line-utilities"]
+# The demo gif is served from the repo via raw.githubusercontent in the README;
+# shipping it in the .crate would only add dead weight to every download.
+exclude = ["media/"]
+
+[dependencies]
+velesdb-core = { workspace = true, features = ["persistence"] }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Pinned to rmcp's schemars (1.2.x) so domain types and MCP DTOs share one
+# JsonSchema derive — no duplicate wire/domain structs.
+schemars = "1"
+# The MCP server stack — optional, behind the (default) `mcp` feature. Library
+# consumers (e.g. the language bindings) build with `default-features = false`
+# to get the memory core without the `rmcp`/`tokio` server dependencies.
+rmcp = { version = "1.8.0", features = ["server", "macros", "transport-io"], optional = true }
+tokio = { workspace = true, optional = true }
+# Optional real-recall backend (off by default). HTTP-only to a local Ollama;
+# `default-features = false` drops TLS to keep the binary small.
+ureq = { version = "2", optional = true, default-features = false }
+
+[features]
+# The MCP server transport + binary. On by default so `cargo build` produces the
+# server; library consumers disable it to drop the rmcp/tokio server stack.
+default = ["mcp"]
+mcp = ["dep:rmcp", "dep:tokio"]
+# Real on-device semantic recall via a local Ollama embeddings endpoint. Off by
+# default so the shipped binary stays tiny, zero-dependency, and fully offline.
+ollama = ["dep:ureq"]
+# Batteries-included text → facts+entities extraction (OllamaExtractor) so the
+# fact↔entity graph self-builds. Off by default: the Extractor trait is always
+# available for bring-your-own-LLM; only this local backend pulls the HTTP dep.
+extract = ["dep:ureq"]
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[[bin]]
+name = "velesdb-memory"
+path = "src/main.rs"
+# The binary is the MCP server, so it only builds with the `mcp` feature.
+required-features = ["mcp"]
+
+# Real-data LoCoMo benchmark. Needs a local Ollama (all-minilm + a generative
+# model), so it only builds with the `ollama` feature.
+[[example]]
+name = "locomo"
+path = "examples/locomo/main.rs"
+required-features = ["ollama"]
+
+[lib]
+name = "velesdb_memory"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[[example]]
+name = "multihop"
+path = "examples/multihop/main.rs"
+required-features = ["ollama"]
+
+[[example]]
+name = "colfilter"
+path = "examples/colfilter/main.rs"
+required-features = ["ollama"]
+
+[[example]]
+name = "timeqa"
+path = "examples/timeqa/main.rs"
+required-features = ["ollama"]
+
+[[example]]
+name = "triengine"
+path = "examples/triengine/main.rs"
+required-features = ["ollama"]

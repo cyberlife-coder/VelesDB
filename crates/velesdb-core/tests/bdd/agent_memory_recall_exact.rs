@@ -147,6 +147,93 @@ fn test_query_filtered_honors_metadata_filter_exact() {
     assert_eq!(recalled_ids(&rows), vec![10, 20, 30], "only red, ranked");
 }
 
+/// GIVEN the same five facts (10,20,30 = red; 40,50 = blue). WHEN
+/// `query_excluding(q, 10, {team:blue})`. THEN exactly [10,20,30] in similarity
+/// order — the negative counterpart of `query_filtered`: blue rows are dropped,
+/// the rest keep their cosine ranking. AND an empty exclude drops nothing.
+#[test]
+fn test_query_excluding_drops_matching_payload() {
+    let (_dir, _db, memory) = setup();
+    let teams = [
+        (10_u64, "red"),
+        (20, "red"),
+        (30, "red"),
+        (40, "blue"),
+        (50, "blue"),
+    ];
+    let offs = [0.0_f32, 0.3, 0.7, 1.2, 3.0];
+    for ((id, team), off) in teams.into_iter().zip(offs) {
+        let mut meta = Map::new();
+        meta.insert("team".to_string(), Value::String(team.to_string()));
+        memory
+            .semantic()
+            .store_with_metadata(id, "fact", &[1.0, off, 0.0, 0.0], &meta)
+            .expect("store with metadata");
+    }
+    let mut exclude = Map::new();
+    exclude.insert("team".to_string(), json!("blue"));
+
+    let rows = memory
+        .semantic()
+        .query_excluding(&Q, 10, &exclude)
+        .expect("query_excluding");
+    assert_eq!(
+        recalled_ids(&rows),
+        vec![10, 20, 30],
+        "blue dropped, ranked"
+    );
+
+    let all = memory
+        .semantic()
+        .query_excluding(&Q, 10, &Map::new())
+        .expect("query_excluding empty");
+    assert_eq!(
+        recalled_ids(&all),
+        vec![10, 20, 30, 40, 50],
+        "empty exclude drops nothing"
+    );
+}
+
+/// GIVEN 12 EXCLUDED points ranked nearer the query than 3 wanted facts (a
+/// dense band of hubs, the realistic auto-extraction shape). WHEN
+/// `query_excluding(q, 3, {block:yes})`. THEN all 3 facts come back — the
+/// growing fetch must not let the excluded band starve the result below k (a
+/// fixed `max(2k, k+8)` window would fetch only 11 ≈ all-excluded and return 0).
+#[test]
+fn test_query_excluding_grows_fetch_past_a_dense_excluded_band() {
+    let (_dir, _db, memory) = setup();
+    // 12 excluded points at the nearest offsets, then 3 wanted facts farther out.
+    for i in 0..12u64 {
+        let mut meta = Map::new();
+        meta.insert("block".to_string(), json!("yes"));
+        let off = i as f32 * 0.1; // 0.0 .. 1.1, all nearer than the facts
+        memory
+            .semantic()
+            .store_with_metadata(100 + i, "hub", &[1.0, off, 0.0, 0.0], &meta)
+            .expect("store excluded");
+    }
+    let want = [200_u64, 201, 202];
+    for (j, id) in want.into_iter().enumerate() {
+        let off = 2.0 + j as f32 * 0.1; // farther than every excluded point
+        memory
+            .semantic()
+            .store(id, "fact", &[1.0, off, 0.0, 0.0])
+            .expect("store fact");
+    }
+    let mut exclude = Map::new();
+    exclude.insert("block".to_string(), json!("yes"));
+
+    let rows = memory
+        .semantic()
+        .query_excluding(&Q, 3, &exclude)
+        .expect("query_excluding");
+    assert_eq!(
+        recalled_ids(&rows),
+        want.to_vec(),
+        "all 3 facts survive the dense excluded band"
+    );
+}
+
 /// GIVEN the five facts (no filter). WHEN paginating with k=2: page0 =
 /// offset 0, page1 = offset 2, page2 = offset 4. THEN the pages are exact,
 /// contiguous, non-overlapping slices of the global similarity order

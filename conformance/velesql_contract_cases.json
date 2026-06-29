@@ -25,7 +25,10 @@
         "params": {}
       },
       "expected_status": 422,
-      "expected_error_code": "VELESQL_MISSING_COLLECTION"
+      "expected_error_code": "VELESQL_MISSING_COLLECTION",
+      "expected_error_message": "MATCH query via /query requires `collection` in request body",
+      "expected_error_hint": "Add `collection` to the /query JSON body or use /collections/{name}/match",
+      "expected_error_details": { "field": "collection", "endpoint": "/query", "query_type": "MATCH" }
     },
     {
       "id": "C003",
@@ -38,7 +41,10 @@
         "params": { "v": [1.0, 0.0, 0.0, 0.0] }
       },
       "expected_status": 404,
-      "expected_error_code": "VELESQL_COLLECTION_NOT_FOUND"
+      "expected_error_code": "VELESQL_COLLECTION_NOT_FOUND",
+      "expected_error_message": "Collection 'docs_missing_conformance' not found",
+      "expected_error_hint": "Create the collection first or correct the collection name",
+      "expected_error_details": { "collection": "docs_missing_conformance" }
     },
     {
       "id": "C004",
@@ -90,7 +96,10 @@
         "params": {}
       },
       "expected_status": 422,
-      "expected_error_code": "VELESQL_AGGREGATION_ERROR"
+      "expected_error_code": "VELESQL_AGGREGATION_ERROR",
+      "expected_error_message": "Only aggregation queries are accepted on /aggregate",
+      "expected_error_hint": "Use /query for row/search/graph queries; use /aggregate for GROUP BY/aggregate workloads.",
+      "expected_error_details": { "endpoint": "/aggregate" }
     },
     {
       "id": "C008",

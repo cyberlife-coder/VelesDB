@@ -86,6 +86,8 @@ New to the codebase? Start with these documents (in order):
 | `velesdb-wasm` | Browser-side vector search (no `persistence` feature) |
 | `velesdb-mobile` | iOS/Android bindings via UniFFI |
 | `velesdb-migrate` | Schema/data migration tooling |
+| `velesdb-memory` | MCP agent-memory server (`MemoryService` wedge: remember/recall/why) |
+| `velesdb-node` | Node.js binding of the memory wedge (napi-rs; `@wiscale/velesdb-memory-node`) |
 | `tauri-plugin-velesdb` | Tauri desktop integration |
 
 ## Quality Gates

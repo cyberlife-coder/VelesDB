@@ -128,7 +128,7 @@ jobs:
       - name: Run workspace tests
         run: |
           cargo test --workspace --features persistence,gpu,update-check \
-            --exclude velesdb-python -- --test-threads=1
+            --exclude velesdb-python --exclude velesdb-node -- --test-threads=1
       - name: Verify publish readiness
         run: |
           # Only dry-run velesdb-core (root crate, no workspace deps).
@@ -185,12 +185,12 @@ jobs:
         run: cargo install cargo-deb --locked
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p velesdb-cli -p velesdb-server -p velesdb-migrate
+        run: cargo build --release --target ${{ matrix.target }} -p velesdb-cli -p velesdb-server -p velesdb-migrate -p velesdb-memory
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
-          mkdir dist && cp target/${{ matrix.target }}/release/velesdb target/${{ matrix.target }}/release/velesdb-server target/${{ matrix.target }}/release/velesdb-migrate dist/ 2>/dev/null || true
+          mkdir dist && cp target/${{ matrix.target }}/release/velesdb target/${{ matrix.target }}/release/velesdb-server target/${{ matrix.target }}/release/velesdb-migrate target/${{ matrix.target }}/release/velesdb-memory dist/ 2>/dev/null || true
           cp README.md LICENSE dist/
           tar -czvf velesdb-${{ matrix.target }}.${{ matrix.ext }} -C dist .
 
@@ -228,6 +228,9 @@ jobs:
       (github.event_name == 'push' || inputs.publish_crates)
     environment: crates-io
     env:
+      # velesdb-memory is intentionally absent: it is versioned independently
+      # (0.x) and ships on its own `velesdb-memory-vX.Y.Z` tag via
+      # release-memory.yml, so it does not ride the workspace 3.x release tag.
       CRATES_TO_PUBLISH: "velesdb-core velesdb-server velesdb-cli velesdb-migrate velesdb-mobile tauri-plugin-velesdb"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

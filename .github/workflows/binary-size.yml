@@ -1,0 +1,89 @@
+name: Binary Size Gate
+
+# Verifies the "~9 MB binary" promise the README makes (QUALITY_BAR.md
+# "Additional gates"). The headline figure used to be prose only — nothing
+# measured it, so a heavy dependency could have inflated the binary while the
+# claim went stale. This job builds the stripped release binaries and fails if
+# any exceeds its ceiling (see scripts/check_binary_size.py for the values and
+# the headroom rationale).
+#
+# Note: ceilings carry headroom over the Apple-Silicon headline figure to
+# absorb the Linux x86_64 build delta this CI runner produces. They catch a
+# real regression (a multi-MB dependency, a bundled asset), not exact bytes.
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/velesdb-core/**"
+      - "crates/velesdb-server/**"
+      - "crates/velesdb-cli/**"
+      - "crates/velesdb-migrate/**"
+      - "scripts/check_binary_size.py"
+      - ".github/workflows/binary-size.yml"
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/velesdb-core/**"
+      - "crates/velesdb-server/**"
+      - "crates/velesdb-cli/**"
+      - "crates/velesdb-migrate/**"
+      - "scripts/check_binary_size.py"
+      - ".github/workflows/binary-size.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: binary-size-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  binary-size:
+    name: Release binaries within ceilings
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537 # stable
+        with:
+          toolchain: "1.89"
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: "velesdb-binary-size"
+
+      - name: Build stripped release binaries
+        # Default features = the configuration the published artifacts ship.
+        # `[profile.release]` in Cargo.toml sets strip = true, lto = true.
+        run: cargo build --release -p velesdb-server -p velesdb-cli -p velesdb-migrate
+
+      - name: Check binary sizes against ceilings
+        run: |
+          python scripts/check_binary_size.py --target-dir target/release \
+            | tee binary-size-report.txt
+          {
+            echo "## Binary Size Gate"
+            echo ""
+            echo '```'
+            cat binary-size-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload size report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binary-size-report-${{ github.sha }}
+          path: binary-size-report.txt
+          retention-days: 30

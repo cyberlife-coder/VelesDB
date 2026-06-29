@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-06-24 (v3.3.0)
+Last updated: 2026-06-28 (v3.4.0; velesdb-memory 0.1.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -83,6 +83,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
   | Durable TTL set/refresh | ✅ `PATCH .../points/{id}/ttl` | ✅ `client.setTtlDurable()` | ❌ (throws `NOT_SUPPORTED`) | ✅ `set_semantic/episodic/procedural_ttl_durable`, `store_with_ttl`, `record_with_ttl`, `learn_with_ttl` |
   | Temporal recall facades | n/a (use `/query`) | ✅ `recallRecent` / `recallOlderThan` | ❌ (throws `NOT_SUPPORTED`) | ✅ `episodic.recent` / `episodic.older_than` |
 - **Agent Memory (WASM / Mobile)**: ⚠️ semantic-only surface (`SemanticMemory` in WASM, `VelesSemanticMemory` on mobile); episodic/procedural memory, TTL helpers, and snapshots are not exposed on these bindings.
+- **Auto-extraction (text → graph)**: lives in the high-level `velesdb-memory` **MCP server**, not in this core-feature matrix. `MemoryService::remember_extracted` (and the `remember_extracted` MCP tool) run an `Extractor` over raw text and auto-wire the fact↔topic graph; the reusable core primitive it builds on is `SemanticMemory::query_excluding` (negative-filter vector search, used to keep internal entity hubs out of recall/why). The MCP `recall`/`why` tools inherit hub-exclusion transparently. The high-level `MemoryService` wedge (remember/recall/recall_where/relate/forget/why/remember_extracted) is now exposed beyond the MCP server in **Python** (`velesdb-python`, #1242) and **Node.js** (`velesdb-node` / npm `@wiscale/velesdb-memory-node`, #1245); the TS/WASM SDK still exposes only the primitive agent-memory layer.
 - **Persistence (WASM)**: Disabled by design — `persistence` feature flag is excluded for `wasm32-unknown-unknown` targets.
 - **GPU**: Requires `gpu` feature flag; only available in crates that link `wgpu` (core, server, Python bindings).
 
@@ -241,7 +242,7 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
 
 ## Remaining Gaps and Action Items
 
-1. Add explicit server-side end-to-end assertions for the REST error shape (`code/hint/details`) beyond parser conformance. (The CLI has no HTTP layer — it executes against embedded core — so the REST error-shape contract belongs to `velesdb-server`.)
+1. ✅ **Done (2026-06-24).** Explicit server-side assertions for the full REST `VelesqlErrorResponse` shape (`code`/`message`/`hint`/`details`) are now enforced in `crates/velesdb-server/tests/velesql_conformance_tests.rs` via the shared fixture. Cases C002 (`VELESQL_MISSING_COLLECTION`), C003 (`VELESQL_COLLECTION_NOT_FOUND`), and C007 (`VELESQL_AGGREGATION_ERROR`) each assert all four fields, pinning the complete error body contract for the `/query` and `/aggregate` semantic-error paths. Parse errors (`QueryErrorResponse`) retain their own parser-specific shape and are tested separately by C004/C013 (status code only, by design — the parser error format is defined at `E0XX` layer). (The CLI has no HTTP layer — it executes against embedded core — so this contract belongs exclusively to `velesdb-server`.)
 2. ✅ **Done (2026-06-20).** The executor-level conformance net now covers **core, WASM, and CLI** — all three run `conformance/velesql_executor_cases.json`, including scalar WHERE filters, single- and multi-column ORDER BY, the ascending-id tie-break, and bounded top-k. See [KNOWN_LIMITATIONS #13](./KNOWN_LIMITATIONS.md#13-velesql-executor-conformance-core-wasm-cli) (resolved).
 3. Keep docs, fixtures, and examples synchronized on every contract version change.
 4. Promote RaBitQ from experimental to stable once the API is finalized.
