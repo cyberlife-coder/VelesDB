@@ -7,7 +7,7 @@ released on its own `velesdb-memory-vX.Y.Z` tag.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-06-29
 
 Benchmark milestone: the tri-engine is no longer just *wired* — each leg is
 *measured* to beat pure-vector retrieval on its specialty, generation-free, on

@@ -172,9 +172,13 @@ leaves it.
 cargo build --release -p velesdb-memory   # → target/release/velesdb-memory
 ```
 
-> Prebuilt, no-Rust binaries (GitHub Releases + `curl | sh` + Homebrew) are a
-> tracked follow-up — until then, `cargo install velesdb-memory` is the
-> supported one-liner.
+> **In an MCP client (no Rust toolchain needed):** velesdb-memory is listed on the
+> [official MCP registry](https://registry.modelcontextprotocol.io) as
+> `io.github.cyberlife-coder/velesdb-memory`. Registry-aware clients can install it
+> straight from the per-platform `.mcpb` bundles attached to each
+> [GitHub release](https://github.com/cyberlife-coder/VelesDB/releases). A
+> `curl | sh` / Homebrew installer is a tracked follow-up; with a Rust toolchain,
+> `cargo install velesdb-memory` is the supported one-liner.
 
 ## Configure your client
 
