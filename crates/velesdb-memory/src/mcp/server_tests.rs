@@ -428,6 +428,85 @@ async fn remember_extracted_builds_a_graph_through_the_server() {
 }
 
 #[tokio::test]
+async fn reserved_metadata_key_returns_invalid_params() {
+    let (_dir, srv) = server();
+    let mut bad_meta = Metadata::new();
+    bad_meta.insert("_veles_hub".to_owned(), serde_json::json!(true));
+    let err = srv
+        .remember(Parameters(RememberParams {
+            fact: "a fact".to_owned(),
+            links: Vec::new(),
+            metadata: Some(bad_meta),
+        }))
+        .await
+        .map(|_| ())
+        .expect_err("reserved metadata key must be rejected");
+    assert_eq!(
+        err.code,
+        ErrorCode::INVALID_PARAMS,
+        "ReservedKey must map to invalid_params, not internal_error"
+    );
+}
+
+#[tokio::test]
+async fn recall_where_non_scalar_filter_value_returns_invalid_params() {
+    let (_dir, srv) = server();
+    let err = srv
+        .recall_where(Parameters(RecallWhereParams {
+            query: "query".to_owned(),
+            limit: None,
+            filters: vec![ColumnFilter {
+                field: "ts".to_owned(),
+                op: ColumnOp::Eq,
+                value: serde_json::json!([1, 2, 3]),
+            }],
+        }))
+        .await
+        .map(|_| ())
+        .expect_err("array filter value must be rejected");
+    assert_eq!(
+        err.code,
+        ErrorCode::INVALID_PARAMS,
+        "non-scalar filter value must map to invalid_params"
+    );
+}
+
+#[tokio::test]
+async fn relate_with_empty_relation_returns_invalid_params() {
+    let (_dir, srv) = server();
+    let Json(a) = srv
+        .remember(Parameters(RememberParams {
+            fact: "fact A".to_owned(),
+            links: Vec::new(),
+            metadata: None,
+        }))
+        .await
+        .expect("remember A");
+    let Json(b) = srv
+        .remember(Parameters(RememberParams {
+            fact: "fact B".to_owned(),
+            links: Vec::new(),
+            metadata: None,
+        }))
+        .await
+        .expect("remember B");
+    let err = srv
+        .relate(Parameters(RelateParams {
+            from: a.id,
+            to: b.id,
+            relation: String::new(),
+        }))
+        .await
+        .map(|_| ())
+        .expect_err("empty relation must be rejected");
+    assert_eq!(
+        err.code,
+        ErrorCode::INVALID_PARAMS,
+        "InvalidRelation must map to invalid_params"
+    );
+}
+
+#[tokio::test]
 async fn remember_extracted_without_backend_returns_internal_error() {
     let (_dir, srv) = server(); // no extractor attached
     let err = srv

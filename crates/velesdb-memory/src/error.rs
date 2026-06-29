@@ -58,6 +58,13 @@ pub enum MemoryError {
     /// identifier, named a reserved key, or carried a non-scalar value.
     #[error("invalid filter field: {0}")]
     InvalidFilter(String),
+
+    /// A relation label supplied to [`crate::service::MemoryService::relate`] or
+    /// a [`crate::model::Link`] in
+    /// [`crate::service::MemoryService::remember`] was invalid — empty, too long,
+    /// or contained non-printable characters.
+    #[error("invalid relation label: {0}")]
+    InvalidRelation(String),
 }
 
 impl MemoryError {
@@ -67,9 +74,10 @@ impl MemoryError {
     #[must_use]
     pub fn category(&self) -> ErrorCategory {
         match self {
-            Self::EmptyFact | Self::ReservedKey(_) | Self::InvalidFilter(_) => {
-                ErrorCategory::InvalidInput
-            }
+            Self::EmptyFact
+            | Self::ReservedKey(_)
+            | Self::InvalidFilter(_)
+            | Self::InvalidRelation(_) => ErrorCategory::InvalidInput,
             Self::UnknownMemory(_) => ErrorCategory::NotFound,
             Self::Storage(_) | Self::Memory(_) | Self::Embed(_) | Self::Extract(_) => {
                 ErrorCategory::Internal

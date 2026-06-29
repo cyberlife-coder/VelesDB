@@ -64,10 +64,13 @@ pub struct MemoryNodeJs {
 
 impl From<MemoryNode> for MemoryNodeJs {
     fn from(n: MemoryNode) -> Self {
+        // SAFETY: hop is bounded by MAX_WHY_HOPS (10), which always fits in u32.
+        #[allow(clippy::cast_possible_truncation)]
+        let hop = n.hop as u32;
         Self {
             id: id_to_string(n.id),
             content: n.content,
-            hop: u32::try_from(n.hop).unwrap_or(u32::MAX),
+            hop,
         }
     }
 }
