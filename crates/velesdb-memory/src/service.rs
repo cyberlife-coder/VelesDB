@@ -107,13 +107,21 @@ impl<E: Embedder> MemoryService<E> {
             metadata,
             positive_ttl(ttl_seconds),
         )?;
+        self.relate_links(fact_id, links)?;
+        Ok(fact_id)
+    }
+
+    /// Create each validated outgoing link from `fact_id`. Split out of
+    /// [`Self::remember_with_ttl`] to keep that method within the complexity
+    /// budget.
+    fn relate_links(&self, fact_id: u64, links: &[Link]) -> Result<(), MemoryError> {
         for link in links {
             validate_relation(&link.relation)?;
             self.memory
                 .semantic()
                 .relate(fact_id, link.target, &link.relation, None)?;
         }
-        Ok(fact_id)
+        Ok(())
     }
 
     /// Remember a passage of raw `text` by running it through an [`Extractor`]
