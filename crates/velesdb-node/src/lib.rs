@@ -121,20 +121,23 @@ impl MemoryStore {
 
     /// Store a fact; resolves to its decimal-string id. `links` are
     /// `{target, relation}` edges to existing memories; `metadata` is an optional
-    /// object for later filtering.
+    /// object for later filtering. `ttlSeconds` makes the fact expire after that
+    /// many seconds (a durable TTL that survives restarts); omit it (or `0`) for
+    /// a permanent memory.
     #[napi(ts_return_type = "Promise<string>")]
     pub fn remember(
         &self,
         fact: String,
         links: Option<Vec<LinkJs>>,
         metadata: Option<Value>,
+        ttl_seconds: Option<u32>,
     ) -> AsyncTask<Job<String>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             guards::check_fact(&fact)?;
             let links = convert::to_links(links)?;
             let metadata = convert::to_metadata(metadata)?;
-            svc.remember(&fact, &links, metadata.as_ref())
+            svc.remember_with_ttl(&fact, &links, metadata.as_ref(), ttl_seconds.map(u64::from))
                 .map(convert::id_to_string)
                 .map_err(to_napi_err)
         }))

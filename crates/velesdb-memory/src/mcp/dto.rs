@@ -23,6 +23,12 @@ pub(super) struct RememberParams {
     /// Optional structured metadata for later filtering (e.g.
     /// `{"project": "veles", "author": "julien", "status": "open"}`).
     pub(super) metadata: Option<Metadata>,
+    /// Optional time-to-live in seconds. When set, the fact expires (and stops
+    /// being recalled) after this many seconds — a durable TTL that survives a
+    /// restart. Omit for a permanent memory. Falls back to the server's
+    /// `VELESDB_MEMORY_DEFAULT_TTL` when unset.
+    #[serde(default)]
+    pub(super) ttl_seconds: Option<u64>,
 }
 
 /// Result of the `remember` tool.

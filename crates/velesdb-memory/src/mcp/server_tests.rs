@@ -40,6 +40,7 @@ async fn remember_then_recall_roundtrips_through_the_server() {
             fact: DECISION.to_owned(),
             links: Vec::new(),
             metadata: None,
+            ttl_seconds: None,
         }))
         .await
         .expect("remember");
@@ -63,6 +64,7 @@ async fn why_returns_the_connected_subgraph() {
             fact: DECISION.to_owned(),
             links: Vec::new(),
             metadata: None,
+            ttl_seconds: None,
         }))
         .await
         .expect("remember decision");
@@ -71,6 +73,7 @@ async fn why_returns_the_connected_subgraph() {
             fact: "PR #42 swaps the mutex".to_owned(),
             links: Vec::new(),
             metadata: None,
+            ttl_seconds: None,
         }))
         .await
         .expect("remember pr");
@@ -95,6 +98,7 @@ async fn forget_removes_a_memory_through_the_server() {
             fact: "ephemeral note about France".to_owned(),
             links: Vec::new(),
             metadata: None,
+            ttl_seconds: None,
         }))
         .await
         .expect("remember");
@@ -122,6 +126,7 @@ async fn remember_links_are_traversable_by_why() {
             fact: "PR #99 refactors locks".to_owned(),
             links: Vec::new(),
             metadata: None,
+            ttl_seconds: None,
         }))
         .await
         .expect("remember pr");
@@ -133,6 +138,7 @@ async fn remember_links_are_traversable_by_why() {
                 relation: "decided_in".to_owned(),
             }],
             metadata: None,
+            ttl_seconds: None,
         }))
         .await
         .expect("remember decision with link");
@@ -154,6 +160,7 @@ async fn metadata_and_filter_flow_through_the_server() {
             fact: "auth bug in login".to_owned(),
             links: Vec::new(),
             metadata: Some(veles_meta.clone()),
+            ttl_seconds: None,
         }))
         .await
         .expect("remember veles");
@@ -162,6 +169,7 @@ async fn metadata_and_filter_flow_through_the_server() {
             fact: "auth bug in login too".to_owned(),
             links: Vec::new(),
             metadata: Some(acme_meta),
+            ttl_seconds: None,
         }))
         .await
         .expect("remember acme");
@@ -177,6 +185,46 @@ async fn metadata_and_filter_flow_through_the_server() {
 
     assert!(recalled.memories.iter().any(|m| m.id == kept.id));
     assert!(recalled.memories.iter().all(|m| m.id != dropped.id));
+}
+
+#[tokio::test]
+async fn remember_accepts_explicit_and_default_ttl() {
+    let (_dir, srv) = server();
+    let srv = srv.with_default_ttl(3_600);
+
+    // Per-fact ttl_seconds flows through the tool.
+    let Json(explicit) = srv
+        .remember(Parameters(RememberParams {
+            fact: "explicit ttl fact".to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: Some(3_600),
+        }))
+        .await
+        .expect("remember with explicit ttl");
+
+    // No per-fact ttl → the server's default_ttl applies.
+    let Json(defaulted) = srv
+        .remember(Parameters(RememberParams {
+            fact: "default ttl fact".to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember with default ttl");
+
+    // Both have a future expiry, so both are still recallable now.
+    let Json(recalled) = srv
+        .recall(Parameters(RecallParams {
+            query: "ttl fact".to_owned(),
+            limit: None,
+            filter: None,
+        }))
+        .await
+        .expect("recall");
+    assert!(recalled.memories.iter().any(|m| m.id == explicit.id));
+    assert!(recalled.memories.iter().any(|m| m.id == defaulted.id));
 }
 
 /// Build a `{"ts": <n>}` metadata map.
@@ -197,6 +245,7 @@ async fn recall_where_filters_by_range_through_the_server() {
             fact: fact.to_owned(),
             links: Vec::new(),
             metadata: Some(ts_meta(ts)),
+            ttl_seconds: None,
         }))
         .await
         .expect("remember");
@@ -254,6 +303,7 @@ async fn empty_fact_returns_invalid_params_not_internal_error() {
             fact: "   ".to_owned(),
             links: Vec::new(),
             metadata: None,
+            ttl_seconds: None,
         }))
         .await
         .map(|_| ())
@@ -276,6 +326,7 @@ async fn unknown_link_target_returns_invalid_params_not_internal_error() {
                 relation: "x".to_owned(),
             }],
             metadata: None,
+            ttl_seconds: None,
         }))
         .await
         .map(|_| ())
@@ -295,6 +346,7 @@ async fn relate_to_unknown_endpoint_returns_invalid_params_not_internal_error() 
             fact: "an existing memory".to_owned(),
             links: Vec::new(),
             metadata: None,
+            ttl_seconds: None,
         }))
         .await
         .expect("remember");
@@ -329,6 +381,7 @@ async fn oversized_fact_returns_invalid_params() {
             fact: huge,
             links: Vec::new(),
             metadata: None,
+            ttl_seconds: None,
         }))
         .await
         .map(|_| ())
@@ -363,6 +416,7 @@ async fn why_hop_depth_is_capped_at_max() {
         fact: DECISION.to_owned(),
         links: Vec::new(),
         metadata: None,
+        ttl_seconds: None,
     }))
     .await
     .expect("remember");
@@ -437,6 +491,7 @@ async fn reserved_metadata_key_returns_invalid_params() {
             fact: "a fact".to_owned(),
             links: Vec::new(),
             metadata: Some(bad_meta),
+            ttl_seconds: None,
         }))
         .await
         .map(|_| ())
@@ -479,6 +534,7 @@ async fn relate_with_empty_relation_returns_invalid_params() {
             fact: "fact A".to_owned(),
             links: Vec::new(),
             metadata: None,
+            ttl_seconds: None,
         }))
         .await
         .expect("remember A");
@@ -487,6 +543,7 @@ async fn relate_with_empty_relation_returns_invalid_params() {
             fact: "fact B".to_owned(),
             links: Vec::new(),
             metadata: None,
+            ttl_seconds: None,
         }))
         .await
         .expect("remember B");
