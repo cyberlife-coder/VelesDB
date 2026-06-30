@@ -5,7 +5,8 @@
 //! Configure the store directory with `VELESDB_MEMORY_PATH` and the embedding
 //! backend with `VELESDB_MEMORY_EMBEDDER` (`hash` | `ollama`). When built with
 //! `--features extract`, set `VELESDB_MEMORY_EXTRACTOR=ollama` to enable the
-//! `remember_extracted` tool (auto text → fact↔topic graph).
+//! `remember_extracted` tool (auto text → fact↔topic graph). Set
+//! `VELESDB_MEMORY_DEFAULT_TTL` (seconds) to expire remembered facts by default.
 
 use rmcp::ServiceExt;
 use velesdb_memory::mcp::McpServer;
@@ -20,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // worker thread on a synchronous operation.
     let embedder = build_embedder()?;
     let service = MemoryService::open(&store_path, embedder)?;
-    let server = build_server(service)?;
+    let server = apply_default_ttl(build_server(service)?)?;
 
     tokio::runtime::Runtime::new()?.block_on(async move {
         let running = server
@@ -29,6 +30,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         running.waiting().await?;
         Ok::<(), Box<dyn std::error::Error>>(())
     })
+}
+
+/// Apply `VELESDB_MEMORY_DEFAULT_TTL` (seconds) as the default expiry for facts
+/// stored without their own `ttl_seconds`. Unset means facts are permanent.
+fn apply_default_ttl(server: McpServer) -> Result<McpServer, Box<dyn std::error::Error>> {
+    match std::env::var("VELESDB_MEMORY_DEFAULT_TTL") {
+        Ok(raw) => {
+            let ttl_seconds: u64 = raw.trim().parse().map_err(|_| {
+                format!(
+                    "VELESDB_MEMORY_DEFAULT_TTL must be a non-negative integer (seconds), got '{raw}'"
+                )
+            })?;
+            Ok(server.with_default_ttl(ttl_seconds))
+        }
+        Err(_) => Ok(server),
+    }
 }
 
 /// Build the MCP server, attaching an extraction backend from

@@ -23,10 +23,17 @@ pub(super) struct RememberParams {
     /// Optional structured metadata for later filtering (e.g.
     /// `{"project": "veles", "author": "julien", "status": "open"}`).
     pub(super) metadata: Option<Metadata>,
+    /// Optional time-to-live in seconds. When set, the fact expires (and stops
+    /// being recalled) after this many seconds — a durable TTL that survives a
+    /// restart. Omit for a permanent memory. Falls back to the server's
+    /// `VELESDB_MEMORY_DEFAULT_TTL` when unset.
+    #[serde(default)]
+    pub(super) ttl_seconds: Option<u64>,
 }
 
 /// Result of the `remember` tool.
 #[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RememberResult {
     /// Stable id assigned to the remembered fact.
     pub(super) id: u64,
@@ -34,6 +41,7 @@ pub(super) struct RememberResult {
 
 /// Parameters for the `recall` tool.
 #[derive(Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RecallParams {
     /// Natural-language query to match semantically.
     pub(super) query: String,
@@ -53,6 +61,7 @@ pub(super) struct RecallResult {
 
 /// Parameters for the `recall_where` tool.
 #[derive(Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RecallWhereParams {
     /// Natural-language query to match semantically.
     pub(super) query: String,
@@ -68,6 +77,7 @@ pub(super) struct RecallWhereParams {
 
 /// Parameters for the `relate` tool.
 #[derive(Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RelateParams {
     /// Source memory id.
     pub(super) from: u64,
@@ -79,6 +89,7 @@ pub(super) struct RelateParams {
 
 /// Result of the `relate` tool.
 #[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RelateResult {
     /// Id of the created edge.
     pub(super) edge_id: u64,
@@ -86,6 +97,7 @@ pub(super) struct RelateResult {
 
 /// Parameters for the `forget` tool.
 #[derive(Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct ForgetParams {
     /// Id of the memory to forget.
     pub(super) id: u64,
@@ -93,6 +105,7 @@ pub(super) struct ForgetParams {
 
 /// Result of the `forget` tool.
 #[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct ForgetResult {
     /// Id of the forgotten memory.
     pub(super) id: u64,
@@ -100,6 +113,7 @@ pub(super) struct ForgetResult {
 
 /// Parameters for the `why` tool.
 #[derive(Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct WhyParams {
     /// The decision (or fact) to explain.
     pub(super) decision: String,
@@ -121,6 +135,7 @@ pub(super) struct RememberExtractedParams {
 
 /// Result of the `remember_extracted` tool.
 #[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RememberExtractedResult {
     /// Stable ids of the stored facts, in extraction order.
     pub(super) ids: Vec<u64>,

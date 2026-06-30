@@ -72,6 +72,26 @@ impl<E: Embedder> MemoryService<E> {
         links: &[Link],
         metadata: Option<&Metadata>,
     ) -> Result<u64, MemoryError> {
+        self.remember_with_ttl(fact, links, metadata, None)
+    }
+
+    /// Like [`Self::remember`], but the fact **expires after `ttl_seconds`**.
+    ///
+    /// The expiry is a durable TTL — persisted with the fact (reserved
+    /// `_veles_expires_at` payload field), so it survives a process restart, and
+    /// expired facts stop being recalled. `None` (or `Some(0)`) stores the fact
+    /// permanently, exactly like [`Self::remember`]. Metadata and a TTL combine:
+    /// the metadata is written and the expiry preserved.
+    ///
+    /// # Errors
+    /// Same as [`Self::remember`].
+    pub fn remember_with_ttl(
+        &self,
+        fact: &str,
+        links: &[Link],
+        metadata: Option<&Metadata>,
+        ttl_seconds: Option<u64>,
+    ) -> Result<u64, MemoryError> {
         let fact = fact.trim();
         if fact.is_empty() {
             return Err(MemoryError::EmptyFact);
@@ -80,14 +100,28 @@ impl<E: Embedder> MemoryService<E> {
         self.ensure_link_targets_exist(links)?;
         let fact_id = id::stable_id(fact);
         let embedding = self.embedder.embed(fact)?;
-        self.store(fact_id, fact, &embedding, metadata)?;
+        self.store(
+            fact_id,
+            fact,
+            &embedding,
+            metadata,
+            positive_ttl(ttl_seconds),
+        )?;
+        self.relate_links(fact_id, links)?;
+        Ok(fact_id)
+    }
+
+    /// Create each validated outgoing link from `fact_id`. Split out of
+    /// [`Self::remember_with_ttl`] to keep that method within the complexity
+    /// budget.
+    fn relate_links(&self, fact_id: u64, links: &[Link]) -> Result<(), MemoryError> {
         for link in links {
             validate_relation(&link.relation)?;
             self.memory
                 .semantic()
                 .relate(fact_id, link.target, &link.relation, None)?;
         }
-        Ok(fact_id)
+        Ok(())
     }
 
     /// Remember a passage of raw `text` by running it through an [`Extractor`]
@@ -249,7 +283,8 @@ impl<E: Embedder> MemoryService<E> {
         let embedding = self.embedder.embed(&content)?;
         let mut meta = Map::new();
         meta.insert(HUB_FIELD.to_string(), Value::Bool(true));
-        self.store(id, &content, &embedding, Some(&meta))?;
+        // Topic hubs are graph anchors — they never expire.
+        self.store(id, &content, &embedding, Some(&meta), None)?;
         Ok(id)
     }
 
@@ -269,26 +304,28 @@ impl<E: Embedder> MemoryService<E> {
         Ok(())
     }
 
-    /// Store a fact with or without metadata.
+    /// Store a fact with any combination of metadata and a durable TTL.
     fn store(
         &self,
         id: u64,
         fact: &str,
         embedding: &[f32],
         metadata: Option<&Metadata>,
+        ttl_seconds: Option<u64>,
     ) -> Result<(), MemoryError> {
-        match metadata {
-            Some(meta) => self
-                .memory
-                .semantic()
-                .store_with_metadata(id, fact, embedding, meta)
-                .map_err(MemoryError::from),
-            None => self
-                .memory
-                .semantic()
-                .store(id, fact, embedding)
-                .map_err(MemoryError::from),
+        let semantic = self.memory.semantic();
+        match (metadata, ttl_seconds) {
+            (Some(meta), Some(ttl)) => {
+                // store_with_ttl writes the fact + the durable expiry; update_metadata
+                // then merges the metadata while preserving `_veles_expires_at`.
+                semantic.store_with_ttl(id, fact, embedding, ttl)?;
+                semantic.update_metadata(id, meta)?;
+            }
+            (Some(meta), None) => semantic.store_with_metadata(id, fact, embedding, meta)?,
+            (None, Some(ttl)) => semantic.store_with_ttl(id, fact, embedding, ttl)?,
+            (None, None) => semantic.store(id, fact, embedding)?,
         }
+        Ok(())
     }
 
     /// Recall up to `k` memories semantically similar to `query` (vector facet),
@@ -576,6 +613,12 @@ fn reject_reserved_keys(metadata: Option<&Metadata>) -> Result<(), MemoryError> 
         }
     }
     Ok(())
+}
+
+/// Normalise a requested TTL: `Some(0)` (and `None`) mean "no expiry" — the fact
+/// is stored permanently. Any positive value is kept as-is.
+fn positive_ttl(ttl_seconds: Option<u64>) -> Option<u64> {
+    ttl_seconds.filter(|&seconds| seconds > 0)
 }
 
 /// Map a core search result to a [`Recollection`], lifting the fact text out of

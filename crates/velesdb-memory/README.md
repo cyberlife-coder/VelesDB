@@ -10,7 +10,7 @@ three engines behind its memory tools:
 
 | Tool       | What it does                                               | Engines |
 |------------|------------------------------------------------------------|---------|
-| `remember` | store a fact, optionally linked + tagged with metadata     | Vector + Graph + ColumnStore |
+| `remember` | store a fact, optionally linked + tagged with metadata, with an optional expiry (`ttl_seconds`) | Vector + Graph + ColumnStore |
 | `recall`   | semantic retrieval, optional exact-match metadata filter   | Vector + ColumnStore |
 | `relate`   | create a typed edge between two memories                   | Graph |
 | `forget`   | delete a memory                                            | — |
@@ -249,7 +249,8 @@ Once configured, your agent discovers the tools automatically (via MCP
 //            (re-remembering identical text is idempotent — same id, updated in place)
 remember { "fact": "we chose parking_lot to avoid lock poisoning",
            "metadata": { "project": "checkout" },                  // optional → enables filtering
-           "links":   [ { "target": 1234, "relation": "decided_in" } ] }  // optional typed edges
+           "links":   [ { "target": 1234, "relation": "decided_in" } ],  // optional typed edges
+           "ttl_seconds": 604800 }                                 // optional → expires in 7 days
 → { "id": 9876543210 }
 
 // relate — add a typed edge between two existing memories
@@ -286,6 +287,13 @@ content. Pass it to `relate` / `forget`, or as a `links[].target` on a later
 `metadata` (project, author, status) and a `link` to the PR or ticket. Days
 later, `why("…")` recovers not just the decision but the PR, ticket, and
 benchmark linked to it — where `recall` alone returns only look-alike text.
+
+**Forgetting & expiry.** Facts are permanent by default. Delete one explicitly
+with `forget { "id": … }`. To make a fact self-expire, pass `ttl_seconds` to
+`remember` (a durable TTL persisted with the fact, so it survives a restart;
+expired facts stop being recalled). Set `VELESDB_MEMORY_DEFAULT_TTL` (seconds) to
+apply a default expiry to every fact that doesn't set its own. To wipe everything,
+delete the store directory at `VELESDB_MEMORY_PATH`.
 
 > **Embedding the library directly?** The same wedge is available without the
 > MCP server: as a **Rust** API (`MemoryService::remember/recall/relate/forget/why`,
