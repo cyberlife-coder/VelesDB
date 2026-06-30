@@ -1,9 +1,25 @@
 # velesdb-memory
 
+[![crates.io](https://img.shields.io/crates/v/velesdb-memory?logo=rust&label=crates.io)](https://crates.io/crates/velesdb-memory)
+[![docs.rs](https://img.shields.io/docsrs/velesdb-memory?logo=docsdotrs&label=docs.rs)](https://docs.rs/velesdb-memory)
+[![npm](https://img.shields.io/npm/v/%40wiscale%2Fvelesdb-memory-node?logo=npm&label=npm)](https://www.npmjs.com/package/@wiscale/velesdb-memory-node)
+[![PyPI](https://img.shields.io/pypi/v/velesdb?logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/velesdb/)
+[![MCP registry](https://img.shields.io/badge/MCP_registry-io.github.cyberlife--coder%2Fvelesdb--memory-1f6feb?logo=modelcontextprotocol&logoColor=white)](https://registry.modelcontextprotocol.io)
+[![license: VelesDB Core 1.0](https://img.shields.io/badge/license-VelesDB_Core_1.0_(source--available)-e8702a)](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE)
+
 **Local-first memory for AI agents — a single MCP server.** Give your coding
 agent durable memory that never leaves your machine: it remembers decisions,
 recalls them semantically, and — the differentiator — **connects** them so it
 can answer *why* a decision was made, not just retrieve look-alike text.
+
+> **Shipped & published — as of 2026-06-30.** `velesdb-memory` **0.3.1** is live on
+> [crates.io](https://crates.io/crates/velesdb-memory) and on the
+> [official MCP registry](https://registry.modelcontextprotocol.io)
+> (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
+> macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.3.1**
+> and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.5.0**.
+> **`cargo install velesdb-memory` works today.**
 
 Built on [VelesDB](https://velesdb.com)'s in-core Agent Memory SDK, which fuses
 three engines behind its memory tools:
