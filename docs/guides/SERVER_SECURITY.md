@@ -299,7 +299,7 @@ curl http://localhost:8080/health
 ```json
 {
   "status": "ok",
-  "version": "3.4.0"
+  "version": "3.5.0"
 }
 ```
 
@@ -318,7 +318,7 @@ curl http://localhost:8080/ready
 ```json
 {
   "status": "ready",
-  "version": "3.4.0"
+  "version": "3.5.0"
 }
 ```
 
@@ -327,7 +327,7 @@ curl http://localhost:8080/ready
 ```json
 {
   "status": "not_ready",
-  "version": "3.4.0"
+  "version": "3.5.0"
 }
 ```
 

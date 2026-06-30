@@ -46,6 +46,10 @@ pub struct McpServer {
     /// a backend is attached via [`Self::with_extractor`]; the tool then reports
     /// extraction as unconfigured.
     extractor: Option<DynExtractor>,
+    /// Default time-to-live (seconds) applied to `remember`d facts that don't
+    /// specify their own `ttl_seconds`. `None` (the default) stores permanently.
+    /// Set from `VELESDB_MEMORY_DEFAULT_TTL` by the binary.
+    default_ttl: Option<u64>,
     tool_router: ToolRouter<McpServer>,
 }
 
@@ -57,6 +61,7 @@ impl McpServer {
         Self {
             service: Arc::new(service),
             extractor: None,
+            default_ttl: None,
             tool_router: Self::tool_router(),
         }
     }
@@ -69,9 +74,17 @@ impl McpServer {
         self
     }
 
+    /// Apply a default TTL (seconds) to `remember`d facts that don't carry their
+    /// own `ttl_seconds`. `0` is treated as "no default" (permanent).
+    #[must_use]
+    pub fn with_default_ttl(mut self, ttl_seconds: u64) -> Self {
+        self.default_ttl = (ttl_seconds > 0).then_some(ttl_seconds);
+        self
+    }
+
     #[tool(
         name = "remember",
-        description = "Store a fact in durable local memory. Optionally link it to existing memories (graph) and tag it with structured metadata like project/author/type/status/date (ColumnStore) for later filtering. Returns the fact's stable id."
+        description = "Store a fact in durable local memory. Optionally link it to existing memories (graph) and tag it with structured metadata like project/author/type/status/date (ColumnStore) for later filtering. Set `ttl_seconds` to make the fact expire after a delay (a durable TTL that survives restarts); omit it for a permanent memory. Returns the fact's stable id."
     )]
     async fn remember(
         &self,
@@ -89,12 +102,15 @@ impl McpServer {
             fact,
             links,
             metadata,
+            ttl_seconds,
         } = params;
-        let id =
-            tokio::task::spawn_blocking(move || service.remember(&fact, &links, metadata.as_ref()))
-                .await
-                .map_err(join_error)?
-                .map_err(to_error)?;
+        let ttl = ttl_seconds.or(self.default_ttl);
+        let id = tokio::task::spawn_blocking(move || {
+            service.remember_with_ttl(&fact, &links, metadata.as_ref(), ttl)
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
         Ok(Json(RememberResult { id }))
     }
 

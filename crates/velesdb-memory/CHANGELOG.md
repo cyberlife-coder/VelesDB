@@ -7,6 +7,23 @@ released on its own `velesdb-memory-vX.Y.Z` tag.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-30
+
+### Added
+
+- **Durable TTL on `remember`.** Facts can now expire. `remember` (MCP tool) and
+  `MemoryService::remember_with_ttl` take an optional `ttl_seconds`; the expiry is
+  persisted with the fact (`_veles_expires_at`), so it survives a restart, and
+  expired facts stop being recalled. Metadata and a TTL combine. Set a server-wide
+  default with `VELESDB_MEMORY_DEFAULT_TTL` (seconds); `0` means permanent. The
+  Node binding's `remember` gains the matching `ttlSeconds` argument.
+
+### Fixed
+
+- **Cleaner MCP tool schemas.** Stripped `schemars`' non-standard integer `format`
+  keywords (`uint64`/`uint`) from the generated tool schemas, so strict MCP clients
+  no longer log `unknown format "uint64" ignored` for every id field.
+
 ## [0.2.0] - 2026-06-29
 
 Benchmark milestone: the tri-engine is no longer just *wired* — each leg is
@@ -69,5 +86,6 @@ First release of the local-first MCP memory server for AI agents.
 - License boundary by construction: memory semantics only, never raw database
   capabilities.
 
+[0.3.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/velesdb-memory-v0.3.0
 [0.2.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/velesdb-memory-v0.2.0
 [0.1.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/velesdb-memory-v0.1.0

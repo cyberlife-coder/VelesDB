@@ -38,6 +38,9 @@ pub mod mcp;
 /// (`Link`, `Recollection`, `ColumnFilter`, `Explanation`, …), separate from the
 /// service that computes them.
 pub mod model;
+/// Shared JSON Schema post-processing (strips `schemars`' non-standard integer
+/// `format` keywords so strict MCP clients don't warn on every id field).
+mod schema;
 pub mod service;
 
 /// Default embedding dimension — the single source of truth, taken from the

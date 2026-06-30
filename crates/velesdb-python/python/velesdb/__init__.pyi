@@ -2271,6 +2271,7 @@ class MemoryService:
         fact: str,
         links: Optional[List[Tuple[int, str]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        ttl_seconds: Optional[int] = None,
     ) -> int:
         """Store a fact and return its stable id (content-addressed / idempotent).
 
@@ -2280,6 +2281,9 @@ class MemoryService:
                 create typed outgoing edges from this fact.
             metadata: Optional dict of key/value pairs for later filtering.
                 Keys starting with ``_veles_`` are reserved.
+            ttl_seconds: Optional durable time-to-live in seconds. The fact
+                expires (and stops being recalled) after this delay, surviving a
+                restart. Omit (or ``0``) for a permanent memory.
 
         Returns:
             Stable integer id for the stored fact.

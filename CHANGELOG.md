@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.0] — 2026-06-30
+
+### Added
+- **Durable TTL on the Python `MemoryService.remember`.** `remember(…, ttl_seconds=…)`
+  gives a fact a durable expiry (persisted with the fact, survives a restart; expired
+  facts stop being recalled), reaching parity with the MCP server and the Node binding.
+  The `velesdb-memory` MCP wedge ships TTL on its own 0.3.0 cadence; this workspace
+  release brings the same capability to the Python binding (`velesdb`).
+
 ## [3.4.0] — 2026-06-28
 
 ### Added

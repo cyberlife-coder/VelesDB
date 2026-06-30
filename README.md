@@ -122,6 +122,8 @@ mem.remember("Booked the aisle seat on Robert's flight", links=[(reason, "becaus
 mem.why("why the aisle seat on Robert's flight?")   # walks booking → reason — recall() can't
 ```
 
+Memories are permanent by default; `forget(id)` deletes one, and `remember(…, ttl_seconds=…)` (or a server-wide `VELESDB_MEMORY_DEFAULT_TTL`) gives a fact a durable, restart-surviving expiry.
+
 The same wedge ships in **Python** (`pip install velesdb`), **Node** (`npm i @wiscale/velesdb-memory-node`), and as a local **[MCP server](crates/velesdb-memory)**.
 
 **Four runnable ways to see it** — each shows what plain vector recall misses and `why()` recovers:
