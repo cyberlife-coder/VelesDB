@@ -7,6 +7,22 @@ released on its own `velesdb-memory-vX.Y.Z` tag.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-06-30
+
+### Security
+
+- **Upgraded `rmcp` 1.8.0 → 2.0.0**, which patches three advisories: OAuth token
+  spoofing, SSRF via crafted MCP URLs, and a session-id leak in error responses.
+  No code changes were needed — the MCP server/macros API stayed compatible.
+
+### Fixed
+
+- **`truncate()` UTF-8 panic** (extract error previews): the budget is now checked
+  *before* appending a word, dropping the post-hoc `String::truncate` that could
+  panic when the 120-byte limit fell mid-multibyte-character.
+- **Dead code in `validate_relation`**: removed the redundant `is_ascii()` guard
+  (`char::is_ascii_control()` is already `false` for non-ASCII code points).
+
 ## [0.3.0] - 2026-06-30
 
 ### Added
@@ -86,6 +102,7 @@ First release of the local-first MCP memory server for AI agents.
 - License boundary by construction: memory semantics only, never raw database
   capabilities.
 
+[0.3.1]: https://github.com/cyberlife-coder/VelesDB/releases/tag/velesdb-memory-v0.3.1
 [0.3.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/velesdb-memory-v0.3.0
 [0.2.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/velesdb-memory-v0.2.0
 [0.1.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/velesdb-memory-v0.1.0
