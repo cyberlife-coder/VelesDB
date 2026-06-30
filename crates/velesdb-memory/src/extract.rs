@@ -211,19 +211,18 @@ fn parse_generate_response(body: &str) -> Result<String, ExtractError> {
 /// A short, single-line preview of model output for error messages.
 #[cfg(feature = "extract")]
 fn truncate(text: &str) -> String {
+    const LIMIT: usize = 120;
     let mut out = String::new();
-    let mut first = true;
     for word in text.split_whitespace() {
-        if out.len() >= 120 {
+        let sep_len = if out.is_empty() { 0 } else { 1 };
+        if out.len() + sep_len + word.len() > LIMIT {
             break;
         }
-        if !first {
+        if sep_len > 0 {
             out.push(' ');
         }
         out.push_str(word);
-        first = false;
     }
-    out.truncate(120);
     out
 }
 
