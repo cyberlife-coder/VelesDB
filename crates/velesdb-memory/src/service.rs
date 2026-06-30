@@ -680,7 +680,7 @@ fn validate_relation(label: &str) -> Result<(), MemoryError> {
             label.len()
         )));
     }
-    if label.chars().any(|c| c.is_ascii() && c.is_ascii_control()) {
+    if label.chars().any(|c| c.is_ascii_control()) {
         return Err(MemoryError::InvalidRelation(
             "relation label must not contain ASCII control characters".to_owned(),
         ));
