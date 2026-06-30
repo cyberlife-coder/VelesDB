@@ -152,13 +152,16 @@ impl PyMemoryService {
 
     /// Store a fact; returns its stable id. `links` is a list of `(target_id,
     /// relation)` tuples; `metadata` is an optional dict for later filtering.
-    #[pyo3(signature = (fact, links = None, metadata = None))]
+    /// `ttl_seconds` makes the fact expire after that many seconds (a durable TTL
+    /// that survives restarts); omit it (or `0`) for a permanent memory.
+    #[pyo3(signature = (fact, links = None, metadata = None, ttl_seconds = None))]
     fn remember(
         &self,
         py: Python<'_>,
         fact: &str,
         links: Option<Vec<(u64, String)>>,
         metadata: Option<HashMap<String, Py<PyAny>>>,
+        ttl_seconds: Option<u64>,
     ) -> PyResult<u64> {
         if fact.len() > limits::MAX_FACT_BYTES {
             return Err(PyValueError::new_err(format!(
@@ -175,7 +178,7 @@ impl PyMemoryService {
         let metadata = to_metadata(py, metadata)?;
         py.detach(|| {
             self.svc
-                .remember(fact, &links, metadata.as_ref())
+                .remember_with_ttl(fact, &links, metadata.as_ref(), ttl_seconds)
                 .map_err(to_py_err)
         })
     }
