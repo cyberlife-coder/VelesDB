@@ -100,8 +100,13 @@ impl<E: Embedder> MemoryService<E> {
         self.ensure_link_targets_exist(links)?;
         let fact_id = id::stable_id(fact);
         let embedding = self.embedder.embed(fact)?;
-        let ttl_seconds = ttl_seconds.filter(|&seconds| seconds > 0);
-        self.store(fact_id, fact, &embedding, metadata, ttl_seconds)?;
+        self.store(
+            fact_id,
+            fact,
+            &embedding,
+            metadata,
+            positive_ttl(ttl_seconds),
+        )?;
         for link in links {
             validate_relation(&link.relation)?;
             self.memory
@@ -600,6 +605,12 @@ fn reject_reserved_keys(metadata: Option<&Metadata>) -> Result<(), MemoryError> 
         }
     }
     Ok(())
+}
+
+/// Normalise a requested TTL: `Some(0)` (and `None`) mean "no expiry" — the fact
+/// is stored permanently. Any positive value is kept as-is.
+fn positive_ttl(ttl_seconds: Option<u64>) -> Option<u64> {
+    ttl_seconds.filter(|&seconds| seconds > 0)
 }
 
 /// Map a core search result to a [`Recollection`], lifting the fact text out of
