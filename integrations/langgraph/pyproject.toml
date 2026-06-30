@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langgraph-velesdb"
-version = "3.4.0"
+version = "3.5.0"
 description = "LangGraph memory tools for VelesDB: drop the why() knowledge-graph memory wedge into any LangGraph agent."
 readme = "README.md"
 license = {text = "MIT"}
