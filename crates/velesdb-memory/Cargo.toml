@@ -29,7 +29,7 @@ schemars = "1"
 # The MCP server stack — optional, behind the (default) `mcp` feature. Library
 # consumers (e.g. the language bindings) build with `default-features = false`
 # to get the memory core without the `rmcp`/`tokio` server dependencies.
-rmcp = { version = "1.8.0", features = ["server", "macros", "transport-io"], optional = true }
+rmcp = { version = "2.0.0", features = ["server", "macros", "transport-io"], optional = true }
 tokio = { workspace = true, optional = true }
 # Optional real-recall backend (off by default). HTTP-only to a local Ollama;
 # `default-features = false` drops TLS to keep the binary small.
