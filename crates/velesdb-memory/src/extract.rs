@@ -214,11 +214,11 @@ fn truncate(text: &str) -> String {
     const LIMIT: usize = 120;
     let mut out = String::new();
     for word in text.split_whitespace() {
-        let sep_len = if out.is_empty() { 0 } else { 1 };
+        let sep_len = usize::from(!out.is_empty());
         if out.len() + sep_len + word.len() > LIMIT {
             break;
         }
-        if sep_len > 0 {
+        if !out.is_empty() {
             out.push(' ');
         }
         out.push_str(word);
