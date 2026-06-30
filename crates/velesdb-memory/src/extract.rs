@@ -211,19 +211,20 @@ fn parse_generate_response(body: &str) -> Result<String, ExtractError> {
 /// A short, single-line preview of model output for error messages.
 #[cfg(feature = "extract")]
 fn truncate(text: &str) -> String {
+    const LIMIT: usize = 120;
     let mut out = String::new();
-    let mut first = true;
     for word in text.split_whitespace() {
-        if out.len() >= 120 {
+        // Check the budget *before* pushing so we never need a post-hoc
+        // `String::truncate`, which would panic if the limit fell mid-UTF-8 char.
+        let sep_len = usize::from(!out.is_empty());
+        if out.len() + sep_len + word.len() > LIMIT {
             break;
         }
-        if !first {
+        if !out.is_empty() {
             out.push(' ');
         }
         out.push_str(word);
-        first = false;
     }
-    out.truncate(120);
     out
 }
 
