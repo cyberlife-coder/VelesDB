@@ -221,10 +221,7 @@ fn date_span(facts: &[FactRecord]) -> (usize, i64) {
 /// Days since a fixed epoch for a `YYYYMMDD` key (Howard Hinnant's
 /// `days_from_civil`, proleptic Gregorian) — `None` for an implausible date.
 fn ymd_to_ordinal(ts: i64) -> Option<i64> {
-    let (year, month, day) = (ts / 10_000, (ts / 100) % 100, ts % 100);
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
+    let (year, month, day) = crate::judge::decompose_ymd(ts)?;
     let y = if month <= 2 { year - 1 } else { year };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400;

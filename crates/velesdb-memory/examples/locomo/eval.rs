@@ -369,7 +369,10 @@ fn raw_if_wanted(
         return Vec::new();
     }
     let mut all = pool.to_vec();
-    all.extend(reached.iter().cloned());
+    // Mirror `fuse`'s own dedup: a fact both vector-ranked and graph-reached
+    // must appear once in the raw pool, not twice with split scores.
+    let present: HashSet<u64> = all.iter().map(|f| f.id).collect();
+    all.extend(reached.iter().filter(|f| !present.contains(&f.id)).cloned());
     all
 }
 
@@ -663,6 +666,15 @@ fn fuse(pool: Vec<RetrievedFact>, reached: &[RetrievedFact], cfg: EvalCfg) -> Ve
     let mut candidates: Vec<RetrievedFact> = pool;
     let present: HashSet<u64> = candidates.iter().map(|f| f.id).collect();
     candidates.extend(reached.iter().filter(|f| !present.contains(&f.id)).cloned());
+    // A fact both vector-ranked and graph-reached keeps its pool copy (above),
+    // whose `graph_weight` is the vector pool's hardcoded 0.0. `fused_score`
+    // scores it correctly via `weights` regardless, but any consumer reading
+    // the struct field directly (the `--dump` instrumentation) needs it synced.
+    for candidate in &mut candidates {
+        if let Some(&weight) = weights.get(&candidate.id) {
+            candidate.graph_weight = weight;
+        }
+    }
 
     candidates.sort_by(|a, b| {
         fused_score(b, &weights, max_score, cfg)
@@ -699,3 +711,7 @@ fn record_injection(injected: usize) {
         GRAPH_ACTIVE_CONTEXTS.fetch_add(1, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+#[path = "eval/eval_tests.rs"]
+mod tests;

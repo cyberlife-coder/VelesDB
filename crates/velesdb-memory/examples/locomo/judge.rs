@@ -120,15 +120,20 @@ fn extract_final(text: &str) -> String {
 /// Render a `YYYYMMDD` session key as `YYYY-MM-DD`, or `None` when unknown (0)
 /// or malformed, so an undated fact is shown without a misleading date prefix.
 fn fmt_date(ts: i64) -> Option<String> {
+    let (year, month, day) = decompose_ymd(ts)?;
+    Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+/// Split a `YYYYMMDD` session key into `(year, month, day)`, or `None` when
+/// unknown (`ts <= 0`) or the month/day is out of range. Shared by every
+/// consumer of this key (date formatting here, day-span math in `dump.rs`) so
+/// the validity rule lives in exactly one place.
+pub(crate) fn decompose_ymd(ts: i64) -> Option<(i64, i64, i64)> {
     if ts <= 0 {
         return None;
     }
     let (year, month, day) = (ts / 10_000, (ts / 100) % 100, ts % 100);
-    if (1..=12).contains(&month) && (1..=31).contains(&day) {
-        Some(format!("{year:04}-{month:02}-{day:02}"))
-    } else {
-        None
-    }
+    ((1..=12).contains(&month) && (1..=31).contains(&day)).then_some((year, month, day))
 }
 
 /// True when the model declined to answer (the correct move on adversarial QA).
