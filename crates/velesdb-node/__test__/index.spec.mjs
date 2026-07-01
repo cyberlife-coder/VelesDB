@@ -97,6 +97,25 @@ test('recallWhere equals recall with the same exact-match filter', async () => {
   }
 })
 
+test('recallWhere surfaces stored metadata; recall leaves it null', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await store.remember('deployed the new pricing page', [], { ts: 20260701 })
+
+    const filtered = await store.recallWhere('pricing page', [
+      { field: 'ts', op: 'eq', value: 20260701 },
+    ])
+    assert.ok(filtered.length >= 1)
+    assert.equal(filtered[0].metadata?.ts, 20260701, 'recallWhere round-trips metadata')
+
+    const hits = await store.recall('pricing page', 5)
+    assert.ok(hits.length >= 1)
+    assert.equal(hits[0].metadata, undefined, 'recall does not carry metadata')
+  } finally {
+    cleanup()
+  }
+})
+
 test('error codes — INVALID_INPUT on empty fact, NOT_FOUND on missing relate endpoint', async () => {
   const { store, cleanup } = freshStore()
   try {

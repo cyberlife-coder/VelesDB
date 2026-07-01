@@ -6758,7 +6758,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-memory"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "rmcp",
  "schemars 1.2.1",

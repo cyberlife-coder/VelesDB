@@ -353,9 +353,20 @@ impl<E: Embedder> MemoryService<E> {
         reject_reserved_keys(filter)?;
         let embedding = self.embedder.embed(query)?;
         let hits = self.search(&embedding, k, filter)?;
+        // `self.search` (below) goes through core's `query_filtered`/
+        // `query_excluding`, which return only `(id, score, content)` — no
+        // payload/metadata access at that layer. Widening that would mean
+        // changing velesdb-core's public API, which is out of scope here.
+        // `recall_where` (via `to_recollection`) is the documented path for
+        // metadata-carrying, dated recall.
         Ok(hits
             .into_iter()
-            .map(|(id, score, content)| Recollection { id, score, content })
+            .map(|(id, score, content)| Recollection {
+                id,
+                score,
+                content,
+                metadata: None,
+            })
             .collect())
     }
 
@@ -622,20 +633,28 @@ fn positive_ttl(ttl_seconds: Option<u64>) -> Option<u64> {
 }
 
 /// Map a core search result to a [`Recollection`], lifting the fact text out of
-/// the reserved `content` payload key.
+/// the reserved `content` payload key and surfacing any remaining
+/// caller-supplied metadata (reserved system keys excluded).
 fn to_recollection(result: &SearchResult) -> Recollection {
-    let content = result
-        .point
-        .payload
-        .as_ref()
+    let payload = result.point.payload.as_ref().and_then(Value::as_object);
+    let content = payload
         .and_then(|payload| payload.get("content"))
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
+    let metadata = payload.and_then(|payload| {
+        let metadata: Map<String, Value> = payload
+            .iter()
+            .filter(|(key, _)| !is_reserved_key(key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        (!metadata.is_empty()).then_some(metadata)
+    });
     Recollection {
         id: result.point.id,
         score: result.score,
         content,
+        metadata,
     }
 }
 
