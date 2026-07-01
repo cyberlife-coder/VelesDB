@@ -26,6 +26,7 @@
 mod bm25;
 mod dataset;
 mod diagnose;
+mod dump;
 mod eval;
 mod explain;
 mod extract;
@@ -44,6 +45,7 @@ use velesdb_memory::{MemoryService, OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAUL
 
 use dataset::{Category, Sample};
 use diagnose::DiagnoseReport;
+use dump::{DumpSink, QuestionTrace};
 use eval::EvalCfg;
 use explain::ExplainReport;
 use ingest::Store;
@@ -69,6 +71,9 @@ struct Args {
     only_category: Option<Category>,
     /// Ollama embedding model (swappable to test stronger encoders).
     embed_model: String,
+    /// Research-analysis instrumentation: append one JSONL record per QA
+    /// (see `dump.rs`). `None` = today's behavior, byte-identical.
+    dump: Option<PathBuf>,
     cfg: EvalCfg,
 }
 
@@ -164,30 +169,17 @@ fn run_eval(
 ) -> Result<(), Box<dyn Error>> {
     let mut report = Report::default();
     let mut total_facts = 0usize;
+    let mut sink = args.dump.as_deref().map(DumpSink::create).transpose()?;
     for (position, sample) in samples.iter().take(take).enumerate() {
-        let (store, facts) = prepare(
+        total_facts += run_eval_conversation(
             generator,
             sample,
             position,
             take,
-            args.extract_version,
-            &args.embed_model,
+            args,
+            &mut sink,
+            &mut report,
         )?;
-        let qa_take = qa_limit(args.max_qa, sample.qa.len());
-        for (done, qa) in sample.qa.iter().take(qa_take).enumerate() {
-            if args.only_category.is_some_and(|c| c != qa.category) {
-                continue;
-            }
-            let off = eval::evaluate(&store, generator, qa, args.cfg, false)?;
-            let on = eval::evaluate(&store, generator, qa, args.cfg, true)?;
-            report.record(qa.category, false, &off);
-            report.record(qa.category, true, &on);
-            if (done + 1) % 20 == 0 {
-                eprintln!("        {}/{} QA evaluated", done + 1, qa_take);
-            }
-        }
-        finish(store, position);
-        total_facts += facts;
     }
     report.print(
         args.cfg,
@@ -201,6 +193,49 @@ fn run_eval(
         "graph activity: traversal injected {injected} fact(s) across {contexts} graph-mode context(s)"
     );
     Ok(())
+}
+
+/// Extract, ingest, and evaluate every QA of one conversation; returns its
+/// fact count. Pulled out of `run_eval` so that function stays within budget.
+#[allow(clippy::too_many_arguments)]
+fn run_eval_conversation(
+    generator: &Generator,
+    sample: &Sample,
+    position: usize,
+    take: usize,
+    args: &Args,
+    sink: &mut Option<DumpSink>,
+    report: &mut Report,
+) -> Result<usize, Box<dyn Error>> {
+    let (store, facts) = prepare(
+        generator,
+        sample,
+        position,
+        take,
+        args.extract_version,
+        &args.embed_model,
+    )?;
+    let qa_take = qa_limit(args.max_qa, sample.qa.len());
+    for (done, qa) in sample.qa.iter().take(qa_take).enumerate() {
+        if args.only_category.is_some_and(|c| c != qa.category) {
+            continue;
+        }
+        evaluate_qa(
+            &store,
+            generator,
+            qa,
+            args.cfg,
+            &sample.sample_id,
+            done,
+            sink,
+            report,
+        )?;
+        if (done + 1) % 20 == 0 {
+            eprintln!("        {}/{} QA evaluated", done + 1, qa_take);
+        }
+    }
+    finish(store, position);
+    Ok(facts)
 }
 
 /// The LLM-free explanation benchmark: does the graph connect scattered evidence?
@@ -231,6 +266,54 @@ fn run_explanation(
     }
     report.print(args.cfg, take);
     Ok(())
+}
+
+/// Evaluate one QA under both modes (vector-only, then fused) and record both
+/// — pulled out of `run_eval`'s loop so that function stays within budget.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_qa(
+    store: &Store,
+    generator: &Generator,
+    qa: &dataset::Qa,
+    cfg: EvalCfg,
+    conversation_id: &str,
+    question_idx: usize,
+    sink: &mut Option<DumpSink>,
+    report: &mut Report,
+) -> Result<(), Box<dyn Error>> {
+    let off = eval::evaluate(
+        store,
+        generator,
+        qa,
+        cfg,
+        false,
+        trace(sink, conversation_id, question_idx),
+    )?;
+    let on = eval::evaluate(
+        store,
+        generator,
+        qa,
+        cfg,
+        true,
+        trace(sink, conversation_id, question_idx),
+    )?;
+    report.record(qa.category, false, &off);
+    report.record(qa.category, true, &on);
+    Ok(())
+}
+
+/// Build a `--dump` trace for one QA when a sink is active, `None` otherwise
+/// (the byte-identical no-op path when `--dump` was never passed).
+fn trace<'a>(
+    sink: &'a mut Option<DumpSink>,
+    conversation_id: &'a str,
+    question_idx: usize,
+) -> Option<QuestionTrace<'a>> {
+    sink.as_mut().map(|sink| QuestionTrace {
+        conversation_id,
+        question_idx,
+        sink,
+    })
 }
 
 /// Extract and ingest one conversation; returns its store and fact count.
@@ -312,6 +395,7 @@ impl Default for Args {
             extract_version: 1,
             only_category: None,
             embed_model: DEFAULT_OLLAMA_MODEL.to_string(),
+            dump: None,
             cfg: EvalCfg {
                 // Gentle: the graph nudges, rarely evicting a strong vector hit.
                 // On LoCoMo the graph is ~neutral; higher boosts only hurt more.
@@ -391,6 +475,7 @@ impl Args {
             "--model" => self.model = value.to_string(),
             "--embed-model" => self.embed_model = value.to_string(),
             "--dataset" => self.dataset = PathBuf::from(value),
+            "--dump" => self.dump = Some(PathBuf::from(value)),
             "--only" => {
                 self.only_category = Some(
                     Category::from_label(value)
