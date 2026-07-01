@@ -2309,8 +2309,38 @@ class MemoryService:
             filter: Optional exact-match metadata filter dict.
 
         Returns:
-            List of ``{"id": int, "score": float, "content": str}`` dicts,
-            ordered by descending similarity score.
+            List of ``{"id": int, "score": float, "content": str,
+            "metadata": Optional[Dict[str, Any]]}`` dicts, ordered by
+            descending similarity score. ``metadata`` is always ``None``
+            here (only :meth:`recall_where` populates it).
+        """
+        ...
+
+    def recall_where(
+        self,
+        query: str,
+        filters: List[Tuple[str, str, Any]],
+        k: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Fused vector + ``ColumnStore`` recall with range/comparison filters.
+
+        Like :meth:`recall`, but ``filters`` support ranges/comparisons
+        (not just exact-match), so numeric/temporal facets become queryable.
+
+        Args:
+            query: Free-text query.
+            filters: List of ``(field, op, value)`` tuples, where ``op`` is
+                one of ``"eq"``/``"ne"``/``"lt"``/``"le"``/``"gt"``/``"ge"``.
+            k: Maximum number of results (default: 10).
+
+        Returns:
+            List of ``{"id": int, "score": float, "content": str,
+            "metadata": Optional[Dict[str, Any]]}`` dicts, ordered by
+            descending similarity score. ``metadata`` is the fact's stored
+            metadata dict, or ``None`` if it carried none.
+
+        Raises:
+            ValueError: If an unknown filter ``op`` is given.
         """
         ...
 

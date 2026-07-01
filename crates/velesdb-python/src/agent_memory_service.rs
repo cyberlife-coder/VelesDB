@@ -19,7 +19,7 @@ use velesdb_memory::{
 };
 
 use crate::collection::query::convert_params;
-use crate::utils::python_to_json;
+use crate::utils::{json_to_python, python_to_json};
 
 /// Map a [`MemoryError`] to the most specific Python exception, driven by its
 /// transport-neutral [`ErrorCategory`] so the taxonomy stays identical to the
@@ -82,12 +82,23 @@ fn to_metadata(
     }
 }
 
-/// One [`Recollection`] as a Python dict `{id, score, content}`.
-fn recollection_to_dict(py: Python<'_>, r: &Recollection) -> PyResult<Py<PyAny>> {
+/// One [`Recollection`] as a Python dict `{id, score, content, metadata}`.
+///
+/// `metadata` mirrors `Recollection.metadata: Option<Map<String, Value>>` —
+/// populated for `recall_where` results, `None` (i.e. Python `None`) for
+/// `recall`/`why` (intentional, see the Rust doc on that field). Takes `r` by
+/// value so the metadata map can be moved into the `serde_json::Value` instead
+/// of cloned.
+fn recollection_to_dict(py: Python<'_>, r: Recollection) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
     dict.set_item(PyString::intern(py, "id"), r.id)?;
     dict.set_item(PyString::intern(py, "score"), r.score)?;
     dict.set_item(PyString::intern(py, "content"), &r.content)?;
+    let metadata = match r.metadata {
+        Some(map) => json_to_python(py, &serde_json::Value::Object(map)),
+        None => py.None(),
+    };
+    dict.set_item(PyString::intern(py, "metadata"), metadata)?;
     Ok(dict.into())
 }
 
@@ -184,7 +195,9 @@ impl PyMemoryService {
     }
 
     /// Recall up to `k` memories similar to `query`, optionally narrowed by an
-    /// exact-match metadata `filter`. Returns a list of `{id, score, content}`.
+    /// exact-match metadata `filter`. Returns a list of `{id, score, content, metadata}`
+    /// (`metadata` is always `None` here; only [`recall_where`](Self::recall_where)
+    /// populates it — matches the upstream `Recollection` contract).
     #[pyo3(signature = (query, k = 10, filter = None))]
     fn recall(
         &self,
@@ -201,7 +214,7 @@ impl PyMemoryService {
                 .map_err(to_py_err)
         })?;
         let list = PyList::empty(py);
-        for hit in &hits {
+        for hit in hits {
             list.append(recollection_to_dict(py, hit)?)?;
         }
         Ok(list.into())
@@ -210,7 +223,8 @@ impl PyMemoryService {
     /// Fused vector + `ColumnStore` recall: like [`recall`](Self::recall) but the
     /// `filters` support ranges/comparisons, so numeric/temporal facets become
     /// queryable. `filters` is a list of `(field, op, value)` tuples where `op`
-    /// is one of `eq`/`ne`/`lt`/`le`/`gt`/`ge`. Returns `{id, score, content}`.
+    /// is one of `eq`/`ne`/`lt`/`le`/`gt`/`ge`. Returns `{id, score, content, metadata}`
+    /// (`metadata` is the fact's stored dict, or `None` if it carried none).
     #[pyo3(signature = (query, filters, k = 10))]
     fn recall_where(
         &self,
@@ -232,7 +246,7 @@ impl PyMemoryService {
             .collect::<PyResult<Vec<_>>>()?;
         let hits = py.detach(|| self.svc.recall_where(query, k, &filters).map_err(to_py_err))?;
         let list = PyList::empty(py);
-        for hit in &hits {
+        for hit in hits {
             list.append(recollection_to_dict(py, hit)?)?;
         }
         Ok(list.into())

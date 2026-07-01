@@ -39,6 +39,10 @@ pub struct RecollectionJs {
     pub score: f64,
     /// Stored fact content.
     pub content: String,
+    /// Caller-supplied structured metadata stored with the fact, or `undefined`
+    /// when the fact carries none (`recall`/`why` never populate this; only
+    /// `recallWhere` does).
+    pub metadata: Option<Value>,
 }
 
 impl From<Recollection> for RecollectionJs {
@@ -47,6 +51,7 @@ impl From<Recollection> for RecollectionJs {
             id: id_to_string(r.id),
             score: f64::from(r.score),
             content: r.content,
+            metadata: r.metadata.map(Value::Object),
         }
     }
 }
