@@ -8,7 +8,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// A typed link from a freshly remembered fact to an existing memory.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -30,6 +30,13 @@ pub struct Recollection {
     pub score: f32,
     /// Stored fact content.
     pub content: String,
+    /// Caller-supplied structured metadata stored with the fact (the `ColumnStore`
+    /// facet), with reserved system keys (`content`, `_veles_*`) excluded. `None`
+    /// when the fact carries no caller metadata. This is what makes dated recall
+    /// work: store a date (e.g. `occurred_at`) and it round-trips here, so a
+    /// `recall_where` result can be ordered into a chronological timeline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Map<String, Value>>,
 }
 
 /// Comparison operator for a [`ColumnFilter`] in

@@ -320,6 +320,83 @@ fn recall_where_rejects_reserved_field() {
     }
 }
 
+// --- Nominal: `recall_where` surfaces caller metadata -------------------------
+
+#[test]
+fn recall_where_surfaces_the_matching_facts_metadata() {
+    let (_dir, svc, [early, _mid, _late]) = seeded_timestamps();
+
+    let hits = svc
+        .recall_where(
+            "project kickoff",
+            10,
+            &[ColumnFilter {
+                field: "ts".to_string(),
+                op: ColumnOp::Eq,
+                value: json!(100),
+            }],
+        )
+        .expect("recall_where eq");
+
+    let hit = hits
+        .iter()
+        .find(|h| h.id == early)
+        .expect("early fact present");
+    let metadata = hit.metadata.as_ref().expect("metadata is Some");
+    assert_eq!(metadata.get("ts"), Some(&json!(100)), "ts round-trips");
+}
+
+#[test]
+fn recall_where_metadata_is_none_when_the_fact_has_no_metadata() {
+    let (_dir, svc) = service();
+    let bare = svc
+        .remember("a bare fact with no metadata", &[], None)
+        .expect("remember bare");
+
+    let hits = svc
+        .recall_where("a bare fact", 10, &[])
+        .expect("recall_where unfiltered");
+
+    let hit = hits
+        .iter()
+        .find(|h| h.id == bare)
+        .expect("bare fact present");
+    assert!(
+        hit.metadata.is_none(),
+        "a fact stored without metadata must round-trip as None"
+    );
+}
+
+#[test]
+fn recall_where_never_leaks_reserved_keys_in_metadata() {
+    let (_dir, svc) = service();
+    let id = svc
+        .remember_with_ttl(
+            "a ttl-bearing fact",
+            &[],
+            Some(&meta(&[("project", json!("veles"))])),
+            Some(3_600),
+        )
+        .expect("remember with ttl + metadata");
+
+    let hits = svc
+        .recall_where("a ttl-bearing fact", 10, &[])
+        .expect("recall_where unfiltered");
+
+    let hit = hits.iter().find(|h| h.id == id).expect("fact present");
+    if let Some(metadata) = &hit.metadata {
+        assert!(
+            metadata.keys().all(|k| !k.starts_with("_veles_")),
+            "no `_veles_`-namespaced system key ever leaks through metadata"
+        );
+        assert_eq!(
+            metadata.get("project"),
+            Some(&json!("veles")),
+            "caller metadata still round-trips alongside the ttl"
+        );
+    }
+}
+
 #[test]
 fn recall_where_rejects_non_scalar_value() {
     let (_dir, svc, _) = seeded_timestamps();
