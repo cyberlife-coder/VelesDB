@@ -1,7 +1,11 @@
 # velesdb-memory on LoCoMo
 
-> Draft results page. Numbers are **our measurement** on a labeled 2-conversation
-> subset, reproducible from the bundled example (`examples/locomo/`). Not committed.
+> Draft results page. Numbers are **our measurement** on the full 10-conversation
+> LoCoMo set, statistically validated with paired tests (McNemar, cluster bootstrap
+> over conversations) — see
+> [`docs/planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md`](../../docs/planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md)
+> for the full methodology and caveats. Reproducible from the bundled example
+> (`examples/locomo/`).
 
 ## What this measures
 
@@ -16,35 +20,49 @@
 
 ## Headline results
 
-*Claude-Opus-4.8-judged · 2-conversation subset · n ≈ 231 answerable questions · best config (mxbai embedder + date-routed context + temporal scaffold + k=32 budget).*
+*Claude-Opus-4.8-judged · full 10-conversation set · n = 1,540 answerable questions · best config (mxbai embedder + date-routed context + temporal scaffold + k=32 budget, tri-engine fusion on).*
 
 | Category | Answer accuracy | Evidence recall @k=32 |
 |---|---|---|
-| Temporal | **~76%** | ~95% |
-| Multi-hop | ~58% | ~76% |
-| Single-hop | ~55% | ~86% |
-| Open-domain | ~23% | ~68% |
-| **Aggregate (answerable)** | **~57–58%** | **~84%** |
+| Temporal | **61%** | 93% |
+| Multi-hop | 55% | 96% |
+| Single-hop | 57% | 87% |
+| Open-domain | 24% | 76% |
+| **Aggregate (answerable)** | **56%** | **89%** |
 
-(Evidence-recall figures are from the full 10-conversation set, n = 1 536 — retrieval generalizes; accuracy is the 2-conversation judged subset.)
+**Statistically validated, not just measured once**: paired McNemar tests + a cluster
+bootstrap over the 10 conversations confirm the temporal lift from dated recall alone is
+real and large (+33.6pp over baseline, 95% CI [27.1, 41.0]). The temporal scaffold's
+*additional* gain on top of dated recall (+5.6pp here) and the aggregate answerable gain
+(+1.1pp) are both directionally positive but **not statistically distinguishable from
+zero at this sample size** (CIs cross zero) — treat the scaffold's marginal benefit as
+unproven, not confirmed. Full numbers, tests, and charts:
+[`docs/planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md`](../../docs/planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md).
 
 ## The tuning trajectory
 
-The honest engineering story — what each change bought, all Claude-judged:
+The honest engineering story from early development — what each change bought,
+Claude-judged on a small 2-conversation exploratory subset at the time. **Superseded by
+the statistically-validated 10-conversation headline above**; kept here for the
+methodological trace of which levers mattered, not as a current accuracy claim:
 
-| Step | Aggregate | What it fixed |
+| Step | Aggregate (2-conv, historical) | What it fixed |
 |---|---|---|
 | Naive baseline | ~32% | vector-only retrieval, no date grounding |
 | + Date-routed context | — | surfaces session dates to the answerer; **biggest single fix** — temporal 14% → 46–67% |
 | + Stronger embedder (mxbai) | — | better single-hop / open-domain recall |
 | + Budget routing (k=32) | ~55% | gives multi-hop room to reason — multi-hop 40% → 58% |
-| + Temporal scaffold | **~57–58%** | timeline + "now" anchor + date-arithmetic — temporal 62% → 76% |
+| + Temporal scaffold | ~57–58% (2-conv) | timeline + "now" anchor + date-arithmetic |
 
-The lesson: most of the gain came not from a bigger model but from *grounding the answerer in time* and *budgeting retrieved evidence* — both cheap, both local.
+The 2-conv run's apparent single-hop cost of the temporal scaffold (a −6pp drop) did
+**not** reproduce at 10-conversation scale with paired statistics (see the research
+report) — it was a small-sample artifact, not a real trade-off. The lesson that did
+hold up: most of the gain came not from a bigger model but from *grounding the answerer
+in time* and *budgeting retrieved evidence* — both cheap, both local.
 
 ## Retrieval vs reasoning
 
-We report **evidence recall** (did retrieval surface the gold facts?) separately from **answer accuracy**, because they are different failure modes. The remaining gap is not the generator: swapping the local answerer for a GPT-4-class model (Claude Opus 4.8) did **not** lift multi-hop accuracy — it landed at the same ~50–58%. The cap is the benchmark's inherent difficulty (incomplete multi-hop evidence chains, and open-domain questions whose answer was never stated in the conversation), which is exactly why independently-measured systems cluster around ~55%. Our ~57–58% sits at the top of that cluster — running fully local.
+We report **evidence recall** (did retrieval surface the gold facts?) separately from **answer accuracy**, because they are different failure modes. The remaining gap is not the generator: swapping the local answerer for a GPT-4-class model (Claude Opus 4.8) did **not** lift multi-hop accuracy — it landed at the same ~50–58%. The cap is the benchmark's inherent difficulty (incomplete multi-hop evidence chains, and open-domain questions whose answer was never stated in the conversation), which is exactly why independently-measured systems cluster around ~55%. Our ~56% sits in that cluster — running fully local.
 
 ## How to reproduce
 
@@ -67,15 +85,16 @@ Flags: `--conversations N`, `--only <category>` (targeted A/B), `--model <ollama
 
 ## Comparative context
 
-On a sober, third-party basis, the [PISA paper](https://arxiv.org/pdf/2510.15966) reports **Mem0 ~55%** and **Zep ~34%** on LoCoMo. Our ~55% puts velesdb-memory at **Mem0-tier accuracy — running fully local.**
+On a sober, third-party basis, the [PISA paper](https://arxiv.org/pdf/2510.15966) reports **Mem0 ~55%** and **Zep ~34%** on LoCoMo. Our ~56% puts velesdb-memory at **Mem0-tier accuracy — running fully local.**
 
 Be skeptical of vendor headlines: Mem0's own ~92% and Zep's (later retracted, [corrected to ~58%](https://github.com/getzep/zep-papers/issues/5)) ~84% use cloud GPT-4o and methodology that has been contested. We do **not** claim to beat those; we claim sober parity with the independently-measured numbers, plus full locality and a reproducible harness.
 
 ## Limitations & next
 
-- **2-conversation subset.** Headline numbers are from 2 LoCoMo conversations (~231 answerable questions); a full **10-conversation run is in progress**. Treat current figures as a clearly-labeled, directional subset.
-- **Open-domain is the weak spot** (~23%) — questions needing world knowledge beyond what the conversation stated; the next tuning target.
-- **Temporal is hard industry-wide**; date-grounding is exactly where we invested, with headroom remaining (the `--temporal-scaffold` lever is under evaluation).
+- **Full 10-conversation set, statistically validated** (paired McNemar/Wilson/cluster-bootstrap tests) — see the [research report](../../docs/planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md) for the complete methodology.
+- **The temporal scaffold's marginal benefit over dated-recall-alone is unproven at this sample size** (its point-estimate gain has a confidence interval crossing zero) — dated recall alone already captures nearly all of the temporal lift.
+- **Open-domain is the weak spot** (24%) — questions needing world knowledge beyond what the conversation stated; the next tuning target.
+- **Temporal is hard industry-wide**; date-grounding is exactly where we invested, and it's the proven, statistically robust win (+33.6pp over baseline).
 - Numbers are **our measurement** under the config above, not a leaderboard submission. The point is that you can re-run it yourself.
 
 ---
