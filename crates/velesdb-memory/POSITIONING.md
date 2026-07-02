@@ -19,7 +19,7 @@ Today's leading agent-memory tools are not databases — they are orchestrators.
 - **Explainable recall via `why()`.** It returns the actual evidence path — which facts, connected through which entities — where competitors return only an answer.
 - **The tri-engine earns its keep — all three legs, measured.** Each engine beats pure vector retrieval on its specialty, generation-free: the **graph** (`why()` BFS) **+7.2pp** on retrieving both bridging facts of a true multi-hop question (HotpotQA, 3 000 dev) — and the win **replicates on a second independent dataset** (2WikiMultiHopQA, same harness, +3.1pp on the genuinely-bridged question types), so it is not a one-dataset artifact; the **ColumnStore** (`recall_where`, numeric range) **+9.7pp on real time-scoped questions** (TimeQA; +18.6pp on a controlled pilot) that a vector store *cannot* disambiguate (the candidates differ only by a number); and the fused engines reach the same LoCoMo accuracy at **half the context budget**. A pure RAG / orchestrator-over-Qdrant has none of these — it ranks by cosine and stops.
 - **And the engines *compound*, not just coexist.** On a task that is multi-hop *and* time-scoped at once (find the right person, in the right company, in the right year-window), Graph alone adds +16pp and ColumnStore alone +5pp — but **both together add +29pp**, more than the sum of their parts. Each resolves an axis the other can't; fused in one collection they do together what no single retrieval mode can. (Generation-free; `examples/triengine`.)
-- **Quality in the same tier, soberly measured.** On our honest LoCoMo measurements (local qwen-35b + mxbai-embed-large, Opus-4.8-judged, 2-conversation subset) we see ~57-58% aggregate, ~58% multi-hop, and **~76% temporal** — the category every memory system is weakest on. Retrieval recall is ~84% across the full 10-conversation set, so the remaining gap is the local *answerer*, not the memory.
+- **Quality in the same tier, soberly measured.** On our honest LoCoMo measurements (local qwen-35b + mxbai-embed-large, Opus-4.8-judged, full 10-conversation set, statistically validated with paired tests) we see ~56% aggregate, ~55% multi-hop, and **~61% temporal** — the category every memory system is weakest on, and the one lever we can prove moves the needle: +33.6pp over baseline (95% CI [27.1, 41.0]). Retrieval recall is ~89%, so the remaining gap is the local *answerer*, not the memory.
 
 ## 4. Honest comparison
 
@@ -29,7 +29,7 @@ Today's leading agent-memory tools are not databases — they are orchestrators.
 | **Deployment** | Single Rust binary | Service mesh to self-host | Service mesh to self-host |
 | **LLM dependency** | Local model stack, no cloud | Cloud LLM in the loop | Cloud LLM in the loop |
 | **Explainability** | `why()` returns evidence path | Returns an answer | Returns an answer |
-| **LoCoMo (sober/local)** | ~57-58% agg, **76% temporal** (local stack, our measurement) | ~55% (PISA, neutral 3rd-party) | ~34% (PISA, neutral 3rd-party) |
+| **LoCoMo (sober/local)** | ~56% agg, **61% temporal** (local stack, our measurement, full 10-conv) | ~55% (PISA, neutral 3rd-party) | ~34% (PISA, neutral 3rd-party) |
 | **License/distribution** | Open, crates.io / PyPI / npm | Open core + hosted | Open core + hosted |
 
 *Note: Mem0's own ~92% and Zep's retracted ~84% headlines use cloud GPT-4o and contested methodology. On the neutral PISA basis, the field — including us — sits far lower and much closer together.*
@@ -42,7 +42,7 @@ Today's leading agent-memory tools are not databases — they are orchestrators.
 
 **"Mem0 reports 92% on LoCoMo — you're only ~55%. That's a big gap."**
 
-It isn't a real gap — it's apples to oranges. Mem0's 92% headline runs on **cloud GPT-4o**; our numbers run on a **fully local** qwen-35b. The honest comparison is same-basis: the neutral PISA paper puts Mem0 at ~55% and Zep at ~34% on LoCoMo, and our local measurement lands at ~57-58% (best config, 2-conversation subset) — i.e. the same tier as Mem0, *measured soberly*. (Mem0's own 92% and Zep's ~84% are vendor headlines on contested methodology; Zep's was retracted.) So the real trade is: you give up roughly nothing on quality, and in return you get full locality, a single embedded engine instead of a service mesh, no per-token cloud bill, and an explainable evidence path. We will not claim a higher score — we claim the same quality on radically better architecture.
+It isn't a real gap — it's apples to oranges. Mem0's 92% headline runs on **cloud GPT-4o**; our numbers run on a **fully local** qwen-35b. The honest comparison is same-basis: the neutral PISA paper puts Mem0 at ~55% and Zep at ~34% on LoCoMo, and our local measurement lands at ~56% (best config, full 10-conversation set, statistically validated) — i.e. the same tier as Mem0, *measured soberly*. (Mem0's own 92% and Zep's ~84% are vendor headlines on contested methodology; Zep's was retracted.) So the real trade is: you give up roughly nothing on quality, and in return you get full locality, a single embedded engine instead of a service mesh, no per-token cloud bill, and an explainable evidence path. We will not claim a higher score — we claim the same quality on radically better architecture.
 
 ## 7. Where local-first is a hard requirement
 
