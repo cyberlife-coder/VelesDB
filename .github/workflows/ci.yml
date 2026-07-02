@@ -26,6 +26,7 @@ on:
       - 'demos/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'deny.toml'
       - 'sonar-project.properties'
       - '.github/workflows/**'
   pull_request:
@@ -42,6 +43,7 @@ on:
       - 'demos/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'deny.toml'
       - 'sonar-project.properties'
       - '.github/workflows/**'
   # Manual trigger so coverage can be refreshed on demand (e.g. after a
