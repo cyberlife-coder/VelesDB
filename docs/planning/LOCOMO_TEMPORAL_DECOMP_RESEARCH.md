@@ -13,8 +13,9 @@ charts) that this report is built from **are** committed alongside it in
 
 ## Why this exists
 
-`docs/guides/TEMPORAL_MEMORY.md` (commit `7a65398b`) published a temporal-decomposition
-table from a 2-conversation exploratory run:
+`docs/guides/TEMPORAL_MEMORY.md` (commit `7a65398b`, "Ran the full 10-conversation
+decomposition") published a temporal-decomposition table from an earlier full
+10-conversation run (1,540 answerable / 321 temporal questions, 2,393 extracted facts):
 
 | Config | Temporal | Answerable | Single-hop |
 |---|---|---|---|
@@ -22,17 +23,24 @@ table from a 2-conversation exploratory run:
 | + dated recall | 53% (+36) | 53% (+11) | 60% (+6) |
 | + temporal scaffold | 58% (+5) | 51% (−2) | **54% (−6)** |
 
-The **−6pp single-hop cost of the scaffold** was the headline risk: dated recall alone
-looked free, but the CoT scaffold looked like it traded temporal accuracy for
-general-question accuracy. This report re-runs the same 3 configs at full
-10-conversation scale with per-question paired statistics, to find out whether that
-trade is real.
+That guide's own text states the −6pp single-hop drop is **"a real trade-off, not a
+free upgrade"** and tells users to treat the scaffold as situational rather than a
+strict improvement. That claim — a specific, falsifiable one — was made from a single
+run with no significance testing: no per-question data was kept (the harness only
+emitted aggregates), so there was no way to tell a real effect from sampling noise.
+This report instruments the harness (`--dump`, #1301), re-runs the same 3 configs on a
+**fresh 10-conversation pass**, and applies paired per-question statistics to find out
+whether that trade-off holds up.
 
 ## Reproduction
 
-Row counts match exactly: 1,540 answerable / 321 temporal / 2,358 extracted facts (vs.
-2,393 published — 1 hard extraction parse failure, `conv-49`/session 17; a known, small,
-evenly-distributed gap, identical across all 3 configs, not investigated further).
+Row counts match closely: 1,540 answerable / 321 temporal (identical) / 2,358 extracted
+facts (vs. 2,393 in the earlier run — 1 hard extraction parse failure this time,
+`conv-49`/session 17; a known, small, evenly-distributed gap, identical across all 3
+configs, not investigated further). Both runs are genuine 10-conversation passes — the
+absolute-accuracy gap between them (below) is run-to-run variance (LLM extraction/
+generation isn't perfectly deterministic even at temperature 0, especially starting
+from an empty cache), not a sample-size difference.
 
 Recomputed aggregate accuracy from the dump (Wilson 95% CI —
 [`assets/locomo-decomp/bar_ci.png`](assets/locomo-decomp/bar_ci.png)):
@@ -47,11 +55,11 @@ Recomputed aggregate accuracy from the dump (Wilson 95% CI —
 | Open-domain | 96 | 24% [17,33] | 24% [17,33] | 24% [17,33] |
 | **Answerable** | 1540 | 47% [45,50] | 54% [52,57] | 56% [53,58] |
 
-Absolute levels sit ~5pp above the published (2-conv) table (extraction/generation
-aren't perfectly deterministic run-to-run, and the published run used a different
-random subset), but this run is internally consistent — extraction is content-addressed
-cached and byte-identical across all 3 configs, so the **within-run deltas are the valid
-comparison**, not the absolute levels against the old table.
+Absolute levels sit ~5pp above the earlier published table (LLM extraction/generation
+isn't perfectly deterministic run-to-run, especially starting from an empty cache), but
+this run is internally consistent — extraction is content-addressed cached and
+byte-identical across all 3 configs, so the **within-run deltas are the valid
+comparison**, not the absolute levels against the earlier table.
 
 ## The statistics that matter
 
@@ -69,13 +77,16 @@ to. Matches the published +36pp closely. **Conclusion: robust, not in question.*
 
 ### 2. Single-hop cost of the scaffold (dated → scaffold) is NOT statistically real
 
-This was the core question. At 10-conv scale: only **7 discordant pairs out of 841**
-single-hop questions (4 lost correct→wrong, 3 won wrong→correct — nearly balanced).
-McNemar p = 1.0. Cluster bootstrap: **−0.1pp, 95% CI [−0.9, +0.5]** — tightly straddles
-zero. Zero conversations flagged as per-conversation outliers on this cell (IQR check —
+This was the core question. Only **7 discordant pairs out of 841** single-hop questions
+(4 lost correct→wrong, 3 won wrong→correct — nearly balanced). McNemar p = 1.0. Cluster
+bootstrap: **−0.1pp, 95% CI [−0.9, +0.5]** — tightly straddles zero. Zero conversations
+flagged as per-conversation outliers on this cell (IQR check —
 [`assets/locomo-decomp/per_conv_delta.png`](assets/locomo-decomp/per_conv_delta.png)),
-ruling out "one bad conversation drove it." **The −6pp finding from the original 2-conv
-run does not reproduce — it was a small-sample artifact, not a real scaffold cost.**
+ruling out "one bad conversation drove it." **The −6pp finding from the earlier run does
+not reproduce.** That run reported a single point estimate with no significance test;
+this run's paired statistics show a −6pp (or any similarly-sized) single-hop swing is
+well within the noise band for this category at this sample size — not a real,
+repeatable scaffold cost.
 
 ![Won vs lost flip counts, baseline→dated (temporal) and dated→scaffold (single-hop)](assets/locomo-decomp/flip_flow.png)
 
@@ -97,15 +108,16 @@ established at this sample size — treat as unproven, not "confirmed +5.6pp."**
 | Transition | Effect | Verdict |
 |---|---|---|
 | Baseline → dated (temporal) | +33.6pp [27.1, 41.0] | **Real, large** |
-| Dated → scaffold (single-hop "cost") | −0.1pp [−0.9, +0.5] | **Not real — was a 2-conv artifact** |
+| Dated → scaffold (single-hop "cost") | −0.1pp [−0.9, +0.5] | **Not real — earlier run's finding doesn't hold up under significance testing** |
 | Dated → scaffold (temporal "gain") | +5.6pp [−1.2, +12.1] | **Unproven at n=321** |
 | Dated → scaffold (answerable aggregate) | +1.1pp [−0.3, +2.6] | **Unproven** |
 
-The original 2-conv table implied a real trade-off (scaffold buys temporal accuracy by
-spending single-hop accuracy). **That trade-off doesn't hold up.** At 10-conversation
-scale, dated recall alone captures nearly all of the temporal win (+33.6pp, ironclad),
-and the scaffold adds an unproven, possibly-zero marginal gain on top — at zero proven
-cost, but also zero proven benefit over the simpler dated-recall-only approach.
+The earlier guide's table implied a real trade-off (scaffold buys temporal accuracy by
+spending single-hop accuracy) and stated it as fact, with no significance test behind
+it. **That trade-off doesn't hold up under paired statistics.** Dated recall alone
+captures nearly all of the temporal win (+33.6pp, ironclad), and the scaffold adds an
+unproven, possibly-zero marginal gain on top — at zero proven cost, but also zero proven
+benefit over the simpler dated-recall-only approach.
 
 **Practical recommendation:** ship dated recall as the default (already the case per the
 `metadata` field shipped in #1300, documented in `docs/guides/TEMPORAL_MEMORY.md`). The
@@ -113,7 +125,9 @@ temporal scaffold prompt technique isn't disproven, but the case for always appl
 is weaker than believed — and the case for *fearing* it (the single-hop cost) is gone. If
 the scaffold's extra CoT tokens have a latency/cost impact, that now dominates the
 decision more than any accuracy trade-off, since no accuracy trade-off is demonstrated at
-this sample size.
+this sample size. `docs/guides/TEMPORAL_MEMORY.md` itself states the single-hop cost as
+settled fact ("a real trade-off, not a free upgrade") — updated alongside this report to
+reflect the finding above.
 
 ## What this does *not* cover
 
