@@ -522,6 +522,26 @@ impl SemanticMemory {
         Ok(Some((extract_content(&point), point.vector.clone())))
     }
 
+    /// Retrieves a fact's raw payload as a metadata map, or `None` when the id
+    /// is unknown, expired, or carries no payload. Unlike [`Self::get`], this
+    /// skips the embedding entirely, so a caller that only needs to inspect a
+    /// fact's tags (e.g. to distinguish internal scaffolding from user data)
+    /// doesn't pay for a vector copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when collection access fails.
+    pub fn get_metadata(&self, id: u64) -> Result<Option<Map<String, Value>>, AgentMemoryError> {
+        if self.ttl.is_expired(MemoryKind::Semantic, id) {
+            return Ok(None);
+        }
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        let Some(point) = collection.get(&[id]).into_iter().flatten().next() else {
+            return Ok(None);
+        };
+        Ok(point.payload.as_ref().and_then(Value::as_object).cloned())
+    }
+
     /// Lists all live (non-expired) tracked facts as `(id, content)` pairs.
     ///
     /// # Errors
