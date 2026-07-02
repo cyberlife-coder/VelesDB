@@ -1,6 +1,7 @@
 //! The memory service: five operations over the in-core Agent Memory SDK.
 
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "persistence")]
 use std::path::Path;
 
 use serde_json::{Map, Value};
@@ -15,7 +16,9 @@ use crate::error::MemoryError;
 use crate::extract::Extractor;
 use crate::id;
 use crate::model::{ColumnFilter, Explanation, Link, MemoryNode, Recollection};
-use crate::storage::{MemoryStore, NativeStore};
+use crate::storage::MemoryStore;
+#[cfg(feature = "persistence")]
+use crate::storage::NativeStore;
 
 /// [`MemoryService::recall_fused`] and its helpers — split out to keep this
 /// file under the crate's 500-NLOC-per-file budget, same pattern as
@@ -48,11 +51,23 @@ const MENTIONS_RELATION: &str = "mentions";
 /// backend `S` so the same orchestration runs over the native, file-backed
 /// engine (the default — nothing changes for existing callers) or any other
 /// backend that implements the trait (e.g. an in-memory one for WASM).
+///
+/// Two definitions, `persistence`-gated: the default type parameter itself
+/// references [`NativeStore`], which doesn't exist as a type at all without
+/// the feature, so a `persistence`-free build (e.g. `velesdb-wasm`) drops the
+/// default and every caller names its own [`MemoryStore`] backend explicitly.
+#[cfg(feature = "persistence")]
 pub struct MemoryService<E: Embedder, S: MemoryStore = NativeStore> {
     store: S,
     embedder: E,
 }
+#[cfg(not(feature = "persistence"))]
+pub struct MemoryService<E: Embedder, S: MemoryStore> {
+    store: S,
+    embedder: E,
+}
 
+#[cfg(feature = "persistence")]
 impl<E: Embedder> MemoryService<E, NativeStore> {
     /// Open (or create) a native, file-backed memory store at `path`, using
     /// `embedder` for text vectorization. The store never leaves this directory.

@@ -60,6 +60,12 @@ mod graph_store;
 mod graph_worker_hints;
 mod hybrid_quantized;
 mod idb_helpers;
+/// WASM binding for `velesdb-memory`'s agent-memory wedge — see
+/// [`memory_service::WasmMemoryService`], exported to JS as `MemoryService`.
+mod memory_service;
+/// The in-memory `MemoryStore` backend for `velesdb-memory`'s agent-memory
+/// wedge — see [`memory_store::WasmStore`].
+mod memory_store;
 mod parsing;
 mod persistence;
 mod serialization;

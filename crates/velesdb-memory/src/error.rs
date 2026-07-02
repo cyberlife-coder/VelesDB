@@ -1,5 +1,6 @@
 //! Error type for the memory layer.
 
+#[cfg(feature = "persistence")]
 use velesdb_core::agent::AgentMemoryError;
 use velesdb_core::Error as CoreError;
 
@@ -28,7 +29,11 @@ pub enum MemoryError {
     #[error("storage error: {0}")]
     Storage(#[from] CoreError),
 
-    /// Failure in the Agent Memory SDK.
+    /// Failure in the Agent Memory SDK. Only constructible with the
+    /// `persistence` feature (the native, file-backed store) — a
+    /// `persistence`-free backend (e.g. `velesdb-wasm`'s in-memory one) never
+    /// touches `velesdb-core`'s `agent` module, so this variant can't arise.
+    #[cfg(feature = "persistence")]
     #[error("memory error: {0}")]
     Memory(#[from] AgentMemoryError),
 
@@ -85,11 +90,11 @@ impl MemoryError {
             | Self::InvalidFilter(_)
             | Self::InvalidRelation(_) => ErrorCategory::InvalidInput,
             Self::UnknownMemory(_) => ErrorCategory::NotFound,
-            Self::Storage(_)
-            | Self::Memory(_)
-            | Self::Embed(_)
-            | Self::Extract(_)
-            | Self::Rerank(_) => ErrorCategory::Internal,
+            #[cfg(feature = "persistence")]
+            Self::Memory(_) => ErrorCategory::Internal,
+            Self::Storage(_) | Self::Embed(_) | Self::Extract(_) | Self::Rerank(_) => {
+                ErrorCategory::Internal
+            }
         }
     }
 }

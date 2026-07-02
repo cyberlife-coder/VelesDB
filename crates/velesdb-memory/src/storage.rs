@@ -7,12 +7,20 @@
 //! `velesdb-wasm` provides for the browser (no filesystem, no `persistence`
 //! feature).
 
+#[cfg(feature = "persistence")]
 use std::collections::HashMap;
+#[cfg(feature = "persistence")]
 use std::path::Path;
+#[cfg(feature = "persistence")]
 use std::sync::Arc;
 
-use serde_json::{json, Map, Value};
+#[cfg(feature = "persistence")]
+use serde_json::json;
+#[cfg(feature = "persistence")]
+use serde_json::{Map, Value};
+#[cfg(feature = "persistence")]
 use velesdb_core::agent::AgentMemory;
+#[cfg(feature = "persistence")]
 use velesdb_core::{Database, SearchResult};
 
 use crate::error::MemoryError;
@@ -154,10 +162,12 @@ pub trait MemoryStore {
 /// (`velesdb-core`'s `Database`/`AgentMemory`, requiring the `persistence`
 /// feature). Existing callers of `MemoryService::open` see no change — this
 /// is exactly what they already ran.
+#[cfg(feature = "persistence")]
 pub struct NativeStore {
     memory: AgentMemory,
 }
 
+#[cfg(feature = "persistence")]
 impl NativeStore {
     /// Open (or create) a native store at `path`, sized for `dimension`.
     ///
@@ -170,6 +180,7 @@ impl NativeStore {
     }
 }
 
+#[cfg(feature = "persistence")]
 impl MemoryStore for NativeStore {
     fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), MemoryError> {
         self.memory
@@ -307,6 +318,7 @@ impl MemoryStore for NativeStore {
     }
 }
 
+#[cfg(feature = "persistence")]
 impl NativeStore {
     /// Build the `VelesQL` for [`Self::query_columnar`]: a `NEAR` predicate
     /// plus one bound parameter per filter, against the semantic collection.
@@ -346,6 +358,7 @@ impl NativeStore {
 /// payload, and any `_veles_`-namespaced system key (durable TTL, entity
 /// hubs). Mirrors [`crate::service`]'s own copy — kept private to each module
 /// since both need it and neither should import a "utility" from the other.
+#[cfg(feature = "persistence")]
 fn is_reserved_key(key: &str) -> bool {
     key == "content" || key.starts_with("_veles_")
 }
@@ -353,6 +366,7 @@ fn is_reserved_key(key: &str) -> bool {
 /// Map a core search result to a [`Recollection`], lifting the fact text out
 /// of the reserved `content` payload key and surfacing any remaining
 /// caller-supplied metadata (reserved system keys excluded).
+#[cfg(feature = "persistence")]
 fn to_recollection(result: &SearchResult) -> Recollection {
     let payload = result.point.payload.as_ref().and_then(Value::as_object);
     let content = payload
@@ -381,6 +395,7 @@ fn to_recollection(result: &SearchResult) -> Recollection {
 /// parameter). Rejects the reserved system columns the docs promise are off
 /// limits: `content` (the fact payload) and any `_veles_`-prefixed engine key
 /// (e.g. durable TTL).
+#[cfg(feature = "persistence")]
 fn validate_field(field: &str) -> Result<(), MemoryError> {
     let plain = !field.is_empty() && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     let reserved = field == "content" || field.starts_with("_veles_");
@@ -395,6 +410,7 @@ fn validate_field(field: &str) -> Result<(), MemoryError> {
 /// compared against a `ColumnStore` column; binding an array/object/null would
 /// fail deep in the query engine and surface as an opaque internal error instead
 /// of a clear client-input error.
+#[cfg(feature = "persistence")]
 fn validate_scalar(value: &Value) -> Result<(), MemoryError> {
     match value {
         Value::String(_) | Value::Number(_) | Value::Bool(_) => Ok(()),
@@ -404,6 +420,6 @@ fn validate_scalar(value: &Value) -> Result<(), MemoryError> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "persistence"))]
 #[path = "storage_tests.rs"]
 mod tests;
