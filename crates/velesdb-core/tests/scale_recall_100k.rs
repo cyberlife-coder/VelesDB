@@ -102,66 +102,39 @@ fn build_100k_fixture() -> (HnswIndex, Vec<Vec<f32>>, Vec<Vec<f32>>) {
     (index, vectors, queries)
 }
 
+/// Validates recall@10 for all four quality modes against one shared 100K
+/// index/query fixture.
+///
+/// Building the 100K-vector HNSW index dominates this gate's runtime, so the
+/// four modes are asserted here instead of in separate `#[test]` fns — one
+/// fixture build instead of four keeps the nightly CI job (60 min budget,
+/// `--test-threads=1`) inside its timeout.
 #[test]
 #[ignore = "Long-running 100K recall gate — run with --ignored"]
-fn scale_100k_recall_balanced() {
+fn scale_100k_recall_all_qualities() {
     let (index, vectors, queries) = build_100k_fixture();
-    let recall = measure_recall(&index, &vectors, &queries, SearchQuality::Balanced);
+    let mut failures = Vec::new();
 
     println!();
-    println!("=== 100K Recall Gate: Balanced ===");
-    println!("  recall@{K} = {recall:.4} (threshold: 0.95)");
+    println!("=== 100K Recall Gate ===");
+    for (label, quality, threshold) in [
+        ("Fast", SearchQuality::Fast, 0.90),
+        ("Balanced", SearchQuality::Balanced, 0.95),
+        ("Accurate", SearchQuality::Accurate, 0.98),
+        ("Perfect", SearchQuality::Perfect, 1.00),
+    ] {
+        let recall = measure_recall(&index, &vectors, &queries, quality);
+        println!("  {label}: recall@{K} = {recall:.4} (threshold: {threshold})");
+        if recall < threshold {
+            failures.push(format!(
+                "{label} recall@{K} = {recall:.4} is below {threshold} threshold"
+            ));
+        }
+    }
 
     assert!(
-        recall >= 0.95,
-        "Balanced recall@{K} = {recall:.4} is below 0.95 threshold at 100K scale"
-    );
-}
-
-#[test]
-#[ignore = "Long-running 100K recall gate — run with --ignored"]
-fn scale_100k_recall_fast() {
-    let (index, vectors, queries) = build_100k_fixture();
-    let recall = measure_recall(&index, &vectors, &queries, SearchQuality::Fast);
-
-    println!();
-    println!("=== 100K Recall Gate: Fast ===");
-    println!("  recall@{K} = {recall:.4} (threshold: 0.90)");
-
-    assert!(
-        recall >= 0.90,
-        "Fast recall@{K} = {recall:.4} is below 0.90 threshold at 100K scale"
-    );
-}
-
-#[test]
-#[ignore = "Long-running 100K recall gate — run with --ignored"]
-fn scale_100k_recall_accurate() {
-    let (index, vectors, queries) = build_100k_fixture();
-    let recall = measure_recall(&index, &vectors, &queries, SearchQuality::Accurate);
-
-    println!();
-    println!("=== 100K Recall Gate: Accurate ===");
-    println!("  recall@{K} = {recall:.4} (threshold: 0.98)");
-
-    assert!(
-        recall >= 0.98,
-        "Accurate recall@{K} = {recall:.4} is below 0.98 threshold at 100K scale"
-    );
-}
-
-#[test]
-#[ignore = "Long-running 100K recall gate — run with --ignored"]
-fn scale_100k_recall_perfect() {
-    let (index, vectors, queries) = build_100k_fixture();
-    let recall = measure_recall(&index, &vectors, &queries, SearchQuality::Perfect);
-
-    println!();
-    println!("=== 100K Recall Gate: Perfect ===");
-    println!("  recall@{K} = {recall:.4} (threshold: 1.00)");
-
-    assert!(
-        (recall - 1.0).abs() < f64::EPSILON,
-        "Perfect recall@{K} = {recall:.4} must be 1.00 at any scale"
+        failures.is_empty(),
+        "100K recall gate failed at scale:\n  {}",
+        failures.join("\n  ")
     );
 }

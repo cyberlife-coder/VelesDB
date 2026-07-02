@@ -277,9 +277,12 @@ jobs:
           shared-key: "velesdb-perf-gate"
 
       - name: Run 100K multi-mode recall gate (brute-force ground truth)
-        # The four tests assert their per-mode thresholds internally, so a
+        # The test asserts all four per-mode thresholds internally, so a
         # recall regression at scale fails the job. Single-threaded: the suite
-        # shares filesystem state (CLAUDE.md).
+        # shares filesystem state (CLAUDE.md). --release is mandatory here —
+        # debug-mode HNSW insert/search at 100K vectors is an order of
+        # magnitude slower and blows the job's timeout budget (see the
+        # sibling Python 100K job's rationale above).
         run: |
-          cargo test -p velesdb-core --test scale_recall_100k \
+          cargo test -p velesdb-core --release --test scale_recall_100k \
             --features persistence -- --ignored --nocapture --test-threads=1
