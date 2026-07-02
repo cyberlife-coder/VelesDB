@@ -24,6 +24,10 @@
 pub mod embedder;
 pub mod error;
 pub mod extract;
+/// Vector+graph score fusion — the ranking layer behind
+/// [`service::MemoryService::recall_fused`]. Internal: callers reach it only
+/// through that method.
+mod fusion;
 /// Content-addressed memory ids — internal; ids surface through the service API.
 pub(crate) mod id;
 /// Resource caps (DoS limits) shared by every adapter — the single source of
@@ -38,6 +42,9 @@ pub mod mcp;
 /// (`Link`, `Recollection`, `ColumnFilter`, `Explanation`, …), separate from the
 /// service that computes them.
 pub mod model;
+/// Optional second-stage re-scoring of a fused recall pool (bring your own
+/// cross-encoder/LLM). Never wired in by default — see [`rerank::Reranker`].
+pub mod rerank;
 /// Shared JSON Schema post-processing (strips `schemars`' non-standard integer
 /// `format` keywords so strict MCP clients don't warn on every id field).
 mod schema;
@@ -56,5 +63,8 @@ pub use extract::OllamaExtractor;
 pub use extract::{DynExtractor, ExtractError, ExtractedFact, Extractor};
 #[cfg(feature = "mcp")]
 pub use mcp::McpServer;
-pub use model::{ColumnFilter, ColumnOp, Explanation, Link, MemoryEdge, MemoryNode, Recollection};
+pub use model::{
+    ColumnFilter, ColumnOp, Explanation, FusionOptions, Link, MemoryEdge, MemoryNode, Recollection,
+};
+pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{MemoryService, Metadata};

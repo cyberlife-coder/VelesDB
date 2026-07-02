@@ -5,7 +5,8 @@
 
 mod common;
 
-use common::service;
+use common::{meta, service};
+use serde_json::json;
 use velesdb_memory::{Link, MemoryError};
 
 // --- Nominal ---------------------------------------------------------------
@@ -24,6 +25,43 @@ fn remember_then_recall_returns_the_fact() {
         hits.iter().any(|h| h.id == id),
         "recalled set should contain the stored fact"
     );
+}
+
+#[test]
+fn recall_round_trips_caller_metadata_for_dated_context() {
+    let (_dir, svc) = service();
+    let m = meta(&[("occurred_at", json!("2026-01-05"))]);
+    let id = svc
+        .remember(
+            "we chose parking_lot to avoid lock poisoning",
+            &[],
+            Some(&m),
+        )
+        .expect("remember with metadata");
+
+    let hits = svc
+        .recall("parking_lot lock poisoning", 5, None)
+        .expect("recall");
+    let hit = hits.iter().find(|h| h.id == id).expect("fact present");
+
+    assert_eq!(
+        hit.metadata.as_ref().and_then(|m| m.get("occurred_at")),
+        Some(&json!("2026-01-05")),
+        "recall() must round-trip caller metadata, not just recall_where()"
+    );
+}
+
+#[test]
+fn recall_metadata_is_none_when_the_fact_carries_none() {
+    let (_dir, svc) = service();
+    svc.remember("a fact with no metadata", &[], None)
+        .expect("remember");
+
+    let hits = svc
+        .recall("a fact with no metadata", 5, None)
+        .expect("recall");
+
+    assert_eq!(hits[0].metadata, None);
 }
 
 #[test]

@@ -19,6 +19,13 @@ use crate::extract::Extractor;
 use crate::id;
 use crate::model::{ColumnFilter, Explanation, Link, MemoryEdge, MemoryNode, Recollection};
 
+/// [`MemoryService::recall_fused`] and its helpers — split out to keep this
+/// file under the crate's 500-NLOC-per-file budget, same pattern as
+/// `velesdb-core`'s `database/*.rs` split. A child module of `service`, so it
+/// shares full access to `MemoryService`'s private fields and methods.
+#[path = "fused_recall.rs"]
+mod fused_recall;
+
 /// Reserved metadata key marking an entity hub auto-created by
 /// [`MemoryService::remember_extracted`] (value `true`). Namespaced under the
 /// system `_veles_` prefix so it can never collide with a caller's own metadata,
@@ -30,6 +37,11 @@ const HUB_FIELD: &str = "_veles_hub";
 /// natural fact ids: a caller fact whose text happens to equal a hub's display
 /// content (`Entity: rust`) can never collide with, or overwrite, the hub.
 const HUB_ID_SALT: &str = "\u{0}_veles_entity_hub\u{0}";
+/// Edge label a hub uses to point back at a fact it tags (the hub → fact
+/// direction). [`fused_recall`] reads this to recognise which edges in a
+/// `why()` walk crossed a hub, so it can weight the reached fact by that
+/// hub's specificity instead of a flat constant.
+const MENTIONS_RELATION: &str = "mentions";
 
 /// Local-first agent memory backed by a single `VelesDB` instance.
 ///
@@ -217,7 +229,7 @@ impl<E: Embedder> MemoryService<E> {
         self.seed_existing_edges(fact_id, edges, seeded)?;
         self.seed_existing_edges(entity_id, edges, seeded)?;
         self.add_edge(fact_id, entity_id, "about", edges)?;
-        self.add_edge(entity_id, fact_id, "mentions", edges)?;
+        self.add_edge(entity_id, fact_id, MENTIONS_RELATION, edges)?;
         Ok(())
     }
 
@@ -338,8 +350,14 @@ impl<E: Embedder> MemoryService<E> {
     /// Entity hubs created by [`Self::remember_extracted`] are never returned:
     /// they are internal graph scaffolding, not facts the caller stored.
     ///
+    /// Each hit carries its caller metadata (`Recollection::metadata`, `None`
+    /// when the fact carries none) — store a date field (e.g. `occurred_at`)
+    /// and it round-trips here, so a caller can sort the result into a
+    /// chronological, date-stamped context without `recall_where`'s explicit
+    /// filters. This costs one extra lookup per returned hit.
+    ///
     /// # Errors
-    /// Returns [`MemoryError`] if the semantic query fails.
+    /// Returns [`MemoryError`] if the semantic query or a metadata lookup fails.
     pub fn recall(
         &self,
         query: &str,
@@ -353,21 +371,30 @@ impl<E: Embedder> MemoryService<E> {
         reject_reserved_keys(filter)?;
         let embedding = self.embedder.embed(query)?;
         let hits = self.search(&embedding, k, filter)?;
-        // `self.search` (below) goes through core's `query_filtered`/
-        // `query_excluding`, which return only `(id, score, content)` — no
-        // payload/metadata access at that layer. Widening that would mean
-        // changing velesdb-core's public API, which is out of scope here.
-        // `recall_where` (via `to_recollection`) is the documented path for
-        // metadata-carrying, dated recall.
-        Ok(hits
-            .into_iter()
-            .map(|(id, score, content)| Recollection {
-                id,
-                score,
-                content,
-                metadata: None,
+        hits.into_iter()
+            .map(|(id, score, content)| {
+                Ok(Recollection {
+                    id,
+                    score,
+                    content,
+                    metadata: self.recall_metadata(id)?,
+                })
             })
-            .collect())
+            .collect()
+    }
+
+    /// The caller-supplied metadata for memory `id` (reserved system keys
+    /// excluded), or `None` when it carries none. Shared by every recall path
+    /// so a fact's metadata round-trips regardless of which one a caller uses.
+    fn recall_metadata(&self, id: u64) -> Result<Option<Metadata>, MemoryError> {
+        let payload = self.memory.semantic().get_metadata(id)?;
+        Ok(payload.and_then(|payload| {
+            let metadata: Metadata = payload
+                .into_iter()
+                .filter(|(key, _)| !is_reserved_key(key))
+                .collect();
+            (!metadata.is_empty()).then_some(metadata)
+        }))
     }
 
     /// Vector search for up to `k` ids, optionally narrowed by a metadata
