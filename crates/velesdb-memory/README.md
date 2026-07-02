@@ -93,7 +93,7 @@ neutral-judge basis — but the real difference is the *architecture*, not the s
 | Shape | one embedded binary (vector + graph + column) | orchestrator over Qdrant + Postgres | orchestrator (graph-centric) |
 | Runs | **100% local / offline** | cloud LLM in the loop | cloud LLM in the loop |
 | Explains | **`why()` returns the evidence path** | returns an answer | returns an answer |
-| LoCoMo (neutral PISA basis) | ~57-58% | ~55% | ~34% |
+| LoCoMo (neutral PISA basis) | ~56% | ~55% | ~34% |
 
 *Mem0's ~92% / Zep's ~84% headlines run on cloud GPT-4o with contested methodology; on
 the neutral basis the whole field sits far lower and close together — we do **not** claim
