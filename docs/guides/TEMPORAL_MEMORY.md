@@ -119,31 +119,48 @@ something wired into the library.
 ## Honest results — read this before you quote a number
 
 We ran the decomposition on the full 10-conversation LoCoMo benchmark
-(2,393 extracted facts, 321 temporal / 1,540 answerable questions total;
+(2,358 extracted facts, 321 temporal / 1,540 answerable questions total;
 answers generated fully locally with a local 35B model, graded by Claude
 Opus 4.8 as a neutral judge — never in production, only for scoring this
-benchmark):
+benchmark), with per-question paired statistics (McNemar tests, cluster
+bootstrap over conversations) to separate real effects from run-to-run
+noise — full methodology, tests, and charts in
+[`docs/planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md`](../planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md):
 
 | Configuration | Temporal accuracy | Answerable accuracy (all categories) |
 |---|---|---|
-| Baseline (no dates, no scaffold) | 17% | 42% |
-| **+ dated recall** (this guide's step 2 — `recall_where` + metadata, chronologically ordered) | **53%** (+36pp) | **53%** (+11pp) |
-| + temporal-reasoning scaffold (this guide's step 4, on top of dated recall) | 58% (+5pp more) | 51% (−2pp) |
+| Baseline (no dates, no scaffold) | 22% | 47% |
+| **+ dated recall** (this guide's step 2 — `recall_where` + metadata, chronologically ordered) | **55%** (+33.6pp, 95% CI [27.1, 41.0]) | **54%** (+6.9pp, 95% CI [5.4, 9.0]) |
+| + temporal-reasoning scaffold (this guide's step 4, on top of dated recall) | 61% (+5.6pp more, 95% CI **[−1.2, +12.1]**) | 56% (+1.1pp more, 95% CI **[−0.3, +2.6]**) |
 
 **Dated recall alone — a VelesDB capability, no special prompting — accounts
-for nearly all of the lift** (17% → 53% on temporal questions). The scaffold
-prompt adds a further +5pp on temporal questions, but that isn't free: it
-costs accuracy elsewhere (single-hop dropped from 60% to 54% in our run),
-because routing a chain-of-thought prompt at every temporal-looking question
-trades breadth for depth. Treat the scaffold as an optional, situational
-technique to A/B test on your own workload — not a strict upgrade.
+for nearly all of the lift, and this is the one number in this table that's
+statistically ironclad** (95% CI cleanly excludes zero). The temporal
+scaffold's *additional* gain on top of dated recall is directionally
+positive but **not statistically distinguishable from zero at this sample
+size** — treat it as unproven, not confirmed.
+
+An earlier version of this guide stated the scaffold "costs accuracy
+elsewhere (single-hop dropped from 60% to 54%)" and called it "a real
+trade-off, not a free upgrade." **That claim doesn't hold up under paired
+statistics.** Re-running with per-question tracking: only 7 discordant
+single-hop outcomes out of 841 questions (4 lost, 3 won — nearly balanced),
+McNemar p = 1.0, cluster-bootstrap effect −0.1pp with a 95% CI of
+[−0.9, +0.5]pp. The original number was a single, unreplicated run reported
+without a significance test — exactly the kind of number this section warns
+you not to trust from *us* either. There's no evidence the scaffold costs
+single-hop accuracy; there's also no evidence its extra temporal gain over
+dated-alone is real yet. If the scaffold's extra chain-of-thought tokens
+matter for your latency/cost budget, that's currently a better reason to
+skip it than any accuracy trade-off — none is demonstrated.
 
 We deliberately never say "VelesDB temporal accuracy: X%" — the reasoning is
 your LLM's, not the database's. What the numbers above show is that VelesDB's
 contribution (dated, chronologically-ordered recall) is where nearly all of
-the measured lift comes from; the scaffold is a portable prompt pattern you
-can adapt to your own model, with a trade-off you should measure before
-adopting it.
+the measured lift comes from, and it's the part backed by real statistics;
+the scaffold is a portable prompt pattern you can adapt to your own model,
+with any trade-off still to be established — measure it on your own workload
+before assuming either a cost or a benefit.
 
 ## See also
 
