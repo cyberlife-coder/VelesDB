@@ -75,8 +75,11 @@ pub fn to_filters(filters: Vec<ColumnFilterJs>) -> napi::Result<Vec<ColumnFilter
 
 /// JS `{hops?, graphBoost?, pool?}` → engine [`FusionOptions`]. An omitted
 /// object, or an omitted field within it, falls back to
-/// [`FusionOptions::default`]'s proven value. `hops` is capped at
-/// [`limits::MAX_WHY_HOPS`], the same `DoS` cap `why()` enforces.
+/// [`FusionOptions::default`]'s proven value. `hops` and `pool` are each
+/// capped at their shared `DoS` limit ([`limits::MAX_WHY_HOPS`],
+/// [`limits::MAX_RECALL_LIMIT`]) — `pool` feeds the same oversampled vector
+/// search `k`/`hops` do, so an uncapped caller-supplied value is exactly as
+/// much of an unbounded-scan risk as an uncapped `k` or `hops` would be.
 pub fn to_fusion_options(opts: Option<FusionOptionsJs>) -> FusionOptions {
     let defaults = FusionOptions::default();
     let Some(opts) = opts else {
@@ -85,6 +88,9 @@ pub fn to_fusion_options(opts: Option<FusionOptionsJs>) -> FusionOptions {
     FusionOptions {
         hops: limits::clamp_hops(opts.hops.map_or(defaults.hops, |h| h as usize)),
         graph_boost: opts.graph_boost.unwrap_or(defaults.graph_boost),
-        pool: opts.pool.map(|p| p as usize).or(defaults.pool),
+        pool: opts
+            .pool
+            .map(|p| limits::clamp_recall_limit(p as usize))
+            .or(defaults.pool),
     }
 }
