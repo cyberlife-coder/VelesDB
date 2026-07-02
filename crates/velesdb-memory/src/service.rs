@@ -2,11 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
 
-use serde_json::{json, Map, Value};
-use velesdb_core::agent::AgentMemory;
-use velesdb_core::{Database, SearchResult};
+use serde_json::{Map, Value};
 
 /// Structured metadata attached to a memory (the `ColumnStore` facet): exact-match
 /// fields like `project`, `author`, `type`, `status`, `date`. `content` and
@@ -17,7 +14,8 @@ use crate::embedder::Embedder;
 use crate::error::MemoryError;
 use crate::extract::Extractor;
 use crate::id;
-use crate::model::{ColumnFilter, Explanation, Link, MemoryEdge, MemoryNode, Recollection};
+use crate::model::{ColumnFilter, Explanation, Link, MemoryNode, Recollection};
+use crate::storage::{MemoryStore, NativeStore};
 
 /// [`MemoryService::recall_fused`] and its helpers — split out to keep this
 /// file under the crate's 500-NLOC-per-file budget, same pattern as
@@ -46,23 +44,34 @@ const MENTIONS_RELATION: &str = "mentions";
 /// Local-first agent memory backed by a single `VelesDB` instance.
 ///
 /// Generic over the [`Embedder`] so production can use an on-device model while
-/// tests use a deterministic, network-free one.
-pub struct MemoryService<E: Embedder> {
-    memory: AgentMemory,
+/// tests use a deterministic, network-free one, and over the [`MemoryStore`]
+/// backend `S` so the same orchestration runs over the native, file-backed
+/// engine (the default — nothing changes for existing callers) or any other
+/// backend that implements the trait (e.g. an in-memory one for WASM).
+pub struct MemoryService<E: Embedder, S: MemoryStore = NativeStore> {
+    store: S,
     embedder: E,
 }
 
-impl<E: Embedder> MemoryService<E> {
-    /// Open (or create) a memory store at `path`, using `embedder` for text
-    /// vectorization. The store never leaves this directory.
+impl<E: Embedder> MemoryService<E, NativeStore> {
+    /// Open (or create) a native, file-backed memory store at `path`, using
+    /// `embedder` for text vectorization. The store never leaves this directory.
     ///
     /// # Errors
     /// Returns [`MemoryError`] if the store cannot be opened or the agent
     /// memory cannot be initialized for the embedder's dimension.
     pub fn open<P: AsRef<Path>>(path: P, embedder: E) -> Result<Self, MemoryError> {
-        let db = Arc::new(Database::open(path)?);
-        let memory = AgentMemory::with_dimension(db, embedder.dimension())?;
-        Ok(Self { memory, embedder })
+        let store = NativeStore::open(path, embedder.dimension())?;
+        Ok(Self { store, embedder })
+    }
+}
+
+impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
+    /// Build a service directly over a `store` backend, bypassing
+    /// [`Self::open`]'s filesystem-specific setup — the constructor a
+    /// non-native backend (e.g. `velesdb-wasm`'s in-memory store) uses.
+    pub fn with_store(store: S, embedder: E) -> Self {
+        Self { store, embedder }
     }
 
     /// Remember a `fact`, optionally tagging it with structured `metadata`
@@ -112,7 +121,7 @@ impl<E: Embedder> MemoryService<E> {
         self.ensure_link_targets_exist(links)?;
         let fact_id = id::stable_id(fact);
         let embedding = self.embedder.embed(fact)?;
-        self.store(
+        self.store_fact(
             fact_id,
             fact,
             &embedding,
@@ -129,9 +138,7 @@ impl<E: Embedder> MemoryService<E> {
     fn relate_links(&self, fact_id: u64, links: &[Link]) -> Result<(), MemoryError> {
         for link in links {
             validate_relation(&link.relation)?;
-            self.memory
-                .semantic()
-                .relate(fact_id, link.target, &link.relation, None)?;
+            self.store.relate(fact_id, link.target, &link.relation)?;
         }
         Ok(())
     }
@@ -260,8 +267,8 @@ impl<E: Embedder> MemoryService<E> {
         if !seeded.insert(node) {
             return Ok(());
         }
-        for edge in self.memory.semantic().relations(node)? {
-            edges.insert((node, edge.target()));
+        for edge in self.store.relations(node)? {
+            edges.insert((node, edge.to));
         }
         Ok(())
     }
@@ -287,8 +294,8 @@ impl<E: Embedder> MemoryService<E> {
     /// hub id space is disjoint from natural fact ids (no caller fact can collide
     /// with or overwrite a hub), while the stored content stays human-readable.
     /// Marked with the reserved [`HUB_FIELD`] so recall and `why` seeds exclude
-    /// it; goes straight to [`Self::store`] to bypass the caller-facing reserved-
-    /// key rejection in [`Self::remember`].
+    /// it; goes straight to [`Self::store_fact`] to bypass the caller-facing
+    /// reserved-key rejection in [`Self::remember`].
     fn remember_hub(&self, key: &str) -> Result<u64, MemoryError> {
         let id = id::stable_id(&format!("{HUB_ID_SALT}{key}"));
         let content = format!("Entity: {key}");
@@ -296,13 +303,13 @@ impl<E: Embedder> MemoryService<E> {
         let mut meta = Map::new();
         meta.insert(HUB_FIELD.to_string(), Value::Bool(true));
         // Topic hubs are graph anchors — they never expire.
-        self.store(id, &content, &embedding, Some(&meta), None)?;
+        self.store_fact(id, &content, &embedding, Some(&meta), None)?;
         Ok(id)
     }
 
     /// Fail with [`MemoryError::UnknownMemory`] unless memory `id` exists.
     fn ensure_exists(&self, id: u64) -> Result<(), MemoryError> {
-        if self.memory.semantic().get(id)?.is_none() {
+        if self.store.get(id)?.is_none() {
             return Err(MemoryError::UnknownMemory(id));
         }
         Ok(())
@@ -317,7 +324,7 @@ impl<E: Embedder> MemoryService<E> {
     }
 
     /// Store a fact with any combination of metadata and a durable TTL.
-    fn store(
+    fn store_fact(
         &self,
         id: u64,
         fact: &str,
@@ -325,17 +332,16 @@ impl<E: Embedder> MemoryService<E> {
         metadata: Option<&Metadata>,
         ttl_seconds: Option<u64>,
     ) -> Result<(), MemoryError> {
-        let semantic = self.memory.semantic();
         match (metadata, ttl_seconds) {
             (Some(meta), Some(ttl)) => {
                 // store_with_ttl writes the fact + the durable expiry; update_metadata
                 // then merges the metadata while preserving `_veles_expires_at`.
-                semantic.store_with_ttl(id, fact, embedding, ttl)?;
-                semantic.update_metadata(id, meta)?;
+                self.store.store_with_ttl(id, fact, embedding, ttl)?;
+                self.store.update_metadata(id, meta)?;
             }
-            (Some(meta), None) => semantic.store_with_metadata(id, fact, embedding, meta)?,
-            (None, Some(ttl)) => semantic.store_with_ttl(id, fact, embedding, ttl)?,
-            (None, None) => semantic.store(id, fact, embedding)?,
+            (Some(meta), None) => self.store.store_with_metadata(id, fact, embedding, meta)?,
+            (None, Some(ttl)) => self.store.store_with_ttl(id, fact, embedding, ttl)?,
+            (None, None) => self.store.store(id, fact, embedding)?,
         }
         Ok(())
     }
@@ -396,18 +402,12 @@ impl<E: Embedder> MemoryService<E> {
         match filter {
             // An include filter already excludes hubs: a hub only carries
             // `{kind: entity}`, so it can never match a user's metadata filter.
-            Some(meta) => self
-                .memory
-                .semantic()
-                .query_filtered(embedding, k, meta, 0)
-                .map_err(MemoryError::from),
+            Some(meta) => self.store.query_filtered(embedding, k, meta, 0),
             // Unfiltered recall must still drop entity hubs explicitly, or a hub
             // like `Entity: rust` would rank for the topic and evict a real fact.
             None => self
-                .memory
-                .semantic()
-                .query_excluding(embedding, k, &hub_exclude_filter())
-                .map_err(MemoryError::from),
+                .store
+                .query_excluding(embedding, k, &hub_exclude_filter()),
         }
     }
 
@@ -436,53 +436,7 @@ impl<E: Embedder> MemoryService<E> {
             return Ok(Vec::new());
         }
         let embedding = self.embedder.embed(query)?;
-        let (sql, params) = self.build_fused_query(&embedding, k, filters)?;
-        // `build_fused_query` has validated every field name; ensure each one is
-        // indexed so the planner uses a bitmap prefilter instead of an O(n)
-        // post-filter scan. Idempotent and incrementally maintained thereafter.
-        for filter in filters {
-            self.memory
-                .semantic()
-                .ensure_index(&filter.field)
-                .map_err(MemoryError::from)?;
-        }
-        let results = self
-            .memory
-            .query_semantic(&sql, &params)
-            .map_err(MemoryError::from)?;
-        Ok(results.iter().map(to_recollection).collect())
-    }
-
-    /// Build the `VelesQL` for [`Self::recall_where`]: a `NEAR` predicate plus
-    /// one bound parameter per filter, against the semantic collection.
-    fn build_fused_query(
-        &self,
-        embedding: &[f32],
-        k: usize,
-        filters: &[ColumnFilter],
-    ) -> Result<(String, HashMap<String, Value>), MemoryError> {
-        use std::fmt::Write as _;
-        let mut params: HashMap<String, Value> = HashMap::new();
-        params.insert("q".to_string(), json!(embedding));
-        let mut predicate = String::from("vector NEAR $q");
-        for (index, filter) in filters.iter().enumerate() {
-            validate_field(&filter.field)?;
-            validate_scalar(&filter.value)?;
-            let key = format!("p{index}");
-            // Field is a validated identifier; the value is bound, never inlined.
-            let _ = write!(
-                predicate,
-                " AND {} {} ${key}",
-                filter.field,
-                filter.op.as_sql()
-            );
-            params.insert(key, filter.value.clone());
-        }
-        let sql = format!(
-            "SELECT * FROM {} WHERE {predicate} LIMIT {k}",
-            self.memory.semantic().collection_name()
-        );
-        Ok((sql, params))
+        self.store.query_columnar(&embedding, k, filters)
     }
 
     /// Create a typed edge `from -> to`. Returns the edge id.
@@ -499,10 +453,7 @@ impl<E: Embedder> MemoryService<E> {
         validate_relation(relation)?;
         self.ensure_exists(from)?;
         self.ensure_exists(to)?;
-        self.memory
-            .semantic()
-            .relate(from, to, relation, None)
-            .map_err(MemoryError::from)
+        self.store.relate(from, to, relation)
     }
 
     /// Forget (delete) the memory with `fact_id`.
@@ -510,10 +461,7 @@ impl<E: Embedder> MemoryService<E> {
     /// # Errors
     /// Returns [`MemoryError`] if the deletion fails.
     pub fn forget(&self, fact_id: u64) -> Result<(), MemoryError> {
-        self.memory
-            .semantic()
-            .delete(fact_id)
-            .map_err(MemoryError::from)
+        self.store.delete(fact_id)
     }
 
     /// Explain a `decision`: find the best-matching memory (optionally scoped to
@@ -587,10 +535,10 @@ impl<E: Embedder> MemoryService<E> {
         visited: &mut HashSet<u64>,
         next: &mut Vec<u64>,
     ) -> Result<(), MemoryError> {
-        for edge in self.memory.semantic().relations(node_id)? {
-            let target = edge.target();
+        for edge in self.store.relations(node_id)? {
+            let target = edge.to;
             if !visited.contains(&target) {
-                let Some((content, _embedding)) = self.memory.semantic().get(target)? else {
+                let Some((content, _embedding)) = self.store.get(target)? else {
                     continue; // target no longer exists → drop the dangling edge too
                 };
                 visited.insert(target);
@@ -601,11 +549,7 @@ impl<E: Embedder> MemoryService<E> {
                 });
                 next.push(target);
             }
-            explanation.edges.push(MemoryEdge {
-                from: edge.source(),
-                to: target,
-                relation: edge.label().to_owned(),
-            });
+            explanation.edges.push(edge);
         }
         Ok(())
     }
@@ -659,60 +603,6 @@ fn reject_reserved_keys(metadata: Option<&Metadata>) -> Result<(), MemoryError> 
 /// is stored permanently. Any positive value is kept as-is.
 fn positive_ttl(ttl_seconds: Option<u64>) -> Option<u64> {
     ttl_seconds.filter(|&seconds| seconds > 0)
-}
-
-/// Map a core search result to a [`Recollection`], lifting the fact text out of
-/// the reserved `content` payload key and surfacing any remaining
-/// caller-supplied metadata (reserved system keys excluded).
-fn to_recollection(result: &SearchResult) -> Recollection {
-    let payload = result.point.payload.as_ref().and_then(Value::as_object);
-    let content = payload
-        .and_then(|payload| payload.get("content"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    let metadata = payload.and_then(|payload| {
-        let metadata: Map<String, Value> = payload
-            .iter()
-            .filter(|(key, _)| !is_reserved_key(key))
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
-        (!metadata.is_empty()).then_some(metadata)
-    });
-    Recollection {
-        id: result.point.id,
-        score: result.score,
-        content,
-        metadata,
-    }
-}
-
-/// Accept only plain, non-reserved identifier field names, so a filter field
-/// can be safely placed into the query text (its value is always a bound
-/// parameter). Rejects the reserved system columns the docs promise are off
-/// limits: `content` (the fact payload) and any `_veles_`-prefixed engine key
-/// (e.g. durable TTL).
-fn validate_field(field: &str) -> Result<(), MemoryError> {
-    let plain = !field.is_empty() && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    let reserved = field == "content" || field.starts_with("_veles_");
-    if plain && !reserved {
-        Ok(())
-    } else {
-        Err(MemoryError::InvalidFilter(field.to_owned()))
-    }
-}
-
-/// Reject non-scalar filter values. Only strings, numbers, and booleans can be
-/// compared against a `ColumnStore` column; binding an array/object/null would
-/// fail deep in the query engine and surface as an opaque internal error instead
-/// of a clear client-input error.
-fn validate_scalar(value: &Value) -> Result<(), MemoryError> {
-    match value {
-        Value::String(_) | Value::Number(_) | Value::Bool(_) => Ok(()),
-        _ => Err(MemoryError::InvalidFilter(format!(
-            "value must be a string, number, or boolean, got {value}"
-        ))),
-    }
 }
 
 /// Maximum byte length for a relation label (prevents oversized graph edge labels

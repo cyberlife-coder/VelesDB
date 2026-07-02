@@ -49,6 +49,10 @@ pub mod rerank;
 /// `format` keywords so strict MCP clients don't warn on every id field).
 mod schema;
 pub mod service;
+/// The storage backend abstraction — [`storage::MemoryStore`] and the
+/// default, file-backed [`storage::NativeStore`]. Implement `MemoryStore` to
+/// run the wedge over a different backend (e.g. an in-memory one for WASM).
+pub mod storage;
 
 /// Default embedding dimension — the single source of truth, taken from the
 /// SDK's own default so the server, library, and tests never restate the value.
@@ -68,3 +72,4 @@ pub use model::{
 };
 pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{MemoryService, Metadata};
+pub use storage::{MemoryStore, NativeStore};
