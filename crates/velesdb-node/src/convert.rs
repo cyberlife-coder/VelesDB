@@ -3,9 +3,10 @@
 //! both worlds, so the dependency boundary is auditable by inspection.
 
 use serde_json::Value;
-use velesdb_memory::{ColumnFilter, ColumnOp, Link, Metadata};
+use velesdb_memory::limits;
+use velesdb_memory::{ColumnFilter, ColumnOp, FusionOptions, Link, Metadata};
 
-use crate::dto::{ColumnFilterJs, LinkJs};
+use crate::dto::{ColumnFilterJs, FusionOptionsJs, LinkJs};
 use crate::error::invalid_input;
 
 /// Format a `u64` id as a decimal string (JS `number` loses precision >2^53).
@@ -70,4 +71,20 @@ pub fn to_filters(filters: Vec<ColumnFilterJs>) -> napi::Result<Vec<ColumnFilter
             })
         })
         .collect()
+}
+
+/// JS `{hops?, graphBoost?, pool?}` → engine [`FusionOptions`]. An omitted
+/// object, or an omitted field within it, falls back to
+/// [`FusionOptions::default`]'s proven value. `hops` is capped at
+/// [`limits::MAX_WHY_HOPS`], the same `DoS` cap `why()` enforces.
+pub fn to_fusion_options(opts: Option<FusionOptionsJs>) -> FusionOptions {
+    let defaults = FusionOptions::default();
+    let Some(opts) = opts else {
+        return defaults;
+    };
+    FusionOptions {
+        hops: limits::clamp_hops(opts.hops.map_or(defaults.hops, |h| h as usize)),
+        graph_boost: opts.graph_boost.unwrap_or(defaults.graph_boost),
+        pool: opts.pool.map(|p| p as usize).or(defaults.pool),
+    }
 }
