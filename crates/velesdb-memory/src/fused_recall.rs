@@ -161,11 +161,15 @@ impl<E: Embedder> MemoryService<E> {
             return Ok(Vec::new());
         };
         let explanation = self.traverse(seed_id, seed_content, hops)?;
+        let nodes: Vec<&MemoryNode> = explanation.nodes.iter().filter(|n| n.hop != 0).collect();
+        let ids: Vec<u64> = nodes.iter().map(|n| n.id).collect();
+        let raw_payloads = self.memory.semantic().get_metadata_batch(&ids)?;
+
         let mut idf_cache: HashMap<u64, f64> = HashMap::new();
         let mut reached = Vec::new();
-        for node in &explanation.nodes {
+        for (node, raw) in nodes.into_iter().zip(raw_payloads) {
             if let Some(candidate) =
-                self.reached_candidate(node, &explanation.edges, filter, &mut idf_cache)?
+                self.reached_candidate(node, raw, &explanation.edges, filter, &mut idf_cache)?
             {
                 reached.push(candidate);
             }
@@ -173,30 +177,26 @@ impl<E: Embedder> MemoryService<E> {
         Ok(reached)
     }
 
-    /// The graph-reached candidate for `node`, or `None` when it's the seed
-    /// itself (hop 0), an entity hub (internal scaffolding, never a caller
-    /// fact), or outside `filter`'s scope — split out of
-    /// [`Self::graph_reached`] to keep that loop's complexity within budget.
-    /// `idf_cache` memoizes [`Self::entity_idf`] per hub across the whole
-    /// traversal (siblings under the same hub would otherwise recompute an
-    /// identical value once per fact).
+    /// The graph-reached candidate for `node` given its already-fetched raw
+    /// payload `raw`, or `None` when it's an entity hub (internal
+    /// scaffolding, never a caller fact) or outside `filter`'s scope — split
+    /// out of [`Self::graph_reached`] to keep that loop's complexity within
+    /// budget. `raw` is fetched once, batched across the whole traversal, by
+    /// the caller — not per node — and serves both the hub check and the
+    /// returned candidate's metadata: the hub flag lives under the reserved
+    /// `_veles_hub` key, so it must be checked before `strip_reserved_keys`
+    /// removes it for the caller-facing metadata. `idf_cache` memoizes
+    /// [`Self::entity_idf`] per hub across the whole traversal (siblings
+    /// under the same hub would otherwise recompute an identical value once
+    /// per fact).
     fn reached_candidate(
         &self,
         node: &MemoryNode,
+        raw: Option<Metadata>,
         edges: &[MemoryEdge],
         filter: Option<&Metadata>,
         idf_cache: &mut HashMap<u64, f64>,
     ) -> Result<Option<Candidate>, MemoryError> {
-        if node.hop == 0 {
-            return Ok(None);
-        }
-        // One raw-payload fetch serves both the hub check and the returned
-        // candidate's metadata — `is_hub` and a second `recall_metadata` call
-        // used to fetch the same payload twice. The hub flag lives under the
-        // reserved `_veles_hub` key, so it must be checked on the *raw*
-        // payload, before `strip_reserved_keys` removes it for the
-        // caller-facing metadata.
-        let raw = self.memory.semantic().get_metadata(node.id)?;
         if raw
             .as_ref()
             .is_some_and(|meta| meta.get(HUB_FIELD) == Some(&Value::Bool(true)))
@@ -286,6 +286,13 @@ fn matches_filter(metadata: Option<&Metadata>, filter: Option<&Metadata>) -> boo
     let Some(filter) = filter else {
         return true;
     };
+    // Mirrors velesdb-core's `payload_matches`: an empty (not absent) filter
+    // matches everything, including a metadata-less fact — `Some({})` from a
+    // caller (e.g. a JS `recallFused(q, k, {})`) must behave exactly like
+    // `None`, not like "reject anything without metadata".
+    if filter.is_empty() {
+        return true;
+    }
     let Some(metadata) = metadata else {
         return false;
     };
@@ -294,7 +301,13 @@ fn matches_filter(metadata: Option<&Metadata>, filter: Option<&Metadata>) -> boo
 
 /// The oversampled candidate pool depth for a `k`-sized fused recall:
 /// `opts.pool` if the caller set one, else the proven default
-/// ([`fusion::pool_size`]).
+/// ([`fusion::pool_size`]) — either way, capped at
+/// [`crate::limits::MAX_RECALL_LIMIT`], the same `DoS` ceiling `k`/`hops`
+/// carry. The cap lives here, not just at each binding's FFI boundary: the
+/// *default* pool (`k.saturating_mul(8)`) exceeds it well before `k` itself
+/// reaches its own cap, so a caller who never touches `pool` at all — not
+/// just one who sets it explicitly — must still be bounded.
 fn pool_depth(k: usize, opts: FusionOptions) -> usize {
-    opts.pool.unwrap_or_else(|| fusion::pool_size(k))
+    let depth = opts.pool.unwrap_or_else(|| fusion::pool_size(k));
+    crate::limits::clamp_recall_limit(depth)
 }

@@ -511,6 +511,28 @@ fn recall_fused_never_leaks_a_graph_reached_fact_outside_the_caller_filter() {
     );
 }
 
+#[test]
+fn recall_fused_empty_filter_map_matches_a_graph_reached_fact_with_no_metadata() {
+    // Regression: an empty-but-present filter (`Some({})`, e.g. a JS caller
+    // doing `recallFused(q, k, {})`) must behave exactly like `None` — match
+    // everything, including a graph-reached fact that carries no metadata at
+    // all — mirroring velesdb-core's `payload_matches` convention. The graph
+    // filter check must not read "empty filter" as "reject anything without
+    // metadata".
+    let (_dir, svc) = service();
+    let (_decision, _pr, ticket) = seeded_chain(&svc);
+
+    let empty_filter = velesdb_memory::Metadata::new();
+    let fused = svc
+        .recall_fused(DECISION, 5, Some(&empty_filter), FusionOptions::default())
+        .expect("recall_fused");
+    assert!(
+        fused.iter().any(|r| r.id == ticket),
+        "an empty filter map must match a graph-reached fact with no metadata, \
+         same as no filter at all"
+    );
+}
+
 // --- Negative ------------------------------------------------------------
 
 #[test]
