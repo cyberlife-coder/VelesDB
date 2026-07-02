@@ -30,6 +30,20 @@ pub struct ColumnFilterJs {
     pub value: Value,
 }
 
+/// Tuning knobs for `recallFused` (input). Every field is optional; an
+/// omitted field falls back to the proven default from
+/// [`velesdb_memory::FusionOptions::default`] (via
+/// [`crate::convert::to_fusion_options`]).
+#[napi(object)]
+pub struct FusionOptionsJs {
+    /// Hops the graph traversal walks from the top vector seed.
+    pub hops: Option<u32>,
+    /// Weight added to a graph-reached fact's normalised vector score.
+    pub graph_boost: Option<f64>,
+    /// Depth of the oversampled vector pool fusion re-ranks.
+    pub pool: Option<u32>,
+}
+
 /// One recalled memory (output of `recall` / `recallWhere`).
 #[napi(object)]
 pub struct RecollectionJs {

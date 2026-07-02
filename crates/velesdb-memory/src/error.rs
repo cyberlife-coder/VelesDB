@@ -5,6 +5,7 @@ use velesdb_core::Error as CoreError;
 
 use crate::embedder::EmbedError;
 use crate::extract::ExtractError;
+use crate::rerank::RerankError;
 
 /// The transport-neutral class of a [`MemoryError`] — the single source of
 /// truth every adapter maps onto its own error channel (JSON-RPC code, napi
@@ -54,6 +55,11 @@ pub enum MemoryError {
     #[error("extraction error: {0}")]
     Extract(#[from] ExtractError),
 
+    /// Failure reranking a fused-recall candidate pool in
+    /// [`crate::service::MemoryService::recall_fused_reranked`].
+    #[error("rerank error: {0}")]
+    Rerank(#[from] RerankError),
+
     /// A fused-recall filter referenced a field name that is not a plain
     /// identifier, named a reserved key, or carried a non-scalar value.
     #[error("invalid filter field: {0}")]
@@ -79,9 +85,11 @@ impl MemoryError {
             | Self::InvalidFilter(_)
             | Self::InvalidRelation(_) => ErrorCategory::InvalidInput,
             Self::UnknownMemory(_) => ErrorCategory::NotFound,
-            Self::Storage(_) | Self::Memory(_) | Self::Embed(_) | Self::Extract(_) => {
-                ErrorCategory::Internal
-            }
+            Self::Storage(_)
+            | Self::Memory(_)
+            | Self::Embed(_)
+            | Self::Extract(_)
+            | Self::Rerank(_) => ErrorCategory::Internal,
         }
     }
 }

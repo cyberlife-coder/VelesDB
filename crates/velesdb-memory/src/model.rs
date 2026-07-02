@@ -90,6 +90,40 @@ pub struct ColumnFilter {
     pub value: Value,
 }
 
+/// Tuning knobs for
+/// [`MemoryService::recall_fused`](crate::service::MemoryService::recall_fused).
+///
+/// `Default` matches the values validated on the LoCoMo/HotpotQA/TimeQA
+/// benchmarks (`examples/locomo`, `examples/multihop`, `examples/timeqa`):
+/// `graph_boost = 0.15` was the optimum of a sweep (0.30/0.50/0.80 all
+/// degraded ranking quality), and `hops = 2` is the minimum depth at which a
+/// fact wired only through a shared topic (the `remember_extracted` hub
+/// scaffolding: fact → hub is hop 1, hub → sibling fact is hop 2) becomes
+/// reachable at all.
+#[derive(Debug, Clone, Copy)]
+pub struct FusionOptions {
+    /// Hops the graph traversal walks from the top vector seed.
+    pub hops: usize,
+    /// Weight added to a graph-reached fact's normalised vector score.
+    pub graph_boost: f64,
+    /// Depth of the oversampled vector pool fusion re-ranks. `None` uses the
+    /// proven default (`k` scaled up, floored at 64 — see
+    /// `crate::fusion::pool_size`). Widen this to give
+    /// [`MemoryService::recall_fused_reranked`](crate::service::MemoryService::recall_fused_reranked)'s
+    /// reranker more candidates to work with.
+    pub pool: Option<usize>,
+}
+
+impl Default for FusionOptions {
+    fn default() -> Self {
+        Self {
+            hops: 2,
+            graph_boost: 0.15,
+            pool: None,
+        }
+    }
+}
+
 /// A node in an [`Explanation`] subgraph.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]

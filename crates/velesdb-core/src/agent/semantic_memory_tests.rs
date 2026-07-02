@@ -345,6 +345,38 @@ mod tests {
     }
 
     #[test]
+    fn test_get_metadata_returns_payload_excluding_none_for_unknown() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let mut meta = serde_json::Map::new();
+        meta.insert("tag".to_string(), serde_json::json!("science"));
+        sm.store_with_metadata(1, "Photosynthesis", &emb, &meta)
+            .unwrap();
+
+        let payload = sm.get_metadata(1).unwrap().expect("payload present");
+        assert_eq!(payload.get("tag"), Some(&serde_json::json!("science")));
+        assert!(sm.get_metadata(404).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_get_metadata_bare_store_has_no_extra_fields() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        sm.store(1, "no metadata here", &[1.0, 0.0, 0.0, 0.0])
+            .unwrap();
+
+        // `store()` still writes a payload (the reserved `content` key), so the
+        // map is Some, just without any caller-supplied field.
+        let payload = sm.get_metadata(1).unwrap().expect("payload present");
+        assert!(!payload.contains_key("tag"));
+    }
+
+    #[test]
     fn test_list_all_returns_live_facts() {
         let dir = tempdir().unwrap();
         let db = Arc::new(Database::open(dir.path()).unwrap());

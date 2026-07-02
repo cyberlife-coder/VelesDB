@@ -196,8 +196,8 @@ impl PyMemoryService {
 
     /// Recall up to `k` memories similar to `query`, optionally narrowed by an
     /// exact-match metadata `filter`. Returns a list of `{id, score, content, metadata}`
-    /// (`metadata` is always `None` here; only [`recall_where`](Self::recall_where)
-    /// populates it — matches the upstream `Recollection` contract).
+    /// (`metadata` is `None` when the fact carries none, matching the upstream
+    /// `Recollection` contract).
     #[pyo3(signature = (query, k = 10, filter = None))]
     fn recall(
         &self,

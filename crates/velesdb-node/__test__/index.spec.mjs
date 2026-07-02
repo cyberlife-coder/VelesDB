@@ -17,13 +17,14 @@ function freshStore() {
   return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
 }
 
-test('surface allowlist — exactly the 8 supported methods, no engine leak', () => {
+test('surface allowlist — exactly the 9 supported methods, no engine leak', () => {
   const instanceMethods = Object.getOwnPropertyNames(MemoryService.prototype)
     .filter((m) => m !== 'constructor')
     .sort((a, b) => a.localeCompare(b))
   assert.deepEqual(instanceMethods, [
     'forget',
     'recall',
+    'recallFused',
     'recallWhere',
     'relate',
     'remember',
@@ -81,6 +82,32 @@ test('relate + why returns a connected subgraph with string ids', async () => {
   }
 })
 
+test('recallFused surfaces a graph-connected fact plain recall ranks low', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const decision = await store.remember('we chose parking_lot to avoid lock poisoning')
+    const ticket = await store.remember('EPIC-317 xyzzy quux frobnicate')
+    const distractor = await store.remember('the quarterly report is due next Friday')
+    await store.relate(decision, ticket, 'decided_in')
+
+    const fused = await store.recallFused('we chose parking_lot to avoid lock poisoning', 3)
+    assert.ok(Array.isArray(fused) && fused.length >= 1)
+    const rankOf = (id) => fused.findIndex((r) => r.id === id)
+    assert.ok(
+      rankOf(ticket) < rankOf(distractor),
+      'the graph-reached ticket must outrank the disconnected distractor',
+    )
+
+    const withOpts = await store.recallFused('we chose parking_lot to avoid lock poisoning', 1, null, {
+      pool: 1,
+    })
+    assert.equal(withOpts.length, 1, 'the pool override narrows the candidate set')
+    assert.equal(withOpts[0].id, decision, 'a pool of 1 admits only the top vector hit')
+  } finally {
+    cleanup()
+  }
+})
+
 test('recallWhere equals recall with the same exact-match filter', async () => {
   const { store, cleanup } = freshStore()
   try {
@@ -97,7 +124,7 @@ test('recallWhere equals recall with the same exact-match filter', async () => {
   }
 })
 
-test('recallWhere surfaces stored metadata; recall leaves it null', async () => {
+test('recallWhere and recall both surface stored metadata (dated recall)', async () => {
   const { store, cleanup } = freshStore()
   try {
     await store.remember('deployed the new pricing page', [], { ts: 20260701 })
@@ -110,7 +137,7 @@ test('recallWhere surfaces stored metadata; recall leaves it null', async () => 
 
     const hits = await store.recall('pricing page', 5)
     assert.ok(hits.length >= 1)
-    assert.equal(hits[0].metadata, undefined, 'recall does not carry metadata')
+    assert.equal(hits[0].metadata?.ts, 20260701, 'recall round-trips metadata too')
   } finally {
     cleanup()
   }
