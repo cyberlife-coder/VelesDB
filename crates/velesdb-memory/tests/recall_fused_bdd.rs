@@ -279,7 +279,8 @@ fn recall_fused_ranks_graph_reached_fact_above_a_vector_tied_distractor() {
         .expect("recall_fused");
     let rank_of = |id: u64| fused.iter().position(|r| r.id == id);
     assert!(
-        rank_of(ticket) < rank_of(distractor),
+        rank_of(ticket).expect("graph-reached ticket must be present")
+            < rank_of(distractor).expect("distractor must be present"),
         "the graph-reached fact must outrank the vector-tied distractor"
     );
 }
@@ -475,6 +476,61 @@ fn recall_fused_zero_k_is_empty() {
         .recall_fused(DECISION, 0, None, FusionOptions::default())
         .expect("recall_fused");
     assert!(fused.is_empty());
+}
+
+#[test]
+fn recall_fused_never_leaks_a_graph_reached_fact_outside_the_caller_filter() {
+    // Regression: the graph walk used to be filter-blind past the seed, so a
+    // fact outside the caller's scope (a different tenant here) could leak
+    // in just by being graph-connected to the seed — a cross-tenant read.
+    let (_dir, svc) = service();
+    let mut alice_meta = velesdb_memory::Metadata::new();
+    alice_meta.insert("tenant".to_string(), Value::String("alice".to_string()));
+    let alice_fact = svc
+        .remember(DECISION, &[], Some(&alice_meta))
+        .expect("remember alice fact");
+
+    let mut bob_meta = velesdb_memory::Metadata::new();
+    bob_meta.insert("tenant".to_string(), Value::String("bob".to_string()));
+    let bob_fact = svc
+        .remember("EPIC-317 xyzzy quux frobnicate", &[], Some(&bob_meta))
+        .expect("remember bob fact");
+    svc.relate(alice_fact, bob_fact, "related_to")
+        .expect("relate");
+
+    let fused = svc
+        .recall_fused(DECISION, 5, Some(&alice_meta), FusionOptions::default())
+        .expect("recall_fused");
+    assert!(
+        fused.iter().all(|r| r.id != bob_fact),
+        "a graph-reached fact outside the tenant filter must not leak into the result"
+    );
+    assert!(
+        fused.iter().any(|r| r.id == alice_fact),
+        "the in-scope seed fact must still be returned"
+    );
+}
+
+#[test]
+fn recall_fused_empty_filter_map_matches_a_graph_reached_fact_with_no_metadata() {
+    // Regression: an empty-but-present filter (`Some({})`, e.g. a JS caller
+    // doing `recallFused(q, k, {})`) must behave exactly like `None` — match
+    // everything, including a graph-reached fact that carries no metadata at
+    // all — mirroring velesdb-core's `payload_matches` convention. The graph
+    // filter check must not read "empty filter" as "reject anything without
+    // metadata".
+    let (_dir, svc) = service();
+    let (_decision, _pr, ticket) = seeded_chain(&svc);
+
+    let empty_filter = velesdb_memory::Metadata::new();
+    let fused = svc
+        .recall_fused(DECISION, 5, Some(&empty_filter), FusionOptions::default())
+        .expect("recall_fused");
+    assert!(
+        fused.iter().any(|r| r.id == ticket),
+        "an empty filter map must match a graph-reached fact with no metadata, \
+         same as no filter at all"
+    );
 }
 
 // --- Negative ------------------------------------------------------------

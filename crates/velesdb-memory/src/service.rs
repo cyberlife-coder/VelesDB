@@ -354,10 +354,10 @@ impl<E: Embedder> MemoryService<E> {
     /// when the fact carries none) — store a date field (e.g. `occurred_at`)
     /// and it round-trips here, so a caller can sort the result into a
     /// chronological, date-stamped context without `recall_where`'s explicit
-    /// filters. This costs one extra lookup per returned hit.
+    /// filters. One extra, single batched lookup covers every returned hit.
     ///
     /// # Errors
-    /// Returns [`MemoryError`] if the semantic query or a metadata lookup fails.
+    /// Returns [`MemoryError`] if the semantic query or the metadata lookup fails.
     pub fn recall(
         &self,
         query: &str,
@@ -371,30 +371,18 @@ impl<E: Embedder> MemoryService<E> {
         reject_reserved_keys(filter)?;
         let embedding = self.embedder.embed(query)?;
         let hits = self.search(&embedding, k, filter)?;
-        hits.into_iter()
-            .map(|(id, score, content)| {
-                Ok(Recollection {
-                    id,
-                    score,
-                    content,
-                    metadata: self.recall_metadata(id)?,
-                })
+        let ids: Vec<u64> = hits.iter().map(|(id, _, _)| *id).collect();
+        let metadata = self.recall_metadata_batch(&ids)?;
+        Ok(hits
+            .into_iter()
+            .zip(metadata)
+            .map(|((id, score, content), metadata)| Recollection {
+                id,
+                score,
+                content,
+                metadata,
             })
-            .collect()
-    }
-
-    /// The caller-supplied metadata for memory `id` (reserved system keys
-    /// excluded), or `None` when it carries none. Shared by every recall path
-    /// so a fact's metadata round-trips regardless of which one a caller uses.
-    fn recall_metadata(&self, id: u64) -> Result<Option<Metadata>, MemoryError> {
-        let payload = self.memory.semantic().get_metadata(id)?;
-        Ok(payload.and_then(|payload| {
-            let metadata: Metadata = payload
-                .into_iter()
-                .filter(|(key, _)| !is_reserved_key(key))
-                .collect();
-            (!metadata.is_empty()).then_some(metadata)
-        }))
+            .collect())
     }
 
     /// Vector search for up to `k` ids, optionally narrowed by a metadata
@@ -638,6 +626,20 @@ fn hub_exclude_filter() -> Metadata {
 /// they can't overwrite a system field or collide with internal scaffolding.
 fn is_reserved_key(key: &str) -> bool {
     key == "content" || key.starts_with("_veles_")
+}
+
+/// Drop reserved system keys from a raw payload, and collapse an
+/// empty-after-stripping map to `None` — the caller-facing shape every
+/// `Recollection::metadata` is built from, regardless of which recall path
+/// (single or batched) fetched the raw payload.
+fn strip_reserved_keys(payload: Option<Metadata>) -> Option<Metadata> {
+    payload.and_then(|payload| {
+        let metadata: Metadata = payload
+            .into_iter()
+            .filter(|(key, _)| !is_reserved_key(key))
+            .collect();
+        (!metadata.is_empty()).then_some(metadata)
+    })
 }
 
 /// Reject caller-supplied metadata/filters that name a reserved key.

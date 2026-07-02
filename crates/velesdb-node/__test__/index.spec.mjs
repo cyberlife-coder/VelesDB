@@ -92,7 +92,11 @@ test('recallFused surfaces a graph-connected fact plain recall ranks low', async
 
     const fused = await store.recallFused('we chose parking_lot to avoid lock poisoning', 3)
     assert.ok(Array.isArray(fused) && fused.length >= 1)
-    const rankOf = (id) => fused.findIndex((r) => r.id === id)
+    const rankOf = (id) => {
+      const index = fused.findIndex((r) => r.id === id)
+      assert.notEqual(index, -1, `expected id ${id} to be present in the fused results`)
+      return index
+    }
     assert.ok(
       rankOf(ticket) < rankOf(distractor),
       'the graph-reached ticket must outrank the disconnected distractor',

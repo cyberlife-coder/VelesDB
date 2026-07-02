@@ -4,9 +4,14 @@
 //! child module of `service`, so it freely uses `MemoryService`'s private
 //! fields and methods (`traverse`, `search`, `HUB_FIELD`, …).
 
+use std::collections::HashMap;
+
 use serde_json::Value;
 
-use super::{reject_reserved_keys, MemoryService, Metadata, HUB_FIELD, MENTIONS_RELATION};
+use super::{
+    reject_reserved_keys, strip_reserved_keys, MemoryService, Metadata, HUB_FIELD,
+    MENTIONS_RELATION,
+};
 use crate::embedder::Embedder;
 use crate::error::MemoryError;
 use crate::fusion::{self, Candidate};
@@ -88,7 +93,9 @@ impl<E: Embedder> MemoryService<E> {
         Ok(ranked.into_iter().take(k).collect())
     }
 
-    /// The oversampled vector pool [`Self::recall_fused`] re-ranks.
+    /// The oversampled vector pool [`Self::recall_fused`] re-ranks. One
+    /// batched metadata lookup covers the whole pool (up to hundreds of ids
+    /// at the deepest `pool_depth`), not one round trip per hit.
     fn fused_pool(
         &self,
         embedding: &[f32],
@@ -96,20 +103,40 @@ impl<E: Embedder> MemoryService<E> {
         filter: Option<&Metadata>,
     ) -> Result<Vec<Candidate>, MemoryError> {
         let hits = self.search(embedding, depth, filter)?;
-        hits.into_iter()
-            .map(|(id, score, content)| {
-                Ok(Candidate {
-                    recollection: Recollection {
-                        id,
-                        score,
-                        content,
-                        metadata: self.recall_metadata(id)?,
-                    },
-                    vector_score: f64::from(score),
-                    graph_weight: 0.0,
-                })
+        let ids: Vec<u64> = hits.iter().map(|(id, _, _)| *id).collect();
+        let metadata = self.recall_metadata_batch(&ids)?;
+        Ok(hits
+            .into_iter()
+            .zip(metadata)
+            .map(|((id, score, content), metadata)| Candidate {
+                recollection: Recollection {
+                    id,
+                    score,
+                    content,
+                    metadata,
+                },
+                vector_score: f64::from(score),
+                graph_weight: 0.0,
             })
-            .collect()
+            .collect())
+    }
+
+    /// The caller-supplied metadata for every id in `ids` (reserved system
+    /// keys excluded, `None` per-id when it carries none), in the same
+    /// order — one batched storage round trip, so a `k`- or pool-sized
+    /// result set (here, and in [`MemoryService::recall`]) costs one
+    /// metadata lookup, not `k`/`pool_size` of them.
+    pub(crate) fn recall_metadata_batch(
+        &self,
+        ids: &[u64],
+    ) -> Result<Vec<Option<Metadata>>, MemoryError> {
+        Ok(self
+            .memory
+            .semantic()
+            .get_metadata_batch(ids)?
+            .into_iter()
+            .map(strip_reserved_keys)
+            .collect())
     }
 
     /// Facts the graph reaches (hop ≥ 1) from the query's top vector seed,
@@ -118,6 +145,11 @@ impl<E: Embedder> MemoryService<E> {
     /// generic mega-hub whose connections carry little signal — the idf lever
     /// validated on `HotpotQA` (+5.0pp both-facts-complete) and `LoCoMo` (turns
     /// the graph net-positive on multi-hop, no regression elsewhere).
+    ///
+    /// `filter` is re-checked against every reached fact's own metadata, not
+    /// just the seed: the graph walk is otherwise filter-blind, so a fact
+    /// outside the caller's scope (e.g. a different tenant/project) could
+    /// leak in just by being graph-connected to the seed.
     fn graph_reached(
         &self,
         embedding: &[f32],
@@ -129,34 +161,59 @@ impl<E: Embedder> MemoryService<E> {
             return Ok(Vec::new());
         };
         let explanation = self.traverse(seed_id, seed_content, hops)?;
+        let nodes: Vec<&MemoryNode> = explanation.nodes.iter().filter(|n| n.hop != 0).collect();
+        let ids: Vec<u64> = nodes.iter().map(|n| n.id).collect();
+        let raw_payloads = self.memory.semantic().get_metadata_batch(&ids)?;
+
+        let mut idf_cache: HashMap<u64, f64> = HashMap::new();
         let mut reached = Vec::new();
-        for node in &explanation.nodes {
-            if let Some(candidate) = self.reached_candidate(node, &explanation.edges)? {
+        for (node, raw) in nodes.into_iter().zip(raw_payloads) {
+            if let Some(candidate) =
+                self.reached_candidate(node, raw, &explanation.edges, filter, &mut idf_cache)?
+            {
                 reached.push(candidate);
             }
         }
         Ok(reached)
     }
 
-    /// The graph-reached candidate for `node`, or `None` when it's the seed
-    /// itself (hop 0) or an entity hub (internal scaffolding, never a caller
-    /// fact — split out of [`Self::graph_reached`] to keep that loop's
-    /// complexity within budget).
+    /// The graph-reached candidate for `node` given its already-fetched raw
+    /// payload `raw`, or `None` when it's an entity hub (internal
+    /// scaffolding, never a caller fact) or outside `filter`'s scope — split
+    /// out of [`Self::graph_reached`] to keep that loop's complexity within
+    /// budget. `raw` is fetched once, batched across the whole traversal, by
+    /// the caller — not per node — and serves both the hub check and the
+    /// returned candidate's metadata: the hub flag lives under the reserved
+    /// `_veles_hub` key, so it must be checked before `strip_reserved_keys`
+    /// removes it for the caller-facing metadata. `idf_cache` memoizes
+    /// [`Self::entity_idf`] per hub across the whole traversal (siblings
+    /// under the same hub would otherwise recompute an identical value once
+    /// per fact).
     fn reached_candidate(
         &self,
         node: &MemoryNode,
+        raw: Option<Metadata>,
         edges: &[MemoryEdge],
+        filter: Option<&Metadata>,
+        idf_cache: &mut HashMap<u64, f64>,
     ) -> Result<Option<Candidate>, MemoryError> {
-        if node.hop == 0 || self.is_hub(node.id)? {
+        if raw
+            .as_ref()
+            .is_some_and(|meta| meta.get(HUB_FIELD) == Some(&Value::Bool(true)))
+        {
             return Ok(None);
         }
-        let weight = self.reach_weight(node.id, edges)?;
+        let metadata = strip_reserved_keys(raw);
+        if !matches_filter(metadata.as_ref(), filter) {
+            return Ok(None);
+        }
+        let weight = self.reach_weight(node.id, edges, idf_cache)?;
         Ok(Some(Candidate {
             recollection: Recollection {
                 id: node.id,
                 score: 0.0,
                 content: node.content.clone(),
-                metadata: self.recall_metadata(node.id)?,
+                metadata,
             },
             vector_score: 0.0,
             graph_weight: weight,
@@ -168,15 +225,37 @@ impl<E: Embedder> MemoryService<E> {
     /// edge into it, or a flat `1.0` when it was reached through a direct
     /// (non-hub) [`Self::relate`] edge instead — idf has nothing to weight
     /// there, so the original flat signal is kept.
-    fn reach_weight(&self, fact_id: u64, edges: &[MemoryEdge]) -> Result<f64, MemoryError> {
+    fn reach_weight(
+        &self,
+        fact_id: u64,
+        edges: &[MemoryEdge],
+        idf_cache: &mut HashMap<u64, f64>,
+    ) -> Result<f64, MemoryError> {
         let mut weight: Option<f64> = None;
         for edge in edges {
             if edge.to == fact_id && edge.relation == MENTIONS_RELATION {
-                let idf = self.entity_idf(edge.from)?;
+                let idf = self.cached_entity_idf(edge.from, idf_cache)?;
                 weight = Some(weight.map_or(idf, |w: f64| w.max(idf)));
             }
         }
         Ok(weight.unwrap_or(1.0))
+    }
+
+    /// [`Self::entity_idf`], memoized in `cache` for the lifetime of one
+    /// [`Self::graph_reached`] call — sibling facts under the same hub would
+    /// otherwise each pay a fresh `relations`+`count` store round trip for an
+    /// identical value.
+    fn cached_entity_idf(
+        &self,
+        hub_id: u64,
+        cache: &mut HashMap<u64, f64>,
+    ) -> Result<f64, MemoryError> {
+        if let Some(&idf) = cache.get(&hub_id) {
+            return Ok(idf);
+        }
+        let idf = self.entity_idf(hub_id)?;
+        cache.insert(hub_id, idf);
+        Ok(idf)
     }
 
     /// Normalised inverse document frequency of hub `hub_id`, in `[0, 1]`:
@@ -195,22 +274,40 @@ impl<E: Embedder> MemoryService<E> {
         let (n, d) = (n as f64, degree as f64);
         Ok((n / d).ln() / n.ln())
     }
+}
 
-    /// True when `id` is an entity hub auto-created by
-    /// [`Self::remember_extracted`] (internal scaffolding, never a caller
-    /// fact — recall and graph reach both exclude it).
-    fn is_hub(&self, id: u64) -> Result<bool, MemoryError> {
-        Ok(self
-            .memory
-            .semantic()
-            .get_metadata(id)?
-            .is_some_and(|meta| meta.get(HUB_FIELD) == Some(&Value::Bool(true))))
+/// True when `filter` is absent, or every key in it matches `metadata`
+/// exactly — the same "all filter keys must match" semantics
+/// [`MemoryService::search`]'s vector-side filtering applies, now also
+/// enforced on graph-reached facts so a caller-scoped `recall_fused` can't
+/// leak a fact outside that scope just because it's graph-connected to the
+/// seed.
+fn matches_filter(metadata: Option<&Metadata>, filter: Option<&Metadata>) -> bool {
+    let Some(filter) = filter else {
+        return true;
+    };
+    // Mirrors velesdb-core's `payload_matches`: an empty (not absent) filter
+    // matches everything, including a metadata-less fact — `Some({})` from a
+    // caller (e.g. a JS `recallFused(q, k, {})`) must behave exactly like
+    // `None`, not like "reject anything without metadata".
+    if filter.is_empty() {
+        return true;
     }
+    let Some(metadata) = metadata else {
+        return false;
+    };
+    filter.iter().all(|(k, v)| metadata.get(k) == Some(v))
 }
 
 /// The oversampled candidate pool depth for a `k`-sized fused recall:
 /// `opts.pool` if the caller set one, else the proven default
-/// ([`fusion::pool_size`]).
+/// ([`fusion::pool_size`]) — either way, capped at
+/// [`crate::limits::MAX_RECALL_LIMIT`], the same `DoS` ceiling `k`/`hops`
+/// carry. The cap lives here, not just at each binding's FFI boundary: the
+/// *default* pool (`k.saturating_mul(8)`) exceeds it well before `k` itself
+/// reaches its own cap, so a caller who never touches `pool` at all — not
+/// just one who sets it explicitly — must still be bounded.
 fn pool_depth(k: usize, opts: FusionOptions) -> usize {
-    opts.pool.unwrap_or_else(|| fusion::pool_size(k))
+    let depth = opts.pool.unwrap_or_else(|| fusion::pool_size(k));
+    crate::limits::clamp_recall_limit(depth)
 }

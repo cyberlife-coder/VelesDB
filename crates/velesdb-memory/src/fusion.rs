@@ -82,8 +82,22 @@ pub(crate) fn fuse(
     candidates.into_iter().map(|c| c.recollection).collect()
 }
 
-/// `vector_score/max_score + graph_boost·graph_weight`. A pure vector hit
-/// (`graph_weight` absent from `weights`) keeps its bare normalised similarity.
+/// `max(vector_score, 0)/max_score + graph_boost·graph_weight`. A pure
+/// vector hit (`graph_weight` absent from `weights`) keeps its bare
+/// normalised similarity.
+///
+/// The numerator is floored at `0`, not just the divisor: Cosine scores
+/// range over `[-1, 1]`, so a negative `vector_score` is a legitimate,
+/// in-range "dissimilar" result, not an error state — dividing a negative
+/// numerator by an epsilon-floored *positive* divisor would otherwise invert
+/// its sign into an unbounded negative score (regression: an all-negative
+/// pool scored around `-2.3e14`, dwarfing any `graph_boost` regardless of
+/// actual relevance). Flooring the numerator instead means a fact with no
+/// positive vector signal contributes `0` — the same neutral baseline a
+/// graph-only candidate (`vector_score = 0.0`) already gets — so it can
+/// still be promoted by a real graph connection, but by the same bounded
+/// margin as any other zero-vector-signal candidate, never by an
+/// astronomical, sign-flipped one.
 fn fused_score(
     candidate: &Candidate,
     weights: &HashMap<u64, f64>,
@@ -94,7 +108,7 @@ fn fused_score(
         .get(&candidate.recollection.id)
         .copied()
         .unwrap_or(0.0);
-    candidate.vector_score / max_score + graph_boost * weight
+    candidate.vector_score.max(0.0) / max_score + graph_boost * weight
 }
 
 #[cfg(test)]

@@ -542,6 +542,34 @@ impl SemanticMemory {
         Ok(point.payload.as_ref().and_then(Value::as_object).cloned())
     }
 
+    /// Batched [`Self::get_metadata`]: fetches every id in `ids` with a
+    /// single collection lookup, returning results in the same order and
+    /// length as `ids` (an unknown or expired id maps to `None`) — avoids
+    /// the N individual round trips a per-id loop over `get_metadata` would
+    /// cost when a caller needs metadata for a whole batch of hits (e.g.
+    /// `velesdb-memory`'s `recall`/`recall_fused`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when collection access fails.
+    pub fn get_metadata_batch(
+        &self,
+        ids: &[u64],
+    ) -> Result<Vec<Option<Map<String, Value>>>, AgentMemoryError> {
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        let points = collection.get(ids);
+        Ok(ids
+            .iter()
+            .zip(points)
+            .map(|(&id, point)| {
+                if self.ttl.is_expired(MemoryKind::Semantic, id) {
+                    return None;
+                }
+                point.and_then(|p| p.payload.as_ref().and_then(Value::as_object).cloned())
+            })
+            .collect())
+    }
+
     /// Lists all live (non-expired) tracked facts as `(id, content)` pairs.
     ///
     /// # Errors

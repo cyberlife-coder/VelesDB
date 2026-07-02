@@ -53,9 +53,10 @@ pub struct RecollectionJs {
     pub score: f64,
     /// Stored fact content.
     pub content: String,
-    /// Caller-supplied structured metadata stored with the fact, or `undefined`
-    /// when the fact carries none (`recall`/`why` never populate this; only
-    /// `recallWhere` does).
+    /// Caller-supplied structured metadata stored with the fact, or
+    /// `undefined` when the fact carries none. `recall`, `recallWhere`, and
+    /// `recallFused` all populate this; `why()`'s subgraph nodes don't carry
+    /// metadata (a different shape, `MemoryNodeJs`).
     pub metadata: Option<Value>,
 }
 
