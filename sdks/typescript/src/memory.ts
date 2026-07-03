@@ -176,8 +176,28 @@ export class MemoryService {
   }
 
   private async runInit(): Promise<void> {
+    let mod: MemoryWasmModule;
     try {
-      const mod = (await import('@wiscale/velesdb-wasm')) as unknown as MemoryWasmModule;
+      mod = (await import('@wiscale/velesdb-wasm')) as unknown as MemoryWasmModule;
+    } catch (error) {
+      throw new ConnectionError(
+        'Failed to load @wiscale/velesdb-wasm',
+        error instanceof Error ? error : undefined
+      );
+    }
+    // Capability floor, checked at runtime because the declared dependency
+    // range (^3.0.0) admits older builds: the memory wedge shipped in wasm
+    // 3.6.0, and an existing project's lockfile may still resolve an
+    // earlier version. Fail with the actionable cause, not a generic
+    // load error.
+    if (typeof mod.MemoryService !== 'function') {
+      throw new ConnectionError(
+        'The resolved @wiscale/velesdb-wasm build does not ship MemoryService — ' +
+          'the memory wedge requires @wiscale/velesdb-wasm >= 3.6.0 ' +
+          '(update the dependency in your lockfile)'
+      );
+    }
+    try {
       const nodeLoader = await import('./backends/wasm-node-loader');
       if (nodeLoader.isNodeRuntime()) {
         await mod.default(await nodeLoader.loadWasmBytesNode());

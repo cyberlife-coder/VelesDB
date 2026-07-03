@@ -97,6 +97,26 @@ describe('MemoryService', () => {
       await expect(memory.init()).rejects.toThrow(ConnectionError);
       expect(memory.isInitialized()).toBe(false);
     });
+
+    it('init() names the wasm version floor when the resolved build lacks MemoryService', async () => {
+      // Simulates a stale lockfile resolving a pre-3.6.0 @wiscale/velesdb-wasm
+      // (the declared range ^3.0.0 admits builds without the memory wedge).
+      const saved = mockWasmModule.MemoryService;
+      (mockWasmModule as { MemoryService?: unknown }).MemoryService = undefined;
+      try {
+        const stale = new MemoryService();
+        const rejection = stale.init();
+        await expect(rejection).rejects.toBeInstanceOf(ConnectionError);
+        await expect(rejection).rejects.toThrow(/>= 3\.6\.0/);
+        // A retry after the failed init runs a fresh load (the memoized
+        // in-flight promise is cleared on settle) and must fail the same
+        // way — never spuriously resolve with a null inner store.
+        await expect(stale.init()).rejects.toThrow(/>= 3\.6\.0/);
+        expect(stale.isInitialized()).toBe(false);
+      } finally {
+        mockWasmModule.MemoryService = saved;
+      }
+    });
   });
 
   describe('wedge operations', () => {

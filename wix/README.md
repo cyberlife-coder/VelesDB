@@ -44,10 +44,10 @@ If images are not provided, WiX will use defaults.
 
 ```powershell
 # Install silently with PATH modification
-msiexec /i velesdb-0.3.1-x86_64.msi /quiet ADDTOPATH=1
+msiexec /i velesdb-<version>-x86_64.msi /quiet ADDTOPATH=1
 
 # Install without PATH modification
-msiexec /i velesdb-0.3.1-x86_64.msi /quiet ADDTOPATH=0
+msiexec /i velesdb-<version>-x86_64.msi /quiet ADDTOPATH=0
 ```
 
 ## Uninstallation
@@ -55,5 +55,5 @@ msiexec /i velesdb-0.3.1-x86_64.msi /quiet ADDTOPATH=0
 Via Control Panel > Programs > Uninstall, or:
 
 ```powershell
-msiexec /x velesdb-0.3.1-x86_64.msi /quiet
+msiexec /x velesdb-<version>-x86_64.msi /quiet
 ```
