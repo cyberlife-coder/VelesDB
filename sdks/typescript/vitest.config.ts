@@ -142,6 +142,12 @@ export default defineConfig({
           branches: 100,
           statements: 100,
         },
+        'src/memory.ts': {
+          lines: 95,
+          functions: 100,
+          branches: 80,
+          statements: 95,
+        },
       },
     },
   },

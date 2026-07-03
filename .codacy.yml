@@ -101,6 +101,15 @@ exclude_paths:
   - "sdks/typescript/src/errors.ts"
   - "sdks/typescript/src/filter.ts"
   - "sdks/typescript/src/client/validation.ts"
+  # memory.ts (memory-wedge MemoryService): same base `no-unused-vars` FP on
+  # the parameter names of the internal `WasmMemoryServiceInstance` interface
+  # (pure type-position signatures describing the wasm-bindgen surface). Its
+  # genuine findings (require-await on await-less async methods, a void-
+  # expression return) were FIXED in code (methods return Promises without the
+  # async keyword; wrapWasmCall lifts sync throws into rejections), so the
+  # file carries ONLY the FP class and qualifies for exclusion per the policy
+  # above.
+  - "sdks/typescript/src/memory.ts"
   # Integration contains_text_search helpers — Codacy's online taint analysis
   # flags VelesQL query construction as SQL injection. All user inputs are
   # sanitized BEFORE the query is built:

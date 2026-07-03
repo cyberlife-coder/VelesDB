@@ -19,10 +19,10 @@
     <div id="results"></div>
 
     <script type="module">
-        import init, { VectorStore } from './pkg/velesdb_wasm.js';
+        import init, { VectorStore, MemoryService } from './pkg/velesdb_wasm.js';
 
         // Expose to window for Playwright tests
-        window.VelesDB = { ready: false, VectorStore: null, error: null };
+        window.VelesDB = { ready: false, VectorStore: null, MemoryService: null, error: null };
 
         async function initWasm() {
             const status = document.getElementById('status');
@@ -31,6 +31,7 @@
             try {
                 await init();
                 window.VelesDB.VectorStore = VectorStore;
+                window.VelesDB.MemoryService = MemoryService;
                 window.VelesDB.ready = true;
                 status.className = 'success';
                 status.textContent = 'WASM module loaded successfully!';

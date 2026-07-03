@@ -12,6 +12,7 @@ WebAssembly build of [VelesDB](https://github.com/cyberlife-coder/VelesDB) - vec
 - **Memory optimization** - SQ8 (4x) and Binary (32x) quantization
 - **Knowledge Graph** - In-memory graph store with BFS/DFS traversal
 - **Agent Memory** - Semantic memory for AI agents (store/query knowledge facts)
+- **Memory Wedge** - The full `remember`/`recall`/`recallFused`/`relate`/`forget`/`why` agent memory wedge, in-memory only
 - **VelesQL parser** - Parse and validate VelesQL queries client-side
 - **Sparse search** - Inverted index with RRF hybrid fusion
 - **Lightweight** - Minimal bundle size
@@ -402,6 +403,40 @@ const results = memory.query(queryEmbedding, 5);
 console.log(memory.len());       // 2
 console.log(memory.dimension()); // 384
 ```
+
+### Memory Wedge (MemoryService)
+
+The full local-first agent memory wedge — `remember`/`recall`/`recallWhere`/
+`recallFused`/`relate`/`forget`/`why` — built on top of `SemanticMemory`
+(above) plus an in-memory graph store, so a fact reached only through a typed
+link (not vector similarity) still surfaces. The same wedge as
+`@wiscale/velesdb-memory-node` and the Python binding; **in-memory only**
+here (no filesystem access under WASM). Most consumers should use the higher-
+level `MemoryService` re-exported from
+[`@wiscale/velesdb-sdk`](../../sdks/typescript) instead, which wraps this
+class with Promise-returning methods and the SDK's typed error hierarchy.
+
+```javascript
+import init, { MemoryService } from '@wiscale/velesdb-wasm';
+
+await init();
+const memory = new MemoryService(384);
+
+const pr = memory.remember('PR #42 swaps the mutex for parking_lot', [], null);
+const decision = memory.remember(
+  'we chose parking_lot to avoid lock poisoning',
+  [{ target: pr, relation: 'decided_in' }],
+  null
+);
+
+const hits = memory.recall('lock poisoning', 5, null);          // vector recall
+const fused = memory.recallFused('lock poisoning', 5, null, null); // + graph promotion
+const { nodes, edges } = memory.why('why parking_lot', 2, null);   // seed + connected subgraph
+```
+
+Ids are decimal strings; every method is synchronous (no `Promise`) and
+throws a `JsValue` `Error` carrying a `.code` (`INVALID_INPUT` / `NOT_FOUND` /
+`INTERNAL`) on failure.
 
 ### Sparse Search (SparseIndex)
 

@@ -59,7 +59,11 @@ pub enum ColumnOp {
 }
 
 impl ColumnOp {
-    /// The `VelesQL` operator token.
+    /// The `VelesQL` operator token. Only [`crate::storage::NativeStore`]
+    /// builds `VelesQL` text; a non-`persistence` backend (e.g.
+    /// `velesdb-wasm`'s in-memory one) filters `ColumnFilter`s directly, with
+    /// no query-string step.
+    #[cfg(feature = "persistence")]
     #[must_use]
     pub(crate) fn as_sql(self) -> &'static str {
         match self {

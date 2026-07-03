@@ -17,8 +17,9 @@ use crate::error::MemoryError;
 use crate::fusion::{self, Candidate};
 use crate::model::{FusionOptions, MemoryEdge, MemoryNode, Recollection};
 use crate::rerank::Reranker;
+use crate::storage::MemoryStore;
 
-impl<E: Embedder> MemoryService<E> {
+impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Fused recall: like [`Self::recall`], but also walks the graph from the
     /// query's top vector hit and folds any fact it reaches (hop ≥ 1) into the
     /// ranking, scored by `opts.graph_boost · graph_weight` on top of its
@@ -131,8 +132,7 @@ impl<E: Embedder> MemoryService<E> {
         ids: &[u64],
     ) -> Result<Vec<Option<Metadata>>, MemoryError> {
         Ok(self
-            .memory
-            .semantic()
+            .store
             .get_metadata_batch(ids)?
             .into_iter()
             .map(strip_reserved_keys)
@@ -163,7 +163,7 @@ impl<E: Embedder> MemoryService<E> {
         let explanation = self.traverse(seed_id, seed_content, hops)?;
         let nodes: Vec<&MemoryNode> = explanation.nodes.iter().filter(|n| n.hop != 0).collect();
         let ids: Vec<u64> = nodes.iter().map(|n| n.id).collect();
-        let raw_payloads = self.memory.semantic().get_metadata_batch(&ids)?;
+        let raw_payloads = self.store.get_metadata_batch(&ids)?;
 
         let mut idf_cache: HashMap<u64, f64> = HashMap::new();
         let mut reached = Vec::new();
@@ -265,8 +265,8 @@ impl<E: Embedder> MemoryService<E> {
     /// (`examples/locomo/ingest.rs`), using the store's total memory count
     /// (facts + hubs) as a corpus-size proxy.
     fn entity_idf(&self, hub_id: u64) -> Result<f64, MemoryError> {
-        let degree = self.memory.semantic().relations(hub_id)?.len();
-        let n = self.memory.semantic().count();
+        let degree = self.store.relations(hub_id)?.len();
+        let n = self.store.count();
         if degree == 0 || n <= 1 {
             return Ok(0.0);
         }
