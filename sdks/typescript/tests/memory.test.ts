@@ -105,8 +105,9 @@ describe('MemoryService', () => {
       (mockWasmModule as { MemoryService?: unknown }).MemoryService = undefined;
       try {
         const stale = new MemoryService();
-        await expect(stale.init()).rejects.toBeInstanceOf(ConnectionError);
-        await expect(stale.init()).rejects.toThrow(/>= 3\.6\.0/);
+        const rejection = stale.init();
+        await expect(rejection).rejects.toBeInstanceOf(ConnectionError);
+        await expect(rejection).rejects.toThrow(/>= 3\.6\.0/);
         expect(stale.isInitialized()).toBe(false);
       } finally {
         mockWasmModule.MemoryService = saved;

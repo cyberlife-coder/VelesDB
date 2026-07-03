@@ -539,6 +539,15 @@ jobs:
         run: |
           cd sdks/typescript
           npm install && npm run build
+          # The PUBLISHED package pins @wiscale/velesdb-wasm to this release
+          # (the memory wedge needs the wasm build shipping WasmMemoryService),
+          # so npm enforces the capability floor at install/upgrade time. The
+          # in-repo range stays ^3.0.0 because CI's npm ci must resolve against
+          # the committed lockfile before the new wasm version exists on npm —
+          # same patch-at-publish pattern as the wasm package.json above.
+          # Patched AFTER install/build: publish doesn't resolve ranges, but
+          # install would fail on a not-yet-published sibling version.
+          node -e "const p=require('./package.json'); p.dependencies['@wiscale/velesdb-wasm']='^'+p.version; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n')"
           PKG_VERSION=$(node -p "require('./package.json').version")
           if npm publish --access public; then
             echo "✅ published @wiscale/velesdb-sdk@$PKG_VERSION"
