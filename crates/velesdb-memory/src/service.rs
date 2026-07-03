@@ -16,9 +16,9 @@ use crate::error::MemoryError;
 use crate::extract::Extractor;
 use crate::id;
 use crate::model::{ColumnFilter, Explanation, Link, MemoryNode, Recollection};
-use crate::storage::MemoryStore;
 #[cfg(feature = "persistence")]
 use crate::storage::NativeStore;
+use crate::storage::{is_reserved_key, strip_reserved_keys, MemoryStore};
 
 /// [`MemoryService::recall_fused`] and its helpers — split out to keep this
 /// file under the crate's 500-NLOC-per-file budget, same pattern as
@@ -416,11 +416,16 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
         match filter {
             // An include filter already excludes hubs: a hub only carries
-            // `{kind: entity}`, so it can never match a user's metadata filter.
-            Some(meta) => self.store.query_filtered(embedding, k, meta, 0),
+            // `{kind: entity}`, so it can never match a user's non-empty
+            // metadata filter. An EMPTY-but-present filter (`Some({})`, the
+            // natural `{}` idiom at the JS boundary) matches every payload —
+            // hubs included — so it must take the hub-excluding path below,
+            // exactly like an absent filter (same `Some({})` ≡ `None`
+            // convention as `recall_fused`'s graph-side `matches_filter`).
+            Some(meta) if !meta.is_empty() => self.store.query_filtered(embedding, k, meta, 0),
             // Unfiltered recall must still drop entity hubs explicitly, or a hub
             // like `Entity: rust` would rank for the topic and evict a real fact.
-            None => self
+            _ => self
                 .store
                 .query_excluding(embedding, k, &hub_exclude_filter()),
         }
@@ -449,6 +454,14 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let query = query.trim();
         if query.is_empty() || k == 0 {
             return Ok(Vec::new());
+        }
+        // No column predicates = a plain recall: route through [`Self::recall`]
+        // so entity hubs stay excluded — `query_columnar` with an empty filter
+        // set is a bare vector search that would rank internal `Entity:` hub
+        // scaffolding as results (same `[]` ≡ unfiltered convention as
+        // `search`'s empty-map handling).
+        if filters.is_empty() {
+            return self.recall(query, k, None);
         }
         let embedding = self.embedder.embed(query)?;
         self.store.query_columnar(&embedding, k, filters)
@@ -577,28 +590,6 @@ fn hub_exclude_filter() -> Metadata {
     let mut exclude = Map::new();
     exclude.insert(HUB_FIELD.to_string(), Value::Bool(true));
     exclude
-}
-
-/// True for metadata keys the memory layer reserves: the engine's `content`
-/// payload, and any `_veles_`-namespaced system key (durable TTL, entity hubs).
-/// Callers may neither set these in `remember` metadata nor filter on them, so
-/// they can't overwrite a system field or collide with internal scaffolding.
-fn is_reserved_key(key: &str) -> bool {
-    key == "content" || key.starts_with("_veles_")
-}
-
-/// Drop reserved system keys from a raw payload, and collapse an
-/// empty-after-stripping map to `None` — the caller-facing shape every
-/// `Recollection::metadata` is built from, regardless of which recall path
-/// (single or batched) fetched the raw payload.
-fn strip_reserved_keys(payload: Option<Metadata>) -> Option<Metadata> {
-    payload.and_then(|payload| {
-        let metadata: Metadata = payload
-            .into_iter()
-            .filter(|(key, _)| !is_reserved_key(key))
-            .collect();
-        (!metadata.is_empty()).then_some(metadata)
-    })
 }
 
 /// Reject caller-supplied metadata/filters that name a reserved key.

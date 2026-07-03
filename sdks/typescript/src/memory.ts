@@ -222,12 +222,21 @@ export class MemoryService {
     } = {}
   ): Promise<string> {
     const svc = this.ensureInitialized();
+    const ttl = options.ttlSeconds;
+    // Validate before BigInt(): a non-integer throws a raw RangeError and a
+    // negative value dies as an opaque wasm-bindgen u64 conversion — both
+    // escaping the ValidationError contract this class promises.
+    if (ttl !== undefined && (!Number.isInteger(ttl) || ttl < 0)) {
+      throw new ValidationError(
+        `ttlSeconds must be a non-negative integer, got ${ttl}`
+      );
+    }
     return wrapWasmCall(() =>
       svc.remember(
         fact,
         options.links ?? [],
         options.metadata,
-        options.ttlSeconds !== undefined ? BigInt(options.ttlSeconds) : undefined
+        ttl !== undefined ? BigInt(ttl) : undefined
       )
     );
   }

@@ -58,12 +58,24 @@ pub mod storage;
 /// SDK's own default so the server, library, and tests never restate the
 /// value. `velesdb_core::agent` (where the canonical constant lives) is
 /// itself `persistence`-gated, so a `persistence`-free build (e.g.
-/// `velesdb-wasm`) falls back to a literal that must be kept in sync with
-/// `velesdb_core::agent::DEFAULT_DIMENSION` (currently `384`).
+/// `velesdb-wasm`) falls back to [`FALLBACK_DIMENSION`].
 #[cfg(feature = "persistence")]
 pub const DEFAULT_DIMENSION: usize = velesdb_core::agent::DEFAULT_DIMENSION;
 #[cfg(not(feature = "persistence"))]
-pub const DEFAULT_DIMENSION: usize = 384;
+pub const DEFAULT_DIMENSION: usize = FALLBACK_DIMENSION;
+
+/// The hand-written value the `persistence`-free arm of
+/// [`DEFAULT_DIMENSION`] falls back to (the canonical constant's module is
+/// feature-gated away there). The `persistence` build — CI's default —
+/// statically asserts it still equals the canonical value, so drift fails
+/// to compile instead of silently splitting the wasm default dimension
+/// from the native one.
+const FALLBACK_DIMENSION: usize = 384;
+#[cfg(feature = "persistence")]
+const _: () = assert!(
+    FALLBACK_DIMENSION == velesdb_core::agent::DEFAULT_DIMENSION,
+    "update FALLBACK_DIMENSION to match velesdb_core::agent::DEFAULT_DIMENSION"
+);
 
 pub use embedder::{DynEmbedder, EmbedError, Embedder, HashEmbedder};
 #[cfg(feature = "ollama")]

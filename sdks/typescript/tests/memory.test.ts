@@ -124,6 +124,19 @@ describe('MemoryService', () => {
       expect(lastMockInstance!.remember).toHaveBeenCalledWith('a fact', [], undefined, undefined);
     });
 
+    it.each([1.5, -1, Number.NaN])(
+      'remember() rejects ttlSeconds %p with ValidationError, not a raw RangeError',
+      async (ttlSeconds) => {
+        // Regression: BigInt(1.5) throws a codeless RangeError and a negative
+        // value dies as an opaque wasm-bindgen u64 conversion — both escaped
+        // the typed-error contract instead of surfacing as ValidationError.
+        await expect(memory.remember('a fact', { ttlSeconds })).rejects.toBeInstanceOf(
+          ValidationError
+        );
+        expect(lastMockInstance!.remember).not.toHaveBeenCalled();
+      }
+    );
+
     it('recall() returns the mocked recollections', async () => {
       const hits = await memory.recall('parking_lot', 5, { project: 'veles' });
       expect(hits).toEqual([{ id: '1', score: 0.9, content: 'we chose parking_lot' }]);

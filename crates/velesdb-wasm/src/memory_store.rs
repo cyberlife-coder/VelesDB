@@ -112,26 +112,6 @@ impl Inner {
         let fact = self.facts.get(&id)?;
         (!fact.is_expired()).then_some(fact)
     }
-
-    /// Flat `(ids, embeddings, payloads)` over every non-expired fact — the
-    /// shape [`vector_ops::compute_filtered_scores`] expects. Rebuilt per
-    /// query rather than kept incrementally in sync: simpler and safer, and
-    /// perfectly adequate at browser-corpus scale (thousands of facts, not
-    /// millions).
-    fn live_snapshot(&self) -> (Vec<u64>, Vec<f32>, Vec<Option<Value>>) {
-        let mut ids = Vec::new();
-        let mut data = Vec::new();
-        let mut payloads = Vec::new();
-        for &id in &self.order {
-            let Some(fact) = self.live_fact(id) else {
-                continue;
-            };
-            ids.push(id);
-            data.extend_from_slice(&fact.embedding);
-            payloads.push(Some(Value::Object(fact.payload.clone())));
-        }
-        (ids, data, payloads)
-    }
 }
 
 /// The in-memory [`MemoryStore`] backend `velesdb-wasm` supplies to
@@ -272,8 +252,7 @@ impl MemoryStore for WasmStore {
         filters: &[ColumnFilter],
     ) -> Result<Vec<Recollection>, MemoryError> {
         for filter in filters {
-            validate_field(&filter.field)?;
-            validate_scalar(&filter.value)?;
+            velesdb_memory::storage::validate_column_filter(filter)?;
         }
         let scored = self.query_scored(embedding, k, 0, |payload| {
             columnar_matches(payload, filters)
@@ -285,13 +264,26 @@ impl MemoryStore for WasmStore {
                 id,
                 score,
                 content,
-                metadata: inner.live_fact(id).map(|fact| fact.payload.clone()),
+                // Reserved keys (`content`, `_veles_*`) are stripped exactly
+                // like the native backend and every other recall path — raw
+                // payloads must never reach a caller-facing `Recollection`.
+                metadata: velesdb_memory::storage::strip_reserved_keys(
+                    inner.live_fact(id).map(|fact| fact.payload.clone()),
+                ),
             })
             .collect())
     }
 
     fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
         let mut inner = self.inner.borrow_mut();
+        // The trait contract (and the native backend) reject an edge to a
+        // missing or expired endpoint — a dangling edge would silently
+        // inflate `entity_idf` degree counts and `why()` traversal work.
+        for endpoint in [from, to] {
+            if inner.live_fact(endpoint).is_none() {
+                return Err(MemoryError::UnknownMemory(endpoint));
+            }
+        }
         // `explicit_id: None` derives the id from (source, target, label), so
         // the only documented failure mode (an explicit id collision) cannot
         // occur here — still mapped, not unwrapped, so a future signature
@@ -308,7 +300,11 @@ impl MemoryStore for WasmStore {
             .graph
             .edges()
             .iter()
-            .filter(|e| e.source == id)
+            // An edge into a TTL-expired fact is dead: the native backend
+            // filters expired targets out, and `entity_idf` divides by this
+            // degree — counting dead edges would under-weight every
+            // graph-reached fact relative to the native ranking.
+            .filter(|e| e.source == id && inner.live_fact(e.target).is_some())
             .map(|e| MemoryEdge {
                 from: e.source,
                 to: e.target,
@@ -332,6 +328,10 @@ impl WasmStore {
     /// [`MemoryStore::query_excluding`], and [`MemoryStore::query_columnar`]:
     /// score every non-expired fact whose payload passes `predicate` against
     /// `embedding`, rank, and take `k` after `offset`.
+    ///
+    /// `predicate` is applied while *building* the scoring input, borrowing
+    /// each payload in place — nothing is cloned for a non-matching fact,
+    /// and content is cloned only for the `k` rows actually returned.
     fn query_scored(
         &self,
         embedding: &[f32],
@@ -340,11 +340,21 @@ impl WasmStore {
         predicate: impl Fn(&Map<String, Value>) -> bool,
     ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
         let inner = self.inner.borrow();
-        let (ids, data, payloads) = inner.live_snapshot();
-        let mut scored = vector_ops::compute_filtered_scores(
+        let mut ids = Vec::new();
+        let mut data = Vec::new();
+        for &id in &inner.order {
+            let Some(fact) = inner.live_fact(id) else {
+                continue;
+            };
+            if !predicate(&fact.payload) {
+                continue;
+            }
+            ids.push(id);
+            data.extend_from_slice(&fact.embedding);
+        }
+        let mut scored = vector_ops::compute_scores(
             embedding,
             &ids,
-            &payloads,
             &data,
             &[],
             &[],
@@ -353,17 +363,16 @@ impl WasmStore {
             inner.dimension,
             DistanceMetric::Cosine,
             StorageMode::Full,
-            |payload| payload.as_object().is_some_and(&predicate),
         );
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
         Ok(scored
             .into_iter()
             .skip(offset)
             .take(k)
-            .map(|(id, score, payload)| {
-                let content = payload
-                    .and_then(Value::as_object)
-                    .map(content_of)
+            .map(|(id, score)| {
+                let content = inner
+                    .live_fact(id)
+                    .map(|fact| content_of(&fact.payload))
                     .unwrap_or_default();
                 (id, score, content)
             })
@@ -409,31 +418,6 @@ fn compare(stored: &Value, op: ColumnOp, target: &Value) -> bool {
         ColumnOp::Eq => stored == target,
         ColumnOp::Ne => stored != target,
         _ => false,
-    }
-}
-
-/// Accept only plain, non-reserved identifier field names — mirrors
-/// `velesdb-memory`'s own `NativeStore::query_columnar` validation, since
-/// this store enforces the same contract independently (no VelesQL text is
-/// built here, so injection isn't a risk, but the reserved-column rule is
-/// part of `recall_where`'s documented contract regardless of backend).
-fn validate_field(field: &str) -> Result<(), MemoryError> {
-    let plain = !field.is_empty() && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    let reserved = field == "content" || field.starts_with("_veles_");
-    if plain && !reserved {
-        Ok(())
-    } else {
-        Err(MemoryError::InvalidFilter(field.to_owned()))
-    }
-}
-
-/// Reject non-scalar filter values, matching `NativeStore`'s validation.
-fn validate_scalar(value: &Value) -> Result<(), MemoryError> {
-    match value {
-        Value::String(_) | Value::Number(_) | Value::Bool(_) => Ok(()),
-        _ => Err(MemoryError::InvalidFilter(format!(
-            "value must be a string, number, or boolean, got {value}"
-        ))),
     }
 }
 

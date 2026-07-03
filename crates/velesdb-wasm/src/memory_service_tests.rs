@@ -107,7 +107,15 @@ fn test_inner_recall_fused_reaches_a_graph_connected_fact() {
             velesdb_memory::FusionOptions::default(),
         )
         .unwrap();
-    let rank_of = |id: u64| fused.iter().position(|r| r.id == id);
+    // `expect` both ranks: `Option`'s ordering makes `None < Some(_)` true,
+    // so comparing raw `position()` results would pass vacuously if the
+    // graph-reached fact were dropped from the results entirely.
+    let rank_of = |id: u64| {
+        fused
+            .iter()
+            .position(|r| r.id == id)
+            .expect("both facts must be present in the fused results")
+    };
     assert!(
         rank_of(ticket) < rank_of(distractor),
         "graph-reached fact must outrank the distractor"

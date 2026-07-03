@@ -16,8 +16,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "persistence")]
 use serde_json::json;
-#[cfg(feature = "persistence")]
-use serde_json::{Map, Value};
+use serde_json::Value;
 #[cfg(feature = "persistence")]
 use velesdb_core::agent::AgentMemory;
 #[cfg(feature = "persistence")]
@@ -335,8 +334,7 @@ impl NativeStore {
         params.insert("q".to_string(), json!(embedding));
         let mut predicate = String::from("vector NEAR $q");
         for (index, filter) in filters.iter().enumerate() {
-            validate_field(&filter.field)?;
-            validate_scalar(&filter.value)?;
+            validate_column_filter(filter)?;
             let key = format!("p{index}");
             let _ = write!(
                 predicate,
@@ -356,11 +354,27 @@ impl NativeStore {
 
 /// True for metadata keys the memory layer reserves: the engine's `content`
 /// payload, and any `_veles_`-namespaced system key (durable TTL, entity
-/// hubs). Mirrors [`crate::service`]'s own copy — kept private to each module
-/// since both need it and neither should import a "utility" from the other.
-#[cfg(feature = "persistence")]
-fn is_reserved_key(key: &str) -> bool {
+/// hubs). The single source of the reserved-key contract — the service layer
+/// (reject/strip) and every backend enforce it through this one predicate.
+pub(crate) fn is_reserved_key(key: &str) -> bool {
     key == "content" || key.starts_with("_veles_")
+}
+
+/// Drop reserved system keys from a raw payload, and collapse an
+/// empty-after-stripping map to `None` — the caller-facing shape every
+/// [`Recollection::metadata`] is built from. `pub` because a [`MemoryStore`]
+/// backend that assembles `Recollection`s itself (`query_columnar`) must
+/// apply the same stripping the service layer applies on every other recall
+/// path, or reserved keys leak to callers on that one path only.
+#[must_use]
+pub fn strip_reserved_keys(payload: Option<Metadata>) -> Option<Metadata> {
+    payload.and_then(|payload| {
+        let metadata: Metadata = payload
+            .into_iter()
+            .filter(|(key, _)| !is_reserved_key(key))
+            .collect();
+        (!metadata.is_empty()).then_some(metadata)
+    })
 }
 
 /// Map a core search result to a [`Recollection`], lifting the fact text out
@@ -374,47 +388,34 @@ fn to_recollection(result: &SearchResult) -> Recollection {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
-    let metadata = payload.and_then(|payload| {
-        let metadata: Map<String, Value> = payload
-            .iter()
-            .filter(|(key, _)| !is_reserved_key(key))
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
-        (!metadata.is_empty()).then_some(metadata)
-    });
     Recollection {
         id: result.point.id,
         score: result.score,
         content,
-        metadata,
+        metadata: strip_reserved_keys(payload.cloned()),
     }
 }
 
-/// Accept only plain, non-reserved identifier field names, so a filter field
-/// can be safely placed into the query text (its value is always a bound
-/// parameter). Rejects the reserved system columns the docs promise are off
-/// limits: `content` (the fact payload) and any `_veles_`-prefixed engine key
-/// (e.g. durable TTL).
-#[cfg(feature = "persistence")]
-fn validate_field(field: &str) -> Result<(), MemoryError> {
+/// Validate one `recall_where` column filter: a plain, non-reserved
+/// identifier field name and a scalar (string/number/boolean) value. `pub`
+/// and shared so every [`MemoryStore`] backend enforces the *same* documented
+/// contract — the field-name rule keeps a filter safe to place into query
+/// text (`NativeStore` builds `VelesQL`; values are always bound parameters),
+/// and rejects the reserved system columns (`content`, `_veles_*`) regardless
+/// of backend; the scalar rule turns what would be an opaque engine error
+/// into a clear client-input error.
+///
+/// # Errors
+/// Returns [`MemoryError::InvalidFilter`] when either rule is violated.
+pub fn validate_column_filter(filter: &ColumnFilter) -> Result<(), MemoryError> {
+    let field = &filter.field;
     let plain = !field.is_empty() && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    let reserved = field == "content" || field.starts_with("_veles_");
-    if plain && !reserved {
-        Ok(())
-    } else {
-        Err(MemoryError::InvalidFilter(field.to_owned()))
+    if !plain || is_reserved_key(field) {
+        return Err(MemoryError::InvalidFilter(field.clone()));
     }
-}
-
-/// Reject non-scalar filter values. Only strings, numbers, and booleans can be
-/// compared against a `ColumnStore` column; binding an array/object/null would
-/// fail deep in the query engine and surface as an opaque internal error instead
-/// of a clear client-input error.
-#[cfg(feature = "persistence")]
-fn validate_scalar(value: &Value) -> Result<(), MemoryError> {
-    match value {
+    match &filter.value {
         Value::String(_) | Value::Number(_) | Value::Bool(_) => Ok(()),
-        _ => Err(MemoryError::InvalidFilter(format!(
+        value => Err(MemoryError::InvalidFilter(format!(
             "value must be a string, number, or boolean, got {value}"
         ))),
     }

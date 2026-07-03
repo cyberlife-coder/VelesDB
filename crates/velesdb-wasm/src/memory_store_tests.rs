@@ -172,6 +172,72 @@ fn test_query_columnar_applies_range_predicate() {
 }
 
 #[test]
+fn test_query_columnar_strips_reserved_keys_from_metadata() {
+    // Regression: the raw payload (which carries the reserved `content` key,
+    // and `_veles_expires_at` for TTL'd facts) used to be returned verbatim
+    // as `Recollection::metadata` — the native backend strips reserved keys
+    // and collapses an empty result to `None`, and this backend must match.
+    let store = WasmStore::new(4);
+    let m = meta(&[("year", Value::from(2003))]);
+    store
+        .store_with_metadata(1, "alice was CEO", &[1.0, 0.0, 0.0, 0.0], &m)
+        .unwrap();
+    store
+        .store_with_ttl(2, "bob was CEO", &[1.0, 0.0, 0.0, 0.0], 3600)
+        .unwrap();
+
+    let hits = store.query_columnar(&[1.0, 0.0, 0.0, 0.0], 5, &[]).unwrap();
+    let alice = hits.iter().find(|r| r.id == 1).expect("alice present");
+    let metadata = alice.metadata.as_ref().expect("caller metadata survives");
+    assert_eq!(metadata.get("year"), Some(&Value::from(2003)));
+    assert!(
+        !metadata.contains_key("content"),
+        "reserved `content` key must be stripped"
+    );
+    let bob = hits.iter().find(|r| r.id == 2).expect("bob present");
+    assert!(
+        bob.metadata.is_none(),
+        "a fact with only reserved keys (content + TTL) has no caller metadata"
+    );
+}
+
+#[test]
+fn test_relate_to_missing_endpoint_errors() {
+    let store = WasmStore::new(4);
+    store.store(1, "a", &[1.0, 0.0, 0.0, 0.0]).unwrap();
+
+    let err = store.relate(1, 999, "decided_in").unwrap_err();
+    assert!(matches!(err, MemoryError::UnknownMemory(999)));
+    let err = store.relate(999, 1, "decided_in").unwrap_err();
+    assert!(matches!(err, MemoryError::UnknownMemory(999)));
+    assert!(
+        store.relations(1).unwrap().is_empty(),
+        "no dangling edge may survive a rejected relate"
+    );
+}
+
+#[test]
+fn test_relations_excludes_edges_to_expired_targets() {
+    // Regression: `entity_idf` divides by this degree, so counting an edge
+    // into a TTL-expired fact under-weights every graph-reached fact
+    // relative to the native backend (which filters expired targets).
+    let store = WasmStore::new(4);
+    store.store(1, "a", &[1.0, 0.0, 0.0, 0.0]).unwrap();
+    store.store(2, "b", &[0.0, 1.0, 0.0, 0.0]).unwrap();
+    store.relate(1, 2, "decided_in").unwrap();
+    // Re-storing the target with an already-passed expiry simulates a fact
+    // that expired after the edge was created (edges survive a re-store).
+    store
+        .store_with_ttl(2, "b", &[0.0, 1.0, 0.0, 0.0], 0)
+        .unwrap();
+
+    assert!(
+        store.relations(1).unwrap().is_empty(),
+        "an edge into an expired fact is dead and must not be returned"
+    );
+}
+
+#[test]
 fn test_query_columnar_rejects_reserved_field() {
     let store = WasmStore::new(4);
     let filters = vec![ColumnFilter {

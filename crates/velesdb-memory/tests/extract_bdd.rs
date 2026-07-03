@@ -129,6 +129,45 @@ fn recall_excludes_entity_hubs() {
 }
 
 #[test]
+fn recall_where_with_no_filters_excludes_entity_hubs_like_plain_recall() {
+    // Same regression family as the empty-map case below: `recall_where(q,
+    // k, &[])` used to hit `query_columnar` directly — a bare vector search
+    // with no hub exclusion — instead of behaving like the plain `recall`
+    // it semantically is when no column predicate narrows it.
+    let (_dir, svc) = service();
+    svc.remember_extracted("Alice and Bob both work in Rust.", &StubExtractor, None)
+        .expect("extract and remember");
+    let hits = svc.recall_where("rust", 8, &[]).expect("recall_where");
+    assert!(!hits.is_empty(), "the facts are still recalled");
+    assert!(
+        hits.iter().all(|hit| !hit.content.starts_with("Entity:")),
+        "recall_where with no filters must exclude hubs: {:?}",
+        hits.iter().map(|hit| &hit.content).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn recall_with_an_empty_filter_map_excludes_entity_hubs_like_no_filter() {
+    // Regression: `Some({})` (the natural `{}` idiom at the JS boundary) used
+    // to take the include-filter path, whose "a filter can never match a hub"
+    // shortcut only holds for NON-empty filters — an empty one matches every
+    // payload, so internal `Entity:` hubs ranked as results. It must behave
+    // exactly like `None`, mirroring `recall_fused`'s `matches_filter`.
+    let (_dir, svc) = service();
+    svc.remember_extracted("Alice and Bob both work in Rust.", &StubExtractor, None)
+        .expect("extract and remember");
+    let hits = svc
+        .recall("rust", 8, Some(&Metadata::new()))
+        .expect("recall");
+    assert!(!hits.is_empty(), "the facts are still recalled");
+    assert!(
+        hits.iter().all(|hit| !hit.content.starts_with("Entity:")),
+        "an empty filter map must exclude hubs exactly like no filter: {:?}",
+        hits.iter().map(|hit| &hit.content).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn why_seed_is_a_fact_not_a_hub() {
     let (_dir, svc) = service();
     svc.remember_extracted("Alice and Bob both work in Rust.", &StubExtractor, None)

@@ -38,37 +38,7 @@ const CODE_INTERNAL: &str = "INTERNAL";
 
 // --- Errors ------------------------------------------------------------
 
-/// Render a structured JS `Error` carrying a non-enumerable `code` property,
-/// mirroring [`crate::wasm_error::WasmError`]'s technique (kept as a separate,
-/// smaller helper here since this surface's error taxonomy — `MemoryError`'s
-/// `InvalidInput`/`NotFound`/`Internal` — is unrelated to core's `VELES-XXX`
-/// codes `WasmError` carries).
-#[cfg(target_arch = "wasm32")]
-fn structured_js_error(code: &str, message: &str) -> JsValue {
-    let err = js_sys::Error::new(message);
-    let descriptor = js_sys::Object::new();
-    let _ = js_sys::Reflect::set(
-        &descriptor,
-        &JsValue::from_str("value"),
-        &JsValue::from_str(code),
-    );
-    let _ = js_sys::Reflect::set(
-        &descriptor,
-        &JsValue::from_str("enumerable"),
-        &JsValue::FALSE,
-    );
-    let _ = js_sys::Reflect::set(&descriptor, &JsValue::from_str("writable"), &JsValue::FALSE);
-    js_sys::Object::define_property(&err, &JsValue::from_str("code"), &descriptor);
-    err.into()
-}
-
-/// Native-target fallback (no JS runtime off `wasm32`): a flat string
-/// carrying both the code and the message, so this module's own tests can
-/// assert on it without a browser.
-#[cfg(not(target_arch = "wasm32"))]
-fn structured_js_error(code: &str, message: &str) -> JsValue {
-    JsValue::from_str(&format!("[{code}] {message}"))
-}
+use crate::wasm_error::structured_js_error;
 
 fn category_code(e: &MemoryError) -> &'static str {
     use velesdb_memory::ErrorCategory;
@@ -272,7 +242,15 @@ impl From<Explanation> for ExplanationOut {
 }
 
 fn to_js(value: &impl Serialize) -> Result<JsValue, JsValue> {
-    serde_wasm_bindgen::to_value(value)
+    // `serialize_maps_as_objects`: `RecollectionOut.metadata` is a
+    // `serde_json::Value::Object`, which the DEFAULT serializer turns into an
+    // ES2015 `Map` — property access and `JSON.stringify` on it silently
+    // yield nothing, breaking the documented `Record<string, unknown>` shape
+    // and Node-binding parity. `Option::None` still serializes to
+    // `undefined`, matching the Node binding's absent-field convention.
+    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    value
+        .serialize(&serializer)
         .map_err(|e| structured_js_error(CODE_INTERNAL, &e.to_string()))
 }
 
