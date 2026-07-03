@@ -12,14 +12,14 @@ agent durable memory that never leaves your machine: it remembers decisions,
 recalls them semantically, and — the differentiator — **connects** them so it
 can answer *why* a decision was made, not just retrieve look-alike text.
 
-> **Shipped & published — as of 2026-06-30.** `velesdb-memory` **0.3.1** is live on
+> **Release 0.4.0 — 2026-07-03.** `velesdb-memory` **0.4.0** ships on
 > [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
-> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.3.1**
-> and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.5.0**.
-> **`cargo install velesdb-memory` works today.**
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.4.0**
+> and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.6.0**.
+> **`cargo install velesdb-memory` installs the latest published release.**
 
 Built on [VelesDB](https://velesdb.com)'s in-core Agent Memory SDK, which fuses
 three engines behind its memory tools:
@@ -93,7 +93,7 @@ neutral-judge basis — but the real difference is the *architecture*, not the s
 | Shape | one embedded binary (vector + graph + column) | orchestrator over Qdrant + Postgres | orchestrator (graph-centric) |
 | Runs | **100% local / offline** | cloud LLM in the loop | cloud LLM in the loop |
 | Explains | **`why()` returns the evidence path** | returns an answer | returns an answer |
-| LoCoMo (neutral PISA basis) | ~57-58% | ~55% | ~34% |
+| LoCoMo (neutral PISA basis) | ~56% | ~55% | ~34% |
 
 *Mem0's ~92% / Zep's ~84% headlines run on cloud GPT-4o with contested methodology; on
 the neutral basis the whole field sits far lower and close together — we do **not** claim

@@ -2,7 +2,7 @@
 name = "velesdb-memory"
 # Independent of the workspace version: velesdb-memory is a young MCP wrapper
 # with its own release cadence, decoupled from the core engine's 3.x line.
-version = "0.3.1"
+version = "0.4.0"
 edition.workspace = true
 rust-version.workspace = true
 license-file = "../../LICENSE"
@@ -19,7 +19,11 @@ categories = ["database", "command-line-utilities"]
 exclude = ["media/"]
 
 [dependencies]
-velesdb-core = { workspace = true, features = ["persistence"] }
+# `persistence` is NOT requested unconditionally here — see the `persistence`
+# feature below. A hardcoded `features = ["persistence"]` would force it on
+# for every consumer (Cargo unions requested features workspace-wide), even
+# one like velesdb-wasm that explicitly disables it to stay off tokio/mio.
+velesdb-core = { workspace = true, default-features = false }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -36,10 +40,16 @@ tokio = { workspace = true, optional = true }
 ureq = { version = "2", optional = true, default-features = false }
 
 [features]
-# The MCP server transport + binary. On by default so `cargo build` produces the
-# server; library consumers disable it to drop the rmcp/tokio server stack.
-default = ["mcp"]
-mcp = ["dep:rmcp", "dep:tokio"]
+# The MCP server transport + binary, and the native file-backed store, are on
+# by default so `cargo build` produces the server; library consumers disable
+# defaults to pick only what they need.
+default = ["mcp", "persistence"]
+mcp = ["dep:rmcp", "dep:tokio", "persistence"]
+# NativeStore, the file-backed MemoryStore (velesdb-core's Database/AgentMemory
+# — tokio/mio/memmap2). On by default; a backend with its own MemoryStore impl
+# (e.g. velesdb-wasm's in-memory one) builds with `default-features = false`
+# and omits this, so those heavy deps never enter its dependency graph.
+persistence = ["velesdb-core/persistence"]
 # Real on-device semantic recall via a local Ollama embeddings endpoint. Off by
 # default so the shipped binary stays tiny, zero-dependency, and fully offline.
 ollama = ["dep:ureq"]

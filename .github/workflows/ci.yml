@@ -26,6 +26,7 @@ on:
       - 'demos/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'deny.toml'
       - 'sonar-project.properties'
       - '.github/workflows/**'
   pull_request:
@@ -42,6 +43,7 @@ on:
       - 'demos/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'deny.toml'
       - 'sonar-project.properties'
       - '.github/workflows/**'
   # Manual trigger so coverage can be refreshed on demand (e.g. after a
@@ -268,7 +270,7 @@ jobs:
   # ===========================================================================
 
   # ===========================================================================
-  # WASM Build Check (compile-only, no tests — fast gate)
+  # WASM Build Check (compile check + wasm-bindgen test suites)
   # NOTE: compat-matrix.yml also checks WASM; this job provides a dedicated
   # signal visible in the ci-success summary.
   # ===========================================================================
@@ -293,6 +295,18 @@ jobs:
 
       - name: Check WASM build (no default features)
         run: cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
+
+      # The wasm-bindgen suites (tests/*.rs gated on target_arch = "wasm32",
+      # e.g. memory_wedge_web.rs's JS-marshalling regression tests) compile
+      # to empty binaries under the native test job and are invisible to the
+      # cargo check above — without this step they never run in CI at all.
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6 # v2.82.6
+        with:
+          tool: wasm-pack
+
+      - name: Run wasm-bindgen tests (Node)
+        run: wasm-pack test --node crates/velesdb-wasm
 
   # ===========================================================================
   # OpenAPI Drift Check

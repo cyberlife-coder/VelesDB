@@ -26,6 +26,16 @@ export * from './types';
 export { VelesDB, AgentMemoryClient } from './client';
 export { WasmBackend } from './backends/wasm';
 export { RestBackend } from './backends/rest';
+export { MemoryService } from './memory';
+export type {
+  MemoryLink,
+  MemoryRecollection,
+  MemoryColumnFilter,
+  MemoryFusionOptions,
+  MemoryNode,
+  MemoryEdge,
+  MemoryExplanation,
+} from './memory';
 export { VelesQLBuilder, velesql } from './query-builder';
 export type {
   RelDirection,

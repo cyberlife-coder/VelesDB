@@ -7,6 +7,47 @@ released on its own `velesdb-memory-vX.Y.Z` tag.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-03
+
+### Added
+
+- **Fused vector+graph recall (`recall_fused` / `recall_fused_reranked`)**:
+  vector recall combined with the graph reach `why()` walks, re-ranked with
+  the entity-idf weighting validated on HotpotQA/TimeQA/LoCoMo. Exposed on
+  the Node binding as `recallFused` (with `{hops, graphBoost, pool}` options,
+  all DoS-clamped). Optional second-stage re-ranking via a bring-your-own
+  `Reranker`.
+- **Every recall path now includes the fact's caller-supplied metadata
+  (`Recollection.metadata`)** — `recall`, `recall_where`, and `recall_fused`
+  alike — enabling dated/chronological recall recipes (see
+  `docs/guides/TEMPORAL_MEMORY.md`). Reserved system keys are never exposed.
+- **Pluggable storage backend (`MemoryStore` trait)**: the wedge
+  orchestration is now generic over its storage, with the native file-backed
+  engine as the default `NativeStore` (existing callers see no change) and
+  `velesdb-wasm` providing an in-memory backend so the full wedge runs in
+  the browser. `persistence` becomes an optional, default-on feature.
+- New `MemoryError::RollbackFailed` variant: a `remember` whose edge write
+  failed after the fact was stored AND whose compensating delete also failed
+  now reports both errors instead of silently keeping the fact.
+
+### Fixed
+
+- `recall_fused`'s metadata `filter` is enforced on graph-reached facts, not
+  just the vector seed — a fact outside the caller's scope (e.g. another
+  tenant) can no longer leak in through a graph connection.
+- Score normalisation no longer sign-inverts a negative (in-range Cosine)
+  vector score into an unbounded magnitude that dwarfed the whole ranking.
+- The fused pool depth is DoS-clamped at the crate level (the default
+  `k × 8` was previously unbounded), and metadata lookups across
+  `recall`/`recall_fused` are batched into single storage round trips.
+- An empty-but-present filter (`{}` at a JS boundary) now behaves exactly
+  like no filter: entity hubs stay excluded from `recall`, `why`, and
+  `recall_fused`; `recall_where` with no predicates routes through `recall`.
+- `remember` validates all link input (targets AND relation labels) before
+  any write, and rolls back a freshly-created fact if an edge write fails —
+  a failed call can no longer overwrite a pre-existing fact's metadata or
+  arm a TTL on a permanent memory.
+
 ## [0.3.1] - 2026-06-30
 
 ### Security

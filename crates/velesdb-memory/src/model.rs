@@ -8,7 +8,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// A typed link from a freshly remembered fact to an existing memory.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -30,6 +30,13 @@ pub struct Recollection {
     pub score: f32,
     /// Stored fact content.
     pub content: String,
+    /// Caller-supplied structured metadata stored with the fact (the `ColumnStore`
+    /// facet), with reserved system keys (`content`, `_veles_*`) excluded. `None`
+    /// when the fact carries no caller metadata. This is what makes dated recall
+    /// work: store a date (e.g. `occurred_at`) and it round-trips here, so a
+    /// `recall_where` result can be ordered into a chronological timeline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Map<String, Value>>,
 }
 
 /// Comparison operator for a [`ColumnFilter`] in
@@ -52,7 +59,11 @@ pub enum ColumnOp {
 }
 
 impl ColumnOp {
-    /// The `VelesQL` operator token.
+    /// The `VelesQL` operator token. Only [`crate::storage::NativeStore`]
+    /// builds `VelesQL` text; a non-`persistence` backend (e.g.
+    /// `velesdb-wasm`'s in-memory one) filters `ColumnFilter`s directly, with
+    /// no query-string step.
+    #[cfg(feature = "persistence")]
     #[must_use]
     pub(crate) fn as_sql(self) -> &'static str {
         match self {
@@ -81,6 +92,40 @@ pub struct ColumnFilter {
     pub op: ColumnOp,
     /// Value to compare against (numbers, strings, booleans).
     pub value: Value,
+}
+
+/// Tuning knobs for
+/// [`MemoryService::recall_fused`](crate::service::MemoryService::recall_fused).
+///
+/// `Default` matches the values validated on the LoCoMo/HotpotQA/TimeQA
+/// benchmarks (`examples/locomo`, `examples/multihop`, `examples/timeqa`):
+/// `graph_boost = 0.15` was the optimum of a sweep (0.30/0.50/0.80 all
+/// degraded ranking quality), and `hops = 2` is the minimum depth at which a
+/// fact wired only through a shared topic (the `remember_extracted` hub
+/// scaffolding: fact → hub is hop 1, hub → sibling fact is hop 2) becomes
+/// reachable at all.
+#[derive(Debug, Clone, Copy)]
+pub struct FusionOptions {
+    /// Hops the graph traversal walks from the top vector seed.
+    pub hops: usize,
+    /// Weight added to a graph-reached fact's normalised vector score.
+    pub graph_boost: f64,
+    /// Depth of the oversampled vector pool fusion re-ranks. `None` uses the
+    /// proven default (`k` scaled up, floored at 64 — see
+    /// `crate::fusion::pool_size`). Widen this to give
+    /// [`MemoryService::recall_fused_reranked`](crate::service::MemoryService::recall_fused_reranked)'s
+    /// reranker more candidates to work with.
+    pub pool: Option<usize>,
+}
+
+impl Default for FusionOptions {
+    fn default() -> Self {
+        Self {
+            hops: 2,
+            graph_boost: 0.15,
+            pool: None,
+        }
+    }
 }
 
 /// A node in an [`Explanation`] subgraph.

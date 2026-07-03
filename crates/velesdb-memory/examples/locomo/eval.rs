@@ -20,9 +20,10 @@ use serde_json::json;
 use velesdb_memory::{ColumnFilter, ColumnOp};
 
 use crate::dataset::{Category, Qa};
+use crate::dump::{self, QuestionTrace};
 use crate::ingest::Store;
 use crate::judge;
-use crate::ollama_gen::Generator;
+use crate::ollama_gen::{Generator, TokenUsage};
 
 /// How many facts graph traversal injected into a context, and how many
 /// graph-mode contexts received at least one. Lets the report state how *active*
@@ -93,15 +94,17 @@ pub struct EvalCfg {
 /// A retrieved fact carried into the generation context. `score` is its vector
 /// similarity (0.0 for facts found only by graph traversal); `graph_weight` is
 /// its graph-link strength in `[0, 1]` (0.0 for facts not reached by the graph).
+/// `pub(crate)` so `dump.rs` can serialise it for `--dump` without a second,
+/// divergent copy of these fields.
 #[derive(Clone)]
-struct RetrievedFact {
-    id: u64,
-    text: String,
-    dia_ids: Vec<String>,
-    score: f64,
-    graph_weight: f64,
+pub(crate) struct RetrievedFact {
+    pub(crate) id: u64,
+    pub(crate) text: String,
+    pub(crate) dia_ids: Vec<String>,
+    pub(crate) score: f64,
+    pub(crate) graph_weight: f64,
     /// Session date (`YYYYMMDD`, 0 if unknown) for date-stamping the context.
-    ts: i64,
+    pub(crate) ts: i64,
 }
 
 /// Outcome of one QA under one mode.
@@ -114,38 +117,131 @@ pub struct ModeResult {
     pub f1: Option<f64>,
 }
 
-/// Evaluate one QA end-to-end under the chosen mode.
+/// Evaluate one QA end-to-end under the chosen mode. `trace`, when set, also
+/// writes one JSONL record to the `--dump` sink for the `LoCoMo` research
+/// analysis. Purely observational: it only reads values this function already
+/// computes and never changes a prompt string, so the generation/judge cache
+/// (keyed on `model + prompt`, see `ollama_gen.rs`) is identical whether
+/// `--dump` is on or off.
 pub fn evaluate(
     store: &Store,
     generator: &Generator,
     qa: &Qa,
     cfg: EvalCfg,
     graph_on: bool,
+    trace: Option<QuestionTrace<'_>>,
 ) -> Result<ModeResult, Box<dyn Error>> {
-    let facts = retrieve(store, &qa.question, cfg, graph_on, qa.category)?;
-    let evidence_hit = facts
-        .iter()
-        .any(|f| f.dia_ids.iter().any(|id| qa.evidence.contains(id)));
-    let dated: Vec<(i64, String)> = facts.into_iter().map(|f| (f.ts, f.text)).collect();
-    let date_on = cfg.date_context && (!cfg.date_routed || is_temporal_question(&qa.question));
-    // The scaffold only fires where dates apply (temporal-framed questions).
-    let scaffold_on = cfg.temporal_scaffold && date_on;
-    let candidate = judge::answer(
+    let (facts, raw) = retrieve(
+        store,
+        &qa.question,
+        cfg,
+        graph_on,
+        qa.category,
+        trace.is_some(),
+    )?;
+    let evidence_hit = any_evidence_hit(&facts, &qa.evidence);
+    // Cloned (not moved) so `facts` survives to build the `--dump` record below
+    // when a trace is requested — a handful of short strings, negligible next
+    // to the network round-trip `judge::answer` makes right after.
+    let dated: Vec<(i64, String)> = facts.iter().map(|f| (f.ts, f.text.clone())).collect();
+    let temporal = temporal_flags(&qa.question, cfg);
+    let now_ts = store.latest_ts();
+    let (candidate, usage) = judge::answer(
         generator,
         &qa.question,
         &dated,
-        date_on,
-        store.latest_ts(),
-        scaffold_on,
+        temporal.date_on,
+        now_ts,
+        temporal.scaffold_on,
         cfg.cot,
         cfg.claude_gen,
     )?;
     let (correct, f1) = score(generator, qa, &candidate, cfg.claude_judge)?;
-    Ok(ModeResult {
+    let result = ModeResult {
         evidence_hit,
         correct,
         f1,
-    })
+    };
+    maybe_dump(
+        trace,
+        &record_inputs(
+            qa, cfg, graph_on, &raw, &facts, &candidate, usage, &result, &temporal, now_ts,
+        ),
+    )?;
+    Ok(result)
+}
+
+/// Build this question's `--dump` inputs from what `evaluate` has already
+/// computed — kept out of `evaluate` so that function stays within budget.
+#[allow(clippy::too_many_arguments)]
+fn record_inputs<'a>(
+    qa: &'a Qa,
+    cfg: EvalCfg,
+    graph_on: bool,
+    raw: &'a [RetrievedFact],
+    reranked: &'a [RetrievedFact],
+    candidate: &'a str,
+    usage: Option<TokenUsage>,
+    verdict: &ModeResult,
+    temporal: &TemporalFlags,
+    latest_ts: i64,
+) -> dump::RecordInputs<'a> {
+    dump::RecordInputs {
+        qa,
+        cfg,
+        graph_on,
+        raw,
+        reranked,
+        candidate,
+        usage,
+        correct: verdict.correct,
+        f1: verdict.f1,
+        evidence_hit: verdict.evidence_hit,
+        date_on: temporal.date_on,
+        scaffold_on: temporal.scaffold_on,
+        is_temporal_trigger: temporal.is_temporal_trigger,
+        latest_ts,
+    }
+}
+
+/// Does any retrieved fact's source overlap the gold `evidence`?
+fn any_evidence_hit(facts: &[RetrievedFact], evidence: &[String]) -> bool {
+    facts
+        .iter()
+        .any(|f| f.dia_ids.iter().any(|id| evidence.contains(id)))
+}
+
+/// Whether a question is temporally framed, and whether dating/the scaffold
+/// prompt should fire for it — computed once, fed to both the answerer and
+/// the `--dump` record.
+struct TemporalFlags {
+    is_temporal_trigger: bool,
+    date_on: bool,
+    scaffold_on: bool,
+}
+
+/// The scaffold only fires where dates apply (temporally-framed questions).
+fn temporal_flags(question: &str, cfg: EvalCfg) -> TemporalFlags {
+    let is_temporal_trigger = is_temporal_question(question);
+    let date_on = cfg.date_context && (!cfg.date_routed || is_temporal_trigger);
+    let scaffold_on = cfg.temporal_scaffold && date_on;
+    TemporalFlags {
+        is_temporal_trigger,
+        date_on,
+        scaffold_on,
+    }
+}
+
+/// Write a `--dump` record when `trace` is set; a no-op otherwise. Isolated so
+/// `evaluate`'s own complexity/length stays within the crate's budget.
+fn maybe_dump(
+    trace: Option<QuestionTrace<'_>>,
+    inputs: &dump::RecordInputs<'_>,
+) -> Result<(), Box<dyn Error>> {
+    let Some(trace) = trace else {
+        return Ok(());
+    };
+    dump::write_record(trace, inputs)
 }
 
 /// The source `dia_id` lists of the budgeted top-`k` facts retrieved for
@@ -161,7 +257,8 @@ pub fn retrieved_dia_ids(
     graph_on: bool,
     category: Category,
 ) -> Result<Vec<Vec<String>>, Box<dyn Error>> {
-    Ok(retrieve(store, question, cfg, graph_on, category)?
+    Ok(retrieve(store, question, cfg, graph_on, category, false)?
+        .0
         .into_iter()
         .map(|f| f.dia_ids)
         .collect())
@@ -217,7 +314,12 @@ fn score(
 const POOL_FACTOR: usize = 8;
 const POOL_MIN: usize = 64;
 
-/// Retrieve the equal-budget fact set for `question` under the chosen mode.
+/// Retrieve the equal-budget fact set for `question` under the chosen mode,
+/// plus — when `want_raw` — the untruncated pre-budget candidates. The raw
+/// list is read from the same pool/traversal this function already computes;
+/// there is no second query and no change to the real (truncated) selection,
+/// so passing `want_raw = false` (every call site except `--dump`) costs one
+/// extra empty `Vec` and nothing else.
 ///
 /// Vector mode takes the top `k` of the vector pool. Graph mode **fuses**: it
 /// re-ranks the union of the vector pool and the facts `why()` reaches by
@@ -232,7 +334,8 @@ fn retrieve(
     cfg: EvalCfg,
     graph_on: bool,
     category: Category,
-) -> Result<Vec<RetrievedFact>, Box<dyn Error>> {
+    want_raw: bool,
+) -> Result<(Vec<RetrievedFact>, Vec<RetrievedFact>), Box<dyn Error>> {
     // Route the graph to multi-hop questions only when asked: elsewhere it was
     // neutral-to-harmful, so the pure vector path is the safer default.
     let use_graph = graph_on && (!cfg.multihop_only || matches!(category, Category::MultiHop));
@@ -240,17 +343,37 @@ fn retrieve(
         // Vector-only: no ColumnStore predicate, no graph. A date window still
         // applies on the fused path below for time-scoped questions.
         let pool = vector_pool(store, question, pool_size(cfg.k), &[])?;
+        let raw = raw_if_wanted(&pool, &[], want_raw);
         if cfg.bm25 {
-            return Ok(rrf_fuse(pool, store, question, cfg.k));
+            return Ok((rrf_fuse(pool, store, question, cfg.k), raw));
         }
-        return Ok(pool.into_iter().take(cfg.k).collect());
+        return Ok((pool.into_iter().take(cfg.k).collect(), raw));
     }
     // Fused mode: a ColumnStore date window when the question is time-scoped,
     // plus graph traversal — all three engines.
     let filters = temporal_filters(question);
     let pool = vector_pool(store, question, pool_size(cfg.k), &filters)?;
     let reached = graph_reached(store, question, cfg)?;
-    Ok(fuse(pool, &reached, cfg))
+    let raw = raw_if_wanted(&pool, &reached, want_raw);
+    Ok((fuse(pool, &reached, cfg), raw))
+}
+
+/// `pool ∪ reached`, uncloned (empty) unless `--dump` actually wants it — kept
+/// out of `retrieve` so its branching doesn't add to that function's CCN.
+fn raw_if_wanted(
+    pool: &[RetrievedFact],
+    reached: &[RetrievedFact],
+    want_raw: bool,
+) -> Vec<RetrievedFact> {
+    if !want_raw {
+        return Vec::new();
+    }
+    let mut all = pool.to_vec();
+    // Mirror `fuse`'s own dedup: a fact both vector-ranked and graph-reached
+    // must appear once in the raw pool, not twice with split scores.
+    let present: HashSet<u64> = all.iter().map(|f| f.id).collect();
+    all.extend(reached.iter().filter(|f| !present.contains(&f.id)).cloned());
+    all
 }
 
 /// Reciprocal Rank Fusion of the dense vector pool with a BM25 lexical ranking:
@@ -543,6 +666,15 @@ fn fuse(pool: Vec<RetrievedFact>, reached: &[RetrievedFact], cfg: EvalCfg) -> Ve
     let mut candidates: Vec<RetrievedFact> = pool;
     let present: HashSet<u64> = candidates.iter().map(|f| f.id).collect();
     candidates.extend(reached.iter().filter(|f| !present.contains(&f.id)).cloned());
+    // A fact both vector-ranked and graph-reached keeps its pool copy (above),
+    // whose `graph_weight` is the vector pool's hardcoded 0.0. `fused_score`
+    // scores it correctly via `weights` regardless, but any consumer reading
+    // the struct field directly (the `--dump` instrumentation) needs it synced.
+    for candidate in &mut candidates {
+        if let Some(&weight) = weights.get(&candidate.id) {
+            candidate.graph_weight = weight;
+        }
+    }
 
     candidates.sort_by(|a, b| {
         fused_score(b, &weights, max_score, cfg)
@@ -579,3 +711,7 @@ fn record_injection(injected: usize) {
         GRAPH_ACTIVE_CONTEXTS.fetch_add(1, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+#[path = "eval/eval_tests.rs"]
+mod tests;

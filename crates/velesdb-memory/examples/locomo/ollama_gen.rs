@@ -33,6 +33,23 @@ pub struct Generator {
     agent: ureq::Agent,
 }
 
+/// Ollama's reported token usage for one generation call. Only available on a
+/// live call (Ollama's `/api/generate` response), never on a cache hit or a
+/// Claude-CLI call — callers must treat `None` as "not recorded", not "zero".
+#[derive(Clone, Copy)]
+pub struct TokenUsage {
+    pub prompt: u64,
+    pub completion: u64,
+}
+
+/// One live-call reply: the answer text plus whatever usage counters Ollama
+/// reported alongside it.
+struct GenReply {
+    text: String,
+    prompt_eval_count: Option<u64>,
+    eval_count: Option<u64>,
+}
+
 impl Generator {
     /// Build a generator. `model` falls back to [`DEFAULT_MODEL`] when empty;
     /// `cache_dir` is created if missing.
@@ -62,18 +79,32 @@ impl Generator {
     /// cached entry is treated as a miss, so a transient blank reply is never
     /// trusted as a permanent answer.
     pub fn generate(&self, prompt: &str) -> Result<String, Box<dyn Error>> {
+        Ok(self.generate_traced(prompt)?.0)
+    }
+
+    /// Same as [`Self::generate`], but also returns Ollama's reported token
+    /// usage when this call actually reached the model. A cache hit carries no
+    /// usage counters — `None`, honestly, rather than a guessed value.
+    pub fn generate_traced(
+        &self,
+        prompt: &str,
+    ) -> Result<(String, Option<TokenUsage>), Box<dyn Error>> {
         let key = self.key(prompt);
         let path = self.cache_dir.join(format!("{key}.txt"));
         if let Ok(cached) = fs::read_to_string(&path) {
             if !cached.trim().is_empty() {
-                return Ok(cached);
+                return Ok((cached, None));
             }
         }
-        let answer = self.call(prompt)?;
-        if !answer.trim().is_empty() {
-            self.store(&key, &path, &answer)?;
+        let reply = self.call(prompt)?;
+        if !reply.text.trim().is_empty() {
+            self.store(&key, &path, &reply.text)?;
         }
-        Ok(answer)
+        let usage = match (reply.prompt_eval_count, reply.eval_count) {
+            (Some(prompt), Some(completion)) => Some(TokenUsage { prompt, completion }),
+            _ => None,
+        };
+        Ok((reply.text, usage))
     }
 
     /// Atomically persist `answer`: write a process-unique temp file, then
@@ -88,11 +119,11 @@ impl Generator {
         Ok(())
     }
 
-    /// POST to Ollama with bounded retries; returns the trimmed `response`.
-    /// The body is serialised with `serde_json` and sent as a raw string so the
-    /// crate's `ureq` can keep `default-features = false` (no bundled TLS/json),
-    /// leaving the shipped server binary tiny.
-    fn call(&self, prompt: &str) -> Result<String, Box<dyn Error>> {
+    /// POST to Ollama with bounded retries; returns the trimmed `response` plus
+    /// any usage counters. The body is serialised with `serde_json` and sent as
+    /// a raw string so the crate's `ureq` can keep `default-features = false`
+    /// (no bundled TLS/json), leaving the shipped server binary tiny.
+    fn call(&self, prompt: &str) -> Result<GenReply, Box<dyn Error>> {
         let body = serde_json::json!({
             "model": self.model,
             "prompt": prompt,
@@ -191,15 +222,27 @@ impl Generator {
     }
 }
 
-/// Pull the `response` string out of Ollama's JSON envelope.
-fn parse_response(resp: ureq::Response) -> Result<String, Box<dyn Error>> {
+/// Pull the `response` string plus the `prompt_eval_count`/`eval_count` usage
+/// fields (absent on some Ollama versions — recorded as `None`, not guessed)
+/// out of the JSON envelope.
+fn parse_response(resp: ureq::Response) -> Result<GenReply, Box<dyn Error>> {
     let raw = resp.into_string()?;
     let value: serde_json::Value = serde_json::from_str(&raw)?;
     let text = value
         .get("response")
         .and_then(serde_json::Value::as_str)
-        .ok_or("Ollama reply had no `response` field")?;
-    Ok(text.trim().to_string())
+        .ok_or("Ollama reply had no `response` field")?
+        .trim()
+        .to_string();
+    let prompt_eval_count = value
+        .get("prompt_eval_count")
+        .and_then(serde_json::Value::as_u64);
+    let eval_count = value.get("eval_count").and_then(serde_json::Value::as_u64);
+    Ok(GenReply {
+        text,
+        prompt_eval_count,
+        eval_count,
+    })
 }
 
 /// Flatten a `ureq` error into a labelled message for the retry log.

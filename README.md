@@ -107,7 +107,7 @@ Built-in memory for AI agents — semantic, episodic, and procedural. No externa
 
 Most "agent memory" is vector recall: it finds text that *looks like* your query. VelesDB's high-level `MemoryService` adds the part that's missing — it **connects** memories with typed links, so it can answer *why* something happened by walking the graph to context that shares **no words** with your question. The store is on disk, so it works across sessions. Offline, deterministic, no API key, no model download:
 
-Where Mem0 and Zep are cloud-coupled orchestrators (a service mesh over Qdrant + Postgres, with a cloud LLM in the loop), this is **one local binary** — same tier as Mem0 on LoCoMo QA (~57-58% vs ~55%, neutral basis), ahead of Zep, but fully offline with an auditable `why()` evidence path. Pick it when your data can't leave the box.
+Where Mem0 and Zep are cloud-coupled orchestrators (a service mesh over Qdrant + Postgres, with a cloud LLM in the loop), this is **one local binary** — same tier as Mem0 on LoCoMo QA (~56% vs ~55%, neutral basis, full 10-conversation set), ahead of Zep, but fully offline with an auditable `why()` evidence path. Pick it when your data can't leave the box.
 
 ![recall() finds the booking but misses the reason; why() reaches it through typed links, across a session restart](examples/agent_memory/why_across_sessions.gif)
 
@@ -124,7 +124,7 @@ mem.why("why the aisle seat on Robert's flight?")   # walks booking → reason �
 
 Memories are permanent by default; `forget(id)` deletes one, and `remember(…, ttl_seconds=…)` (or a server-wide `VELESDB_MEMORY_DEFAULT_TTL`) gives a fact a durable, restart-surviving expiry.
 
-The same wedge ships in **Python** (`pip install velesdb`), **Node** (`npm i @wiscale/velesdb-memory-node`), and as a local **[MCP server](crates/velesdb-memory)**.
+The same wedge ships in **Python** (`pip install velesdb`), **Node** (`npm i @wiscale/velesdb-memory-node`), as a local **[MCP server](crates/velesdb-memory)**, and — in-memory only, no disk access under WASM — in the **[TypeScript SDK](sdks/typescript)** (`npm i @wiscale/velesdb-sdk`), running entirely in the browser or Node.js with no server.
 
 **Four runnable ways to see it** — each shows what plain vector recall misses and `why()` recovers:
 
@@ -544,6 +544,7 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | **WASM** | [velesdb-wasm](crates/velesdb-wasm) — Browser-side vector search | `npm install @wiscale/velesdb-wasm` |
 | **Agent memory (MCP)** | [velesdb-memory](crates/velesdb-memory) — local-first MCP memory server (`why()` wedge) | `cargo install velesdb-memory` |
 | **Agent memory (Node)** | [velesdb-node](crates/velesdb-node) — in-process napi binding of the memory wedge | `npm install @wiscale/velesdb-memory-node` |
+| **Agent memory (TS/WASM)** | [typescript-sdk](sdks/typescript) `MemoryService` — the wedge in the browser or Node.js, in-memory only (no disk under WASM) | `npm install @wiscale/velesdb-sdk` |
 | **Mobile** | [velesdb-mobile](crates/velesdb-mobile) — iOS (Swift) & Android (Kotlin) | [Build instructions](docs/guides/INSTALLATION.md#-mobile-iosandroid) |
 | **Desktop** | [tauri-plugin](crates/tauri-plugin-velesdb) — Tauri v2 AI-powered apps | `cargo add tauri-plugin-velesdb` |
 | **LangChain** | [langchain-velesdb](integrations/langchain) — Official VectorStore | [From source](integrations/langchain/README.md) |

@@ -9,7 +9,7 @@
 use std::error::Error;
 
 use crate::dataset::Qa;
-use crate::ollama_gen::Generator;
+use crate::ollama_gen::{Generator, TokenUsage};
 use crate::parse::{normalize, tokens};
 
 const ABSTAIN: &str = "NO_ANSWER";
@@ -19,7 +19,9 @@ const ABSTAIN: &str = "NO_ANSWER";
 /// When `date_context` is set, every dated fact is prefixed with its date and
 /// the facts are ordered chronologically — the session date is retrieved but
 /// otherwise invisible to the answerer, which makes temporal questions
-/// unanswerable despite high evidence recall.
+/// unanswerable despite high evidence recall. Returns the token usage Ollama
+/// reported for the generation call, when available (`None` on a cache hit or
+/// when `claude_gen` routes to the Claude CLI, which reports no usage).
 // benchmark harness: ablation knobs threaded through the harness
 #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub fn answer(
@@ -31,7 +33,7 @@ pub fn answer(
     scaffold: bool,
     cot: bool,
     claude_gen: bool,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<(String, Option<TokenUsage>), Box<dyn Error>> {
     let context = if facts.is_empty() {
         "(no facts retrieved)".to_string()
     } else {
@@ -64,8 +66,8 @@ ordering, or date the question asks for. If the timeline does not contain the \
 answer, the final answer is {ABSTAIN}. End with a line exactly of the form:\n\
 FINAL: <answer in a few words>"
         );
-        let raw = gen(generator, &prompt, claude_gen)?;
-        return Ok(extract_final(&raw));
+        let (raw, usage) = gen(generator, &prompt, claude_gen)?;
+        return Ok((extract_final(&raw), usage));
     }
     if cot {
         // General chain-of-thought: reason over the facts, then a parseable FINAL.
@@ -77,8 +79,8 @@ question, then determine the answer. If the facts do not contain the answer, the
 final answer is {ABSTAIN}. End with a line exactly of the form:\n\
 FINAL: <answer in a few words>"
         );
-        let raw = gen(generator, &prompt, claude_gen)?;
-        return Ok(extract_final(&raw));
+        let (raw, usage) = gen(generator, &prompt, claude_gen)?;
+        return Ok((extract_final(&raw), usage));
     }
     let prompt = format!(
         "Answer the question using ONLY the memory facts below. If the facts do \
@@ -89,12 +91,17 @@ explanation.\n\nFacts:\n{context}\n\nQuestion: {question}\nAnswer:"
 }
 
 /// Generate an answer with either the strong external model (Claude via CLI) or
-/// the local model, depending on `claude_gen`.
-fn gen(generator: &Generator, prompt: &str, claude_gen: bool) -> Result<String, Box<dyn Error>> {
+/// the local model, depending on `claude_gen`. Only the local model reports
+/// token usage; the Claude CLI path always carries `None`.
+fn gen(
+    generator: &Generator,
+    prompt: &str,
+    claude_gen: bool,
+) -> Result<(String, Option<TokenUsage>), Box<dyn Error>> {
     if claude_gen {
-        generator.judge(prompt)
+        Ok((generator.judge(prompt)?, None))
     } else {
-        generator.generate(prompt)
+        generator.generate_traced(prompt)
     }
 }
 
@@ -113,15 +120,20 @@ fn extract_final(text: &str) -> String {
 /// Render a `YYYYMMDD` session key as `YYYY-MM-DD`, or `None` when unknown (0)
 /// or malformed, so an undated fact is shown without a misleading date prefix.
 fn fmt_date(ts: i64) -> Option<String> {
+    let (year, month, day) = decompose_ymd(ts)?;
+    Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+/// Split a `YYYYMMDD` session key into `(year, month, day)`, or `None` when
+/// unknown (`ts <= 0`) or the month/day is out of range. Shared by every
+/// consumer of this key (date formatting here, day-span math in `dump.rs`) so
+/// the validity rule lives in exactly one place.
+pub(crate) fn decompose_ymd(ts: i64) -> Option<(i64, i64, i64)> {
     if ts <= 0 {
         return None;
     }
     let (year, month, day) = (ts / 10_000, (ts / 100) % 100, ts % 100);
-    if (1..=12).contains(&month) && (1..=31).contains(&day) {
-        Some(format!("{year:04}-{month:02}-{day:02}"))
-    } else {
-        None
-    }
+    ((1..=12).contains(&month) && (1..=31).contains(&day)).then_some((year, month, day))
 }
 
 /// True when the model declined to answer (the correct move on adversarial QA).
@@ -160,7 +172,7 @@ INCORRECT.\n\nQuestion: {question}\nReference answer: {gold}\nCandidate answer: 
     );
     // The judge can run on the stronger Claude model (vendor-neutral, fairer) or
     // the local model; the candidate answer itself is always the local system.
-    let raw = gen(generator, &prompt, use_claude)?;
+    let (raw, _usage) = gen(generator, &prompt, use_claude)?;
     let verdict = normalize(&raw);
     // Compare the leading word so "incorrect" never matches "correct" by
     // substring, and a stray verbose reply still grades on its first verdict word.

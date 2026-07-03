@@ -33,6 +33,19 @@ ignore = [
     { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version: tauri transitive, unmaintained" },
     { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident: tauri transitive, unmaintained" },
 
+    # ── quick-xml / plist transitive (tauri Info.plist tooling) ────────
+    # quick-xml 0.38.4 comes in via plist 1.8.0 (tauri's Info.plist reader/
+    # writer, tauri-codegen/tauri-utils/tauri-build all depend on it too).
+    # Both advisories are XML-parsing DoS only (quadratic attribute scan /
+    # unbounded namespace allocation) — not memory-unsafety, and only
+    # reachable if this stack parses untrusted XML, which it doesn't (local
+    # Info.plist files only). No fix yet: plist's latest release (1.9.0,
+    # 2026-04-26) still requires quick-xml ^0.39.2; the advisories need
+    # >=0.41.0. Revisit when plist ships a release depending on quick-xml
+    # >=0.41 (tracked upstream: https://github.com/ebarnard/rust-plist).
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml: tauri/plist transitive, DoS-only, no fix yet (plist 1.9.0 caps at quick-xml 0.39)" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml: tauri/plist transitive, DoS-only, no fix yet (plist 1.9.0 caps at quick-xml 0.39)" },
+
     # ── velesdb-cli transitive ────────────────────────────────────────
     { id = "RUSTSEC-2024-0384", reason = "instant: velesdb-cli transitive (clap/indicatif chain), unmaintained" },
 

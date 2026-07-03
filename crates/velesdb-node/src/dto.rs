@@ -30,6 +30,20 @@ pub struct ColumnFilterJs {
     pub value: Value,
 }
 
+/// Tuning knobs for `recallFused` (input). Every field is optional; an
+/// omitted field falls back to the proven default from
+/// [`velesdb_memory::FusionOptions::default`] (via
+/// [`crate::convert::to_fusion_options`]).
+#[napi(object)]
+pub struct FusionOptionsJs {
+    /// Hops the graph traversal walks from the top vector seed.
+    pub hops: Option<u32>,
+    /// Weight added to a graph-reached fact's normalised vector score.
+    pub graph_boost: Option<f64>,
+    /// Depth of the oversampled vector pool fusion re-ranks.
+    pub pool: Option<u32>,
+}
+
 /// One recalled memory (output of `recall` / `recallWhere`).
 #[napi(object)]
 pub struct RecollectionJs {
@@ -39,6 +53,11 @@ pub struct RecollectionJs {
     pub score: f64,
     /// Stored fact content.
     pub content: String,
+    /// Caller-supplied structured metadata stored with the fact, or
+    /// `undefined` when the fact carries none. `recall`, `recallWhere`, and
+    /// `recallFused` all populate this; `why()`'s subgraph nodes don't carry
+    /// metadata (a different shape, `MemoryNodeJs`).
+    pub metadata: Option<Value>,
 }
 
 impl From<Recollection> for RecollectionJs {
@@ -47,6 +66,7 @@ impl From<Recollection> for RecollectionJs {
             id: id_to_string(r.id),
             score: f64::from(r.score),
             content: r.content,
+            metadata: r.metadata.map(Value::Object),
         }
     }
 }

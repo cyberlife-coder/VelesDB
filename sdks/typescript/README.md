@@ -2,9 +2,13 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-**v3.5.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
+**v3.6.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
 
-## What's New (unreleased)
+## What's New in v3.6.0
+
+- **Memory wedge, running in-browser via WASM**: new `MemoryService` class (`remember`/`recall`/`recallWhere`/`recallFused`/`relate`/`forget`/`why`) — the same local-first agent memory as `@wiscale/velesdb-memory-node` and the Python binding, now reachable without a server. In-memory only in this release (no filesystem access under WASM); see [Memory Wedge](#memory-wedge-agent-memory) below. Requires `@wiscale/velesdb-wasm` >= 3.6.0 — fresh installs resolve it automatically; on an upgrade, refresh the dependency in your lockfile (`init()` reports the exact cause otherwise).
+
+## What's New in v3.0.0
 
 - **Streaming ingestion enablement (2026-06-14)** (REST backend): `enableStreaming(collection, config?)` turns on the bounded streaming-ingestion channel before `streamInsert()`. The optional `StreamingConfig` (`bufferSize`, `batchSize`, `flushIntervalMs`) is camelCase; omitted fields fall back to the server defaults. See [`db.enableStreaming`](#dbenablestreamingcollection-config) below. The WASM backend throws `NOT_SUPPORTED`.
 - **Relation + durable-TTL surface** (REST backend): `relate()`, `unrelate()`, `getRelations()`, `setTtlDurable()` — now fully tested and documented (see [Knowledge Graph API](#knowledge-graph-api) and [Agent Memory API](#agent-memory-api) below). The WASM backend throws `NOT_SUPPORTED` for these methods.
@@ -216,6 +220,58 @@ const results = await db.search('docs', query, { k: 5 });
 output. To use a different provider, set `baseUrl`. Implement the `Embedder`
 interface (`{ dimension: number; embed(texts: string[]): Promise<number[][]> }`)
 to plug in any other embedding source.
+
+## Memory Wedge (Agent Memory)
+
+Local-first **agent memory** — the same wedge as `@wiscale/velesdb-memory-node`
+and the Python binding, running entirely in-process via WebAssembly (browser
+or Node.js, no server). `remember` / `recall` / `recallWhere` / `recallFused`
+/ `relate` / `forget` / `why`. The differentiator is **`why()`**: it answers a
+question with the best-matching memory *plus its connected subgraph* —
+related facts a plain vector recall is blind to.
+
+```typescript
+import { MemoryService } from '@wiscale/velesdb-sdk';
+
+const memory = new MemoryService({ dimension: 384 });
+await memory.init();
+
+const pr = await memory.remember('PR #42 swaps the mutex for parking_lot');
+const decision = await memory.remember(
+  'we chose parking_lot to avoid lock poisoning',
+  { links: [{ target: pr, relation: 'decided_in' }] }
+);
+
+// recall: vector similarity.
+const hits = await memory.recall('lock poisoning', 5);
+
+// recallFused: also walks the graph from the top vector hit and promotes
+// any fact it reaches — the tri-engine ranking measured on HotpotQA/TimeQA/LoCoMo.
+const fused = await memory.recallFused('lock poisoning', 5);
+
+// recallWhere: fused vector + structured filters (ranges/comparisons).
+const recent = await memory.recallWhere('release notes', [
+  { field: 'ts', op: 'ge', value: 20260101 },
+]);
+
+// why: the wedge — seed memory + its reachable subgraph.
+const { nodes, edges } = await memory.why('why parking_lot');
+```
+
+Every method returns a `Promise`. Memory ids cross the WASM boundary as
+**decimal strings** (a JS `number` loses precision above 2^53). Errors thrown
+across the boundary are translated into the SDK's typed hierarchy —
+`NotFoundError`, `ValidationError`, or the base `VelesDBError` — so you can
+`catch (e) { if (e instanceof NotFoundError) ... }` the same way regardless
+of which backend raised it.
+
+> **In-memory only in this release.** Unlike the Node/Python bindings, the
+> WASM store has no filesystem access, so `MemoryService` does not persist to
+> disk — memory is lost when the page/process ends. Durable browser storage
+> (IndexedDB) and `rememberExtracted` (auto-extraction, which needs a
+> model/network call) are both out of scope for this release; track
+> `@wiscale/velesdb-memory-node` or the Python binding if you need a
+> persistent store today.
 
 ## API Reference
 

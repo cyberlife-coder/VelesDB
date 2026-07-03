@@ -107,6 +107,30 @@ def test_recall_where_unknown_op_raises_value_error(mem):
         mem.recall_where("q", [("year", "bogus", 1)], k=5)
 
 
+def test_recall_where_returns_stored_metadata(mem):
+    # `recall_where` results carry the fact's caller-supplied metadata dict.
+    fid = mem.remember("we shipped the release", metadata={"ts": 20260701})
+    hits = mem.recall_where("release", [("ts", "eq", 20260701)], k=5)
+    hit = next(h for h in hits if h["id"] == fid)
+    assert hit["metadata"] == {"ts": 20260701}
+
+
+def test_recall_also_returns_stored_metadata(mem):
+    # `recall` round-trips caller metadata too (one extra by-id lookup per
+    # hit), not just `recall_where` — enables dated/sorted context from any
+    # recall path.
+    fid = mem.remember("paris is lovely in spring", metadata={"ts": 1})
+    hits = mem.recall("paris", k=5)
+    hit = next(h for h in hits if h["id"] == fid)
+    assert hit["metadata"] == {"ts": 1}
+
+
+def test_recall_metadata_is_none_when_the_fact_carries_none(mem):
+    mem.remember("a fact with no metadata")
+    hits = mem.recall("a fact with no metadata", k=5)
+    assert all(h["metadata"] is None for h in hits)
+
+
 def test_oversized_fact_raises_value_error(mem):
     # Facts above the shared 1 MiB cap are rejected before any embedding work.
     with pytest.raises(ValueError):

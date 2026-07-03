@@ -1,0 +1,1031 @@
+[
+  {
+    "config": "base",
+    "category": "temporal",
+    "conversation_id": "conv-26",
+    "acc": 29.7,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "temporal",
+    "conversation_id": "conv-30",
+    "acc": 7.7,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "temporal",
+    "conversation_id": "conv-41",
+    "acc": 25.9,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "temporal",
+    "conversation_id": "conv-42",
+    "acc": 25.0,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "temporal",
+    "conversation_id": "conv-43",
+    "acc": 34.6,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "temporal",
+    "conversation_id": "conv-44",
+    "acc": 4.2,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "temporal",
+    "conversation_id": "conv-47",
+    "acc": 8.8,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "temporal",
+    "conversation_id": "conv-48",
+    "acc": 26.2,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "temporal",
+    "conversation_id": "conv-49",
+    "acc": 21.2,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "temporal",
+    "conversation_id": "conv-50",
+    "acc": 28.1,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "multi-hop",
+    "conversation_id": "conv-26",
+    "acc": 62.5,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "multi-hop",
+    "conversation_id": "conv-30",
+    "acc": 54.5,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "multi-hop",
+    "conversation_id": "conv-41",
+    "acc": 71.0,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "multi-hop",
+    "conversation_id": "conv-42",
+    "acc": 43.2,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "multi-hop",
+    "conversation_id": "conv-43",
+    "acc": 45.2,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "multi-hop",
+    "conversation_id": "conv-44",
+    "acc": 46.7,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "multi-hop",
+    "conversation_id": "conv-47",
+    "acc": 40.0,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "multi-hop",
+    "conversation_id": "conv-48",
+    "acc": 66.7,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "multi-hop",
+    "conversation_id": "conv-49",
+    "acc": 59.5,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "multi-hop",
+    "conversation_id": "conv-50",
+    "acc": 56.2,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "single-hop",
+    "conversation_id": "conv-26",
+    "acc": 57.1,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "single-hop",
+    "conversation_id": "conv-30",
+    "acc": 45.5,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "single-hop",
+    "conversation_id": "conv-41",
+    "acc": 54.7,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "single-hop",
+    "conversation_id": "conv-42",
+    "acc": 52.3,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "single-hop",
+    "conversation_id": "conv-43",
+    "acc": 61.7,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "single-hop",
+    "conversation_id": "conv-44",
+    "acc": 71.0,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "single-hop",
+    "conversation_id": "conv-47",
+    "acc": 65.1,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "single-hop",
+    "conversation_id": "conv-48",
+    "acc": 61.0,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "single-hop",
+    "conversation_id": "conv-49",
+    "acc": 54.8,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "single-hop",
+    "conversation_id": "conv-50",
+    "acc": 49.4,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "open-domain",
+    "conversation_id": "conv-26",
+    "acc": 23.1,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "open-domain",
+    "conversation_id": "conv-41",
+    "acc": 25.0,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "open-domain",
+    "conversation_id": "conv-42",
+    "acc": 9.1,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "open-domain",
+    "conversation_id": "conv-43",
+    "acc": 28.6,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "open-domain",
+    "conversation_id": "conv-44",
+    "acc": 0.0,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "open-domain",
+    "conversation_id": "conv-47",
+    "acc": 15.4,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "open-domain",
+    "conversation_id": "conv-48",
+    "acc": 30.0,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "open-domain",
+    "conversation_id": "conv-49",
+    "acc": 46.2,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "open-domain",
+    "conversation_id": "conv-50",
+    "acc": 28.6,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "adversarial",
+    "conversation_id": "conv-26",
+    "acc": 87.2,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "adversarial",
+    "conversation_id": "conv-30",
+    "acc": 87.5,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "adversarial",
+    "conversation_id": "conv-41",
+    "acc": 92.7,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "adversarial",
+    "conversation_id": "conv-42",
+    "acc": 93.4,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "adversarial",
+    "conversation_id": "conv-43",
+    "acc": 90.6,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "adversarial",
+    "conversation_id": "conv-44",
+    "acc": 85.7,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "adversarial",
+    "conversation_id": "conv-47",
+    "acc": 87.5,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "adversarial",
+    "conversation_id": "conv-48",
+    "acc": 95.8,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "adversarial",
+    "conversation_id": "conv-49",
+    "acc": 92.5,
+    "outlier": false
+  },
+  {
+    "config": "base",
+    "category": "adversarial",
+    "conversation_id": "conv-50",
+    "acc": 91.3,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "temporal",
+    "conversation_id": "conv-26",
+    "acc": 51.4,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "temporal",
+    "conversation_id": "conv-30",
+    "acc": 65.4,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "temporal",
+    "conversation_id": "conv-41",
+    "acc": 59.3,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "temporal",
+    "conversation_id": "conv-42",
+    "acc": 65.0,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "temporal",
+    "conversation_id": "conv-43",
+    "acc": 53.8,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "temporal",
+    "conversation_id": "conv-44",
+    "acc": 45.8,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "temporal",
+    "conversation_id": "conv-47",
+    "acc": 32.4,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "temporal",
+    "conversation_id": "conv-48",
+    "acc": 50.0,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "temporal",
+    "conversation_id": "conv-49",
+    "acc": 66.7,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "temporal",
+    "conversation_id": "conv-50",
+    "acc": 65.6,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "multi-hop",
+    "conversation_id": "conv-26",
+    "acc": 65.6,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "multi-hop",
+    "conversation_id": "conv-30",
+    "acc": 54.5,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "multi-hop",
+    "conversation_id": "conv-41",
+    "acc": 71.0,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "multi-hop",
+    "conversation_id": "conv-42",
+    "acc": 43.2,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "multi-hop",
+    "conversation_id": "conv-43",
+    "acc": 48.4,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "multi-hop",
+    "conversation_id": "conv-44",
+    "acc": 46.7,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "multi-hop",
+    "conversation_id": "conv-47",
+    "acc": 40.0,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "multi-hop",
+    "conversation_id": "conv-48",
+    "acc": 61.9,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "multi-hop",
+    "conversation_id": "conv-49",
+    "acc": 59.5,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "multi-hop",
+    "conversation_id": "conv-50",
+    "acc": 56.2,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "single-hop",
+    "conversation_id": "conv-26",
+    "acc": 57.1,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "single-hop",
+    "conversation_id": "conv-30",
+    "acc": 45.5,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "single-hop",
+    "conversation_id": "conv-41",
+    "acc": 53.5,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "single-hop",
+    "conversation_id": "conv-42",
+    "acc": 52.3,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "single-hop",
+    "conversation_id": "conv-43",
+    "acc": 61.7,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "single-hop",
+    "conversation_id": "conv-44",
+    "acc": 71.0,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "single-hop",
+    "conversation_id": "conv-47",
+    "acc": 63.9,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "single-hop",
+    "conversation_id": "conv-48",
+    "acc": 61.0,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "single-hop",
+    "conversation_id": "conv-49",
+    "acc": 54.8,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "single-hop",
+    "conversation_id": "conv-50",
+    "acc": 49.4,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "open-domain",
+    "conversation_id": "conv-26",
+    "acc": 23.1,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "open-domain",
+    "conversation_id": "conv-41",
+    "acc": 25.0,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "open-domain",
+    "conversation_id": "conv-42",
+    "acc": 9.1,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "open-domain",
+    "conversation_id": "conv-43",
+    "acc": 28.6,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "open-domain",
+    "conversation_id": "conv-44",
+    "acc": 0.0,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "open-domain",
+    "conversation_id": "conv-47",
+    "acc": 15.4,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "open-domain",
+    "conversation_id": "conv-48",
+    "acc": 30.0,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "open-domain",
+    "conversation_id": "conv-49",
+    "acc": 46.2,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "open-domain",
+    "conversation_id": "conv-50",
+    "acc": 28.6,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "adversarial",
+    "conversation_id": "conv-26",
+    "acc": 87.2,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "adversarial",
+    "conversation_id": "conv-30",
+    "acc": 87.5,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "adversarial",
+    "conversation_id": "conv-41",
+    "acc": 92.7,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "adversarial",
+    "conversation_id": "conv-42",
+    "acc": 93.4,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "adversarial",
+    "conversation_id": "conv-43",
+    "acc": 90.6,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "adversarial",
+    "conversation_id": "conv-44",
+    "acc": 85.7,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "adversarial",
+    "conversation_id": "conv-47",
+    "acc": 87.5,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "adversarial",
+    "conversation_id": "conv-48",
+    "acc": 95.8,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "adversarial",
+    "conversation_id": "conv-49",
+    "acc": 92.5,
+    "outlier": false
+  },
+  {
+    "config": "dated",
+    "category": "adversarial",
+    "conversation_id": "conv-50",
+    "acc": 91.3,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "temporal",
+    "conversation_id": "conv-26",
+    "acc": 70.3,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "temporal",
+    "conversation_id": "conv-30",
+    "acc": 80.8,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "temporal",
+    "conversation_id": "conv-41",
+    "acc": 59.3,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "temporal",
+    "conversation_id": "conv-42",
+    "acc": 57.5,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "temporal",
+    "conversation_id": "conv-43",
+    "acc": 61.5,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "temporal",
+    "conversation_id": "conv-44",
+    "acc": 62.5,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "temporal",
+    "conversation_id": "conv-47",
+    "acc": 44.1,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "temporal",
+    "conversation_id": "conv-48",
+    "acc": 54.8,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "temporal",
+    "conversation_id": "conv-49",
+    "acc": 75.8,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "temporal",
+    "conversation_id": "conv-50",
+    "acc": 50.0,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "multi-hop",
+    "conversation_id": "conv-26",
+    "acc": 62.5,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "multi-hop",
+    "conversation_id": "conv-30",
+    "acc": 63.6,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "multi-hop",
+    "conversation_id": "conv-41",
+    "acc": 71.0,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "multi-hop",
+    "conversation_id": "conv-42",
+    "acc": 43.2,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "multi-hop",
+    "conversation_id": "conv-43",
+    "acc": 48.4,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "multi-hop",
+    "conversation_id": "conv-44",
+    "acc": 46.7,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "multi-hop",
+    "conversation_id": "conv-47",
+    "acc": 40.0,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "multi-hop",
+    "conversation_id": "conv-48",
+    "acc": 61.9,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "multi-hop",
+    "conversation_id": "conv-49",
+    "acc": 59.5,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "multi-hop",
+    "conversation_id": "conv-50",
+    "acc": 56.2,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "single-hop",
+    "conversation_id": "conv-26",
+    "acc": 57.1,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "single-hop",
+    "conversation_id": "conv-30",
+    "acc": 45.5,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "single-hop",
+    "conversation_id": "conv-41",
+    "acc": 53.5,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "single-hop",
+    "conversation_id": "conv-42",
+    "acc": 53.2,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "single-hop",
+    "conversation_id": "conv-43",
+    "acc": 61.7,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "single-hop",
+    "conversation_id": "conv-44",
+    "acc": 71.0,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "single-hop",
+    "conversation_id": "conv-47",
+    "acc": 65.1,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "single-hop",
+    "conversation_id": "conv-48",
+    "acc": 58.5,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "single-hop",
+    "conversation_id": "conv-49",
+    "acc": 54.8,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "single-hop",
+    "conversation_id": "conv-50",
+    "acc": 49.4,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "open-domain",
+    "conversation_id": "conv-26",
+    "acc": 23.1,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "open-domain",
+    "conversation_id": "conv-41",
+    "acc": 25.0,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "open-domain",
+    "conversation_id": "conv-42",
+    "acc": 9.1,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "open-domain",
+    "conversation_id": "conv-43",
+    "acc": 28.6,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "open-domain",
+    "conversation_id": "conv-44",
+    "acc": 0.0,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "open-domain",
+    "conversation_id": "conv-47",
+    "acc": 15.4,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "open-domain",
+    "conversation_id": "conv-48",
+    "acc": 30.0,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "open-domain",
+    "conversation_id": "conv-49",
+    "acc": 46.2,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "open-domain",
+    "conversation_id": "conv-50",
+    "acc": 28.6,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "adversarial",
+    "conversation_id": "conv-26",
+    "acc": 87.2,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "adversarial",
+    "conversation_id": "conv-30",
+    "acc": 87.5,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "adversarial",
+    "conversation_id": "conv-41",
+    "acc": 92.7,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "adversarial",
+    "conversation_id": "conv-42",
+    "acc": 93.4,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "adversarial",
+    "conversation_id": "conv-43",
+    "acc": 90.6,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "adversarial",
+    "conversation_id": "conv-44",
+    "acc": 85.7,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "adversarial",
+    "conversation_id": "conv-47",
+    "acc": 87.5,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "adversarial",
+    "conversation_id": "conv-48",
+    "acc": 95.8,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "adversarial",
+    "conversation_id": "conv-49",
+    "acc": 92.5,
+    "outlier": false
+  },
+  {
+    "config": "scaffold",
+    "category": "adversarial",
+    "conversation_id": "conv-50",
+    "acc": 91.3,
+    "outlier": false
+  }
+]

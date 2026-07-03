@@ -345,6 +345,99 @@ mod tests {
     }
 
     #[test]
+    fn test_get_metadata_returns_payload_excluding_none_for_unknown() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let mut meta = serde_json::Map::new();
+        meta.insert("tag".to_string(), serde_json::json!("science"));
+        sm.store_with_metadata(1, "Photosynthesis", &emb, &meta)
+            .unwrap();
+
+        let payload = sm.get_metadata(1).unwrap().expect("payload present");
+        assert_eq!(payload.get("tag"), Some(&serde_json::json!("science")));
+        assert!(sm.get_metadata(404).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_get_metadata_bare_store_has_no_extra_fields() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        sm.store(1, "no metadata here", &[1.0, 0.0, 0.0, 0.0])
+            .unwrap();
+
+        // `store()` still writes a payload (the reserved `content` key), so the
+        // map is Some, just without any caller-supplied field.
+        let payload = sm.get_metadata(1).unwrap().expect("payload present");
+        assert!(!payload.contains_key("tag"));
+    }
+
+    #[test]
+    fn test_get_metadata_batch_matches_individual_calls_order_and_length() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        let mut tagged = serde_json::Map::new();
+        tagged.insert("tag".to_string(), serde_json::json!("science"));
+        sm.store_with_metadata(1, "photosynthesis", &[1.0, 0.0, 0.0, 0.0], &tagged)
+            .unwrap();
+        sm.store(2, "no metadata here", &[0.0, 1.0, 0.0, 0.0])
+            .unwrap();
+
+        let batch = sm.get_metadata_batch(&[1, 2, 404]).unwrap();
+        assert_eq!(batch.len(), 3, "one result per input id, in order");
+        assert_eq!(
+            batch[0].as_ref().and_then(|m| m.get("tag")),
+            Some(&serde_json::json!("science"))
+        );
+        assert!(!batch[1].as_ref().unwrap().contains_key("tag"));
+        assert!(batch[2].is_none(), "unknown id maps to None, not an error");
+    }
+
+    #[test]
+    fn test_get_metadata_batch_handles_a_gap_among_present_ids() {
+        // `store_with_ttl(id, .., 0)` deletes on the spot (see
+        // `test_store_with_ttl_zero_does_not_persist_point`), so id 1 here is
+        // absent from storage entirely by the time the batch runs — the same
+        // "missing id in the middle of the batch" shape a real expired-TTL
+        // gap would produce, without needing a real-time sleep to test it.
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        sm.store_with_ttl(1, "never actually persisted", &[1.0, 0.0, 0.0, 0.0], 0)
+            .unwrap();
+        sm.store(2, "live", &[0.0, 1.0, 0.0, 0.0]).unwrap();
+
+        let batch = sm.get_metadata_batch(&[1, 2]).unwrap();
+        assert!(batch[0].is_none());
+        assert!(batch[1].is_some());
+    }
+
+    #[test]
+    fn test_get_metadata_batch_excludes_a_durably_expired_id() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        sm.store(1, "will expire", &[1.0, 0.0, 0.0, 0.0]).unwrap();
+        sm.set_ttl_durable(1, 0).unwrap();
+        sm.store(2, "live", &[0.0, 1.0, 0.0, 0.0]).unwrap();
+
+        let batch = sm.get_metadata_batch(&[1, 2]).unwrap();
+        assert!(
+            batch[0].is_none(),
+            "durably-expired id must not surface metadata"
+        );
+        assert!(batch[1].is_some());
+    }
+
+    #[test]
     fn test_list_all_returns_live_facts() {
         let dir = tempdir().unwrap();
         let db = Arc::new(Database::open(dir.path()).unwrap());

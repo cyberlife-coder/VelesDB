@@ -40,39 +40,45 @@ impl WasmError {
     }
 
     /// Renders a structured JS `Error` whose `code` property is the
-    /// `VELES-XXX` code. The property is defined as non-enumerable so it does
-    /// not pollute `JSON.stringify(error)` yet stays readable as `error.code`.
-    #[cfg(target_arch = "wasm32")]
+    /// `VELES-XXX` code — see [`structured_js_error`].
     pub(crate) fn into_js_value(self) -> wasm_bindgen::JsValue {
-        use wasm_bindgen::JsValue;
-        let err = js_sys::Error::new(&self.message);
-        let descriptor = js_sys::Object::new();
-        // `Object.defineProperty` is a safe wrapper; a failed `set` degrades to
-        // a plain Error rather than panicking, so the results are discarded.
-        let _ = js_sys::Reflect::set(
-            &descriptor,
-            &JsValue::from_str("value"),
-            &JsValue::from_str(self.code),
-        );
-        let _ = js_sys::Reflect::set(
-            &descriptor,
-            &JsValue::from_str("enumerable"),
-            &JsValue::FALSE,
-        );
-        let _ = js_sys::Reflect::set(&descriptor, &JsValue::from_str("writable"), &JsValue::FALSE);
-        js_sys::Object::define_property(&err, &JsValue::from_str("code"), &descriptor);
-        err.into()
+        structured_js_error(self.code, &self.message)
     }
+}
 
-    /// Native-target fallback: `js_sys::Error`/`Object.defineProperty` have no
-    /// JS runtime off `wasm32`, so the error degrades to a flat string carrying
-    /// both the code and the message. The structured `code` is asserted in
-    /// native tests via [`WasmError::code`]; the real JS `Error` is produced
-    /// only in the browser build above.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn into_js_value(self) -> wasm_bindgen::JsValue {
-        wasm_bindgen::JsValue::from_str(&format!("[{}] {}", self.code, self.message))
-    }
+/// Render a structured JS `Error` carrying a non-enumerable, machine-readable
+/// `code` property — so it does not pollute `JSON.stringify(error)` yet stays
+/// readable as `error.code`. Shared by [`WasmError`] (core's `VELES-XXX`
+/// codes) and the memory binding (`MemoryError`'s category codes): different
+/// taxonomies, one JS error shape.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn structured_js_error(code: &str, message: &str) -> wasm_bindgen::JsValue {
+    use wasm_bindgen::JsValue;
+    let err = js_sys::Error::new(message);
+    let descriptor = js_sys::Object::new();
+    // `Object.defineProperty` is a safe wrapper; a failed `set` degrades to
+    // a plain Error rather than panicking, so the results are discarded.
+    let _ = js_sys::Reflect::set(
+        &descriptor,
+        &JsValue::from_str("value"),
+        &JsValue::from_str(code),
+    );
+    let _ = js_sys::Reflect::set(
+        &descriptor,
+        &JsValue::from_str("enumerable"),
+        &JsValue::FALSE,
+    );
+    let _ = js_sys::Reflect::set(&descriptor, &JsValue::from_str("writable"), &JsValue::FALSE);
+    js_sys::Object::define_property(&err, &JsValue::from_str("code"), &descriptor);
+    err.into()
+}
+
+/// Native-target fallback: `js_sys::Error`/`Object.defineProperty` have no
+/// JS runtime off `wasm32`, so the error degrades to a flat string carrying
+/// both the code and the message, which native tests assert on directly.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn structured_js_error(code: &str, message: &str) -> wasm_bindgen::JsValue {
+    wasm_bindgen::JsValue::from_str(&format!("[{code}] {message}"))
 }
 
 impl From<CoreError> for WasmError {

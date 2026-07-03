@@ -49,7 +49,7 @@ use velesdb_memory::{
     DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
-use crate::dto::{ColumnFilterJs, ExplanationJs, LinkJs, RecollectionJs};
+use crate::dto::{ColumnFilterJs, ExplanationJs, FusionOptionsJs, LinkJs, RecollectionJs};
 use crate::error::{invalid_input, to_napi_err, CODE_INTERNAL};
 use crate::tasks::Job;
 
@@ -181,6 +181,35 @@ impl MemoryStore {
             let k = guards::clamp_limit(k.unwrap_or(10));
             let filters = convert::to_filters(filters)?;
             let hits = svc.recall_where(&query, k, &filters).map_err(to_napi_err)?;
+            Ok(hits.into_iter().map(RecollectionJs::from).collect())
+        }))
+    }
+
+    /// Fused vector + graph recall: like [`recall`](Self::recall), but also
+    /// walks the graph from the top vector hit and promotes any fact it
+    /// reaches into the ranking — the tri-engine ranking measured on
+    /// HotpotQA/TimeQA/LoCoMo, now reachable from Node. `opts` is optional;
+    /// an omitted field falls back to the proven default (`hops: 2`,
+    /// `graphBoost: 0.15`, oversampled pool).
+    #[napi(
+        js_name = "recallFused",
+        ts_return_type = "Promise<Array<RecollectionJs>>"
+    )]
+    pub fn recall_fused(
+        &self,
+        query: String,
+        k: Option<u32>,
+        filter: Option<Value>,
+        opts: Option<FusionOptionsJs>,
+    ) -> AsyncTask<Job<Vec<RecollectionJs>>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let k = guards::clamp_limit(k.unwrap_or(10));
+            let filter = convert::to_metadata(filter)?;
+            let opts = convert::to_fusion_options(opts);
+            let hits = svc
+                .recall_fused(&query, k, filter.as_ref(), opts)
+                .map_err(to_napi_err)?;
             Ok(hits.into_iter().map(RecollectionJs::from).collect())
         }))
     }

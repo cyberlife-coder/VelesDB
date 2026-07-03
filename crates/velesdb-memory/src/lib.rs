@@ -24,6 +24,10 @@
 pub mod embedder;
 pub mod error;
 pub mod extract;
+/// Vector+graph score fusion — the ranking layer behind
+/// [`service::MemoryService::recall_fused`]. Internal: callers reach it only
+/// through that method.
+mod fusion;
 /// Content-addressed memory ids — internal; ids surface through the service API.
 pub(crate) mod id;
 /// Resource caps (DoS limits) shared by every adapter — the single source of
@@ -38,14 +42,40 @@ pub mod mcp;
 /// (`Link`, `Recollection`, `ColumnFilter`, `Explanation`, …), separate from the
 /// service that computes them.
 pub mod model;
+/// Optional second-stage re-scoring of a fused recall pool (bring your own
+/// cross-encoder/LLM). Never wired in by default — see [`rerank::Reranker`].
+pub mod rerank;
 /// Shared JSON Schema post-processing (strips `schemars`' non-standard integer
 /// `format` keywords so strict MCP clients don't warn on every id field).
 mod schema;
 pub mod service;
+/// The storage backend abstraction — [`storage::MemoryStore`] and the
+/// default, file-backed [`storage::NativeStore`]. Implement `MemoryStore` to
+/// run the wedge over a different backend (e.g. an in-memory one for WASM).
+pub mod storage;
 
 /// Default embedding dimension — the single source of truth, taken from the
-/// SDK's own default so the server, library, and tests never restate the value.
+/// SDK's own default so the server, library, and tests never restate the
+/// value. `velesdb_core::agent` (where the canonical constant lives) is
+/// itself `persistence`-gated, so a `persistence`-free build (e.g.
+/// `velesdb-wasm`) falls back to [`FALLBACK_DIMENSION`].
+#[cfg(feature = "persistence")]
 pub const DEFAULT_DIMENSION: usize = velesdb_core::agent::DEFAULT_DIMENSION;
+#[cfg(not(feature = "persistence"))]
+pub const DEFAULT_DIMENSION: usize = FALLBACK_DIMENSION;
+
+/// The hand-written value the `persistence`-free arm of
+/// [`DEFAULT_DIMENSION`] falls back to (the canonical constant's module is
+/// feature-gated away there). The `persistence` build — CI's default —
+/// statically asserts it still equals the canonical value, so drift fails
+/// to compile instead of silently splitting the wasm default dimension
+/// from the native one.
+const FALLBACK_DIMENSION: usize = 384;
+#[cfg(feature = "persistence")]
+const _: () = assert!(
+    FALLBACK_DIMENSION == velesdb_core::agent::DEFAULT_DIMENSION,
+    "update FALLBACK_DIMENSION to match velesdb_core::agent::DEFAULT_DIMENSION"
+);
 
 pub use embedder::{DynEmbedder, EmbedError, Embedder, HashEmbedder};
 #[cfg(feature = "ollama")]
@@ -56,5 +86,11 @@ pub use extract::OllamaExtractor;
 pub use extract::{DynExtractor, ExtractError, ExtractedFact, Extractor};
 #[cfg(feature = "mcp")]
 pub use mcp::McpServer;
-pub use model::{ColumnFilter, ColumnOp, Explanation, Link, MemoryEdge, MemoryNode, Recollection};
+pub use model::{
+    ColumnFilter, ColumnOp, Explanation, FusionOptions, Link, MemoryEdge, MemoryNode, Recollection,
+};
+pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{MemoryService, Metadata};
+pub use storage::MemoryStore;
+#[cfg(feature = "persistence")]
+pub use storage::NativeStore;
