@@ -182,13 +182,14 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         Ok(fact_id)
     }
 
-    /// Create each outgoing link from `fact_id` (labels already validated by
-    /// [`Self::remember_with_ttl`]'s pre-pass; re-checked here so a future
-    /// direct caller can't skip it). Split out of `remember_with_ttl` to
-    /// keep that method within the complexity budget.
+    /// Create each outgoing link from `fact_id`.
+    ///
+    /// Precondition: every label was already validated by
+    /// [`Self::remember_with_ttl`]'s pre-write pass (its only caller) —
+    /// no re-check here, so the validation rule lives in exactly one
+    /// place on this path.
     fn relate_links(&self, fact_id: u64, links: &[Link]) -> Result<(), MemoryError> {
         for link in links {
-            validate_relation(&link.relation)?;
             self.store.relate(fact_id, link.target, &link.relation)?;
         }
         Ok(())

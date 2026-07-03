@@ -199,12 +199,18 @@ fn remember_with_unknown_link_target_errors_and_stores_nothing() {
     );
 }
 
+/// A relation label just over the 512-byte cap, shared by the
+/// link-failure atomicity tests below.
+fn oversized_label() -> String {
+    "x".repeat(600)
+}
+
 #[test]
 fn remember_with_invalid_relation_label_errors_and_stores_nothing() {
-    // Regression: relation labels are validated AFTER the fact is stored
-    // (inside the edge-creation loop), so a bad label used to leave the
+    // Regression: relation labels used to be validated only AFTER the fact
+    // was stored (inside the edge-creation loop), so a bad label left the
     // fact persisted with no links — the exact half-written state the API
-    // docs rule out. A fresh fact must be rolled back on any link failure.
+    // docs rule out. Labels are now validated before any write.
     let (_dir, svc) = service();
     let target = svc.remember("a target fact", &[], None).expect("remember");
 
@@ -213,7 +219,7 @@ fn remember_with_invalid_relation_label_errors_and_stores_nothing() {
             "a decision",
             &[Link {
                 target,
-                relation: "x".repeat(600), // over MAX_RELATION_BYTES
+                relation: oversized_label(),
             }],
             None,
         )
@@ -241,7 +247,7 @@ fn remember_link_failure_keeps_a_fact_that_already_existed() {
         "a decision",
         &[Link {
             target,
-            relation: "x".repeat(600),
+            relation: oversized_label(),
         }],
         None,
     )
@@ -258,9 +264,11 @@ fn remember_link_failure_keeps_a_fact_that_already_existed() {
 fn remember_link_failure_leaves_a_pre_existing_facts_payload_untouched() {
     // Regression: relation labels used to be validated only inside the
     // edge-creation loop, AFTER store_fact — so a failed re-remember had
-    // already overwritten the fact's metadata and could arm a TTL on a
-    // permanent memory (it would silently expire despite the call
-    // erroring). All link input is now validated before any write.
+    // already overwritten the fact's metadata. All link input is now
+    // validated before any write. (Asserted here via metadata survival;
+    // the same pre-validation also prevents the failed call's TTL from
+    // being armed, which recall can't observe directly — `_veles_*` keys
+    // are stripped from caller-facing metadata.)
     let (_dir, svc) = service();
     let target = svc.remember("a target fact", &[], None).expect("remember");
     svc.remember(
@@ -274,7 +282,7 @@ fn remember_link_failure_leaves_a_pre_existing_facts_payload_untouched() {
         "a decision",
         &[Link {
             target,
-            relation: "x".repeat(600), // over MAX_RELATION_BYTES
+            relation: oversized_label(),
         }],
         Some(&meta(&[("source", json!("overwritten"))])),
         Some(60),

@@ -82,6 +82,11 @@ pub enum MemoryError {
     /// from `remember`, the fact **remains stored**. Both errors are
     /// carried so the caller can see why the write failed and why the
     /// cleanup couldn't undo it.
+    ///
+    /// Neither field is `#[source]` — deliberately: the `Display` message
+    /// already embeds both errors, and a source chain would double-print
+    /// them in chain-style reports (anyhow, miette). Match on the variant
+    /// to inspect the two errors programmatically.
     #[error(
         "link failed ({cause}); rollback delete also failed ({rollback}) — the fact remains stored"
     )]
