@@ -161,13 +161,18 @@ export class MemoryService {
     if (this._initialized) {
       return Promise.resolve();
     }
-    if (this._initInFlight) {
-      return this._initInFlight;
+    if (!this._initInFlight) {
+      this._initInFlight = this.runInit().finally(() => {
+        this._initInFlight = null;
+      });
     }
-    this._initInFlight = this.runInit().finally(() => {
-      this._initInFlight = null;
-    });
-    return this._initInFlight;
+    // A distinct derived promise per caller (adopting the shared in-flight
+    // load's fate), not the memoized instance itself: one caller's .catch
+    // must not mark the rejection handled for every other caller — a
+    // fire-and-forget init() still surfaces its own unhandledrejection
+    // carrying the WASM-load root cause, exactly as the previous async
+    // wrapper guaranteed.
+    return this._initInFlight.then();
   }
 
   private async runInit(): Promise<void> {
@@ -346,8 +351,14 @@ function wrapWasmCall<T>(call: () => T): Promise<T> {
     try {
       return Promise.reject(toTypedError(error));
     } catch {
+      // Prefer the original thrown value when it's a real Error (a poisoned
+      // `.code` getter broke the translation, but the message and stack are
+      // intact and are what the caller needs) — synthesize a generic error
+      // only when even that isn't usable.
       return Promise.reject(
-        new VelesDBError('non-coercible value thrown across the wasm boundary', 'INTERNAL')
+        error instanceof Error
+          ? error
+          : new VelesDBError('non-coercible value thrown across the wasm boundary', 'INTERNAL')
       );
     }
   }
