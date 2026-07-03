@@ -362,59 +362,74 @@ function wrapWasmCall<T>(call: () => T): Promise<T> {
  * own `.code`/`.message` reads can never detonate in their catch handler.
  */
 function toTypedError(error: unknown): Error {
-  let isError: boolean;
-  try {
-    isError = error instanceof Error;
-  } catch {
-    isError = false; // a revoked proxy throws on the prototype walk
-  }
-  if (!isError) {
-    let text: string;
-    try {
-      text = String(error);
-    } catch {
-      text = 'non-coercible value thrown across the wasm boundary';
+  const isError = tryRead(() => error instanceof Error); // a revoked proxy throws on the prototype walk
+  const rawMessage = tryRead(() => (error as WasmErrorLike).message);
+  const message = salvageMessage(rawMessage);
+  if (isError.value !== true) {
+    const text = tryRead(() => String(error));
+    if (typeof text.value === 'string') {
+      return new VelesDBError(text.value, 'INTERNAL');
     }
-    return new VelesDBError(text, 'INTERNAL');
+    return new VelesDBError(
+      message !== undefined
+        ? `wasm error (translation failed): ${message}`
+        : 'non-coercible value thrown across the wasm boundary',
+      'INTERNAL'
+    );
   }
-  let codeUnreadable = false;
-  let code: string | undefined;
-  try {
-    code = (error as WasmErrorLike).code;
-  } catch {
-    codeUnreadable = true;
-  }
-  let messageUnreadable = false;
-  let message: string | undefined;
-  try {
-    const read = (error as WasmErrorLike).message;
-    message = typeof read === 'string' ? read : undefined;
-  } catch {
-    messageUnreadable = true;
-  }
-  switch (code) {
+  const code = tryRead(() => (error as WasmErrorLike).code);
+  switch (code.value) {
     // NotFoundError's constructor takes a bare resource name and builds its
     // own "X not found" message — but the wasm error already carries a
     // specific, well-formed message from Rust (e.g. "memory 42 does not
     // exist"). Construct it for `instanceof` narrowing, then overwrite its
     // message with the original rather than wrapping it a second time.
     // ValidationError has no such mangling — its constructor takes a raw
-    // message directly, so no override is needed there.
+    // message directly. Both branches flag a lost original message the same
+    // way, so degradation is never silent.
     case 'NOT_FOUND':
-      return withMessage(new NotFoundError('memory'), message ?? 'memory not found');
+      return withMessage(
+        new NotFoundError('memory'),
+        message ?? 'memory not found (original message unreadable)'
+      );
     case 'INVALID_INPUT':
       return new ValidationError(message ?? 'invalid input (original message unreadable)');
     default:
-      if (!codeUnreadable && !messageUnreadable) {
+      if (code.ok && rawMessage.ok) {
         return error as Error;
       }
       return new VelesDBError(
         message !== undefined
           ? `wasm error (translation failed): ${message}`
-          : 'wasm error whose property inspection throws (message unreadable)',
+          : 'wasm error (translation failed: property inspection throws)',
         'INTERNAL'
       );
   }
+}
+
+/** A guarded read: captures the result, or the fact that reading threw. */
+function tryRead<T>(read: () => T): { ok: boolean; value: T | undefined } {
+  try {
+    return { ok: true, value: read() };
+  } catch {
+    return { ok: false, value: undefined };
+  }
+}
+
+/**
+ * A usable message text out of a guarded `.message` read, or `undefined`:
+ * non-empty strings pass through, non-string values are coerced when their
+ * coercion doesn't itself throw, empty/absent/unreadable yield nothing.
+ */
+function salvageMessage(read: { ok: boolean; value: unknown }): string | undefined {
+  if (!read.ok || read.value == null) {
+    return undefined;
+  }
+  if (typeof read.value === 'string') {
+    return read.value.length > 0 ? read.value : undefined;
+  }
+  const coerced = tryRead(() => String(read.value));
+  return coerced.value;
 }
 
 function withMessage<E extends Error>(error: E, message: string): E {
