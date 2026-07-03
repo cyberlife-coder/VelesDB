@@ -194,10 +194,12 @@ export class MemoryService {
   }
 
   /** Release the underlying WASM store. */
-  async close(): Promise<void> {
-    this.inner?.free();
-    this.inner = null;
-    this._initialized = false;
+  close(): Promise<void> {
+    return wrapWasmCall(() => {
+      this.inner?.free();
+      this.inner = null;
+      this._initialized = false;
+    });
   }
 
   private ensureInitialized(): WasmMemoryServiceInstance {
@@ -213,7 +215,7 @@ export class MemoryService {
    * is optional structured data for later filtering; `ttlSeconds` makes the
    * fact expire after that many seconds (omit, or `0`, for permanent).
    */
-  async remember(
+  remember(
     fact: string,
     options: {
       links?: MemoryLink[];
@@ -221,44 +223,38 @@ export class MemoryService {
       ttlSeconds?: number;
     } = {}
   ): Promise<string> {
-    const svc = this.ensureInitialized();
-    const ttl = options.ttlSeconds;
-    // Validate before BigInt(): a non-integer throws a raw RangeError, a
-    // negative value dies as an opaque wasm-bindgen u64 conversion, and a
-    // value past MAX_SAFE_INTEGER silently wraps modulo 2^64 at the wasm
-    // boundary (2**64 wraps to 0 — "permanent" — the opposite of what the
-    // caller asked). All must surface as the ValidationError this class
-    // promises. MAX_SAFE_INTEGER seconds ≈ 285 million years, so the cap
-    // rejects only corrupted upstream arithmetic, never a real TTL.
-    if (
-      ttl !== undefined &&
-      (!Number.isInteger(ttl) || ttl < 0 || ttl > Number.MAX_SAFE_INTEGER)
-    ) {
-      throw new ValidationError(
-        `ttlSeconds must be an integer between 0 and ${Number.MAX_SAFE_INTEGER}, got ${ttl}`
-      );
-    }
-    return wrapWasmCall(() =>
-      svc.remember(
+    return wrapWasmCall(() => {
+      const svc = this.ensureInitialized();
+      const ttl = options.ttlSeconds;
+      // Validate before BigInt(): a non-integer throws a raw RangeError, a
+      // negative value dies as an opaque wasm-bindgen u64 conversion, and a
+      // value past MAX_SAFE_INTEGER silently wraps modulo 2^64 at the wasm
+      // boundary (2**64 wraps to 0 — "permanent" — the opposite of what the
+      // caller asked). All must surface as the ValidationError this class
+      // promises. MAX_SAFE_INTEGER seconds ≈ 285 million years, so the cap
+      // rejects only corrupted upstream arithmetic, never a real TTL.
+      if (ttl !== undefined && (!Number.isInteger(ttl) || ttl < 0 || ttl > Number.MAX_SAFE_INTEGER)) {
+        throw new ValidationError(
+          `ttlSeconds must be an integer between 0 and ${Number.MAX_SAFE_INTEGER}, got ${ttl}`
+        );
+      }
+      return svc.remember(
         fact,
         options.links ?? [],
         options.metadata,
         ttl !== undefined ? BigInt(ttl) : undefined
-      )
-    );
+      );
+    });
   }
 
   /**
    * Recall up to `k` (default 10) memories similar to `query`, optionally
    * narrowed by an exact-match metadata `filter`.
    */
-  async recall(
-    query: string,
-    k?: number,
-    filter?: Record<string, unknown>
-  ): Promise<MemoryRecollection[]> {
-    const svc = this.ensureInitialized();
-    return wrapWasmCall(() => svc.recall(query, k, filter) as MemoryRecollection[]);
+  recall(query: string, k?: number, filter?: Record<string, unknown>): Promise<MemoryRecollection[]> {
+    return wrapWasmCall(
+      () => this.ensureInitialized().recall(query, k, filter) as MemoryRecollection[]
+    );
   }
 
   /**
@@ -266,13 +262,10 @@ export class MemoryService {
    * support ranges/comparisons (`gt`, `le`, …), so temporal/numeric facets
    * become queryable.
    */
-  async recallWhere(
-    query: string,
-    filters: MemoryColumnFilter[],
-    k?: number
-  ): Promise<MemoryRecollection[]> {
-    const svc = this.ensureInitialized();
-    return wrapWasmCall(() => svc.recallWhere(query, filters, k) as MemoryRecollection[]);
+  recallWhere(query: string, filters: MemoryColumnFilter[], k?: number): Promise<MemoryRecollection[]> {
+    return wrapWasmCall(
+      () => this.ensureInitialized().recallWhere(query, filters, k) as MemoryRecollection[]
+    );
   }
 
   /**
@@ -280,54 +273,56 @@ export class MemoryService {
    * graph from the top vector hit and promotes any fact it reaches into the
    * ranking — the tri-engine ranking measured on HotpotQA/TimeQA/LoCoMo.
    */
-  async recallFused(
+  recallFused(
     query: string,
     k?: number,
     filter?: Record<string, unknown>,
     opts?: MemoryFusionOptions
   ): Promise<MemoryRecollection[]> {
-    const svc = this.ensureInitialized();
-    return wrapWasmCall(() => svc.recallFused(query, k, filter, opts) as MemoryRecollection[]);
+    return wrapWasmCall(
+      () => this.ensureInitialized().recallFused(query, k, filter, opts) as MemoryRecollection[]
+    );
   }
 
   /** Create a typed edge `from -> to`. Resolves to the edge's decimal-string id. */
-  async relate(from: string, to: string, relation: string): Promise<string> {
-    const svc = this.ensureInitialized();
-    return wrapWasmCall(() => svc.relate(from, to, relation));
+  relate(from: string, to: string, relation: string): Promise<string> {
+    return wrapWasmCall(() => this.ensureInitialized().relate(from, to, relation));
   }
 
   /** Delete a memory by id. */
-  async forget(id: string): Promise<void> {
-    const svc = this.ensureInitialized();
-    return wrapWasmCall(() => svc.forget(id));
+  forget(id: string): Promise<void> {
+    return wrapWasmCall(() => {
+      this.ensureInitialized().forget(id);
+    });
   }
 
   /**
    * Explain a decision: the best-matching memory plus its connected
    * subgraph. `maxHops` (default 2) is capped at 10.
    */
-  async why(
-    decision: string,
-    maxHops?: number,
-    filter?: Record<string, unknown>
-  ): Promise<MemoryExplanation> {
-    const svc = this.ensureInitialized();
-    return wrapWasmCall(() => svc.why(decision, maxHops, filter) as MemoryExplanation);
+  why(decision: string, maxHops?: number, filter?: Record<string, unknown>): Promise<MemoryExplanation> {
+    return wrapWasmCall(
+      () => this.ensureInitialized().why(decision, maxHops, filter) as MemoryExplanation
+    );
   }
 }
 
 /**
  * Run a synchronous wasm-bindgen call (every `WasmMemoryService` method is
- * sync — errors surface as a thrown value, not a rejected promise) and
- * translate a structured `{code}` error into the SDK's typed hierarchy, so
- * callers can `catch (e) { if (e instanceof NotFoundError) ... }` the same
- * way regardless of which backend raised it.
+ * sync — errors surface as a thrown value, not a rejected promise), lift the
+ * result into a Promise, and translate a structured `{code}` error into the
+ * SDK's typed hierarchy, so callers can
+ * `catch (e) { if (e instanceof NotFoundError) ... }` the same way
+ * regardless of which backend raised it. Every failure — including a sync
+ * throw from validation or the not-initialized guard inside `call` — becomes
+ * a rejection, never a synchronous throw, matching what the public
+ * Promise-returning signatures advertise.
  */
-function wrapWasmCall<T>(call: () => T): T {
+function wrapWasmCall<T>(call: () => T): Promise<T> {
   try {
-    return call();
+    return Promise.resolve(call());
   } catch (error) {
-    throw toTypedError(error);
+    return Promise.reject(toTypedError(error));
   }
 }
 
