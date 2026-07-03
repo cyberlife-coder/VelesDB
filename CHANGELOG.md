@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.6.0] — 2026-07-03
+
+### Added
+- **The agent-memory wedge runs in the browser.** `velesdb-wasm` gains a
+  `MemoryService` wasm-bindgen class (remember/recall/recallWhere/recallFused/
+  relate/forget/why) over a new in-memory storage backend, and the TypeScript
+  SDK (`@wiscale/velesdb-sdk`) gains a matching standalone `MemoryService`
+  client with the same typed-error contract as the Node binding. Entirely
+  client-side: no server, no network, offline `HashEmbedder`. In-memory only
+  under WASM (no persistence) — documented, not silent. (#1310)
+- **New public `SemanticMemory::get_metadata_batch` on `velesdb-core`**: one
+  collection lookup for a whole batch of ids (same order/length, `None` for
+  unknown/expired). Powers the batched recall paths in `velesdb-memory` 0.4.0.
+  Additive API — the minor bump that lets the 0.4.0 wedge build against a
+  published core. (#1309)
+- The workspace CI wasm job now runs the wasm-bindgen test suites in Node
+  (previously compile-check only), so JS-marshalling regressions are caught
+  in CI. (#1310)
+
 ## [3.5.0] — 2026-06-30
 
 ### Added
