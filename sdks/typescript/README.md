@@ -4,7 +4,7 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 
 **v3.6.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
 
-## What's New (unreleased)
+## What's New in v3.6.0
 
 - **Memory wedge, running in-browser via WASM**: new `MemoryService` class (`remember`/`recall`/`recallWhere`/`recallFused`/`relate`/`forget`/`why`) — the same local-first agent memory as `@wiscale/velesdb-memory-node` and the Python binding, now reachable without a server. In-memory only in this release (no filesystem access under WASM); see [Memory Wedge](#memory-wedge-agent-memory) below.
 - **Streaming ingestion enablement (2026-06-14)** (REST backend): `enableStreaming(collection, config?)` turns on the bounded streaming-ingestion channel before `streamInsert()`. The optional `StreamingConfig` (`bufferSize`, `batchSize`, `flushIntervalMs`) is camelCase; omitted fields fall back to the server defaults. See [`db.enableStreaming`](#dbenablestreamingcollection-config) below. The WASM backend throws `NOT_SUPPORTED`.
