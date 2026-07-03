@@ -157,9 +157,9 @@ export class MemoryService {
   }
 
   /** Load the WASM module and create the underlying in-memory store. */
-  async init(): Promise<void> {
+  init(): Promise<void> {
     if (this._initialized) {
-      return;
+      return Promise.resolve();
     }
     if (this._initInFlight) {
       return this._initInFlight;
@@ -233,7 +233,10 @@ export class MemoryService {
       // caller asked). All must surface as the ValidationError this class
       // promises. MAX_SAFE_INTEGER seconds ≈ 285 million years, so the cap
       // rejects only corrupted upstream arithmetic, never a real TTL.
-      if (ttl !== undefined && (!Number.isInteger(ttl) || ttl < 0 || ttl > Number.MAX_SAFE_INTEGER)) {
+      if (
+        ttl !== undefined &&
+        (!Number.isInteger(ttl) || ttl < 0 || ttl > Number.MAX_SAFE_INTEGER)
+      ) {
         throw new ValidationError(
           `ttlSeconds must be an integer between 0 and ${Number.MAX_SAFE_INTEGER}, got ${ttl}`
         );
@@ -251,7 +254,11 @@ export class MemoryService {
    * Recall up to `k` (default 10) memories similar to `query`, optionally
    * narrowed by an exact-match metadata `filter`.
    */
-  recall(query: string, k?: number, filter?: Record<string, unknown>): Promise<MemoryRecollection[]> {
+  recall(
+    query: string,
+    k?: number,
+    filter?: Record<string, unknown>
+  ): Promise<MemoryRecollection[]> {
     return wrapWasmCall(
       () => this.ensureInitialized().recall(query, k, filter) as MemoryRecollection[]
     );
@@ -262,7 +269,11 @@ export class MemoryService {
    * support ranges/comparisons (`gt`, `le`, …), so temporal/numeric facets
    * become queryable.
    */
-  recallWhere(query: string, filters: MemoryColumnFilter[], k?: number): Promise<MemoryRecollection[]> {
+  recallWhere(
+    query: string,
+    filters: MemoryColumnFilter[],
+    k?: number
+  ): Promise<MemoryRecollection[]> {
     return wrapWasmCall(
       () => this.ensureInitialized().recallWhere(query, filters, k) as MemoryRecollection[]
     );
@@ -300,7 +311,11 @@ export class MemoryService {
    * Explain a decision: the best-matching memory plus its connected
    * subgraph. `maxHops` (default 2) is capped at 10.
    */
-  why(decision: string, maxHops?: number, filter?: Record<string, unknown>): Promise<MemoryExplanation> {
+  why(
+    decision: string,
+    maxHops?: number,
+    filter?: Record<string, unknown>
+  ): Promise<MemoryExplanation> {
     return wrapWasmCall(
       () => this.ensureInitialized().why(decision, maxHops, filter) as MemoryExplanation
     );
@@ -322,7 +337,19 @@ function wrapWasmCall<T>(call: () => T): Promise<T> {
   try {
     return Promise.resolve(call());
   } catch (error) {
-    return Promise.reject(toTypedError(error));
+    // toTypedError itself can throw on exotic thrown values (a
+    // prototype-less object breaks String(); a poisoned getter breaks the
+    // `.code` read). Without an enclosing `async` to lift it, that throw
+    // would escape this Promise-returning function SYNCHRONOUSLY — the one
+    // path violating the every-failure-is-a-rejection contract — so it too
+    // is caught and folded into a rejection.
+    try {
+      return Promise.reject(toTypedError(error));
+    } catch {
+      return Promise.reject(
+        new VelesDBError('non-coercible value thrown across the wasm boundary', 'INTERNAL')
+      );
+    }
   }
 }
 
