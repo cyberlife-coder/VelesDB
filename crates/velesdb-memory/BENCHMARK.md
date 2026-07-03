@@ -18,8 +18,9 @@
 
 ## The scoreboard — each engine, measured, generation-free
 
-No other agent-memory project publishes retrieval-level metrics — numbers for
-how often the memory actually *finds* the right information. These isolate each
+To our knowledge, no other agent-memory project publishes retrieval-level
+metrics — numbers for how often the memory actually *finds* the right
+information. These isolate each
 of our three engines against a pure vector-search baseline (what a standard
 RAG/memory product does) on **public, third-party datasets**:
 
@@ -157,9 +158,10 @@ sentence(s) containing the gold answer — vector-only vs vector +
 | Vector only | 36.3% |
 | **+ ColumnStore `recall_where`** | **46.0% (+9.7pp, +27% relative)** |
 
-**Controlled pilot (synthetic):** on `(person, role, org, year)` tuples where
-every candidate for a role is embedding-near-identical and differs only by its
-`year` column, with out-of-window distractors built in:
+**Controlled pilot (synthetic — 108 time-scoped probes, k=5):** on
+`(person, role, org, year)` tuples where every candidate for a role is
+embedding-near-identical and differs only by its `year` column, with
+out-of-window distractors built in:
 
 | Subset | Vector only | + ColumnStore `recall_where` |
 |---|---|---|
@@ -251,10 +253,11 @@ fusion on).*
 | Open-domain | 24% | 76% |
 | **Aggregate (answerable)** | **56%** | **89%** |
 
-Under the *default* config (dated recall only, no scaffold, k=8 era of the
-decomposition study) the same 10-conversation set gives 53% answerable / 53%
-temporal — the delta to the headline is the disclosed best-config tuning, not a
-different dataset. Both runs are in the
+Without the optional temporal scaffold (dated recall only, same pipeline) the
+same 10-conversation set gives **54% answerable / 55% temporal** — that is the
+statistically proven configuration; the scaffold's additional gain to the 56%/61%
+headline is directionally positive but not statistically proven (next
+paragraph). Both runs, with confidence intervals, are in the
 [research report](../../docs/planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md).
 
 **Statistically validated, not just measured once**: paired McNemar tests + a
@@ -293,12 +296,18 @@ cheap, both local.
 ## Retrieval vs reasoning
 
 We report **evidence recall** (did retrieval surface the gold facts?) separately
-from **answer accuracy**, because they are different failure modes. The
-remaining gap is not the generator: swapping the local answerer for a
-GPT-4-class model (Claude Opus 4.8) did **not** lift multi-hop accuracy — it
-landed at the same ~50–58%. Bonus finding: the fused tri-engine at k=32 matches
-brute-force vector retrieval at k=64 — **the graph reaches the same accuracy on
-half the context budget**, which halves the answering token bill.
+from **answer accuracy**, because they are different failure modes. Within our
+harness, the remaining gap is not the generator: swapping the local answerer
+for a GPT-4-class model (Claude Opus 4.8), everything else held fixed, did
+**not** lift multi-hop accuracy — it landed at the same ~50–58%. The cap is the
+benchmark's inherent difficulty (incomplete multi-hop evidence chains, and
+open-domain questions whose answer was never stated in the conversation). This
+is a *within-harness* statement — it does not contradict the cross-harness
+observation below that generator choice shifts *aggregate* scores ~10pp when
+labs also change prompts, context budgets, and judges; here only the answerer
+was swapped. Bonus finding: the fused tri-engine at k=32 matches brute-force
+vector retrieval at k=64 — **the graph reaches the same accuracy on half the
+context budget**, which halves the answering token bill.
 
 ## How to reproduce
 
@@ -332,7 +341,7 @@ landscape, every figure sourced:
 
 | System | Vendor-claimed | Independently measured | Harness of the independent run |
 |---|---|---|---|
-| Mem0 | 66.9–68.4 ([paper](https://arxiv.org/abs/2504.19413)); 91.6+ (2026 README) | **62.5** / **64.2** / **59.2** | [MIRIX](https://arxiv.org/abs/2507.07957) (gpt-4.1-mini) / [PISA](https://arxiv.org/abs/2510.15966) / [MemOS](https://arxiv.org/abs/2507.03724) |
+| Mem0 | 66.9–68.4 ([paper](https://arxiv.org/abs/2504.19413)); 91.6+ (2026 README) | **62.5** / **64.2** | [MIRIX](https://arxiv.org/abs/2507.07957) (gpt-4.1-mini) / [PISA](https://arxiv.org/abs/2510.15966) |
 | Zep | 84 → [corrected 75.1](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/) | **58.4** / **79.1** | [Mem0's run](https://github.com/getzep/zep-papers/issues/5) (gpt-4o-mini) / [MIRIX](https://arxiv.org/abs/2507.07957) (gpt-4.1-mini) |
 | Full-context (no memory system) | — | **72.9** (gpt-4o-mini) / **87.5** (gpt-4.1-mini) | [Mem0 paper](https://arxiv.org/abs/2504.19413) / [MIRIX](https://arxiv.org/abs/2507.07957) |
 | Filesystem agent (no memory system) | — | **74.0** | [Letta](https://www.letta.com/blog/benchmarking-ai-agent-memory/) (gpt-4o-mini) |
@@ -344,10 +353,12 @@ What we actually claim from this table:
    Under the closest comparable regime (gpt-4o-mini-class), independently
    measured systems cluster at 58–64 and full-context sits at 72.9 — our 56,
    fully local, sits at the edge of that cluster, not orders below it.
-2. **Our temporal category (61%) exceeds the temporal Mem0 (55.5%) and Zep
-   (49.3%) report in their own frontier harness** ([Mem0 paper, per-category
-   table](https://arxiv.org/abs/2504.19413)) — and it is the one category with a
-   statistically validated within-harness ablation behind it (+33.6pp).
+2. **Our temporal category (55–61%; the floor is the configuration without the
+   optional scaffold) is level with or above the 55.5% (Mem0) and 49.3% (Zep)
+   that the [Mem0 paper's evaluation](https://arxiv.org/abs/2504.19413) reports
+   for that category** — the Zep figure is Mem0's measurement of Zep, which Zep
+   disputes — and it is the one category with a statistically validated
+   within-harness ablation behind it (+33.6pp).
 3. **We do not claim to beat anyone's vendor headline.** We claim disclosed
    config, paired statistics, a bundled harness, and retrieval metrics (Part 1)
    nobody else publishes.

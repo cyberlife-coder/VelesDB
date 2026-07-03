@@ -18,8 +18,9 @@ quality claims with numbers measured on public test sets that anyone can re-run.
 
 **1. Explainable, *measured* recall.** `why()` returns the actual evidence
 trail — which facts an answer came from and how they connect, with scores —
-where every competitor returns only an answer. And we are the only agent-memory
-project that publishes **how often the memory finds the right information**,
+where every competitor returns only an answer. And we are — to our knowledge —
+the only agent-memory project that publishes **how often the memory finds the
+right information**,
 measured on public test sets with no AI grader in the loop (so no model can
 flatter the score): the graph engine finds the two linked facts a multi-step
 question needs **+7.2 percentage points more often on HotpotQA** (3,000
@@ -30,10 +31,11 @@ reports retrieval quality at all — you can't be out-benchmarked on a number
 only you publish. (All tables: [`BENCHMARK.md`](BENCHMARK.md).)
 
 **2. One binary, zero API keys.** The single most-repeated complaint about the
-incumbent memory layers is that **saving one memory triggers 2–3 paid calls to
-a cloud AI service and requires an API key** — on top of the stack of separate
-services you must install and operate (Qdrant + Postgres for Mem0;
-Neo4j/FalkorDB for Graphiti — and Zep's self-hosted edition was
+incumbent memory layers is that **saving one memory triggers 2–3 AI-model calls
+— by default, paid cloud calls with an API key** (local-model setups exist but
+keep the per-write AI calls) — on top of the stack of separate services you
+must install and operate (Qdrant + Postgres for Mem0; Neo4j/FalkorDB for
+Graphiti — and Zep's self-hosted edition was
 [discontinued in 2025](https://blog.getzep.com/announcing-a-new-direction-for-zeps-open-source-strategy/)).
 velesdb-memory is one small embedded program: no Qdrant, no Postgres, no Neo4j —
 and storing or recalling a memory requires **no AI call at all** (AI-based fact
@@ -46,12 +48,15 @@ chronological order — lifts accuracy on those questions by **+33.6 percentage
 points over baseline**, and that gain is confirmed by paired statistical tests
 (meaning: it's a real effect, not a lucky run — 95% confidence interval
 [27.1, 41.0], measured across the full 10-conversation test set). Independent
-research found the same mechanism to be the highest-value technique in the
-field ([LongMemEval paper](https://arxiv.org/abs/2410.10813): +7–11% on
-temporal reasoning). Our time-question score lands at **58–61%** — higher than
-the 55.5% (Mem0) and 49.3% (Zep) those vendors report for the same category
-**in their own tests, on powerful cloud AI models**
-([Mem0 paper](https://arxiv.org/abs/2504.19413)).
+research reached the same conclusion — time-aware retrieval is one of the most
+effective memory techniques ([LongMemEval paper](https://arxiv.org/abs/2410.10813)).
+Our time-question score lands at **55–61%** (the floor is the statistically
+proven configuration; the ceiling adds an optional prompt scaffold whose extra
+gain is directionally positive but not yet statistically proven) — level with
+or above the 55.5% (Mem0) and 49.3% (Zep) that the
+[Mem0 paper's evaluation](https://arxiv.org/abs/2504.19413) reports for that
+category **on powerful cloud AI models** (the Zep figure is Mem0's measurement,
+which Zep disputes).
 
 ## 3. The category insight
 
@@ -75,7 +80,7 @@ outbound.
 | **LLM calls per memory write** | **Zero required** (opt-in local extraction) | Cloud LLM in the write path | Cloud LLM in the write path |
 | **Explainability** | `why()` returns the scored evidence path | Returns an answer | Graph inside, but no evidence-path API or metric |
 | **Retrieval metrics published** | **Yes — generation-free, public datasets** | No | No |
-| **LoCoMo** | 56% aggregate / **61% temporal** — fully local stack, config + stats disclosed, reproducible harness | 66.9% own harness ([paper](https://arxiv.org/abs/2504.19413)); **59–64% independently** ([MIRIX 62.5](https://arxiv.org/abs/2507.07957), [PISA 64.2](https://arxiv.org/abs/2510.15966), [MemOS 59.2](https://arxiv.org/abs/2507.03724)) | 75.1% own corrected run ([blog](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/)); **58.4–79.1% across independent harnesses** ([Mem0's run](https://github.com/getzep/zep-papers/issues/5), [MIRIX](https://arxiv.org/abs/2507.07957)) |
+| **LoCoMo** | 56% aggregate / **55–61% temporal** (floor = without the optional scaffold) — fully local stack, config + stats disclosed, reproducible harness | 66.9% own harness ([paper](https://arxiv.org/abs/2504.19413)); **62–64% independently** ([MIRIX 62.5](https://arxiv.org/abs/2507.07957), [PISA 64.2](https://arxiv.org/abs/2510.15966)) | 75.1% own corrected run ([blog](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/)); **58.4–79.1% across independent harnesses** ([Mem0's run](https://github.com/getzep/zep-papers/issues/5), [MIRIX](https://arxiv.org/abs/2507.07957)) |
 | **License / distribution** | Source-available, crates.io / PyPI / npm / MCP registry | Open core + hosted | Graphiti OSS + hosted cloud |
 
 *Reading the LoCoMo row honestly: benchmark scores from different labs are
@@ -86,9 +91,11 @@ merely changing which AI model writes the answers moves scores by ~10 points
 number in the Mem0/Zep cells was produced with a powerful **cloud** AI model;
 ours runs on a model **on your own machine**. So we do not claim to beat
 anyone's overall score. What we do claim: on **time-related questions**
-(58–61%) we score higher than what both vendors report for that category in
-their own tests, our full method and statistics are disclosed, and the test
-harness ships with the product so you can re-run it.*
+(55–61%) we score level with or above the 55.5% / 49.3% that the
+[Mem0 paper's evaluation](https://arxiv.org/abs/2504.19413) reports for Mem0
+and Zep in that category (the Zep figure is Mem0's measurement, which Zep
+disputes), our full method and statistics are disclosed, and the test harness
+ships with the product so you can re-run it.*
 
 ## 5. Why we don't play the aggregate-score game (and you shouldn't trust it)
 
@@ -117,13 +124,14 @@ with the product, in `examples/locomo/`.
 
 Those two numbers are not on the same scale. The 91.6% is a vendor headline on a
 contested, evolving eval stack (their *paper* number was 66.9% — and independent
-labs measure them at [59.2](https://arxiv.org/abs/2507.03724)–[64.2](https://arxiv.org/abs/2510.15966)
+labs measure them at [62.5](https://arxiv.org/abs/2507.07957)–[64.2](https://arxiv.org/abs/2510.15966)
 under neutral harnesses); it runs on cloud frontier generators, on a benchmark
 where the judge [accepts most wrong answers](https://dev.to/penfieldlabs/we-audited-locomo-64-of-the-answer-key-is-wrong-and-the-judge-accepts-up-to-63-of-intentionally-33lg)
 and [a filesystem agent scores 74%](https://www.letta.com/blog/benchmarking-ai-agent-memory/).
 Our 56% runs on a **fully local** 35B generator with the config, judge, paired
-statistics, and raw dumps disclosed — and the *categories we invest in* hold up
-against anyone's own reporting: temporal 61% vs Mem0's own 55.5%. So the real
+statistics, and raw dumps disclosed — and the *category we invest in* holds up:
+temporal 55–61%, level with or above the 55.5% the Mem0 paper reports for Mem0
+itself. So the real
 trade is: quality in the independently-measured tier of the field, plus full
 locality, one embedded engine instead of a service mesh, zero per-write LLM
 cost, and an evidence path you can audit. We will not inflate a score to win a

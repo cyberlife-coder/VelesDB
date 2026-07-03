@@ -87,26 +87,26 @@ Each is a real run that shows what plain recall misses and `why()` recovers:
 velesdb-memory is **embedded memory, not a cloud memory service.** The
 difference isn't a benchmark bar chart — it's three things no competitor
 counters: an **evidence trail you can audit** (`why()` shows which facts an
-answer came from), **zero AI calls to store a memory** (the incumbents make 2–3
-paid cloud-AI calls every time they save one), and **published retrieval
-numbers** — we measure, on public test sets and with no AI grader in the loop,
-how often the memory finds the right information; nobody else in this market
-publishes that at all:
+answer came from), **zero AI calls to store a memory** (the incumbents run 2–3
+AI-model calls per save — by default, paid cloud calls), and **published
+retrieval numbers** — we measure, with no AI grader in the loop, how often the
+memory finds the right information; to our knowledge, nobody else in this
+market publishes that at all:
 
 | | **velesdb-memory** | Mem0 | Zep / Graphiti |
 |---|---|---|---|
 | What it is | one embedded binary (vector + graph + column engines) | coordinator over separate services (Qdrant + Postgres) | coordinator, graph-centric (needs Neo4j/FalkorDB) |
-| AI calls to store a memory | **zero required** (optional extraction runs on your local model) | paid cloud-AI call on every write | paid cloud-AI call on every write |
-| Runs | **100% local / offline** | self-host still needs a cloud AI key | Zep's self-hosted edition was discontinued; Graphiti needs a graph database + AI key |
+| AI calls to store a memory | **zero required** (optional extraction runs on your local model) | AI-model calls on every write (cloud by default) | AI-model calls on every write (cloud by default) |
+| Runs | **100% local / offline** | self-host still needs an AI service in the write path | Zep's self-hosted edition was discontinued; Graphiti needs a graph database + an AI service |
 | Explains its answers | **yes** — `why()` returns the evidence trail | no — returns an answer only | no — returns an answer only |
 | Publishes retrieval accuracy | **yes** — [+7.2pts multi-hop, +9.7pts time-scoped, no AI grader](BENCHMARK.md) | no | no |
-| Time-related questions on LoCoMo (each system in its own test setup) | **61%** — on a fully local model ([method + stats](BENCHMARK.md)) | 55.5% on cloud AI ([own paper](https://arxiv.org/abs/2504.19413)) | 49.3% on cloud AI ([same source](https://arxiv.org/abs/2504.19413)) |
+| Time-related questions on LoCoMo | **55–61%** on a fully local model — floor = without the optional scaffold ([method + stats](BENCHMARK.md)) | 55.5% on cloud AI ([own paper](https://arxiv.org/abs/2504.19413)) | 49.3% on cloud AI — [as measured in Mem0's evaluation](https://arxiv.org/abs/2504.19413), which Zep disputes |
 
 *Why no single "overall score" comparison row? Because overall scores from
 different labs can't be fairly compared: the same product (Zep) scores 58.4 in
 one lab's test and 79.1 in another's — the test setup moves the number more
 than the product does. Independent labs measure Mem0 at
-[59](https://arxiv.org/abs/2507.03724)–[64](https://arxiv.org/abs/2510.15966),
+[62.5](https://arxiv.org/abs/2507.07957)–[64.2](https://arxiv.org/abs/2510.15966),
 far from the 91.6% on its own README; our fully-local 56% (full method and
 statistics disclosed) sits at the edge of that independently-measured range —
 while running entirely on your machine. Full landscape, sources, and caveats:
