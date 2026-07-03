@@ -7,7 +7,7 @@
 //! `IndexedDB` persistence (`vector_store_persistence.rs`) if that's needed;
 //! this store only holds state in the WASM heap.
 //!
-//! Reuses the crate's existing similarity math ([`vector_ops::compute_filtered_scores`])
+//! Reuses the crate's existing similarity math ([`vector_ops::compute_scores`])
 //! and edge storage ([`WasmGraphStore`]) rather than duplicating them — this
 //! module is the glue that makes those primitives satisfy `MemoryStore`, not
 //! a second implementation of either.
@@ -267,8 +267,8 @@ impl MemoryStore for WasmStore {
                 // Reserved keys (`content`, `_veles_*`) are stripped exactly
                 // like the native backend and every other recall path — raw
                 // payloads must never reach a caller-facing `Recollection`.
-                metadata: velesdb_memory::storage::strip_reserved_keys(
-                    inner.live_fact(id).map(|fact| fact.payload.clone()),
+                metadata: velesdb_memory::storage::strip_reserved_keys_ref(
+                    inner.live_fact(id).map(|fact| &fact.payload),
                 ),
             })
             .collect())
@@ -331,7 +331,10 @@ impl WasmStore {
     ///
     /// `predicate` is applied while *building* the scoring input, borrowing
     /// each payload in place — nothing is cloned for a non-matching fact,
-    /// and content is cloned only for the `k` rows actually returned.
+    /// and content is cloned only for the `k` rows actually returned. The
+    /// admitted facts are held as borrows (`matched`) rather than re-fetched
+    /// through the time-sensitive `live_fact` after ranking: a TTL lapsing
+    /// mid-query must not turn an admitted hit's content into `""`.
     fn query_scored(
         &self,
         embedding: &[f32],
@@ -342,6 +345,7 @@ impl WasmStore {
         let inner = self.inner.borrow();
         let mut ids = Vec::new();
         let mut data = Vec::new();
+        let mut matched: HashMap<u64, &Fact> = HashMap::new();
         for &id in &inner.order {
             let Some(fact) = inner.live_fact(id) else {
                 continue;
@@ -351,6 +355,7 @@ impl WasmStore {
             }
             ids.push(id);
             data.extend_from_slice(&fact.embedding);
+            matched.insert(id, fact);
         }
         let mut scored = vector_ops::compute_scores(
             embedding,
@@ -370,8 +375,8 @@ impl WasmStore {
             .skip(offset)
             .take(k)
             .map(|(id, score)| {
-                let content = inner
-                    .live_fact(id)
+                let content = matched
+                    .get(&id)
                     .map(|fact| content_of(&fact.payload))
                     .unwrap_or_default();
                 (id, score, content)

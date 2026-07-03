@@ -177,6 +177,11 @@ struct RecollectionOut {
     id: String,
     score: f32,
     content: String,
+    /// Skipped when `None` so absent metadata reads as `undefined` in JS
+    /// (the Node binding's convention) even though [`to_js`] serializes
+    /// missing-as-null — that setting exists for `null` *values inside*
+    /// the metadata map, not for this absent-field case.
+    #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<Value>,
 }
 
@@ -246,9 +251,17 @@ fn to_js(value: &impl Serialize) -> Result<JsValue, JsValue> {
     // `serde_json::Value::Object`, which the DEFAULT serializer turns into an
     // ES2015 `Map` — property access and `JSON.stringify` on it silently
     // yield nothing, breaking the documented `Record<string, unknown>` shape
-    // and Node-binding parity. `Option::None` still serializes to
-    // `undefined`, matching the Node binding's absent-field convention.
-    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    // and Node-binding parity.
+    //
+    // `serialize_missing_as_null`: a `Value::Null` INSIDE metadata (a caller
+    // stored `{flag: null}`) must marshal as JS `null`, exactly like the
+    // Node binding — the default (`undefined`) makes `JSON.stringify` drop
+    // the key on WASM only. Absent metadata still reads as `undefined`:
+    // that field is `skip_serializing_if`-omitted, never serialized as a
+    // `None` this setting could turn into `null`.
+    let serializer = serde_wasm_bindgen::Serializer::new()
+        .serialize_maps_as_objects(true)
+        .serialize_missing_as_null(true);
     value
         .serialize(&serializer)
         .map_err(|e| structured_js_error(CODE_INTERNAL, &e.to_string()))

@@ -46,6 +46,34 @@ fn recall_metadata_is_a_plain_js_object_not_a_map() {
     );
 }
 
+/// A `null` VALUE inside metadata must marshal as JS `null`, matching the
+/// Node binding — with the serializer's default missing-as-undefined, the
+/// key silently vanished from `JSON.stringify` output on WASM only.
+#[wasm_bindgen_test]
+fn recall_metadata_preserves_null_values() {
+    let svc = WasmMemoryService::new(16);
+    let meta = js_sys::Object::new();
+    js_sys::Reflect::set(&meta, &"flag".into(), &JsValue::NULL).unwrap();
+    svc.remember(
+        "a fact carrying a null-valued metadata key",
+        JsValue::UNDEFINED,
+        meta.into(),
+        None,
+    )
+    .unwrap();
+
+    let hits = svc
+        .recall("null-valued metadata", Some(5), JsValue::UNDEFINED)
+        .unwrap();
+    let first = js_sys::Reflect::get(&hits, &0.into()).unwrap();
+    let metadata = js_sys::Reflect::get(&first, &"metadata".into()).unwrap();
+    let flag = js_sys::Reflect::get(&metadata, &"flag".into()).unwrap();
+    assert!(
+        flag.is_null(),
+        "a stored null value must round-trip as null, not undefined"
+    );
+}
+
 /// The absent-metadata convention must survive the serializer change:
 /// a fact with no caller metadata marshals `metadata` as `undefined`
 /// (matching the Node binding), not `null` or an empty object.

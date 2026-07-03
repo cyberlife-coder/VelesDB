@@ -377,6 +377,22 @@ pub fn strip_reserved_keys(payload: Option<Metadata>) -> Option<Metadata> {
     })
 }
 
+/// [`strip_reserved_keys`] over a *borrowed* payload: clones only the
+/// surviving non-reserved entries. Use this when the payload isn't already
+/// owned — cloning the whole map first would deep-copy the reserved
+/// `content` value (the full fact text) per hit, only to discard it.
+#[must_use]
+pub fn strip_reserved_keys_ref(payload: Option<&Metadata>) -> Option<Metadata> {
+    payload.and_then(|payload| {
+        let metadata: Metadata = payload
+            .iter()
+            .filter(|(key, _)| !is_reserved_key(key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        (!metadata.is_empty()).then_some(metadata)
+    })
+}
+
 /// Map a core search result to a [`Recollection`], lifting the fact text out
 /// of the reserved `content` payload key and surfacing any remaining
 /// caller-supplied metadata (reserved system keys excluded).
@@ -392,7 +408,7 @@ fn to_recollection(result: &SearchResult) -> Recollection {
         id: result.point.id,
         score: result.score,
         content,
-        metadata: strip_reserved_keys(payload.cloned()),
+        metadata: strip_reserved_keys_ref(payload),
     }
 }
 

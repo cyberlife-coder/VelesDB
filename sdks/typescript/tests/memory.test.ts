@@ -124,12 +124,13 @@ describe('MemoryService', () => {
       expect(lastMockInstance!.remember).toHaveBeenCalledWith('a fact', [], undefined, undefined);
     });
 
-    it.each([1.5, -1, Number.NaN])(
+    it.each([1.5, -1, Number.NaN, 2 ** 64, Number.POSITIVE_INFINITY])(
       'remember() rejects ttlSeconds %p with ValidationError, not a raw RangeError',
       async (ttlSeconds) => {
-        // Regression: BigInt(1.5) throws a codeless RangeError and a negative
-        // value dies as an opaque wasm-bindgen u64 conversion — both escaped
-        // the typed-error contract instead of surfacing as ValidationError.
+        // Regression: BigInt(1.5) throws a codeless RangeError, a negative
+        // value dies as an opaque wasm-bindgen u64 conversion, and 2**64
+        // silently wraps to 0 ("permanent") at the wasm boundary — all must
+        // surface through the typed-error contract as ValidationError.
         await expect(memory.remember('a fact', { ttlSeconds })).rejects.toBeInstanceOf(
           ValidationError
         );

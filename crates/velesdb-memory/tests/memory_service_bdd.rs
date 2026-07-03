@@ -200,6 +200,61 @@ fn remember_with_unknown_link_target_errors_and_stores_nothing() {
 }
 
 #[test]
+fn remember_with_invalid_relation_label_errors_and_stores_nothing() {
+    // Regression: relation labels are validated AFTER the fact is stored
+    // (inside the edge-creation loop), so a bad label used to leave the
+    // fact persisted with no links — the exact half-written state the API
+    // docs rule out. A fresh fact must be rolled back on any link failure.
+    let (_dir, svc) = service();
+    let target = svc.remember("a target fact", &[], None).expect("remember");
+
+    let err = svc
+        .remember(
+            "a decision",
+            &[Link {
+                target,
+                relation: "x".repeat(600), // over MAX_RELATION_BYTES
+            }],
+            None,
+        )
+        .expect_err("oversized relation label must error");
+    assert!(matches!(err, MemoryError::InvalidRelation(_)));
+
+    let hits = svc.recall("a decision", 5, None).expect("recall");
+    assert!(
+        hits.iter().all(|h| h.content != "a decision"),
+        "a failed link must roll the fresh fact back, not leave it half-written"
+    );
+}
+
+#[test]
+fn remember_link_failure_keeps_a_fact_that_already_existed() {
+    // The rollback must only remove a FRESH fact: re-remembering an existing
+    // fact with a bad link errors, but deleting the fact would destroy the
+    // state an earlier, successful call legitimately established.
+    let (_dir, svc) = service();
+    let target = svc.remember("a target fact", &[], None).expect("remember");
+    svc.remember("a decision", &[], None)
+        .expect("first remember succeeds");
+
+    svc.remember(
+        "a decision",
+        &[Link {
+            target,
+            relation: "x".repeat(600),
+        }],
+        None,
+    )
+    .expect_err("oversized relation label must error");
+
+    let hits = svc.recall("a decision", 5, None).expect("recall");
+    assert!(
+        hits.iter().any(|h| h.content == "a decision"),
+        "the pre-existing fact must survive the failed re-remember"
+    );
+}
+
+#[test]
 fn recall_with_empty_query_returns_empty() {
     let (_dir, svc) = service();
     svc.remember("some stored fact", &[], None)

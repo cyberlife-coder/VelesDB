@@ -223,12 +223,19 @@ export class MemoryService {
   ): Promise<string> {
     const svc = this.ensureInitialized();
     const ttl = options.ttlSeconds;
-    // Validate before BigInt(): a non-integer throws a raw RangeError and a
-    // negative value dies as an opaque wasm-bindgen u64 conversion — both
-    // escaping the ValidationError contract this class promises.
-    if (ttl !== undefined && (!Number.isInteger(ttl) || ttl < 0)) {
+    // Validate before BigInt(): a non-integer throws a raw RangeError, a
+    // negative value dies as an opaque wasm-bindgen u64 conversion, and a
+    // value past MAX_SAFE_INTEGER silently wraps modulo 2^64 at the wasm
+    // boundary (2**64 wraps to 0 — "permanent" — the opposite of what the
+    // caller asked). All must surface as the ValidationError this class
+    // promises. MAX_SAFE_INTEGER seconds ≈ 285 million years, so the cap
+    // rejects only corrupted upstream arithmetic, never a real TTL.
+    if (
+      ttl !== undefined &&
+      (!Number.isInteger(ttl) || ttl < 0 || ttl > Number.MAX_SAFE_INTEGER)
+    ) {
       throw new ValidationError(
-        `ttlSeconds must be a non-negative integer, got ${ttl}`
+        `ttlSeconds must be an integer between 0 and ${Number.MAX_SAFE_INTEGER}, got ${ttl}`
       );
     }
     return wrapWasmCall(() =>

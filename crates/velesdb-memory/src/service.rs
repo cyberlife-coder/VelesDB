@@ -136,6 +136,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         self.ensure_link_targets_exist(links)?;
         let fact_id = id::stable_id(fact);
         let embedding = self.embedder.embed(fact)?;
+        let existed_before = !links.is_empty() && self.store.get(fact_id)?.is_some();
         self.store_fact(
             fact_id,
             fact,
@@ -143,7 +144,19 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             metadata,
             positive_ttl(ttl_seconds),
         )?;
-        self.relate_links(fact_id, links)?;
+        // A link failing AFTER the fact is stored (an invalid relation
+        // label, or a target expiring between the pre-check above and the
+        // edge write) must not leave the fact half-written — the documented
+        // contract is that a bad link never does. Roll a FRESH fact back
+        // (delete cascades any edges already created); a fact that existed
+        // before this call is kept, since deleting it would destroy prior
+        // state an earlier, successful call established.
+        if let Err(e) = self.relate_links(fact_id, links) {
+            if !existed_before {
+                let _ = self.store.delete(fact_id);
+            }
+            return Err(e);
+        }
         Ok(fact_id)
     }
 
@@ -415,9 +428,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         filter: Option<&Metadata>,
     ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
         match filter {
-            // An include filter already excludes hubs: a hub only carries
-            // `{kind: entity}`, so it can never match a user's non-empty
-            // metadata filter. An EMPTY-but-present filter (`Some({})`, the
+            // An include filter already excludes hubs: a hub's payload
+            // carries only reserved keys (`content`, `_veles_hub`), and
+            // reserved keys are rejected from caller filters, so a non-empty
+            // filter can never match a hub. An EMPTY-but-present filter (`Some({})`, the
             // natural `{}` idiom at the JS boundary) matches every payload —
             // hubs included — so it must take the hub-excluding path below,
             // exactly like an absent filter (same `Some({})` ≡ `None`
