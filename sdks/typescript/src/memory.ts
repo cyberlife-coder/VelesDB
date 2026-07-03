@@ -351,16 +351,34 @@ function wrapWasmCall<T>(call: () => T): Promise<T> {
     try {
       return Promise.reject(toTypedError(error));
     } catch {
-      // Prefer the original thrown value when it's a real Error (a poisoned
-      // `.code` getter broke the translation, but the message and stack are
-      // intact and are what the caller needs) — synthesize a generic error
-      // only when even that isn't usable.
-      return Promise.reject(
-        error instanceof Error
-          ? error
-          : new VelesDBError('non-coercible value thrown across the wasm boundary', 'INTERNAL')
-      );
+      // The translation itself blew up (poisoned getter, revoked proxy,
+      // non-coercible value). Reject with a SAFE synthetic error — never
+      // the original, whose live poisoned properties would detonate again
+      // inside the caller's own catch handler — salvaging its message when
+      // that much can be read without re-triggering the failure. Every
+      // operation here is total: `safeDescription` swallows its own reads'
+      // throws, and constructing a `VelesDBError` from a plain string
+      // cannot fail, so no path escapes as a synchronous throw.
+      return Promise.reject(new VelesDBError(safeDescription(error), 'INTERNAL'));
     }
+  }
+}
+
+/**
+ * Best-effort description of a value whose property access or string
+ * coercion throws (the reason `toTypedError` failed on it). Total: every
+ * read is guarded, so this can never throw — the last-resort rejection
+ * path depends on that.
+ */
+function safeDescription(error: unknown): string {
+  const fallback = 'non-coercible value thrown across the wasm boundary';
+  try {
+    const message = (error as { message?: unknown }).message;
+    return typeof message === 'string' && message.length > 0
+      ? `wasm error (translation failed): ${message}`
+      : fallback;
+  } catch {
+    return fallback;
   }
 }
 
