@@ -1,19 +1,27 @@
 # velesdb-memory — Benchmarks
 
 > Every number on this page is **our measurement**, reproducible from the bundled
-> examples, with the full config disclosed (embedder, generator, judge, judge
-> prompt, `k`, flags). We lead with **generation-free retrieval metrics** — pure
-> recall against gold annotations, no LLM in the scoring loop — because they
-> measure the *memory*, not a generator, and no judge can inflate them. The
-> end-to-end LoCoMo section follows, statistically validated with paired tests
-> (McNemar, cluster bootstrap) — see
+> examples, with the full configuration disclosed (embedder, generator, judge,
+> judge prompt, `k`, flags). We lead with **generation-free retrieval metrics** —
+> in plain terms: we check whether the memory surfaced the officially annotated
+> right pieces of evidence, with **no AI model involved in the scoring**, so the
+> number measures the *memory* itself and nothing can flatter it. The end-to-end
+> LoCoMo section follows, validated with paired statistical tests (McNemar,
+> cluster bootstrap — i.e. checks that a gain is a real effect, not a lucky
+> run) — see
 > [`docs/planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md`](../../docs/planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md)
 > for full methodology and caveats.
+>
+> *Reading the numbers: "pp" = percentage points, the absolute gap between two
+> percentages (36% → 46% is +9.7pp). "k" = the retrieval budget — how many
+> memories the system is allowed to hand to the model answering the question.*
 
 ## The scoreboard — each engine, measured, generation-free
 
-No other agent-memory project publishes retrieval-level metrics. These isolate
-each engine against a pure-vector baseline on **public, third-party datasets**:
+No other agent-memory project publishes retrieval-level metrics — numbers for
+how often the memory actually *finds* the right information. These isolate each
+of our three engines against a pure vector-search baseline (what a standard
+RAG/memory product does) on **public, third-party datasets**:
 
 | Engine | Benchmark | Metric | Vector → fused |
 |---|---|---|---|

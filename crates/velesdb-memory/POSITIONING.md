@@ -8,42 +8,50 @@
 ## 1. Positioning statement
 
 **velesdb-memory is the explainable local memory for AI agents — one embedded
-binary, zero API keys, and we publish our retrieval numbers.** A single Rust
-engine fuses vector, graph, and column storage in one WAL; every recall can
-return the scored evidence path behind it (`why()`); and the retrieval claims
-are measured generation-free on public benchmarks anyone can re-run.
+binary, zero API keys, and we publish our retrieval numbers.** In plain terms:
+it's the memory layer that runs entirely on your own machine as a single small
+program, never sends data (or money) to a cloud AI service just to store a
+memory, can show the evidence trail behind every answer (`why()`), and backs its
+quality claims with numbers measured on public test sets that anyone can re-run.
 
 ## 2. The three claims no competitor counters
 
-**1. Explainable, *measured* recall.** `why()` returns the actual evidence path —
-which facts, connected through which entities, with scores — where every
-competitor returns only an answer. And we are the only agent-memory project that
-publishes **retrieval-level supporting-fact metrics** (generation-free, public
-datasets): the graph lifts both-bridge-facts retrieval **+7.2pp on HotpotQA**
-(3,000 dev), replicated **+3.1pp on 2WikiMultiHopQA**'s bridged types; the
-ColumnStore lifts time-scoped recall **+9.7pp on TimeQA**. Nobody else in this
-market reports retrieval metrics at all — you can't be out-benchmarked on a
-number only you publish. (All tables: [`BENCHMARK.md`](BENCHMARK.md).)
+**1. Explainable, *measured* recall.** `why()` returns the actual evidence
+trail — which facts an answer came from and how they connect, with scores —
+where every competitor returns only an answer. And we are the only agent-memory
+project that publishes **how often the memory finds the right information**,
+measured on public test sets with no AI grader in the loop (so no model can
+flatter the score): the graph engine finds the two linked facts a multi-step
+question needs **+7.2 percentage points more often on HotpotQA** (3,000
+questions), a result replicated on a second independent test set
+(**+3.1 points on 2WikiMultiHopQA**); the column engine finds date-scoped
+answers **+9.7 points more often on TimeQA**. Nobody else in this market
+reports retrieval quality at all — you can't be out-benchmarked on a number
+only you publish. (All tables: [`BENCHMARK.md`](BENCHMARK.md).)
 
 **2. One binary, zero API keys.** The single most-repeated complaint about the
-incumbent memory layers is that **every memory write costs 2–3 cloud-LLM calls
-and requires an OpenAI key** — that, plus the backing-services mesh (Qdrant +
-Postgres for Mem0; Neo4j/FalkorDB for Graphiti, whose self-hosted Zep CE was
-[deprecated in 2025](https://blog.getzep.com/announcing-a-new-direction-for-zeps-open-source-strategy/)).
-velesdb-memory is one embedded Rust binary: no Qdrant, no Postgres, no Neo4j —
-and no LLM call is required to store or recall a memory (LLM-based extraction is
-an *opt-in* layer, and it runs on your local model).
+incumbent memory layers is that **saving one memory triggers 2–3 paid calls to
+a cloud AI service and requires an API key** — on top of the stack of separate
+services you must install and operate (Qdrant + Postgres for Mem0;
+Neo4j/FalkorDB for Graphiti — and Zep's self-hosted edition was
+[discontinued in 2025](https://blog.getzep.com/announcing-a-new-direction-for-zeps-open-source-strategy/)).
+velesdb-memory is one small embedded program: no Qdrant, no Postgres, no Neo4j —
+and storing or recalling a memory requires **no AI call at all** (AI-based fact
+extraction exists as an *option*, and it runs on a model on your own machine).
 
-**3. Temporal grounding, statistically validated.** Grounding recall in time
-(date-stamped, chronologically ordered context from the stored `ts` column) lifts
-LoCoMo temporal accuracy **+33.6pp over baseline (95% CI [27.1, 41.0], McNemar
-p≈2e-28, cluster bootstrap over conversations)** — measured on the full
-10-conversation set with paired statistics, not a point estimate. This is the
-same mechanism the [LongMemEval paper](https://arxiv.org/abs/2410.10813) found to
-be the highest-ROI technique (+7–11% on temporal reasoning), independently
-confirming the lever. Our temporal category lands at **58–61%** — higher than
-the temporal scores Mem0 (55.5%) and Zep (49.3%) report **in their own
-frontier-generator harness** ([Mem0 paper](https://arxiv.org/abs/2504.19413)).
+**3. Time-aware memory, statistically validated.** Answering "when did X
+happen?" questions is the weakest category for every memory system. Our fix —
+storing each fact with its date and presenting recalled facts in dated,
+chronological order — lifts accuracy on those questions by **+33.6 percentage
+points over baseline**, and that gain is confirmed by paired statistical tests
+(meaning: it's a real effect, not a lucky run — 95% confidence interval
+[27.1, 41.0], measured across the full 10-conversation test set). Independent
+research found the same mechanism to be the highest-value technique in the
+field ([LongMemEval paper](https://arxiv.org/abs/2410.10813): +7–11% on
+temporal reasoning). Our time-question score lands at **58–61%** — higher than
+the 55.5% (Mem0) and 49.3% (Zep) those vendors report for the same category
+**in their own tests, on powerful cloud AI models**
+([Mem0 paper](https://arxiv.org/abs/2504.19413)).
 
 ## 3. The category insight
 
@@ -70,15 +78,17 @@ outbound.
 | **LoCoMo** | 56% aggregate / **61% temporal** — fully local stack, config + stats disclosed, reproducible harness | 66.9% own harness ([paper](https://arxiv.org/abs/2504.19413)); **59–64% independently** ([MIRIX 62.5](https://arxiv.org/abs/2507.07957), [PISA 64.2](https://arxiv.org/abs/2510.15966), [MemOS 59.2](https://arxiv.org/abs/2507.03724)) | 75.1% own corrected run ([blog](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/)); **58.4–79.1% across independent harnesses** ([Mem0's run](https://github.com/getzep/zep-papers/issues/5), [MIRIX](https://arxiv.org/abs/2507.07957)) |
 | **License / distribution** | Source-available, crates.io / PyPI / npm / MCP registry | Open core + hosted | Graphiti OSS + hosted cloud |
 
-*Reading the LoCoMo row honestly: cross-harness scores are **not comparable** —
-the same system (Zep) scores 58.4 in Mem0's harness and 79.1 in MIRIX's, a
-21-point swing from harness choice alone, and swapping only the generator model
-moves scores ~10pp ([Continua's controlled rerun](https://blog.continua.ai/p/the-locomo-fair-fight)).
-Every number in the Mem0/Zep cells uses a frontier **cloud** generator; ours uses
-a fully **local** 35B model. We therefore do not claim to beat anyone's
-aggregate. What we do claim: our **temporal** category (58–61%) exceeds the
-temporal both vendors report in their own harnesses, our full config and paired
-statistics are disclosed, and the harness is bundled so you can re-run it.*
+*Reading the LoCoMo row honestly: benchmark scores from different labs are
+**not comparable** — the same product (Zep) scores 58.4 in one lab's test setup
+and 79.1 in another's, a 21-point swing caused by the test setup alone, and
+merely changing which AI model writes the answers moves scores by ~10 points
+([controlled rerun](https://blog.continua.ai/p/the-locomo-fair-fight)). Every
+number in the Mem0/Zep cells was produced with a powerful **cloud** AI model;
+ours runs on a model **on your own machine**. So we do not claim to beat
+anyone's overall score. What we do claim: on **time-related questions**
+(58–61%) we score higher than what both vendors report for that category in
+their own tests, our full method and statistics are disclosed, and the test
+harness ships with the product so you can re-run it.*
 
 ## 5. Why we don't play the aggregate-score game (and you shouldn't trust it)
 
@@ -95,10 +105,11 @@ The LoCoMo aggregate has become a marketing number, not a measurement:
   which says more about the benchmark than about memory systems
   ([Letta](https://www.letta.com/blog/benchmarking-ai-agent-memory/)).
 
-Our stance: publish the harness, the config, the judge, the raw dumps, and the
-paired statistics; lead with **generation-free retrieval metrics** that no judge
-can inflate; and compare categories only within a stated harness. If you want to
-check us — the harness ships in `examples/locomo/`.
+Our stance: publish the test harness, the exact configuration, the grader, the
+raw outputs, and the statistics; lead with **retrieval numbers measured without
+any AI grader** (so nothing can inflate them); and only compare categories
+measured under the same conditions. If you want to check us — the harness ships
+with the product, in `examples/locomo/`.
 
 ## 6. Hardest objection
 
