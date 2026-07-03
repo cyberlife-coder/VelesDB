@@ -255,6 +255,45 @@ fn remember_link_failure_keeps_a_fact_that_already_existed() {
 }
 
 #[test]
+fn remember_link_failure_leaves_a_pre_existing_facts_payload_untouched() {
+    // Regression: relation labels used to be validated only inside the
+    // edge-creation loop, AFTER store_fact — so a failed re-remember had
+    // already overwritten the fact's metadata and could arm a TTL on a
+    // permanent memory (it would silently expire despite the call
+    // erroring). All link input is now validated before any write.
+    let (_dir, svc) = service();
+    let target = svc.remember("a target fact", &[], None).expect("remember");
+    svc.remember(
+        "a decision",
+        &[],
+        Some(&meta(&[("source", json!("trusted"))])),
+    )
+    .expect("first remember");
+
+    svc.remember_with_ttl(
+        "a decision",
+        &[Link {
+            target,
+            relation: "x".repeat(600), // over MAX_RELATION_BYTES
+        }],
+        Some(&meta(&[("source", json!("overwritten"))])),
+        Some(60),
+    )
+    .expect_err("oversized relation label must error");
+
+    let hits = svc.recall("a decision", 5, None).expect("recall");
+    let hit = hits
+        .iter()
+        .find(|h| h.content == "a decision")
+        .expect("fact still present");
+    assert_eq!(
+        hit.metadata.as_ref().and_then(|m| m.get("source")),
+        Some(&json!("trusted")),
+        "a failed call must not overwrite the pre-existing fact's metadata"
+    );
+}
+
+#[test]
 fn recall_with_empty_query_returns_empty() {
     let (_dir, svc) = service();
     svc.remember("some stored fact", &[], None)

@@ -254,24 +254,21 @@ impl MemoryStore for WasmStore {
         for filter in filters {
             velesdb_memory::storage::validate_column_filter(filter)?;
         }
-        let scored = self.query_scored(embedding, k, 0, |payload| {
-            columnar_matches(payload, filters)
-        })?;
-        let inner = self.inner.borrow();
-        Ok(scored
-            .into_iter()
-            .map(|(id, score, content)| Recollection {
+        self.query_ranked(
+            embedding,
+            k,
+            0,
+            |payload| columnar_matches(payload, filters),
+            |id, score, fact| Recollection {
                 id,
                 score,
-                content,
+                content: content_of(&fact.payload),
                 // Reserved keys (`content`, `_veles_*`) are stripped exactly
                 // like the native backend and every other recall path — raw
                 // payloads must never reach a caller-facing `Recollection`.
-                metadata: velesdb_memory::storage::strip_reserved_keys_ref(
-                    inner.live_fact(id).map(|fact| &fact.payload),
-                ),
-            })
-            .collect())
+                metadata: velesdb_memory::storage::strip_reserved_keys_ref(Some(&fact.payload)),
+            },
+        )
     }
 
     fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
@@ -327,21 +324,24 @@ impl WasmStore {
     /// Shared vector-search core for [`MemoryStore::query_filtered`],
     /// [`MemoryStore::query_excluding`], and [`MemoryStore::query_columnar`]:
     /// score every non-expired fact whose payload passes `predicate` against
-    /// `embedding`, rank, and take `k` after `offset`.
+    /// `embedding`, rank, take `k` after `offset`, and build each returned
+    /// row with `row`.
     ///
     /// `predicate` is applied while *building* the scoring input, borrowing
     /// each payload in place — nothing is cloned for a non-matching fact,
-    /// and content is cloned only for the `k` rows actually returned. The
-    /// admitted facts are held as borrows (`matched`) rather than re-fetched
-    /// through the time-sensitive `live_fact` after ranking: a TTL lapsing
-    /// mid-query must not turn an admitted hit's content into `""`.
-    fn query_scored(
+    /// and `row` runs only for the rows actually returned. Admitted facts
+    /// are held as borrows (`matched`) and `row` receives the fact captured
+    /// at scoring time — never re-fetched through the time-sensitive
+    /// `live_fact` after ranking, so a TTL lapsing mid-query can't corrupt
+    /// an admitted hit's content or metadata.
+    fn query_ranked<T>(
         &self,
         embedding: &[f32],
         k: usize,
         offset: usize,
         predicate: impl Fn(&Map<String, Value>) -> bool,
-    ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
+        row: impl Fn(u64, f32, &Fact) -> T,
+    ) -> Result<Vec<T>, MemoryError> {
         let inner = self.inner.borrow();
         let mut ids = Vec::new();
         let mut data = Vec::new();
@@ -374,14 +374,23 @@ impl WasmStore {
             .into_iter()
             .skip(offset)
             .take(k)
-            .map(|(id, score)| {
-                let content = matched
-                    .get(&id)
-                    .map(|fact| content_of(&fact.payload))
-                    .unwrap_or_default();
-                (id, score, content)
-            })
+            .filter_map(|(id, score)| matched.get(&id).map(|fact| row(id, score, fact)))
             .collect())
+    }
+
+    /// [`Self::query_ranked`] specialised to the `(id, score, content)`
+    /// triple [`MemoryStore::query_filtered`]/[`MemoryStore::query_excluding`]
+    /// return.
+    fn query_scored(
+        &self,
+        embedding: &[f32],
+        k: usize,
+        offset: usize,
+        predicate: impl Fn(&Map<String, Value>) -> bool,
+    ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
+        self.query_ranked(embedding, k, offset, predicate, |id, score, fact| {
+            (id, score, content_of(&fact.payload))
+        })
     }
 }
 

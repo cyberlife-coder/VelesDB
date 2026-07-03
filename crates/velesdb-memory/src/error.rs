@@ -76,6 +76,21 @@ pub enum MemoryError {
     /// or contained non-printable characters.
     #[error("invalid relation label: {0}")]
     InvalidRelation(String),
+
+    /// A `remember` link failed after the fact was stored AND the
+    /// compensating rollback delete also failed — unlike every other error
+    /// from `remember`, the fact **remains stored**. Both errors are
+    /// carried so the caller can see why the write failed and why the
+    /// cleanup couldn't undo it.
+    #[error(
+        "link failed ({cause}); rollback delete also failed ({rollback}) — the fact remains stored"
+    )]
+    RollbackFailed {
+        /// The link failure that triggered the rollback.
+        cause: Box<MemoryError>,
+        /// The storage failure that prevented the rollback delete.
+        rollback: Box<MemoryError>,
+    },
 }
 
 impl MemoryError {
@@ -95,6 +110,9 @@ impl MemoryError {
             Self::Storage(_) | Self::Embed(_) | Self::Extract(_) | Self::Rerank(_) => {
                 ErrorCategory::Internal
             }
+            // The rollback failure is the storage-level fault that matters
+            // to a client: the write is in an unexpected state.
+            Self::RollbackFailed { .. } => ErrorCategory::Internal,
         }
     }
 }

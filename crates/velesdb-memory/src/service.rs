@@ -93,14 +93,23 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// (`ColumnStore` facet) and linking it to existing memories (graph facet).
     /// Returns the stable id of the fact (idempotent on identical content).
     ///
-    /// Link targets are validated to exist *before* the fact is stored, so a bad
-    /// link never leaves the fact half-written.
+    /// Every link is validated — target existence AND relation label —
+    /// *before* the fact is stored, so bad link input never leaves the fact
+    /// half-written. If an edge write itself fails afterwards (e.g. a target
+    /// expiring concurrently), a freshly-created fact is rolled back; a
+    /// re-remembered fact keeps its updated payload (re-remembering updates
+    /// metadata by design, and deleting it would destroy prior state).
+    /// Concurrent `remember`s of identical content are last-writer-wins,
+    /// not transactional.
     ///
     /// # Errors
     /// Returns [`MemoryError::EmptyFact`] for empty/whitespace facts,
     /// [`MemoryError::ReservedKey`] if `metadata` names a reserved key
     /// (`content` or any `_veles_`-prefixed system key),
     /// [`MemoryError::UnknownMemory`] if a link points at a missing memory,
+    /// [`MemoryError::InvalidRelation`] for a bad relation label,
+    /// [`MemoryError::RollbackFailed`] if an edge write failed and the
+    /// compensating delete also failed (the fact remains stored),
     /// or a storage error if persistence fails.
     pub fn remember(
         &self,
@@ -133,6 +142,12 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             return Err(MemoryError::EmptyFact);
         }
         reject_reserved_keys(metadata)?;
+        // EVERY link property — relation label and target existence — is
+        // validated before any write, so all deterministic link failures
+        // happen while nothing has been stored or overwritten yet.
+        for link in links {
+            validate_relation(&link.relation)?;
+        }
         self.ensure_link_targets_exist(links)?;
         let fact_id = id::stable_id(fact);
         let embedding = self.embedder.embed(fact)?;
@@ -144,25 +159,33 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             metadata,
             positive_ttl(ttl_seconds),
         )?;
-        // A link failing AFTER the fact is stored (an invalid relation
-        // label, or a target expiring between the pre-check above and the
-        // edge write) must not leave the fact half-written — the documented
-        // contract is that a bad link never does. Roll a FRESH fact back
-        // (delete cascades any edges already created); a fact that existed
-        // before this call is kept, since deleting it would destroy prior
-        // state an earlier, successful call established.
+        // Links are fully pre-validated above, so an edge write can only
+        // fail here on a race (e.g. a target's TTL lapsing since the
+        // pre-check). Roll a FRESH fact back (delete cascades any edges
+        // already created); a fact that existed before this call is kept —
+        // deleting it would destroy prior state, and its updated payload
+        // stands per re-remember's update semantics. The existence probe
+        // and the delete are not one atomic unit: a concurrent remember of
+        // identical content between them is last-writer-wins (documented
+        // on [`Self::remember`]).
         if let Err(e) = self.relate_links(fact_id, links) {
             if !existed_before {
-                let _ = self.store.delete(fact_id);
+                if let Err(rollback) = self.store.delete(fact_id) {
+                    return Err(MemoryError::RollbackFailed {
+                        cause: Box::new(e),
+                        rollback: Box::new(rollback),
+                    });
+                }
             }
             return Err(e);
         }
         Ok(fact_id)
     }
 
-    /// Create each validated outgoing link from `fact_id`. Split out of
-    /// [`Self::remember_with_ttl`] to keep that method within the complexity
-    /// budget.
+    /// Create each outgoing link from `fact_id` (labels already validated by
+    /// [`Self::remember_with_ttl`]'s pre-pass; re-checked here so a future
+    /// direct caller can't skip it). Split out of `remember_with_ttl` to
+    /// keep that method within the complexity budget.
     fn relate_links(&self, fact_id: u64, links: &[Link]) -> Result<(), MemoryError> {
         for link in links {
             validate_relation(&link.relation)?;
