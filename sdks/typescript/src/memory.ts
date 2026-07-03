@@ -342,51 +342,56 @@ function wrapWasmCall<T>(call: () => T): Promise<T> {
   try {
     return Promise.resolve(call());
   } catch (error) {
-    // toTypedError itself can throw on exotic thrown values (a
-    // prototype-less object breaks String(); a poisoned getter breaks the
-    // `.code` read). Without an enclosing `async` to lift it, that throw
-    // would escape this Promise-returning function SYNCHRONOUSLY — the one
-    // path violating the every-failure-is-a-rejection contract — so it too
-    // is caught and folded into a rejection.
-    try {
-      return Promise.reject(toTypedError(error));
-    } catch {
-      // The translation itself blew up (poisoned getter, revoked proxy,
-      // non-coercible value). Reject with a SAFE synthetic error — never
-      // the original, whose live poisoned properties would detonate again
-      // inside the caller's own catch handler — salvaging its message when
-      // that much can be read without re-triggering the failure. Every
-      // operation here is total: `safeDescription` swallows its own reads'
-      // throws, and constructing a `VelesDBError` from a plain string
-      // cannot fail, so no path escapes as a synchronous throw.
-      return Promise.reject(new VelesDBError(safeDescription(error), 'INTERNAL'));
-    }
+    // `toTypedError` is total (every property read and coercion inside it
+    // is guarded), so this single reject can never itself throw — the
+    // every-failure-is-a-rejection contract needs no second safety net.
+    return Promise.reject(toTypedError(error));
   }
 }
 
 /**
- * Best-effort description of a value whose property access or string
- * coercion throws (the reason `toTypedError` failed on it). Total: every
- * read is guarded, so this can never throw — the last-resort rejection
- * path depends on that.
+ * Translate a value thrown across the wasm boundary into the SDK's typed
+ * hierarchy. **Total by construction**: every property read and string
+ * coercion is individually guarded, so this never throws even for exotic
+ * values (poisoned getters, revoked proxies, prototype-less objects) —
+ * `wrapWasmCall`'s rejection contract depends on that. Degradation is
+ * per-property: a readable `.code` still classifies the error as
+ * NotFound/Validation even when `.message` is unreadable, and the original
+ * error object is passed through verbatim only when its whole inspected
+ * surface proved safe — otherwise the caller gets a synthetic error whose
+ * own `.code`/`.message` reads can never detonate in their catch handler.
  */
-function safeDescription(error: unknown): string {
-  const fallback = 'non-coercible value thrown across the wasm boundary';
-  try {
-    const message = (error as { message?: unknown }).message;
-    return typeof message === 'string' && message.length > 0
-      ? `wasm error (translation failed): ${message}`
-      : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 function toTypedError(error: unknown): Error {
-  if (!(error instanceof Error)) {
-    return new VelesDBError(String(error), 'INTERNAL');
+  let isError: boolean;
+  try {
+    isError = error instanceof Error;
+  } catch {
+    isError = false; // a revoked proxy throws on the prototype walk
   }
-  const code = (error as WasmErrorLike).code;
+  if (!isError) {
+    let text: string;
+    try {
+      text = String(error);
+    } catch {
+      text = 'non-coercible value thrown across the wasm boundary';
+    }
+    return new VelesDBError(text, 'INTERNAL');
+  }
+  let codeUnreadable = false;
+  let code: string | undefined;
+  try {
+    code = (error as WasmErrorLike).code;
+  } catch {
+    codeUnreadable = true;
+  }
+  let messageUnreadable = false;
+  let message: string | undefined;
+  try {
+    const read = (error as WasmErrorLike).message;
+    message = typeof read === 'string' ? read : undefined;
+  } catch {
+    messageUnreadable = true;
+  }
   switch (code) {
     // NotFoundError's constructor takes a bare resource name and builds its
     // own "X not found" message — but the wasm error already carries a
@@ -396,11 +401,19 @@ function toTypedError(error: unknown): Error {
     // ValidationError has no such mangling — its constructor takes a raw
     // message directly, so no override is needed there.
     case 'NOT_FOUND':
-      return withMessage(new NotFoundError('memory'), error.message);
+      return withMessage(new NotFoundError('memory'), message ?? 'memory not found');
     case 'INVALID_INPUT':
-      return new ValidationError(error.message);
+      return new ValidationError(message ?? 'invalid input (original message unreadable)');
     default:
-      return error;
+      if (!codeUnreadable && !messageUnreadable) {
+        return error as Error;
+      }
+      return new VelesDBError(
+        message !== undefined
+          ? `wasm error (translation failed): ${message}`
+          : 'wasm error whose property inspection throws (message unreadable)',
+        'INTERNAL'
+      );
   }
 }
 
