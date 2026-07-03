@@ -108,6 +108,10 @@ describe('MemoryService', () => {
         const rejection = stale.init();
         await expect(rejection).rejects.toBeInstanceOf(ConnectionError);
         await expect(rejection).rejects.toThrow(/>= 3\.6\.0/);
+        // A retry after the failed init runs a fresh load (the memoized
+        // in-flight promise is cleared on settle) and must fail the same
+        // way — never spuriously resolve with a null inner store.
+        await expect(stale.init()).rejects.toThrow(/>= 3\.6\.0/);
         expect(stale.isInitialized()).toBe(false);
       } finally {
         mockWasmModule.MemoryService = saved;

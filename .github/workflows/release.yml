@@ -539,6 +539,7 @@ jobs:
         run: |
           cd sdks/typescript
           npm install && npm run build
+          PKG_VERSION=$(node -p "require('./package.json').version")
           # The PUBLISHED package pins @wiscale/velesdb-wasm to this release
           # (the memory wedge needs the wasm build shipping WasmMemoryService),
           # so npm enforces the capability floor at install/upgrade time. The
@@ -547,8 +548,23 @@ jobs:
           # same patch-at-publish pattern as the wasm package.json above.
           # Patched AFTER install/build: publish doesn't resolve ranges, but
           # install would fail on a not-yet-published sibling version.
+          #
+          # The wasm package publishes from a PARALLEL matrix leg (slower: it
+          # compiles Rust), so wait for it before publishing a manifest that
+          # points at it — otherwise the SDK ships uninstallable (ETARGET)
+          # until/unless the wasm leg lands. Bounded wait, then hard fail:
+          # better an unpublished SDK leg (re-runnable via workflow_dispatch)
+          # than an immutably published one requiring a ghost version.
+          for i in $(seq 1 40); do
+            if npm view "@wiscale/velesdb-wasm@$PKG_VERSION" version >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$i" = "40" ]; then
+              echo "❌ @wiscale/velesdb-wasm@$PKG_VERSION not on npm after 10 min — not publishing an SDK that depends on it"; exit 1
+            fi
+            echo "⏳ waiting for @wiscale/velesdb-wasm@$PKG_VERSION on npm ($i/40)"; sleep 15
+          done
           node -e "const p=require('./package.json'); p.dependencies['@wiscale/velesdb-wasm']='^'+p.version; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n')"
-          PKG_VERSION=$(node -p "require('./package.json').version")
           if npm publish --access public; then
             echo "✅ published @wiscale/velesdb-sdk@$PKG_VERSION"
           elif npm view "@wiscale/velesdb-sdk@$PKG_VERSION" version >/dev/null 2>&1; then
