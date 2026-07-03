@@ -84,20 +84,29 @@ Each is a real run that shows what plain recall misses and `why()` recovers:
 
 ## How it compares — and who it's for
 
-velesdb-memory is **embedded memory, not a cloud memory service.** On the LoCoMo QA
-benchmark it sits in the **same tier as Mem0** and well ahead of Zep on a sober,
-neutral-judge basis — but the real difference is the *architecture*, not the score:
+velesdb-memory is **embedded memory, not a cloud memory service.** The
+difference isn't a benchmark bar chart — it's three things no competitor
+counters: an **evidence path you can audit** (`why()`), **zero LLM calls to
+store a memory** (the incumbents make 2–3 cloud calls per write), and
+**published retrieval metrics** (generation-free, public datasets — nobody else
+reports retrieval quality at all):
 
 | | **velesdb-memory** | Mem0 | Zep / Graphiti |
 |---|---|---|---|
-| Shape | one embedded binary (vector + graph + column) | orchestrator over Qdrant + Postgres | orchestrator (graph-centric) |
-| Runs | **100% local / offline** | cloud LLM in the loop | cloud LLM in the loop |
-| Explains | **`why()` returns the evidence path** | returns an answer | returns an answer |
-| LoCoMo (neutral PISA basis) | ~56% | ~55% | ~34% |
+| Shape | one embedded binary (vector + graph + column) | orchestrator over Qdrant + Postgres | orchestrator (graph-centric, needs Neo4j/FalkorDB) |
+| LLM calls per memory write | **zero required** (opt-in local extraction) | cloud LLM in the write path | cloud LLM in the write path |
+| Runs | **100% local / offline** | self-host still needs an LLM API | Zep CE deprecated; Graphiti needs a graph DB + LLM API |
+| Explains | **`why()` returns the scored evidence path** | returns an answer | returns an answer |
+| Retrieval metrics published | **yes** — [HotpotQA +7.2pp, TimeQA +9.7pp, generation-free](BENCHMARK.md) | no | no |
+| LoCoMo temporal (each in its own harness) | **61%** (local stack, [stats disclosed](BENCHMARK.md)) | 55.5% ([own paper](https://arxiv.org/abs/2504.19413), cloud) | 49.3% ([measured in Mem0's harness](https://arxiv.org/abs/2504.19413)) |
 
-*Mem0's ~92% / Zep's ~84% headlines run on cloud GPT-4o with contested methodology; on
-the neutral basis the whole field sits far lower and close together — we do **not** claim
-to beat those headlines, we claim the same tier on radically better architecture.*
+*On the LoCoMo aggregate we deliberately don't print a comparison row:
+cross-harness scores are not comparable (the same system scores 58.4 or 79.1
+depending on whose harness runs it). Independent labs measure Mem0 at
+[59](https://arxiv.org/abs/2507.03724)–[64](https://arxiv.org/abs/2510.15966),
+far from its 91.6% README headline; our fully-local 56% (config + paired
+statistics disclosed) sits at the edge of that independently-measured cluster.
+Full landscape, sources, and caveats: [`BENCHMARK.md`](BENCHMARK.md).*
 
 **Choose velesdb-memory when local-first is a requirement, not a preference:**
 - **Regulated / sovereign data** (health, legal, finance, defense) — context can't transit a third-party LLM API; `why()` gives both data residency and an auditable recall trail.
