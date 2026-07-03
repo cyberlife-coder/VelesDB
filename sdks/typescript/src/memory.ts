@@ -366,16 +366,7 @@ function toTypedError(error: unknown): Error {
   const rawMessage = tryRead(() => (error as WasmErrorLike).message);
   const message = salvageMessage(rawMessage);
   if (isError.value !== true) {
-    const text = tryRead(() => String(error));
-    if (typeof text.value === 'string') {
-      return new VelesDBError(text.value, 'INTERNAL');
-    }
-    return new VelesDBError(
-      message !== undefined
-        ? `wasm error (translation failed): ${message}`
-        : 'non-coercible value thrown across the wasm boundary',
-      'INTERNAL'
-    );
+    return coerceNonError(error, message);
   }
   const code = tryRead(() => (error as WasmErrorLike).code);
   switch (code.value) {
@@ -385,26 +376,50 @@ function toTypedError(error: unknown): Error {
     // exist"). Construct it for `instanceof` narrowing, then overwrite its
     // message with the original rather than wrapping it a second time.
     // ValidationError has no such mangling — its constructor takes a raw
-    // message directly. Both branches flag a lost original message the same
-    // way, so degradation is never silent.
+    // message directly. The "(original message unavailable)" fallbacks make
+    // a lost message visible without claiming why it was lost (empty,
+    // non-string, or a throwing getter alike).
     case 'NOT_FOUND':
       return withMessage(
         new NotFoundError('memory'),
-        message ?? 'memory not found (original message unreadable)'
+        messageOr(message, 'memory not found (original message unavailable)')
       );
     case 'INVALID_INPUT':
-      return new ValidationError(message ?? 'invalid input (original message unreadable)');
-    default:
-      if (code.ok && rawMessage.ok) {
-        return error as Error;
-      }
-      return new VelesDBError(
-        message !== undefined
-          ? `wasm error (translation failed): ${message}`
-          : 'wasm error (translation failed: property inspection throws)',
-        'INTERNAL'
+      return new ValidationError(
+        messageOr(message, 'invalid input (original message unavailable)')
       );
+    default:
+      return code.ok && rawMessage.ok
+        ? (error as Error)
+        : degradedError(message, 'wasm error (message unavailable)');
   }
+}
+
+/**
+ * The `INTERNAL` translation for a thrown non-Error: its string coercion
+ * when that works, else a degraded error salvaging the already-read
+ * `.message` (a prototype-less `{code, message}` object has no `toString`,
+ * yet its message is the one diagnostic worth keeping).
+ */
+function coerceNonError(error: unknown, message: string | undefined): VelesDBError {
+  const text = tryRead(() => String(error));
+  if (typeof text.value === 'string') {
+    return new VelesDBError(text.value, 'INTERNAL');
+  }
+  return degradedError(message, 'non-coercible value thrown across the wasm boundary');
+}
+
+/** The salvaged message, or `fallback` when nothing survived. */
+function messageOr(message: string | undefined, fallback: string): string {
+  return message ?? fallback;
+}
+
+/** A synthetic error carrying whatever message survived salvage, else `fallback`. */
+function degradedError(message: string | undefined, fallback: string): VelesDBError {
+  return new VelesDBError(
+    message !== undefined ? `wasm error (translation failed): ${message}` : fallback,
+    'INTERNAL'
+  );
 }
 
 /** A guarded read: captures the result, or the fact that reading threw. */
@@ -419,7 +434,8 @@ function tryRead<T>(read: () => T): { ok: boolean; value: T | undefined } {
 /**
  * A usable message text out of a guarded `.message` read, or `undefined`:
  * non-empty strings pass through, non-string values are coerced when their
- * coercion doesn't itself throw, empty/absent/unreadable yield nothing.
+ * coercion doesn't itself throw; empty, absent, and unreadable all yield
+ * nothing (the caller's fallback text stays accurate for every case).
  */
 function salvageMessage(read: { ok: boolean; value: unknown }): string | undefined {
   if (!read.ok || read.value == null) {
@@ -429,7 +445,7 @@ function salvageMessage(read: { ok: boolean; value: unknown }): string | undefin
     return read.value.length > 0 ? read.value : undefined;
   }
   const coerced = tryRead(() => String(read.value));
-  return coerced.value;
+  return coerced.value ? coerced.value : undefined;
 }
 
 function withMessage<E extends Error>(error: E, message: string): E {
