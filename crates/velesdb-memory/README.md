@@ -105,12 +105,11 @@ market publishes that at all:
 *Why no single "overall score" comparison row? Because overall scores from
 different labs can't be fairly compared: the same product (Zep) scores 58.4 in
 one lab's test and 79.1 in another's — the test setup moves the number more
-than the product does. Independent labs measure Mem0 at
-[62.5](https://arxiv.org/abs/2507.07957)–[64.2](https://arxiv.org/abs/2510.15966),
-far from the 91.6% on its own README; our fully-local 56% (full method and
-statistics disclosed) sits at the edge of that independently-measured range —
-while running entirely on your machine. Full landscape, sources, and caveats:
-[`BENCHMARK.md`](BENCHMARK.md).*
+than the product does. Independent labs measure the leading vendors well below
+their own headlines, and our fully-local 56% (full method and statistics
+disclosed) lands a few points below that independently-measured cluster —
+while running entirely on your machine. The full sourced landscape and every
+caveat: [`BENCHMARK.md`](BENCHMARK.md).*
 
 **Choose velesdb-memory when local-first is a requirement, not a preference:**
 - **Regulated / sovereign data** (health, legal, finance, defense) — context can't transit a third-party LLM API; `why()` gives both data residency and an auditable recall trail.

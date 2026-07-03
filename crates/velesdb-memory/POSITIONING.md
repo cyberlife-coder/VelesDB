@@ -25,7 +25,8 @@ measured on public test sets with no AI grader in the loop (so no model can
 flatter the score): the graph engine finds the two linked facts a multi-step
 question needs **+7.2 percentage points more often on HotpotQA** (3,000
 questions), a result replicated on a second independent test set
-(**+3.1 points on 2WikiMultiHopQA**); the column engine finds date-scoped
+(2WikiMultiHopQA: **+3.1 points on its bridged question types**, +2.1 overall);
+the column engine finds date-scoped
 answers **+9.7 points more often on TimeQA**. Nobody else in this market
 reports retrieval quality at all — you can't be out-benchmarked on a number
 only you publish. (All tables: [`BENCHMARK.md`](BENCHMARK.md).)

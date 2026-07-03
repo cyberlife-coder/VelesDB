@@ -13,7 +13,7 @@
 > for full methodology and caveats.
 >
 > *Reading the numbers: "pp" = percentage points, the absolute gap between two
-> percentages (36% → 46% is +9.7pp). "k" = the retrieval budget — how many
+> percentages (36.3% → 46.0% is +9.7pp). "k" = the retrieval budget — how many
 > memories the system is allowed to hand to the model answering the question.*
 
 ## The scoreboard — each engine, measured, generation-free
@@ -68,7 +68,7 @@ is downweighted). Embedder: `mxbai-embed-large`, local. Fully generation-free.
 | **All** | Vector only | 72.1% | 47.1% |
 | | **+ tri-engine graph (idf)** | **75.3% (+3.3pp)** | **52.7% (+5.6pp)** |
 
-The split is the story. On **bridge** questions — the genuine multi-hop, 81% of
+The split is the story. On **bridge** questions — the genuine multi-hop, 80% of
 the set, where the answer requires following a bridge entity to a second-hop
 fact a vector store ranks *low by construction* — the graph delivers a large,
 clean win. On **comparison** questions (both entities are named in the question,
@@ -345,7 +345,7 @@ landscape, every figure sourced:
 | Zep | 84 → [corrected 75.1](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/) | **58.4** / **79.1** | [Mem0's run](https://github.com/getzep/zep-papers/issues/5) (gpt-4o-mini) / [MIRIX](https://arxiv.org/abs/2507.07957) (gpt-4.1-mini) |
 | Full-context (no memory system) | — | **72.9** (gpt-4o-mini) / **87.5** (gpt-4.1-mini) | [Mem0 paper](https://arxiv.org/abs/2504.19413) / [MIRIX](https://arxiv.org/abs/2507.07957) |
 | Filesystem agent (no memory system) | — | **74.0** | [Letta](https://www.letta.com/blog/benchmarking-ai-agent-memory/) (gpt-4o-mini) |
-| **velesdb-memory** | — | **56 aggregate / 61 temporal** — the only fully-local entry on this table | ours (local qwen-35b generator, Opus 4.8 judge, config above) |
+| **velesdb-memory** | — | **56 aggregate / 55–61 temporal** — *self-measured, not independent*; the only fully-local entry on this table | ours (local qwen-35b generator, Opus 4.8 judge, config above) |
 
 What we actually claim from this table:
 
@@ -369,5 +369,5 @@ What we actually claim from this table:
 - **The temporal scaffold's marginal benefit over dated-recall-alone is unproven at this sample size** (its point-estimate gain has a confidence interval crossing zero) — dated recall alone already captures nearly all of the temporal lift.
 - **Open-domain is the weak spot** (24%) — questions needing world knowledge beyond what the conversation stated; the next tuning target.
 - **Temporal is hard industry-wide**; date-grounding is exactly where we invested, and it's the proven, statistically robust win (+33.6pp over baseline).
-- **The headline uses the best config found on these same 10 conversations** (LoCoMo has no held-out split); the default-config number (53%) is published alongside it above.
+- **The headline uses the best config found on these same 10 conversations** (LoCoMo has no held-out split); the without-scaffold number (54% answerable / 55% temporal) is published alongside it above.
 - Numbers are **our measurement** under the config above, not a leaderboard submission. The point is that you can re-run it yourself. A LongMemEval run — the benchmark serious actors are moving to — is the tracked next step.
