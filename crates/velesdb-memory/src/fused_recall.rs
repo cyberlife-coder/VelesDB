@@ -58,6 +58,30 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         Ok(fusion::fuse(pool, &reached, k, opts.graph_boost))
     }
 
+    /// [`Self::recall_fused`] paired with the dated-context rendering of its
+    /// results: returns the recalled facts and the
+    /// [`DatedContext`](crate::DatedContext) built from their `date_field`
+    /// metadata (see [`format_dated_context`](crate::format_dated_context)).
+    /// Every binding that exposes a "dated recall" (the MCP `recall_fused`
+    /// tool's `date_field`, Node/WASM `recallFusedDated`) calls this, so the
+    /// "recall then format" pairing lives in exactly one place and can't drift
+    /// between surfaces.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if the underlying [`Self::recall_fused`] fails.
+    pub fn recall_fused_dated(
+        &self,
+        query: &str,
+        k: usize,
+        filter: Option<&Metadata>,
+        opts: FusionOptions,
+        date_field: &str,
+    ) -> Result<(Vec<Recollection>, crate::DatedContext), MemoryError> {
+        let hits = self.recall_fused(query, k, filter, opts)?;
+        let ctx = crate::format_dated_context(&hits, date_field);
+        Ok((hits, ctx))
+    }
+
     /// Like [`Self::recall_fused`], but hands the FULL fused-ranked candidate
     /// pool (before the final `k` cutoff) to `reranker` for a second-stage
     /// re-score, then truncates to `k`. Closes the ranking-miss gap the

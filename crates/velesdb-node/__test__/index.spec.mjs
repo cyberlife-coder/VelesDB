@@ -17,7 +17,7 @@ function freshStore() {
   return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
 }
 
-test('surface allowlist — exactly the 9 supported methods, no engine leak', () => {
+test('surface allowlist — exactly the supported methods, no engine leak', () => {
   const instanceMethods = Object.getOwnPropertyNames(MemoryService.prototype)
     .filter((m) => m !== 'constructor')
     .sort((a, b) => a.localeCompare(b))
@@ -25,6 +25,7 @@ test('surface allowlist — exactly the 9 supported methods, no engine leak', ()
     'forget',
     'recall',
     'recallFused',
+    'recallFusedDated',
     'recallWhere',
     'relate',
     'remember',
@@ -142,6 +143,27 @@ test('recallWhere and recall both surface stored metadata (dated recall)', async
     const hits = await store.recall('pricing page', 5)
     assert.ok(hits.length >= 1)
     assert.equal(hits[0].metadata?.ts, 20260701, 'recall round-trips metadata too')
+  } finally {
+    cleanup()
+  }
+})
+
+test('recallFusedDated returns a chronological timeline and a now anchor', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await store.remember('the release shipped', [], { ts: 20260701 })
+    await store.remember('the project kicked off', [], { ts: 20260103 })
+
+    const res = await store.recallFusedDated('project release timeline', 'ts', 10)
+    assert.ok(Array.isArray(res.memories) && res.memories.length >= 2)
+    assert.ok(res.datedContext.includes('- [2026-01-03] the project kicked off'))
+    assert.ok(res.datedContext.includes('- [2026-07-01] the release shipped'))
+    // Oldest first.
+    assert.ok(
+      res.datedContext.indexOf('2026-01-03') < res.datedContext.indexOf('2026-07-01'),
+      'timeline is oldest-first',
+    )
+    assert.equal(res.now, '2026-07-01', 'now anchors on the latest date')
   } finally {
     cleanup()
   }
