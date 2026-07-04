@@ -12,7 +12,25 @@
 //! cargo run --release -p velesdb-memory --features ollama --example locomo
 //! # LLM-free explanation benchmark (does the graph connect scattered evidence?):
 //! cargo run --release -p velesdb-memory --features ollama --example locomo -- --explanation
+//!
+//! # LLM-free reproduction: does the SHIPPED recall_fused reproduce the fused
+//! # retrieval? Compare the harness fusion against the installed API on the same
+//! # data (single-seed, no BM25, idf-weighted to match recall_fused):
+//! cargo run --release -p velesdb-memory --features ollama --example locomo -- \
+//!     --retrieval --idf-weight                       # harness fusion
+//! cargo run --release -p velesdb-memory --features ollama --example locomo -- \
+//!     --retrieval --use-shipped-api                  # shipped recall_fused
 //! ```
+//!
+//! `--use-shipped-api` routes the fused (graph) path through the exact
+//! [`MemoryService::recall_fused`](velesdb_memory::MemoryService::recall_fused)
+//! a user installs, instead of the harness's own `vector_pool`+`graph_reached`+`fuse`.
+//! On a 3-conversation run the two agree to ~1pp of evidence-recall@k
+//! (69.8% harness → 69.0% shipped), identical on temporal/single-hop/open-domain;
+//! the residual is concentrated in multi-hop and traces to the documented
+//! graph-reach divergences (the shipped IDF counts facts + entity hubs where the
+//! harness counts facts only; `recall_fused` is single-seed, no BM25, and takes
+//! an exact-match filter rather than the temporal `ColumnStore` date window).
 //!
 //! Pipeline: extract facts from each session with a local LLM (tagged with the
 //! gold `dia_id`s and session timestamp), ingest them as a fact↔entity graph,
@@ -412,6 +430,7 @@ impl Default for Args {
                 bm25: false,
                 claude_judge: false,
                 claude_gen: false,
+                use_shipped_api: false,
             },
         }
     }
@@ -465,6 +484,7 @@ impl Args {
             "--bm25" => &mut self.cfg.bm25,
             "--claude-judge" => &mut self.cfg.claude_judge,
             "--claude-gen" => &mut self.cfg.claude_gen,
+            "--use-shipped-api" => &mut self.cfg.use_shipped_api,
             _ => return None,
         })
     }
