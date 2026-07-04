@@ -103,13 +103,12 @@ market publishes that at all:
 | Time-related questions on LoCoMo | **55–61%** on a fully local model — floor = without the optional scaffold ([method + stats](BENCHMARK.md)) | 55.5% on cloud AI ([own paper](https://arxiv.org/abs/2504.19413)) | 49.3% on cloud AI — [as measured in Mem0's evaluation](https://arxiv.org/abs/2504.19413), which Zep disputes |
 
 *Why no single "overall score" comparison row? Because overall scores from
-different labs can't be fairly compared: the same product (Zep) scores 58.4 in
-one lab's test and 79.1 in another's — the test setup moves the number more
-than the product does. Independent labs measure the leading vendors well below
-their own headlines, and our fully-local 56% (full method and statistics
-disclosed) lands a few points below that independently-measured cluster —
-while running entirely on your machine. The full sourced landscape and every
-caveat: [`BENCHMARK.md`](BENCHMARK.md).*
+different labs can't be fairly compared: the same product's score can swing
+~21 points between two test setups, and vendor headlines often diverge widely
+from what other labs measure. Our fully-local 56% aggregate comes with the
+full method and statistics disclosed, and instead of a bar chart we publish
+the complete sourced landscape — who measured what, with which AI models, and
+which figures are disputed: [`BENCHMARK.md`](BENCHMARK.md).*
 
 **Choose velesdb-memory when local-first is a requirement, not a preference:**
 - **Regulated / sovereign data** (health, legal, finance, defense) — context can't transit a third-party LLM API; `why()` gives both data residency and an auditable recall trail.
@@ -170,7 +169,7 @@ every figure reproduces from the bundled examples.
 | Engine | Public benchmark | What it measures | Vector → fused |
 |---|---|---|---|
 | **Graph** (`why()` BFS) | HotpotQA (3 000 dev, distractor) | retrieving *both* bridge facts of a multi-hop question | **+7.2pp** both-facts on bridge questions (+5.6pp all types) |
-| **Graph** — *replicated* | 2WikiMultiHopQA (1 000 dev) | same metric, second independent dataset | **+3.1pp** on bridged types (+2.1pp overall) |
+| **Graph** — *replicated* | 2WikiMultiHopQA (1 000 dev) | supporting-fact recall, second independently built dataset | **+2.6 to +3.1pp** on its three bridged types (+2.1pp overall) |
 | **ColumnStore** (`recall_where`) | TimeQA (real Wikipedia bios) | time-scoped recall a year-range filter can do and cosine can't | **+9.7pp** gold-sentence recall |
 | **Tri-engine** (compound) | synthetic, multi-hop **and** time-scoped | do the engines *stack*? | **+29pp** together — more than the sum of each alone |
 

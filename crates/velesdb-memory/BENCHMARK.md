@@ -27,7 +27,7 @@ RAG/memory product does) on **public, third-party datasets**:
 | Engine | Benchmark | Metric | Vector → fused |
 |---|---|---|---|
 | **Graph** (`why()` BFS) | [HotpotQA](https://hotpotqa.github.io/) 3,000 dev | both bridge facts retrieved (bridge questions) | 41.3% → 48.5% = **+7.2pp** |
-| **Graph** — *replicated* | [2WikiMultiHopQA](https://github.com/Alab-NII/2wikimultihop) 1,000 dev | supporting-fact recall (bridged types) | **+3.1pp** (+2.1pp overall) |
+| **Graph** — *replicated* | [2WikiMultiHopQA](https://github.com/Alab-NII/2wikimultihop) 1,000 dev | supporting-fact recall — same harness, second independently built dataset | **+2.6 to +3.1pp** on its three bridged question types (+2.1pp overall) |
 | **ColumnStore** (`recall_where`) | [TimeQA](https://huggingface.co/datasets/hugosousa/TimeQA) real bios | gold-sentence recall, time-scoped questions | 36.3% → 46.0% = **+9.7pp** |
 | **Both engines together** | tri-engine capstone (synthetic) | answer-bearing recall, multi-hop **and** time-scoped | 21% → 50% = **+29pp — super-additive** |
 
@@ -124,8 +124,10 @@ The win **replicates**: the graph lifts exactly the question types that require
 a genuine second hop, and only nudges down the `comparison` type, where both
 entities are already named in the question and saturated vector recall (91.5%)
 leaves nothing to gain. Stated plainly: the lift is **real but more modest than
-on HotpotQA** (2Wiki's many comparison/short-fact questions give the graph less
-to do). What matters for the architectural claim is that the directional result
+on HotpotQA** — on the same supporting-fact-recall metric, HotpotQA bridge
+questions gain +4.3pp vs +2.6 to +3.1pp on 2Wiki's bridged types (2Wiki's many
+comparison/short-fact questions give the graph less to do). What matters for
+the architectural claim is that the directional result
 — *the graph earns its keep on multi-hop retrieval* — holds across two
 independently built datasets, not one.
 
@@ -302,10 +304,11 @@ for a GPT-4-class model (Claude Opus 4.8), everything else held fixed, did
 **not** lift multi-hop accuracy — it landed at the same ~50–58%. The cap is the
 benchmark's inherent difficulty (incomplete multi-hop evidence chains, and
 open-domain questions whose answer was never stated in the conversation). This
-is a *within-harness* statement — it does not contradict the cross-harness
-observation below that generator choice shifts *aggregate* scores ~10pp when
-labs also change prompts, context budgets, and judges; here only the answerer
-was swapped. Bonus finding: the fused tri-engine at k=32 matches brute-force
+is a statement about the *multi-hop category under our fixed retrieval* — it
+does not contradict the observation below that a stronger generator lifts
+*aggregate* scores ~10pp in a controlled swap: multi-hop specifically is capped
+by evidence completeness, which no generator can fix.
+Bonus finding: the fused tri-engine at k=32 matches brute-force
 vector retrieval at k=64 — **the graph reaches the same accuracy on half the
 context budget**, which halves the answering token bill.
 
@@ -341,7 +344,7 @@ landscape, every figure sourced:
 
 | System | Vendor-claimed | Measured outside the vendor's own eval | Harness of that measurement |
 |---|---|---|---|
-| Mem0 | 66.9–68.4 ([paper](https://arxiv.org/abs/2504.19413)); 91.6+ (2026 README) | **62.5** / **64.2** | [MIRIX](https://arxiv.org/abs/2507.07957) (gpt-4.1-mini) / [PISA](https://arxiv.org/abs/2510.15966) |
+| Mem0 | 66.9–68.4 ([paper](https://arxiv.org/abs/2504.19413)); 91.6+ ([2026 README](https://github.com/mem0ai/mem0)) | **62.5** / **64.2** | [MIRIX](https://arxiv.org/abs/2507.07957) (gpt-4.1-mini) / [PISA](https://arxiv.org/abs/2510.15966) (generator not stated) |
 | Zep | 84 → [corrected 75.1](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/) | **58.4** (by competitor Mem0 — disputed by Zep) / **79.1** (neutral) | [Mem0's run](https://github.com/getzep/zep-papers/issues/5) (gpt-4o-mini) / [MIRIX](https://arxiv.org/abs/2507.07957) (gpt-4.1-mini) |
 | Full-context (no memory system) | — | **72.9** (gpt-4o-mini) / **87.5** (gpt-4.1-mini) | [Mem0 paper](https://arxiv.org/abs/2504.19413) / [MIRIX](https://arxiv.org/abs/2507.07957) |
 | Filesystem agent (no memory system) | — | **74.0** | [Letta](https://www.letta.com/blog/benchmarking-ai-agent-memory/) (gpt-4o-mini) |
@@ -350,13 +353,13 @@ landscape, every figure sourced:
 What we actually claim from this table:
 
 1. **Every other row runs a frontier cloud generator; ours is a local 35B —
-   and the generator tier dominates the number.** Under gpt-4o-mini-based
-   harnesses, non-vendor measurements land at 58.4 (Zep, by Mem0 — disputed),
-   64.2 (Mem0, by PISA) and 72.9 (full-context ceiling); under a stronger
-   gpt-4.1-mini harness the same systems jump 10–20 points (Zep 79.1,
-   full-context 87.5). Our fully-local 56 lands a few points below the
-   gpt-4o-mini-tier measurements — not orders below — while using no cloud
-   at all.
+   and the eval stack dominates the number.** The same system's score moves by
+   ~21 points between measuring labs (Zep: 58.4 under Mem0's gpt-4o-mini run —
+   disputed — vs 79.1 under MIRIX's gpt-4.1-mini), and the full-context
+   ceiling itself moves from 72.9 (gpt-4o-mini) to 87.5 (gpt-4.1-mini). Our
+   fully-local 56 sits within a few points of the lowest cloud measurements in
+   this table and well under the strongest-stack ones — the honest statement
+   is that it is in the field's measured span, achieved with no cloud at all.
 2. **Our temporal category (55–61%; the floor is the configuration without the
    optional scaffold) is level with or above the 55.5% (Mem0) and 49.3% (Zep)
    that the [Mem0 paper's evaluation](https://arxiv.org/abs/2504.19413) reports

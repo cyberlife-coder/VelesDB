@@ -25,8 +25,8 @@ measured on public test sets with no AI grader in the loop (so no model can
 flatter the score): the graph engine finds the two linked facts a multi-step
 question needs **+7.2 percentage points more often on HotpotQA** (3,000
 questions), a result replicated on a second independent test set
-(2WikiMultiHopQA: **+3.1 points on its bridged question types**, +2.1 overall);
-the column engine finds date-scoped
+(2WikiMultiHopQA: **+2.6 to +3.1 points on its three bridged question types**,
++2.1 overall); the column engine finds date-scoped
 answers **+9.7 points more often on TimeQA**. Nobody else in this market
 reports retrieval quality at all — you can't be out-benchmarked on a number
 only you publish. (All tables: [`BENCHMARK.md`](BENCHMARK.md).)
@@ -81,7 +81,7 @@ outbound.
 | **LLM calls per memory write** | **Zero required** (opt-in local extraction) | Cloud LLM in the write path | Cloud LLM in the write path |
 | **Explainability** | `why()` returns the scored evidence path | Returns an answer | Graph inside, but no evidence-path API or metric |
 | **Retrieval metrics published** | **Yes — generation-free, public datasets** | No | No |
-| **LoCoMo** | 56% aggregate / **55–61% temporal** (floor = without the optional scaffold) — fully local stack, config + stats disclosed, reproducible harness | 66.9% in its own paper ([source](https://arxiv.org/abs/2504.19413)); neutral labs measure it lower — [sourced landscape](BENCHMARK.md) | 75.1% in its own corrected run ([source](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/)); other labs' measurements span ~21 points — [sourced landscape](BENCHMARK.md) |
+| **LoCoMo** | 56% aggregate / **55–61% temporal** (floor = without the optional scaffold) — fully local stack, config + stats disclosed, reproducible harness | 66.9% in its own paper ([source](https://arxiv.org/abs/2504.19413)); neutral labs measure it lower — [sourced landscape](BENCHMARK.md) | 75.1% in its own corrected run ([source](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/)); measurements by others — including one by competitor Mem0 that Zep disputes — span ~21 points — [sourced landscape](BENCHMARK.md) |
 | **License / distribution** | Source-available, crates.io / PyPI / npm / MCP registry | Open core + hosted | Graphiti OSS + hosted cloud |
 
 *Reading the LoCoMo row honestly: benchmark scores from different labs are
@@ -123,19 +123,21 @@ with the product, in `examples/locomo/`.
 
 **"Mem0's README says 91.6% on LoCoMo — you report 56%. That's a huge gap."**
 
-Those two numbers are not on the same scale. The 91.6% is a vendor headline on a
-contested, evolving eval stack (their peer-reviewed *paper* number was 66.9%,
-and neutral labs measure them lower still — sourced figures in the §4 table and
-[`BENCHMARK.md`](BENCHMARK.md)); it runs on cloud frontier generators, on a benchmark
+Those two numbers are not on the same scale. The 91.6% is a vendor headline
+([their README](https://github.com/mem0ai/mem0)) on a contested, evolving eval
+stack — their own *paper* number was 66.9%, and neutral labs measure them lower
+still (sourced figures in [`BENCHMARK.md`](BENCHMARK.md)); it runs on cloud
+frontier generators, on a benchmark
 where the judge [accepts most wrong answers](https://dev.to/penfieldlabs/we-audited-locomo-64-of-the-answer-key-is-wrong-and-the-judge-accepts-up-to-63-of-intentionally-33lg)
 and [a filesystem agent scores 74%](https://www.letta.com/blog/benchmarking-ai-agent-memory/).
 Our 56% runs on a **fully local** 35B generator with the config, judge, paired
 statistics, and raw dumps disclosed — and the *category we invest in* holds up:
 temporal 55–61%, level with or above the 55.5% the Mem0 paper reports for Mem0
-itself. So the real trade is explicit: a few points of measured accuracy versus
-the neutral-lab results for the cloud leaders (see the §4 table — not the
-30-point gap the vendor headline suggests), in exchange for full locality, one
-embedded engine instead of a service mesh, zero per-write AI cost, and an
+itself. So the real trade is explicit: a measured accuracy gap versus the cloud
+systems — a few points against the lowest-tier cloud measurements, more against
+the strongest eval stacks ([sourced landscape](BENCHMARK.md)) and nothing like
+the 35-point gap the vendor headline suggests — in exchange for full locality,
+one embedded engine instead of a service mesh, zero per-write AI cost, and an
 evidence path you can audit. We will not inflate a score to win a bar chart; we
 publish what you can reproduce.
 
