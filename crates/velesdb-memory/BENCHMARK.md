@@ -332,13 +332,65 @@ cargo run --release -p velesdb-memory --features ollama --example locomo -- \
 # 3. full answer-accuracy run (date-routed context, Claude judge):
 cargo run --release -p velesdb-memory --features ollama --example locomo -- \
   --embed-model mxbai-embed-large --date-context --date-route --k 32 --claude-judge
+
+# 4. does the fused ranking reproduce through the SHIPPED recall_fused API?
+#    compare these two on identical data (LLM-free, seconds each):
+cargo run --release -p velesdb-memory --features ollama --example locomo -- \
+  --retrieval --idf-weight        # the harness's own fusion
+cargo run --release -p velesdb-memory --features ollama --example locomo -- \
+  --retrieval --use-shipped-api   # the installed MemoryService::recall_fused
 ```
 
 Flags: `--conversations N`, `--only <category>` (targeted A/B), `--model
 <ollama-chat-model>` (answerer), `--graph-boost`, `--idf-weight`,
-`--multihop-only`, `--temporal-scaffold`. The Claude judge runs through the
-authenticated `claude` CLI; the harness caches every LLM call, so re-runs are
-free and any judge can be substituted.
+`--multihop-only`, `--temporal-scaffold`, `--use-shipped-api` (below). The
+Claude judge runs through the authenticated `claude` CLI; the harness caches
+every LLM call, so re-runs are free and any judge can be substituted.
+
+## Does the win ship? Reproducing through the installed API
+
+A fair challenge to any benchmark: is the result a property of the *harness*, or
+of the product you install? Our harness always retrieves through the real
+`MemoryService` (`recall` / `recall_where` / `why`), but it historically did the
+final vector+graph **fusion** in its own code. The `--use-shipped-api` flag
+routes that fusion through the exact
+[`MemoryService::recall_fused`](https://docs.rs/velesdb-memory) a caller
+installs, so the two can be compared on identical data — LLM-free, in the fast
+`--retrieval` mode.
+
+On a 3-conversation run (default `all-minilm` embedder; single-seed, no BM25,
+`--idf-weight` to match `recall_fused`'s always-IDF reach weighting), evidence
+recall@k:
+
+| retrieval path | ALL | multi-hop | temporal | single-hop | open-domain |
+|---|---|---|---|---|---|
+| harness fusion | 69.8% | 56.1% | 88.3% | 68.2% | 51.3% |
+| shipped `recall_fused` | 69.0% | 52.3% | 88.3% | 68.2% | 51.3% |
+
+The vector baseline is identical (70.1%), and the fused numbers agree to ~1pp —
+**identical on temporal, single-hop, and open-domain.** What this measures is the
+harness-vs-shipped *delta*, which is embedder-independent (both paths share one
+store). The residual sits entirely in multi-hop, and it is not noise: it traces
+to deliberate differences between the shipped API and the harness's research
+levers, documented here so no comparison is misread —
+
+- **IDF corpus size.** `recall_fused` weights a graph link by the
+  inverse-document-frequency of the connecting entity over *all* memories (facts
+  + entity hubs); the harness counts facts only. Different denominators →
+  slightly different graph weights → the multi-hop gap.
+- **Single-seed.** `recall_fused` reaches the graph from one top vector seed; the
+  harness can seed from the top-N (`--seed-breadth`), an unshipped research lever.
+- **No BM25.** The harness's RRF lexical fusion has no `recall_fused` equivalent.
+- **Exact-match filter, not a range window.** `recall_fused` takes an exact-match
+  metadata filter; the harness's temporal date *window* is a `recall_where` range
+  predicate, so the shipped path runs unfiltered — yet the temporal category
+  still matches, because date grounding rides on the retrieved facts, not the
+  pre-filter.
+
+Net: the tri-engine *ranking* reproduces through the installed API within a
+small, fully-explained margin. The harness-only levers (multi-seed, BM25) and
+the IDF-corpus choice are tracked accuracy-lever work — not the source of the
+headline.
 
 ## Comparative context — read before comparing any two LoCoMo numbers
 
