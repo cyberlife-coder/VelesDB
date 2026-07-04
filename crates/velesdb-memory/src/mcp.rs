@@ -178,20 +178,25 @@ impl McpServer {
             date_field,
             ..
         } = params;
-        let memories = tokio::task::spawn_blocking(move || {
-            service.recall_fused(&query, k, filter.as_ref(), opts)
-        })
-        .await
-        .map_err(join_error)?
-        .map_err(to_error)?;
-        // When the caller names a date field, also ship the dated timeline it
-        // would otherwise have to format itself in a prompt.
-        let (dated_context, now) = match date_field {
-            Some(field) => {
-                let ctx = crate::dated_context::format_dated_context(&memories, &field);
-                (Some(ctx.timeline), ctx.now)
-            }
-            None => (None, None),
+        // With a date field, take the shared "recall then format" path so the
+        // dated timeline stays identical to the Node/WASM bindings; without one,
+        // plain fused recall (no timeline).
+        let (memories, dated_context, now) = if let Some(field) = date_field {
+            let (hits, ctx) = tokio::task::spawn_blocking(move || {
+                service.recall_fused_dated(&query, k, filter.as_ref(), opts, &field)
+            })
+            .await
+            .map_err(join_error)?
+            .map_err(to_error)?;
+            (hits, Some(ctx.timeline), ctx.now)
+        } else {
+            let hits = tokio::task::spawn_blocking(move || {
+                service.recall_fused(&query, k, filter.as_ref(), opts)
+            })
+            .await
+            .map_err(join_error)?
+            .map_err(to_error)?;
+            (hits, None, None)
         };
         Ok(Json(RecallFusedResult {
             memories,

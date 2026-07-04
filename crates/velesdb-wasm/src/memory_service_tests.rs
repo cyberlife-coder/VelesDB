@@ -145,8 +145,8 @@ fn test_inner_why_reaches_a_two_hop_fact_vector_search_misses() {
 #[test]
 fn test_inner_recall_fused_dated_builds_a_chronological_timeline() {
     // The `recallFusedDated` JS boundary can't be touched natively (JsValue),
-    // but its logic is `inner.recall_fused` + `format_dated_context` — both pure
-    // Rust — so the timeline/now behavior is provable here.
+    // but its logic is the pure-Rust `inner.recall_fused_dated` the wrapper
+    // delegates to — so the timeline/now behavior is provable here.
     let svc = WasmMemoryService::new(4);
     let mut newer = Metadata::new();
     newer.insert("ts".to_owned(), serde_json::json!(20_260_701));
@@ -159,16 +159,16 @@ fn test_inner_recall_fused_dated_builds_a_chronological_timeline() {
         .remember("the project kicked off", &[], Some(&older))
         .unwrap();
 
-    let hits = svc
+    let (_hits, ctx) = svc
         .inner
-        .recall_fused(
+        .recall_fused_dated(
             "project release timeline",
             10,
             None,
             velesdb_memory::FusionOptions::default(),
+            "ts",
         )
         .unwrap();
-    let ctx = format_dated_context(&hits, "ts");
     assert!(ctx
         .timeline
         .contains("- [2026-01-03] the project kicked off"));

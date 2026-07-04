@@ -72,8 +72,8 @@ export interface MemoryDatedRecall {
    * (`- [YYYY-MM-DD] content` per line, oldest first, undated facts last).
    */
   datedContext: string;
-  /** The most recent date across {@link memories} (`YYYY-MM-DD`), or `undefined` when none is dated. */
-  now?: string;
+  /** The most recent date across {@link memories} (`YYYY-MM-DD`), or `null` when none is dated. */
+  now: string | null;
 }
 
 /** A node in a {@link MemoryService.why} explanation subgraph. */

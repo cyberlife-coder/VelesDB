@@ -45,8 +45,8 @@ use napi::bindgen_prelude::AsyncTask;
 use napi_derive::napi;
 use serde_json::Value;
 use velesdb_memory::{
-    format_dated_context, DynEmbedder, HashEmbedder, MemoryService, OllamaEmbedder,
-    OllamaExtractor, DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    DynEmbedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor, DEFAULT_DIMENSION,
+    DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::dto::{
@@ -239,10 +239,9 @@ impl MemoryStore {
             let k = guards::clamp_limit(k.unwrap_or(10));
             let filter = convert::to_metadata(filter)?;
             let opts = convert::to_fusion_options(opts);
-            let hits = svc
-                .recall_fused(&query, k, filter.as_ref(), opts)
+            let (hits, ctx) = svc
+                .recall_fused_dated(&query, k, filter.as_ref(), opts, &date_field)
                 .map_err(to_napi_err)?;
-            let ctx = format_dated_context(&hits, &date_field);
             Ok(DatedRecallJs {
                 memories: hits.into_iter().map(RecollectionJs::from).collect(),
                 dated_context: ctx.timeline,

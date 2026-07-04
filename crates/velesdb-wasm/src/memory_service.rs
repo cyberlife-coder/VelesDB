@@ -26,8 +26,8 @@ use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
 use velesdb_memory::{
-    format_dated_context, ColumnFilter, ColumnOp, Explanation, FusionOptions, HashEmbedder,
-    MemoryEdge, MemoryError, MemoryNode, MemoryService, Metadata, Recollection,
+    ColumnFilter, ColumnOp, Explanation, FusionOptions, HashEmbedder, MemoryEdge, MemoryError,
+    MemoryNode, MemoryService, Metadata, Recollection,
 };
 
 use crate::memory_store::WasmStore;
@@ -203,8 +203,8 @@ impl From<Recollection> for RecollectionOut {
 struct DatedRecallOut {
     memories: Vec<RecollectionOut>,
     dated_context: String,
-    /// Skipped when absent (no dated fact) so it reads as `undefined` in JS.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// `null` when no fact is dated — kept present (not skipped) so this matches
+    /// the Node binding, where napi serializes `Option::None` as JS `null`.
     now: Option<String>,
 }
 
@@ -420,11 +420,10 @@ impl WasmMemoryService {
         let k = velesdb_memory::limits::clamp_recall_limit(k.unwrap_or(10));
         let filter = to_metadata(filter)?;
         let opts = to_fusion_options(opts)?;
-        let hits = self
+        let (hits, ctx) = self
             .inner
-            .recall_fused(query, k, filter.as_ref(), opts)
+            .recall_fused_dated(query, k, filter.as_ref(), opts, date_field)
             .map_err(to_js_err)?;
-        let ctx = format_dated_context(&hits, date_field);
         to_js(&DatedRecallOut {
             memories: hits.into_iter().map(RecollectionOut::from).collect(),
             dated_context: ctx.timeline,
