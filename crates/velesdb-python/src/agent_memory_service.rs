@@ -272,12 +272,7 @@ impl PyMemoryService {
     ) -> PyResult<Py<PyAny>> {
         let k = limits::clamp_recall_limit(k);
         let filter = to_metadata(py, filter)?;
-        let defaults = FusionOptions::default();
-        let opts = FusionOptions {
-            hops: limits::clamp_hops(hops.unwrap_or(defaults.hops)),
-            graph_boost: graph_boost.unwrap_or(defaults.graph_boost),
-            pool: defaults.pool,
-        };
+        let opts = FusionOptions::from_knobs(hops, graph_boost);
         let hits = py.detach(|| {
             self.svc
                 .recall_fused(query, k, filter.as_ref(), opts)

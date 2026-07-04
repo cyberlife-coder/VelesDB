@@ -454,6 +454,51 @@ async fn recall_fused_folds_in_a_graph_reached_fact() {
 }
 
 #[tokio::test]
+async fn recall_fused_survives_a_non_finite_graph_boost() {
+    // A NaN graph_boost reaches the pyo3/native-float bindings unfiltered; if it
+    // hit fusion it would collapse the ranking (NaN scores compare Equal) and
+    // silently drop the graph-reached facts. The service sanitizes it, so the
+    // linked fact is still surfaced — proving the guard holds on the real path.
+    let (_dir, srv) = server();
+    let Json(anchor) = srv
+        .remember(Parameters(RememberParams {
+            fact: DECISION.to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember anchor");
+    let Json(linked) = srv
+        .remember(Parameters(RememberParams {
+            fact: "the on-call rotation moved to Tuesdays".to_owned(),
+            links: vec![Link {
+                target: anchor.id,
+                relation: "context".to_owned(),
+            }],
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember linked");
+
+    let Json(fused) = srv
+        .recall_fused(Parameters(RecallFusedParams {
+            query: DECISION.to_owned(),
+            limit: Some(10),
+            filter: None,
+            hops: None,
+            graph_boost: Some(f64::NAN),
+        }))
+        .await
+        .expect("recall_fused");
+    assert!(
+        fused.memories.iter().any(|m| m.id == linked.id),
+        "graph-reached fact must still surface despite a non-finite graph_boost"
+    );
+}
+
+#[tokio::test]
 async fn recall_fused_limit_is_capped_at_max() {
     let (_dir, srv) = server();
     // The call must succeed (capped, not rejected) even with an absurd limit.

@@ -11,7 +11,7 @@ use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{ErrorCode, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 
-use crate::limits::{clamp_hops, DEFAULT_WHY_HOPS, MAX_FACT_BYTES, MAX_RECALL_LIMIT, MAX_WHY_HOPS};
+use crate::limits::{DEFAULT_WHY_HOPS, MAX_FACT_BYTES, MAX_RECALL_LIMIT, MAX_WHY_HOPS};
 use crate::model::{Explanation, FusionOptions};
 use crate::service::MemoryService;
 
@@ -170,12 +170,7 @@ impl McpServer {
             .limit
             .unwrap_or(DEFAULT_RECALL_LIMIT)
             .min(MAX_RECALL_LIMIT);
-        let defaults = FusionOptions::default();
-        let opts = FusionOptions {
-            hops: clamp_hops(params.hops.unwrap_or(defaults.hops)),
-            graph_boost: params.graph_boost.unwrap_or(defaults.graph_boost),
-            pool: defaults.pool,
-        };
+        let opts = FusionOptions::from_knobs(params.hops, params.graph_boost);
         let service = Arc::clone(&self.service);
         let RecallFusedParams { query, filter, .. } = params;
         let memories = tokio::task::spawn_blocking(move || {

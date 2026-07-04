@@ -163,6 +163,20 @@ def test_recall_fused_accepts_tuning_knobs(mem):
     assert isinstance(hits, list)
 
 
+def test_recall_fused_survives_non_finite_graph_boost(mem):
+    # A native Python float bypasses JSON's NaN rejection, so the binding must
+    # not let a NaN graph_boost poison fusion (it would collapse the ranking and
+    # silently drop exactly the graph-reached facts recall_fused exists to find).
+    anchor = mem.remember("we chose parking_lot to avoid lock poisoning")
+    linked = mem.remember(
+        "the on-call rotation moved to Tuesdays",
+        links=[(anchor, "context")],
+    )
+    hits = mem.recall_fused("parking_lot poisoning", k=10, graph_boost=float("nan"))
+    ids = {h["id"] for h in hits}
+    assert linked in ids
+
+
 def test_oversized_fact_raises_value_error(mem):
     # Facts above the shared 1 MiB cap are rejected before any embedding work.
     with pytest.raises(ValueError):
