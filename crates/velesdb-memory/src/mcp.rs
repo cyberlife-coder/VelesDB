@@ -12,7 +12,7 @@ use rmcp::model::{ErrorCode, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 
 use crate::limits::{DEFAULT_WHY_HOPS, MAX_FACT_BYTES, MAX_RECALL_LIMIT, MAX_WHY_HOPS};
-use crate::model::Explanation;
+use crate::model::{Explanation, FusionOptions};
 use crate::service::MemoryService;
 
 /// Default number of memories returned by `recall`.
@@ -31,9 +31,9 @@ use crate::extract::DynExtractor;
 // domain types from `crate::model` directly (no duplicate wire/domain struct).
 mod dto;
 use dto::{
-    ForgetParams, ForgetResult, RecallParams, RecallResult, RecallWhereParams, RelateParams,
-    RelateResult, RememberExtractedParams, RememberExtractedResult, RememberParams, RememberResult,
-    WhyParams,
+    ForgetParams, ForgetResult, RecallFusedParams, RecallParams, RecallResult, RecallWhereParams,
+    RelateParams, RelateResult, RememberExtractedParams, RememberExtractedResult, RememberParams,
+    RememberResult, WhyParams,
 };
 
 // --- The server ------------------------------------------------------------
@@ -155,6 +155,30 @@ impl McpServer {
                 .await
                 .map_err(join_error)?
                 .map_err(to_error)?;
+        Ok(Json(RecallResult { memories }))
+    }
+
+    #[tool(
+        name = "recall_fused",
+        description = "Fused vector + graph recall: like `recall`, but also walks the graph from the top vector hit and folds any connected fact into the ranking — the tri-engine ranking (vector similarity + ColumnStore filter + graph reach) measured on multi-hop and temporal benchmarks. Reach for this when an answer needs a fact the query doesn't mention directly but a stored `relate`/extracted link connects (multi-hop reasoning, temporal chains). `hops`/`graph_boost` tune the graph reach; omit them for the proven defaults. Optionally narrow with an exact-match `filter`. Most relevant first."
+    )]
+    async fn recall_fused(
+        &self,
+        Parameters(params): Parameters<RecallFusedParams>,
+    ) -> Result<Json<RecallResult>, ErrorData> {
+        let k = params
+            .limit
+            .unwrap_or(DEFAULT_RECALL_LIMIT)
+            .min(MAX_RECALL_LIMIT);
+        let opts = FusionOptions::from_knobs(params.hops, params.graph_boost);
+        let service = Arc::clone(&self.service);
+        let RecallFusedParams { query, filter, .. } = params;
+        let memories = tokio::task::spawn_blocking(move || {
+            service.recall_fused(&query, k, filter.as_ref(), opts)
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
         Ok(Json(RecallResult { memories }))
     }
 

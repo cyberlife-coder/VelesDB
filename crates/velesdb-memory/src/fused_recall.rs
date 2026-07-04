@@ -50,6 +50,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         if query.is_empty() || k == 0 {
             return Ok(Vec::new());
         }
+        let opts = opts.sanitized();
         reject_reserved_keys(filter)?;
         let embedding = self.embedder.embed(query)?;
         let pool = self.fused_pool(&embedding, pool_depth(k, opts), filter)?;
@@ -84,6 +85,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         if query.is_empty() || k == 0 {
             return Ok(Vec::new());
         }
+        let opts = opts.sanitized();
         reject_reserved_keys(filter)?;
         let embedding = self.embedder.embed(query)?;
         let depth = pool_depth(k, opts);

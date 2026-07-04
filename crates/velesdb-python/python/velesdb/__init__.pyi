@@ -2344,6 +2344,38 @@ class MemoryService:
         """
         ...
 
+    def recall_fused(
+        self,
+        query: str,
+        k: int = 10,
+        filter: Optional[Dict[str, Any]] = None,
+        hops: Optional[int] = None,
+        graph_boost: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fused vector + graph recall (the tri-engine ranking).
+
+        Like :meth:`recall`, but also walks the graph from the top vector hit
+        and folds any connected fact into the ranking. Best when an answer
+        needs a fact the ``query`` doesn't mention directly but a stored
+        :meth:`relate` / :meth:`remember_extracted` link connects (multi-hop
+        or temporal reasoning).
+
+        Args:
+            query: Free-text query.
+            k: Maximum number of results (default: 10).
+            filter: Optional exact-match metadata filter dict.
+            hops: Graph hops from the top vector hit (default: 2).
+            graph_boost: Weight added to a graph-reached fact's score
+                (default: 0.15).
+
+        Returns:
+            List of ``{"id": int, "score": float, "content": str,
+            "metadata": Optional[Dict[str, Any]]}`` dicts, most relevant
+            first. ``metadata`` is the fact's stored dict, or ``None`` if it
+            carried none.
+        """
+        ...
+
     def relate(self, from_id: int, to_id: int, relation: str) -> int:
         """Create a typed edge ``from_id → to_id``.
 
