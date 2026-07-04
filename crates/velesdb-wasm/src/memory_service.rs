@@ -26,8 +26,8 @@ use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
 use velesdb_memory::{
-    ColumnFilter, ColumnOp, Explanation, FusionOptions, HashEmbedder, MemoryEdge, MemoryError,
-    MemoryNode, MemoryService, Metadata, Recollection,
+    format_dated_context, ColumnFilter, ColumnOp, Explanation, FusionOptions, HashEmbedder,
+    MemoryEdge, MemoryError, MemoryNode, MemoryService, Metadata, Recollection,
 };
 
 use crate::memory_store::WasmStore;
@@ -194,6 +194,18 @@ impl From<Recollection> for RecollectionOut {
             metadata: r.metadata.map(Value::Object),
         }
     }
+}
+
+/// Result of [`WasmMemoryService::recall_fused_dated`]: the recalled memories
+/// plus a chronological, date-prefixed timeline and a "now" anchor.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DatedRecallOut {
+    memories: Vec<RecollectionOut>,
+    dated_context: String,
+    /// Skipped when absent (no dated fact) so it reads as `undefined` in JS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    now: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -388,6 +400,36 @@ impl WasmMemoryService {
                 .map(RecollectionOut::from)
                 .collect::<Vec<_>>(),
         )
+    }
+
+    /// Fused recall plus a dated timeline: like [`Self::recall_fused`], but
+    /// reads each fact's date from the `dateField` metadata key (a `YYYYMMDD`
+    /// integer) and returns `{memories, datedContext, now}` — the memories, a
+    /// chronological date-prefixed timeline, and a "now" anchor for temporal
+    /// reasoning. A separate method (not a flag on `recallFused`) so the
+    /// published `recallFused` array return type is unchanged.
+    #[wasm_bindgen(js_name = recallFusedDated)]
+    pub fn recall_fused_dated(
+        &self,
+        query: &str,
+        date_field: &str,
+        k: Option<usize>,
+        filter: JsValue,
+        opts: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let k = velesdb_memory::limits::clamp_recall_limit(k.unwrap_or(10));
+        let filter = to_metadata(filter)?;
+        let opts = to_fusion_options(opts)?;
+        let hits = self
+            .inner
+            .recall_fused(query, k, filter.as_ref(), opts)
+            .map_err(to_js_err)?;
+        let ctx = format_dated_context(&hits, date_field);
+        to_js(&DatedRecallOut {
+            memories: hits.into_iter().map(RecollectionOut::from).collect(),
+            dated_context: ctx.timeline,
+            now: ctx.now,
+        })
     }
 
     /// Create a typed edge `from -> to`. Resolves to the edge's

@@ -141,3 +141,41 @@ fn test_inner_why_reaches_a_two_hop_fact_vector_search_misses() {
         .unwrap();
     assert!(explanation.nodes.iter().any(|n| n.id == ticket));
 }
+
+#[test]
+fn test_inner_recall_fused_dated_builds_a_chronological_timeline() {
+    // The `recallFusedDated` JS boundary can't be touched natively (JsValue),
+    // but its logic is `inner.recall_fused` + `format_dated_context` — both pure
+    // Rust — so the timeline/now behavior is provable here.
+    let svc = WasmMemoryService::new(4);
+    let mut newer = Metadata::new();
+    newer.insert("ts".to_owned(), serde_json::json!(20_260_701));
+    svc.inner
+        .remember("the release shipped", &[], Some(&newer))
+        .unwrap();
+    let mut older = Metadata::new();
+    older.insert("ts".to_owned(), serde_json::json!(20_260_103));
+    svc.inner
+        .remember("the project kicked off", &[], Some(&older))
+        .unwrap();
+
+    let hits = svc
+        .inner
+        .recall_fused(
+            "project release timeline",
+            10,
+            None,
+            velesdb_memory::FusionOptions::default(),
+        )
+        .unwrap();
+    let ctx = format_dated_context(&hits, "ts");
+    assert!(ctx
+        .timeline
+        .contains("- [2026-01-03] the project kicked off"));
+    assert!(ctx.timeline.contains("- [2026-07-01] the release shipped"));
+    assert!(
+        ctx.timeline.find("2026-01-03").unwrap() < ctx.timeline.find("2026-07-01").unwrap(),
+        "timeline is oldest-first"
+    );
+    assert_eq!(ctx.now.as_deref(), Some("2026-07-01"));
+}

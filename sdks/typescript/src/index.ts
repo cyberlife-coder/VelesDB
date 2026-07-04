@@ -32,6 +32,7 @@ export type {
   MemoryRecollection,
   MemoryColumnFilter,
   MemoryFusionOptions,
+  MemoryDatedRecall,
   MemoryNode,
   MemoryEdge,
   MemoryExplanation,

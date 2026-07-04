@@ -71,6 +71,19 @@ impl From<Recollection> for RecollectionJs {
     }
 }
 
+/// Result of `recallFusedDated`: the recalled memories plus a dated timeline.
+#[napi(object)]
+pub struct DatedRecallJs {
+    /// Recalled memories, most relevant first.
+    pub memories: Vec<RecollectionJs>,
+    /// Chronological, date-prefixed rendering of `memories` (`- [YYYY-MM-DD]
+    /// content` per line, oldest first, undated facts last).
+    pub dated_context: String,
+    /// The most recent date across `memories` (`YYYY-MM-DD`), or `undefined`
+    /// when no memory carries a valid date.
+    pub now: Option<String>,
+}
+
 /// A node in a `why()` explanation subgraph.
 #[napi(object)]
 pub struct MemoryNodeJs {

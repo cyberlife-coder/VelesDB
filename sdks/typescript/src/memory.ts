@@ -63,6 +63,19 @@ export interface MemoryFusionOptions {
   pool?: number;
 }
 
+/** Result of {@link MemoryService.recallFusedDated}: the recalled memories plus a dated timeline. */
+export interface MemoryDatedRecall {
+  /** Recalled memories, most relevant first. */
+  memories: MemoryRecollection[];
+  /**
+   * Chronological, date-prefixed rendering of {@link memories}
+   * (`- [YYYY-MM-DD] content` per line, oldest first, undated facts last).
+   */
+  datedContext: string;
+  /** The most recent date across {@link memories} (`YYYY-MM-DD`), or `undefined` when none is dated. */
+  now?: string;
+}
+
 /** A node in a {@link MemoryService.why} explanation subgraph. */
 export interface MemoryNode {
   /** Decimal-string id of the memory. */
@@ -103,6 +116,13 @@ interface WasmMemoryServiceInstance {
   recall(query: string, k: number | null | undefined, filter: unknown): unknown;
   recallWhere(query: string, filters: unknown, k?: number | null): unknown;
   recallFused(query: string, k: number | null | undefined, filter: unknown, opts: unknown): unknown;
+  recallFusedDated(
+    query: string,
+    dateField: string,
+    k: number | null | undefined,
+    filter: unknown,
+    opts: unknown
+  ): unknown;
   relate(from: string, to: string, relation: string): string;
   forget(id: string): void;
   why(decision: string, maxHops: number | null | undefined, filter: unknown): unknown;
@@ -317,6 +337,31 @@ export class MemoryService {
   ): Promise<MemoryRecollection[]> {
     return wrapWasmCall(
       () => this.ensureInitialized().recallFused(query, k, filter, opts) as MemoryRecollection[]
+    );
+  }
+
+  /**
+   * Fused recall plus a dated timeline: like {@link recallFused}, but reads each
+   * fact's date from the `dateField` metadata key (a `YYYYMMDD` integer) and
+   * resolves to `{ memories, datedContext, now }` — the memories, a chronological
+   * date-prefixed timeline, and a "now" anchor for temporal reasoning.
+   */
+  recallFusedDated(
+    query: string,
+    dateField: string,
+    k?: number,
+    filter?: Record<string, unknown>,
+    opts?: MemoryFusionOptions
+  ): Promise<MemoryDatedRecall> {
+    return wrapWasmCall(
+      () =>
+        this.ensureInitialized().recallFusedDated(
+          query,
+          dateField,
+          k,
+          filter,
+          opts
+        ) as MemoryDatedRecall
     );
   }
 
