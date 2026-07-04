@@ -140,11 +140,13 @@ temporal 55–61%, spanning both rows the
 [Mem0 paper's evaluation](https://arxiv.org/abs/2504.19413) reports for
 itself — roughly level with base Mem0 (55.5%) at our floor, above its
 graph-enhanced Mem0g variant (58.1%, the paper's own best score there) at our
-ceiling. So the real trade is explicit: on the *aggregate* score, a gap of
-roughly 2 to 8 points against measurements of the leading cloud systems by
-other neutral labs, and up to ~30 points against the strongest cloud-generator
-eval stacks ([exact figures, sourced](BENCHMARK.md)) — nothing like the
-35-point gap the vendor headline suggests — in exchange for full locality,
+ceiling. So the real trade is explicit: on the *aggregate* score, our 56 sits
+roughly 6 to 8 points behind Mem0's neutral-lab measurements (62.5–64.2) and
+about 23 points behind Zep's neutral-lab measurement (79.1) — with the
+strongest cloud-generator eval stacks pulling the full-context ceiling itself
+up to 87.5, a ~31-point gap ([exact figures, sourced](BENCHMARK.md)) — nothing
+like the 35-point gap the vendor headline suggests — in exchange for full
+locality,
 one embedded engine instead of a service mesh, zero per-write AI cost, and an
 evidence path you can audit. We will not inflate a score to win a bar chart; we
 publish what you can reproduce.
