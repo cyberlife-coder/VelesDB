@@ -386,8 +386,6 @@ levers, documented here so no comparison is misread —
   predicate, so the shipped path runs unfiltered — yet the temporal category
   still matches, because date grounding rides on the retrieved facts, not the
   pre-filter.
-- **The `pool` (oversample-depth) knob is exposed on the Node/WASM bindings
-  only**, kept off MCP/Python where there is no reranker to feed it.
 
 Net: the tri-engine *ranking* reproduces through the installed API within a
 small, fully-explained margin. The harness-only levers (multi-seed, BM25) and
