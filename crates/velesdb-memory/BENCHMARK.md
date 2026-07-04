@@ -66,7 +66,7 @@ is downweighted). Embedder: `mxbai-embed-large`, local. Fully generation-free.
 | comparison (n=600) | Vector only | 85.5% | 70.3% |
 | | + graph | 84.6% (−0.9) | 69.2% (−1.1) |
 | **All** | Vector only | 72.1% | 47.1% |
-| | **+ tri-engine graph (idf)** | **75.3% (+3.3pp)** | **52.7% (+5.6pp)** |
+| | **+ tri-engine graph (idf)** | **75.3% (+3.2pp)** | **52.7% (+5.6pp)** |
 
 The split is the story. On **bridge** questions — the genuine multi-hop, 80% of
 the set, where the answer requires following a bridge entity to a second-hop
@@ -96,7 +96,7 @@ sentences and the title that connects them — not just an answer.
 ollama pull mxbai-embed-large
 # fetch HotpotQA dev (distractor) into examples/multihop/data/
 cargo run --release -p velesdb-memory --features ollama --example multihop -- \
-  --questions 300 --k 4 --idf --embed-model mxbai-embed-large
+  --questions 3000 --k 5 --idf --embed-model mxbai-embed-large
 ```
 
 Limitations: entity graph is title-mention based (a learned relation extractor
@@ -339,20 +339,24 @@ free and any judge can be substituted.
 moves scores ~10pp. So instead of one misleading bar chart, here is the honest
 landscape, every figure sourced:
 
-| System | Vendor-claimed | Independently measured | Harness of the independent run |
+| System | Vendor-claimed | Measured outside the vendor's own eval | Harness of that measurement |
 |---|---|---|---|
 | Mem0 | 66.9–68.4 ([paper](https://arxiv.org/abs/2504.19413)); 91.6+ (2026 README) | **62.5** / **64.2** | [MIRIX](https://arxiv.org/abs/2507.07957) (gpt-4.1-mini) / [PISA](https://arxiv.org/abs/2510.15966) |
-| Zep | 84 → [corrected 75.1](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/) | **58.4** / **79.1** | [Mem0's run](https://github.com/getzep/zep-papers/issues/5) (gpt-4o-mini) / [MIRIX](https://arxiv.org/abs/2507.07957) (gpt-4.1-mini) |
+| Zep | 84 → [corrected 75.1](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/) | **58.4** (by competitor Mem0 — disputed by Zep) / **79.1** (neutral) | [Mem0's run](https://github.com/getzep/zep-papers/issues/5) (gpt-4o-mini) / [MIRIX](https://arxiv.org/abs/2507.07957) (gpt-4.1-mini) |
 | Full-context (no memory system) | — | **72.9** (gpt-4o-mini) / **87.5** (gpt-4.1-mini) | [Mem0 paper](https://arxiv.org/abs/2504.19413) / [MIRIX](https://arxiv.org/abs/2507.07957) |
 | Filesystem agent (no memory system) | — | **74.0** | [Letta](https://www.letta.com/blog/benchmarking-ai-agent-memory/) (gpt-4o-mini) |
 | **velesdb-memory** | — | **56 aggregate / 55–61 temporal** — *self-measured, not independent*; the only fully-local entry on this table | ours (local qwen-35b generator, Opus 4.8 judge, config above) |
 
 What we actually claim from this table:
 
-1. **Every other row runs a frontier cloud generator; ours is a local 35B.**
-   Under the closest comparable regime (gpt-4o-mini-class), independently
-   measured systems cluster at 58–64 and full-context sits at 72.9 — our 56,
-   fully local, sits at the edge of that cluster, not orders below it.
+1. **Every other row runs a frontier cloud generator; ours is a local 35B —
+   and the generator tier dominates the number.** Under gpt-4o-mini-based
+   harnesses, non-vendor measurements land at 58.4 (Zep, by Mem0 — disputed),
+   64.2 (Mem0, by PISA) and 72.9 (full-context ceiling); under a stronger
+   gpt-4.1-mini harness the same systems jump 10–20 points (Zep 79.1,
+   full-context 87.5). Our fully-local 56 lands a few points below the
+   gpt-4o-mini-tier measurements — not orders below — while using no cloud
+   at all.
 2. **Our temporal category (55–61%; the floor is the configuration without the
    optional scaffold) is level with or above the 55.5% (Mem0) and 49.3% (Zep)
    that the [Mem0 paper's evaluation](https://arxiv.org/abs/2504.19413) reports

@@ -1,6 +1,6 @@
 # velesdb-memory — Positioning
 
-> Marketing/positioning draft, grounded in our own measurements (local stack,
+> Marketing/positioning reference, grounded in our own measurements (local stack,
 > Opus-4.8-judged, methodology and stats in [`BENCHMARK.md`](BENCHMARK.md)) and in
 > **sourced** third-party numbers — every external figure below links to where it
 > comes from. See `examples/locomo/` for the reproducible harness.
@@ -81,13 +81,13 @@ outbound.
 | **LLM calls per memory write** | **Zero required** (opt-in local extraction) | Cloud LLM in the write path | Cloud LLM in the write path |
 | **Explainability** | `why()` returns the scored evidence path | Returns an answer | Graph inside, but no evidence-path API or metric |
 | **Retrieval metrics published** | **Yes — generation-free, public datasets** | No | No |
-| **LoCoMo** | 56% aggregate / **55–61% temporal** (floor = without the optional scaffold) — fully local stack, config + stats disclosed, reproducible harness | 66.9% own harness ([paper](https://arxiv.org/abs/2504.19413)); **62–64% independently** ([MIRIX 62.5](https://arxiv.org/abs/2507.07957), [PISA 64.2](https://arxiv.org/abs/2510.15966)) | 75.1% own corrected run ([blog](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/)); **58.4–79.1% across independent harnesses** ([Mem0's run](https://github.com/getzep/zep-papers/issues/5), [MIRIX](https://arxiv.org/abs/2507.07957)) |
+| **LoCoMo** | 56% aggregate / **55–61% temporal** (floor = without the optional scaffold) — fully local stack, config + stats disclosed, reproducible harness | 66.9% in its own paper ([source](https://arxiv.org/abs/2504.19413)); neutral labs measure it lower — [sourced landscape](BENCHMARK.md) | 75.1% in its own corrected run ([source](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/)); other labs' measurements span ~21 points — [sourced landscape](BENCHMARK.md) |
 | **License / distribution** | Source-available, crates.io / PyPI / npm / MCP registry | Open core + hosted | Graphiti OSS + hosted cloud |
 
 *Reading the LoCoMo row honestly: benchmark scores from different labs are
-**not comparable** — the same product (Zep) scores 58.4 in one lab's test setup
-and 79.1 in another's, a 21-point swing caused by the test setup alone, and
-merely changing which AI model writes the answers moves scores by ~10 points
+**not comparable** — the same product's score swings by ~21 points between
+labs' test setups ([sourced landscape](BENCHMARK.md)), and merely changing
+which AI model writes the answers moves scores by ~10 points
 ([controlled rerun](https://blog.continua.ai/p/the-locomo-fair-fight)). Every
 number in the Mem0/Zep cells was produced with a powerful **cloud** AI model;
 ours runs on a model **on your own machine**. So we do not claim to beat
@@ -124,19 +124,20 @@ with the product, in `examples/locomo/`.
 **"Mem0's README says 91.6% on LoCoMo — you report 56%. That's a huge gap."**
 
 Those two numbers are not on the same scale. The 91.6% is a vendor headline on a
-contested, evolving eval stack (their *paper* number was 66.9% — and independent
-labs measure them at [62.5](https://arxiv.org/abs/2507.07957)–[64.2](https://arxiv.org/abs/2510.15966)
-under neutral harnesses); it runs on cloud frontier generators, on a benchmark
+contested, evolving eval stack (their peer-reviewed *paper* number was 66.9%,
+and neutral labs measure them lower still — sourced figures in the §4 table and
+[`BENCHMARK.md`](BENCHMARK.md)); it runs on cloud frontier generators, on a benchmark
 where the judge [accepts most wrong answers](https://dev.to/penfieldlabs/we-audited-locomo-64-of-the-answer-key-is-wrong-and-the-judge-accepts-up-to-63-of-intentionally-33lg)
 and [a filesystem agent scores 74%](https://www.letta.com/blog/benchmarking-ai-agent-memory/).
 Our 56% runs on a **fully local** 35B generator with the config, judge, paired
 statistics, and raw dumps disclosed — and the *category we invest in* holds up:
 temporal 55–61%, level with or above the 55.5% the Mem0 paper reports for Mem0
-itself. So the real
-trade is: quality in the independently-measured tier of the field, plus full
-locality, one embedded engine instead of a service mesh, zero per-write LLM
-cost, and an evidence path you can audit. We will not inflate a score to win a
-bar chart; we publish what you can reproduce.
+itself. So the real trade is explicit: a few points of measured accuracy versus
+the neutral-lab results for the cloud leaders (see the §4 table — not the
+30-point gap the vendor headline suggests), in exchange for full locality, one
+embedded engine instead of a service mesh, zero per-write AI cost, and an
+evidence path you can audit. We will not inflate a score to win a bar chart; we
+publish what you can reproduce.
 
 ## 7. Where local-first is a hard requirement
 
