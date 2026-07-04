@@ -9,7 +9,9 @@
 </h3>
 <p align="center">
   <strong>One ~9 MB binary. Three engines. One query language. Zero cloud dependency.</strong><br/>
-  <em>Vector + Graph + ColumnStore — unified under <a href="docs/VELESQL_SPEC.md">VelesQL</a></em>
+  <em>Vector + Graph + ColumnStore — unified under <a href="docs/VELESQL_SPEC.md">VelesQL</a></em><br/><br/>
+  The <strong>explainable</strong> agent memory: <code>why()</code> returns the evidence path behind every recall —<br/>
+  <a href="crates/velesdb-memory/BENCHMARK.md"><strong>measured on public benchmarks</strong></a>, not vibes.
 </p>
 <p align="center">
   <a href="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml"><img src="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -42,17 +44,11 @@
 
 ---
 
-## The Story Behind VelesDB
+## Three things no competitor counters
 
-VelesDB was born in France out of a simple observation: **EU data sovereignty is an architectural problem, not a legal one.**
-
-The US Cloud Act, FISA 702, and PATRIOT Act give US authorities multiple legal paths to reach data held by any US company — regardless of where the servers are. Hosting on AWS `eu-west-1` is a latency decision, not a sovereignty decision. The EU's Data Privacy Framework has been invalidated twice (Schrems I, Schrems II), and a third challenge is pending.
-
-For European developers building AI agents that handle health data, legal documents, or financial records, the typical 2026 stack sends embeddings to Pinecone (US), graphs to Neo4j Aura (US), and metadata to PostgreSQL on AWS (US provider). Every one of these is reachable by a FISA warrant.
-
-VelesDB removes the US provider from the chain entirely. One Rust binary, local-first by design. No API key, no cloud account, no data processor. Your data stays in a directory you control — on your laptop, your server, your jurisdiction.
-
-> [Read the full story: "I built a database in France because the Cloud Act makes EU data sovereignty impossible"](https://dev.to/wiscale-fr/i-built-a-database-in-france-because-the-cloud-act-makes-eu-data-sovereignty-impossible-5325)
+| 🔍 It shows its work | 🔑 No cloud bill per memory | 📊 Measured, not vibes |
+|---|---|---|
+| Ask `why()` and the memory returns the **evidence trail** behind every answer — which facts it used and how they connect, not just the answer itself. That's a built-in audit trail, exactly what regulations like the [EU AI Act (enforceable Aug 2026)](https://artificialintelligenceact.eu/implementation-timeline/) will ask of AI systems. | With the leading alternatives, **every single memory saved runs 2–3 AI-model calls** — by default, paid cloud calls with an API key. VelesDB stores memories with **zero AI calls and zero keys**: one small program (~9 MB) on your machine, no extra databases to install or operate. | We publish how often the memory **finds the right information** — measured with no AI grader in the loop that could flatter the score. On public test sets: **+7.2 pts** on multi-hop (HotpotQA) and **+9.7 pts** on time-scoped recall (TimeQA); on a controlled task needing both engines at once, **+29 pts**. [Anyone can re-run the tests](crates/velesdb-memory/BENCHMARK.md). |
 
 ---
 
@@ -107,7 +103,7 @@ Built-in memory for AI agents — semantic, episodic, and procedural. No externa
 
 Most "agent memory" is vector recall: it finds text that *looks like* your query. VelesDB's high-level `MemoryService` adds the part that's missing — it **connects** memories with typed links, so it can answer *why* something happened by walking the graph to context that shares **no words** with your question. The store is on disk, so it works across sessions. Offline, deterministic, no API key, no model download:
 
-Where Mem0 and Zep are cloud-coupled orchestrators (a service mesh over Qdrant + Postgres, with a cloud LLM in the loop), this is **one local binary** — same tier as Mem0 on LoCoMo QA (~56% vs ~55%, neutral basis, full 10-conversation set), ahead of Zep, but fully offline with an auditable `why()` evidence path. Pick it when your data can't leave the box.
+Where Mem0 and Zep are cloud-coupled orchestrators (several backing services plus AI-model calls — cloud by default — on every memory write), this is **one local binary** — fully offline, zero AI calls to store a memory, and an auditable `why()` evidence trail. On the standard LoCoMo memory test, our fully-local setup answers 56% of the *answerable* questions (the benchmark's unanswerable "adversarial" category is excluded, as is standard practice — every configuration detail is disclosed) and **55–61% of time-related questions** ("when did X happen?") — spanning both configurations the leading vendor's own paper reports for itself in that category, on powerful cloud AI models, while we run on a model on your own machine. Scores from different labs can't be fairly compared (the same product's score can swing ~21 points with the test setup alone), so instead of a bar chart we publish the [full sourced landscape, method, and statistics](crates/velesdb-memory/BENCHMARK.md). Pick it when your data can't leave the box.
 
 ![recall() finds the booking but misses the reason; why() reaches it through typed links, across a session restart](examples/agent_memory/why_across_sessions.gif)
 
@@ -506,6 +502,20 @@ Ship AI features without a server. VelesDB embeds directly into Tauri, iOS, and 
 | iOS (Swift) | UniFFI bindings | ~4 MB |
 | Android (Kotlin) | UniFFI bindings | ~4 MB |
 | Browser | WASM module | ~430 KB gzipped |
+
+---
+
+## The Story Behind VelesDB
+
+VelesDB was born in France out of a simple observation: **EU data sovereignty is an architectural problem, not a legal one.**
+
+The US Cloud Act, FISA 702, and PATRIOT Act give US authorities multiple legal paths to reach data held by any US company — regardless of where the servers are. Hosting on AWS `eu-west-1` is a latency decision, not a sovereignty decision. The EU's Data Privacy Framework has been invalidated twice (Schrems I, Schrems II), and a third challenge is pending.
+
+For European developers building AI agents that handle health data, legal documents, or financial records, the typical 2026 stack sends embeddings to Pinecone (US), graphs to Neo4j Aura (US), and metadata to PostgreSQL on AWS (US provider). Every one of these is reachable by a FISA warrant.
+
+VelesDB removes the US provider from the chain entirely. One Rust binary, local-first by design. No API key, no cloud account, no data processor. Your data stays in a directory you control — on your laptop, your server, your jurisdiction.
+
+> [Read the full story: "I built a database in France because the Cloud Act makes EU data sovereignty impossible"](https://dev.to/wiscale-fr/i-built-a-database-in-france-because-the-cloud-act-makes-eu-data-sovereignty-impossible-5325)
 
 ---
 

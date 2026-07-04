@@ -84,20 +84,31 @@ Each is a real run that shows what plain recall misses and `why()` recovers:
 
 ## How it compares — and who it's for
 
-velesdb-memory is **embedded memory, not a cloud memory service.** On the LoCoMo QA
-benchmark it sits in the **same tier as Mem0** and well ahead of Zep on a sober,
-neutral-judge basis — but the real difference is the *architecture*, not the score:
+velesdb-memory is **embedded memory, not a cloud memory service.** The
+difference isn't a benchmark bar chart — it's three things no competitor
+counters: an **evidence trail you can audit** (`why()` shows which facts an
+answer came from), **zero AI calls to store a memory** (the incumbents run 2–3
+AI-model calls per save — by default, paid cloud calls), and **published
+retrieval numbers** — we measure, with no AI grader in the loop, how often the
+memory finds the right information; to our knowledge, nobody else in this
+market publishes that at all:
 
 | | **velesdb-memory** | Mem0 | Zep / Graphiti |
 |---|---|---|---|
-| Shape | one embedded binary (vector + graph + column) | orchestrator over Qdrant + Postgres | orchestrator (graph-centric) |
-| Runs | **100% local / offline** | cloud LLM in the loop | cloud LLM in the loop |
-| Explains | **`why()` returns the evidence path** | returns an answer | returns an answer |
-| LoCoMo (neutral PISA basis) | ~56% | ~55% | ~34% |
+| What it is | one embedded binary (vector + graph + column engines) | coordinator over separate services (Qdrant + Postgres) | coordinator, graph-centric (needs Neo4j/FalkorDB) |
+| AI calls to store a memory | **zero required** (optional extraction runs on your local model) | AI-model calls on every write (cloud by default) | AI-model calls on every write (cloud by default) |
+| Runs | **100% local / offline** | self-host still needs an AI service in the write path | Zep's self-hosted edition was discontinued; Graphiti needs a graph database + an AI service |
+| Explains its answers | **yes** — `why()` returns the evidence trail | no — returns an answer only | no — returns an answer only |
+| Publishes retrieval accuracy | **yes** — [+7.2pts multi-hop, +9.7pts time-scoped, no AI grader](BENCHMARK.md) | no | no |
+| Time-related questions on LoCoMo | **55–61%** on a fully local model — floor = without the optional scaffold ([method + stats](BENCHMARK.md)) | 55.5% base / 58.1% graph-enhanced "Mem0g" (its own best score), both on cloud AI ([own paper](https://arxiv.org/abs/2504.19413)) | 49.3% on cloud AI — [as measured in Mem0's evaluation](https://arxiv.org/abs/2504.19413), which Zep disputes |
 
-*Mem0's ~92% / Zep's ~84% headlines run on cloud GPT-4o with contested methodology; on
-the neutral basis the whole field sits far lower and close together — we do **not** claim
-to beat those headlines, we claim the same tier on radically better architecture.*
+*Why no single "overall score" comparison row? Because overall scores from
+different labs can't be fairly compared: the same product's score can swing
+~21 points between two test setups, and vendor headlines often diverge widely
+from what other labs measure. Our fully-local 56% aggregate comes with the
+full method and statistics disclosed, and instead of a bar chart we publish
+the complete sourced landscape — who measured what, with which AI models, and
+which figures are disputed: [`BENCHMARK.md`](BENCHMARK.md).*
 
 **Choose velesdb-memory when local-first is a requirement, not a preference:**
 - **Regulated / sovereign data** (health, legal, finance, defense) — context can't transit a third-party LLM API; `why()` gives both data residency and an auditable recall trail.
@@ -158,7 +169,7 @@ every figure reproduces from the bundled examples.
 | Engine | Public benchmark | What it measures | Vector → fused |
 |---|---|---|---|
 | **Graph** (`why()` BFS) | HotpotQA (3 000 dev, distractor) | retrieving *both* bridge facts of a multi-hop question | **+7.2pp** both-facts on bridge questions (+5.6pp all types) |
-| **Graph** — *replicated* | 2WikiMultiHopQA (1 000 dev) | same metric, second independent dataset | **+3.1pp** on bridged types (+2.1pp overall) |
+| **Graph** — *replicated* | 2WikiMultiHopQA (1 000 dev) | supporting-fact recall, second independently built dataset | **+2.6 to +3.1pp** on its three bridged types (+2.1pp overall) |
 | **ColumnStore** (`recall_where`) | TimeQA (real Wikipedia bios) | time-scoped recall a year-range filter can do and cosine can't | **+9.7pp** gold-sentence recall |
 | **Tri-engine** (compound) | synthetic, multi-hop **and** time-scoped | do the engines *stack*? | **+29pp** together — more than the sum of each alone |
 
