@@ -75,6 +75,26 @@ pub(super) struct RecallWhereParams {
     pub(super) filters: Vec<ColumnFilter>,
 }
 
+/// Parameters for the `recall_fused` tool.
+#[derive(Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct RecallFusedParams {
+    /// Natural-language query to match semantically.
+    pub(super) query: String,
+    /// Maximum number of memories to return (default 10).
+    pub(super) limit: Option<usize>,
+    /// Optional exact-match metadata filter (e.g.
+    /// `{"project": "veles", "status": "resolved"}`).
+    pub(super) filter: Option<Metadata>,
+    /// Graph hops walked from the top vector hit (default 2). Higher reaches
+    /// further but adds noise; capped at the `why` hop ceiling.
+    pub(super) hops: Option<usize>,
+    /// Weight added to a graph-reached fact's normalised vector score
+    /// (default 0.15). Raise to trust the graph more, lower to trust vector
+    /// similarity more.
+    pub(super) graph_boost: Option<f64>,
+}
+
 /// Parameters for the `relate` tool.
 #[derive(Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]

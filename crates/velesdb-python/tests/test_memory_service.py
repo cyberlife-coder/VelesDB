@@ -131,6 +131,38 @@ def test_recall_metadata_is_none_when_the_fact_carries_none(mem):
     assert all(h["metadata"] is None for h in hits)
 
 
+def test_recall_fused_folds_in_a_graph_reached_fact(mem):
+    # Fused recall walks the graph from the top vector hit and folds in a fact
+    # the query never mentions but a stored link connects — the shipped
+    # tri-engine ranking, not a harness-only prompt trick.
+    anchor = mem.remember("we chose parking_lot to avoid lock poisoning")
+    linked = mem.remember(
+        "the on-call rotation moved to Tuesdays",
+        links=[(anchor, "context")],
+    )
+    # Plain top-1 vector recall finds the anchor, not the unrelated linked fact.
+    plain = mem.recall("parking_lot poisoning", k=1)
+    assert all(h["id"] != linked for h in plain)
+    # Fused recall reaches it through the graph.
+    fused = mem.recall_fused("parking_lot poisoning", k=10)
+    ids = {h["id"] for h in fused}
+    assert anchor in ids and linked in ids
+
+
+def test_recall_fused_respects_exact_match_filter(mem):
+    keep = mem.remember("auth bug in login", metadata={"project": "veles"})
+    mem.remember("auth bug in login too", metadata={"project": "acme"})
+    hits = mem.recall_fused("auth bug", k=5, filter={"project": "veles"})
+    assert all(h["id"] == keep for h in hits)
+
+
+def test_recall_fused_accepts_tuning_knobs(mem):
+    # hops/graph_boost are optional and clamped, not rejected.
+    mem.remember("a decision about locks")
+    hits = mem.recall_fused("locks", k=5, hops=1, graph_boost=0.3)
+    assert isinstance(hits, list)
+
+
 def test_oversized_fact_raises_value_error(mem):
     # Facts above the shared 1 MiB cap are rejected before any embedding work.
     with pytest.raises(ValueError):
