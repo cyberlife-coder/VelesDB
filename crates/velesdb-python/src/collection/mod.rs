@@ -29,17 +29,7 @@ const DEFAULT_FUSION: CoreFusionStrategy = CoreFusionStrategy::RRF { k: 60 };
 
 use velesdb_core::collection::streaming::{AsyncIndexBuilderConfig, DeferredIndexerConfig};
 
-/// Extract an optional typed value for `key`, returning `None` when the
-/// key is absent or holds Python `None`.
-fn opt_field<'py, T: FromPyObjectOwned<'py>>(
-    dict: &Bound<'py, PyDict>,
-    key: &str,
-) -> PyResult<Option<T>> {
-    match dict.get_item(key)? {
-        Some(v) if !v.is_none() => Ok(Some(v.extract().map_err(Into::into)?)),
-        _ => Ok(None),
-    }
-}
+use crate::utils::opt_field;
 
 /// Resolve a three-state override for `key`: an absent key leaves the field
 /// unchanged (`None`), an explicit Python `None` clears it (`Some(None)`),

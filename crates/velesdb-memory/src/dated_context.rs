@@ -38,29 +38,25 @@ pub struct DatedContext {
 /// latest date seen. An empty `facts` yields an empty timeline and `now: None`.
 #[must_use]
 pub fn format_dated_context(facts: &[Recollection], date_field: &str) -> DatedContext {
-    // (date, content) for dated facts; content only for undated ones.
-    let mut dated: Vec<(i64, &str)> = Vec::new();
+    // (sort key, pre-formatted `YYYY-MM-DD`, content) for dated facts; content
+    // only for undated ones. The date is formatted once here, so nothing
+    // downstream re-parses it.
+    let mut dated: Vec<(i64, String, &str)> = Vec::new();
     let mut undated: Vec<&str> = Vec::new();
     for fact in facts {
         match fact_date(fact, date_field) {
-            Some(date) => dated.push((date, &fact.content)),
+            Some((key, formatted)) => dated.push((key, formatted, &fact.content)),
             None => undated.push(&fact.content),
         }
     }
     // Ascending chronological order; a stable sort keeps same-date facts in
     // their original relevance order.
-    dated.sort_by_key(|(date, _)| *date);
-    let now = dated.last().and_then(|(date, _)| fmt_date(*date));
+    dated.sort_by_key(|(key, _, _)| *key);
+    let now = dated.last().map(|(_, formatted, _)| formatted.clone());
 
     let lines = dated
         .iter()
-        .map(|(date, content)| match fmt_date(*date) {
-            Some(date) => format!("- [{date}] {content}"),
-            // Unreachable in practice: a value is only in `dated` because
-            // `fact_date` (via `decompose_ymd`) already validated it. Kept total
-            // rather than `unwrap` so a future change can't panic here.
-            None => format!("- {content}"),
-        })
+        .map(|(_, date, content)| format!("- [{date}] {content}"))
         .chain(undated.iter().map(|content| format!("- {content}")))
         .collect::<Vec<_>>()
         .join("\n");
@@ -71,32 +67,57 @@ pub fn format_dated_context(facts: &[Recollection], date_field: &str) -> DatedCo
     }
 }
 
-/// A fact's date from its `date_field` metadata, or `None` when the field is
-/// absent, non-integer, or not a valid `YYYYMMDD`.
-fn fact_date(fact: &Recollection, date_field: &str) -> Option<i64> {
+/// A fact's `(sort key, formatted "YYYY-MM-DD")` from its `date_field`
+/// metadata, or `None` when the field is absent, non-integer, or not a valid
+/// calendar date — so a plain counter (or an impossible date like `20260231`)
+/// living under the date field is treated as undated, not rendered as a
+/// nonsense timeline anchor. Formats the date here so the caller never parses
+/// the integer twice.
+fn fact_date(fact: &Recollection, date_field: &str) -> Option<(i64, String)> {
     let raw = fact.metadata.as_ref()?.get(date_field)?.as_i64()?;
-    // Validate the calendar shape so an out-of-range integer (e.g. a plain
-    // counter that happens to live under the date field) is treated as undated,
-    // not rendered as a nonsense date.
-    decompose_ymd(raw).map(|_| raw)
+    Some((raw, fmt_date(raw)?))
 }
 
 /// Render a `YYYYMMDD` integer as `YYYY-MM-DD`, or `None` when it is not a valid
-/// calendar date (`<= 0`, or month/day out of range).
+/// calendar date.
 fn fmt_date(ts: i64) -> Option<String> {
     let (year, month, day) = decompose_ymd(ts)?;
     Some(format!("{year:04}-{month:02}-{day:02}"))
 }
 
 /// Split a `YYYYMMDD` integer into `(year, month, day)`, or `None` when it is
-/// `<= 0` or the month/day is out of range. The single validity rule for the
-/// date convention, mirroring the `examples/locomo` harness.
+/// `<= 0`, the month is out of range, or the day exceeds that month's real
+/// length (leap years included) — the single validity rule for the date
+/// convention, stricter than the harness's `1..=31` so no impossible date ever
+/// reaches the timeline.
 fn decompose_ymd(ts: i64) -> Option<(i64, i64, i64)> {
     if ts <= 0 {
         return None;
     }
     let (year, month, day) = (ts / 10_000, (ts / 100) % 100, ts % 100);
-    ((1..=12).contains(&month) && (1..=31).contains(&day)).then_some((year, month, day))
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+    (1..=days_in_month(year, month))
+        .contains(&day)
+        .then_some((year, month, day))
+}
+
+/// Days in `month` (1..=12) of `year` in the proleptic Gregorian calendar
+/// (February is 29 in a leap year). Only ever called with a validated month.
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+/// Whether `year` is a leap year (Gregorian rule).
+fn is_leap_year(year: i64) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 #[cfg(test)]

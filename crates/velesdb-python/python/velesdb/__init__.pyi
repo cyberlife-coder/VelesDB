@@ -2350,6 +2350,7 @@ class MemoryService:
         query: str,
         k: int = 10,
         filter: Optional[Dict[str, Any]] = None,
+        *,
         date_field: None = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]: ...
@@ -2368,6 +2369,7 @@ class MemoryService:
         query: str,
         k: int = 10,
         filter: Optional[Dict[str, Any]] = None,
+        *,
         date_field: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> Union[List[Dict[str, Any]], Dict[str, Any]]:

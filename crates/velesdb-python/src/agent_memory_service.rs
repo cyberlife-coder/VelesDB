@@ -19,7 +19,7 @@ use velesdb_memory::{
 };
 
 use crate::collection::query::convert_params;
-use crate::utils::{json_to_python, python_to_json};
+use crate::utils::{json_to_python, opt_field, python_to_json};
 
 /// Map a [`MemoryError`] to the most specific Python exception, driven by its
 /// transport-neutral [`ErrorCategory`] so the taxonomy stays identical to the
@@ -126,20 +126,6 @@ fn explanation_to_dict(py: Python<'_>, e: &Explanation) -> PyResult<Py<PyAny>> {
     Ok(out.into())
 }
 
-/// Extract an optional typed value for `key` from `dict`, `None` when the key
-/// is absent or holds Python `None` — the same three-state read the collection
-/// binding's `opt_field` uses, so `{}`, a missing key, and an explicit `None`
-/// all mean "unset".
-fn opt_item<'py, T: FromPyObjectOwned<'py>>(
-    dict: &Bound<'py, PyDict>,
-    key: &str,
-) -> PyResult<Option<T>> {
-    match dict.get_item(key)? {
-        Some(v) if !v.is_none() => Ok(Some(v.extract().map_err(Into::into)?)),
-        _ => Ok(None),
-    }
-}
-
 /// Build [`FusionOptions`] from an optional Python `{hops?, graph_boost?, pool?}`
 /// dict, routed through [`FusionOptions::from_knobs`] so the defaults and clamps
 /// stay identical to the MCP tool. An absent dict (or one omitting a key) uses
@@ -148,9 +134,9 @@ fn fusion_options_from_dict(options: Option<&Bound<'_, PyDict>>) -> PyResult<Fus
     let Some(dict) = options else {
         return Ok(FusionOptions::from_knobs(None, None, None));
     };
-    let hops = opt_item(dict, "hops")?;
-    let graph_boost = opt_item(dict, "graph_boost")?;
-    let pool = opt_item(dict, "pool")?;
+    let hops = opt_field(dict, "hops")?;
+    let graph_boost = opt_field(dict, "graph_boost")?;
+    let pool = opt_field(dict, "pool")?;
     Ok(FusionOptions::from_knobs(hops, graph_boost, pool))
 }
 
@@ -295,7 +281,7 @@ impl PyMemoryService {
     /// date, returns a dict `{"memories": [...], "dated_context": str, "now":
     /// str | None}` — the memories plus a chronological, date-prefixed timeline
     /// and a "now" anchor for temporal reasoning.
-    #[pyo3(signature = (query, k = 10, filter = None, date_field = None, options = None))]
+    #[pyo3(signature = (query, k = 10, filter = None, *, date_field = None, options = None))]
     fn recall_fused(
         &self,
         py: Python<'_>,

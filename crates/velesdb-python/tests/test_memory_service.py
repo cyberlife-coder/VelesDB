@@ -204,6 +204,15 @@ def test_recall_fused_without_date_field_returns_a_plain_list(mem):
     assert isinstance(res, list)
 
 
+def test_recall_fused_zero_pool_is_floored_not_emptied(mem):
+    # pool=0 must not oversample zero candidates and return nothing; it is
+    # floored to 1 (a deliberate small pool is still honored, just never empty).
+    for i in range(3):
+        mem.remember(f"a fact number {i} about locks")
+    hits = mem.recall_fused("locks", k=5, options={"pool": 0})
+    assert len(hits) > 0
+
+
 def test_oversized_fact_raises_value_error(mem):
     # Facts above the shared 1 MiB cap are rejected before any embedding work.
     with pytest.raises(ValueError):
