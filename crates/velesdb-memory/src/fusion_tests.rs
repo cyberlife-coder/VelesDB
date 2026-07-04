@@ -194,13 +194,16 @@ fn test_fusion_options_sanitized_only_touches_non_finite_boost() {
 #[allow(clippy::float_cmp)] // asserting exact propagation of literal boosts, no arithmetic
 fn test_fusion_options_from_knobs_defaults_and_clamps_hops() {
     let d = FusionOptions::default();
-    let none = FusionOptions::from_knobs(None, None);
+    let none = FusionOptions::from_knobs(None, None, None);
     assert_eq!(none.hops, d.hops);
     assert_eq!(none.graph_boost, d.graph_boost);
     assert_eq!(none.pool, d.pool);
 
-    let clamped = FusionOptions::from_knobs(Some(usize::MAX), Some(0.42));
+    let clamped = FusionOptions::from_knobs(Some(usize::MAX), Some(0.42), Some(usize::MAX));
     assert_eq!(clamped.hops, crate::limits::clamp_hops(usize::MAX));
     assert_eq!(clamped.graph_boost, 0.42);
-    assert_eq!(clamped.pool, d.pool);
+    assert_eq!(
+        clamped.pool,
+        Some(crate::limits::clamp_recall_limit(usize::MAX))
+    );
 }

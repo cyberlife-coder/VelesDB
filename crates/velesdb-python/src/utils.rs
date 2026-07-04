@@ -5,9 +5,28 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use pyo3::IntoPyObjectExt;
 use std::collections::HashMap;
 use velesdb_core::{DistanceMetric, StorageMode};
+
+/// Extract an optional typed value for `key` from `dict`, returning `None` when
+/// the key is absent or holds Python `None` — so `{}`, a missing key, and an
+/// explicit `None` all read as "unset". Shared by every binding that takes an
+/// options dict (collection config, `recall_fused` fusion options).
+///
+/// # Errors
+///
+/// Propagates any error from extracting the value as `T` (e.g. a wrong type).
+pub fn opt_field<'py, T: FromPyObjectOwned<'py>>(
+    dict: &Bound<'py, PyDict>,
+    key: &str,
+) -> PyResult<Option<T>> {
+    match dict.get_item(key)? {
+        Some(v) if !v.is_none() => Ok(Some(v.extract().map_err(Into::into)?)),
+        _ => Ok(None),
+    }
+}
 
 /// Rejects vectors that contain non-finite values (NaN or Infinity).
 ///

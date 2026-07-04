@@ -21,6 +21,10 @@
 //! Set" of the Software's features and breach the `VelesDB` Core License 1.0
 //! (§1, No Hosted or Managed Service). See `VISION.md` §5 and `PLAN.md` Phase 4A.
 
+/// Format recalled facts as a chronological, date-prefixed timeline with a
+/// "now" anchor — the dated-context representation measured to lift temporal
+/// question answering, shipped as product behavior rather than a harness prompt.
+pub mod dated_context;
 pub mod embedder;
 pub mod error;
 pub mod extract;
@@ -77,6 +81,7 @@ const _: () = assert!(
     "update FALLBACK_DIMENSION to match velesdb_core::agent::DEFAULT_DIMENSION"
 );
 
+pub use dated_context::{format_dated_context, DatedContext};
 pub use embedder::{DynEmbedder, EmbedError, Embedder, HashEmbedder};
 #[cfg(feature = "ollama")]
 pub use embedder::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};

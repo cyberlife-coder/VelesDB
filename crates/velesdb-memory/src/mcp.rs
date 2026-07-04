@@ -31,9 +31,9 @@ use crate::extract::DynExtractor;
 // domain types from `crate::model` directly (no duplicate wire/domain struct).
 mod dto;
 use dto::{
-    ForgetParams, ForgetResult, RecallFusedParams, RecallParams, RecallResult, RecallWhereParams,
-    RelateParams, RelateResult, RememberExtractedParams, RememberExtractedResult, RememberParams,
-    RememberResult, WhyParams,
+    ForgetParams, ForgetResult, RecallFusedParams, RecallFusedResult, RecallParams, RecallResult,
+    RecallWhereParams, RelateParams, RelateResult, RememberExtractedParams,
+    RememberExtractedResult, RememberParams, RememberResult, WhyParams,
 };
 
 // --- The server ------------------------------------------------------------
@@ -160,26 +160,44 @@ impl McpServer {
 
     #[tool(
         name = "recall_fused",
-        description = "Fused vector + graph recall: like `recall`, but also walks the graph from the top vector hit and folds any connected fact into the ranking — the tri-engine ranking (vector similarity + ColumnStore filter + graph reach) measured on multi-hop and temporal benchmarks. Reach for this when an answer needs a fact the query doesn't mention directly but a stored `relate`/extracted link connects (multi-hop reasoning, temporal chains). `hops`/`graph_boost` tune the graph reach; omit them for the proven defaults. Optionally narrow with an exact-match `filter`. Most relevant first."
+        description = "Fused vector + graph recall: like `recall`, but also walks the graph from the top vector hit and folds any connected fact into the ranking — the tri-engine ranking (vector similarity + ColumnStore filter + graph reach) measured on multi-hop and temporal benchmarks. Reach for this when an answer needs a fact the query doesn't mention directly but a stored `relate`/extracted link connects (multi-hop reasoning, temporal chains). `hops`/`graph_boost` tune the graph reach; omit them for the proven defaults. Optionally narrow with an exact-match `filter`. Set `date_field` (the metadata key holding a YYYYMMDD date) to also get a `dated_context` timeline and a `now` anchor for temporal questions. Most relevant first."
     )]
     async fn recall_fused(
         &self,
         Parameters(params): Parameters<RecallFusedParams>,
-    ) -> Result<Json<RecallResult>, ErrorData> {
+    ) -> Result<Json<RecallFusedResult>, ErrorData> {
         let k = params
             .limit
             .unwrap_or(DEFAULT_RECALL_LIMIT)
             .min(MAX_RECALL_LIMIT);
-        let opts = FusionOptions::from_knobs(params.hops, params.graph_boost);
+        let opts = FusionOptions::from_knobs(params.hops, params.graph_boost, None);
         let service = Arc::clone(&self.service);
-        let RecallFusedParams { query, filter, .. } = params;
+        let RecallFusedParams {
+            query,
+            filter,
+            date_field,
+            ..
+        } = params;
         let memories = tokio::task::spawn_blocking(move || {
             service.recall_fused(&query, k, filter.as_ref(), opts)
         })
         .await
         .map_err(join_error)?
         .map_err(to_error)?;
-        Ok(Json(RecallResult { memories }))
+        // When the caller names a date field, also ship the dated timeline it
+        // would otherwise have to format itself in a prompt.
+        let (dated_context, now) = match date_field {
+            Some(field) => {
+                let ctx = crate::dated_context::format_dated_context(&memories, &field);
+                (Some(ctx.timeline), ctx.now)
+            }
+            None => (None, None),
+        };
+        Ok(Json(RecallFusedResult {
+            memories,
+            dated_context,
+            now,
+        }))
     }
 
     #[tool(

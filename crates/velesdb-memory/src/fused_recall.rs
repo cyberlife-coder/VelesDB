@@ -302,14 +302,20 @@ fn matches_filter(metadata: Option<&Metadata>, filter: Option<&Metadata>) -> boo
 }
 
 /// The oversampled candidate pool depth for a `k`-sized fused recall:
-/// `opts.pool` if the caller set one, else the proven default
+/// `opts.pool` if the caller set one (floored at 1), else the proven default
 /// ([`fusion::pool_size`]) — either way, capped at
 /// [`crate::limits::MAX_RECALL_LIMIT`], the same `DoS` ceiling `k`/`hops`
-/// carry. The cap lives here, not just at each binding's FFI boundary: the
-/// *default* pool (`k.saturating_mul(8)`) exceeds it well before `k` itself
-/// reaches its own cap, so a caller who never touches `pool` at all — not
-/// just one who sets it explicitly — must still be bounded.
+/// carry. Both bounds live here, not at each binding's FFI boundary:
+/// - the floor of 1 stops an explicit `pool` of 0 (a binding now exposes the
+///   knob: `options={"pool": 0}` in Python) from oversampling *zero* candidates
+///   and returning nothing. A caller can still deliberately narrow the pool
+///   below the default (e.g. `pool: 1` to admit only the top vector hit — the
+///   documented behavior fusion's tests pin); the floor only rules out the
+///   degenerate empty-set case, it does not force a minimum recall depth.
+/// - the cap bounds the default too: `k.saturating_mul(8)` exceeds the limit
+///   well before `k` itself does, so even a caller who never touches `pool` is
+///   bounded.
 fn pool_depth(k: usize, opts: FusionOptions) -> usize {
-    let depth = opts.pool.unwrap_or_else(|| fusion::pool_size(k));
+    let depth = opts.pool.map_or_else(|| fusion::pool_size(k), |p| p.max(1));
     crate::limits::clamp_recall_limit(depth)
 }
