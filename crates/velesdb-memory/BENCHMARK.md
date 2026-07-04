@@ -308,9 +308,14 @@ is a statement about the *multi-hop category under our fixed retrieval* — it
 does not contradict the observation below that a stronger generator lifts
 *aggregate* scores ~10pp in a controlled swap: multi-hop specifically is capped
 by evidence completeness, which no generator can fix.
-Bonus finding: the fused tri-engine at k=32 matches brute-force
-vector retrieval at k=64 — **the graph reaches the same accuracy on half the
-context budget**, which halves the answering token bill.
+Bonus finding, disclosed as exploratory (2-conversation subset, Claude-judged —
+not part of the statistically-validated 10-conversation headline above, and
+not yet backed by a published table on this page): the fused tri-engine at
+k=32 reached about the same multi-hop accuracy as brute-force vector retrieval
+at k=64 in that smaller run — suggestive that **the graph can reach similar
+accuracy on half the context budget**, which would roughly halve the answering
+token bill. Treat this as a lead worth confirming at full scale, not a proven
+claim.
 
 ## How to reproduce
 
@@ -353,19 +358,21 @@ landscape, every figure sourced:
 What we actually claim from this table:
 
 1. **Every other row runs a frontier cloud generator; ours is a local 35B —
-   and the eval stack dominates the number.** The same system's score moves by
-   ~21 points between measuring labs (Zep: 58.4 under Mem0's gpt-4o-mini run —
-   disputed — vs 79.1 under MIRIX's gpt-4.1-mini), and the full-context
-   ceiling itself moves from 72.9 (gpt-4o-mini) to 87.5 (gpt-4.1-mini). Our
-   fully-local 56 sits within a few points of the lowest cloud measurements in
-   this table and well under the strongest-stack ones — the honest statement
-   is that it is in the field's measured span, achieved with no cloud at all.
+   and, per the swing above, the eval stack moves the number as much as the
+   product does.** Even the full-context ceiling (no memory system at all)
+   moves from 72.9 to 87.5 depending on the generator. Our fully-local 56 sits
+   within a few points of the lowest cloud measurements in this table and well
+   under the strongest-stack ones — the honest statement is that it is in the
+   field's measured span, achieved with no cloud at all.
 2. **Our temporal category (55–61%; the floor is the configuration without the
-   optional scaffold) is level with or above the 55.5% (Mem0) and 49.3% (Zep)
-   that the [Mem0 paper's evaluation](https://arxiv.org/abs/2504.19413) reports
-   for that category** — the Zep figure is Mem0's measurement of Zep, which Zep
-   disputes — and it is the one category with a statistically validated
-   within-harness ablation behind it (+33.6pp).
+   optional scaffold) spans both rows Mem0's own paper reports for itself in
+   that category** ([source, Table 1](https://arxiv.org/abs/2504.19413)):
+   roughly level with base Mem0 (55.5%) at our floor, and above even Mem0's
+   graph-enhanced variant (**Mem0g, 58.1% — the paper's own best score in that
+   column**) at our ceiling — while Zep sits at 49.3% in that same evaluation
+   (a measurement by competitor Mem0, which Zep disputes). This is also the one
+   category with a statistically validated within-harness ablation behind it
+   (+33.6pp).
 3. **We do not claim to beat anyone's vendor headline.** We claim disclosed
    config, paired statistics, a bundled harness, and retrieval metrics (Part 1)
    nobody else publishes.
@@ -377,4 +384,4 @@ What we actually claim from this table:
 - **Open-domain is the weak spot** (24%) — questions needing world knowledge beyond what the conversation stated; the next tuning target.
 - **Temporal is hard industry-wide**; date-grounding is exactly where we invested, and it's the proven, statistically robust win (+33.6pp over baseline).
 - **The headline uses the best config found on these same 10 conversations** (LoCoMo has no held-out split); the without-scaffold number (54% answerable / 55% temporal) is published alongside it above.
-- Numbers are **our measurement** under the config above, not a leaderboard submission. The point is that you can re-run it yourself. A LongMemEval run — the benchmark serious actors are moving to — is the tracked next step.
+- Not a leaderboard submission — a self-run harness. A LongMemEval run, the benchmark serious actors are moving to, is the tracked next step.

@@ -53,11 +53,13 @@ research reached the same conclusion — time-aware retrieval is one of the most
 effective memory techniques ([LongMemEval paper](https://arxiv.org/abs/2410.10813)).
 Our time-question score lands at **55–61%** (the floor is the statistically
 proven configuration; the ceiling adds an optional prompt scaffold whose extra
-gain is directionally positive but not yet statistically proven) — level with
-or above the 55.5% (Mem0) and 49.3% (Zep) that the
-[Mem0 paper's evaluation](https://arxiv.org/abs/2504.19413) reports for that
-category **on powerful cloud AI models** (the Zep figure is Mem0's measurement,
-which Zep disputes).
+gain is directionally positive but not yet statistically proven) — spanning
+both rows the [Mem0 paper's own evaluation](https://arxiv.org/abs/2504.19413)
+reports for that category: roughly level with base Mem0 (55.5%) at our floor,
+and above even Mem0's graph-enhanced variant (**Mem0g, 58.1% — the paper's own
+best score in that column**) at our ceiling. Zep scores 49.3% in that same
+evaluation (a measurement by competitor Mem0, which Zep disputes) — both run
+**on powerful cloud AI models**, ours on a model on your own machine.
 
 ## 3. The category insight
 
@@ -92,11 +94,13 @@ which AI model writes the answers moves scores by ~10 points
 number in the Mem0/Zep cells was produced with a powerful **cloud** AI model;
 ours runs on a model **on your own machine**. So we do not claim to beat
 anyone's overall score. What we do claim: on **time-related questions**
-(55–61%) we score level with or above the 55.5% / 49.3% that the
-[Mem0 paper's evaluation](https://arxiv.org/abs/2504.19413) reports for Mem0
-and Zep in that category (the Zep figure is Mem0's measurement, which Zep
-disputes), our full method and statistics are disclosed, and the test harness
-ships with the product so you can re-run it.*
+(55–61%) our range spans both configurations the
+[Mem0 paper's evaluation](https://arxiv.org/abs/2504.19413) reports for
+itself — roughly level with base Mem0 (55.5%) at our floor, above its
+graph-enhanced Mem0g variant (58.1%, the paper's own best score there) at our
+ceiling — and clears Zep's 49.3% in that category throughout (a measurement by
+competitor Mem0, which Zep disputes); our full method and statistics are
+disclosed, and the test harness ships with the product so you can re-run it.*
 
 ## 5. Why we don't play the aggregate-score game (and you shouldn't trust it)
 
@@ -132,11 +136,15 @@ where the judge [accepts most wrong answers](https://dev.to/penfieldlabs/we-audi
 and [a filesystem agent scores 74%](https://www.letta.com/blog/benchmarking-ai-agent-memory/).
 Our 56% runs on a **fully local** 35B generator with the config, judge, paired
 statistics, and raw dumps disclosed — and the *category we invest in* holds up:
-temporal 55–61%, level with or above the 55.5% the Mem0 paper reports for Mem0
-itself. So the real trade is explicit: a measured accuracy gap versus the cloud
-systems — a few points against the lowest-tier cloud measurements, more against
-the strongest eval stacks ([sourced landscape](BENCHMARK.md)) and nothing like
-the 35-point gap the vendor headline suggests — in exchange for full locality,
+temporal 55–61%, spanning both rows the
+[Mem0 paper's evaluation](https://arxiv.org/abs/2504.19413) reports for
+itself — roughly level with base Mem0 (55.5%) at our floor, above its
+graph-enhanced Mem0g variant (58.1%, the paper's own best score there) at our
+ceiling. So the real trade is explicit: on the *aggregate* score, a gap of
+roughly 2 to 8 points against measurements of the leading cloud systems by
+other neutral labs, and up to ~30 points against the strongest cloud-generator
+eval stacks ([exact figures, sourced](BENCHMARK.md)) — nothing like the
+35-point gap the vendor headline suggests — in exchange for full locality,
 one embedded engine instead of a service mesh, zero per-write AI cost, and an
 evidence path you can audit. We will not inflate a score to win a bar chart; we
 publish what you can reproduce.
@@ -155,9 +163,11 @@ publish what you can reproduce.
    deploys at all.
 3. **Cost-sensitive, high-volume agents.** When every memory write is 2–3
    cloud-LLM calls, economics flip at scale: local extraction and recall remove
-   the per-token bill entirely. Bonus: the graph reaches the same LoCoMo accuracy
-   at **half the context budget** (fused k=32 matches brute-force vector k=64),
-   which halves the *answering* token bill too.
+   the per-token bill entirely. Early, exploratory signal (2-conversation
+   subset, not yet confirmed at full scale): the graph may reach similar
+   LoCoMo accuracy at **half the context budget** (fused k=32 vs brute-force
+   vector k=64 — see [`BENCHMARK.md`](BENCHMARK.md)), which would halve the
+   *answering* token bill too.
 
 ## 8. The close
 
