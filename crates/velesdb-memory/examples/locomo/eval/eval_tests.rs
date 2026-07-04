@@ -26,6 +26,7 @@ fn cfg() -> EvalCfg {
         bm25: false,
         claude_judge: false,
         claude_gen: false,
+        use_shipped_api: false,
     }
 }
 
