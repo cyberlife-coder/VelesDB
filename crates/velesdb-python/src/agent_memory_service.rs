@@ -13,9 +13,9 @@ use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 
 use velesdb_memory::{
-    limits, ColumnFilter, ColumnOp, DynEmbedder, ErrorCategory, Explanation, FusionOptions,
-    HashEmbedder, Link, MemoryError, MemoryService, Metadata, OllamaEmbedder, OllamaExtractor,
-    Recollection, DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    format_dated_context, limits, ColumnFilter, ColumnOp, DynEmbedder, ErrorCategory, Explanation,
+    FusionOptions, HashEmbedder, Link, MemoryError, MemoryService, Metadata, OllamaEmbedder,
+    OllamaExtractor, Recollection, DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::collection::query::convert_params;
@@ -124,6 +124,34 @@ fn explanation_to_dict(py: Python<'_>, e: &Explanation) -> PyResult<Py<PyAny>> {
     out.set_item(PyString::intern(py, "nodes"), nodes)?;
     out.set_item(PyString::intern(py, "edges"), edges)?;
     Ok(out.into())
+}
+
+/// Extract an optional typed value for `key` from `dict`, `None` when the key
+/// is absent or holds Python `None` — the same three-state read the collection
+/// binding's `opt_field` uses, so `{}`, a missing key, and an explicit `None`
+/// all mean "unset".
+fn opt_item<'py, T: FromPyObjectOwned<'py>>(
+    dict: &Bound<'py, PyDict>,
+    key: &str,
+) -> PyResult<Option<T>> {
+    match dict.get_item(key)? {
+        Some(v) if !v.is_none() => Ok(Some(v.extract().map_err(Into::into)?)),
+        _ => Ok(None),
+    }
+}
+
+/// Build [`FusionOptions`] from an optional Python `{hops?, graph_boost?, pool?}`
+/// dict, routed through [`FusionOptions::from_knobs`] so the defaults and clamps
+/// stay identical to the MCP tool. An absent dict (or one omitting a key) uses
+/// the proven defaults.
+fn fusion_options_from_dict(options: Option<&Bound<'_, PyDict>>) -> PyResult<FusionOptions> {
+    let Some(dict) = options else {
+        return Ok(FusionOptions::from_knobs(None, None, None));
+    };
+    let hops = opt_item(dict, "hops")?;
+    let graph_boost = opt_item(dict, "graph_boost")?;
+    let pool = opt_item(dict, "pool")?;
+    Ok(FusionOptions::from_knobs(hops, graph_boost, pool))
 }
 
 /// Local-first agent memory with the `why()` graph wedge.
@@ -257,32 +285,53 @@ impl PyMemoryService {
     /// into the ranking — the tri-engine ranking measured on multi-hop and
     /// temporal benchmarks. Best when an answer needs a fact the query doesn't
     /// mention directly but a stored `relate`/`remember_extracted` link
-    /// connects. `hops`/`graph_boost` tune the graph reach; omit them for the
-    /// proven defaults. Returns `{id, score, content, metadata}` (`metadata`
-    /// is the fact's stored dict, or `None` if it carried none).
-    #[pyo3(signature = (query, k = 10, filter = None, hops = None, graph_boost = None))]
+    /// connects. Advanced fusion tuning goes in `options`
+    /// (`{"hops": int, "graph_boost": float, "pool": int}`, all optional — same
+    /// shape as the Node/WASM binding); omit it for the proven defaults.
+    ///
+    /// Without `date_field`, returns a list of `{id, score, content, metadata}`
+    /// (`metadata` is the fact's stored dict, or `None` if it carried none).
+    /// With `date_field` set to the metadata key holding each fact's `YYYYMMDD`
+    /// date, returns a dict `{"memories": [...], "dated_context": str, "now":
+    /// str | None}` — the memories plus a chronological, date-prefixed timeline
+    /// and a "now" anchor for temporal reasoning.
+    #[pyo3(signature = (query, k = 10, filter = None, date_field = None, options = None))]
     fn recall_fused(
         &self,
         py: Python<'_>,
         query: &str,
         k: usize,
         filter: Option<HashMap<String, Py<PyAny>>>,
-        hops: Option<usize>,
-        graph_boost: Option<f64>,
+        date_field: Option<String>,
+        options: Option<Bound<'_, PyDict>>,
     ) -> PyResult<Py<PyAny>> {
         let k = limits::clamp_recall_limit(k);
         let filter = to_metadata(py, filter)?;
-        let opts = FusionOptions::from_knobs(hops, graph_boost);
+        let opts = fusion_options_from_dict(options.as_ref())?;
         let hits = py.detach(|| {
             self.svc
                 .recall_fused(query, k, filter.as_ref(), opts)
                 .map_err(to_py_err)
         })?;
-        let list = PyList::empty(py);
+        // Format the dated timeline before the hits are consumed into the list.
+        let dated = date_field
+            .as_ref()
+            .map(|field| format_dated_context(&hits, field));
+
+        let memories = PyList::empty(py);
         for hit in hits {
-            list.append(recollection_to_dict(py, hit)?)?;
+            memories.append(recollection_to_dict(py, hit)?)?;
         }
-        Ok(list.into())
+        match dated {
+            None => Ok(memories.into()),
+            Some(ctx) => {
+                let out = PyDict::new(py);
+                out.set_item(PyString::intern(py, "memories"), memories)?;
+                out.set_item(PyString::intern(py, "dated_context"), ctx.timeline)?;
+                out.set_item(PyString::intern(py, "now"), ctx.now)?;
+                Ok(out.into())
+            }
+        }
     }
 
     /// Create a typed edge `from_id -> to_id`. Returns the edge id.

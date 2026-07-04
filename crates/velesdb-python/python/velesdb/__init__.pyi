@@ -2344,14 +2344,33 @@ class MemoryService:
         """
         ...
 
+    @overload
     def recall_fused(
         self,
         query: str,
         k: int = 10,
         filter: Optional[Dict[str, Any]] = None,
-        hops: Optional[int] = None,
-        graph_boost: Optional[float] = None,
-    ) -> List[Dict[str, Any]]:
+        date_field: None = None,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]: ...
+    @overload
+    def recall_fused(
+        self,
+        query: str,
+        k: int = 10,
+        filter: Optional[Dict[str, Any]] = None,
+        *,
+        date_field: str,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]: ...
+    def recall_fused(
+        self,
+        query: str,
+        k: int = 10,
+        filter: Optional[Dict[str, Any]] = None,
+        date_field: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
         """Fused vector + graph recall (the tri-engine ranking).
 
         Like :meth:`recall`, but also walks the graph from the top vector hit
@@ -2364,15 +2383,19 @@ class MemoryService:
             query: Free-text query.
             k: Maximum number of results (default: 10).
             filter: Optional exact-match metadata filter dict.
-            hops: Graph hops from the top vector hit (default: 2).
-            graph_boost: Weight added to a graph-reached fact's score
-                (default: 0.15).
+            date_field: Metadata key holding each fact's ``YYYYMMDD`` date. When
+                given, the result is a dict with a dated timeline (see below);
+                when ``None`` (default), a plain list is returned.
+            options: Optional advanced fusion tuning
+                ``{"hops": int, "graph_boost": float, "pool": int}`` (all keys
+                optional). Omit for the proven defaults.
 
         Returns:
-            List of ``{"id": int, "score": float, "content": str,
-            "metadata": Optional[Dict[str, Any]]}`` dicts, most relevant
-            first. ``metadata`` is the fact's stored dict, or ``None`` if it
-            carried none.
+            Without ``date_field``: a list of ``{"id": int, "score": float,
+            "content": str, "metadata": Optional[Dict[str, Any]]}`` dicts, most
+            relevant first. With ``date_field``: a dict ``{"memories": [...],
+            "dated_context": str, "now": Optional[str]}`` — the same memories
+            plus a chronological, date-prefixed timeline and a "now" anchor.
         """
         ...
 

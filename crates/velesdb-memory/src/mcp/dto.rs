@@ -93,6 +93,29 @@ pub(super) struct RecallFusedParams {
     /// (default 0.15). Raise to trust the graph more, lower to trust vector
     /// similarity more.
     pub(super) graph_boost: Option<f64>,
+    /// Name of the metadata field holding each fact's date as a `YYYYMMDD`
+    /// integer (e.g. `"ts"`, `"occurred_at"`). When set, the result adds a
+    /// `dated_context` timeline (facts date-prefixed and ordered oldest-first)
+    /// plus a `now` anchor — the representation that lifts temporal reasoning.
+    /// Omit for plain results.
+    pub(super) date_field: Option<String>,
+}
+
+/// Result of the `recall_fused` tool: the recalled memories, plus a dated
+/// timeline when `date_field` was given.
+#[derive(Serialize, JsonSchema)]
+pub(super) struct RecallFusedResult {
+    /// Recalled memories, most relevant first.
+    pub(super) memories: Vec<Recollection>,
+    /// Chronological, date-prefixed rendering of `memories` (`- [YYYY-MM-DD]
+    /// content` per line, oldest first, undated facts last). Present only when
+    /// `date_field` was set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) dated_context: Option<String>,
+    /// The most recent date across `memories` (`YYYY-MM-DD`), the "now" anchor.
+    /// Present only when `date_field` was set and at least one fact is dated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) now: Option<String>,
 }
 
 /// Parameters for the `relate` tool.

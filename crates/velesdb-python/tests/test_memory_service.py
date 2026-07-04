@@ -157,9 +157,10 @@ def test_recall_fused_respects_exact_match_filter(mem):
 
 
 def test_recall_fused_accepts_tuning_knobs(mem):
-    # hops/graph_boost are optional and clamped, not rejected.
+    # Advanced fusion knobs go in `options` (same shape as Node/WASM); optional
+    # and clamped, not rejected.
     mem.remember("a decision about locks")
-    hits = mem.recall_fused("locks", k=5, hops=1, graph_boost=0.3)
+    hits = mem.recall_fused("locks", k=5, options={"hops": 1, "graph_boost": 0.3, "pool": 64})
     assert isinstance(hits, list)
 
 
@@ -172,9 +173,35 @@ def test_recall_fused_survives_non_finite_graph_boost(mem):
         "the on-call rotation moved to Tuesdays",
         links=[(anchor, "context")],
     )
-    hits = mem.recall_fused("parking_lot poisoning", k=10, graph_boost=float("nan"))
+    hits = mem.recall_fused(
+        "parking_lot poisoning", k=10, options={"graph_boost": float("nan")}
+    )
     ids = {h["id"] for h in hits}
     assert linked in ids
+
+
+def test_recall_fused_dated_returns_timeline_and_now(mem):
+    # With date_field, recall_fused returns a dict carrying a chronological,
+    # date-prefixed timeline + a "now" anchor — the temporal representation
+    # shipped as product behavior, not left to the caller's prompt.
+    mem.remember("the release shipped", metadata={"ts": 20260701})
+    mem.remember("the project kicked off", metadata={"ts": 20260103})
+    res = mem.recall_fused("project release timeline", k=10, date_field="ts")
+    assert isinstance(res, dict)
+    assert set(res) == {"memories", "dated_context", "now"}
+    timeline = res["dated_context"]
+    assert "- [2026-01-03] the project kicked off" in timeline
+    assert "- [2026-07-01] the release shipped" in timeline
+    # Oldest first.
+    assert timeline.index("2026-01-03") < timeline.index("2026-07-01")
+    assert res["now"] == "2026-07-01"
+
+
+def test_recall_fused_without_date_field_returns_a_plain_list(mem):
+    # Backward-compatible: no date_field -> a list, exactly like before.
+    mem.remember("a plain fact")
+    res = mem.recall_fused("plain fact", k=5)
+    assert isinstance(res, list)
 
 
 def test_oversized_fact_raises_value_error(mem):
