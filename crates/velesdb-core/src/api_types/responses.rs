@@ -323,6 +323,24 @@ pub struct ListIndexesResponse {
 // Scroll Responses
 // ============================================================================
 
+/// `OpenAPI` schema for the scroll `cursor` input: an integer-or-string ID
+/// (precision-safe) that keeps the cursor-specific "resume after" semantics
+/// rather than the generic point-ID description.
+#[cfg(feature = "openapi")]
+fn scroll_cursor_schema() -> utoipa::openapi::schema::OneOfBuilder {
+    use utoipa::openapi::schema::{ObjectBuilder, Type};
+    // `cursor` is `Option<u64>`: the deserializer accepts an integer, a
+    // precision-safe string, or `null` (= start from the beginning). The
+    // `null` branch keeps the spec in step with that leniency.
+    serde_id::id_oneof()
+        .item(ObjectBuilder::new().schema_type(Type::Null))
+        .description(Some(
+            "Resume after this point ID (exclusive). Omit or send null to \
+             start from the beginning. Accepts a JSON integer or a \
+             precision-safe string.",
+        ))
+}
+
 /// Request body for the scroll endpoint.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -332,6 +350,7 @@ pub struct ScrollRequest {
         default,
         deserialize_with = "serde_id::deserialize_option_id_from_string_or_number"
     )]
+    #[cfg_attr(feature = "openapi", schema(schema_with = scroll_cursor_schema))]
     pub cursor: Option<u64>,
     /// Maximum points per batch (1–10 000, default 100).
     #[serde(default = "default_scroll_batch_size")]
@@ -357,6 +376,7 @@ pub struct ScrollResponse {
         serialize_with = "serde_id::serialize_option_id_as_string",
         deserialize_with = "serde_id::deserialize_option_id_from_string_or_number"
     )]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
     pub next_cursor: Option<u64>,
 }
 

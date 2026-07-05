@@ -322,7 +322,7 @@ pub async fn traverse_graph(
     path = "/collections/{name}/graph/nodes/{node_id}/degree",
     params(
         ("name" = String, Path, description = "Collection name"),
-        ("node_id" = u64, Path, description = "Node ID")
+        ("node_id" = String, Path, description = "Node ID (u64 as a string; precision-safe above 2^53-1)", pattern = "^[0-9]+$")
     ),
     responses(
         (status = 200, description = "Degree retrieved successfully", body = DegreeResponse),

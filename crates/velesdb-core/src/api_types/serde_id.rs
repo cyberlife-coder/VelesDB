@@ -74,16 +74,32 @@ pub fn id_input_schema() -> utoipa::openapi::schema::OneOfBuilder {
 ///
 /// An ID is emitted as a string on the wire (precision-safe) but accepted as
 /// either an integer or a string on input.
+///
+/// `u64` has no exact `OpenAPI` primitive, so the two branches are deliberately
+/// asymmetric and the exact bound is enforced server-side (`parse::<u64>`):
+/// the integer branch is `int64`/`minimum: 0` (the JS-safe native form; values
+/// above `i64::MAX` must use the string branch, which is precisely why the
+/// string form exists), and the string branch is `^[0-9]+$` — permissive at
+/// the very top of the range (a >`u64::MAX` digit string is rejected at
+/// runtime) rather than an unreadable exact-max regex. This mirrors the
+/// protobuf/Google-JSON convention of carrying 64-bit ints as strings.
 #[cfg(feature = "openapi")]
-fn id_oneof() -> utoipa::openapi::schema::OneOfBuilder {
+pub(crate) fn id_oneof() -> utoipa::openapi::schema::OneOfBuilder {
     use utoipa::openapi::schema::{KnownFormat, ObjectBuilder, OneOfBuilder, SchemaFormat, Type};
     OneOfBuilder::new()
         .item(
             ObjectBuilder::new()
                 .schema_type(Type::Integer)
-                .format(Some(SchemaFormat::KnownFormat(KnownFormat::Int64))),
+                .format(Some(SchemaFormat::KnownFormat(KnownFormat::Int64)))
+                // IDs are `u64`; the native-integer branch is non-negative.
+                .minimum(Some(0.0)),
         )
-        .item(ObjectBuilder::new().schema_type(Type::String))
+        .item(
+            ObjectBuilder::new()
+                .schema_type(Type::String)
+                // The string branch carries the decimal digits of a `u64`.
+                .pattern(Some("^[0-9]+$")),
+        )
 }
 
 /// `OpenAPI` schema for an array of IDs whose elements accept an integer or a
@@ -94,7 +110,13 @@ fn id_oneof() -> utoipa::openapi::schema::OneOfBuilder {
 #[cfg(feature = "openapi")]
 #[must_use]
 pub fn ids_array_schema() -> utoipa::openapi::schema::ArrayBuilder {
-    utoipa::openapi::schema::ArrayBuilder::new().items(id_oneof())
+    utoipa::openapi::schema::ArrayBuilder::new()
+        .items(id_oneof())
+        .description(Some(
+            "Point IDs. Each accepts a JSON integer (native form) or a string; \
+             use a string for u64 values above 2^53-1 to avoid JavaScript \
+             precision loss.",
+        ))
 }
 
 /// `OpenAPI` schema for a map whose values are IDs accepting an integer or a
