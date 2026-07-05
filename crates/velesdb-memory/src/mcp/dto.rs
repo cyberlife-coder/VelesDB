@@ -81,7 +81,9 @@ pub(super) struct RecallWhereParams {
 pub(super) struct RecallFusedParams {
     /// Natural-language query to match semantically.
     pub(super) query: String,
-    /// Maximum number of memories to return (default 10).
+    /// Maximum number of memories to return (default 10). Multi-hop reasoning
+    /// benefits from a larger budget (~32-64); simple and temporal recall
+    /// saturate early, where a larger budget only adds tokens.
     pub(super) limit: Option<usize>,
     /// Optional exact-match metadata filter (e.g.
     /// `{"project": "veles", "status": "resolved"}`).

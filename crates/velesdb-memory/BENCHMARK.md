@@ -308,14 +308,38 @@ is a statement about the *multi-hop category under our fixed retrieval* — it
 does not contradict the observation below that a stronger generator lifts
 *aggregate* scores ~10pp in a controlled swap: multi-hop specifically is capped
 by evidence completeness, which no generator can fix.
-Bonus finding, disclosed as exploratory (2-conversation subset, Claude-judged —
-not part of the statistically-validated 10-conversation headline above, and
-not yet backed by a published table on this page): the fused tri-engine at
-k=32 reached about the same multi-hop accuracy as brute-force vector retrieval
-at k=64 in that smaller run — suggestive that **the graph can reach similar
-accuracy on half the context budget**, which would roughly halve the answering
-token bill. Treat this as a lead worth confirming at full scale, not a proven
-claim.
+An earlier exploratory note here suggested the graph might reach the same
+multi-hop accuracy on *half* the context budget (fused at k=32 ≈ brute-force
+vector at k=64), which would roughly halve the answering token bill. We measured
+that lead at fuller scale (10-conversation set, local `all-minilm` embedder +
+local qwen judge — a self-consistent A/B, not the mxbai + Claude-judge headline
+config above) and **it did not hold**, so we retract it:
+
+- **The graph is retrieval-neutral here.** With the budget held fixed,
+  vector+graph and vector-only land within ~1pp of each other on every category
+  (graph contribution: temporal −1.2…+0.9pp over 321 questions, single-hop
+  +0.1…+0.6pp over 624, multi-hop −0.4…+0.0pp over 282 paired). The graph does
+  not measurably move retrieval accuracy on LoCoMo. The bar it would clear —
+  surfacing *at least one* gold fact — is already saturated: vector recall hits
+  it ~85–97% of the time (93–97% on multi-hop and temporal), so the graph rarely
+  rescues a question vector missed outright.
+- **The graph does not buy back a smaller budget.** Fused at k=32 lands ~4pp
+  *below* brute-force vector at k=64 on multi-hop (56% vs 60%) — the opposite of
+  the retracted lead. Budget helps where the graph doesn't because a multi-hop
+  answer needs a *chain* of facts, not one: the ≥1-fact bar is saturated, but
+  the full chain is not. Going from k=32 to k=64 raises the mean gold-evidence
+  facts retrieved per multi-hop question from 2.6 to 3.1 (37% of questions gain
+  at least one more), and that added chain coverage is what lifts accuracy.
+  Those facts sit at vector ranks 33–64 — a wider vector budget captures them;
+  graph traversal does not. The already-saturated categories, meanwhile, stay
+  flat (temporal +0.3pp, single-hop +1.3pp) and only pay extra tokens.
+
+So the honest decomposition of the tri-engine on LoCoMo: **date grounding
+(ColumnStore) and retrieval budget carry the accuracy; graph traversal does
+not.** The graph earns its place elsewhere in velesdb — as the substrate `why()`
+walks for auditable provenance — not as a retrieval-accuracy lever on this
+benchmark. Reproduce the budget contrast with `--only multi-hop --k 32` vs
+`--k 64`, both `--use-shipped-api --date-context`.
 
 ## How to reproduce
 
