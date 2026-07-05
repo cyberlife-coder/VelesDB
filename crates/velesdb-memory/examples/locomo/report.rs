@@ -157,7 +157,7 @@ fn answerable(cells: &[Cell; 5]) -> Cell {
 }
 
 /// Percentage with a guarded zero denominator.
-fn pct(num: u32, den: u32) -> f64 {
+pub(crate) fn pct(num: u32, den: u32) -> f64 {
     if den == 0 {
         return 0.0;
     }

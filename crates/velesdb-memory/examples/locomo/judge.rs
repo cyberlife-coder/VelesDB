@@ -12,7 +12,7 @@ use crate::dataset::Qa;
 use crate::ollama_gen::{Generator, TokenUsage};
 use crate::parse::{normalize, tokens};
 
-const ABSTAIN: &str = "NO_ANSWER";
+pub(crate) const ABSTAIN: &str = "NO_ANSWER";
 
 /// Generate a concise answer from the retrieved facts (each a `(YYYYMMDD ts,
 /// text)` pair), or the abstain token when the facts don't contain the answer.
@@ -82,12 +82,23 @@ FINAL: <answer in a few words>"
         let (raw, usage) = gen(generator, &prompt, claude_gen)?;
         return Ok((extract_final(&raw), usage));
     }
-    let prompt = format!(
+    gen(
+        generator,
+        &plain_answer_prompt(&context, question),
+        claude_gen,
+    )
+}
+
+/// The plain (no-scaffold, no-CoT) answer prompt: answer from the given facts,
+/// or emit [`ABSTAIN`]. Shared so the full-context baseline
+/// ([`crate::full_context`]) grades like-for-like with this retrieval eval —
+/// one prompt, so the two answerers cannot silently diverge.
+pub(crate) fn plain_answer_prompt(context: &str, question: &str) -> String {
+    format!(
         "Answer the question using ONLY the memory facts below. If the facts do \
 not contain the answer, reply exactly {ABSTAIN}. Be concise: a few words, no \
 explanation.\n\nFacts:\n{context}\n\nQuestion: {question}\nAnswer:"
-    );
-    gen(generator, &prompt, claude_gen)
+    )
 }
 
 /// Generate an answer with either the strong external model (Claude via CLI) or
@@ -119,7 +130,7 @@ fn extract_final(text: &str) -> String {
 
 /// Render a `YYYYMMDD` session key as `YYYY-MM-DD`, or `None` when unknown (0)
 /// or malformed, so an undated fact is shown without a misleading date prefix.
-fn fmt_date(ts: i64) -> Option<String> {
+pub(crate) fn fmt_date(ts: i64) -> Option<String> {
     let (year, month, day) = decompose_ymd(ts)?;
     Some(format!("{year:04}-{month:02}-{day:02}"))
 }
