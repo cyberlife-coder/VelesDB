@@ -12,13 +12,13 @@ agent durable memory that never leaves your machine: it remembers decisions,
 recalls them semantically, and — the differentiator — **connects** them so it
 can answer *why* a decision was made, not just retrieve look-alike text.
 
-> **Release 0.5.0 — 2026-07-06.** `velesdb-memory` **0.5.0** ships on
+> **Release 0.6.0 — 2026-07-06.** `velesdb-memory` **0.6.0** ships on
 > [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
-> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.5.0**
-> and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.7.0**.
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.6.0**
+> and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.8.0**.
 > **`cargo install velesdb-memory` installs the latest published release.**
 
 Built on [VelesDB](https://velesdb.com)'s in-core Agent Memory SDK, which fuses

@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | **Last Updated**: 2026-07-06 (VelesDB v3.7.0)
+**Version**: 3.10.0 | **Last Updated**: 2026-07-06 (VelesDB v3.8.0)
 
 ---
 
