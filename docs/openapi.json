@@ -777,12 +777,11 @@
           {
             "name": "edge_id",
             "in": "path",
-            "description": "Edge ID to remove",
+            "description": "Edge ID to remove (u64 as a string; precision-safe above 2^53-1)",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^[0-9]+$"
             }
           }
         ],
@@ -875,12 +874,11 @@
           {
             "name": "node_id",
             "in": "path",
-            "description": "Node ID",
+            "description": "Node ID (u64 as a string; precision-safe above 2^53-1)",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^[0-9]+$"
             }
           }
         ],
@@ -938,12 +936,11 @@
           {
             "name": "node_id",
             "in": "path",
-            "description": "Node ID",
+            "description": "Node ID (u64 as a string; precision-safe above 2^53-1)",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^[0-9]+$"
             }
           },
           {
@@ -1014,12 +1011,11 @@
           {
             "name": "node_id",
             "in": "path",
-            "description": "Node ID",
+            "description": "Node ID (u64 as a string; precision-safe above 2^53-1)",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^[0-9]+$"
             }
           }
         ],
@@ -1075,12 +1071,11 @@
           {
             "name": "node_id",
             "in": "path",
-            "description": "Node ID",
+            "description": "Node ID (u64 as a string; precision-safe above 2^53-1)",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^[0-9]+$"
             }
           }
         ],
@@ -1348,11 +1343,10 @@
             "description": "Source node ID to start traversal from.",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^[0-9]+$"
             },
-            "example": 123
+            "example": "123"
           },
           {
             "name": "algorithm",
@@ -2084,12 +2078,11 @@
           {
             "name": "id",
             "in": "path",
-            "description": "Point ID",
+            "description": "Point ID (u64 as a string; precision-safe above 2^53-1)",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^[0-9]+$"
             }
           }
         ],
@@ -2135,12 +2128,11 @@
           {
             "name": "id",
             "in": "path",
-            "description": "Point ID",
+            "description": "Point ID (u64 as a string; precision-safe above 2^53-1)",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^[0-9]+$"
             }
           }
         ],
@@ -2188,12 +2180,11 @@
           {
             "name": "id",
             "in": "path",
-            "description": "Point ID",
+            "description": "Point ID (u64 as a string; precision-safe above 2^53-1)",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^[0-9]+$"
             }
           }
         ],
@@ -2252,12 +2243,11 @@
           {
             "name": "id",
             "in": "path",
-            "description": "Point ID",
+            "description": "Point ID (u64 as a string; precision-safe above 2^53-1)",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^[0-9]+$"
             }
           }
         ],
@@ -2401,12 +2391,11 @@
           {
             "name": "edge_id",
             "in": "path",
-            "description": "Edge ID to remove",
+            "description": "Edge ID to remove (u64 as a string; precision-safe above 2^53-1)",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^[0-9]+$"
             }
           }
         ],
@@ -3451,10 +3440,12 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64"
+                "format": "int64",
+                "minimum": 0
               },
               {
-                "type": "string"
+                "type": "string",
+                "pattern": "^[0-9]+$"
               }
             ],
             "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
@@ -3470,10 +3461,12 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64"
+                "format": "int64",
+                "minimum": 0
               },
               {
-                "type": "string"
+                "type": "string",
+                "pattern": "^[0-9]+$"
               }
             ],
             "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
@@ -3482,10 +3475,12 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64"
+                "format": "int64",
+                "minimum": 0
               },
               {
-                "type": "string"
+                "type": "string",
+                "pattern": "^[0-9]+$"
               }
             ],
             "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
@@ -3593,11 +3588,19 @@
           "ids": {
             "type": "array",
             "items": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[0-9]+$"
+                }
+              ]
             },
-            "description": "List of point IDs to delete."
+            "description": "Point IDs. Each accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
           }
         }
       },
@@ -4912,10 +4915,12 @@
               "oneOf": [
                 {
                   "type": "integer",
-                  "format": "int64"
+                  "format": "int64",
+                  "minimum": 0
                 },
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[0-9]+$"
                 }
               ]
             }
@@ -5042,13 +5047,16 @@
               "oneOf": [
                 {
                   "type": "integer",
-                  "format": "int64"
+                  "format": "int64",
+                  "minimum": 0
                 },
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[0-9]+$"
                 }
               ]
-            }
+            },
+            "description": "Point IDs. Each accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
           }
         }
       },
@@ -5144,13 +5152,16 @@
               "oneOf": [
                 {
                   "type": "integer",
-                  "format": "int64"
+                  "format": "int64",
+                  "minimum": 0
                 },
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[0-9]+$"
                 }
               ]
-            }
+            },
+            "description": "Point IDs. Each accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
           }
         }
       },
@@ -5166,10 +5177,12 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64"
+                "format": "int64",
+                "minimum": 0
               },
               {
-                "type": "string"
+                "type": "string",
+                "pattern": "^[0-9]+$"
               }
             ],
             "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
@@ -5358,10 +5371,12 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64"
+                "format": "int64",
+                "minimum": 0
               },
               {
-                "type": "string"
+                "type": "string",
+                "pattern": "^[0-9]+$"
               }
             ],
             "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
@@ -5370,10 +5385,12 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64"
+                "format": "int64",
+                "minimum": 0
               },
               {
-                "type": "string"
+                "type": "string",
+                "pattern": "^[0-9]+$"
               }
             ],
             "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
@@ -5483,13 +5500,21 @@
             "minimum": 0
           },
           "cursor": {
-            "type": [
-              "integer",
-              "null"
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "string",
+                "pattern": "^[0-9]+$"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "format": "int64",
-            "description": "Resume after this point ID (exclusive). Omit to start from beginning.",
-            "minimum": 0
+            "description": "Resume after this point ID (exclusive). Omit or send null to start from the beginning. Accepts a JSON integer or a precision-safe string."
           },
           "filter": {
             "description": "Optional filter expression."
@@ -5505,12 +5530,10 @@
         "properties": {
           "next_cursor": {
             "type": [
-              "integer",
+              "string",
               "null"
             ],
-            "format": "int64",
-            "description": "Cursor for the next batch. Null when iteration is complete.",
-            "minimum": 0
+            "description": "Cursor for the next batch. Null when iteration is complete."
           },
           "points": {
             "type": "array",
@@ -5772,10 +5795,12 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64"
+                "format": "int64",
+                "minimum": 0
               },
               {
-                "type": "string"
+                "type": "string",
+                "pattern": "^[0-9]+$"
               }
             ],
             "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
@@ -5818,13 +5843,16 @@
               "oneOf": [
                 {
                   "type": "integer",
-                  "format": "int64"
+                  "format": "int64",
+                  "minimum": 0
                 },
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[0-9]+$"
                 }
               ]
-            }
+            },
+            "description": "Point IDs. Each accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
           }
         }
       },
@@ -5901,13 +5929,16 @@
               "oneOf": [
                 {
                   "type": "integer",
-                  "format": "int64"
+                  "format": "int64",
+                  "minimum": 0
                 },
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[0-9]+$"
                 }
               ]
-            }
+            },
+            "description": "Point IDs. Each accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."
           },
           "target_id": {
             "type": "string",
@@ -5965,10 +5996,12 @@
             "oneOf": [
               {
                 "type": "integer",
-                "format": "int64"
+                "format": "int64",
+                "minimum": 0
               },
               {
-                "type": "string"
+                "type": "string",
+                "pattern": "^[0-9]+$"
               }
             ],
             "description": "Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss."

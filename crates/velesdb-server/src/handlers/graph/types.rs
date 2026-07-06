@@ -277,7 +277,7 @@ pub struct GraphSearchResultItem {
 pub struct StreamTraverseParams {
     /// Source node ID to start traversal from.
     #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
-    #[param(example = 123)]
+    #[param(value_type = String, example = "123", pattern = "^[0-9]+$")]
     pub start_node: u64,
     /// Traversal algorithm: "bfs" or "dfs".
     #[serde(default = "default_algorithm")]

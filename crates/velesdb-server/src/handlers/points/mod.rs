@@ -24,6 +24,7 @@ use crate::types::{
     UpsertPointsRequest,
 };
 use crate::AppState;
+use velesdb_core::api_types::serde_id;
 use velesdb_core::Point;
 
 use crate::handlers::helpers::{
@@ -190,7 +191,7 @@ fn build_points_from_request(req: UpsertPointsRequest) -> Result<Vec<Point>, Str
     tag = "points",
     params(
         ("name" = String, Path, description = "Collection name"),
-        ("id" = u64, Path, description = "Point ID")
+        ("id" = String, Path, description = "Point ID (u64 as a string; precision-safe above 2^53-1)", pattern = "^[0-9]+$")
     ),
     responses(
         (status = 200, description = "Point found", body = Object),
@@ -229,7 +230,7 @@ pub async fn get_point(
     tag = "points",
     params(
         ("name" = String, Path, description = "Collection name"),
-        ("id" = u64, Path, description = "Point ID")
+        ("id" = String, Path, description = "Point ID (u64 as a string; precision-safe above 2^53-1)", pattern = "^[0-9]+$")
     ),
     responses(
         (status = 200, description = "Point deleted", body = Object),
@@ -350,6 +351,8 @@ const MAX_BULK_DELETE_SIZE: usize = 10_000;
 #[derive(serde::Deserialize, utoipa::ToSchema)]
 pub struct BulkDeleteRequest {
     /// List of point IDs to delete.
+    #[serde(deserialize_with = "serde_id::deserialize_ids_from_string_or_number")]
+    #[cfg_attr(feature = "openapi", schema(schema_with = serde_id::ids_array_schema))]
     pub ids: Vec<u64>,
 }
 

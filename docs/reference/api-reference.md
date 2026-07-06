@@ -442,7 +442,7 @@ Cursor-based pagination over all points of a collection (ascending ID order).
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | batch_size | integer | No | Points per batch (1–10 000, default: 100) |
-| cursor | integer/null | No | Resume **after** this point ID (exclusive); omit to start from the beginning |
+| cursor | string \| integer \| null | No | Resume **after** this point ID (exclusive); echo back the `next_cursor` string. Omit or send `null` to start from the beginning. The integer form is also accepted |
 | filter | object | No | Optional canonical filter expression |
 
 **Response:**
@@ -451,12 +451,13 @@ Cursor-based pagination over all points of a collection (ascending ID order).
   "points": [
     {"id": "1", "vector": [0.1, 0.2, ...], "payload": {"title": "Doc 1"}}
   ],
-  "next_cursor": 1
+  "next_cursor": "1"
 }
 ```
 
-`next_cursor` is `null` once iteration is complete. Point IDs are serialized as
-strings (see the Point ID encoding note in [Search](#search)).
+`next_cursor` is `null` once iteration is complete. Point IDs (including the
+cursor) are serialized as strings (see the Point ID encoding note in
+[Search](#search)).
 
 ### POST /collections/:name/points/stream
 

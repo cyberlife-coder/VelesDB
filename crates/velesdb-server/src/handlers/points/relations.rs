@@ -194,7 +194,7 @@ fn insert_edge_with_retry(
     path = "/collections/{name}/relations/{edge_id}",
     params(
         ("name" = String, Path, description = "Collection name"),
-        ("edge_id" = u64, Path, description = "Edge ID to remove")
+        ("edge_id" = String, Path, description = "Edge ID to remove (u64 as a string; precision-safe above 2^53-1)", pattern = "^[0-9]+$")
     ),
     responses(
         (status = 204, description = "Relation removed"),
@@ -233,7 +233,7 @@ pub async fn unrelate_points(
     path = "/collections/{name}/points/{id}/relations",
     params(
         ("name" = String, Path, description = "Collection name"),
-        ("id" = u64, Path, description = "Point ID")
+        ("id" = String, Path, description = "Point ID (u64 as a string; precision-safe above 2^53-1)", pattern = "^[0-9]+$")
     ),
     responses(
         (status = 200, description = "Outgoing relations", body = RelationsResponse),
@@ -278,7 +278,7 @@ pub async fn get_point_relations(
     path = "/collections/{name}/points/{id}/ttl",
     params(
         ("name" = String, Path, description = "Collection name"),
-        ("id" = u64, Path, description = "Point ID")
+        ("id" = String, Path, description = "Point ID (u64 as a string; precision-safe above 2^53-1)", pattern = "^[0-9]+$")
     ),
     request_body = SetTtlRequest,
     responses(
