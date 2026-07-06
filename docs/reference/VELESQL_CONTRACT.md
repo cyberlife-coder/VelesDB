@@ -2,8 +2,8 @@
 
 Canonical contract for VelesQL server endpoints and payloads.
 
-- Contract version: `3.6.0`
-- Last updated: `2026-06-12`
+- Contract version: `3.7.0`
+- Last updated: `2026-07-06`
 
 This document is the normative REST contract baseline for VelesQL.
 When behavior differs between docs and runtime, runtime must be fixed or this
