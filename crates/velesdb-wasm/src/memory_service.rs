@@ -196,6 +196,18 @@ impl From<Recollection> for RecollectionOut {
     }
 }
 
+/// Result of [`WasmMemoryService::recall_fused_dated`]: the recalled memories
+/// plus a chronological, date-prefixed timeline and a "now" anchor.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DatedRecallOut {
+    memories: Vec<RecollectionOut>,
+    dated_context: String,
+    /// `null` when no fact is dated — kept present (not skipped) so this matches
+    /// the Node binding, where napi serializes `Option::None` as JS `null`.
+    now: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MemoryNodeOut {
@@ -388,6 +400,35 @@ impl WasmMemoryService {
                 .map(RecollectionOut::from)
                 .collect::<Vec<_>>(),
         )
+    }
+
+    /// Fused recall plus a dated timeline: like [`Self::recall_fused`], but
+    /// reads each fact's date from the `dateField` metadata key (a `YYYYMMDD`
+    /// integer) and returns `{memories, datedContext, now}` — the memories, a
+    /// chronological date-prefixed timeline, and a "now" anchor for temporal
+    /// reasoning. A separate method (not a flag on `recallFused`) so the
+    /// published `recallFused` array return type is unchanged.
+    #[wasm_bindgen(js_name = recallFusedDated)]
+    pub fn recall_fused_dated(
+        &self,
+        query: &str,
+        date_field: &str,
+        k: Option<usize>,
+        filter: JsValue,
+        opts: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let k = velesdb_memory::limits::clamp_recall_limit(k.unwrap_or(10));
+        let filter = to_metadata(filter)?;
+        let opts = to_fusion_options(opts)?;
+        let (hits, ctx) = self
+            .inner
+            .recall_fused_dated(query, k, filter.as_ref(), opts, date_field)
+            .map_err(to_js_err)?;
+        to_js(&DatedRecallOut {
+            memories: hits.into_iter().map(RecollectionOut::from).collect(),
+            dated_context: ctx.timeline,
+            now: ctx.now,
+        })
     }
 
     /// Create a typed edge `from -> to`. Resolves to the edge's

@@ -128,6 +128,51 @@ impl Default for FusionOptions {
     }
 }
 
+impl FusionOptions {
+    /// Build options from optional, untrusted tuning knobs, applying the
+    /// defaults and clamps every binding must enforce identically: `hops`
+    /// clamped to the graph-traversal ceiling
+    /// ([`clamp_hops`](crate::limits::clamp_hops)), `graph_boost` defaulted when
+    /// absent, and `pool` clamped to the recall ceiling
+    /// ([`clamp_recall_limit`](crate::limits::clamp_recall_limit)) or left at the
+    /// proven default. The MCP `recall_fused` tool (which exposes no `pool`, so
+    /// passes `None`) and the Python `recall_fused` binding both build their
+    /// options here so the transports can't drift on what they accept. A
+    /// non-finite `graph_boost` is not filtered here — that guard lives in
+    /// [`Self::sanitized`], applied by fusion itself so *every* caller is
+    /// covered, not just this constructor.
+    #[must_use]
+    pub fn from_knobs(hops: Option<usize>, graph_boost: Option<f64>, pool: Option<usize>) -> Self {
+        let defaults = Self::default();
+        Self {
+            hops: crate::limits::clamp_hops(hops.unwrap_or(defaults.hops)),
+            graph_boost: graph_boost.unwrap_or(defaults.graph_boost),
+            pool: pool
+                .map(crate::limits::clamp_recall_limit)
+                .or(defaults.pool),
+        }
+    }
+
+    /// A copy with any non-finite `graph_boost` (NaN or ±∞) reset to the
+    /// default. A non-finite boost poisons fusion catastrophically: the score
+    /// term `graph_boost · weight` is `NaN` for *every* candidate — even a
+    /// pool-only one, since `NaN · 0.0 == NaN` — so [`crate::fusion::fuse`]'s
+    /// `total_cmp` sort sees all scores as equal, degenerates to a no-op, and
+    /// then truncates away the graph-reached facts fusion exists to surface
+    /// (they are appended after the vector pool). The result is silently worse
+    /// than a plain `recall`. Applied inside
+    /// [`recall_fused`](crate::service::MemoryService::recall_fused) so no
+    /// caller — any binding, or a direct Rust user who filled the struct — can
+    /// trip it, however the options were built.
+    #[must_use]
+    pub fn sanitized(mut self) -> Self {
+        if !self.graph_boost.is_finite() {
+            self.graph_boost = Self::default().graph_boost;
+        }
+        self
+    }
+}
+
 /// A node in an [`Explanation`] subgraph.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]

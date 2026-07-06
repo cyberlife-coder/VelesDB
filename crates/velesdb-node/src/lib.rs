@@ -49,7 +49,9 @@ use velesdb_memory::{
     DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
-use crate::dto::{ColumnFilterJs, ExplanationJs, FusionOptionsJs, LinkJs, RecollectionJs};
+use crate::dto::{
+    ColumnFilterJs, DatedRecallJs, ExplanationJs, FusionOptionsJs, LinkJs, RecollectionJs,
+};
 use crate::error::{invalid_input, to_napi_err, CODE_INTERNAL};
 use crate::tasks::Job;
 
@@ -211,6 +213,40 @@ impl MemoryStore {
                 .recall_fused(&query, k, filter.as_ref(), opts)
                 .map_err(to_napi_err)?;
             Ok(hits.into_iter().map(RecollectionJs::from).collect())
+        }))
+    }
+
+    /// Fused recall plus a dated timeline: like [`recall_fused`](Self::recall_fused),
+    /// but reads each fact's date from the `dateField` metadata key (a `YYYYMMDD`
+    /// integer) and resolves to `{memories, datedContext, now}` — the memories, a
+    /// chronological date-prefixed timeline, and a "now" anchor for temporal
+    /// reasoning. A separate method (not a flag on `recallFused`) so the published
+    /// `recallFused` array return type stays unchanged.
+    #[napi(
+        js_name = "recallFusedDated",
+        ts_return_type = "Promise<DatedRecallJs>"
+    )]
+    pub fn recall_fused_dated(
+        &self,
+        query: String,
+        date_field: String,
+        k: Option<u32>,
+        filter: Option<Value>,
+        opts: Option<FusionOptionsJs>,
+    ) -> AsyncTask<Job<DatedRecallJs>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let k = guards::clamp_limit(k.unwrap_or(10));
+            let filter = convert::to_metadata(filter)?;
+            let opts = convert::to_fusion_options(opts);
+            let (hits, ctx) = svc
+                .recall_fused_dated(&query, k, filter.as_ref(), opts, &date_field)
+                .map_err(to_napi_err)?;
+            Ok(DatedRecallJs {
+                memories: hits.into_iter().map(RecollectionJs::from).collect(),
+                dated_context: ctx.timeline,
+                now: ctx.now,
+            })
         }))
     }
 

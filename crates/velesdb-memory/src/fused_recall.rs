@@ -50,11 +50,36 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         if query.is_empty() || k == 0 {
             return Ok(Vec::new());
         }
+        let opts = opts.sanitized();
         reject_reserved_keys(filter)?;
         let embedding = self.embedder.embed(query)?;
         let pool = self.fused_pool(&embedding, pool_depth(k, opts), filter)?;
         let reached = self.graph_reached(&embedding, filter, opts.hops)?;
         Ok(fusion::fuse(pool, &reached, k, opts.graph_boost))
+    }
+
+    /// [`Self::recall_fused`] paired with the dated-context rendering of its
+    /// results: returns the recalled facts and the
+    /// [`DatedContext`](crate::DatedContext) built from their `date_field`
+    /// metadata (see [`format_dated_context`](crate::format_dated_context)).
+    /// Every binding that exposes a "dated recall" (the MCP `recall_fused`
+    /// tool's `date_field`, Node/WASM `recallFusedDated`) calls this, so the
+    /// "recall then format" pairing lives in exactly one place and can't drift
+    /// between surfaces.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if the underlying [`Self::recall_fused`] fails.
+    pub fn recall_fused_dated(
+        &self,
+        query: &str,
+        k: usize,
+        filter: Option<&Metadata>,
+        opts: FusionOptions,
+        date_field: &str,
+    ) -> Result<(Vec<Recollection>, crate::DatedContext), MemoryError> {
+        let hits = self.recall_fused(query, k, filter, opts)?;
+        let ctx = crate::format_dated_context(&hits, date_field);
+        Ok((hits, ctx))
     }
 
     /// Like [`Self::recall_fused`], but hands the FULL fused-ranked candidate
@@ -84,6 +109,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         if query.is_empty() || k == 0 {
             return Ok(Vec::new());
         }
+        let opts = opts.sanitized();
         reject_reserved_keys(filter)?;
         let embedding = self.embedder.embed(query)?;
         let depth = pool_depth(k, opts);
@@ -300,14 +326,20 @@ fn matches_filter(metadata: Option<&Metadata>, filter: Option<&Metadata>) -> boo
 }
 
 /// The oversampled candidate pool depth for a `k`-sized fused recall:
-/// `opts.pool` if the caller set one, else the proven default
+/// `opts.pool` if the caller set one (floored at 1), else the proven default
 /// ([`fusion::pool_size`]) — either way, capped at
 /// [`crate::limits::MAX_RECALL_LIMIT`], the same `DoS` ceiling `k`/`hops`
-/// carry. The cap lives here, not just at each binding's FFI boundary: the
-/// *default* pool (`k.saturating_mul(8)`) exceeds it well before `k` itself
-/// reaches its own cap, so a caller who never touches `pool` at all — not
-/// just one who sets it explicitly — must still be bounded.
+/// carry. Both bounds live here, not at each binding's FFI boundary:
+/// - the floor of 1 stops an explicit `pool` of 0 (a binding now exposes the
+///   knob: `options={"pool": 0}` in Python) from oversampling *zero* candidates
+///   and returning nothing. A caller can still deliberately narrow the pool
+///   below the default (e.g. `pool: 1` to admit only the top vector hit — the
+///   documented behavior fusion's tests pin); the floor only rules out the
+///   degenerate empty-set case, it does not force a minimum recall depth.
+/// - the cap bounds the default too: `k.saturating_mul(8)` exceeds the limit
+///   well before `k` itself does, so even a caller who never touches `pool` is
+///   bounded.
 fn pool_depth(k: usize, opts: FusionOptions) -> usize {
-    let depth = opts.pool.unwrap_or_else(|| fusion::pool_size(k));
+    let depth = opts.pool.map_or_else(|| fusion::pool_size(k), |p| p.max(1));
     crate::limits::clamp_recall_limit(depth)
 }

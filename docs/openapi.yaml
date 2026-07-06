@@ -8,7 +8,7 @@ info:
   license:
     name: VelesDB Core License 1.0
     url: https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE
-  version: 3.6.0
+  version: 3.7.0
 servers:
 - url: /
   description: Local server
@@ -487,12 +487,11 @@ paths:
           type: string
       - name: edge_id
         in: path
-        description: Edge ID to remove
+        description: Edge ID to remove (u64 as a string; precision-safe above 2^53-1)
         required: true
         schema:
-          type: integer
-          format: int64
-          minimum: 0
+          type: string
+          pattern: ^[0-9]+$
       responses:
         '204':
           description: Edge removed successfully
@@ -549,12 +548,11 @@ paths:
           type: string
       - name: node_id
         in: path
-        description: Node ID
+        description: Node ID (u64 as a string; precision-safe above 2^53-1)
         required: true
         schema:
-          type: integer
-          format: int64
-          minimum: 0
+          type: string
+          pattern: ^[0-9]+$
       responses:
         '200':
           description: Degree retrieved successfully
@@ -589,12 +587,11 @@ paths:
           type: string
       - name: node_id
         in: path
-        description: Node ID
+        description: Node ID (u64 as a string; precision-safe above 2^53-1)
         required: true
         schema:
-          type: integer
-          format: int64
-          minimum: 0
+          type: string
+          pattern: ^[0-9]+$
       - name: direction
         in: query
         description: 'Filter by direction: "in", "out", or "both".'
@@ -639,12 +636,11 @@ paths:
           type: string
       - name: node_id
         in: path
-        description: Node ID
+        description: Node ID (u64 as a string; precision-safe above 2^53-1)
         required: true
         schema:
-          type: integer
-          format: int64
-          minimum: 0
+          type: string
+          pattern: ^[0-9]+$
       responses:
         '200':
           description: Payload retrieved
@@ -678,12 +674,11 @@ paths:
           type: string
       - name: node_id
         in: path
-        description: Node ID
+        description: Node ID (u64 as a string; precision-safe above 2^53-1)
         required: true
         schema:
-          type: integer
-          format: int64
-          minimum: 0
+          type: string
+          pattern: ^[0-9]+$
       requestBody:
         content:
           application/json:
@@ -852,10 +847,9 @@ paths:
         description: Source node ID to start traversal from.
         required: true
         schema:
-          type: integer
-          format: int64
-          minimum: 0
-        example: 123
+          type: string
+          pattern: ^[0-9]+$
+        example: '123'
       - name: algorithm
         in: query
         description: 'Traversal algorithm: "bfs" or "dfs".'
@@ -1379,12 +1373,11 @@ paths:
           type: string
       - name: id
         in: path
-        description: Point ID
+        description: Point ID (u64 as a string; precision-safe above 2^53-1)
         required: true
         schema:
-          type: integer
-          format: int64
-          minimum: 0
+          type: string
+          pattern: ^[0-9]+$
       responses:
         '200':
           description: Point found
@@ -1412,12 +1405,11 @@ paths:
           type: string
       - name: id
         in: path
-        description: Point ID
+        description: Point ID (u64 as a string; precision-safe above 2^53-1)
         required: true
         schema:
-          type: integer
-          format: int64
-          minimum: 0
+          type: string
+          pattern: ^[0-9]+$
       responses:
         '200':
           description: Point deleted
@@ -1446,12 +1438,11 @@ paths:
           type: string
       - name: id
         in: path
-        description: Point ID
+        description: Point ID (u64 as a string; precision-safe above 2^53-1)
         required: true
         schema:
-          type: integer
-          format: int64
-          minimum: 0
+          type: string
+          pattern: ^[0-9]+$
       responses:
         '200':
           description: Outgoing relations
@@ -1491,12 +1482,11 @@ paths:
           type: string
       - name: id
         in: path
-        description: Point ID
+        description: Point ID (u64 as a string; precision-safe above 2^53-1)
         required: true
         schema:
-          type: integer
-          format: int64
-          minimum: 0
+          type: string
+          pattern: ^[0-9]+$
       requestBody:
         content:
           application/json:
@@ -1586,12 +1576,11 @@ paths:
           type: string
       - name: edge_id
         in: path
-        description: Edge ID to remove
+        description: Edge ID to remove (u64 as a string; precision-safe above 2^53-1)
         required: true
         schema:
-          type: integer
-          format: int64
-          minimum: 0
+          type: string
+          pattern: ^[0-9]+$
       responses:
         '204':
           description: Relation removed
@@ -2301,7 +2290,9 @@ components:
           oneOf:
           - type: integer
             format: int64
+            minimum: 0
           - type: string
+            pattern: ^[0-9]+$
           description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
         label:
           type: string
@@ -2312,13 +2303,17 @@ components:
           oneOf:
           - type: integer
             format: int64
+            minimum: 0
           - type: string
+            pattern: ^[0-9]+$
           description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
         target:
           oneOf:
           - type: integer
             format: int64
+            minimum: 0
           - type: string
+            pattern: ^[0-9]+$
           description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
     AddEdgesBatchRequest:
       type: object
@@ -2397,10 +2392,13 @@ components:
         ids:
           type: array
           items:
-            type: integer
-            format: int64
-            minimum: 0
-          description: List of point IDs to delete.
+            oneOf:
+            - type: integer
+              format: int64
+              minimum: 0
+            - type: string
+              pattern: ^[0-9]+$
+          description: Point IDs. Each accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
     CollectionConfigResponse:
       type: object
       description: Response with detailed collection configuration.
@@ -3455,7 +3453,9 @@ components:
             oneOf:
             - type: integer
               format: int64
+              minimum: 0
             - type: string
+              pattern: ^[0-9]+$
         depth:
           type: integer
           format: int32
@@ -3552,7 +3552,10 @@ components:
             oneOf:
             - type: integer
               format: int64
+              minimum: 0
             - type: string
+              pattern: ^[0-9]+$
+          description: Point IDs. Each accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
     NodePayloadResponse:
       type: object
       description: Response for a node payload retrieval.
@@ -3640,7 +3643,10 @@ components:
             oneOf:
             - type: integer
               format: int64
+              minimum: 0
             - type: string
+              pattern: ^[0-9]+$
+          description: Point IDs. Each accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
     PointRequest:
       type: object
       description: A point in an upsert request.
@@ -3652,7 +3658,9 @@ components:
           oneOf:
           - type: integer
             format: int64
+            minimum: 0
           - type: string
+            pattern: ^[0-9]+$
           description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
         payload:
           description: Optional payload.
@@ -3807,13 +3815,17 @@ components:
           oneOf:
           - type: integer
             format: int64
+            minimum: 0
           - type: string
+            pattern: ^[0-9]+$
           description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
         target:
           oneOf:
           - type: integer
             format: int64
+            minimum: 0
           - type: string
+            pattern: ^[0-9]+$
           description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
     RelateResponse:
       type: object
@@ -3892,12 +3904,14 @@ components:
           description: Maximum points per batch (1–10 000, default 100).
           minimum: 0
         cursor:
-          type:
-          - integer
-          - 'null'
-          format: int64
-          description: Resume after this point ID (exclusive). Omit to start from beginning.
-          minimum: 0
+          oneOf:
+          - type: integer
+            format: int64
+            minimum: 0
+          - type: string
+            pattern: ^[0-9]+$
+          - type: 'null'
+          description: Resume after this point ID (exclusive). Omit or send null to start from the beginning. Accepts a JSON integer or a precision-safe string.
         filter:
           description: Optional filter expression.
     ScrollResponse:
@@ -3908,11 +3922,9 @@ components:
       properties:
         next_cursor:
           type:
-          - integer
+          - string
           - 'null'
-          format: int64
           description: Cursor for the next batch. Null when iteration is complete.
-          minimum: 0
         points:
           type: array
           items:
@@ -4102,7 +4114,9 @@ components:
           oneOf:
           - type: integer
             format: int64
+            minimum: 0
           - type: string
+            pattern: ^[0-9]+$
           description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
         payload:
           description: Optional JSON payload (metadata).
@@ -4134,7 +4148,10 @@ components:
             oneOf:
             - type: integer
               format: int64
+              minimum: 0
             - type: string
+              pattern: ^[0-9]+$
+          description: Point IDs. Each accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
     StreamStatsEvent:
       type: object
       description: 'SSE event: Periodic statistics update.'
@@ -4193,7 +4210,10 @@ components:
             oneOf:
             - type: integer
               format: int64
+              minimum: 0
             - type: string
+              pattern: ^[0-9]+$
+          description: Point IDs. Each accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
         target_id:
           type: string
           description: Target node ID reached.
@@ -4237,7 +4257,9 @@ components:
           oneOf:
           - type: integer
             format: int64
+            minimum: 0
           - type: string
+            pattern: ^[0-9]+$
           description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
         strategy:
           type: string

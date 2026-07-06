@@ -24,6 +24,11 @@ class MockWasmMemoryService {
   recall = vi.fn(() => [{ id: '1', score: 0.9, content: 'we chose parking_lot' }]);
   recallWhere = vi.fn(() => [{ id: '1', score: 0.9, content: 'we chose parking_lot' }]);
   recallFused = vi.fn(() => [{ id: '2', score: 0.0, content: 'EPIC-317' }]);
+  recallFusedDated = vi.fn(() => ({
+    memories: [{ id: '1', score: 0.9, content: 'we chose parking_lot' }],
+    datedContext: '- [2026-01-03] we chose parking_lot',
+    now: '2026-01-03',
+  }));
   relate = vi.fn(() => '5');
   forget = vi.fn();
   why = vi.fn(() => ({
@@ -177,6 +182,20 @@ describe('MemoryService', () => {
       expect(lastMockInstance!.recallFused).toHaveBeenCalledWith('parking_lot', 3, undefined, {
         hops: 2,
       });
+    });
+
+    it('recallFusedDated() returns the memories plus a dated timeline', async () => {
+      const res = await memory.recallFusedDated('parking_lot', 'ts', 3, undefined, { hops: 2 });
+      expect(res.now).toBe('2026-01-03');
+      expect(res.datedContext).toContain('- [2026-01-03] we chose parking_lot');
+      expect(res.memories).toHaveLength(1);
+      expect(lastMockInstance!.recallFusedDated).toHaveBeenCalledWith(
+        'parking_lot',
+        'ts',
+        3,
+        undefined,
+        { hops: 2 }
+      );
     });
 
     it('relate() returns the edge id', async () => {

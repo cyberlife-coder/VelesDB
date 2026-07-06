@@ -17,7 +17,7 @@ use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::json;
-use velesdb_memory::{ColumnFilter, ColumnOp};
+use velesdb_memory::{ColumnFilter, ColumnOp, FusionOptions};
 
 use crate::dataset::{Category, Qa};
 use crate::dump::{self, QuestionTrace};
@@ -89,6 +89,17 @@ pub struct EvalCfg {
     /// accuracy goes when the generator is not the bottleneck (the memory layer
     /// is model-agnostic — plug in any LLM).
     pub claude_gen: bool,
+    /// Run the fused (graph) path through the SHIPPED
+    /// [`MemoryService::recall_fused`](velesdb_memory::MemoryService::recall_fused)
+    /// API instead of the harness's own `vector_pool` + `graph_reached` + `fuse`.
+    /// Proves the benchmarked tri-engine ranking reproduces through the API a
+    /// user installs — not just a harness re-implementation. It drops the
+    /// harness-only levers `recall_fused` doesn't have: the BM25/RRF lexical
+    /// fusion, multi-seed graph reach (`seed_breadth`), and the temporal
+    /// `ColumnStore` date window (a `recall_where` range predicate, not an
+    /// exact-match filter `recall_fused` accepts) — so compare it against the
+    /// single-seed, no-BM25 harness config to isolate the ranking itself.
+    pub use_shipped_api: bool,
 }
 
 /// A retrieved fact carried into the generation context. `score` is its vector
@@ -349,13 +360,55 @@ fn retrieve(
         }
         return Ok((pool.into_iter().take(cfg.k).collect(), raw));
     }
-    // Fused mode: a ColumnStore date window when the question is time-scoped,
-    // plus graph traversal — all three engines.
+    // Fused mode, shipped path: the exact `recall_fused` a user installs does
+    // the vector+graph fusion internally. No temporal ColumnStore window (that
+    // is `recall_where`'s range predicate, which `recall_fused` doesn't take),
+    // no BM25, single-seed — see `use_shipped_api`'s doc.
+    if cfg.use_shipped_api {
+        let opts = FusionOptions {
+            hops: cfg.hops,
+            graph_boost: cfg.graph_boost,
+            pool: None,
+        };
+        let fused = shipped_fused(store, question, cfg.k, opts)?;
+        let raw = raw_if_wanted(&fused, &[], want_raw);
+        return Ok((fused, raw));
+    }
+    // Fused mode, harness path: a ColumnStore date window when the question is
+    // time-scoped, plus graph traversal — all three engines.
     let filters = temporal_filters(question);
     let pool = vector_pool(store, question, pool_size(cfg.k), &filters)?;
     let reached = graph_reached(store, question, cfg)?;
     let raw = raw_if_wanted(&pool, &reached, want_raw);
     Ok((fuse(pool, &reached, cfg), raw))
+}
+
+/// The shipped [`MemoryService::recall_fused`](velesdb_memory::MemoryService::recall_fused)
+/// path, mapped into the harness's [`RetrievedFact`]. `recall_fused` already
+/// ranks vector+graph and excludes entity hubs, so this only re-hydrates the
+/// harness-side `dia_ids`/`ts` (by fact id, exactly as [`vector_pool`] does) for
+/// the evidence-recall scorer and the dated context. `graph_weight` is 0: the
+/// shipped API ranks internally and never exposes the per-fact breakdown the
+/// harness `fuse` keeps for `--dump`.
+fn shipped_fused(
+    store: &Store,
+    question: &str,
+    k: usize,
+    opts: FusionOptions,
+) -> Result<Vec<RetrievedFact>, Box<dyn Error>> {
+    let hits = store.svc.recall_fused(question, k, None, opts)?;
+    Ok(hits
+        .into_iter()
+        .filter(|hit| store.is_fact(hit.id))
+        .map(|hit| RetrievedFact {
+            id: hit.id,
+            text: hit.content,
+            dia_ids: store.dia_ids(hit.id).to_vec(),
+            score: f64::from(hit.score),
+            graph_weight: 0.0,
+            ts: store.fact_ts(hit.id),
+        })
+        .collect())
 }
 
 /// `pool ∪ reached`, uncloned (empty) unless `--dump` actually wants it — kept

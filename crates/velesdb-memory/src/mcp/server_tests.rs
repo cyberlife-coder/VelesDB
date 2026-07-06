@@ -394,6 +394,200 @@ async fn oversized_fact_returns_invalid_params() {
 }
 
 #[tokio::test]
+async fn recall_fused_folds_in_a_graph_reached_fact() {
+    let (_dir, srv) = server();
+    // Anchor: an exact vector hit for the query.
+    let Json(anchor) = srv
+        .remember(Parameters(RememberParams {
+            fact: DECISION.to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember anchor");
+    // Linked: unrelated text (so it is not a vector hit for the query), but
+    // graph-connected to the anchor — only the graph reach can surface it.
+    let Json(linked) = srv
+        .remember(Parameters(RememberParams {
+            fact: "the on-call rotation moved to Tuesdays".to_owned(),
+            links: vec![Link {
+                target: anchor.id,
+                relation: "context".to_owned(),
+            }],
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember linked");
+
+    // Plain top-1 vector recall for the query finds the anchor, not the linked fact.
+    let Json(plain) = srv
+        .recall(Parameters(RecallParams {
+            query: DECISION.to_owned(),
+            limit: Some(1),
+            filter: None,
+        }))
+        .await
+        .expect("recall");
+    assert!(!plain.memories.iter().any(|m| m.id == linked.id));
+
+    // Fused recall walks the graph from the anchor seed and folds the linked fact in.
+    let Json(fused) = srv
+        .recall_fused(Parameters(RecallFusedParams {
+            query: DECISION.to_owned(),
+            limit: Some(10),
+            filter: None,
+            hops: None,
+            graph_boost: None,
+            date_field: None,
+        }))
+        .await
+        .expect("recall_fused");
+    assert!(
+        fused.memories.iter().any(|m| m.id == anchor.id),
+        "anchor present in fused recall"
+    );
+    assert!(
+        fused.memories.iter().any(|m| m.id == linked.id),
+        "graph-reached fact folded into fused recall"
+    );
+}
+
+#[tokio::test]
+async fn recall_fused_with_date_field_returns_a_dated_timeline() {
+    let (_dir, srv) = server();
+    // Two dated facts, stored newest-first so ordering is actually exercised.
+    for (fact, ts) in [
+        ("the release shipped", 20_260_701_i64),
+        ("the project kicked off", 20_260_103),
+    ] {
+        srv.remember(Parameters(RememberParams {
+            fact: fact.to_owned(),
+            links: Vec::new(),
+            metadata: Some(ts_meta(ts)),
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember dated fact");
+    }
+
+    let Json(res) = srv
+        .recall_fused(Parameters(RecallFusedParams {
+            query: "project release timeline".to_owned(),
+            limit: Some(10),
+            filter: None,
+            hops: None,
+            graph_boost: None,
+            date_field: Some("ts".to_owned()),
+        }))
+        .await
+        .expect("recall_fused dated");
+
+    let timeline = res
+        .dated_context
+        .expect("dated_context present when date_field set");
+    // Chronological: kickoff (Jan) before release (Jul), each date-prefixed.
+    assert!(timeline.contains("- [2026-01-03] the project kicked off"));
+    assert!(timeline.contains("- [2026-07-01] the release shipped"));
+    assert!(
+        timeline.find("2026-01-03").unwrap() < timeline.find("2026-07-01").unwrap(),
+        "facts must be ordered oldest-first"
+    );
+    assert_eq!(res.now.as_deref(), Some("2026-07-01"));
+}
+
+#[tokio::test]
+async fn recall_fused_without_date_field_omits_the_timeline() {
+    let (_dir, srv) = server();
+    srv.remember(Parameters(RememberParams {
+        fact: DECISION.to_owned(),
+        links: Vec::new(),
+        metadata: None,
+        ttl_seconds: None,
+    }))
+    .await
+    .expect("remember");
+    let Json(res) = srv
+        .recall_fused(Parameters(RecallFusedParams {
+            query: DECISION.to_owned(),
+            limit: Some(5),
+            filter: None,
+            hops: None,
+            graph_boost: None,
+            date_field: None,
+        }))
+        .await
+        .expect("recall_fused");
+    assert!(res.dated_context.is_none());
+    assert!(res.now.is_none());
+}
+
+#[tokio::test]
+async fn recall_fused_survives_a_non_finite_graph_boost() {
+    // A NaN graph_boost reaches the pyo3/native-float bindings unfiltered; if it
+    // hit fusion it would collapse the ranking (NaN scores compare Equal) and
+    // silently drop the graph-reached facts. The service sanitizes it, so the
+    // linked fact is still surfaced — proving the guard holds on the real path.
+    let (_dir, srv) = server();
+    let Json(anchor) = srv
+        .remember(Parameters(RememberParams {
+            fact: DECISION.to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember anchor");
+    let Json(linked) = srv
+        .remember(Parameters(RememberParams {
+            fact: "the on-call rotation moved to Tuesdays".to_owned(),
+            links: vec![Link {
+                target: anchor.id,
+                relation: "context".to_owned(),
+            }],
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember linked");
+
+    let Json(fused) = srv
+        .recall_fused(Parameters(RecallFusedParams {
+            query: DECISION.to_owned(),
+            limit: Some(10),
+            filter: None,
+            hops: None,
+            graph_boost: Some(f64::NAN),
+            date_field: None,
+        }))
+        .await
+        .expect("recall_fused");
+    assert!(
+        fused.memories.iter().any(|m| m.id == linked.id),
+        "graph-reached fact must still surface despite a non-finite graph_boost"
+    );
+}
+
+#[tokio::test]
+async fn recall_fused_limit_is_capped_at_max() {
+    let (_dir, srv) = server();
+    // The call must succeed (capped, not rejected) even with an absurd limit.
+    let Json(result) = srv
+        .recall_fused(Parameters(RecallFusedParams {
+            query: "anything".to_owned(),
+            limit: Some(usize::MAX),
+            filter: None,
+            hops: Some(usize::MAX),
+            graph_boost: None,
+            date_field: None,
+        }))
+        .await
+        .expect("recall_fused with huge limit/hops must succeed (silently capped)");
+    let _ = result;
+}
+
+#[tokio::test]
 async fn recall_limit_is_capped_at_max() {
     let (_dir, srv) = server();
     // The call must succeed (capped, not rejected).

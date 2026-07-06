@@ -12,7 +12,7 @@ use rmcp::model::{ErrorCode, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 
 use crate::limits::{DEFAULT_WHY_HOPS, MAX_FACT_BYTES, MAX_RECALL_LIMIT, MAX_WHY_HOPS};
-use crate::model::Explanation;
+use crate::model::{Explanation, FusionOptions};
 use crate::service::MemoryService;
 
 /// Default number of memories returned by `recall`.
@@ -31,9 +31,9 @@ use crate::extract::DynExtractor;
 // domain types from `crate::model` directly (no duplicate wire/domain struct).
 mod dto;
 use dto::{
-    ForgetParams, ForgetResult, RecallParams, RecallResult, RecallWhereParams, RelateParams,
-    RelateResult, RememberExtractedParams, RememberExtractedResult, RememberParams, RememberResult,
-    WhyParams,
+    ForgetParams, ForgetResult, RecallFusedParams, RecallFusedResult, RecallParams, RecallResult,
+    RecallWhereParams, RelateParams, RelateResult, RememberExtractedParams,
+    RememberExtractedResult, RememberParams, RememberResult, WhyParams,
 };
 
 // --- The server ------------------------------------------------------------
@@ -156,6 +156,53 @@ impl McpServer {
                 .map_err(join_error)?
                 .map_err(to_error)?;
         Ok(Json(RecallResult { memories }))
+    }
+
+    #[tool(
+        name = "recall_fused",
+        description = "Fused vector + graph recall: like `recall`, but also walks the graph from the top vector hit and folds any connected fact into the ranking — the tri-engine ranking (vector similarity + ColumnStore filter + graph reach) measured on multi-hop and temporal benchmarks. Reach for this when an answer needs a fact the query doesn't mention directly but a stored `relate`/extracted link connects (multi-hop reasoning, temporal chains). `hops`/`graph_boost` tune the graph reach; omit them for the proven defaults. Optionally narrow with an exact-match `filter`. Set `date_field` (the metadata key holding a YYYYMMDD date) to also get a `dated_context` timeline and a `now` anchor for temporal questions. Most relevant first."
+    )]
+    async fn recall_fused(
+        &self,
+        Parameters(params): Parameters<RecallFusedParams>,
+    ) -> Result<Json<RecallFusedResult>, ErrorData> {
+        let k = params
+            .limit
+            .unwrap_or(DEFAULT_RECALL_LIMIT)
+            .min(MAX_RECALL_LIMIT);
+        let opts = FusionOptions::from_knobs(params.hops, params.graph_boost, None);
+        let service = Arc::clone(&self.service);
+        let RecallFusedParams {
+            query,
+            filter,
+            date_field,
+            ..
+        } = params;
+        // With a date field, take the shared "recall then format" path so the
+        // dated timeline stays identical to the Node/WASM bindings; without one,
+        // plain fused recall (no timeline).
+        let (memories, dated_context, now) = if let Some(field) = date_field {
+            let (hits, ctx) = tokio::task::spawn_blocking(move || {
+                service.recall_fused_dated(&query, k, filter.as_ref(), opts, &field)
+            })
+            .await
+            .map_err(join_error)?
+            .map_err(to_error)?;
+            (hits, Some(ctx.timeline), ctx.now)
+        } else {
+            let hits = tokio::task::spawn_blocking(move || {
+                service.recall_fused(&query, k, filter.as_ref(), opts)
+            })
+            .await
+            .map_err(join_error)?
+            .map_err(to_error)?;
+            (hits, None, None)
+        };
+        Ok(Json(RecallFusedResult {
+            memories,
+            dated_context,
+            now,
+        }))
     }
 
     #[tool(

@@ -1,7 +1,7 @@
 //! Unit tests for the fusion ranking layer.
 
 use super::*;
-use crate::model::Recollection;
+use crate::model::{FusionOptions, Recollection};
 
 #[allow(clippy::cast_possible_truncation)] // test fixture scores are small, exact literals
 fn candidate(id: u64, vector_score: f64, graph_weight: f64) -> Candidate {
@@ -127,5 +127,83 @@ fn test_fuse_all_negative_pool_ties_at_a_neutral_baseline_not_an_inverted_extrem
         ranked.iter().map(|r| r.id).collect::<Vec<_>>(),
         vec![3, 1, 2],
         "the graph-reached candidate outranks the tied, neutral-baseline negative pool (stable order preserved)"
+    );
+}
+
+#[test]
+fn test_non_finite_graph_boost_collapses_fusion_without_sanitizing() {
+    // Guards the reason FusionOptions::sanitized exists: a non-finite boost
+    // makes `graph_boost · weight` NaN for EVERY candidate (even a pool-only
+    // one, since NaN·0.0 == NaN), so total_cmp sees all scores equal, the sort
+    // is a no-op, and the graph-reached fact — appended after the pool — is
+    // truncated away. A strong pool hit (id 1) plus a weak one (id 2) that the
+    // default boost is enough to outrank; the graph fact (id 3) should take the
+    // second slot at k=2.
+    let build = || {
+        (
+            vec![candidate(1, 0.5, 0.0), candidate(2, 0.01, 0.0)],
+            vec![candidate(3, 0.0, 1.0)],
+        )
+    };
+
+    let (pool, reached) = build();
+    let ranked = fuse(pool, &reached, 2, f64::NAN);
+    assert!(
+        !ranked.iter().any(|r| r.id == 3),
+        "with a raw NaN boost the graph fact is silently dropped — this is the failure sanitized() prevents"
+    );
+
+    // Sanitizing the boost restores correct fusion: the default 0.15 outranks
+    // the weak pool hit, so the graph fact takes the second slot.
+    let boost = FusionOptions {
+        graph_boost: f64::NAN,
+        ..FusionOptions::default()
+    }
+    .sanitized()
+    .graph_boost;
+    let (pool, reached) = build();
+    let ranked = fuse(pool, &reached, 2, boost);
+    assert!(
+        ranked.iter().any(|r| r.id == 3),
+        "after sanitizing the boost, the graph fact ranks in again"
+    );
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // asserting exact propagation of literal boosts, no arithmetic
+fn test_fusion_options_sanitized_only_touches_non_finite_boost() {
+    let default_boost = FusionOptions::default().graph_boost;
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let opts = FusionOptions {
+            graph_boost: bad,
+            ..FusionOptions::default()
+        }
+        .sanitized();
+        assert_eq!(opts.graph_boost, default_boost);
+    }
+    // A finite (even negative) boost is a valid demote-the-graph choice, left as is.
+    let kept = FusionOptions {
+        graph_boost: -0.5,
+        ..FusionOptions::default()
+    }
+    .sanitized();
+    assert_eq!(kept.graph_boost, -0.5);
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // asserting exact propagation of literal boosts, no arithmetic
+fn test_fusion_options_from_knobs_defaults_and_clamps_hops() {
+    let d = FusionOptions::default();
+    let none = FusionOptions::from_knobs(None, None, None);
+    assert_eq!(none.hops, d.hops);
+    assert_eq!(none.graph_boost, d.graph_boost);
+    assert_eq!(none.pool, d.pool);
+
+    let clamped = FusionOptions::from_knobs(Some(usize::MAX), Some(0.42), Some(usize::MAX));
+    assert_eq!(clamped.hops, crate::limits::clamp_hops(usize::MAX));
+    assert_eq!(clamped.graph_boost, 0.42);
+    assert_eq!(
+        clamped.pool,
+        Some(crate::limits::clamp_recall_limit(usize::MAX))
     );
 }

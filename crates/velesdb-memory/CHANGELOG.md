@@ -7,6 +7,17 @@ released on its own `velesdb-memory-vX.Y.Z` tag.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-06
+
+### Added
+
+- **`format_dated_context` / `DatedContext` (new `dated_context` module)** —
+  formats recalled facts into a chronological, "now"-anchored timeline for dated
+  recall; the primitive behind `recall_fused`'s `date_field` (MCP/Python) and
+  `recallFusedDated` (Node/WASM/TypeScript SDK). (#1315, #1316)
+- **Node binding `recallFusedDated`** — fused recall returning the dated timeline
+  plus a `now` anchor in a single call. (#1316)
+
 ## [0.4.0] - 2026-07-03
 
 ### Added

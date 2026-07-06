@@ -131,6 +131,88 @@ def test_recall_metadata_is_none_when_the_fact_carries_none(mem):
     assert all(h["metadata"] is None for h in hits)
 
 
+def test_recall_fused_folds_in_a_graph_reached_fact(mem):
+    # Fused recall walks the graph from the top vector hit and folds in a fact
+    # the query never mentions but a stored link connects — the shipped
+    # tri-engine ranking, not a harness-only prompt trick.
+    anchor = mem.remember("we chose parking_lot to avoid lock poisoning")
+    linked = mem.remember(
+        "the on-call rotation moved to Tuesdays",
+        links=[(anchor, "context")],
+    )
+    # Plain top-1 vector recall finds the anchor, not the unrelated linked fact.
+    plain = mem.recall("parking_lot poisoning", k=1)
+    assert all(h["id"] != linked for h in plain)
+    # Fused recall reaches it through the graph.
+    fused = mem.recall_fused("parking_lot poisoning", k=10)
+    ids = {h["id"] for h in fused}
+    assert anchor in ids and linked in ids
+
+
+def test_recall_fused_respects_exact_match_filter(mem):
+    keep = mem.remember("auth bug in login", metadata={"project": "veles"})
+    mem.remember("auth bug in login too", metadata={"project": "acme"})
+    hits = mem.recall_fused("auth bug", k=5, filter={"project": "veles"})
+    assert all(h["id"] == keep for h in hits)
+
+
+def test_recall_fused_accepts_tuning_knobs(mem):
+    # Advanced fusion knobs go in `options` (same shape as Node/WASM); optional
+    # and clamped, not rejected.
+    mem.remember("a decision about locks")
+    hits = mem.recall_fused("locks", k=5, options={"hops": 1, "graph_boost": 0.3, "pool": 64})
+    assert isinstance(hits, list)
+
+
+def test_recall_fused_survives_non_finite_graph_boost(mem):
+    # A native Python float bypasses JSON's NaN rejection, so the binding must
+    # not let a NaN graph_boost poison fusion (it would collapse the ranking and
+    # silently drop exactly the graph-reached facts recall_fused exists to find).
+    anchor = mem.remember("we chose parking_lot to avoid lock poisoning")
+    linked = mem.remember(
+        "the on-call rotation moved to Tuesdays",
+        links=[(anchor, "context")],
+    )
+    hits = mem.recall_fused(
+        "parking_lot poisoning", k=10, options={"graph_boost": float("nan")}
+    )
+    ids = {h["id"] for h in hits}
+    assert linked in ids
+
+
+def test_recall_fused_dated_returns_timeline_and_now(mem):
+    # With date_field, recall_fused returns a dict carrying a chronological,
+    # date-prefixed timeline + a "now" anchor — the temporal representation
+    # shipped as product behavior, not left to the caller's prompt.
+    mem.remember("the release shipped", metadata={"ts": 20260701})
+    mem.remember("the project kicked off", metadata={"ts": 20260103})
+    res = mem.recall_fused("project release timeline", k=10, date_field="ts")
+    assert isinstance(res, dict)
+    assert set(res) == {"memories", "dated_context", "now"}
+    timeline = res["dated_context"]
+    assert "- [2026-01-03] the project kicked off" in timeline
+    assert "- [2026-07-01] the release shipped" in timeline
+    # Oldest first.
+    assert timeline.index("2026-01-03") < timeline.index("2026-07-01")
+    assert res["now"] == "2026-07-01"
+
+
+def test_recall_fused_without_date_field_returns_a_plain_list(mem):
+    # Backward-compatible: no date_field -> a list, exactly like before.
+    mem.remember("a plain fact")
+    res = mem.recall_fused("plain fact", k=5)
+    assert isinstance(res, list)
+
+
+def test_recall_fused_zero_pool_is_floored_not_emptied(mem):
+    # pool=0 must not oversample zero candidates and return nothing; it is
+    # floored to 1 (a deliberate small pool is still honored, just never empty).
+    for i in range(3):
+        mem.remember(f"a fact number {i} about locks")
+    hits = mem.recall_fused("locks", k=5, options={"pool": 0})
+    assert len(hits) > 0
+
+
 def test_oversized_fact_raises_value_error(mem):
     # Facts above the shared 1 MiB cap are rejected before any embedding work.
     with pytest.raises(ValueError):

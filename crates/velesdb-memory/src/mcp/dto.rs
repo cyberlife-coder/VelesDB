@@ -75,6 +75,51 @@ pub(super) struct RecallWhereParams {
     pub(super) filters: Vec<ColumnFilter>,
 }
 
+/// Parameters for the `recall_fused` tool.
+#[derive(Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct RecallFusedParams {
+    /// Natural-language query to match semantically.
+    pub(super) query: String,
+    /// Maximum number of memories to return (default 10). Multi-hop reasoning
+    /// benefits from a larger budget (~32-64); simple and temporal recall
+    /// saturate early, where a larger budget only adds tokens.
+    pub(super) limit: Option<usize>,
+    /// Optional exact-match metadata filter (e.g.
+    /// `{"project": "veles", "status": "resolved"}`).
+    pub(super) filter: Option<Metadata>,
+    /// Graph hops walked from the top vector hit (default 2). Higher reaches
+    /// further but adds noise; capped at the `why` hop ceiling.
+    pub(super) hops: Option<usize>,
+    /// Weight added to a graph-reached fact's normalised vector score
+    /// (default 0.15). Raise to trust the graph more, lower to trust vector
+    /// similarity more.
+    pub(super) graph_boost: Option<f64>,
+    /// Name of the metadata field holding each fact's date as a `YYYYMMDD`
+    /// integer (e.g. `"ts"`, `"occurred_at"`). When set, the result adds a
+    /// `dated_context` timeline (facts date-prefixed and ordered oldest-first)
+    /// plus a `now` anchor — the representation that lifts temporal reasoning.
+    /// Omit for plain results.
+    pub(super) date_field: Option<String>,
+}
+
+/// Result of the `recall_fused` tool: the recalled memories, plus a dated
+/// timeline when `date_field` was given.
+#[derive(Serialize, JsonSchema)]
+pub(super) struct RecallFusedResult {
+    /// Recalled memories, most relevant first.
+    pub(super) memories: Vec<Recollection>,
+    /// Chronological, date-prefixed rendering of `memories` (`- [YYYY-MM-DD]
+    /// content` per line, oldest first, undated facts last). Present only when
+    /// `date_field` was set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) dated_context: Option<String>,
+    /// The most recent date across `memories` (`YYYY-MM-DD`), the "now" anchor.
+    /// Present only when `date_field` was set and at least one fact is dated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) now: Option<String>,
+}
+
 /// Parameters for the `relate` tool.
 #[derive(Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]

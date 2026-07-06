@@ -89,14 +89,35 @@ impl Generator {
         &self,
         prompt: &str,
     ) -> Result<(String, Option<TokenUsage>), Box<dyn Error>> {
-        let key = self.key(prompt);
+        self.generate_ctx(prompt, None)
+    }
+
+    /// Like [`Self::generate_traced`], but pins Ollama's context window to
+    /// `num_ctx` tokens for this call — needed by the full-context baseline,
+    /// whose whole-conversation prompt overflows Ollama's small default window
+    /// (a silent truncation there would invalidate the ceiling it measures).
+    pub fn generate_full_ctx(
+        &self,
+        prompt: &str,
+        num_ctx: u64,
+    ) -> Result<(String, Option<TokenUsage>), Box<dyn Error>> {
+        self.generate_ctx(prompt, Some(num_ctx))
+    }
+
+    /// Cache-then-call core shared by the default and pinned-context entries.
+    fn generate_ctx(
+        &self,
+        prompt: &str,
+        num_ctx: Option<u64>,
+    ) -> Result<(String, Option<TokenUsage>), Box<dyn Error>> {
+        let key = self.key_ctx(prompt, num_ctx);
         let path = self.cache_dir.join(format!("{key}.txt"));
         if let Ok(cached) = fs::read_to_string(&path) {
             if !cached.trim().is_empty() {
                 return Ok((cached, None));
             }
         }
-        let reply = self.call(prompt)?;
+        let reply = self.call(prompt, num_ctx)?;
         if !reply.text.trim().is_empty() {
             self.store(&key, &path, &reply.text)?;
         }
@@ -123,13 +144,17 @@ impl Generator {
     /// any usage counters. The body is serialised with `serde_json` and sent as
     /// a raw string so the crate's `ureq` can keep `default-features = false`
     /// (no bundled TLS/json), leaving the shipped server binary tiny.
-    fn call(&self, prompt: &str) -> Result<GenReply, Box<dyn Error>> {
+    fn call(&self, prompt: &str, num_ctx: Option<u64>) -> Result<GenReply, Box<dyn Error>> {
+        let mut options = serde_json::json!({ "temperature": 0 });
+        if let Some(tokens) = num_ctx {
+            options["num_ctx"] = serde_json::json!(tokens);
+        }
         let body = serde_json::json!({
             "model": self.model,
             "prompt": prompt,
             "stream": false,
             "think": false,
-            "options": { "temperature": 0 },
+            "options": options,
         })
         .to_string();
         let mut last: Box<dyn Error> = "no attempt made".into();
@@ -209,6 +234,23 @@ impl Generator {
     /// Content-addressed cache key over the local model + prompt.
     fn key(&self, prompt: &str) -> String {
         self.key_for(&self.model, prompt)
+    }
+
+    /// Cache key that also binds the pinned context window, so a prompt
+    /// generated at one `num_ctx` is never served to a call that asked for a
+    /// different one (a smaller window silently truncates — exactly what the
+    /// full-context baseline must not do). `None` keeps the plain model+prompt
+    /// key, leaving every existing default-window cache entry valid.
+    fn key_ctx(&self, prompt: &str, num_ctx: Option<u64>) -> String {
+        let Some(tokens) = num_ctx else {
+            return self.key(prompt);
+        };
+        let mut hash = fnv1a(self.model.as_bytes());
+        hash = fnv1a_continue(hash, b"\0num_ctx\0");
+        hash = fnv1a_continue(hash, &tokens.to_le_bytes());
+        hash = fnv1a_continue(hash, b"\0");
+        hash = fnv1a_continue(hash, prompt.as_bytes());
+        format!("{hash:016x}")
     }
 
     /// Content-addressed cache key over an explicit `model` + prompt, so callers

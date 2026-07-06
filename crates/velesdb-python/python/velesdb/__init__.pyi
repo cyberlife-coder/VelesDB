@@ -2344,6 +2344,63 @@ class MemoryService:
         """
         ...
 
+    @overload
+    def recall_fused(
+        self,
+        query: str,
+        k: int = 10,
+        filter: Optional[Dict[str, Any]] = None,
+        *,
+        date_field: None = None,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]: ...
+    @overload
+    def recall_fused(
+        self,
+        query: str,
+        k: int = 10,
+        filter: Optional[Dict[str, Any]] = None,
+        *,
+        date_field: str,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]: ...
+    def recall_fused(
+        self,
+        query: str,
+        k: int = 10,
+        filter: Optional[Dict[str, Any]] = None,
+        *,
+        date_field: Optional[str] = None,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
+        """Fused vector + graph recall (the tri-engine ranking).
+
+        Like :meth:`recall`, but also walks the graph from the top vector hit
+        and folds any connected fact into the ranking. Best when an answer
+        needs a fact the ``query`` doesn't mention directly but a stored
+        :meth:`relate` / :meth:`remember_extracted` link connects (multi-hop
+        or temporal reasoning).
+
+        Args:
+            query: Free-text query.
+            k: Maximum number of results (default: 10).
+            filter: Optional exact-match metadata filter dict.
+            date_field: Metadata key holding each fact's ``YYYYMMDD`` date. When
+                given, the result is a dict with a dated timeline (see below);
+                when ``None`` (default), a plain list is returned.
+            options: Optional advanced fusion tuning
+                ``{"hops": int, "graph_boost": float, "pool": int}`` (all keys
+                optional). Omit for the proven defaults.
+
+        Returns:
+            Without ``date_field``: a list of ``{"id": int, "score": float,
+            "content": str, "metadata": Optional[Dict[str, Any]]}`` dicts, most
+            relevant first. With ``date_field``: a dict ``{"memories": [...],
+            "dated_context": str, "now": Optional[str]}`` — the same memories
+            plus a chronological, date-prefixed timeline and a "now" anchor.
+        """
+        ...
+
     def relate(self, from_id: int, to_id: int, relation: str) -> int:
         """Create a typed edge ``from_id → to_id``.
 

@@ -28,7 +28,7 @@ use super::types::{
     path = "/collections/{name}/graph/edges/{edge_id}",
     params(
         ("name" = String, Path, description = "Collection name"),
-        ("edge_id" = u64, Path, description = "Edge ID to remove")
+        ("edge_id" = String, Path, description = "Edge ID to remove (u64 as a string; precision-safe above 2^53-1)", pattern = "^[0-9]+$")
     ),
     responses(
         (status = 204, description = "Edge removed successfully"),
@@ -113,7 +113,7 @@ pub async fn list_nodes(
     path = "/collections/{name}/graph/nodes/{node_id}/edges",
     params(
         ("name" = String, Path, description = "Collection name"),
-        ("node_id" = u64, Path, description = "Node ID"),
+        ("node_id" = String, Path, description = "Node ID (u64 as a string; precision-safe above 2^53-1)", pattern = "^[0-9]+$"),
         NodeEdgeQueryParams
     ),
     responses(
@@ -166,7 +166,7 @@ pub async fn get_node_edges(
     path = "/collections/{name}/graph/nodes/{node_id}/payload",
     params(
         ("name" = String, Path, description = "Collection name"),
-        ("node_id" = u64, Path, description = "Node ID")
+        ("node_id" = String, Path, description = "Node ID (u64 as a string; precision-safe above 2^53-1)", pattern = "^[0-9]+$")
     ),
     request_body = UpsertNodePayloadRequest,
     responses(
@@ -201,7 +201,7 @@ pub async fn upsert_node_payload(
     path = "/collections/{name}/graph/nodes/{node_id}/payload",
     params(
         ("name" = String, Path, description = "Collection name"),
-        ("node_id" = u64, Path, description = "Node ID")
+        ("node_id" = String, Path, description = "Node ID (u64 as a string; precision-safe above 2^53-1)", pattern = "^[0-9]+$")
     ),
     responses(
         (status = 200, description = "Payload retrieved", body = NodePayloadResponse),

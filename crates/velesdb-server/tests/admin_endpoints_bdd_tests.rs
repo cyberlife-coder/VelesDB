@@ -127,6 +127,32 @@ async fn bulk_delete_nominal_returns_200_with_deleted_count() {
 }
 
 #[tokio::test]
+async fn bulk_delete_accepts_string_ids_for_js_precision_safety() {
+    // IDs are emitted as JSON strings on every read surface (precision-safe
+    // above 2^53-1); bulk delete must therefore accept the string form a JS
+    // client echoes back — not just native integers. See `serde_id`.
+    let temp_dir = TempDir::new().expect("test: temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_collection(app.clone(), 5).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/collections/{TEST_COLLECTION}/points/delete"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(json!({ "ids": ["1", "2", "3"] }).to_string()))
+                .expect("test: build delete request"),
+        )
+        .await
+        .expect("test: delete request");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = read_json(response).await;
+    assert_eq!(json["deleted_count"], 3);
+}
+
+#[tokio::test]
 async fn bulk_delete_empty_payload_returns_200_noop() {
     // Documented behaviour: empty `ids: []` is a no-op (200, count=0).
     // See `bulk_delete_points` rustdoc — idempotent batch semantics.

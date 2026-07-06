@@ -12,7 +12,29 @@
 //! cargo run --release -p velesdb-memory --features ollama --example locomo
 //! # LLM-free explanation benchmark (does the graph connect scattered evidence?):
 //! cargo run --release -p velesdb-memory --features ollama --example locomo -- --explanation
+//!
+//! # Full-context baseline (whole conversation, no retrieval) — the local
+//! # ceiling our budgeted retrieval trades tokens against:
+//! cargo run --release -p velesdb-memory --features ollama --example locomo -- --full-context
+//!
+//! # LLM-free reproduction: does the SHIPPED recall_fused reproduce the fused
+//! # retrieval? Compare the harness fusion against the installed API on the same
+//! # data (single-seed, no BM25, idf-weighted to match recall_fused):
+//! cargo run --release -p velesdb-memory --features ollama --example locomo -- \
+//!     --retrieval --idf-weight                       # harness fusion
+//! cargo run --release -p velesdb-memory --features ollama --example locomo -- \
+//!     --retrieval --use-shipped-api                  # shipped recall_fused
 //! ```
+//!
+//! `--use-shipped-api` routes the fused (graph) path through the exact
+//! [`MemoryService::recall_fused`](velesdb_memory::MemoryService::recall_fused)
+//! a user installs, instead of the harness's own `vector_pool`+`graph_reached`+`fuse`.
+//! On a 3-conversation run the two agree to ~1pp of evidence-recall@k
+//! (69.8% harness → 69.0% shipped), identical on temporal/single-hop/open-domain;
+//! the residual is concentrated in multi-hop and traces to the documented
+//! graph-reach divergences (the shipped IDF counts facts + entity hubs where the
+//! harness counts facts only; `recall_fused` is single-seed, no BM25, and takes
+//! an exact-match filter rather than the temporal `ColumnStore` date window).
 //!
 //! Pipeline: extract facts from each session with a local LLM (tagged with the
 //! gold `dia_id`s and session timestamp), ingest them as a fact↔entity graph,
@@ -30,6 +52,7 @@ mod dump;
 mod eval;
 mod explain;
 mod extract;
+mod full_context;
 mod ingest;
 mod judge;
 mod ollama_gen;
@@ -54,6 +77,9 @@ use report::Report;
 use retrieval::RetrievalReport;
 
 /// Parsed command-line configuration.
+// The flags are independent CLI switches (run modes + ablation knobs), not a
+// state machine — the same reason `EvalCfg` carries this allow.
+#[allow(clippy::struct_excessive_bools)]
 struct Args {
     dataset: PathBuf,
     conversations: usize,
@@ -65,6 +91,9 @@ struct Args {
     retrieval: bool,
     /// Run the LLM-free extraction-vs-retrieval coverage diagnosis.
     diagnose: bool,
+    /// Run the full-context baseline (whole conversation, no retrieval) — the
+    /// reporting-standard local ceiling.
+    full_context: bool,
     /// Extraction prompt version: 1 (topics) or 2 (specific referents).
     extract_version: u8,
     /// Restrict the QA eval to one category (cheap, targeted A/B runs).
@@ -89,6 +118,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         run_retrieval(&generator, &samples, take, &args)
     } else if args.explanation {
         run_explanation(&generator, &samples, take, &args)
+    } else if args.full_context {
+        let claude = full_context::ClaudeFlags {
+            gen: args.cfg.claude_gen,
+            judge: args.cfg.claude_judge,
+        };
+        full_context::run(
+            &generator,
+            &samples,
+            take,
+            claude,
+            args.max_qa,
+            args.only_category,
+        )
     } else {
         run_eval(&generator, &samples, take, &args)
     }
@@ -392,6 +434,7 @@ impl Default for Args {
             explanation: false,
             retrieval: false,
             diagnose: false,
+            full_context: false,
             extract_version: 1,
             only_category: None,
             embed_model: DEFAULT_OLLAMA_MODEL.to_string(),
@@ -412,6 +455,7 @@ impl Default for Args {
                 bm25: false,
                 claude_judge: false,
                 claude_gen: false,
+                use_shipped_api: false,
             },
         }
     }
@@ -456,6 +500,7 @@ impl Args {
             "--explanation" => &mut self.explanation,
             "--retrieval" => &mut self.retrieval,
             "--diagnose" => &mut self.diagnose,
+            "--full-context" => &mut self.full_context,
             "--multihop-only" => &mut self.cfg.multihop_only,
             "--idf-weight" => &mut self.cfg.idf_weight,
             "--date-context" => &mut self.cfg.date_context,
@@ -465,6 +510,7 @@ impl Args {
             "--bm25" => &mut self.cfg.bm25,
             "--claude-judge" => &mut self.cfg.claude_judge,
             "--claude-gen" => &mut self.cfg.claude_gen,
+            "--use-shipped-api" => &mut self.cfg.use_shipped_api,
             _ => return None,
         })
     }

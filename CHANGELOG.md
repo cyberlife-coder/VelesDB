@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.0] — 2026-07-06
+
+### Added
+- **`recall_fused` on the MCP and Python bindings** — fused vector+graph recall
+  (previously Node/WASM-only) is now available to MCP clients (Claude Code,
+  Codex, OpenCode…) and the Python `MemoryService`, with flat `hops`/`graph_boost`
+  knobs. (#1314)
+- **Dated-context recall on every surface** — `recall_fused` gains a `date_field`
+  option (MCP, Python) and a sibling `recallFusedDated` (Node, WASM, TypeScript
+  SDK) returning a chronological, "now"-anchored timeline. Powered by the new
+  `velesdb-memory::format_dated_context` primitive. (#1315, #1316)
+
+### Fixed
+- **u64 IDs are precision-safe across the whole REST OpenAPI spec.** Path/query
+  ID parameters, the scroll `cursor`, and `BulkDeleteRequest.ids` were typed or
+  accepted as integers only; a client generated from `docs/openapi.{json,yaml}`
+  therefore typed IDs above 2^53-1 as a JavaScript `number` and lost precision.
+  IDs are now `string` (path/query, `^[0-9]+$`) or `oneOf(integer|string)`
+  (bodies), matching the string form every read surface already emits. No wire
+  change. (#1321)
+
+### Changed
+- LoCoMo positioning and benchmark docs (sourced citations, reproduction through
+  the shipped `recall_fused`, the k-budget lever) and the bench harness gains
+  `--use-shipped-api` plus a `--full-context` ceiling baseline. (#1313, #1317,
+  #1318, #1319, #1320)
+
 ## [3.6.0] — 2026-07-03
 
 ### Added
