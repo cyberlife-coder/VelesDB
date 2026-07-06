@@ -3632,7 +3632,7 @@ async fn test_get_point_by_id() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["id"], 42);
+    assert_eq!(json["id"], "42"); // ID emitted as a string (JS precision-safety)
     assert_eq!(json["vector"], json!([1.0, 0.0, 0.0]));
     assert_eq!(json["payload"]["color"], "red");
 
@@ -3736,7 +3736,7 @@ async fn test_delete_point_by_id() {
         .await
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["id"], 7);
+    assert_eq!(json["id"], "7"); // ID emitted as a string (JS precision-safety)
 
     // GET after delete returns 404
     let response = app

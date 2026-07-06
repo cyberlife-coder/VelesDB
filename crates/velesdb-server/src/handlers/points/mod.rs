@@ -210,8 +210,10 @@ pub async fn get_point(
     let points = collection.get(&[id]);
 
     match points.into_iter().next().flatten() {
+        // ID as a string for JS precision-safety above 2^53-1, consistent with
+        // every other read surface (search/scroll/relations, see `serde_id`).
         Some(point) => Json(serde_json::json!({
-            "id": point.id,
+            "id": point.id.to_string(),
             "vector": point.vector,
             "payload": point.payload
         }))
@@ -247,9 +249,11 @@ pub async fn delete_point(
     };
 
     match collection.delete(&[id]) {
+        // ID as a string for JS precision-safety (see `serde_id`), consistent
+        // with the string ID accepted in the path and returned by reads.
         Ok(()) => Json(serde_json::json!({
             "message": "Point deleted",
-            "id": id
+            "id": id.to_string()
         }))
         .into_response(),
         Err(e) => auto_core_error_response(&e),
