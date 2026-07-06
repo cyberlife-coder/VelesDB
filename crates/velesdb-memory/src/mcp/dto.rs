@@ -124,11 +124,12 @@ pub(super) struct RecallFusedResult {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RelateParams {
-    /// Source memory id.
+    /// Source memory id — the link points FROM here (as returned by `remember`/`recall`).
     pub(super) from: u64,
-    /// Target memory id.
+    /// Target memory id — the link points TO here (as returned by `remember`/`recall`).
     pub(super) to: u64,
-    /// Relationship label.
+    /// Directional relationship label, read as `from` <relation> `to`.
+    /// Examples: `caused_by`, `depends_on`, `authored_by`, `supersedes`.
     pub(super) relation: String,
 }
 
@@ -144,7 +145,7 @@ pub(super) struct RelateResult {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct ForgetParams {
-    /// Id of the memory to forget.
+    /// Id of the memory to permanently delete (as returned by `remember` or `recall`).
     pub(super) id: u64,
 }
 

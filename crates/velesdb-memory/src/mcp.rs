@@ -207,7 +207,7 @@ impl McpServer {
 
     #[tool(
         name = "relate",
-        description = "Create a typed link from one memory to another. Returns the edge id."
+        description = "Create a typed, directional link between two memories (`from` → `to`) labeled by `relation`. These links are the graph edges that `why` and `recall_fused` later traverse to surface connected facts that share no words with the query — build the graph with `relate` so multi-hop reasoning works (e.g. link a decision to its cause, a fact to its source, a task to the person it concerns). Idempotent per (from, relation, to). Returns the new edge id."
     )]
     async fn relate(
         &self,
@@ -222,7 +222,10 @@ impl McpServer {
         Ok(Json(RelateResult { edge_id }))
     }
 
-    #[tool(name = "forget", description = "Delete a memory by id.")]
+    #[tool(
+        name = "forget",
+        description = "Permanently delete a memory by its `id` (as returned by `remember` or `recall`), removing the fact and its graph links. The deletion is durable and cannot be undone — use it to retract or correct stored knowledge. For automatic time-based expiry instead, set a TTL when calling `remember`. Returns the deleted id."
+    )]
     async fn forget(
         &self,
         Parameters(params): Parameters<ForgetParams>,

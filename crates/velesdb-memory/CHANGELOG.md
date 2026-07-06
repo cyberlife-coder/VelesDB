@@ -7,6 +7,16 @@ released on its own `velesdb-memory-vX.Y.Z` tag.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.6.0] - 2026-07-06
+
+### Changed
+
+- Richer MCP tool descriptions and parameter docs for `relate` and `forget`
+  (when to use them, directionality, examples, durability) — improves the
+  schema quality MCP clients and directories surface.
+
 ## [0.5.0] - 2026-07-06
 
 ### Added
