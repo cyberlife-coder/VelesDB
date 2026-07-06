@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING (REST server):** `GET` and `DELETE /collections/{name}/points/{id}`
+  now return the point `id` as a JSON **string** (e.g. `"42"`) instead of a
+  number, completing the u64 precision-safety migration on the point-object
+  endpoints so they match `search`/`scroll`/`relations` (which already emit
+  string IDs). JS clients parsing these two responses as numbers must read the
+  `id` as a string. The VelesQL `/query` endpoint still emits numeric `id`
+  columns (general query results — a separate, tracked follow-up).
+
+### Fixed
+- CI: exclude `**/__test__/**` and `**/__tests__/**` from Sonar analysis (the
+  Node napi test suite was counted as uncovered production code, failing the
+  coverage Quality Gate).
+
 ## [3.7.0] — 2026-07-06
 
 ### Added

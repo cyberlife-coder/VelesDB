@@ -401,7 +401,7 @@ Get a single point by ID.
 **Response:**
 ```json
 {
-  "id": 1,
+  "id": "1",
   "vector": [0.1, 0.2, 0.3, ...],
   "payload": {"title": "Hello World"}
 }
@@ -415,7 +415,7 @@ Delete a point by ID.
 ```json
 {
   "message": "Point deleted",
-  "id": 1
+  "id": "1"
 }
 ```
 
