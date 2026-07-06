@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.8.0] — 2026-07-06
+
 ### Changed
 - **BREAKING (REST server):** `GET` and `DELETE /collections/{name}/points/{id}`
   now return the point `id` as a JSON **string** (e.g. `"42"`) instead of a

@@ -16,4 +16,4 @@ across agent runs.
 from langgraph_velesdb.tools import make_memory_tools
 
 __all__ = ["make_memory_tools"]
-__version__ = "3.7.0"
+__version__ = "3.8.0"
