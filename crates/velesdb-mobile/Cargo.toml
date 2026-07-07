@@ -24,7 +24,7 @@ path = "src/bin/uniffi-bindgen.rs"
 
 [dependencies]
 velesdb-core = { workspace = true }
-uniffi = { version = "0.31", features = ["tokio", "cli"] }
+uniffi = { version = "0.32", features = ["tokio", "cli"] }
 tokio = { version = "1.52", features = ["rt-multi-thread"] }
 parking_lot = "0.12"
 thiserror = "2.0"
