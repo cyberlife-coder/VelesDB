@@ -22,11 +22,9 @@ ignore = [
     { id = "RUSTSEC-2024-0418", reason = "gdk-sys: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
     { id = "RUSTSEC-2024-0419", reason = "gtk3-macros: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
     { id = "RUSTSEC-2024-0420", reason = "gtk-sys: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
-    { id = "RUSTSEC-2024-0429", reason = "glib unsound: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
 
     # ── Tauri non-GTK3 transitives ────────────────────────────────────
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: tauri build-time transitive, unmaintained" },
-    { id = "RUSTSEC-2025-0057", reason = "fxhash: tauri transitive, unmaintained" },
     { id = "RUSTSEC-2025-0075", reason = "unic-char-range: tauri transitive, unmaintained" },
     { id = "RUSTSEC-2025-0080", reason = "unic-common: tauri transitive, unmaintained" },
     { id = "RUSTSEC-2025-0081", reason = "unic-char-property: tauri transitive, unmaintained" },
@@ -49,8 +47,6 @@ ignore = [
     # ── velesdb-cli transitive ────────────────────────────────────────
     { id = "RUSTSEC-2024-0384", reason = "instant: velesdb-cli transitive (clap/indicatif chain), unmaintained" },
 
-    # ── SIMD / quantization transitive ────────────────────────────────
-    { id = "RUSTSEC-2024-0436", reason = "paste: simdeez transitive, unmaintained" },
 
     # ── Embedded / heapless transitive (postcard 1.x) ─────────────────
     # postcard 1.x is a load-bearing serializer in velesdb-core; postcard 2.x
