@@ -62,7 +62,7 @@ version = "6.2"
 
 # GPU acceleration (optional)
 [dependencies.wgpu]
-version = "29"
+version = "30"
 optional = true
 
 [dependencies.pollster]
