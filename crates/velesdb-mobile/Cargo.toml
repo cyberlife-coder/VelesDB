@@ -28,6 +28,7 @@ uniffi = { version = "0.31", features = ["tokio", "cli"] }
 tokio = { version = "1.52", features = ["rt-multi-thread"] }
 parking_lot = "0.12"
 thiserror = "2.0"
+serde = { workspace = true }
 serde_json = "1.0"
 tracing = "0.1"
 
