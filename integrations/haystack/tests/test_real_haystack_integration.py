@@ -286,3 +286,34 @@ def test_pipeline_with_decorated_retriever(tmp_path) -> None:
     assert len(docs) == 2
     # Top result should be the closest English doc to the query vector.
     assert docs[0].id == "doc-en-1"
+
+
+def test_shipped_embedding_retriever_component_runs(tmp_path) -> None:
+    """The package now ships VelesDBEmbeddingRetriever, so callers no longer
+    hand-roll a @component wrapper. It runs standalone and inside a Pipeline."""
+    from haystack_velesdb import VelesDBEmbeddingRetriever
+
+    store = _store(tmp_path)
+    store.write_documents(_docs())
+    retriever = VelesDBEmbeddingRetriever(document_store=store, top_k=2)
+
+    out = retriever.run(query_embedding=[1.0, 0.0, 0.0, 0.0])
+    assert [d.id for d in out["documents"]][0] == "doc-en-1"
+
+    pipeline = Pipeline()
+    pipeline.add_component("retriever", retriever)
+    result = pipeline.run({"retriever": {"query_embedding": [1.0, 0.0, 0.0, 0.0]}})
+    assert len(result["retriever"]["documents"]) == 2
+
+
+def test_shipped_embedding_retriever_serialization_roundtrip(tmp_path) -> None:
+    """to_dict/from_dict rebuilds the component and its store for pipeline YAML."""
+    from haystack_velesdb import VelesDBEmbeddingRetriever
+
+    retriever = VelesDBEmbeddingRetriever(
+        document_store=_store(tmp_path), top_k=3, scale_score=False
+    )
+    restored = VelesDBEmbeddingRetriever.from_dict(retriever.to_dict())
+    assert restored._top_k == 3
+    assert restored._scale_score is False
+    assert isinstance(restored._document_store, VelesDBDocumentStore)
