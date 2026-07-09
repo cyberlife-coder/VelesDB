@@ -229,7 +229,9 @@ fn print_vector_table(cfg: &velesdb_core::collection::CollectionConfig, type_lab
 /// Prints sample vector records.
 fn print_vector_samples(col: &velesdb_core::VectorCollection, samples: usize) {
     println!("\n{}", "Sample Records".bold().underline());
-    let ids: Vec<u64> = (1..=(samples as u64 * 2)).collect();
+    // Sample from the collection's actual IDs, not an assumed contiguous
+    // `1..=n` range: sparse/non-sequential IDs would otherwise show nothing.
+    let ids: Vec<u64> = col.all_ids().into_iter().take(samples).collect();
     let points = col.get(&ids);
     for point in points.into_iter().flatten().take(samples) {
         println!("  ID: {}", point.id.to_string().green());
