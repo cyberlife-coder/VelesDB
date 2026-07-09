@@ -34,7 +34,9 @@ fn byte_to_mode(byte: u8) -> Result<StorageMode, JsValue> {
         2 => Ok(StorageMode::Binary),
         3 => Ok(StorageMode::ProductQuantization),
         4 => Ok(StorageMode::RaBitQ),
-        _ => Err(JsValue::from_str(&format!("Invalid storage-mode byte: {byte}"))),
+        _ => Err(JsValue::from_str(&format!(
+            "Invalid storage-mode byte: {byte}"
+        ))),
     }
 }
 
@@ -78,7 +80,11 @@ pub fn export_to_bytes(store: &VectorStore) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"VELS");
     bytes.push(FORMAT_VERSION);
-    bytes.extend_from_slice(&u32::try_from(store.dimension).unwrap_or(u32::MAX).to_le_bytes());
+    bytes.extend_from_slice(
+        &u32::try_from(store.dimension)
+            .unwrap_or(u32::MAX)
+            .to_le_bytes(),
+    );
     bytes.push(metric_to_byte(store.metric));
     bytes.push(mode_to_byte(store.storage_mode));
     bytes.extend_from_slice(&(store.ids.len() as u64).to_le_bytes());
@@ -125,7 +131,9 @@ fn read_blob<'a>(bytes: &'a [u8], offset: &mut usize) -> Result<&'a [u8], JsValu
 fn read_f32_blob(bytes: &[u8], offset: &mut usize) -> Result<Vec<f32>, JsValue> {
     let blob = read_blob(bytes, offset)?;
     if blob.len() % 4 != 0 {
-        return Err(JsValue::from_str("Invalid data: f32 blob not 4-byte aligned"));
+        return Err(JsValue::from_str(
+            "Invalid data: f32 blob not 4-byte aligned",
+        ));
     }
     Ok(blob
         .chunks_exact(4)
