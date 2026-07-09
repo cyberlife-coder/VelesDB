@@ -277,6 +277,22 @@ describe('request — retry on backpressure (429/503)', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect((result as { error: { code: string } }).error.code).toBe('BAD_REQUEST');
   });
+
+  it('does NOT retry a 503 on a non-idempotent POST (avoids double-write)', async () => {
+    mockFetch.mockResolvedValue(errResponse(503));
+    const result = await request(fast, 'POST', '/x', { a: 1 });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect((result as { error: { code: string } }).error.code).toBe('SERVICE_UNAVAILABLE');
+  });
+
+  it('does retry a 429 on a POST (server rejected it before processing)', async () => {
+    mockFetch
+      .mockResolvedValueOnce(errResponse(429, '0'))
+      .mockResolvedValueOnce(okResponse({ ok: 1 }));
+    const result = await request<{ ok: number }>(fast, 'POST', '/x', { a: 1 });
+    expect(result).toEqual({ data: { ok: 1 } });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('request — connection errors', () => {

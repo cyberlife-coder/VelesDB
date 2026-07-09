@@ -33,6 +33,28 @@ export interface RestHttpConfig {
 const DEFAULT_MAX_RETRIES = 2;
 /** Default exponential-backoff base delay in ms. */
 const DEFAULT_RETRY_BASE_MS = 200;
+/** Hard cap on any single retry wait, so a large `Retry-After` can't hang a request. */
+const MAX_RETRY_DELAY_MS = 20_000;
+
+/** HTTP methods that are idempotent per RFC 9110 (safe to replay). */
+function isIdempotentMethod(method: string): boolean {
+  const m = method.toUpperCase();
+  return m === 'GET' || m === 'HEAD' || m === 'PUT' || m === 'DELETE' || m === 'OPTIONS';
+}
+
+/**
+ * Whether a failed response should be retried for this method.
+ *
+ * `429` means the server rejected the request *before* processing it (rate
+ * limit), so replaying is safe for any method. `503` is ambiguous — the request
+ * may have been partially applied — so it is only retried for idempotent
+ * methods, never for a non-idempotent write like a POST upsert.
+ */
+function shouldRetry(status: number, method: string): boolean {
+  if (status === 429) return true;
+  if (status === 503) return isIdempotentMethod(method);
+  return false;
+}
 
 /** HTTP status → typed error code lookup. */
 const STATUS_ERROR_CODES: Record<number, string> = {
@@ -110,15 +132,17 @@ function sleep(ms: number): Promise<void> {
 /**
  * Compute the backoff delay before retrying a 429/503 response. Honors an
  * integer `Retry-After` header (seconds); otherwise exponential backoff with
- * light jitter.
+ * light jitter. Always capped at `MAX_RETRY_DELAY_MS` so a hostile or huge
+ * `Retry-After` cannot hang a request far past the caller's intent.
  */
 function retryDelayMs(response: Response, attempt: number, baseDelayMs: number): number {
   const retryAfter = response.headers.get('Retry-After');
   if (retryAfter !== null) {
     const secs = Number(retryAfter);
-    if (Number.isFinite(secs) && secs >= 0) return secs * 1000;
+    if (Number.isFinite(secs) && secs >= 0) return Math.min(secs * 1000, MAX_RETRY_DELAY_MS);
   }
-  return baseDelayMs * 2 ** attempt + Math.floor(Math.random() * baseDelayMs);
+  const backoff = baseDelayMs * 2 ** attempt + Math.floor(Math.random() * baseDelayMs);
+  return Math.min(backoff, MAX_RETRY_DELAY_MS);
 }
 
 /** Perform a single HTTP attempt (own timeout); network errors throw. */
@@ -147,10 +171,11 @@ async function attemptFetch(
 /**
  * Execute an HTTP request against the REST API.
  *
- * Retries automatically on 429 (rate limited) and 503 (service unavailable),
- * which the server returns *before* processing the request, so a replay is
- * safe even for writes. Network errors and timeouts are NOT retried (a write
- * may already have been applied). Backoff is exponential, honoring `Retry-After`.
+ * Retries `429` for any method (the server rejected it before processing) and
+ * `503` only for idempotent methods (see {@link shouldRetry}), so a
+ * non-idempotent write is never silently replayed. Network errors and timeouts
+ * are NOT retried (a write may already have been applied). Backoff is
+ * exponential, honoring a capped `Retry-After`.
  */
 export async function request<T>(
   config: RestHttpConfig,
@@ -167,7 +192,7 @@ export async function request<T>(
     if (response.ok) {
       return { data: data as unknown as T };
     }
-    if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
+    if (shouldRetry(response.status, method) && attempt < maxRetries) {
       await sleep(retryDelayMs(response, attempt, baseDelay));
       continue;
     }
