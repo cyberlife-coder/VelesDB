@@ -245,10 +245,8 @@ pub(super) fn persist_flat_index_atomic(
 
     persist_flat_index(&staging, index)?;
     promote_index_sidecar(&staging, path)?;
-    match path.parent() {
-        Some(dir) if !dir.as_os_str().is_empty() => sync_dir(dir),
-        _ => Ok(()),
-    }
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
+    durable_rename_barrier(dir, &[path])
 }
 
 /// Renames a fully written index file over `idx_path`.
@@ -266,18 +264,38 @@ fn promote_index_sidecar(sidecar: &Path, idx_path: &Path) -> io::Result<()> {
     std::fs::rename(sidecar, idx_path)
 }
 
-/// Fsyncs the storage directory so preceding renames are durable (POSIX).
+/// Makes preceding renames durable before the caller truncates the WAL.
 ///
-/// Without this, a power loss could persist the WAL truncation that follows
-/// the compaction commit while rolling back the renames themselves.
-fn sync_dir(dir: &Path) -> io::Result<()> {
+/// A compaction commit renames the new data/index files into place and then
+/// truncates the WAL. If the truncation reaches disk while the renames do not,
+/// a power loss leaves an empty WAL beside stale pre-compaction files — silent
+/// data loss. This barrier orders the renames before the truncation:
+///
+/// - **Unix:** fsync the directory, persisting the renames' directory entries.
+/// - **Windows/other:** there is no directory fsync, and the data file is
+///   memory-mapped so it cannot be reopened for write (`FlushFileBuffers`
+///   access-denied). Each *non-mapped* renamed file passed here (the index
+///   sidecar) is fsynced instead. Callers must NOT pass a currently-mmapped
+///   path. The data-file rename is ordered by NTFS: its record is written to
+///   `$LogFile` before the trailing `wal.sync_all()`, and NTFS's write-ahead
+///   invariant flushes `$LogFile` up to that point, so the rename is durable
+///   before the WAL truncation reaches disk (holds on NTFS; FAT/exFAT data
+///   directories are unsupported for durability).
+fn durable_rename_barrier(dir: Option<&Path>, renamed: &[&Path]) -> io::Result<()> {
     #[cfg(unix)]
     {
-        File::open(dir)?.sync_all()
+        let _ = renamed;
+        match dir {
+            Some(d) => File::open(d)?.sync_all(),
+            None => Ok(()),
+        }
     }
     #[cfg(not(unix))]
     {
         let _ = dir;
+        for path in renamed {
+            OpenOptions::new().write(true).open(path)?.sync_all()?;
+        }
         Ok(())
     }
 }
@@ -410,7 +428,8 @@ impl CompactionContext<'_> {
     /// # TS-CORE-004: Storage Compaction
     ///
     /// This operation is quasi-atomic via `rename()` for crash safety.
-    /// Reads remain available during compaction (copy-on-write pattern).
+    /// The caller holds the storage write lock for the duration, so reads are
+    /// blocked while compaction runs (it is not concurrent copy-on-write).
     ///
     /// # Returns
     ///
@@ -565,12 +584,17 @@ impl CompactionContext<'_> {
         atomic_replace(temp_path, data_path)?;
 
         // Promote the staged index so vectors.idx matches the new layout.
-        promote_index_sidecar(idx_tmp_path, &self.path.join("vectors.idx"))?;
+        let idx_path = self.path.join("vectors.idx");
+        promote_index_sidecar(idx_tmp_path, &idx_path)?;
 
-        // Make both renames durable before the truncation below can hit disk:
-        // a power loss must never persist an empty WAL while rolling back the
-        // renames that committed the compaction.
-        sync_dir(self.path)?;
+        // Make the renames durable before the truncation below can hit disk: a
+        // power loss must never persist an empty WAL while rolling back the
+        // renames that committed the compaction. On Unix this fsyncs the
+        // directory; on Windows the index sidecar is fsynced and the data-file
+        // rename is ordered via NTFS $LogFile (see durable_rename_barrier). The
+        // mmapped data file is deliberately not passed — it cannot be reopened
+        // for write while mapped.
+        durable_rename_barrier(Some(self.path), &[&idx_path])?;
 
         // Compaction renders the prior WAL obsolete: truncate it. flush()
         // first so the BufWriter cannot later re-append buffered stale
