@@ -339,6 +339,18 @@ export class WasmBackend implements IVelesDBBackend {
     return removed;
   }
 
+  async bulkDelete(collectionName: string, ids: Array<string | number>): Promise<number> {
+    this.ensureInitialized();
+    const collection = this.collections.get(collectionName);
+    if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
+    let count = 0;
+    for (const id of ids) {
+      const removed = collection.store.remove(BigInt(toNumericId(id)));
+      if (removed) { collection.payloads.delete(canonicalPayloadKey(id)); count += 1; }
+    }
+    return count;
+  }
+
   async get(collectionName: string, id: string | number): Promise<VectorDocument | null> {
     this.ensureInitialized();
     const collection = this.collections.get(collectionName);

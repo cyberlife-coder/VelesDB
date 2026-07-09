@@ -126,6 +126,9 @@ export interface IVelesDBBackend {
   /** Delete a vector by ID */
   delete(collection: string, id: string | number): Promise<boolean>;
 
+  /** Delete multiple vectors by ID in one request; returns the deleted count. */
+  bulkDelete(collection: string, ids: Array<string | number>): Promise<number>;
+
   /** Get a vector by ID */
   get(collection: string, id: string | number): Promise<VectorDocument | null>;
 

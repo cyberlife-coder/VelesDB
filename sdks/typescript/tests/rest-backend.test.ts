@@ -103,6 +103,24 @@ describe('RestBackend', () => {
       expect(col?.dimension).toBe(128);
     });
 
+    it('should bulk delete points via POST points/delete', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ deleted_count: 2 }),
+      });
+
+      const count = await backend.bulkDelete('docs', [5, 42]);
+
+      expect(count).toBe(2);
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/collections/docs/points/delete',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ ids: ['5', '42'] }),
+        })
+      );
+    });
+
     it('should return null for non-existent collection (typed VELES-002)', async () => {
       // Modern server emits the VELES-002 code verbatim via
       // `core_error_response`; the transport layer recognises
