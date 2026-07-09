@@ -69,7 +69,7 @@
     "vitest": "^4.0.16"
   },
   "dependencies": {
-    "@wiscale/velesdb-wasm": "^3.0.0"
+    "@wiscale/velesdb-wasm": "^3.8.0"
   },
   "engines": {
     "node": ">=18.0.0"
