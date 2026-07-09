@@ -5,83 +5,218 @@
 use crate::{DistanceMetric, StorageMode, VectorStore};
 use wasm_bindgen::JsValue;
 
-/// Binary format header size.
+/// v1 header size (magic4 + version1 + dim4 + metric1 + count8). v1 stored only
+/// id + f32 vectors (Full mode); kept for reading legacy data.
 pub const HEADER_SIZE: usize = 18;
 
-/// Serializes a `VectorStore` to binary format.
-///
-/// Format:
-/// - Magic: "VELS" (4 bytes)
-/// - Version: 1 (1 byte)
-/// - Dimension: u32 LE (4 bytes)
-/// - Metric: u8 (1 byte)
-/// - Count: u64 LE (8 bytes)
-/// - Data: [id: u64, vector: f32 * dim] * count
-pub fn export_to_bytes(store: &VectorStore) -> Vec<u8> {
-    let count = store.ids.len();
-    let vector_size = 8 + store.dimension * 4;
-    let total_size = HEADER_SIZE + count * vector_size;
-    let mut bytes = Vec::with_capacity(total_size);
+/// v2 header size — v1 plus a storage-mode byte.
+const HEADER_SIZE_V2: usize = 19;
 
-    // Header: magic number "VELS"
-    bytes.extend_from_slice(b"VELS");
+/// Current format version written by [`export_to_bytes`].
+const FORMAT_VERSION: u8 = 2;
 
-    // Version
-    bytes.push(1);
-
-    // Dimension
-    let Ok(dim_u32) = u32::try_from(store.dimension) else {
-        return Vec::new();
-    };
-    bytes.extend_from_slice(&dim_u32.to_le_bytes());
-
-    // Metric
-    let metric_byte = metric_to_byte(store.metric);
-    bytes.push(metric_byte);
-
-    // Vector count
-    let Ok(count_u64) = u64::try_from(count) else {
-        return Vec::new();
-    };
-    bytes.extend_from_slice(&count_u64.to_le_bytes());
-
-    // Data
-    for (idx, &id) in store.ids.iter().enumerate() {
-        bytes.extend_from_slice(&id.to_le_bytes());
-        let start = idx * store.dimension;
-        let data_slice = &store.data[start..start + store.dimension];
-        // SAFETY: [f32] and [u8] share the same memory layout (IEEE 754 binary32).
-        // - `data_slice` is a valid, aligned slice of `f32` owned by `store.data`.
-        // - Length is `dimension * 4` bytes, exactly the byte representation of `dimension` f32 values.
-        // Reason: bulk byte copy avoids per-element serialization for 500+ MB/s throughput.
-        let data_bytes: &[u8] = unsafe {
-            core::slice::from_raw_parts(data_slice.as_ptr().cast::<u8>(), store.dimension * 4)
-        };
-        bytes.extend_from_slice(data_bytes);
+/// Maps a storage mode to its on-disk byte.
+fn mode_to_byte(mode: StorageMode) -> u8 {
+    match mode {
+        StorageMode::Full => 0,
+        StorageMode::SQ8 => 1,
+        StorageMode::Binary => 2,
+        StorageMode::ProductQuantization => 3,
+        StorageMode::RaBitQ => 4,
     }
+}
 
+/// Maps an on-disk byte back to a storage mode.
+fn byte_to_mode(byte: u8) -> Result<StorageMode, JsValue> {
+    match byte {
+        0 => Ok(StorageMode::Full),
+        1 => Ok(StorageMode::SQ8),
+        2 => Ok(StorageMode::Binary),
+        3 => Ok(StorageMode::ProductQuantization),
+        4 => Ok(StorageMode::RaBitQ),
+        _ => Err(JsValue::from_str(&format!("Invalid storage-mode byte: {byte}"))),
+    }
+}
+
+/// Appends a length-prefixed (u64 LE) byte blob.
+fn write_blob(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    out.extend_from_slice(bytes);
+}
+
+/// Appends a length-prefixed blob of little-endian f32 values.
+fn write_f32_blob(out: &mut Vec<u8>, values: &[f32]) {
+    out.extend_from_slice(&((values.len() as u64) * 4).to_le_bytes());
+    for &v in values {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+}
+
+/// Appends the payloads section: each entry is a blob — empty for `None`,
+/// otherwise the JSON bytes of the value.
+fn write_payloads(out: &mut Vec<u8>, payloads: &[Option<serde_json::Value>]) {
+    for payload in payloads {
+        match payload {
+            Some(v) => write_blob(out, &serde_json::to_vec(v).unwrap_or_default()),
+            None => write_blob(out, &[]),
+        }
+    }
+}
+
+/// Serializes a `VectorStore` to the v2 binary format.
+///
+/// Layout (little-endian): `"VELS"`(4) | version=2(1) | dimension u32(4) |
+/// metric u8(1) | storage-mode u8(1) | count u64(8), then `count` u64 IDs, then
+/// five length-prefixed blobs (`data` f32, `data_sq8`, `data_binary`,
+/// `sq8_mins` f32, `sq8_scales` f32), then `count` payload blobs (empty = None).
+///
+/// Unlike v1 (id + f32 only, Full mode), v2 preserves the storage mode, the
+/// quantized buffers and the payloads, and never panics on a quantized store
+/// (v1 indexed the empty `data` buffer in SQ8/Binary mode). The sparse index is
+/// not persisted (rebuilt on demand), as in v1.
+pub fn export_to_bytes(store: &VectorStore) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"VELS");
+    bytes.push(FORMAT_VERSION);
+    bytes.extend_from_slice(&u32::try_from(store.dimension).unwrap_or(u32::MAX).to_le_bytes());
+    bytes.push(metric_to_byte(store.metric));
+    bytes.push(mode_to_byte(store.storage_mode));
+    bytes.extend_from_slice(&(store.ids.len() as u64).to_le_bytes());
+
+    for &id in &store.ids {
+        bytes.extend_from_slice(&id.to_le_bytes());
+    }
+    write_f32_blob(&mut bytes, &store.data);
+    write_blob(&mut bytes, &store.data_sq8);
+    write_blob(&mut bytes, &store.data_binary);
+    write_f32_blob(&mut bytes, &store.sq8_mins);
+    write_f32_blob(&mut bytes, &store.sq8_scales);
+    write_payloads(&mut bytes, &store.payloads);
     bytes
 }
 
-/// Deserializes a `VectorStore` from binary format.
-///
-/// Perf: Uses bulk copy for 500+ MB/s throughput.
+/// Reads a u64 LE at `*offset`, advancing it. Bounds-checked.
+fn read_u64(bytes: &[u8], offset: &mut usize) -> Result<u64, JsValue> {
+    let end = offset
+        .checked_add(8)
+        .filter(|&e| e <= bytes.len())
+        .ok_or_else(|| JsValue::from_str("Invalid data: truncated u64"))?;
+    let arr: [u8; 8] = bytes[*offset..end]
+        .try_into()
+        .map_err(|_| JsValue::from_str("Invalid data: u64 slice"))?;
+    *offset = end;
+    Ok(u64::from_le_bytes(arr))
+}
+
+/// Reads a length-prefixed (u64 LE) byte blob, advancing `*offset`. Bounds-checked.
+fn read_blob<'a>(bytes: &'a [u8], offset: &mut usize) -> Result<&'a [u8], JsValue> {
+    let len = usize::try_from(read_u64(bytes, offset)?)
+        .map_err(|_| JsValue::from_str("Invalid data: blob length too large"))?;
+    let end = offset
+        .checked_add(len)
+        .filter(|&e| e <= bytes.len())
+        .ok_or_else(|| JsValue::from_str("Invalid data: blob out of bounds"))?;
+    let slice = &bytes[*offset..end];
+    *offset = end;
+    Ok(slice)
+}
+
+/// Reads a length-prefixed blob and decodes it as little-endian f32 values.
+fn read_f32_blob(bytes: &[u8], offset: &mut usize) -> Result<Vec<f32>, JsValue> {
+    let blob = read_blob(bytes, offset)?;
+    if blob.len() % 4 != 0 {
+        return Err(JsValue::from_str("Invalid data: f32 blob not 4-byte aligned"));
+    }
+    Ok(blob
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect())
+}
+
+/// Reads `count` payload blobs (an empty blob decodes to `None`).
+fn read_payloads(
+    bytes: &[u8],
+    offset: &mut usize,
+    count: usize,
+) -> Result<Vec<Option<serde_json::Value>>, JsValue> {
+    let mut payloads = Vec::with_capacity(count);
+    for _ in 0..count {
+        let blob = read_blob(bytes, offset)?;
+        if blob.is_empty() {
+            payloads.push(None);
+        } else {
+            let value = serde_json::from_slice(blob)
+                .map_err(|e| JsValue::from_str(&format!("Invalid payload JSON: {e}")))?;
+            payloads.push(Some(value));
+        }
+    }
+    Ok(payloads)
+}
+
+/// Deserializes a `VectorStore`, dispatching on the format version byte.
 pub fn import_from_bytes(bytes: &[u8]) -> Result<VectorStore, JsValue> {
-    if bytes.len() < HEADER_SIZE {
+    if bytes.len() < 5 {
         return Err(JsValue::from_str("Invalid data: too short"));
     }
-
-    // Check magic
     if &bytes[0..4] != b"VELS" {
         return Err(JsValue::from_str("Invalid data: wrong magic number"));
     }
+    match bytes[4] {
+        1 => import_v1(bytes),
+        2 => import_v2(bytes),
+        v => Err(JsValue::from_str(&format!("Unsupported version: {v}"))),
+    }
+}
 
-    // Check version
-    let version = bytes[4];
-    if version != 1 {
-        return Err(JsValue::from_str(&format!(
-            "Unsupported version: {version}"
-        )));
+/// Reads the v2 format (storage mode, quantized buffers and payloads preserved).
+fn import_v2(bytes: &[u8]) -> Result<VectorStore, JsValue> {
+    if bytes.len() < HEADER_SIZE_V2 {
+        return Err(JsValue::from_str("Invalid data: too short"));
+    }
+    let dimension = u32::from_le_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]) as usize;
+    let metric = byte_to_metric(bytes[9])?;
+    let storage_mode = byte_to_mode(bytes[10])?;
+    let count = usize::try_from(u64::from_le_bytes([
+        bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], bytes[16], bytes[17], bytes[18],
+    ]))
+    .map_err(|_| JsValue::from_str("Invalid data: count too large"))?;
+    let mut offset = HEADER_SIZE_V2;
+    // DoS guard: each ID needs 8 bytes, so `count` cannot exceed the remaining
+    // input — reject before allocating.
+    if count > bytes.len().saturating_sub(offset) / 8 {
+        return Err(JsValue::from_str("Invalid data: count exceeds input size"));
+    }
+
+    let mut ids = Vec::with_capacity(count);
+    for _ in 0..count {
+        ids.push(read_u64(bytes, &mut offset)?);
+    }
+    let data = read_f32_blob(bytes, &mut offset)?;
+    let data_sq8 = read_blob(bytes, &mut offset)?.to_vec();
+    let data_binary = read_blob(bytes, &mut offset)?.to_vec();
+    let sq8_mins = read_f32_blob(bytes, &mut offset)?;
+    let sq8_scales = read_f32_blob(bytes, &mut offset)?;
+    let payloads = read_payloads(bytes, &mut offset, count)?;
+
+    Ok(VectorStore {
+        ids,
+        data,
+        data_sq8,
+        data_binary,
+        sq8_mins,
+        sq8_scales,
+        payloads,
+        dimension,
+        metric,
+        storage_mode,
+        sparse_index: None,
+    })
+}
+
+/// Reads the legacy v1 format (id + f32 vectors only; Full mode, no payloads).
+fn import_v1(bytes: &[u8]) -> Result<VectorStore, JsValue> {
+    if bytes.len() < HEADER_SIZE {
+        return Err(JsValue::from_str("Invalid data: too short"));
     }
 
     // Read dimension
@@ -210,5 +345,82 @@ mod tests {
             let result = byte_to_metric(byte).unwrap();
             assert_eq!(metric, result);
         }
+    }
+
+    #[test]
+    fn test_v2_roundtrip_full_preserves_payloads() {
+        let store = VectorStore {
+            ids: vec![1, 2],
+            data: vec![1.0, 2.0, 3.0, 4.0],
+            data_sq8: Vec::new(),
+            data_binary: Vec::new(),
+            sq8_mins: Vec::new(),
+            sq8_scales: Vec::new(),
+            payloads: vec![Some(serde_json::json!({"k": "v"})), None],
+            dimension: 2,
+            metric: DistanceMetric::Cosine,
+            storage_mode: StorageMode::Full,
+            sparse_index: None,
+        };
+        let restored = import_from_bytes(&export_to_bytes(&store)).unwrap();
+        assert_eq!(restored.ids, vec![1, 2]);
+        assert_eq!(restored.data, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(
+            mode_to_byte(restored.storage_mode),
+            mode_to_byte(StorageMode::Full)
+        );
+        assert_eq!(restored.payloads[0], Some(serde_json::json!({"k": "v"})));
+        assert_eq!(restored.payloads[1], None);
+    }
+
+    #[test]
+    fn test_v2_roundtrip_sq8_preserves_mode_buffers_payload() {
+        // v1 dropped the SQ8 buffers/mode (reloaded as Full) and all payloads.
+        let store = VectorStore {
+            ids: vec![10],
+            data: Vec::new(),
+            data_sq8: vec![200, 100],
+            data_binary: Vec::new(),
+            sq8_mins: vec![0.5],
+            sq8_scales: vec![0.01],
+            payloads: vec![Some(serde_json::json!({"x": 1}))],
+            dimension: 2,
+            metric: DistanceMetric::Euclidean,
+            storage_mode: StorageMode::SQ8,
+            sparse_index: None,
+        };
+        let restored = import_from_bytes(&export_to_bytes(&store)).unwrap();
+        assert_eq!(
+            mode_to_byte(restored.storage_mode),
+            mode_to_byte(StorageMode::SQ8)
+        );
+        assert_eq!(restored.data_sq8, vec![200, 100]);
+        assert_eq!(restored.sq8_mins, vec![0.5]);
+        assert_eq!(restored.sq8_scales, vec![0.01]);
+        assert_eq!(restored.payloads[0], Some(serde_json::json!({"x": 1})));
+    }
+
+    #[test]
+    fn test_v2_roundtrip_binary_does_not_panic() {
+        // v1 panicked here by indexing the empty `data` buffer in Binary mode.
+        let store = VectorStore {
+            ids: vec![7],
+            data: Vec::new(),
+            data_sq8: Vec::new(),
+            data_binary: vec![0b1010_1010],
+            sq8_mins: Vec::new(),
+            sq8_scales: Vec::new(),
+            payloads: vec![None],
+            dimension: 8,
+            metric: DistanceMetric::Hamming,
+            storage_mode: StorageMode::Binary,
+            sparse_index: None,
+        };
+        let restored = import_from_bytes(&export_to_bytes(&store)).unwrap();
+        assert_eq!(
+            mode_to_byte(restored.storage_mode),
+            mode_to_byte(StorageMode::Binary)
+        );
+        assert_eq!(restored.data_binary, vec![0b1010_1010]);
     }
 }
