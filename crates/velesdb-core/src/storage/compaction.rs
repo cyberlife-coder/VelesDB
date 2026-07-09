@@ -540,35 +540,31 @@ impl CompactionContext<'_> {
             let _ = std::mem::replace(&mut *self.mmap.write(), placeholder);
         }
 
-        // 6. Commit: swap the data file in, promote the staged index, then
-        // truncate the now-obsolete WAL (see `commit_compaction` for the
-        // crash-safety invariant). Capture the result rather than `?`: after the
-        // step-5b placeholder swap, `self.mmap` is a 1-byte anonymous map, so we
-        // MUST remap a real file below on every path — otherwise a commit error
-        // would leave storage stranded on the placeholder.
+        // 6. COMMIT POINT: atomically swap the compacted temp file into place.
+        // After this succeeds, `vectors.dat` IS the compacted layout.
         let data_path = self.path.join("vectors.dat");
-        let commit_result = self.commit_compaction(&temp_path, &idx_tmp_path, &data_path);
+        let swapped = atomic_replace(&temp_path, &data_path);
 
-        // 7. Remap the live data file, replacing the placeholder. On success
-        // this is the compacted file; on commit failure it is whatever the swap
-        // left on disk (the untouched original if it failed early), so storage
-        // never stays on the anonymous placeholder.
+        // 7. Remap the live data file so storage never stays on the step-5b
+        // placeholder. `data_path` is the compacted file if the swap succeeded,
+        // otherwise the untouched original.
         let new_data_file = OpenOptions::new().read(true).write(true).open(&data_path)?;
         // SAFETY: `MmapMut::map_mut` requires a writable file sized for mapping.
-        // - Condition 1: `new_data_file` is opened read/write after atomic replace.
+        // - Condition 1: `new_data_file` is opened read/write after the swap.
         // - Condition 2: File contents are fully materialized by the preceding flush/rename flow.
         // SAFETY: Reloading mmap is required to switch storage to compacted bytes.
         let new_mmap = unsafe { MmapMut::map_mut(&new_data_file)? };
-        // Issue #316: Atomic index swap — replace mmap and index without
-        // an intermediate empty state visible to concurrent readers.
         *self.mmap.write() = new_mmap;
 
-        // Surface a commit failure now that a valid mapping is restored. The
-        // index/offset are left unchanged so they still match the pre-compaction
-        // file that startup recovery reinstates.
-        commit_result?;
-
-        // 8. Commit succeeded: adopt the compacted index and offsets.
+        // 8. Reconcile the in-memory index with what is now on disk. If the swap
+        // failed, the original data file is intact and the existing index/offset
+        // still describe it, so return the error without touching them.
+        swapped?;
+        // Swap succeeded: `vectors.dat` is the compacted layout, so the index and
+        // offset MUST switch to it. Adopt them BEFORE finalizing, so a failure in
+        // `finalize_commit` still leaves the index and the mmap mutually
+        // consistent (startup recovery reconciles the durable index/WAL). Issue
+        // #316: readers never observe an intermediate empty state (`&mut self`).
         self.index.replace_all(new_index);
         // Reason: Release ordering pairs with the Acquire loads in
         // `should_compact` and `compact` to ensure readers on ARM/weak-memory
@@ -576,20 +572,27 @@ impl CompactionContext<'_> {
         // new offset value.
         self.next_offset.store(new_offset, Ordering::Release);
 
+        // 9. Finalize: promote the staged index sidecar and truncate the obsolete
+        // WAL. A failure here is recoverable on the next open and does not desync
+        // the already-adopted in-memory index.
+        self.finalize_commit(&idx_tmp_path)?;
+
         Ok(bytes_to_reclaim)
     }
 
-    /// Commits a built compacted file: atomic data swap, index promotion and
-    /// WAL truncation, all under the WAL lock so no writer can append an
-    /// entry between the swap and the truncation.
+    /// Finalizes a compaction after the data-file swap: promotes the staged
+    /// index sidecar, makes the renames durable, and truncates the obsolete WAL.
+    /// Runs under the WAL lock so no writer can append between promotion and
+    /// truncation. Must be called only after `atomic_replace` has swapped the
+    /// compacted `vectors.dat` into place.
     ///
     /// # Crash-safety invariant
     ///
-    /// The rename of `vectors.dat.tmp` -> `vectors.dat` is the single commit
-    /// point. The compacted file plus the staged index fully capture every
-    /// acknowledged write (stores update the mmap before compaction snapshots
-    /// it), so once the swap is durable the prior WAL is obsolete and is
-    /// truncated. Every intermediate crash point is recoverable:
+    /// The `vectors.dat.tmp` -> `vectors.dat` rename (done by the caller) is the
+    /// single commit point. The compacted file plus the staged index fully
+    /// capture every acknowledged write, so once the swap is durable the prior
+    /// WAL is obsolete and is truncated. Every intermediate crash point is
+    /// recoverable:
     /// - before the swap: startup recovery removes both staged files and the
     ///   old dat/idx/WAL triple is untouched;
     /// - after the swap, before promotion: recovery promotes the sidecar;
@@ -597,16 +600,8 @@ impl CompactionContext<'_> {
     ///   every store record carries the full vector value and deletes replay
     ///   in order;
     /// - after promotion, before truncation: same convergent replay.
-    fn commit_compaction(
-        &self,
-        temp_path: &Path,
-        idx_tmp_path: &Path,
-        data_path: &Path,
-    ) -> io::Result<()> {
+    fn finalize_commit(&self, idx_tmp_path: &Path) -> io::Result<()> {
         let mut wal = self.wal.write();
-
-        // COMMIT POINT: atomic swap temp -> main (cross-platform).
-        atomic_replace(temp_path, data_path)?;
 
         // Promote the staged index so vectors.idx matches the new layout.
         let idx_path = self.path.join("vectors.idx");
