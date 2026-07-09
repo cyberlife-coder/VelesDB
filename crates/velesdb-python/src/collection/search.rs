@@ -245,7 +245,9 @@ impl Collection {
         top_k: usize,
         filter: Option<Py<PyAny>>,
     ) -> PyResult<Vec<Py<PyAny>>> {
-        self.ensure_vector()?;
+        // No ensure_vector() here: BM25 text_search operates on the text index
+        // and takes no query vector, so it is valid on metadata/graph collections
+        // that carry text fields — unlike the vector-only search paths.
         let filter_obj = parse_optional_filter(py, filter)?;
         let query_owned = query.to_string();
 
