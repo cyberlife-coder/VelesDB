@@ -526,24 +526,49 @@ impl CompactionContext<'_> {
         let idx_tmp_path = self.path.join("vectors.idx.tmp");
         persist_flat_index(&idx_tmp_path, &new_index)?;
 
+        // 5b. Release the live mapping of the OLD data file BEFORE the swap.
+        // Windows refuses to rename/replace a memory-mapped file
+        // (ERROR_ACCESS_DENIED), so `atomic_replace` below would fail while the
+        // old mapping is held — leaving compaction entirely broken on Windows.
+        // Swap in a tiny anonymous placeholder to unmap the file; step 7 remaps
+        // the compacted file. Safe because the caller holds `&mut self`
+        // (exclusive), so no `VectorSliceGuard` is outstanding to invalidate.
+        {
+            let placeholder = MmapMut::map_anon(1)?;
+            // Dropping the replaced value unmaps the old file-backed mapping,
+            // releasing the OS handle so the swap can rename the data file.
+            let _ = std::mem::replace(&mut *self.mmap.write(), placeholder);
+        }
+
         // 6. Commit: swap the data file in, promote the staged index, then
         // truncate the now-obsolete WAL (see `commit_compaction` for the
-        // crash-safety invariant).
+        // crash-safety invariant). Capture the result rather than `?`: after the
+        // step-5b placeholder swap, `self.mmap` is a 1-byte anonymous map, so we
+        // MUST remap a real file below on every path — otherwise a commit error
+        // would leave storage stranded on the placeholder.
         let data_path = self.path.join("vectors.dat");
-        self.commit_compaction(&temp_path, &idx_tmp_path, &data_path)?;
+        let commit_result = self.commit_compaction(&temp_path, &idx_tmp_path, &data_path);
 
-        // 7. Reopen the compacted file
+        // 7. Remap the live data file, replacing the placeholder. On success
+        // this is the compacted file; on commit failure it is whatever the swap
+        // left on disk (the untouched original if it failed early), so storage
+        // never stays on the anonymous placeholder.
         let new_data_file = OpenOptions::new().read(true).write(true).open(&data_path)?;
         // SAFETY: `MmapMut::map_mut` requires a writable file sized for mapping.
         // - Condition 1: `new_data_file` is opened read/write after atomic replace.
         // - Condition 2: File contents are fully materialized by the preceding flush/rename flow.
         // SAFETY: Reloading mmap is required to switch storage to compacted bytes.
         let new_mmap = unsafe { MmapMut::map_mut(&new_data_file)? };
-
-        // 8. Update internal state
         // Issue #316: Atomic index swap — replace mmap and index without
         // an intermediate empty state visible to concurrent readers.
         *self.mmap.write() = new_mmap;
+
+        // Surface a commit failure now that a valid mapping is restored. The
+        // index/offset are left unchanged so they still match the pre-compaction
+        // file that startup recovery reinstates.
+        commit_result?;
+
+        // 8. Commit succeeded: adopt the compacted index and offsets.
         self.index.replace_all(new_index);
         // Reason: Release ordering pairs with the Acquire loads in
         // `should_compact` and `compact` to ensure readers on ARM/weak-memory
@@ -591,18 +616,21 @@ impl CompactionContext<'_> {
         // power loss must never persist an empty WAL while rolling back the
         // renames that committed the compaction. On Unix this fsyncs the
         // directory; on Windows the index sidecar is fsynced and the data-file
-        // rename is ordered via NTFS $LogFile (see durable_rename_barrier). The
-        // mmapped data file is deliberately not passed — it cannot be reopened
-        // for write while mapped.
+        // rename is ordered via NTFS $LogFile (see durable_rename_barrier).
         durable_rename_barrier(Some(self.path), &[&idx_path])?;
 
-        // Compaction renders the prior WAL obsolete: truncate it. flush()
-        // first so the BufWriter cannot later re-append buffered stale
-        // entries; the fd is in append mode, so subsequent writes start at
-        // the new EOF (offset 0).
+        // Compaction renders the prior WAL obsolete: truncate it to zero.
+        // flush() first so the BufWriter cannot re-emit buffered stale entries;
+        // the append fd then writes fresh entries from the new EOF (offset 0).
+        // The WAL is opened append-only, so its handle lacks FILE_WRITE_DATA and
+        // set_len() on it is ACCESS_DENIED on Windows — truncate via a dedicated
+        // write handle instead (mirrors wal_replay::truncate_wal).
         wal.flush()?;
-        wal.get_ref().set_len(0)?;
-        wal.get_ref().sync_all()
+        let wal_file = OpenOptions::new()
+            .write(true)
+            .open(self.path.join("vectors.wal"))?;
+        wal_file.set_len(0)?;
+        wal_file.sync_all()
     }
 
     /// Returns the fragmentation ratio (0.0 = no fragmentation, 1.0 = 100% fragmented).
