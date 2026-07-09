@@ -65,6 +65,11 @@ logger = logging.getLogger(__name__)
 # defaults to LIMIT 10, far too small for chunked documents).
 _REF_DOC_SCAN_BATCH = 1000
 
+# Metrics for which VelesDB returns a raw distance (lower = closer). LlamaIndex
+# treats `similarities` as higher-is-better, so these are mapped to a bounded,
+# monotonically-decreasing similarity; cosine/dot-product are already similarities.
+_DISTANCE_METRICS = frozenset({"euclidean", "hamming", "jaccard"})
+
 
 class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, ScrollOpsMixin, BasePydanticVectorStore):
     """VelesDB vector store for LlamaIndex.
@@ -211,17 +216,30 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         node = cls._node_from_result(result)
         return node, result.get("score", 0.0), node.node_id
 
-    @classmethod
-    def _build_query_result(cls, results: list[dict]) -> VectorStoreQueryResult:
+    def _score_to_similarity(self, score: float) -> float:
+        """Map a raw VelesDB score to a LlamaIndex similarity (higher = closer).
+
+        VelesDB returns a raw *distance* for distance metrics (euclidean, hamming,
+        jaccard — lower is closer) and a *similarity* for cosine/dot-product
+        (higher is closer). LlamaIndex treats ``similarities`` as higher-is-better
+        (``similarity_cutoff``, node postprocessors), so distances are mapped to a
+        bounded, monotonically-decreasing similarity; similarity metrics pass
+        through unchanged.
+        """
+        if self.metric.lower() in _DISTANCE_METRICS:
+            return 1.0 / (1.0 + max(score, 0.0))
+        return score
+
+    def _build_query_result(self, results: list[dict]) -> VectorStoreQueryResult:
         """Build a VectorStoreQueryResult from raw VelesDB result dictionaries."""
         nodes: List[TextNode] = []
         similarities: List[float] = []
         ids: List[str] = []
 
         for result in results:
-            node, score, node_id = cls._result_to_parts(result)
+            node, score, node_id = self._result_to_parts(result)
             nodes.append(node)
-            similarities.append(score)
+            similarities.append(self._score_to_similarity(score))
             ids.append(node_id)
 
         return VectorStoreQueryResult(nodes=nodes, similarities=similarities, ids=ids)
@@ -368,23 +386,16 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         self, collection: velesdb.Collection, ref_doc_id: str
     ) -> None:
         """Delete every node whose payload ``ref_doc_id`` matches."""
-        from llamaindex_velesdb.security import validate_query
-
-        # NOTE: $ref parameter binding silently matches nothing on published
-        # velesdb wheels <= 1.18.0 (scalar param equality bug, fixed upstream
-        # for 1.19) — this connector must run on published engines, so the
-        # value is escaped (single quotes doubled) and the whole statement is
-        # checked by validate_query. Switch to params once the minimum pin
-        # is >= the first fixed release. Not a SQL engine — VelesQL only,
-        # and collection_name is validated at construction ([a-zA-Z0-9_-]+).
-        escaped = ref_doc_id.replace("'", "''")
+        # Parameter binding ($ref) keeps the user value out of the query text
+        # entirely. It was a no-op on published wheels <= 1.18.0 (scalar-equality
+        # bug); the package now pins velesdb >= 3.8.0 where it works. The only
+        # interpolated token is collection_name, regex-validated at construction.
         query_str = (
-            f"SELECT * FROM {self.collection_name} "  # nosec B608  # identifier regex-validated
-            f"WHERE ref_doc_id = '{escaped}' LIMIT {_REF_DOC_SCAN_BATCH}"  # nosec B608  # value quote-escaped + validate_query'd
+            f"SELECT * FROM {self.collection_name} "  # nosec B608 — identifier regex-validated
+            f"WHERE ref_doc_id = $ref LIMIT {_REF_DOC_SCAN_BATCH}"
         )
-        validate_query(query_str)
         while True:
-            rows = collection.query(query_str)
+            rows = collection.query(query_str, {"ref": ref_doc_id})
             if rows:
                 collection.delete([row["id"] for row in rows])
             if len(rows) < _REF_DOC_SCAN_BATCH:
