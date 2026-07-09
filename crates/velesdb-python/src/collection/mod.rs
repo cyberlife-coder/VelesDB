@@ -82,18 +82,65 @@ fn async_builder_from_dict(value: &Bound<'_, PyAny>) -> PyResult<AsyncIndexBuild
 ///
 /// Collections store vectors with optional metadata (payload) and support
 /// efficient similarity search.
+/// Real kind of the core collection behind the single Python `Collection`
+/// facade. Vector-only operations use it to fail loud on graph/metadata
+/// collections instead of silently returning empty results (F2.2).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CollectionKind {
+    /// HNSW vector collection — supports vector search.
+    Vector,
+    /// Graph collection — edges and optional node embeddings.
+    Graph,
+    /// Metadata-only collection — payload/VelesQL, no vector search.
+    Metadata,
+}
+
+impl CollectionKind {
+    /// Human-readable label used in error messages.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Vector => "vector",
+            Self::Graph => "graph",
+            Self::Metadata => "metadata",
+        }
+    }
+}
+
 #[pyclass]
 pub struct Collection {
     /// Core collection (cheap to clone — all fields are `Arc`-wrapped internally).
     pub(crate) inner: CoreCollection,
     /// Cached name to avoid acquiring `config` read lock on every `#[getter]` access.
     pub(crate) name: String,
+    /// Real kind of the wrapped collection; guards vector-only methods.
+    pub(crate) kind: CollectionKind,
 }
 
 impl Collection {
-    /// Create a new Collection wrapper.
+    /// Create a wrapper for a vector collection.
     pub fn new(inner: CoreCollection, name: String) -> Self {
-        Self { inner, name }
+        Self::new_with_kind(inner, name, CollectionKind::Vector)
+    }
+
+    /// Create a wrapper for a collection whose real kind may not be vector
+    /// (graph/metadata), so vector-only methods fail loud rather than returning
+    /// empty results (F2.2).
+    pub(crate) fn new_with_kind(inner: CoreCollection, name: String, kind: CollectionKind) -> Self {
+        Self { inner, name, kind }
+    }
+
+    /// Rejects a vector-only operation on a non-vector collection with a clear,
+    /// actionable error instead of the silent empty result of F2.2.
+    fn ensure_vector(&self) -> PyResult<()> {
+        if self.kind == CollectionKind::Vector {
+            return Ok(());
+        }
+        Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "vector search is not supported on the {} collection '{}'; \
+             use execute_query() for VelesQL or the graph API instead",
+            self.kind.label(),
+            self.name
+        )))
     }
 
     /// Dispatch to the correct search path based on which arguments are present.
@@ -111,6 +158,10 @@ impl Collection {
     ) -> PyResult<Vec<SearchResult>> {
         use crate::collection_helpers::core_err;
         use pyo3::exceptions::PyValueError;
+
+        // F2.2: vector search on a graph/metadata collection must fail loud,
+        // not return an empty list.
+        self.ensure_vector()?;
 
         let index_name =
             sparse_index_name.unwrap_or(velesdb_core::sparse_index::DEFAULT_SPARSE_INDEX_NAME);
