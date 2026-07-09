@@ -54,7 +54,7 @@ fn collect_export_records(
     col: &velesdb_core::VectorCollection,
     include_vectors: bool,
 ) -> Vec<serde_json::Value> {
-    let all_ids = col.all_ids();
+    let all_ids = col.all_point_ids();
     let mut records = Vec::with_capacity(all_ids.len());
     let batch_size = 1000;
 

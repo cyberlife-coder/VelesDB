@@ -55,6 +55,16 @@ impl VectorCollection {
         self.inner.all_ids()
     }
 
+    /// Returns every point ID (vector- or payload-backed) in ascending order.
+    ///
+    /// Unlike [`all_ids`](Self::all_ids), this includes points inserted with a
+    /// `None` payload, so it is the complete, deterministic set to iterate for
+    /// export/sampling.
+    #[must_use]
+    pub fn all_point_ids(&self) -> Vec<u64> {
+        self.inner.all_point_ids()
+    }
+
     /// Returns the next batch of points for scroll iteration.
     ///
     /// Delegates to the inner collection's scroll implementation; see also
