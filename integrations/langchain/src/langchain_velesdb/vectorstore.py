@@ -332,6 +332,10 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         Returns:
             VelesDBVectorStore instance with texts added.
         """
+        # `ids` belongs to add_texts, not the constructor: pop it out of kwargs
+        # so caller-supplied ids are actually assigned to the points (LangChain
+        # contract) instead of being silently swallowed by **kwargs.
+        ids = kwargs.pop("ids", None)
         vectorstore = cls(
             embedding=embedding,
             path=path,
@@ -339,7 +343,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
             metric=metric,
             **kwargs,
         )
-        vectorstore.add_texts(texts, metadatas=metadatas)
+        vectorstore.add_texts(texts, metadatas=metadatas, ids=ids)
         return vectorstore
 
     def as_retriever(self, **kwargs: Any):
