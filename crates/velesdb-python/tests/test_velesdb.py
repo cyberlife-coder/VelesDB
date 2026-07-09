@@ -699,6 +699,22 @@ class TestMetadataOnlyCollections:
         assert collection.name == "products"
         assert collection.is_metadata_only()
 
+    def test_search_on_metadata_collection_raises(self, temp_db):
+        """F2.2: vector search on a metadata collection fails loud (raises),
+        instead of silently returning an empty list."""
+        collection = temp_db.create_metadata_collection("catalog_f22")
+        collection.upsert_metadata([{"id": 1, "payload": {"name": "Widget"}}])
+        with pytest.raises(ValueError):
+            collection.search([1.0, 0.0, 0.0, 0.0], top_k=2)
+
+    def test_search_on_metadata_via_get_collection_raises(self, temp_db):
+        """F2.2: the same guard applies when the metadata collection is
+        re-fetched through the generic get_collection() facade."""
+        temp_db.create_metadata_collection("catalog_f22b")
+        collection = temp_db.get_collection("catalog_f22b")
+        with pytest.raises(ValueError):
+            collection.search([1.0, 0.0, 0.0, 0.0], top_k=2)
+
     def test_metadata_collection_info(self, temp_db):
         """Test metadata-only collection info."""
         collection = temp_db.create_metadata_collection("catalog")

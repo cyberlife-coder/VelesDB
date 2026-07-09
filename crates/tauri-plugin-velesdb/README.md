@@ -28,7 +28,7 @@ A Tauri plugin for **VelesDB** — Vector search in desktop applications.
 
 ```toml
 [dependencies]
-tauri-plugin-velesdb = "1"
+tauri-plugin-velesdb = "3"
 ```
 
 ### TypeScript SDK (package.json)

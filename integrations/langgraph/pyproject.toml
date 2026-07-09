@@ -25,7 +25,7 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "langchain-core>=0.3.0,<2.0.0",
-    "velesdb>=3.4.0",
+    "velesdb>=3.8.0",
 ]
 
 [project.optional-dependencies]

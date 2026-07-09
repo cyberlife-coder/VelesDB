@@ -28,11 +28,11 @@ pub struct SemanticResult {
 ///
 /// # Durability
 ///
-/// **In-memory only.** The WASM crate has no `persistence` feature. The
-/// `VectorStore` binary format used by `export_to_bytes`/`save`/`load` does
-/// **not** serialize payloads, so fact content does **not** survive a
-/// store reload. Persist content out-of-band (e.g. in application state or
-/// IndexedDB) if durability is required.
+/// **Not auto-persisted.** The WASM crate has no `persistence` feature, but the
+/// `VectorStore` binary format (`export_to_bytes`/`save`/`load`, v2) **does**
+/// serialize payloads, so fact content **survives** an explicit `save()` →
+/// `load()` roundtrip. Call `save()` (e.g. to IndexedDB) to keep state across
+/// reloads; nothing is written automatically.
 ///
 /// # Example (JavaScript)
 ///

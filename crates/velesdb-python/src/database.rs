@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::agent;
-use crate::collection::Collection;
+use crate::collection::{Collection, CollectionKind};
 use crate::collection_helpers::core_err;
 use crate::graph_collection::{PyGraphCollection, PyGraphSchema};
 use crate::observer::PyObserver;
@@ -334,20 +334,23 @@ impl Database {
     fn get_collection(&self, name: &str) -> PyResult<Option<Collection>> {
         match self.inner.get_any_collection(name) {
             Some(any_coll) => {
-                // F2.2 mitigation: Python SDK exposes a single Collection
-                // type. Invoking vector-specific methods on a graph or
-                // metadata collection returns empty results rather than
-                // raising — the typed split is tracked as a post-seed
-                // EPIC in docs/ARCHITECTURE.md.
-                //
-                // SAFETY: Python SDK exposes a single Collection facade over all variants.
-                // - any_coll comes from `get_any_collection`, returned Some, so the
-                //   underlying `AnyCollection` is registered and valid.
-                // - Only the shared surface is guaranteed correct on non-Vector variants;
-                //   vector-only methods return empty results by design.
-                // Reason: single-Collection Python ergonomic facade.
+                // The Python SDK exposes a single `Collection` facade over all
+                // variants. Capture the real kind so vector-only methods fail
+                // loud on graph/metadata collections (F2.2) instead of silently
+                // returning empty results.
+                let kind = if any_coll.is_graph() {
+                    CollectionKind::Graph
+                } else if any_coll.is_metadata() {
+                    CollectionKind::Metadata
+                } else {
+                    CollectionKind::Vector
+                };
+                // SAFETY: `any_coll` came from `get_any_collection` (Some), so the
+                // underlying `AnyCollection` is registered and valid. The coerced
+                // vector facade only exercises the shared surface for non-Vector
+                // kinds; `Collection::ensure_vector` rejects vector-only ops.
                 let vc = unsafe { any_coll.into_vector_unchecked() };
-                Ok(Some(Collection::new(vc, name.to_string())))
+                Ok(Some(Collection::new_with_kind(vc, name.to_string(), kind)))
             }
             None => Ok(None),
         }
@@ -431,7 +434,11 @@ impl Database {
         // Reason: single-Collection Python ergonomic facade.
         let collection = unsafe { any.into_vector_unchecked() };
 
-        Ok(Collection::new(collection, name_owned))
+        Ok(Collection::new_with_kind(
+            collection,
+            name_owned,
+            CollectionKind::Metadata,
+        ))
     }
 
     /// Create an AgentMemory instance for AI agent workflows.

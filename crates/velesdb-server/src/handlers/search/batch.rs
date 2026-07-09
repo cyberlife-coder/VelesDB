@@ -34,7 +34,6 @@ use crate::handlers::helpers::{
         (status = 400, description = "Invalid request", body = ErrorResponse)
     )
 )]
-#[allow(clippy::unused_async)]
 pub async fn batch_search(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -72,10 +71,35 @@ pub async fn batch_search(
         }
     };
 
-    let queries: Vec<&[f32]> = req.searches.iter().map(|s| s.vector.as_slice()).collect();
+    // F-01 sweep: batch search is CPU-bound (one HNSW pass per query) and must
+    // not run on the async runtime thread — a large batch would otherwise block
+    // a Tokio worker and starve concurrent requests. Move it to a blocking
+    // worker like the other search endpoints. `spawn_blocking` needs a 'static
+    // closure, so owned query vectors + filters are moved in and the `&[f32]`
+    // views are rebuilt inside.
+    let collection_for_work = collection.clone();
+    let query_vectors: Vec<Vec<f32>> = req.searches.iter().map(|s| s.vector.clone()).collect();
     let max_top_k = req.searches.iter().map(|s| s.top_k).max().unwrap_or(10);
 
-    let batch_result = run_batch_search(&collection, &queries, max_top_k, &filters);
+    let batch_result = match tokio::task::spawn_blocking(move || {
+        let queries: Vec<&[f32]> = query_vectors.iter().map(Vec::as_slice).collect();
+        run_batch_search(&collection_for_work, &queries, max_top_k, &filters)
+    })
+    .await
+    {
+        Ok(inner) => inner,
+        Err(_) => {
+            state.operational_metrics.inc_errors();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Batch search worker failed".to_string(),
+                    code: None,
+                }),
+            )
+                .into_response();
+        }
+    };
     record_circuit_breaker(&collection, &batch_result);
 
     let all_results = match batch_result {

@@ -136,6 +136,35 @@ impl Collection {
             exhausted: false,
         })
     }
+
+    /// Fetch one batch of points starting after `cursor` (O(1) cursor seek).
+    ///
+    /// Returns ``(points, next_cursor)``: the batch as a list of dicts and the
+    /// cursor to pass on the next call (``None`` once the batch is the last).
+    /// Unlike the [`scroll`](Self::scroll) generator this is a stateless
+    /// one-shot for callers that persist the cursor themselves (e.g.
+    /// ``velesdb_common.scroll``), avoiding an O(n) re-scan per page.
+    #[pyo3(signature = (cursor=None, batch_size=100, filter=None))]
+    fn scroll_batch(
+        &self,
+        py: Python<'_>,
+        cursor: Option<u64>,
+        batch_size: usize,
+        filter: Option<Py<PyAny>>,
+    ) -> PyResult<(Vec<Py<PyAny>>, Option<u64>)> {
+        if batch_size == 0 {
+            return Err(PyValueError::new_err("batch_size must be greater than 0"));
+        }
+
+        let parsed_filter = parse_optional_filter(py, filter)?;
+        let inner = self.inner.clone();
+        let batch = py
+            .detach(move || inner.scroll_batch(cursor, batch_size, parsed_filter.as_ref()))
+            .map_err(core_err)?;
+
+        let dicts: Vec<Py<PyAny>> = batch.points.iter().map(|p| point_to_dict(py, p)).collect();
+        Ok((dicts, batch.next_cursor))
+    }
 }
 
 /// Eagerly validate that the requested DataFrame backend is importable.

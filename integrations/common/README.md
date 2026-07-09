@@ -33,7 +33,7 @@ direct use by end users.
 
 | Export | Type | Description |
 |--------|------|-------------|
-| `CollectionAdminMixin` | class | Mixin providing shared admin operations (`flush`, `get_collection_info`, `is_empty`) |
+| `CollectionAdminMixin` | class | Mixin providing shared admin operations (`create_metadata_collection`, `is_metadata_only`, `train_pq`, `analyze_collection`, `get_collection_stats`) |
 | `GraphOpsBase` | class | Base class for graph query helpers used by both integrations |
 
 **ID helpers**

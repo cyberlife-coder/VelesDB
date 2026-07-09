@@ -90,16 +90,11 @@ impl<'a> GraphMigrationPhase<'a> {
                 relation.from_column, relation.to_table, relation.to_column, relation.edge_label
             );
 
-            let edges = self
-                .extract_edges_for_relation(relation, batch_size)
+            let (created, failed) = self
+                .migrate_relation_edges(relation, batch_size, &gc)
                 .await?;
-
-            let total = edges.len() as u64;
-            let inserted = gc.add_edges_batch(edges).map_err(|e| {
-                Error::DestinationConnection(format!("Edge batch insert failed: {e}"))
-            })? as u64;
-            stats.edges_created += inserted;
-            stats.edges_failed += total.saturating_sub(inserted);
+            stats.edges_created += created;
+            stats.edges_failed += failed;
             stats.relations_processed += 1;
         }
 
@@ -114,12 +109,22 @@ impl<'a> GraphMigrationPhase<'a> {
         Ok(stats)
     }
 
-    async fn extract_edges_for_relation(
+    /// Streams a relation's edges into the graph collection batch by batch.
+    ///
+    /// Each source batch is converted to edges and inserted immediately, so
+    /// only one batch worth of edges is held in memory at a time. The previous
+    /// implementation accumulated every edge of a relation into a single `Vec`
+    /// before one bulk insert, which could exhaust memory on large sources.
+    ///
+    /// Returns `(edges_created, edges_failed)`.
+    async fn migrate_relation_edges(
         &self,
         relation: &RelationConfig,
         batch_size: usize,
-    ) -> Result<Vec<velesdb_core::GraphEdge>> {
-        let mut edges = Vec::new();
+        gc: &velesdb_core::GraphCollection,
+    ) -> Result<(u64, u64)> {
+        let mut created = 0u64;
+        let mut failed = 0u64;
         let mut offset = None;
 
         loop {
@@ -135,6 +140,7 @@ impl<'a> GraphMigrationPhase<'a> {
                 break;
             }
 
+            let mut edges = Vec::with_capacity(batch.points.len());
             for point in &batch.points {
                 if let Some(edge) = build_edge(point, relation) {
                     edges.push(edge);
@@ -146,13 +152,22 @@ impl<'a> GraphMigrationPhase<'a> {
                 }
             }
 
+            if !edges.is_empty() {
+                let total = edges.len() as u64;
+                let inserted = gc.add_edges_batch(edges).map_err(|e| {
+                    Error::DestinationConnection(format!("Edge batch insert failed: {e}"))
+                })? as u64;
+                created += inserted;
+                failed += total.saturating_sub(inserted);
+            }
+
             if !batch.has_more {
                 break;
             }
             offset = batch.next_offset;
         }
 
-        Ok(edges)
+        Ok((created, failed))
     }
 }
 

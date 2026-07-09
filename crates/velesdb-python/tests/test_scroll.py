@@ -80,6 +80,31 @@ def test_scroll_single_page_yields_full_dataset(temp_db) -> None:
     assert sorted(ids) == [1, 2, 3, 4, 5]
 
 
+def test_scroll_batch_cursor_pagination_covers_all(temp_db) -> None:
+    """Collection.scroll_batch(cursor, batch_size) does a stateless O(1) seek:
+    driving it with the returned cursor covers every point exactly once."""
+    col = temp_db.create_collection("scroll_batch_cursor", dimension=4)
+    _seed(col, 10)
+
+    seen: list[int] = []
+    cursor = None
+    while True:
+        points, cursor = col.scroll_batch(cursor, 3)
+        if not points:
+            break
+        seen.extend(p["id"] for p in points)
+    assert sorted(seen) == list(range(1, 11))
+    assert cursor is None
+
+
+def test_scroll_batch_empty_collection(temp_db) -> None:
+    """scroll_batch on an empty collection returns no points and no cursor."""
+    col = temp_db.create_collection("scroll_batch_empty", dimension=4)
+    points, cursor = col.scroll_batch(None, 10)
+    assert points == []
+    assert cursor is None
+
+
 def test_scroll_multi_page_covers_every_point_once(temp_db) -> None:
     """Multi-page scroll exhausts the collection without duplicates or gaps."""
     col = temp_db.create_collection("scroll_multi", dimension=4)

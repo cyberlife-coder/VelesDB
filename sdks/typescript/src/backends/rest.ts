@@ -123,7 +123,7 @@ import {
   createCollection as _createCollection, deleteCollection as _deleteCollection,
   getCollection as _getCollection, listCollections as _listCollections,
   upsert as _upsert, upsertBatch as _upsertBatch, upsertBatchRaw as _upsertBatchRaw,
-  deletePoint as _deletePoint, get as _get, isEmpty as _isEmpty, flush as _flush,
+  deletePoint as _deletePoint, bulkDeletePoints as _bulkDeletePoints, get as _get, isEmpty as _isEmpty, flush as _flush,
 } from './crud-backend';
 
 // Re-export for backward compatibility
@@ -174,6 +174,7 @@ export class RestBackend implements IVelesDBBackend {
   async upsertBatch(c: string, d: VectorDocument[]): Promise<void> { this.ensureInitialized(); return _upsertBatch(buildCrudTransport(this.httpConfig), c, d); }
   async upsertBatchRaw(c: string, d: VectorDocument[]): Promise<number> { this.ensureInitialized(); return _upsertBatchRaw(buildRawBulkTransport(this.httpConfig), c, d, d[0]?.vector.length ?? 0); }
   async delete(c: string, id: string | number): Promise<boolean> { this.ensureInitialized(); return _deletePoint(buildCrudTransport(this.httpConfig), c, id); }
+  async bulkDelete(c: string, ids: Array<string | number>): Promise<number> { this.ensureInitialized(); return _bulkDeletePoints(buildCrudTransport(this.httpConfig), c, ids); }
   async get(c: string, id: string | number): Promise<VectorDocument | null> { this.ensureInitialized(); return _get(buildCrudTransport(this.httpConfig), c, id); }
   async isEmpty(c: string): Promise<boolean> { this.ensureInitialized(); return _isEmpty(buildCrudTransport(this.httpConfig), c); }
   async flush(c: string): Promise<void> { this.ensureInitialized(); return _flush(buildCrudTransport(this.httpConfig), c); }

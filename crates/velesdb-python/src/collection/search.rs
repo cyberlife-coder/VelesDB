@@ -149,6 +149,7 @@ impl Collection {
         top_k: usize,
         ef_search: usize,
     ) -> PyResult<Vec<Py<PyAny>>> {
+        self.ensure_vector()?;
         let query_vector = extract_vector(py, &vector)?;
 
         let results = py.detach(|| {
@@ -176,6 +177,7 @@ impl Collection {
         quality: &str,
         top_k: usize,
     ) -> PyResult<Vec<Py<PyAny>>> {
+        self.ensure_vector()?;
         let query_vector = extract_vector(py, &vector)?;
         let sq = parse_search_quality(quality)?;
 
@@ -196,6 +198,7 @@ impl Collection {
         vector: Py<PyAny>,
         top_k: usize,
     ) -> PyResult<Vec<Py<PyAny>>> {
+        self.ensure_vector()?;
         let query_vector = extract_vector(py, &vector)?;
 
         let results = py.detach(|| {
@@ -217,6 +220,7 @@ impl Collection {
         top_k: usize,
         filter: Option<Py<PyAny>>,
     ) -> PyResult<Vec<Py<PyAny>>> {
+        self.ensure_vector()?;
         let query_vector = extract_vector(py, &vector)?;
         let filter_obj = filter
             .map(|f| parse_filter(py, &f))
@@ -241,6 +245,9 @@ impl Collection {
         top_k: usize,
         filter: Option<Py<PyAny>>,
     ) -> PyResult<Vec<Py<PyAny>>> {
+        // No ensure_vector() here: BM25 text_search operates on the text index
+        // and takes no query vector, so it is valid on metadata/graph collections
+        // that carry text fields — unlike the vector-only search paths.
         let filter_obj = parse_optional_filter(py, filter)?;
         let query_owned = query.to_string();
 
@@ -270,6 +277,7 @@ impl Collection {
         vector_weight: f32,
         filter: Option<Py<PyAny>>,
     ) -> PyResult<Vec<Py<PyAny>>> {
+        self.ensure_vector()?;
         let query_vector = extract_vector(py, &vector)?;
         let filter_obj = parse_optional_filter(py, filter)?;
         let query_owned = query.to_string();
@@ -307,6 +315,7 @@ impl Collection {
         py: Python<'_>,
         searches: Vec<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Vec<Vec<Py<PyAny>>>> {
+        self.ensure_vector()?;
         let parsed = Self::parse_batch_searches(py, &searches)?;
 
         let results = py.detach(|| self.dispatch_batch_by_top_k(&parsed))?;
@@ -324,6 +333,7 @@ impl Collection {
         fusion: Option<FusionStrategy>,
         filter: Option<Py<PyAny>>,
     ) -> PyResult<Vec<Py<PyAny>>> {
+        self.ensure_vector()?;
         let query_vectors: Vec<Vec<f32>> = vectors
             .iter()
             .map(|v| extract_vector(py, v))
@@ -360,6 +370,7 @@ impl Collection {
         vectors: Vec<Py<PyAny>>,
         top_k: usize,
     ) -> PyResult<Vec<Vec<Py<PyAny>>>> {
+        self.ensure_vector()?;
         let query_vectors: Vec<Vec<f32>> = vectors
             .iter()
             .map(|v| extract_vector(py, v))
@@ -384,6 +395,7 @@ impl Collection {
         top_k: usize,
         fusion: Option<FusionStrategy>,
     ) -> PyResult<Vec<Py<PyAny>>> {
+        self.ensure_vector()?;
         let query_vectors: Vec<Vec<f32>> = vectors
             .iter()
             .map(|v| extract_vector(py, v))

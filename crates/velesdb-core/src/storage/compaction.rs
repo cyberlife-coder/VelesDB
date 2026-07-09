@@ -245,10 +245,8 @@ pub(super) fn persist_flat_index_atomic(
 
     persist_flat_index(&staging, index)?;
     promote_index_sidecar(&staging, path)?;
-    match path.parent() {
-        Some(dir) if !dir.as_os_str().is_empty() => sync_dir(dir),
-        _ => Ok(()),
-    }
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
+    durable_rename_barrier(dir, &[path])
 }
 
 /// Renames a fully written index file over `idx_path`.
@@ -266,18 +264,38 @@ fn promote_index_sidecar(sidecar: &Path, idx_path: &Path) -> io::Result<()> {
     std::fs::rename(sidecar, idx_path)
 }
 
-/// Fsyncs the storage directory so preceding renames are durable (POSIX).
+/// Makes preceding renames durable before the caller truncates the WAL.
 ///
-/// Without this, a power loss could persist the WAL truncation that follows
-/// the compaction commit while rolling back the renames themselves.
-fn sync_dir(dir: &Path) -> io::Result<()> {
+/// A compaction commit renames the new data/index files into place and then
+/// truncates the WAL. If the truncation reaches disk while the renames do not,
+/// a power loss leaves an empty WAL beside stale pre-compaction files — silent
+/// data loss. This barrier orders the renames before the truncation:
+///
+/// - **Unix:** fsync the directory, persisting the renames' directory entries.
+/// - **Windows/other:** there is no directory fsync, and the data file is
+///   memory-mapped so it cannot be reopened for write (`FlushFileBuffers`
+///   access-denied). Each *non-mapped* renamed file passed here (the index
+///   sidecar) is fsynced instead. Callers must NOT pass a currently-mmapped
+///   path. The data-file rename is ordered by NTFS: its record is written to
+///   `$LogFile` before the trailing `wal.sync_all()`, and NTFS's write-ahead
+///   invariant flushes `$LogFile` up to that point, so the rename is durable
+///   before the WAL truncation reaches disk (holds on NTFS; FAT/exFAT data
+///   directories are unsupported for durability).
+fn durable_rename_barrier(dir: Option<&Path>, renamed: &[&Path]) -> io::Result<()> {
     #[cfg(unix)]
     {
-        File::open(dir)?.sync_all()
+        let _ = renamed;
+        match dir {
+            Some(d) => File::open(d)?.sync_all(),
+            None => Ok(()),
+        }
     }
     #[cfg(not(unix))]
     {
         let _ = dir;
+        for path in renamed {
+            OpenOptions::new().write(true).open(path)?.sync_all()?;
+        }
         Ok(())
     }
 }
@@ -410,7 +428,8 @@ impl CompactionContext<'_> {
     /// # TS-CORE-004: Storage Compaction
     ///
     /// This operation is quasi-atomic via `rename()` for crash safety.
-    /// Reads remain available during compaction (copy-on-write pattern).
+    /// The caller holds the storage write lock for the duration, so reads are
+    /// blocked while compaction runs (it is not concurrent copy-on-write).
     ///
     /// # Returns
     ///
@@ -507,24 +526,45 @@ impl CompactionContext<'_> {
         let idx_tmp_path = self.path.join("vectors.idx.tmp");
         persist_flat_index(&idx_tmp_path, &new_index)?;
 
-        // 6. Commit: swap the data file in, promote the staged index, then
-        // truncate the now-obsolete WAL (see `commit_compaction` for the
-        // crash-safety invariant).
-        let data_path = self.path.join("vectors.dat");
-        self.commit_compaction(&temp_path, &idx_tmp_path, &data_path)?;
+        // 5b. Release the live mapping of the OLD data file BEFORE the swap.
+        // Windows refuses to rename/replace a memory-mapped file
+        // (ERROR_ACCESS_DENIED), so `atomic_replace` below would fail while the
+        // old mapping is held — leaving compaction entirely broken on Windows.
+        // Swap in a tiny anonymous placeholder to unmap the file; step 7 remaps
+        // the compacted file. Safe because the caller holds `&mut self`
+        // (exclusive), so no `VectorSliceGuard` is outstanding to invalidate.
+        {
+            let placeholder = MmapMut::map_anon(1)?;
+            // Dropping the replaced value unmaps the old file-backed mapping,
+            // releasing the OS handle so the swap can rename the data file.
+            let _ = std::mem::replace(&mut *self.mmap.write(), placeholder);
+        }
 
-        // 7. Reopen the compacted file
+        // 6. COMMIT POINT: atomically swap the compacted temp file into place.
+        // After this succeeds, `vectors.dat` IS the compacted layout.
+        let data_path = self.path.join("vectors.dat");
+        let swapped = atomic_replace(&temp_path, &data_path);
+
+        // 7. Remap the live data file so storage never stays on the step-5b
+        // placeholder. `data_path` is the compacted file if the swap succeeded,
+        // otherwise the untouched original.
         let new_data_file = OpenOptions::new().read(true).write(true).open(&data_path)?;
         // SAFETY: `MmapMut::map_mut` requires a writable file sized for mapping.
-        // - Condition 1: `new_data_file` is opened read/write after atomic replace.
+        // - Condition 1: `new_data_file` is opened read/write after the swap.
         // - Condition 2: File contents are fully materialized by the preceding flush/rename flow.
         // SAFETY: Reloading mmap is required to switch storage to compacted bytes.
         let new_mmap = unsafe { MmapMut::map_mut(&new_data_file)? };
-
-        // 8. Update internal state
-        // Issue #316: Atomic index swap — replace mmap and index without
-        // an intermediate empty state visible to concurrent readers.
         *self.mmap.write() = new_mmap;
+
+        // 8. Reconcile the in-memory index with what is now on disk. If the swap
+        // failed, the original data file is intact and the existing index/offset
+        // still describe it, so return the error without touching them.
+        swapped?;
+        // Swap succeeded: `vectors.dat` is the compacted layout, so the index and
+        // offset MUST switch to it. Adopt them BEFORE finalizing, so a failure in
+        // `finalize_commit` still leaves the index and the mmap mutually
+        // consistent (startup recovery reconciles the durable index/WAL). Issue
+        // #316: readers never observe an intermediate empty state (`&mut self`).
         self.index.replace_all(new_index);
         // Reason: Release ordering pairs with the Acquire loads in
         // `should_compact` and `compact` to ensure readers on ARM/weak-memory
@@ -532,20 +572,27 @@ impl CompactionContext<'_> {
         // new offset value.
         self.next_offset.store(new_offset, Ordering::Release);
 
+        // 9. Finalize: promote the staged index sidecar and truncate the obsolete
+        // WAL. A failure here is recoverable on the next open and does not desync
+        // the already-adopted in-memory index.
+        self.finalize_commit(&idx_tmp_path)?;
+
         Ok(bytes_to_reclaim)
     }
 
-    /// Commits a built compacted file: atomic data swap, index promotion and
-    /// WAL truncation, all under the WAL lock so no writer can append an
-    /// entry between the swap and the truncation.
+    /// Finalizes a compaction after the data-file swap: promotes the staged
+    /// index sidecar, makes the renames durable, and truncates the obsolete WAL.
+    /// Runs under the WAL lock so no writer can append between promotion and
+    /// truncation. Must be called only after `atomic_replace` has swapped the
+    /// compacted `vectors.dat` into place.
     ///
     /// # Crash-safety invariant
     ///
-    /// The rename of `vectors.dat.tmp` -> `vectors.dat` is the single commit
-    /// point. The compacted file plus the staged index fully capture every
-    /// acknowledged write (stores update the mmap before compaction snapshots
-    /// it), so once the swap is durable the prior WAL is obsolete and is
-    /// truncated. Every intermediate crash point is recoverable:
+    /// The `vectors.dat.tmp` -> `vectors.dat` rename (done by the caller) is the
+    /// single commit point. The compacted file plus the staged index fully
+    /// capture every acknowledged write, so once the swap is durable the prior
+    /// WAL is obsolete and is truncated. Every intermediate crash point is
+    /// recoverable:
     /// - before the swap: startup recovery removes both staged files and the
     ///   old dat/idx/WAL triple is untouched;
     /// - after the swap, before promotion: recovery promotes the sidecar;
@@ -553,32 +600,32 @@ impl CompactionContext<'_> {
     ///   every store record carries the full vector value and deletes replay
     ///   in order;
     /// - after promotion, before truncation: same convergent replay.
-    fn commit_compaction(
-        &self,
-        temp_path: &Path,
-        idx_tmp_path: &Path,
-        data_path: &Path,
-    ) -> io::Result<()> {
+    fn finalize_commit(&self, idx_tmp_path: &Path) -> io::Result<()> {
         let mut wal = self.wal.write();
 
-        // COMMIT POINT: atomic swap temp -> main (cross-platform).
-        atomic_replace(temp_path, data_path)?;
-
         // Promote the staged index so vectors.idx matches the new layout.
-        promote_index_sidecar(idx_tmp_path, &self.path.join("vectors.idx"))?;
+        let idx_path = self.path.join("vectors.idx");
+        promote_index_sidecar(idx_tmp_path, &idx_path)?;
 
-        // Make both renames durable before the truncation below can hit disk:
-        // a power loss must never persist an empty WAL while rolling back the
-        // renames that committed the compaction.
-        sync_dir(self.path)?;
+        // Make the renames durable before the truncation below can hit disk: a
+        // power loss must never persist an empty WAL while rolling back the
+        // renames that committed the compaction. On Unix this fsyncs the
+        // directory; on Windows the index sidecar is fsynced and the data-file
+        // rename is ordered via NTFS $LogFile (see durable_rename_barrier).
+        durable_rename_barrier(Some(self.path), &[&idx_path])?;
 
-        // Compaction renders the prior WAL obsolete: truncate it. flush()
-        // first so the BufWriter cannot later re-append buffered stale
-        // entries; the fd is in append mode, so subsequent writes start at
-        // the new EOF (offset 0).
+        // Compaction renders the prior WAL obsolete: truncate it to zero.
+        // flush() first so the BufWriter cannot re-emit buffered stale entries;
+        // the append fd then writes fresh entries from the new EOF (offset 0).
+        // The WAL is opened append-only, so its handle lacks FILE_WRITE_DATA and
+        // set_len() on it is ACCESS_DENIED on Windows — truncate via a dedicated
+        // write handle instead (mirrors wal_replay::truncate_wal).
         wal.flush()?;
-        wal.get_ref().set_len(0)?;
-        wal.get_ref().sync_all()
+        let wal_file = OpenOptions::new()
+            .write(true)
+            .open(self.path.join("vectors.wal"))?;
+        wal_file.set_len(0)?;
+        wal_file.sync_all()
     }
 
     /// Returns the fragmentation ratio (0.0 = no fragmentation, 1.0 = 100% fragmented).

@@ -22,6 +22,7 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     Database as _RawDatabase,
     DatabaseLockedError,
     DimensionMismatchError,
+    CONDITION_TYPES,
     DISTANCE_METRICS,
     EdgeExistsError,
     FusionStrategy,
@@ -905,6 +906,7 @@ __all__ = [
     "AutoReindexOptions",
     "VelesConfigOptions",
     # Canonical enum name sets, single-sourced from velesdb-core (tuples of str).
+    "CONDITION_TYPES",
     "DISTANCE_METRICS",
     "STORAGE_MODES",
     "embed",
