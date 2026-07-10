@@ -72,7 +72,7 @@ The workspace is laid out as eight crates with one-way dependencies (no cycles).
 | Crate | Role | Public surface | Notes |
 |-------|------|---------------|-------|
 | **`velesdb-core`** | The engine. HNSW, SIMD, VelesQL, collections, storage, recovery, GPU pipeline. Everything else depends on it. | `Database`, `VectorCollection`, `GraphCollection`, `MetadataCollection`, VelesQL parser, error types | The only crate where `unsafe` lives in non-trivial volume (SIMD intrinsics, mmap). All `unsafe` is documented in [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md). |
-| **`velesdb-server`** | Axum REST + OpenAPI server. 48 endpoints (55 operations), including relation/TTL management and a Prometheus `GET /metrics` served by default. | HTTP API | Optional; `feature = "openapi"` exposes the schema. |
+| **`velesdb-server`** | Axum REST + OpenAPI server. 54 endpoints (61 operations), including relation/TTL management and a Prometheus `GET /metrics` served by default. | HTTP API | Optional; `feature = "openapi"` exposes the schema. |
 | **`velesdb-python`** | PyO3 bindings + NumPy interop. | `velesdb` package on PyPI | Released as wheels via maturin (abi3-py39, manylinux + macOS arm64/x64 + Windows x64). |
 | **`velesdb-wasm`** | Browser-side vector search. | `@wiscale/velesdb-sdk` partial | No `persistence` feature; transient in-memory. |
 | **`velesdb-mobile`** | iOS / Android bindings via UniFFI. | Swift + Kotlin | One binding crate, two outputs. |
