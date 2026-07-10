@@ -101,6 +101,26 @@ class TestE2EVelesDB:
         assert len(results) == 2
         assert all(isinstance(r, Document) for r in results)
 
+    def test_from_texts_assigns_provided_ids(self, temp_dir, embeddings):
+        """from_texts(ids=...) must assign the caller's ids to the points.
+
+        Regression: `ids` used to fall into **kwargs and be silently dropped,
+        so get_by_ids() on those ids returned nothing.
+        """
+        texts = ["alpha", "beta", "gamma"]
+        ids = ["id-a", "id-b", "id-c"]
+        store = VelesDBVectorStore.from_texts(
+            texts,
+            embeddings,
+            ids=ids,
+            path=temp_dir,
+            collection_name="from_texts_ids",
+            metric="cosine",
+        )
+        fetched = store.get_by_ids(ids)
+        assert len(fetched) == 3
+        assert {d.page_content for d in fetched} == set(texts)
+
     def test_search_with_scores(self, vectorstore):
         """Similarity search returns (Document, score) tuples."""
         vectorstore.add_texts(["alpha", "beta", "gamma"])

@@ -167,7 +167,7 @@ impl MemoryStore {
 
     /// Fused vector + `ColumnStore` recall: like [`recall`](Self::recall) but the
     /// `filters` support ranges/comparisons (`gt`, `le`, …), so temporal/numeric
-    /// facets become queryable. (No `PyO3` counterpart — napi-specific surface.)
+    /// facets become queryable. Mirrors the `PyO3` `recall_where` surface.
     #[napi(
         js_name = "recallWhere",
         ts_return_type = "Promise<Array<RecollectionJs>>"

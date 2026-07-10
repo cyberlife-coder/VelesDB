@@ -18,24 +18,11 @@ def scroll_one_batch(
     batch_size: int,
     filter: Optional[dict] = None,  # pylint: disable=redefined-builtin  # public API kwarg name, cannot rename without breaking callers
 ) -> tuple:
-    """Pull one batch from a velesdb Collection using its scroll iterator.
+    """Pull one batch from a velesdb Collection by cursor.
 
-    Creates a fresh ``collection.scroll()`` iterator on every call and skips
-    batches until the one past *cursor* is found.
-
-    .. warning::
-        **Complexity: O(page_index * batch_size)** — this function re-scans
-        from the beginning of the collection on each call because the native
-        SDK does not yet expose a cursor-based ``scroll_batch`` method at the
-        Python level (the Rust ``VectorCollection.scroll_batch`` method is
-        internal to the ``ScrollIterator`` PyO3 class).  For large collections
-        with many pages, callers should either:
-
-        * keep the ``ScrollIterator`` alive across calls (use
-          ``collection.scroll(batch_size=N)`` as a Python generator and drive
-          it with ``next()``), or
-        * wait for a future ``Collection.scroll_batch(cursor, batch_size)``
-          Python binding that will provide true O(1) cursor seek.
+    Delegates to ``Collection.scroll_batch(cursor, batch_size, filter)`` (native
+    since velesdb 3.8.0, this package's minimum), which seeks directly to the
+    page after *cursor* — an O(1) seek rather than re-scanning from the start.
 
     Args:
         collection: A ``velesdb.Collection`` instance.
@@ -50,19 +37,9 @@ def scroll_one_batch(
         the last point ID (``int``) or ``None`` when the collection is
         exhausted.
     """
-    scroll_kwargs: dict = {"batch_size": batch_size}
-    if filter is not None:
-        scroll_kwargs["filter"] = filter
-
-    iterator = collection.scroll(**scroll_kwargs)
-    for batch in iterator:
-        if not batch:
-            continue
-        last_id = batch[-1].get("id")
-        if cursor is not None and last_id is not None and last_id <= cursor:
-            continue
-        return batch, (int(last_id) if last_id is not None else None)
-    return [], None
+    # O(1) cursor seek via the native binding (velesdb >= 3.8.0, this package's
+    # minimum). Returns ``(points, next_cursor)`` directly — no re-scan.
+    return collection.scroll_batch(cursor, batch_size, filter)
 
 
 __all__ = ["scroll_one_batch"]

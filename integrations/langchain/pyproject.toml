@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langchain-velesdb"
-version = "3.8.0"
+version = "3.8.1"
 description = "LangChain VectorStore for VelesDB: The Local AI Memory Database. Microsecond RAG retrieval."
 readme = "README.md"
 license = {text = "MIT"}
@@ -29,8 +29,8 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "langchain-core>=0.1.0,<2.0.0",
-    "velesdb>=1.14.0",
-    "velesdb-common>=1.14.0",
+    "velesdb>=3.8.0",
+    "velesdb-common>=3.8.0",
 ]
 
 [project.optional-dependencies]

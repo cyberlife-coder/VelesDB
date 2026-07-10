@@ -86,7 +86,7 @@ pub(super) fn readback_buffer<T: bytemuck::Pod>(
 
     rx.recv().ok().and_then(Result::ok)?;
 
-    let data = buffer_slice.get_mapped_range();
+    let data = buffer_slice.get_mapped_range().ok()?;
     let typed: &[T] = bytemuck::cast_slice(&data);
     let result = typed[..count].to_vec();
     drop(data);

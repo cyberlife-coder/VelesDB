@@ -65,7 +65,7 @@ jobs:
           - { target: aarch64-unknown-linux-gnu, host: ubuntu-latest,  os: linux,   arch: arm64 }
           - { target: x86_64-pc-windows-msvc,    host: windows-latest, os: win32,   arch: amd64 }
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -157,7 +157,7 @@ jobs:
     needs: [version, build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download all bundles
         uses: actions/download-artifact@v4
@@ -172,8 +172,13 @@ jobs:
         run: |
           set -euo pipefail
           # Ensure a release exists for the tag, then upload (clobber) the bundles.
+          # --latest=false: the velesdb-memory release must never become the
+          # repo's "Latest release" (that belongs to the VelesDB vX.Y.Z release,
+          # which carries the binaries the README download link points at). Left
+          # unset, `gh release create` marks it latest-by-date and steals the
+          # flag, breaking releases/latest/download/velesdb-*.
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --notes "velesdb-memory $TAG — MCPB bundles for the MCP registry." || true
+            gh release create "$TAG" --title "$TAG" --latest=false --notes "velesdb-memory $TAG — MCPB bundles for the MCP registry." || true
           fi
           gh release upload "$TAG" bundles/*.mcpb --clobber
 

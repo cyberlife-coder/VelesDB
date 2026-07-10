@@ -23,6 +23,37 @@ export interface RestHttpConfig {
   baseUrl: string;
   apiKey?: string;
   timeout: number;
+  /** Max automatic retries on 429/503 backpressure responses (default 2). */
+  maxRetries?: number;
+  /** Base delay in ms for exponential backoff between retries (default 200). */
+  retryBaseDelayMs?: number;
+}
+
+/** Default number of retries on 429/503 when not configured. */
+const DEFAULT_MAX_RETRIES = 2;
+/** Default exponential-backoff base delay in ms. */
+const DEFAULT_RETRY_BASE_MS = 200;
+/** Hard cap on any single retry wait, so a large `Retry-After` can't hang a request. */
+const MAX_RETRY_DELAY_MS = 20_000;
+
+/** HTTP methods that are idempotent per RFC 9110 (safe to replay). */
+function isIdempotentMethod(method: string): boolean {
+  const m = method.toUpperCase();
+  return m === 'GET' || m === 'HEAD' || m === 'PUT' || m === 'DELETE' || m === 'OPTIONS';
+}
+
+/**
+ * Whether a failed response should be retried for this method.
+ *
+ * `429` means the server rejected the request *before* processing it (rate
+ * limit), so replaying is safe for any method. `503` is ambiguous — the request
+ * may have been partially applied — so it is only retried for idempotent
+ * methods, never for a non-idempotent write like a POST upsert.
+ */
+function shouldRetry(status: number, method: string): boolean {
+  if (status === 429) return true;
+  if (status === 503) return isIdempotentMethod(method);
+  return false;
 }
 
 /** HTTP status → typed error code lookup. */
@@ -93,37 +124,86 @@ function wrapCatchError(error: unknown): never {
   throw new ConnectionError(`Request failed: ${message}`, cause);
 }
 
-/** Execute an HTTP request against the REST API. */
+/** Promise-based delay used between retries. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Compute the backoff delay before retrying a 429/503 response. Honors an
+ * integer `Retry-After` header (seconds); otherwise exponential backoff with
+ * light jitter. Always capped at `MAX_RETRY_DELAY_MS` so a hostile or huge
+ * `Retry-After` cannot hang a request far past the caller's intent.
+ */
+function retryDelayMs(response: Response, attempt: number, baseDelayMs: number): number {
+  const retryAfter = response.headers.get('Retry-After');
+  if (retryAfter !== null) {
+    const secs = Number(retryAfter);
+    if (Number.isFinite(secs) && secs >= 0) return Math.min(secs * 1000, MAX_RETRY_DELAY_MS);
+  }
+  const backoff = baseDelayMs * 2 ** attempt + Math.floor(Math.random() * baseDelayMs);
+  return Math.min(backoff, MAX_RETRY_DELAY_MS);
+}
+
+/** Perform a single HTTP attempt (own timeout); network errors throw. */
+async function attemptFetch(
+  config: RestHttpConfig,
+  method: string,
+  path: string,
+  body?: unknown
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), config.timeout);
+  try {
+    return await fetch(`${config.baseUrl}${path}`, {
+      method,
+      headers: buildHeaders(config),
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    wrapCatchError(error);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Execute an HTTP request against the REST API.
+ *
+ * Retries `429` for any method (the server rejected it before processing) and
+ * `503` only for idempotent methods (see {@link shouldRetry}), so a
+ * non-idempotent write is never silently replayed. Network errors and timeouts
+ * are NOT retried (a write may already have been applied). Backoff is
+ * exponential, honoring a capped `Retry-After`.
+ */
 export async function request<T>(
   config: RestHttpConfig,
   method: string,
   path: string,
   body?: unknown
 ): Promise<TransportResponse<T>> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), config.timeout);
+  const maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const baseDelay = config.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_MS;
 
-  try {
-    const response = await fetch(`${config.baseUrl}${path}`, {
-      method,
-      headers: buildHeaders(config),
-      body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const response = await attemptFetch(config, method, path, body);
     const data = await safeJsonParse(response);
-    if (!response.ok) {
-      const ep = extractErrorPayload(data);
-      return { error: {
-        code: ep.code ?? mapStatusToErrorCode(response.status),
-        message: ep.message ?? `HTTP ${response.status}`,
-      }};
+    if (response.ok) {
+      return { data: data as unknown as T };
     }
-    return { data: data as unknown as T };
-  } catch (error) {
-    clearTimeout(timeoutId);
-    wrapCatchError(error);
+    if (shouldRetry(response.status, method) && attempt < maxRetries) {
+      await sleep(retryDelayMs(response, attempt, baseDelay));
+      continue;
+    }
+    const ep = extractErrorPayload(data);
+    return { error: {
+      code: ep.code ?? mapStatusToErrorCode(response.status),
+      message: ep.message ?? `HTTP ${response.status}`,
+    }};
   }
+  // Unreachable: the final iteration always returns (retry guard is attempt < maxRetries).
+  throw new ConnectionError('Request failed: retries exhausted');
 }
 
 // ============================================================================

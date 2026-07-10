@@ -75,8 +75,33 @@ class TestVectorStoreE2E:
             similarity_top_k=5,
         )
         results = temp_store.query(query)
-        
+
         assert len(results.nodes) == 5
+
+    def test_euclidean_similarity_is_higher_for_closer_nodes(self):
+        """Euclidean returns a raw distance; the store must expose it as a
+        higher-is-better similarity. Otherwise ``similarity_cutoff`` / node
+        postprocessors would rank the farthest node as the most similar."""
+        temp_dir = tempfile.mkdtemp()
+        try:
+            store = VelesDBVectorStore(
+                path=temp_dir,
+                collection_name="euclid_sim",
+                dimension=3,
+                metric="euclidean",
+            )
+            store.add([
+                TextNode(text="near", id_="near", embedding=[0.0, 0.0, 0.0]),
+                TextNode(text="far", id_="far", embedding=[10.0, 0.0, 0.0]),
+            ])
+            result = store.query(
+                VectorStoreQuery(query_embedding=[0.1, 0.0, 0.0], similarity_top_k=2)
+            )
+            sims = dict(zip(result.ids, result.similarities))
+            assert sims["near"] > sims["far"]
+            assert 0.0 < sims["near"] <= 1.0
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_add_nodes_with_metadata(self, temp_store):
         """Test adding nodes with metadata."""

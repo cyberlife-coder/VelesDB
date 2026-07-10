@@ -218,10 +218,80 @@ describe('request — error responses', () => {
       json: () => Promise.reject(new Error('bad json')),
     });
 
-    const result = await request(config, 'GET', '/x');
+    // maxRetries: 0 isolates the invalid-JSON tolerance from the retry path
+    // (503 is otherwise retried); this test only asserts the parse fallback.
+    const result = await request({ ...config, maxRetries: 0 }, 'GET', '/x');
     expect(result).toEqual({
       error: { code: 'SERVICE_UNAVAILABLE', message: 'HTTP 503' },
     });
+  });
+});
+
+describe('request — retry on backpressure (429/503)', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const fast: RestHttpConfig = { ...config, retryBaseDelayMs: 0 };
+
+  const okResponse = (data: unknown) => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    json: () => Promise.resolve(data),
+  });
+  const errResponse = (status: number, retryAfter: string | null = null) => ({
+    ok: false,
+    status,
+    headers: { get: (h: string) => (h === 'Retry-After' ? retryAfter : null) },
+    json: () => Promise.resolve({}),
+  });
+
+  it('retries a 503 then returns the successful response', async () => {
+    mockFetch
+      .mockResolvedValueOnce(errResponse(503))
+      .mockResolvedValueOnce(okResponse({ ok: 1 }));
+    const result = await request<{ ok: number }>(fast, 'GET', '/x');
+    expect(result).toEqual({ data: { ok: 1 } });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a 429 honoring Retry-After, then succeeds', async () => {
+    mockFetch
+      .mockResolvedValueOnce(errResponse(429, '0'))
+      .mockResolvedValueOnce(okResponse({ ok: 1 }));
+    const result = await request<{ ok: number }>(fast, 'GET', '/x');
+    expect(result).toEqual({ data: { ok: 1 } });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns the error after exhausting retries', async () => {
+    mockFetch.mockResolvedValue(errResponse(503));
+    const result = await request(fast, 'GET', '/x');
+    expect(result).toEqual({
+      error: { code: 'SERVICE_UNAVAILABLE', message: 'HTTP 503' },
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(3); // initial + 2 retries
+  });
+
+  it('does not retry a non-backpressure error (400)', async () => {
+    mockFetch.mockResolvedValue(errResponse(400));
+    const result = await request(fast, 'GET', '/x');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect((result as { error: { code: string } }).error.code).toBe('BAD_REQUEST');
+  });
+
+  it('does NOT retry a 503 on a non-idempotent POST (avoids double-write)', async () => {
+    mockFetch.mockResolvedValue(errResponse(503));
+    const result = await request(fast, 'POST', '/x', { a: 1 });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect((result as { error: { code: string } }).error.code).toBe('SERVICE_UNAVAILABLE');
+  });
+
+  it('does retry a 429 on a POST (server rejected it before processing)', async () => {
+    mockFetch
+      .mockResolvedValueOnce(errResponse(429, '0'))
+      .mockResolvedValueOnce(okResponse({ ok: 1 }));
+    const result = await request<{ ok: number }>(fast, 'POST', '/x', { a: 1 });
+    expect(result).toEqual({ data: { ok: 1 } });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -33,7 +33,7 @@ pub fn handle_export(
         collection.green()
     );
 
-    let records = collect_export_records(&col, cfg.point_count, include_vectors);
+    let records = collect_export_records(&col, include_vectors);
     std::fs::write(&output_path, serde_json::to_string_pretty(&records)?)?;
     println!(
         "{} Exported {} records to {}",
@@ -45,18 +45,21 @@ pub fn handle_export(
 }
 
 /// Collects all records from a vector collection for export.
+///
+/// IDs come from the live collection (`all_ids`) rather than an assumed
+/// contiguous `1..=point_count` range: sparse or non-sequential IDs (explicit
+/// ids passed at upsert, or gaps left by deletions) would otherwise be exported
+/// as missing records — silent data loss.
 fn collect_export_records(
     col: &velesdb_core::VectorCollection,
-    point_count: usize,
     include_vectors: bool,
 ) -> Vec<serde_json::Value> {
-    let mut records = Vec::new();
+    let all_ids = col.all_point_ids();
+    let mut records = Vec::with_capacity(all_ids.len());
     let batch_size = 1000;
 
-    for batch_start in (0..point_count).step_by(batch_size) {
-        let ids: Vec<u64> =
-            ((batch_start as u64 + 1)..=((batch_start + batch_size) as u64)).collect();
-        let points = col.get(&ids);
+    for ids in all_ids.chunks(batch_size) {
+        let points = col.get(ids);
 
         for point in points.into_iter().flatten() {
             let mut record = serde_json::Map::new();

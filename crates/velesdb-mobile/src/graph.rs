@@ -8,7 +8,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 /// A graph node for knowledge graph construction.
-#[derive(Debug, Clone, uniffi::Record)]
+#[derive(Debug, Clone, uniffi::Record, serde::Serialize, serde::Deserialize)]
 pub struct MobileGraphNode {
     /// Unique identifier.
     pub id: u64,
@@ -21,7 +21,7 @@ pub struct MobileGraphNode {
 }
 
 /// A graph edge representing a relationship.
-#[derive(Debug, Clone, uniffi::Record)]
+#[derive(Debug, Clone, uniffi::Record, serde::Serialize, serde::Deserialize)]
 pub struct MobileGraphEdge {
     /// Unique identifier.
     pub id: u64,
@@ -100,12 +100,24 @@ impl From<velesdb_core::TraversalResult> for TraversalResult {
 }
 
 /// In-memory graph store for mobile knowledge graphs.
+///
+/// Nodes and edges are held in RAM for fast in-session traversal and are not
+/// written automatically. Call [`save`](Self::save) to persist a snapshot to
+/// disk and [`load`](Self::load) to restore it across app restarts.
 #[derive(uniffi::Object)]
 pub struct MobileGraphStore {
     nodes: RwLock<HashMap<u64, MobileGraphNode>>,
     edges: RwLock<HashMap<u64, MobileGraphEdge>>,
     outgoing: RwLock<HashMap<u64, Vec<u64>>>,
     incoming: RwLock<HashMap<u64, Vec<u64>>>,
+}
+
+/// On-disk snapshot of a [`MobileGraphStore`] (JSON). The outgoing/incoming
+/// adjacency is rebuilt from `edges` on load, so it is not stored.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct GraphSnapshot {
+    nodes: Vec<MobileGraphNode>,
+    edges: Vec<MobileGraphEdge>,
 }
 
 #[uniffi::export]
@@ -119,6 +131,38 @@ impl MobileGraphStore {
             outgoing: RwLock::new(HashMap::new()),
             incoming: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// Persists the current nodes and edges to `path` as JSON so the graph
+    /// survives an app restart (the store is otherwise in-memory only).
+    pub fn save(&self, path: String) -> Result<(), crate::VelesError> {
+        let snapshot = GraphSnapshot {
+            nodes: self.nodes.read().values().cloned().collect(),
+            edges: self.edges.read().values().cloned().collect(),
+        };
+        let bytes = serde_json::to_vec(&snapshot)
+            .map_err(|e| crate::VelesError::database(format!("Graph serialize failed: {e}")))?;
+        std::fs::write(&path, bytes)
+            .map_err(|e| crate::VelesError::database(format!("Graph save to '{path}' failed: {e}")))
+    }
+
+    /// Loads a graph previously written by [`save`](Self::save) from `path`,
+    /// rebuilding the adjacency from the stored edges.
+    #[uniffi::constructor]
+    pub fn load(path: String) -> Result<Arc<Self>, crate::VelesError> {
+        let bytes = std::fs::read(&path).map_err(|e| {
+            crate::VelesError::database(format!("Graph load from '{path}' failed: {e}"))
+        })?;
+        let snapshot: GraphSnapshot = serde_json::from_slice(&bytes)
+            .map_err(|e| crate::VelesError::database(format!("Graph deserialize failed: {e}")))?;
+        let store = Self::new();
+        for node in snapshot.nodes {
+            store.add_node(node);
+        }
+        for edge in snapshot.edges {
+            store.add_edge(edge)?;
+        }
+        Ok(store)
     }
 
     /// Adds a node to the graph.
@@ -580,6 +624,32 @@ mod tests {
         let result = store.add_edge(knows_edge(100, 1, 2));
         assert!(result.is_ok());
         assert_eq!(store.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_mobile_graph_save_load_roundtrip() {
+        let store = store_with_nodes(3);
+        store.add_edge(knows_edge(100, 1, 2)).unwrap();
+        store.add_edge(knows_edge(101, 2, 3)).unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("graph.json").to_string_lossy().to_string();
+        store.save(path.clone()).unwrap();
+
+        let restored = MobileGraphStore::load(path).unwrap();
+        assert_eq!(restored.node_count(), 3);
+        assert_eq!(restored.edge_count(), 2);
+        assert_eq!(restored.get_node(1).unwrap().label, "Person");
+        // Adjacency is rebuilt from the stored edges, not persisted directly.
+        let outgoing: Vec<u64> = restored.get_outgoing(1).iter().map(|e| e.id).collect();
+        assert_eq!(outgoing, vec![100]);
+        assert_eq!(restored.get_outgoing(2).len(), 1);
+    }
+
+    #[test]
+    fn test_mobile_graph_load_missing_file_errors() {
+        let result = MobileGraphStore::load("/nonexistent/velesdb-graph-missing.json".to_string());
+        assert!(result.is_err());
     }
 
     #[test]

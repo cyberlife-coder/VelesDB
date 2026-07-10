@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langgraph-velesdb"
-version = "3.8.0"
+version = "3.8.1"
 description = "LangGraph memory tools for VelesDB: drop the why() knowledge-graph memory wedge into any LangGraph agent."
 readme = "README.md"
 license = {text = "MIT"}
@@ -25,7 +25,7 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "langchain-core>=0.3.0,<2.0.0",
-    "velesdb>=3.4.0",
+    "velesdb>=3.8.0",
 ]
 
 [project.optional-dependencies]

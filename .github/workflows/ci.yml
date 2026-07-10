@@ -301,7 +301,7 @@ jobs:
       # to empty binaries under the native test job and are invisible to the
       # cargo check above — without this step they never run in CI at all.
       - name: Install wasm-pack
-        uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6 # v2.82.6
+        uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c # v2.82.10
         with:
           tool: wasm-pack
 
@@ -570,7 +570,7 @@ jobs:
       # `cargo install` from source — faster and avoids the compile/network
       # flakes that lost the runner mid-job on earlier release runs.
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6 # v2.82.6
+        uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c # v2.82.10
         with:
           tool: cargo-llvm-cov
 

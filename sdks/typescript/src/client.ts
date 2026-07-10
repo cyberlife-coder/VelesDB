@@ -209,6 +209,12 @@ export class VelesDB {
     return this.backend.delete(collection, id);
   }
 
+  async bulkDelete(collection: string, ids: Array<string | number>): Promise<number> {
+    this.ensureInitialized();
+    for (const id of ids) { validateRestPointId(id, this.config); }
+    return this.backend.bulkDelete(collection, ids);
+  }
+
   async get(collection: string, id: string | number): Promise<VectorDocument | null> {
     this.ensureInitialized();
     validateRestPointId(id, this.config);

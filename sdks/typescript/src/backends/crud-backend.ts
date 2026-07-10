@@ -259,6 +259,23 @@ export async function deletePoint(
   return response.data?.deleted ?? false;
 }
 
+export async function bulkDeletePoints(
+  transport: CrudTransport,
+  collection: string,
+  ids: Array<string | number>
+): Promise<number> {
+  // Server route POST /collections/{name}/points/delete accepts ids as decimal
+  // strings (safe for u64 > 2^53) and returns { deleted_count }.
+  const restIds = ids.map((id) => String(parseRestPointId(id)));
+  const response = await transport.requestJson<{ deleted_count?: number }>(
+    'POST',
+    `${collectionPath(collection)}/points/delete`,
+    { ids: restIds }
+  );
+  throwOnError(response, `Collection '${collection}'`);
+  return response.data?.deleted_count ?? 0;
+}
+
 export async function get(
   transport: CrudTransport,
   collection: string,
