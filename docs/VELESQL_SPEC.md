@@ -2253,9 +2253,23 @@ CREATE METADATA COLLECTION tags
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `storage` | string | `full` | Storage mode: `full`, `sq8`, `binary` |
+| `storage` | string | `full` | Storage mode: `full`, `sq8`, `binary`, `pq`, `rabitq` |
 | `m` | integer | 16 | HNSW M parameter (max links per node) |
 | `ef_construction` | integer | 200 | HNSW build-time expansion factor |
+
+**Capacity mode vs search-path mode.** The `storage` mode determines whether
+quantization affects only memory or also the search path:
+
+| `storage` | Kind | Collection search path |
+|-----------|------|------------------------|
+| `full` | full-precision | f32 (baseline) |
+| `sq8` | **Capacity Mode** | full-precision f32 — memory only, no throughput gain |
+| `binary` | **Capacity Mode** | full-precision f32 — memory only, no throughput gain |
+| `pq` | search-path mode | ADC-rescored (wired) |
+| `rabitq` | search-path mode | quantized traversal (wired end-to-end) |
+
+Choose `sq8`/`binary` for memory savings only; choose `rabitq` (or `pq`, via
+`TRAIN QUANTIZER`) for a quantized search path.
 
 #### Schema Type Names
 

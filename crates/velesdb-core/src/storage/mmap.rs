@@ -83,6 +83,14 @@ pub struct MmapStorage {
     /// HNSW index may not reflect; `Collection::open` drains them via
     /// [`MmapStorage::take_wal_replayed_ids`] for stale-entry reconciliation.
     pub(super) wal_replayed_ids: Vec<u64>,
+    /// In-memory replication-consumer low-watermark registration state.
+    ///
+    /// Holds retention over the vector WAL: compaction consults its minimum
+    /// watermark before reclaiming the WAL so a registered consumer never
+    /// loses a position it still needs (Requirement 6.3). Empty by default,
+    /// so with no registered consumer truncation is unchanged from before this
+    /// seam existed.
+    pub(super) watermarks: super::wal_cursor::WalWatermarkRegistry,
 }
 
 impl MmapStorage {
@@ -172,6 +180,7 @@ impl MmapStorage {
             remap_epoch: AtomicU64::new(0),
             durability,
             wal_replayed_ids,
+            watermarks: super::wal_cursor::WalWatermarkRegistry::new(),
         })
     }
 
@@ -179,6 +188,33 @@ impl MmapStorage {
     /// `wal_replayed_ids` field). Subsequent calls return an empty vec.
     pub(crate) fn take_wal_replayed_ids(&mut self) -> Vec<u64> {
         std::mem::take(&mut self.wal_replayed_ids)
+    }
+
+    /// Registers a replication consumer, returning an opaque handle used to
+    /// advance its low-watermark.
+    ///
+    /// While registered, the consumer holds retention over the WAL: compaction
+    /// will not reclaim any position at or beyond `min` over all registered
+    /// watermarks (Requirement 6.3). A freshly registered consumer starts at
+    /// [`WalPosition::START`](super::wal_cursor::WalPosition::START).
+    pub fn register_consumer(&self) -> super::wal_cursor::WalConsumerId {
+        self.watermarks.register()
+    }
+
+    /// Drops a previously registered consumer, releasing any retention it held.
+    pub fn deregister_consumer(&self, consumer: super::wal_cursor::WalConsumerId) {
+        self.watermarks.deregister(consumer);
+    }
+
+    /// Advances a consumer's low-watermark to `up_to` — the oldest position it
+    /// still needs. Advancement is monotonic; an unknown consumer or a
+    /// backwards move is ignored.
+    pub fn advance_low_watermark(
+        &self,
+        consumer: super::wal_cursor::WalConsumerId,
+        up_to: super::wal_cursor::WalPosition,
+    ) {
+        self.watermarks.advance(consumer, up_to);
     }
 
     /// Returns the current durability mode.
@@ -302,6 +338,12 @@ impl MmapStorage {
     ///
     /// Returns the deduplicated ids touched by the replay so the caller can
     /// reconcile the persisted HNSW index against them after the WAL is gone.
+    ///
+    /// Retention (Requirement 6.3) is intentionally *not* consulted here: this
+    /// runs during `open` before any [`WalWatermarkRegistry`](super::wal_cursor::WalWatermarkRegistry)
+    /// consumer can register, so the retained set is always empty and the
+    /// reclaim matches the pre-cursor baseline. Runtime reclaim (compaction)
+    /// gates on the registry instead.
     fn replay_wal(
         mut mmap: MmapMut,
         mut next_offset: usize,

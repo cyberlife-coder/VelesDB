@@ -33,7 +33,13 @@ impl Database {
             .iter()
             .map(|p| SearchResult::new(p.clone(), 0.0))
             .collect();
+        let point_count = points.len();
         collection.upsert(points)?;
+        // Requirement 2.1/2.3/2.5: fire `on_upsert` exactly once at the Database
+        // DML use-case entry after the write completes, with the exact affected
+        // point count. Placed here (not inside `Collection::upsert`) so the
+        // programmatic collection API is not double-counted by this path.
+        self.fire_on_upsert(&stmt.table, point_count);
         Ok(results)
     }
 
@@ -113,7 +119,16 @@ impl Database {
         let updated_points =
             Self::apply_update_assignments(&collection, rows, filter.as_ref(), &assignments)?;
 
-        Self::upsert_and_collect(&collection, updated_points)
+        let point_count = updated_points.len();
+        let results = Self::upsert_and_collect(&collection, updated_points)?;
+        // Requirement 2.1/2.3/2.5: an UPDATE writes via `Collection::upsert`;
+        // fire `on_upsert` exactly once after the write completes, with the
+        // exact affected point count. `upsert_and_collect` no-ops on an empty
+        // set (no write occurred), so only fire when points were written.
+        if point_count > 0 {
+            self.fire_on_upsert(&stmt.table, point_count);
+        }
+        Ok(results)
     }
 
     /// Resolves and validates UPDATE assignment values.

@@ -309,3 +309,71 @@ fn test_execute_aggregate_unknown_collection_errors() {
         "expected CollectionNotFound, got {err:?}"
     );
 }
+
+// =========================================================================
+// Read-gate zero-overhead guard (Requirement 8.2 — Quality Bar Gate 2).
+//
+// Gate 2 requires search p50 ≤ 450 µs to be preserved once the control-plane
+// read hook is wired. The wall-clock p50 contract itself is enforced by the
+// `Perf Gate (E2E)` workflow (`.github/workflows/perf-gate-e2e.yml`), which
+// runs `benchmarks/velesdb_benchmark.py` and gates p50 on the reference
+// machine. Wall-clock thresholds are flaky inside the unit suite, so here we
+// pin the *structural* invariant the latency claim rests on: when no observer
+// is registered, the read gate is a single `Option` presence check that
+// returns `Cow::Borrowed` pointing at the caller's own query — no clone, no
+// allocation, no observer call. This is the "no measurable overhead" half of
+// the gate, asserted deterministically and CI-safe.
+// =========================================================================
+
+/// Allow-all observer used to prove the `AccessDecision::Allow` read-path arm
+/// also borrows (no query clone) rather than reallocating.
+struct AllowAllObserver;
+impl crate::observer::DatabaseObserver for AllowAllObserver {}
+
+#[test]
+fn test_read_gate_no_observer_is_borrowed_single_pointer_check() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let query = Parser::parse("SELECT * FROM docs WHERE title = 'alpha'").unwrap();
+    let gated = db.read_gate_cow_for_test(&query).unwrap();
+
+    // No observer ⇒ the gate must borrow, never clone.
+    assert!(
+        matches!(gated, std::borrow::Cow::Borrowed(_)),
+        "no-observer read gate must return Cow::Borrowed (no query clone)"
+    );
+    // Single pointer check: the borrowed query is the *same object* as the
+    // input, proving no clone/allocation occurred on the fast path.
+    assert!(
+        std::ptr::eq(&raw const *gated, &raw const query),
+        "no-observer read gate must return the caller's own query by reference"
+    );
+}
+
+#[test]
+fn test_read_gate_allow_observer_is_borrowed_no_clone() {
+    let dir = tempdir().unwrap();
+    let observer: std::sync::Arc<dyn crate::observer::DatabaseObserver> =
+        std::sync::Arc::new(AllowAllObserver);
+    let db = Database::open_with_observer(dir.path(), observer).unwrap();
+    db.create_collection("docs", 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let query = Parser::parse("SELECT * FROM docs").unwrap();
+    let gated = db.read_gate_cow_for_test(&query).unwrap();
+
+    // Allow decision ⇒ borrowed, unmodified query (Requirement 1.6): the only
+    // arm that clones is AllowWithScope, so the common allow path stays
+    // zero-copy and preserves the p50 latency budget.
+    assert!(
+        matches!(gated, std::borrow::Cow::Borrowed(_)),
+        "Allow-returning observer must keep the read gate borrowed (no clone)"
+    );
+    assert!(
+        std::ptr::eq(&raw const *gated, &raw const query),
+        "Allow read path must return the caller's own query by reference"
+    );
+}

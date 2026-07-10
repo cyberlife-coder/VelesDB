@@ -88,6 +88,7 @@ impl MmapStorage {
             next_offset: &self.next_offset,
             wal: &self.wal,
             initial_size: Self::INITIAL_SIZE,
+            watermarks: &self.watermarks,
         };
 
         let bytes_reclaimed = ctx.compact()?;
@@ -118,6 +119,7 @@ impl MmapStorage {
             next_offset: &self.next_offset,
             wal: &self.wal,
             initial_size: Self::INITIAL_SIZE,
+            watermarks: &self.watermarks,
         };
 
         ctx.fragmentation_ratio()

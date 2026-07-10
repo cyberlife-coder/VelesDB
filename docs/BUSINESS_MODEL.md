@@ -47,16 +47,34 @@ The `DatabaseObserver` trait enables premium features without forking the core:
 
 ```rust
 pub trait DatabaseObserver: Send + Sync {
+    // Lifecycle
     fn on_collection_created(&self, name: &str, kind: &CollectionType);
     fn on_collection_deleted(&self, name: &str);
+
+    // Telemetry (core-invoked, since 3.9.0)
     fn on_upsert(&self, collection: &str, point_count: usize);
     fn on_query(&self, collection: &str, duration_us: u64);
+
+    // Control-plane gates
+    fn on_ddl_request(&self, operation: &str, collection: &str) -> Result<()>;
+    fn on_dml_mutation_request(&self, operation: &str, collection: &str) -> Result<()>;
+    fn on_query_request(&self, ctx: &QueryAccessContext) -> Result<AccessDecision>; // read path, since 3.9.0
 }
 ```
 
-All methods have default no-op implementations. The overhead when no observer is
-attached is a single pointer check. Premium implements this trait and injects it
-via `Database::open_with_observer(path, observer)`.
+All methods have default implementations (telemetry/lifecycle no-op, gates
+allow-all), so the overhead when no observer is attached is a single pointer
+check and existing implementers keep compiling as new hooks are added. Premium
+implements this trait and injects it via
+`Database::open_with_observer(path, observer)`.
+
+Since 3.9.0 the port covers the **read path**: `on_query_request` fires inside
+the core use-case layer before every query executes and returns an
+`AccessDecision` (`Allow` / `Deny` / `AllowWithScope` — the latter AND-composes
+a tenant/row filter into the query). This means RBAC, tenant isolation, and
+audit apply to **every** consumer through the port, not only the REST adapter.
+Telemetry (`on_upsert` / `on_query`) is also core-invoked, so consumers emit
+consistent telemetry without firing it manually.
 
 This design ensures:
 

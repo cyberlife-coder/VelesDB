@@ -113,6 +113,23 @@ pub trait QuantizationCodec: Sized {
 pub const STORAGE_MODE_NAMES: &[&str] = &["full", "sq8", "binary", "pq", "rabitq"];
 
 /// Storage mode for vectors.
+///
+/// # Capacity mode vs search-path mode
+///
+/// | Mode | Kind | Collection search path |
+/// |------|------|------------------------|
+/// | `Full` | full-precision | f32 (baseline) |
+/// | `SQ8` | **Capacity Mode** | full-precision f32 (memory only, no throughput gain) |
+/// | `Binary` | **Capacity Mode** | full-precision f32 (memory only, no throughput gain) |
+/// | `ProductQuantization` | search-path mode | ADC-rescored (wired) |
+/// | `RaBitQ` | search-path mode | quantized traversal (wired end-to-end) |
+///
+/// **Capacity Modes (`SQ8`, `Binary`)** reduce the in-memory footprint of the
+/// quantization primitives, but the collection search path stays
+/// full-precision f32 for those modes — selecting them does not gain search
+/// throughput. **Search-path modes (`RaBitQ`, `ProductQuantization`)** are the
+/// quantized paths wired into the query hot path. See
+/// `docs/guides/QUANTIZATION.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -120,14 +137,22 @@ pub enum StorageMode {
     /// Full precision f32 storage (default).
     #[default]
     Full,
-    /// 8-bit scalar quantization for 4x memory reduction.
+    /// **Capacity Mode.** 8-bit scalar quantization for 4x memory reduction.
+    /// Reduces the quantization primitive's footprint only; the collection
+    /// search path stays full-precision f32 and gains no search throughput.
     SQ8,
-    /// 1-bit binary quantization for 32x memory reduction.
-    /// Best for edge/IoT devices with limited RAM.
+    /// **Capacity Mode.** 1-bit binary quantization for 32x memory reduction.
+    /// Best for edge/IoT devices with limited RAM. Reduces footprint only; the
+    /// collection search path stays full-precision f32 and gains no search
+    /// throughput (use `RaBitQ` for a quantized search path).
     Binary,
-    /// Product Quantization (PQ) for aggressive lossy compression (8x-16x typical).
+    /// Product Quantization (PQ) for aggressive lossy compression (8x-16x
+    /// typical). Search-path mode: wired into the query hot path for ADC
+    /// (Asymmetric Distance Computation) rescoring.
     ProductQuantization,
     /// `RaBitQ` binary quantization for 32x compression with scalar correction.
+    /// Search-path mode: the performant quantized search path, wired
+    /// end-to-end into the query hot path.
     RaBitQ,
 }
 

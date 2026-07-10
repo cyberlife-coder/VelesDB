@@ -1,8 +1,9 @@
 //! Query execution: `execute_query`, `explain_query`, `explain_analyze_query`, plan caching, and DML dispatch.
 
+use crate::observer::{AccessDecision, AccessScope, QueryAccessContext, QueryOperationKind};
 use crate::velesql::{
-    ActualStats, AdminStatement, DdlStatement, DmlStatement, ExplainOutput, IntrospectionStatement,
-    Query, TrainStatement,
+    ActualStats, AdminStatement, Condition, DdlStatement, DmlStatement, ExplainOutput,
+    IntrospectionStatement, Query, TrainStatement,
 };
 use crate::{Error, Result, SearchResult};
 
@@ -42,7 +43,89 @@ fn classify_statement(query: &Query) -> StatementType<'_> {
     StatementType::Select
 }
 
+/// Returns `true` if `cond` (or any nested sub-condition) contains a full-text
+/// `MATCH` search.
+///
+/// Mirrors [`Condition::has_vector_search`] but for the BM25/full-text path.
+/// `CONTAINS_TEXT` is intentionally excluded: it is a strict substring metadata
+/// filter, not a scored full-text search.
+fn condition_has_text_search(cond: &Condition) -> bool {
+    match cond {
+        Condition::Match(_) => true,
+        Condition::And(left, right) | Condition::Or(left, right) => {
+            condition_has_text_search(left) || condition_has_text_search(right)
+        }
+        Condition::Group(inner) | Condition::Not(inner) => condition_has_text_search(inner),
+        _ => false,
+    }
+}
+
+/// Derives the [`QueryOperationKind`] for a resolved query.
+///
+/// MATCH queries are graph traversals. Otherwise the WHERE clause is inspected:
+/// vector + text ⇒ hybrid, vector only ⇒ vector, text only ⇒ text, neither ⇒
+/// a plain relational SELECT.
+fn derive_operation_kind(query: &Query) -> QueryOperationKind {
+    if query.is_match_query() {
+        return QueryOperationKind::GraphTraversal;
+    }
+    let where_clause = query.select.where_clause.as_ref();
+    let has_vector = where_clause.is_some_and(Condition::has_vector_search);
+    let has_text = where_clause.is_some_and(condition_has_text_search);
+    match (has_vector, has_text) {
+        (true, true) => QueryOperationKind::HybridSearch,
+        (true, false) => QueryOperationKind::VectorSearch,
+        (false, true) => QueryOperationKind::TextSearch,
+        (false, false) => QueryOperationKind::Select,
+    }
+}
+
+impl<'a> QueryAccessContext<'a> {
+    /// Builds a read-path [`QueryAccessContext`] from a resolved query.
+    ///
+    /// Borrows the collection name from `query.select.from` and derives the
+    /// [`QueryOperationKind`] from the query shape. `principal` and
+    /// `tenant_hint` are left unset here: they are opaque, caller-supplied
+    /// hints that core never derives from the query itself, so callers that
+    /// have them populate the context after construction.
+    #[must_use]
+    pub fn from_query(query: &'a Query) -> Self {
+        Self {
+            collection: query.select.from.as_str(),
+            operation: derive_operation_kind(query),
+            principal: None,
+            tenant_hint: None,
+        }
+    }
+}
+
 impl Database {
+    /// AND-composes a control-plane [`AccessScope`]'s filter into a query's
+    /// WHERE clause, returning a narrowed clone (Requirement 1.5).
+    ///
+    /// The scope filter is combined with any existing WHERE predicate via
+    /// [`Condition::And`], with the pre-existing predicate as the left operand
+    /// so it is never rewritten or removed — the composition can only *narrow*
+    /// the result set, never widen it. When the query has no WHERE clause, the
+    /// scope filter becomes the WHERE clause. A scope with no filter returns an
+    /// unmodified clone.
+    ///
+    /// `scope.tenant` is deliberately **not** turned into a data-plane
+    /// predicate here: it is an opaque hint the observer/adapter layer records
+    /// and forwards for audit and routing, kept policy-free in core.
+    #[must_use]
+    pub fn apply_scope(query: &Query, scope: &AccessScope) -> Query {
+        let mut narrowed = query.clone();
+        if let Some(filter) = scope.filter.clone() {
+            let scoped_where = match narrowed.select.where_clause.take() {
+                Some(existing) => Condition::And(Box::new(existing), Box::new(filter)),
+                None => filter,
+            };
+            narrowed.select.where_clause = Some(scoped_where);
+        }
+        narrowed
+    }
+
     /// Produces a canonical JSON string for a `serde_json::Value`.
     ///
     /// Recursively sorts the keys of every JSON object so that two values
@@ -258,6 +341,131 @@ impl Database {
 
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
 
+        // Requirement 1: read-path control-plane gate. Fires exactly once here
+        // at the `Database` facade for read paths (SELECT + MATCH). Compound /
+        // JOIN sub-executions re-enter `execute_single_select`, not
+        // `execute_query`, so the gate never double-fires. Non-read statements
+        // (DDL/DML/admin/train/introspection) keep their own gates and are not
+        // gated here (Requirement 3.5).
+        //
+        // Requirement 2: `execute_query_timed` wraps the single top-level
+        // `execute_query_inner` call so `on_query` telemetry fires exactly once
+        // after the data-plane op completes. Resolving the `Cow` to a `&Query`
+        // (via deref coercion on `&gated`) keeps the timing in one place rather
+        // than duplicated across the borrowed / owned arms.
+        let gated = self.read_gate(query)?;
+        self.execute_query_timed(&gated, params)
+    }
+
+    /// Executes the resolved (post-gate) query and fires the `on_query`
+    /// telemetry hook exactly once after the data-plane op completes
+    /// (Requirement 2.2, 2.5).
+    ///
+    /// The timer wraps only the single top-level `execute_query_inner` call, so
+    /// compound / UNION / INTERSECT / EXCEPT and JOIN sub-executions that
+    /// re-enter `execute_single_select` are folded into this one measurement
+    /// and never fire their own telemetry.
+    ///
+    /// When no observer is registered, this is a single `Option` presence check
+    /// with no timer and no notification beyond that check (Requirement 2.4).
+    /// The duration is reported in microseconds; `elapsed().as_micros()` is a
+    /// `u128`, converted with a bounds-guarded `try_from` that saturates at
+    /// `u64::MAX` rather than panicking (no `unwrap`/`expect`).
+    fn execute_query_timed(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<SearchResult>> {
+        let Some(observer) = self.observer.as_ref() else {
+            return self.execute_query_inner(query, params); // zero-overhead fast path
+        };
+        let started = std::time::Instant::now();
+        let results = self.execute_query_inner(query, params)?;
+        let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        observer.on_query(query.select.from.as_str(), duration_us);
+        Ok(results)
+    }
+
+    /// Applies the read-path control-plane gate (Requirement 1).
+    ///
+    /// Fast path: a single `Option` presence check when no observer is
+    /// registered returns [`Cow::Borrowed`](std::borrow::Cow::Borrowed) with
+    /// zero allocation and zero query clone (Requirement 1.8). When an observer
+    /// is present it is consulted only for read paths (SELECT + MATCH); other
+    /// statement types pass through borrowed because they carry their own
+    /// DDL/DML gates.
+    ///
+    /// * [`AccessDecision::Allow`] ⇒ borrowed, unmodified query (Requirement 1.6).
+    /// * [`AccessDecision::Deny`] ⇒ the supplied error, no results (Requirement 1.4).
+    /// * [`AccessDecision::AllowWithScope`] ⇒ an owned, scope-narrowed clone
+    ///   (Requirement 1.5).
+    ///
+    /// # Errors
+    ///
+    /// Returns the observer's `Err` for an internal failure, or the
+    /// `Deny`-supplied error when access is refused.
+    fn read_gate<'q>(
+        &self,
+        query: &'q crate::velesql::Query,
+    ) -> Result<std::borrow::Cow<'q, crate::velesql::Query>> {
+        let Some(observer) = self.observer.as_ref() else {
+            return Ok(std::borrow::Cow::Borrowed(query)); // zero-overhead fast path
+        };
+        if !Self::is_read_path(query) {
+            return Ok(std::borrow::Cow::Borrowed(query));
+        }
+        let ctx = QueryAccessContext::from_query(query);
+        match observer.on_query_request(&ctx)? {
+            AccessDecision::Allow => Ok(std::borrow::Cow::Borrowed(query)),
+            AccessDecision::Deny(err) => Err(err),
+            AccessDecision::AllowWithScope(scope) => {
+                Ok(std::borrow::Cow::Owned(Self::apply_scope(query, &scope)))
+            }
+        }
+    }
+
+    /// Test-only accessor exposing [`read_gate`](Self::read_gate)'s [`Cow`]
+    /// result so tests can assert the no-observer read path is a single pointer
+    /// check that returns [`Cow::Borrowed`](std::borrow::Cow::Borrowed) with no
+    /// query clone (Requirement 8.2 — Quality Bar Gate 2, p50 latency).
+    ///
+    /// Compiled only under `cfg(test)`, so it adds nothing to the production
+    /// surface. The full ≤ 450 µs wall-clock p50 contract is enforced
+    /// separately by the `Perf Gate (E2E)` workflow
+    /// (`.github/workflows/perf-gate-e2e.yml`); this accessor pins the
+    /// structural "zero-overhead when no observer" half of the gate
+    /// deterministically, without a flaky timing threshold.
+    #[cfg(test)]
+    pub(crate) fn read_gate_cow_for_test<'q>(
+        &self,
+        query: &'q crate::velesql::Query,
+    ) -> Result<std::borrow::Cow<'q, crate::velesql::Query>> {
+        self.read_gate(query)
+    }
+
+    /// Returns `true` when the statement is a gated read path (SELECT or MATCH).
+    ///
+    /// Admin, introspection, DDL, TRAIN, and DML statements are excluded: they
+    /// route through their own control-plane gates and must not be double-gated
+    /// by the read-path hook.
+    fn is_read_path(query: &crate::velesql::Query) -> bool {
+        matches!(
+            classify_statement(query),
+            StatementType::Match | StatementType::Select
+        )
+    }
+
+    /// Executes a query after the read gate has resolved (Requirement 1).
+    ///
+    /// This is the single dispatch entry the gate delegates to; it fires
+    /// exactly once per top-level query and is *not* re-entered by compound /
+    /// JOIN sub-executions, so telemetry (Task 5.1) can wrap it cleanly without
+    /// double-counting.
+    fn execute_query_inner(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<SearchResult>> {
         if let Some(results) = self.dispatch_non_select(query, params)? {
             return Ok(results);
         }

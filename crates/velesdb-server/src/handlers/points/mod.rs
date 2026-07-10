@@ -157,6 +157,10 @@ pub(super) fn upsert_result_to_response(
 ) -> axum::response::Response {
     match result {
         Ok(Ok(inserted)) => {
+            // Programmatic `Collection` upsert path; core does not fire `on_upsert`
+            // here (only via the VelesQL DML path), so this shim is the sole,
+            // non-double-counting telemetry source. See deprecation note.
+            #[allow(deprecated)]
             state.db.notify_upsert(name, inserted);
             Json(serde_json::json!({
                 "message": "Points upserted",

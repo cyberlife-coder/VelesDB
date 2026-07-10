@@ -34,6 +34,72 @@ security patch and a batch of correctness fixes. No API breaks.
 ### Changed
 - **docs:** roadmap refreshed through v3.8.x with a forward-looking "Next" line; REST endpoint count corrected **48 → 54** across the tree and the promise-contract guardrail; stale version strings realigned.
 - **deps:** wgpu 30.0.0, uniffi 0.32.0, plus routine cargo/npm and CI-action group bumps.
+## [3.9.0] — 2026-07-07
+
+### Added
+- **Read-path control-plane hook on `DatabaseObserver`.** A new
+  `on_query_request(&QueryAccessContext) -> Result<AccessDecision>` method is
+  invoked inside the core use-case layer immediately before every read path
+  (vector, text/BM25, hybrid, graph `MATCH`, VelesQL `SELECT`) executes. It
+  returns an `AccessDecision`: `Allow` (unchanged), `Deny(err)` (aborts with the
+  supplied error and zero results), or `AllowWithScope(AccessScope)` (a
+  `velesql::Condition` filter is AND-composed into the query's `WHERE` clause
+  before execution — narrow-only, never widening). This lets premium enforce
+  RBAC, tenant isolation, and audit through the port so every consumer inherits
+  it, not just the REST adapter. The method has a default `Allow` implementation,
+  so existing observers are unaffected. New public types: `QueryAccessContext`,
+  `QueryOperationKind`, `AccessDecision`, `AccessScope`.
+- **Stable cross-engine ID hashing (`hash_id`).** `velesdb_core::hash_id(&str)
+  -> u64` (FNV-1a) is now a first-class, documented API for deriving numeric IDs
+  from strings that are persisted or exchanged between processes/nodes/engines.
+  The FNV-1a constants (`FNV_OFFSET_BASIS`, `FNV_PRIME`) are exposed for
+  auditability, and `hash_edge_id` is rebuilt on the same core with byte-identical
+  output (existing persisted edge IDs remain valid).
+- **Compiled lock-rank invariant (`LockRank`).** The global lock-acquisition
+  order (`gpu < vectors < columnar < layers < neighbors`) is now a typed
+  `LockRank` newtype with a debug-only `assert_lock_order` check (zero release
+  overhead) and a reserved premium range `[40, 59]` so premium can order its
+  locks relative to core without collision.
+- **Shippable WAL cursor (`WalCursor`).** An additive, read-only, forward-only
+  API (`WalPosition`, `WalRecord`, `WalConsumerId`, `WalCursor`) over the existing
+  WAL framing, plus a low-watermark retention contract so replication consumers
+  can resume from a stable position without core truncating records they still
+  need. No on-disk format change; existing WALs remain readable.
+- **Cross-implementation conformance harness (`conformance`).** Frozen golden
+  reference vectors and `check_stable_hash` / `check_rrf` / `check_executor`
+  functions that premium (or any alternate engine) can run against its own
+  implementations to detect divergence in stable hashing, RRF fusion, and the
+  canonical edge-id derivation.
+- **Nightly ThreadSanitizer concurrency suite** exercising lock-order
+  acquisition across the core lock classes.
+
+### Changed
+- **Telemetry is now core-invoked.** `on_upsert` and `on_query` fire exactly
+  once from inside the core use-case layer after the data-plane operation
+  completes (with the exact affected point count / measured duration in µs),
+  so every consumer emits consistent telemetry without callers remembering to
+  fire it. The no-observer path stays a single pointer check.
+- **Quantization storage-mode docs pin the capacity-vs-speed contract.** `SQ8`
+  and `Binary` are documented as **Capacity Modes** (memory reduction only; the
+  collection search path stays full-precision f32, no throughput gain), while
+  `RaBitQ` and `ProductQuantization` are the wired search-path modes. A
+  promise-contract CI guard rejects any doc that claims search throughput for
+  `sq8`/`binary`.
+
+### Deprecated
+- **`Database::notify_upsert` / `Database::notify_query`** are deprecated (since
+  3.9.0). Telemetry is now invoked inside the core use-case layer; callers should
+  stop invoking these shims to avoid double-counting once they upgrade. They
+  remain working thin shims for backward compatibility and will be removed in a
+  future major version.
+
+### Removed
+- **Dead `hnsw_delta_wal` module removed from core.** It was never wired into the
+  recovery/open/flush path (recovery is fully provided by the 3-pass
+  reconciliation against storage as the single source of truth). O(delta) fast
+  recovery becomes a premium concern built by consuming the new `WalCursor` seam.
+  No on-disk artifact is affected (current versions never wrote a delta-WAL file
+  → no migration). A CI guard prevents silent reintroduction.
 
 ## [3.8.0] — 2026-07-06
 

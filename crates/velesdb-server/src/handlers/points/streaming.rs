@@ -150,6 +150,11 @@ pub async fn stream_upsert_points(
     let stats = process_ndjson_stream(&collection, body).await;
 
     if stats.inserted > 0 {
+        // This REST path writes via the programmatic `Collection` API, which core
+        // does NOT instrument (core fires `on_upsert` only through the VelesQL DML
+        // use-case path). The shim is therefore the sole telemetry source here and
+        // does not double-count. See `Database::notify_upsert` deprecation note.
+        #[allow(deprecated)]
         state.db.notify_upsert(&name, stats.inserted);
     }
 
