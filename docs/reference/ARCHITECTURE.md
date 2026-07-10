@@ -100,7 +100,7 @@ VelesDB core architecture is explicitly **hybrid by design**:
 #### velesdb-server
 - Axum-based REST API server
 - OpenAPI/Swagger documentation
-- 48 REST endpoints (55 method+path operations)
+- 54 REST endpoints (61 method+path operations)
 - Prometheus metrics served by default (`GET /metrics`)
 
 #### velesdb-python
