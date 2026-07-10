@@ -2,7 +2,7 @@
   <img src="velesdb_icon_pack/favicon/android-chrome-512x512.png" alt="VelesDB Logo" width="200"/>
 </p>
 <h1 align="center">
-  <img src="velesdb_icon_pack/favicon/favicon-32x32.png" alt="VelesDB" width="32" height="32" style="vertical-align: middle;"/>
+  <img src="velesdb_icon_pack/favicon/favicon-32x32.png" alt="" width="32" height="32" style="vertical-align: middle;"/> VelesDB
 </h1>
 <h3 align="center">
   Your AI agents forget everything. VelesDB fixes that.
@@ -521,24 +521,21 @@ VelesDB removes the US provider from the chain entirely. One Rust binary, local-
 
 ## Roadmap
 
-| Milestone | Status |
-|-----------|--------|
-| v1.0 — Core engine (vector + graph + VelesQL) | ✅ Shipped |
-| v1.5 — Python SDK, WASM, Mobile bindings | ✅ Shipped |
-| v1.10 — Agent Memory SDK, hybrid search, quantization | ✅ Shipped |
-| v1.11 — Cross-collection MATCH, bitmap pre-filter, CSR graph | ✅ Shipped |
-| v1.12 — Cross-collection MATCH (graph/BM25/HNSW hybrids), Sprint 4 Phase B (TS SDK stability) | ✅ Shipped |
-| v1.13 — Pre-seed remediation: BM25 O(1) cold-start, sparse search 16× speedup, HNSW prefetch, EXPLAIN/CBO routing, VelesQL window functions, SIFT1M standardized harness | ✅ Shipped |
-| v1.14 — DX correctness: MSRV 1.89 alignment, Dockerfile auto-sync; **Haystack 2.x DocumentStore** completes the LangChain + LlamaIndex + Haystack Python RAG trio | ✅ Shipped |
-| v1.15 — ACT-R Phase 1 procedural learning, CBO calibration in `EXPLAIN ANALYZE`, Python auto-dimension + `SearchOptions` builder | ✅ Shipped |
-| v1.16 — `audit-2026q2` security-hardening wave (9 PRs), first-party embedding adapters (Python + TypeScript), multi-arch GHCR image | ✅ Shipped |
-| v1.17 — VelesQL error hints with did-you-mean suggestions, payload-WAL torn-tail crash recovery, OpenAPI id-type accuracy | ✅ Shipped |
-| v1.18 — Engine artifacts realigned to VelesDB Core License 1.0, agent-memory parity (Python/Tauri bindings, TS procedural recall) | ✅ Shipped |
-| v2.0.0 — Agent-memory graph dimension (`relate()` API + the NEAR + MATCH flagship query verbatim), GraphFirst anchored retrieval, PQ/RaBitQ quantization wired end-to-end across restarts, durable TTL on every read path, `GET /metrics` by default | ✅ Shipped |
+We ship weekly. This is the arc; the committed, dated plan lives in [ROADMAP.md](ROADMAP.md) and the [GitHub Milestones](https://github.com/cyberlife-coder/VelesDB/milestones).
+
+| Line | Highlights | Status |
+|------|-----------|--------|
+| **v1.0 → v1.18** | Core engine (vector + graph + VelesQL); Python / WASM / Mobile bindings; Agent Memory SDK; hybrid search + quantization; cross-collection MATCH; BM25 16× speedup; EXPLAIN / CBO routing; SIFT1M harness; the LangChain + LlamaIndex + **Haystack** Python RAG trio | ✅ Shipped |
+| **v2.0** | Agent-memory **graph dimension** — `relate()` + the NEAR + MATCH flagship query; GraphFirst anchored retrieval; PQ/RaBitQ wired end-to-end across restarts; durable TTL; `GET /metrics` by default | ✅ Shipped |
+| **v3.0 → v3.2** | Major release + API cleanup; canonical cross-SDK wire primitives (`hash_edge_id`, shared enum-name sets); `EXPLAIN` parity across REST / CLI / Python | ✅ Shipped |
+| **v3.3** | VelesQL correctness + cross-surface parity — silent-wrong-result sweep, canonical `VELES-XXX` error codes with correct HTTP statuses, executable scalar subqueries, request hard-limits | ✅ Shipped |
+| **v3.4 → v3.7** | The `why()` wedge **everywhere** — Node binding (`velesdb-memory-node`), Python `MemoryService`, MCP `recall_fused`, browser / WASM + TypeScript-SDK `MemoryService`, durable TTL, dated-context recall, indexed prefilter for filtered recall | ✅ Shipped |
+| **v3.8** *(current)* | u64 point-id precision-safety completed across the REST surface + OpenAPI spec | ✅ Shipped |
+| **Next** | Concurrent WAL writer & Raft replication (Enterprise); WASM SIMD128 kernels + 3+ hop `MATCH`; Dual-Precision (VSAG) engine integration; side-by-side Docker-Compose ANN benchmark vs Qdrant / Chroma / FAISS | 🔜 Tracked |
 
 > VelesDB Core is source-available (readable, modifiable, redistributable under the VelesDB Core License 1.0 — not an OSI-approved license; see [docs/LICENSING.md](docs/LICENSING.md)). Enterprise features (distributed replication, managed cloud, RBAC) are available separately via [VelesDB Premium](https://velesdb.com).
 
-> We ship weekly. [Full changelog](CHANGELOG.md) | [Contributing guide](CONTRIBUTING.md)
+> [Full changelog](CHANGELOG.md) · [Contributing guide](CONTRIBUTING.md)
 
 ---
 
@@ -547,7 +544,7 @@ VelesDB removes the US provider from the chain entirely. One Rust binary, local-
 | Domain | Component | Install |
 |--------|-----------|---------|
 | **Core** | [velesdb-core](crates/velesdb-core) — Vector + Graph + ColumnStore + VelesQL | `cargo add velesdb-core` |
-| **Server** | [velesdb-server](crates/velesdb-server) — REST API (48 endpoints, OpenAPI) | `cargo install velesdb-server` |
+| **Server** | [velesdb-server](crates/velesdb-server) — REST API (54 endpoints, OpenAPI) | `cargo install velesdb-server` |
 | **CLI** | [velesdb-cli](crates/velesdb-cli) — Interactive VelesQL REPL | `cargo install velesdb-cli` |
 | **Python** | [velesdb-python](crates/velesdb-python) — PyO3 bindings + NumPy | `pip install velesdb` |
 | **TypeScript** | [typescript-sdk](sdks/typescript) — Node.js & Browser SDK | `npm install @wiscale/velesdb-sdk` |
@@ -617,7 +614,7 @@ The container runs as a non-root `velesdb` user. Data persists via the named vol
 </details>
 
 <details>
-<summary>API Reference (48 REST endpoints)</summary>
+<summary>API Reference (54 REST endpoints)</summary>
 
 | Category | Key Endpoints |
 |----------|--------------|

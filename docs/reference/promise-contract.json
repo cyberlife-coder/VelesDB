@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-06-12",
+  "last_updated": "2026-07-10",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
@@ -166,10 +166,10 @@
     {
       "id": "readme_rest_endpoint_count",
       "file": "README.md",
-      "must_contain": "48 REST endpoints",
-      "validation_command": "grep -cE \"^  /\" docs/openapi.yaml  # 48 paths (55 operations counting per-verb)",
-      "source": "docs/openapi.yaml on this branch: 48 paths / 55 operations, including the relations + TTL endpoints and GET /metrics. Endpoint count convention = OpenAPI paths.",
-      "last_updated": "2026-06-12"
+      "must_contain": "54 REST endpoints",
+      "validation_command": "grep -cE \"^  /\" docs/openapi.yaml  # 54 paths (61 operations counting per-verb)",
+      "source": "docs/openapi.yaml on this branch: 54 paths / 61 operations, including the relations + TTL endpoints and GET /metrics. Corroborated by crates/velesdb-server/src/routes.rs (54 .route() registrations). Endpoint count convention = OpenAPI paths.",
+      "last_updated": "2026-07-10"
     }
   ]
 }
