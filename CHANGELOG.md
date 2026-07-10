@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.8.1] — 2026-07-10
+
+Maintenance release: a full crate + integration health audit closed with a
+security patch and a batch of correctness fixes. No API breaks.
+
+### Security
+- Patched `crossbeam-epoch` to 0.9.20 (**RUSTSEC-2026-0204**) and dropped the now-stale audit ignores.
+
+### Fixed
+- **storage/compaction:** compaction now works on Windows — the data file's memory map is released before the atomic rename, and the WAL is truncated through a write handle (previously `ACCESS_DENIED`). A durable rename barrier orders the swap before WAL truncation, and the live index is kept consistent with the mmap if a commit fails mid-compaction.
+- **cli:** `export` and `collection show --samples` iterate the collection's actual point IDs (including points with no payload) instead of an assumed contiguous `1..=n` range — no more silent data loss on sparse IDs.
+- **python:** vector search on a graph/metadata collection now raises instead of silently returning `[]`; `CONDITION_TYPES` is re-exported at the package top level.
+- **wasm:** persistence preserves the storage mode, quantized buffers and payloads (versioned v2 format); export no longer panics or drops data in SQ8/Binary modes.
+- **server:** batch search is offloaded to a blocking worker so it no longer stalls the async runtime.
+- **migrate:** graph relation edges are streamed instead of accumulated, avoiding OOM on large relations.
+- **langchain:** `from_texts(ids=...)` is honored instead of dropped.
+- **llamaindex:** distance scores are mapped to similarity; `delete()` binds its parameters.
+
+### Added
+- **ts-sdk:** retry on 429/503 with exponential backoff (503 retried only for idempotent methods, `Retry-After` capped); `bulkDelete`.
+- **haystack:** `VelesDBEmbeddingRetriever` component.
+- **common:** O(1) cursor scroll via `Collection.scroll_batch`.
+- **mobile:** `MobileGraphStore` save/load persistence.
+
+### Changed
+- **docs:** roadmap refreshed through v3.8.x with a forward-looking "Next" line; REST endpoint count corrected **48 → 54** across the tree and the promise-contract guardrail; stale version strings realigned.
+- **deps:** wgpu 30.0.0, uniffi 0.32.0, plus routine cargo/npm and CI-action group bumps.
+
 ## [3.8.0] — 2026-07-06
 
 ### Changed
