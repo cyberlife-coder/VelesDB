@@ -31,6 +31,7 @@ three engines behind its memory tools:
 | `relate`   | create a typed edge between two memories                   | Graph |
 | `forget`   | delete a memory                                            | — |
 | `why`      | recall a decision **+ its connected subgraph** (multi-hop) | Vector + Graph + ColumnStore |
+| `feedback` | reinforce a recalled fact (**useful/noise**) — `recall` re-ranks by this learned confidence, so the memory **improves with use** without retraining | Vector |
 | `remember_extracted` | extract facts from raw text + **auto-build the graph** (opt-in backend) | Vector + Graph |
 
 `why` is the wedge: it surfaces related memories (the PR, the ticket, the

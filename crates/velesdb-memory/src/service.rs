@@ -27,6 +27,12 @@ use crate::storage::{is_reserved_key, strip_reserved_keys, MemoryStore};
 #[path = "fused_recall.rs"]
 mod fused_recall;
 
+/// [`MemoryService::feedback`] and the recall re-ranking it drives (RL Memory).
+/// A child module of `service`, like [`fused_recall`], so it uses
+/// `MemoryService`'s private `store` directly.
+#[path = "reinforce.rs"]
+mod reinforce;
+
 /// Reserved metadata key marking an entity hub auto-created by
 /// [`MemoryService::remember_extracted`] (value `true`). Namespaced under the
 /// system `_veles_` prefix so it can never collide with a caller's own metadata,
@@ -428,7 +434,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         }
         reject_reserved_keys(filter)?;
         let embedding = self.embedder.embed(query)?;
-        let hits = self.search(&embedding, k, filter)?;
+        let mut hits = self.search(&embedding, k, filter)?;
+        // RL Memory: re-order the recalled set by learned confidence. Facts
+        // that never received `feedback` keep their similarity order exactly.
+        self.rl_rerank(&mut hits)?;
         let ids: Vec<u64> = hits.iter().map(|(id, _, _)| *id).collect();
         let metadata = self.recall_metadata_batch(&ids)?;
         Ok(hits
