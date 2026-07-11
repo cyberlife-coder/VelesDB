@@ -449,8 +449,11 @@ fn record_search_metrics(state: &AppState, name: &str, start: std::time::Instant
     }
     let elapsed = start.elapsed();
     let duration_us = elapsed.as_micros();
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_truncation, deprecated)]
     // Reason: value is clamped to u64::MAX above, so the truncation is lossless.
+    // `notify_query` is deprecated for callers that route through the VelesQL DML
+    // path; the REST search pipeline does not, so core never fires `on_query` for
+    // it and this shim is the sole, non-double-counting telemetry source.
     state
         .db
         .notify_query(name, duration_us.min(u128::from(u64::MAX)) as u64);

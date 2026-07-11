@@ -6,6 +6,9 @@ on:
     paths:
       - 'README.md'
       - 'crates/velesdb-core/README.md'
+      - 'crates/velesdb-core/src/quantization/mod.rs'
+      - 'docs/guides/QUANTIZATION.md'
+      - 'docs/VELESQL_SPEC.md'
       - 'docs/reference/promise-contract.json'
       - 'scripts/check-promise-contract.py'
   push:
@@ -13,6 +16,9 @@ on:
     paths:
       - 'README.md'
       - 'crates/velesdb-core/README.md'
+      - 'crates/velesdb-core/src/quantization/mod.rs'
+      - 'docs/guides/QUANTIZATION.md'
+      - 'docs/VELESQL_SPEC.md'
       - 'docs/reference/promise-contract.json'
       - 'scripts/check-promise-contract.py'
 

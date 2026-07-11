@@ -11,8 +11,8 @@
 //! - [`VectorSliceGuard`]: Zero-copy vector slice guard
 //! - [`metrics`]: Storage operation metrics (P0 audit - latency monitoring)
 //! - [`async_ops`]: Async wrappers for blocking I/O (EPIC-034/US-001)
-//! - [`hnsw_delta_wal`]: HNSW graph mutation WAL (standalone module; not wired
-//!   into the collection recovery path, which rebuilds the graph from storage)
+//! - [`wal_cursor`]: Shippable WAL cursor — additive, read-only API over the
+//!   existing WAL framing for replication consumers (no on-disk format change)
 #![allow(clippy::doc_markdown)] // Storage docs include API and platform identifiers.
 
 pub mod async_ops;
@@ -20,7 +20,6 @@ pub(crate) mod atomic_write;
 mod compaction;
 mod guard;
 mod histogram;
-pub mod hnsw_delta_wal;
 mod log_payload;
 mod log_payload_io;
 pub mod metrics;
@@ -37,7 +36,15 @@ mod vector_bytes_tests;
 pub mod wal_batcher;
 #[cfg(test)]
 mod wal_batcher_tests;
+pub mod wal_cursor;
+#[cfg(test)]
+mod wal_cursor_legacy_tests;
+#[cfg(test)]
+mod wal_cursor_property_tests;
+pub mod wal_cursor_reader;
 mod wal_entry;
+#[cfg(test)]
+mod wal_retention_property_tests;
 
 #[cfg(test)]
 mod compaction_tests;
@@ -47,8 +54,6 @@ mod deferred_index_tests;
 mod guard_tests;
 #[cfg(test)]
 mod histogram_tests;
-#[cfg(test)]
-mod hnsw_delta_wal_tests;
 #[cfg(test)]
 mod idx_persistence_tests;
 #[cfg(test)]
@@ -72,3 +77,5 @@ pub use log_payload::{DurabilityMode, LogPayloadStorage};
 pub use metrics::{LatencyStats, StorageMetrics};
 pub use mmap::MmapStorage;
 pub use traits::{PayloadStorage, VectorStorage};
+pub use wal_cursor::{WalConsumerId, WalCursor, WalPosition, WalRecord, WalWatermarkRegistry};
+pub use wal_cursor_reader::LogWalCursor;

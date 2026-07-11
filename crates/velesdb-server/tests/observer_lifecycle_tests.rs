@@ -131,3 +131,54 @@ async fn observer_receives_full_lifecycle() {
         "on_collection_deleted"
     );
 }
+
+/// Regression test for a double-count bug: `Database::execute_query` fires
+/// `on_query` once internally (core-invoked telemetry). The `/query` REST
+/// handler must not *also* invoke the deprecated `notify_query` shim after
+/// calling `execute_query`, or every `VelesQL` request would tally twice for
+/// any registered `DatabaseObserver` (RBAC/audit/usage billing). Unlike
+/// `observer_receives_full_lifecycle` above (which asserts `>= 1` for the
+/// `/search` REST pipeline, a path that never routes through
+/// `execute_query`), this test asserts an exact count for both `/query`
+/// dispatch branches so a reintroduced double-fire fails the test.
+#[tokio::test]
+async fn query_endpoint_fires_on_query_exactly_once_per_dispatch_branch() {
+    let dir = TempDir::new().expect("test: dir");
+    let observer = Arc::new(CountingObserver::default());
+    let app = create_test_app_with_observer(&dir, observer.clone());
+
+    let status = post(
+        &app,
+        "/collections",
+        json!({"name": COLLECTION, "dimension": DIM, "metric": "cosine"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "create");
+
+    // SELECT via /query exercises `execute_standard_query`.
+    let status = post(
+        &app,
+        "/query",
+        json!({
+            "query": format!("SELECT * FROM {COLLECTION} WHERE vector NEAR $v LIMIT 1"),
+            "params": {"v": QUERY}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "select via /query");
+    assert_eq!(
+        observer.query.load(Ordering::SeqCst),
+        1,
+        "on_query must fire exactly once for a SELECT dispatched via /query"
+    );
+
+    // SHOW COLLECTIONS via /query exercises the AST-routed
+    // `execute_mutation_query` branch (introspection).
+    let status = post(&app, "/query", json!({"query": "SHOW COLLECTIONS"})).await;
+    assert_eq!(status, StatusCode::OK, "show collections via /query");
+    assert_eq!(
+        observer.query.load(Ordering::SeqCst),
+        2,
+        "on_query must fire exactly once more for an introspection query dispatched via /query"
+    );
+}

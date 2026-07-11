@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="VelesDB RAG Demo",
     description="PDF Question Answering with VelesDB vector search",
-    version="3.8.1",
+    version="3.9.1",
     lifespan=lifespan
 )
 

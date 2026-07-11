@@ -4228,15 +4228,16 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.14"
+version = "0.11.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
+checksum = "2f4bfc015262b9df63c8845072ce59068853ff5872180c2ce2f13038b970e560"
 dependencies = [
  "aws-lc-rs",
  "bytes",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "lru-slab",
- "rand 0.9.3",
+ "rand 0.10.2",
+ "rand_pcg",
  "ring",
  "rustc-hash 2.1.3",
  "rustls",
@@ -4356,6 +4357,15 @@ checksum = "4d431c2703ccf129de4d45253c03f49ebb22b97d6ad79ee3ecfc7e3f4862c1d8"
 dependencies = [
  "num-traits",
  "rand 0.10.2",
+]
+
+[[package]]
+name = "rand_pcg"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
+dependencies = [
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -5715,7 +5725,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-velesdb"
-version = "3.8.1"
+version = "3.9.1"
 dependencies = [
  "dirs",
  "parking_lot",
@@ -6022,17 +6032,6 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
-]
-
-[[package]]
-name = "tokio-test"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f6d24790a10a7af737693a3e8f1d03faef7e6ca0cc99aae5066f533766de545"
-dependencies = [
- "futures-core",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]
@@ -6725,7 +6724,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "velesdb-cli"
-version = "3.8.1"
+version = "3.9.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -6750,7 +6749,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-core"
-version = "3.8.1"
+version = "3.9.1"
 dependencies = [
  "arc-swap",
  "bytemuck",
@@ -6770,7 +6769,6 @@ dependencies = [
  "libc",
  "loom",
  "memmap2",
- "ndarray",
  "parking_lot",
  "pest",
  "pest_derive",
@@ -6792,12 +6790,10 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-test",
  "toml 1.1.2+spec-1.1.0",
  "tracing",
  "ureq",
  "utoipa",
- "uuid",
  "wgpu",
  "whoami",
  "windows-sys 0.61.2",
@@ -6820,7 +6816,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-migrate"
-version = "3.8.1"
+version = "3.9.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6837,7 +6833,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-test",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -6848,7 +6843,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-mobile"
-version = "3.8.1"
+version = "3.9.1"
 dependencies = [
  "parking_lot",
  "serde",
@@ -6874,7 +6869,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-python"
-version = "3.8.1"
+version = "3.9.1"
 dependencies = [
  "numpy",
  "parking_lot",
@@ -6888,7 +6883,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-server"
-version = "3.8.1"
+version = "3.9.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -6907,7 +6902,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
- "tokio-test",
  "toml 1.1.2+spec-1.1.0",
  "tower",
  "tower-http 0.7.0",
@@ -6921,7 +6915,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-wasm"
-version = "3.8.1"
+version = "3.9.1"
 dependencies = [
  "getrandom 0.3.4",
  "getrandom 0.4.2",

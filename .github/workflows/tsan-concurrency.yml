@@ -1,0 +1,76 @@
+# =============================================================================
+# VelesDB Core - Scheduled ThreadSanitizer Concurrency Suite
+# =============================================================================
+# Runs the lock-order concurrency suite (tests/concurrency_lock_order.rs) under
+# ThreadSanitizer on a nightly toolchain. The suite exercises acquisition
+# across the core lock classes (gpu → vectors → columnar → layers → neighbors)
+# from many threads at once; any detected data race or lock-order violation
+# (Requirements 8.5, 8.6) fails the job.
+#
+# Scheduled (nightly) + manual, matching the cost-optimized cadence of the
+# other deep-quality suites (see quality-deep.yml). TSan needs a nightly
+# toolchain with rust-src so std can be rebuilt with the sanitizer via
+# `-Z build-std`; the sanitizer is x86_64-unknown-linux-gnu only.
+# =============================================================================
+
+name: TSan Concurrency
+
+on:
+  # Nightly: 04h UTC (offset from Quality Deep's Sunday 03h slot).
+  schedule:
+    - cron: '0 4 * * *'
+
+  # Manual trigger for on-demand verification.
+  workflow_dispatch:
+
+# These runs are important; do not cancel in-progress.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ===========================================================================
+  # ThreadSanitizer - data-race and lock-order violation detection
+  # ===========================================================================
+  tsan:
+    name: ThreadSanitizer Concurrency Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # rust-src is required to rebuild std under the sanitizer (`-Z build-std`).
+      - uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537 # nightly
+        with:
+          toolchain: nightly
+          components: rust-src
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: "velesdb-tsan"
+          save-if: true
+
+      # Instrument the crate AND a freshly-built std with ThreadSanitizer, then
+      # run the concurrency suite single-threaded at the harness level (the
+      # concurrency lives inside each test, which spawns worker threads).
+      # A detected race or a tripped `assert_lock_order` (debug_assert, kept on
+      # in the test profile) exits non-zero and fails the job.
+      - name: Run concurrency suite under ThreadSanitizer
+        run: |
+          cargo +nightly test \
+            -Z build-std \
+            --target x86_64-unknown-linux-gnu \
+            -p velesdb-core --features persistence \
+            --test concurrency_lock_order \
+            -- --test-threads=1
+        env:
+          RUSTFLAGS: "-Zsanitizer=thread"
+          RUSTDOCFLAGS: "-Zsanitizer=thread"
+          # halt_on_error=1 → the job fails on the first detected race.
+          TSAN_OPTIONS: "halt_on_error=1 second_deadlock_stack=1"

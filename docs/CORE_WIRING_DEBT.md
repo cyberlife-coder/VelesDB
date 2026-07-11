@@ -330,6 +330,18 @@ hooks across create/upsert/search/delete). The two **veto** hooks
 intentionally **not** exposed — no policy/RBAC engine in the open SDK. WASM is
 architecturally N/A; TypeScript-REST (SSE/WS) and Mobile remain deferred.
 
+**Status — Observer plane** (item P, update 3.9.0): **telemetry wiring debt
+resolved.** `on_upsert` / `on_query` are now invoked **inside the core
+use-case layer** (`database/query_engine.rs`, `database/query_engine_dml.rs`),
+firing exactly once per completed operation with the exact point count /
+measured duration — callers no longer need to measure and fire them. The
+caller-driven `notify_upsert` / `notify_query` shims are now `#[deprecated(since
+= "3.9.0")]` (kept as thin backward-compatible delegates to avoid
+double-counting). The read path also gained a control-plane gate
+(`on_query_request` → `AccessDecision`), so RBAC/tenant/audit now apply to
+every consumer through the port rather than only the REST adapter's HTTP
+middleware.
+
 **Streaming ingestion (`stream_insert_batch` / `enable_streaming` /
 `StreamIngester::*`) — DONE across the first-party bindings (2026-06-14).** The
 async-runtime + channel-handle-lifetime concern was solved by giving each

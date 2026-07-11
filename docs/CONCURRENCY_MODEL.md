@@ -112,6 +112,15 @@ When multiple locks are needed, acquire them in this order:
 
 ### Global Lock Order (HNSW + Storage)
 
+The rank ordinals below are **not a documentation-only convention**: they are
+first-class, typed ranks defined by the `LockRank` newtype in
+`crates/velesdb-core/src/lock_rank.rs`. `LockRank` derives a total ordering
+over its ordinals, and the debug-only `assert_lock_order` helper panics on any
+out-of-order acquisition in debug builds (compiling to nothing in release, so
+there is zero release overhead). This section is the **single authoritative
+record** of the total rank ordering; the code constants and this table are kept
+in lock-step and MUST NOT diverge.
+
 For HNSW index operations that touch the GPU snapshot cache, vector storage,
 the PDX columnar layout, graph layers, and neighbor lists, the global lock
 acquisition order is:
@@ -121,16 +130,36 @@ gpu_vectors_snapshot (rank 5) → vectors (rank 10) → columnar (rank 15)
     → layers (rank 20) → neighbors (rank 30)
 ```
 
-| Lock | Rank | Component | Notes |
-|------|------|-----------|-------|
-| `gpu_vectors_snapshot` | 5 | GPU flat-vector snapshot cache (`Mutex`) | Acquired before `vectors` in the GPU path (`gpu` feature); writers release `vectors` before reacquiring it to invalidate |
-| `vectors` | 10 | `ShardedVectors` / `ContiguousVectors` | Acquired first among the core HNSW locks in upsert and search paths |
-| `columnar` | 15 | `ColumnarVectors` (PDX block-columnar layout of the HNSW vectors) | SIMD-parallel distance layout, acquired after vectors |
-| `layers` | 20 | HNSW layer structure (`RwLock`) | Global graph topology |
-| `neighbors` | 30 | Per-node neighbor lists (`RwLock`) | Fine-grained, acquired last |
+| Lock | Rank | `LockRank` constant | Component | Notes |
+|------|------|---------------------|-----------|-------|
+| `gpu_vectors_snapshot` | 5 | `LockRank::GPU_VECTORS_SNAPSHOT` | GPU flat-vector snapshot cache (`Mutex`) | Acquired before `vectors` in the GPU path (`gpu` feature); writers release `vectors` before reacquiring it to invalidate |
+| `vectors` | 10 | `LockRank::VECTORS` | `ShardedVectors` / `ContiguousVectors` | Acquired first among the core HNSW locks in upsert and search paths |
+| `columnar` | 15 | `LockRank::COLUMNAR` | `ColumnarVectors` (PDX block-columnar layout of the HNSW vectors) | SIMD-parallel distance layout, acquired after vectors |
+| `layers` | 20 | `LockRank::LAYERS` | HNSW layer structure (`RwLock`) | Global graph topology |
+| `neighbors` | 30 | `LockRank::NEIGHBORS` | Per-node neighbor lists (`RwLock`) | Fine-grained, acquired last |
 
 **Rule**: Never acquire a lower-rank lock while holding a higher-rank lock.
 For example, acquiring `vectors` while holding `neighbors` is forbidden.
+`assert_lock_order(previously_held, about_to_acquire)` encodes this rule
+directly and fires a debug assertion when it is violated.
+
+### Reserved Premium Rank Range [40, 59]
+
+The inclusive ordinal range **`[40, 59]`** is reserved for premium-owned lock
+classes (cluster state, tenant store, server-level locks). Core **never**
+assigns a rank at or above `40`, leaving that band exclusively for premium so
+it can order its own locks relative to core without collision. The bounds are
+exposed as `LockRank::PREMIUM_MIN` (40) and `LockRank::PREMIUM_MAX` (59), and
+`LockRank::premium(value)` constructs a premium rank, returning `None` for any
+value outside the reserved range. Because all core ranks (5–30) sit strictly
+below the premium band, the union of core and premium ranks forms one
+authoritative total ordering shared across both engines: premium locks are
+always acquired after the core locks whose data they wrap.
+
+| Range | Owner | Ordinals |
+|-------|-------|----------|
+| Core | `velesdb-core` | 5, 10, 15, 20, 30 |
+| Premium (reserved) | `velesdb-premium` | 40–59 inclusive |
 
 ### Cross-Shard Operations
 
@@ -642,29 +671,47 @@ uses to attempt a load at all.
 | `native_vectors.bin` | `Vec<(internal_idx, Vec<f32>)>`, generation | postcard-serialized vector pairs |
 | `native_meta.bin` | Dimension, metric, vector storage flag, storage mode, generation | postcard-serialized tuple |
 
-### HNSW Delta WAL (Incremental Graph Logging)
+### HNSW Delta WAL — Removed from Core (Disposition)
 
-**Module**: `crates/velesdb-core/src/storage/hnsw_delta_wal.rs`
+> **Decision**: the standalone `hnsw_delta_wal` module has been **removed
+> from `velesdb-core`**. O(delta) fast / warm-standby recovery becomes a
+> premium concern, built by consuming the `WalCursor` seam
+> (`crates/velesdb-core/src/storage/wal_cursor.rs`) rather than a
+> core-owned delta-WAL. This disposition is recorded here, alongside the
+> WAL shippability contract, because both concern the WAL/recovery
+> boundary.
 
-> **Status**: standalone module, NOT wired into the open/flush path. The
-> recovery path described above (persisted graph load + 3-pass
-> reconciliation) does not read or write this WAL; it exists as
-> infrastructure for a future O(delta) graph recovery.
+Core previously carried a standalone `storage/hnsw_delta_wal.rs` module
+that logged incremental graph mutations (edge add/remove, entry-point
+changes) with the intent of enabling O(delta) graph recovery instead of a
+full O(N*M) rebuild. It was **never wired** into the open / flush /
+recovery path — `Collection::open()` and the recovery flow described above
+never read or wrote it.
 
-In addition to the vector storage WAL, VelesDB provides an HNSW delta WAL
-that logs incremental graph mutations (edge additions, edge removals,
-entry-point changes). This enables O(delta) recovery instead of full graph
-rebuild O(N*M).
+**Why it was not wired, and was removed instead of activated:**
 
-| Op | Name | Frame Layout |
-|----|------|-------------|
-| `0x01` | AddEdge | `[op:1B][from:4B LE][to:4B LE][layer:1B][crc32:4B LE]` (14 bytes) |
-| `0x02` | RemoveEdge | `[op:1B][from:4B LE][to:4B LE][layer:1B][crc32:4B LE]` (14 bytes) |
-| `0x03` | SetEntry | `[op:1B][node:4B LE][max_layer:1B][crc32:4B LE]` (10 bytes) |
+- **Dead-in-core infrastructure.** Core recovery correctness is already
+  fully provided by the 3-pass reconciliation
+  (`collection/core/recovery.rs`) against **storage as the single source of
+  truth**. The delta WAL added nothing to correctness; the persisted graph
+  load plus reconciliation is sufficient.
+- **No speculative infrastructure.** An unexercised WAL format that must be
+  kept byte-compatible with a graph format it never observes is exactly the
+  silent-drift hazard the disposition set out to eliminate. Wiring it would
+  make the HNSW graph a partial source of truth alongside storage,
+  re-opening soundness invariants for a performance gain that only matters
+  at cluster scale.
+- **The O(delta) benefit is an enterprise concern.** Fast failover and
+  warm-standby recovery belong to premium's clustering/replication story,
+  not the local-first core. Premium can build it by **consuming the
+  `WalCursor` seam** — the clean, supported extension point — which unifies
+  "shippable WAL" and "delta recovery" behind one open seam rather than two
+  half-built mechanisms. Core never depends on premium; premium consumes
+  the cursor.
 
-Each entry is CRC32-framed. On recovery, `HnswDeltaReader::read_all()`
-reads entries sequentially until EOF or the first corrupted frame, which
-marks the crash boundary.
+**On-disk / migration impact:** none. Current versions never wrote a
+delta-WAL file, so the removal is a pure source deletion with no on-disk
+artifact to migrate and no format-compatibility work required.
 
 ### Test Coverage
 
@@ -678,7 +725,6 @@ Recovery behavior is validated by the following test suite:
 | `test_gap_recovery_on_collection_reopen` | `recovery_tests.rs` | End-to-end: create, gap, flush, drop, reopen, verify search |
 | `test_metadata_only_skips_recovery` | `recovery_tests.rs` | Metadata-only collections skip recovery |
 | WAL replay tests | `wal_recovery_tests.rs` | CRC validation, legacy format detection, truncation |
-| HNSW delta WAL tests | `hnsw_delta_wal_tests.rs` | Delta entry serialization, CRC verification, crash boundary |
 
 ## Storage Compaction Concurrency
 

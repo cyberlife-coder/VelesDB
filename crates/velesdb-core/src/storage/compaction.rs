@@ -416,6 +416,10 @@ pub(super) struct CompactionContext<'a> {
     pub next_offset: &'a AtomicUsize,
     pub wal: &'a RwLock<io::BufWriter<File>>,
     pub initial_size: u64,
+    /// Replication-consumer retention state consulted before the WAL is
+    /// reclaimed, so compaction never discards a position a consumer still
+    /// needs (Requirement 6.3).
+    pub watermarks: &'a super::wal_cursor::WalWatermarkRegistry,
 }
 
 impl CompactionContext<'_> {
@@ -614,18 +618,37 @@ impl CompactionContext<'_> {
         // rename is ordered via NTFS $LogFile (see durable_rename_barrier).
         durable_rename_barrier(Some(self.path), &[&idx_path])?;
 
-        // Compaction renders the prior WAL obsolete: truncate it to zero.
-        // flush() first so the BufWriter cannot re-emit buffered stale entries;
-        // the append fd then writes fresh entries from the new EOF (offset 0).
-        // The WAL is opened append-only, so its handle lacks FILE_WRITE_DATA and
-        // set_len() on it is ACCESS_DENIED on Windows — truncate via a dedicated
-        // write handle instead (mirrors wal_replay::truncate_wal).
+        // Compaction renders the prior WAL obsolete: reclaim it unless a
+        // registered replication consumer's low-watermark still needs a durable
+        // position (Requirement 6.3). flush() first so the BufWriter cannot
+        // re-emit buffered stale entries; the append fd then writes fresh
+        // entries from the new EOF (offset 0).
         wal.flush()?;
-        let wal_file = OpenOptions::new()
-            .write(true)
-            .open(self.path.join("vectors.wal"))?;
-        wal_file.set_len(0)?;
-        wal_file.sync_all()
+        self.reclaim_wal_if_unheld(&wal)
+    }
+
+    /// Truncates the WAL to empty unless a registered consumer's low-watermark
+    /// still needs a durable position (Requirement 6.3): a registered
+    /// replication consumer holds the WAL until its low-watermark passes the
+    /// tail, so no needed record is discarded; with no registered consumer this
+    /// is the unchanged full truncation.
+    fn reclaim_wal_if_unheld(&self, wal: &io::BufWriter<File>) -> io::Result<()> {
+        let tail = wal.get_ref().metadata()?.len();
+        if super::wal_cursor::watermark_allows_full_truncation(
+            self.watermarks.min_watermark(),
+            tail,
+        ) {
+            // The WAL is opened append-only, so its handle lacks FILE_WRITE_DATA
+            // and set_len() on it is ACCESS_DENIED on Windows — truncate via a
+            // dedicated write handle instead (mirrors wal_replay::truncate_wal),
+            // then make the reclaim durable.
+            let wal_file = OpenOptions::new()
+                .write(true)
+                .open(self.path.join("vectors.wal"))?;
+            wal_file.set_len(0)?;
+            wal_file.sync_all()?;
+        }
+        Ok(())
     }
 
     /// Returns the fragmentation ratio (0.0 = no fragmentation, 1.0 = 100% fragmented).

@@ -29,11 +29,6 @@ toml = { workspace = true }
 # HNSW: Native implementation only (v1.0+)
 # hnsw_rs dependency removed - native HNSW is 1.2x faster
 
-# UUID - target-specific for WASM compatibility
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies.uuid]
-version = "1.23"
-features = ["v4", "serde"]
-
 [dependencies.smallvec]
 workspace = true
 
@@ -122,7 +117,7 @@ internal-bench = []
 ## to catch API drift).
 bench-sift1m = ["dep:flate2", "dep:tar", "dep:ureq", "dep:sha2"]
 openapi = ["dep:utoipa"]
-persistence = ["dep:memmap2", "dep:rayon", "dep:tokio", "dep:ndarray", "dep:fs2"]
+persistence = ["dep:memmap2", "dep:rayon", "dep:tokio", "dep:fs2"]
 update-check = ["dep:reqwest", "dep:tokio", "dep:sha2", "dep:hex", "dep:hostname", "dep:whoami"]
 loom = ["dep:loom"]
 ## Test-only fault injection seams. Exposes RAII guards in
@@ -136,7 +131,6 @@ test-fault-injection = []
 criterion = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }
-tokio-test = "0.4"
 serial_test = "3.5"
 clap = { version = "4.6", features = ["derive"] }
 rand_distr = "0.6"
@@ -371,11 +365,6 @@ optional = true
 
 [dependencies.whoami]
 version = "1.5"
-optional = true
-
-[dependencies.ndarray]
-version = "0.17"
-default-features = false
 optional = true
 
 [dependencies.reqwest]

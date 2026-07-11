@@ -6,6 +6,7 @@
 use super::compaction::{punch_hole, CompactionContext};
 use super::sharded_index::ShardedIndex;
 use super::traits::VectorStorage;
+use super::wal_cursor::WalWatermarkRegistry;
 use super::MmapStorage;
 
 use memmap2::MmapMut;
@@ -648,6 +649,7 @@ fn test_context_compact_updates_index_offsets() {
     index.remove(1);
     index.remove(3);
 
+    let watermarks = WalWatermarkRegistry::new();
     let ctx = CompactionContext {
         path: dir.path(),
         dimension: dim,
@@ -656,6 +658,7 @@ fn test_context_compact_updates_index_offsets() {
         next_offset: &next_offset,
         wal: &wal,
         initial_size: 4096,
+        watermarks: &watermarks,
     };
 
     let reclaimed = ctx.compact().expect("compact");
@@ -688,6 +691,7 @@ fn test_context_fragmentation_ratio_precise() {
     index.remove(5);
     index.remove(8);
 
+    let watermarks = WalWatermarkRegistry::new();
     let ctx = CompactionContext {
         path: dir.path(),
         dimension: dim,
@@ -696,6 +700,7 @@ fn test_context_fragmentation_ratio_precise() {
         next_offset: &next_offset,
         wal: &wal,
         initial_size: 4096,
+        watermarks: &watermarks,
     };
 
     // active_size = 7 * 16 = 112, current_offset = 10 * 16 = 160

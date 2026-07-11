@@ -77,6 +77,8 @@ pub mod config_quantization;
 #[cfg(test)]
 mod config_tests;
 mod config_validation;
+/// Cross-implementation conformance harness (frozen golden reference vectors).
+pub mod conformance;
 pub mod contiguous_ops;
 mod contiguous_resize;
 pub mod distance;
@@ -110,6 +112,7 @@ pub mod index;
 pub mod internal_bench;
 #[cfg(all(test, feature = "internal-bench"))]
 mod internal_bench_tests;
+pub mod lock_rank;
 pub mod metrics;
 #[cfg(test)]
 mod metrics_tests;
@@ -204,6 +207,7 @@ pub use contiguous_ops::pad_to_simd_width;
 pub use distance::{DistanceMetric, CONDITION_TYPE_NAMES, DISTANCE_METRIC_NAMES};
 pub use error::{Error, Result};
 pub use filter::{Condition, Filter};
+pub use lock_rank::{assert_lock_order, LockRank};
 pub use point::{ComponentScores, Point, SearchResult};
 pub use quantization::{
     cosine_similarity_quantized, cosine_similarity_quantized_simd, dot_product_quantized,
@@ -215,9 +219,11 @@ pub use validation::{
     validate_collection_name, validate_dimension, validate_dimension_match,
     MAX_COLLECTION_NAME_LENGTH, MAX_DIMENSION, MIN_DIMENSION,
 };
-// Canonical cross-engine edge-id derivation (FNV-1a over raw LE bytes).
-// Lives in `wire` so persistence-free targets (WASM) can delegate to it.
-pub use wire::hash_edge_id;
+// Canonical cross-engine stable hashing (FNV-1a). Lives in `wire::stable_hash`
+// so persistence-free targets (WASM) can delegate to it. Consumers deriving a
+// numeric ID from a string for persisted or interoperable use MUST call
+// `hash_id` (never a std `DefaultHasher`, which is not stable across runs).
+pub use wire::stable_hash::{hash_edge_id, hash_id};
 
 #[cfg(feature = "persistence")]
 pub use column_store::{
@@ -256,5 +262,7 @@ pub mod observer;
 pub use database::Database;
 #[cfg(feature = "persistence")]
 pub use observer::DatabaseObserver;
+#[cfg(feature = "persistence")]
+pub use observer::{AccessDecision, AccessScope, QueryAccessContext, QueryOperationKind};
 #[cfg(feature = "persistence")]
 pub use storage::DurabilityMode;

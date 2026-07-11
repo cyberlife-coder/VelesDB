@@ -281,6 +281,21 @@ impl Database {
     // Observer notification helpers (called by server handlers after operations)
     // =========================================================================
 
+    /// Fires the `on_upsert` telemetry hook once for a completed upsert write.
+    ///
+    /// Called by the core use-case DML entry points (INSERT/UPSERT and UPDATE
+    /// in [`query_engine_dml`]) after the data-plane write completes, so a
+    /// single completed operation results in exactly one `on_upsert`
+    /// invocation (Requirement 2.1, 2.3, 2.5). This is the internal replacement
+    /// for the deprecated [`Database::notify_upsert`] shim — it is invoked by
+    /// core itself rather than by callers, and is a single pointer check when
+    /// no observer is present (Requirement 2.4).
+    pub(super) fn fire_on_upsert(&self, collection: &str, point_count: usize) {
+        if let Some(ref obs) = self.observer {
+            obs.on_upsert(collection, point_count);
+        }
+    }
+
     /// Notifies the observer that points were upserted into a collection.
     ///
     /// **Caller contract**: this method is NOT called automatically by
@@ -290,6 +305,13 @@ impl Database {
     /// events for that operation.
     ///
     /// No-op when no observer is registered.
+    #[deprecated(
+        since = "3.9.0",
+        note = "Telemetry is now invoked inside the core use-case layer. \
+                This shim is retained for backward compatibility and will be \
+                removed in a future major version. Callers should stop invoking \
+                it to avoid double-counting once they upgrade."
+    )]
     pub fn notify_upsert(&self, collection: &str, point_count: usize) {
         if let Some(ref obs) = self.observer {
             obs.on_upsert(collection, point_count);
@@ -304,6 +326,12 @@ impl Database {
     /// and invoke this method afterwards with the elapsed microseconds.
     ///
     /// No-op when no observer is registered.
+    #[deprecated(
+        since = "3.9.0",
+        note = "See notify_upsert deprecation note. Telemetry is now invoked \
+                inside the core use-case layer; callers should stop invoking \
+                this shim to avoid double-counting once they upgrade."
+    )]
     pub fn notify_query(&self, collection: &str, duration_us: u64) {
         if let Some(ref obs) = self.observer {
             obs.on_query(collection, duration_us);

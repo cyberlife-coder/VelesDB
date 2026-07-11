@@ -15,6 +15,23 @@
 | **Binary** (1-bit) | **32x** | ~10-15% | No | IoT, fingerprints |
 | **RaBitQ** (Randomized Binary) | **32x** | ~5-10% | Yes (rotation) | High compression + good recall |
 
+### Capacity mode vs search-path mode
+
+The compression figures above describe the quantization **primitives**. In the
+**collection search path**, only some modes are wired up — the rest are capacity
+modes that shrink memory without changing how search runs:
+
+| Storage mode | Kind | Collection search path |
+|--------------|------|------------------------|
+| `full` | full-precision | f32 (baseline) |
+| `sq8` | **Capacity Mode** | full-precision f32 — memory only, no throughput gain |
+| `binary` | **Capacity Mode** | full-precision f32 — memory only, no throughput gain |
+| `pq` | search-path mode | ADC-rescored (wired) |
+| `rabitq` | search-path mode | quantized traversal (wired end-to-end) |
+
+Pick `sq8`/`binary` only for the primitive-level memory savings; pick `rabitq`
+(or `pq`) when you want the quantized path in the query hot path.
+
 ---
 
 ## 🚀 SQ8: 4x Compression
