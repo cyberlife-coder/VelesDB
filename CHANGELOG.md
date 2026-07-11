@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.9.1] — 2026-07-12
+
+Delivery release: everything merged on `develop` since v3.9.0 reaches users —
+RL Memory, zero-friction Docker onboarding, security warnings — plus the
+release-pipeline gate that prevents partially-harmonised trees from ever
+being tagged again. `velesdb-memory` ships as **0.7.0** (new MCP tool).
+
+### Added
+- **memory (velesdb-memory 0.7.0): RL Memory** — new MCP `feedback` tool plus
+  learned-confidence re-ranking of `recall`. Agents reinforce or weaken
+  memories from outcome feedback; ranking adapts over time. Persistent,
+  backwards-compatible, gated on the `persistence` feature.
+- **memory:** the default hash embedder now warns on stderr that recall is
+  lexical, not semantic (silence with `VELESDB_MEMORY_QUIET=1`), so nobody
+  mistakes the zero-dep default for semantic search.
+- **memory:** agent-memory skill shipped alongside the MCP server, with fixed
+  onboarding defaults.
+- **server:** warns when binding a public address without authentication;
+  README documents the prebuilt `ghcr.io` image (`docker run` quickstart).
+
+### Fixed
+- **memory:** RL re-ranking no longer inverts ordering on negative cosine
+  similarity.
+- **server:** exposed-bind warnings reconciled; loopback detection hardened.
+- **release:** a manually-entered `workflow_dispatch` version now strips a
+  leading `v` before comparison, so `v3.9.1` and `3.9.1` behave identically.
+
+### CI / Release pipeline
+- **REL-07 gate:** `release.yml` now runs `check-version-sync.py` and checks
+  tag == workspace version before publishing — a partially-harmonised tree
+  can no longer be tagged. All 35 satellite manifests realigned to the
+  workspace version.
+- `check-version-sync.py` now also polices the MCP registry manifest
+  `server.json` against the independently-versioned `velesdb-memory` crate.
+- `perf-gate-e2e.yml` aligned on Rust 1.89 (was pinned to 1.86, so the perf
+  gate compiled with an older toolchain than the main CI).
+- Docker runtime image embeds the LICENSE file.
+
 ## [3.8.1] — 2026-07-10
 
 Maintenance release: a full crate + integration health audit closed with a

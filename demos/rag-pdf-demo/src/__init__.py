@@ -1,3 +1,3 @@
 """VelesDB RAG Demo - PDF Question Answering System."""
 
-__version__ = "3.9.0"
+__version__ = "3.9.1"
