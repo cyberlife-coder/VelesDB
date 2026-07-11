@@ -113,9 +113,8 @@ fn build_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
 /// that the default `hash` embedder is deterministic but **not semantic**:
 /// `recall` matches on lexical/hash proximity, not meaning. This is the single
 /// most common "why is recall bad?" surprise, so make the trade-off explicit
-/// and point to the opt-in. Suppress with `VELESDB_MEMORY_EMBEDDER=hash` set
-/// intentionally? No — the value is identical; instead honor an explicit
-/// opt-out for scripted/offline runs via `VELESDB_MEMORY_QUIET=1`.
+/// and point to the opt-in. Silence it for scripted/offline runs with
+/// `VELESDB_MEMORY_QUIET=1`.
 fn warn_hash_embedder_not_semantic() {
     if std::env::var_os("VELESDB_MEMORY_QUIET").is_some() {
         return;

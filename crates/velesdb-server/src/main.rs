@@ -196,15 +196,6 @@ fn build_router(
     }
 }
 
-fn warn_if_exposed(host: &str) {
-    if host != "127.0.0.1" && host != "localhost" {
-        tracing::warn!(
-            "VelesDB server exposed on network ({host}). \
-             Consider using 127.0.0.1 for local-first usage."
-        );
-    }
-}
-
 /// Returns a future that resolves when SIGTERM is received (Unix) or never (non-Unix).
 async fn sigterm() {
     #[cfg(unix)]
@@ -234,7 +225,6 @@ async fn serve(
     state: Arc<AppState>,
     shutdown_timeout_secs: u64,
 ) -> anyhow::Result<()> {
-    warn_if_exposed(host);
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("VelesDB server listening on http://{}", addr);
@@ -360,8 +350,6 @@ async fn serve_tls(
     state: Arc<AppState>,
     shutdown_timeout_secs: u64,
 ) -> anyhow::Result<()> {
-    warn_if_exposed(host);
-
     let tls_acceptor = velesdb_server::tls::load_tls_config(cert_path, key_path)?;
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
