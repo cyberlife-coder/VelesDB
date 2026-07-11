@@ -157,6 +157,27 @@ pub(super) struct ForgetResult {
     pub(super) id: u64,
 }
 
+/// Parameters for the `feedback` tool.
+#[derive(Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct FeedbackParams {
+    /// Id of the recalled memory to reinforce (as returned by `recall`/`remember`).
+    pub(super) id: u64,
+    /// `true` if the memory was useful (reinforce it), `false` if it was noise
+    /// (weaken it).
+    pub(super) success: bool,
+}
+
+/// Result of the `feedback` tool.
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct FeedbackResult {
+    /// Id of the reinforced memory.
+    pub(super) id: u64,
+    /// The memory's new learned confidence in `[0.0, 1.0]` after this feedback.
+    pub(super) confidence: f32,
+}
+
 /// Parameters for the `why` tool.
 #[derive(Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]

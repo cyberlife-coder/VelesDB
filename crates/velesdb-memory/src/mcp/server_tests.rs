@@ -57,6 +57,51 @@ async fn remember_then_recall_roundtrips_through_the_server() {
 }
 
 #[tokio::test]
+async fn feedback_tool_reinforces_and_returns_confidence() {
+    let (_dir, srv) = server();
+    let Json(stored) = srv
+        .remember(Parameters(RememberParams {
+            fact: DECISION.to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember");
+
+    let Json(up) = srv
+        .feedback(Parameters(FeedbackParams {
+            id: stored.id,
+            success: true,
+        }))
+        .await
+        .expect("feedback success");
+    assert_eq!(up.id, stored.id);
+    assert!(up.confidence > 0.5, "success raises confidence");
+
+    let Json(down) = srv
+        .feedback(Parameters(FeedbackParams {
+            id: stored.id,
+            success: false,
+        }))
+        .await
+        .expect("feedback failure");
+    assert!(down.confidence < up.confidence, "failure lowers confidence");
+}
+
+#[tokio::test]
+async fn feedback_tool_errors_on_unknown_id() {
+    let (_dir, srv) = server();
+    let result = srv
+        .feedback(Parameters(FeedbackParams {
+            id: 4242,
+            success: true,
+        }))
+        .await;
+    assert!(result.is_err(), "feedback on an unknown id must error");
+}
+
+#[tokio::test]
 async fn why_returns_the_connected_subgraph() {
     let (_dir, srv) = server();
     let Json(decision) = srv
