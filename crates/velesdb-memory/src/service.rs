@@ -29,7 +29,11 @@ mod fused_recall;
 
 /// [`MemoryService::feedback`] and the recall re-ranking it drives (RL Memory).
 /// A child module of `service`, like [`fused_recall`], so it uses
-/// `MemoryService`'s private `store` directly.
+/// `MemoryService`'s private `store` directly. Gated on `persistence`: it
+/// builds on `velesdb-core`'s agent SDK (`ReinforcementStrategy`), itself
+/// behind that feature, and a durable learned confidence is meaningless on the
+/// in-memory (WASM) backend.
+#[cfg(feature = "persistence")]
 #[path = "reinforce.rs"]
 mod reinforce;
 
@@ -434,9 +438,12 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         }
         reject_reserved_keys(filter)?;
         let embedding = self.embedder.embed(query)?;
+        // `mut` is used only by the persistence-gated RL re-rank below.
+        #[cfg_attr(not(feature = "persistence"), allow(unused_mut))]
         let mut hits = self.search(&embedding, k, filter)?;
         // RL Memory: re-order the recalled set by learned confidence. Facts
         // that never received `feedback` keep their similarity order exactly.
+        #[cfg(feature = "persistence")]
         self.rl_rerank(&mut hits)?;
         let ids: Vec<u64> = hits.iter().map(|(id, _, _)| *id).collect();
         let metadata = self.recall_metadata_batch(&ids)?;
