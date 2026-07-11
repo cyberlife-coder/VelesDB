@@ -135,7 +135,7 @@ async fn observer_receives_full_lifecycle() {
 /// Regression test for a double-count bug: `Database::execute_query` fires
 /// `on_query` once internally (core-invoked telemetry). The `/query` REST
 /// handler must not *also* invoke the deprecated `notify_query` shim after
-/// calling `execute_query`, or every VelesQL request would tally twice for
+/// calling `execute_query`, or every `VelesQL` request would tally twice for
 /// any registered `DatabaseObserver` (RBAC/audit/usage billing). Unlike
 /// `observer_receives_full_lifecycle` above (which asserts `>= 1` for the
 /// `/search` REST pipeline, a path that never routes through
