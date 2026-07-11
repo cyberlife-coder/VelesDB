@@ -65,7 +65,10 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            VERSION="$INPUT_VERSION"
+            # Accept an operator-entered "v3.9.0" the same as "3.9.0": every
+            # downstream comparison (crates.io/npm publish gates, REL-07)
+            # expects the unprefixed form, matching the tag-derived path below.
+            VERSION="${INPUT_VERSION#v}"
           else
             VERSION=${GITHUB_REF#refs/tags/v}
           fi
