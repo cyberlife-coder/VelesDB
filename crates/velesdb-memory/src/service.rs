@@ -438,23 +438,24 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         }
         reject_reserved_keys(filter)?;
         let embedding = self.embedder.embed(query)?;
-        // `mut` is used only by the persistence-gated RL re-rank below.
-        #[cfg_attr(not(feature = "persistence"), allow(unused_mut))]
-        let mut hits = self.search(&embedding, k, filter)?;
+        let hits = self.search(&embedding, k, filter)?;
+        let ids: Vec<u64> = hits.iter().map(|(id, _, _)| *id).collect();
+        // One raw batched payload lookup (reserved keys included), reused for
+        // BOTH the RL re-rank and the caller-facing metadata below — a single
+        // round trip, not one per concern.
+        let payloads = self.store.get_metadata_batch(&ids)?;
         // RL Memory: re-order the recalled set by learned confidence. Facts
         // that never received `feedback` keep their similarity order exactly.
         #[cfg(feature = "persistence")]
-        self.rl_rerank(&mut hits)?;
-        let ids: Vec<u64> = hits.iter().map(|(id, _, _)| *id).collect();
-        let metadata = self.recall_metadata_batch(&ids)?;
+        let (hits, payloads) = self.rl_rerank(hits, payloads);
         Ok(hits
             .into_iter()
-            .zip(metadata)
-            .map(|((id, score, content), metadata)| Recollection {
+            .zip(payloads)
+            .map(|((id, score, content), payload)| Recollection {
                 id,
                 score,
                 content,
-                metadata,
+                metadata: strip_reserved_keys(payload),
             })
             .collect())
     }

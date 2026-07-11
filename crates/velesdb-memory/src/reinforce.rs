@@ -39,6 +39,14 @@ pub(crate) const RL_NEUTRAL_CONFIDENCE: f32 = 0.5;
 /// signal and feedback only tips genuinely close calls.
 const RL_RERANK_WEIGHT: f32 = 0.5;
 
+/// One recalled hit: `(id, similarity, content)`.
+type Hit = (u64, f32, String);
+/// A recalled hit paired with its raw payload and the blended re-rank key, as
+/// sorted by [`MemoryService::rl_rerank`].
+type RankedHit = (Hit, Option<Metadata>, f32);
+/// Reordered hits and their raw payloads, returned by [`MemoryService::rl_rerank`].
+type RerankedHits = (Vec<Hit>, Vec<Option<Metadata>>);
+
 impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Record an outcome for a recalled fact and return its new confidence.
     ///
@@ -48,6 +56,14 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// success/failure history, then persisted durably. Over repeated
     /// feedback the fact drifts up or down the [`Self::recall`] ranking — the
     /// agent's memory learns which facts are worth surfacing.
+    ///
+    /// # Concurrency
+    /// The update is a read-modify-write that is **not** atomic across the
+    /// `get_metadata`/`update_metadata` pair. Two `feedback` calls racing on the
+    /// same `id` are last-writer-wins: one increment can be lost. This is
+    /// acceptable for a soft, approximate ranking signal — feedback still moves
+    /// confidence in the right direction — but callers needing exact tallies
+    /// must serialize their own calls per id.
     ///
     /// # Errors
     /// Returns [`MemoryError::UnknownMemory`] if `id` is not a live fact, or a
@@ -87,44 +103,62 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         Ok(new_confidence)
     }
 
-    /// Re-rank vector hits in place by blending similarity with each fact's
-    /// learned confidence.
+    /// Re-rank vector hits by blending similarity with each fact's learned
+    /// confidence, reordering the hits **and** their raw payloads together.
     ///
-    /// The reported `score` stays the true similarity; only the *order*
-    /// changes. A fact with neutral (or absent) confidence gets a `1.0`
-    /// factor, so a result set with no feedback is returned untouched — the
-    /// stable sort preserves the incoming similarity order exactly. Reads raw
-    /// payloads (reserved keys included) in one batched lookup.
-    ///
-    /// # Errors
-    /// Returns a storage error if the batched payload read fails.
-    pub(crate) fn rl_rerank(&self, hits: &mut Vec<(u64, f32, String)>) -> Result<(), MemoryError> {
+    /// Takes the payloads the caller already fetched (reserved keys included,
+    /// same order as `hits`) so no extra storage round trip is needed, and
+    /// returns both reordered so the caller can strip and attach metadata in
+    /// the final order. The reported `score` stays the true similarity; only
+    /// the *order* changes. A fact with neutral (or absent) confidence keeps a
+    /// blend factor of exactly `1.0`, so a result set with no feedback is
+    /// returned untouched — the stable sort preserves the incoming similarity
+    /// order exactly.
+    pub(crate) fn rl_rerank(
+        &self,
+        hits: Vec<Hit>,
+        payloads: Vec<Option<Metadata>>,
+    ) -> RerankedHits {
         if hits.len() < 2 {
-            return Ok(());
+            return (hits, payloads);
         }
-        let ids: Vec<u64> = hits.iter().map(|(id, _, _)| *id).collect();
-        let payloads = self.store.get_metadata_batch(&ids)?;
-
-        let mut ranked: Vec<(u64, f32, String, f32)> = std::mem::take(hits)
+        let mut ranked: Vec<RankedHit> = hits
             .into_iter()
             .zip(payloads)
-            .map(|((id, score, content), payload)| {
+            .map(|(hit, payload)| {
                 let confidence = payload
                     .as_ref()
                     .map_or(RL_NEUTRAL_CONFIDENCE, read_confidence);
-                let factor = 1.0 + RL_RERANK_WEIGHT * (2.0 * confidence - 1.0);
-                (id, score, content, score * factor)
+                let blended = blended_score(hit.1, confidence);
+                (hit, payload, blended)
             })
             .collect();
         // Stable sort: equal blended scores (e.g. all-neutral) keep input order.
-        ranked.sort_by(|a, b| b.3.total_cmp(&a.3));
+        ranked.sort_by(|a, b| b.2.total_cmp(&a.2));
 
-        *hits = ranked
-            .into_iter()
-            .map(|(id, score, content, _)| (id, score, content))
-            .collect();
-        Ok(())
+        let mut out_hits = Vec::with_capacity(ranked.len());
+        let mut out_payloads = Vec::with_capacity(ranked.len());
+        for (hit, payload, _) in ranked {
+            out_hits.push(hit);
+            out_payloads.push(payload);
+        }
+        (out_hits, out_payloads)
     }
+}
+
+/// Blend a raw similarity with a learned confidence into a re-rank key.
+///
+/// The cosine similarity (range `[-1, 1]` — a real embedder produces negative
+/// values for dissimilar pairs) is mapped to a **non-negative** `[0, 1]` base
+/// *before* the confidence factor is applied, so reinforcement can never invert
+/// the ranking: multiplying a negative score by a `> 1` factor would push a
+/// reinforced fact *down*. The factor `1 + W·(2c − 1) ∈ [1−W, 1+W]` scales the
+/// base up for confident facts and down for doubted ones; neutral confidence
+/// (`0.5`) gives factor `1.0`, leaving the base — and thus the order — untouched.
+fn blended_score(similarity: f32, confidence: f32) -> f32 {
+    let base = f32::midpoint(similarity, 1.0);
+    let factor = 1.0 + RL_RERANK_WEIGHT * (2.0 * confidence - 1.0);
+    base * factor
 }
 
 /// Read a fact's persisted confidence, clamped to `[0.0, 1.0]`; neutral when
@@ -299,5 +333,29 @@ mod tests {
     fn feedback_on_unknown_id_errors() {
         let (_dir, svc) = service();
         assert!(svc.feedback(999, true).is_err(), "unknown id must error");
+    }
+
+    #[test]
+    fn blend_never_inverts_ranking_even_on_negative_similarity() {
+        use super::blended_score;
+        // Regression guard for the cosine sign bug: a real embedder produces
+        // negative similarities for dissimilar pairs. At a fixed similarity,
+        // more confidence must never yield a *lower* blended score, whatever
+        // the sign — otherwise reinforcing a fact would demote it.
+        for &sim in &[-0.99_f32, -0.5, -0.12, 0.0, 0.3, 0.95] {
+            let punished = blended_score(sim, 0.0);
+            let neutral = blended_score(sim, 0.5);
+            let reinforced = blended_score(sim, 1.0);
+            assert!(
+                reinforced >= neutral && neutral >= punished,
+                "sim={sim}: confidence inverted the ranking ({punished} <= {neutral} <= {reinforced})"
+            );
+        }
+        // The review's failing case: a reinforced fact at sim -0.12 must
+        // outrank a neutral, *more* similar fact at sim -0.10.
+        assert!(
+            blended_score(-0.12, 1.0) > blended_score(-0.10, 0.5),
+            "reinforcement must overcome a small similarity gap even when negative"
+        );
     }
 }
