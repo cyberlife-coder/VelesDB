@@ -63,7 +63,6 @@ url = "2.5"
 velesdb-core = { workspace = true }
 
 [dev-dependencies]
-tokio-test = "0.4"
 wiremock = "0.6"
 tempfile = "3.14"
 criterion = { version = "0.5", features = ["async_tokio"] }
