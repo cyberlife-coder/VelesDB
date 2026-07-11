@@ -447,7 +447,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         // RL Memory: re-order the recalled set by learned confidence. Facts
         // that never received `feedback` keep their similarity order exactly.
         #[cfg(feature = "persistence")]
-        let (hits, payloads) = self.rl_rerank(hits, payloads);
+        let (hits, payloads) = Self::rl_rerank(hits, payloads);
         Ok(hits
             .into_iter()
             .zip(payloads)

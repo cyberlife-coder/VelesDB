@@ -114,11 +114,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// blend factor of exactly `1.0`, so a result set with no feedback is
     /// returned untouched — the stable sort preserves the incoming similarity
     /// order exactly.
-    pub(crate) fn rl_rerank(
-        &self,
-        hits: Vec<Hit>,
-        payloads: Vec<Option<Metadata>>,
-    ) -> RerankedHits {
+    pub(crate) fn rl_rerank(hits: Vec<Hit>, payloads: Vec<Option<Metadata>>) -> RerankedHits {
         if hits.len() < 2 {
             return (hits, payloads);
         }
