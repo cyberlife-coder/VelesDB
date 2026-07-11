@@ -305,7 +305,7 @@ impl RaBitQIndex {
     }
 }
 
-/// Training and persistence methods (require `persistence` feature for ndarray and rayon).
+/// Training and persistence methods (require `persistence` feature for rayon).
 #[cfg(feature = "persistence")]
 impl RaBitQIndex {
     /// Train a `RaBitQ` index from a set of vectors.
