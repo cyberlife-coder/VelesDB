@@ -105,6 +105,25 @@ jobs:
 
           echo "CI passed on commit $SHA"
 
+      # v3.9.0 shipped with satellite manifests (TS SDK, guest-js, Python
+      # integrations) still on 3.8.1: their npm/PyPI publish jobs "succeeded"
+      # as silent no-ops on already-published versions. This gate makes a
+      # partial harmonization impossible to tag again.
+      - name: Verify version sync across policed manifests (REL-07)
+        env:
+          TAG_VERSION: ${{ steps.version.outputs.version }}
+          IS_PRERELEASE: ${{ steps.version.outputs.is_prerelease }}
+        run: |
+          python3 scripts/check-version-sync.py
+          if [ "$IS_PRERELEASE" = "false" ]; then
+            WORKSPACE_VERSION=$(sed -n '/\[workspace.package\]/,/^\[/p' Cargo.toml | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
+            if [ "$WORKSPACE_VERSION" != "$TAG_VERSION" ]; then
+              echo "::error::Tag v$TAG_VERSION does not match workspace version $WORKSPACE_VERSION. Run scripts/bump_version.py $TAG_VERSION before tagging."
+              exit 1
+            fi
+            echo "Tag matches workspace version $WORKSPACE_VERSION; all policed manifests in sync."
+          fi
+
   # ===========================================================================
   # 1b. Pre-publish Validation Gate (REL-05)
   # ===========================================================================
