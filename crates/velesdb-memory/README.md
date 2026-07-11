@@ -267,6 +267,24 @@ env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
 } } }
 ```
 
+## Teach your agent the flow (skill)
+
+Wiring the MCP server gives your agent the *tools*; it doesn't tell it *when* to
+use them — and the differentiator (`why`) only pays off if the agent builds the
+graph as it works. Ship it the flow with the bundled **agent skill**:
+
+```bash
+# Claude Code / opencode: copy the skill into your skills directory
+cp -r crates/velesdb-memory/skill/velesdb-memory ~/.claude/skills/
+```
+
+[`skill/velesdb-memory/SKILL.md`](skill/velesdb-memory/SKILL.md) teaches the agent
+the loop — *recall before acting → remember decisions with metadata **and** links →
+`relate` facts as relationships appear → `why` to explain → `feedback` to reinforce* —
+with concrete scenarios (incident→decision→"why?", onboarding, cross-session
+continuity). Without it, an agent will call `recall` at best and never build the
+graph that makes `why` shine.
+
 ## Using the tools
 
 Once configured, your agent discovers the tools automatically (via MCP
