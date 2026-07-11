@@ -74,6 +74,19 @@ security patch and a batch of correctness fixes. No API breaks.
 - **deps:** wgpu 30.0.0, uniffi 0.32.0, plus routine cargo/npm and CI-action group bumps.
 ## [3.9.0] — 2026-07-07
 
+> Post-cut additions shipped inside the `v3.9.0` tag (the tag was cut on the
+> July 11 tree; these were first drafted under a phantom "3.9.1" heading that
+> never became a release):
+>
+> - **Security:** bumped `quinn-proto` 0.11.14 → 0.11.16 (**RUSTSEC-2026-0185**);
+>   added `.gitleaksignore` for verified false positives so the secret scan
+>   gate stays strict.
+> - **Fixed:** `/query` no longer double-fires `on_query` telemetry (one
+>   logical query = one event); `velesdb-core` version harmonized to the
+>   workspace version (C1), OpenAPI spec regenerated accordingly.
+> - **Changed:** dropped unused `ndarray`, `uuid` and `tokio-test`
+>   dependencies (`cargo udeps` clean).
+
 ### Added
 - **Read-path control-plane hook on `DatabaseObserver`.** A new
   `on_query_request(&QueryAccessContext) -> Result<AccessDecision>` method is
