@@ -1,0 +1,11 @@
+# Faux positifs vérifiés ligne à ligne (audit 2026-07-11, docs/audit/PHASE0_BASELINE.md §4.5).
+# Format : <commit>:<fichier>:<règle>:<ligne>
+
+# Clé de cache rust-cache (shared-key), pas un secret
+4b62338f5cec8cbad952369c8d461325a0982e23:.github/workflows/bench-sift1m-nightly.yml:generic-api-key:51
+8a7193f79001d7a07e8db9f9e5db9b2d30099a7a:.github/workflows/bench-sift1m-nightly.yml:generic-api-key:51
+
+# Exemples curl de documentation (placeholders Bearer)
+92cc35bd17a386c15b8029f7365f61ef3c3c2c61:crates/velesdb-server/README.md:curl-auth-header:326
+1d38fcb862b1da138b96f5a01571a13b9158633e:docs/guides/SERVER_SECURITY.md:curl-auth-header:112
+1d38fcb862b1da138b96f5a01571a13b9158633e:docs/guides/SERVER_SECURITY.md:curl-auth-header:245
