@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "velesdb-common"
-version = "3.8.1"
+version = "3.9.0"
 description = "Shared utilities for VelesDB Python integrations (internal use)"
 readme = "README.md"
 license = {text = "MIT"}
