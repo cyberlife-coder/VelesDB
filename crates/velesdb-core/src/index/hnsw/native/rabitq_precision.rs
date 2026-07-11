@@ -439,7 +439,7 @@ impl<D: DistanceEngine> RaBitQPrecisionHnsw<D> {
         Ok(())
     }
 
-    /// Stub for non-persistence builds (training requires ndarray/rayon).
+    /// Stub for non-persistence builds (training requires rayon).
     #[cfg(not(feature = "persistence"))]
     fn train_rabitq(&self) -> crate::error::Result<()> {
         Ok(())
