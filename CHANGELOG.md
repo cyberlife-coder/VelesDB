@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.9.1] — 2026-07-11
+
+Patch release on top of 3.9.0: telemetry correctness, version harmonization
+and supply-chain hygiene. No API breaks.
+
+### Security
+- Bumped `quinn-proto` 0.11.14 → 0.11.16 (**RUSTSEC-2026-0185**).
+- Added `.gitleaksignore` for verified false positives so the secret scan gate stays strict.
+
+### Fixed
+- **server:** `/query` no longer double-fires `on_query` telemetry (one logical query = one event).
+- **workspace:** `velesdb-core` version harmonized to the workspace version (C1); OpenAPI spec regenerated accordingly.
+
+### Changed
+- **deps:** dropped unused `ndarray`, `uuid` and `tokio-test` dependencies (`cargo udeps` clean).
+
 ## [3.8.1] — 2026-07-10
 
 Maintenance release: a full crate + integration health audit closed with a

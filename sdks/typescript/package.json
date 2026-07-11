@@ -1,6 +1,6 @@
 {
   "name": "@wiscale/velesdb-sdk",
-  "version": "3.8.1",
+  "version": "3.9.1",
   "description": "VelesDB TypeScript SDK: The Local Vector Database for AI & RAG. Microsecond semantic search in Browser & Node.js.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
