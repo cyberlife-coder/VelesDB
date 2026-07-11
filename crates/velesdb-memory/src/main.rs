@@ -98,12 +98,35 @@ fn build_ollama_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std:
 fn build_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
     match std::env::var("VELESDB_MEMORY_EMBEDDER").as_deref() {
         Ok("ollama") => build_ollama_embedder(),
-        Ok("hash") | Err(_) => Ok(Box::new(HashEmbedder::new(DEFAULT_DIMENSION))),
+        Ok("hash") | Err(_) => {
+            warn_hash_embedder_not_semantic();
+            Ok(Box::new(HashEmbedder::new(DEFAULT_DIMENSION)))
+        }
         Ok(other) => Err(format!(
             "unknown VELESDB_MEMORY_EMBEDDER '{other}' (expected 'hash' or 'ollama')"
         )
         .into()),
     }
+}
+
+/// Warn (on **stderr**, never stdout — that carries the MCP JSON-RPC stream)
+/// that the default `hash` embedder is deterministic but **not semantic**:
+/// `recall` matches on lexical/hash proximity, not meaning. This is the single
+/// most common "why is recall bad?" surprise, so make the trade-off explicit
+/// and point to the opt-in. Suppress with `VELESDB_MEMORY_EMBEDDER=hash` set
+/// intentionally? No — the value is identical; instead honor an explicit
+/// opt-out for scripted/offline runs via `VELESDB_MEMORY_QUIET=1`.
+fn warn_hash_embedder_not_semantic() {
+    if std::env::var_os("VELESDB_MEMORY_QUIET").is_some() {
+        return;
+    }
+    eprintln!(
+        "[velesdb-memory] Using the default 'hash' embedder: deterministic and \
+         fully offline, but NOT semantic — recall matches surface form, not meaning. \
+         For real semantic recall, run an Ollama build with \
+         VELESDB_MEMORY_EMBEDDER=ollama (see crates/velesdb-memory/README.md). \
+         Set VELESDB_MEMORY_QUIET=1 to silence this notice."
+    );
 }
 
 #[cfg(feature = "ollama")]
