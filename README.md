@@ -246,16 +246,16 @@ cargo install velesdb-server velesdb-cli
 
 **Docker (REST server):**
 ```bash
-# Build the image locally
-git clone https://github.com/cyberlife-coder/VelesDB.git && cd VelesDB
-docker build -t velesdb .
-
-# Run with persistent data (named volume)
-docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb velesdb
+# Run the published image (multi-arch: linux/amd64 + linux/arm64)
+docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb \
+  ghcr.io/cyberlife-coder/velesdb:latest
 
 # Verify it's running
 curl http://localhost:8080/health
 ```
+Pin a specific version with `ghcr.io/cyberlife-coder/velesdb:3.9` (or a full
+`3.9.1`). To build the image yourself instead: `git clone` the repo and
+`docker build -t velesdb .`.
 
 Data is stored in `/data` inside the container; the named volume `velesdb_data` persists across restarts.
 
@@ -593,13 +593,13 @@ INSERT                      INDEX                       SEARCH
 <summary>Docker deployment</summary>
 
 ```bash
-# Build and run locally
-docker build -t velesdb .
-docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb velesdb
+# Run the published multi-arch image
+docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb \
+  ghcr.io/cyberlife-coder/velesdb:latest
 curl http://localhost:8080/health
 
-# Or with docker-compose (builds + auto-restart)
-docker-compose up -d
+# Or build locally / use docker-compose (builds + auto-restart)
+docker build -t velesdb . && docker-compose up -d
 ```
 
 | Variable | Default | Description |

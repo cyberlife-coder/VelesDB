@@ -261,6 +261,19 @@ impl ServerConfig {
     pub fn rate_limit_enabled(&self) -> bool {
         self.rate_limit > 0
     }
+
+    /// Returns `true` when the bind host is reachable beyond the local machine.
+    ///
+    /// A loopback host (`127.0.0.1`, `::1`, `localhost`) is treated as private;
+    /// anything else — including the wildcard `0.0.0.0`/`::` — is considered
+    /// publicly reachable. Used to warn when the server is exposed without
+    /// authentication.
+    pub fn binds_publicly(&self) -> bool {
+        let host = self.host.trim();
+        // Bracketed IPv6 literals may appear as `[::1]`.
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        !matches!(host, "127.0.0.1" | "::1" | "localhost") && !host.starts_with("127.")
+    }
 }
 
 // ============================================================================
@@ -428,6 +441,21 @@ pub fn parse_api_keys_env() -> Option<Vec<String>> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn test_binds_publicly() {
+        let mut cfg = ServerConfig::default();
+        // Loopback hosts are private.
+        for host in ["127.0.0.1", "::1", "[::1]", "localhost", "127.0.0.5"] {
+            cfg.host = host.to_string();
+            assert!(!cfg.binds_publicly(), "{host} should be private");
+        }
+        // Wildcard and routable addresses are public.
+        for host in ["0.0.0.0", "::", "192.168.1.10", "10.0.0.1"] {
+            cfg.host = host.to_string();
+            assert!(cfg.binds_publicly(), "{host} should be public");
+        }
+    }
 
     #[test]
     fn test_defaults() {
