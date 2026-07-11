@@ -86,6 +86,19 @@ security patch and a batch of correctness fixes. No API breaks.
   promise-contract CI guard rejects any doc that claims search throughput for
   `sq8`/`binary`.
 
+### Fixed
+- **server:** the `/query` VelesQL endpoint no longer double-fires `on_query`
+  telemetry. `Database::execute_query` already invokes the observer's
+  `on_query` hook exactly once internally (see "Telemetry is now
+  core-invoked" above); the REST handler was additionally calling the
+  deprecated `notify_query` shim after every `execute_query` dispatch, so any
+  registered `DatabaseObserver` (RBAC/audit/usage billing) counted every
+  `/query` request twice. The redundant call — and the per-statement
+  collection-name extraction helpers that existed only to feed it — were
+  removed; a regression test
+  (`query_endpoint_fires_on_query_exactly_once_per_dispatch_branch`) pins the
+  exactly-once contract for both `/query` dispatch branches.
+
 ### Deprecated
 - **`Database::notify_upsert` / `Database::notify_query`** are deprecated (since
   3.9.0). Telemetry is now invoked inside the core use-case layer; callers should
