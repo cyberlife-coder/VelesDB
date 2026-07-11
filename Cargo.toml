@@ -79,7 +79,7 @@ base64 = "0.22"
 smallvec = { version = "1", features = ["serde"] }
 
 # Internal workspace crates
-velesdb-core = { path = "crates/velesdb-core", version = "3.8.1", default-features = false }
+velesdb-core = { path = "crates/velesdb-core", version = "3.9.0", default-features = false }
 
 [profile.release]
 lto = true

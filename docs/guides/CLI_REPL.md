@@ -1,6 +1,6 @@
 # 💻 CLI & REPL Reference
 
-*Version 3.8.1 — 2026-06-12*
+*Version 3.9.0 — 2026-06-12*
 
 Complete guide to the VelesDB command-line interface and the interactive REPL.
 
@@ -36,7 +36,7 @@ cargo build --release -p velesdb-cli
 
 ```bash
 velesdb --version
-# velesdb 3.8.1
+# velesdb 3.9.0
 ```
 
 ---
@@ -269,7 +269,7 @@ velesdb> \info
 ┌─────────────────────┬────────────────────┐
 │ Property            │ Value              │
 ├─────────────────────┼────────────────────┤
-│ Version             │ 3.8.1              │
+│ Version             │ 3.9.0              │
 │ Data directory      │ ./data             │
 │ Collections         │ 3                  │
 │ Total vectors       │ 125,000            │
@@ -342,7 +342,7 @@ Session settings are **not persisted** across REPL sessions. To persist them, us
 ```
 $ velesdb repl ./my_db
 
-VelesDB v3.8.1 - Interactive REPL
+VelesDB v3.9.0 - Interactive REPL
 Type \help for help, \quit to exit.
 
 velesdb> \show
