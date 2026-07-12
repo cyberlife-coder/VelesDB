@@ -31,9 +31,9 @@ use crate::extract::DynExtractor;
 // domain types from `crate::model` directly (no duplicate wire/domain struct).
 mod dto;
 use dto::{
-    ForgetParams, ForgetResult, RecallFusedParams, RecallFusedResult, RecallParams, RecallResult,
-    RecallWhereParams, RelateParams, RelateResult, RememberExtractedParams,
-    RememberExtractedResult, RememberParams, RememberResult, WhyParams,
+    FeedbackParams, FeedbackResult, ForgetParams, ForgetResult, RecallFusedParams,
+    RecallFusedResult, RecallParams, RecallResult, RecallWhereParams, RelateParams, RelateResult,
+    RememberExtractedParams, RememberExtractedResult, RememberParams, RememberResult, WhyParams,
 };
 
 // --- The server ------------------------------------------------------------
@@ -203,6 +203,23 @@ impl McpServer {
             dated_context,
             now,
         }))
+    }
+
+    #[tool(
+        name = "feedback",
+        description = "Reinforce a recalled memory with an outcome: `success=true` if the fact was useful, `false` if it was noise. This durably updates the fact's learned confidence, which `recall` uses to re-rank future results — over repeated feedback, useful facts drift up and noise drifts down, so the memory improves with use without retraining the model. Returns the fact's new confidence in [0,1]."
+    )]
+    async fn feedback(
+        &self,
+        Parameters(params): Parameters<FeedbackParams>,
+    ) -> Result<Json<FeedbackResult>, ErrorData> {
+        let service = Arc::clone(&self.service);
+        let FeedbackParams { id, success } = params;
+        let confidence = tokio::task::spawn_blocking(move || service.feedback(id, success))
+            .await
+            .map_err(join_error)?
+            .map_err(to_error)?;
+        Ok(Json(FeedbackResult { id, confidence }))
     }
 
     #[tool(

@@ -155,6 +155,39 @@ TARGETS: "list[tuple[str, str]]" = [
     ("docs/guides/CLI_REPL.md", "cli_repl_version"),
 ]
 
+# velesdb-memory is versioned independently of the workspace (it ships its own
+# MCP binary on crates.io). Its version is mirrored in the MCP registry
+# manifest `server.json` (root `.version` AND `packages[*].version`) — a drift
+# there ships a registry entry pointing at a crate version that may not exist.
+# Found unpoliced during the v3.9.1 release audit (server.json agreed with
+# 0.6.0 by luck, not by gate). smithery.yaml / glama.json carry no version
+# field, so there is nothing to police in them.
+MEMORY_TARGETS: "list[tuple[str, str]]" = [
+    ("server.json", "mcp_server_json"),
+]
+
+
+def _read_memory_crate_version() -> str:
+    cargo_toml = (REPO_ROOT / "crates/velesdb-memory/Cargo.toml").read_text(encoding="utf-8")
+    match = re.search(r"^version\s*=\s*\"([^\"]+)\"", cargo_toml, re.MULTILINE)
+    if not match:
+        raise RuntimeError("Could not find version field in crates/velesdb-memory/Cargo.toml")
+    return match.group(1)
+
+
+def _read_mcp_server_json_versions(path: Path) -> str:
+    """Read EVERY version carried by the MCP registry manifest: the root
+    `.version` and each `packages[*].version` (the pin the cargo registry
+    installs from). They must all agree — return them joined if they don't
+    so the caller reports the mismatch verbatim."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    versions = [str(data.get("version"))]
+    versions += [str(pkg.get("version")) for pkg in data.get("packages", [])]
+    if any(v == "None" for v in versions):
+        raise RuntimeError(f"Missing version field(s) in {path}")
+    uniq = set(versions)
+    return versions[0] if len(uniq) == 1 else "/".join(versions)
+
 
 def _read_cargo_version() -> str:
     cargo_toml = (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
@@ -478,6 +511,7 @@ _READERS = {
     "deb_download_path": _read_deb_download_path,
     "md_version_label": _read_md_version_label,
     "cli_repl_version": _read_cli_repl_version,
+    "mcp_server_json": _read_mcp_server_json_versions,
 }
 
 
@@ -503,6 +537,21 @@ def main() -> int:
         if actual != expected:
             mismatches.append(
                 f"{rel_path} [{fmt}]: expected {expected}, found {actual}"
+            )
+
+    memory_expected = _read_memory_crate_version()
+    print(f"\nvelesdb-memory version (crates/velesdb-memory/Cargo.toml): {memory_expected}")
+    for rel_path, fmt in MEMORY_TARGETS:
+        path = REPO_ROOT / rel_path
+        if not path.exists():
+            print(f"  SKIP  {rel_path} (file not found)")
+            continue
+        actual = _READERS[fmt](path)
+        status = "OK   " if actual == memory_expected else "MISMATCH"
+        print(f"  {status}  {rel_path} [{fmt}]: {actual}")
+        if actual != memory_expected:
+            mismatches.append(
+                f"{rel_path} [{fmt}]: expected {memory_expected}, found {actual}"
             )
 
     if mismatches:

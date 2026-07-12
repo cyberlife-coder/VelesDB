@@ -261,6 +261,35 @@ impl ServerConfig {
     pub fn rate_limit_enabled(&self) -> bool {
         self.rate_limit > 0
     }
+
+    /// Returns `true` when the bind host is reachable beyond the local machine.
+    ///
+    /// A loopback host is treated as private: `localhost`, any `127.0.0.0/8`
+    /// address (`127.0.0.1`, `127.0.0.5`, …), IPv6 loopback `::1`, and the
+    /// IPv4-mapped form `::ffff:127.0.0.1`. Matching is case-insensitive and
+    /// tolerates surrounding whitespace and `[...]` brackets. Anything else —
+    /// including the wildcards `0.0.0.0`/`::` and any routable address or
+    /// hostname — is considered publicly reachable. Errs toward *over*-warning
+    /// (an unrecognised host is treated as public), never under-warning.
+    pub fn binds_publicly(&self) -> bool {
+        // Case-insensitive, whitespace- and bracket-tolerant (`[::1]`).
+        let host = self
+            .host
+            .trim()
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_ascii_lowercase();
+        if matches!(host.as_str(), "localhost" | "::1") || host.starts_with("127.") {
+            return false;
+        }
+        // IPv4-mapped IPv6 loopback, e.g. `::ffff:127.0.0.1`.
+        if let Some(v4) = host.strip_prefix("::ffff:") {
+            if v4.starts_with("127.") {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 // ============================================================================
@@ -428,6 +457,31 @@ pub fn parse_api_keys_env() -> Option<Vec<String>> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn test_binds_publicly() {
+        let mut cfg = ServerConfig::default();
+        // Loopback hosts are private — including case variants, brackets,
+        // whitespace, 127.0.0.0/8, and the IPv4-mapped IPv6 loopback.
+        for host in [
+            "127.0.0.1",
+            "::1",
+            "[::1]",
+            "localhost",
+            "LOCALHOST",
+            " localhost ",
+            "127.0.0.5",
+            "::ffff:127.0.0.1",
+        ] {
+            cfg.host = host.to_string();
+            assert!(!cfg.binds_publicly(), "{host} should be private");
+        }
+        // Wildcard and routable addresses are public.
+        for host in ["0.0.0.0", "::", "192.168.1.10", "10.0.0.1", ""] {
+            cfg.host = host.to_string();
+            assert!(cfg.binds_publicly(), "{host} should be public");
+        }
+    }
 
     #[test]
     fn test_defaults() {

@@ -7,21 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [3.9.1] — 2026-07-11
+## [3.9.1] — 2026-07-12
 
-Patch release on top of 3.9.0: telemetry correctness, version harmonization
-and supply-chain hygiene. No API breaks.
+Delivery release: everything merged on `develop` since v3.9.0 reaches users —
+RL Memory, zero-friction Docker onboarding, security warnings — plus the
+release-pipeline gate that prevents partially-harmonised trees from ever
+being tagged again. `velesdb-memory` ships as **0.7.0** (new MCP tool).
 
-### Security
-- Bumped `quinn-proto` 0.11.14 → 0.11.16 (**RUSTSEC-2026-0185**).
-- Added `.gitleaksignore` for verified false positives so the secret scan gate stays strict.
+### Added
+- **memory (velesdb-memory 0.7.0): RL Memory** — new MCP `feedback` tool plus
+  learned-confidence re-ranking of `recall`. Agents reinforce or weaken
+  memories from outcome feedback; ranking adapts over time. Persistent,
+  backwards-compatible, gated on the `persistence` feature.
+- **memory:** the default hash embedder now warns on stderr that recall is
+  lexical, not semantic (silence with `VELESDB_MEMORY_QUIET=1`), so nobody
+  mistakes the zero-dep default for semantic search.
+- **memory:** agent-memory skill shipped alongside the MCP server, with fixed
+  onboarding defaults.
+- **server:** warns when binding a public address without authentication;
+  README documents the prebuilt `ghcr.io` image (`docker run` quickstart).
 
 ### Fixed
-- **server:** `/query` no longer double-fires `on_query` telemetry (one logical query = one event).
-- **workspace:** `velesdb-core` version harmonized to the workspace version (C1); OpenAPI spec regenerated accordingly.
+- **memory:** RL re-ranking no longer inverts ordering on negative cosine
+  similarity.
+- **server:** exposed-bind warnings reconciled; loopback detection hardened.
+- **release:** a manually-entered `workflow_dispatch` version now strips a
+  leading `v` before comparison, so `v3.9.1` and `3.9.1` behave identically.
 
-### Changed
-- **deps:** dropped unused `ndarray`, `uuid` and `tokio-test` dependencies (`cargo udeps` clean).
+### CI / Release pipeline
+- **REL-07 gate:** `release.yml` now runs `check-version-sync.py` and checks
+  tag == workspace version before publishing — a partially-harmonised tree
+  can no longer be tagged. All 35 satellite manifests realigned to the
+  workspace version.
+- `check-version-sync.py` now also polices the MCP registry manifest
+  `server.json` against the independently-versioned `velesdb-memory` crate.
+- `perf-gate-e2e.yml` aligned on Rust 1.89 (was pinned to 1.86, so the perf
+  gate compiled with an older toolchain than the main CI).
+- Docker runtime image embeds the LICENSE file.
 
 ## [3.8.1] — 2026-07-10
 
@@ -51,6 +73,19 @@ security patch and a batch of correctness fixes. No API breaks.
 - **docs:** roadmap refreshed through v3.8.x with a forward-looking "Next" line; REST endpoint count corrected **48 → 54** across the tree and the promise-contract guardrail; stale version strings realigned.
 - **deps:** wgpu 30.0.0, uniffi 0.32.0, plus routine cargo/npm and CI-action group bumps.
 ## [3.9.0] — 2026-07-07
+
+> Post-cut additions shipped inside the `v3.9.0` tag (the tag was cut on the
+> July 11 tree; these were first drafted under a phantom "3.9.1" heading that
+> never became a release):
+>
+> - **Security:** bumped `quinn-proto` 0.11.14 → 0.11.16 (**RUSTSEC-2026-0185**);
+>   added `.gitleaksignore` for verified false positives so the secret scan
+>   gate stays strict.
+> - **Fixed:** `/query` no longer double-fires `on_query` telemetry (one
+>   logical query = one event); `velesdb-core` version harmonized to the
+>   workspace version (C1), OpenAPI spec regenerated accordingly.
+> - **Changed:** dropped unused `ndarray`, `uuid` and `tokio-test`
+>   dependencies (`cargo udeps` clean).
 
 ### Added
 - **Read-path control-plane hook on `DatabaseObserver`.** A new

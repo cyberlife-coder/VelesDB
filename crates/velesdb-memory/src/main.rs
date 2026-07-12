@@ -2,7 +2,8 @@
 //!
 //! Serves the memory tools over stdio so any MCP client (Claude Code, Cursor,
 //! Cline, Zed, …) can use it locally. The store never leaves the machine.
-//! Configure the store directory with `VELESDB_MEMORY_PATH` and the embedding
+//! Configure the store directory with `VELESDB_MEMORY_PATH` (default
+//! `~/.velesdb-memory`) and the embedding
 //! backend with `VELESDB_MEMORY_EMBEDDER` (`hash` | `ollama`). When built with
 //! `--features extract`, set `VELESDB_MEMORY_EXTRACTOR=ollama` to enable the
 //! `remember_extracted` tool (auto text → fact↔topic graph). Set
@@ -13,8 +14,7 @@ use velesdb_memory::mcp::McpServer;
 use velesdb_memory::{DynEmbedder, HashEmbedder, MemoryService, DEFAULT_DIMENSION};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let store_path = std::env::var("VELESDB_MEMORY_PATH")
-        .unwrap_or_else(|_| "./velesdb-memory-store".to_owned());
+    let store_path = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
 
     // All synchronous setup (env probing, blocking HTTP to Ollama, disk open)
     // runs here, before the async runtime starts, so we never block a tokio
@@ -30,6 +30,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         running.waiting().await?;
         Ok::<(), Box<dyn std::error::Error>>(())
     })
+}
+
+/// Default store location when `VELESDB_MEMORY_PATH` is unset: `~/.velesdb-memory`
+/// (the path advertised in `server.json`, the README, and every client-config
+/// snippet). A stable home-based path — never a `./`-relative one: an MCP server
+/// is launched by its client with an unpredictable working directory, so a
+/// cwd-relative default would scatter (or lose) the store between sessions. Falls
+/// back to a cwd-relative path only when no home directory can be resolved.
+fn default_store_path() -> String {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|h| !h.is_empty());
+    match home {
+        Some(home) => std::path::Path::new(&home)
+            .join(".velesdb-memory")
+            .to_string_lossy()
+            .into_owned(),
+        None => "./velesdb-memory-store".to_owned(),
+    }
 }
 
 /// Apply `VELESDB_MEMORY_DEFAULT_TTL` (seconds) as the default expiry for facts
@@ -98,12 +117,34 @@ fn build_ollama_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std:
 fn build_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
     match std::env::var("VELESDB_MEMORY_EMBEDDER").as_deref() {
         Ok("ollama") => build_ollama_embedder(),
-        Ok("hash") | Err(_) => Ok(Box::new(HashEmbedder::new(DEFAULT_DIMENSION))),
+        Ok("hash") | Err(_) => {
+            warn_hash_embedder_not_semantic();
+            Ok(Box::new(HashEmbedder::new(DEFAULT_DIMENSION)))
+        }
         Ok(other) => Err(format!(
             "unknown VELESDB_MEMORY_EMBEDDER '{other}' (expected 'hash' or 'ollama')"
         )
         .into()),
     }
+}
+
+/// Warn (on **stderr**, never stdout — that carries the MCP JSON-RPC stream)
+/// that the default `hash` embedder is deterministic but **not semantic**:
+/// `recall` matches on lexical/hash proximity, not meaning. This is the single
+/// most common "why is recall bad?" surprise, so make the trade-off explicit
+/// and point to the opt-in. Silence it for scripted/offline runs with
+/// `VELESDB_MEMORY_QUIET=1`.
+fn warn_hash_embedder_not_semantic() {
+    if std::env::var_os("VELESDB_MEMORY_QUIET").is_some() {
+        return;
+    }
+    eprintln!(
+        "[velesdb-memory] Using the default 'hash' embedder: deterministic and \
+         fully offline, but NOT semantic — recall matches surface form, not meaning. \
+         For real semantic recall, run an Ollama build with \
+         VELESDB_MEMORY_EMBEDDER=ollama (see crates/velesdb-memory/README.md). \
+         Set VELESDB_MEMORY_QUIET=1 to silence this notice."
+    );
 }
 
 #[cfg(feature = "ollama")]

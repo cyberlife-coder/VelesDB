@@ -42,6 +42,10 @@ RUN useradd -r -s /bin/false velesdb
 # Copy binary from builder
 COPY --from=builder /app/target/release/velesdb-server /usr/local/bin/
 
+# Embed the license so the redistributed image carries its notices
+# (VelesDB Core License 1.0 / ELv2 requires the license to travel with the Software).
+COPY LICENSE /usr/local/share/doc/velesdb/LICENSE
+
 # Create data directory
 RUN mkdir -p /data && chown velesdb:velesdb /data
 

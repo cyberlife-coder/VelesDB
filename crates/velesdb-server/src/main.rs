@@ -78,8 +78,20 @@ fn log_startup(cfg: &ServerConfig) {
             "API key authentication enabled ({} key(s))",
             cfg.api_keys.len()
         );
+    } else if cfg.binds_publicly() {
+        tracing::warn!(
+            "API key authentication is DISABLED while binding a publicly reachable \
+             address ({}). Every endpoint — including /metrics and all data — is open \
+             to anyone who can reach this host. Set VELESDB_API_KEYS (and preferably \
+             TLS via VELESDB_TLS_CERT/VELESDB_TLS_KEY) before exposing this server, or \
+             bind 127.0.0.1 for local development. See docs/guides/SERVER_SECURITY.md.",
+            cfg.host
+        );
     } else {
-        tracing::info!("API key authentication disabled (local dev mode)");
+        tracing::info!(
+            "API key authentication disabled (local dev mode, bound to {})",
+            cfg.host
+        );
     }
     if cfg.tls_enabled() {
         tracing::info!("TLS enabled");
@@ -184,15 +196,6 @@ fn build_router(
     }
 }
 
-fn warn_if_exposed(host: &str) {
-    if host != "127.0.0.1" && host != "localhost" {
-        tracing::warn!(
-            "VelesDB server exposed on network ({host}). \
-             Consider using 127.0.0.1 for local-first usage."
-        );
-    }
-}
-
 /// Returns a future that resolves when SIGTERM is received (Unix) or never (non-Unix).
 async fn sigterm() {
     #[cfg(unix)]
@@ -222,7 +225,6 @@ async fn serve(
     state: Arc<AppState>,
     shutdown_timeout_secs: u64,
 ) -> anyhow::Result<()> {
-    warn_if_exposed(host);
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("VelesDB server listening on http://{}", addr);
@@ -348,8 +350,6 @@ async fn serve_tls(
     state: Arc<AppState>,
     shutdown_timeout_secs: u64,
 ) -> anyhow::Result<()> {
-    warn_if_exposed(host);
-
     let tls_acceptor = velesdb_server::tls::load_tls_config(cert_path, key_path)?;
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
