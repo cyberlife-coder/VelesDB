@@ -164,6 +164,15 @@ TARGETS: "list[tuple[str, str]]" = [
 # field, so there is nothing to police in them.
 MEMORY_TARGETS: "list[tuple[str, str]]" = [
     ("server.json", "mcp_server_json"),
+    # The napi-rs node binding of velesdb-memory versions in lock-step with
+    # the crate. Its package.json was found at 0.6.0 when the 0.7.0 tag was
+    # cut (release-memory.yml failed all five node builds on the
+    # version-vs-tag check and the npm publish was skipped), and its lockfile
+    # had silently drifted to 0.4.0 — neither was policed by anything before.
+    ("crates/velesdb-node/Cargo.toml", "toml"),
+    ("crates/velesdb-node/package.json", "json"),
+    ("crates/velesdb-node/package-lock.json", "json"),
+    ("crates/velesdb-node/package-lock.json", "npm_lock_pkg"),
 ]
 
 
