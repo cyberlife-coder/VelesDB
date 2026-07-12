@@ -530,8 +530,9 @@ We ship weekly. This is the arc; the committed, dated plan lives in [ROADMAP.md]
 | **v3.0 → v3.2** | Major release + API cleanup; canonical cross-SDK wire primitives (`hash_edge_id`, shared enum-name sets); `EXPLAIN` parity across REST / CLI / Python | ✅ Shipped |
 | **v3.3** | VelesQL correctness + cross-surface parity — silent-wrong-result sweep, canonical `VELES-XXX` error codes with correct HTTP statuses, executable scalar subqueries, request hard-limits | ✅ Shipped |
 | **v3.4 → v3.7** | The `why()` wedge **everywhere** — Node binding (`velesdb-memory-node`), Python `MemoryService`, MCP `recall_fused`, browser / WASM + TypeScript-SDK `MemoryService`, durable TTL, dated-context recall, indexed prefilter for filtered recall | ✅ Shipped |
-| **v3.8** *(current)* | u64 point-id precision-safety completed across the REST surface + OpenAPI spec | ✅ Shipped |
-| **Next** | Concurrent WAL writer & Raft replication (Enterprise); WASM SIMD128 kernels + 3+ hop `MATCH`; Dual-Precision (VSAG) engine integration; side-by-side Docker-Compose ANN benchmark vs Qdrant / Chroma / FAISS | 🔜 Tracked |
+| **v3.8** | u64 point-id precision-safety completed across the REST surface + OpenAPI spec | ✅ Shipped |
+| **v3.9** *(current)* | `DatabaseObserver` read-path control-plane hook (`QueryAccessContext`) — the seam premium uses to enforce access, narrow-only; `velesdb-memory` 0.7.0 RL Memory (MCP `feedback` tool + learned-confidence recall re-ranking); zero-friction Docker onboarding; release-pipeline harmonisation gate | ✅ Shipped |
+| **Next** | Concurrent WAL writer; WASM SIMD128 kernels + 3+ hop `MATCH`; Dual-Precision (VSAG) engine integration; side-by-side Docker-Compose ANN benchmark vs Qdrant / Chroma / FAISS | 🔜 Tracked |
 
 > VelesDB Core is source-available (readable, modifiable, redistributable under the VelesDB Core License 1.0 — not an OSI-approved license; see [docs/LICENSING.md](docs/LICENSING.md)). Enterprise features (distributed replication, managed cloud, RBAC) are available separately via [VelesDB Premium](https://velesdb.com).
 
