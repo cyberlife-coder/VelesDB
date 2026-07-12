@@ -22,6 +22,20 @@ ignore = [
     { id = "RUSTSEC-2024-0418", reason = "gdk-sys: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
     { id = "RUSTSEC-2024-0419", reason = "gtk3-macros: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
     { id = "RUSTSEC-2024-0420", reason = "gtk-sys: tauri Linux GTK3 — no fix; Tauri 3 migration tracked" },
+    # glib (RUSTSEC-2024-0429 / GHSA-wrw7-89jp-8q8g, Dependabot alerts #3 &
+    # #6): unsoundness in the `glib::VariantStrIter` Iterator impls, patched
+    # in glib 0.20.0. The fix is UNREACHABLE from this dependency tree: the
+    # GTK3 bindings (gtk3-rs, archived upstream) ended at 0.18.x and pin
+    # glib =0.18, and Tauri 2.x (incl. latest 2.11.5) depends on gtk 0.18
+    # via muda/tao/webkit2gtk on Linux. `cargo update -p glib` is a no-op in
+    # both lockfiles (root + demos/tauri-rag-app/src-tauri). No ignore entry
+    # is needed: the advisory is informational ("unsound") and cargo-deny
+    # does not flag it — an ignore would trip the unmatched-ignore warning.
+    # VelesDB code never constructs `VariantStrIter` (verified: no direct
+    # glib usage in crates/ or demos/); exposure is limited to the Tauri
+    # Linux GTK3 backend and goes away with the same Tauri 3 / GTK4
+    # migration as the ignores above. If cargo-deny starts erroring on
+    # unsound advisories, add: { id = "RUSTSEC-2024-0429", ... } here.
 
     # ── Tauri non-GTK3 transitives ────────────────────────────────────
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: tauri build-time transitive, unmaintained" },
