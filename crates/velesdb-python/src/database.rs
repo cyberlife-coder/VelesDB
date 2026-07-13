@@ -111,21 +111,28 @@ impl Database {
     ///     config: Optional typed configuration (limits, etc.) applied
     ///         at open time. See :class:`VelesConfigOptions`.
     ///     observer: Optional callable invoked on collection lifecycle
-    ///         events. Called as ``observer(event, **fields)`` where
-    ///         ``event`` is one of ``"collection_created"``,
-    ///         ``"collection_deleted"``, ``"upsert"``, or ``"query"``:
+    ///         events and before every gated read. Called as
+    ///         ``observer(event, **fields)`` where ``event`` is one of
+    ///         ``"collection_created"``, ``"collection_deleted"``,
+    ///         ``"upsert"``, ``"query"``, or ``"query_request"``:
     ///
     ///         - ``collection_created`` → ``name``, ``kind``
     ///           (``"vector"``/``"metadata"``/``"graph"``/``"unknown"``)
     ///         - ``collection_deleted`` → ``name``
     ///         - ``upsert`` → ``collection``, ``point_count``
-    ///         - ``query`` → ``collection``, ``duration_us``
+    ///         - ``query`` → ``collection``, ``duration_us`` (after execution)
+    ///         - ``query_request`` → ``collection``, ``operation``,
+    ///           ``principal``, ``tenant`` (before execution — **veto point**)
     ///
     ///         The observer is immutable once the database is opened
-    ///         (there is no post-open setter). Exceptions raised inside
-    ///         the callback are swallowed so they never break a core
-    ///         operation. This is a notify-only hook — it cannot veto
-    ///         operations.
+    ///         (there is no post-open setter). For the *notify* events the
+    ///         return value is ignored and a raised exception is swallowed so
+    ///         it never breaks a core operation. For ``"query_request"`` the
+    ///         callback governs the read: return ``False`` or a string reason to
+    ///         **deny** it (raising a query error), or ``None``/``True`` to
+    ///         allow. A callback that ignores ``query_request`` (returns
+    ///         ``None``) allows every read, so existing notify-only observers
+    ///         are unaffected.
     ///
     /// Returns:
     ///     Database instance
