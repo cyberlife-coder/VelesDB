@@ -318,6 +318,26 @@ pub async fn graph_search(
         ));
     }
 
+    // Gate the read (CORE-2). Graph embedding search has no metadata-filter
+    // channel, so a denied or scope-narrowed decision refuses it (fail closed).
+    match state.db.authorize_read(
+        &name,
+        velesdb_core::observer::QueryOperationKind::VectorSearch,
+        None,
+        None,
+    ) {
+        Ok(None) => {}
+        Ok(Some(_)) | Err(_) => {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: "Read denied by governance policy".to_string(),
+                    code: None,
+                }),
+            ));
+        }
+    }
+
     let search_results = coll
         .search_by_embedding(&request.vector, request.top_k)
         .map_err(|e| {

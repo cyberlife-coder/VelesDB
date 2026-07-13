@@ -164,6 +164,29 @@ pub async fn multi_query_search(
         None => None,
     };
 
+    // Gate the read (CORE-2) before the off-thread fusion. A denied decision —
+    // or a scope narrowing, which the multi-query fusion kernel has no channel
+    // to apply — refuses the query (fail closed).
+    match state.db.authorize_read(
+        &name,
+        velesdb_core::observer::QueryOperationKind::VectorSearch,
+        None,
+        None,
+    ) {
+        Ok(None) => {}
+        Ok(Some(_)) | Err(_) => {
+            state.operational_metrics.inc_errors();
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: "Read denied by governance policy".to_string(),
+                    code: None,
+                }),
+            )
+                .into_response();
+        }
+    }
+
     let start = std::time::Instant::now();
 
     // F-01 sweep: multi-vector fusion is CPU-bound (multiple HNSW
@@ -237,6 +260,27 @@ pub async fn multi_query_search_ids(
             }),
         )
             .into_response();
+    }
+
+    // Gate the read (CORE-2) before the off-thread ids-only fusion.
+    match state.db.authorize_read(
+        &name,
+        velesdb_core::observer::QueryOperationKind::VectorSearch,
+        None,
+        None,
+    ) {
+        Ok(None) => {}
+        Ok(Some(_)) | Err(_) => {
+            state.operational_metrics.inc_errors();
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: "Read denied by governance policy".to_string(),
+                    code: None,
+                }),
+            )
+                .into_response();
+        }
     }
 
     let start = std::time::Instant::now();

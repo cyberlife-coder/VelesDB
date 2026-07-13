@@ -243,19 +243,29 @@ pub(crate) fn execute_dense_search(
     // Supersedes mode_to_ef_search — all named modes map to SearchQuality.
     let quality_mode = req.mode.as_ref().and_then(|m| mode_to_search_quality(m));
 
-    // Known limitation (#457): when filter is present, mode/ef_search are ignored
-    // because search_with_filter does not accept a quality parameter yet.
-    let result = if let Some(ref filter_json) = req.filter {
-        let filter = parse_filter_or_400(filter_json, &state.onboarding_metrics)?;
-        collection.search_with_filter(&req.vector, req.top_k, &filter)
-    } else if let Some(ef) = req.ef_search {
-        // Explicit ef_search takes precedence over quality mode
-        collection.search_with_ef(&req.vector, req.top_k, ef)
-    } else if let Some(quality) = quality_mode {
-        collection.search_with_quality(&req.vector, req.top_k, quality)
-    } else {
-        collection.search(&req.vector, req.top_k)
+    // Parse the optional metadata filter up front so the search can be routed
+    // through the governed facade. Known limitation (#457): when a filter is
+    // present, mode/ef_search are ignored (search_with_filter takes no quality
+    // parameter yet) — `gated_search` preserves that same precedence.
+    let filter = match req.filter {
+        Some(ref filter_json) => Some(parse_filter_or_400(filter_json, &state.onboarding_metrics)?),
+        None => None,
     };
+
+    // Route the read through the control-plane gate (CORE-1/CORE-2) instead of
+    // the detached collection handle. With no observer registered this is a
+    // single `Option` check followed by the same leaf search (zero overhead);
+    // when a governance observer is present, RBAC / tenant / scope apply and a
+    // denied read is refused and audited. The open-core server has no per-request
+    // principal, so principal/tenant are `None` and the observer decides.
+    let read = velesdb_core::GatedRead::Dense {
+        query: &req.vector,
+        k: req.top_k,
+        ef: req.ef_search,
+        quality: quality_mode,
+        filter: filter.as_ref(),
+    };
+    let result = state.db.gated_search(name, None, None, read);
     Ok(result)
 }
 
@@ -320,9 +330,23 @@ pub(crate) fn execute_dense_search_ids(
     if let Err(error) = validate_query_dimension(state, name, expected_dimension, &req.vector) {
         return Err((StatusCode::BAD_REQUEST, Json(error)).into_response());
     }
-    let result = collection
-        .search_ids(&req.vector, req.top_k)
-        .map(|scored| id_score_results(scored.into_iter().map(|s| (s.id, s.score))));
+    // Gate the read (CORE-2). The ids fast path is only taken for filter-free
+    // dense requests, so a scope decision fails closed rather than silently
+    // running unscoped.
+    let result = match state.db.authorize_read(
+        name,
+        velesdb_core::observer::QueryOperationKind::VectorSearch,
+        None,
+        None,
+    ) {
+        Ok(None) => collection
+            .search_ids(&req.vector, req.top_k)
+            .map(|scored| id_score_results(scored.into_iter().map(|s| (s.id, s.score)))),
+        Ok(Some(_)) => Err(velesdb_core::Error::Config(
+            "scope narrowing is not supported on the ids fast path".to_string(),
+        )),
+        Err(e) => Err(e),
+    };
     Ok(result)
 }
 
@@ -410,9 +434,18 @@ pub(crate) fn execute_search_request(
             execute_hybrid_sparse(state, name, collection, req, sparse, index_name)
         }
         SearchMode::DenseOnly => execute_dense_search(state, name, collection, req),
-        SearchMode::SparseOnly { sparse } => {
-            Ok(collection.sparse_search(sparse, req.top_k, index_name))
-        }
+        SearchMode::SparseOnly { sparse } => match state.db.authorize_read(
+            name,
+            velesdb_core::observer::QueryOperationKind::VectorSearch,
+            None,
+            None,
+        ) {
+            Ok(None) => Ok(collection.sparse_search(sparse, req.top_k, index_name)),
+            Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
+                "scope narrowing is not supported for sparse-only search".to_string(),
+            ))),
+            Err(e) => Ok(Err(e)),
+        },
     }
 }
 
@@ -431,15 +464,26 @@ fn execute_hybrid_sparse(
         return Err((StatusCode::BAD_REQUEST, Json(error)).into_response());
     }
     let strategy = parse_fusion_strategy(req.fusion.as_ref())?;
-    Ok(
-        collection.hybrid_sparse_search(
+    // Gate the read (CORE-2): hybrid dense+sparse has no metadata-filter leaf,
+    // so a scope decision fails closed rather than running unfiltered.
+    match state.db.authorize_read(
+        name,
+        velesdb_core::observer::QueryOperationKind::HybridSearch,
+        None,
+        None,
+    ) {
+        Ok(None) => Ok(collection.hybrid_sparse_search(
             &req.vector,
             sparse_query,
             req.top_k,
             index_name,
             &strategy,
-        ),
-    )
+        )),
+        Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
+            "scope narrowing is not supported for hybrid dense+sparse search".to_string(),
+        ))),
+        Err(e) => Ok(Err(e)),
+    }
 }
 
 /// Record empty-results diagnostic and notify the query timing subsystem.

@@ -112,3 +112,85 @@ def test_no_observer_is_optional():
         assert "docs" in db.list_collections()
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# CORE-5: read-path veto via the ``query_request`` event. A VelesQL SELECT is a
+# gated read, so it fires ``query_request`` before execution; returning
+# ``False`` / a reason denies it, ``None`` / ``True`` allows it.
+# ---------------------------------------------------------------------------
+
+
+def test_query_request_veto_denies_read():
+    """Returning ``False`` from ``query_request`` refuses the gated read."""
+    temp_dir = tempfile.mkdtemp()
+    try:
+
+        def deny_reads(event, **fields):
+            if event == "query_request":
+                return False
+            return None
+
+        db = Database(temp_dir, observer=deny_reads)
+        db.create_collection("docs", dimension=DIM)
+        with pytest.raises(Exception):
+            db.execute_query("SELECT * FROM docs")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_query_request_allow_permits_read():
+    """A notify-only observer (returns ``None``) allows every read unchanged."""
+    temp_dir = tempfile.mkdtemp()
+    try:
+
+        def notify_only(event, **fields):
+            return None
+
+        db = Database(temp_dir, observer=notify_only)
+        db.create_collection("docs", dimension=DIM)
+        rows = db.execute_query("SELECT * FROM docs")
+        assert isinstance(rows, list)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_query_request_reason_string_surfaces_in_error():
+    """Returning a string reason denies and carries the reason to the caller."""
+    temp_dir = tempfile.mkdtemp()
+    try:
+
+        def deny_with_reason(event, **fields):
+            if event == "query_request":
+                return "tenant mismatch"
+            return None
+
+        db = Database(temp_dir, observer=deny_with_reason)
+        db.create_collection("docs", dimension=DIM)
+        with pytest.raises(Exception) as exc:
+            db.execute_query("SELECT * FROM docs")
+        assert "tenant mismatch" in str(exc.value)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_query_request_fields_carry_collection_and_operation():
+    """The veto callback receives the collection name and operation kind."""
+    temp_dir = tempfile.mkdtemp()
+    try:
+        recorder = Recorder()
+
+        def observe(event, **fields):
+            recorder.events.append((event, fields))
+            return None
+
+        db = Database(temp_dir, observer=observe)
+        db.create_collection("docs", dimension=DIM)
+        db.execute_query("SELECT * FROM docs")
+
+        requests = recorder.events_of("query_request")
+        assert len(requests) >= 1
+        assert requests[0]["collection"] == "docs"
+        assert requests[0]["operation"] == "select"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
