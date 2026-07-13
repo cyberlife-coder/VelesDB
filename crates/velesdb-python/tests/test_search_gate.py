@@ -222,6 +222,147 @@ def test_malformed_scope_filter_denies():
 
 
 # ---------------------------------------------------------------------------
+# Fail closed on a scope dict that carries no enforceable filter. A dict MUST
+# yield a real predicate; OSS does not narrow by "tenant" alone, so an
+# empty/tenant-only dict must NOT masquerade as scoping.
+# ---------------------------------------------------------------------------
+
+
+def test_empty_scope_dict_denies():
+    """An empty ``{}`` scope dict fails closed, not allow-unscoped."""
+
+    def empty_scope(event, **fields):
+        if event == "query_request":
+            return {}
+        return None
+
+    with _Db(observer=empty_scope) as db:
+        collection = _seed(db)
+        with pytest.raises(Exception):
+            collection.search_request(SearchOptions(vector=QUERY, top_k=10))
+
+
+def test_tenant_only_scope_dict_denies():
+    """A ``{"tenant": ...}``-only dict fails closed (OSS ignores tenant)."""
+
+    def tenant_only(event, **fields):
+        if event == "query_request":
+            return {"tenant": "acme"}
+        return None
+
+    with _Db(observer=tenant_only) as db:
+        collection = _seed(db)
+        with pytest.raises(Exception):
+            collection.search_request(SearchOptions(vector=QUERY, top_k=10))
+
+
+def test_tenant_plus_filter_scope_narrows():
+    """A dict with both tenant hint and a real filter still narrows correctly."""
+
+    def scoped(event, **fields):
+        if event == "query_request":
+            return {"tenant": "acme", "filter": "tenant = 'acme'"}
+        return None
+
+    with _Db(observer=scoped) as db:
+        collection = _seed(db)
+        results = collection.search_request(SearchOptions(vector=QUERY, top_k=10))
+    assert _ids(results) == {1}
+
+
+# ---------------------------------------------------------------------------
+# Additional non-GatedRead coverage: sparse deny, and dense-backed parallel /
+# multi-query deny + scope (multi_query_search_ids fails closed on scope).
+# ---------------------------------------------------------------------------
+
+
+def test_sparse_search_deny_fails_closed():
+    with _Db(observer=_deny_reads) as db:
+        collection = _seed(db)
+        with pytest.raises(Exception):
+            collection.search_request(
+                SearchOptions(sparse_vector={0: 1.0}, top_k=2)
+            )
+
+
+def test_search_batch_parallel_deny_fails_closed():
+    with _Db(observer=_deny_reads) as db:
+        collection = _seed(db)
+        with pytest.raises(Exception):
+            collection.search_batch_parallel([QUERY], top_k=2)
+
+
+def test_search_batch_parallel_scope_narrows():
+    with _Db(observer=_scope_to_acme) as db:
+        collection = _seed(db)
+        scoped = collection.search_batch_parallel([QUERY], top_k=10)
+    assert len(scoped) == 1
+    assert _ids(scoped[0]) == {1}
+
+
+def test_multi_query_search_deny_fails_closed():
+    with _Db(observer=_deny_reads) as db:
+        collection = _seed(db)
+        with pytest.raises(Exception):
+            collection.multi_query_search([QUERY], top_k=2)
+
+
+def test_multi_query_search_scope_narrows():
+    with _Db(observer=_scope_to_acme) as db:
+        collection = _seed(db)
+        scoped = collection.multi_query_search([QUERY], top_k=10)
+    assert _ids(scoped) == {1}
+
+
+def test_multi_query_search_ids_deny_fails_closed():
+    with _Db(observer=_deny_reads) as db:
+        collection = _seed(db)
+        with pytest.raises(Exception):
+            collection.multi_query_search_ids([QUERY], top_k=2)
+
+
+def test_multi_query_search_ids_scope_fails_closed():
+    """IDs-only fused results carry no payload → scope fails closed."""
+    with _Db(observer=_scope_to_acme) as db:
+        collection = _seed(db)
+        with pytest.raises(Exception):
+            collection.multi_query_search_ids([QUERY], top_k=10)
+
+
+# ---------------------------------------------------------------------------
+# Graph collection: PyGraphCollection.search_by_embedding is now gated too.
+# ---------------------------------------------------------------------------
+
+
+def _seed_graph(db, name="kg"):
+    graph = db.create_graph_collection(name, dimension=DIM)
+    graph.upsert_node(1, {"tenant": "acme"}, [1.0, 0.0, 0.0, 0.0])
+    graph.upsert_node(2, {"tenant": "other"}, [0.9, 0.1, 0.0, 0.0])
+    return graph
+
+
+def test_graph_search_by_embedding_no_observer_unchanged():
+    with _Db() as db:
+        graph = _seed_graph(db)
+        results = graph.search_by_embedding(QUERY, 10)
+    assert _ids(results) == {1, 2}
+
+
+def test_graph_search_by_embedding_deny_fails_closed():
+    with _Db(observer=_deny_reads) as db:
+        graph = _seed_graph(db)
+        with pytest.raises(Exception):
+            graph.search_by_embedding(QUERY, 10)
+
+
+def test_graph_search_by_embedding_scope_narrows():
+    with _Db(observer=_scope_to_acme) as db:
+        graph = _seed_graph(db)
+        scoped = graph.search_by_embedding(QUERY, 10)
+    assert _ids(scoped) == {1}
+
+
+# ---------------------------------------------------------------------------
 # Backward compatibility: no observer ⇒ unchanged results + deprecation warning.
 # ---------------------------------------------------------------------------
 

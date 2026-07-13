@@ -130,11 +130,13 @@ impl Database {
     ///         it never breaks a core operation. For ``"query_request"`` the
     ///         callback governs the read: return ``False`` or a string reason to
     ///         **deny** it (raising a query error), ``None``/``True`` to allow,
-    ///         or a ``dict`` to **allow with a narrowing scope** — recognized
-    ///         keys are ``"filter"`` (a VelesQL WHERE-predicate string such as
-    ///         ``"tenant = 'acme'"``, AND-composed into the read) and
-    ///         ``"tenant"`` (an opaque tenant hint). A malformed ``"filter"``
-    ///         denies (fail closed). ``query_request`` fires for VelesQL
+    ///         or a ``dict`` to **allow with a narrowing scope**. The dict MUST
+    ///         carry an enforceable ``"filter"`` (a VelesQL WHERE-predicate
+    ///         string such as ``"tenant = 'acme'"``, AND-composed into the
+    ///         read); ``"tenant"`` is an optional audit hint OSS does not narrow
+    ///         by. A dict with a missing/empty/tenant-only or unparseable
+    ///         ``"filter"`` denies (fail closed), so a ``{"tenant": t}`` return
+    ///         can never masquerade as scoping. ``query_request`` fires for VelesQL
     ///         ``SELECT``/``MATCH`` and for the Python direct-search API
     ///         (``search``/``search_request``/``text_search``/``hybrid_search``
     ///         and their variants), with ``operation`` one of ``"select"``,
@@ -593,7 +595,11 @@ impl Database {
             .get_graph_collection(&name_owned)
             .ok_or_else(|| PyRuntimeError::new_err("Graph collection not found after creation"))?;
 
-        Ok(PyGraphCollection::new(coll, name_owned))
+        Ok(PyGraphCollection::new(
+            coll,
+            Arc::clone(&self.inner),
+            name_owned,
+        ))
     }
 
     /// Execute a VelesQL query string (SELECT, DDL, or DML).
@@ -723,7 +729,7 @@ impl Database {
         Ok(self
             .inner
             .get_graph_collection(name)
-            .map(|c| PyGraphCollection::new(c, name.to_string())))
+            .map(|c| PyGraphCollection::new(c, Arc::clone(&self.inner), name.to_string())))
     }
 
     /// Analyze a collection, computing and persisting statistics.

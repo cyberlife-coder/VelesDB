@@ -292,6 +292,10 @@ impl Collection {
     /// a non-vector collection, batch, multi-query). Returns the observer scope
     /// filter to AND into the query, `Ok(None)` to allow unmodified, or an
     /// `Err` when the read is denied (fail closed).
+    ///
+    /// `principal`/`tenant` are caller-supplied and only meaningful when a
+    /// trusted embedder forwards a verified identity (local-SDK trust boundary):
+    /// the gate authorizes against them but cannot itself authenticate the caller.
     fn authorize(
         &self,
         operation: QueryOperationKind,
@@ -321,7 +325,11 @@ fn and_scope(caller: Option<Filter>, scope: Option<Filter>) -> Option<Filter> {
 /// filter or the observer scope filter (either may be absent). A row with no
 /// payload is dropped whenever a filter is active, matching the pre-existing
 /// hybrid-sparse post-filter semantics.
-fn retain_by_filters(
+///
+/// Exposed `pub(crate)` so leaf-only search paths that take no metadata filter
+/// (sparse, parallel batch, graph embedding search) can apply an observer scope
+/// filter as a post-filter (narrow-only) after the gate authorizes the read.
+pub(crate) fn retain_by_filters(
     results: &mut Vec<SearchResult>,
     caller: Option<&Filter>,
     scope: Option<&Filter>,

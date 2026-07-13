@@ -96,10 +96,11 @@ fn operation_str(op: QueryOperationKind) -> &'static str {
 /// * `False` → [`AccessDecision::Deny`] with a default reason;
 /// * a `str` → `Deny` carrying that string as the human-readable reason;
 /// * a `dict` → [`AccessDecision::AllowWithScope`] — the read is allowed but
-///   *narrowed*. Recognized keys: `"filter"` (a `VelesQL` WHERE predicate string,
-///   e.g. `"tenant = 'acme'"`, AND-composed into the query) and `"tenant"`
-///   (an opaque tenant hint). A malformed `"filter"` **denies** (fail closed)
-///   rather than allowing an unscoped read.
+///   *narrowed*. It MUST carry an enforceable `"filter"` (a `VelesQL` WHERE
+///   predicate string, e.g. `"tenant = 'acme'"`, AND-composed into the query);
+///   `"tenant"` is an optional audit hint OSS does not itself narrow by. A dict
+///   with a missing/empty/tenant-only or unparseable `"filter"` **denies**
+///   (fail closed) rather than allowing an unscoped read.
 fn interpret_decision(ret: &Bound<'_, PyAny>) -> AccessDecision {
     if ret.is_none() {
         return AccessDecision::Allow;
@@ -124,8 +125,15 @@ fn interpret_decision(ret: &Bound<'_, PyAny>) -> AccessDecision {
 }
 
 /// Builds an [`AccessDecision::AllowWithScope`] from a callback-returned dict.
-/// A present-but-invalid `"filter"` fails closed (denies) so a policy typo can
-/// never silently widen access to an unscoped read.
+///
+/// A scope dict **must** yield an enforceable `"filter"` predicate. Because OSS
+/// enforces narrowing only through the `filter` (it forwards `tenant` for audit
+/// but does not itself narrow by it), a dict with no parseable `filter` —
+/// empty (`{}`), `tenant`-only (`{"tenant": …}`), or a `filter` that fails to
+/// parse — is treated as **DENY** (fail closed). Otherwise a policy author who
+/// writes `return {"tenant": t}` believing they scoped the read would instead
+/// receive every tenant's rows. A proper `{"filter": "<predicate>"}` narrows;
+/// bare `True`/`None` stays Allow and `False`/str stays Deny (handled upstream).
 fn interpret_scope(dict: &Bound<'_, PyDict>) -> AccessDecision {
     let tenant = dict
         .get_item("tenant")
@@ -133,23 +141,34 @@ fn interpret_scope(dict: &Bound<'_, PyDict>) -> AccessDecision {
         .flatten()
         .and_then(|v| v.extract::<String>().ok());
 
-    let filter = match dict.get_item("filter") {
+    // An enforceable filter predicate is mandatory — its absence fails closed.
+    let predicate = match dict.get_item("filter") {
         Ok(Some(v)) if !v.is_none() => match v.extract::<String>() {
-            Ok(predicate) => match parse_scope_predicate(&predicate) {
-                Ok(condition) => Some(condition),
-                Err(err) => {
-                    return AccessDecision::Deny(Error::Query(format!(
-                        "invalid observer scope filter: {err}"
-                    )))
-                }
-            },
+            Ok(predicate) => predicate,
             Err(_) => {
                 return AccessDecision::Deny(Error::Query(
                     "observer scope 'filter' must be a VelesQL predicate string".to_string(),
                 ))
             }
         },
-        _ => None,
+        _ => {
+            return AccessDecision::Deny(Error::Query(
+                "observer returned an allow-with-scope dict without an enforceable 'filter' \
+                 predicate; OSS does not narrow by 'tenant' alone, so the read is denied \
+                 (fail closed). Return a {\"filter\": \"<VelesQL predicate>\"} dict to scope, \
+                 or None/True to allow."
+                    .to_string(),
+            ))
+        }
+    };
+
+    let condition = match parse_scope_predicate(&predicate) {
+        Ok(condition) => condition,
+        Err(err) => {
+            return AccessDecision::Deny(Error::Query(format!(
+                "invalid observer scope filter: {err}"
+            )))
+        }
     };
 
     // `AccessScope` is `#[non_exhaustive]`, so struct-literal construction is
@@ -158,7 +177,7 @@ fn interpret_scope(dict: &Bound<'_, PyDict>) -> AccessDecision {
     let scope = {
         let mut scope = AccessScope::default();
         scope.tenant = tenant;
-        scope.filter = filter;
+        scope.filter = Some(condition);
         scope
     };
     AccessDecision::AllowWithScope(scope)
