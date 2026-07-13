@@ -108,6 +108,40 @@ fn and_filters(caller: Option<&Filter>, scope: Option<Filter>) -> Option<Filter>
 }
 
 impl Database {
+    /// Public read-gate check for search paths that do not map onto
+    /// [`GatedRead`] — sparse, batch, multi-query, graph-embedding and MATCH —
+    /// so their callers can enforce governance without a bespoke gated method
+    /// per return type. Consults the observer for the given collection /
+    /// operation / principal / tenant and reports what the caller must do:
+    ///
+    /// * `Ok(None)` — allow the read unmodified;
+    /// * `Ok(Some(filter))` — allow, but AND this scope filter into the search
+    ///   (callers whose search variant cannot apply a metadata filter must fail
+    ///   closed rather than run unfiltered);
+    /// * `Err(_)` — the read is denied (or the observer failed internally); the
+    ///   caller must not touch the data plane.
+    ///
+    /// With no observer registered this is a single `Option` check returning
+    /// `Ok(None)` (zero-overhead contract).
+    ///
+    /// # Errors
+    ///
+    /// Returns the observer's `Deny` error when access is refused, or the
+    /// observer's own error on an internal failure.
+    pub fn authorize_read(
+        &self,
+        collection: &str,
+        operation: QueryOperationKind,
+        principal: Option<&str>,
+        tenant_hint: Option<&str>,
+    ) -> Result<Option<Filter>> {
+        match self.read_gate_raw(collection, operation, principal, tenant_hint)? {
+            RawGateOutcome::Allow => Ok(None),
+            RawGateOutcome::Deny(err) => Err(err),
+            RawGateOutcome::Scope(scope) => Ok(scope.filter.map(scope_to_core_filter)),
+        }
+    }
+
     /// Executes a search through the control-plane read gate.
     ///
     /// Consults the registered observer via

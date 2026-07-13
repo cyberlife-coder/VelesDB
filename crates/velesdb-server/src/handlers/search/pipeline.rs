@@ -330,9 +330,23 @@ pub(crate) fn execute_dense_search_ids(
     if let Err(error) = validate_query_dimension(state, name, expected_dimension, &req.vector) {
         return Err((StatusCode::BAD_REQUEST, Json(error)).into_response());
     }
-    let result = collection
-        .search_ids(&req.vector, req.top_k)
-        .map(|scored| id_score_results(scored.into_iter().map(|s| (s.id, s.score))));
+    // Gate the read (CORE-2). The ids fast path is only taken for filter-free
+    // dense requests, so a scope decision fails closed rather than silently
+    // running unscoped.
+    let result = match state.db.authorize_read(
+        name,
+        velesdb_core::observer::QueryOperationKind::VectorSearch,
+        None,
+        None,
+    ) {
+        Ok(None) => collection
+            .search_ids(&req.vector, req.top_k)
+            .map(|scored| id_score_results(scored.into_iter().map(|s| (s.id, s.score)))),
+        Ok(Some(_)) => Err(velesdb_core::Error::Config(
+            "scope narrowing is not supported on the ids fast path".to_string(),
+        )),
+        Err(e) => Err(e),
+    };
     Ok(result)
 }
 
@@ -420,9 +434,18 @@ pub(crate) fn execute_search_request(
             execute_hybrid_sparse(state, name, collection, req, sparse, index_name)
         }
         SearchMode::DenseOnly => execute_dense_search(state, name, collection, req),
-        SearchMode::SparseOnly { sparse } => {
-            Ok(collection.sparse_search(sparse, req.top_k, index_name))
-        }
+        SearchMode::SparseOnly { sparse } => match state.db.authorize_read(
+            name,
+            velesdb_core::observer::QueryOperationKind::VectorSearch,
+            None,
+            None,
+        ) {
+            Ok(None) => Ok(collection.sparse_search(sparse, req.top_k, index_name)),
+            Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
+                "scope narrowing is not supported for sparse-only search".to_string(),
+            ))),
+            Err(e) => Ok(Err(e)),
+        },
     }
 }
 
@@ -441,15 +464,26 @@ fn execute_hybrid_sparse(
         return Err((StatusCode::BAD_REQUEST, Json(error)).into_response());
     }
     let strategy = parse_fusion_strategy(req.fusion.as_ref())?;
-    Ok(
-        collection.hybrid_sparse_search(
+    // Gate the read (CORE-2): hybrid dense+sparse has no metadata-filter leaf,
+    // so a scope decision fails closed rather than running unfiltered.
+    match state.db.authorize_read(
+        name,
+        velesdb_core::observer::QueryOperationKind::HybridSearch,
+        None,
+        None,
+    ) {
+        Ok(None) => Ok(collection.hybrid_sparse_search(
             &req.vector,
             sparse_query,
             req.top_k,
             index_name,
             &strategy,
-        ),
-    )
+        )),
+        Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
+            "scope narrowing is not supported for hybrid dense+sparse search".to_string(),
+        ))),
+        Err(e) => Ok(Err(e)),
+    }
 }
 
 /// Record empty-results diagnostic and notify the query timing subsystem.

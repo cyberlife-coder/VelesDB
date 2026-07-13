@@ -71,6 +71,29 @@ pub async fn batch_search(
         }
     };
 
+    // Gate the read (CORE-2) before dispatching the off-thread batch. A denied
+    // decision — or a scope narrowing, which batch has no per-query channel to
+    // apply — refuses the batch (fail closed).
+    match state.db.authorize_read(
+        &name,
+        velesdb_core::observer::QueryOperationKind::VectorSearch,
+        None,
+        None,
+    ) {
+        Ok(None) => {}
+        Ok(Some(_)) | Err(_) => {
+            state.operational_metrics.inc_errors();
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: "Read denied by governance policy".to_string(),
+                    code: None,
+                }),
+            )
+                .into_response();
+        }
+    }
+
     // F-01 sweep: batch search is CPU-bound (one HNSW pass per query) and must
     // not run on the async runtime thread — a large batch would otherwise block
     // a Tokio worker and starve concurrent requests. Move it to a blocking
