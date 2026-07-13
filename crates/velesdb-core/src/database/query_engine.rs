@@ -637,7 +637,12 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<(Vec<SearchResult>, u64, u64)> {
         if query.is_match_query() {
-            return self.execute_match_routed(query, params);
+            // Apply the read-path gate before the MATCH executor. The non-EXPLAIN
+            // MATCH path is gated inside `execute_query`; this counted path (used
+            // by EXPLAIN ANALYZE) routes straight to `execute_match_routed`, so
+            // without this it would let EXPLAIN ANALYZE MATCH bypass governance.
+            let gated = self.read_gate(query)?;
+            return self.execute_match_routed(&gated, params);
         }
         Ok((self.execute_query(query, params)?, 0, 0))
     }

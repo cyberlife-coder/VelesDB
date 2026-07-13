@@ -498,3 +498,55 @@ fn test_gated_search_no_observer_runs_search() {
     // No observer ⇒ zero-overhead allow ⇒ plain search results.
     assert_eq!(res.len(), 2);
 }
+
+/// CORE-6: `EXPLAIN ANALYZE MATCH` routes through `execute_query_counted` →
+/// `execute_match_routed`, which historically skipped the read gate that the
+/// non-EXPLAIN path applies in `execute_query`. With identical setup an Allow
+/// observer lets the analyzed MATCH run while a Deny observer refuses it, so the
+/// gate — not some setup error — is provably what blocks the read.
+#[test]
+fn test_explain_analyze_match_is_gated() {
+    fn setup(
+        observer: std::sync::Arc<dyn crate::observer::DatabaseObserver>,
+    ) -> (tempfile::TempDir, Database) {
+        let dir = tempdir().unwrap();
+        let db = Database::open_with_observer(dir.path(), observer).unwrap();
+        db.create_collection("docs", 2, DistanceMetric::Cosine)
+            .unwrap();
+        let coll = db.get_vector_collection("docs").unwrap();
+        coll.upsert(vec![
+            Point::new(
+                1,
+                vec![1.0, 0.0],
+                Some(serde_json::json!({"_labels": ["Doc"], "name": "Alice"})),
+            ),
+            Point::new(
+                2,
+                vec![1.0, 0.0],
+                Some(serde_json::json!({"_labels": ["Doc"], "name": "Bob"})),
+            ),
+        ])
+        .unwrap();
+        (dir, db)
+    }
+
+    let query = Parser::parse("MATCH (d:Doc) RETURN d.name LIMIT 5").unwrap();
+    let mut params = std::collections::HashMap::new();
+    params.insert("_collection".to_string(), serde_json::json!("docs"));
+
+    // Allow: the analyzed MATCH executes and yields an ExplainOutput.
+    let (_d1, allow_db) = setup(std::sync::Arc::new(AllowAllObserver));
+    let allowed = allow_db.explain_analyze_query(&query, &params);
+    assert!(
+        allowed.is_ok(),
+        "AllowAll observer must let EXPLAIN ANALYZE MATCH run: {allowed:?}"
+    );
+
+    // Deny: the read gate refuses it (CORE-6) rather than letting it bypass.
+    let (_d2, deny_db) = setup(std::sync::Arc::new(DenyObserver));
+    let denied = deny_db.explain_analyze_query(&query, &params);
+    assert!(
+        denied.is_err(),
+        "Deny observer must refuse EXPLAIN ANALYZE MATCH — no gate bypass"
+    );
+}
