@@ -198,6 +198,31 @@ impl SemanticMemory {
         memory_helpers::validate_dimension(self.dimension, embedding.len())?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let mut payload = build_payload(content, metadata);
+        // Preserve reserved system keys (`_veles_*`: durable TTL, RL confidence,
+        // entity tags) from a prior version of this fact, so a content re-store
+        // (`remember`) does not silently wipe learned state. Caller metadata is
+        // already in `payload` and the explicit `expires_at` below still wins,
+        // so a carried-forward value is only used when nothing overwrites it.
+        if self.stored_ids.read().contains(&id) {
+            if let Ok(existing) = memory_helpers::ensure_live(
+                &collection,
+                &self.collection_name,
+                &self.ttl,
+                MemoryKind::Semantic,
+                id,
+            ) {
+                if let (Some(prior), Some(obj)) = (
+                    existing.payload.as_ref().and_then(Value::as_object),
+                    payload.as_object_mut(),
+                ) {
+                    for (k, v) in prior {
+                        if k.starts_with("_veles_") && !obj.contains_key(k) {
+                            obj.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+        }
         memory_helpers::attach_expiry(&mut payload, expires_at);
         let point = Point::new(id, embedding.to_vec(), Some(payload));
         memory_helpers::upsert_points(&collection, vec![point])?;
