@@ -1,12 +1,12 @@
 //! Governed (gated) read primitives at the [`Database`] facade.
 //!
-//! Search entry points that do not build a VelesQL `Query` — REST vector /
+//! Search entry points that do not build a `VelesQL` `Query` — REST vector /
 //! text / hybrid search, and memory recall — historically bypassed the
 //! control-plane read gate because [`Database::get_vector_collection`] hands
 //! back a detached [`VectorCollection`](crate::VectorCollection) with no
 //! observer reference. These methods restore governance for those paths: they
 //! consult the observer via [`Database::read_gate_raw`] (the same resolver the
-//! VelesQL gate uses), then delegate to the collection search leaf, applying any
+//! `VelesQL` gate uses), then delegate to the collection search leaf, applying any
 //! observer-supplied scope narrowing.
 //!
 //! When no observer is registered the gate is a single `Option` check and the
@@ -85,7 +85,7 @@ impl GatedRead<'_> {
 }
 
 /// Lowers an [`AccessScope`](crate::observer::AccessScope) filter — expressed in
-/// the VelesQL [`Condition`](crate::velesql::Condition) language — into the
+/// the `VelesQL` [`Condition`](crate::velesql::Condition) language — into the
 /// lower-level [`filter::Filter`](crate::filter::Filter) the raw search leaves
 /// accept. Infallible: reuses the existing
 /// `From<velesql::Condition> for filter::Condition` conversion (the same

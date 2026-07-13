@@ -11,7 +11,7 @@ use super::Database;
 
 /// Outcome of the non-VelesQL read gate ([`Database::read_gate_raw`]).
 ///
-/// Mirrors [`AccessDecision`] but is returned to in-crate callers — the VelesQL
+/// Mirrors [`AccessDecision`] but is returned to in-crate callers — the `VelesQL`
 /// [`read_gate`](Database::read_gate) and the raw `gated_search` path — so each
 /// enforces the same decision in the shape it needs: `read_gate` maps it onto a
 /// [`Cow<Query>`](std::borrow::Cow), the raw path onto a filtered collection
@@ -448,7 +448,7 @@ impl Database {
 
     /// Non-VelesQL read-path gate, shared by [`read_gate`](Self::read_gate) and
     /// the raw `gated_search` read path (vector / text / hybrid / graph search
-    /// and memory recall that never build a VelesQL [`Query`]).
+    /// and memory recall that never build a `VelesQL` [`Query`]).
     ///
     /// Fast path: a single `Option` presence check when no observer is
     /// registered returns [`RawGateOutcome::Allow`] with zero allocation and no
