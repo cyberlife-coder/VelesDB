@@ -12,6 +12,7 @@
 //! When no observer is registered the gate is a single `Option` check and the
 //! search runs exactly as the ungated path did (zero-overhead contract).
 
+use crate::collection::VectorCollection;
 use crate::filter::{Condition, Filter};
 use crate::observer::QueryOperationKind;
 use crate::point::SearchResult;
@@ -107,6 +108,66 @@ fn and_filters(caller: Option<&Filter>, scope: Option<Filter>) -> Option<Filter>
     }
 }
 
+/// Runs a dense kNN search, picking the leaf by the effective filter and tuning.
+/// A filter (caller filter already AND-composed with any scope) routes through
+/// the filtered leaf; otherwise `ef` wins over `quality`, then plain search.
+fn run_dense(
+    coll: &VectorCollection,
+    query: &[f32],
+    k: usize,
+    ef: Option<usize>,
+    quality: Option<crate::SearchQuality>,
+    filter: Option<Filter>,
+) -> Result<Vec<SearchResult>> {
+    match filter {
+        Some(f) => coll.search_with_filter(query, k, &f),
+        None => match (ef, quality) {
+            (Some(ef), _) => coll.search_with_ef(query, k, ef),
+            (None, Some(q)) => coll.search_with_quality(query, k, q),
+            (None, None) => coll.search(query, k),
+        },
+    }
+}
+
+/// Dispatches a gated read to its collection search leaf, AND-composing the
+/// observer scope filter with any caller filter first.
+fn dispatch_gated_read(
+    coll: &VectorCollection,
+    read: GatedRead<'_>,
+    scope_filter: Option<Filter>,
+) -> Result<Vec<SearchResult>> {
+    match read {
+        GatedRead::Dense {
+            query,
+            k,
+            ef,
+            quality,
+            filter,
+        } => run_dense(
+            coll,
+            query,
+            k,
+            ef,
+            quality,
+            and_filters(filter, scope_filter),
+        ),
+        GatedRead::Text { query, k, filter } => match and_filters(filter, scope_filter) {
+            Some(f) => coll.text_search_with_filter(query, k, &f),
+            None => coll.text_search(query, k),
+        },
+        GatedRead::Hybrid {
+            vector,
+            text,
+            k,
+            alpha,
+            filter,
+        } => match and_filters(filter, scope_filter) {
+            Some(f) => coll.hybrid_search_with_filter(vector, text, k, alpha, &f),
+            None => coll.hybrid_search(vector, text, k, alpha),
+        },
+    }
+}
+
 impl Database {
     /// Public read-gate check for search paths that do not map onto
     /// [`GatedRead`] — sparse, batch, multi-query, graph-embedding and MATCH —
@@ -179,35 +240,6 @@ impl Database {
             .get_vector_collection(collection)
             .ok_or_else(|| Error::CollectionNotFound(collection.to_string()))?;
 
-        match read {
-            GatedRead::Dense {
-                query,
-                k,
-                ef,
-                quality,
-                filter,
-            } => match and_filters(filter, scope_filter) {
-                Some(f) => coll.search_with_filter(query, k, &f),
-                None => match (ef, quality) {
-                    (Some(ef), _) => coll.search_with_ef(query, k, ef),
-                    (None, Some(q)) => coll.search_with_quality(query, k, q),
-                    (None, None) => coll.search(query, k),
-                },
-            },
-            GatedRead::Text { query, k, filter } => match and_filters(filter, scope_filter) {
-                Some(f) => coll.text_search_with_filter(query, k, &f),
-                None => coll.text_search(query, k),
-            },
-            GatedRead::Hybrid {
-                vector,
-                text,
-                k,
-                alpha,
-                filter,
-            } => match and_filters(filter, scope_filter) {
-                Some(f) => coll.hybrid_search_with_filter(vector, text, k, alpha, &f),
-                None => coll.hybrid_search(vector, text, k, alpha),
-            },
-        }
+        dispatch_gated_read(&coll, read, scope_filter)
     }
 }
