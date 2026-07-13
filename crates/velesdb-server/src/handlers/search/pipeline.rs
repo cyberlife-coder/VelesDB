@@ -243,19 +243,29 @@ pub(crate) fn execute_dense_search(
     // Supersedes mode_to_ef_search — all named modes map to SearchQuality.
     let quality_mode = req.mode.as_ref().and_then(|m| mode_to_search_quality(m));
 
-    // Known limitation (#457): when filter is present, mode/ef_search are ignored
-    // because search_with_filter does not accept a quality parameter yet.
-    let result = if let Some(ref filter_json) = req.filter {
-        let filter = parse_filter_or_400(filter_json, &state.onboarding_metrics)?;
-        collection.search_with_filter(&req.vector, req.top_k, &filter)
-    } else if let Some(ef) = req.ef_search {
-        // Explicit ef_search takes precedence over quality mode
-        collection.search_with_ef(&req.vector, req.top_k, ef)
-    } else if let Some(quality) = quality_mode {
-        collection.search_with_quality(&req.vector, req.top_k, quality)
-    } else {
-        collection.search(&req.vector, req.top_k)
+    // Parse the optional metadata filter up front so the search can be routed
+    // through the governed facade. Known limitation (#457): when a filter is
+    // present, mode/ef_search are ignored (search_with_filter takes no quality
+    // parameter yet) — `gated_search` preserves that same precedence.
+    let filter = match req.filter {
+        Some(ref filter_json) => Some(parse_filter_or_400(filter_json, &state.onboarding_metrics)?),
+        None => None,
     };
+
+    // Route the read through the control-plane gate (CORE-1/CORE-2) instead of
+    // the detached collection handle. With no observer registered this is a
+    // single `Option` check followed by the same leaf search (zero overhead);
+    // when a governance observer is present, RBAC / tenant / scope apply and a
+    // denied read is refused and audited. The open-core server has no per-request
+    // principal, so principal/tenant are `None` and the observer decides.
+    let read = velesdb_core::GatedRead::Dense {
+        query: &req.vector,
+        k: req.top_k,
+        ef: req.ef_search,
+        quality: quality_mode,
+        filter: filter.as_ref(),
+    };
+    let result = state.db.gated_search(name, None, None, read);
     Ok(result)
 }
 
