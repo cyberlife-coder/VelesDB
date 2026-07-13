@@ -139,6 +139,24 @@ fn run_match(
     let match_clause = parse_match_clause(&request.query)?;
     validate_threshold(request.threshold)?;
 
+    // Gate the read (CORE-2). MATCH is a graph-traversal read; a `?`-propagated
+    // Deny refuses it, and a scope narrowing (no filter channel here) fails
+    // closed.
+    if state
+        .db
+        .authorize_read(
+            collection_name,
+            velesdb_core::observer::QueryOperationKind::GraphTraversal,
+            None,
+            None,
+        )?
+        .is_some()
+    {
+        return Err(Error::Config(
+            "scope narrowing is not supported for MATCH queries".to_string(),
+        ));
+    }
+
     let results = execute_match(&collection, &match_clause, request)?;
 
     let count = results.len();

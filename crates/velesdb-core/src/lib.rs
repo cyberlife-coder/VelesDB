@@ -259,7 +259,7 @@ mod database;
 pub mod observer;
 
 #[cfg(feature = "persistence")]
-pub use database::Database;
+pub use database::{Database, GatedRead};
 #[cfg(feature = "persistence")]
 pub use observer::DatabaseObserver;
 #[cfg(feature = "persistence")]
