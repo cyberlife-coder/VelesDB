@@ -24,6 +24,7 @@ mod collection_ops;
 mod cross_collection;
 mod ddl_executor;
 mod dml_executor;
+mod gated_search;
 mod graph_ops;
 mod introspection_executor;
 mod join_pushdown;
@@ -55,6 +56,8 @@ mod graph_ops_tests;
 mod query_engine_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod stats_tests;
+
+pub use gated_search::GatedRead;
 
 /// Database instance managing collections and storage.
 ///

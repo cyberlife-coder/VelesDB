@@ -225,19 +225,23 @@ pub async fn text_search(
     let filter_json = req.filter.clone();
     let query = req.query.clone();
     let top_k = req.top_k;
-    let collection_for_work = collection.clone();
-    let onboarding_for_work = Arc::clone(&state);
+    let name_for_work = name.clone();
+    let state_for_work = Arc::clone(&state);
 
+    // Route through the control-plane read gate (CORE-1/CORE-2) rather than the
+    // detached collection handle, so text reads inherit governance. No observer
+    // ⇒ single `Option` check then the same BM25 leaf (zero overhead).
     let work_result = run_blocking_search(move || {
-        let filter = parse_optional_filter(
-            filter_json.as_ref(),
-            &onboarding_for_work.onboarding_metrics,
-        )?;
-        Ok(if let Some(f) = filter {
-            collection_for_work.text_search_with_filter(&query, top_k, &f)
-        } else {
-            collection_for_work.text_search(&query, top_k)
-        })
+        let filter =
+            parse_optional_filter(filter_json.as_ref(), &state_for_work.onboarding_metrics)?;
+        let read = velesdb_core::GatedRead::Text {
+            query: &query,
+            k: top_k,
+            filter: filter.as_ref(),
+        };
+        Ok(state_for_work
+            .db
+            .gated_search(&name_for_work, None, None, read))
     })
     .await;
 
@@ -305,8 +309,8 @@ pub async fn hybrid_search(
     // (filter parsing, text index lookup, dense HNSW search, fusion).
     // Move the whole closure to a blocking worker so the async
     // runtime stays responsive.
-    let collection_for_work = collection.clone();
     let state_for_work = Arc::clone(&state);
+    let name_for_work = name.clone();
     let HybridSearchRequest {
         vector,
         query,
@@ -315,19 +319,20 @@ pub async fn hybrid_search(
         filter,
     } = req;
 
+    // Route through the control-plane read gate (CORE-1/CORE-2). No observer ⇒
+    // single `Option` check then the same hybrid leaf (zero overhead).
     let work_result = run_blocking_search(move || {
         let filter = parse_optional_filter(filter.as_ref(), &state_for_work.onboarding_metrics)?;
-        Ok(if let Some(f) = filter {
-            collection_for_work.hybrid_search_with_filter(
-                &vector,
-                &query,
-                top_k,
-                Some(vector_weight),
-                &f,
-            )
-        } else {
-            collection_for_work.hybrid_search(&vector, &query, top_k, Some(vector_weight))
-        })
+        let read = velesdb_core::GatedRead::Hybrid {
+            vector: &vector,
+            text: &query,
+            k: top_k,
+            alpha: Some(vector_weight),
+            filter: filter.as_ref(),
+        };
+        Ok(state_for_work
+            .db
+            .gated_search(&name_for_work, None, None, read))
     })
     .await;
 
