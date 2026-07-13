@@ -18,10 +18,13 @@ pub(crate) mod scroll;
 mod search;
 pub(crate) mod search_options;
 
+use std::sync::Arc;
+
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use velesdb_core::{
-    Filter, FusionStrategy as CoreFusionStrategy, SearchResult, VectorCollection as CoreCollection,
+    Condition, Database as CoreDatabase, Filter, FusionStrategy as CoreFusionStrategy, GatedRead,
+    QueryOperationKind, SearchResult, VectorCollection as CoreCollection,
 };
 
 /// Default fusion strategy when none is specified by the caller.
@@ -110,6 +113,12 @@ impl CollectionKind {
 pub struct Collection {
     /// Core collection (cheap to clone — all fields are `Arc`-wrapped internally).
     pub(crate) inner: CoreCollection,
+    /// Shared handle to the owning database. `inner` is a *detached* collection
+    /// leaf with no observer reference, so every search is routed back through
+    /// this handle's control-plane read gate (`gated_search` / `authorize_read`)
+    /// rather than hitting the leaf directly — restoring governance for the
+    /// Python direct-search API (OSS direct-search gate).
+    pub(crate) db: Arc<CoreDatabase>,
     /// Cached name to avoid acquiring `config` read lock on every `#[getter]` access.
     pub(crate) name: String,
     /// Real kind of the wrapped collection; guards vector-only methods.
@@ -118,15 +127,25 @@ pub struct Collection {
 
 impl Collection {
     /// Create a wrapper for a vector collection.
-    pub fn new(inner: CoreCollection, name: String) -> Self {
-        Self::new_with_kind(inner, name, CollectionKind::Vector)
+    pub fn new(inner: CoreCollection, db: Arc<CoreDatabase>, name: String) -> Self {
+        Self::new_with_kind(inner, db, name, CollectionKind::Vector)
     }
 
     /// Create a wrapper for a collection whose real kind may not be vector
     /// (graph/metadata), so vector-only methods fail loud rather than returning
     /// empty results (F2.2).
-    pub(crate) fn new_with_kind(inner: CoreCollection, name: String, kind: CollectionKind) -> Self {
-        Self { inner, name, kind }
+    pub(crate) fn new_with_kind(
+        inner: CoreCollection,
+        db: Arc<CoreDatabase>,
+        name: String,
+        kind: CollectionKind,
+    ) -> Self {
+        Self {
+            inner,
+            db,
+            name,
+            kind,
+        }
     }
 
     /// Rejects a vector-only operation on a non-vector collection with a clear,
@@ -145,8 +164,13 @@ impl Collection {
 
     /// Dispatch to the correct search path based on which arguments are present.
     ///
-    /// Handles all combinations of dense/sparse with optional filter and
-    /// optional named sparse index selection.
+    /// Every path is routed through the owning database's control-plane read
+    /// gate first: dense-only / dense+filter reads map directly onto
+    /// [`GatedRead::Dense`] and run via [`gated_search`](CoreDatabase::gated_search);
+    /// sparse and hybrid-sparse reads have no `GatedRead` leaf, so they consult
+    /// [`authorize_read`](CoreDatabase::authorize_read) and AND any observer
+    /// scope filter into a post-filter (fail closed on deny, narrow on scope).
+    #[allow(clippy::too_many_arguments)] // gate identity (principal/tenant) threads through
     fn dispatch_search(
         &self,
         dense: Option<Vec<f32>>,
@@ -155,6 +179,8 @@ impl Collection {
         filter: Option<&Filter>,
         sparse_index_name: Option<&str>,
         fusion: Option<&CoreFusionStrategy>,
+        principal: Option<&str>,
+        tenant: Option<&str>,
     ) -> PyResult<Vec<SearchResult>> {
         use crate::collection_helpers::core_err;
         use pyo3::exceptions::PyValueError;
@@ -169,42 +195,160 @@ impl Collection {
         // (backlog #24); other paths ignore it. Default preserves RRF k=60.
         let fusion = fusion.unwrap_or(&DEFAULT_FUSION);
 
-        match (dense, sparse, filter) {
-            (Some(d), Some(s), Some(f)) => {
-                // No native hybrid_sparse_search_with_filter — run unfiltered then post-filter
-                let mut results = self
-                    .inner
-                    .hybrid_sparse_search(&d, &s, top_k, index_name, fusion)
+        match (dense, sparse) {
+            // Dense-only / dense+filter: expressible as a governed `GatedRead`.
+            (Some(d), None) => self
+                .db
+                .gated_search(
+                    &self.name,
+                    principal,
+                    tenant,
+                    GatedRead::Dense {
+                        query: &d,
+                        k: top_k,
+                        ef: None,
+                        quality: None,
+                        filter,
+                    },
+                )
+                .map_err(core_err),
+            // Any path carrying a sparse vector: the gate has no sparse leaf, so
+            // authorize the read (deny ⇒ Err, fail closed) then AND the observer
+            // scope filter into a post-filter so a scoped read only narrows.
+            (dense_opt, Some(s)) => {
+                let scope = self
+                    .db
+                    .authorize_read(
+                        &self.name,
+                        QueryOperationKind::VectorSearch,
+                        principal,
+                        tenant,
+                    )
                     .map_err(core_err)?;
-                results.retain(|r| {
-                    r.point
-                        .payload
-                        .as_ref()
-                        .is_some_and(|p| f.matches(p))
-                });
-                Ok(results)
+                self.run_sparse_gated(
+                    dense_opt.as_deref(),
+                    &s,
+                    top_k,
+                    filter,
+                    scope.as_ref(),
+                    index_name,
+                    fusion,
+                )
             }
-            (Some(d), Some(s), None) => self
-                .inner
-                .hybrid_sparse_search(&d, &s, top_k, index_name, fusion)
-                .map_err(core_err),
-            (Some(d), None, Some(f)) => self
-                .inner
-                .search_with_filter(&d, top_k, f)
-                .map_err(core_err),
-            (Some(d), None, None) => self.inner.search(&d, top_k).map_err(core_err),
-            (None, Some(_), Some(_)) => Err(PyValueError::new_err(
-                "Filter is not supported with sparse-only search; provide 'vector' for hybrid search",
-            )),
-            (None, Some(s), None) => self
-                .inner
-                .sparse_search(&s, top_k, index_name)
-                .map_err(core_err),
-            (None, None, _) => Err(PyValueError::new_err(
+            (None, None) => Err(PyValueError::new_err(
                 "At least one of 'vector' or 'sparse_vector' must be provided",
             )),
         }
     }
+
+    /// Runs a sparse-only or hybrid dense+sparse search after the read gate has
+    /// authorized it, applying the caller filter and any observer scope filter
+    /// via post-filtering (neither leaf accepts a metadata filter natively).
+    #[allow(clippy::too_many_arguments)] // scope threading is intrinsic to the gate
+    fn run_sparse_gated(
+        &self,
+        dense: Option<&[f32]>,
+        sparse: &velesdb_core::sparse_index::SparseVector,
+        top_k: usize,
+        caller_filter: Option<&Filter>,
+        scope_filter: Option<&Filter>,
+        index_name: &str,
+        fusion: &CoreFusionStrategy,
+    ) -> PyResult<Vec<SearchResult>> {
+        use crate::collection_helpers::core_err;
+        use pyo3::exceptions::PyValueError;
+
+        match dense {
+            // Hybrid dense+sparse: no filtered leaf — run unfiltered then
+            // post-filter by the caller filter AND the observer scope filter.
+            Some(d) => {
+                let mut results = self
+                    .inner
+                    .hybrid_sparse_search(d, sparse, top_k, index_name, fusion)
+                    .map_err(core_err)?;
+                retain_by_filters(&mut results, caller_filter, scope_filter);
+                Ok(results)
+            }
+            // Sparse-only: a caller filter was never supported here (preserved
+            // error). A governance scope filter still applies via post-filter,
+            // so a scoped observer narrows rather than being silently bypassed.
+            None => {
+                if caller_filter.is_some() {
+                    return Err(PyValueError::new_err(
+                        "Filter is not supported with sparse-only search; provide 'vector' for hybrid search",
+                    ));
+                }
+                let mut results = self
+                    .inner
+                    .sparse_search(sparse, top_k, index_name)
+                    .map_err(core_err)?;
+                retain_by_filters(&mut results, None, scope_filter);
+                Ok(results)
+            }
+        }
+    }
+
+    /// Consults the read gate for a non-`GatedRead` search path (sparse, text on
+    /// a non-vector collection, batch, multi-query). Returns the observer scope
+    /// filter to AND into the query, `Ok(None)` to allow unmodified, or an
+    /// `Err` when the read is denied (fail closed).
+    fn authorize(
+        &self,
+        operation: QueryOperationKind,
+        principal: Option<&str>,
+        tenant: Option<&str>,
+    ) -> PyResult<Option<Filter>> {
+        self.db
+            .authorize_read(&self.name, operation, principal, tenant)
+            .map_err(crate::collection_helpers::core_err)
+    }
+}
+
+/// AND-composes a caller filter with an observer scope filter. The result
+/// matches only rows satisfying both, so composing a scope can only narrow.
+fn and_scope(caller: Option<Filter>, scope: Option<Filter>) -> Option<Filter> {
+    match (caller, scope) {
+        (None, None) => None,
+        (Some(c), None) => Some(c),
+        (None, Some(s)) => Some(s),
+        (Some(c), Some(s)) => Some(Filter::new(Condition::And {
+            conditions: vec![c.condition, s.condition],
+        })),
+    }
+}
+
+/// Post-filters search results in place, dropping any row failing the caller
+/// filter or the observer scope filter (either may be absent). A row with no
+/// payload is dropped whenever a filter is active, matching the pre-existing
+/// hybrid-sparse post-filter semantics.
+fn retain_by_filters(
+    results: &mut Vec<SearchResult>,
+    caller: Option<&Filter>,
+    scope: Option<&Filter>,
+) {
+    if caller.is_none() && scope.is_none() {
+        return;
+    }
+    results.retain(|r| {
+        r.point.payload.as_ref().is_some_and(|p| {
+            caller.is_none_or(|f| f.matches(p)) && scope.is_none_or(|f| f.matches(p))
+        })
+    });
+}
+
+/// Refuses a search whose return shape (IDs and scores only, no payload) cannot
+/// carry an observer scope filter. Rather than silently returning unscoped
+/// rows, the read fails closed and the caller is pointed at a filterable entry
+/// point. A `None` scope (plain allow) is a no-op.
+fn deny_if_scoped(scope: Option<Filter>, context: &str) -> PyResult<()> {
+    if scope.is_some() {
+        return Err(pyo3::exceptions::PyPermissionError::new_err(format!(
+            "{context} cannot honor the governance scope filter returned by the observer \
+             (this entry point returns only ids/scores and has no metadata-filtered leaf); \
+             refusing to run unscoped. Use search()/search_request() with the same query instead."
+        )));
+    }
+    Ok(())
 }
 
 #[pymethods]
