@@ -39,6 +39,7 @@ use crate::collection::stats::{CollectionStats, IndexStats};
 
 // Re-export types that were historically defined here so that existing
 // `use crate::collection::query_cost::cost_model::X` paths keep working.
+#[cfg(feature = "persistence")]
 pub(crate) use super::calibration::calibrate_cost_factors;
 pub use super::cost_factors::OperationCostFactors;
 
