@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.11.0] — 2026-07-14
+
+Chief-engineer audit resolution: closes every actionable finding from the
+line-by-line `velesdb-core` audit (soundness, quality-gate coverage,
+feature-gating, and documentation). No user-facing behavior changes except one
+new opt-in feature. The one large item — splitting the `Collection` god-object
+backing store — is deliberately deferred as a tracked EPIC (#1384) rather than
+rushed on a released core.
+
+### Added
+
+- **Opt-in fail-closed observer mode.** `Database(..., observer_strict=True)`
+  (Python) makes an *error* while consulting a `query_request` read policy — the
+  callback raising or returning an uninterpretable value — resolve to **deny**
+  instead of the default fail-open **allow**. Default is unchanged (fail-open, so
+  a bug in policy code never breaks a read); strict mode is for governance / RBAC
+  deployments. Explicit decisions (`None`/`True`/`False`/str/dict) are unaffected.
+  (Audit F-5.3.)
+- **VelesQL query planner is available without the `persistence` feature.**
+  `velesql::{planner, explain, cost_estimator, query_stats}` no longer require
+  `persistence`; they and their `collection::{stats, query_cost}` /
+  `match_planner` dependencies now compile with `--no-default-features`, so
+  no-persistence builds (the WASM path) can reach the core planner instead of
+  reimplementing it. The persistence build is unchanged. (Audit P1.4.)
+
+### Changed
+
+- **`AnyCollection::into_vector_unchecked` (`unsafe`) → `into_vector_facade`
+  (safe).** The method was never memory-unsafe — its body is a plain value move
+  between three newtypes that wrap the identical inner `Collection` — so the
+  `unsafe` marker (which flagged a *logical* contract) has been removed. The two
+  internal Python call-sites drop their `unsafe {}` blocks; the real contract is
+  still enforced by the captured `CollectionKind` + `Collection::ensure_vector`.
+  Removes the workspace's last logically-unsound `unsafe`. *Migration:* if you
+  called `into_vector_unchecked` directly, rename to `into_vector_facade` and
+  drop the `unsafe` block (no behavior change). (Audit P0.)
+- **Uniform `AnyCollection` dispatch** via a single private `inner()` accessor —
+  the shared, identical-across-kinds methods no longer mix `c.method()` /
+  `c.inner.method()` forwarding. No behavior change. (Audit P2.6.)
+- **`column_store` deletion state unified on `RoaringBitmap`.** Removed the
+  redundant parallel `deleted_rows` FxHashSet tombstone set; the bitmap is now the
+  single source of truth. (Audit F-2.11.)
+- **Quality-gate coverage extended.** `scripts/check_prod_unwraps.py` now scans
+  every production crate (adds `velesdb-memory`, `velesdb-node`, `velesdb-python`)
+  and recognizes composite test gates like `#[cfg(all(test, feature = "…"))]`;
+  the CI `Verify SAFETY template` job now validates unsafe blocks in **all**
+  crates, not just `velesdb-core`. (Audit F-3.10 / F-3.11 / F-3.12.)
+
+### Fixed
+
+- Encapsulated `MmapStorage`'s `pub(super)` fields behind accessors and removed
+  dead `simd_native` re-exports. (Audit P3.11 / P3.13.)
+- Completed the SAFETY template on the Python binding's unsafe block
+  (Audit F-3.2) — now superseded by the `into_vector_facade` removal above.
+
+### Documentation
+
+- Clarified `Point::is_metadata_only` semantics (P2.7), disambiguated
+  `SearchMode::Perfect` (bruteforce engine) from `SearchQuality::Perfect` (HNSW
+  graph effort) (P2.9), and documented the planner strategy realization on SELECT
+  (F-2.15), the indexed-metadata scan fallback (F-4.7), read-path-gate ecosystem
+  parity (F-5.4), and the per-function NLOC governance model (F-5.13).
+- Refreshed the `docs/ARCHITECTURE.md` F2.2 tech-debt entry to reflect the safe
+  `into_vector_facade` and link the `Collection` split EPIC (#1384). (P2.10.)
+
 ## [3.10.0] — 2026-07-14
 
 Delivery release: closes the P0 flagged by the 7-auditor review — the OSS
