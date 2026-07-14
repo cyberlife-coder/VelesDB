@@ -58,15 +58,34 @@ def _scope_to_acme(event, **fields):
     return None
 
 
+def _raise_on_read(event, **fields):
+    """A buggy policy that raises while deciding a gated read."""
+    if event == "query_request":
+        raise RuntimeError("policy bug")
+    return None
+
+
+def _return_bad_type(event, **fields):
+    """A buggy policy that returns an uninterpretable value (a list)."""
+    if event == "query_request":
+        return ["not", "a", "decision"]
+    return None
+
+
 class _Db:
     """Context-managed temp database, optionally with an observer."""
 
-    def __init__(self, observer=None):
+    def __init__(self, observer=None, observer_strict=False):
         self.observer = observer
+        self.observer_strict = observer_strict
 
     def __enter__(self):
         self.dir = tempfile.mkdtemp()
-        self.db = Database(self.dir, observer=self.observer)
+        self.db = Database(
+            self.dir,
+            observer=self.observer,
+            observer_strict=self.observer_strict,
+        )
         return self.db
 
     def __exit__(self, *exc):
@@ -145,6 +164,54 @@ def test_search_ids_deny_fails_closed():
         collection = _seed(db)
         with pytest.raises(Exception):
             collection.search_ids(QUERY, top_k=2)
+
+
+# ---------------------------------------------------------------------------
+# Strict (fail-closed) mode, audit F-5.3: a policy *error* denies under strict
+# and allows (fail-open) by default. Explicit decisions are unaffected.
+# ---------------------------------------------------------------------------
+
+
+def test_policy_exception_fails_open_by_default():
+    """A raising policy must NOT break the read in the default (fail-open) mode."""
+    with _Db(observer=_raise_on_read) as db:
+        collection = _seed(db)
+        results = collection.search_request(SearchOptions(vector=QUERY, top_k=2))
+        assert _ids(results) == {1, 2}
+
+
+def test_policy_exception_fails_closed_under_strict():
+    """The same raising policy denies the read when observer_strict=True."""
+    with _Db(observer=_raise_on_read, observer_strict=True) as db:
+        collection = _seed(db)
+        with pytest.raises(Exception):
+            collection.search_request(SearchOptions(vector=QUERY, top_k=2))
+
+
+def test_bad_return_type_fails_open_by_default():
+    """An uninterpretable return value is treated as allow by default."""
+    with _Db(observer=_return_bad_type) as db:
+        collection = _seed(db)
+        results = collection.search_request(SearchOptions(vector=QUERY, top_k=2))
+        assert _ids(results) == {1, 2}
+
+
+def test_bad_return_type_fails_closed_under_strict():
+    """An uninterpretable return value denies the read under strict mode."""
+    with _Db(observer=_return_bad_type, observer_strict=True) as db:
+        collection = _seed(db)
+        with pytest.raises(Exception):
+            collection.search_request(SearchOptions(vector=QUERY, top_k=2))
+
+
+def test_explicit_allow_unaffected_by_strict():
+    """None/allow from the policy still allows even under strict mode."""
+    with _Db(observer=_scope_to_acme, observer_strict=True) as db:
+        collection = _seed(db)
+        results = collection.search_request(SearchOptions(vector=QUERY, top_k=10))
+        # Scope still narrows to tenant 'acme' (id 1), proving strict didn't
+        # turn an explicit allow-with-scope into a denial.
+        assert _ids(results) == {1}
 
 
 # ---------------------------------------------------------------------------

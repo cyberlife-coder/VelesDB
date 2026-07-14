@@ -39,6 +39,10 @@
 
 use std::fmt;
 
+// Cost-factor calibration is only consumed by the persistence-gated statistics
+// path (`collection::core::statistics`); gate it so the planner-only build
+// (P1.4, `--no-default-features`) stays warning-clean.
+#[cfg(feature = "persistence")]
 pub mod calibration;
 pub mod cost_factors;
 pub mod cost_model;

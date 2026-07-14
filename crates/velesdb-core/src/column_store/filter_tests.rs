@@ -104,7 +104,6 @@ fn filter_in_string_no_matches() {
 fn filter_excludes_deleted_rows() {
     let mut store = store_with_rows(5, &["a"]);
     // Delete row 2
-    store.deleted_rows.insert(2);
     if let Ok(idx) = u32::try_from(2_usize) {
         store.deletion_bitmap.insert(idx);
     }
@@ -323,9 +322,7 @@ fn test_filter_in_string_bitmap_excludes_deleted() {
     let mut store = store_with_rows(6, &["a", "b"]);
     // Rows: 0=a, 1=b, 2=a, 3=b, 4=a, 5=b
     // Delete rows 0 and 4 (both "a")
-    store.deleted_rows.insert(0);
     store.deletion_bitmap.insert(0);
-    store.deleted_rows.insert(4);
     store.deletion_bitmap.insert(4);
 
     let bitmap = store.filter_in_string_bitmap("name", &["a"]);
@@ -363,7 +360,6 @@ fn test_filter_in_int_bitmap_excludes_deleted() {
     let mut store = store_with_rows(6, &["a"]);
     // age column: 0,1,2,3,4,5
     // Delete row 2
-    store.deleted_rows.insert(2);
     store.deletion_bitmap.insert(2);
 
     let bitmap = store.filter_in_int_bitmap("age", &[1, 2, 3]);

@@ -13,11 +13,9 @@ use super::types::{
     JoinPlanNode, LimitPlan, MatchTraversalPlan, OffsetPlan, PlanNode, QueryPlan, SortPlan,
     TableScanPlan, VectorSearchPlan,
 };
-use crate::collection::search::query::match_planner::{
-    CollectionStats, MatchExecutionStrategy, MatchQueryPlanner,
-};
 use crate::collection::stats::CollectionStats as CoreCollectionStats;
 use crate::velesql::ast::{Condition, LetBinding, SelectStatement, DEFAULT_SELECT_LIMIT};
+use crate::velesql::match_planner::{CollectionStats, MatchExecutionStrategy, MatchQueryPlanner};
 use crate::velesql::MatchClause;
 
 impl QueryPlan {
@@ -542,7 +540,8 @@ impl QueryPlan {
     }
 
     /// Returns the heuristic cost for a single plan node.
-    #[cfg(test)]
+    // Test-only shim; its sole consumer (`explain_tests`) is persistence-gated (P1.4).
+    #[cfg(all(test, feature = "persistence"))]
     pub(crate) fn node_cost(node: &PlanNode) -> f64 {
         node_stats::node_cost(node)
     }

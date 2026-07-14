@@ -9,16 +9,20 @@ use super::ColumnStore;
 use roaring::RoaringBitmap;
 use std::collections::HashMap;
 
+/// Returns whether `idx` is tombstoned in the deletion bitmap.
+///
+/// Indices that don't fit `u32` can never be tombstoned, so they count as live.
+#[inline]
+fn is_deleted(deleted: &RoaringBitmap, idx: usize) -> bool {
+    u32::try_from(idx).is_ok_and(|i| deleted.contains(i))
+}
+
 /// Filters a column vector, removing entries at deleted indices and counting reclaimed bytes.
-fn compact_vec<T: Copy>(
-    data: &[T],
-    deleted: &rustc_hash::FxHashSet<usize>,
-    element_bytes: u64,
-) -> (Vec<T>, u64) {
-    let mut new_data = Vec::with_capacity(data.len().saturating_sub(deleted.len()));
+fn compact_vec<T: Copy>(data: &[T], deleted: &RoaringBitmap, element_bytes: u64) -> (Vec<T>, u64) {
+    let mut new_data = Vec::with_capacity(data.len().saturating_sub(deleted.len() as usize));
     let mut bytes_reclaimed = 0u64;
     for (idx, value) in data.iter().enumerate() {
-        if deleted.contains(&idx) {
+        if is_deleted(deleted, idx) {
             bytes_reclaimed += element_bytes;
         } else {
             new_data.push(*value);
@@ -30,13 +34,13 @@ fn compact_vec<T: Copy>(
 /// Clone-based variant of `compact_vec` for non-Copy types (e.g., `SmallVec`).
 fn compact_vec_clone<T: Clone>(
     data: &[T],
-    deleted: &rustc_hash::FxHashSet<usize>,
+    deleted: &RoaringBitmap,
     element_bytes: u64,
 ) -> (Vec<T>, u64) {
-    let mut new_data = Vec::with_capacity(data.len().saturating_sub(deleted.len()));
+    let mut new_data = Vec::with_capacity(data.len().saturating_sub(deleted.len() as usize));
     let mut bytes_reclaimed = 0u64;
     for (idx, value) in data.iter().enumerate() {
-        if deleted.contains(&idx) {
+        if is_deleted(deleted, idx) {
             bytes_reclaimed += element_bytes;
         } else {
             new_data.push(value.clone());
@@ -63,7 +67,7 @@ impl ColumnStore {
     /// Statistics about the vacuum operation.
     pub fn vacuum(&mut self, _config: VacuumConfig) -> VacuumStats {
         let start = std::time::Instant::now();
-        let tombstones_found = self.deleted_rows.len();
+        let tombstones_found = self.deletion_bitmap.len() as usize;
 
         if tombstones_found == 0 {
             return VacuumStats {
@@ -84,8 +88,7 @@ impl ColumnStore {
         self.remap_primary_index(&old_to_new);
         self.remap_row_expiry(&old_to_new);
 
-        stats.tombstones_removed = self.deleted_rows.len();
-        self.deleted_rows.clear();
+        stats.tombstones_removed = self.deletion_bitmap.len() as usize;
         self.deletion_bitmap.clear();
         self.row_count = new_row_count;
 
@@ -99,7 +102,7 @@ impl ColumnStore {
         let mut old_to_new: HashMap<usize, usize> = HashMap::new();
         let mut new_idx = 0;
         for old_idx in 0..self.row_count {
-            if !self.deleted_rows.contains(&old_idx) {
+            if !self.is_row_deleted_bitmap(old_idx) {
                 old_to_new.insert(old_idx, new_idx);
                 new_idx += 1;
             }
@@ -110,7 +113,7 @@ impl ColumnStore {
     /// Compacts all columns, removing deleted rows and accumulating reclaimed bytes.
     fn compact_all_columns(&mut self, stats: &mut VacuumStats) {
         for column in self.columns.values_mut() {
-            let (new_col, bytes) = Self::compact_column(column, &self.deleted_rows);
+            let (new_col, bytes) = Self::compact_column(column, &self.deletion_bitmap);
             stats.bytes_reclaimed += bytes;
             *column = new_col;
         }
@@ -145,10 +148,7 @@ impl ColumnStore {
     }
 
     /// Compacts a single column by removing deleted rows.
-    fn compact_column(
-        column: &TypedColumn,
-        deleted: &rustc_hash::FxHashSet<usize>,
-    ) -> (TypedColumn, u64) {
+    fn compact_column(column: &TypedColumn, deleted: &RoaringBitmap) -> (TypedColumn, u64) {
         match column {
             TypedColumn::Int(data) => {
                 let (new_data, bytes) = compact_vec(data, deleted, 8);
@@ -196,7 +196,7 @@ impl ColumnStore {
         if self.row_count == 0 {
             return false;
         }
-        let ratio = self.deleted_rows.len() as f64 / self.row_count as f64;
+        let ratio = self.deletion_bitmap.len() as f64 / self.row_count as f64;
         ratio >= threshold
     }
 
@@ -206,16 +206,12 @@ impl ColumnStore {
 
     /// Checks if a row is deleted using RoaringBitmap (O(1) lookup).
     ///
-    /// This is faster than FxHashSet for large deletion sets.
+    /// Single source of truth for deletion state. Indices >= `u32::MAX` cannot
+    /// be tombstoned (the bitmap is `u32`-indexed) and are reported as live.
     #[must_use]
     #[inline]
     pub fn is_row_deleted_bitmap(&self, row_idx: usize) -> bool {
-        if let Ok(idx) = u32::try_from(row_idx) {
-            self.deletion_bitmap.contains(idx)
-        } else {
-            // Fallback to FxHashSet for indices > u32::MAX
-            self.deleted_rows.contains(&row_idx)
-        }
+        u32::try_from(row_idx).is_ok_and(|idx| self.deletion_bitmap.contains(idx))
     }
 
     /// Returns an iterator over live (non-deleted) row indices.
