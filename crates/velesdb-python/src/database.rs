@@ -367,17 +367,12 @@ impl Database {
                 } else {
                     CollectionKind::Vector
                 };
-                // SAFETY: `any_coll` came from `get_any_collection` (Some), so the
-                // underlying `AnyCollection` is registered and valid.
-                // - any_coll is a valid, registered handle returned by
-                //   `get_any_collection`; it is never a disconnected copy.
-                // - The coerced vector facade only exercises the shared surface
-                //   for non-Vector kinds; `kind` is captured above and
-                //   `Collection::ensure_vector` rejects vector-only ops on
-                //   graph/metadata collections (fails loud, not UB).
-                // Reason: single-Collection Python ergonomic facade (mirrors the
-                // conforming block in `create_metadata_collection` below).
-                let vc = unsafe { any_coll.into_vector_unchecked() };
+                // `into_vector_facade` is a safe value move (all AnyCollection
+                // variants wrap the same inner Collection). `kind` is captured
+                // above and `Collection::ensure_vector` rejects vector-only ops
+                // on graph/metadata collections, so the facade fails loud rather
+                // than returning misleading results.
+                let vc = any_coll.into_vector_facade();
                 Ok(Some(Collection::new_with_kind(
                     vc,
                     Arc::clone(&self.inner),
@@ -459,13 +454,11 @@ impl Database {
             .inner
             .get_any_collection(&name_owned)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
-        // SAFETY: Python SDK wraps the freshly-created metadata collection in the
-        // single Collection facade (mirrors `get_collection` above).
-        // - any was just registered by `create_metadata_collection` and retrieved
-        //   via `get_any_collection`, so it is a valid registered handle.
-        // - Only the shared surface is exercised on metadata variants.
-        // Reason: single-Collection Python ergonomic facade.
-        let collection = unsafe { any.into_vector_unchecked() };
+        // Wrap the freshly-created metadata collection in the single Collection
+        // facade (mirrors `get_collection` above). `into_vector_facade` is a
+        // safe value move; the `Metadata` kind is recorded below and
+        // `Collection::ensure_vector` rejects vector-only ops on it.
+        let collection = any.into_vector_facade();
 
         Ok(Collection::new_with_kind(
             collection,

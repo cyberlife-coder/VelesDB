@@ -561,36 +561,27 @@ impl AnyCollection {
     /// shared surface (`config`, `flush`, `diagnostics`, `point_count`,
     /// `execute_query_str`) on the result.
     ///
-    /// # Safety
+    /// # Facade semantics
     ///
-    /// Calling vector-specific methods on a `VectorCollection` obtained from
-    /// a `Graph` or `Metadata` variant is **not** memory-unsafe, but the
-    /// result is logically unsound: the underlying storage does not hold a
-    /// homogeneous vector index, and the returned search results are either
-    /// empty or reflect internal state that was not intended for public
-    /// consumption.
+    /// All three variants wrap the identical `inner: Collection` type, so this
+    /// is an ordinary value move — **not** a `transmute`, and not memory-unsafe.
+    /// (That is why this method is safe; it was previously marked `unsafe` to
+    /// flag the *logical* caller contract, a misuse of `unsafe` — audit P0.)
     ///
-    /// Callers must either:
+    /// It is a *logical* facade: invoking vector-specific methods (e.g.
+    /// [`search`](VectorCollection::search)) on a facade built from a
+    /// `Graph`/`Metadata` collection returns empty or misleading results,
+    /// because the underlying storage holds no homogeneous vector index. The
+    /// caller must therefore track the real kind and gate vector-only
+    /// operations — the Python SDK does this via the `CollectionKind` it
+    /// captures alongside the facade and its `ensure_vector()` guard.
     ///
-    /// * branch on [`is_vector`](Self::is_vector) first and only invoke
-    ///   vector-specific methods on the `Vector` variant, or
-    /// * restrict themselves to the methods that all three collection
-    ///   kinds share (`config`, `flush`, `diagnostics`, `name`,
-    ///   `point_count`, `execute_query_str`).
-    ///
-    /// Prefer the safe [`into_vector`](Self::into_vector) (variant-checked,
-    /// returns `Result`) when the caller can branch. A proper type-safe
-    /// refactor that eliminates this method entirely is tracked under the
-    /// post-seed EPIC documented in `docs/ARCHITECTURE.md` (finding F2.2 of
-    /// the pre-seed audit).
-    ///
-    /// # Violation of invariants
-    ///
-    /// The `unsafe` marker flags the caller contract (only invoke the
-    /// shared surface on non-`Vector` variants) even though violating it
-    /// does not cause undefined behaviour.
+    /// Prefer the variant-checked [`into_vector`](Self::into_vector) (returns
+    /// `Result`) when the caller can branch on kind. A type-safe refactor that
+    /// removes this facade entirely is tracked under the F2.2 EPIC in
+    /// `docs/ARCHITECTURE.md`.
     #[must_use]
-    pub unsafe fn into_vector_unchecked(self) -> VectorCollection {
+    pub fn into_vector_facade(self) -> VectorCollection {
         match self {
             Self::Vector(c) => c,
             Self::Graph(c) => VectorCollection { inner: c.inner },
