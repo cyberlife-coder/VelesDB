@@ -600,6 +600,7 @@ class Database:
         path: str,
         config: VelesConfigOptions | None = None,
         observer: Any | None = None,
+        observer_strict: bool = False,
     ) -> None:
         """Open or create a database.
 
@@ -611,19 +612,31 @@ class Database:
                 ``"collection_created"`` (fields ``name``, ``kind``, where
                 ``kind`` is ``"vector"``/``"metadata"``/``"graph"``/``"unknown"``),
                 ``"collection_deleted"`` (``name``), ``"upsert"``
-                (``collection``, ``point_count``), or ``"query"``
-                (``collection``, ``duration_us``). The observer is immutable
-                once the database is opened and cannot veto operations;
-                exceptions it raises are swallowed.
+                (``collection``, ``point_count``), ``"query"``
+                (``collection``, ``duration_us``), or the read-path veto
+                ``"query_request"`` (``collection``, ``operation``,
+                ``principal``, ``tenant``). For ``"query_request"`` the return
+                value decides the read: ``None``/``True`` allow, ``False``/a
+                reason string deny, and a ``{"filter": "<VelesQL predicate>"}``
+                dict allow-with-scope (narrowing the read). The observer is
+                immutable once the database is opened.
+            observer_strict: Read-path failure policy for the
+                ``"query_request"`` veto. Default ``False`` (fail-open): if the
+                policy callback raises or returns an uninterpretable value, the
+                read is **allowed** so a bug in policy code never breaks reads.
+                Set ``True`` (fail-closed) for governance / RBAC deployments:
+                the same error cases then **deny** the read. Explicit decisions
+                (``None``/``True``/``False``/str/dict) are unaffected by this
+                flag.
 
-                Caveat: in the embedded Python SDK only
-                ``collection_created`` / ``collection_deleted`` fire, as they
-                originate in the core engine. ``upsert`` / ``query`` are
-                emitted only by callers that explicitly call
-                ``notify_upsert`` / ``notify_query`` — in this ecosystem that
-                is the REST server, not embedded usage.
+                Caveat: in the embedded Python SDK the lifecycle
+                ``collection_created`` / ``collection_deleted`` events and the
+                ``query_request`` read gate fire from the core engine.
+                ``upsert`` / ``query`` are emitted only by callers that
+                explicitly call ``notify_upsert`` / ``notify_query`` — in this
+                ecosystem that is the REST server, not embedded usage.
         """
-        self._inner = _RawDatabase(path, config, observer)
+        self._inner = _RawDatabase(path, config, observer, observer_strict)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
