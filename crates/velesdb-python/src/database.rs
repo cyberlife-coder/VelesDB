@@ -368,9 +368,15 @@ impl Database {
                     CollectionKind::Vector
                 };
                 // SAFETY: `any_coll` came from `get_any_collection` (Some), so the
-                // underlying `AnyCollection` is registered and valid. The coerced
-                // vector facade only exercises the shared surface for non-Vector
-                // kinds; `Collection::ensure_vector` rejects vector-only ops.
+                // underlying `AnyCollection` is registered and valid.
+                // - any_coll is a valid, registered handle returned by
+                //   `get_any_collection`; it is never a disconnected copy.
+                // - The coerced vector facade only exercises the shared surface
+                //   for non-Vector kinds; `kind` is captured above and
+                //   `Collection::ensure_vector` rejects vector-only ops on
+                //   graph/metadata collections (fails loud, not UB).
+                // Reason: single-Collection Python ergonomic facade (mirrors the
+                // conforming block in `create_metadata_collection` below).
                 let vc = unsafe { any_coll.into_vector_unchecked() };
                 Ok(Some(Collection::new_with_kind(
                     vc,
