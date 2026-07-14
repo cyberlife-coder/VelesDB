@@ -29,26 +29,29 @@ fn scan_int_column(
     col.iter()
         .enumerate()
         .filter_map(|(idx, v)| match v {
-            Some(val) if predicate(*val) && !store.deleted_rows.contains(&idx) => Some(idx),
+            Some(val) if predicate(*val) && !store.is_row_deleted_bitmap(idx) => Some(idx),
             _ => None,
         })
         .collect()
 }
 
 /// Scans a typed column slice, returning a `RoaringBitmap` of indices where
-/// `predicate(val)` is true. Excludes deleted rows.
+/// `predicate(val)` is true. Excludes deleted rows (via `deletion_bitmap`).
 ///
 /// Indices >= `u32::MAX` are safely skipped (not truncated).
 fn scan_cells_bitmap<T: Copy>(
     cells: &[Option<T>],
-    deleted_rows: &rustc_hash::FxHashSet<usize>,
+    deletion_bitmap: &RoaringBitmap,
     predicate: impl Fn(T) -> bool,
 ) -> RoaringBitmap {
     cells
         .iter()
         .enumerate()
         .filter_map(|(idx, v)| match v {
-            Some(val) if predicate(*val) && !deleted_rows.contains(&idx) => u32::try_from(idx).ok(),
+            Some(val) if predicate(*val) => {
+                let idx = u32::try_from(idx).ok()?;
+                (!deletion_bitmap.contains(idx)).then_some(idx)
+            }
             _ => None,
         })
         .collect()
@@ -63,7 +66,7 @@ fn scan_int_column_bitmap(
     let Some(TypedColumn::Int(col)) = store.columns.get(column) else {
         return RoaringBitmap::new();
     };
-    scan_cells_bitmap(col, &store.deleted_rows, predicate)
+    scan_cells_bitmap(col, &store.deletion_bitmap, predicate)
 }
 
 /// Scans a float column, returning a `RoaringBitmap` of matching indices.
@@ -75,7 +78,7 @@ fn scan_float_column_bitmap(
     let Some(TypedColumn::Float(col)) = store.columns.get(column) else {
         return RoaringBitmap::new();
     };
-    scan_cells_bitmap(col, &store.deleted_rows, predicate)
+    scan_cells_bitmap(col, &store.deletion_bitmap, predicate)
 }
 
 /// Scans a bool column, returning a `RoaringBitmap` of rows equal to `value`.
@@ -83,7 +86,7 @@ fn scan_bool_column_bitmap(store: &ColumnStore, column: &str, value: bool) -> Ro
     let Some(TypedColumn::Bool(col)) = store.columns.get(column) else {
         return RoaringBitmap::new();
     };
-    scan_cells_bitmap(col, &store.deleted_rows, |v| v == value)
+    scan_cells_bitmap(col, &store.deletion_bitmap, |v| v == value)
 }
 
 /// Scans a string column for rows whose interned id matches `target_id`.
@@ -96,7 +99,7 @@ fn scan_string_column(store: &ColumnStore, column: &str, target_id: StringId) ->
     col.iter()
         .enumerate()
         .filter_map(|(idx, v)| {
-            if *v == Some(target_id) && !store.deleted_rows.contains(&idx) {
+            if *v == Some(target_id) && !store.is_row_deleted_bitmap(idx) {
                 Some(idx)
             } else {
                 None
@@ -115,7 +118,7 @@ fn scan_string_column_bitmap(
     let Some(TypedColumn::String(col)) = store.columns.get(column) else {
         return RoaringBitmap::new();
     };
-    scan_cells_bitmap(col, &store.deleted_rows, |id| id == target_id)
+    scan_cells_bitmap(col, &store.deletion_bitmap, |id| id == target_id)
 }
 
 impl ColumnStore {
@@ -194,7 +197,7 @@ impl ColumnStore {
 
         col.iter()
             .enumerate()
-            .filter(|(idx, v)| **v == Some(value) && !self.deleted_rows.contains(idx))
+            .filter(|(idx, v)| **v == Some(value) && !self.is_row_deleted_bitmap(*idx))
             .count()
     }
 
@@ -211,7 +214,7 @@ impl ColumnStore {
 
         col.iter()
             .enumerate()
-            .filter(|(idx, v)| **v == Some(string_id) && !self.deleted_rows.contains(idx))
+            .filter(|(idx, v)| **v == Some(string_id) && !self.is_row_deleted_bitmap(*idx))
             .count()
     }
 
@@ -357,7 +360,7 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| match v {
-                Some(id) if predicate(id) && !self.deleted_rows.contains(&idx) => {
+                Some(id) if predicate(id) && !self.is_row_deleted_bitmap(idx) => {
                     u32::try_from(idx).ok()
                 }
                 _ => None,
@@ -386,7 +389,7 @@ impl ColumnStore {
         col.iter()
             .enumerate()
             .filter_map(|(idx, v)| match v {
-                Some(id) if predicate(id) && !self.deleted_rows.contains(&idx) => Some(idx),
+                Some(id) if predicate(id) && !self.is_row_deleted_bitmap(idx) => Some(idx),
                 _ => None,
             })
             .collect()

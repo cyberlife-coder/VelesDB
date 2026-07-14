@@ -41,7 +41,7 @@ impl ColumnStore {
             }
 
             match self.primary_index.get(&update.pk) {
-                Some(&row_idx) if !self.deleted_rows.contains(&row_idx) => {
+                Some(&row_idx) if !self.is_row_deleted_bitmap(row_idx) => {
                     by_column
                         .entry(update.column.as_str())
                         .or_default()
@@ -148,8 +148,6 @@ impl ColumnStore {
 
         for row_idx in expired_rows {
             if let Some(&pk) = self.row_idx_to_pk.get(&row_idx) {
-                self.deleted_rows.insert(row_idx);
-                // BUG-2 FIX: Also update RoaringBitmap to keep both in sync
                 if let Ok(idx) = u32::try_from(row_idx) {
                     self.deletion_bitmap.insert(idx);
                 }
@@ -209,9 +207,8 @@ impl ColumnStore {
         row_idx: usize,
         pk_col: &str,
     ) -> Result<UpsertResult, ColumnStoreError> {
-        if self.deleted_rows.contains(&row_idx) {
+        if self.is_row_deleted_bitmap(row_idx) {
             Self::validate_value_types(&self.columns, values, Some(pk_col))?;
-            self.deleted_rows.remove(&row_idx);
             if let Ok(idx) = u32::try_from(row_idx) {
                 self.deletion_bitmap.remove(idx);
             }
