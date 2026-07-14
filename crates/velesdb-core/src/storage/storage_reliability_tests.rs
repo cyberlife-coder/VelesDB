@@ -150,10 +150,10 @@ fn test_wal_replay_recovers_unflushed_stores() {
         storage.store(2, &[4.0, 5.0, 6.0]).unwrap();
 
         // Flush WAL to disk but do NOT call storage.flush() (which persists index)
-        storage.wal.write().flush().unwrap();
-        storage.wal.write().get_ref().sync_all().unwrap();
+        storage.wal().write().flush().unwrap();
+        storage.wal().write().get_ref().sync_all().unwrap();
         // Flush mmap too so vector bytes are on disk
-        storage.mmap.write().flush().unwrap();
+        storage.mmap().write().flush().unwrap();
 
         // Do NOT call storage.flush() — simulates crash before index persistence
     }
@@ -188,8 +188,8 @@ fn test_wal_replay_recovers_deletes() {
 
         // Now delete one — written to WAL but NOT flushed to index
         storage.delete(1).unwrap();
-        storage.wal.write().flush().unwrap();
-        storage.wal.write().get_ref().sync_all().unwrap();
+        storage.wal().write().flush().unwrap();
+        storage.wal().write().get_ref().sync_all().unwrap();
         // Do NOT call storage.flush() — crash
     }
 
@@ -260,9 +260,9 @@ fn test_wal_replay_truncates_after_success() {
     {
         let mut storage = MmapStorage::new(&path, dim).unwrap();
         storage.store(1, &[1.0, 2.0, 3.0]).unwrap();
-        storage.wal.write().flush().unwrap();
-        storage.wal.write().get_ref().sync_all().unwrap();
-        storage.mmap.write().flush().unwrap();
+        storage.wal().write().flush().unwrap();
+        storage.wal().write().get_ref().sync_all().unwrap();
+        storage.mmap().write().flush().unwrap();
     }
 
     // Reopen triggers replay
@@ -722,15 +722,15 @@ fn test_898b_store_offset_overflow_leaves_next_offset_unchanged() {
     // Force next_offset so close to usize::MAX that offset + vector_size wraps.
     let poisoned = usize::MAX - (vector_size - 1);
     storage
-        .next_offset
+        .next_offset()
         .store(poisoned, std::sync::atomic::Ordering::SeqCst);
 
     let before = storage
-        .next_offset
+        .next_offset()
         .load(std::sync::atomic::Ordering::SeqCst);
     let result = storage.store(999, &[1.0, 2.0, 3.0]);
     let after = storage
-        .next_offset
+        .next_offset()
         .load(std::sync::atomic::Ordering::SeqCst);
 
     assert!(result.is_err(), "overflowing store offset must be rejected");
@@ -752,16 +752,16 @@ fn test_898_store_batch_offset_overflow_leaves_next_offset_unchanged() {
     let mut storage = MmapStorage::new(&path, dim).unwrap();
     let poisoned = usize::MAX - (vector_size - 1);
     storage
-        .next_offset
+        .next_offset()
         .store(poisoned, std::sync::atomic::Ordering::SeqCst);
 
     let before = storage
-        .next_offset
+        .next_offset()
         .load(std::sync::atomic::Ordering::SeqCst);
     let v = [1.0_f32, 2.0, 3.0];
     let result = storage.store_batch(&[(999_u64, &v[..])]);
     let after = storage
-        .next_offset
+        .next_offset()
         .load(std::sync::atomic::Ordering::SeqCst);
 
     assert!(result.is_err(), "overflowing batch store must be rejected");

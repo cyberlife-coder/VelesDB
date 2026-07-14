@@ -24,7 +24,35 @@ SCAN_DIRS = [
     Path("crates/velesdb-mobile/src"),
     Path("crates/velesdb-wasm/src"),
     Path("crates/tauri-plugin-velesdb/src"),
+    # Bindings/adapters were previously outside the gate (audit F-3.10): they
+    # ship production Rust too, so scan them as well. velesdb-node forbids
+    # unwrap/expect via its [lints] table, but scanning here makes the gate
+    # explicit and uniform across every production crate.
+    Path("crates/velesdb-memory/src"),
+    Path("crates/velesdb-node/src"),
+    Path("crates/velesdb-python/src"),
 ]
+
+
+def is_cfg_test_gate(stripped: str) -> bool:
+    """True if a line is a `#[cfg(...)]` attribute that gates a test module.
+
+    Recognises the bare `#[cfg(test)]` form *and* the composite forms the
+    codebase actually uses to gate test modules behind a feature, e.g.
+    `#[cfg(all(test, feature = "persistence"))]` or `#[cfg(any(test, ...))]`
+    (audit F-3.11 — the old exact-string match let those fall through and
+    flagged `.expect()` inside test modules as false positives).
+
+    Quoted strings are stripped first so `#[cfg(feature = "test-utils")]`
+    does not match, and `not(test)` is excluded so we never stop scanning at
+    an attribute that gates *production* (non-test) code.
+    """
+    if not stripped.startswith("#[cfg("):
+        return False
+    without_strings = re.sub(r'"[^"]*"', "", stripped)
+    if "not(" in without_strings:
+        return False
+    return re.search(r"\btest\b", without_strings) is not None
 
 
 def is_production_file(path: Path) -> bool:
@@ -52,8 +80,11 @@ def scan_file(path: Path) -> list[tuple[int, str]]:
     for line_no, line in enumerate(lines, start=1):
         stripped = line.strip()
 
-        # Stop scanning after #[cfg(test)] module
-        if stripped == "#[cfg(test)]":
+        # Stop scanning once we reach a test module gate (bare #[cfg(test)] or
+        # a composite like #[cfg(all(test, feature = "..."))]). Test modules
+        # live at the end of a file by convention, so everything after is test
+        # code.
+        if is_cfg_test_gate(stripped):
             break
 
         # Track block comments

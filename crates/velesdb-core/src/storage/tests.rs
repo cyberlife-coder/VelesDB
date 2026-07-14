@@ -82,7 +82,7 @@ fn test_drop_best_effort_mmap_lock_contention_non_blocking() {
     let mut storage = MmapStorage::new(dir.path(), 3).unwrap();
     storage.store(1, &[1.0, 2.0, 3.0]).unwrap();
 
-    let _mmap_guard = storage.mmap.read();
+    let _mmap_guard = storage.mmap().read();
     let start = std::time::Instant::now();
     storage.flush_on_shutdown_best_effort();
 
@@ -98,7 +98,7 @@ fn test_drop_best_effort_wal_lock_contention_non_blocking() {
     let mut storage = MmapStorage::new(dir.path(), 3).unwrap();
     storage.store(1, &[1.0, 2.0, 3.0]).unwrap();
 
-    let _wal_guard = storage.wal.write();
+    let _wal_guard = storage.wal().write();
     let start = std::time::Instant::now();
     storage.flush_on_shutdown_best_effort();
 
@@ -374,7 +374,7 @@ fn test_retrieve_ref_returns_invalid_data_on_misaligned_offset() {
     storage.store(1, &[1.0, 2.0, 3.0]).unwrap();
 
     // Inject a corrupted, non-f32-aligned offset to ensure retrieve_ref is fallible.
-    storage.index.insert(42, 1);
+    storage.index().insert(42, 1);
 
     let result = storage.retrieve_ref(42);
     match result {
@@ -393,7 +393,7 @@ fn test_retrieve_returns_invalid_data_on_overflowing_offset() {
     // `offset + vector_size` wraps, slipping past an unchecked bound check
     // and panicking on the subsequent slice. `retrieve` must return Err.
     let vector_size = 3 * std::mem::size_of::<f32>();
-    storage.index.insert(42, usize::MAX - vector_size + 1);
+    storage.index().insert(42, usize::MAX - vector_size + 1);
 
     let result = storage.retrieve(42);
     match result {

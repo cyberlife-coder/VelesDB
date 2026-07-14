@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-07-14 (v3.10.0; velesdb-memory 0.7.0)
+Last updated: 2026-07-14 (v3.11.0; velesdb-memory 0.7.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -255,3 +255,4 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
    targeting already works).
 7. Propagate `@collection` cross-collection MATCH to WASM, Mobile, Tauri, LangChain, LlamaIndex, and Haystack.
 8. Add cross-collection vector search (`similarity()` on `@collection`-annotated nodes).
+9. **Read-path gate (observer) parity (audit F-5.4).** The 3.10.0 read-path gate — `velesdb_core::observer` + `database::gated_search` / `authorize_read` (scope AND-composed with the caller filter, fail-closed on non-filterable paths) — is wired into **`velesdb-server`** (search/match/graph handlers) and **`velesdb-python`** (`.search()` gating). `tauri-plugin-velesdb` ships a **notify-only** observer (no deny). **`velesdb-node`** (memory-only, out of scope by design), **`velesdb-mobile`**, and **`velesdb-wasm`** expose **no** observer, so the gate is inactive there. This is a **parity gap, not a vulnerability**: the core contract is fail-open *only when no observer is registered* (no policy ⇒ no denial to enforce), so an ungated binding simply has no governance layer to bypass. Governance-sensitive deployments must use the server or Python surface. Wiring an observer hook into mobile/wasm is a follow-up; node is intentionally excluded (it never touches the gated core `Collection`).

@@ -33,7 +33,7 @@
 use std::collections::HashMap;
 
 use serde_json::json;
-use velesdb_core::collection::search::query::match_planner::{
+use velesdb_core::velesql::match_planner::{
     CollectionStats, MatchExecutionStrategy, MatchQueryPlanner,
 };
 use velesdb_core::{Database, GraphEdge, Point};

@@ -39,17 +39,9 @@ pub(crate) mod reduction;
 pub mod scalar;
 mod tail_unroll;
 
-// Re-export macros from tail_unroll for crate-wide use
-#[allow(unused_imports)]
-pub(crate) use tail_unroll::sum_remainder_unrolled_8;
-#[allow(unused_imports)]
-pub(crate) use tail_unroll::sum_squared_remainder_unrolled_8;
-
-// Re-export 4-accumulator loop macros from reduction for crate-wide use
-#[allow(unused_imports)]
-pub(crate) use reduction::simd_4acc_dot_loop;
-#[allow(unused_imports)]
-pub(crate) use reduction::simd_4acc_l2_loop;
+// NOTE: The `tail_unroll` and `reduction` unrolling macros are `#[macro_export]`,
+// so call-sites reach them via crate-root paths (`crate::sum_remainder_unrolled_8`,
+// `crate::simd_4acc_dot_loop`, …). No module-local re-export is needed here.
 
 // Re-export public API from scalar
 pub use scalar::{cosine_similarity_fast, fast_rsqrt};

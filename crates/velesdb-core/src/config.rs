@@ -59,7 +59,17 @@ pub enum SearchMode {
     Balanced,
     /// Accurate search with `ef_search=512`, ~100% recall.
     Accurate,
-    /// Perfect recall with bruteforce, 100% guaranteed.
+    /// Perfect recall via **exhaustive bruteforce** (`ef_search = usize::MAX`
+    /// signals a full scan): every vector is scored, no HNSW graph traversal, so
+    /// recall is 100% by construction at O(n) cost.
+    ///
+    /// Distinct from `SearchQuality::Perfect`
+    /// (`crate::index::hnsw::SearchQuality`) despite the shared name:
+    /// `SearchMode` picks the **engine** (bruteforce here vs. the HNSW graph),
+    /// whereas `SearchQuality::Perfect` stays *on* the graph with a very high
+    /// `ef_search` (`4096.max(k*100)`) — ~1.0 recall up to ~100K, ~0.9994 at 1M,
+    /// at graph cost rather than a full scan. Pick `SearchMode::Perfect` only
+    /// when an exact guarantee is worth the linear scan.
     Perfect,
 }
 

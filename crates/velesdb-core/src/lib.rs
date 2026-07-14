@@ -65,7 +65,9 @@ pub mod alloc_guard;
 mod alloc_guard_tests;
 pub mod api_types;
 pub mod cache;
-#[cfg(feature = "persistence")]
+// `collection` is declared unconditionally: its `stats` and `query_cost` leaves are
+// persistence-free and feed the `VelesQL` query planner (P1.4). The storage/index-coupled
+// submodules remain individually gated inside `collection/mod.rs`.
 pub mod collection;
 #[cfg(feature = "persistence")]
 pub mod column_store;

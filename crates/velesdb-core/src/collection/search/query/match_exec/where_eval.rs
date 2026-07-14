@@ -333,7 +333,7 @@ impl Collection {
         // alias, mirroring what evaluate_comparison_condition does. Without
         // this, `WHERE a.category IN (...)` would evaluate against node_id
         // (the traversal target) instead of the node bound to alias `a`.
-        let column = column_of_metadata_condition(condition);
+        let column = crate::velesql::match_planner::column_of_metadata_condition(condition);
 
         // Audit 2026-06 F: a relationship alias resolves against the EDGE's
         // properties (ANY-element semantics; fixed-length = one element).
@@ -584,28 +584,6 @@ fn strip_alias<'a>(column: &'a str, is_alias: &dyn Fn(&str) -> bool) -> &'a str 
 /// `is_alias` accepts the prefix, or the original string otherwise.
 fn strip_alias_owned(column: &str, is_alias: &dyn Fn(&str) -> bool) -> String {
     strip_alias(column, is_alias).to_string()
-}
-
-/// Extracts the column name from a metadata condition variant.
-///
-/// Returns `Some(&str)` for condition types that carry a `column` field.
-/// Non-metadata variants return `None`.
-pub(in crate::collection::search::query) fn column_of_metadata_condition(
-    condition: &crate::velesql::Condition,
-) -> Option<&str> {
-    use crate::velesql::Condition;
-    match condition {
-        Condition::In(ic) => Some(&ic.column),
-        Condition::Between(btw) => Some(&btw.column),
-        Condition::Like(lk) => Some(&lk.column),
-        Condition::IsNull(isn) => Some(&isn.column),
-        Condition::Match(m) => Some(&m.column),
-        Condition::ContainsText(ct) => Some(&ct.column),
-        Condition::Contains(c) => Some(&c.column),
-        Condition::GeoDistance(gd) => Some(&gd.column),
-        Condition::GeoBbox(gb) => Some(&gb.column),
-        _ => None,
-    }
 }
 
 /// Rewrites alias-prefixed column names in metadata conditions so the filter
