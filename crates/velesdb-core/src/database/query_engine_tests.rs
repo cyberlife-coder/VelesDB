@@ -377,3 +377,176 @@ fn test_read_gate_allow_observer_is_borrowed_no_clone() {
         "Allow read path must return the caller's own query by reference"
     );
 }
+
+// =========================================================================
+// gated_search — the non-VelesQL read gate (REST /search, memory recall).
+// Proves the read-path governance gap (CORE-1/CORE-2) is closed: a Deny
+// observer fails the raw search closed with zero results, an Allow observer
+// runs it, and the no-observer path stays a plain search.
+// =========================================================================
+
+/// Denies every read request — models an out-of-tenant / unauthorized principal.
+struct DenyObserver;
+impl crate::observer::DatabaseObserver for DenyObserver {
+    fn on_query_request(
+        &self,
+        _ctx: &crate::observer::QueryAccessContext,
+    ) -> crate::Result<crate::observer::AccessDecision> {
+        Ok(crate::observer::AccessDecision::Deny(crate::Error::Config(
+            "read denied by policy".to_string(),
+        )))
+    }
+}
+
+fn seed_docs(db: &Database) {
+    db.create_collection("docs", 4, DistanceMetric::Cosine)
+        .unwrap();
+    let coll = db.get_vector_collection("docs").unwrap();
+    coll.upsert(vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            Some(serde_json::json!({"title": "alpha"})),
+        ),
+        Point::new(
+            2,
+            vec![0.0, 1.0, 0.0, 0.0],
+            Some(serde_json::json!({"title": "beta"})),
+        ),
+    ])
+    .unwrap();
+}
+
+#[test]
+fn test_gated_search_deny_fails_closed_with_zero_results() {
+    let dir = tempdir().unwrap();
+    let observer: std::sync::Arc<dyn crate::observer::DatabaseObserver> =
+        std::sync::Arc::new(DenyObserver);
+    let db = Database::open_with_observer(dir.path(), observer).unwrap();
+    seed_docs(&db);
+
+    let q = vec![1.0, 0.0, 0.0, 0.0];
+    let res = db.gated_search(
+        "docs",
+        Some("mallory"),
+        None,
+        GatedRead::Dense {
+            query: &q,
+            k: 2,
+            ef: None,
+            quality: None,
+            filter: None,
+        },
+    );
+    // A denied read must NOT reach the data plane: error out, zero results.
+    assert!(
+        res.is_err(),
+        "Deny observer must make gated_search fail closed (no results leaked)"
+    );
+}
+
+#[test]
+fn test_gated_search_allow_returns_results() {
+    let dir = tempdir().unwrap();
+    let observer: std::sync::Arc<dyn crate::observer::DatabaseObserver> =
+        std::sync::Arc::new(AllowAllObserver);
+    let db = Database::open_with_observer(dir.path(), observer).unwrap();
+    seed_docs(&db);
+
+    let q = vec![1.0, 0.0, 0.0, 0.0];
+    let res = db
+        .gated_search(
+            "docs",
+            Some("alice"),
+            None,
+            GatedRead::Dense {
+                query: &q,
+                k: 2,
+                ef: None,
+                quality: None,
+                filter: None,
+            },
+        )
+        .unwrap();
+    assert!(
+        !res.is_empty(),
+        "Allow observer must let the search return neighbours"
+    );
+}
+
+#[test]
+fn test_gated_search_no_observer_runs_search() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    seed_docs(&db);
+
+    let q = vec![1.0, 0.0, 0.0, 0.0];
+    let res = db
+        .gated_search(
+            "docs",
+            None,
+            None,
+            GatedRead::Dense {
+                query: &q,
+                k: 2,
+                ef: None,
+                quality: None,
+                filter: None,
+            },
+        )
+        .unwrap();
+    // No observer ⇒ zero-overhead allow ⇒ plain search results.
+    assert_eq!(res.len(), 2);
+}
+
+/// CORE-6: `EXPLAIN ANALYZE MATCH` routes through `execute_query_counted` →
+/// `execute_match_routed`, which historically skipped the read gate that the
+/// non-EXPLAIN path applies in `execute_query`. With identical setup an Allow
+/// observer lets the analyzed MATCH run while a Deny observer refuses it, so the
+/// gate — not some setup error — is provably what blocks the read.
+#[test]
+fn test_explain_analyze_match_is_gated() {
+    fn setup(
+        observer: std::sync::Arc<dyn crate::observer::DatabaseObserver>,
+    ) -> (tempfile::TempDir, Database) {
+        let dir = tempdir().unwrap();
+        let db = Database::open_with_observer(dir.path(), observer).unwrap();
+        db.create_collection("docs", 2, DistanceMetric::Cosine)
+            .unwrap();
+        let coll = db.get_vector_collection("docs").unwrap();
+        coll.upsert(vec![
+            Point::new(
+                1,
+                vec![1.0, 0.0],
+                Some(serde_json::json!({"_labels": ["Doc"], "name": "Alice"})),
+            ),
+            Point::new(
+                2,
+                vec![1.0, 0.0],
+                Some(serde_json::json!({"_labels": ["Doc"], "name": "Bob"})),
+            ),
+        ])
+        .unwrap();
+        (dir, db)
+    }
+
+    let query = Parser::parse("MATCH (d:Doc) RETURN d.name LIMIT 5").unwrap();
+    let mut params = std::collections::HashMap::new();
+    params.insert("_collection".to_string(), serde_json::json!("docs"));
+
+    // Allow: the analyzed MATCH executes and yields an ExplainOutput.
+    let (_d1, allow_db) = setup(std::sync::Arc::new(AllowAllObserver));
+    let allowed = allow_db.explain_analyze_query(&query, &params);
+    assert!(
+        allowed.is_ok(),
+        "AllowAll observer must let EXPLAIN ANALYZE MATCH run: {allowed:?}"
+    );
+
+    // Deny: the read gate refuses it (CORE-6) rather than letting it bypass.
+    let (_d2, deny_db) = setup(std::sync::Arc::new(DenyObserver));
+    let denied = deny_db.explain_analyze_query(&query, &params);
+    assert!(
+        denied.is_err(),
+        "Deny observer must refuse EXPLAIN ANALYZE MATCH — no gate bypass"
+    );
+}

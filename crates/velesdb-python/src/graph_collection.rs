@@ -6,12 +6,14 @@
 
 use pyo3::prelude::*;
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use crate::collection::retain_by_filters;
 use crate::collection_helpers::{core_err, point_to_dict, search_result_to_dict};
 use crate::graph::{dict_to_edge, edge_to_dict, traversal_to_dict};
 use crate::utils::{extract_vector, json_to_python, python_to_json};
 use velesdb_core::collection::graph::TraversalConfig;
-use velesdb_core::{GraphCollection, GraphSchema};
+use velesdb_core::{Database as CoreDatabase, GraphCollection, GraphSchema, QueryOperationKind};
 
 // ---------------------------------------------------------------------------
 // PyGraphSchema
@@ -103,13 +105,18 @@ impl PyGraphSchema {
 #[pyclass(name = "GraphCollection")]
 pub struct PyGraphCollection {
     pub(crate) inner: GraphCollection,
+    /// Shared handle to the owning database. Like `Collection`, `inner` is a
+    /// detached leaf with no observer reference, so `search_by_embedding` routes
+    /// its vector read through this handle's control-plane gate rather than
+    /// hitting the leaf directly.
+    pub(crate) db: Arc<CoreDatabase>,
     name: String,
 }
 
 impl PyGraphCollection {
     /// Creates a new `PyGraphCollection` wrapper.
-    pub fn new(inner: GraphCollection, name: String) -> Self {
-        Self { inner, name }
+    pub fn new(inner: GraphCollection, db: Arc<CoreDatabase>, name: String) -> Self {
+        Self { inner, db, name }
     }
 }
 
@@ -452,20 +459,45 @@ impl PyGraphCollection {
     ///
     /// Raises:
     ///     RuntimeError: If the collection has no embeddings
-    #[pyo3(signature = (query, k=None))]
+    ///     PermissionError / RuntimeError: If the read gate denies the read.
+    ///
+    /// The `principal` argument is caller-supplied and only meaningful when a
+    /// trusted embedder forwards a verified identity (local-SDK trust boundary):
+    /// the gate cannot itself authenticate the caller.
+    #[pyo3(signature = (query, k=None, *, principal=None, tenant=None))]
     fn search_by_embedding(
         &self,
         py: Python<'_>,
         query: Py<PyAny>,
         k: Option<usize>,
+        principal: Option<String>,
+        tenant: Option<String>,
     ) -> PyResult<Vec<Py<PyAny>>> {
         let vec = extract_vector(py, &query)?;
         let top_k = k.unwrap_or(10);
 
+        // Route the vector read through the control-plane gate. The graph leaf
+        // takes no metadata filter, so authorize first (Deny ⇒ Err, fail closed)
+        // then apply any observer scope filter as a post-filter (narrow-only),
+        // mirroring the sparse / parallel-batch paths on `Collection`.
         let results = py.detach(|| {
-            self.inner
+            let scope = self
+                .db
+                .authorize_read(
+                    &self.name,
+                    QueryOperationKind::VectorSearch,
+                    principal.as_deref(),
+                    tenant.as_deref(),
+                )
+                .map_err(core_err)?;
+            let mut results = self
+                .inner
                 .search_by_embedding(&vec, top_k)
-                .map_err(core_err)
+                .map_err(core_err)?;
+            if let Some(scope_filter) = scope {
+                retain_by_filters(&mut results, None, Some(&scope_filter));
+            }
+            Ok::<_, PyErr>(results)
         })?;
 
         Ok(results

@@ -1,6 +1,6 @@
 # VelesDB Performance Benchmarks
 
-*Last updated: July 12, 2026 (VelesDB v3.9.1). Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
+*Last updated: July 14, 2026 (VelesDB v3.10.0). Figures are re-validated at each release only when re-measured — each section carries its own measurement date and machine; this stamp tracks the document revision, not a fresh measurement.*
 
 ---
 
@@ -177,7 +177,7 @@ The RRF fusion step is a simple score merge with no distance computation, so hyb
 
 *Recall values from recall_benchmark. Latencies measured March 19, 2026. ef_search values are base values (scaled with k).*
 
-Recall@10 >= 95% is guaranteed for Balanced mode and above. The new **Adaptive** mode starts with a low ef and escalates only for hard queries, achieving 2-4x faster median latency. Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
+Recall@10 >= 95% is the design target for Balanced mode and above, and is what we measure on the benchmark sets below — it is a measured target, not a hard guarantee, since HNSW is an approximate index. The new **Adaptive** mode starts with a low ef and escalates only for hard queries, achieving 2-4x faster median latency. Use `HnswParams::for_dataset_size()` for automatic parameter tuning.
 
 ### Search Optimization Notes (v1.7.2)
 

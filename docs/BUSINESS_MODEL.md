@@ -76,6 +76,15 @@ audit apply to **every** consumer through the port, not only the REST adapter.
 Telemetry (`on_upsert` / `on_query`) is also core-invoked, so consumers emit
 consistent telemetry without firing it manually.
 
+Note that until the 3.10.0 CORE-1/CORE-2 read-path gate, that coverage was
+narrower in practice than it sounds: it held for VelesQL `SELECT`/`MATCH`, but
+the direct REST search routes (`/search`, `/search/text`, `/search/hybrid`,
+and the sparse/batch/multi/graph-embedding variants) called the collection
+directly and never consulted the gate — the OSS server registered no observer
+at all (`Database::open`, never `open_with_observer`). As of 3.10.0, the gate
+genuinely covers every HTTP search entry point (dense/text/hybrid/sparse/
+batch/multi-query/ids/graph-embedding/MATCH), closing that gap.
+
 This design ensures:
 
 - **Zero coupling**: The core library has no knowledge of premium internals.

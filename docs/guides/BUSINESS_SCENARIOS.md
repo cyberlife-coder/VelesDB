@@ -62,7 +62,7 @@ RETURN tx.id, account.id, similarity() as fraud_score
 
 ## Business Scenario 3: Healthcare Diagnosis Assistant
 **Industry:** Healthcare / MedTech
-**Problem:** "Find similar patient cases with treatment outcomes, HIPAA-compliant"
+**Problem:** "Find similar patient cases with treatment outcomes, for HIPAA-regulated data"
 
 ```sql
 -- Medical RAG: symptoms + patient network + treatment history

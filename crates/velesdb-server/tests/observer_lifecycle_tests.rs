@@ -182,3 +182,81 @@ async fn query_endpoint_fires_on_query_exactly_once_per_dispatch_branch() {
         "on_query must fire exactly once more for an introspection query dispatched via /query"
     );
 }
+
+/// Refuses every read at the control-plane gate — models an unauthorized
+/// principal. Writes are unaffected: `on_query_request` gates reads only.
+struct DenyingReadObserver;
+impl DatabaseObserver for DenyingReadObserver {
+    fn on_query_request(
+        &self,
+        _ctx: &velesdb_core::observer::QueryAccessContext,
+    ) -> velesdb_core::Result<velesdb_core::observer::AccessDecision> {
+        Ok(velesdb_core::observer::AccessDecision::Deny(
+            velesdb_core::Error::Query("read denied by governance policy".to_string()),
+        ))
+    }
+}
+
+/// End-to-end proof that the read-path gate (CORE-1/CORE-2) is enforced through
+/// the HTTP layer: a `Deny` observer must refuse `/search`, `/search/text`, and
+/// `/search/hybrid` — none may return `200 OK` — while writes still succeed
+/// (they are not read-gated). This closes the gap where the REST search
+/// handlers called a detached `VectorCollection` handle that bypassed the gate.
+#[tokio::test]
+async fn read_gate_denies_rest_search_end_to_end() {
+    let dir = TempDir::new().expect("test: dir");
+    let app = create_test_app_with_observer(&dir, Arc::new(DenyingReadObserver));
+
+    // Writes are not read-gated: create + upsert must still succeed.
+    let status = post(
+        &app,
+        "/collections",
+        json!({"name": COLLECTION, "dimension": DIM, "metric": "cosine"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "create must not be read-gated");
+
+    let status = post(
+        &app,
+        &format!("/collections/{COLLECTION}/points"),
+        json!({"points": [{"id": 1, "vector": QUERY, "payload": {"k": "v"}}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "upsert must not be read-gated");
+
+    // Dense /search is refused end-to-end (HTTP → gated_search → observer Deny).
+    let status = post(
+        &app,
+        &format!("/collections/{COLLECTION}/search"),
+        json!({"vector": QUERY, "top_k": 1}),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "denied dense read must not return success, got {status}"
+    );
+
+    // Text search is refused.
+    let status = post(
+        &app,
+        &format!("/collections/{COLLECTION}/search/text"),
+        json!({"query": "hello", "top_k": 1}),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "denied text read must not return success, got {status}"
+    );
+
+    // Hybrid (dense + BM25) search is refused.
+    let status = post(
+        &app,
+        &format!("/collections/{COLLECTION}/search/hybrid"),
+        json!({"vector": QUERY, "query": "hello", "top_k": 1, "vector_weight": 0.5}),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "denied hybrid read must not return success, got {status}"
+    );
+}

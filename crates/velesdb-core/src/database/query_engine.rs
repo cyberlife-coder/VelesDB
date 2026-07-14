@@ -9,6 +9,23 @@ use crate::{Error, Result, SearchResult};
 
 use super::Database;
 
+/// Outcome of the non-VelesQL read gate ([`Database::read_gate_raw`]).
+///
+/// Mirrors [`AccessDecision`] but is returned to in-crate callers — the `VelesQL`
+/// [`read_gate`](Database::read_gate) and the raw `gated_search` path — so each
+/// enforces the same decision in the shape it needs: `read_gate` maps it onto a
+/// [`Cow<Query>`](std::borrow::Cow), the raw path onto a filtered collection
+/// search. Keeping one resolver means the observer-consult logic is defined
+/// exactly once.
+pub(crate) enum RawGateOutcome {
+    /// Execute the read unmodified.
+    Allow,
+    /// Abort the read with this error and zero results (Requirement 1.4).
+    Deny(crate::Error),
+    /// Execute the read with this scope narrowing applied (Requirement 1.5).
+    Scope(AccessScope),
+}
+
 /// Statement type classification for dispatch routing.
 enum StatementType<'a> {
     Admin(&'a AdminStatement),
@@ -408,19 +425,66 @@ impl Database {
         &self,
         query: &'q crate::velesql::Query,
     ) -> Result<std::borrow::Cow<'q, crate::velesql::Query>> {
-        let Some(observer) = self.observer.as_ref() else {
-            return Ok(std::borrow::Cow::Borrowed(query)); // zero-overhead fast path
-        };
-        if !Self::is_read_path(query) {
+        // Non-read statements (DDL/DML/admin/train/introspection) carry their
+        // own control-plane gates and must never be double-gated here. The
+        // no-observer fast path is handled inside `read_gate_raw` (single
+        // `Option` check, Requirement 1.8).
+        if self.observer.is_none() || !Self::is_read_path(query) {
             return Ok(std::borrow::Cow::Borrowed(query));
         }
-        let ctx = QueryAccessContext::from_query(query);
-        match observer.on_query_request(&ctx)? {
-            AccessDecision::Allow => Ok(std::borrow::Cow::Borrowed(query)),
-            AccessDecision::Deny(err) => Err(err),
-            AccessDecision::AllowWithScope(scope) => {
+        match self.read_gate_raw(
+            query.select.from.as_str(),
+            derive_operation_kind(query),
+            None,
+            None,
+        )? {
+            RawGateOutcome::Allow => Ok(std::borrow::Cow::Borrowed(query)),
+            RawGateOutcome::Deny(err) => Err(err),
+            RawGateOutcome::Scope(scope) => {
                 Ok(std::borrow::Cow::Owned(Self::apply_scope(query, &scope)))
             }
+        }
+    }
+
+    /// Non-VelesQL read-path gate, shared by [`read_gate`](Self::read_gate) and
+    /// the raw `gated_search` read path (vector / text / hybrid / graph search
+    /// and memory recall that never build a `VelesQL` [`Query`]).
+    ///
+    /// Fast path: a single `Option` presence check when no observer is
+    /// registered returns [`RawGateOutcome::Allow`] with zero allocation and no
+    /// hook call, preserving the zero-overhead contract (Requirement 1.8). When
+    /// an observer is present it builds a [`QueryAccessContext`] from the
+    /// caller-supplied collection / operation / principal / tenant and consults
+    /// [`on_query_request`](crate::observer::DatabaseObserver::on_query_request).
+    ///
+    /// Unlike [`read_gate`](Self::read_gate), the caller is responsible for
+    /// having already established that this is a read path — the raw callers are
+    /// search primitives that are reads by construction.
+    ///
+    /// # Errors
+    ///
+    /// Returns the observer's `Err` for an internal failure. Access denial is
+    /// carried in [`RawGateOutcome::Deny`], not the `Result` error channel.
+    pub(crate) fn read_gate_raw(
+        &self,
+        collection: &str,
+        operation: QueryOperationKind,
+        principal: Option<&str>,
+        tenant_hint: Option<&str>,
+    ) -> Result<RawGateOutcome> {
+        let Some(observer) = self.observer.as_ref() else {
+            return Ok(RawGateOutcome::Allow); // zero-overhead fast path
+        };
+        let ctx = QueryAccessContext {
+            collection,
+            operation,
+            principal,
+            tenant_hint,
+        };
+        match observer.on_query_request(&ctx)? {
+            AccessDecision::Allow => Ok(RawGateOutcome::Allow),
+            AccessDecision::Deny(err) => Ok(RawGateOutcome::Deny(err)),
+            AccessDecision::AllowWithScope(scope) => Ok(RawGateOutcome::Scope(scope)),
         }
     }
 
@@ -573,7 +637,12 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<(Vec<SearchResult>, u64, u64)> {
         if query.is_match_query() {
-            return self.execute_match_routed(query, params);
+            // Apply the read-path gate before the MATCH executor. The non-EXPLAIN
+            // MATCH path is gated inside `execute_query`; this counted path (used
+            // by EXPLAIN ANALYZE) routes straight to `execute_match_routed`, so
+            // without this it would let EXPLAIN ANALYZE MATCH bypass governance.
+            let gated = self.read_gate(query)?;
+            return self.execute_match_routed(&gated, params);
         }
         Ok((self.execute_query(query, params)?, 0, 0))
     }
