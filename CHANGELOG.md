@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.10.0] — 2026-07-14
+
+Delivery release: closes the P0 flagged by the 7-auditor review — the OSS
+server registered **no observer at all**, so governance/RBAC hooks were a
+complete no-op in the open-core binary regardless of what a consumer
+configured. Every read path (HTTP and Python SDK) is now gated end to end.
+
+### Security
+- **server: the governance read-path gate is now live on every HTTP read.**
+  `velesdb-server` previously opened the database with `Database::open`
+  (never `open_with_observer`), so `on_query_request` never fired in the
+  shipped binary — any observer a consumer registered was silently inert.
+  Dense/text/hybrid/sparse/batch/multi-query/ids search, `EXPLAIN ANALYZE
+  MATCH`, and graph embedding search now all route through
+  `Database::gated_search` / `authorize_read`: a `Deny` fails closed (zero
+  results, not an error swallowed into success), an allow-with-scope filter
+  composes with the caller's own filter, and there is zero overhead when no
+  observer is registered. A new end-to-end test drives a denying observer
+  through the real HTTP surface and asserts every one of those routes is
+  actually blocked, not just the query layer above them.
+- **python: the SDK observer gained a read-path veto.** `on_query_request`
+  now fires before every gated read and can return `False`/a reason string
+  to deny, or a `{"filter": ...}` dict to narrow the result scope — the
+  callback was previously notify-only and could not affect the outcome.
+- **python: direct `.search()` (and its dense/text/hybrid/sparse/batch/
+  multi-query/ids variants, plus graph `search_by_embedding`) now goes
+  through the same gate as VelesQL — previously it bypassed governance
+  entirely, even with an observer registered. A scope dict with no
+  enforceable `filter` (e.g. `{}` or `{"tenant": ...}`, which OSS does not
+  itself enforce) is now treated as a deny rather than an accidental
+  unscoped allow.
+
+### Fixed
+- **memory:** `remember`ing over an existing fact now carries forward its
+  reserved `_veles_*` metadata (RL confidence, TTL) instead of resetting it —
+  reinforcement learned from prior feedback survives a re-remember.
+- **docs:** `BENCHMARKS.md`'s recall language was softened from a guarantee
+  to a measured target (HNSW is an approximate index; nothing in the engine
+  guarantees 100% recall), and a stale Docker version pin in the README was
+  corrected.
+
 ## [3.9.1] — 2026-07-12
 
 Delivery release: everything merged on `develop` since v3.9.0 reaches users —

@@ -4,4 +4,4 @@ from haystack_velesdb.document_store import VelesDBDocumentStore
 from haystack_velesdb.retriever import VelesDBEmbeddingRetriever
 
 __all__ = ["VelesDBDocumentStore", "VelesDBEmbeddingRetriever"]
-__version__ = "3.9.1"
+__version__ = "3.10.0"
