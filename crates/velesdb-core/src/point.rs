@@ -175,7 +175,22 @@ impl Point {
         self.vector.len()
     }
 
-    /// Returns true if this point has no vector (metadata-only).
+    /// Returns `true` if this point carries **no dense vector**.
+    ///
+    /// This is a *per-point* property — it means `self.vector` is empty, i.e.
+    /// the point was built via [`Point::metadata_only`] or [`Point::sparse_only`]
+    /// (a sparse-only point is still "metadata-only" in the dense sense: it has
+    /// no dense embedding, only sparse vectors and/or payload). It is **not**
+    /// the same concept as the collection-kind `CollectionType::is_metadata_only`
+    /// (a discriminant on how a whole collection is stored, in the
+    /// persistence-gated `collection` module).
+    ///
+    /// Note there is no "dense vector of length 0": an empty `vector` *is* the
+    /// canonical representation of "no dense vector", so this predicate is exact
+    /// and unambiguous. Collections still validate their declared dimension to
+    /// [`MIN_DIMENSION`](crate::validation::MIN_DIMENSION)` = 1` (see
+    /// `validation::validate_dimension`); a metadata-only point simply omits the
+    /// dense vector rather than storing a zero-length one under that dimension.
     #[must_use]
     pub fn is_metadata_only(&self) -> bool {
         self.vector.is_empty()
