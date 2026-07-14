@@ -129,10 +129,21 @@ impl Database {
     ///         return value is ignored and a raised exception is swallowed so
     ///         it never breaks a core operation. For ``"query_request"`` the
     ///         callback governs the read: return ``False`` or a string reason to
-    ///         **deny** it (raising a query error), or ``None``/``True`` to
-    ///         allow. A callback that ignores ``query_request`` (returns
-    ///         ``None``) allows every read, so existing notify-only observers
-    ///         are unaffected.
+    ///         **deny** it (raising a query error), ``None``/``True`` to allow,
+    ///         or a ``dict`` to **allow with a narrowing scope**. The dict MUST
+    ///         carry an enforceable ``"filter"`` (a VelesQL WHERE-predicate
+    ///         string such as ``"tenant = 'acme'"``, AND-composed into the
+    ///         read); ``"tenant"`` is an optional audit hint OSS does not narrow
+    ///         by. A dict with a missing/empty/tenant-only or unparseable
+    ///         ``"filter"`` denies (fail closed), so a ``{"tenant": t}`` return
+    ///         can never masquerade as scoping. ``query_request`` fires for VelesQL
+    ///         ``SELECT``/``MATCH`` and for the Python direct-search API
+    ///         (``search``/``search_request``/``text_search``/``hybrid_search``
+    ///         and their variants), with ``operation`` one of ``"select"``,
+    ///         ``"vector_search"``, ``"text_search"``, ``"hybrid_search"``,
+    ///         ``"graph_traversal"``. A callback that ignores ``query_request``
+    ///         (returns ``None``) allows every read, so existing notify-only
+    ///         observers are unaffected.
     ///
     /// Returns:
     ///     Database instance
@@ -320,7 +331,11 @@ impl Database {
             collection.attach_auto_reindex(manager);
         }
 
-        Ok(Collection::new(collection, name_owned))
+        Ok(Collection::new(
+            collection,
+            Arc::clone(&self.inner),
+            name_owned,
+        ))
     }
 
     /// Get an existing collection by name.
@@ -357,7 +372,12 @@ impl Database {
                 // vector facade only exercises the shared surface for non-Vector
                 // kinds; `Collection::ensure_vector` rejects vector-only ops.
                 let vc = unsafe { any_coll.into_vector_unchecked() };
-                Ok(Some(Collection::new_with_kind(vc, name.to_string(), kind)))
+                Ok(Some(Collection::new_with_kind(
+                    vc,
+                    Arc::clone(&self.inner),
+                    name.to_string(),
+                    kind,
+                )))
             }
             None => Ok(None),
         }
@@ -443,6 +463,7 @@ impl Database {
 
         Ok(Collection::new_with_kind(
             collection,
+            Arc::clone(&self.inner),
             name_owned,
             CollectionKind::Metadata,
         ))
@@ -574,7 +595,11 @@ impl Database {
             .get_graph_collection(&name_owned)
             .ok_or_else(|| PyRuntimeError::new_err("Graph collection not found after creation"))?;
 
-        Ok(PyGraphCollection::new(coll, name_owned))
+        Ok(PyGraphCollection::new(
+            coll,
+            Arc::clone(&self.inner),
+            name_owned,
+        ))
     }
 
     /// Execute a VelesQL query string (SELECT, DDL, or DML).
@@ -704,7 +729,7 @@ impl Database {
         Ok(self
             .inner
             .get_graph_collection(name)
-            .map(|c| PyGraphCollection::new(c, name.to_string())))
+            .map(|c| PyGraphCollection::new(c, Arc::clone(&self.inner), name.to_string())))
     }
 
     /// Analyze a collection, computing and persisting statistics.

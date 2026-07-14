@@ -21,7 +21,8 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use velesdb_core::collection::CollectionType;
-use velesdb_core::observer::{AccessDecision, QueryAccessContext, QueryOperationKind};
+use velesdb_core::observer::{AccessDecision, AccessScope, QueryAccessContext, QueryOperationKind};
+use velesdb_core::velesql::{Condition, Parser};
 use velesdb_core::{DatabaseObserver, Error};
 
 /// A [`DatabaseObserver`] that forwards lifecycle events to one Python callable.
@@ -93,7 +94,13 @@ fn operation_str(op: QueryOperationKind) -> &'static str {
 ///   — so an existing notify-only callback that ignores the event and returns
 ///   `None` keeps allowing every read (backward compatible);
 /// * `False` → [`AccessDecision::Deny`] with a default reason;
-/// * a `str` → `Deny` carrying that string as the human-readable reason.
+/// * a `str` → `Deny` carrying that string as the human-readable reason;
+/// * a `dict` → [`AccessDecision::AllowWithScope`] — the read is allowed but
+///   *narrowed*. It MUST carry an enforceable `"filter"` (a `VelesQL` WHERE
+///   predicate string, e.g. `"tenant = 'acme'"`, AND-composed into the query);
+///   `"tenant"` is an optional audit hint OSS does not itself narrow by. A dict
+///   with a missing/empty/tenant-only or unparseable `"filter"` **denies**
+///   (fail closed) rather than allowing an unscoped read.
 fn interpret_decision(ret: &Bound<'_, PyAny>) -> AccessDecision {
     if ret.is_none() {
         return AccessDecision::Allow;
@@ -110,7 +117,82 @@ fn interpret_decision(ret: &Bound<'_, PyAny>) -> AccessDecision {
             AccessDecision::Deny(Error::Query("read denied by observer policy".to_string()))
         };
     }
+    // A dict expresses an allow-with-scope narrowing.
+    if let Ok(dict) = ret.cast::<PyDict>() {
+        return interpret_scope(dict);
+    }
     AccessDecision::Allow
+}
+
+/// Builds an [`AccessDecision::AllowWithScope`] from a callback-returned dict.
+///
+/// A scope dict **must** yield an enforceable `"filter"` predicate. Because OSS
+/// enforces narrowing only through the `filter` (it forwards `tenant` for audit
+/// but does not itself narrow by it), a dict with no parseable `filter` —
+/// empty (`{}`), `tenant`-only (`{"tenant": …}`), or a `filter` that fails to
+/// parse — is treated as **DENY** (fail closed). Otherwise a policy author who
+/// writes `return {"tenant": t}` believing they scoped the read would instead
+/// receive every tenant's rows. A proper `{"filter": "<predicate>"}` narrows;
+/// bare `True`/`None` stays Allow and `False`/str stays Deny (handled upstream).
+fn interpret_scope(dict: &Bound<'_, PyDict>) -> AccessDecision {
+    let tenant = dict
+        .get_item("tenant")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract::<String>().ok());
+
+    // An enforceable filter predicate is mandatory — its absence fails closed.
+    let predicate = match dict.get_item("filter") {
+        Ok(Some(v)) if !v.is_none() => match v.extract::<String>() {
+            Ok(predicate) => predicate,
+            Err(_) => {
+                return AccessDecision::Deny(Error::Query(
+                    "observer scope 'filter' must be a VelesQL predicate string".to_string(),
+                ))
+            }
+        },
+        _ => {
+            return AccessDecision::Deny(Error::Query(
+                "observer returned an allow-with-scope dict without an enforceable 'filter' \
+                 predicate; OSS does not narrow by 'tenant' alone, so the read is denied \
+                 (fail closed). Return a {\"filter\": \"<VelesQL predicate>\"} dict to scope, \
+                 or None/True to allow."
+                    .to_string(),
+            ))
+        }
+    };
+
+    let condition = match parse_scope_predicate(&predicate) {
+        Ok(condition) => condition,
+        Err(err) => {
+            return AccessDecision::Deny(Error::Query(format!(
+                "invalid observer scope filter: {err}"
+            )))
+        }
+    };
+
+    // `AccessScope` is `#[non_exhaustive]`, so struct-literal construction is
+    // not available to this crate — build via `Default` then assign fields.
+    #[allow(clippy::field_reassign_with_default)]
+    let scope = {
+        let mut scope = AccessScope::default();
+        scope.tenant = tenant;
+        scope.filter = Some(condition);
+        scope
+    };
+    AccessDecision::AllowWithScope(scope)
+}
+
+/// Parses a bare `VelesQL` WHERE predicate (e.g. `"tenant = 'acme'"`) into a
+/// [`Condition`] by wrapping it in a throwaway `SELECT` and reusing the real
+/// parser — no parallel filter grammar is introduced.
+fn parse_scope_predicate(predicate: &str) -> Result<Condition, String> {
+    let sql = format!("SELECT * FROM _scope WHERE {predicate}");
+    let query = Parser::parse(&sql).map_err(|e| e.message)?;
+    query
+        .select
+        .where_clause
+        .ok_or_else(|| "scope predicate produced no WHERE condition".to_string())
 }
 
 impl DatabaseObserver for PyObserver {
@@ -162,11 +244,13 @@ impl DatabaseObserver for PyObserver {
     /// Read-path veto. Invokes the callback as
     /// `callback("query_request", collection=…, operation=…, principal=…, tenant=…)`
     /// and maps its return value through [`interpret_decision`]: `None`/`True`
-    /// allow, `False`/str deny. A callback that raises, or a field-population
-    /// failure, allows the read (fail-open on error so a bug in user policy code
-    /// never breaks a query — only an explicit refusal denies). Fires on every
-    /// gated read (VelesQL `SELECT`/`MATCH`) so an SDK embedder can enforce
-    /// governance, closing the "notify-only" gap (CORE-5).
+    /// allow, `False`/str deny, `dict` allow-with-scope (a `"filter"` VelesQL
+    /// predicate string and/or `"tenant"` hint narrowing the read). A callback
+    /// that raises, or a field-population failure, allows the read (fail-open on
+    /// error so a bug in user policy code never breaks a query — only an explicit
+    /// refusal denies). Fires on every gated read: VelesQL `SELECT`/`MATCH` and,
+    /// via the Python SDK's direct-search gate, `vector_search` / `text_search` /
+    /// `hybrid_search` (closing the "notify-only" gap, CORE-5).
     fn on_query_request(&self, ctx: &QueryAccessContext) -> velesdb_core::Result<AccessDecision> {
         let decision = Python::attach(|py| {
             let fields = PyDict::new(py);
