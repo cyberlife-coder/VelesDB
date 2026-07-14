@@ -161,12 +161,13 @@ impl Database {
     ///     ...     observer=lambda event, **f: events.append((event, f)),
     ///     ... )
     #[new]
-    #[pyo3(signature = (path, config = None, observer = None))]
+    #[pyo3(signature = (path, config = None, observer = None, observer_strict = false))]
     fn new(
         py: Python<'_>,
         path: &str,
         config: Option<VelesConfigOptions>,
         observer: Option<Py<PyAny>>,
+        observer_strict: bool,
     ) -> PyResult<Self> {
         // Open the database off the GIL. Opening walks the WAL, rebuilds
         // any in-memory state, and mmaps vector/edge files — on a multi-
@@ -181,8 +182,8 @@ impl Database {
         let path_buf = PathBuf::from(path);
         let path_clone = path_buf.clone();
         let core_config = config.map(|cfg| cfg.to_core());
-        let core_observer: Option<Arc<dyn DatabaseObserver>> =
-            observer.map(|cb| Arc::new(PyObserver::new(cb)) as Arc<dyn DatabaseObserver>);
+        let core_observer: Option<Arc<dyn DatabaseObserver>> = observer
+            .map(|cb| Arc::new(PyObserver::new(cb, observer_strict)) as Arc<dyn DatabaseObserver>);
         let db = py
             .detach(move || open_core(&path_clone, core_config, core_observer))
             .map_err(core_err)?;
