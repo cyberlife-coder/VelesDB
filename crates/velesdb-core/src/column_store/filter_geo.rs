@@ -88,7 +88,7 @@ impl ColumnStore {
                 let (lat, lng) = (*v).as_ref()?;
                 let dist = haversine_distance(*lat, *lng, params.lat, params.lng);
                 if compare_f64(dist, params.threshold, params.operator)
-                    && !self.deleted_rows.contains(&idx)
+                    && !self.is_row_deleted_bitmap(idx)
                 {
                     Some(idx)
                 } else {
@@ -112,7 +112,7 @@ impl ColumnStore {
                 let (lat, lng) = (*v).as_ref()?;
                 let dist = haversine_distance(*lat, *lng, params.lat, params.lng);
                 if compare_f64(dist, params.threshold, params.operator)
-                    && !self.deleted_rows.contains(&idx)
+                    && !self.is_row_deleted_bitmap(idx)
                 {
                     u32::try_from(idx).ok()
                 } else {
@@ -142,7 +142,7 @@ impl ColumnStore {
                     && *lat <= params.lat_max
                     && *lng >= params.lng_min
                     && *lng <= params.lng_max
-                    && !self.deleted_rows.contains(&idx)
+                    && !self.is_row_deleted_bitmap(idx)
                 {
                     Some(idx)
                 } else {
@@ -171,7 +171,7 @@ impl ColumnStore {
                     && *lat <= params.lat_max
                     && *lng >= params.lng_min
                     && *lng <= params.lng_max
-                    && !self.deleted_rows.contains(&idx)
+                    && !self.is_row_deleted_bitmap(idx)
                 {
                     u32::try_from(idx).ok()
                 } else {

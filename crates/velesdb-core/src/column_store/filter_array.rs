@@ -42,7 +42,7 @@ impl ColumnStore {
         let Some(TypedColumn::Array { data, .. }) = self.columns.get(column) else {
             return C::default();
         };
-        Self::iter_array_matches(data, &predicate, &self.deleted_rows, map_idx)
+        Self::iter_array_matches(data, &predicate, &self.deletion_bitmap, map_idx)
     }
 
     /// Inner loop shared by [`Self::filter_array_indices`]. Kept as a free associated
@@ -51,7 +51,7 @@ impl ColumnStore {
     fn iter_array_matches<P, M, T, C>(
         data: &[ArrayRow],
         predicate: &P,
-        deleted_rows: &rustc_hash::FxHashSet<usize>,
+        deletion_bitmap: &RoaringBitmap,
         map_idx: M,
     ) -> C
     where
@@ -63,7 +63,10 @@ impl ColumnStore {
             .enumerate()
             .filter_map(|(idx, row)| {
                 let arr = row.as_ref()?;
-                if predicate(arr) && !deleted_rows.contains(&idx) {
+                // Deleted rows live in `deletion_bitmap` (u32-indexed); indices that
+                // don't fit `u32` can never be tombstoned, so they count as live.
+                let deleted = u32::try_from(idx).is_ok_and(|i| deletion_bitmap.contains(i));
+                if predicate(arr) && !deleted {
                     map_idx(idx)
                 } else {
                     None

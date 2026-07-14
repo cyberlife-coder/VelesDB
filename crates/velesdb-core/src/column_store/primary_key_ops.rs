@@ -77,7 +77,7 @@ impl ColumnStore {
         existing_idx: usize,
         pk_value: i64,
     ) -> Result<usize, ColumnStoreError> {
-        if !self.deleted_rows.contains(&existing_idx) {
+        if !self.is_row_deleted_bitmap(existing_idx) {
             return Err(ColumnStoreError::DuplicateKey(pk_value));
         }
 
@@ -114,7 +114,6 @@ impl ColumnStore {
 
     /// Marks a tombstoned row as live again.
     fn undelete_row(&mut self, row_idx: usize) {
-        self.deleted_rows.remove(&row_idx);
         if let Ok(idx) = u32::try_from(row_idx) {
             self.deletion_bitmap.remove(idx);
         }
@@ -152,7 +151,7 @@ impl ColumnStore {
     #[must_use]
     pub fn get_row_idx_by_pk(&self, pk: i64) -> Option<usize> {
         let row_idx = self.primary_index.get(&pk).copied()?;
-        if self.deleted_rows.contains(&row_idx) {
+        if self.is_row_deleted_bitmap(row_idx) {
             return None;
         }
         Some(row_idx)
@@ -161,16 +160,14 @@ impl ColumnStore {
     /// Deletes a row by primary key value.
     ///
     /// Also clears any TTL metadata to prevent false-positive expirations.
-    /// Updates both FxHashSet and RoaringBitmap (EPIC-043 US-002).
+    /// Tombstones the row in the `deletion_bitmap` (EPIC-043 US-002).
     pub fn delete_by_pk(&mut self, pk: i64) -> bool {
         let Some(&row_idx) = self.primary_index.get(&pk) else {
             return false;
         };
-        if self.deleted_rows.contains(&row_idx) {
+        if self.is_row_deleted_bitmap(row_idx) {
             return false;
         }
-        self.deleted_rows.insert(row_idx);
-        // EPIC-043 US-002: Also update RoaringBitmap for O(1) contains
         if let Ok(idx) = u32::try_from(row_idx) {
             self.deletion_bitmap.insert(idx);
         }
@@ -243,7 +240,7 @@ impl ColumnStore {
             .primary_index
             .get(&pk)
             .ok_or(ColumnStoreError::RowNotFound(pk))?;
-        if self.deleted_rows.contains(&row_idx) {
+        if self.is_row_deleted_bitmap(row_idx) {
             return Err(ColumnStoreError::RowNotFound(pk));
         }
         Ok(row_idx)
