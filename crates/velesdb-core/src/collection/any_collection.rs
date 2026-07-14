@@ -73,14 +73,24 @@ impl AnyCollection {
     // Shared operations (dispatch on variant)
     // -------------------------------------------------------------------------
 
+    /// The shared inner [`Collection`](crate::collection::types::Collection)
+    /// backing every variant. All three newtypes wrap the same `Collection`, so
+    /// operations that are identical across kinds dispatch through this one
+    /// accessor instead of a per-variant match — removing the ad-hoc mix of
+    /// `c.method()` / `c.inner.method()` forwarding that the audit flagged (P2.6).
+    #[inline]
+    fn inner(&self) -> &crate::collection::types::Collection {
+        match self {
+            Self::Vector(c) => &c.inner,
+            Self::Graph(c) => &c.inner,
+            Self::Metadata(c) => &c.inner,
+        }
+    }
+
     /// Returns the collection configuration.
     #[must_use]
     pub fn config(&self) -> CollectionConfig {
-        match self {
-            Self::Vector(c) => c.config(),
-            Self::Graph(c) => c.inner.config(),
-            Self::Metadata(c) => c.inner.config(),
-        }
+        self.inner().config()
     }
 
     /// Flushes all state to disk.
@@ -105,11 +115,7 @@ impl AnyCollection {
     /// Returns `true` if the collection contains no points.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        match self {
-            Self::Vector(c) => c.inner.is_empty(),
-            Self::Graph(c) => c.is_empty(),
-            Self::Metadata(c) => c.is_empty(),
-        }
+        self.inner().is_empty()
     }
 
     /// Returns `true` if this is a metadata-only collection.
@@ -154,11 +160,7 @@ impl AnyCollection {
         query: &crate::velesql::Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
-        match self {
-            Self::Vector(c) => c.execute_aggregate(query, params),
-            Self::Graph(c) => c.inner.execute_aggregate(query, params),
-            Self::Metadata(c) => c.inner.execute_aggregate(query, params),
-        }
+        self.inner().execute_aggregate(query, params)
     }
 
     /// Returns collection diagnostics.
@@ -181,51 +183,31 @@ impl AnyCollection {
     ///
     /// Returns an error if the edge cannot be stored.
     pub fn add_edge(&self, edge: crate::collection::graph::GraphEdge) -> Result<()> {
-        match self {
-            Self::Vector(c) => c.add_edge(edge),
-            Self::Graph(c) => c.add_edge(edge),
-            Self::Metadata(c) => c.inner.add_edge(edge),
-        }
+        self.inner().add_edge(edge)
     }
 
     /// Removes a graph edge by ID. Returns `true` if the edge existed.
     #[must_use]
     pub fn remove_edge(&self, edge_id: u64) -> bool {
-        match self {
-            Self::Vector(c) => c.remove_edge(edge_id),
-            Self::Graph(c) => c.remove_edge(edge_id),
-            Self::Metadata(c) => c.inner.remove_edge(edge_id),
-        }
+        self.inner().remove_edge(edge_id)
     }
 
     /// Returns outgoing edges from a node.
     #[must_use]
     pub fn get_outgoing_edges(&self, node_id: u64) -> Vec<crate::collection::graph::GraphEdge> {
-        match self {
-            Self::Vector(c) => c.get_outgoing_edges(node_id),
-            Self::Graph(c) => c.get_outgoing(node_id),
-            Self::Metadata(c) => c.inner.get_outgoing_edges(node_id),
-        }
+        self.inner().get_outgoing_edges(node_id)
     }
 
     /// Returns the highest edge ID in the graph, if any.
     #[must_use]
     pub fn max_edge_id(&self) -> Option<u64> {
-        match self {
-            Self::Vector(c) => c.max_edge_id(),
-            Self::Graph(c) => c.inner.max_edge_id(),
-            Self::Metadata(c) => c.inner.max_edge_id(),
-        }
+        self.inner().max_edge_id()
     }
 
     /// Returns `true` when an edge with `edge_id` exists.
     #[must_use]
     pub fn edge_exists(&self, edge_id: u64) -> bool {
-        match self {
-            Self::Vector(c) => c.edge_exists(edge_id),
-            Self::Graph(c) => c.inner.edge_exists(edge_id),
-            Self::Metadata(c) => c.inner.edge_exists(edge_id),
-        }
+        self.inner().edge_exists(edge_id)
     }
 
     // -------------------------------------------------------------------------
