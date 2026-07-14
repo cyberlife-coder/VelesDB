@@ -128,19 +128,24 @@ jobs:
             BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
           fi
 
-          mapfile -t CORE_RS_FILES < <(
+          # F-3.12: validate SAFETY templates in EVERY production crate, not
+          # just velesdb-core. Bindings (velesdb-python, velesdb-wasm,
+          # velesdb-mobile, tauri-plugin-velesdb) contain unsafe blocks too and
+          # were previously unchecked, which let one incomplete template slip
+          # through (F-3.2).
+          mapfile -t PROD_RS_FILES < <(
             git diff --name-only "$BASE_SHA" "${{ github.sha }}" \
               | grep '\.rs$' \
-              | grep '^crates/velesdb-core/src/' \
+              | grep -E '^crates/[^/]+/src/' \
               | grep -v '/tests/' \
               | grep -v '/benches/' \
               | grep -Ev '_tests?\.rs$'
           )
-          if [[ ${#CORE_RS_FILES[@]} -eq 0 ]]; then
+          if [[ ${#PROD_RS_FILES[@]} -eq 0 ]]; then
             echo "No changed production Rust files to validate."
             exit 0
           fi
-          python3 scripts/verify_unsafe_safety_template.py --files "${CORE_RS_FILES[@]}" --strict
+          python3 scripts/verify_unsafe_safety_template.py --files "${PROD_RS_FILES[@]}" --strict
 
       - name: Check TODO/FIXME/HACK governance (production code)
         run: |
@@ -172,6 +177,9 @@ jobs:
 
       - name: Test feature-claims audit script
         run: python3 -m unittest scripts.tests.test_check_feature_claims
+
+      - name: Test prod-unwraps audit script
+        run: python3 -m unittest scripts.tests.test_check_prod_unwraps
 
       - name: Audit feature claims vs exports
         run: python3 scripts/check-feature-claims.py
