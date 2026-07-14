@@ -102,6 +102,7 @@ These are **not the same number** as the canonical 450 µs. The README explicitl
 **Enforcement:**
 
 - **CI script:** `scripts/check_prod_unwraps.py` — runs on every push, blocks merge if non-zero.
+- **Crate coverage:** every production crate's `src/` — `velesdb-core`, `velesdb-server`, `velesdb-cli`, `velesdb-migrate`, `velesdb-mobile`, `velesdb-wasm`, `tauri-plugin-velesdb`, `velesdb-memory`, `velesdb-node`, `velesdb-python` (the last three were added per audit F-3.10). The scan set lives in `SCAN_DIRS`; add any new production crate there. Test modules gated by `#[cfg(test)]` **and** composite forms like `#[cfg(all(test, feature = "..."))]` are excluded (audit F-3.11).
 - **Status:** **PASSED** — re-verified per push; the script exits 0 on the current workspace.
 
 **Approved alternatives** (in order of preference):
@@ -126,6 +127,7 @@ These are **not the same number** as the canonical 450 µs. The README explicitl
 **Enforcement:**
 
 - **CI script:** `scripts/verify_unsafe_safety_template.py` — runs on every push, blocks merge if any `unsafe { … }` / `unsafe impl …` site is not preceded by a `// SAFETY:` comment.
+- **Crate coverage:** the CI `Verify SAFETY template` job validates changed production `.rs` files under **any** `crates/*/src/` — core and every binding (`velesdb-python`, `velesdb-wasm`, `velesdb-mobile`, `tauri-plugin-velesdb`, …). It was previously scoped to `velesdb-core` only, which let one incomplete template in `velesdb-python` slip past CI (audit F-3.12 / F-3.2).
 - **Coverage:** every unsafe site in the workspace is annotated; live counts (unsafe sites and `// SAFETY:` comments) are reported by the script in CI logs and tracked release-over-release in `CHANGELOG.md`.
 - **Audit trail:** [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md) documents invariants for every unsafe pattern in the codebase.
 
