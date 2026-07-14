@@ -23,7 +23,7 @@ impl MmapStorage {
         let mut did_resize = false;
         let mut bytes_resized = 0u64;
 
-        let mut mmap = self.mmap.write();
+        let mut mmap = self.mmap().write();
         if mmap.len() < required_len {
             mmap.flush()?;
 
@@ -45,14 +45,14 @@ impl MmapStorage {
             // - Condition 3: File remains open with read+write permissions.
             // SAFETY: Memory mapping requires unsafe; resizing ensures mapping doesn't exceed file bounds.
             *mmap = unsafe { MmapMut::map_mut(&self.data_file)? };
-            self.remap_epoch
+            self.remap_epoch()
                 .fetch_add(1, std::sync::atomic::Ordering::Release);
 
             did_resize = true;
             bytes_resized = new_len.saturating_sub(current_len);
         }
 
-        self.metrics
+        self.metrics()
             .record_ensure_capacity(start.elapsed(), did_resize, bytes_resized);
 
         Ok(())
@@ -64,10 +64,29 @@ impl MmapStorage {
     ///
     /// Returns an error if file operations fail.
     pub fn reserve_capacity(&mut self, vector_count: usize) -> io::Result<()> {
-        let vector_size = self.dimension * std::mem::size_of::<f32>();
+        let vector_size = self.dimension() * std::mem::size_of::<f32>();
         let required_len = vector_count.saturating_mul(vector_size);
         let with_headroom = required_len.saturating_add(required_len / 10);
         self.ensure_capacity(with_headroom)
+    }
+
+    /// Borrows this storage's live fields into a [`CompactionContext`].
+    ///
+    /// Shared by [`compact`](Self::compact) and
+    /// [`fragmentation_ratio`](Self::fragmentation_ratio) so the field wiring
+    /// lives in one place. The context borrows `self` immutably; interior
+    /// mutability on the borrowed locks/atomics preserves existing semantics.
+    fn compaction_ctx(&self) -> CompactionContext<'_> {
+        CompactionContext {
+            path: self.path(),
+            dimension: self.dimension(),
+            index: self.index(),
+            mmap: self.mmap(),
+            next_offset: self.next_offset(),
+            wal: self.wal(),
+            initial_size: Self::INITIAL_SIZE,
+            watermarks: self.watermarks(),
+        }
     }
 
     /// Compacts the storage by rewriting only active vectors.
@@ -80,21 +99,10 @@ impl MmapStorage {
     ///
     /// Returns an error if file operations fail.
     pub fn compact(&mut self) -> io::Result<usize> {
-        let ctx = CompactionContext {
-            path: &self.path,
-            dimension: self.dimension,
-            index: &self.index,
-            mmap: &self.mmap,
-            next_offset: &self.next_offset,
-            wal: &self.wal,
-            initial_size: Self::INITIAL_SIZE,
-            watermarks: &self.watermarks,
-        };
-
-        let bytes_reclaimed = ctx.compact()?;
+        let bytes_reclaimed = self.compaction_ctx().compact()?;
 
         if bytes_reclaimed > 0 {
-            let data_path = self.path.join("vectors.dat");
+            let data_path = self.path().join("vectors.dat");
             self.data_file = OpenOptions::new().read(true).write(true).open(&data_path)?;
             // No flush_full() here: `commit_compaction` already synced the
             // compacted data file before the swap, promoted an identical
@@ -111,17 +119,6 @@ impl MmapStorage {
     /// Returns the fragmentation ratio (0.0 = no fragmentation, 1.0 = 100% fragmented).
     #[must_use]
     pub fn fragmentation_ratio(&self) -> f64 {
-        let ctx = CompactionContext {
-            path: &self.path,
-            dimension: self.dimension,
-            index: &self.index,
-            mmap: &self.mmap,
-            next_offset: &self.next_offset,
-            wal: &self.wal,
-            initial_size: Self::INITIAL_SIZE,
-            watermarks: &self.watermarks,
-        };
-
-        ctx.fragmentation_ratio()
+        self.compaction_ctx().fragmentation_ratio()
     }
 }
