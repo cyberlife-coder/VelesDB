@@ -41,6 +41,14 @@ Both branches feed into the same `dispatch_vector_query` executor through the `(
 
 **What remains open**: the deeper `PlanGenerator::CandidatePlan` enumeration (SeqScan, IndexScan, VectorSearch, GraphTraversal, hybrid combinations) is still not consumed by `execute_query`. The current two-path routing covers the operationally common cases — full multi-candidate enumeration would only change the decision when the cost landscape is non-trivially multimodal.
 
+**Strategy realization on SELECT (audit F-2.15)**: the `ExecutionStrategy` the planner selects is not executed as three physically distinct engines on the SELECT path. As documented in `velesql/planner.rs`:
+
+- `VectorFirst` — executed natively (HNSW-first, then filter).
+- `GraphFirst` — realized as an **anchor pre-filter** (compute the candidate id set, then run the vector search constrained to it), not a graph-driven scan.
+- `Parallel` — **collapses to `VectorFirst`** on SELECT; it is not run as concurrent branches. On `MATCH`, `Parallel` executes sequentially.
+
+This is a deliberate, assumed limitation (the planner's cost model still picks the cheapest strategy; the executor just realizes `GraphFirst`/`Parallel` conservatively), not a hidden bug. Hybrid-query optimization that executes these strategies distinctly is a future item.
+
 **User impact**: `MATCH` queries use the full CBO via `MatchQueryPlanner::plan`. SELECT queries (including ORDER BY similarity + filter) now use calibrated strategy and over-fetch selection. Covered by `test_cbo_forces_vector_first_for_order_by_similarity_with_selective_filter` + `test_cbo_calibrated_path_still_works_without_order_by_similarity` + `test_filter_strategy_switches_on_selectivity`.
 
 ### 3. Filter-strategy fallback threshold is runtime-tunable (default 0.1)
@@ -50,6 +58,14 @@ Both branches feed into the same `dispatch_vector_query` executor through the `(
 When no calibrated `CollectionStats` is available (collection never analyzed, SDK path without collection handle), `resolve_filter_strategy` falls back to `selectivity > threshold → PostFilter`. The threshold defaults to `0.1` to keep the ~50 pre-existing `EXPLAIN` tests green (backward-compat anchor), but is tunable at runtime via `velesdb_core::velesql::set_fallback_selectivity_threshold(value)` (lock-free `AtomicU64`, validates `[0.0, 1.0]`). Once stats are present, the cost-based comparison (pre-filter vs post-filter with recall guardrail at `selectivity >= 0.5`) takes over.
 
 **User impact**: for unanalyzed collections, operators can tune the fallback threshold for workloads where the calibrated pathway is unavailable without recompiling. Running `ANALYZE` on the collection still switches the decision to the calibrated pathway documented by BDD tests `test_filter_strategy_switches_on_selectivity` and `test_filter_strategy_respects_ef_search`.
+
+### Indexed metadata `Eq` query falls back to full scan above 50× the limit (audit F-4.7)
+
+**Status**: documented heuristic. Source: `crates/velesdb-core/src/collection/search/query/metadata_query.rs` (`execute_indexed_metadata_query`).
+
+For a metadata query whose `WHERE` reduces to an indexed `Eq`, the executor uses the secondary index directly. If the index reports more than `max(execution_limit × 50, 1000)` matching ids, it abandons the index and does a full filtered scan instead. The `50×` factor (with a 1000-id floor) is an intentional but **arbitrary** cutoff: past that fan-out, materializing and post-filtering the id list from the index is empirically slower than a straight scan, but the exact break-even point is workload-dependent and has not been calibrated per collection.
+
+**User impact**: none on correctness (results are identical either way). On a low-selectivity `Eq` over a very large collection, the query may take the scan path even when a different constant would have kept the index path. The factor is a compile-time constant today; making it cost-model-driven (like the filter-strategy threshold above) is a possible follow-up.
 
 ---
 
@@ -287,6 +303,19 @@ filters, conjunctive (AND) filters, single- and multi-column ORDER BY in mixed
 directions, the deterministic ascending-id tie-break, and bounded top-k
 (`ORDER BY ... LIMIT k`, both ASC and DESC). A result-shape divergence specific
 to the WASM or CLI surface now fails CI rather than going unnoticed.
+
+### Large production files vs the NLOC/complexity gate (audit F-5.13)
+
+**Status**: documented (governance clarification). Sources: [`QUALITY_BAR.md`](../../QUALITY_BAR.md) Gates 5–6, [`.codacy.yml`](../../.codacy.yml) `engines.lizard.exclude_paths`.
+
+The enforced Codacy metric is **per-function**: cyclomatic complexity ≤ 8 and function NLOC ≤ 50. There is no hard file-length gate — a file can be large yet fully compliant if it is a set of small functions or is comment-dense. So raw line count is not, by itself, a violation.
+
+Several production files exceed ~900 raw lines (e.g. `simd_native/x86_avx512.rs` ≈ 1469 raw / ~944 NLOC — dominated by per-intrinsic `// SAFETY:` blocks; `tauri-plugin-velesdb/src/{types,commands}.rs`; `velesdb-python/src/{agent.rs, collection/search.rs}`; `velesql/.../match_dispatch.rs`; `velesdb-server/src/config.rs`). They fall into two buckets:
+
+- **Covered by an exclusion**: the tauri-plugin files via the `crates/tauri-plugin-velesdb/src/**` lizard glob.
+- **Compliant without an exclusion**: the rest — their individual functions stay within CC ≤ 8 / NLOC ≤ 50, which is why `main` (3.10.0) ships Codacy-green. They are intentionally **not** added to `.codacy.yml`, because a blanket file exclusion would suppress genuine future per-function findings in them.
+
+The rule of thumb when adding a large file: only list it under `engines.lizard.exclude_paths` (with a rationale) if a **specific function** legitimately exceeds the per-function budget; never to silence file size alone.
 
 ---
 
