@@ -17,6 +17,16 @@
 //! `query_request` veto also never panics: a raised callback error is logged and
 //! treated as *allow* (fail-open on observer error, never break a read on a bug
 //! in user policy code — an explicit `False`/reason is the only way to deny).
+//!
+//! # Strict (fail-closed) mode
+//!
+//! Fail-open is the default so a bug in user policy never breaks reads. Governance
+//! / RBAC deployments can opt into **strict mode** (`Database(..., observer_strict=True)`):
+//! then any *error* while consulting the policy — the callback raising, a
+//! field-population failure, or an uninterpretable return value (e.g. a list) —
+//! resolves to **deny** instead of allow, so a broken policy fails closed rather
+//! than silently disabling governance. Explicit decisions (`None`/`True`/`False`/
+//! str/`dict`) are unaffected by the mode.
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -44,12 +54,37 @@ pub struct PyObserver {
     /// User-supplied Python callable. `Py<PyAny>` is `Send + Sync`, satisfying
     /// the `DatabaseObserver: Send + Sync` bound.
     cb: Py<PyAny>,
+    /// Read-path failure policy. When `false` (default), an *error* while
+    /// consulting the policy — the callback raising, a field-population
+    /// failure, or an uninterpretable return value — resolves to **allow**
+    /// (fail-open: a bug in user policy never breaks a read). When `true`
+    /// (opt-in, for RBAC / governance deployments), those same error cases
+    /// resolve to **deny** (fail-closed), so a broken policy denies rather
+    /// than silently disabling governance. Explicit decisions
+    /// (`None`/`True`/`False`/str/`dict`) behave identically in both modes.
+    strict: bool,
 }
 
 impl PyObserver {
     /// Wraps a Python callable as a core observer.
-    pub fn new(cb: Py<PyAny>) -> Self {
-        Self { cb }
+    ///
+    /// `strict` selects the read-path failure policy: `false` = fail-open
+    /// (default, backward compatible), `true` = fail-closed on any error while
+    /// consulting the policy. See [`PyObserver::strict`].
+    pub fn new(cb: Py<PyAny>, strict: bool) -> Self {
+        Self { cb, strict }
+    }
+
+    /// The [`AccessDecision`] to use when consulting the policy errors out:
+    /// `Deny` under strict mode, `Allow` otherwise.
+    fn on_error_decision(&self, what: &str) -> AccessDecision {
+        if self.strict {
+            AccessDecision::Deny(Error::Query(format!(
+                "read denied by observer strict mode: {what}"
+            )))
+        } else {
+            AccessDecision::Allow
+        }
     }
 
     /// Invokes the callback as `callback(event, **fields)`, swallowing any
@@ -101,7 +136,7 @@ fn operation_str(op: QueryOperationKind) -> &'static str {
 ///   `"tenant"` is an optional audit hint OSS does not itself narrow by. A dict
 ///   with a missing/empty/tenant-only or unparseable `"filter"` **denies**
 ///   (fail closed) rather than allowing an unscoped read.
-fn interpret_decision(ret: &Bound<'_, PyAny>) -> AccessDecision {
+fn interpret_decision(ret: &Bound<'_, PyAny>, strict: bool) -> AccessDecision {
     if ret.is_none() {
         return AccessDecision::Allow;
     }
@@ -120,6 +155,17 @@ fn interpret_decision(ret: &Bound<'_, PyAny>) -> AccessDecision {
     // A dict expresses an allow-with-scope narrowing.
     if let Ok(dict) = ret.cast::<PyDict>() {
         return interpret_scope(dict);
+    }
+    // Any other return type (e.g. a list, an int, an object) is not a valid
+    // decision. Fail-open by default (treat as no-opinion allow); fail-closed
+    // under strict mode so a policy bug that returns the wrong type denies
+    // rather than silently allowing.
+    if strict {
+        return AccessDecision::Deny(Error::Query(
+            "read denied by observer strict mode: policy returned an \
+             uninterpretable value (expected None/bool/str/dict)"
+                .to_string(),
+        ));
     }
     AccessDecision::Allow
 }
@@ -261,15 +307,14 @@ impl DatabaseObserver for PyObserver {
                 || fields.set_item("principal", ctx.principal).is_err()
                 || fields.set_item("tenant", ctx.tenant_hint).is_err()
             {
-                return AccessDecision::Allow;
+                return self.on_error_decision("could not populate query_request fields");
             }
             match self.cb.bind(py).call(("query_request",), Some(&fields)) {
-                Ok(ret) => interpret_decision(&ret),
+                Ok(ret) => interpret_decision(&ret, self.strict),
                 Err(err) => {
-                    eprintln!(
-                        "[velesdb] observer callback 'query_request' raised; allowing: {err}"
-                    );
-                    AccessDecision::Allow
+                    let verb = if self.strict { "denying" } else { "allowing" };
+                    eprintln!("[velesdb] observer callback 'query_request' raised; {verb}: {err}");
+                    self.on_error_decision("query_request callback raised")
                 }
             }
         });

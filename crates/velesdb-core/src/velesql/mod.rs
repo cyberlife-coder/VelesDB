@@ -35,11 +35,10 @@ mod bare_alias_tests;
 mod cache;
 #[cfg(test)]
 mod cache_tests;
-#[cfg(all(test, feature = "persistence"))]
+#[cfg(test)]
 mod cbo_tests;
 #[cfg(test)]
 mod complex_parser_tests;
-#[cfg(feature = "persistence")]
 mod cost_estimator;
 #[cfg(test)]
 mod ddl_tests;
@@ -50,8 +49,10 @@ mod dml_tests;
 mod error;
 #[cfg(test)]
 mod error_tests;
-#[cfg(feature = "persistence")]
 mod explain;
+// explain_tests exercises the REST `api_types` EXPLAIN conversions (gated with the
+// server/persistence layer), so it stays persistence-gated even though `explain`
+// itself is now persistence-free (P1.4).
 #[cfg(all(test, feature = "persistence"))]
 mod explain_tests;
 mod graph_pattern;
@@ -66,6 +67,11 @@ mod join_extended_tests;
 pub mod json_path;
 #[cfg(test)]
 mod json_path_tests;
+/// MATCH-query execution planner (persistence-free; relocated from
+/// `collection::search::query` in P1.4 so the planner can compile without it).
+pub mod match_planner;
+#[cfg(test)]
+mod match_planner_tests;
 #[cfg(test)]
 mod orderby_multi_tests;
 #[cfg(test)]
@@ -73,13 +79,11 @@ mod parallel_aggregation_tests;
 mod parser;
 #[cfg(test)]
 mod parser_tests;
-#[cfg(feature = "persistence")]
 mod planner;
-#[cfg(all(test, feature = "persistence"))]
+#[cfg(test)]
 mod planner_tests;
 #[cfg(test)]
 mod projection_parser_tests;
-#[cfg(feature = "persistence")]
 mod query_stats;
 mod validation;
 mod validation_anchor;
@@ -265,9 +269,10 @@ pub use graph_pattern::*;
 // Re-export match_clause parser functions for benchmarks
 pub use cache::{CacheStats, QueryCache};
 pub use error::{ParseError, ParseErrorKind};
+// Consumed only by the persistence-gated select dispatcher; keep gated so the
+// planner-only build stays warning-clean (P1.4).
 #[cfg(feature = "persistence")]
 pub(crate) use explain::strip_vector_predicates;
-#[cfg(feature = "persistence")]
 pub use explain::{
     build_leaf_node_stats, fallback_selectivity_threshold, set_fallback_selectivity_threshold,
     ActualStats, AggregatePlan, ExplainOutput, FeedbackCalibration, FilterPlan, FilterStrategy,
@@ -277,7 +282,6 @@ pub use explain::{
 };
 pub use parser::match_clause;
 pub use parser::Parser;
-#[cfg(feature = "persistence")]
 pub use planner::{
     Cost, CostEstimator, ExecutionStrategy, QueryPlanner, QueryStats, SelectivityMethod,
 };
