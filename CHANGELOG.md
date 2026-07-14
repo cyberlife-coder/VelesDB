@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.10.0] — 2026-07-14
+
+Delivery release: closes the P0 flagged by the 7-auditor review — the OSS
+server registered **no observer at all**, so governance/RBAC hooks were a
+complete no-op in the open-core binary regardless of what a consumer
+configured. Every read path (HTTP and Python SDK) is now gated end to end.
+Plus a memory carry-forward fix, a version-sync gap on the node binding,
+routine dependency maintenance, and a documentation pass (recall language,
+roadmap currency, an overreaching compliance claim).
+
+### Security
+- **server: the governance read-path gate is now live on every HTTP read.**
+  `velesdb-server` previously opened the database with `Database::open`
+  (never `open_with_observer`), so `on_query_request` never fired in the
+  shipped binary — any observer a consumer registered was silently inert.
+  Dense/text/hybrid/sparse/batch/multi-query/ids search, `EXPLAIN ANALYZE
+  MATCH`, and graph embedding search now all route through
+  `Database::gated_search` / `authorize_read`: a `Deny` fails closed (zero
+  results, not an error swallowed into success), an allow-with-scope filter
+  composes with the caller's own filter, and there is zero overhead when no
+  observer is registered. A new end-to-end test drives a denying observer
+  through the real HTTP surface and asserts every one of those routes is
+  actually blocked, not just the query layer above them.
+- **python: the SDK observer gained a read-path veto.** `on_query_request`
+  now fires before every gated read and can return `False`/a reason string
+  to deny, or a `{"filter": ...}` dict to narrow the result scope — the
+  callback was previously notify-only and could not affect the outcome.
+- **python: direct `.search()` (and its dense/text/hybrid/sparse/batch/
+  multi-query/ids variants, plus graph `search_by_embedding`) now goes
+  through the same gate as VelesQL — previously it bypassed governance
+  entirely, even with an observer registered. A scope dict with no
+  enforceable `filter` (e.g. `{}` or `{"tenant": ...}`, which OSS does not
+  itself enforce) is now treated as a deny rather than an accidental
+  unscoped allow.
+
+### Fixed
+- **memory:** `remember`ing over an existing fact now carries forward its
+  reserved `_veles_*` metadata (RL confidence, TTL) instead of resetting it —
+  reinforcement learned from prior feedback survives a re-remember.
+- **node:** the `velesdb-node` binding had drifted to 0.6.0 (its lockfile
+  even further, at 0.4.0) against `velesdb-memory` 0.7.0, so its 5 release
+  build jobs failed and the npm publish for that binding was skipped in the
+  0.7.0 delivery — bumped in lockstep and the 3 binding manifests are now
+  policed by `check-version-sync.py` so this drift can't recur silently.
+- **docs:** `BENCHMARKS.md`'s recall language was softened from a guarantee
+  to a measured target (HNSW is an approximate index; nothing in the engine
+  guarantees 100% recall), and a stale Docker version pin in the README was
+  corrected.
+- **docs:** the README roadmap table still flagged v3.8 as current while the
+  tree had moved to 3.9.1 — added an accurate v3.9 row; softened an
+  overreaching "HIPAA-compliant" claim in `BUSINESS_SCENARIOS` to "for
+  HIPAA-regulated data" (the product supports that posture, it does not
+  itself confer compliance); removed the internal `report/audit-2026q2/`
+  code-health analysis from the public tree (the campaign stays named in
+  this changelog; nothing public linked those files by path).
+
+### Dependencies
+- **`ed25519-dalek` 2.2.0 → 3.0.0** (MAJOR): used for offline license-key
+  signing (`veles-license`); the bump required no code changes, CI green
+  across the workspace.
+- Routine group updates: TypeScript SDK npm deps, GitHub Actions, the
+  `dtolnay/rust-toolchain` pin, a 6-crate Cargo `cargo-non-major` group, and
+  `pollster` 0.4.0 → 1.0.1.
+
+### Security (acknowledged, not fixed)
+- **`glib` 0.18.5 unsoundness** (GHSA-wrw7-89jp-8q8g / RUSTSEC-2024-0429,
+  Dependabot alerts #3/#6): pulled in only by the Tauri demo's Linux/GTK3
+  backend (`tauri → gtk 0.18 → glib 0.18.5`); no code in `crates/` or
+  `demos/` constructs the affected `VariantStrIter`. **Not patched** —
+  gtk3-rs is archived upstream at the 0.18 line and Tauri 2.x's Linux
+  backend still depends on GTK3, so no available bump reaches glib 0.20.
+  The accepted risk and exit path (a GTK4/webkit2gtk-6 migration, not
+  before 2026 Q4) are now recorded in `deny.toml` alongside the 7 sibling
+  GTK3 advisories already tracked there.
+
 ## [3.9.1] — 2026-07-12
 
 Delivery release: everything merged on `develop` since v3.9.0 reaches users —
