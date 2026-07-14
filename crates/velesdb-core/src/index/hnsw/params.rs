@@ -335,6 +335,12 @@ pub enum SearchQuality {
     /// tests; on a real 1M corpus (SIFT1M) it measures ~0.9994 — re-ranking can
     /// only reorder candidates the graph surfaced, so the rare true neighbour
     /// outside the ef=8192 pool at 1M is not recovered. See docs/BENCHMARKS.md §11.
+    ///
+    /// This tunes the **HNSW graph's effort** and is not exhaustive. For a hard
+    /// 100% guarantee use the separate `SearchMode::Perfect`
+    /// (`crate::config::SearchMode`), which switches the *engine* to a bruteforce
+    /// full scan (O(n)) rather than staying on the graph. Same name, different
+    /// axis: `SearchQuality` = graph effort, `SearchMode` = engine choice.
     Perfect,
     /// Custom `ef_search` value.
     Custom(usize),
