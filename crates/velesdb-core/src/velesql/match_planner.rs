@@ -172,7 +172,7 @@ impl MatchQueryPlanner {
             Condition::Not(inner) | Condition::Group(inner) => {
                 Self::condition_references_alias(inner, aliases)
             }
-            other => super::match_exec::where_eval::column_of_metadata_condition(other)
+            other => column_of_metadata_condition(other)
                 .is_some_and(|column| column_targets_alias(column, aliases)),
         }
     }
@@ -424,6 +424,26 @@ fn order_by_expr_targets_alias(expr: &crate::velesql::OrderByExpr, aliases: &[&s
         OrderByExpr::SimilarityBare | OrderByExpr::Aggregate(_) | OrderByExpr::Arithmetic(_) => {
             false
         }
+    }
+}
+
+/// Extracts the column name from a metadata condition variant.
+///
+/// Returns `Some(&str)` for condition types that carry a `column` field.
+/// Non-metadata variants return `None`. Persistence-free helper shared by the
+/// MATCH planner and the collection WHERE-evaluator (relocated here in P1.4).
+pub(crate) fn column_of_metadata_condition(condition: &Condition) -> Option<&str> {
+    match condition {
+        Condition::In(ic) => Some(&ic.column),
+        Condition::Between(btw) => Some(&btw.column),
+        Condition::Like(lk) => Some(&lk.column),
+        Condition::IsNull(isn) => Some(&isn.column),
+        Condition::Match(m) => Some(&m.column),
+        Condition::ContainsText(ct) => Some(&ct.column),
+        Condition::Contains(c) => Some(&c.column),
+        Condition::GeoDistance(gd) => Some(&gd.column),
+        Condition::GeoBbox(gb) => Some(&gb.column),
+        _ => None,
     }
 }
 
