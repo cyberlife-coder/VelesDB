@@ -235,8 +235,8 @@ impl HnswIndex {
 
     /// Re-ranks candidates using SIMD-optimized exact distance computation.
     ///
-    /// Reads vector slices directly from `ContiguousVectors` (64-byte aligned,
-    /// cache-friendly) instead of cloning via `ShardedVectors::get()`.
+    /// Reads vector slices directly from `ContiguousVectors` (64-byte
+    /// aligned, cache-friendly) — the single vector store since PERF1.
     pub(crate) fn rerank_candidates_simd(
         &self,
         query: &[f32],

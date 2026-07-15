@@ -1,7 +1,6 @@
 //! Tests for `upsert` module — shared upsert-mapping logic.
 
 use super::sharded_mappings::ShardedMappings;
-use super::sharded_vectors::ShardedVectors;
 use super::upsert::{rollback_upsert, upsert_mapping, upsert_mapping_batch};
 
 // -------------------------------------------------------------------------
@@ -11,8 +10,7 @@ use super::upsert::{rollback_upsert, upsert_mapping, upsert_mapping_batch};
 #[test]
 fn test_upsert_mapping_batch_empty() {
     let mappings = ShardedMappings::new();
-    let vectors = ShardedVectors::new(4);
-    let results = upsert_mapping_batch(&mappings, &vectors, true, &[]);
+    let results = upsert_mapping_batch(&mappings, &[]);
     assert!(results.is_empty());
     assert!(mappings.is_empty());
 }
@@ -20,9 +18,8 @@ fn test_upsert_mapping_batch_empty() {
 #[test]
 fn test_upsert_mapping_batch_all_new() {
     let mappings = ShardedMappings::new();
-    let vectors = ShardedVectors::new(4);
     let ids = [10, 20, 30];
-    let results = upsert_mapping_batch(&mappings, &vectors, true, &ids);
+    let results = upsert_mapping_batch(&mappings, &ids);
 
     assert_eq!(results.len(), 3);
     for result in &results {
@@ -32,65 +29,42 @@ fn test_upsert_mapping_batch_all_new() {
 }
 
 #[test]
-fn test_upsert_mapping_batch_all_existing_cleans_stale_vectors() {
+fn test_upsert_mapping_batch_all_existing_reports_old_indices() {
     let mappings = ShardedMappings::new();
-    let vectors = ShardedVectors::new(4);
 
-    // Pre-insert IDs and store sidecar vectors
+    // Pre-insert IDs
+    let mut old_indices = Vec::new();
     for id in [10, 20, 30] {
-        let idx = mappings.register(id).expect("register");
-        vectors.insert(idx, &[1.0, 0.0, 0.0, 0.0]);
+        old_indices.push(mappings.register(id).expect("register"));
     }
-    assert_eq!(vectors.len(), 3);
 
     // Batch upsert same IDs
-    let results = upsert_mapping_batch(&mappings, &vectors, true, &[10, 20, 30]);
+    let results = upsert_mapping_batch(&mappings, &[10, 20, 30]);
 
     assert_eq!(results.len(), 3);
-    for result in &results {
-        assert!(
-            result.old_idx.is_some(),
-            "existing IDs should have old index"
+    for (result, old_idx) in results.iter().zip(&old_indices) {
+        assert_eq!(
+            result.old_idx,
+            Some(*old_idx),
+            "existing IDs should report their previous index"
         );
+        assert_ne!(result.idx, *old_idx, "replacement allocates a fresh index");
     }
-    // Old sidecar vectors removed
-    assert_eq!(vectors.len(), 0, "stale vectors should be cleaned up");
-    // Mapping count unchanged
+    // Mapping count unchanged; old indices are now unmapped tombstones.
     assert_eq!(mappings.len(), 3);
-}
-
-#[test]
-fn test_upsert_mapping_batch_no_stale_cleanup_when_storage_disabled() {
-    let mappings = ShardedMappings::new();
-    let vectors = ShardedVectors::new(4);
-
-    // Pre-insert and store vectors
-    for id in [10, 20] {
-        let idx = mappings.register(id).expect("register");
-        vectors.insert(idx, &[1.0, 0.0, 0.0, 0.0]);
+    for old_idx in old_indices {
+        assert_eq!(mappings.get_id(old_idx), None);
     }
-
-    // Batch upsert with storage disabled: vectors should NOT be removed
-    let results = upsert_mapping_batch(&mappings, &vectors, false, &[10, 20]);
-
-    assert_eq!(results.len(), 2);
-    assert_eq!(
-        vectors.len(),
-        2,
-        "vectors should not be removed when storage disabled"
-    );
 }
 
 #[test]
 fn test_upsert_mapping_batch_mixed_new_and_existing() {
     let mappings = ShardedMappings::new();
-    let vectors = ShardedVectors::new(4);
 
     // Pre-insert one ID
     let old_idx = mappings.register(20).expect("register");
-    vectors.insert(old_idx, &[1.0, 0.0, 0.0, 0.0]);
 
-    let results = upsert_mapping_batch(&mappings, &vectors, true, &[10, 20, 30]);
+    let results = upsert_mapping_batch(&mappings, &[10, 20, 30]);
 
     assert_eq!(results.len(), 3);
     // ID 10: new
@@ -101,16 +75,15 @@ fn test_upsert_mapping_batch_mixed_new_and_existing() {
     assert_eq!(results[2].old_idx, None);
 
     assert_eq!(mappings.len(), 3);
-    // Stale vector for old_idx removed
-    assert!(vectors.get(old_idx).is_none());
+    // The replaced index no longer resolves to an ID.
+    assert_eq!(mappings.get_id(old_idx), None);
 }
 
 #[test]
 fn test_upsert_mapping_batch_single_element() {
     let mappings = ShardedMappings::new();
-    let vectors = ShardedVectors::new(4);
 
-    let results = upsert_mapping_batch(&mappings, &vectors, true, &[42]);
+    let results = upsert_mapping_batch(&mappings, &[42]);
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].old_idx, None);
@@ -124,13 +97,12 @@ fn test_upsert_mapping_batch_single_element() {
 #[test]
 fn test_upsert_mapping_batch_rollback_restores_old_mappings() {
     let mappings = ShardedMappings::new();
-    let vectors = ShardedVectors::new(4);
 
     // Pre-insert ID 10
     let original_idx = mappings.register(10).expect("register");
 
     // Batch upsert replaces ID 10
-    let results = upsert_mapping_batch(&mappings, &vectors, false, &[10]);
+    let results = upsert_mapping_batch(&mappings, &[10]);
     assert_eq!(results[0].old_idx, Some(original_idx));
     let new_idx = results[0].idx;
     assert_ne!(new_idx, original_idx);
@@ -148,14 +120,13 @@ fn test_upsert_mapping_batch_rollback_restores_old_mappings() {
 #[test]
 fn test_upsert_mapping_batch_rollback_reverse_order() {
     let mappings = ShardedMappings::new();
-    let vectors = ShardedVectors::new(4);
 
     // Pre-insert IDs 10 and 20
     let idx_10 = mappings.register(10).expect("register");
     let idx_20 = mappings.register(20).expect("register");
 
     // Batch upsert replaces both
-    let results = upsert_mapping_batch(&mappings, &vectors, false, &[10, 20]);
+    let results = upsert_mapping_batch(&mappings, &[10, 20]);
 
     // Rollback in reverse order (as the production code does)
     for (id, result) in [10_u64, 20].iter().zip(results.iter()).rev() {
@@ -177,16 +148,14 @@ fn test_upsert_mapping_batch_matches_sequential() {
 
     // Sequential path
     let seq_mappings = ShardedMappings::new();
-    let seq_vectors = ShardedVectors::new(4);
     let seq_results: Vec<_> = ids
         .iter()
-        .map(|&id| upsert_mapping(&seq_mappings, &seq_vectors, true, id))
+        .map(|&id| upsert_mapping(&seq_mappings, id))
         .collect();
 
     // Batch path
     let batch_mappings = ShardedMappings::new();
-    let batch_vectors = ShardedVectors::new(4);
-    let batch_results = upsert_mapping_batch(&batch_mappings, &batch_vectors, true, &ids);
+    let batch_results = upsert_mapping_batch(&batch_mappings, &ids);
 
     // Results should be identical for all-new IDs
     assert_eq!(seq_results.len(), batch_results.len());
