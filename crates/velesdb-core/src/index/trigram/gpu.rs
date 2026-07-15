@@ -285,9 +285,9 @@ mod gpu_tests {
             let mut bitmap = RoaringBitmap::new();
             bitmap.insert(0);
             bitmap.insert(1);
-            index.insert([b'h', b'e', b'l'], bitmap.clone());
-            index.insert([b'e', b'l', b'l'], bitmap.clone());
-            index.insert([b'l', b'l', b'o'], bitmap);
+            index.insert(*b"hel", bitmap.clone());
+            index.insert(*b"ell", bitmap.clone());
+            index.insert(*b"llo", bitmap);
 
             let patterns = vec!["hello"];
             let results = gpu.batch_search(&patterns, &index);
