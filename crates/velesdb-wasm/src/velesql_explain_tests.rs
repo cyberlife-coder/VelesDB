@@ -3,13 +3,15 @@
 //! Asserts the emitted `operation` vocabulary is a strict subset of core's
 //! `PlanStep::rest_operation()` taxonomy and that the REST `ExplainStep` wire
 //! keys (`step`, `operation`, `description`, `estimated_rows`) are present.
+//! SELECT/MATCH steps now come straight from core's `QueryPlan::to_plan_steps`
+//! (R6); the mirrored taxonomy below still pins the locally-built rows
+//! (DML/DDL, compound combine) to the same vocabulary.
 
 use super::*;
 use velesdb_core::velesql::Parser;
 
 /// The exact set of `operation` strings core's `PlanStep::rest_operation()`
-/// can emit (`{Type}Join` expands per join type). Mirrored here because the
-/// core `explain` module is `persistence`-gated and unreachable from WASM.
+/// can emit (`{Type}Join` expands per join type).
 const CORE_OPERATIONS: &[&str] = &[
     "VectorSearch",
     "FullScan",
