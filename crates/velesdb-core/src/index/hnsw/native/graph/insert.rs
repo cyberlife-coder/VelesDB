@@ -4,12 +4,7 @@ use super::super::distance::DistanceEngine;
 use super::super::layer::{Layer, NodeId};
 use super::{NativeHnsw, NO_ENTRY_POINT};
 use crate::perf_optimizations::ContiguousVectors;
-use std::borrow::Cow;
 use std::sync::atomic::Ordering;
-
-/// Result of [`NativeHnsw::allocate_batch`]: `(NodeId, layer)` pairs and
-/// the pre-processed query vectors (normalized for cosine, borrowed otherwise).
-type BatchAllocation<'a> = (Vec<(NodeId, usize)>, Vec<Cow<'a, [f32]>>);
 
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Allocates vector storage if needed and pushes the vector, returning its node ID.
@@ -174,35 +169,44 @@ impl<D: DistanceEngine> NativeHnsw<D> {
 
     /// Batch-allocates vectors and assigns random layers.
     ///
-    /// Returns `(assignments, processed_queries)` where:
-    /// - `assignments`: `(NodeId, layer)` pairs for each vector
-    /// - `processed_queries`: normalized query vectors (reusable in Phase B)
+    /// Returns the `(NodeId, layer)` assignments for each vector, in input
+    /// order (`assignments[i]` corresponds to `vectors[i]`).
     ///
     /// This is Phase A of the two-phase batch insertion: all vectors are stored
     /// and layers expanded in single lock scopes. The caller is responsible for
     /// connecting nodes (Phase B) and updating `entry_point`/`count` (Phase C).
+    ///
+    /// # Allocation strategy (PERF2)
+    ///
+    /// Raw input slices are pushed directly into [`ContiguousVectors`]; for
+    /// the pre-normalized cosine configuration the pushed range is then
+    /// normalized **in place** inside the storage, under the same write lock
+    /// (see [`Self::bulk_push_vectors`]). This avoids materializing one owned
+    /// normalized buffer per vector (`Vec<Cow>` of N owned buffers held alive
+    /// for the whole batch). Phase B re-derives the normalized query per node
+    /// from a thread-local scratch (`with_prepared_query`), which is
+    /// bit-identical to the stored form (same `normalize_inplace_native`
+    /// kernel on the same input bits).
     ///
     /// # Lock Strategy (I2 optimization)
     ///
     /// The vector write lock is acquired in two separate scopes:
     /// 1. **Capacity reservation** — initializes storage and pre-grows the buffer
     ///    if needed. May trigger an expensive realloc+copy on the cold path.
-    /// 2. **Bulk push** — copies vectors into pre-reserved space. Guaranteed
-    ///    fast memcpy with no reallocation.
+    /// 2. **Bulk push** — copies vectors into pre-reserved space (guaranteed
+    ///    fast memcpy with no reallocation), then normalizes the pushed range
+    ///    in place for pre-normalized cosine.
     ///
     /// # Errors
     ///
     /// Returns an error if vector storage allocation fails.
-    pub(in crate::index::hnsw::native) fn allocate_batch<'a>(
+    pub(in crate::index::hnsw::native) fn allocate_batch(
         &self,
-        vectors: &[&'a [f32]],
-    ) -> crate::error::Result<BatchAllocation<'a>> {
+        vectors: &[&[f32]],
+    ) -> crate::error::Result<Vec<(NodeId, usize)>> {
         if vectors.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok(Vec::new());
         }
-
-        let processed: Vec<Cow<'a, [f32]>> =
-            vectors.iter().map(|v| self.prepare_query(v)).collect();
 
         // Pre-expand layers before vectors (lock ordering safe: layers only)
         let current_len = self
@@ -213,16 +217,16 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.pre_expand_layers(current_len + vectors.len());
 
         // Scope 1: Initialize storage and reserve capacity (may resize — cold path)
-        self.reserve_vector_capacity(&processed, vectors.len())?;
+        self.reserve_vector_capacity(vectors[0].len(), vectors.len())?;
 
         // Scope 2: Bulk push into pre-reserved space (fast memcpy — no resize)
-        let first_id = self.bulk_push_vectors(&processed)?;
+        let first_id = self.bulk_push_vectors(vectors)?;
 
         let assignments: Vec<(NodeId, usize)> = (0..vectors.len())
             .map(|i| (first_id + i, self.random_layer()))
             .collect();
 
-        Ok((assignments, processed))
+        Ok(assignments)
     }
 
     /// Initializes vector storage if needed and pre-reserves capacity.
@@ -230,15 +234,12 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Cold path: the write lock may be held during a buffer resize.
     fn reserve_vector_capacity(
         &self,
-        processed: &[Cow<'_, [f32]>],
+        dimension: usize,
         batch_size: usize,
     ) -> crate::error::Result<()> {
         let mut guard = self.vectors.write();
         if guard.is_none() {
-            *guard = Some(ContiguousVectors::new(
-                processed[0].len(),
-                batch_size.max(16),
-            )?);
+            *guard = Some(ContiguousVectors::new(dimension, batch_size.max(16))?);
         }
         let storage = guard.as_mut().ok_or_else(|| {
             crate::error::Error::Internal("Vector storage missing after init".to_string())
@@ -247,17 +248,35 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         Ok(())
     }
 
-    /// Pushes all processed vectors into pre-reserved storage.
+    /// Pushes all raw vectors into pre-reserved storage, then normalizes the
+    /// pushed range in place for the pre-normalized cosine configuration.
     ///
-    /// Fast path: write lock held only for bulk memcpy, no reallocation.
-    fn bulk_push_vectors(&self, processed: &[Cow<'_, [f32]>]) -> crate::error::Result<NodeId> {
+    /// Fast path: write lock held only for bulk memcpy (plus, for cosine
+    /// pre-normalized, one in-place normalization pass), no reallocation.
+    ///
+    /// # Ordering invariant (PERF2)
+    ///
+    /// The in-place normalization runs under the **same** write lock as the
+    /// push, so no reader can ever observe a raw (un-normalized) cosine
+    /// vector: graph construction (Phase B) only starts after this method
+    /// returns, and any concurrent search takes the vectors read lock, which
+    /// is excluded while this write lock is held.
+    fn bulk_push_vectors(&self, vectors: &[&[f32]]) -> crate::error::Result<NodeId> {
         let mut guard = self.vectors.write();
         let storage = guard.as_mut().ok_or_else(|| {
             crate::error::Error::Internal("Vector storage missing after reserve".to_string())
         })?;
         let first = storage.len();
-        let slices: Vec<&[f32]> = processed.iter().map(AsRef::as_ref).collect();
-        storage.push_batch(&slices)?;
+        storage.push_batch(vectors)?;
+        if self.distance.is_pre_normalized()
+            && self.distance.metric() == crate::DistanceMetric::Cosine
+        {
+            for i in first..storage.len() {
+                if let Some(stored) = storage.get_mut(i) {
+                    crate::simd_native::normalize_inplace_native(stored);
+                }
+            }
+        }
         Ok(first)
     }
 

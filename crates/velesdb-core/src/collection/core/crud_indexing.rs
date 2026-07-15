@@ -302,6 +302,14 @@ impl Collection {
         let count = vector_refs.len();
         #[cfg(feature = "persistence")]
         if let Some(ref di) = self.deferred_indexer {
+            // PERF3: the per-vector `to_vec()` copy is intrinsic to the
+            // deferred contract — `vector_refs` borrows the caller's data and
+            // does not outlive this call, while the deferred buffer must own
+            // the vectors until the next merge. `DeltaBuffer` stores one
+            // exact-sized `Vec<f32>` per entry (its per-entry ownership is
+            // what makes upsert-replace/remove O(1) data-move); the copies
+            // run OUTSIDE the buffer's write lock (see `DeltaBuffer::extend`)
+            // and the buffer is bounded by `merge_threshold` entries.
             di.extend(vector_refs.iter().map(|(id, v)| (*id, v.to_vec())));
             if di.should_merge() {
                 self.merge_deferred_batch(di);
