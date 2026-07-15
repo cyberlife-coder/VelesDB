@@ -297,9 +297,12 @@ fn like_match(text: &str, pattern: &str, case_insensitive: bool) -> bool {
         if stale {
             *slot = Some(CompiledLikePattern::compile(pattern, case_insensitive));
         }
-        slot.as_mut()
-            .expect("compiled pattern just populated")
-            .run(text)
+        match slot.as_mut() {
+            Some(compiled) => compiled.run(text),
+            // Unreachable in practice (populated above when stale); recompile as
+            // a fail-safe rather than unwrap, keeping production code panic-free.
+            None => CompiledLikePattern::compile(pattern, case_insensitive).run(text),
+        }
     })
 }
 
