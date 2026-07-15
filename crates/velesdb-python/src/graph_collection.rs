@@ -110,7 +110,7 @@ pub struct PyGraphCollection {
     /// its vector read through this handle's control-plane gate rather than
     /// hitting the leaf directly.
     pub(crate) db: Arc<CoreDatabase>,
-    name: String,
+    pub(crate) name: String,
 }
 
 impl PyGraphCollection {
