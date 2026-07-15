@@ -1,3 +1,5 @@
+// Reason: clippy 1.90 similar_names flags idiomatic test bindings (dir/dim, ids/idx).
+#![allow(clippy::similar_names)]
 #![cfg(feature = "persistence")]
 //! E2E tests for WAL crash recovery.
 //!

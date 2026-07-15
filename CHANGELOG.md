@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **GraphFirst full-scan truncation is now observable.** The filtered-vector
+  `GraphFirst` executor caps how many metadata matches it rescores at
+  `SCAN_CAP = 100_000` per query (#901 pathological-query guard). The cap is
+  unchanged, but when it actually bites (matches were still unvisited when the
+  scan stopped) the query now emits **one** structured `tracing::warn!` with
+  the collection name, the cap, the matches scored, and an upper bound on the
+  unvisited remainder — instead of silently degrading recall. Documented in
+  `docs/reference/KNOWN_LIMITATIONS.md` with symptoms and workarounds. (WO-D2.)
+
 ## [3.11.0] — 2026-07-14
 
 Chief-engineer audit resolution: closes every actionable finding from the

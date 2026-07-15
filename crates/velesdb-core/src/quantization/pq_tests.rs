@@ -1,3 +1,5 @@
+// Reason: clippy 1.90 similar_names flags idiomatic test bindings (dir/dim, ids/idx).
+#![allow(clippy::similar_names)]
 //! Tests for Product Quantization (PQ) and OPQ modules.
 
 use super::{distance_pq_l2, pq_adc_batch_rescore, PQVector, ProductQuantizer};

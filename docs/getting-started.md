@@ -50,7 +50,7 @@ The rest of this page is the **REST API** path — useful if you want to drive V
 
 ## Prerequisites (REST API path)
 
-- Docker (recommended) or Rust 1.89+
+- Docker (recommended) or Rust 1.90+
 - curl or any HTTP client for testing
 
 ## Installation

@@ -32,6 +32,12 @@ pub struct GraphPersistence {
     db: Option<IdbDatabase>,
 }
 
+impl Default for GraphPersistence {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[wasm_bindgen]
 impl GraphPersistence {
     /// Creates a new `GraphPersistence` instance (call `init()` to open database).

@@ -1,3 +1,5 @@
+// Reason: clippy 1.90 similar_names flags idiomatic test bindings (dir/dim, ids/idx).
+#![allow(clippy::similar_names)]
 //! Crash-safety tests for `vectors.idx` persistence.
 //!
 //! Audit 2026-06 (cluster C2, finding 3): rewriting `vectors.idx` in place
