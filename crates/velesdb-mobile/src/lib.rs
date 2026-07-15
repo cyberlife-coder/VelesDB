@@ -51,6 +51,7 @@ mod agent;
 mod collection;
 mod collection_sparse;
 mod graph;
+mod observer;
 mod query;
 mod streaming_runtime;
 mod types;
@@ -58,6 +59,9 @@ mod types;
 pub use agent::{SemanticResult, VelesSemanticMemory};
 pub use collection::VelesCollection;
 pub use graph::{MobileGraphEdge, MobileGraphNode, MobileGraphStore, TraversalResult};
+pub use observer::{
+    MobileAccessDecision, MobileObserver, MobileQueryContext, MobileQueryOperationKind,
+};
 pub use query::{QueryResult, QueryResultKind, QueryResultRow};
 pub use types::{
     DistanceMetric, FusionStrategy, IndividualSearchRequest, MobileAdvancedConfig,
@@ -68,7 +72,9 @@ pub use types::{
 };
 
 use std::sync::Arc;
-use velesdb_core::Database as CoreDatabase;
+use velesdb_core::{Database as CoreDatabase, DatabaseObserver};
+
+use crate::observer::ForeignObserver;
 
 #[cfg(test)]
 use velesdb_core::DistanceMetric as CoreDistanceMetric;
@@ -90,7 +96,13 @@ use velesdb_core::SearchQuality as CoreSearchQuality;
 /// Thread-safe handle to a VelesDB database. Can be shared across threads.
 #[derive(uniffi::Object)]
 pub struct VelesDatabase {
-    inner: CoreDatabase,
+    /// Shared handle to the core database. Held behind an `Arc` so each
+    /// [`VelesCollection`] minted from it can carry a clone and route its reads
+    /// back through this database's control-plane gate (`gated_search` /
+    /// `authorize_read`) rather than hitting its detached collection leaf
+    /// directly — the read gate that observer governance depends on
+    /// (audit F-5.4, #1392).
+    inner: Arc<CoreDatabase>,
 }
 
 #[uniffi::export]
@@ -107,7 +119,38 @@ impl VelesDatabase {
     #[uniffi::constructor]
     pub fn open(path: String) -> Result<Arc<Self>, VelesError> {
         let db = CoreDatabase::open(&path)?;
-        Ok(Arc::new(Self { inner: db }))
+        Ok(Arc::new(Self {
+            inner: Arc::new(db),
+        }))
+    }
+
+    /// Opens or creates a database with a read-path [`MobileObserver`] attached.
+    ///
+    /// The observer is consulted before every governed read (dense / text /
+    /// hybrid / sparse / multi-query search and `VelesQL` `SELECT` / `MATCH`):
+    /// returning [`MobileAccessDecision::Deny`] aborts the read with that
+    /// message and zero results, [`MobileAccessDecision::Allow`] runs it
+    /// unmodified. This is the mobile counterpart of the observer gate already
+    /// wired on server and Python (audit F-5.4, #1392).
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the database directory (will be created if needed)
+    /// * `observer` - A Kotlin/Swift implementation of [`MobileObserver`]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path is invalid or cannot be accessed.
+    #[uniffi::constructor]
+    pub fn open_with_observer(
+        path: String,
+        observer: Arc<dyn MobileObserver>,
+    ) -> Result<Arc<Self>, VelesError> {
+        let core_observer: Arc<dyn DatabaseObserver> = Arc::new(ForeignObserver::new(observer));
+        let db = CoreDatabase::open_with_observer(&path, core_observer)?;
+        Ok(Arc::new(Self {
+            inner: Arc::new(db),
+        }))
     }
 
     /// Updates query guardrail limits for every collection in this database.
@@ -234,7 +277,11 @@ impl VelesDatabase {
     pub fn get_collection(&self, name: String) -> Result<Option<Arc<VelesCollection>>, VelesError> {
         match self.inner.get_any_collection(&name) {
             Some(any_coll) => match any_coll.into_vector() {
-                Ok(vc) => Ok(Some(Arc::new(VelesCollection { inner: vc }))),
+                Ok(vc) => Ok(Some(Arc::new(VelesCollection {
+                    inner: vc,
+                    db: self.inner.clone(),
+                    name,
+                }))),
                 Err(_other_variant) => Err(VelesError::Collection {
                     message: format!(
                         "Collection '{name}' is not a vector collection. \

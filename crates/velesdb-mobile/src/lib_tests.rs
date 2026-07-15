@@ -1220,3 +1220,174 @@ fn test_streaming_enable_and_insert_roundtrip() {
         .unwrap();
     assert_eq!(queued, 2);
 }
+
+// =========================================================================
+// Observer read-gate tests (audit F-5.4, #1392)
+// =========================================================================
+
+/// Test observer that denies every read with a fixed reason.
+struct DenyAllObserver;
+
+impl MobileObserver for DenyAllObserver {
+    fn on_query_request(&self, _context: MobileQueryContext) -> MobileAccessDecision {
+        MobileAccessDecision::Deny {
+            reason: "test policy".to_string(),
+        }
+    }
+}
+
+/// Test observer that allows every read and records the contexts it saw, so a
+/// test can assert the read actually passed through the gate.
+#[derive(Default)]
+struct RecordingObserver {
+    seen: std::sync::Mutex<Vec<(String, MobileQueryOperationKind)>>,
+}
+
+impl MobileObserver for RecordingObserver {
+    fn on_query_request(&self, context: MobileQueryContext) -> MobileAccessDecision {
+        self.seen
+            .lock()
+            .unwrap()
+            .push((context.collection, context.operation));
+        MobileAccessDecision::Allow
+    }
+}
+
+/// Opens a database with `observer`, creates a 4-dim `vectors` collection and
+/// seeds one point. Writes are not gated, so this succeeds even under a denying
+/// observer (only reads pass through `on_query_request`).
+fn seed_gated_db(
+    path: String,
+    observer: std::sync::Arc<dyn MobileObserver>,
+) -> std::sync::Arc<VelesDatabase> {
+    let db = VelesDatabase::open_with_observer(path, observer).unwrap();
+    db.create_collection("vectors".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("vectors".to_string()).unwrap().unwrap();
+    col.upsert(VelesPoint {
+        id: 1,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: Some(r#"{"cat":"a"}"#.to_string()),
+    })
+    .unwrap();
+    db
+}
+
+#[test]
+fn test_observer_allow_read_returns_results_and_sees_context() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let obs = std::sync::Arc::new(RecordingObserver::default());
+    let db = seed_gated_db(path, obs.clone());
+    let col = db.get_collection("vectors".to_string()).unwrap().unwrap();
+
+    let results = col.search(vec![1.0, 0.0, 0.0, 0.0], 1).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, 1);
+
+    // The read passed through the gate: the observer saw a VectorSearch on
+    // the `vectors` collection.
+    let seen = obs.seen.lock().unwrap();
+    assert!(
+        seen.iter()
+            .any(|(c, op)| c == "vectors" && *op == MobileQueryOperationKind::VectorSearch),
+        "observer should have seen a VectorSearch on 'vectors', saw: {seen:?}"
+    );
+}
+
+#[test]
+fn test_observer_deny_blocks_vector_search() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = seed_gated_db(path, std::sync::Arc::new(DenyAllObserver));
+    let col = db.get_collection("vectors".to_string()).unwrap().unwrap();
+
+    let err = col.search(vec![1.0, 0.0, 0.0, 0.0], 1).unwrap_err();
+    let VelesError::Database { message, .. } = err else {
+        panic!("expected VelesError::Database, got {err:?}");
+    };
+    assert!(
+        message.contains("denied by observer"),
+        "denial should surface the observer reason, got: {message}"
+    );
+}
+
+#[test]
+fn test_observer_deny_blocks_text_hybrid_and_velesql() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = seed_gated_db(path, std::sync::Arc::new(DenyAllObserver));
+    let col = db.get_collection("vectors".to_string()).unwrap().unwrap();
+
+    assert!(
+        col.text_search("hello".to_string(), 5).is_err(),
+        "text_search must be gated"
+    );
+    assert!(
+        col.hybrid_search(vec![1.0, 0.0, 0.0, 0.0], "hello".to_string(), 5, 0.5)
+            .is_err(),
+        "hybrid_search must be gated"
+    );
+    // VelesQL collection query is routed through the gated database facade, so
+    // it is denied too.
+    assert!(
+        col.query("SELECT * FROM vectors LIMIT 10".to_string(), None)
+            .is_err(),
+        "VelesQL query must be gated"
+    );
+}
+
+#[test]
+fn test_observer_deny_blocks_sparse_and_multi_query() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = seed_gated_db(path, std::sync::Arc::new(DenyAllObserver));
+    let col = db.get_collection("vectors".to_string()).unwrap().unwrap();
+
+    // The gate is consulted before the leaf, so denial short-circuits even the
+    // sparse path (whether or not a sparse index is configured).
+    let sparse = VelesSparseVector {
+        indices: vec![0],
+        values: vec![1.0],
+    };
+    assert!(
+        col.sparse_search(sparse, 5, None).is_err(),
+        "sparse_search must be gated"
+    );
+    assert!(
+        col.multi_query_search(
+            vec![vec![1.0, 0.0, 0.0, 0.0]],
+            5,
+            FusionStrategy::Rrf { k: 60 }
+        )
+        .is_err(),
+        "multi_query_search must be gated"
+    );
+}
+
+#[test]
+fn test_open_without_observer_reads_unchanged() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    // Baseline: the plain open() path registers no observer, so the gate is a
+    // no-op and reads behave exactly as before.
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("vectors".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("vectors".to_string()).unwrap().unwrap();
+    col.upsert(VelesPoint {
+        id: 7,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: None,
+    })
+    .unwrap();
+
+    let results = col.search(vec![1.0, 0.0, 0.0, 0.0], 1).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, 7);
+}
