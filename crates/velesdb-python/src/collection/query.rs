@@ -37,27 +37,39 @@ pub(crate) fn match_result_to_dict(
     dict.into_any().unbind()
 }
 
-/// Returns `query` with `SELECT ... FROM` defaulted to `collection_name` when
-/// the parsed statement carries no FROM target (bare `MATCH (n) ...`).
+/// Returns `query` retargeted so its FROM (top-level select and every UNION /
+/// INTERSECT / EXCEPT operand) is `collection_name`.
 ///
 /// The collection-level VelesQL methods historically executed on the detached
-/// collection leaf, which always ran against itself and ignored the FROM
-/// clause. Routing through the gated `Database` facade (audit F-5.4, #1392)
-/// resolves the collection from the FROM clause instead, so a bare MATCH must
-/// inherit the wrapping collection's name — this both preserves the leaf
-/// semantics and keys the control-plane read gate on the collection actually
-/// read. Borrowed (zero clone) when the query already names a FROM target.
-pub(crate) fn with_default_from<'q>(
+/// collection leaf, which always ran against itself: the FROM name was purely
+/// nominal (the LangChain / LlamaIndex adapters rely on this, issuing e.g.
+/// ``SELECT * FROM vectors`` against a collection with another name). Routing
+/// through the gated `Database` facade (audit F-5.4, #1392) resolves the
+/// collection from the FROM clause instead, so the FROM must be rewritten to
+/// the wrapping collection's name — this preserves the leaf contract exactly
+/// (with and without an observer) and keys the control-plane read gate on the
+/// collection actually read, so gate and data plane can never disagree.
+/// Borrowed (zero clone) when the query already targets `collection_name`.
+pub(crate) fn retarget_to_collection<'q>(
     query: &'q velesdb_core::velesql::Query,
     collection_name: &str,
 ) -> std::borrow::Cow<'q, velesdb_core::velesql::Query> {
-    if query.select.from.is_empty() {
-        let mut owned = query.clone();
-        owned.select.from = collection_name.to_string();
-        std::borrow::Cow::Owned(owned)
-    } else {
-        std::borrow::Cow::Borrowed(query)
+    let compound_retargeted = |q: &velesdb_core::velesql::Query| {
+        q.compound
+            .as_ref()
+            .is_none_or(|c| c.operations.iter().all(|(_, s)| s.from == collection_name))
+    };
+    if query.select.from == collection_name && compound_retargeted(query) {
+        return std::borrow::Cow::Borrowed(query);
     }
+    let mut owned = query.clone();
+    owned.select.from = collection_name.to_string();
+    if let Some(compound) = owned.compound.as_mut() {
+        for (_, operand) in &mut compound.operations {
+            operand.from = collection_name.to_string();
+        }
+    }
+    std::borrow::Cow::Owned(owned)
 }
 
 /// Parses a VelesQL string into an AST, mapping parse errors to `PyValueError`.
@@ -350,12 +362,12 @@ impl Collection {
         // leaf) so the VelesQL read path passes the control-plane observer
         // gate — the detached leaf has no observer reference and would bypass
         // governance (audit F-5.4, #1392; mirrors the mobile fix, PR #1404).
-        // The gate is keyed on the query's FROM target, which is also the
-        // collection the facade resolves and executes against, so gate and
-        // data plane can never disagree. A bare MATCH inherits this
-        // collection's name via `with_default_from`.
+        // The query is retargeted to this collection first: the leaf always
+        // executed against itself (FROM was nominal — adapters rely on it),
+        // and the retarget keys the gate on the collection actually read.
         run_velesql_select(py, query_str, params, |q, p| {
-            self.db.execute_query(&with_default_from(q, &self.name), p)
+            self.db
+                .execute_query(&retarget_to_collection(q, &self.name), p)
         })
     }
 
@@ -445,7 +457,7 @@ impl Collection {
         // execution), unlike the detached leaf method used before (#1392).
         let output = py.detach(move || {
             self.db
-                .explain_analyze_query(&with_default_from(&parsed, &self.name), &rust_params)
+                .explain_analyze_query(&retarget_to_collection(&parsed, &self.name), &rust_params)
                 .map_err(core_err)
         })?;
         Ok(build_explain_analyze_dict(py, &output))
@@ -475,7 +487,8 @@ impl Collection {
         // AND-composed into the query AST inside core before execution, so the
         // ids projected here are already narrowed — no unscoped id can leak.
         run_velesql_select_ids(py, velesql, params, |q, p| {
-            self.db.execute_query(&with_default_from(q, &self.name), p)
+            self.db
+                .execute_query(&retarget_to_collection(q, &self.name), p)
         })
     }
 }

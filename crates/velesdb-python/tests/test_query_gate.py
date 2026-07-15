@@ -401,3 +401,68 @@ def test_graph_match_query_scope_fails_closed():
         graph = _seed_graph(db)
         with pytest.raises(Exception):
             graph.match_query("MATCH (n) RETURN n LIMIT 10")
+
+
+# ---------------------------------------------------------------------------
+# FROM is nominal: the collection-level VelesQL methods always execute against
+# the wrapped collection, whatever the FROM clause names. The detached leaf
+# historically ignored FROM, and the LangChain / LlamaIndex adapters rely on
+# it (e.g. ``SELECT * FROM vectors`` on a collection with another name), so
+# gated routing must preserve this contract — with and without an observer —
+# and key the gate on the collection actually read.
+# ---------------------------------------------------------------------------
+
+
+def test_query_from_name_is_nominal():
+    with _Db() as db:
+        collection = _seed(db)  # collection is named "docs"
+        results = collection.query("SELECT * FROM vectors LIMIT 10")
+    assert {r["node_id"] for r in results} == {1, 2}
+
+
+def test_query_ids_from_name_is_nominal():
+    with _Db() as db:
+        collection = _seed(db)
+        results = collection.query_ids("SELECT * FROM vectors LIMIT 10")
+    assert _ids(results) == {1, 2}
+
+
+def test_explain_analyze_from_name_is_nominal():
+    with _Db() as db:
+        collection = _seed(db)
+        out = collection.explain_analyze("SELECT * FROM vectors LIMIT 10")
+    assert out["actual_stats"]["actual_rows"] == 2
+
+
+def test_query_compound_operands_execute_on_wrapped_collection():
+    """UNION operands also carried nominal FROM names on the leaf."""
+    with _Db() as db:
+        collection = _seed(db)
+        results = collection.query(
+            "SELECT * FROM a WHERE tenant = 'acme' "
+            "UNION SELECT * FROM b WHERE tenant = 'other'"
+        )
+    assert {r["node_id"] for r in results} == {1, 2}
+
+
+def test_graph_query_from_name_is_nominal():
+    with _Db() as db:
+        graph = _seed_graph(db)
+        rows = graph.query("SELECT * FROM vectors LIMIT 10")
+    assert len(rows) == 2
+
+
+def test_query_deny_fails_closed_with_nominal_from():
+    """The gate is keyed on the wrapped collection (the one actually read),
+    not on whatever name the FROM clause carries."""
+    with _Db(observer=_deny_reads) as db:
+        collection = _seed(db)
+        with pytest.raises(Exception):
+            collection.query("SELECT * FROM vectors LIMIT 10")
+
+
+def test_query_scope_narrows_with_nominal_from():
+    with _Db(observer=_scope_to_acme) as db:
+        collection = _seed(db)
+        scoped = collection.query("SELECT * FROM vectors LIMIT 10")
+    assert {r["node_id"] for r in scoped} == {1}

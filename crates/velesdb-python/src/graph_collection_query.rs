@@ -10,8 +10,8 @@ use velesdb_core::QueryOperationKind;
 use crate::collection::deny_if_scoped;
 use crate::collection::query::{
     build_explain_analyze_dict, build_explain_dict, convert_params, parse_velesql,
-    run_velesql_match, run_velesql_select, run_velesql_select_ids, validate_query,
-    with_default_from,
+    retarget_to_collection, run_velesql_match, run_velesql_select, run_velesql_select_ids,
+    validate_query,
 };
 use crate::collection_helpers::core_err;
 use crate::graph_collection::PyGraphCollection;
@@ -61,7 +61,8 @@ impl PyGraphCollection {
         // actually read. `@collection` payload enrichment applies at the
         // facade as it does for `Database.execute_query`.
         run_velesql_select(py, query_str, params, |q, p| {
-            self.db.execute_query(&with_default_from(q, &self.name), p)
+            self.db
+                .execute_query(&retarget_to_collection(q, &self.name), p)
         })
     }
 
@@ -163,7 +164,7 @@ impl PyGraphCollection {
         // measured execution), mirroring `Collection.explain_analyze`.
         let output = py.detach(move || {
             self.db
-                .explain_analyze_query(&with_default_from(&parsed, &self.name), &rust_params)
+                .explain_analyze_query(&retarget_to_collection(&parsed, &self.name), &rust_params)
                 .map_err(core_err)
         })?;
         Ok(build_explain_analyze_dict(py, &output))
@@ -187,7 +188,8 @@ impl PyGraphCollection {
         // Gated facade routing, same rationale as `query()`; a scope filter is
         // AND-composed into the AST in core, so projected ids are pre-narrowed.
         run_velesql_select_ids(py, velesql, params, |q, p| {
-            self.db.execute_query(&with_default_from(q, &self.name), p)
+            self.db
+                .execute_query(&retarget_to_collection(q, &self.name), p)
         })
     }
 }
