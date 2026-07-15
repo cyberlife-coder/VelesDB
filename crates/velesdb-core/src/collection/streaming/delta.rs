@@ -234,9 +234,13 @@ impl DeltaBuffer {
     /// Brute-force searches the delta buffer for the k nearest neighbors.
     ///
     /// Returns an empty `Vec` if the buffer is neither `ACTIVE` nor `DRAINING`.
-    /// Takes a brief read lock to snapshot the points, releases it, then
-    /// computes distances on the snapshot to avoid holding the lock during
-    /// potentially expensive distance calculations.
+    /// Computes distances directly under a single read lock — without cloning
+    /// the buffer — and only materializes the compact `(id, score)` result Vec
+    /// (`O(M)`), never a full `O(M×D)` copy of the vector data. The distance
+    /// scan is `O(M×D)` regardless, so the lock is held for the same order of
+    /// work as the previous snapshot copy but does useful computation instead
+    /// of allocating and copying. The (potentially larger) sort runs after the
+    /// lock is released.
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, metric: DistanceMetric) -> Vec<(u64, f32)> {
         let current_state = self.state.load(Ordering::Acquire);
@@ -244,16 +248,18 @@ impl DeltaBuffer {
             return Vec::new();
         }
 
-        // Snapshot under a brief read lock, then release before computing distances.
-        let snapshot: Vec<(u64, Vec<f32>)> = self.points.read().clone();
-        if snapshot.is_empty() {
-            return Vec::new();
-        }
-
-        let mut results: Vec<(u64, f32)> = snapshot
-            .iter()
-            .map(|(id, vec)| (*id, metric.calculate(query, vec)))
-            .collect();
+        // Compute distances in place under the read lock; only the compact
+        // result Vec escapes it. Sorting/truncation happen after release.
+        let mut results: Vec<(u64, f32)> = {
+            let points = self.points.read();
+            if points.is_empty() {
+                return Vec::new();
+            }
+            points
+                .iter()
+                .map(|(id, vec)| (*id, metric.calculate(query, vec)))
+                .collect()
+        };
 
         metric.sort_results(&mut results);
         results.truncate(k);
