@@ -80,17 +80,12 @@ fn test_extract_trigrams_simd_long_text() {
 
 #[test]
 fn test_count_matching_trigrams() {
-    let query: Vec<[u8; 3]> = vec![
-        [b'h', b'e', b'l'],
-        [b'e', b'l', b'l'],
-        [b'l', b'l', b'o'],
-        [b'x', b'y', b'z'],
-    ];
+    let query: Vec<[u8; 3]> = vec![*b"hel", *b"ell", *b"llo", *b"xyz"];
 
     let mut doc_set = HashSet::new();
-    doc_set.insert([b'h', b'e', b'l']);
-    doc_set.insert([b'e', b'l', b'l']);
-    doc_set.insert([b'a', b'b', b'c']);
+    doc_set.insert(*b"hel");
+    doc_set.insert(*b"ell");
+    doc_set.insert(*b"abc");
 
     let count = count_matching_trigrams_simd(&query, &doc_set);
     assert_eq!(count, 2); // 'hel' and 'ell' match
@@ -190,19 +185,19 @@ fn test_count_matching_trigrams_empty_query() {
 
 #[test]
 fn test_count_matching_trigrams_no_match() {
-    let query: Vec<[u8; 3]> = vec![[b'a', b'b', b'c'], [b'd', b'e', b'f']];
+    let query: Vec<[u8; 3]> = vec![*b"abc", *b"def"];
     let mut doc_set = HashSet::new();
-    doc_set.insert([b'x', b'y', b'z']);
+    doc_set.insert(*b"xyz");
     let count = count_matching_trigrams_simd(&query, &doc_set);
     assert_eq!(count, 0);
 }
 
 #[test]
 fn test_count_matching_trigrams_all_match() {
-    let query: Vec<[u8; 3]> = vec![[b'a', b'b', b'c'], [b'd', b'e', b'f']];
+    let query: Vec<[u8; 3]> = vec![*b"abc", *b"def"];
     let mut doc_set = HashSet::new();
-    doc_set.insert([b'a', b'b', b'c']);
-    doc_set.insert([b'd', b'e', b'f']);
+    doc_set.insert(*b"abc");
+    doc_set.insert(*b"def");
     let count = count_matching_trigrams_simd(&query, &doc_set);
     assert_eq!(count, 2);
 }
@@ -213,9 +208,9 @@ fn test_count_matching_trigrams_large_query() {
     // Test with > 16 trigrams to trigger SIMD path
     let query: Vec<[u8; 3]> = (0..20).map(|i| [b'a' + i as u8, b'b', b'c']).collect();
     let mut doc_set = HashSet::new();
-    doc_set.insert([b'a', b'b', b'c']);
-    doc_set.insert([b'b', b'b', b'c']);
-    doc_set.insert([b'c', b'b', b'c']);
+    doc_set.insert(*b"abc");
+    doc_set.insert(*b"bbc");
+    doc_set.insert(*b"cbc");
     let count = count_matching_trigrams_simd(&query, &doc_set);
     assert_eq!(count, 3);
 }

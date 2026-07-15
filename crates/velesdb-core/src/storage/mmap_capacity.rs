@@ -38,6 +38,16 @@ impl MmapStorage {
 
             self.data_file.set_len(new_len)?;
 
+            // No `data_file.sync_all()` here (unlike the replay growth path in
+            // `replay_wal`): live growth is protected by the WAL. A store writes
+            // (and, under Fsync, syncs) its record to the WAL *before* reaching
+            // here, and the WAL is not truncated during normal operation. So a
+            // crash that loses this `set_len` growth is recovered on reopen by
+            // replaying the WAL, which re-grows the file. The acute case — where
+            // the index is persisted against grown offsets AND the WAL is then
+            // cleared, removing the recovery source — happens only in the replay
+            // and compaction paths, which fsync the data file explicitly.
+
             // SAFETY: data_file has been resized with set_len(new_len) above,
             // ensuring the new mapping range is fully allocated.
             // - Condition 1: File was resized to new_len before remapping.
