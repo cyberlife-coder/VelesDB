@@ -21,9 +21,11 @@ impl Collection {
                 limit = execution_limit,
                 "indexed metadata query: Eq lookup"
             );
-            // Skip index path when too many hits — sequential scan with early
-            // exit is faster than hydrating thousands of index results.
-            if ids.len() > execution_limit.saturating_mul(50).max(1000) {
+            // Skip index path when the cost model (audit F-4.7, issue #1391)
+            // deems a sequential scan with early exit cheaper than hydrating the
+            // index hits. Both paths yield identical results — only the physical
+            // path differs.
+            if !self.prefer_candidate_scan(ids.len(), execution_limit, Some(cond)) {
                 tracing::debug!("indexed metadata query: too many hits, falling through to scan");
                 return None; // Fall through to scan
             }
