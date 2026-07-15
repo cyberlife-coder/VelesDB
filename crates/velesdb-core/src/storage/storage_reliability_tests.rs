@@ -542,6 +542,106 @@ fn test_898_replay_grows_mmap_no_silent_gap() {
 }
 
 #[test]
+// Reads/writes the process-global corrupt-entry metric; serialize with the rest
+// of the metric-asserting group.
+#[serial(wal_corrupt_metric)]
+fn test_replay_corrupt_first_record_recovers_following_entries() {
+    // Regression: a CRC-framed WAL whose FIRST record is corrupt must NOT be
+    // misclassified as legacy (which silently discarded the ENTIRE WAL). Format
+    // detection now scans for any CRC-valid record, so the corrupt first record
+    // is treated as mid-stream corruption (skip + metric) and every valid record
+    // behind it is still recovered.
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let dim = 3;
+
+    // First record: fully framed but with a broken CRC.
+    let mut bad = crc_store_entry(1, &vec3_bytes([1.0, 2.0, 3.0]));
+    let last = bad.len() - 1;
+    bad[last] ^= 0xFF;
+
+    let mut wal = bad;
+    wal.extend_from_slice(&crc_store_entry(2, &vec3_bytes([4.0, 5.0, 6.0])));
+    wal.extend_from_slice(&crc_store_entry(3, &vec3_bytes([7.0, 8.0, 9.0])));
+    std::fs::write(path.join("vectors.wal"), &wal).unwrap();
+
+    let before = crate::metrics::global_guardrails_metrics()
+        .wal_replay_corrupt_entries
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    let storage = MmapStorage::new(&path, dim).unwrap();
+    assert!(
+        storage.retrieve(1).unwrap().is_none(),
+        "corrupt first record must be skipped, not applied"
+    );
+    assert_eq!(
+        storage.retrieve(2).unwrap(),
+        Some(vec![4.0, 5.0, 6.0]),
+        "records after a corrupt first record must be recovered, not discarded with the whole WAL"
+    );
+    assert_eq!(storage.retrieve(3).unwrap(), Some(vec![7.0, 8.0, 9.0]));
+
+    let after = crate::metrics::global_guardrails_metrics()
+        .wal_replay_corrupt_entries
+        .load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        after > before,
+        "a corrupt first record must be counted as mid-stream corruption"
+    );
+}
+
+#[test]
+fn test_replay_growth_persists_data_file_size_for_reopen() {
+    // FIX (fsync ordering): after a replay that GROWS the data file, the grown
+    // size and rebuilt index must be mutually consistent so a subsequent reopen's
+    // load_index bound check (offset <= data file size) passes. Exercises the
+    // sync_all-before-persist-index ordering added to `replay_wal`. (A true crash
+    // between truncation and data-file durability cannot be injected here without
+    // a fault harness; this guards the open -> replay+grow -> reopen round-trip.)
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let dim = 3;
+    let vec_size = dim * 4;
+
+    // Index whose highest offset is the last slot of the 16 MB initial map.
+    let near_cap = 16 * 1024 * 1024 - vec_size;
+    let mut index: FxHashMap<u64, usize> = FxHashMap::default();
+    index.insert(1, near_cap);
+    std::fs::write(
+        path.join("vectors.idx"),
+        postcard::to_allocvec(&index).unwrap(),
+    )
+    .unwrap();
+
+    let mut data = vec![0u8; 16 * 1024 * 1024];
+    data[near_cap..near_cap + vec_size].copy_from_slice(&vec3_bytes([1.0, 2.0, 3.0]));
+    std::fs::write(path.join("vectors.dat"), &data).unwrap();
+
+    // A NEW vector lands at next_offset (== 16 MB), beyond the initial mapping,
+    // forcing replay to grow the data file.
+    let wal = crc_store_entry(2, &vec3_bytes([4.0, 5.0, 6.0]));
+    std::fs::write(path.join("vectors.wal"), &wal).unwrap();
+
+    // First open replays, grows, persists the index, then truncates the WAL.
+    {
+        let storage = MmapStorage::new(&path, dim).unwrap();
+        assert_eq!(storage.retrieve(2).unwrap(), Some(vec![4.0, 5.0, 6.0]));
+        assert_eq!(
+            std::fs::metadata(path.join("vectors.wal")).unwrap().len(),
+            0,
+            "WAL truncated only after data file + index made durable"
+        );
+    }
+
+    // The persisted index now references an offset in the GROWN region; a reopen
+    // must load it without load_index rejecting the offset as past the data file,
+    // proving the grown size persisted consistently with the index.
+    let reopened = MmapStorage::new(&path, dim).unwrap();
+    assert_eq!(reopened.retrieve(1).unwrap(), Some(vec![1.0, 2.0, 3.0]));
+    assert_eq!(reopened.retrieve(2).unwrap(), Some(vec![4.0, 5.0, 6.0]));
+}
+
+#[test]
 fn test_898_load_index_rejects_out_of_bounds_offset() {
     // A corrupt index offset that points past the data file must be rejected,
     // not silently accepted (which would wrap into an OOB read later).

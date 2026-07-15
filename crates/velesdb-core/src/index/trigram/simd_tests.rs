@@ -80,12 +80,7 @@ fn test_extract_trigrams_simd_long_text() {
 
 #[test]
 fn test_count_matching_trigrams() {
-    let query: Vec<[u8; 3]> = vec![
-        *b"hel",
-        *b"ell",
-        *b"llo",
-        *b"xyz",
-    ];
+    let query: Vec<[u8; 3]> = vec![*b"hel", *b"ell", *b"llo", *b"xyz"];
 
     let mut doc_set = HashSet::new();
     doc_set.insert(*b"hel");
