@@ -19,7 +19,7 @@ use crate::index::VectorIndex;
 use tempfile::tempdir;
 
 /// Deterministic pseudo-random vectors (LCG) — no external RNG dependency.
-fn sample_vectors(n: u64, dim: usize, seed: u64) -> Vec<(u64, Vec<f32>)> {
+fn sample_vectors(n: u64, dimension: usize, seed: u64) -> Vec<(u64, Vec<f32>)> {
     let mut state = seed | 1;
     let mut next = move || {
         state = state
@@ -31,7 +31,7 @@ fn sample_vectors(n: u64, dim: usize, seed: u64) -> Vec<(u64, Vec<f32>)> {
         (bits + 1.0) / 16_777_216.0
     };
     (0..n)
-        .map(|id| (id, (0..dim).map(|_| next()).collect()))
+        .map(|id| (id, (0..dimension).map(|_| next()).collect()))
         .collect()
 }
 
@@ -78,10 +78,10 @@ fn assert_results_parity(
 fn test_legacy_fixture_with_vectors_file_loads_with_parity() {
     let dir = tempdir().unwrap();
     let path = dir.path();
-    let dim = 8;
+    let dimension = 8;
 
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
-    let data = sample_vectors(50, dim, 42);
+    let index = HnswIndex::new(dimension, DistanceMetric::Cosine).unwrap();
+    let data = sample_vectors(50, dimension, 42);
     for (id, v) in &data {
         index.insert(*id, v);
     }
@@ -104,7 +104,7 @@ fn test_legacy_fixture_with_vectors_file_loads_with_parity() {
     .unwrap();
     assert!(path.join("native_vectors.bin").exists());
 
-    let loaded = HnswIndex::load(path, dim, DistanceMetric::Cosine).unwrap();
+    let loaded = HnswIndex::load(path, dimension, DistanceMetric::Cosine).unwrap();
     assert_eq!(loaded.len(), index.len());
     assert!(loaded.has_vector_storage());
 
@@ -121,7 +121,7 @@ fn test_legacy_fixture_with_vectors_file_loads_with_parity() {
     // The next save must delete the legacy duplicate.
     loaded.save(path).unwrap();
     assert!(!path.join("native_vectors.bin").exists());
-    HnswIndex::load(path, dim, DistanceMetric::Cosine).expect("reload after cleanup");
+    HnswIndex::load(path, dimension, DistanceMetric::Cosine).expect("reload after cleanup");
 }
 
 /// A legacy vectors file whose generation does not match meta proves a
@@ -131,9 +131,9 @@ fn test_legacy_fixture_with_vectors_file_loads_with_parity() {
 fn test_legacy_vectors_file_generation_mismatch_is_invalid_data() {
     let dir = tempdir().unwrap();
     let path = dir.path();
-    let dim = 4;
+    let dimension = 4;
 
-    let index = HnswIndex::new(dim, DistanceMetric::Euclidean).unwrap();
+    let index = HnswIndex::new(dimension, DistanceMetric::Euclidean).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0, 0.0]);
     index.insert(2, &[0.0, 1.0, 0.0, 0.0]);
     index.save(path).unwrap();
@@ -148,7 +148,7 @@ fn test_legacy_vectors_file_generation_mismatch_is_invalid_data() {
     )
     .unwrap();
 
-    let Err(err) = HnswIndex::load(path, dim, DistanceMetric::Euclidean) else {
+    let Err(err) = HnswIndex::load(path, dimension, DistanceMetric::Euclidean) else {
         panic!("generation mismatch must fail the load")
     };
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -169,10 +169,10 @@ fn test_legacy_vectors_file_generation_mismatch_is_invalid_data() {
 fn test_new_snapshot_reload_full_functionality() {
     let dir = tempdir().unwrap();
     let path = dir.path();
-    let dim = 8;
+    let dimension = 8;
 
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
-    let data = sample_vectors(60, dim, 7);
+    let index = HnswIndex::new(dimension, DistanceMetric::Cosine).unwrap();
+    let data = sample_vectors(60, dimension, 7);
     for (id, v) in &data {
         index.insert(*id, v);
     }
@@ -185,7 +185,7 @@ fn test_new_snapshot_reload_full_functionality() {
     assert_eq!(meta.generation, mappings.generation);
     assert_eq!(meta.generation, graph_gen);
 
-    let loaded = HnswIndex::load(path, dim, DistanceMetric::Cosine).unwrap();
+    let loaded = HnswIndex::load(path, dimension, DistanceMetric::Cosine).unwrap();
     assert!(loaded.has_vector_storage());
 
     let query = &data[5].1;
@@ -206,10 +206,10 @@ fn test_new_snapshot_reload_full_functionality() {
 #[test]
 fn test_cosine_brute_force_score_parity_across_roundtrip() {
     let dir = tempdir().unwrap();
-    let dim = 16;
+    let dimension = 16;
 
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
-    let data = sample_vectors(40, dim, 1234);
+    let index = HnswIndex::new(dimension, DistanceMetric::Cosine).unwrap();
+    let data = sample_vectors(40, dimension, 1234);
     for (id, v) in &data {
         index.insert(*id, v);
     }
@@ -218,7 +218,7 @@ fn test_cosine_brute_force_score_parity_across_roundtrip() {
     let before = index.brute_force_search_parallel(query, 40).unwrap();
 
     index.save(dir.path()).unwrap();
-    let loaded = HnswIndex::load(dir.path(), dim, DistanceMetric::Cosine).unwrap();
+    let loaded = HnswIndex::load(dir.path(), dimension, DistanceMetric::Cosine).unwrap();
     let after = loaded.brute_force_search_parallel(query, 40).unwrap();
 
     assert_results_parity(&before, &after);
@@ -233,9 +233,9 @@ fn test_cosine_brute_force_score_parity_across_roundtrip() {
 
 #[test]
 fn test_brute_force_hides_deleted_tombstones() {
-    let dim = 4;
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
-    let data = sample_vectors(10, dim, 99);
+    let dimension = 4;
+    let index = HnswIndex::new(dimension, DistanceMetric::Cosine).unwrap();
+    let data = sample_vectors(10, dimension, 99);
     for (id, v) in &data {
         index.insert(*id, v);
     }
@@ -254,8 +254,8 @@ fn test_brute_force_hides_deleted_tombstones() {
 
 #[test]
 fn test_brute_force_upsert_does_not_return_old_slot() {
-    let dim = 4;
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
+    let dimension = 4;
+    let index = HnswIndex::new(dimension, DistanceMetric::Cosine).unwrap();
 
     let old = [1.0_f32, 0.0, 0.0, 0.0];
     let new = [0.0_f32, 1.0, 0.0, 0.0];
@@ -282,9 +282,9 @@ fn test_brute_force_upsert_does_not_return_old_slot() {
 
 #[test]
 fn test_vacuum_cosine_preserves_recall() {
-    let dim = 16;
-    let index = HnswIndex::new(dim, DistanceMetric::Cosine).unwrap();
-    let data = sample_vectors(200, dim, 2024);
+    let dimension = 16;
+    let index = HnswIndex::new(dimension, DistanceMetric::Cosine).unwrap();
+    let data = sample_vectors(200, dimension, 2024);
     for (id, v) in &data {
         index.insert(*id, v);
     }
