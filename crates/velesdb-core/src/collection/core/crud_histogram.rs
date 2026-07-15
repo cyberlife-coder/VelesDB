@@ -29,8 +29,8 @@ impl Collection {
         old_payloads: &[Option<serde_json::Value>],
         new_payloads: &[Option<serde_json::Value>],
     ) {
-        let stats_path = self.path.join("collection.stats.json");
-        let _guard = self.stats_io_mutex.lock();
+        let stats_path = self.storage.path.join("collection.stats.json");
+        let _guard = self.query.stats_io_mutex.lock();
 
         let Some(mut stats) = Self::read_persisted_stats(&stats_path) else {
             return;
@@ -57,10 +57,10 @@ impl Collection {
         payloads: &[Option<serde_json::Value>],
         increment: bool,
     ) {
-        let stats_path = self.path.join("collection.stats.json");
+        let stats_path = self.storage.path.join("collection.stats.json");
 
         // LOCK ORDER: stats_io_mutex (12) — no other lock held.
-        let _guard = self.stats_io_mutex.lock();
+        let _guard = self.query.stats_io_mutex.lock();
 
         let Some(mut stats) = Self::read_persisted_stats(&stats_path) else {
             return;
@@ -164,8 +164,8 @@ impl Collection {
     /// race with incremental histogram updates (Bug #51). Returns `Ok(())`
     /// on success, or an I/O / serialisation error.
     pub fn write_stats_guarded(&self, stats: &CollectionStats) -> crate::error::Result<()> {
-        let stats_path = self.path.join("collection.stats.json");
-        let _guard = self.stats_io_mutex.lock();
+        let stats_path = self.storage.path.join("collection.stats.json");
+        let _guard = self.query.stats_io_mutex.lock();
 
         let serialized = serde_json::to_vec_pretty(stats).map_err(|e| {
             crate::error::Error::Serialization(format!("failed to serialize stats: {e}"))

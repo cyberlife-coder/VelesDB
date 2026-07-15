@@ -49,7 +49,7 @@ fn query_ids(col: &Collection, query: &str) -> Vec<u64> {
 }
 
 fn mirror_built(col: &Collection) -> bool {
-    col.payload_mirror.state.read().is_some()
+    col.storage.payload_mirror.state.read().is_some()
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn test_mirror_builds_after_scan_debt_and_preserves_results() {
     // First query takes the sequential scan path and accrues scan debt.
     let scan_ids = query_ids(&col, query);
     assert!(!mirror_built(&col), "mirror must not build on first scan");
-    assert!(col.payload_mirror.scan_debt() >= ROWS as u64);
+    assert!(col.storage.payload_mirror.scan_debt() >= ROWS as u64);
 
     // Second query crosses the debt threshold, builds the mirror, and must
     // return exactly the same rows.
@@ -130,7 +130,7 @@ fn test_mirror_stays_in_sync_after_upsert_and_delete() {
 
 /// Returns `(row_count, deleted_row_count)` of the mirror's `ColumnStore`.
 fn mirror_store_counts(col: &Collection) -> (usize, usize) {
-    let guard = col.payload_mirror.state.read();
+    let guard = col.storage.payload_mirror.state.read();
     let state = guard.as_ref().expect("mirror must be built");
     (state.store.row_count(), state.store.deleted_row_count())
 }
@@ -252,7 +252,7 @@ fn test_apply_upserts_batch_is_atomic_for_concurrent_readers() {
     let done = AtomicBool::new(false);
 
     std::thread::scope(|s| {
-        let mirror = &col.payload_mirror;
+        let mirror = &col.storage.payload_mirror;
         let done_ref = &done;
         s.spawn(move || {
             for gen in 1..=GENS {
@@ -288,7 +288,7 @@ fn test_apply_upserts_batch_is_atomic_for_concurrent_readers() {
     });
 
     // Once the writer is done, the last generation must be fully visible.
-    match col.payload_mirror.candidate_ids(&gen_eq(GENS)) {
+    match col.storage.payload_mirror.candidate_ids(&gen_eq(GENS)) {
         MirrorAnswer::Ids(ids) => assert_eq!(ids.len(), BATCH),
         _ => panic!("mirror must still be built and answer the Eq probe"),
     }

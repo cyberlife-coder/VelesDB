@@ -54,7 +54,7 @@ fn test_reopen_reconciles_stale_wal_upsert_into_loaded_index() {
     // B consumes idx 1. A rebuilt-from-scratch index would stop at next_idx
     // 1, so this proves the persisted graph was LOADED, not rebuilt.
     assert_eq!(
-        reopened.index.mappings.next_idx(),
+        reopened.storage.index.mappings.next_idx(),
         2,
         "stale re-upsert must run on the LOADED index (not a rebuild)"
     );
@@ -215,14 +215,14 @@ fn test_alpha_round_trip_through_reopen() {
             params,
         )
         .expect("create");
-        assert_eq!(coll.index.inner.read().alpha(), 1.5);
+        assert_eq!(coll.storage.index.inner.read().alpha(), 1.5);
         coll.upsert(make_points(0, 3)).expect("upsert");
         coll.flush_full().expect("flush_full");
     }
 
     let reopened = Collection::open(PathBuf::from(temp.path())).expect("reopen");
     assert_eq!(
-        reopened.index.inner.read().alpha(),
+        reopened.storage.index.inner.read().alpha(),
         1.5,
         "custom alpha must survive the save/load round-trip"
     );

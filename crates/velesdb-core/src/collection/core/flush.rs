@@ -33,8 +33,8 @@ impl Collection {
         // Issue #423: vector_storage.flush() is now a fast path (WAL + mmap
         // only, no vectors.idx serialization). The WAL provides crash recovery
         // even with a stale index file.
-        self.vector_storage.write().flush()?;
-        self.payload_storage.write().flush()?;
+        self.storage.vector_storage.write().flush()?;
+        self.storage.payload_storage.write().flush()?;
         // Drain delta buffer into HNSW before persisting the index.
         // Lock order: delta_buffer(10) is acquired after vector_storage(2)
         // and payload_storage(3) — both already released above.
@@ -66,7 +66,7 @@ impl Collection {
         self.flush_core_storage()?;
         self.flush_derived_indexes()?;
         // Write the deferred vectors.idx AFTER all other flush steps.
-        self.vector_storage.read().flush_index()?;
+        self.storage.vector_storage.read().flush_index()?;
         Ok(())
     }
 
@@ -76,14 +76,15 @@ impl Collection {
     /// after adding the BM25 snapshot/WAL step (#389).
     fn flush_core_storage(&self) -> Result<()> {
         self.save_config()?;
-        self.vector_storage.write().flush()?;
-        self.payload_storage.write().flush()?;
+        self.storage.vector_storage.write().flush()?;
+        self.storage.payload_storage.write().flush()?;
         self.drain_delta_into_index();
         self.drain_deferred_into_index();
         self.drain_async_index_builder()?;
         // Always save HNSW on full flush and reset the counter.
-        self.index.save(&self.path)?;
-        self.inserts_since_last_hnsw_save
+        self.storage.index.save(&self.storage.path)?;
+        self.generations
+            .inserts_since_last_hnsw_save
             .store(0, std::sync::atomic::Ordering::Relaxed);
         self.flush_pq_codebook()?;
         self.flush_rabitq_quantizer()?;
@@ -108,11 +109,14 @@ impl Collection {
     /// created, so a pre-existing (non-BM25) collection reopened by
     /// newer code does not gain a spurious empty snapshot.
     fn flush_bm25_index(&self) -> Result<()> {
-        if self.text_index.is_empty() {
+        if self.storage.text_index.is_empty() {
             return Ok(());
         }
-        crate::index::bm25_persistence::save_snapshot(&self.path, &self.text_index)?;
-        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.path);
+        crate::index::bm25_persistence::save_snapshot(
+            &self.storage.path,
+            &self.storage.text_index,
+        )?;
+        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.storage.path);
         crate::index::bm25_persistence_wal::wal_truncate(&wal_path)?;
         Ok(())
     }
@@ -124,13 +128,13 @@ impl Collection {
     /// so this covers the lazy-training case to prevent codebook loss on restart.
     #[cfg(feature = "persistence")]
     fn flush_pq_codebook(&self) -> Result<()> {
-        let guard = self.pq_quantizer.read();
+        let guard = self.storage.pq_quantizer.read();
         let Some(ref pq) = *guard else {
             return Ok(());
         };
-        pq.save_codebook(&self.path)?;
+        pq.save_codebook(&self.storage.path)?;
         if pq.rotation.is_some() {
-            pq.save_rotation(&self.path)?;
+            pq.save_rotation(&self.storage.path)?;
         }
         Ok(())
     }
@@ -149,10 +153,10 @@ impl Collection {
     /// quantizer survives a restart instead of silently degrading to f32.
     #[cfg(feature = "persistence")]
     fn flush_rabitq_quantizer(&self) -> Result<()> {
-        let Some(rabitq) = self.index.rabitq_quantizer() else {
+        let Some(rabitq) = self.storage.index.rabitq_quantizer() else {
             return Ok(());
         };
-        rabitq.save(&self.path)?;
+        rabitq.save(&self.storage.path)?;
         Ok(())
     }
 
@@ -167,11 +171,13 @@ impl Collection {
     /// time for high-throughput workloads.
     fn save_hnsw_if_threshold_exceeded(&self) -> Result<()> {
         let count = self
+            .generations
             .inserts_since_last_hnsw_save
             .load(std::sync::atomic::Ordering::Relaxed);
         if count > Self::HNSW_SAVE_THRESHOLD {
-            self.index.save(&self.path)?;
-            self.inserts_since_last_hnsw_save
+            self.storage.index.save(&self.storage.path)?;
+            self.generations
+                .inserts_since_last_hnsw_save
                 .store(0, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(())
@@ -182,7 +188,7 @@ impl Collection {
     /// No-op when the delta buffer is inactive (no rebuild in progress).
     #[cfg(feature = "persistence")]
     fn drain_delta_into_index(&self) {
-        let drained = self.delta_buffer.deactivate_and_drain();
+        let drained = self.streaming.delta_buffer.deactivate_and_drain();
         self.filter_and_insert_valid(&drained);
     }
 
@@ -195,7 +201,7 @@ impl Collection {
     /// No-op when deferred indexing is not configured.
     #[cfg(feature = "persistence")]
     fn drain_deferred_into_index(&self) {
-        if let Some(ref di) = self.deferred_indexer {
+        if let Some(ref di) = self.streaming.deferred_indexer {
             let drained = di.drain_all();
             self.filter_and_insert_valid(&drained);
         }
@@ -220,7 +226,7 @@ impl Collection {
         if drained.is_empty() {
             return;
         }
-        let storage = self.vector_storage.read();
+        let storage = self.storage.vector_storage.read();
         let valid: Vec<(u64, &[f32])> = drained
             .iter()
             .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
@@ -228,7 +234,7 @@ impl Collection {
             .collect();
         drop(storage);
         if !valid.is_empty() {
-            self.index.insert_batch_parallel(valid);
+            self.storage.index.insert_batch_parallel(valid);
         }
     }
 
@@ -248,8 +254,8 @@ impl Collection {
     /// `warn` level before propagation so that operational dashboards can
     /// alert on repeated failures.
     fn drain_async_index_builder(&self) -> Result<()> {
-        if let Some(ref aib) = self.async_index_builder {
-            match aib.flush_sync(&self.index) {
+        if let Some(ref aib) = self.streaming.async_index_builder {
+            match aib.flush_sync(&self.storage.index) {
                 Ok(count) if count > 0 => {
                     tracing::debug!("flush: drained {count} vectors from async index builder");
                 }
@@ -265,13 +271,17 @@ impl Collection {
 
     /// Persists property index, range index, and edge store (EPIC-009 US-005).
     fn flush_secondary_indexes(&self) -> Result<()> {
-        let property_index_path = self.path.join("property_index.bin");
-        self.property_index
+        let property_index_path = self.storage.path.join("property_index.bin");
+        self.graph
+            .property_index
             .read()
             .save_to_file(&property_index_path)?;
 
-        let range_index_path = self.path.join("range_index.bin");
-        self.range_index.read().save_to_file(&range_index_path)?;
+        let range_index_path = self.storage.path.join("range_index.bin");
+        self.graph
+            .range_index
+            .read()
+            .save_to_file(&range_index_path)?;
 
         // Save the EdgeStore snapshot for ANY collection that uses the graph
         // dimension (edges now WAL-persist on every collection type, so the
@@ -279,20 +289,20 @@ impl Collection {
         // edge WAL grows without bound and a torn tail never heals). The
         // `edge_store.bin exists` arm keeps persisting deletions down to an
         // empty store.
-        let edge_store_path = self.path.join("edge_store.bin");
-        if !self.edge_store.is_empty() || edge_store_path.exists() {
-            self.edge_store.save_to_file(&edge_store_path)?;
+        let edge_store_path = self.storage.path.join("edge_store.bin");
+        if !self.graph.edge_store.is_empty() || edge_store_path.exists() {
+            self.graph.edge_store.save_to_file(&edge_store_path)?;
             // The snapshot now contains every edge, so the edge WAL delta is
             // redundant — truncate it AFTER the snapshot is durably written so
             // a crash between the two still replays the edges (never loses
             // them). Mirrors the BM25 snapshot → wal_truncate contract.
             #[cfg(feature = "persistence")]
             crate::collection::graph::edge_wal::wal_truncate(
-                &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
+                &crate::collection::graph::edge_wal::wal_path_for_edges(&self.storage.path),
             )?;
             // Rebuild CSR read snapshot after flush so that subsequent reads
             // benefit from zero-copy neighbor lookups (EPIC-020 US-004).
-            self.edge_store.build_read_snapshot();
+            self.graph.edge_store.build_read_snapshot();
         }
 
         Ok(())
@@ -300,9 +310,9 @@ impl Collection {
 
     /// Compacts all named sparse indexes to disk (EPIC-062 / SPARSE-04).
     fn flush_sparse_indexes(&self) -> Result<()> {
-        let indexes = self.sparse_indexes.read();
+        let indexes = self.query.sparse_indexes.read();
         for (name, idx) in indexes.iter() {
-            crate::index::sparse::persistence::compact_named(&self.path, name, idx)?;
+            crate::index::sparse::persistence::compact_named(&self.storage.path, name, idx)?;
         }
         Ok(())
     }
@@ -337,9 +347,9 @@ impl Collection {
             }
         }
 
-        let config = self.config.read();
-        let config_path = self.path.join("config.json");
-        let tmp_path = self.path.join("config.json.tmp");
+        let config = self.storage.config.read();
+        let config_path = self.storage.path.join("config.json");
+        let tmp_path = self.storage.path.join("config.json.tmp");
         let config_data = serde_json::to_string_pretty(&*config)
             .map_err(|e| Error::Serialization(e.to_string()))?;
 
@@ -366,7 +376,8 @@ impl Collection {
     /// Returns an error if the underlying HNSW vacuum fails (for
     /// instance, when vector storage is disabled on the index).
     pub(crate) fn vacuum_hnsw_index(&self) -> Result<usize> {
-        self.index
+        self.storage
+            .index
             .vacuum()
             .map_err(|e| Error::Index(format!("HNSW vacuum failed: {e}")))
     }
@@ -381,6 +392,7 @@ impl Collection {
     /// Returns an error if the compaction I/O fails.
     pub(crate) fn compact_vector_storage(&self) -> Result<usize> {
         let reclaimed = self
+            .storage
             .vector_storage
             .write()
             .compact()
@@ -389,8 +401,9 @@ impl Collection {
         // the delta since the last HNSW save. Re-save the index to restore
         // the invariant "WAL ⊇ writes since last index save" that open-time
         // reconciliation relies on.
-        self.index.save(&self.path)?;
-        self.inserts_since_last_hnsw_save
+        self.storage.index.save(&self.storage.path)?;
+        self.generations
+            .inserts_since_last_hnsw_save
             .store(0, std::sync::atomic::Ordering::Relaxed);
         Ok(reclaimed)
     }
@@ -424,7 +437,7 @@ impl Collection {
         async_index_builder: Option<Option<crate::collection::streaming::AsyncIndexBuilderConfig>>,
     ) -> Result<()> {
         {
-            let mut config = self.config.write();
+            let mut config = self.storage.config.write();
             if let Some(rescore) = pq_rescore_oversampling {
                 config.pq_rescore_oversampling = rescore;
             }

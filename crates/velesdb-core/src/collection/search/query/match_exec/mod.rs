@@ -266,7 +266,7 @@ impl Collection {
         let mut reported_cardinality: usize = 0;
 
         // Hoist payload_storage lock once for the entire query.
-        let payload_guard = self.payload_storage.read();
+        let payload_guard = self.storage.payload_storage.read();
 
         for pattern in &match_clause.patterns {
             if all_results.len() >= limit {
@@ -278,7 +278,7 @@ impl Collection {
                 params,
                 ctx,
                 &payload_guard,
-                &self.edge_store,
+                &self.graph.edge_store,
                 limit,
                 &mut all_results,
                 &mut iteration_count,

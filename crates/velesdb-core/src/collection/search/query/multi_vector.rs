@@ -35,12 +35,12 @@ impl Collection {
     ) -> Result<Option<Vec<f32>>> {
         if field == "vector" {
             // Primary vector store
-            let storage = self.vector_storage.read();
+            let storage = self.storage.vector_storage.read();
             return Ok(storage.retrieve(point_id)?);
         }
 
         // Named vector from payload JSON field
-        let payload_storage = self.payload_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let Some(payload) = payload_storage.retrieve(point_id)? else {
             return Ok(None);
         };

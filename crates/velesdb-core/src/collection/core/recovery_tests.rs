@@ -29,7 +29,8 @@ fn test_no_gap_returns_zero() {
     coll.upsert(make_points(5)).expect("upsert");
 
     let recovered =
-        recovery::recover_hnsw_gap(&coll.vector_storage, &coll.index, 4).expect("recovery");
+        recovery::recover_hnsw_gap(&coll.storage.vector_storage, &coll.storage.index, 4)
+            .expect("recovery");
     assert_eq!(recovered, 0);
 }
 
@@ -40,7 +41,8 @@ fn test_empty_collection_no_recovery() {
         Collection::create(PathBuf::from(temp.path()), 4, DistanceMetric::Cosine).expect("create");
 
     let recovered =
-        recovery::recover_hnsw_gap(&coll.vector_storage, &coll.index, 4).expect("recovery");
+        recovery::recover_hnsw_gap(&coll.storage.vector_storage, &coll.storage.index, 4)
+            .expect("recovery");
     assert_eq!(recovered, 0);
 }
 
@@ -59,22 +61,23 @@ fn test_crash_gap_detected_and_recovered() {
     // Simulate crash gap: write 2 vectors to storage ONLY, bypassing HNSW.
     // Use orthogonal directions to avoid cosine ambiguity with existing points.
     {
-        let mut vs = coll.vector_storage.write();
+        let mut vs = coll.storage.vector_storage.write();
         vs.store(100, &[0.0, 0.0, 1.0, 0.0]).expect("store 100");
         vs.store(101, &[0.0, 0.0, 0.0, 1.0]).expect("store 101");
     }
 
-    assert_eq!(coll.vector_storage.read().len(), 5);
-    assert_eq!(coll.index.len(), 3);
+    assert_eq!(coll.storage.vector_storage.read().len(), 5);
+    assert_eq!(coll.storage.index.len(), 3);
 
     let recovered =
-        recovery::recover_hnsw_gap(&coll.vector_storage, &coll.index, 4).expect("recovery");
+        recovery::recover_hnsw_gap(&coll.storage.vector_storage, &coll.storage.index, 4)
+            .expect("recovery");
 
     assert_eq!(recovered, 2);
-    assert_eq!(coll.index.len(), 5);
+    assert_eq!(coll.storage.index.len(), 5);
 
     // Verify recovered vectors are searchable via HNSW.
-    let results = coll.index.search(&[0.0, 0.0, 1.0, 0.0], 1);
+    let results = coll.storage.index.search(&[0.0, 0.0, 1.0, 0.0], 1);
     assert_eq!(results[0].id, 100, "recovered vector should be searchable");
 }
 
@@ -97,7 +100,7 @@ fn test_gap_recovery_on_collection_reopen() {
         // Simulate gap: store vectors directly without HNSW indexing.
         // Use orthogonal directions to avoid cosine ambiguity.
         {
-            let mut vs = coll.vector_storage.write();
+            let mut vs = coll.storage.vector_storage.write();
             vs.store(100, &[0.0, 0.0, 1.0, 0.0]).expect("store 100");
             vs.store(101, &[0.0, 0.0, 0.0, 1.0]).expect("store 101");
             vs.flush().expect("flush storage");
@@ -110,7 +113,7 @@ fn test_gap_recovery_on_collection_reopen() {
     // Phase 2: Reopen — should auto-recover gap vectors.
     let reopened = Collection::open(PathBuf::from(temp.path())).expect("reopen");
     assert_eq!(
-        reopened.index.len(),
+        reopened.storage.index.len(),
         5,
         "HNSW should include 3 original + 2 recovered vectors"
     );
@@ -140,7 +143,7 @@ fn test_metadata_only_skips_recovery() {
     let reopened = Collection::open(PathBuf::from(temp.path())).expect("reopen");
 
     // Metadata-only has dimension 0, no vectors, no HNSW content.
-    assert_eq!(reopened.config.read().dimension, 0);
+    assert_eq!(reopened.storage.config.read().dimension, 0);
 }
 
 // =========================================================================
@@ -162,7 +165,12 @@ fn test_no_gap_after_flush_and_reopen() {
     let reopened = Collection::open(PathBuf::from(temp.path())).expect("reopen");
     // After a full flush + clean reopen there must be no gap.
     let recovered =
-        recovery::recover_hnsw_gap(&reopened.vector_storage, &reopened.index, 4).expect("recover");
+        recovery::recover_hnsw_gap(&reopened.storage.vector_storage, &reopened.storage.index, 4)
+            .expect("recover");
     assert_eq!(recovered, 0, "no gap after clean flush+reopen");
-    assert_eq!(reopened.index.len(), 8, "all vectors present in HNSW");
+    assert_eq!(
+        reopened.storage.index.len(),
+        8,
+        "all vectors present in HNSW"
+    );
 }

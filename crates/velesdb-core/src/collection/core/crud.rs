@@ -26,7 +26,7 @@ impl Collection {
     /// attempting to insert vectors into a metadata-only collection.
     pub fn upsert(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         let points: Vec<Point> = points.into_iter().collect();
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let dimension = config.dimension;
         let storage_mode = config.storage_mode;
 
@@ -155,7 +155,7 @@ impl Collection {
         // Collect old payloads under the payload write lock, then release.
         // The write lock prevents concurrent payload mutations during the read.
         let old_payloads = {
-            let payload_storage = self.payload_storage.write();
+            let payload_storage = self.storage.payload_storage.write();
             let result = Self::collect_old_payloads(points, &payload_storage);
             drop(payload_storage);
             result
@@ -195,7 +195,7 @@ impl Collection {
     /// Issue #425: Accepts a pre-computed `dedup_map` to avoid rebuilding
     /// the last-writer-wins map redundantly.
     fn write_and_flush_payloads(&self, points: &[Point], dedup_map: &DedupMap) -> Result<()> {
-        let mut payload_storage = self.payload_storage.write();
+        let mut payload_storage = self.storage.payload_storage.write();
         Self::write_deduped_payloads(points, &mut payload_storage, dedup_map)?;
         payload_storage.flush()?;
         Ok(())
@@ -276,13 +276,13 @@ impl Collection {
             .map(|(_, p)| (p.id, p.vector.as_slice()))
             .collect();
 
-        let mut vector_storage = self.vector_storage.write();
+        let mut vector_storage = self.storage.vector_storage.write();
         vector_storage.store_batch(&deduped)?;
         let point_count = vector_storage.len();
         vector_storage.flush()?;
         drop(vector_storage);
 
-        self.config.write().point_count = point_count;
+        self.storage.config.write().point_count = point_count;
         Ok(())
     }
 
@@ -300,14 +300,14 @@ impl Collection {
         }
 
         // Secondary indexes require per-point old/new payload diffing
-        let no_secondary = self.secondary_indexes.read().is_empty();
+        let no_secondary = self.query.secondary_indexes.read().is_empty();
         if !no_secondary {
             return false;
         }
 
         // BM25 text index: skip only when the index is empty AND no point
         // carries a payload (nothing to add, nothing to remove)
-        let bm25_empty = self.text_index.is_empty();
+        let bm25_empty = self.storage.text_index.is_empty();
         let any_payload = points.iter().any(|p| p.payload.is_some());
         if !bm25_empty || any_payload {
             return false;
@@ -315,7 +315,7 @@ impl Collection {
 
         // Label index: when populated, old payloads may contain `_labels`
         // that need cleanup. Phase 2 must run to call `apply_label_updates`.
-        if !self.label_index.read().is_empty() {
+        if !self.graph.label_index.read().is_empty() {
             return false;
         }
 
@@ -385,7 +385,8 @@ impl Collection {
         let mut sparse_batch = Vec::new();
         let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> =
             HashMap::with_capacity(points.len());
-        let skip_bm25 = self.text_index.is_empty() && !points.iter().any(|p| p.payload.is_some());
+        let skip_bm25 =
+            self.storage.text_index.is_empty() && !points.iter().any(|p| p.payload.is_some());
         let needs_label_updates = Self::needs_label_updates(points, old_payloads);
         let mut label_updates = Self::alloc_label_buffer(needs_label_updates, points.len());
 
@@ -410,7 +411,7 @@ impl Collection {
             seen_payloads.insert(point.id, point.payload.as_ref());
         }
 
-        Self::apply_label_updates(&self.label_index, &label_updates);
+        Self::apply_label_updates(&self.graph.label_index, &label_updates);
         Ok(sparse_batch)
     }
 
@@ -431,8 +432,8 @@ impl Collection {
         self.enforce_upsert_limits(&points)?;
 
         // LOCK ORDER: payload_storage(3) → label_index(7).
-        let mut payload_storage = self.payload_storage.write();
-        let mut label_idx = self.label_index.write();
+        let mut payload_storage = self.storage.payload_storage.write();
+        let mut label_idx = self.graph.label_index.write();
 
         // Collect old payloads for histogram decrements before they are overwritten.
         // Bug #46: use collect_old_payloads to deduplicate by ID — only the
@@ -451,7 +452,7 @@ impl Collection {
         drop(payload_storage);
 
         // config(1) only — payload_storage(3) and label_index(7) both released above.
-        self.config.write().point_count = point_count;
+        self.storage.config.write().point_count = point_count;
 
         // Incremental histogram maintenance for metadata-only collections
         // (Bug #47 + Bug #49): dedup by id and replace histograms in one

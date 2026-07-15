@@ -39,7 +39,7 @@ impl Collection {
         k: usize,
         index_name: &str,
     ) -> Result<Vec<SearchResult>> {
-        let indexes = self.sparse_indexes.read();
+        let indexes = self.query.sparse_indexes.read();
         let index = indexes
             .get(index_name)
             .ok_or_else(|| resolve::sparse_index_not_found(index_name))?;

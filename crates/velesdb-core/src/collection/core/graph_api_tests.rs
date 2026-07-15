@@ -452,12 +452,12 @@ mod tests {
         let (collection, _temp) = create_test_collection();
         build_chain(&collection);
 
-        let before = collection.edge_store.metrics().traversals_total();
+        let before = collection.graph.edge_store.metrics().traversals_total();
         let config = TraversalConfig::with_range(1, 3).with_limit(100);
         let results = collection.traverse_bfs_config(1, &config);
         assert!(!results.is_empty());
 
-        let metrics = collection.edge_store.metrics();
+        let metrics = collection.graph.edge_store.metrics();
         assert_eq!(
             metrics.traversals_total(),
             before + 1,
@@ -478,12 +478,12 @@ mod tests {
         let (collection, _temp) = create_test_collection();
         build_chain(&collection);
 
-        let before = collection.edge_store.metrics().traversals_total();
+        let before = collection.graph.edge_store.metrics().traversals_total();
         let config = TraversalConfig::with_range(1, 3).with_limit(100);
         let _ = collection.traverse_dfs_config(1, &config);
 
         assert_eq!(
-            collection.edge_store.metrics().traversals_total(),
+            collection.graph.edge_store.metrics().traversals_total(),
             before + 1,
             "DFS config traversal increments the counter"
         );
@@ -772,7 +772,7 @@ mod tests {
             max_pending,
         };
         expand_dfs_neighbors(
-            collection.edge_store.as_ref(),
+            collection.graph.edge_store.as_ref(),
             0,
             0,
             &rel_filter,

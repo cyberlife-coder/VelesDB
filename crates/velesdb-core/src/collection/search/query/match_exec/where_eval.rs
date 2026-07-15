@@ -305,7 +305,7 @@ impl Collection {
         cmp: &crate::velesql::Comparison,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<bool> {
-        let Some(edge) = self.edge_store.get_edge(edge_id) else {
+        let Some(edge) = self.graph.edge_store.get_edge(edge_id) else {
             return Ok(false);
         };
         let property = cmp.column.split_once('.').map_or("", |(_, rest)| rest);
@@ -383,7 +383,7 @@ impl Collection {
         condition: &crate::velesql::Condition,
         ctx: &MatchWhereCtx<'_>,
     ) -> Result<bool> {
-        let Some(edge) = self.edge_store.get_edge(edge_id) else {
+        let Some(edge) = self.graph.edge_store.get_edge(edge_id) else {
             return Ok(false);
         };
         let payload = serde_json::Value::Object(
@@ -418,7 +418,7 @@ impl Collection {
             return Ok(false);
         }
 
-        let vector_storage = self.vector_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
         let Some(node_vector) = vector_storage.retrieve(node_id)? else {
             return Ok(false);
         };
@@ -427,7 +427,7 @@ impl Collection {
             return Ok(false);
         }
 
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let metric = config.metric;
         let higher_is_better = metric.higher_is_better();
         drop(config);

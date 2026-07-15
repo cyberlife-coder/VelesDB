@@ -376,7 +376,7 @@ impl crate::collection::types::Collection {
         &self,
         condition: &crate::filter::Condition,
     ) -> Option<Vec<u64>> {
-        match self.payload_mirror.candidate_ids(condition) {
+        match self.storage.payload_mirror.candidate_ids(condition) {
             MirrorAnswer::Ids(ids) => return Some(ids),
             MirrorAnswer::Unsupported => return None,
             MirrorAnswer::NotBuilt => {}
@@ -385,7 +385,7 @@ impl crate::collection::types::Collection {
             return None;
         }
         self.build_payload_mirror();
-        match self.payload_mirror.candidate_ids(condition) {
+        match self.storage.payload_mirror.candidate_ids(condition) {
             MirrorAnswer::Ids(ids) => Some(ids),
             MirrorAnswer::Unsupported | MirrorAnswer::NotBuilt => None,
         }
@@ -393,8 +393,8 @@ impl crate::collection::types::Collection {
 
     /// Whether accumulated scan debt justifies the one-off build cost.
     fn mirror_build_due(&self) -> bool {
-        let rows = self.config.read().point_count;
-        rows >= MIRROR_MIN_ROWS && self.payload_mirror.scan_debt() >= rows as u64
+        let rows = self.storage.config.read().point_count;
+        rows >= MIRROR_MIN_ROWS && self.storage.payload_mirror.scan_debt() >= rows as u64
     }
 
     /// Builds the mirror from storage under the mirror write lock.
@@ -405,15 +405,15 @@ impl crate::collection::types::Collection {
     /// here during the build and re-apply their batch afterwards (idempotent),
     /// keeping the mirror complete.
     pub(crate) fn build_payload_mirror(&self) {
-        let mut guard = self.payload_mirror.state.write();
+        let mut guard = self.storage.payload_mirror.state.write();
         if guard.is_some() {
             return; // another query won the build race
         }
         let vector_ids = {
-            let vectors = self.vector_storage.read();
+            let vectors = self.storage.vector_storage.read();
             vectors.ids()
         };
-        let payload_storage = self.payload_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let mut state = MirrorState::default();
         let mut seen: FxHashSet<u64> = FxHashSet::default();
         for id in vector_ids.into_iter().chain(payload_storage.ids()) {
@@ -426,7 +426,10 @@ impl crate::collection::types::Collection {
             }
         }
         drop(payload_storage);
-        self.payload_mirror.scan_debt.store(0, Ordering::Relaxed);
+        self.storage
+            .payload_mirror
+            .scan_debt
+            .store(0, Ordering::Relaxed);
         *guard = Some(state);
     }
 }

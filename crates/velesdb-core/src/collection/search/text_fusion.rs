@@ -164,14 +164,14 @@ impl Collection {
     ) -> Result<(ScoreStream, ScoreStream)> {
         use crate::index::VectorIndex;
         let metric = {
-            let config = self.config.read();
+            let config = self.storage.config.read();
             crate::validation::validate_dimension_match(config.dimension, vector_query.len())?;
             config.metric
         };
-        let raw = self.index.search(vector_query, candidate_k);
+        let raw = self.storage.index.search(vector_query, candidate_k);
         let vec_res = self.merge_delta(raw, vector_query, candidate_k, metric);
         let vector_stream: Vec<(u64, f32)> = vec_res.iter().map(|sr| (sr.id, sr.score)).collect();
-        let text_stream = self.text_index.search(text_query, candidate_k);
+        let text_stream = self.storage.text_index.search(text_query, candidate_k);
         Ok((vector_stream, text_stream))
     }
 }

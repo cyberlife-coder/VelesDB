@@ -74,12 +74,12 @@ impl Collection {
         batch_size: usize,
         filter: Option<&Filter>,
     ) -> Vec<Point> {
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let is_metadata_only = config.metadata_only;
         drop(config);
 
-        let payload_storage = self.payload_storage.read();
-        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
         let now_secs = now_unix_secs();
 
         let mut points = Vec::with_capacity(batch_size);
