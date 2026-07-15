@@ -242,6 +242,34 @@ per-artifact load-time validation (file-length-bounded counts).
 
 ---
 
+## Hybrid search / fusion
+
+### `FUSION(maximum)` / `FUSION(average)` mix raw score scales (BM25 dominates)
+
+**Status**: documented design choice (not a bug). Sources: `crates/velesdb-core/src/fusion/strategy.rs` (`fuse_maximum`, `fuse_average` — no normalization; `fuse_rsf` → `min_max_normalize`), `crates/velesdb-core/src/collection/search/text_fusion.rs` (routes `maximum`/`average`/`rsf` to score-level fusion of the raw vector-similarity and BM25 streams).
+
+**Symptom**: in a hybrid query fusing a vector branch with a text branch — e.g.
+`WHERE vector NEAR $v AND content MATCH '...' USING FUSION(strategy = 'maximum')`
+(or `'average'`) — the fused ranking is dominated by the text (BM25) results,
+and the vector branch has little or no visible influence.
+
+**Why**: `maximum` and `average` operate on the **raw** per-branch scores with
+no normalization. Vector similarity is bounded (cosine ∈ [0, 1]) while BM25 is
+unbounded (routinely > 1, often 5–20 on longer queries), so under `maximum` the
+BM25 score almost always wins, and under `average` it dwarfs the vector
+contribution. These strategies are designed for branches whose scores share a
+scale (e.g. two dense-vector branches over the same metric); the engine
+deliberately does not second-guess the caller by normalizing behind their back.
+
+**Recommendation**: for mixed-scale hybrids (vector + BM25), use
+`FUSION(strategy = 'rrf')` — rank-based, therefore insensitive to score scale —
+or `FUSION(strategy = 'rsf', dense_weight = ..., sparse_weight = ...)`, which
+min-max normalizes each branch to [0, 1] before the weighted sum. Reserve
+`maximum`/`average` for branches with commensurable scores. See the
+scale-mixing caveat in [`VELESQL_SPEC.md` → USING FUSION](../VELESQL_SPEC.md#using-fusion----hybrid-search-v20).
+
+---
+
 ## Ecosystem / interop
 
 ### 12. String → u64 point-ID hashing differs across components
