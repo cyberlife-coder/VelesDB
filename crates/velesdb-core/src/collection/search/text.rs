@@ -154,7 +154,6 @@ impl Collection {
         Ok(bm25_results
             .into_iter()
             .filter_map(|(id, score)| {
-                let vector = vector_storage.retrieve(id).ok().flatten()?;
                 let payload = payload_storage.retrieve(id).ok().flatten();
                 if is_payload_expired(payload.as_ref(), now_secs) {
                     return None;
@@ -165,6 +164,13 @@ impl Collection {
                 if !filter.matches(payload_ref) {
                     return None;
                 }
+
+                // Retrieve the vector only for candidates that pass the filter;
+                // fetching it before filtering copies a dim-D vector that is
+                // discarded for every non-match. Result-set membership is
+                // unchanged: inclusion still requires a present vector AND a
+                // non-expired payload passing the filter (a conjunction).
+                let vector = vector_storage.retrieve(id).ok().flatten()?;
 
                 let point = Point {
                     id,
