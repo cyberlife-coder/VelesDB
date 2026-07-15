@@ -96,17 +96,100 @@ pub(super) struct MirrorState {
     pub(super) uncolumnized: FxHashSet<String>,
 }
 
+/// A payload cell pre-converted outside the mirror lock. Strings stay
+/// borrowed: interning requires the store's string table, which lives under
+/// the state lock.
+enum PreparedCell<'p> {
+    Float(f64),
+    Bool(bool),
+    Str(&'p str),
+}
+
+impl PreparedCell<'_> {
+    /// The mirror column type this cell lands in.
+    fn column_type(&self) -> ColumnType {
+        match self {
+            Self::Float(_) => ColumnType::Float,
+            Self::Bool(_) => ColumnType::Bool,
+            Self::Str(_) => ColumnType::String,
+        }
+    }
+}
+
+/// A payload row pre-converted outside the mirror lock: top-level scalar
+/// fields only, keys borrowed from the payload.
+type PreparedRow<'p> = Vec<(&'p str, PreparedCell<'p>)>;
+
+/// Extracts mirrorable cells from a payload's top-level scalar fields.
+///
+/// Pure conversion — needs no shared state, so upsert batches run it outside
+/// the mirror write lock. Non-scalar values (arrays, objects, nulls) and
+/// dotted keys produce no cell — `push_row_unchecked` stores null for absent
+/// columns, matching the JSON filter's "missing field never matches"
+/// semantics. All numbers map to `Float` because the JSON filter compares
+/// numbers as `f64` (`values_equal` / `compare_values`), making the `f64`
+/// mirror exactly as faithful as the JSON path itself.
+fn prepare_row(payload: Option<&serde_json::Value>) -> PreparedRow<'_> {
+    let Some(serde_json::Value::Object(map)) = payload else {
+        return Vec::new();
+    };
+    let mut cells = Vec::with_capacity(map.len());
+    for (key, value) in map {
+        // `get_field` splits on '.', so dotted keys are unreachable by
+        // the JSON filter — never mirror them.
+        if key.contains('.') {
+            continue;
+        }
+        let cell = match value {
+            serde_json::Value::Number(n) => match n.as_f64() {
+                Some(f) => PreparedCell::Float(f),
+                None => continue,
+            },
+            serde_json::Value::String(s) => PreparedCell::Str(s),
+            serde_json::Value::Bool(b) => PreparedCell::Bool(*b),
+            _ => continue,
+        };
+        cells.push((key.as_str(), cell));
+    }
+    cells
+}
+
 impl MirrorState {
     /// Tombstones the previous row for `id` (if any) and appends a new row.
     ///
     /// Returns `false` when the row index space (`u32`) is exhausted, which
     /// poisons the mirror (caller drops the state).
     pub(super) fn upsert_row(&mut self, id: u64, payload: Option<&serde_json::Value>) -> bool {
+        self.upsert_prepared_row(id, &prepare_row(payload))
+    }
+
+    /// Lock-side half of an upsert: resolves prepared cells against the
+    /// shared state (column creation, string interning) and appends the row.
+    ///
+    /// Returns `false` when the row index space (`u32`) is exhausted, which
+    /// poisons the mirror (caller drops the state). Cells whose type
+    /// conflicts with the existing column are nulled by `push_typed`.
+    fn upsert_prepared_row(&mut self, id: u64, row: &PreparedRow<'_>) -> bool {
         self.tombstone(id);
         let Ok(row_idx) = u32::try_from(self.store.row_count()) else {
             return false;
         };
-        let cells = self.collect_cells(payload);
+        // Keys are borrowed straight from the prepared row so the cells can
+        // go to `push_row_unchecked` without `String` clones.
+        let mut cells: Vec<(&str, ColumnValue)> = Vec::with_capacity(row.len());
+        for (key, cell) in row {
+            if !self.ensure_column(key, &cell.column_type()) {
+                continue;
+            }
+            let value = match cell {
+                PreparedCell::Float(f) => ColumnValue::Float(*f),
+                PreparedCell::Bool(b) => ColumnValue::Bool(*b),
+                PreparedCell::Str(s) => {
+                    ColumnValue::String(self.store.string_table_mut().intern(s))
+                }
+            };
+            cells.push((key, value));
+        }
         self.store.push_row_unchecked(&cells);
         self.row_ids.push(id);
         self.id_rows.insert(id, row_idx);
@@ -119,59 +202,6 @@ impl MirrorState {
         if let Some(row_idx) = self.id_rows.remove(&id) {
             self.store.tombstone_row(row_idx as usize);
             self.live.remove(row_idx);
-        }
-    }
-
-    /// Extracts mirrored cells from a payload's top-level scalar fields.
-    ///
-    /// Keys are borrowed directly from `payload` so the caller can pass the
-    /// result straight to `push_row_unchecked` without an intermediate Vec or
-    /// any `String` / `ColumnValue` clones.
-    ///
-    /// Non-scalar values (arrays, objects, nulls) and dotted keys produce no
-    /// cell — `push_row_unchecked` stores null for absent columns, matching
-    /// the JSON filter's "missing field never matches" semantics. Cells whose
-    /// type conflicts with the existing column are nulled by `push_typed`.
-    fn collect_cells<'p>(
-        &mut self,
-        payload: Option<&'p serde_json::Value>,
-    ) -> Vec<(&'p str, ColumnValue)> {
-        let Some(serde_json::Value::Object(map)) = payload else {
-            return Vec::new();
-        };
-        let mut cells = Vec::with_capacity(map.len());
-        for (key, value) in map {
-            // `get_field` splits on '.', so dotted keys are unreachable by
-            // the JSON filter — never mirror them.
-            if key.contains('.') {
-                continue;
-            }
-            let Some((col_type, cell)) = self.scalar_cell(value) else {
-                continue;
-            };
-            if self.ensure_column(key, &col_type) {
-                cells.push((key.as_str(), cell));
-            }
-        }
-        cells
-    }
-
-    /// Maps a scalar JSON value to its mirror column type and cell value.
-    ///
-    /// All numbers map to `Float` because the JSON filter compares numbers
-    /// as `f64` (`values_equal` / `compare_values`), making the `f64` mirror
-    /// exactly as faithful as the JSON path itself.
-    fn scalar_cell(&mut self, value: &serde_json::Value) -> Option<(ColumnType, ColumnValue)> {
-        match value {
-            serde_json::Value::Number(n) => n
-                .as_f64()
-                .map(|f| (ColumnType::Float, ColumnValue::Float(f))),
-            serde_json::Value::String(s) => Some((
-                ColumnType::String,
-                ColumnValue::String(self.store.string_table_mut().intern(s)),
-            )),
-            serde_json::Value::Bool(b) => Some((ColumnType::Bool, ColumnValue::Bool(*b))),
-            _ => None,
         }
     }
 
@@ -251,25 +281,50 @@ impl PayloadMirror {
         self.scan_debt.load(Ordering::Relaxed)
     }
 
+    /// Whether the mirror is currently built — the cheap not-built fast path
+    /// for the mutation hooks.
+    ///
+    /// Racing against a concurrent lazy build is safe: the build holds the
+    /// state write lock across its whole storage snapshot, and mutation paths
+    /// write storage *before* calling the hooks — so this check either blocks
+    /// until the build finishes (then the hook applies its batch, idempotent),
+    /// or returns `false` before the build starts, in which case the build's
+    /// snapshot already contains the batch.
+    fn is_built(&self) -> bool {
+        self.state.read().is_some()
+    }
+
     /// Applies an upsert batch incrementally (no-op when not built).
     ///
     /// Intra-batch duplicate ids resolve to last-writer-wins because each
-    /// `upsert_row` tombstones the previous row for the same id.
+    /// `upsert_prepared_row` tombstones the previous row for the same id.
+    ///
+    /// INVARIANT: the whole batch is applied under one state write-lock hold,
+    /// so concurrent filtered queries (`candidate_ids`) never observe a
+    /// half-applied batch — do not split this into per-point locking. Only
+    /// row *preparation* (payload → scalar cells) runs outside the lock;
+    /// string interning and store insertion need the shared state and stay
+    /// under it.
     pub(crate) fn apply_upserts(&self, points: &[Point]) {
-        let mut guard = self.state.write();
-        let mut healthy = true;
-        if let Some(state) = guard.as_mut() {
-            for point in points {
-                if !state.upsert_row(point.id, point.payload.as_ref()) {
-                    healthy = false;
-                    break;
-                }
-            }
-            healthy = healthy && !state.is_bloated();
-        } else {
+        if !self.is_built() {
             return;
         }
-        if !healthy {
+        let prepared: Vec<(u64, PreparedRow<'_>)> = points
+            .iter()
+            .map(|point| (point.id, prepare_row(point.payload.as_ref())))
+            .collect();
+        let mut guard = self.state.write();
+        let Some(state) = guard.as_mut() else {
+            return; // invalidated between the fast-path check and the lock
+        };
+        let mut healthy = true;
+        for (id, row) in &prepared {
+            if !state.upsert_prepared_row(*id, row) {
+                healthy = false;
+                break;
+            }
+        }
+        if !healthy || state.is_bloated() {
             *guard = None;
         }
     }
@@ -277,7 +332,13 @@ impl PayloadMirror {
     /// Applies a delete batch incrementally (no-op when not built), then
     /// evaluates the auto-vacuum trigger so tombstone bloat is compacted on
     /// the delete path (PostgreSQL-inspired: 20% dead-row ratio, ≥ 50 dead).
+    ///
+    /// INVARIANT: same batch atomicity as [`Self::apply_upserts`] — one write
+    /// lock for the whole batch, never per-id locking.
     pub(crate) fn apply_deletes(&self, ids: &[u64]) {
+        if !self.is_built() {
+            return;
+        }
         let mut guard = self.state.write();
         if let Some(state) = guard.as_mut() {
             for &id in ids {

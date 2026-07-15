@@ -32,7 +32,10 @@
 //!   indicates bit-rot or a malformed WAL; the entry is skipped, a metric and
 //!   warning are recorded, and replay continues so later valid entries are
 //!   still recovered. Unknown opcodes mid-stream stop replay (the framing can
-//!   no longer be trusted).
+//!   no longer be trusted). A CRC-valid store record whose payload length does
+//!   not match the collection's vector size gets the same treatment (metric +
+//!   warning, payload not applied), and its id still lands in `touched_ids`
+//!   so the HNSW reconciliation sees the WAL touched it.
 //!
 //! A bare `0x04` byte is the legacy compaction marker: versions prior to the
 //! WAL-truncating compaction protocol appended it after a successful
@@ -469,8 +472,24 @@ fn replay_store(
 
     if data.len() == vector_size {
         apply_store_to_mmap(id, &data, index, target, next_offset, vector_size)?;
-        touched_ids.push(id);
+    } else {
+        // BUG4: a CRC-valid record whose payload length differs from the
+        // collection's vector size is corruption (or a foreign-dimension
+        // write). The payload is unusable so it is not applied, but per the
+        // module corruption policy it must be OBSERVABLE — warn + the same
+        // corrupt-entry metric as the CRC path above — never a silent drop.
+        crate::metrics::global_guardrails_metrics().record_wal_replay_corrupt_entry();
+        tracing::warn!(
+            id,
+            expected_len = vector_size,
+            actual_len = data.len(),
+            "WAL replay: skipping CRC-valid store entry with payload length mismatch"
+        );
     }
+    // Push the id even when the payload was unusable: the caller truncates the
+    // WAL after replay, so touched_ids is the only remaining witness that this
+    // id was touched — the HNSW open-time reconciliation must still see it.
+    touched_ids.push(id);
 
     Ok(EntryOutcome::Applied)
 }

@@ -1,3 +1,5 @@
+// Reason: clippy 1.90 similar_names flags idiomatic test bindings (dir/dim, ids/idx).
+#![allow(clippy::similar_names)]
 //! Shared test fixtures for `velesdb-core` tests.
 //!
 //! Centralizes collection creation, point generation, and setup patterns

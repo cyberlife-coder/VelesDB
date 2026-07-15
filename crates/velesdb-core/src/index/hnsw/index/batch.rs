@@ -57,13 +57,8 @@ impl HnswIndex {
         // pipeline (see `NativeHnswIndex::insert_batch`). Runs dimension
         // validation to completion BEFORE any mapping registration so
         // failures cannot leave orphaned mappings.
-        let upsert_results = upsert::validate_and_register_batch(
-            &self.mappings,
-            &self.vectors,
-            self.enable_vector_storage,
-            self.dimension,
-            &items,
-        )?;
+        let upsert_results =
+            upsert::validate_and_register_batch(&self.mappings, self.dimension, &items)?;
 
         let mut to_insert = Vec::with_capacity(items.len());
         let mut rollback_info = Vec::with_capacity(items.len());
@@ -86,10 +81,11 @@ impl HnswIndex {
     ///
     /// # Ordering
     ///
-    /// The pipeline executes: validate dims -> register mappings -> graph insert
-    /// -> sidecar store. On graph failure, rollback undoes mappings in reverse
-    /// order. Because `parallel_insert` uses rayon, the HNSW graph construction
-    /// order is non-deterministic across runs (see v1.7.2 CHANGELOG note).
+    /// The pipeline executes: validate dims -> register mappings -> graph
+    /// insert -> mapping reconciliation. On graph failure, rollback undoes
+    /// mappings in reverse order. Because `parallel_insert` uses rayon, the
+    /// HNSW graph construction order is non-deterministic across runs (see
+    /// v1.7.2 CHANGELOG note).
     ///
     /// # Arguments
     ///
@@ -146,7 +142,6 @@ impl HnswIndex {
             .map(|(idx, vec)| (*vec, *idx))
             .collect();
 
-        // Insert into HNSW graph before storing vectors to avoid orphaned sidecar data.
         let assigned_ids = match self.inner.read().parallel_insert(&refs_for_hnsw) {
             Ok(ids) => ids,
             Err(e) => {
@@ -160,18 +155,7 @@ impl HnswIndex {
 
         // RF-DEDUP #448 Group D — mapping reconciliation shared with
         // NativeHnswIndex::insert_batch.
-        let storage_ids =
-            upsert::reconcile_batch_mappings(&self.mappings, &batch.rollback_info, &assigned_ids);
-
-        if self.enable_vector_storage {
-            batch
-                .to_insert
-                .par_iter()
-                .zip(storage_ids.par_iter())
-                .for_each(|((_, vec), idx)| {
-                    self.vectors.insert(*idx, vec);
-                });
-        }
+        upsert::reconcile_batch_mappings(&self.mappings, &batch.rollback_info, &assigned_ids);
 
         count
     }
@@ -225,7 +209,7 @@ impl HnswIndex {
         if matches!(
             quality,
             SearchQuality::Perfect | SearchQuality::Adaptive { .. } | SearchQuality::AutoTune
-        ) || (self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty())
+        ) || (self.len() <= 100 && self.enable_vector_storage && self.graph_vector_count() > 0)
         {
             let results: crate::error::Result<Vec<Vec<ScoredResult>>> = queries
                 .par_iter()
@@ -358,18 +342,43 @@ impl HnswIndex {
         self.search_brute_force_gpu_inner(query, k)
     }
 
-    /// Rayon-based brute-force search over `ShardedVectors`.
+    /// Rayon-based brute-force search over the graph's `ContiguousVectors`.
     ///
     /// Extracted from `brute_force_search_parallel` so the GPU gate in that
     /// method stays compact. Also used by `search_brute_force` as the default
     /// compute path (RF-DEDUP: single parallel implementation).
+    ///
+    /// Snapshots the contiguous slab under a brief read lock (one memcpy),
+    /// then releases it BEFORE the rayon scan: parallel inserts acquire
+    /// `vectors.write()` from inside rayon tasks, so running parallel work
+    /// while holding the vectors lock could park every worker on that write
+    /// and deadlock the pool (same discipline as the GPU snapshot paths).
+    ///
+    /// Internal indices `0..count` are filtered through `mappings.get_id`,
+    /// so tombstoned slots (deleted/upserted vectors that remain in the
+    /// graph store) are never returned.
     pub(super) fn brute_force_search_rayon(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
-        let vectors_snapshot = self.vectors.collect_for_parallel();
+        // Preserve fast-insert semantics: exact-distance features are gated
+        // on `enable_vector_storage` even though the graph stores vectors.
+        if !self.enable_vector_storage {
+            return Vec::new();
+        }
 
-        let mut results: Vec<ScoredResult> = vectors_snapshot
-            .par_iter()
+        let (flat, dimension) = {
+            let inner = self.inner.read();
+            inner.with_contiguous_vectors(|vectors| {
+                (vectors.as_flat_slice().to_vec(), vectors.dimension())
+            })
+        };
+        if flat.is_empty() || dimension == 0 {
+            return Vec::new();
+        }
+
+        let mut results: Vec<ScoredResult> = flat
+            .par_chunks(dimension)
+            .enumerate()
             .filter_map(|(idx, vec)| {
-                let id = self.mappings.get_id(*idx)?;
+                let id = self.mappings.get_id(idx)?;
                 let score = self.compute_distance(query, vec);
                 Some(ScoredResult::new(id, score))
             })

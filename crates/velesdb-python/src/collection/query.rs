@@ -5,10 +5,12 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 
+use velesdb_core::QueryOperationKind;
+
 use crate::collection_helpers::{core_err, id_score_pairs_to_dicts};
 use crate::utils::{extract_vector, json_to_python, python_to_json, to_pyobject};
 
-use super::Collection;
+use super::{deny_if_scoped, Collection};
 
 /// Convert a `MatchResult` to a Python dict.
 ///
@@ -33,6 +35,41 @@ pub(crate) fn match_result_to_dict(
     }
     let _ = dict.set_item(PyString::intern(py, "projected"), projected);
     dict.into_any().unbind()
+}
+
+/// Returns `query` retargeted so its FROM (top-level select and every UNION /
+/// INTERSECT / EXCEPT operand) is `collection_name`.
+///
+/// The collection-level VelesQL methods historically executed on the detached
+/// collection leaf, which always ran against itself: the FROM name was purely
+/// nominal (the LangChain / LlamaIndex adapters rely on this, issuing e.g.
+/// ``SELECT * FROM vectors`` against a collection with another name). Routing
+/// through the gated `Database` facade (audit F-5.4, #1392) resolves the
+/// collection from the FROM clause instead, so the FROM must be rewritten to
+/// the wrapping collection's name — this preserves the leaf contract exactly
+/// (with and without an observer) and keys the control-plane read gate on the
+/// collection actually read, so gate and data plane can never disagree.
+/// Borrowed (zero clone) when the query already targets `collection_name`.
+pub(crate) fn retarget_to_collection<'q>(
+    query: &'q velesdb_core::velesql::Query,
+    collection_name: &str,
+) -> std::borrow::Cow<'q, velesdb_core::velesql::Query> {
+    let compound_retargeted = |q: &velesdb_core::velesql::Query| {
+        q.compound
+            .as_ref()
+            .is_none_or(|c| c.operations.iter().all(|(_, s)| s.from == collection_name))
+    };
+    if query.select.from == collection_name && compound_retargeted(query) {
+        return std::borrow::Cow::Borrowed(query);
+    }
+    let mut owned = query.clone();
+    owned.select.from = collection_name.to_string();
+    if let Some(compound) = owned.compound.as_mut() {
+        for (_, operand) in &mut compound.operations {
+            operand.from = collection_name.to_string();
+        }
+    }
+    std::borrow::Cow::Owned(owned)
 }
 
 /// Parses a VelesQL string into an AST, mapping parse errors to `PyValueError`.
@@ -321,8 +358,17 @@ impl Collection {
         query_str: &str,
         params: Option<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Vec<Py<PyAny>>> {
-        let inner = &self.inner;
-        run_velesql_select(py, query_str, params, |q, p| inner.execute_query(q, p))
+        // Execute through the owning database (not the detached collection
+        // leaf) so the VelesQL read path passes the control-plane observer
+        // gate — the detached leaf has no observer reference and would bypass
+        // governance (audit F-5.4, #1392; mirrors the mobile fix, PR #1404).
+        // The query is retargeted to this collection first: the leaf always
+        // executed against itself (FROM was nominal — adapters rely on it),
+        // and the retarget keys the gate on the collection actually read.
+        run_velesql_select(py, query_str, params, |q, p| {
+            self.db
+                .execute_query(&retarget_to_collection(q, &self.name), p)
+        })
     }
 
     /// Execute a MATCH graph traversal query.
@@ -344,6 +390,14 @@ impl Collection {
         vector: Option<Py<PyAny>>,
         threshold: f32,
     ) -> PyResult<Vec<Py<PyAny>>> {
+        // No gated `Database` twin returns `MatchResult` (the facade's MATCH
+        // path folds results into `SearchResult`), so the read gate is
+        // consulted here instead: deny fails closed, and a scope filter also
+        // fails closed because the MATCH leaf takes no metadata filter and
+        // `MatchResult` carries no payload to post-filter (#1405, #1392).
+        let scope = self.authorize(QueryOperationKind::GraphTraversal, None, None)?;
+        deny_if_scoped(scope, "match_query")?;
+
         let inner = &self.inner;
         run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {
             if let Some(ref qv) = qv {
@@ -363,6 +417,11 @@ impl Collection {
     /// and statistics, so a SELECT whose WHERE targets an indexed field shows
     /// an `IndexLookup` node and a MATCH reports a real traversal strategy.
     /// Semantically invalid queries raise `ValueError`.
+    ///
+    /// Deliberately NOT routed through the read gate: EXPLAIN builds a plan
+    /// from the AST plus collection statistics and never touches point data,
+    /// so there is nothing for a governance observer to scope or leak
+    /// (`explain_analyze`, which *executes* the query, is gated).
     #[pyo3(signature = (query_str))]
     fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<Py<PyAny>> {
         let parsed = parse_velesql(query_str)?;
@@ -392,10 +451,13 @@ impl Collection {
     ) -> PyResult<Py<PyAny>> {
         let parsed = parse_velesql(query_str)?;
         let rust_params = convert_params(py, params)?;
-        let inner = &self.inner;
+        // EXPLAIN ANALYZE *executes* the query, so it must pass the same
+        // control-plane read gate as `query()`. The `Database` facade twin is
+        // gated internally (deny fails closed, a scope narrows the measured
+        // execution), unlike the detached leaf method used before (#1392).
         let output = py.detach(move || {
-            inner
-                .explain_analyze_query(&parsed, &rust_params)
+            self.db
+                .explain_analyze_query(&retarget_to_collection(&parsed, &self.name), &rust_params)
                 .map_err(core_err)
         })?;
         Ok(build_explain_analyze_dict(py, &output))
@@ -421,7 +483,12 @@ impl Collection {
         velesql: &str,
         params: Option<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Vec<Py<PyAny>>> {
-        let inner = &self.inner;
-        run_velesql_select_ids(py, velesql, params, |q, p| inner.execute_query(q, p))
+        // Gated facade routing, same rationale as `query()`. A scope filter is
+        // AND-composed into the query AST inside core before execution, so the
+        // ids projected here are already narrowed — no unscoped id can leak.
+        run_velesql_select_ids(py, velesql, params, |q, p| {
+            self.db
+                .execute_query(&retarget_to_collection(q, &self.name), p)
+        })
     }
 }
