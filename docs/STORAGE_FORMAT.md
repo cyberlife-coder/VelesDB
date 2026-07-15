@@ -24,9 +24,8 @@ collection_directory/
 ├── payloads.snapshot    # Payload index snapshot (optional)
 ├── native_meta.bin      # HNSW metadata sidecar (dimension, metric, generation)
 ├── native_mappings.bin  # HNSW id ↔ internal-index mappings sidecar
-├── native_vectors.bin   # HNSW vector payload sidecar (when vector storage enabled)
 ├── native_hnsw.gen      # HNSW save-generation marker
-├── native_hnsw.*        # HNSW graph dump files
+├── native_hnsw.*        # HNSW graph dump files (incl. native_hnsw.vectors, the single vector store)
 ├── edge_store.bin       # Graph edge store (whole-file snapshot, any collection with edges)
 ├── edges.wal            # Graph edge WAL (any collection that writes edges)
 ├── property_index.bin   # Graph property index (graph collections)

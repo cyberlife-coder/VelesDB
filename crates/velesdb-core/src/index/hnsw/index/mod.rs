@@ -34,7 +34,6 @@ pub use vacuum::VacuumError;
 
 use super::native_inner::NativeHnswInner as HnswInner;
 use super::sharded_mappings::ShardedMappings;
-use super::sharded_vectors::ShardedVectors;
 use super::upsert::{self, UpsertResult};
 use crate::distance::DistanceMetric;
 use parking_lot::RwLock;
@@ -88,14 +87,13 @@ pub struct HnswIndex {
     pub(crate) inner: RwLock<ManuallyDrop<HnswInner>>,
     /// ID mappings (external ID <-> internal index) - lock-free via `DashMap` (EPIC-A.1)
     pub(crate) mappings: ShardedMappings,
-    /// Vector storage for SIMD re-ranking - sharded for parallel writes (EPIC-A.2)
-    pub(crate) vectors: ShardedVectors,
-    /// Whether to store vectors in `ShardedVectors` for re-ranking.
+    /// Whether exact-distance features (SIMD re-ranking, brute-force search,
+    /// vacuum) are enabled.
     ///
-    /// When `false`, vectors are only stored in HNSW graph, providing:
-    /// - ~2x faster insert throughput
-    /// - ~50% less memory usage
-    /// - No SIMD re-ranking or brute-force search support
+    /// Vectors always live once, in the graph's `ContiguousVectors` (the
+    /// former `ShardedVectors` sidecar was removed — PERF1). This flag is
+    /// kept as a feature gate so fast-insert indices preserve their
+    /// historical behavior (no brute-force / rerank / vacuum).
     ///
     /// Default: `true` (full functionality)
     pub(crate) enable_vector_storage: bool,
@@ -115,19 +113,14 @@ pub struct HnswIndex {
 }
 
 impl HnswIndex {
-    /// Registers an ID with upsert semantics and cleans up stale vector data.
+    /// Registers an ID with upsert semantics.
     ///
     /// Returns an [`UpsertResult`] with the new internal index and optional
     /// old index for rollback. If the ID already existed, the old mapping is
-    /// replaced and the stale sidecar vector is removed.
+    /// replaced (the old graph node becomes an unreachable tombstone).
     #[must_use]
     pub(crate) fn upsert_mapping(&self, id: u64) -> UpsertResult {
-        upsert::upsert_mapping(
-            &self.mappings,
-            &self.vectors,
-            self.enable_vector_storage,
-            id,
-        )
+        upsert::upsert_mapping(&self.mappings, id)
     }
 
     /// Inserts a vector into the HNSW graph and corrects the mapping if the
@@ -149,19 +142,12 @@ impl HnswIndex {
             }
         };
 
-        let idx = if assigned_id == result.idx {
-            result.idx
-        } else {
+        if assigned_id != result.idx {
             // Remove stale reverse mapping before restoring the correct one.
             // upsert_mapping created idx_to_id[result.idx] = id, but the graph
             // assigned a different node_id, so result.idx is now orphaned.
             self.mappings.remove_reverse(result.idx);
             self.mappings.restore(id, assigned_id);
-            assigned_id
-        };
-
-        if self.enable_vector_storage {
-            self.vectors.insert(idx, vector);
         }
         true
     }
@@ -179,8 +165,7 @@ impl HnswIndex {
     /// Returns `true` if the ID existed and was removed from the mappings,
     /// `false` if the ID was absent. The HNSW graph node is not physically
     /// deleted — it becomes a tombstone, filtered out on search via the
-    /// reverse mapping. Sidecar vectors in `ShardedVectors` are purged when
-    /// vector storage is enabled.
+    /// reverse mapping.
     ///
     /// For workloads with many deletions, consider periodic
     /// [`Self::vacuum`] to rebuild the graph and reclaim memory.
@@ -190,12 +175,19 @@ impl HnswIndex {
     /// and delegates to `upsert::soft_delete` (private; also used by
     /// `NativeHnswIndex::remove`).
     pub fn remove(&self, id: u64) -> bool {
-        upsert::soft_delete(
-            &self.mappings,
-            &self.vectors,
-            self.enable_vector_storage,
-            id,
-        )
+        upsert::soft_delete(&self.mappings, id)
+    }
+
+    /// Returns the number of vector slots in the graph's `ContiguousVectors`
+    /// (live vectors + tombstones).
+    ///
+    /// This is the exclusive upper bound for internal indices: brute-force
+    /// guards and rerank paths read vectors from this store, keyed by the
+    /// mapping's internal index.
+    pub(crate) fn graph_vector_count(&self) -> usize {
+        self.inner
+            .read()
+            .with_contiguous_vectors(crate::perf_optimizations::ContiguousVectors::len)
     }
 
     /// Reorders graph nodes in BFS traversal order for improved cache locality.

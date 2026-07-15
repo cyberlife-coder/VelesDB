@@ -197,10 +197,10 @@ impl ShardedMappings {
         for (i, &id) in ids.iter().enumerate() {
             let result = match self.id_to_idx.entry(id) {
                 Entry::Vacant(entry) => {
-                    let idx = start + i;
-                    entry.insert(idx);
-                    self.idx_to_id.insert(idx, id);
-                    (idx, None)
+                    let slot_idx = start + i;
+                    entry.insert(slot_idx);
+                    self.idx_to_id.insert(slot_idx, id);
+                    (slot_idx, None)
                 }
                 Entry::Occupied(entry) => {
                     // Race: another thread inserted this ID after our vacancy check.

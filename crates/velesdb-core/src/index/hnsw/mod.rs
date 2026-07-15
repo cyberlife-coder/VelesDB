@@ -31,7 +31,6 @@ mod native_inner;
 mod params;
 pub(crate) mod persistence;
 mod sharded_mappings;
-mod sharded_vectors;
 pub(crate) mod upsert;
 // ============================================================================
 // Tests
@@ -53,7 +52,7 @@ mod persistence_atomicity_tests;
 #[cfg(test)]
 mod sharded_mappings_tests;
 #[cfg(test)]
-mod sharded_vectors_tests;
+mod sidecar_removal_tests;
 #[cfg(test)]
 mod upsert_tests;
 

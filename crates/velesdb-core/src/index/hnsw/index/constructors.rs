@@ -5,7 +5,6 @@ use crate::distance::DistanceMetric;
 use crate::error::Result;
 use crate::index::hnsw::params::HnswParams;
 use crate::index::hnsw::sharded_mappings::ShardedMappings;
-use crate::index::hnsw::sharded_vectors::ShardedVectors;
 use parking_lot::RwLock;
 use std::mem::ManuallyDrop;
 use std::path::Path;
@@ -41,14 +40,13 @@ impl HnswIndex {
     ///
     /// # Performance
     ///
-    /// - **~2-3x faster inserts** than `new()` (M/2, ef/2 + no vector storage)
-    /// - **~50% less memory** (no `ShardedVectors` duplication)
+    /// - **~2-3x faster inserts** than `new()` (M/2, ef/2)
     /// - **Recall**: ~90% (vs ≥95% with standard params)
     ///
     /// # Limitations
     ///
     /// - No SIMD re-ranking support (`search_with_rerank` falls back to standard search)
-    /// - No brute-force search (`search_brute_force` returns empty)
+    /// - No brute-force search (`search_brute_force` falls back to HNSW search)
     /// - Cannot `vacuum()` the index (returns error)
     ///
     /// # Use Cases
@@ -67,7 +65,7 @@ impl HnswIndex {
     /// use velesdb_core::index::HnswIndex;
     /// use velesdb_core::DistanceMetric;
     ///
-    /// // Fast insert mode: 2x faster, 50% less memory
+    /// // Fast insert mode: lighter graph params, no exact-distance features
     /// let index = HnswIndex::new_fast_insert(768, DistanceMetric::Cosine)?;
     /// ```
     pub fn new_fast_insert(dimension: usize, metric: DistanceMetric) -> Result<Self> {
@@ -165,7 +163,6 @@ impl HnswIndex {
             metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
             mappings,
-            vectors: ShardedVectors::new(dimension),
             enable_vector_storage,
             rerank_latency_target_us: AtomicU64::new(0),
             rerank_latency_ema_us: AtomicU64::new(0),
@@ -275,16 +272,20 @@ impl HnswIndex {
             storage_mode,
         )?;
 
-        // Mappings + vectors in one shared call (RF-DEDUP #448 Group C).
-        let (mappings, vectors, enable_vector_storage) = persistence::load_sidecars(path, &meta)?;
+        // Mappings (+ legacy vectors-file consistency check) in one shared
+        // call (RF-DEDUP #448 Group C). The graph's own ContiguousVectors —
+        // loaded above — is the single vector store; its count bounds every
+        // mapped internal index.
+        let graph_vector_count =
+            inner.with_contiguous_vectors(crate::perf_optimizations::ContiguousVectors::len);
+        let mappings = persistence::load_sidecars(path, &meta, graph_vector_count)?;
 
         let index = Self {
             dimension: meta.dimension,
             metric: meta.metric,
             inner: RwLock::new(ManuallyDrop::new(inner)),
             mappings,
-            vectors,
-            enable_vector_storage,
+            enable_vector_storage: meta.enable_vector_storage,
             rerank_latency_target_us: AtomicU64::new(0),
             rerank_latency_ema_us: AtomicU64::new(0),
             io_holder: None,
@@ -362,13 +363,12 @@ impl HnswIndex {
         // old one — `load_sidecars` detects the mismatch.
         persistence::save_graph_generation(path, new_gen)?;
 
-        // Mappings + vectors + meta in one shared call (RF-DEDUP #448 Group C).
+        // Mappings + meta in one shared call (RF-DEDUP #448 Group C).
         // The actual backend storage mode is persisted so save/load round-trips
         // (a RaBitQ index reloads with the RaBitQ backend).
         persistence::save_sidecars(
             path,
             &self.mappings,
-            &self.vectors,
             &HnswMeta {
                 dimension: self.dimension,
                 metric: self.metric,

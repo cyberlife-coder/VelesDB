@@ -513,6 +513,7 @@ impl NativeHnswInner {
     ///
     /// Alias for [`with_contiguous_vectors`](Self::with_contiguous_vectors)
     /// with explicit read semantics for clarity at call sites.
+    #[allow(dead_code)] // Reason: test-only callers (direct_writer_tests) — kept for API symmetry with _mut
     #[inline]
     pub fn with_contiguous_vectors_read<R: Default>(
         &self,

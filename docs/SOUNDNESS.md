@@ -901,15 +901,17 @@ partial state corruption:
 1. **Validate dimensions** — All vectors are checked before any state mutation.
    A dimension mismatch panics before `upsert_mapping_batch` runs, so no
    orphaned mappings are created.
-2. **Register mappings** (`upsert_mapping_batch`) — Allocates internal indices
-   and removes stale sidecar vectors for replaced IDs. This is a point of no
-   return: if the subsequent graph insert fails, rollback must undo mappings
-   in reverse order.
-3. **Graph insert** (`parallel_insert`) — Inserts nodes into the HNSW graph
-   using rayon. On failure, rollback iterates `rollback_info` in reverse to
-   correctly restore duplicate-ID chains.
-4. **Sidecar storage** — Vectors are stored in `ShardedVectors` only after
-   graph insertion succeeds, preventing orphaned sidecar data.
+2. **Register mappings** (`upsert_mapping_batch`) — Allocates internal
+   indices; a replaced ID's old graph node becomes an unreachable tombstone.
+   This is a point of no return: if the subsequent graph insert fails,
+   rollback must undo mappings in reverse order.
+3. **Graph insert** (`parallel_insert`) — Inserts nodes (and their vectors,
+   into the graph's `ContiguousVectors` — the single vector store since
+   PERF1) using rayon. On failure, rollback iterates `rollback_info` in
+   reverse to correctly restore duplicate-ID chains.
+4. **Mapping reconciliation** (`reconcile_batch_mappings`) — Re-points any
+   mapping whose graph-assigned node ID differs from the pre-registered
+   index, so search/rerank/brute-force resolve to the correct graph slot.
 
 **Invariant**: Dimension validation (step 1) always precedes destructive
 mapping mutations (step 2). This is enforced by the structure of

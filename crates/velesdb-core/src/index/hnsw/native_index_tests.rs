@@ -79,9 +79,24 @@ fn test_native_index_persistence() {
     let results = loaded.search(&vec![0.0; 32], 5);
     assert!(!results.is_empty());
 
-    // Ensure vector sidecar survives reload for brute-force APIs.
+    // Ensure graph-stored vectors survive reload for brute-force APIs.
     let brute_force = loaded.brute_force_search_parallel(&vec![0.0; 32], 5);
     assert_eq!(brute_force.len(), 5);
+}
+
+#[test]
+fn test_native_index_save_does_not_persist_legacy_vectors_file() {
+    let dir = tempdir().unwrap();
+
+    // PERF1: no index variant writes native_vectors.bin anymore — the
+    // vectors live inside the graph dump (native_hnsw.vectors).
+    let index = NativeHnswIndex::new(16, DistanceMetric::Cosine).expect("test");
+    for i in 0..10 {
+        index.insert(i, &vec![i as f32 * 0.1; 16]).expect("test");
+    }
+    index.save(dir.path()).unwrap();
+    assert!(!dir.path().join("native_vectors.bin").exists());
+    assert!(dir.path().join("native_hnsw.vectors").exists());
 }
 
 #[test]
@@ -104,19 +119,22 @@ fn test_native_index_fast_insert_save_does_not_persist_vectors() {
 }
 
 #[test]
-fn test_native_index_fast_insert_save_removes_stale_vectors_file() {
+fn test_native_index_save_removes_stale_legacy_vectors_file() {
     let dir = tempdir().unwrap();
 
-    let regular = NativeHnswIndex::new(16, DistanceMetric::Cosine).expect("test");
-    regular.insert(1, &vec![0.1; 16]).expect("test");
-    regular.save(dir.path()).unwrap();
-    assert!(dir.path().join("native_vectors.bin").exists());
+    let index = NativeHnswIndex::new(16, DistanceMetric::Cosine).expect("test");
+    index.insert(1, &vec![0.1; 16]).expect("test");
+    index.save(dir.path()).unwrap();
 
-    let fast = NativeHnswIndex::new_fast_insert(16, DistanceMetric::Cosine).expect("test");
-    fast.insert(2, &vec![0.2; 16]).expect("test");
-    fast.save(dir.path()).unwrap();
+    // Plant a legacy vectors file as an old binary would have left it.
+    std::fs::write(dir.path().join("native_vectors.bin"), [0_u8; 8]).unwrap();
+
+    index.insert(2, &vec![0.2; 16]).expect("test");
+    index.save(dir.path()).unwrap();
 
     assert!(!dir.path().join("native_vectors.bin").exists());
+    let loaded = NativeHnswIndex::load(dir.path(), 16, DistanceMetric::Cosine).unwrap();
+    assert_eq!(loaded.len(), 2);
 }
 
 #[test]
@@ -266,7 +284,7 @@ fn test_native_remove_cleans_up_vector_storage() {
     let index = NativeHnswIndex::new(4, DistanceMetric::Cosine).expect("test");
     index.insert(1, &[1.0, 0.0, 0.0, 0.0]).expect("test");
 
-    // Verify vector exists in brute-force (uses ShardedVectors)
+    // Verify vector exists in brute-force (reads the graph's ContiguousVectors)
     let before = index.brute_force_search_parallel(&[1.0, 0.0, 0.0, 0.0], 1);
     assert_eq!(before.len(), 1, "Should find vector before removal");
 
@@ -343,8 +361,9 @@ fn test_native_batch_insert_vector_storage_uses_assigned_ids() {
     ];
     index.insert_batch(&batch).expect("test");
 
-    // Brute-force search uses ShardedVectors — if storage indices are wrong,
-    // brute-force results will disagree with HNSW search results.
+    // Brute-force search reads the graph's ContiguousVectors through the
+    // mappings — if the mapping indices are wrong, brute-force results will
+    // disagree with HNSW search results.
     let hnsw_results = index.search(&[10.0, 0.0, 0.0, 0.0], 1);
     let brute_results = index.brute_force_search_parallel(&[10.0, 0.0, 0.0, 0.0], 1);
 

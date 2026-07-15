@@ -1,4 +1,6 @@
 #![cfg(all(test, feature = "persistence"))]
+// Reason: clippy 1.90 similar_names flags idiomatic test bindings (dir/dim, ids/idx).
+#![allow(clippy::similar_names)]
 
 use crate::collection::types::Collection;
 use crate::distance::DistanceMetric;

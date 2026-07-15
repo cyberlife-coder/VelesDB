@@ -49,7 +49,7 @@ impl Collection {
     ///
     /// Delegates to [`resolve_vector`](Self::resolve_vector) for parameter
     /// resolution, eliminating the duplicated f64-to-f32 conversion logic.
-    #[allow(clippy::self_only_used_in_recursion)]
+    #[allow(clippy::only_used_in_recursion)]
     pub(crate) fn extract_vector_search(
         &self,
         condition: &mut Condition,
@@ -76,7 +76,7 @@ impl Collection {
     /// [`multi_query_search`](Self::multi_query_search). Walks the same
     /// AND/Group recursion as [`extract_vector_search`](Self::extract_vector_search)
     /// and reuses [`resolve_vector`](Self::resolve_vector) for each `VectorExpr`.
-    #[allow(clippy::self_only_used_in_recursion)]
+    #[allow(clippy::only_used_in_recursion)]
     pub(crate) fn extract_fused_vectors(
         &self,
         condition: &Condition,
@@ -109,7 +109,6 @@ impl Collection {
     /// resolution, eliminating the duplicated f64-to-f32 conversion logic.
     #[allow(clippy::type_complexity)]
     #[allow(clippy::only_used_in_recursion)]
-    #[allow(clippy::self_only_used_in_recursion)]
     pub(crate) fn extract_all_similarity_conditions(
         &self,
         condition: &Condition,
