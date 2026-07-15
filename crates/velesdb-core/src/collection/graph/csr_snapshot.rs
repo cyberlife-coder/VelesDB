@@ -262,10 +262,10 @@ impl CsrSnapshot {
         let (start, end) = self.range_of(node_id).unwrap_or((0, 0));
         (start..end).filter_map(move |i| {
             let target = self.targets[i];
-            let eid = self.edge_ids[i];
+            let edge_id = self.edge_ids[i];
             let lid = self.label_ids[i];
-            if predicate.matches(target, eid, lid) {
-                Some((target, eid, lid))
+            if predicate.matches(target, edge_id, lid) {
+                Some((target, edge_id, lid))
             } else {
                 None
             }

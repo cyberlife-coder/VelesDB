@@ -320,6 +320,8 @@ fn filter_deleted(results: Vec<(u64, f32)>, deleted: &FxHashSet<u64>) -> Vec<(u6
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+// Reason: clippy 1.90 similar_names flags idiomatic test bindings (ids/idx).
+#[allow(clippy::similar_names)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
