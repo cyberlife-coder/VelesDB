@@ -425,8 +425,20 @@ impl MmapStorage {
             &mut touched_ids,
         )?;
         if replayed > 0 {
-            // 1. Make the recovered vector bytes durable.
+            // 1. Make the recovered vector bytes durable (msync of dirty pages).
             mmap.flush()?;
+            // 1b. fsync the data file so any file GROWTH performed during replay
+            //     (ReplayTarget::ensure_capacity -> set_len) is durably recorded
+            //     BEFORE we persist the index (whose offsets reference the grown
+            //     region) and truncate the WAL. `msync` flushes page contents but
+            //     does not guarantee the inode size is journaled; on such a
+            //     filesystem a crash after the WAL truncation could leave the data
+            //     file at its pre-growth length while vectors.idx points past EOF
+            //     -> next open, load_index rejects "offset exceeds data file size"
+            //     and open fails with the WAL already gone. Ordering the sync here
+            //     closes that window; the WAL is only cleared once both the data
+            //     file (size + bytes) and the index are durable.
+            data_file.sync_all()?;
             // 2. Persist the rebuilt index so the recovered state survives even
             //    after the WAL is cleared.
             Self::persist_index_file(index_path, index)?;
