@@ -569,6 +569,18 @@ impl MmapStorage {
     /// Returns an error if any I/O operation fails.
     pub fn flush_full(&mut self) -> io::Result<()> {
         self.flush()?;
+        // fsync the data file BEFORE persisting the index (mirrors the replay
+        // growth path in `replay_wal`). `flush()` msyncs the mmap and fsyncs the
+        // WAL, but neither guarantees a live `set_len` growth (from
+        // `ensure_capacity`) has its inode size journaled. `flush_index()` then
+        // persists `vectors.idx` with offsets that reference the grown region.
+        // On a filesystem where the size update is not durable, a crash could
+        // leave the data file at its pre-growth length while the persisted index
+        // points past EOF -> next open, `load_index` rejects it ("index offset
+        // exceeds data file size") and open fails before `replay_wal` can rebuild
+        // from the (still-intact) WAL. Syncing the size here keeps the data file
+        // and the index we persist next mutually consistent.
+        self.data_file.sync_all()?;
         self.flush_index()
     }
 
