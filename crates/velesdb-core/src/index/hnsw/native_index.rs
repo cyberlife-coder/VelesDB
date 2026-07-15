@@ -353,12 +353,14 @@ impl NativeHnswIndex {
 
         let inner = self.inner.read();
 
-        // Snapshot the contiguous slab under a brief vectors read lock (one
-        // memcpy), releasing it BEFORE the rayon scan: parallel inserts
-        // acquire `vectors.write()` from inside rayon tasks, so parallel
-        // work under the vectors lock could park every worker on that write
-        // and deadlock the pool. Tombstoned slots (deleted/upserted vectors)
-        // have no reverse mapping and are skipped.
+        // Snapshot the contiguous slab into an owned buffer (one memcpy) so the
+        // rayon scan below iterates a private copy. The `inner` read lock is
+        // held for the whole scan (the closure calls `inner.compute_distance`),
+        // which is safe here: native inserts also run under `inner.read()` and
+        // mutate the graph through interior mutability, so there is no
+        // exclusive `inner.write()` this shared read could deadlock a rayon
+        // worker against. Tombstoned slots (deleted/upserted vectors) have no
+        // reverse mapping and are skipped by `mappings.get_id`.
         let (flat, dimension) = inner.with_contiguous_vectors(|vectors| {
             (vectors.as_flat_slice().to_vec(), vectors.dimension())
         });
