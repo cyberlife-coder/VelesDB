@@ -259,6 +259,18 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 /// - `\%` matches a literal `%`
 /// - `\_` matches a literal `_`
 ///
+/// # Performance
+///
+/// `matches()` is invoked **per candidate row** during a full-scan post-filter,
+/// with the *same* `pattern` for every candidate. Naively this re-tokenizes the
+/// pattern, re-lowercases it (ILIKE), and allocates two DP buffers on every row.
+/// To avoid that, the compiled form (tokens + lowercased pattern for ILIKE) plus
+/// the DP scratch buffers are cached in a thread-local [`CompiledLikePattern`]
+/// and reused across candidates. Identity is keyed on the *content* of the
+/// pattern (and the case-sensitivity flag), so it is correct even if a later
+/// query's pattern `String` happens to reuse a freed allocation — no per-row
+/// work beyond a length-short-circuited byte comparison of the pattern.
+///
 /// # Arguments
 ///
 /// * `text` - The string to match against
@@ -275,14 +287,23 @@ fn like_match(text: &str, pattern: &str, case_insensitive: bool) -> bool {
         return false;
     }
 
-    if case_insensitive {
-        like_match_impl(
-            text.to_lowercase().as_bytes(),
-            pattern.to_lowercase().as_bytes(),
-        )
-    } else {
-        like_match_impl(text.as_bytes(), pattern.as_bytes())
-    }
+    LIKE_COMPILE_CACHE.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        // Recompile only when the pattern content or case-sensitivity changed;
+        // on a full-scan the same pattern is reused for every candidate row.
+        let stale = slot
+            .as_ref()
+            .is_none_or(|c| !c.matches_key(pattern, case_insensitive));
+        if stale {
+            *slot = Some(CompiledLikePattern::compile(pattern, case_insensitive));
+        }
+        match slot.as_mut() {
+            Some(compiled) => compiled.run(text),
+            // Unreachable in practice (populated above when stale); recompile as
+            // a fail-safe rather than unwrap, keeping production code panic-free.
+            None => CompiledLikePattern::compile(pattern, case_insensitive).run(text),
+        }
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -320,35 +341,105 @@ fn tokenize_like_pattern(pattern: &[u8]) -> Vec<Token> {
     out
 }
 
-/// LIKE matching using rolling DP (`O(text_len * token_len)` time, `O(token_len)` memory).
-fn like_match_impl(text: &[u8], pattern: &[u8]) -> bool {
-    let tokens = tokenize_like_pattern(pattern);
-    let n = tokens.len();
+thread_local! {
+    /// Per-thread scratch: the most recently compiled LIKE/ILIKE pattern with
+    /// its reusable DP buffers. Bounded to a single pattern; parallel search
+    /// threads each keep their own, so there is no contention.
+    static LIKE_COMPILE_CACHE: std::cell::RefCell<Option<CompiledLikePattern>> =
+        const { std::cell::RefCell::new(None) };
+}
 
-    let mut prev = vec![false; n + 1];
-    prev[0] = true;
-    for (j, tok) in tokens.iter().enumerate() {
-        if matches!(tok, Token::AnySeq) {
-            prev[j + 1] = prev[j];
+/// A LIKE pattern compiled once and reused across candidate rows.
+///
+/// Holds the tokenized pattern (already lowercased for ILIKE) plus two DP
+/// buffers that are resized/reset in place on each [`Self::run`] call rather
+/// than reallocated. `source` keeps the *original* pattern bytes so the cache
+/// can verify identity by content.
+struct CompiledLikePattern {
+    /// Original (pre-lowercasing) pattern bytes — the cache identity key.
+    source: Vec<u8>,
+    case_insensitive: bool,
+    tokens: Vec<Token>,
+    dp_prev: Vec<bool>,
+    dp_curr: Vec<bool>,
+}
+
+impl CompiledLikePattern {
+    /// Tokenizes `pattern`, lowercasing it first for the case-insensitive path
+    /// so the (identical-per-row) pattern lowercase happens exactly once.
+    fn compile(pattern: &str, case_insensitive: bool) -> Self {
+        let lowered;
+        let pattern_bytes = if case_insensitive {
+            lowered = pattern.to_lowercase();
+            lowered.as_bytes()
         } else {
-            break;
+            pattern.as_bytes()
+        };
+        Self {
+            source: pattern.as_bytes().to_vec(),
+            case_insensitive,
+            tokens: tokenize_like_pattern(pattern_bytes),
+            dp_prev: Vec::new(),
+            dp_curr: Vec::new(),
         }
     }
 
-    let mut curr = vec![false; n + 1];
-    for &ch in text {
-        curr.fill(false);
+    /// Whether this compiled form is still valid for `(pattern, case)`.
+    /// Byte comparison short-circuits on length, so it is cheap.
+    fn matches_key(&self, pattern: &str, case_insensitive: bool) -> bool {
+        self.case_insensitive == case_insensitive && self.source == pattern.as_bytes()
+    }
+
+    /// Runs the rolling-DP match of `text` against the compiled tokens,
+    /// reusing the DP buffers (`O(text_len * token_len)` time, `O(token_len)`
+    /// memory). For ILIKE the text is lowercased per row (unavoidable, as it
+    /// differs across candidates); the pattern lowercase is already amortized.
+    fn run(&mut self, text: &str) -> bool {
+        let lowered;
+        let text_bytes = if self.case_insensitive {
+            lowered = text.to_lowercase();
+            lowered.as_bytes()
+        } else {
+            text.as_bytes()
+        };
+
+        // Disjoint field borrows so tokens can be read while the DP buffers are
+        // mutated.
+        let Self {
+            tokens,
+            dp_prev,
+            dp_curr,
+            ..
+        } = self;
+        let n = tokens.len();
+
+        dp_prev.clear();
+        dp_prev.resize(n + 1, false);
+        dp_prev[0] = true;
         for (j, tok) in tokens.iter().enumerate() {
-            curr[j + 1] = match tok {
-                Token::AnySeq => curr[j] || prev[j + 1],
-                Token::AnyOne => prev[j],
-                Token::Literal(c) => prev[j] && ch == *c,
-            };
+            if matches!(tok, Token::AnySeq) {
+                dp_prev[j + 1] = dp_prev[j];
+            } else {
+                break;
+            }
         }
-        std::mem::swap(&mut prev, &mut curr);
-    }
 
-    prev[n]
+        dp_curr.clear();
+        dp_curr.resize(n + 1, false);
+        for &ch in text_bytes {
+            dp_curr.fill(false);
+            for (j, tok) in tokens.iter().enumerate() {
+                dp_curr[j + 1] = match tok {
+                    Token::AnySeq => dp_curr[j] || dp_prev[j + 1],
+                    Token::AnyOne => dp_prev[j],
+                    Token::Literal(c) => dp_prev[j] && ch == *c,
+                };
+            }
+            std::mem::swap(dp_prev, dp_curr);
+        }
+
+        dp_prev[n]
+    }
 }
 
 /// Haversine great-circle distance. Returns distance in **meters** (WGS-84 mean radius).
@@ -380,6 +471,7 @@ fn compare_geo_distance(dist: f64, threshold: f64, op: crate::velesql::CompareOp
 
 #[cfg(test)]
 mod tests {
+    use super::{like_match, CompiledLikePattern};
     use crate::filter::Condition;
     use serde_json::json;
 
@@ -508,6 +600,138 @@ mod tests {
             value: json!(50)
         }
         .matches(&p));
+    }
+
+    // ---- LIKE precompiled-pattern equivalence (PERF7) ----
+
+    /// Independent oracle: greedy backtracking wildcard matcher, deliberately a
+    /// *different* algorithm from the production rolling-DP so it cross-checks
+    /// results rather than re-deriving them the same way.
+    #[derive(Clone, Copy, PartialEq)]
+    enum RTok {
+        AnySeq,
+        AnyOne,
+        Lit(u8),
+    }
+
+    fn ref_tokenize(pattern: &[u8]) -> Vec<RTok> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < pattern.len() {
+            match pattern[i] {
+                b'\\' if i + 1 < pattern.len() => {
+                    out.push(RTok::Lit(pattern[i + 1]));
+                    i += 2;
+                }
+                b'%' => {
+                    out.push(RTok::AnySeq);
+                    i += 1;
+                }
+                b'_' => {
+                    out.push(RTok::AnyOne);
+                    i += 1;
+                }
+                c => {
+                    out.push(RTok::Lit(c));
+                    i += 1;
+                }
+            }
+        }
+        out
+    }
+
+    fn ref_like(text: &str, pattern: &str, case_insensitive: bool) -> bool {
+        let (t, p) = if case_insensitive {
+            (text.to_lowercase(), pattern.to_lowercase())
+        } else {
+            (text.to_string(), pattern.to_string())
+        };
+        let text = t.as_bytes();
+        let toks = ref_tokenize(p.as_bytes());
+        let (mut i, mut j) = (0usize, 0usize);
+        let (mut star_j, mut star_i): (Option<usize>, usize) = (None, 0);
+        while i < text.len() {
+            if j < toks.len() && (toks[j] == RTok::AnyOne || toks[j] == RTok::Lit(text[i])) {
+                i += 1;
+                j += 1;
+            } else if j < toks.len() && toks[j] == RTok::AnySeq {
+                star_j = Some(j);
+                star_i = i;
+                j += 1;
+            } else if let Some(sj) = star_j {
+                j = sj + 1;
+                star_i += 1;
+                i = star_i;
+            } else {
+                return false;
+            }
+        }
+        while j < toks.len() && toks[j] == RTok::AnySeq {
+            j += 1;
+        }
+        j == toks.len()
+    }
+
+    #[test]
+    fn like_precompiled_matches_reference_over_batch() {
+        // Each entry: (pattern, case_insensitive). Interleaved to force cache
+        // recompiles and re-hits within one run.
+        let patterns: &[(&str, bool)] = &[
+            ("hello", false),
+            ("%foo%", false),
+            ("h_llo", false),
+            ("%", false),
+            ("", false),
+            ("a%b%c", false),
+            ("50\\%", false), // escaped percent → literal '%'
+            ("a\\_b", false), // escaped underscore → literal '_'
+            ("%ARIS", true),  // ILIKE wildcard prefix
+            ("PaRiS", true),  // ILIKE mixed case, no wildcard
+            ("caf%", true),   // ILIKE over non-ASCII text
+            ("_bc", false),
+            ("%%%%a", false), // collapsed consecutive %
+            ("hello", false), // repeat first pattern (pure cache hit)
+        ];
+        // A batch of candidate texts covering matches, non-matches, casing,
+        // literal wildcards, and unicode.
+        let candidates = [
+            "hello", "Hello", "HELLO", "hallo", "h_llo", "foobar", "xxfooxx", "abc", "aXbYc",
+            "50%", "50x", "a_b", "aXb", "paris", "PARIS", "Paris", "café", "CAFÉ", "", "bc", "zbc",
+        ];
+
+        for &(pattern, ci) in patterns {
+            // Run the SAME pattern across the whole candidate batch: the first
+            // call compiles, the rest are cache hits. Every row must equal both
+            // the independent oracle and a freshly-compiled pattern (proving the
+            // reused compiled form is not stateful across candidates).
+            for text in candidates {
+                let via_cache = like_match(text, pattern, ci);
+                let expected = ref_like(text, pattern, ci);
+                assert_eq!(
+                    via_cache, expected,
+                    "cache path diverged from reference: pattern={pattern:?} ci={ci} text={text:?}"
+                );
+
+                let mut fresh = CompiledLikePattern::compile(pattern, ci);
+                assert_eq!(
+                    fresh.run(text),
+                    expected,
+                    "fresh compile diverged: pattern={pattern:?} ci={ci} text={text:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn like_cache_switches_case_flag_for_same_pattern() {
+        // Same pattern bytes, different case-sensitivity, alternated: the cache
+        // key includes the case flag, so results must never bleed across.
+        for _ in 0..8 {
+            assert!(!like_match("PARIS", "paris", false)); // LIKE: case matters
+            assert!(like_match("PARIS", "paris", true)); // ILIKE: case ignored
+            assert!(like_match("paris", "paris", false));
+            assert!(like_match("PaRiS", "paris", true));
+        }
     }
 
     // Sanity: string ordering still works.
