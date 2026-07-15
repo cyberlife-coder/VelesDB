@@ -129,7 +129,7 @@ impl HnswIndex {
         // Issue #699 follow-up: ef_search_for_scale aligns this fallback with
         // HnswIndex::search_with_quality on >10K datasets. The Accurate intent
         // here (since we can't run brute force) deserves the scaled ef pool.
-        if !self.enable_vector_storage || self.vectors.is_empty() {
+        if !self.enable_vector_storage || self.graph_vector_count() == 0 {
             let ef_search = SearchQuality::Accurate.ef_search_for_scale(k, self.len());
             return Ok(self.search_hnsw_only(query, k, ef_search));
         }
