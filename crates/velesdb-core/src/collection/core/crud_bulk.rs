@@ -5,8 +5,9 @@
 //! Raw import path (`upsert_bulk_from_raw`) is in `crud_bulk_raw.rs`.
 //!
 //! When `async_index_builder` is configured, `upsert_bulk` uses an optimized
-//! V2 path: `DirectVectorWriter` bypasses per-vector `ShardedVectors` overhead
-//! and `AsyncIndexBuilder` defers HNSW construction for higher throughput.
+//! V2 path: `DirectVectorWriter` writes vectors straight into the graph's
+//! `ContiguousVectors` and `AsyncIndexBuilder` defers HNSW construction for
+//! higher throughput.
 
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
@@ -101,8 +102,8 @@ impl Collection {
 
     /// V2 optimized path: `DirectVectorWriter` + `AsyncIndexBuilder`.
     ///
-    /// Bypasses `ShardedVectors` for direct writes to `ContiguousVectors`,
-    /// then enqueues vectors for deferred HNSW construction.
+    /// Writes vectors directly to `ContiguousVectors`, then enqueues them
+    /// for deferred HNSW construction.
     fn upsert_bulk_v2_path(
         &self,
         vector_refs: &[(u64, &[f32])],
@@ -125,21 +126,17 @@ impl Collection {
         // WAL + payload write (same durability guarantees as standard path).
         self.store_vectors_and_payloads_inner(vector_refs, points, fsync)?;
 
-        // Bypass ShardedVectors: write directly to ContiguousVectors.
+        // Write directly to the graph's ContiguousVectors so vectors are
+        // immediately visible to rerank/brute-force while HNSW construction
+        // is deferred.
         let writer = DirectVectorWriter::new(&self.index);
-        let results = writer.write_batch_direct(vector_refs)?;
+        writer.write_batch_direct(vector_refs)?;
 
         // Enqueue for deferred HNSW construction.
         let tuples: Vec<(u64, Vec<f32>)> =
             points.iter().map(|p| (p.id, p.vector.clone())).collect();
 
         let needs_flush = aib.enqueue(tuples);
-
-        // Sync to ShardedVectors for SIMD re-ranking BEFORE flush_sync,
-        // because flush_sync → insert_batch_parallel re-registers mappings
-        // with new internal indices, making the `results` from
-        // write_batch_direct stale.
-        writer.sync_to_sharded(&results)?;
 
         if needs_flush {
             // Buffer reached merge_threshold — flush synchronously.
@@ -161,7 +158,7 @@ impl Collection {
         Ok(count)
     }
 
-    /// Standard path: `ShardedVectors` + synchronous HNSW insertion.
+    /// Standard path: synchronous HNSW insertion.
     fn upsert_bulk_standard_path(
         &self,
         vector_refs: &[(u64, &[f32])],

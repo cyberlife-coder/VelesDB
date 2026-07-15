@@ -410,11 +410,12 @@ impl Collection {
     /// Replaces a loaded index that cannot be verified against storage.
     ///
     /// Pass 3 of the open-time reconciliation compares the indexed vectors
-    /// against storage for every WAL-touched id. An index loaded without
-    /// sidecar vector storage (fast-insert save) has nothing to compare:
-    /// when WAL-touched ids overlap its mappings, some entries may be stale
-    /// with no way to tell which. Fall back to a fresh empty index — gap
-    /// recovery then rebuilds it entirely from storage (simple and safe).
+    /// against storage for every WAL-touched id. A fast-insert index
+    /// (`enable_vector_storage == false`) keeps its historical contract of
+    /// not supporting exact-vector features, so it is not verified in place:
+    /// when WAL-touched ids overlap its mappings, some entries may be stale.
+    /// Fall back to a fresh empty index — gap recovery then rebuilds it
+    /// entirely from storage (simple and safe).
     fn rebuild_if_unverifiable(
         config: &CollectionConfig,
         index: Arc<HnswIndex>,

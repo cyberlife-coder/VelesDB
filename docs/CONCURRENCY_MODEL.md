@@ -133,7 +133,7 @@ gpu_vectors_snapshot (rank 5) → vectors (rank 10) → columnar (rank 15)
 | Lock | Rank | `LockRank` constant | Component | Notes |
 |------|------|---------------------|-----------|-------|
 | `gpu_vectors_snapshot` | 5 | `LockRank::GPU_VECTORS_SNAPSHOT` | GPU flat-vector snapshot cache (`Mutex`) | Acquired before `vectors` in the GPU path (`gpu` feature); writers release `vectors` before reacquiring it to invalidate |
-| `vectors` | 10 | `LockRank::VECTORS` | `ShardedVectors` / `ContiguousVectors` | Acquired first among the core HNSW locks in upsert and search paths |
+| `vectors` | 10 | `LockRank::VECTORS` | `ContiguousVectors` (single vector store since PERF1) | Acquired first among the core HNSW locks in upsert and search paths |
 | `columnar` | 15 | `LockRank::COLUMNAR` | `ColumnarVectors` (PDX block-columnar layout of the HNSW vectors) | SIMD-parallel distance layout, acquired after vectors |
 | `layers` | 20 | `LockRank::LAYERS` | HNSW layer structure (`RwLock`) | Global graph topology |
 | `neighbors` | 30 | `LockRank::NEIGHBORS` | Per-node neighbor lists (`RwLock`) | Fine-grained, acquired last |
@@ -492,8 +492,9 @@ ensure no data is lost.
 │                                                                        │
 │  2. load_or_create_hnsw()                                              │
 │     ├─ Gate: native_meta.bin present? (commit point, written LAST)     │
-│     ├─ Load native_hnsw.graph/.vectors/.gen, native_mappings.bin,      │
-│     │  native_vectors.bin — all generation-stamped (#617)              │
+│     ├─ Load native_hnsw.graph/.vectors/.gen + native_mappings.bin —   │
+│     │  all generation-stamped (#617); a legacy native_vectors.bin      │
+│     │  is generation-checked then discarded (PERF1)                    │
 │     └─ Load failure or config mismatch → empty index (rebuild below)   │
 │                                                                        │
 │  3. reconcile_point_count()                                            │
@@ -668,7 +669,7 @@ uses to attempt a load at all.
 | `native_hnsw.graph` | Graph structure (layers, neighbors) + params incl. VAMANA `alpha` (header v2) | Custom binary via `file_dump` |
 | `native_hnsw.gen` | Graph generation marker | postcard-serialized `u64` |
 | `native_mappings.bin` | `id_to_idx`, `idx_to_id`, `next_idx`, generation | postcard-serialized HashMaps |
-| `native_vectors.bin` | `Vec<(internal_idx, Vec<f32>)>`, generation | postcard-serialized vector pairs |
+| `native_vectors.bin` (legacy, pre-PERF1) | `Vec<(internal_idx, Vec<f32>)>`, generation | Read for the generation check only, payload discarded; deleted on the next save |
 | `native_meta.bin` | Dimension, metric, vector storage flag, storage mode, generation | postcard-serialized tuple |
 
 ### HNSW Delta WAL — Removed from Core (Disposition)

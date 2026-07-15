@@ -37,8 +37,8 @@ impl GraphMatchEvalCache {
 
         let ids = collection.evaluate_graph_match_anchor_ids(predicate, params, from_aliases)?;
         self.entries.push((predicate.clone(), ids));
-        let idx = self.entries.len() - 1;
-        Ok(&self.entries[idx].1)
+        let entry_idx = self.entries.len() - 1;
+        Ok(&self.entries[entry_idx].1)
     }
 
     /// Returns the cached `Filter` for a metadata-leaf `condition`, building it

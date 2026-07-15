@@ -265,13 +265,14 @@ fn remove_orphan_ids(vector_storage: &Arc<RwLock<MmapStorage>>, index: &Arc<Hnsw
 ///
 /// The WAL replay applied these writes to storage and then truncated the
 /// WAL, so storage is the source of truth. For every touched id present in
-/// both storage and the index, the indexed sidecar vector is compared to
-/// the storage bytes; on mismatch the storage value is re-upserted into the
-/// index (tombstoning the stale graph node).
+/// both storage and the index, the graph-stored vector (`ContiguousVectors`)
+/// is compared to the storage bytes; on mismatch the storage value is
+/// re-upserted into the index (tombstoning the stale graph node).
 ///
-/// The caller guarantees the index has sidecar vector storage when any
-/// touched id overlaps its mappings (see `rebuild_if_unverifiable`); an id
-/// whose sidecar vector is missing anyway is treated as stale.
+/// The byte comparison is exact: the graph stores vectors verbatim (the
+/// production distance engine is not pre-normalized), so an indexed vector
+/// that survived the crash is bit-identical to its storage copy. An id
+/// whose graph slot is missing is treated as stale.
 #[cfg(feature = "persistence")]
 fn reindex_stale_wal_ids(
     vector_storage: &Arc<RwLock<MmapStorage>>,
@@ -280,6 +281,7 @@ fn reindex_stale_wal_ids(
     dimension: usize,
 ) -> Result<usize> {
     let storage = vector_storage.read();
+    let inner = index.inner.read();
     let mut stale: Vec<(u64, Vec<f32>)> = Vec::new();
     for &id in wal_touched_ids {
         let Some(idx) = index.mappings.get_idx(id) else {
@@ -287,10 +289,11 @@ fn reindex_stale_wal_ids(
         };
         match storage.retrieve(id) {
             Ok(Some(v)) if v.len() == dimension => {
-                let matches = index
-                    .vectors
-                    .with_vector(idx, |indexed| indexed == v.as_slice())
-                    .unwrap_or(false);
+                let matches = inner.with_contiguous_vectors(|vectors| {
+                    vectors
+                        .get(idx)
+                        .is_some_and(|indexed| indexed == v.as_slice())
+                });
                 if !matches {
                     stale.push((id, v));
                 }
@@ -303,6 +306,7 @@ fn reindex_stale_wal_ids(
             }
         }
     }
+    drop(inner);
     drop(storage);
 
     let reindexed = reindex_vectors(index, &stale);

@@ -105,12 +105,19 @@ impl HnswIndex {
             return Err(VacuumError::VectorStorageDisabled);
         }
 
-        // 1. Collect all active vectors (copy-on-write snapshot)
-        let active_vectors: Vec<(u64, Vec<f32>)> = self
-            .mappings
-            .iter()
-            .filter_map(|(id, idx)| self.vectors.get(idx).map(|vec| (id, vec)))
-            .collect();
+        // 1. Collect all active vectors: snapshot live mappings and read each
+        // vector from the graph's ContiguousVectors (single source of truth).
+        // For cosine indices these are the pre-normalized vectors; re-insertion
+        // re-normalizes, which is idempotent up to f32 rounding.
+        let active_vectors: Vec<(u64, Vec<f32>)> = {
+            let inner = self.inner.read();
+            inner.with_contiguous_vectors(|vectors| {
+                self.mappings
+                    .iter()
+                    .filter_map(|(id, idx)| vectors.get(idx).map(|vec| (id, vec.to_vec())))
+                    .collect()
+            })
+        };
 
         let count = active_vectors.len();
 
@@ -137,16 +144,14 @@ impl HnswIndex {
             *inner_guard = ManuallyDrop::new(new_inner);
         }
 
-        // 6. Swap mappings and vectors
-        // Note: ShardedMappings/ShardedVectors use interior mutability,
-        // so we need to clear and repopulate
+        // 6. Rebuild mappings to match the compacted graph (sequential
+        // indices 0..count, same order as `refs_for_hnsw` above).
+        // Note: ShardedMappings uses interior mutability, so we clear and
+        // repopulate in place.
         self.mappings.clear();
-        self.vectors.clear();
 
-        for (id, vec) in active_vectors {
-            if let Some(idx) = self.mappings.register(id) {
-                self.vectors.insert(idx, &vec);
-            } else {
+        for (id, _vec) in active_vectors {
+            if self.mappings.register(id).is_none() {
                 debug_assert!(
                     false,
                     "Vacuum invariant violated: duplicate id encountered while rebuilding mappings"

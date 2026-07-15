@@ -56,7 +56,6 @@ let loaded = NativeHnswIndex::load("./my_index", 768, DistanceMetric::Cosine)?;
 ├─────────────────────────────────────────────────────────────────┤
 │  inner: NativeHnswInner      (HNSW graph + SIMD distances)      │
 │  mappings: ShardedMappings   (lock-free ID <-> index mapping)   │
-│  vectors: ShardedVectors     (parallel vector storage)          │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼

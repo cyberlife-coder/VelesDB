@@ -27,7 +27,7 @@ permissions:
   contents: read
 
 env:
-  RUST_VERSION: "1.89"
+  RUST_VERSION: "1.90"
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   # Recall@10 regression floor at ef=128 (docs/BENCHMARKS.md §11).
