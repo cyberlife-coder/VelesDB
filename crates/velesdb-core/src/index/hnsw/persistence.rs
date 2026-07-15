@@ -7,7 +7,7 @@
 //!
 //! Both index types share the same binary format. Every sidecar carries a
 //! `generation: u64` stamp so that [`load_sidecars`] can detect a partial
-//! save (see issue #617 — the 3-file sequence is not itself atomic even
+//! save (see issue #617 — the multi-file sequence is not itself atomic even
 //! though each individual file is written atomically).
 //!
 //! - `native_meta.bin`: 5-tuple `(dimension: usize, metric: u8,
@@ -18,9 +18,14 @@
 //! - `native_mappings.bin`: 4-tuple `(id_to_idx: HashMap<u64, usize>,
 //!   idx_to_id: HashMap<usize, u64>, next_idx: usize, generation: u64)`.
 //!   Backward-compat: 3-tuple (generation=0) accepted on load.
-//! - `native_vectors.bin`: 2-tuple `(Vec<(internal_idx: usize, vector:
-//!   Vec<f32>)>, generation: u64)`. Backward-compat: plain `Vec`
-//!   (generation=0) accepted on load.
+//! - `native_vectors.bin`: **legacy only (PERF1)**. Older binaries persisted
+//!   a duplicate of the vectors here (2-tuple `(Vec<(internal_idx: usize,
+//!   vector: Vec<f32>)>, generation: u64)`; pre-#617 plain `Vec`,
+//!   generation=0). The vectors now live solely in the graph's own
+//!   `native_hnsw.vectors` file. On load, a legacy `native_vectors.bin` is
+//!   still parsed for the #617 generation check and dimension validation,
+//!   then its payload is discarded. [`save_sidecars`] deletes the file so
+//!   a stale copy can never shadow newer graph data.
 
 use crate::distance::DistanceMetric;
 use crate::storage::atomic_write::atomic_write;
@@ -52,7 +57,12 @@ pub(crate) struct HnswMappingsData {
     pub generation: u64,
 }
 
-/// HNSW vectors payload as stored on disk.
+/// Legacy HNSW vectors payload as stored on disk (`native_vectors.bin`).
+///
+/// New saves no longer write this file (PERF1 — the graph's
+/// `native_hnsw.vectors` is the single vector store). Kept for reading
+/// databases written by older binaries: the generation stamp still
+/// participates in the #617 consistency check, the payload is discarded.
 pub(crate) struct HnswVectorsData {
     pub vectors: Vec<(usize, Vec<f32>)>,
     /// Must match [`HnswMeta::generation`] on load — mismatch = partial save.
@@ -185,13 +195,12 @@ pub(crate) fn load_mappings(path: &Path) -> std::io::Result<HnswMappingsData> {
     })
 }
 
-/// Saves HNSW vectors to `native_vectors.bin` in the given directory.
+/// Writes a legacy-format `native_vectors.bin` (test-only).
 ///
-/// Uses atomic write-tmp-fsync-rename to prevent torn writes on crash.
-///
-/// # Errors
-///
-/// Returns `io::Error` if file creation or serialization fails.
+/// Production code no longer persists this file (PERF1); this writer is
+/// kept so tests can build fixtures that mimic databases written by older
+/// binaries and exercise the legacy-read path of [`load_sidecars`].
+#[cfg(test)]
 pub(crate) fn save_vectors(path: &Path, data: &HnswVectorsData) -> std::io::Result<()> {
     let vectors_path = path.join("native_vectors.bin");
     let bytes =
@@ -199,7 +208,7 @@ pub(crate) fn save_vectors(path: &Path, data: &HnswVectorsData) -> std::io::Resu
     atomic_write(&vectors_path, &bytes)
 }
 
-/// Loads HNSW vectors from `native_vectors.bin` in the given directory.
+/// Loads legacy HNSW vectors from `native_vectors.bin` in the given directory.
 ///
 /// # Errors
 ///
@@ -229,76 +238,49 @@ pub(crate) fn load_vectors(path: &Path) -> std::io::Result<HnswVectorsData> {
 // Crash-safe persistence (write-tmp + fsync + rename) is provided by the shared
 // `crate::storage::atomic_write` helper, imported above.
 
-/// Loads vectors from disk, disabling vector storage gracefully when the file
-/// is missing (e.g., index was saved in fast-insert mode before vectors existed).
+/// Checks a legacy `native_vectors.bin` left by an older binary, then
+/// discards its payload (PERF1 — the graph's `native_hnsw.vectors` is the
+/// single vector store).
 ///
-/// RF-DEDUP: This pattern was duplicated in `HnswIndex::load` and
-/// `NativeHnswIndex::load`. Now both delegate here.
-///
-/// Returns `(vectors, enable_vector_storage, vectors_generation)`. The
-/// third element is the on-disk generation stamp (see #617); it is only
-/// meaningful when `enable_vector_storage` is `true`. When vectors are
-/// disabled or the file is absent, the returned generation is `0`.
+/// When the file is present it must still be internally valid (dimension,
+/// unique indices) and carry the meta generation, otherwise the on-disk
+/// state is torn (crash mid-save under the old 4-file scheme) and loading
+/// must fail exactly as it did before the sidecar removal. A missing file
+/// is the normal case for databases saved by current binaries.
 ///
 /// # Errors
 ///
-/// Returns `io::Error` if the vectors file exists but cannot be read/deserialized.
-pub(crate) fn load_vectors_or_disable(
-    path: &Path,
-    meta: &HnswMeta,
-) -> std::io::Result<(super::sharded_vectors::ShardedVectors, bool, u64)> {
-    use super::sharded_vectors::ShardedVectors;
-
-    if !meta.enable_vector_storage {
-        return Ok((ShardedVectors::new(meta.dimension), false, 0));
-    }
-
+/// Returns `InvalidData` if the file exists but is corrupted, has wrong
+/// dimensions, or carries a generation different from `meta.generation`.
+fn check_legacy_vectors_file(path: &Path, meta: &HnswMeta) -> std::io::Result<()> {
     match load_vectors(path) {
         Ok(vectors_data) => {
             validate_loaded_vectors(&vectors_data.vectors, meta.dimension)?;
-            let vectors = ShardedVectors::new(meta.dimension);
-            vectors.insert_batch(vectors_data.vectors);
-            Ok((vectors, true, vectors_data.generation))
+            check_sidecar_generation(
+                "vectors",
+                vectors_data.generation,
+                meta.generation,
+                "crash between sidecar writes",
+            )
+            // Payload intentionally dropped: vectors were loaded from the
+            // graph's own file before this function ran.
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            tracing::debug!(
-                "native_vectors.bin missing during HNSW load; disabling vector storage for safety"
-            );
-            Ok((ShardedVectors::new(meta.dimension), false, 0))
-        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err),
     }
 }
 
-/// Persists vectors to disk or removes stale vector files.
+/// Removes a stale legacy `native_vectors.bin`, if any.
 ///
-/// RF-DEDUP: This pattern was duplicated in `HnswIndex::save` and
-/// `NativeHnswIndex::save`. Now both delegate here.
-///
-/// # Errors
-///
-/// Returns `io::Error` if the file operation fails.
-pub(crate) fn save_or_cleanup_vectors(
-    path: &Path,
-    enable_vector_storage: bool,
-    vectors: &super::sharded_vectors::ShardedVectors,
-    generation: u64,
-) -> std::io::Result<()> {
-    if enable_vector_storage {
-        save_vectors(
-            path,
-            &HnswVectorsData {
-                vectors: vectors.collect_for_parallel(),
-                generation,
-            },
-        )
-    } else {
-        let vectors_path = path.join("native_vectors.bin");
-        if vectors_path.exists() {
-            std::fs::remove_file(vectors_path)?;
-        }
-        Ok(())
+/// Called on every save so a file written by an older binary can never
+/// outlive the snapshot it belonged to (it would otherwise fail the #617
+/// generation check on the next load).
+fn cleanup_legacy_vectors_file(path: &Path) -> std::io::Result<()> {
+    let vectors_path = path.join("native_vectors.bin");
+    if vectors_path.exists() {
+        std::fs::remove_file(vectors_path)?;
     }
+    Ok(())
 }
 
 /// Reads the current on-disk generation from `native_meta.bin` with
@@ -379,29 +361,32 @@ pub(crate) fn load_graph_generation(path: &Path) -> std::io::Result<u64> {
     }
 }
 
-/// Persists every non-graph sidecar (mappings, vectors, meta) for an HNSW
-/// index in one call.
+/// Persists every non-graph sidecar (mappings, meta) for an HNSW index in
+/// one call.
 ///
-/// Both `HnswIndex::save` and `NativeHnswIndex::save` need the same 3-step
-/// sidecar sequence after they dump the graph. Consolidating it here removes
-/// format drift risk (the two call sites previously had identical code but
-/// could silently diverge on the next field addition to `HnswMeta`).
+/// Both `HnswIndex::save` and `NativeHnswIndex::save` need the same sidecar
+/// sequence after they dump the graph. Consolidating it here removes format
+/// drift risk (the two call sites previously had identical code but could
+/// silently diverge on the next field addition to `HnswMeta`).
 ///
 /// The HNSW graph itself is dumped by the caller, because the two index
 /// types use different inner types (`NativeHnswInner` directly vs
 /// `ManuallyDrop<HnswInner>`) that would otherwise require a trait object.
+/// Vector data lives inside the graph dump (`native_hnsw.vectors`) — the
+/// legacy `native_vectors.bin` duplicate is no longer written and any stale
+/// copy from an older binary is deleted here (PERF1).
 ///
 /// # Atomicity (issue #617)
 ///
-/// Individual file writes are atomic (via [`atomic_write`]), but the 3-file
-/// sequence is not — a crash between two renames leaves the on-disk state
-/// inconsistent. To detect such a crash on reload, every sidecar is stamped
-/// with the same monotonic `new_gen: u64`, computed by the caller via
-/// [`next_generation`] BEFORE dumping the HNSW graph. `meta` is written
-/// LAST: its generation is the authoritative commit point. On load,
-/// [`load_sidecars`] verifies that mappings, vectors, and the graph marker
-/// all carry the same generation as meta — any mismatch is reported as
-/// `InvalidData`.
+/// Individual file writes are atomic (via [`atomic_write`]), but the
+/// multi-file sequence is not — a crash between two renames leaves the
+/// on-disk state inconsistent. To detect such a crash on reload, every
+/// sidecar is stamped with the same monotonic `new_gen: u64`, computed by
+/// the caller via [`next_generation`] BEFORE dumping the HNSW graph. `meta`
+/// is written LAST: its generation is the authoritative commit point. On
+/// load, [`load_sidecars`] verifies that mappings and the graph marker
+/// (which covers the graph dump, vectors included) carry the same
+/// generation as meta — any mismatch is reported as `InvalidData`.
 ///
 /// The caller must pre-compute `new_gen = next_generation(path)` once and
 /// pass the same value to [`save_graph_generation`] and this function, so
@@ -412,11 +397,10 @@ pub(crate) fn load_graph_generation(path: &Path) -> std::io::Result<u64> {
 ///
 /// # Errors
 ///
-/// Returns `io::Error` if any of the three file operations fail.
+/// Returns `io::Error` if any of the file operations fail.
 pub(crate) fn save_sidecars(
     path: &Path,
     mappings: &super::sharded_mappings::ShardedMappings,
-    vectors: &super::sharded_vectors::ShardedVectors,
     meta: &HnswMeta,
     new_gen: u64,
 ) -> std::io::Result<()> {
@@ -430,7 +414,9 @@ pub(crate) fn save_sidecars(
             generation: new_gen,
         },
     )?;
-    save_or_cleanup_vectors(path, meta.enable_vector_storage, vectors, new_gen)?;
+    // A leftover legacy vectors file would carry an older generation and
+    // fail the next load's consistency check — remove it eagerly.
+    cleanup_legacy_vectors_file(path)?;
 
     // `meta` is written LAST — its generation is the authoritative commit
     // point that `load_sidecars` checks the other artefacts against.
@@ -441,22 +427,32 @@ pub(crate) fn save_sidecars(
     save_meta(path, &stamped_meta)
 }
 
-/// Loads non-graph sidecars (mappings + vectors) for an HNSW index given a
-/// previously loaded [`HnswMeta`].
+/// Loads the non-graph sidecar (mappings) for an HNSW index given a
+/// previously loaded [`HnswMeta`] and the vector count of the
+/// already-loaded graph.
 ///
 /// Complements [`save_sidecars`]. The HNSW graph itself is loaded by the
-/// caller (different inner types, see [`save_sidecars`]).
+/// caller (different inner types, see [`save_sidecars`]) — `graph_vector_count`
+/// is the number of vector slots in its `ContiguousVectors`, which is the
+/// store every mapped internal index resolves into at runtime.
 ///
 /// # Atomicity check (issue #617)
 ///
-/// Every persisted artefact (graph marker, mappings, vectors) carries a
-/// `generation: u64` stamp written by the pair
-/// [`save_graph_generation`] + [`save_sidecars`]. `meta.generation` is the
-/// authoritative commit point. If any artefact carries a stale or
-/// mismatched generation, the database is proven to be in an inconsistent
-/// state (crash between file renames during the previous save) and this
-/// function returns `InvalidData` rather than silently loading a torn
-/// state.
+/// Every persisted artefact (graph marker, mappings — plus the legacy
+/// vectors file when present) carries a `generation: u64` stamp written by
+/// the pair [`save_graph_generation`] + [`save_sidecars`].
+/// `meta.generation` is the authoritative commit point. If any artefact
+/// carries a stale or mismatched generation, the database is proven to be
+/// in an inconsistent state (crash between file renames during the
+/// previous save) and this function returns `InvalidData` rather than
+/// silently loading a torn state.
+///
+/// The check went from 4 artefacts to 3 with the sidecar removal (PERF1):
+/// the vector payload now lives inside the graph dump, whose own
+/// `native_hnsw.gen` marker already covers it — the old vectors leg was a
+/// duplicate of the graph leg, not an independent signal. Databases
+/// written by older binaries still have `native_vectors.bin`; its stamp is
+/// verified (4-leg check preserved) and its payload discarded.
 ///
 /// Legacy DBs written by pre-#617 binaries have generation=0 everywhere
 /// and no `native_hnsw.gen` marker — [`load_graph_generation`] returns 0
@@ -465,17 +461,14 @@ pub(crate) fn save_sidecars(
 /// # Errors
 ///
 /// Returns `io::Error::InvalidData` if the on-disk generations disagree
-/// with `meta.generation`. Also returns `io::Error` if the mappings file
-/// is missing or corrupt. Missing vectors files are tolerated and
-/// gracefully disable vector storage — see [`load_vectors_or_disable`].
+/// with `meta.generation`, or if any mapped index falls outside the loaded
+/// graph's vector store. Also returns `io::Error` if the mappings file is
+/// missing or corrupt.
 pub(crate) fn load_sidecars(
     path: &Path,
     meta: &HnswMeta,
-) -> std::io::Result<(
-    super::sharded_mappings::ShardedMappings,
-    super::sharded_vectors::ShardedVectors,
-    bool,
-)> {
+    graph_vector_count: usize,
+) -> std::io::Result<super::sharded_mappings::ShardedMappings> {
     let graph_generation = load_graph_generation(path)?;
     check_sidecar_generation(
         "graph",
@@ -491,37 +484,24 @@ pub(crate) fn load_sidecars(
         meta.generation,
         "crash between sidecar writes",
     )?;
-    let (vectors, enable_vector_storage, vectors_generation) = load_vectors_or_disable(path, meta)?;
-    if enable_vector_storage {
-        check_sidecar_generation(
-            "vectors",
-            vectors_generation,
-            meta.generation,
-            "crash between sidecar writes",
-        )?;
-    }
 
-    // Cross-check each mapped index against the actually-loaded vector set.
+    // Legacy databases: verify (then discard) the old duplicate vectors file.
+    check_legacy_vectors_file(path, meta)?;
+
+    // Cross-check each mapped index against the loaded graph's vector store.
     // Internal indices are sparse and monotonic (never reused after an
-    // upsert/delete), so a perfectly valid live index can exceed
-    // `vectors.len()`; membership in the loaded store is the correct test —
-    // and strictly stronger than the file's own `next_idx`, which comes from
-    // the same untrusted blob and cannot vouch for itself. When vector storage
-    // is disabled there is no store to resolve into, so the file's `next_idx`
-    // remains the only available bound.
-    let bound = if enable_vector_storage {
-        MappingBound::Loaded(&vectors)
-    } else {
-        MappingBound::MaxExclusive(mappings_data.next_idx)
-    };
-    validate_loaded_mappings(&mappings_data, bound)?;
+    // upsert/delete) but every live index must resolve to a graph slot —
+    // `ContiguousVectors` is dense in `0..count`, so `< count` is the exact
+    // membership test. This external bound is strictly stronger than the
+    // file's self-reported `next_idx`, which comes from the same untrusted
+    // blob and cannot vouch for itself.
+    validate_loaded_mappings(&mappings_data, graph_vector_count)?;
 
-    let mappings = super::sharded_mappings::ShardedMappings::from_parts(
+    Ok(super::sharded_mappings::ShardedMappings::from_parts(
         mappings_data.id_to_idx,
         mappings_data.idx_to_id,
         mappings_data.next_idx,
-    );
-    Ok((mappings, vectors, enable_vector_storage))
+    ))
 }
 
 /// Rejects a sidecar whose generation does not match the meta generation,
@@ -550,12 +530,13 @@ fn invalid_data(msg: String) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, msg)
 }
 
-/// Validates vectors deserialized from an untrusted `native_vectors.bin`.
+/// Validates vectors deserialized from an untrusted legacy
+/// `native_vectors.bin`.
 ///
 /// Every stored vector must have exactly `dimension` components and a unique
-/// internal index. A corrupt file with the wrong dimension would otherwise
-/// produce malformed rows in `ShardedVectors` and feed wrong-length slices
-/// into the SIMD distance kernels (out-of-bounds reads).
+/// internal index. The payload is discarded after this check (PERF1), but a
+/// malformed legacy file still proves on-disk corruption and must fail the
+/// load exactly as it did when the file was authoritative.
 ///
 /// # Errors
 ///
@@ -582,32 +563,14 @@ fn validate_loaded_vectors(vectors: &[(usize, Vec<f32>)], dimension: usize) -> s
 /// Validates id-mappings deserialized from an untrusted `native_mappings.bin`.
 ///
 /// Enforces the bijection invariant `HnswIndex` relies on: every internal
-/// index is `< index_bound`, and `id_to_idx` / `idx_to_id` are exact inverses
+/// index is `< max_exclusive` (the loaded graph's `ContiguousVectors` count,
+/// dense in `0..count`), and `id_to_idx` / `idx_to_id` are exact inverses
 /// of each other (same cardinality, every entry round-trips).
-///
-/// How a mapped internal index is bound-checked, depending on whether the
-/// vector store was loaded.
-#[derive(Clone, Copy)]
-enum MappingBound<'a> {
-    /// Vector storage enabled: every mapped index must be a vector actually
-    /// present in the loaded store. Correct for sparse/monotonic indices and
-    /// strictly stronger than the file's self-reported `next_idx`.
-    Loaded(&'a super::sharded_vectors::ShardedVectors),
-    /// Vector storage disabled: no store to resolve into, so the only bound is
-    /// the file's `next_idx` (indices must be `< next_idx`).
-    MaxExclusive(usize),
-}
-
-/// Validates id-mappings deserialized from an untrusted `native_mappings.bin`.
-///
-/// Enforces the bijection invariant `HnswIndex` relies on: every internal
-/// index is valid under `bound`, and `id_to_idx` / `idx_to_id` are exact
-/// inverses of each other (same cardinality, every entry round-trips).
 ///
 /// # Errors
 ///
 /// Returns `InvalidData` on any out-of-range index or broken bijection.
-fn validate_loaded_mappings(data: &HnswMappingsData, bound: MappingBound) -> std::io::Result<()> {
+fn validate_loaded_mappings(data: &HnswMappingsData, max_exclusive: usize) -> std::io::Result<()> {
     if data.id_to_idx.len() != data.idx_to_id.len() {
         return Err(invalid_data(format!(
             "mapping cardinality mismatch: id_to_idx={} idx_to_id={}",
@@ -616,13 +579,10 @@ fn validate_loaded_mappings(data: &HnswMappingsData, bound: MappingBound) -> std
         )));
     }
     for (&id, &idx) in &data.id_to_idx {
-        let valid = match bound {
-            MappingBound::Loaded(vectors) => vectors.contains(idx),
-            MappingBound::MaxExclusive(next_idx) => idx < next_idx,
-        };
-        if !valid {
+        if idx >= max_exclusive {
             return Err(invalid_data(format!(
-                "mapping id {id} resolves to index {idx} absent from the loaded vector store"
+                "mapping id {id} resolves to index {idx} absent from the loaded \
+                 vector store (graph has {max_exclusive} vector slots)"
             )));
         }
         if data.idx_to_id.get(&idx) != Some(&id) {

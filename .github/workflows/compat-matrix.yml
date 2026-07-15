@@ -23,6 +23,11 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Must match rust-toolchain.toml (which cargo actually resolves via the
+  # rustup directory override): installing a *different* toolchain here just
+  # wastes time — and `targets:` would land on the wrong toolchain, leaving
+  # the pinned one without wasm32 std (E0463, seen on PR #1406).
+  RUST_VERSION: "1.90"
 
 jobs:
   rust-matrix:
@@ -48,7 +53,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Install Linux build deps
         if: runner.os == 'Linux'
@@ -73,12 +78,17 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_VERSION }}
           targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: "velesdb-compat-wasm"
+
+      # Belt-and-suspenders (same as ci.yml wasm-check): add wasm32 std to the
+      # *active* toolchain, i.e. whatever rust-toolchain.toml resolves to.
+      - name: Install wasm32 target on the active toolchain
+        run: rustup target add wasm32-unknown-unknown
 
       - name: Check velesdb-core and velesdb-wasm on wasm32 no-default-features
         run: cargo check -p velesdb-core -p velesdb-wasm --target wasm32-unknown-unknown --no-default-features

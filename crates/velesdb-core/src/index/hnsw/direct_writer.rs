@@ -1,21 +1,19 @@
-//! Direct vector writer for bulk insert bypass of `ShardedVectors`.
+//! Direct vector writer for bulk insert.
 //!
-//! During bulk insert, the standard path writes each vector through
-//! `ShardedVectors` (16 shards × `RwLock` × `FxHash` per vector).
-//! `DirectVectorWriter` bypasses this overhead by writing directly to
-//! `ContiguousVectors` via the `NativeHnsw` inner graph, deferring
-//! `ShardedVectors` synchronization until after HNSW indexing completes.
+//! During bulk insert with deferred HNSW construction, vectors must be
+//! visible to rerank/brute-force before graph indexing completes.
+//! `DirectVectorWriter` registers ID mappings and writes vector data
+//! straight into the graph's `ContiguousVectors` (the single vector store).
 
 use super::index::HnswIndex;
 use super::upsert::{self, UpsertResult};
 use crate::validation::validate_dimension_match;
 
-/// Writes vectors directly to `ContiguousVectors`, bypassing `ShardedVectors`.
+/// Writes vectors directly to the graph's `ContiguousVectors`.
 ///
-/// Used exclusively during `upsert_bulk` to eliminate per-vector sharding
-/// overhead (16 shards × `RwLock` × `FxHash`). After indexing completes,
-/// call [`sync_to_sharded`](Self::sync_to_sharded) to populate
-/// `ShardedVectors` for SIMD re-ranking and brute-force search.
+/// Used exclusively during `upsert_bulk` so vectors are immediately
+/// available for SIMD re-ranking and brute-force search while HNSW graph
+/// construction is deferred to `AsyncIndexBuilder`.
 #[allow(dead_code)] // Wired into Collection pipeline in Task 4
 pub(crate) struct DirectVectorWriter<'a> {
     hnsw_index: &'a HnswIndex,
@@ -35,11 +33,8 @@ impl<'a> DirectVectorWriter<'a> {
     /// 1. Registers the external ID via `ShardedMappings` (upsert semantics)
     /// 2. Writes the vector data to `ContiguousVectors` inside `NativeHnsw`
     ///
-    /// Does **not** write to `ShardedVectors` — call [`sync_to_sharded`](Self::sync_to_sharded)
-    /// after HNSW indexing to populate the sidecar storage.
-    ///
     /// When `enable_vector_storage` is `false`, only mappings are registered
-    /// (no vector data is written to `ContiguousVectors` sidecar).
+    /// (the deferred HNSW insert path will populate `ContiguousVectors`).
     ///
     /// # Errors
     ///
@@ -64,16 +59,12 @@ impl<'a> DirectVectorWriter<'a> {
 
         // Register mappings (upsert semantics: replaces existing IDs).
         let ids: Vec<u64> = vectors.iter().map(|(id, _)| *id).collect();
-        let results = upsert::upsert_mapping_batch(
-            &self.hnsw_index.mappings,
-            &self.hnsw_index.vectors,
-            self.hnsw_index.enable_vector_storage,
-            &ids,
-        );
+        let results = upsert::upsert_mapping_batch(&self.hnsw_index.mappings, &ids);
 
-        // Write vectors to ContiguousVectors inside NativeHnsw (bypass ShardedVectors).
+        // Write vectors to ContiguousVectors inside NativeHnsw.
         // When enable_vector_storage is false, the graph's own ContiguousVectors
-        // is still populated by the HNSW insert path, so we skip sidecar writes.
+        // is still populated by the (deferred) HNSW insert path, so we skip the
+        // direct write here.
         if self.hnsw_index.enable_vector_storage {
             self.write_to_contiguous(vectors, &results)?;
         }
@@ -108,38 +99,5 @@ impl<'a> DirectVectorWriter<'a> {
             }
             Ok(())
         })
-    }
-
-    /// Synchronizes `ContiguousVectors` → `ShardedVectors` after HNSW indexing.
-    ///
-    /// For each `UpsertResult`, reads the vector from `ContiguousVectors` and
-    /// inserts it into `ShardedVectors`. No-op when `enable_vector_storage`
-    /// is `false`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::error::Error::Internal`] if a vector cannot be read from
-    /// `ContiguousVectors` (indicates a bug in the write path).
-    ///
-    /// [`crate::error::Error::Internal`]: crate::error::Error::Internal
-    #[allow(clippy::unnecessary_wraps)] // Returns Result for API consistency with Task 4
-    pub(crate) fn sync_to_sharded(&self, results: &[UpsertResult]) -> crate::error::Result<()> {
-        if !self.hnsw_index.enable_vector_storage || results.is_empty() {
-            return Ok(());
-        }
-
-        let inner = self.hnsw_index.inner.read();
-        let pairs: Vec<(usize, Vec<f32>)> = inner.with_contiguous_vectors_read(|storage| {
-            let mut out = Vec::with_capacity(results.len());
-            for result in results {
-                if let Some(vec) = storage.get(result.idx) {
-                    out.push((result.idx, vec.to_vec()));
-                }
-            }
-            out
-        });
-
-        self.hnsw_index.vectors.insert_batch(pairs);
-        Ok(())
     }
 }

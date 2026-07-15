@@ -1,18 +1,23 @@
 //! Crash-simulation tests for `save_sidecars` / `load_sidecars` atomicity
 //! (issue #617).
 //!
-//! `save_sidecars` writes three sidecar files sequentially
-//! (`native_mappings.bin`, `native_vectors.bin`, `native_meta.bin`). Each
-//! individual file uses atomic write-tmp-fsync-rename, but the 3-file
-//! sequence itself is not atomic. A crash between two renames leaves
-//! the on-disk state inconsistent, which can silently corrupt search or
-//! panic at load time.
+//! `save_sidecars` writes the sidecar files sequentially
+//! (`native_mappings.bin`, `native_meta.bin`). Each individual file uses
+//! atomic write-tmp-fsync-rename, but the multi-file sequence itself is not
+//! atomic. A crash between two renames leaves the on-disk state
+//! inconsistent, which can silently corrupt search or panic at load time.
 //!
 //! To detect a crashed save we stamp every sidecar with a monotonic
 //! `generation: u64`. `meta` (written last) is the authoritative commit
 //! point. Any file with a stale generation is proof of an incomplete
 //! prior save, and `load_sidecars` must reject the database with
 //! `io::ErrorKind::InvalidData` rather than silently return a torn state.
+//!
+//! Vector data lives inside the graph dump since PERF1 (the legacy
+//! `native_vectors.bin` duplicate is no longer written). Databases written
+//! by older binaries still carry that file: its generation stamp must keep
+//! participating in the consistency check (payload discarded), and
+//! `save_sidecars` must delete it.
 //!
 //! These tests simulate the crashed states by manually rewriting the
 //! sidecar files with mismatched generations, no real crash is needed.
@@ -27,7 +32,6 @@ use super::persistence::{
     self, load_sidecars, save_sidecars, HnswMappingsData, HnswMeta, HnswVectorsData,
 };
 use super::sharded_mappings::ShardedMappings;
-use super::sharded_vectors::ShardedVectors;
 use crate::distance::DistanceMetric;
 use crate::StorageMode;
 use std::collections::HashMap;
@@ -37,6 +41,10 @@ use tempfile::TempDir;
 // -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------
+
+/// Vector-slot count of the (virtual) graph matching [`build_mappings`]:
+/// indices {0, 1} must resolve, so the graph store holds 2 slots.
+const GRAPH_COUNT: usize = 2;
 
 /// Builds a minimal `HnswMeta` for the atomicity tests.
 fn build_meta(generation: u64) -> HnswMeta {
@@ -60,14 +68,16 @@ fn build_mappings() -> ShardedMappings {
     ShardedMappings::from_parts(id_to_idx, idx_to_id, 2)
 }
 
-/// Builds a populated `ShardedVectors` containing two 4-d vectors.
-fn build_vectors() -> ShardedVectors {
-    let vectors = ShardedVectors::new(4);
-    vectors.insert_batch(vec![
-        (0_usize, vec![1.0_f32, 0.0, 0.0, 0.0]),
-        (1_usize, vec![0.0_f32, 1.0, 0.0, 0.0]),
-    ]);
-    vectors
+/// Builds the legacy vectors payload (two 4-d vectors) as written by
+/// pre-PERF1 binaries into `native_vectors.bin`.
+fn build_legacy_vectors(generation: u64) -> HnswVectorsData {
+    HnswVectorsData {
+        vectors: vec![
+            (0_usize, vec![1.0_f32, 0.0, 0.0, 0.0]),
+            (1_usize, vec![0.0_f32, 1.0, 0.0, 0.0]),
+        ],
+        generation,
+    }
 }
 
 /// Writes the legacy 4-tuple meta format (v1.7.2+, without the generation
@@ -125,14 +135,6 @@ fn mappings_data(mappings: &ShardedMappings, generation: u64) -> HnswMappingsDat
     }
 }
 
-/// Returns the `HnswVectorsData` in the same shape `save_sidecars` expects.
-fn vectors_data(vectors: &ShardedVectors, generation: u64) -> HnswVectorsData {
-    HnswVectorsData {
-        vectors: vectors.collect_for_parallel(),
-        generation,
-    }
-}
-
 // -----------------------------------------------------------------------
 // Test 1 — save_sidecars stamps a monotonically increasing generation
 // -----------------------------------------------------------------------
@@ -142,33 +144,13 @@ fn test_save_sidecars_stamps_monotonic_generation() {
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
     let mappings = build_mappings();
-    let vectors = build_vectors();
     let meta = build_meta(0);
 
-    save_sidecars(
-        path,
-        &mappings,
-        &vectors,
-        &meta,
-        persistence::next_generation(path).expect("test: next_generation"),
-    )
-    .expect("test: first save");
-    save_sidecars(
-        path,
-        &mappings,
-        &vectors,
-        &meta,
-        persistence::next_generation(path).expect("test: next_generation"),
-    )
-    .expect("test: second save");
-    save_sidecars(
-        path,
-        &mappings,
-        &vectors,
-        &meta,
-        persistence::next_generation(path).expect("test: next_generation"),
-    )
-    .expect("test: third save");
+    for expected in 1..=3_u64 {
+        let new_gen = persistence::next_generation(path).expect("test: next_generation");
+        assert_eq!(new_gen, expected);
+        save_sidecars(path, &mappings, &meta, new_gen).expect("test: save");
+    }
 
     let loaded_meta = persistence::load_meta(path).expect("test: load meta");
     assert_eq!(
@@ -182,10 +164,10 @@ fn test_save_sidecars_stamps_monotonic_generation() {
         "mappings generation must match meta"
     );
 
-    let loaded_vectors = persistence::load_vectors(path).expect("test: load vectors");
-    assert_eq!(
-        loaded_vectors.generation, 3,
-        "vectors generation must match meta"
+    // PERF1: the vectors duplicate is no longer written.
+    assert!(
+        !path.join("native_vectors.bin").exists(),
+        "save_sidecars must not write the legacy vectors file"
     );
 }
 
@@ -198,21 +180,18 @@ fn test_load_sidecars_detects_stale_mappings() {
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
     let mappings = build_mappings();
-    let vectors = build_vectors();
 
-    // Simulate a save at generation 4 (all four artefacts consistent:
-    // graph marker, mappings, vectors, meta).
+    // Simulate a save at generation 4 (all artefacts consistent).
     let meta_4 = build_meta(4);
     persistence::save_graph_generation(path, 4).expect("test: graph gen 4");
     persistence::save_mappings(path, &mappings_data(&mappings, 4)).expect("test: save mappings 4");
-    persistence::save_vectors(path, &vectors_data(&vectors, 4)).expect("test: save vectors 4");
     persistence::save_meta(path, &meta_4).expect("test: save meta 4");
 
     // Now simulate a crash at generation 5 that only rewrote mappings.
     persistence::save_mappings(path, &mappings_data(&mappings, 5)).expect("test: save mappings 5");
 
     let loaded_meta = persistence::load_meta(path).expect("test: reload meta");
-    let err = load_sidecars(path, &loaded_meta)
+    let err = load_sidecars(path, &loaded_meta, GRAPH_COUNT)
         .expect_err("test: stale mappings must trigger InvalidData");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
@@ -222,31 +201,30 @@ fn test_load_sidecars_detects_stale_mappings() {
 }
 
 // -----------------------------------------------------------------------
-// Test 3 — load_sidecars detects stale vectors
+// Test 3 — load_sidecars detects a stale LEGACY vectors file
 // -----------------------------------------------------------------------
 
 #[test]
-fn test_load_sidecars_detects_stale_vectors() {
+fn test_load_sidecars_detects_stale_legacy_vectors() {
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
     let mappings = build_mappings();
-    let vectors = build_vectors();
 
-    // Consistent state at generation 4 (graph + mappings + vectors + meta).
+    // Consistent legacy state at generation 4 (graph + mappings + vectors + meta).
     persistence::save_graph_generation(path, 4).expect("test: graph gen 4");
     persistence::save_mappings(path, &mappings_data(&mappings, 4)).expect("test: save mappings 4");
-    persistence::save_vectors(path, &vectors_data(&vectors, 4)).expect("test: save vectors 4");
+    persistence::save_vectors(path, &build_legacy_vectors(4)).expect("test: save vectors 4");
     persistence::save_meta(path, &build_meta(4)).expect("test: save meta 4");
 
-    // Simulate a crash at generation 5 that rewrote graph + mappings + meta,
-    // leaving vectors at gen 4.
+    // Simulate an old-binary crash at generation 5 that rewrote
+    // graph + mappings + meta, leaving the legacy vectors file at gen 4.
     persistence::save_graph_generation(path, 5).expect("test: graph gen 5");
     persistence::save_mappings(path, &mappings_data(&mappings, 5)).expect("test: save mappings 5");
     persistence::save_meta(path, &build_meta(5)).expect("test: save meta 5");
 
     let loaded_meta = persistence::load_meta(path).expect("test: reload meta");
-    let err = load_sidecars(path, &loaded_meta)
-        .expect_err("test: stale vectors must trigger InvalidData");
+    let err = load_sidecars(path, &loaded_meta, GRAPH_COUNT)
+        .expect_err("test: stale legacy vectors must trigger InvalidData");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
         err.to_string().contains("vectors generation"),
@@ -263,18 +241,16 @@ fn test_load_sidecars_detects_newer_mappings_than_meta() {
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
     let mappings = build_mappings();
-    let vectors = build_vectors();
 
     // Meta is older (gen 5) than mappings (gen 10) — `meta` is authoritative.
     // Graph marker aligned with meta to isolate the mappings check.
     persistence::save_graph_generation(path, 5).expect("test: graph gen 5");
     persistence::save_mappings(path, &mappings_data(&mappings, 10))
         .expect("test: save mappings 10");
-    persistence::save_vectors(path, &vectors_data(&vectors, 5)).expect("test: save vectors 5");
     persistence::save_meta(path, &build_meta(5)).expect("test: save meta 5");
 
     let loaded_meta = persistence::load_meta(path).expect("test: reload meta");
-    let err = load_sidecars(path, &loaded_meta)
+    let err = load_sidecars(path, &loaded_meta, GRAPH_COUNT)
         .expect_err("test: newer mappings than meta must trigger InvalidData");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
@@ -292,7 +268,6 @@ fn test_backward_compat_legacy_meta_without_generation_loads() {
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
     let mappings = build_mappings();
-    let vectors = build_vectors();
 
     // Pretend the database was written by a pre-fix binary: legacy 4-tuple
     // meta (v1.7.2+ storage mode, no generation), legacy 3-tuple mappings,
@@ -301,7 +276,7 @@ fn test_backward_compat_legacy_meta_without_generation_loads() {
     write_legacy_4tuple_meta(path, &meta).expect("test: legacy meta");
     write_legacy_3tuple_mappings(path, &mappings_data(&mappings, 0))
         .expect("test: legacy mappings");
-    write_legacy_plain_vectors(path, &vectors_data(&vectors, 0)).expect("test: legacy vectors");
+    write_legacy_plain_vectors(path, &build_legacy_vectors(0)).expect("test: legacy vectors");
 
     let loaded_meta = persistence::load_meta(path).expect("test: legacy meta loads");
     assert_eq!(
@@ -309,9 +284,13 @@ fn test_backward_compat_legacy_meta_without_generation_loads() {
         "legacy meta must default to generation 0"
     );
 
-    let (_mappings, _vectors, enable_vs) =
-        load_sidecars(path, &loaded_meta).expect("test: legacy sidecars load");
-    assert!(enable_vs, "enable_vector_storage must round-trip from meta");
+    let loaded =
+        load_sidecars(path, &loaded_meta, GRAPH_COUNT).expect("test: legacy sidecars load");
+    assert_eq!(loaded.len(), 2, "both legacy mappings must load");
+    assert!(
+        loaded_meta.enable_vector_storage,
+        "enable_vector_storage must round-trip from meta"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -323,7 +302,6 @@ fn test_backward_compat_legacy_3tuple_meta_loads() {
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
     let mappings = build_mappings();
-    let vectors = build_vectors();
 
     // Pre-v1.7.2 meta: only (dim, metric, enable_vs) — no storage_mode, no
     // generation. Paired with legacy 3-tuple mappings + plain vectors.
@@ -331,7 +309,7 @@ fn test_backward_compat_legacy_3tuple_meta_loads() {
     write_legacy_3tuple_meta(path, &meta).expect("test: 3-tuple meta");
     write_legacy_3tuple_mappings(path, &mappings_data(&mappings, 0))
         .expect("test: legacy mappings");
-    write_legacy_plain_vectors(path, &vectors_data(&vectors, 0)).expect("test: legacy vectors");
+    write_legacy_plain_vectors(path, &build_legacy_vectors(0)).expect("test: legacy vectors");
 
     let loaded_meta = persistence::load_meta(path).expect("test: 3-tuple meta loads");
     assert_eq!(
@@ -344,10 +322,10 @@ fn test_backward_compat_legacy_3tuple_meta_loads() {
         "3-tuple meta must default storage_mode to Full"
     );
 
-    let (loaded_mappings, _vectors, enabled) =
-        load_sidecars(path, &loaded_meta).expect("test: legacy sidecars load cleanly");
+    let loaded_mappings =
+        load_sidecars(path, &loaded_meta, GRAPH_COUNT).expect("test: legacy sidecars load cleanly");
     assert!(
-        enabled,
+        loaded_meta.enable_vector_storage,
         "vector storage must round-trip from legacy 3-tuple meta"
     );
     let (id_to_idx, _, next_idx) = loaded_mappings.as_parts();
@@ -360,33 +338,48 @@ fn test_backward_compat_legacy_3tuple_meta_loads() {
 }
 
 // -----------------------------------------------------------------------
-// Test 7 — existing DB at generation 7 → save → load → generation 8
+// Test 7 — existing DB at generation 7 → save → load → generation 8,
+// and the stale legacy vectors file is deleted by the save
 // -----------------------------------------------------------------------
 
 #[test]
-fn test_save_then_load_roundtrip_gen_bumped() {
+fn test_save_then_load_roundtrip_gen_bumped_and_legacy_file_removed() {
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
     let mappings = build_mappings();
-    let vectors = build_vectors();
 
-    // Prime the directory with a consistent state at generation 7.
+    // Prime the directory with a consistent legacy state at generation 7
+    // (including the old vectors duplicate).
     persistence::save_mappings(path, &mappings_data(&mappings, 7)).expect("test: seed mappings");
-    persistence::save_vectors(path, &vectors_data(&vectors, 7)).expect("test: seed vectors");
+    persistence::save_vectors(path, &build_legacy_vectors(7)).expect("test: seed vectors");
     persistence::save_meta(path, &build_meta(7)).expect("test: seed meta");
+    assert!(path.join("native_vectors.bin").exists());
 
     // Callers are expected to compute `next_generation(path)` and pass it
     // explicitly; this must read the current on-disk generation and bump to 8.
     let meta_in = build_meta(0); // caller-provided generation ignored
     let new_gen = persistence::next_generation(path).expect("test: next_generation");
     assert_eq!(new_gen, 8, "next_generation must bump from 7 to 8");
-    save_sidecars(path, &mappings, &vectors, &meta_in, new_gen).expect("test: save bumps gen");
+    // Production callers stamp the graph marker with the same generation
+    // before writing the sidecars — mirror that sequence.
+    persistence::save_graph_generation(path, new_gen).expect("test: graph gen 8");
+    save_sidecars(path, &mappings, &meta_in, new_gen).expect("test: save bumps gen");
 
     let loaded_meta = persistence::load_meta(path).expect("test: reload meta");
     assert_eq!(
         loaded_meta.generation, 8,
         "save_sidecars must bump to next generation"
     );
+
+    // PERF1: the stale legacy duplicate must be gone (it would otherwise
+    // fail the next load's generation check with its gen-7 stamp).
+    assert!(
+        !path.join("native_vectors.bin").exists(),
+        "save_sidecars must delete a stale legacy vectors file"
+    );
+
+    // And the reload passes the consistency check.
+    load_sidecars(path, &loaded_meta, GRAPH_COUNT).expect("test: reload after cleanup");
 }
 
 // -----------------------------------------------------------------------
@@ -398,7 +391,6 @@ fn test_save_when_no_prior_state_starts_at_gen_1() {
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
     let mappings = build_mappings();
-    let vectors = build_vectors();
 
     // Fresh directory, no prior meta. Caller passes generation=0 (ignored).
     let meta_in = build_meta(0);
@@ -407,7 +399,7 @@ fn test_save_when_no_prior_state_starts_at_gen_1() {
         new_gen, 1,
         "next_generation on a fresh directory must return 1"
     );
-    save_sidecars(path, &mappings, &vectors, &meta_in, new_gen).expect("test: first save");
+    save_sidecars(path, &mappings, &meta_in, new_gen).expect("test: first save");
 
     let loaded_meta = persistence::load_meta(path).expect("test: reload meta");
     assert_eq!(
@@ -425,22 +417,19 @@ fn test_load_sidecars_detects_stale_graph_generation() {
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
     let mappings = build_mappings();
-    let vectors = build_vectors();
 
-    // Consistent state at generation 4 across all four artefacts.
+    // Consistent state at generation 4 across all artefacts.
     persistence::save_graph_generation(path, 4).expect("test: graph gen 4");
     persistence::save_mappings(path, &mappings_data(&mappings, 4)).expect("test: save mappings 4");
-    persistence::save_vectors(path, &vectors_data(&vectors, 4)).expect("test: save vectors 4");
     persistence::save_meta(path, &build_meta(4)).expect("test: save meta 4");
 
     // Simulate a crash after the graph dump (new graph + new marker at gen=5)
-    // but BEFORE any sidecar was rewritten — mappings / vectors / meta still
-    // at gen=4.
+    // but BEFORE any sidecar was rewritten — mappings / meta still at gen=4.
     persistence::save_graph_generation(path, 5).expect("test: graph gen 5 only");
 
     let loaded_meta = persistence::load_meta(path).expect("test: reload meta");
-    let err =
-        load_sidecars(path, &loaded_meta).expect_err("test: stale graph must trigger InvalidData");
+    let err = load_sidecars(path, &loaded_meta, GRAPH_COUNT)
+        .expect_err("test: stale graph must trigger InvalidData");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
         err.to_string().contains("graph generation"),
@@ -522,30 +511,31 @@ fn test_next_generation_propagates_corrupted_meta_error() {
 
 // -----------------------------------------------------------------------
 // Regression tests (#894): reject corrupt sidecar payloads on load so that
-// a malformed vector dimension or a broken id<->idx bijection cannot reach
-// the SIMD distance kernels or resolve a result to an out-of-range index.
+// a malformed legacy vectors file or a broken id<->idx bijection cannot
+// reach the SIMD distance kernels or resolve a result to an out-of-range
+// index.
 // -----------------------------------------------------------------------
 
 /// Writes a consistent generation-4 baseline (graph marker + mappings +
-/// vectors + meta) so that the generation checks in `load_sidecars` pass and
-/// the new content validation is what decides accept/reject.
-fn seed_consistent_gen4(path: &Path, mappings: &ShardedMappings, vectors: &ShardedVectors) {
+/// meta) so that the generation checks in `load_sidecars` pass and the
+/// content validation is what decides accept/reject.
+fn seed_consistent_gen4(path: &Path, mappings: &ShardedMappings) {
     persistence::save_graph_generation(path, 4).expect("test: graph gen 4");
     persistence::save_mappings(path, &mappings_data(mappings, 4)).expect("test: save mappings 4");
-    persistence::save_vectors(path, &vectors_data(vectors, 4)).expect("test: save vectors 4");
     persistence::save_meta(path, &build_meta(4)).expect("test: save meta 4");
 }
 
 #[test]
-fn test_load_sidecars_rejects_wrong_vector_dimension() {
+fn test_load_sidecars_rejects_wrong_legacy_vector_dimension() {
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
     let mappings = build_mappings();
-    let vectors = build_vectors();
-    seed_consistent_gen4(path, &mappings, &vectors);
+    seed_consistent_gen4(path, &mappings);
 
-    // Overwrite vectors at the SAME generation (4) with a wrong-dimension
-    // payload: meta declares dimension 4, this vector has length 3.
+    // Legacy vectors file at the SAME generation (4) with a wrong-dimension
+    // payload: meta declares dimension 4, this vector has length 3. Even
+    // though the payload is discarded (PERF1), a malformed file proves
+    // corruption and must still be rejected.
     let bad = HnswVectorsData {
         vectors: vec![
             (0_usize, vec![1.0_f32, 2.0, 3.0]),
@@ -553,10 +543,11 @@ fn test_load_sidecars_rejects_wrong_vector_dimension() {
         ],
         generation: 4,
     };
-    persistence::save_vectors(path, &bad).expect("test: overwrite vectors");
+    persistence::save_vectors(path, &bad).expect("test: write bad legacy vectors");
 
     let meta = persistence::load_meta(path).expect("test: reload meta");
-    let err = load_sidecars(path, &meta).expect_err("test: wrong dimension must be rejected");
+    let err = load_sidecars(path, &meta, GRAPH_COUNT)
+        .expect_err("test: wrong dimension must be rejected");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
         err.to_string().contains("dimension"),
@@ -565,13 +556,13 @@ fn test_load_sidecars_rejects_wrong_vector_dimension() {
 }
 
 /// Seeds a consistent gen-4 baseline, overwrites the mappings sidecar at the
-/// same generation with a single corrupt `id -> idx` pair (so the new content
+/// same generation with a single corrupt `id -> idx` pair (so the content
 /// validation, not the generation check, decides), then runs `load_sidecars`
-/// and returns the resulting error.
+/// against a 2-slot graph and returns the resulting error.
 fn load_with_corrupt_single_mapping(id: u64, idx: usize, mapped_back: u64) -> std::io::Error {
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
-    seed_consistent_gen4(path, &build_mappings(), &build_vectors());
+    seed_consistent_gen4(path, &build_mappings());
 
     let mut id_to_idx = HashMap::new();
     id_to_idx.insert(id, idx);
@@ -586,12 +577,12 @@ fn load_with_corrupt_single_mapping(id: u64, idx: usize, mapped_back: u64) -> st
     persistence::save_mappings(path, &bad).expect("test: overwrite mappings");
 
     let meta = persistence::load_meta(path).expect("test: reload meta");
-    load_sidecars(path, &meta).expect_err("test: corrupt mapping must be rejected")
+    load_sidecars(path, &meta, GRAPH_COUNT).expect_err("test: corrupt mapping must be rejected")
 }
 
 #[test]
 fn test_load_sidecars_rejects_index_beyond_vector_count() {
-    // Internal index 99 is absent from the loaded vector store ({0,1});
+    // Internal index 99 is absent from the graph's vector store (2 slots);
     // id_to_idx/idx_to_id agree but the index is dangling.
     let err = load_with_corrupt_single_mapping(1, 99, 1);
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -605,12 +596,12 @@ fn test_load_sidecars_rejects_index_beyond_vector_count() {
 #[test]
 fn test_load_sidecars_rejects_dangling_index_within_next_idx() {
     // The mapping's idx (5) is VALID against the file's own self-reported
-    // `next_idx` (6) — the file's own bound would accept it — but no vector
-    // exists at index 5 in the loaded store ({0,1}). Membership in the real
-    // store must reject this dangling index.
+    // `next_idx` (6) — the file's own bound would accept it — but the loaded
+    // graph store only has 2 slots. The external graph bound must reject
+    // this dangling index.
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
-    seed_consistent_gen4(path, &build_mappings(), &build_vectors());
+    seed_consistent_gen4(path, &build_mappings());
 
     let mut id_to_idx = HashMap::new();
     id_to_idx.insert(1_u64, 5_usize);
@@ -625,7 +616,8 @@ fn test_load_sidecars_rejects_dangling_index_within_next_idx() {
     persistence::save_mappings(path, &bad).expect("test: overwrite mappings");
 
     let meta = persistence::load_meta(path).expect("test: reload meta");
-    let err = load_sidecars(path, &meta).expect_err("test: dangling index must be rejected");
+    let err =
+        load_sidecars(path, &meta, GRAPH_COUNT).expect_err("test: dangling index must be rejected");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
         err.to_string()
@@ -635,20 +627,16 @@ fn test_load_sidecars_rejects_dangling_index_within_next_idx() {
 }
 
 #[test]
-fn test_load_sidecars_accepts_sparse_index_beyond_count() {
-    // Regression for the #908 review: internal indices are sparse and monotonic
-    // (never reused after an upsert/delete), so a live vector legitimately sits
-    // at an index >= the live count. Here 2 vectors are loaded at indices {0, 5}
-    // with id 2 -> idx 5; a `idx < count` bound would WRONGLY reject this valid,
-    // previously-saved index. Membership in the loaded store must accept it.
+fn test_load_sidecars_accepts_sparse_index_beyond_live_count() {
+    // Regression for the #908 review: internal indices are sparse and
+    // monotonic (never reused after an upsert/delete), so a live mapping
+    // legitimately sits at an index >= the live mapping count. Here only 2
+    // ids are mapped, at indices {0, 5}, but the graph store has 6 slots
+    // (4 tombstones). A `idx < live_count` bound would WRONGLY reject the
+    // valid, previously-saved index 5; the graph slot count must accept it.
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
 
-    let vectors = ShardedVectors::new(4);
-    vectors.insert_batch(vec![
-        (0_usize, vec![1.0_f32; 4]),
-        (5_usize, vec![2.0_f32; 4]),
-    ]);
     let mut id_to_idx = HashMap::new();
     id_to_idx.insert(1_u64, 0_usize);
     id_to_idx.insert(2_u64, 5_usize);
@@ -656,12 +644,10 @@ fn test_load_sidecars_accepts_sparse_index_beyond_count() {
     idx_to_id.insert(0_usize, 1_u64);
     idx_to_id.insert(5_usize, 2_u64);
     let mappings = ShardedMappings::from_parts(id_to_idx, idx_to_id, 6);
-    seed_consistent_gen4(path, &mappings, &vectors);
+    seed_consistent_gen4(path, &mappings);
 
     let meta = persistence::load_meta(path).expect("test: reload meta");
-    let (loaded, _vectors, enabled) =
-        load_sidecars(path, &meta).expect("test: sparse-but-valid index must load");
-    assert!(enabled);
+    let loaded = load_sidecars(path, &meta, 6).expect("test: sparse-but-valid index must load");
     assert_eq!(
         loaded.get_id(5),
         Some(2_u64),
@@ -682,18 +668,41 @@ fn test_load_sidecars_rejects_broken_bijection() {
 
 #[test]
 fn test_load_sidecars_accepts_valid_sidecars() {
-    // Regression guard: the new content validation must not reject genuine data.
+    // Regression guard: the content validation must not reject genuine data.
     let dir = TempDir::new().expect("test: temp dir");
     let path = dir.path();
     let mappings = build_mappings();
-    let vectors = build_vectors();
-    seed_consistent_gen4(path, &mappings, &vectors);
+    seed_consistent_gen4(path, &mappings);
 
     let meta = persistence::load_meta(path).expect("test: reload meta");
-    let (loaded_mappings, _vectors, enabled) =
-        load_sidecars(path, &meta).expect("test: valid sidecars must load");
-    assert!(enabled, "vector storage should remain enabled");
+    let loaded_mappings =
+        load_sidecars(path, &meta, GRAPH_COUNT).expect("test: valid sidecars must load");
+    assert!(
+        meta.enable_vector_storage,
+        "vector storage should remain enabled"
+    );
     let (id_to_idx, _, next_idx) = loaded_mappings.as_parts();
     assert_eq!(id_to_idx.len(), 2);
     assert_eq!(next_idx, 2);
+}
+
+// -----------------------------------------------------------------------
+// PERF1 — corrupted legacy vectors payload is rejected (not silently
+// skipped just because the payload is discarded)
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_load_sidecars_rejects_garbage_legacy_vectors_file() {
+    let dir = TempDir::new().expect("test: temp dir");
+    let path = dir.path();
+    seed_consistent_gen4(path, &build_mappings());
+
+    // Bytes that postcard cannot parse as either vectors format.
+    std::fs::write(path.join("native_vectors.bin"), [0xFF_u8; 16])
+        .expect("test: write garbage vectors");
+
+    let meta = persistence::load_meta(path).expect("test: reload meta");
+    let err = load_sidecars(path, &meta, GRAPH_COUNT)
+        .expect_err("test: garbage legacy vectors must be rejected");
+    assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
 }

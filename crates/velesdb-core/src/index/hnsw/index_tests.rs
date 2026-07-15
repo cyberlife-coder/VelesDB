@@ -1,5 +1,6 @@
 //! Tests for `HnswIndex` (extracted from index.rs for maintainability)
 #![allow(
+    clippy::similar_names, // Reason: clippy 1.90 flags idiomatic test bindings (dir/dim, ids/idx)
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation,
@@ -569,28 +570,26 @@ fn test_hnsw_persistence() {
 }
 
 #[test]
-fn test_hnsw_load_legacy_snapshot_without_vectors_disables_vacuum() {
-    use std::fs;
+fn test_hnsw_snapshot_without_vectors_file_keeps_vector_features() {
     use tempfile::tempdir;
 
-    // Arrange: create a valid snapshot then remove vector sidecar to simulate legacy format.
+    // Arrange: a snapshot written by the current format has NO
+    // native_vectors.bin — the vectors live inside the graph dump (PERF1).
     let dir = tempdir().unwrap();
     let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
     index.insert(1, &[1.0, 0.0, 0.0]);
     index.insert(2, &[0.0, 1.0, 0.0]);
     index.save(dir.path()).unwrap();
-    fs::remove_file(dir.path().join("native_vectors.bin")).unwrap();
+    assert!(!dir.path().join("native_vectors.bin").exists());
 
-    // Act: load snapshot missing vectors.
+    // Act: load the snapshot.
     let loaded_index = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
 
-    // Assert: keep queryability but block vacuum that would otherwise rebuild from missing vectors.
+    // Assert: full functionality — vector storage stays enabled (vectors are
+    // in the graph) and vacuum works.
     assert_eq!(loaded_index.len(), 2);
-    assert!(!loaded_index.has_vector_storage());
-    assert_eq!(
-        loaded_index.vacuum(),
-        Err(VacuumError::VectorStorageDisabled)
-    );
+    assert!(loaded_index.has_vector_storage());
+    assert_eq!(loaded_index.vacuum(), Ok(2));
     assert_eq!(loaded_index.len(), 2);
 }
 
@@ -608,26 +607,32 @@ fn test_hnsw_fast_insert_save_does_not_persist_vectors_file() {
 
     let loaded = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
     assert!(!loaded.has_vector_storage());
+    assert_eq!(loaded.vacuum(), Err(VacuumError::VectorStorageDisabled));
 }
 
 #[test]
-fn test_hnsw_fast_insert_save_removes_stale_vectors_file() {
+fn test_hnsw_save_removes_stale_legacy_vectors_file() {
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
 
-    // Write a regular snapshot first (with vectors sidecar).
-    let regular = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
-    regular.insert(1, &[1.0, 0.0, 0.0]);
-    regular.save(dir.path()).unwrap();
-    assert!(dir.path().join("native_vectors.bin").exists());
+    // Write a first snapshot, then plant a legacy vectors file as an old
+    // binary would have left it.
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
+    index.insert(1, &[1.0, 0.0, 0.0]);
+    index.save(dir.path()).unwrap();
+    std::fs::write(dir.path().join("native_vectors.bin"), [0_u8; 8]).unwrap();
 
-    // Overwrite with fast-insert snapshot; stale vectors file must be removed.
-    let fast = HnswIndex::new_fast_insert(3, DistanceMetric::Cosine).unwrap();
-    fast.insert(2, &[0.0, 1.0, 0.0]);
-    fast.save(dir.path()).unwrap();
+    // Any save must remove the stale legacy duplicate (its generation could
+    // never match the new snapshot's).
+    index.insert(2, &[0.0, 1.0, 0.0]);
+    index.save(dir.path()).unwrap();
 
     assert!(!dir.path().join("native_vectors.bin").exists());
+
+    // And the snapshot reloads cleanly.
+    let loaded = HnswIndex::load(dir.path(), 3, DistanceMetric::Cosine).unwrap();
+    assert_eq!(loaded.len(), 2);
 }
 
 #[test]
@@ -2955,10 +2960,11 @@ fn test_batch_after_single_insert_mapping_consistency() {
     assert_eq!(results[0].id, 100, "Nearest to [1,0,0,0] must be id=100");
 }
 
-/// Regression test: sidecar vectors stored at graph-assigned IDs.
+/// Regression test: graph vectors readable at graph-assigned IDs.
 ///
-/// After reconciliation, vectors in `ShardedVectors` must be stored at
-/// the graph-assigned node IDs (not the pre-registered mapping indices).
+/// After reconciliation, the vector each mapping resolves to (in the
+/// graph's `ContiguousVectors`) must be the one inserted for that external
+/// ID (not one stored at a stale pre-registered mapping index).
 #[test]
 fn test_batch_insert_vector_storage_uses_assigned_ids() {
     let index = HnswIndex::new(4, DistanceMetric::Euclidean).unwrap();
@@ -2980,14 +2986,17 @@ fn test_batch_insert_vector_storage_uses_assigned_ids() {
     let inserted = index.insert_batch_parallel(batch);
     assert_eq!(inserted, 4);
 
-    // For each batch-inserted ID, the sidecar vector at the mapped idx
+    // For each batch-inserted ID, the graph vector at the mapped idx
     // must exist and match the original vector.
     for ext_id in 10..=13u64 {
         let idx = index.mappings.get_idx(ext_id).expect("mapping must exist");
-        let stored = index.vectors.get(idx);
+        let stored = index
+            .inner
+            .read()
+            .with_contiguous_vectors(|cv| cv.get(idx).map(<[f32]>::to_vec));
         assert!(
             stored.is_some(),
-            "ShardedVectors must have a vector at idx {idx} for id {ext_id}"
+            "ContiguousVectors must have a vector at idx {idx} for id {ext_id}"
         );
         let expected_first = ext_id as f32;
         let stored_vec = stored.unwrap();
