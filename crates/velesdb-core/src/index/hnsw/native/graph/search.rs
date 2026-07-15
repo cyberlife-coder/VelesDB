@@ -566,6 +566,33 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         }
     }
 
+    /// Runs `f` on a prepared (cosine-normalized) view of `query`, recycling
+    /// the thread-local scratch buffer afterwards.
+    ///
+    /// For non-cosine (or non-pre-normalized) engines this is a zero-cost
+    /// pass-through of the raw slice. For the pre-normalized cosine engine
+    /// the query is normalized into the `QUERY_BUF` thread-local scratch,
+    /// which is returned to the pool after `f` completes — so a batch loop
+    /// calling this per element keeps at most **one** owned buffer alive per
+    /// thread, instead of one per element (PERF2).
+    ///
+    /// The normalized bits are identical to those produced by
+    /// [`Self::prepare_query`] and by the in-place storage normalization in
+    /// the batch insert path: `normalize_inplace_native` dispatches on the
+    /// global SIMD level and slice length only (unaligned loads), so the
+    /// same input bits always yield the same output bits.
+    #[inline]
+    pub(in crate::index::hnsw::native) fn with_prepared_query<R>(
+        &self,
+        query: &[f32],
+        f: impl FnOnce(&[f32]) -> R,
+    ) -> R {
+        let prepared = self.prepare_query(query);
+        let result = f(&prepared);
+        Self::recycle_cow(prepared);
+        result
+    }
+
     /// Returns a query buffer to the thread-local pool for reuse.
     ///
     /// Called after the prepared query is no longer needed. This avoids

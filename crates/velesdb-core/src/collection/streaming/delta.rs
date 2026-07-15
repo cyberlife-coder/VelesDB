@@ -184,11 +184,25 @@ impl DeltaBuffer {
     /// No-op if the buffer is not in `ACTIVE` state. The check is performed
     /// **inside** the write lock to close the TOCTOU window between `is_active()`
     /// and the actual write.
+    ///
+    /// # Lock scope (PERF3)
+    ///
+    /// The iterator is materialized **before** taking the write lock: callers
+    /// pass lazy iterators whose items perform `O(N×D)` vector copies
+    /// (e.g. `to_vec()` in `bulk_index_or_defer`), and running those copies
+    /// under the write lock would stall every concurrent brute-force search
+    /// (read lock) for the duration of the batch copy. If the buffer turns
+    /// out to be inactive the materialized entries are dropped — a rare,
+    /// benign waste (the deferred path activates the buffer just before
+    /// extending).
     pub fn extend(&self, entries: impl IntoIterator<Item = (u64, Vec<f32>)>) {
+        let new_entries: Vec<(u64, Vec<f32>)> = entries.into_iter().collect();
+        if new_entries.is_empty() {
+            return;
+        }
+        let new_ids: HashSet<u64> = new_entries.iter().map(|(id, _)| *id).collect();
         let mut points = self.points.write();
         if self.state.load(Ordering::Acquire) == ACTIVE {
-            let new_entries: Vec<(u64, Vec<f32>)> = entries.into_iter().collect();
-            let new_ids: HashSet<u64> = new_entries.iter().map(|(id, _)| *id).collect();
             points.retain(|(existing_id, _)| !new_ids.contains(existing_id));
             points.extend(new_entries);
         }

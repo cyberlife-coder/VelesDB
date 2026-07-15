@@ -397,6 +397,35 @@ impl ContiguousVectors {
         Some(unsafe { std::slice::from_raw_parts(self.data.as_ptr().add(offset), self.dimension) })
     }
 
+    /// Gets a mutable vector by index.
+    ///
+    /// Used by the HNSW batch-insert path to normalize cosine vectors
+    /// in place after a raw `push_batch`, avoiding one owned intermediate
+    /// buffer per vector (PERF2). Requires `&mut self`, so callers must
+    /// hold the exclusive storage lock — no concurrent reader can observe
+    /// a partially normalized vector.
+    ///
+    /// # Returns
+    ///
+    /// Mutable slice to the vector data, or `None` if index is out of bounds.
+    #[inline]
+    #[must_use]
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut [f32]> {
+        if index >= self.count {
+            return None;
+        }
+
+        let offset = index * self.dimension;
+        // SAFETY: Index is within bounds (checked against count, which is <= capacity)
+        // - Condition 1: index < count ensures access is within initialized range.
+        // - Condition 2: data is non-null per NonNull invariant.
+        // - Condition 3: `&mut self` guarantees exclusive access — no aliasing.
+        // SAFETY: In-place mutation of one vector slot in contiguous storage.
+        Some(unsafe {
+            std::slice::from_raw_parts_mut(self.data.as_ptr().add(offset), self.dimension)
+        })
+    }
+
     /// Gets a vector by index (unchecked).
     ///
     /// # Safety

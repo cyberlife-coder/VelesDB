@@ -142,7 +142,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
 
         // Phase A: Batch allocate — stores vectors, assigns layers (single lock scopes)
         let vectors: Vec<&[f32]> = data.iter().map(|(v, _)| *v).collect();
-        let (assignments, processed) = self.allocate_batch(&vectors)?;
+        let assignments = self.allocate_batch(&vectors)?;
         if assignments.is_empty() {
             return Ok(Vec::new());
         }
@@ -150,7 +150,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         let first_node = assignments[0].0;
         let connect_start = self.bootstrap_entry_point(&assignments);
 
-        self.connect_batch_chunked(&assignments[connect_start..], &processed, first_node)?;
+        self.connect_batch_chunked(&assignments[connect_start..], &vectors, first_node)?;
         self.finalize_batch(&assignments, connect_start);
 
         // Invalidate GPU caches — topology and vectors both changed.
@@ -282,10 +282,15 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     /// - **Phase 1** (first 10%): full ef — builds a quality scaffold
     /// - **Phase 2** (10%-90%): reduced ef (0.5x) — graph is dense enough
     /// - **Phase 3** (last 10%): moderate ef (0.75x) — finalizes connections
+    ///
+    /// Takes the **raw** input vectors; each worker derives the prepared
+    /// (cosine-normalized) query on demand via `with_prepared_query`, which
+    /// reuses one thread-local scratch buffer per rayon worker instead of
+    /// holding one owned normalized buffer per batch element alive (PERF2).
     fn connect_batch_chunked(
         &self,
         assignments: &[(NodeId, usize)],
-        processed: &[std::borrow::Cow<'_, [f32]>],
+        vectors: &[&[f32]],
         first_node: NodeId,
     ) -> crate::error::Result<()> {
         let chunk_size = Self::compute_chunk_size(assignments.len());
@@ -309,11 +314,14 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             chunk.par_iter().enumerate().try_for_each(
                 |(i, (node_id, layer))| -> crate::error::Result<()> {
                     let batch_idx = node_id - first_node;
-                    let query: &[f32] = &processed[batch_idx];
-                    let current_ep = self.greedy_descent_upper_layers(query, *layer, ep_id);
-                    let ef = schedule.ef_for_position(chunk_offset + i);
-                    let stagnation = ef / 2;
-                    self.connect_node_with_ef(*node_id, query, *layer, current_ep, ef, stagnation);
+                    self.with_prepared_query(vectors[batch_idx], |query| {
+                        let current_ep = self.greedy_descent_upper_layers(query, *layer, ep_id);
+                        let ef = schedule.ef_for_position(chunk_offset + i);
+                        let stagnation = ef / 2;
+                        self.connect_node_with_ef(
+                            *node_id, query, *layer, current_ep, ef, stagnation,
+                        );
+                    });
                     Ok(())
                 },
             )?;
