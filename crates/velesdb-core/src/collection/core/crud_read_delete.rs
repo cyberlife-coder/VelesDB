@@ -257,7 +257,7 @@ impl Collection {
         #[cfg(feature = "persistence")]
         {
             let indexes = self.sparse_indexes.read();
-            for (name, _) in indexes.iter() {
+            for name in indexes.keys() {
                 let wal_path =
                     crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
                 for &id in ids {

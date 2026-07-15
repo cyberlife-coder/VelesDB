@@ -68,5 +68,5 @@ fn test_prefetch_distance_bounds() {
     // 32D = 128 bytes / 64 = 2 → clamped to 4
     assert_eq!(calculate_prefetch_distance(32), 4);
     // Maximum capped at 16
-    assert!(calculate_prefetch_distance(10000) == 16);
+    assert_eq!(calculate_prefetch_distance(10000), 16);
 }

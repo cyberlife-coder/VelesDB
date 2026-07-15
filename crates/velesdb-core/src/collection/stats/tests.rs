@@ -407,8 +407,8 @@ fn test_builder_normal_distribution() {
     assert_eq!(h.buckets.len(), 10);
     // Each bucket should have ~10 values
     for bucket in &h.buckets {
-        assert!(bucket.count == 10);
-        assert!(bucket.distinct_count == 10);
+        assert_eq!(bucket.count, 10);
+        assert_eq!(bucket.distinct_count, 10);
     }
     assert_eq!(h.total_count, 100);
     assert!(!h.stale);
