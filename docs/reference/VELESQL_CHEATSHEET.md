@@ -1,7 +1,7 @@
 # VelesQL Cheat Sheet
 
 > **Date:** 2026-06-03
-> **VelesDB version:** 3.11.0
+> **VelesDB version:** 3.12.0
 > See the full specification in [`docs/VELESQL_SPEC.md`](../VELESQL_SPEC.md).
 
 > Every `sql` block below is **parsed** against the real grammar by an automated
