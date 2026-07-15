@@ -15,7 +15,6 @@
 use super::native_inner::NativeHnswInner;
 use super::params::{HnswParams, SearchQuality};
 use super::sharded_mappings::ShardedMappings;
-use super::sharded_vectors::ShardedVectors;
 use super::upsert::{self, UpsertResult};
 use crate::distance::DistanceMetric;
 use crate::index::VectorIndex;
@@ -39,7 +38,6 @@ pub struct NativeHnswIndex {
     pub(crate) metric: DistanceMetric,
     pub(crate) inner: RwLock<NativeHnswInner>,
     pub(crate) mappings: ShardedMappings,
-    pub(crate) vectors: ShardedVectors,
     pub(crate) enable_vector_storage: bool,
     #[allow(dead_code)] // Retained for future vacuum/rebuild operations
     pub(crate) params: HnswParams,
@@ -80,7 +78,6 @@ impl NativeHnswIndex {
             metric,
             inner: RwLock::new(inner),
             mappings: ShardedMappings::new(),
-            vectors: ShardedVectors::new(dimension),
             enable_vector_storage: true,
             params,
         })
@@ -178,19 +175,14 @@ impl NativeHnswIndex {
             .collect()
     }
 
-    /// Registers an ID with upsert semantics and cleans up stale vector data.
+    /// Registers an ID with upsert semantics.
     ///
     /// Returns an [`UpsertResult`] with the new internal index and optional
     /// old index for rollback. If the ID already existed, the old mapping is
-    /// replaced and the stale sidecar vector is removed.
+    /// replaced (the old graph node becomes an unreachable tombstone).
     #[must_use]
     fn upsert_mapping(&self, id: u64) -> UpsertResult {
-        upsert::upsert_mapping(
-            &self.mappings,
-            &self.vectors,
-            self.enable_vector_storage,
-            id,
-        )
+        upsert::upsert_mapping(&self.mappings, id)
     }
 
     /// Rolls back a mapping upsert after a failed graph insertion.
@@ -219,9 +211,6 @@ impl NativeHnswIndex {
             return Err(e);
         }
 
-        if self.enable_vector_storage {
-            self.vectors.insert(result.idx, vector);
-        }
         Ok(())
     }
 
@@ -242,13 +231,8 @@ impl NativeHnswIndex {
         // pipeline (see `HnswIndex::prepare_batch_insert`). Runs dimension
         // validation to completion BEFORE any mapping registration so
         // failures cannot leave orphaned mappings.
-        let upsert_results = upsert::validate_and_register_batch(
-            &self.mappings,
-            &self.vectors,
-            self.enable_vector_storage,
-            self.dimension,
-            items,
-        )?;
+        let upsert_results =
+            upsert::validate_and_register_batch(&self.mappings, self.dimension, items)?;
 
         let mut data: Vec<(&[f32], usize)> = Vec::with_capacity(items.len());
         let mut rollback_info: Vec<(u64, UpsertResult)> = Vec::with_capacity(items.len());
@@ -270,32 +254,20 @@ impl NativeHnswIndex {
 
         // RF-DEDUP #448 Group D — mapping reconciliation shared with
         // HnswIndex::insert_batch_parallel.
-        let storage_ids =
-            upsert::reconcile_batch_mappings(&self.mappings, &rollback_info, &assigned_ids);
-
-        if self.enable_vector_storage {
-            for (vec_slice, idx) in data.iter().map(|(v, _)| *v).zip(storage_ids) {
-                self.vectors.insert(idx, vec_slice);
-            }
-        }
+        upsert::reconcile_batch_mappings(&self.mappings, &rollback_info, &assigned_ids);
 
         Ok(())
     }
 
     /// Removes a vector by ID (soft delete).
     ///
-    /// Removes the ID from mappings and cleans up stored vector data.
-    /// The HNSW graph node becomes a tombstone, filtered out during search.
+    /// Removes the ID from the mappings. The HNSW graph node becomes a
+    /// tombstone, filtered out during search via the reverse mapping.
     ///
     /// Delegates to `upsert::soft_delete` (private), shared with
     /// `HnswIndex::remove` (#448 Group F).
     pub fn remove(&self, id: u64) -> bool {
-        upsert::soft_delete(
-            &self.mappings,
-            &self.vectors,
-            self.enable_vector_storage,
-            id,
-        )
+        upsert::soft_delete(&self.mappings, id)
     }
 
     /// Sets searching mode (no-op for native implementation).
@@ -373,18 +345,32 @@ impl NativeHnswIndex {
     pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         use rayon::prelude::*;
 
-        let vectors_snapshot = self.vectors.collect_for_parallel();
-
-        if vectors_snapshot.is_empty() {
+        // Preserve fast-insert semantics: exact-distance features are gated
+        // on `enable_vector_storage` even though the graph stores vectors.
+        if !self.enable_vector_storage {
             return Vec::new();
         }
 
         let inner = self.inner.read();
 
-        let mut results: Vec<ScoredResult> = vectors_snapshot
-            .par_iter()
+        // Snapshot the contiguous slab under a brief vectors read lock (one
+        // memcpy), releasing it BEFORE the rayon scan: parallel inserts
+        // acquire `vectors.write()` from inside rayon tasks, so parallel
+        // work under the vectors lock could park every worker on that write
+        // and deadlock the pool. Tombstoned slots (deleted/upserted vectors)
+        // have no reverse mapping and are skipped.
+        let (flat, dimension) = inner.with_contiguous_vectors(|vectors| {
+            (vectors.as_flat_slice().to_vec(), vectors.dimension())
+        });
+        if flat.is_empty() || dimension == 0 {
+            return Vec::new();
+        }
+
+        let mut results: Vec<ScoredResult> = flat
+            .par_chunks(dimension)
+            .enumerate()
             .filter_map(|(idx, vec)| {
-                let id = self.mappings.get_id(*idx)?;
+                let id = self.mappings.get_id(idx)?;
                 let raw_distance = inner.compute_distance(query, vec);
                 // Reason: compute_distance returns squared L2 for Euclidean
                 // (CachedSimdDistance optimization). Apply transform_score to

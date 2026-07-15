@@ -14,6 +14,14 @@ fn make_index_no_storage(dim: usize) -> HnswIndex {
     HnswIndex::new_fast_insert(dim, DistanceMetric::Cosine).expect("test index creation")
 }
 
+/// Reads a vector back from the graph's `ContiguousVectors`.
+fn contiguous_get(index: &HnswIndex, idx: usize) -> Option<Vec<f32>> {
+    index
+        .inner
+        .read()
+        .with_contiguous_vectors_read(|cv| cv.get(idx).map(<[f32]>::to_vec))
+}
+
 #[test]
 fn test_write_batch_direct_empty() {
     let index = make_index(4);
@@ -35,15 +43,8 @@ fn test_write_batch_direct_single_vector() {
     // Verify mapping exists
     assert!(index.mappings.get_idx(1).is_some());
 
-    // Verify vector is in ContiguousVectors (via inner)
-    let stored = index
-        .inner
-        .read()
-        .with_contiguous_vectors_read(|cv| cv.get(results[0].idx).map(<[f32]>::to_vec));
-    assert_eq!(stored, Some(vec.to_vec()));
-
-    // Verify ShardedVectors is empty (bypass)
-    assert!(index.vectors.is_empty());
+    // Verify vector is in ContiguousVectors (single vector store)
+    assert_eq!(contiguous_get(&index, results[0].idx), Some(vec.to_vec()));
 }
 
 #[test]
@@ -63,29 +64,27 @@ fn test_write_batch_direct_multiple_vectors() {
     assert!(index.mappings.get_idx(20).is_some());
     assert!(index.mappings.get_idx(30).is_some());
 
-    // ShardedVectors still empty
-    assert!(index.vectors.is_empty());
+    // Every vector landed in ContiguousVectors at its assigned slot.
+    assert_eq!(contiguous_get(&index, results[0].idx), Some(v1.to_vec()));
+    assert_eq!(contiguous_get(&index, results[1].idx), Some(v2.to_vec()));
+    assert_eq!(contiguous_get(&index, results[2].idx), Some(v3.to_vec()));
 }
 
+/// Vectors written by `write_batch_direct` are immediately visible to
+/// brute-force search (the deferred-HNSW window must not hide them).
 #[test]
-fn test_sync_to_sharded_populates_sharded_vectors() {
+fn test_write_batch_direct_visible_to_brute_force() {
     let index = make_index(3);
     let writer = DirectVectorWriter::new(&index);
     let v1 = [1.0_f32, 2.0, 3.0];
     let v2 = [4.0_f32, 5.0, 6.0];
     let batch: Vec<(u64, &[f32])> = vec![(1, &v1), (2, &v2)];
 
-    let results = writer.write_batch_direct(&batch).unwrap();
-    assert!(index.vectors.is_empty());
+    writer.write_batch_direct(&batch).unwrap();
 
-    writer.sync_to_sharded(&results).unwrap();
-
-    // Now ShardedVectors should have the vectors
-    assert_eq!(index.vectors.len(), 2);
-    let stored1 = index.vectors.get(results[0].idx).unwrap();
-    assert_eq!(stored1, v1.to_vec());
-    let stored2 = index.vectors.get(results[1].idx).unwrap();
-    assert_eq!(stored2, v2.to_vec());
+    let results = index.brute_force_search_parallel(&v1, 2).unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].id, 1);
 }
 
 #[test]
@@ -134,18 +133,7 @@ fn test_storage_bypass_when_disabled() {
     // Mapping exists
     assert!(index.mappings.get_idx(1).is_some());
 
-    // ShardedVectors empty (storage disabled)
-    assert!(index.vectors.is_empty());
-
-    // sync_to_sharded is a no-op
-    writer.sync_to_sharded(&results).unwrap();
-    assert!(index.vectors.is_empty());
-}
-
-#[test]
-fn test_sync_to_sharded_empty_results() {
-    let index = make_index(3);
-    let writer = DirectVectorWriter::new(&index);
-    writer.sync_to_sharded(&[]).unwrap();
-    assert!(index.vectors.is_empty());
+    // Direct contiguous write is skipped when storage is disabled — the
+    // deferred HNSW insert path populates the graph store instead.
+    assert_eq!(contiguous_get(&index, results[0].idx), None);
 }

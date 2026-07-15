@@ -271,12 +271,12 @@ fn compute_agg_value(
             AggregateType::Avg => {
                 // Reason: count is bounded by result set size, precision loss acceptable
                 #[allow(clippy::cast_precision_loss)]
-                let avg = if acc.count > 0 {
+                let mean = if acc.count > 0 {
                     acc.sum_scores / acc.count as f32
                 } else {
                     0.0
                 };
-                serde_json::json!(avg)
+                serde_json::json!(mean)
             }
             _ => serde_json::Value::Null,
         };

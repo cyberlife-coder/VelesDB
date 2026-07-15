@@ -65,7 +65,9 @@ env:
   RUST_BACKTRACE: 1
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
-  RUST_VERSION: "1.89"
+  # 1.90 is the workspace MSRV: roaring 0.11.4 declares rust-version = 1.90.0,
+  # so a 1.89 toolchain only builds when the dep is already in cache.
+  RUST_VERSION: "1.90"
   # Skip Python detection for pyo3 - avoids environment contamination issues
   PYO3_NO_PYTHON: "1"
 
@@ -94,6 +96,22 @@ jobs:
         with:
           shared-key: "velesdb-ci"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      # rust-cache restores target/ INCLUDING the clippy .fingerprint entries
+      # for workspace crates. With warm fingerprints cargo skips re-linting
+      # "unchanged" crates, so violations of lints that became enforced after
+      # the fingerprint was cached are silently skipped. This bit for real:
+      # the 1.89 pedantic debt was only discovered via a chance fingerprint
+      # miss (PRs #1394/#1396). Dropping build artifacts for the workspace
+      # crates ONLY forces a full re-lint of first-party code on every run
+      # while keeping all third-party deps cached (moderate cost, ~1-3 min).
+      - name: Drop cached workspace fingerprints (force full re-lint)
+        run: |
+          set -euo pipefail
+          # -r: never run a bare `cargo clean` (full wipe) on empty input.
+          cargo metadata --format-version 1 --no-deps --locked \
+            | jq -r '.packages[] | "-p", .name' \
+            | xargs -r cargo clean
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -174,6 +192,13 @@ jobs:
 
       - name: Check for .unwrap() in production code
         run: python3 scripts/check_prod_unwraps.py
+
+      # REL-07 ran only at release time (release.yml), so a version drift in a
+      # policed manifest was invisible until tagging. Running the same checker
+      # at PR time surfaces the drift in the PR that introduces it (<5s, pure
+      # python, no build needed).
+      - name: Verify version sync across policed manifests (REL-07, PR-time)
+        run: python3 scripts/check-version-sync.py
 
       - name: Test feature-claims audit script
         run: python3 -m unittest scripts.tests.test_check_feature_claims

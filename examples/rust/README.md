@@ -15,7 +15,7 @@ Demonstrates VelesDB's multi-model query capabilities in a single Rust binary: v
 
 ## Prerequisites
 
-- Rust 1.89+ with Cargo
+- Rust 1.90+ with Cargo
 
 ## How to Run
 

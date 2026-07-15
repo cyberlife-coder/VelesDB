@@ -178,6 +178,8 @@ impl Default for VelesDbState {
 }
 
 #[cfg(test)]
+// Reason: clippy 1.90 similar_names flags idiomatic test bindings (dir/dim).
+#[allow(clippy::similar_names)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
