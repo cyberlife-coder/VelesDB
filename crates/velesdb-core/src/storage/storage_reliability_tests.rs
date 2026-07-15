@@ -642,6 +642,58 @@ fn test_replay_growth_persists_data_file_size_for_reopen() {
 }
 
 #[test]
+fn test_flush_full_after_live_growth_persists_data_file_size_for_reopen() {
+    // FIX (fsync ordering): flush_full() persists vectors.idx after a LIVE growth
+    // (ensure_capacity -> set_len during a store). The grown data-file size must be
+    // fsync'd BEFORE the index is persisted so a subsequent reopen's load_index
+    // bound check (offset <= data file size) passes. Guards the
+    // sync_all-before-persist-index ordering added to `flush_full`, mirroring the
+    // replay path. (A true crash between growth and data-file durability cannot be
+    // injected here without a fault harness; this guards the
+    // open -> store+grow -> flush_full -> reopen round-trip.)
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let dim = 3;
+    let vec_size = dim * 4;
+
+    // Seed an index whose highest offset is the last slot of the 16 MB initial
+    // map, so next_offset lands exactly at the map boundary and the next store
+    // forces a live growth.
+    let near_cap = 16 * 1024 * 1024 - vec_size;
+    let mut index: FxHashMap<u64, usize> = FxHashMap::default();
+    index.insert(1, near_cap);
+    std::fs::write(
+        path.join("vectors.idx"),
+        postcard::to_allocvec(&index).unwrap(),
+    )
+    .unwrap();
+
+    let mut data = vec![0u8; 16 * 1024 * 1024];
+    data[near_cap..near_cap + vec_size].copy_from_slice(&vec3_bytes([1.0, 2.0, 3.0]));
+    std::fs::write(path.join("vectors.dat"), &data).unwrap();
+
+    // Open (no WAL to replay), then store a NEW vector at next_offset (== 16 MB),
+    // forcing ensure_capacity to grow the data file live. flush_full then persists
+    // the index referencing the grown offset.
+    {
+        let mut storage = MmapStorage::new(&path, dim).unwrap();
+        storage.store(2, &[4.0, 5.0, 6.0]).unwrap();
+        assert!(
+            std::fs::metadata(path.join("vectors.dat")).unwrap().len() > 16 * 1024 * 1024,
+            "storing past the initial map must have grown the data file live"
+        );
+        storage.flush_full().unwrap();
+    }
+
+    // The persisted index now references an offset in the GROWN region; a reopen
+    // must load it without load_index rejecting the offset as past the data file,
+    // proving flush_full made the grown size durable consistently with the index.
+    let reopened = MmapStorage::new(&path, dim).unwrap();
+    assert_eq!(reopened.retrieve(1).unwrap(), Some(vec![1.0, 2.0, 3.0]));
+    assert_eq!(reopened.retrieve(2).unwrap(), Some(vec![4.0, 5.0, 6.0]));
+}
+
+#[test]
 fn test_898_load_index_rejects_out_of_bounds_offset() {
     // A corrupt index offset that points past the data file must be rejected,
     // not silently accepted (which would wrap into an OOB read later).
