@@ -1,51 +1,47 @@
 //! `EXPLAIN` support for the WASM executor (S4-13).
 //!
-//! WASM has no cost-based optimizer, but consumers still benefit from a
-//! human-readable plan. This module walks the parsed AST and produces one
-//! row per logical pipeline step, returning them as synthetic rows so the
-//! JavaScript caller can render them in an "explain plan" table.
+//! # Delegation to the core plan emitter (audit 61b5e8 follow-up R6)
 //!
-//! # Vocabulary parity with core (backlog #23)
+//! Since P1.4 the core `velesql::explain` module compiles without the
+//! `persistence` feature, so SELECT/MATCH plans delegate to the single source
+//! of truth used by the REST `/query/explain` endpoint —
+//! [`QueryPlan::to_plan_steps()`] / `PlanStep::rest_operation()` — instead of
+//! re-implementing the step walk from the raw AST. The step rows keep the REST
+//! `ExplainStep` wire keys (`step`, `operation`, `description`,
+//! `estimated_rows`, `estimation_method`).
 //!
-//! The core `QueryPlan::to_plan_steps()` / `PlanStep::rest_operation()` plan
-//! emitter — the single source of truth used by the REST `/query/explain`
-//! endpoint — lives behind the `persistence` feature, which WASM never
-//! enables (it pulls in `tokio`/`memmap2`/`rayon`). It is therefore
-//! unreachable from this crate. Rather than re-export divergent labels, the
-//! step rows below emit the SAME wire keys as the REST `ExplainStep`
-//! (`step`, `operation`, `description`, `estimated_rows`, `estimation_method`)
-//! and the SAME `operation` vocabulary as
-//! [`PlanStepKind`](velesdb_core::velesql) /`rest_operation` —
-//! `VectorSearch`, `FullScan`, `Filter`, `{Type}Join`, `GroupBy`, `Aggregate`,
-//! `Sort`, `Limit`, `Offset`, `MatchTraversal`. WASM-only concerns with no core
-//! plan node (FUSION, DISTINCT) are folded into a step's description instead of
-//! inventing an out-of-taxonomy `operation`.
+//! Only concerns with no core plan node stay local:
+//! - **DML/DDL** rows — core plans cover reads only;
+//! - **compound** (`UNION`/…) combine rows, folded into `Filter`-class steps;
+//! - the leading scan step's **`estimated_rows`** — the WASM store knows its
+//!   real row count, where the core plan without collection stats carries none;
+//! - the **NEAR description** — WASM searches brute-force, not via an HNSW
+//!   index, so the core wording would overstate the execution.
 
-use velesdb_core::velesql::{Query, SelectStatement};
+use velesdb_core::velesql::{PlanStep, Query, QueryPlan};
 
 use crate::database::DatabaseInner;
 use crate::velesql_result::QueryResultRow;
 
 /// Builds an EXPLAIN plan as a sequence of synthetic rows (one per step).
 pub(crate) fn explain(db: &DatabaseInner, query: &Query) -> Result<Vec<QueryResultRow>, String> {
-    let steps = plan_steps(db, query);
-    steps
+    step_rows(db, query)
         .into_iter()
         .enumerate()
-        .map(|(i, step)| QueryResultRow::synthetic(step.to_json(i + 1)))
+        .map(|(i, row)| QueryResultRow::synthetic(row.to_json(i + 1)))
         .collect()
 }
 
 /// One EXPLAIN row, mirroring the REST `ExplainStep` wire shape.
-struct PlanStep {
+struct StepRow {
     /// Core `rest_operation()` taxonomy string (e.g. `FullScan`, `Filter`).
     operation: String,
     description: String,
-    estimated_rows: Option<usize>,
-    estimation_method: Option<&'static str>,
+    estimated_rows: Option<u64>,
+    estimation_method: Option<String>,
 }
 
-impl PlanStep {
+impl StepRow {
     /// Serializes the row with the REST `ExplainStep` keys, omitting the
     /// optional estimate fields when absent (matching core's `skip_if_none`).
     fn to_json(&self, step: usize) -> serde_json::Value {
@@ -59,7 +55,7 @@ impl PlanStep {
         if let Some(rows) = self.estimated_rows {
             map.insert("estimated_rows".to_string(), serde_json::json!(rows));
         }
-        if let Some(method) = self.estimation_method {
+        if let Some(method) = &self.estimation_method {
             map.insert("estimation_method".to_string(), serde_json::json!(method));
         }
         serde_json::Value::Object(map)
@@ -74,147 +70,68 @@ impl PlanStep {
             estimation_method: None,
         }
     }
+
+    /// Maps a core plan step onto the wire row, rewording the NEAR description
+    /// (WASM has no HNSW index — the scan is brute-force).
+    fn from_core(step: &PlanStep) -> Self {
+        let operation = step.rest_operation();
+        let description = if operation == "VectorSearch" {
+            "ANN search using NEAR clause (brute-force in WASM)".to_string()
+        } else {
+            step.description.clone()
+        };
+        Self {
+            operation,
+            description,
+            estimated_rows: step.estimated_rows,
+            estimation_method: step.estimation_method.clone(),
+        }
+    }
 }
 
-fn plan_steps(db: &DatabaseInner, query: &Query) -> Vec<PlanStep> {
-    if let Some(match_clause) = &query.match_clause {
-        return explain_match(match_clause);
-    }
+fn step_rows(db: &DatabaseInner, query: &Query) -> Vec<StepRow> {
     if let Some(dml) = &query.dml {
         return explain_dml(dml);
     }
     if query.ddl.is_some() {
-        return vec![PlanStep::plain(
+        return vec![StepRow::plain(
             "FullScan",
             "Schema change (DDL) — no scan involved.",
         )];
     }
-    explain_select(db, &query.select, query)
+    let plan = QueryPlan::from_query(query);
+    let mut rows: Vec<StepRow> = plan
+        .to_plan_steps()
+        .iter()
+        .map(StepRow::from_core)
+        .collect();
+    if query.match_clause.is_none() {
+        enrich_leading_scan(&mut rows, db, &query.select.from);
+    }
+    append_compound_rows(&mut rows, query);
+    rows
 }
 
-fn explain_select(db: &DatabaseInner, stmt: &SelectStatement, query: &Query) -> Vec<PlanStep> {
-    let mut steps = vec![scan_step(db, stmt)];
-    append_join_steps(&mut steps, db, stmt);
-    append_filter_step(&mut steps, stmt);
-    append_group_steps(&mut steps, stmt);
-    append_post_scan_steps(&mut steps, stmt);
-    append_compound_steps(&mut steps, query);
-    steps
-}
-
-/// Builds the leading scan step: `VectorSearch` when the WHERE carries a NEAR
-/// clause (mirroring core's vector-search node), otherwise `FullScan`.
-fn scan_step(db: &DatabaseInner, stmt: &SelectStatement) -> PlanStep {
-    let rows = row_count_hint(db, &stmt.from);
-    let has_vector = stmt
-        .where_clause
-        .as_ref()
-        .is_some_and(velesdb_core::velesql::Condition::has_vector_search);
-    let (operation, description) = if has_vector {
-        (
-            "VectorSearch",
-            "ANN search using NEAR clause (brute-force in WASM)".to_string(),
-        )
-    } else {
-        ("FullScan", format!("Scan collection '{}'", stmt.from))
-    };
-    PlanStep {
-        operation: operation.to_string(),
-        description,
-        estimated_rows: Some(rows),
-        estimation_method: Some("row count"),
-    }
-}
-
-fn append_join_steps(steps: &mut Vec<PlanStep>, db: &DatabaseInner, stmt: &SelectStatement) {
-    for join in &stmt.joins {
-        let right_count = row_count_hint(db, &join.table);
-        // `{Type}Join` reproduces core `rest_operation()` for a Join node.
-        steps.push(PlanStep::plain(
-            format!("{:?}Join", join.join_type),
-            format!(
-                "Join with '{}' ({right_count} rows) ON equality",
-                join.table
-            ),
-        ));
-    }
-}
-
-fn append_filter_step(steps: &mut Vec<PlanStep>, stmt: &SelectStatement) {
-    if stmt.where_clause.is_some() {
-        steps.push(PlanStep::plain("Filter", "Apply WHERE clause predicates"));
-    }
-}
-
-fn append_group_steps(steps: &mut Vec<PlanStep>, stmt: &SelectStatement) {
-    if stmt.group_by.is_some() {
-        steps.push(PlanStep::plain(
-            "GroupBy",
-            "Group rows by specified columns",
-        ));
-    }
-    if stmt.is_aggregation_query() {
-        steps.push(PlanStep::plain(
-            "Aggregate",
-            "Compute aggregate functions (COUNT, SUM, etc.)",
-        ));
-    }
-    if stmt.having.is_some() {
-        // HAVING has no dedicated core plan node; it is a predicate filter over
-        // grouped rows, so it surfaces as a `Filter` within the taxonomy.
-        steps.push(PlanStep::plain(
-            "Filter",
-            "Filter groups on HAVING predicate",
-        ));
-    }
-}
-
-fn append_post_scan_steps(steps: &mut Vec<PlanStep>, stmt: &SelectStatement) {
-    if stmt.order_by.is_some() {
-        steps.push(PlanStep::plain("Sort", sort_description(stmt)));
-    }
-    append_pagination_steps(steps, stmt);
-}
-
-/// Sort description, folding the WASM-only DISTINCT/FUSION notes in (neither has
-/// a dedicated core plan node, so they are not standalone operations).
-fn sort_description(stmt: &SelectStatement) -> String {
-    let mut desc = "Sort results by ORDER BY clause".to_string();
-    if stmt.fusion_clause.is_some() {
-        desc.push_str(" (after FUSION combine)");
-    }
-    if matches!(stmt.distinct, velesdb_core::velesql::DistinctMode::All) {
-        desc.push_str(" (DISTINCT applied)");
-    }
-    desc
-}
-
-/// Emits `Limit` (folding any OFFSET into its description) or a standalone
-/// `Offset`, mirroring core's pagination folding.
-fn append_pagination_steps(steps: &mut Vec<PlanStep>, stmt: &SelectStatement) {
-    match (stmt.limit, stmt.offset) {
-        (Some(limit), offset) => {
-            let off = offset.unwrap_or(0);
-            let mut step = PlanStep::plain("Limit", format!("Apply LIMIT {limit} OFFSET {off}"));
-            step.estimated_rows = usize::try_from(limit).ok();
-            steps.push(step);
+/// Injects the WASM store's real row count into the leading scan step. The
+/// core plan (built without collection stats) carries no scan estimate.
+fn enrich_leading_scan(rows: &mut [StepRow], db: &DatabaseInner, collection: &str) {
+    if let Some(scan) = rows
+        .first_mut()
+        .filter(|r| matches!(r.operation.as_str(), "FullScan" | "VectorSearch"))
+    {
+        if scan.estimated_rows.is_none() {
+            scan.estimated_rows = Some(row_count_hint(db, collection));
+            scan.estimation_method = Some("row count".to_string());
         }
-        (None, Some(offset)) => {
-            steps.push(PlanStep::plain(
-                "Offset",
-                format!("Skip {offset} rows (OFFSET)"),
-            ));
-        }
-        (None, None) => {}
     }
 }
 
-fn append_compound_steps(steps: &mut Vec<PlanStep>, query: &Query) {
+fn append_compound_rows(rows: &mut Vec<StepRow>, query: &Query) {
     if let Some(compound) = &query.compound {
         for (op, _) in &compound.operations {
             // Set operations have no dedicated core plan node; surface them as a
             // Filter-class combine to stay within the taxonomy.
-            steps.push(PlanStep::plain(
+            rows.push(StepRow::plain(
                 "Filter",
                 format!("Combine with right-hand SELECT ({op:?})"),
             ));
@@ -222,7 +139,7 @@ fn append_compound_steps(steps: &mut Vec<PlanStep>, query: &Query) {
     }
 }
 
-fn explain_dml(dml: &velesdb_core::velesql::DmlStatement) -> Vec<PlanStep> {
+fn explain_dml(dml: &velesdb_core::velesql::DmlStatement) -> Vec<StepRow> {
     use velesdb_core::velesql::DmlStatement;
     // DML has no read-plan vocabulary in core; surface a single FullScan-class
     // row whose description names the mutation.
@@ -237,22 +154,12 @@ fn explain_dml(dml: &velesdb_core::velesql::DmlStatement) -> Vec<PlanStep> {
         DmlStatement::InsertNode(s) => format!("INSERT NODE INTO {}", s.collection),
         _ => "Unsupported DML variant".to_string(),
     };
-    vec![PlanStep::plain("FullScan", description)]
+    vec![StepRow::plain("FullScan", description)]
 }
 
-fn explain_match(clause: &velesdb_core::velesql::MatchClause) -> Vec<PlanStep> {
-    let node_count: usize = clause.patterns.iter().map(|p| p.nodes.len()).sum();
-    let rel_count: usize = clause.patterns.iter().map(|p| p.relationships.len()).sum();
-    vec![PlanStep::plain(
-        "MatchTraversal",
-        format!("Graph traversal: {node_count} node pattern(s), {rel_count} relationship(s), RETURN {} item(s)",
-            clause.return_clause.items.len()),
-    )]
-}
-
-fn row_count_hint(db: &DatabaseInner, name: &str) -> usize {
+fn row_count_hint(db: &DatabaseInner, name: &str) -> u64 {
     db.get_shared_store(name)
-        .map(|s| s.borrow().ids.len())
+        .map(|s| s.borrow().ids.len() as u64)
         .unwrap_or(0)
 }
 
