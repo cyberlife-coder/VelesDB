@@ -281,7 +281,7 @@ impl VectorCollection {
         k: usize,
         index_name: &str,
     ) -> Result<Vec<SearchResult>> {
-        let indexes = self.inner.sparse_indexes.read();
+        let indexes = self.inner.query.sparse_indexes.read();
         let index = indexes.get(index_name).ok_or_else(|| {
             crate::error::Error::Config(format!(
                 "Sparse index '{}' not found",
@@ -485,7 +485,7 @@ impl VectorCollection {
     #[cfg(feature = "persistence")]
     #[must_use]
     pub fn is_delta_active(&self) -> bool {
-        self.inner.delta_buffer.is_active()
+        self.inner.streaming.delta_buffer.is_active()
     }
 
     /// Enables streaming ingestion on this collection.

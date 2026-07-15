@@ -165,7 +165,7 @@ impl Collection {
         item: &crate::velesql::ReturnItem,
         projected: &mut HashMap<String, serde_json::Value>,
     ) {
-        let Some(edge) = self.edge_store.get_edge(edge_id) else {
+        let Some(edge) = self.graph.edge_store.get_edge(edge_id) else {
             return;
         };
         let Some(value) = super::where_eval::edge_property_path(&edge, property) else {
@@ -187,7 +187,8 @@ impl Collection {
         let values: Vec<serde_json::Value> = edge_ids
             .iter()
             .map(|&edge_id| {
-                self.edge_store
+                self.graph
+                    .edge_store
                     .get_edge(edge_id)
                     .as_ref()
                     .and_then(|edge| super::where_eval::edge_property_path(edge, property).cloned())
@@ -322,7 +323,7 @@ impl Collection {
             return Ok(results);
         }
 
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let metric = config.metric;
         let expected_dimension = config.dimension;
         drop(config);
@@ -330,8 +331,8 @@ impl Collection {
         validate_dimension_match(expected_dimension, query_vector.len())?;
 
         // Hoist both storage locks once for the entire scoring loop.
-        let payload_guard = self.payload_storage.read();
-        let vector_storage = self.vector_storage.read();
+        let payload_guard = self.storage.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
         let higher_is_better = metric.higher_is_better();
 
         let mut scored_results = self.score_match_results(
@@ -452,7 +453,7 @@ impl Collection {
                  (use similarity(), depth, or alias.property)"
             )));
         };
-        let payload_storage = self.payload_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         results.sort_by(|a, b| {
             let get_value = |r: &MatchResult| -> Option<serde_json::Value> {
                 let node_id = *r.bindings.get(alias)?;
@@ -481,8 +482,8 @@ impl Collection {
         &self,
         match_results: Vec<MatchResult>,
     ) -> Result<Vec<SearchResult>> {
-        let payload_storage = self.payload_storage.read();
-        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
 
         let mut results = Vec::new();
 

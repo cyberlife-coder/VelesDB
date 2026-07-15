@@ -61,9 +61,12 @@ fn compute_hybrid_scored(
     rustc_hash::FxHashMap<u64, (f32, f32)>,
 ) {
     use crate::index::VectorIndex;
-    let raw = collection.index.search(vector_query, overfetch_k);
+    let raw = collection.storage.index.search(vector_query, overfetch_k);
     let vec_res = collection.merge_delta(raw, vector_query, overfetch_k, metric);
-    let text_res = collection.text_index.search(text_query, overfetch_k);
+    let text_res = collection
+        .storage
+        .text_index
+        .search(text_query, overfetch_k);
     Collection::compute_rrf_scores_with_components(
         &vec_res,
         &text_res,
@@ -103,10 +106,10 @@ impl Collection {
     /// Returns an error if storage retrieval fails.
     #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
     pub fn text_search(&self, query: &str, k: usize) -> Result<Vec<SearchResult>> {
-        let bm25_results = self.text_index.search(query, k);
+        let bm25_results = self.storage.text_index.search(query, k);
 
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
 
         let mut results = resolve::resolve_id_score_pairs(
             &bm25_results,
@@ -145,10 +148,10 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         // Retrieve more candidates for filtering
         let candidates_k = k.saturating_mul(4).max(k + 10);
-        let bm25_results = self.text_index.search(query, candidates_k);
+        let bm25_results = self.storage.text_index.search(query, candidates_k);
 
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let now_secs = now_unix_secs();
 
         Ok(bm25_results
@@ -218,7 +221,7 @@ impl Collection {
         vector_weight: Option<f32>,
         rrf_k: Option<u32>,
     ) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let (metric, weight, text_weight, rrf_constant) =
             validated_hybrid_params(&config, vector_query, vector_weight, rrf_k)?;
         drop(config);
@@ -309,8 +312,8 @@ impl Collection {
         scored_ids: &[(u64, f32)],
         component_map: &rustc_hash::FxHashMap<u64, (f32, f32)>,
     ) -> Vec<SearchResult> {
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let now_secs = now_unix_secs();
 
         scored_ids
@@ -355,7 +358,7 @@ impl Collection {
         filter: &crate::filter::Filter,
         rrf_k: Option<u32>,
     ) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let (metric, weight, text_weight, rrf_constant) =
             validated_hybrid_params(&config, vector_query, vector_weight, rrf_k)?;
         drop(config);
@@ -436,7 +439,7 @@ impl Collection {
         anchor_ids: &HashSet<u64>,
         overfetch_k: usize,
     ) -> Result<AnchoredHybridStreams> {
-        let config = self.config.read();
+        let config = self.storage.config.read();
         validate_dimension_match(config.dimension, vector_query.len())?;
         drop(config);
 
@@ -449,7 +452,7 @@ impl Collection {
             .collect();
 
         // BM25 branch: over-fetch then restrict to anchor set.
-        let bm25_all = self.text_index.search(text_query, overfetch_k);
+        let bm25_all = self.storage.text_index.search(text_query, overfetch_k);
         let text_results: Vec<(u64, f32)> = bm25_all
             .into_iter()
             .filter(|(id, _)| anchor_ids.contains(id))
@@ -466,8 +469,8 @@ impl Collection {
         k: usize,
         component_map: &rustc_hash::FxHashMap<u64, (f32, f32)>,
     ) -> Vec<SearchResult> {
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let now_secs = now_unix_secs();
 
         scored_ids

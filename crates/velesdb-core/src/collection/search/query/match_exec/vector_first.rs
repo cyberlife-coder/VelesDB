@@ -53,7 +53,7 @@ impl Collection {
 
         let candidates = self.search(&query_vector, top_k)?;
 
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let higher_is_better = config.metric.higher_is_better();
         drop(config);
 
@@ -89,7 +89,7 @@ impl Collection {
         limit: usize,
         higher_is_better: bool,
     ) -> Result<Vec<MatchResult>> {
-        let payload_guard = self.payload_storage.read();
+        let payload_guard = self.storage.payload_storage.read();
         let mut results = Vec::new();
         let mut examined = 0u64;
 
@@ -258,7 +258,7 @@ impl Collection {
             bindings.insert(alias.clone(), node_id);
         }
 
-        for hit in concurrent_bfs_stream(&self.edge_store, node_id, config) {
+        for hit in concurrent_bfs_stream(&self.graph.edge_store, node_id, config) {
             // Each BFS hit is a node reached by following edges (EXPLAIN ANALYZE).
             ctx.add_traversal(1, 1);
             if let Some(target_pattern) = pattern.nodes.get(hit.depth as usize) {

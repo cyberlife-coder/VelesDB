@@ -26,7 +26,7 @@ impl Collection {
     /// codebook/index). Encode failures on individual vectors degrade
     /// gracefully (logged, vector keeps full-precision scoring).
     pub(crate) fn restore_persisted_quantizers(&self) -> Result<()> {
-        let mode = self.config.read().storage_mode;
+        let mode = self.storage.config.read().storage_mode;
         match mode {
             StorageMode::ProductQuantization => self.restore_persisted_pq(),
             StorageMode::RaBitQ => self.restore_persisted_rabitq(),
@@ -40,16 +40,16 @@ impl Collection {
     /// Lock order: `vector_storage` (2) → `pq_cache` (4) → `pq_quantizer` (5),
     /// acquired sequentially and never inverted.
     fn restore_persisted_pq(&self) -> Result<()> {
-        if self.pq_quantizer.read().is_some() {
+        if self.storage.pq_quantizer.read().is_some() {
             return Ok(());
         }
-        let Some(mut pq) = ProductQuantizer::load_codebook(&self.path)? else {
+        let Some(mut pq) = ProductQuantizer::load_codebook(&self.storage.path)? else {
             return Ok(());
         };
         // Warn-and-degrade like the RaBitQ restore below: a stale or foreign
         // codebook would fail to encode every vector (empty cache + silent
         // f32 fallback), so reject it once here instead.
-        let dimension = self.config.read().dimension;
+        let dimension = self.storage.config.read().dimension;
         if pq.codebook.dimension != dimension {
             tracing::warn!(
                 codebook_dim = pq.codebook.dimension,
@@ -61,7 +61,7 @@ impl Collection {
         // codebook.pq serializes the rotation when trained via OPQ; the
         // standalone rotation.opq artifact covers codebooks saved without it.
         if pq.rotation.is_none() {
-            pq.rotation = ProductQuantizer::load_rotation(&self.path)?;
+            pq.rotation = ProductQuantizer::load_rotation(&self.storage.path)?;
         }
 
         let cache = self.encode_pq_cache(&pq);
@@ -69,8 +69,8 @@ impl Collection {
             entries = cache.len(),
             "restored PQ quantizer from codebook.pq; cache rebuilt on open"
         );
-        *self.pq_cache.write() = cache;
-        *self.pq_quantizer.write() = Some(pq);
+        *self.storage.pq_cache.write() = cache;
+        *self.storage.pq_quantizer.write() = Some(pq);
         Ok(())
     }
 
@@ -80,7 +80,7 @@ impl Collection {
     /// Vectors that fail to encode are skipped with a warning — they keep
     /// their HNSW score in the ADC rescore path (cache-miss semantics).
     fn encode_pq_cache(&self, pq: &ProductQuantizer) -> HashMap<u64, PQVector> {
-        let storage = self.vector_storage.read();
+        let storage = self.storage.vector_storage.read();
         let ids = storage.ids();
         let mut cache = HashMap::with_capacity(ids.len());
         for id in ids {
@@ -107,7 +107,11 @@ impl Collection {
     /// backend). Search then stays on exact f32 distances, which is correct
     /// but unaccelerated.
     fn restore_persisted_rabitq(&self) -> Result<()> {
-        preinstall_persisted_rabitq(&self.path, self.config.read().dimension, &self.index)
+        preinstall_persisted_rabitq(
+            &self.storage.path,
+            self.storage.config.read().dimension,
+            &self.storage.index,
+        )
     }
 
     /// Installs a freshly trained `RaBitQ` quantizer into the live index.
@@ -120,20 +124,20 @@ impl Collection {
     ///
     /// Returns an error if re-encoding a stored vector fails.
     pub(crate) fn install_rabitq_quantizer(&self, rabitq: Arc<RaBitQIndex>) -> Result<bool> {
-        self.index.install_trained_rabitq(rabitq)
+        self.storage.index.install_trained_rabitq(rabitq)
     }
 
     /// Returns true when the HNSW backend is `RaBitQ` with a trained
     /// quantizer (test introspection).
     #[cfg(test)]
     pub(crate) fn is_rabitq_quantizer_trained(&self) -> bool {
-        self.index.is_rabitq_quantizer_trained()
+        self.storage.index.is_rabitq_quantizer_trained()
     }
 
     /// Number of entries in the PQ cache (test introspection).
     #[cfg(test)]
     pub(crate) fn pq_cache_len(&self) -> usize {
-        self.pq_cache.read().len()
+        self.storage.pq_cache.read().len()
     }
 }
 

@@ -215,7 +215,7 @@ impl Collection {
                 anchors,
             )?
         } else {
-            let indexes = self.sparse_indexes.read(); // lock 9 only (no payload needed)
+            let indexes = self.query.sparse_indexes.read(); // lock 9 only (no payload needed)
             let index = indexes
                 .get(index_name)
                 .ok_or_else(|| resolve::sparse_index_not_found(index_name))?;
@@ -242,8 +242,8 @@ impl Collection {
         metadata_filter: Option<&crate::filter::Filter>,
         anchors: Option<&std::collections::HashSet<u64>>,
     ) -> Result<Vec<crate::sparse_index::ScoredDoc>> {
-        let payload_storage = metadata_filter.map(|_| self.payload_storage.read()); // lock 3
-        let indexes = self.sparse_indexes.read(); // lock 9
+        let payload_storage = metadata_filter.map(|_| self.storage.payload_storage.read()); // lock 3
+        let indexes = self.query.sparse_indexes.read(); // lock 9
         let index = indexes
             .get(index_name)
             .ok_or_else(|| resolve::sparse_index_not_found(index_name))?;
@@ -404,8 +404,8 @@ impl Collection {
                 || {
                     if let Some(filter) = metadata_filter {
                         // LOCK ORDER: payload_storage(3) before sparse_indexes(9).
-                        let payload_storage = self.payload_storage.read();
-                        let indexes = self.sparse_indexes.read();
+                        let payload_storage = self.storage.payload_storage.read();
+                        let indexes = self.query.sparse_indexes.read();
                         let Some(index) = indexes.get(index_name) else {
                             return Vec::new();
                         };
@@ -416,7 +416,7 @@ impl Collection {
                         };
                         sparse_search_filtered(index, sparse_query, candidate_k, Some(&filter_fn))
                     } else {
-                        let indexes = self.sparse_indexes.read();
+                        let indexes = self.query.sparse_indexes.read();
                         let Some(index) = indexes.get(index_name) else {
                             return Vec::new();
                         };
@@ -438,8 +438,8 @@ impl Collection {
                 .collect();
             let sparse = if let Some(filter) = metadata_filter {
                 // LOCK ORDER: payload_storage(3) before sparse_indexes(9).
-                let payload_storage = self.payload_storage.read();
-                let indexes = self.sparse_indexes.read();
+                let payload_storage = self.storage.payload_storage.read();
+                let indexes = self.query.sparse_indexes.read();
                 if let Some(index) = indexes.get(index_name) {
                     let filter_fn = |id: u64| {
                         let payload = payload_storage.retrieve(id).ok().flatten();
@@ -451,7 +451,7 @@ impl Collection {
                     Vec::new()
                 }
             } else {
-                let indexes = self.sparse_indexes.read();
+                let indexes = self.query.sparse_indexes.read();
                 if let Some(index) = indexes.get(index_name) {
                     sparse_search(index, sparse_query, candidate_k)
                 } else {
@@ -476,8 +476,8 @@ impl Collection {
         limit: usize,
         capacity_hint: usize,
     ) -> Vec<SearchResult> {
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let now_secs = now_unix_secs();
 
         let mut out = Vec::with_capacity(capacity_hint.min(limit));

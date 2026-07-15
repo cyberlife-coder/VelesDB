@@ -93,11 +93,11 @@ impl Collection {
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<()> {
         let query_vector = Self::resolve_vector(&sim.vector, params)?;
-        let metric = self.config.read().metric;
+        let metric = self.storage.config.read().metric;
         let higher_is_better = metric.higher_is_better();
         // `alias.property` => score the node bound to `alias`; bare => the anchor.
         let alias = parse_property_path(&sim.field).map(|(alias, _)| alias);
-        let vector_storage = self.vector_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
         results.sort_by(|a, b| {
             let score = |r: &MatchResult| -> f32 {
                 let Some(node_id) = resolve_scored_node_id(r, alias) else {
@@ -130,7 +130,7 @@ impl Collection {
         arith: &ArithmeticExpr,
         descending: bool,
     ) {
-        let payload_storage = self.payload_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         results.sort_by(|a, b| {
             let score = |r: &MatchResult| -> f32 {
                 let payload = payload_storage.retrieve(r.node_id).ok().flatten();

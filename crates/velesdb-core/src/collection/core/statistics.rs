@@ -51,7 +51,7 @@ impl Collection {
         // Basic counts from config
         // Note: deleted_count and column_stats are placeholders for future tombstone tracking
         // and per-column cardinality analysis (EPIC-046 future work)
-        let config = self.config.read();
+        let config = self.storage.config.read();
         collector.set_row_count(saturating_u64(config.point_count));
         drop(config);
 
@@ -75,13 +75,13 @@ impl Collection {
         }
 
         // HNSW index statistics
-        let hnsw_len = self.index.len();
+        let hnsw_len = self.storage.index.len();
         let hnsw_stats =
             IndexStats::new("hnsw_primary", "HNSW").with_entry_count(saturating_u64(hnsw_len));
         collector.add_index_stats(hnsw_stats);
 
         // BM25 index statistics - use len() if available
-        let bm25_len = self.text_index.len();
+        let bm25_len = self.storage.text_index.len();
         if bm25_len > 0 {
             let bm25_stats =
                 IndexStats::new("bm25_text", "BM25").with_entry_count(saturating_u64(bm25_len));
@@ -105,7 +105,7 @@ impl Collection {
         let mut null_counts: HashMap<String, u64> = HashMap::new();
         let mut payload_size_bytes = 0u64;
 
-        let payload_storage = self.payload_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let ids = payload_storage.ids();
         for id in ids.into_iter().take(1_000) {
             let Ok(Some(payload)) = payload_storage.retrieve(id) else {
@@ -153,7 +153,7 @@ impl Collection {
     /// collected, sorted lexicographically, deduplicated, and each string is
     /// mapped to its 0-based index in the sorted unique list.
     fn sample_column_values_for_histograms(&self, max_samples: usize) -> HashMap<String, Vec<f64>> {
-        let payload_storage = self.payload_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let ids = payload_storage.ids();
 
         // First pass: collect raw values per column
@@ -239,7 +239,7 @@ impl Collection {
     /// Use `analyze()` directly if error handling is required.
     #[must_use]
     pub fn get_stats(&self) -> CollectionStats {
-        let mut cached = self.cached_stats.lock();
+        let mut cached = self.query.cached_stats.lock();
         if let Some((ref stats, ts)) = *cached {
             if ts.elapsed() < STATS_TTL {
                 return stats.clone();

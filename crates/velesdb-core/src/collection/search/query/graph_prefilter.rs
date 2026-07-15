@@ -155,7 +155,7 @@ impl Collection {
                 super::super::vector_filter::compute_oversampled_k(limit, f)
             })
             .min(super::MAX_LIMIT);
-        let index_results = self.index.search_with_quality_and_bitmap(
+        let index_results = self.storage.index.search_with_quality_and_bitmap(
             vector,
             candidates_k,
             crate::SearchQuality::default(),

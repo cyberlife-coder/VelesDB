@@ -199,22 +199,34 @@ impl Default for RuntimeLimits {
 //  11. deferred_indexer / async_index_builder (internal locks)
 //  12. stats_io_mutex                         (disk I/O only, no other lock held)
 
-/// A collection of vectors with associated metadata.
+/// Vector + payload storage, quantization caches and the columnar mirror.
 ///
-/// Internal executor type — external callers should use `VectorCollection`,
-/// `GraphCollection`, or `MetadataCollection` instead.
+/// Concern cluster **storage** of `Collection` (R1.1 of the god-object split,
+/// EPIC #1384). Grouping is a pure declaration/access-path change: no lock is
+/// added, removed, merged, or re-ordered — the runtime acquisition order is
+/// dictated by code, never by field placement. Lock-order positions of the
+/// individual fields are preserved verbatim below.
+///
+/// `Clone` for the same reason `Collection` is: every field is an `Arc`, so a
+/// clone shares state and stays cheap.
 #[derive(Clone)]
-pub(crate) struct Collection {
+pub(crate) struct StorageState {
     /// Path to the collection data.
     pub(super) path: PathBuf,
 
     /// Collection configuration.
+    ///
+    /// Lock order position: **1**.
     pub(super) config: Arc<RwLock<CollectionConfig>>,
 
     /// Vector storage (on-disk, memory-mapped).
+    ///
+    /// Lock order position: **2**.
     pub(super) vector_storage: Arc<RwLock<MmapStorage>>,
 
     /// Payload storage (on-disk, log-structured).
+    ///
+    /// Lock order position: **3**.
     pub(super) payload_storage: Arc<RwLock<LogPayloadStorage>>,
 
     /// HNSW index for fast approximate nearest neighbor search.
@@ -224,22 +236,50 @@ pub(crate) struct Collection {
     pub(super) text_index: Arc<Bm25Index>,
 
     /// SQ8 quantized vectors cache (for SQ8 storage mode).
+    ///
+    /// Lock order position: **4**.
     pub(super) sq8_cache: Arc<RwLock<HashMap<u64, QuantizedVector>>>,
 
     /// Binary quantized vectors cache (for Binary storage mode).
+    ///
+    /// Lock order position: **4**.
     pub(super) binary_cache: Arc<RwLock<HashMap<u64, BinaryQuantizedVector>>>,
 
     /// PQ quantized vectors cache (for ProductQuantization storage mode).
+    ///
+    /// Lock order position: **4**.
     pub(super) pq_cache: Arc<RwLock<HashMap<u64, PQVector>>>,
 
     /// Trained ProductQuantizer (lazy-trained on first inserted vectors).
+    ///
+    /// Lock order position: **5** (`pq_quantizer` → `pq_training_buffer`).
     pub(super) pq_quantizer: Arc<RwLock<Option<ProductQuantizer>>>,
 
     /// Buffer of first vectors used to train PQ codebooks.
     /// Stores `(point_id, vector)` so trained quantizers can backfill cache entries.
+    ///
+    /// Lock order position: **5** (`pq_quantizer` → `pq_training_buffer`).
     pub(super) pq_training_buffer: Arc<RwLock<VecDeque<PqTrainingSample>>>,
 
+    /// Columnar mirror of top-level scalar payload fields (`ColumnStore`).
+    ///
+    /// Lazily built when full-scan debt warrants it; consulted by
+    /// `dispatch_metadata_filter` before the JSON scan fallback.
+    /// Lock order position: **1b** — held while acquiring `vector_storage`
+    /// (2) and `payload_storage` (3) during the lazy build; mutation hooks
+    /// and queries acquire it with no other collection lock held.
+    pub(crate) payload_mirror: Arc<crate::collection::payload_mirror::PayloadMirror>,
+}
+
+/// Graph node/edge indexes, advisors and the edge store.
+///
+/// Concern cluster **graph** of `Collection` (R1.1, EPIC #1384). See
+/// [`StorageState`] for the lock-order-preservation rationale.
+#[derive(Clone)]
+pub(crate) struct GraphState {
     /// Property index for O(1) equality lookups on graph nodes (EPIC-009).
+    ///
+    /// Lock order position: **7**.
     pub(super) property_index: Arc<RwLock<PropertyIndex>>,
 
     /// Label index for O(1) label-based node lookups (Issue #486).
@@ -252,6 +292,8 @@ pub(crate) struct Collection {
     pub(super) label_index: Arc<RwLock<LabelIndex>>,
 
     /// Range index for O(log n) range queries on graph nodes (EPIC-009).
+    ///
+    /// Lock order position: **7**.
     pub(super) range_index: Arc<RwLock<RangeIndex>>,
 
     /// Graph node property range indexes keyed by `"label.property"` (EPIC-047).
@@ -306,37 +348,24 @@ pub(crate) struct Collection {
     /// held; the edge store's internal `edge_ids → shards` chain is acquired
     /// while holding it.
     pub(super) edge_wal_lock: Arc<Mutex<()>>,
+}
 
+/// Secondary/sparse payload indexes and the query-execution engine state.
+///
+/// Concern cluster **query** of `Collection` (R1.1, EPIC #1384). See
+/// [`StorageState`] for the lock-order-preservation rationale.
+#[derive(Clone)]
+pub(crate) struct QueryState {
     /// Named sparse inverted indexes for sparse vector search (EPIC-062).
     /// Key is the sparse vector name (e.g., `""` for default, `"title"`, `"body"`).
+    ///
+    /// Lock order position: **9**.
     pub(super) sparse_indexes: Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>>,
 
     /// Secondary indexes for metadata payload fields.
+    ///
+    /// Lock order position: **6**.
     pub(super) secondary_indexes: Arc<RwLock<HashMap<String, SecondaryIndex>>>,
-
-    /// Columnar mirror of top-level scalar payload fields (`ColumnStore`).
-    ///
-    /// Lazily built when full-scan debt warrants it; consulted by
-    /// `dispatch_metadata_filter` before the JSON scan fallback.
-    /// Lock order position: **1b** — held while acquiring `vector_storage`
-    /// (2) and `payload_storage` (3) during the lazy build; mutation hooks
-    /// and queries acquire it with no other collection lock held.
-    pub(crate) payload_mirror: Arc<crate::collection::payload_mirror::PayloadMirror>,
-
-    /// Guard-rails for query execution (EPIC-048).
-    pub(crate) guard_rails: Arc<GuardRails>,
-
-    /// Runtime ingest/search limits pushed from the live
-    /// [`VelesConfig::limits`](crate::config::LimitsConfig) at `Database`
-    /// registration time (parity item E).
-    ///
-    /// Defaults to the permissive [`RuntimeLimits::default`] so direct
-    /// `Collection::create`/`open` callers are unaffected; the `Database`
-    /// registration paths overwrite it via [`Collection::set_runtime_limits`].
-    /// `Arc<RwLock<_>>` so every `Collection` clone shares the same value and
-    /// the setter can run after the registry has cloned the collection.
-    /// **Not persisted** — re-pushed on every open.
-    pub(crate) runtime_limits: Arc<RwLock<RuntimeLimits>>,
 
     /// Query planner for cost-based optimization (EPIC-046).
     pub(crate) query_planner: Arc<QueryPlanner>,
@@ -353,7 +382,14 @@ pub(crate) struct Collection {
     /// at 11). Protects only disk I/O — no other lock is held while this one is
     /// held, so it cannot participate in a deadlock chain.
     pub(super) stats_io_mutex: Arc<Mutex<()>>,
+}
 
+/// Monotonic generation counters that gate compiled-plan cache invalidation.
+///
+/// Concern cluster **generations** of `Collection` (R1.1, EPIC #1384). These
+/// are lock-free atomics; grouping them changes no synchronization.
+#[derive(Clone)]
+pub(crate) struct GenerationCounters {
     /// Monotonic write generation counter (CACHE-01).
     ///
     /// Incremented once per mutation batch (upsert, `upsert_bulk`, `upsert_metadata`, delete).
@@ -376,7 +412,17 @@ pub(crate) struct Collection {
     /// When this counter exceeds `HNSW_SAVE_THRESHOLD`, `flush()` saves the
     /// HNSW graph as a safety measure. `flush_full()` always saves and resets.
     pub(crate) inserts_since_last_hnsw_save: Arc<std::sync::atomic::AtomicU64>,
+}
 
+/// Streaming ingestion, delta buffering and deferred/async/auto indexing.
+///
+/// Concern cluster **streaming** of `Collection` (R1.1, EPIC #1384). Three of
+/// the five fields are `#[cfg(feature = "persistence")]`; the cfg attributes
+/// stay on the individual fields so the struct compiles (and derives `Clone`)
+/// under both `--features persistence` and `--no-default-features`. See
+/// [`StorageState`] for the lock-order-preservation rationale.
+#[derive(Clone)]
+pub(crate) struct StreamingState {
     /// Streaming ingestion handle (STREAM-01).
     ///
     /// `None` when streaming is not configured. Wrapped in `RwLock` so that
@@ -434,11 +480,65 @@ pub(crate) struct Collection {
         Arc<RwLock<Option<Arc<crate::collection::auto_reindex::AutoReindexManager>>>>,
 }
 
+/// Query-execution guard-rails and the runtime ingest/search limits.
+///
+/// Concern cluster **runtime** of `Collection` (R1.1, EPIC #1384).
+#[derive(Clone)]
+pub(crate) struct RuntimeGuards {
+    /// Guard-rails for query execution (EPIC-048).
+    pub(crate) guard_rails: Arc<GuardRails>,
+
+    /// Runtime ingest/search limits pushed from the live
+    /// [`VelesConfig::limits`](crate::config::LimitsConfig) at `Database`
+    /// registration time (parity item E).
+    ///
+    /// Defaults to the permissive [`RuntimeLimits::default`] so direct
+    /// `Collection::create`/`open` callers are unaffected; the `Database`
+    /// registration paths overwrite it via [`Collection::set_runtime_limits`].
+    /// `Arc<RwLock<_>>` so every `Collection` clone shares the same value and
+    /// the setter can run after the registry has cloned the collection.
+    /// **Not persisted** — re-pushed on every open.
+    pub(crate) runtime_limits: Arc<RwLock<RuntimeLimits>>,
+}
+
+/// A collection of vectors with associated metadata.
+///
+/// Internal executor type — external callers should use `VectorCollection`,
+/// `GraphCollection`, or `MetadataCollection` instead.
+///
+/// The ~39 shared fields are grouped into six concern sub-structs
+/// ([`StorageState`], [`GraphState`], [`QueryState`], [`GenerationCounters`],
+/// [`StreamingState`], [`RuntimeGuards`]) as the foundation of the god-object
+/// split (R1.1 of EPIC #1384). This is a pure structural regrouping: the lock
+/// ordering documented above is unchanged (no lock added, removed, merged, or
+/// re-ordered), every field keeps its original visibility and `cfg`, and the
+/// public API is untouched.
+#[derive(Clone)]
+pub(crate) struct Collection {
+    /// Vector + payload storage, quantization caches and columnar mirror.
+    pub(crate) storage: StorageState,
+
+    /// Graph node/edge indexes, advisors and the edge store.
+    pub(crate) graph: GraphState,
+
+    /// Secondary/sparse payload indexes and query-execution engine state.
+    pub(crate) query: QueryState,
+
+    /// Monotonic generation counters for plan-cache invalidation.
+    pub(crate) generations: GenerationCounters,
+
+    /// Streaming ingestion, delta buffering and deferred/async/auto indexing.
+    pub(crate) streaming: StreamingState,
+
+    /// Query-execution guard-rails and runtime ingest/search limits.
+    pub(crate) runtime: RuntimeGuards,
+}
+
 impl Collection {
     /// Returns a reference to the named sparse indexes lock (EPIC-062 sparse integration).
     #[allow(dead_code)] // Reason: Used in tests for sparse index verification
     pub(crate) fn sparse_indexes(&self) -> &Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>> {
-        &self.sparse_indexes
+        &self.query.sparse_indexes
     }
 
     /// Overwrites the runtime ingest/search limits (parity item E).
@@ -447,12 +547,12 @@ impl Collection {
     /// [`VelesConfig::limits`](crate::config::LimitsConfig) into the
     /// collection. The value is **not** persisted — each open re-pushes it.
     pub(crate) fn set_runtime_limits(&self, limits: RuntimeLimits) {
-        *self.runtime_limits.write() = limits;
+        *self.runtime.runtime_limits.write() = limits;
     }
 
     /// Returns the current runtime limits snapshot (`Copy`, no lock retained).
     pub(crate) fn runtime_limits(&self) -> RuntimeLimits {
-        *self.runtime_limits.read()
+        *self.runtime.runtime_limits.read()
     }
 
     /// Enforces the runtime ingest limits at the cold upsert boundary
@@ -550,7 +650,8 @@ impl Collection {
     /// The counter starts at 0 and increments once per mutation batch.
     #[must_use]
     pub(crate) fn write_generation(&self) -> u64 {
-        self.write_generation
+        self.generations
+            .write_generation
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -562,7 +663,8 @@ impl Collection {
     /// mutation has bumped `write_generation`.
     #[must_use]
     pub(crate) fn analyze_generation(&self) -> u64 {
-        self.analyze_generation
+        self.generations
+            .analyze_generation
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -573,7 +675,8 @@ impl Collection {
     /// on every query dispatch; observing a slightly stale counter on a
     /// concurrent reader at most causes one extra cache miss (self-healing).
     pub(crate) fn bump_analyze_generation(&self) {
-        self.analyze_generation
+        self.generations
+            .analyze_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -592,7 +695,7 @@ impl Collection {
     /// Returns [`BackpressureError`] on buffer-full or not-configured.
     #[cfg(feature = "persistence")]
     pub fn stream_insert(&self, point: Point) -> Result<(), BackpressureError> {
-        let guard = self.stream_ingester.read();
+        let guard = self.streaming.stream_ingester.read();
         match guard.as_ref() {
             Some(ingester) => ingester.try_send(point),
             None => Err(BackpressureError::NotConfigured),
@@ -611,7 +714,7 @@ impl Collection {
     /// Returns [`BackpressureError`] on buffer-full, drain-dead, or not-configured.
     #[cfg(feature = "persistence")]
     pub fn stream_insert_batch(&self, points: Vec<Point>) -> Result<usize, BackpressureError> {
-        let guard = self.stream_ingester.read();
+        let guard = self.streaming.stream_ingester.read();
         match guard.as_ref() {
             Some(ingester) => ingester.try_send_batch(points),
             None => Err(BackpressureError::NotConfigured),
@@ -632,7 +735,7 @@ impl Collection {
     pub fn enable_streaming(&self, config: crate::collection::streaming::StreamingConfig) {
         use crate::collection::streaming::StreamIngester;
         let ingester = StreamIngester::new(self.clone(), config);
-        *self.stream_ingester.write() = Some(ingester);
+        *self.streaming.stream_ingester.write() = Some(ingester);
     }
 
     /// Pushes entries into the delta buffer if it is currently active.
@@ -643,8 +746,9 @@ impl Collection {
     /// No-op when the delta buffer is inactive.
     #[cfg(feature = "persistence")]
     pub fn push_to_delta_if_active(&self, entries: &[(u64, Vec<f32>)]) {
-        if self.delta_buffer.is_active() {
-            self.delta_buffer
+        if self.streaming.delta_buffer.is_active() {
+            self.streaming
+                .delta_buffer
                 .extend(entries.iter().map(|(id, v)| (*id, v.clone())));
         }
     }
@@ -667,8 +771,8 @@ impl Collection {
     ) {
         // Mirror the policy into the persisted config first (config lock
         // released before the auto_reindex lock at position 11 is taken).
-        self.config.write().auto_reindex_config = Some(manager.config());
-        *self.auto_reindex.write() = Some(manager);
+        self.storage.config.write().auto_reindex_config = Some(manager.config());
+        *self.streaming.auto_reindex.write() = Some(manager);
     }
 
     /// Detaches the currently attached auto-reindex manager, if any.
@@ -680,8 +784,8 @@ impl Collection {
     pub(crate) fn detach_auto_reindex(
         &self,
     ) -> Option<Arc<crate::collection::auto_reindex::AutoReindexManager>> {
-        self.config.write().auto_reindex_config = None;
-        self.auto_reindex.write().take()
+        self.storage.config.write().auto_reindex_config = None;
+        self.streaming.auto_reindex.write().take()
     }
 
     /// Returns a clone of the currently attached auto-reindex manager, if any.
@@ -692,7 +796,7 @@ impl Collection {
     pub(crate) fn auto_reindex_manager(
         &self,
     ) -> Option<Arc<crate::collection::auto_reindex::AutoReindexManager>> {
-        self.auto_reindex.read().as_ref().map(Arc::clone)
+        self.streaming.auto_reindex.read().as_ref().map(Arc::clone)
     }
 
     /// Returns a [`DivergenceCheck`](crate::collection::auto_reindex::DivergenceCheck)
@@ -733,7 +837,7 @@ impl Collection {
         let (params, size, dimension) = self.auto_reindex_inputs();
         if manager.should_reindex(&params, size, dimension) {
             tracing::info!(
-                collection = %self.config.read().name,
+                collection = %self.storage.config.read().name,
                 current_size = size,
                 dimension = dimension,
                 "auto-reindex manager reports divergence — reindex recommended"
@@ -750,11 +854,11 @@ impl Collection {
     /// and [`Self::notify_auto_reindex_after_bulk`] share the same source
     /// of truth instead of drifting.
     fn auto_reindex_inputs(&self) -> (crate::index::hnsw::HnswParams, usize, usize) {
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let params = config.hnsw_params.unwrap_or_default();
         let dimension = config.dimension;
         drop(config);
-        let size = self.vector_storage.read().len();
+        let size = self.storage.vector_storage.read().len();
         (params, size, dimension)
     }
 }
