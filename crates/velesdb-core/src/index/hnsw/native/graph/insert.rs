@@ -272,7 +272,16 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             && self.distance.metric() == crate::DistanceMetric::Cosine
         {
             for i in first..storage.len() {
-                if let Some(stored) = storage.get_mut(i) {
+                // `i` is in `first..storage.len()`, i.e. a slot we just pushed,
+                // so `get_mut` is always `Some`. Assert it: a `None` here would
+                // leave a raw (un-normalized) cosine vector in storage and
+                // silently corrupt every distance computed against it.
+                let stored = storage.get_mut(i);
+                debug_assert!(
+                    stored.is_some(),
+                    "just-pushed vector slot {i} missing during in-place normalization"
+                );
+                if let Some(stored) = stored {
                     crate::simd_native::normalize_inplace_native(stored);
                 }
             }
