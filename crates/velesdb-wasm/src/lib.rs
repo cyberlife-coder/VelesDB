@@ -66,6 +66,9 @@ mod memory_service;
 /// The in-memory `MemoryStore` backend for `velesdb-memory`'s agent-memory
 /// wedge — see [`memory_store::WasmStore`].
 mod memory_store;
+/// Wasm-local read-path control-plane hook (audit F-5.4, #1392) — see
+/// [`observer::WasmObserver`].
+mod observer;
 mod parsing;
 mod persistence;
 mod serialization;
@@ -111,6 +114,9 @@ pub use agent::SemanticMemory;
 pub use database::{WasmCollectionHandle, WasmDatabase};
 pub use graph::{GraphEdge, GraphNode, GraphStore};
 pub use memory_service::WasmMemoryService;
+pub use observer::{
+    WasmAccessDecision, WasmObserver, WasmQueryAccessContext, WasmQueryOperationKind,
+};
 pub use vector_store::VectorStore;
 pub use velesdb_core::DistanceMetric;
 
