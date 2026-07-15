@@ -41,13 +41,13 @@ Both branches feed into the same `dispatch_vector_query` executor through the `(
 
 **What remains open**: the deeper `PlanGenerator::CandidatePlan` enumeration (SeqScan, IndexScan, VectorSearch, GraphTraversal, hybrid combinations) is still not consumed by `execute_query`. The current two-path routing covers the operationally common cases — full multi-candidate enumeration would only change the decision when the cost landscape is non-trivially multimodal.
 
-**Strategy realization on SELECT (audit F-2.15)**: the `ExecutionStrategy` the planner selects is not executed as three physically distinct engines on the SELECT path. As documented in `velesql/planner.rs`:
+**Strategy realization on SELECT (audit F-2.15 — RESOLVED, #1390)**: on the NEAR + metadata-filter SELECT path (`execution_paths.rs`, `dispatch_vector_with_strategy`), the `ExecutionStrategy` the planner selects is executed as three **physically distinct** plans:
 
-- `VectorFirst` — executed natively (HNSW-first, then filter).
-- `GraphFirst` — realized as an **anchor pre-filter** (compute the candidate id set, then run the vector search constrained to it), not a graph-driven scan.
-- `Parallel` — **collapses to `VectorFirst`** on SELECT; it is not run as concurrent branches. On `MATCH`, `Parallel` executes sequentially.
+- `VectorFirst` — filtered HNSW search (`search_with_filter_and_opts`).
+- `GraphFirst` — a full metadata scan scored by vector similarity (`scan_and_score_by_vector`), physically distinct from the HNSW path.
+- `Parallel` — the GraphFirst scan and the VectorFirst HNSW branch run **concurrently** via `rayon::join`, then merge by best-score-per-id. On `MATCH` (`match_dispatch.rs`, `execute_match_parallel`), `Parallel` likewise runs its GraphFirst and VectorFirst legs concurrently via `rayon::join` and merges by `node_id`.
 
-This is a deliberate, assumed limitation (the planner's cost model still picks the cheapest strategy; the executor just realizes `GraphFirst`/`Parallel` conservatively), not a hidden bug. Hybrid-query optimization that executes these strategies distinctly is a future item.
+The concurrent Parallel result set is identical to the former sequential one (both legs are read-only; the merge is order-insensitive); the shared EXPLAIN counters remain the sum of both legs (atomic `fetch_add`). The other SELECT arms (similarity() threshold, pure NEAR, metadata-only, SELECT *) each have a single sensible physical plan and deliberately ignore the strategy — see the `dispatch_vector_query` match arms for the per-arm rationale. SELECT graph predicates still use their own anchored pre-filter (`graph_prefilter.rs`) independently of `ExecutionStrategy`. Covered by `test_parallel_strategy_returns_best_score_union_of_both_branches`, the forced-`GraphFirst`/`VectorFirst` dispatch tests, and `parallel_counters_sum_both_legs`.
 
 **User impact**: `MATCH` queries use the full CBO via `MatchQueryPlanner::plan`. SELECT queries (including ORDER BY similarity + filter) now use calibrated strategy and over-fetch selection. Covered by `test_cbo_forces_vector_first_for_order_by_similarity_with_selective_filter` + `test_cbo_calibrated_path_still_works_without_order_by_similarity` + `test_filter_strategy_switches_on_selectivity`.
 

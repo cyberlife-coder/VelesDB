@@ -130,6 +130,213 @@ fn test_parallel_strategy_returns_best_score_union_of_both_branches() {
     }
 }
 
+/// Shared fixture: 20 `category="tech"` points whose second vector component
+/// increases with the id, so cosine similarity to `[1,0,0,0]` is strictly
+/// monotone in the id (id 1 = closest). Distinct scores make every strategy's
+/// output fully ordered and deterministic.
+fn setup_parallel_fixture() -> (tempfile::TempDir, crate::collection::Collection) {
+    let (dir, col) = setup_collection(4);
+    let points: Vec<Point> = (1..=20u64)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let v = vec![1.0, i as f32 * 0.05, 0.0, 0.0];
+            make_point_with_payload(i, v, serde_json::json!({"category": "tech"}))
+        })
+        .collect();
+    col.upsert(points).expect("test: upsert");
+    (dir, col)
+}
+
+fn tech_filter() -> crate::filter::Filter {
+    crate::filter::Filter::new(crate::filter::Condition::Eq {
+        field: "category".into(),
+        value: serde_json::json!("tech"),
+    })
+}
+
+/// GIVEN a filtered collection
+/// WHEN dispatching with a FORCED `ExecutionStrategy::GraphFirst`
+/// THEN the result equals the exhaustive `scan_and_score_by_vector`
+///      realization (a full metadata scan scored by vector similarity),
+///      physically distinct from the HNSW path.
+#[test]
+fn test_graph_first_strategy_matches_exhaustive_scan_reference() {
+    let (_dir, col) = setup_parallel_fixture();
+    let filter = tech_filter();
+    let query = [1.0, 0.0, 0.0, 0.0];
+    let opts = QuerySearchOptions::default();
+    let (k, limit) = (10, 3);
+
+    let graph_first = col
+        .dispatch_vector_with_strategy(
+            &query,
+            &filter,
+            ExecutionStrategy::GraphFirst,
+            k,
+            limit,
+            &opts,
+        )
+        .expect("test: graph-first dispatch");
+
+    let expected = col.scan_and_score_by_vector(&filter, &query, limit);
+
+    assert_eq!(
+        ids_of(&graph_first),
+        ids_of(&expected),
+        "GraphFirst must equal the exhaustive scan-and-score realization"
+    );
+    assert_eq!(graph_first.len(), limit, "GraphFirst returns top-`limit`");
+    assert_eq!(graph_first[0].point.id, 1, "closest point ranks first");
+}
+
+/// GIVEN a filtered collection
+/// WHEN dispatching with a FORCED `ExecutionStrategy::VectorFirst`
+/// THEN the result equals the filtered-HNSW `search_with_filter_and_opts`
+///      realization (up to `k` candidates), distinct from the GraphFirst scan.
+#[test]
+fn test_vector_first_strategy_matches_hnsw_filtered_reference() {
+    let (_dir, col) = setup_parallel_fixture();
+    let filter = tech_filter();
+    let query = [1.0, 0.0, 0.0, 0.0];
+    let opts = QuerySearchOptions::default();
+    let (k, limit) = (10, 3);
+
+    let vector_first = col
+        .dispatch_vector_with_strategy(
+            &query,
+            &filter,
+            ExecutionStrategy::VectorFirst,
+            k,
+            limit,
+            &opts,
+        )
+        .expect("test: vector-first dispatch");
+
+    let expected = col
+        .search_with_filter_and_opts(&query, k, &filter, &opts)
+        .expect("test: vector reference");
+
+    assert_eq!(
+        ids_of(&vector_first),
+        ids_of(&expected),
+        "VectorFirst must equal the filtered-HNSW realization"
+    );
+}
+
+/// GIVEN the same data, filter, query, k, and limit
+/// WHEN dispatched under GraphFirst, VectorFirst, and Parallel
+/// THEN the three strategies are observably distinct physical plans: the
+///      VectorFirst set (up to `k` HNSW candidates) differs from the
+///      GraphFirst set (top-`limit` exhaustive), and Parallel is the
+///      best-score-per-id merge of both.
+#[test]
+fn test_three_strategies_yield_distinct_result_sets() {
+    let (_dir, col) = setup_parallel_fixture();
+    let filter = tech_filter();
+    let query = [1.0, 0.0, 0.0, 0.0];
+    let opts = QuerySearchOptions::default();
+    let (k, limit) = (10, 3);
+
+    let graph_first = col
+        .dispatch_vector_with_strategy(
+            &query,
+            &filter,
+            ExecutionStrategy::GraphFirst,
+            k,
+            limit,
+            &opts,
+        )
+        .expect("test: graph-first");
+    let vector_first = col
+        .dispatch_vector_with_strategy(
+            &query,
+            &filter,
+            ExecutionStrategy::VectorFirst,
+            k,
+            limit,
+            &opts,
+        )
+        .expect("test: vector-first");
+    let parallel = col
+        .dispatch_vector_with_strategy(
+            &query,
+            &filter,
+            ExecutionStrategy::Parallel,
+            k,
+            limit,
+            &opts,
+        )
+        .expect("test: parallel");
+
+    // GraphFirst (top-3 exhaustive) is not the VectorFirst set (10 candidates):
+    // three physically distinct realizations, not one collapsed path.
+    assert_ne!(
+        ids_of(&graph_first),
+        ids_of(&vector_first),
+        "GraphFirst and VectorFirst must produce distinct result-sets"
+    );
+
+    // Parallel equals the documented best-score-per-id merge of both legs.
+    let graph_ref = col.scan_and_score_by_vector(&filter, &query, limit);
+    let vector_ref = col
+        .search_with_filter_and_opts(&query, k, &filter, &opts)
+        .expect("test: vector ref");
+    let expected = merge_select_parallel_results(graph_ref, vector_ref, true, limit);
+    assert_eq!(
+        ids_of(&parallel),
+        ids_of(&expected),
+        "Parallel must equal the best-score-per-id union of both legs"
+    );
+}
+
+/// The concurrent (`rayon::join`) Parallel realization is DETERMINISTIC: the
+/// same forced dispatch, repeated, returns byte-identical ids AND scores,
+/// proving the switch from sequential to concurrent execution changed nothing
+/// observable (the merge is order-insensitive over immutable data).
+#[test]
+fn test_parallel_concurrent_dispatch_is_deterministic() {
+    let (_dir, col) = setup_parallel_fixture();
+    let filter = tech_filter();
+    let query = [1.0, 0.0, 0.0, 0.0];
+    let opts = QuerySearchOptions::default();
+    let (k, limit) = (10, 5);
+
+    let first = col
+        .dispatch_vector_with_strategy(
+            &query,
+            &filter,
+            ExecutionStrategy::Parallel,
+            k,
+            limit,
+            &opts,
+        )
+        .expect("test: parallel run 1");
+
+    for run in 0..8 {
+        let again = col
+            .dispatch_vector_with_strategy(
+                &query,
+                &filter,
+                ExecutionStrategy::Parallel,
+                k,
+                limit,
+                &opts,
+            )
+            .expect("test: parallel repeat");
+        assert_eq!(
+            ids_of(&first),
+            ids_of(&again),
+            "Parallel ids must be identical across runs (run {run})"
+        );
+        let scores_first: Vec<f32> = first.iter().map(|r| r.score).collect();
+        let scores_again: Vec<f32> = again.iter().map(|r| r.score).collect();
+        assert_eq!(
+            scores_first, scores_again,
+            "Parallel scores must be identical across runs (run {run})"
+        );
+    }
+}
+
 // ============================================================================
 // B. Cost-model-driven metadata fallback (audit F-4.7, issue #1391)
 // ============================================================================

@@ -198,12 +198,20 @@ impl Collection {
 
     /// Executes the Parallel MATCH strategy (Wave 6 Phase D).
     ///
-    /// Runs GraphFirst and VectorFirst sequentially, then merges the result
-    /// sets by `node_id` (union semantics -- best score wins for duplicates).
+    /// Runs the GraphFirst and VectorFirst legs CONCURRENTLY via `rayon::join`
+    /// (R2, #1390), then merges the result sets by `node_id` (union semantics --
+    /// best score wins for duplicates).
     ///
-    /// True parallel execution (rayon/tokio) is a future optimisation; the
-    /// sequential approach is correct and avoids concurrency complexity for
-    /// typical MATCH query sizes.
+    /// # Determinism & counter invariant
+    ///
+    /// Both legs are read-only over immutable collection data, so the merged
+    /// result set is identical to the former sequential execution — only
+    /// wall-clock latency changes. Both legs share the same [`QueryContext`],
+    /// whose EXPLAIN counters (`traversal_nodes_visited` /
+    /// `traversal_edges_traversed`) are `AtomicU64` updated with `fetch_add`;
+    /// concurrent `fetch_add` is commutative, so the "Parallel = sum of both
+    /// legs" contract asserted by `parallel_counters_sum_both_legs` is
+    /// preserved regardless of interleaving.
     fn execute_match_parallel(
         &self,
         match_clause: &crate::velesql::MatchClause,
@@ -211,34 +219,43 @@ impl Collection {
         ctx: &crate::guardrails::QueryContext,
         vector_hint: &crate::velesql::match_planner::MatchExecutionStrategy,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
-        // Phase 1: GraphFirst path.
-        let graph_results = self.execute_match_with_context(match_clause, params, Some(ctx))?;
-
-        // Phase 2: VectorFirst path (extract hint parameters).
-        let vector_results =
+        // Extract the VectorFirst hint parameters once, before the join.
+        let vector_first =
             if let crate::velesql::match_planner::MatchExecutionStrategy::VectorFirst {
                 similarity_alias,
                 top_k,
                 threshold,
             } = vector_hint
             {
-                self.execute_match_vector_first(
-                    match_clause,
-                    params,
-                    ctx,
-                    similarity_alias,
-                    *top_k,
-                    *threshold,
-                )?
+                Some((similarity_alias.as_str(), *top_k, *threshold))
             } else {
                 tracing::warn!(
                     "Parallel strategy vector_hint is not VectorFirst; \
                      skipping vector path"
                 );
-                Vec::new()
+                None
             };
 
-        // Phase 3: Merge by node_id (union, best score wins per metric polarity).
+        // GraphFirst leg + VectorFirst leg run concurrently. The shared `ctx`
+        // is `Sync` (all counters are atomics), so both closures may accumulate
+        // traversal metrics into it in parallel.
+        let graph_leg = || self.execute_match_with_context(match_clause, params, Some(ctx));
+        let vector_leg = || match vector_first {
+            Some((alias, top_k, threshold)) => {
+                self.execute_match_vector_first(match_clause, params, ctx, alias, top_k, threshold)
+            }
+            None => Ok(Vec::new()),
+        };
+
+        #[cfg(feature = "persistence")]
+        let (graph_results, vector_results) = rayon::join(graph_leg, vector_leg);
+        #[cfg(not(feature = "persistence"))]
+        let (graph_results, vector_results) = (graph_leg(), vector_leg());
+
+        let graph_results = graph_results?;
+        let vector_results = vector_results?;
+
+        // Merge by node_id (union, best score wins per metric polarity).
         let config = self.config.read();
         let higher_is_better = config.metric.higher_is_better();
         drop(config);
