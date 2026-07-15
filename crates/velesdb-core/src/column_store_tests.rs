@@ -462,6 +462,39 @@ mod tests {
         assert!(store.get_column("rating").is_some());
     }
 
+    /// `add_column` does not backfill, so calling it once rows exist would
+    /// silently desynchronize the store. The debug guard must catch it.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "add_column called with 1 existing row(s)")]
+    fn test_add_column_debug_guard_rejects_non_empty_store() {
+        // Arrange - store with one row already pushed
+        let mut store = ColumnStore::with_schema(&[("id", ColumnType::Int)]);
+        store.push_row(&[("id", ColumnValue::Int(1))]);
+
+        // Act - adding a column without backfill must trip the debug guard
+        store.add_column("late", &ColumnType::Float);
+    }
+
+    /// `add_column_backfilled` is the supported path once rows exist: the new
+    /// column must be padded with nulls up to `row_count`.
+    #[test]
+    fn test_add_column_backfilled_aligns_with_existing_rows() {
+        // Arrange - store with two rows already pushed
+        let mut store = ColumnStore::with_schema(&[("id", ColumnType::Int)]);
+        store.push_row(&[("id", ColumnValue::Int(1))]);
+        store.push_row(&[("id", ColumnValue::Int(2))]);
+
+        // Act
+        store.add_column_backfilled("late", &ColumnType::Float);
+
+        // Assert - column exists, aligned with row_count, and backfilled nulls
+        let column = store.get_column("late").expect("column must exist");
+        assert_eq!(column.len(), store.row_count());
+        assert!(column.get_as_json_non_string(0).is_none());
+        assert!(column.get_as_json_non_string(1).is_none());
+    }
+
     // =========================================================================
     // TDD Tests for EPIC-020 US-001: Primary Key Index
     // =========================================================================

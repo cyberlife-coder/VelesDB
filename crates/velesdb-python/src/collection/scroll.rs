@@ -3,17 +3,29 @@
 //! Provides `Collection.scroll()` — a Python generator that yields batches
 //! of points via the Rust-native `scroll_batch` method.
 
+use std::sync::Arc;
+
 use pyo3::exceptions::{PyImportError, PyValueError};
 use pyo3::prelude::*;
+use velesdb_core::{Database as CoreDatabase, QueryOperationKind};
 
 use crate::collection::Collection;
 use crate::collection_helpers::{core_err, parse_optional_filter, point_to_dict};
+
+use super::and_scope;
 
 /// Python iterator that yields batches from `scroll_batch`.
 #[pyclass]
 pub(crate) struct ScrollIterator {
     /// Clone of the inner collection (cheap — Arc-wrapped).
     inner: velesdb_core::VectorCollection,
+    /// Shared handle to the owning database. `inner` is a detached leaf with
+    /// no observer reference, so every batch read consults this handle's
+    /// control-plane read gate (`authorize_read`) — a long-lived cursor keeps
+    /// honoring governance decisions made after it was created (#1405).
+    db: Arc<CoreDatabase>,
+    /// Collection name the gate is keyed on.
+    name: String,
     /// Current cursor position (`None` = start).
     cursor: Option<u64>,
     /// Maximum points per batch.
@@ -58,6 +70,8 @@ impl ScrollIterator {
         // Snapshot inputs for the blocking closure. `inner` is already
         // `Arc`-backed so the clone is a ref-count bump.
         let inner = self.inner.clone();
+        let db = Arc::clone(&self.db);
+        let name = self.name.clone();
         let cursor = self.cursor;
         let batch_size = self.batch_size;
         let filter_owned = self.filter.clone();
@@ -65,9 +79,20 @@ impl ScrollIterator {
         // Release the GIL while the core walks the mmap region and
         // applies the optional filter. Any resulting `velesdb_core::Error`
         // is routed to the typed Python exception hierarchy by `core_err`.
-        let batch = py
-            .detach(move || inner.scroll_batch(cursor, batch_size, filter_owned.as_ref()))
-            .map_err(core_err)?;
+        //
+        // Each batch consults the read gate: deny fails closed mid-iteration,
+        // and an observer scope filter is AND-composed with the caller filter
+        // so the batch read only narrows. With no observer this is a single
+        // `Option` check (zero-overhead allow, behavior unchanged).
+        let batch = py.detach(move || {
+            let scope = db
+                .authorize_read(&name, QueryOperationKind::Select, None, None)
+                .map_err(core_err)?;
+            let effective = and_scope(filter_owned, scope);
+            inner
+                .scroll_batch(cursor, batch_size, effective.as_ref())
+                .map_err(core_err)
+        })?;
 
         if batch.points.is_empty() {
             self.exhausted = true;
@@ -128,6 +153,8 @@ impl Collection {
 
         Ok(ScrollIterator {
             inner: self.inner.clone(),
+            db: Arc::clone(&self.db),
+            name: self.name.clone(),
             cursor: None,
             batch_size,
             filter: parsed_filter,
@@ -158,9 +185,16 @@ impl Collection {
 
         let parsed_filter = parse_optional_filter(py, filter)?;
         let inner = self.inner.clone();
-        let batch = py
-            .detach(move || inner.scroll_batch(cursor, batch_size, parsed_filter.as_ref()))
-            .map_err(core_err)?;
+        // Stateless page reads pass the same read gate as the scroll iterator:
+        // deny fails closed, an observer scope filter AND-composes with the
+        // caller filter (narrow-only). No observer ⇒ unchanged single check.
+        let batch = py.detach(move || {
+            let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+            let effective = and_scope(parsed_filter, scope);
+            inner
+                .scroll_batch(cursor, batch_size, effective.as_ref())
+                .map_err(core_err)
+        })?;
 
         let dicts: Vec<Py<PyAny>> = batch.points.iter().map(|p| point_to_dict(py, p)).collect();
         Ok((dicts, batch.next_cursor))
