@@ -954,3 +954,140 @@ fn test_torn_tail_declared_length_past_eof_recovers_prior_entries() {
         "a torn record must drop only itself, never prior entries"
     );
 }
+
+// -------------------------------------------------------------------------
+// WAL corruption recovery (FIX 1): an unknown marker or a corrupt length must
+// degrade the collection gracefully instead of making it permanently unopenable.
+// -------------------------------------------------------------------------
+
+#[test]
+// Asserts the process-global `wal_replay_corrupt_entries` metric; serialize
+// against the other metric-asserting tests so the counter can't be polluted.
+#[serial_test::serial(wal_corrupt_metric)]
+fn test_corrupt_marker_midstream_recovers_prior_entries_and_records_metric() {
+    // A flipped marker byte (bit rot) cannot be a torn tail: truncation removes
+    // trailing bytes, it never rewrites an already-persisted marker. Replay must
+    // stop cleanly at the corrupt record — keeping every prior entry and never
+    // failing the collection open — while surfacing the corruption via the
+    // shared metric, mirroring the vector WAL's #898 policy. Before FIX 1 this
+    // marker returned `InvalidData` from `WalEntry::read`, which propagated up
+    // through `open` and made the collection permanently unopenable.
+    let temp = storage_with_three_entries();
+    let wal_path = temp.path().join("payloads.log");
+
+    // Unknown marker (0x99) followed by a full 8-byte id header, so the id read
+    // succeeds and control reaches the unknown-marker arm rather than the
+    // torn-header early return.
+    let mut corrupt = vec![0x99u8];
+    corrupt.extend_from_slice(&7u64.to_le_bytes());
+    append_raw_to_wal(&wal_path, &corrupt);
+
+    let before = crate::metrics::global_guardrails_metrics()
+        .wal_replay_corrupt_entries
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    let storage = LogPayloadStorage::new(temp.path())
+        .expect("an unknown marker must degrade the collection, not fail the open");
+
+    let mut ids = storage.ids();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec![1, 2, 3],
+        "entries before a corrupt marker must survive replay"
+    );
+    assert_eq!(
+        storage.retrieve(2).expect("retrieve"),
+        Some(json!({ "id": 2 })),
+        "a pre-corruption payload must still be readable"
+    );
+
+    let after = crate::metrics::global_guardrails_metrics()
+        .wal_replay_corrupt_entries
+        .load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        after > before,
+        "an unknown WAL marker must increment the corrupt-entry metric"
+    );
+}
+
+#[test]
+fn test_corrupt_shrunk_length_skips_entry_but_opens_collection() {
+    // A length field corrupted *smaller* still passes the OOM guard (it does not
+    // run past EOF), so the record is fully framed but its CRC no longer matches.
+    // Replay must skip the offending id and keep the collection openable with
+    // every prior entry intact — never abort the open.
+    let temp = storage_with_three_entries();
+    let wal_path = temp.path().join("payloads.log");
+
+    // Hand-built store record for id 42 whose declared length (1) is far shorter
+    // than a real `{"id":42}` payload; the trailing CRC bytes are deliberately
+    // wrong so the CRC check fails and the entry is skipped.
+    let mut record = vec![CRC_STORE_MARKER];
+    record.extend_from_slice(&42u64.to_le_bytes()); // id
+    record.extend_from_slice(&1u32.to_le_bytes()); // shrunk length = 1 byte
+    record.push(0x7B); // single payload byte ('{')
+    record.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // wrong CRC
+    append_raw_to_wal(&wal_path, &record);
+
+    let storage = LogPayloadStorage::new(temp.path())
+        .expect("a corrupt length must not fail the collection open");
+
+    let mut ids = storage.ids();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec![1, 2, 3],
+        "prior entries survive a CRC-failing corrupt-length record"
+    );
+    assert_eq!(
+        storage.retrieve(42).expect("retrieve"),
+        None,
+        "the CRC-failing record must be skipped, not applied"
+    );
+}
+
+// -------------------------------------------------------------------------
+// Concurrent hydration (FIX 2): `retrieve` uses positional reads under a shared
+// read lock, so many threads can hydrate payloads in parallel and each still
+// reads exactly its own record.
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_concurrent_retrieve_reads_correct_payloads() {
+    use std::sync::Arc;
+
+    let temp = TempDir::new().expect("temp dir");
+    let mut storage = LogPayloadStorage::new_with_durability(temp.path(), DurabilityMode::Fsync)
+        .expect("create storage");
+    // Distinct, differently-sized payloads at varying offsets so a mixed-up
+    // cursor or wrong offset would surface as a wrong/short read.
+    for id in 0..64u64 {
+        let payload = json!({ "id": id, "pad": "x".repeat((id % 17) as usize) });
+        storage.store(id, &payload).expect("store");
+    }
+
+    let storage = Arc::new(storage);
+    let mut handles = Vec::new();
+    for t in 0..8u64 {
+        let storage = Arc::clone(&storage);
+        handles.push(std::thread::spawn(move || {
+            // Each thread hammers every id; positional reads under the shared
+            // read lock must return each id's own payload every time.
+            for _ in 0..50 {
+                for id in 0..64u64 {
+                    let got = storage.retrieve(id).expect("retrieve");
+                    let expected = json!({ "id": id, "pad": "x".repeat((id % 17) as usize) });
+                    assert_eq!(
+                        got,
+                        Some(expected),
+                        "thread {t} read the wrong payload for id {id}"
+                    );
+                }
+            }
+        }));
+    }
+    for h in handles {
+        h.join().expect("retrieve thread panicked");
+    }
+}

@@ -33,7 +33,7 @@ pub(crate) use snapshot::{crc32_hash, SNAPSHOT_MAGIC, SNAPSHOT_VERSION};
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 /// Controls how payload WAL writes are synced to disk.
@@ -211,11 +211,14 @@ impl LogPayloadStorage {
 
         let mut pos = start_pos;
         while pos < end_pos {
-            let Some(entry) = WalEntry::read(&mut reader_buf, pos)? else {
+            // `read` returns `None` to stop cleanly on a torn tail (crash
+            // mid-append) or on mid-stream corruption (unknown marker), keeping
+            // every entry replayed so far; see `wal_entry`'s policy.
+            let Some(entry) = WalEntry::read(&mut reader_buf, pos) else {
                 break;
             };
-            // `None` signals a torn tail (crash mid-append): stop cleanly,
-            // keeping every entry replayed so far.
+            // `apply` returns `Ok(None)` for a torn tail in the payload region
+            // (short/oversized final record): stop cleanly, keeping prior entries.
             let Some(next_pos) = entry.apply(&mut index, &mut reader_buf, end_pos)? else {
                 break;
             };
@@ -400,9 +403,16 @@ impl PayloadStorage for LogPayloadStorage {
             self.wal.write().flush()?;
         }
 
-        let mut reader = self.reader.write(); // Need write lock to seek
-        let file_len = reader.metadata()?.len();
-        let payload_bytes = read_length_prefixed_payload(&mut *reader, offset, file_len)?;
+        // Positional reads (`read_at`/`seek_read`) take `&File` and never touch
+        // a shared file cursor, so a *shared* read lock is enough: concurrent
+        // hydrations no longer serialize behind an exclusive write lock. The
+        // guard is also released before `serde_json::from_slice` so deserialize
+        // runs fully outside the lock.
+        let payload_bytes = {
+            let reader = self.reader.read();
+            let file_len = reader.metadata()?.len();
+            read_length_prefixed_payload(&reader, offset, file_len)?
+        };
 
         let payload = serde_json::from_slice(&payload_bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -462,18 +472,49 @@ impl PayloadStorage for LogPayloadStorage {
     }
 }
 
+/// Reads `buf.len()` bytes from `file` starting at absolute `offset` without
+/// disturbing any shared file cursor.
+///
+/// Uses positional I/O (`pread` on Unix via [`std::os::unix::fs::FileExt`],
+/// overlapped `ReadFile` on Windows via [`std::os::windows::fs::FileExt`]), so
+/// the same `&File` can be read concurrently from many threads under a shared
+/// lock — the offset is passed to the syscall rather than seeked on the handle.
+#[cfg(unix)]
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
+    use std::os::unix::fs::FileExt;
+    file.read_exact_at(buf, offset)
+}
+
+/// Windows counterpart to [`read_exact_at`]. `seek_read` carries the offset in
+/// an `OVERLAPPED` structure (it does not rely on the shared cursor), so it is
+/// safe under concurrent shared-locked reads; it may return short, so loop
+/// until `buf` is filled.
+#[cfg(windows)]
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        let read = file.seek_read(&mut buf[filled..], offset + filled as u64)?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "failed to fill whole buffer",
+            ));
+        }
+        filled += read;
+    }
+    Ok(())
+}
+
 /// Reads a length-prefixed payload at `offset`: a 4-byte LE length followed by
 /// that many payload bytes. The declared length is bounded by the bytes
 /// remaining after the prefix (OOM guard #897/#898) before allocating.
-fn read_length_prefixed_payload<R: Read + Seek>(
-    reader: &mut R,
-    offset: u64,
-    file_len: u64,
-) -> io::Result<Vec<u8>> {
-    reader.seek(SeekFrom::Start(offset))?;
-
+///
+/// Uses positional reads on a borrowed `&File`, so callers only need a shared
+/// read lock — the file cursor is never mutated.
+fn read_length_prefixed_payload(file: &File, offset: u64, file_len: u64) -> io::Result<Vec<u8>> {
     let mut len_bytes = [0u8; 4];
-    reader.read_exact(&mut len_bytes)?;
+    read_exact_at(file, &mut len_bytes, offset)?;
     let declared = u64::from(u32::from_le_bytes(len_bytes));
 
     // OOM guard (#897/#898): a corrupt length field must not drive an unbounded
@@ -490,6 +531,6 @@ fn read_length_prefixed_payload<R: Read + Seek>(
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "payload length overflow"))?;
 
     let mut payload_bytes = vec![0u8; len];
-    reader.read_exact(&mut payload_bytes)?;
+    read_exact_at(file, &mut payload_bytes, pos_after_len)?;
     Ok(payload_bytes)
 }
