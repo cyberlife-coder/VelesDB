@@ -1,6 +1,11 @@
 //! `VelesCollection` — UniFFI-exported collection operations for mobile.
 
-use velesdb_core::VectorCollection as CoreCollection;
+use std::sync::Arc;
+
+use velesdb_core::{
+    Database as CoreDatabase, Filter, GatedRead, QueryOperationKind,
+    VectorCollection as CoreCollection,
+};
 
 use crate::types::{
     IndividualSearchRequest, MobileAdvancedConfig, MobileCollectionDiagnostics,
@@ -13,9 +18,63 @@ use crate::types::{
 // ============================================================================
 
 /// A collection of vectors with associated metadata.
+///
+/// `inner` is a *detached* core collection leaf with no observer reference, so
+/// every governed read is routed back through the owning database's
+/// control-plane gate (`db.gated_search` / `db.authorize_read`) rather than
+/// hitting the leaf directly — restoring observer governance for the mobile
+/// direct-search API (audit F-5.4, #1392). Reads with no observer registered
+/// take a single `Option` check and then the same leaf call as before
+/// (zero-overhead contract).
 #[derive(uniffi::Object)]
 pub struct VelesCollection {
     pub(crate) inner: CoreCollection,
+    /// Shared handle to the owning database, carrying the read gate.
+    pub(crate) db: Arc<CoreDatabase>,
+    /// Collection name, used to address the gate.
+    pub(crate) name: String,
+}
+
+/// Maps a batch of core search results into the UniFFI `SearchResult` shape
+/// (id + score, payload dropped — the mobile direct-search API is id/score
+/// oriented). Shared by every gated read leaf.
+fn to_mobile_results(results: Vec<velesdb_core::SearchResult>) -> Vec<SearchResult> {
+    results
+        .into_iter()
+        .map(|r| SearchResult {
+            id: r.point.id,
+            score: r.score,
+            payload: None,
+        })
+        .collect()
+}
+
+/// AND-composes a caller filter with an observer scope filter. The result
+/// matches only rows satisfying both, so composing a scope can only narrow.
+pub(crate) fn and_scope(caller: Option<Filter>, scope: Option<Filter>) -> Option<Filter> {
+    use velesdb_core::Condition;
+    match (caller, scope) {
+        (None, None) => None,
+        (Some(c), None) => Some(c),
+        (None, Some(s)) => Some(s),
+        (Some(c), Some(s)) => Some(Filter::new(Condition::And {
+            conditions: vec![c.condition, s.condition],
+        })),
+    }
+}
+
+/// Fails a non-`GatedRead` read closed when the observer returned a scope
+/// filter the leaf cannot apply (id/score-only leaves with no metadata-filtered
+/// twin). Refusing to run unscoped is the safe default — never widen past the
+/// observer's narrowing.
+pub(crate) fn deny_if_scoped(scope: Option<Filter>, context: &str) -> Result<(), VelesError> {
+    if scope.is_some() {
+        return Err(VelesError::database(format!(
+            "{context} cannot honor the governance scope filter returned by the observer \
+             (this entry point has no metadata-filtered leaf); refusing to run unscoped"
+        )));
+    }
+    Ok(())
 }
 
 #[uniffi::export]
@@ -31,18 +90,20 @@ impl VelesCollection {
     ///
     /// Vector of search results sorted by similarity.
     pub fn search(&self, vector: Vec<f32>, limit: u32) -> Result<Vec<SearchResult>, VelesError> {
-        let results = self
-            .inner
-            .search_ids(&vector, usize::try_from(limit).unwrap_or(usize::MAX))?;
+        let results = self.db.gated_search(
+            &self.name,
+            None,
+            None,
+            GatedRead::Dense {
+                query: &vector,
+                k: usize::try_from(limit).unwrap_or(usize::MAX),
+                ef: None,
+                quality: None,
+                filter: None,
+            },
+        )?;
 
-        Ok(results
-            .into_iter()
-            .map(|sr| SearchResult {
-                id: sr.id,
-                score: sr.score,
-                payload: None,
-            })
-            .collect())
+        Ok(to_mobile_results(results))
     }
 
     /// Searches with a specific quality profile controlling recall/latency.
@@ -62,21 +123,20 @@ impl VelesCollection {
         limit: u32,
         quality: SearchQuality,
     ) -> Result<Vec<SearchResult>, VelesError> {
-        let core_quality: velesdb_core::SearchQuality = quality.into();
-        let results = self.inner.search_with_quality(
-            &vector,
-            usize::try_from(limit).unwrap_or(usize::MAX),
-            core_quality,
+        let results = self.db.gated_search(
+            &self.name,
+            None,
+            None,
+            GatedRead::Dense {
+                query: &vector,
+                k: usize::try_from(limit).unwrap_or(usize::MAX),
+                ef: None,
+                quality: Some(quality.into()),
+                filter: None,
+            },
         )?;
 
-        Ok(results
-            .into_iter()
-            .map(|sr| SearchResult {
-                id: sr.point.id,
-                score: sr.score,
-                payload: None,
-            })
-            .collect())
+        Ok(to_mobile_results(results))
     }
 
     /// Inserts or updates a single point.
@@ -181,19 +241,18 @@ impl VelesCollection {
     ///
     /// Vector of search results sorted by BM25 score.
     pub fn text_search(&self, query: String, limit: u32) -> Result<Vec<SearchResult>, VelesError> {
-        let results = self
-            .inner
-            .text_search(&query, usize::try_from(limit).unwrap_or(usize::MAX))
-            .map_err(|e| VelesError::database(format!("Text search failed: {e}")))?;
+        let results = self.db.gated_search(
+            &self.name,
+            None,
+            None,
+            GatedRead::Text {
+                query: &query,
+                k: usize::try_from(limit).unwrap_or(usize::MAX),
+                filter: None,
+            },
+        )?;
 
-        Ok(results
-            .into_iter()
-            .map(|r| SearchResult {
-                id: r.point.id,
-                score: r.score,
-                payload: None,
-            })
-            .collect())
+        Ok(to_mobile_results(results))
     }
 
     /// Performs hybrid search combining vector similarity and BM25 text search.
@@ -215,21 +274,20 @@ impl VelesCollection {
         limit: u32,
         vector_weight: f32,
     ) -> Result<Vec<SearchResult>, VelesError> {
-        let results = self.inner.hybrid_search(
-            &vector,
-            &text_query,
-            usize::try_from(limit).unwrap_or(usize::MAX),
-            Some(vector_weight),
+        let results = self.db.gated_search(
+            &self.name,
+            None,
+            None,
+            GatedRead::Hybrid {
+                vector: &vector,
+                text: &text_query,
+                k: usize::try_from(limit).unwrap_or(usize::MAX),
+                alpha: Some(vector_weight),
+                filter: None,
+            },
         )?;
 
-        Ok(results
-            .into_iter()
-            .map(|r| SearchResult {
-                id: r.point.id,
-                score: r.score,
-                payload: None,
-            })
-            .collect())
+        Ok(to_mobile_results(results))
     }
 
     /// Searches with metadata filtering.
@@ -250,23 +308,23 @@ impl VelesCollection {
         filter_json: String,
     ) -> Result<Vec<SearchResult>, VelesError> {
         // Parse filter JSON
-        let filter: velesdb_core::Filter = serde_json::from_str(&filter_json)
+        let filter: Filter = serde_json::from_str(&filter_json)
             .map_err(|e| VelesError::database(format!("Invalid filter JSON: {e}")))?;
 
-        let results = self.inner.search_with_filter(
-            &vector,
-            usize::try_from(limit).unwrap_or(usize::MAX),
-            &filter,
+        let results = self.db.gated_search(
+            &self.name,
+            None,
+            None,
+            GatedRead::Dense {
+                query: &vector,
+                k: usize::try_from(limit).unwrap_or(usize::MAX),
+                ef: None,
+                quality: None,
+                filter: Some(&filter),
+            },
         )?;
 
-        Ok(results
-            .into_iter()
-            .map(|r| SearchResult {
-                id: r.point.id,
-                score: r.score,
-                payload: None,
-            })
-            .collect())
+        Ok(to_mobile_results(results))
     }
 
     /// Performs batch search for multiple query vectors in parallel.
@@ -284,7 +342,7 @@ impl VelesCollection {
     ) -> Result<Vec<Vec<SearchResult>>, VelesError> {
         let query_refs: Vec<&[f32]> = searches.iter().map(|s| s.vector.as_slice()).collect();
 
-        let filters: Result<Vec<Option<velesdb_core::Filter>>, VelesError> = searches
+        let filters: Result<Vec<Option<Filter>>, VelesError> = searches
             .iter()
             .map(|s| {
                 s.filter
@@ -298,7 +356,16 @@ impl VelesCollection {
             })
             .collect();
 
-        let filters = filters?;
+        // Authorize the batch as a whole through the read gate, then AND any
+        // observer scope filter into every per-query filter so the filtered
+        // leaf enforces the narrowing (Deny propagates as an error).
+        let scope =
+            self.db
+                .authorize_read(&self.name, QueryOperationKind::VectorSearch, None, None)?;
+        let filters: Vec<Option<Filter>> = filters?
+            .into_iter()
+            .map(|f| and_scope(f, scope.clone()))
+            .collect();
         let max_top_k = searches.iter().map(|s| s.top_k).max().unwrap_or(10);
 
         let all_results = self.inner.search_batch_with_filters(
@@ -339,26 +406,21 @@ impl VelesCollection {
         limit: u32,
         filter_json: String,
     ) -> Result<Vec<SearchResult>, VelesError> {
-        let filter: velesdb_core::Filter = serde_json::from_str(&filter_json)
+        let filter: Filter = serde_json::from_str(&filter_json)
             .map_err(|e| VelesError::database(format!("Invalid filter JSON: {e}")))?;
 
-        let results = self
-            .inner
-            .text_search_with_filter(
-                &query,
-                usize::try_from(limit).unwrap_or(usize::MAX),
-                &filter,
-            )
-            .map_err(|e| VelesError::database(format!("Text search with filter failed: {e}")))?;
+        let results = self.db.gated_search(
+            &self.name,
+            None,
+            None,
+            GatedRead::Text {
+                query: &query,
+                k: usize::try_from(limit).unwrap_or(usize::MAX),
+                filter: Some(&filter),
+            },
+        )?;
 
-        Ok(results
-            .into_iter()
-            .map(|r| SearchResult {
-                id: r.point.id,
-                score: r.score,
-                payload: None,
-            })
-            .collect())
+        Ok(to_mobile_results(results))
     }
 
     /// Performs hybrid search with metadata filtering.
@@ -378,25 +440,23 @@ impl VelesCollection {
         vector_weight: f32,
         filter_json: String,
     ) -> Result<Vec<SearchResult>, VelesError> {
-        let filter: velesdb_core::Filter = serde_json::from_str(&filter_json)
+        let filter: Filter = serde_json::from_str(&filter_json)
             .map_err(|e| VelesError::database(format!("Invalid filter JSON: {e}")))?;
 
-        let results = self.inner.hybrid_search_with_filter(
-            &vector,
-            &text_query,
-            usize::try_from(limit).unwrap_or(usize::MAX),
-            Some(vector_weight),
-            &filter,
+        let results = self.db.gated_search(
+            &self.name,
+            None,
+            None,
+            GatedRead::Hybrid {
+                vector: &vector,
+                text: &text_query,
+                k: usize::try_from(limit).unwrap_or(usize::MAX),
+                alpha: Some(vector_weight),
+                filter: Some(&filter),
+            },
         )?;
 
-        Ok(results
-            .into_iter()
-            .map(|r| SearchResult {
-                id: r.point.id,
-                score: r.score,
-                payload: None,
-            })
-            .collect())
+        Ok(to_mobile_results(results))
     }
 
     /// Executes a VelesQL query.
@@ -434,9 +494,12 @@ impl VelesCollection {
             .map_err(|e| VelesError::database(format!("Invalid params JSON: {e}")))?
             .unwrap_or_default();
 
-        // Execute the query
+        // Execute through the owning database (not the detached collection
+        // leaf) so the VelesQL read path passes the control-plane observer gate
+        // — the detached `VectorCollection::execute_query` has no observer
+        // reference and would bypass governance (audit F-5.4, #1392).
         let results = self
-            .inner
+            .db
             .execute_query(&parsed, &params)
             .map_err(|e| VelesError::database(format!("Query execution failed: {e}")))?;
 

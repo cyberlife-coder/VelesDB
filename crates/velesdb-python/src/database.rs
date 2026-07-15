@@ -129,10 +129,21 @@ impl Database {
     ///         return value is ignored and a raised exception is swallowed so
     ///         it never breaks a core operation. For ``"query_request"`` the
     ///         callback governs the read: return ``False`` or a string reason to
-    ///         **deny** it (raising a query error), or ``None``/``True`` to
-    ///         allow. A callback that ignores ``query_request`` (returns
-    ///         ``None``) allows every read, so existing notify-only observers
-    ///         are unaffected.
+    ///         **deny** it (raising a query error), ``None``/``True`` to allow,
+    ///         or a ``dict`` to **allow with a narrowing scope**. The dict MUST
+    ///         carry an enforceable ``"filter"`` (a VelesQL WHERE-predicate
+    ///         string such as ``"tenant = 'acme'"``, AND-composed into the
+    ///         read); ``"tenant"`` is an optional audit hint OSS does not narrow
+    ///         by. A dict with a missing/empty/tenant-only or unparseable
+    ///         ``"filter"`` denies (fail closed), so a ``{"tenant": t}`` return
+    ///         can never masquerade as scoping. ``query_request`` fires for VelesQL
+    ///         ``SELECT``/``MATCH`` and for the Python direct-search API
+    ///         (``search``/``search_request``/``text_search``/``hybrid_search``
+    ///         and their variants), with ``operation`` one of ``"select"``,
+    ///         ``"vector_search"``, ``"text_search"``, ``"hybrid_search"``,
+    ///         ``"graph_traversal"``. A callback that ignores ``query_request``
+    ///         (returns ``None``) allows every read, so existing notify-only
+    ///         observers are unaffected.
     ///
     /// Returns:
     ///     Database instance
@@ -150,12 +161,13 @@ impl Database {
     ///     ...     observer=lambda event, **f: events.append((event, f)),
     ///     ... )
     #[new]
-    #[pyo3(signature = (path, config = None, observer = None))]
+    #[pyo3(signature = (path, config = None, observer = None, observer_strict = false))]
     fn new(
         py: Python<'_>,
         path: &str,
         config: Option<VelesConfigOptions>,
         observer: Option<Py<PyAny>>,
+        observer_strict: bool,
     ) -> PyResult<Self> {
         // Open the database off the GIL. Opening walks the WAL, rebuilds
         // any in-memory state, and mmaps vector/edge files — on a multi-
@@ -170,8 +182,8 @@ impl Database {
         let path_buf = PathBuf::from(path);
         let path_clone = path_buf.clone();
         let core_config = config.map(|cfg| cfg.to_core());
-        let core_observer: Option<Arc<dyn DatabaseObserver>> =
-            observer.map(|cb| Arc::new(PyObserver::new(cb)) as Arc<dyn DatabaseObserver>);
+        let core_observer: Option<Arc<dyn DatabaseObserver>> = observer
+            .map(|cb| Arc::new(PyObserver::new(cb, observer_strict)) as Arc<dyn DatabaseObserver>);
         let db = py
             .detach(move || open_core(&path_clone, core_config, core_observer))
             .map_err(core_err)?;
@@ -320,7 +332,11 @@ impl Database {
             collection.attach_auto_reindex(manager);
         }
 
-        Ok(Collection::new(collection, name_owned))
+        Ok(Collection::new(
+            collection,
+            Arc::clone(&self.inner),
+            name_owned,
+        ))
     }
 
     /// Get an existing collection by name.
@@ -352,12 +368,18 @@ impl Database {
                 } else {
                     CollectionKind::Vector
                 };
-                // SAFETY: `any_coll` came from `get_any_collection` (Some), so the
-                // underlying `AnyCollection` is registered and valid. The coerced
-                // vector facade only exercises the shared surface for non-Vector
-                // kinds; `Collection::ensure_vector` rejects vector-only ops.
-                let vc = unsafe { any_coll.into_vector_unchecked() };
-                Ok(Some(Collection::new_with_kind(vc, name.to_string(), kind)))
+                // `into_vector_facade` is a safe value move (all AnyCollection
+                // variants wrap the same inner Collection). `kind` is captured
+                // above and `Collection::ensure_vector` rejects vector-only ops
+                // on graph/metadata collections, so the facade fails loud rather
+                // than returning misleading results.
+                let vc = any_coll.into_vector_facade();
+                Ok(Some(Collection::new_with_kind(
+                    vc,
+                    Arc::clone(&self.inner),
+                    name.to_string(),
+                    kind,
+                )))
             }
             None => Ok(None),
         }
@@ -433,16 +455,15 @@ impl Database {
             .inner
             .get_any_collection(&name_owned)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
-        // SAFETY: Python SDK wraps the freshly-created metadata collection in the
-        // single Collection facade (mirrors `get_collection` above).
-        // - any was just registered by `create_metadata_collection` and retrieved
-        //   via `get_any_collection`, so it is a valid registered handle.
-        // - Only the shared surface is exercised on metadata variants.
-        // Reason: single-Collection Python ergonomic facade.
-        let collection = unsafe { any.into_vector_unchecked() };
+        // Wrap the freshly-created metadata collection in the single Collection
+        // facade (mirrors `get_collection` above). `into_vector_facade` is a
+        // safe value move; the `Metadata` kind is recorded below and
+        // `Collection::ensure_vector` rejects vector-only ops on it.
+        let collection = any.into_vector_facade();
 
         Ok(Collection::new_with_kind(
             collection,
+            Arc::clone(&self.inner),
             name_owned,
             CollectionKind::Metadata,
         ))
@@ -574,7 +595,11 @@ impl Database {
             .get_graph_collection(&name_owned)
             .ok_or_else(|| PyRuntimeError::new_err("Graph collection not found after creation"))?;
 
-        Ok(PyGraphCollection::new(coll, name_owned))
+        Ok(PyGraphCollection::new(
+            coll,
+            Arc::clone(&self.inner),
+            name_owned,
+        ))
     }
 
     /// Execute a VelesQL query string (SELECT, DDL, or DML).
@@ -704,7 +729,7 @@ impl Database {
         Ok(self
             .inner
             .get_graph_collection(name)
-            .map(|c| PyGraphCollection::new(c, name.to_string())))
+            .map(|c| PyGraphCollection::new(c, Arc::clone(&self.inner), name.to_string())))
     }
 
     /// Analyze a collection, computing and persisting statistics.

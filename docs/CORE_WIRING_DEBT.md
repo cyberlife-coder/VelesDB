@@ -330,6 +330,14 @@ hooks across create/upsert/search/delete). The two **veto** hooks
 intentionally **not** exposed — no policy/RBAC engine in the open SDK. WASM is
 architecturally N/A; TypeScript-REST (SSE/WS) and Mobile remain deferred.
 
+**Update, CORE-5 (3.10.0):** the Python SDK observer callback also gained a
+**read-path** veto — `on_query_request` now fires before every gated read
+(VelesQL `SELECT`/`MATCH`, and since 3.10.0 all direct `.search()` /
+`.search_with_filter()` / etc. variants); returning `False` or a reason string
+denies the read, and a `{"filter": ...}` dict narrows its scope. This is new
+enforcement surface on the read side only — the DDL/DML mutation vetoes
+described above remain unexposed.
+
 **Status — Observer plane** (item P, update 3.9.0): **telemetry wiring debt
 resolved.** `on_upsert` / `on_query` are now invoked **inside the core
 use-case layer** (`database/query_engine.rs`, `database/query_engine_dml.rs`),
@@ -340,7 +348,13 @@ caller-driven `notify_upsert` / `notify_query` shims are now `#[deprecated(since
 double-counting). The read path also gained a control-plane gate
 (`on_query_request` → `AccessDecision`), so RBAC/tenant/audit now apply to
 every consumer through the port rather than only the REST adapter's HTTP
-middleware.
+middleware — in practice this held only for VelesQL `SELECT`/`MATCH` until
+3.10.0: direct REST search routes (`/search`, `/search/text`, `/search/hybrid`,
+sparse/batch/multi/graph-embedding) bypassed the gate entirely because the OSS
+server opened the database with `Database::open`, never
+`open_with_observer`. The 3.10.0 CORE-1/CORE-2 delivery fixes this so every
+HTTP search route now routes through the gate — see `docs/BUSINESS_MODEL.md`
+and the `[3.10.0]` entry in `CHANGELOG.md` for details.
 
 **Streaming ingestion (`stream_insert_batch` / `enable_streaming` /
 `StreamIngester::*`) — DONE across the first-party bindings (2026-06-14).** The

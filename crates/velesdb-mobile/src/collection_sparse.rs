@@ -2,8 +2,9 @@
 //!
 //! Extracted from `collection.rs` to reduce NLOC below the 500 threshold.
 
-use velesdb_core::FusionStrategy as CoreFusionStrategy;
+use velesdb_core::{Filter, FusionStrategy as CoreFusionStrategy, QueryOperationKind};
 
+use crate::collection::{and_scope, deny_if_scoped};
 use crate::types::{FusionStrategy, SearchResult, VelesError, VelesPoint, VelesSparseVector};
 use crate::VelesCollection;
 
@@ -28,6 +29,14 @@ impl VelesCollection {
     ) -> Result<Vec<SearchResult>, VelesError> {
         let core_sv = Self::to_core_sparse_vector(&sparse_vector);
         let idx_name = index_name.unwrap_or_default();
+
+        // Sparse search has no `GatedRead` leaf and no metadata-filtered twin,
+        // so it consults the read gate directly and fails closed if the
+        // observer asks for a scope filter it cannot apply (audit F-5.4, #1392).
+        let scope =
+            self.db
+                .authorize_read(&self.name, QueryOperationKind::VectorSearch, None, None)?;
+        deny_if_scoped(scope, "sparse_search")?;
 
         let results = self
             .inner
@@ -74,6 +83,13 @@ impl VelesCollection {
         let strategy = velesdb_core::fusion::FusionStrategy::RRF { k: 60 };
         let idx_name = index_name.unwrap_or_default();
 
+        // Fused dense+sparse leaf takes no metadata filter, so consult the gate
+        // and fail closed on an unappliable observer scope (audit F-5.4, #1392).
+        let scope =
+            self.db
+                .authorize_read(&self.name, QueryOperationKind::HybridSearch, None, None)?;
+        deny_if_scoped(scope, "hybrid_sparse_search")?;
+
         let results = self
             .inner
             .hybrid_sparse_search(
@@ -111,13 +127,21 @@ impl VelesCollection {
         let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
         let core_strategy: CoreFusionStrategy = strategy.into();
 
+        // Consult the read gate, then AND any observer scope filter into the
+        // fusion leaf (which accepts a metadata filter) so narrowing is
+        // enforced (Deny propagates as an error) (audit F-5.4, #1392).
+        let scope =
+            self.db
+                .authorize_read(&self.name, QueryOperationKind::VectorSearch, None, None)?;
+        let effective: Option<Filter> = and_scope(None, scope);
+
         let results = self
             .inner
             .multi_query_search(
                 &query_refs,
                 usize::try_from(limit).unwrap_or(usize::MAX),
                 core_strategy,
-                None,
+                effective.as_ref(),
             )
             .map_err(|e| VelesError::database(format!("Multi-query search failed: {e}")))?;
 
@@ -149,6 +173,14 @@ impl VelesCollection {
 
         let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
         let core_strategy: CoreFusionStrategy = strategy.into();
+
+        // Ids/scores-only results carry no payload, so an observer scope filter
+        // cannot be enforced on them: consult the gate and fail closed rather
+        // than return unscoped ids (audit F-5.4, #1392).
+        let scope =
+            self.db
+                .authorize_read(&self.name, QueryOperationKind::VectorSearch, None, None)?;
+        deny_if_scoped(scope, "multi_query_search_ids")?;
 
         let results = self
             .inner
@@ -183,11 +215,18 @@ impl VelesCollection {
             ));
         }
 
-        let filter: velesdb_core::Filter = serde_json::from_str(&filter_json)
+        let filter: Filter = serde_json::from_str(&filter_json)
             .map_err(|e| VelesError::database(format!("Invalid filter JSON: {e}")))?;
 
         let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
         let core_strategy: CoreFusionStrategy = strategy.into();
+
+        // Consult the read gate and AND any observer scope filter into the
+        // caller filter (narrow-only) before running (audit F-5.4, #1392).
+        let scope =
+            self.db
+                .authorize_read(&self.name, QueryOperationKind::VectorSearch, None, None)?;
+        let effective = and_scope(Some(filter), scope);
 
         let results = self
             .inner
@@ -195,7 +234,7 @@ impl VelesCollection {
                 &query_refs,
                 usize::try_from(limit).unwrap_or(usize::MAX),
                 core_strategy,
-                Some(&filter),
+                effective.as_ref(),
             )
             .map_err(|e| VelesError::database(format!("Multi-query search failed: {e}")))?;
 

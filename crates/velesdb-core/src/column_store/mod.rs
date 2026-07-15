@@ -78,9 +78,9 @@ pub struct ColumnStore {
     pub(crate) primary_index: HashMap<i64, usize>,
     /// Reverse index: row_idx → pk_value (O(1) reverse lookup for expire_rows)
     pub(crate) row_idx_to_pk: HashMap<usize, i64>,
-    /// Deleted row indices (tombstones) - FxHashSet for backward compatibility
-    pub(crate) deleted_rows: rustc_hash::FxHashSet<usize>,
-    /// Deleted row bitmap (EPIC-043 US-002) - RoaringBitmap for O(1) contains
+    /// Deleted row indices (tombstones). Single source of truth for deletion
+    /// state (EPIC-043 US-002 / audit F-2.11): a `RoaringBitmap` for O(1)
+    /// `contains`. Rows with index >= `u32::MAX` cannot be tombstoned.
     pub(crate) deletion_bitmap: RoaringBitmap,
     /// Row expiry timestamps: row_idx → expiry_timestamp (US-004 TTL)
     pub(crate) row_expiry: HashMap<usize, u64>,
@@ -192,7 +192,6 @@ impl ColumnStore {
         if row_idx >= self.row_count {
             return;
         }
-        self.deleted_rows.insert(row_idx);
         if let Ok(idx) = u32::try_from(row_idx) {
             self.deletion_bitmap.insert(idx);
         }
@@ -207,13 +206,14 @@ impl ColumnStore {
     /// Returns the number of active (non-deleted) rows in the store.
     #[must_use]
     pub fn active_row_count(&self) -> usize {
-        self.row_count.saturating_sub(self.deleted_rows.len())
+        self.row_count
+            .saturating_sub(self.deletion_bitmap.len() as usize)
     }
 
     /// Returns the number of deleted (tombstoned) rows.
     #[must_use]
     pub fn deleted_row_count(&self) -> usize {
-        self.deleted_rows.len()
+        self.deletion_bitmap.len() as usize
     }
 
     /// Returns the string table for string interning.
@@ -275,7 +275,7 @@ impl ColumnStore {
     /// Gets a value from a column at a specific row index as JSON.
     #[must_use]
     pub fn get_value_as_json(&self, column: &str, row_idx: usize) -> Option<serde_json::Value> {
-        if self.deleted_rows.contains(&row_idx) {
+        if self.is_row_deleted_bitmap(row_idx) {
             return None;
         }
 

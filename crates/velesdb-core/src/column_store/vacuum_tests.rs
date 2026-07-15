@@ -23,8 +23,6 @@ fn vacuum_removes_tombstones() {
     let mut store = store_with_id_rows(10);
 
     // Soft-delete rows 3 and 7
-    store.deleted_rows.insert(3);
-    store.deleted_rows.insert(7);
     if let Ok(idx) = u32::try_from(3_usize) {
         store.deletion_bitmap.insert(idx);
     }
@@ -53,7 +51,6 @@ fn vacuum_no_tombstones_is_noop() {
 fn vacuum_preserves_remaining_data() {
     let mut store = store_with_id_rows(5);
     // Delete row at index 2 (id=2)
-    store.deleted_rows.insert(2);
     if let Ok(idx) = u32::try_from(2_usize) {
         store.deletion_bitmap.insert(idx);
     }
@@ -76,8 +73,8 @@ fn vacuum_preserves_remaining_data() {
 fn should_vacuum_below_threshold() {
     let mut store = store_with_id_rows(100);
     // Delete 10 out of 100 => 10%, threshold 20% => false
-    for i in 0..10 {
-        store.deleted_rows.insert(i);
+    for i in 0..10u32 {
+        store.deletion_bitmap.insert(i);
     }
     assert!(!store.should_vacuum(0.20));
 }
@@ -86,8 +83,8 @@ fn should_vacuum_below_threshold() {
 fn should_vacuum_at_threshold() {
     let mut store = store_with_id_rows(100);
     // Delete 20 out of 100 => 20%, threshold 20% => true
-    for i in 0..20 {
-        store.deleted_rows.insert(i);
+    for i in 0..20u32 {
+        store.deletion_bitmap.insert(i);
     }
     assert!(store.should_vacuum(0.20));
 }
@@ -95,8 +92,8 @@ fn should_vacuum_at_threshold() {
 #[test]
 fn should_vacuum_above_threshold() {
     let mut store = store_with_id_rows(100);
-    for i in 0..50 {
-        store.deleted_rows.insert(i);
+    for i in 0..50u32 {
+        store.deletion_bitmap.insert(i);
     }
     assert!(store.should_vacuum(0.20));
 }
@@ -114,7 +111,6 @@ fn should_vacuum_empty_store() {
 #[test]
 fn is_row_deleted_bitmap_true_for_deleted() {
     let mut store = store_with_id_rows(5);
-    store.deleted_rows.insert(2);
     store.deletion_bitmap.insert(2);
 
     assert!(store.is_row_deleted_bitmap(2));
@@ -130,23 +126,9 @@ fn is_row_deleted_bitmap_false_for_live() {
 #[test]
 fn live_row_indices_excludes_deleted() {
     let mut store = store_with_id_rows(5);
-    store.deleted_rows.insert(1);
     store.deletion_bitmap.insert(1);
-    store.deleted_rows.insert(3);
     store.deletion_bitmap.insert(3);
 
     let live: Vec<usize> = store.live_row_indices().collect();
     assert_eq!(live, vec![0, 2, 4]);
-}
-
-#[test]
-fn deleted_count_bitmap_matches_set() {
-    let mut store = store_with_id_rows(10);
-    for i in [0, 2, 4, 6] {
-        store.deleted_rows.insert(i);
-        if let Ok(idx) = u32::try_from(i) {
-            store.deletion_bitmap.insert(idx);
-        }
-    }
-    assert_eq!(store.deleted_count_bitmap(), 4);
 }

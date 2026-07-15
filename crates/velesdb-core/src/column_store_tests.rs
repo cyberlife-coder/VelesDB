@@ -2037,24 +2037,10 @@ mod tests {
     // EPIC-043 US-002: RoaringBitmap Filtering Tests
     // =========================================================================
 
-    #[test]
-    fn test_roaring_bitmap_sync_with_deleted_rows() {
-        // Arrange
-        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id").unwrap();
-
-        for i in 0..100 {
-            store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
-        }
-
-        // Act: Delete some rows
-        for i in 0..30 {
-            store.delete_by_pk(i);
-        }
-
-        // Assert: Both FxHashSet and RoaringBitmap should be in sync
-        assert_eq!(store.deleted_row_count(), 30);
-        assert_eq!(store.deleted_count_bitmap(), 30);
-    }
+    // NOTE: the former `test_roaring_bitmap_sync_with_deleted_rows` compared
+    // `deleted_row_count()` to `deleted_count_bitmap()`, which read the same
+    // RoaringBitmap since the F-2.11 unification (PR #1379) — removed as a
+    // tautology (audit 61b5e8 follow-up R8).
 
     #[test]
     fn test_is_row_deleted_bitmap() {

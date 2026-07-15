@@ -36,31 +36,37 @@ pub use crate::velesql::query_stats::QueryStats;
 
 /// Execution strategy for hybrid queries.
 ///
-/// This is the planner's *intent*; the executor realizes it only partially:
-/// on the SELECT path (`execution_paths.rs`), `GraphFirst` selects a
-/// full-scan-then-score realization for metadata filters and every other
-/// variant (including `Parallel`) is executed as `VectorFirst`. Graph
-/// predicates in SELECT WHERE that are AND-required take the GraphFirst
-/// anchored fetch (`graph_prefilter.rs`) independently of this strategy —
-/// anchor sets are evaluated first and retrieval is exhaustive within them;
-/// only OR/NOT-wrapped predicates remain post-filters over the fetch
-/// window. On the top-level MATCH path (`match_dispatch.rs`),
-/// `Parallel` runs `GraphFirst` and `VectorFirst` **sequentially** and merges
-/// the result sets (true parallelism is a future optimization).
+/// On the NEAR + metadata-filter SELECT path (`execution_paths.rs`,
+/// `dispatch_vector_with_strategy`) all three variants are realized as
+/// **physically distinct** plans: `VectorFirst` runs the filtered HNSW search,
+/// `GraphFirst` runs a full metadata scan scored by vector similarity, and
+/// `Parallel` runs both concurrently (`rayon::join`) and merges them by
+/// best-score-per-id. Other SELECT arms (similarity() threshold, pure NEAR,
+/// metadata-only, SELECT *) each have a single sensible physical plan and
+/// deliberately ignore the strategy — see the `dispatch_vector_query` match
+/// arms for the per-arm rationale. Graph predicates in SELECT WHERE that are
+/// AND-required take the GraphFirst anchored fetch (`graph_prefilter.rs`)
+/// independently of this strategy — anchor sets are evaluated first and
+/// retrieval is exhaustive within them; only OR/NOT-wrapped predicates remain
+/// post-filters over the fetch window.
+///
+/// On the top-level MATCH path (`match_dispatch.rs`), `Parallel` runs
+/// `GraphFirst` and `VectorFirst` **concurrently** (`rayon::join`) and merges
+/// the result sets by `node_id`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExecutionStrategy {
-    /// Execute vector search first, then filter by graph pattern.
-    /// Best when graph filter is not very selective (>10% of data).
+    /// Execute the vector search first (filtered HNSW), then filter/merge.
+    /// Best when the metadata/graph filter is not very selective (>50% of data).
     VectorFirst,
-    /// Intended: execute graph pattern first, then vector search on
-    /// candidates (selective filters, <1% of data). Realized on the SELECT
-    /// path as a full scan scored by vector similarity for metadata filters;
-    /// not realized for SELECT graph predicates (post-filter applies).
+    /// Execute the filter first: a full metadata scan scored by vector
+    /// similarity (selective filters, <1% of data). Realized distinctly on the
+    /// SELECT NEAR+filter path via `scan_and_score_by_vector`. Not applied to
+    /// SELECT graph predicates, which use their own anchored pre-filter.
     GraphFirst,
-    /// Intended: execute both sides in parallel and merge (medium
-    /// selectivity, 1-10%). Realized as `VectorFirst` on the SELECT path and
-    /// as sequential GraphFirst + VectorFirst with a merge on the MATCH path.
+    /// Execute both sides concurrently and merge by best-score-per-id (medium
+    /// selectivity, 1-50%). Realized via `rayon::join` on BOTH the SELECT
+    /// NEAR+filter path and the top-level MATCH path.
     Parallel,
 }
 

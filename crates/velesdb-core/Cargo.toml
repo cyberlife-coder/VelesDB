@@ -61,7 +61,7 @@ version = "30"
 optional = true
 
 [dependencies.pollster]
-version = "0.4"
+version = "1.0"
 optional = true
 
 [dependencies.bytemuck]

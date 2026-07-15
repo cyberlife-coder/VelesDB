@@ -51,23 +51,28 @@ idiom for enum-variant access:
    `Err(self)` so the caller recovers ownership.
 3. **Variant discriminants** — `is_vector`, `is_graph`, `is_metadata`
    round out the matrix.
-4. **Unchecked escape hatch** — the previous
-   `as_vector_collection_unchecked` (and its deprecated alias
-   `into_vector_collection`) was replaced by
-   `unsafe fn into_vector_unchecked(self) -> VectorCollection`. The
-   `unsafe` marker makes the logical-soundness contract explicit at
-   every call site, even though violating it does not cause
-   undefined behaviour. Only the Python SDK binding retains this
-   escape hatch (twice), each with a mandatory `// SAFETY:` comment
-   documenting why the shared-surface-only contract holds.
+4. **Facade escape hatch** — the previous
+   `as_vector_collection_unchecked` / `into_vector_collection` became
+   `into_vector_unchecked`, and (audit **P0**, PR #1383) is now the
+   **safe** `into_vector_facade(self) -> VectorCollection`. Its body is a
+   plain value move between three newtypes that all wrap the identical
+   `inner: Collection`, so it was never memory-unsafe; the `unsafe` marker —
+   a misuse that flagged a *logical* contract rather than a memory one — has
+   been removed. Only the Python SDK binding uses it (twice), and it relies on
+   the captured `CollectionKind` + `Collection::ensure_vector` guard (which
+   rejects vector ops on graph/metadata facades) rather than an `unsafe`
+   contract.
 5. The velesdb-mobile and tauri-plugin-velesdb bindings migrated to
    the safe `into_vector()` API — the Rust error path already
    existed in both bindings, so the variant check became free.
 
-**Post-seed resolution** (tracked as the F2.2 EPIC):
+**Post-seed resolution** (tracked as the F2.2 EPIC — [issue #1384](https://github.com/cyberlife-coder/VelesDB/issues/1384)):
 
 The correct long-term fix is to split the `Collection` god-object
-into three genuinely distinct types with distinct public APIs:
+into three genuinely distinct types with distinct public APIs. Note the three
+newtypes (`VectorCollection`/`GraphCollection`/`MetadataCollection`) already
+exist as distinct wrappers; the remaining debt is that they still share **one
+38-field `Collection` backing store**, so the EPIC is to separate that store:
 
 1. `VectorCollection` retains the vector search surface.
 2. `GraphCollection` exposes only graph operations (traversal, edge
@@ -79,8 +84,11 @@ The SDK bindings would then expose a sum type (enum) or union
 interface that forces callers to discriminate the kind before
 invoking any operation. This is estimated at 2-4 weeks of core
 refactoring and is deliberately out of scope for the pre-seed
-remediation cycle. The `into_vector_unchecked` method will be
-removed in full as part of the EPIC.
+remediation cycle. The safe `into_vector_facade` method will be
+removed in full as part of the EPIC, once the Python binding holds the
+shared collection directly instead of coercing to a `VectorCollection`
+facade.
 
 **When to revisit**: post-seed, within the first 4 weeks of the
-architecture cleanup milestone.
+architecture cleanup milestone. Concrete plan, blast radius, and incremental
+sequencing are captured in [issue #1384](https://github.com/cyberlife-coder/VelesDB/issues/1384).

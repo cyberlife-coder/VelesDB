@@ -14,6 +14,7 @@ use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
 use crate::graph_store::WasmGraphStore;
+use crate::observer::{gate, WasmObserver, WasmQueryOperationKind};
 use crate::parsing;
 use crate::store_new;
 use crate::vector_store::VectorStore;
@@ -39,6 +40,14 @@ pub(crate) struct DatabaseInner {
     /// name. JS callers do not need to `CREATE COLLECTION` before running
     /// `INSERT EDGE` — the executor handles the auto-provision.
     graphs: HashMap<String, SharedGraph>,
+    /// Optional read-path control-plane hook (audit F-5.4, #1392).
+    ///
+    /// `None` on the open path (zero overhead — the gate is a single `Option`
+    /// check). When `Some`, every governed read (`search`, VelesQL `SELECT` /
+    /// `MATCH` / `SELECT EDGES`) consults it before touching the store. Held
+    /// as `Rc<dyn WasmObserver>` — deliberately non-`Send` to match the
+    /// single-threaded `Rc<RefCell<VectorStore>>` store graph.
+    observer: Option<Rc<dyn WasmObserver>>,
 }
 
 impl DatabaseInner {
@@ -46,7 +55,42 @@ impl DatabaseInner {
         Self {
             collections: HashMap::new(),
             graphs: HashMap::new(),
+            observer: None,
         }
+    }
+
+    /// Registers (or replaces) the read-path observer.
+    ///
+    /// Reads routed through the database after this call consult the observer.
+    /// Handles obtained via [`WasmDatabase::get_collection`] snapshot the
+    /// observer at hand-out time, so register the observer **before** handing
+    /// out handles you want governed (mirrors the existing DDL handle
+    /// semantics documented on `WasmCollectionHandle`).
+    pub(crate) fn register_observer(&mut self, observer: Rc<dyn WasmObserver>) {
+        self.observer = Some(observer);
+    }
+
+    /// Returns a cloned handle to the current observer, if any. Used to
+    /// snapshot the observer into a freshly minted `WasmCollectionHandle`.
+    pub(crate) fn observer_handle(&self) -> Option<Rc<dyn WasmObserver>> {
+        self.observer.clone()
+    }
+
+    /// Read-path gate for VelesQL / database-mediated reads.
+    ///
+    /// Zero-overhead when no observer is registered (single `Option` check).
+    /// Returns `Err(msg)` when the observer denies the read.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the observer's denial message.
+    #[inline]
+    pub(crate) fn check_query_access(
+        &self,
+        collection: &str,
+        operation: WasmQueryOperationKind,
+    ) -> Result<(), String> {
+        gate(self.observer.as_ref(), collection, operation)
     }
 
     /// Returns a shared handle to the named graph store, creating it lazily
@@ -235,6 +279,20 @@ impl Default for WasmDatabase {
     }
 }
 
+impl WasmDatabase {
+    /// Registers a read-path observer (audit F-5.4, #1392).
+    ///
+    /// This is the internal Rust seam: `dyn WasmObserver` is not a
+    /// `wasm_bindgen`-compatible type, so JS registration would require a
+    /// concrete adapter wrapping a JS callback (documented follow-up). Reads
+    /// routed through the database after this call — `search` on handles
+    /// obtained afterwards, and every VelesQL `SELECT` / `MATCH` /
+    /// `SELECT EDGES` — consult the observer before touching the store.
+    pub fn register_observer(&mut self, observer: Rc<dyn WasmObserver>) {
+        self.inner.register_observer(observer);
+    }
+}
+
 #[wasm_bindgen]
 impl WasmDatabase {
     /// Creates an empty database with no collections.
@@ -328,7 +386,13 @@ impl WasmDatabase {
             .inner
             .get_shared_store(name)
             .map_err(|e| JsValue::from_str(&e))?;
-        Ok(WasmCollectionHandle { inner: store })
+        Ok(WasmCollectionHandle {
+            inner: store,
+            // Snapshot the observer registered at hand-out time so the handle
+            // can gate its own reads without a back-reference to the database.
+            observer: self.inner.observer_handle(),
+            name: name.to_owned(),
+        })
     }
 
     /// Returns the number of managed collections.
@@ -401,6 +465,11 @@ impl WasmDatabase {
 #[wasm_bindgen]
 pub struct WasmCollectionHandle {
     inner: SharedStore,
+    /// Observer snapshotted from the database at [`WasmDatabase::get_collection`]
+    /// time. `None` (the common case) makes [`Self::search`] gate a no-op.
+    observer: Option<Rc<dyn WasmObserver>>,
+    /// Collection name, carried for the read-path gate context.
+    name: String,
 }
 
 #[wasm_bindgen]
@@ -434,9 +503,20 @@ impl WasmCollectionHandle {
 
     /// k-NN search. Returns `[[id, score], ...]`.
     ///
+    /// When a read-path observer is registered on the owning database, it is
+    /// consulted before the store is touched: a `Deny` decision aborts with
+    /// the observer's message and produces no results (audit F-5.4, #1392).
+    ///
     /// # Errors
-    /// Returns an error if the query dimension does not match the collection.
+    /// Returns an error if the query dimension does not match the collection,
+    /// or if the read-path observer denies the query.
     pub fn search(&self, query: &[f32], k: usize) -> Result<JsValue, JsValue> {
+        gate(
+            self.observer.as_ref(),
+            &self.name,
+            WasmQueryOperationKind::VectorSearch,
+        )
+        .map_err(|e| JsValue::from_str(&e))?;
         let store = self.inner.borrow();
         store.search(query, k)
     }
@@ -463,6 +543,17 @@ impl WasmCollectionHandle {
     #[wasm_bindgen(getter)]
     pub fn dimension(&self) -> usize {
         self.inner.borrow().dimension()
+    }
+}
+
+impl WasmCollectionHandle {
+    /// Test-only: whether this handle snapshotted a read-path observer at
+    /// hand-out time. Used to assert the [`WasmDatabase::get_collection`]
+    /// observer-snapshot wiring without touching the `JsValue`-returning
+    /// `search` (which panics off `wasm32`).
+    #[cfg(test)]
+    pub(crate) fn has_observer(&self) -> bool {
+        self.observer.is_some()
     }
 }
 

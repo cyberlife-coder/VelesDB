@@ -73,14 +73,24 @@ impl AnyCollection {
     // Shared operations (dispatch on variant)
     // -------------------------------------------------------------------------
 
+    /// The shared inner [`Collection`](crate::collection::types::Collection)
+    /// backing every variant. All three newtypes wrap the same `Collection`, so
+    /// operations that are identical across kinds dispatch through this one
+    /// accessor instead of a per-variant match — removing the ad-hoc mix of
+    /// `c.method()` / `c.inner.method()` forwarding that the audit flagged (P2.6).
+    #[inline]
+    fn inner(&self) -> &crate::collection::types::Collection {
+        match self {
+            Self::Vector(c) => &c.inner,
+            Self::Graph(c) => &c.inner,
+            Self::Metadata(c) => &c.inner,
+        }
+    }
+
     /// Returns the collection configuration.
     #[must_use]
     pub fn config(&self) -> CollectionConfig {
-        match self {
-            Self::Vector(c) => c.config(),
-            Self::Graph(c) => c.inner.config(),
-            Self::Metadata(c) => c.inner.config(),
-        }
+        self.inner().config()
     }
 
     /// Flushes all state to disk.
@@ -105,11 +115,7 @@ impl AnyCollection {
     /// Returns `true` if the collection contains no points.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        match self {
-            Self::Vector(c) => c.inner.is_empty(),
-            Self::Graph(c) => c.is_empty(),
-            Self::Metadata(c) => c.is_empty(),
-        }
+        self.inner().is_empty()
     }
 
     /// Returns `true` if this is a metadata-only collection.
@@ -154,11 +160,7 @@ impl AnyCollection {
         query: &crate::velesql::Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
-        match self {
-            Self::Vector(c) => c.execute_aggregate(query, params),
-            Self::Graph(c) => c.inner.execute_aggregate(query, params),
-            Self::Metadata(c) => c.inner.execute_aggregate(query, params),
-        }
+        self.inner().execute_aggregate(query, params)
     }
 
     /// Returns collection diagnostics.
@@ -181,51 +183,31 @@ impl AnyCollection {
     ///
     /// Returns an error if the edge cannot be stored.
     pub fn add_edge(&self, edge: crate::collection::graph::GraphEdge) -> Result<()> {
-        match self {
-            Self::Vector(c) => c.add_edge(edge),
-            Self::Graph(c) => c.add_edge(edge),
-            Self::Metadata(c) => c.inner.add_edge(edge),
-        }
+        self.inner().add_edge(edge)
     }
 
     /// Removes a graph edge by ID. Returns `true` if the edge existed.
     #[must_use]
     pub fn remove_edge(&self, edge_id: u64) -> bool {
-        match self {
-            Self::Vector(c) => c.remove_edge(edge_id),
-            Self::Graph(c) => c.remove_edge(edge_id),
-            Self::Metadata(c) => c.inner.remove_edge(edge_id),
-        }
+        self.inner().remove_edge(edge_id)
     }
 
     /// Returns outgoing edges from a node.
     #[must_use]
     pub fn get_outgoing_edges(&self, node_id: u64) -> Vec<crate::collection::graph::GraphEdge> {
-        match self {
-            Self::Vector(c) => c.get_outgoing_edges(node_id),
-            Self::Graph(c) => c.get_outgoing(node_id),
-            Self::Metadata(c) => c.inner.get_outgoing_edges(node_id),
-        }
+        self.inner().get_outgoing_edges(node_id)
     }
 
     /// Returns the highest edge ID in the graph, if any.
     #[must_use]
     pub fn max_edge_id(&self) -> Option<u64> {
-        match self {
-            Self::Vector(c) => c.max_edge_id(),
-            Self::Graph(c) => c.inner.max_edge_id(),
-            Self::Metadata(c) => c.inner.max_edge_id(),
-        }
+        self.inner().max_edge_id()
     }
 
     /// Returns `true` when an edge with `edge_id` exists.
     #[must_use]
     pub fn edge_exists(&self, edge_id: u64) -> bool {
-        match self {
-            Self::Vector(c) => c.edge_exists(edge_id),
-            Self::Graph(c) => c.inner.edge_exists(edge_id),
-            Self::Metadata(c) => c.inner.edge_exists(edge_id),
-        }
+        self.inner().edge_exists(edge_id)
     }
 
     // -------------------------------------------------------------------------
@@ -561,36 +543,27 @@ impl AnyCollection {
     /// shared surface (`config`, `flush`, `diagnostics`, `point_count`,
     /// `execute_query_str`) on the result.
     ///
-    /// # Safety
+    /// # Facade semantics
     ///
-    /// Calling vector-specific methods on a `VectorCollection` obtained from
-    /// a `Graph` or `Metadata` variant is **not** memory-unsafe, but the
-    /// result is logically unsound: the underlying storage does not hold a
-    /// homogeneous vector index, and the returned search results are either
-    /// empty or reflect internal state that was not intended for public
-    /// consumption.
+    /// All three variants wrap the identical `inner: Collection` type, so this
+    /// is an ordinary value move — **not** a `transmute`, and not memory-unsafe.
+    /// (That is why this method is safe; it was previously marked `unsafe` to
+    /// flag the *logical* caller contract, a misuse of `unsafe` — audit P0.)
     ///
-    /// Callers must either:
+    /// It is a *logical* facade: invoking vector-specific methods (e.g.
+    /// [`search`](VectorCollection::search)) on a facade built from a
+    /// `Graph`/`Metadata` collection returns empty or misleading results,
+    /// because the underlying storage holds no homogeneous vector index. The
+    /// caller must therefore track the real kind and gate vector-only
+    /// operations — the Python SDK does this via the `CollectionKind` it
+    /// captures alongside the facade and its `ensure_vector()` guard.
     ///
-    /// * branch on [`is_vector`](Self::is_vector) first and only invoke
-    ///   vector-specific methods on the `Vector` variant, or
-    /// * restrict themselves to the methods that all three collection
-    ///   kinds share (`config`, `flush`, `diagnostics`, `name`,
-    ///   `point_count`, `execute_query_str`).
-    ///
-    /// Prefer the safe [`into_vector`](Self::into_vector) (variant-checked,
-    /// returns `Result`) when the caller can branch. A proper type-safe
-    /// refactor that eliminates this method entirely is tracked under the
-    /// post-seed EPIC documented in `docs/ARCHITECTURE.md` (finding F2.2 of
-    /// the pre-seed audit).
-    ///
-    /// # Violation of invariants
-    ///
-    /// The `unsafe` marker flags the caller contract (only invoke the
-    /// shared surface on non-`Vector` variants) even though violating it
-    /// does not cause undefined behaviour.
+    /// Prefer the variant-checked [`into_vector`](Self::into_vector) (returns
+    /// `Result`) when the caller can branch on kind. A type-safe refactor that
+    /// removes this facade entirely is tracked under the F2.2 EPIC in
+    /// `docs/ARCHITECTURE.md`.
     #[must_use]
-    pub unsafe fn into_vector_unchecked(self) -> VectorCollection {
+    pub fn into_vector_facade(self) -> VectorCollection {
         match self {
             Self::Vector(c) => c,
             Self::Graph(c) => VectorCollection { inner: c.inner },

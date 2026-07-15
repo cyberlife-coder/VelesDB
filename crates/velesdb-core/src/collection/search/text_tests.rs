@@ -134,6 +134,33 @@ fn test_text_search_with_filter_includes_matching_category() {
     assert!(!results.is_empty(), "should find tech rust docs");
 }
 
+#[test]
+fn test_text_search_with_filter_exact_result_set_preserved() {
+    // Regression guard for the hydrate-order optimization: retrieving the
+    // vector only for post-filter matches must not change the result set.
+    // "programming" matches docs 1 and 2 (both category=tech); doc 4 (rust
+    // web framework) has no "programming" token and doc 3 is sports.
+    let (_dir, col) = setup_text_collection();
+
+    let filter = Filter::new(Condition::eq("category", "tech"));
+    let results = col
+        .text_search_with_filter("programming", 10, &filter)
+        .expect("filtered text search");
+
+    let mut ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![1, 2], "exact match set must be {{1, 2}}");
+
+    // Every returned point is fully hydrated (vector fetched for matches only).
+    for r in &results {
+        assert_eq!(
+            r.point.vector.len(),
+            4,
+            "matched point must carry its vector"
+        );
+    }
+}
+
 // -----------------------------------------------------------------------
 // Hybrid search (vector + text)
 // -----------------------------------------------------------------------

@@ -305,17 +305,19 @@ impl Collection {
         &self,
         filter: &crate::filter::Filter,
         limit: usize,
+        cond: Option<&crate::velesql::Condition>,
     ) -> Vec<SearchResult> {
         // Try index-accelerated scan: extract the first Eq condition and use
         // the secondary index to get candidate IDs, then post-filter.
-        // Skip when the index returns too many candidates relative to the limit —
-        // sequential scan with early exit is faster than hydrating thousands of
-        // index hits (e.g., IsMobile=1 matching 20% of rows).
+        // The cost model (audit F-4.7, issue #1391) decides whether hydrating
+        // the candidate set beats a sequential scan with early exit — the former
+        // wins for narrow candidate sets, the latter for broad ones (e.g.
+        // IsMobile=1 matching 20% of rows). Both paths return identical results.
         if let Some(candidate_ids) = self.try_index_accelerated_ids(filter) {
-            if candidate_ids.len() <= limit.saturating_mul(50).max(1000) {
+            if self.prefer_candidate_scan(candidate_ids.len(), limit, cond) {
                 return self.scan_candidate_ids(&candidate_ids, filter, limit);
             }
-            // Fall through to sequential scan — index has too many hits
+            // Fall through to sequential scan — cost model prefers full scan
         }
 
         // Full sequential scan (slow fallback for non-indexed conditions).
@@ -484,7 +486,7 @@ impl Collection {
         let metric = self.config().metric;
         let higher_is_better = metric.higher_is_better();
 
-        let candidates = self.execute_scan_query(metadata_filter, SCAN_CAP);
+        let candidates = self.execute_scan_query(metadata_filter, SCAN_CAP, None);
         let mut topk = super::bounded_top_k::BoundedTopK::new(limit, higher_is_better);
         for mut r in candidates {
             // Exact distance computation using the stored vector.

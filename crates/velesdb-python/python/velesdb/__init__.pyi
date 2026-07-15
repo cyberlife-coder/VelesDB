@@ -211,6 +211,8 @@ class SearchOptions:
     sparse_index_name: Optional[str]
     include_vectors: bool
     fusion: Optional["FusionStrategy"]
+    principal: Optional[str]
+    tenant: Optional[str]
 
     def __init__(
         self,
@@ -222,6 +224,8 @@ class SearchOptions:
         sparse_index_name: Optional[str] = None,
         include_vectors: bool = False,
         fusion: Optional["FusionStrategy"] = None,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> None: ...
     def with_vector(
         self, vector: Optional[Union[List[float], "np.ndarray"]]
@@ -234,6 +238,8 @@ class SearchOptions:
     def with_sparse_index_name(self, name: Optional[str]) -> "SearchOptions": ...
     def with_include_vectors(self, include: bool) -> "SearchOptions": ...
     def with_fusion(self, fusion: Optional["FusionStrategy"]) -> "SearchOptions": ...
+    def with_principal(self, principal: Optional[str]) -> "SearchOptions": ...
+    def with_tenant(self, tenant: Optional[str]) -> "SearchOptions": ...
 
 
 class SearchResult:
@@ -462,6 +468,8 @@ class Collection:
         top_k: int = 10,
         filter: Optional[Dict[str, Any]] = None,
         sparse_index_name: Optional[str] = None,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search for similar vectors (dense, sparse, or hybrid).
 
@@ -511,6 +519,9 @@ class Collection:
         vector: Union[List[float], "np.ndarray"],
         top_k: int = 10,
         ef_search: int = 128,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search with custom HNSW ef_search parameter."""
         ...
@@ -519,8 +530,16 @@ class Collection:
         self,
         vector: Union[List[float], "np.ndarray"],
         top_k: int = 10,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Search returning only IDs and scores."""
+        """Search returning only IDs and scores.
+
+        Note: this entry point returns no payload, so it cannot apply an
+        observer scope filter; a scoped read fails closed. Use ``search`` /
+        ``search_request`` when governance scoping may be in effect.
+        """
         ...
 
     def search_with_filter(
@@ -528,6 +547,9 @@ class Collection:
         vector: Union[List[float], "np.ndarray"],
         top_k: int = 10,
         filter: Optional[Dict[str, Any]] = None,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search with metadata filtering."""
         ...
@@ -537,6 +559,9 @@ class Collection:
         query: str,
         top_k: int = 10,
         filter: Optional[Dict[str, Any]] = None,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Full-text search using BM25 ranking."""
         ...
@@ -548,6 +573,9 @@ class Collection:
         top_k: int = 10,
         vector_weight: float = 0.5,
         filter: Optional[Dict[str, Any]] = None,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Hybrid search combining vector similarity and text search."""
         ...
@@ -555,6 +583,9 @@ class Collection:
     def batch_search(
         self,
         searches: List[Dict[str, Any]],
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[List[Dict[str, Any]]]:
         """Batch search for multiple query vectors in parallel.
 
@@ -568,6 +599,9 @@ class Collection:
         top_k: int = 10,
         fusion: Optional["FusionStrategy"] = None,
         filter: Optional[Dict[str, Any]] = None,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Multi-query search with result fusion.
 
@@ -587,8 +621,14 @@ class Collection:
         vectors: List[Union[List[float], "np.ndarray"]],
         top_k: int = 10,
         fusion: Optional[FusionStrategy] = None,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Multi-query search returning only IDs and fused scores."""
+        """Multi-query search returning only IDs and fused scores.
+
+        Note: returns no payload, so a scoped observer read fails closed.
+        """
         ...
 
     def get(self, ids: List[int]) -> List[Optional[Dict[str, Any]]]:
@@ -662,6 +702,9 @@ class Collection:
         self,
         vectors: List[Union[List[float], "np.ndarray"]],
         top_k: int = 10,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[List[Dict[str, Any]]]:
         """Parallel batch search for multiple query vectors.
 
@@ -679,6 +722,9 @@ class Collection:
         vector: Union[List[float], "np.ndarray"],
         quality: str,
         top_k: int = 10,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search with a named quality mode.
 

@@ -19,6 +19,7 @@ mod plan_builder;
 mod step;
 mod types;
 
+#[cfg(feature = "persistence")]
 pub(crate) use filter_strategy::strip_vector_predicates;
 pub use filter_strategy::{
     fallback_selectivity_threshold, set_fallback_selectivity_threshold,

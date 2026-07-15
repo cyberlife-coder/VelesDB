@@ -7,6 +7,146 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.11.0] — 2026-07-14
+
+Chief-engineer audit resolution: closes every actionable finding from the
+line-by-line `velesdb-core` audit (soundness, quality-gate coverage,
+feature-gating, and documentation). No user-facing behavior changes except one
+new opt-in feature. The one large item — splitting the `Collection` god-object
+backing store — is deliberately deferred as a tracked EPIC (#1384) rather than
+rushed on a released core.
+
+### Added
+
+- **Opt-in fail-closed observer mode.** `Database(..., observer_strict=True)`
+  (Python) makes an *error* while consulting a `query_request` read policy — the
+  callback raising or returning an uninterpretable value — resolve to **deny**
+  instead of the default fail-open **allow**. Default is unchanged (fail-open, so
+  a bug in policy code never breaks a read); strict mode is for governance / RBAC
+  deployments. Explicit decisions (`None`/`True`/`False`/str/dict) are unaffected.
+  (Audit F-5.3.)
+- **VelesQL query planner is available without the `persistence` feature.**
+  `velesql::{planner, explain, cost_estimator, query_stats}` no longer require
+  `persistence`; they and their `collection::{stats, query_cost}` /
+  `match_planner` dependencies now compile with `--no-default-features`, so
+  no-persistence builds (the WASM path) can reach the core planner instead of
+  reimplementing it. The persistence build is unchanged. (Audit P1.4.)
+
+### Changed
+
+- **`AnyCollection::into_vector_unchecked` (`unsafe`) → `into_vector_facade`
+  (safe).** The method was never memory-unsafe — its body is a plain value move
+  between three newtypes that wrap the identical inner `Collection` — so the
+  `unsafe` marker (which flagged a *logical* contract) has been removed. The two
+  internal Python call-sites drop their `unsafe {}` blocks; the real contract is
+  still enforced by the captured `CollectionKind` + `Collection::ensure_vector`.
+  Removes the workspace's last logically-unsound `unsafe`. *Migration:* if you
+  called `into_vector_unchecked` directly, rename to `into_vector_facade` and
+  drop the `unsafe` block (no behavior change). (Audit P0.)
+- **Uniform `AnyCollection` dispatch** via a single private `inner()` accessor —
+  the shared, identical-across-kinds methods no longer mix `c.method()` /
+  `c.inner.method()` forwarding. No behavior change. (Audit P2.6.)
+- **`column_store` deletion state unified on `RoaringBitmap`.** Removed the
+  redundant parallel `deleted_rows` FxHashSet tombstone set; the bitmap is now the
+  single source of truth. (Audit F-2.11.)
+- **Quality-gate coverage extended.** `scripts/check_prod_unwraps.py` now scans
+  every production crate (adds `velesdb-memory`, `velesdb-node`, `velesdb-python`)
+  and recognizes composite test gates like `#[cfg(all(test, feature = "…"))]`;
+  the CI `Verify SAFETY template` job now validates unsafe blocks in **all**
+  crates, not just `velesdb-core`. (Audit F-3.10 / F-3.11 / F-3.12.)
+
+### Fixed
+
+- Encapsulated `MmapStorage`'s `pub(super)` fields behind accessors and removed
+  dead `simd_native` re-exports. (Audit P3.11 / P3.13.)
+- Completed the SAFETY template on the Python binding's unsafe block
+  (Audit F-3.2) — now superseded by the `into_vector_facade` removal above.
+
+### Documentation
+
+- Clarified `Point::is_metadata_only` semantics (P2.7), disambiguated
+  `SearchMode::Perfect` (bruteforce engine) from `SearchQuality::Perfect` (HNSW
+  graph effort) (P2.9), and documented the planner strategy realization on SELECT
+  (F-2.15), the indexed-metadata scan fallback (F-4.7), read-path-gate ecosystem
+  parity (F-5.4), and the per-function NLOC governance model (F-5.13).
+- Refreshed the `docs/ARCHITECTURE.md` F2.2 tech-debt entry to reflect the safe
+  `into_vector_facade` and link the `Collection` split EPIC (#1384). (P2.10.)
+
+## [3.10.0] — 2026-07-14
+
+Delivery release: closes the P0 flagged by the 7-auditor review — the OSS
+server registered **no observer at all**, so governance/RBAC hooks were a
+complete no-op in the open-core binary regardless of what a consumer
+configured. Every read path (HTTP and Python SDK) is now gated end to end.
+Plus a memory carry-forward fix, a version-sync gap on the node binding,
+routine dependency maintenance, and a documentation pass (recall language,
+roadmap currency, an overreaching compliance claim).
+
+### Security
+- **server: the governance read-path gate is now live on every HTTP read.**
+  `velesdb-server` previously opened the database with `Database::open`
+  (never `open_with_observer`), so `on_query_request` never fired in the
+  shipped binary — any observer a consumer registered was silently inert.
+  Dense/text/hybrid/sparse/batch/multi-query/ids search, `EXPLAIN ANALYZE
+  MATCH`, and graph embedding search now all route through
+  `Database::gated_search` / `authorize_read`: a `Deny` fails closed (zero
+  results, not an error swallowed into success), an allow-with-scope filter
+  composes with the caller's own filter, and there is zero overhead when no
+  observer is registered. A new end-to-end test drives a denying observer
+  through the real HTTP surface and asserts every one of those routes is
+  actually blocked, not just the query layer above them.
+- **python: the SDK observer gained a read-path veto.** `on_query_request`
+  now fires before every gated read and can return `False`/a reason string
+  to deny, or a `{"filter": ...}` dict to narrow the result scope — the
+  callback was previously notify-only and could not affect the outcome.
+- **python: direct `.search()` (and its dense/text/hybrid/sparse/batch/
+  multi-query/ids variants, plus graph `search_by_embedding`) now goes
+  through the same gate as VelesQL — previously it bypassed governance
+  entirely, even with an observer registered. A scope dict with no
+  enforceable `filter` (e.g. `{}` or `{"tenant": ...}`, which OSS does not
+  itself enforce) is now treated as a deny rather than an accidental
+  unscoped allow.
+
+### Fixed
+- **memory:** `remember`ing over an existing fact now carries forward its
+  reserved `_veles_*` metadata (RL confidence, TTL) instead of resetting it —
+  reinforcement learned from prior feedback survives a re-remember.
+- **node:** the `velesdb-node` binding had drifted to 0.6.0 (its lockfile
+  even further, at 0.4.0) against `velesdb-memory` 0.7.0, so its 5 release
+  build jobs failed and the npm publish for that binding was skipped in the
+  0.7.0 delivery — bumped in lockstep and the 3 binding manifests are now
+  policed by `check-version-sync.py` so this drift can't recur silently.
+- **docs:** `BENCHMARKS.md`'s recall language was softened from a guarantee
+  to a measured target (HNSW is an approximate index; nothing in the engine
+  guarantees 100% recall), and a stale Docker version pin in the README was
+  corrected.
+- **docs:** the README roadmap table still flagged v3.8 as current while the
+  tree had moved to 3.9.1 — added an accurate v3.9 row; softened an
+  overreaching "HIPAA-compliant" claim in `BUSINESS_SCENARIOS` to "for
+  HIPAA-regulated data" (the product supports that posture, it does not
+  itself confer compliance); removed the internal `report/audit-2026q2/`
+  code-health analysis from the public tree (the campaign stays named in
+  this changelog; nothing public linked those files by path).
+
+### Dependencies
+- **`ed25519-dalek` 2.2.0 → 3.0.0** (MAJOR): used for offline license-key
+  signing (`veles-license`); the bump required no code changes, CI green
+  across the workspace.
+- Routine group updates: TypeScript SDK npm deps, GitHub Actions, the
+  `dtolnay/rust-toolchain` pin, a 6-crate Cargo `cargo-non-major` group, and
+  `pollster` 0.4.0 → 1.0.1.
+
+### Security (acknowledged, not fixed)
+- **`glib` 0.18.5 unsoundness** (GHSA-wrw7-89jp-8q8g / RUSTSEC-2024-0429,
+  Dependabot alerts #3/#6): pulled in only by the Tauri demo's Linux/GTK3
+  backend (`tauri → gtk 0.18 → glib 0.18.5`); no code in `crates/` or
+  `demos/` constructs the affected `VariantStrIter`. **Not patched** —
+  gtk3-rs is archived upstream at the 0.18 line and Tauri 2.x's Linux
+  backend still depends on GTK3, so no available bump reaches glib 0.20.
+  The accepted risk and exit path (a GTK4/webkit2gtk-6 migration, not
+  before 2026 Q4) are now recorded in `deny.toml` alongside the 7 sibling
+  GTK3 advisories already tracked there.
+
 ## [3.9.1] — 2026-07-12
 
 Delivery release: everything merged on `develop` since v3.9.0 reaches users —

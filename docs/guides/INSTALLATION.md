@@ -60,10 +60,10 @@ entry.
 
 ```bash
 # Download
-wget https://github.com/cyberlife-coder/VelesDB/releases/download/v3.9.1/velesdb-3.9.1-amd64.deb
+wget https://github.com/cyberlife-coder/VelesDB/releases/download/v3.11.0/velesdb-3.11.0-amd64.deb
 
 # Install
-sudo dpkg -i velesdb-3.9.1-amd64.deb
+sudo dpkg -i velesdb-3.11.0-amd64.deb
 
 # Verify
 velesdb --version
@@ -160,13 +160,13 @@ GitHub Container Registry, so you don't need to build locally:
 
 ```bash
 # Pull a specific release (recommended for reproducibility)
-docker pull ghcr.io/cyberlife-coder/velesdb:3.9.1
+docker pull ghcr.io/cyberlife-coder/velesdb:3.11.0
 
 # ...or the latest stable release
 docker pull ghcr.io/cyberlife-coder/velesdb:latest
 
 docker run -d --name velesdb -p 8080:8080 -v velesdb_data:/data \
-  ghcr.io/cyberlife-coder/velesdb:3.9.1
+  ghcr.io/cyberlife-coder/velesdb:3.11.0
 ```
 
 ### Build locally

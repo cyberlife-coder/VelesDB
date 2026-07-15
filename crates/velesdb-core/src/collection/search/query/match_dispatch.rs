@@ -26,7 +26,9 @@ impl Collection {
     /// from the live collection data structures for cost-based strategy selection.
     // Reason: usize->f64 casts are for cost-estimation ratios, not precise calculations.
     #[allow(clippy::cast_precision_loss)]
-    pub(crate) fn compute_match_collection_stats(&self) -> super::match_planner::CollectionStats {
+    pub(crate) fn compute_match_collection_stats(
+        &self,
+    ) -> crate::velesql::match_planner::CollectionStats {
         let total_nodes = self.len();
         let total_edges = self.edge_store.len();
         let avg_degree = if total_nodes > 0 {
@@ -40,7 +42,7 @@ impl Collection {
         } else {
             1.0
         };
-        super::match_planner::CollectionStats {
+        crate::velesql::match_planner::CollectionStats {
             total_nodes,
             total_edges,
             avg_degree,
@@ -135,13 +137,13 @@ impl Collection {
 
         // W6-A2: Cost-based strategy selection.
         let stats = self.compute_match_collection_stats();
-        let strategy = super::match_planner::MatchQueryPlanner::plan(match_clause, &stats);
+        let strategy = crate::velesql::match_planner::MatchQueryPlanner::plan(match_clause, &stats);
         tracing::debug!(strategy = ?strategy, "MATCH execution strategy selected");
 
         let result = self.run_match_strategy(match_clause, params, ctx, &strategy);
 
         // W6-A3: Record metrics.
-        let max_depth = super::match_planner::MatchQueryPlanner::count_hops(match_clause);
+        let max_depth = crate::velesql::match_planner::MatchQueryPlanner::count_hops(match_clause);
         match &result {
             Ok(results) => {
                 MATCH_METRICS.record_success(start.elapsed(), results.len(), max_depth);
@@ -169,10 +171,10 @@ impl Collection {
         match_clause: &crate::velesql::MatchClause,
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
-        strategy: &super::match_planner::MatchExecutionStrategy,
+        strategy: &crate::velesql::match_planner::MatchExecutionStrategy,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
         match strategy {
-            super::match_planner::MatchExecutionStrategy::VectorFirst {
+            crate::velesql::match_planner::MatchExecutionStrategy::VectorFirst {
                 similarity_alias,
                 top_k,
                 threshold,
@@ -184,10 +186,11 @@ impl Collection {
                 *top_k,
                 *threshold,
             ),
-            super::match_planner::MatchExecutionStrategy::Parallel {
-                ref vector_hint, ..
+            crate::velesql::match_planner::MatchExecutionStrategy::Parallel {
+                ref vector_hint,
+                ..
             } => self.execute_match_parallel(match_clause, params, ctx, vector_hint),
-            super::match_planner::MatchExecutionStrategy::GraphFirst { .. } => {
+            crate::velesql::match_planner::MatchExecutionStrategy::GraphFirst { .. } => {
                 self.execute_match_with_context(match_clause, params, Some(ctx))
             }
         }
@@ -195,46 +198,64 @@ impl Collection {
 
     /// Executes the Parallel MATCH strategy (Wave 6 Phase D).
     ///
-    /// Runs GraphFirst and VectorFirst sequentially, then merges the result
-    /// sets by `node_id` (union semantics -- best score wins for duplicates).
+    /// Runs the GraphFirst and VectorFirst legs CONCURRENTLY via `rayon::join`
+    /// (R2, #1390), then merges the result sets by `node_id` (union semantics --
+    /// best score wins for duplicates).
     ///
-    /// True parallel execution (rayon/tokio) is a future optimisation; the
-    /// sequential approach is correct and avoids concurrency complexity for
-    /// typical MATCH query sizes.
+    /// # Determinism & counter invariant
+    ///
+    /// Both legs are read-only over immutable collection data, so the merged
+    /// result set is identical to the former sequential execution — only
+    /// wall-clock latency changes. Both legs share the same [`QueryContext`],
+    /// whose EXPLAIN counters (`traversal_nodes_visited` /
+    /// `traversal_edges_traversed`) are `AtomicU64` updated with `fetch_add`;
+    /// concurrent `fetch_add` is commutative, so the "Parallel = sum of both
+    /// legs" contract asserted by `parallel_counters_sum_both_legs` is
+    /// preserved regardless of interleaving.
     fn execute_match_parallel(
         &self,
         match_clause: &crate::velesql::MatchClause,
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
-        vector_hint: &super::match_planner::MatchExecutionStrategy,
+        vector_hint: &crate::velesql::match_planner::MatchExecutionStrategy,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
-        // Phase 1: GraphFirst path.
-        let graph_results = self.execute_match_with_context(match_clause, params, Some(ctx))?;
-
-        // Phase 2: VectorFirst path (extract hint parameters).
-        let vector_results = if let super::match_planner::MatchExecutionStrategy::VectorFirst {
-            similarity_alias,
-            top_k,
-            threshold,
-        } = vector_hint
-        {
-            self.execute_match_vector_first(
-                match_clause,
-                params,
-                ctx,
+        // Extract the VectorFirst hint parameters once, before the join.
+        let vector_first =
+            if let crate::velesql::match_planner::MatchExecutionStrategy::VectorFirst {
                 similarity_alias,
-                *top_k,
-                *threshold,
-            )?
-        } else {
-            tracing::warn!(
-                "Parallel strategy vector_hint is not VectorFirst; \
+                top_k,
+                threshold,
+            } = vector_hint
+            {
+                Some((similarity_alias.as_str(), *top_k, *threshold))
+            } else {
+                tracing::warn!(
+                    "Parallel strategy vector_hint is not VectorFirst; \
                      skipping vector path"
-            );
-            Vec::new()
+                );
+                None
+            };
+
+        // GraphFirst leg + VectorFirst leg run concurrently. The shared `ctx`
+        // is `Sync` (all counters are atomics), so both closures may accumulate
+        // traversal metrics into it in parallel.
+        let graph_leg = || self.execute_match_with_context(match_clause, params, Some(ctx));
+        let vector_leg = || match vector_first {
+            Some((alias, top_k, threshold)) => {
+                self.execute_match_vector_first(match_clause, params, ctx, alias, top_k, threshold)
+            }
+            None => Ok(Vec::new()),
         };
 
-        // Phase 3: Merge by node_id (union, best score wins per metric polarity).
+        #[cfg(feature = "persistence")]
+        let (graph_results, vector_results) = rayon::join(graph_leg, vector_leg);
+        #[cfg(not(feature = "persistence"))]
+        let (graph_results, vector_results) = (graph_leg(), vector_leg());
+
+        let graph_results = graph_results?;
+        let vector_results = vector_results?;
+
+        // Merge by node_id (union, best score wins per metric polarity).
         let config = self.config.read();
         let higher_is_better = config.metric.higher_is_better();
         drop(config);
@@ -595,11 +616,11 @@ mod tests {
     // after the parallel run equal the sum of the two legs run independently.
     #[cfg(feature = "persistence")]
     mod parallel_counters {
-        use super::super::super::match_planner::MatchExecutionStrategy;
         use crate::collection::graph::GraphEdge;
         use crate::collection::types::Collection;
         use crate::distance::DistanceMetric;
         use crate::point::Point;
+        use crate::velesql::match_planner::MatchExecutionStrategy;
         use crate::velesql::{MatchClause, Parser};
         use std::collections::HashMap;
         use std::path::PathBuf;

@@ -77,6 +77,15 @@ pub struct SearchOptions {
     /// sparse-only searches.
     #[pyo3(get, set)]
     pub fusion: Option<FusionStrategy>,
+    /// Optional principal (caller identity) forwarded to the control-plane read
+    /// gate. When ``None`` (default) and no observer is registered the gate is a
+    /// zero-overhead allow, preserving pre-governance behavior.
+    #[pyo3(get, set)]
+    pub principal: Option<String>,
+    /// Optional tenant hint forwarded to the control-plane read gate alongside
+    /// ``principal`` for multi-tenant scoping. ``None`` by default.
+    #[pyo3(get, set)]
+    pub tenant: Option<String>,
 }
 
 #[pymethods]
@@ -96,7 +105,10 @@ impl SearchOptions {
     ///     include_vectors: Include raw vectors in results (default: False).
     ///     fusion: Optional :py:class:`FusionStrategy` for hybrid dense+sparse
     ///         fusion (default: RRF k=60).
+    ///     principal: Optional caller identity forwarded to the read gate.
+    ///     tenant: Optional tenant hint forwarded to the read gate.
     #[new]
+    #[allow(clippy::too_many_arguments)] // additive governance kwargs on an existing builder
     #[pyo3(signature = (
         vector = None,
         *,
@@ -106,6 +118,8 @@ impl SearchOptions {
         sparse_index_name = None,
         include_vectors = false,
         fusion = None,
+        principal = None,
+        tenant = None,
     ))]
     pub fn new(
         vector: Option<Py<PyAny>>,
@@ -115,6 +129,8 @@ impl SearchOptions {
         sparse_index_name: Option<String>,
         include_vectors: bool,
         fusion: Option<FusionStrategy>,
+        principal: Option<String>,
+        tenant: Option<String>,
     ) -> Self {
         Self {
             vector,
@@ -124,6 +140,8 @@ impl SearchOptions {
             sparse_index_name,
             include_vectors,
             fusion,
+            principal,
+            tenant,
         }
     }
 
@@ -192,6 +210,18 @@ impl SearchOptions {
     /// Pass ``None`` to fall back to the default RRF (k=60).
     pub fn with_fusion(slf: Py<Self>, py: Python<'_>, fusion: Option<FusionStrategy>) -> Py<Self> {
         slf.bind(py).borrow_mut().fusion = fusion;
+        slf
+    }
+
+    /// Sets the read-gate principal (caller identity) and returns `self`.
+    pub fn with_principal(slf: Py<Self>, py: Python<'_>, principal: Option<String>) -> Py<Self> {
+        slf.bind(py).borrow_mut().principal = principal;
+        slf
+    }
+
+    /// Sets the read-gate tenant hint and returns `self`.
+    pub fn with_tenant(slf: Py<Self>, py: Python<'_>, tenant: Option<String>) -> Py<Self> {
+        slf.bind(py).borrow_mut().tenant = tenant;
         slf
     }
 }

@@ -46,22 +46,26 @@ use tracing::error;
 #[allow(clippy::module_name_repetitions)]
 pub struct MmapStorage {
     /// Directory path for storage files
-    pub(super) path: PathBuf,
+    path: PathBuf,
     /// Vector dimension
-    pub(super) dimension: usize,
+    dimension: usize,
     /// In-memory index of ID -> file offset
     /// EPIC-033/US-004: Sharded for reduced lock contention on read-heavy workloads
-    pub(super) index: ShardedIndex,
+    index: ShardedIndex,
     /// Write-Ahead Log writer
-    pub(super) wal: RwLock<io::BufWriter<File>>,
-    /// File handle for the data file (kept open for resizing)
+    wal: RwLock<io::BufWriter<File>>,
+    /// File handle for the data file (kept open for resizing).
+    ///
+    /// Stays `pub(super)` because [`ensure_capacity`](Self::ensure_capacity)'s
+    /// sibling module (`mmap_capacity`) reopens (reassigns) this handle after a
+    /// compaction swap; a read-only getter cannot express that reassignment.
     pub(super) data_file: File,
     /// Memory mapped data file
-    pub(super) mmap: RwLock<MmapMut>,
+    mmap: RwLock<MmapMut>,
     /// Next available offset in the data file
-    pub(super) next_offset: AtomicUsize,
+    next_offset: AtomicUsize,
     /// P0 Audit: Metrics for monitoring `ensure_capacity` latency
-    pub(super) metrics: Arc<StorageMetrics>,
+    metrics: Arc<StorageMetrics>,
     /// Epoch counter incremented every time the mmap is remapped.
     ///
     /// # Overflow Safety
@@ -70,19 +74,19 @@ pub struct MmapStorage {
     /// remaps/second, overflow would take ~584 years. The worst-case scenario
     /// on wrap is a false-positive panic in `VectorSliceGuard::as_slice()`,
     /// which is acceptable given the astronomical time required.
-    pub(super) remap_epoch: AtomicU64,
+    remap_epoch: AtomicU64,
     /// Controls WAL write and sync behavior for vector storage.
     ///
     /// Issue #423 Component 4: `DurabilityMode::None` skips WAL writes
     /// entirely for bulk import scenarios where data can be re-derived.
     /// Default is `Fsync` (unchanged from pre-#423 behavior).
-    pub(super) durability: DurabilityMode,
+    durability: DurabilityMode,
     /// Ids touched by the WAL replay performed in [`MmapStorage::new`]
     /// (store + delete entries), deduplicated. The replay truncates the WAL,
     /// so these ids are the only remaining witness of writes the persisted
     /// HNSW index may not reflect; `Collection::open` drains them via
     /// [`MmapStorage::take_wal_replayed_ids`] for stale-entry reconciliation.
-    pub(super) wal_replayed_ids: Vec<u64>,
+    wal_replayed_ids: Vec<u64>,
     /// In-memory replication-consumer low-watermark registration state.
     ///
     /// Holds retention over the vector WAL: compaction consults its minimum
@@ -90,7 +94,7 @@ pub struct MmapStorage {
     /// loses a position it still needs (Requirement 6.3). Empty by default,
     /// so with no registered consumer truncation is unchanged from before this
     /// seam existed.
-    pub(super) watermarks: super::wal_cursor::WalWatermarkRegistry,
+    watermarks: super::wal_cursor::WalWatermarkRegistry,
 }
 
 impl MmapStorage {
@@ -234,6 +238,63 @@ impl MmapStorage {
         &self.metrics
     }
 
+    // -------------------------------------------------------------------------
+    // Field accessors for sibling modules (`mmap_capacity`).
+    //
+    // Descendant modules (`mmap::vector_io`, `mmap::wal_replay`) and this module
+    // read the fields directly; these getters exist so the fields can stay
+    // private while `mmap_capacity` still borrows them (interior mutability via
+    // the returned reference preserves the original locking semantics).
+    // -------------------------------------------------------------------------
+
+    /// Storage directory path.
+    #[inline]
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Configured vector dimension.
+    #[inline]
+    pub(super) fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    /// Sharded ID -> offset index (interior-mutable).
+    #[inline]
+    pub(super) fn index(&self) -> &ShardedIndex {
+        &self.index
+    }
+
+    /// Write-Ahead Log writer lock.
+    #[inline]
+    pub(super) fn wal(&self) -> &RwLock<io::BufWriter<File>> {
+        &self.wal
+    }
+
+    /// Memory-mapped data file lock.
+    #[inline]
+    pub(super) fn mmap(&self) -> &RwLock<MmapMut> {
+        &self.mmap
+    }
+
+    /// Next-available data-file offset counter.
+    #[inline]
+    pub(super) fn next_offset(&self) -> &AtomicUsize {
+        &self.next_offset
+    }
+
+    /// Remap epoch counter, bumped on every mmap remap.
+    #[inline]
+    pub(super) fn remap_epoch(&self) -> &AtomicU64 {
+        &self.remap_epoch
+    }
+
+    /// Replication-consumer low-watermark registry.
+    #[inline]
+    pub(super) fn watermarks(&self) -> &super::wal_cursor::WalWatermarkRegistry {
+        &self.watermarks
+    }
+
     /// Opens or creates the data file, ensuring it has at least `INITIAL_SIZE` bytes.
     fn open_data_file(data_path: &Path) -> io::Result<File> {
         let data_file = OpenOptions::new()
@@ -364,8 +425,20 @@ impl MmapStorage {
             &mut touched_ids,
         )?;
         if replayed > 0 {
-            // 1. Make the recovered vector bytes durable.
+            // 1. Make the recovered vector bytes durable (msync of dirty pages).
             mmap.flush()?;
+            // 1b. fsync the data file so any file GROWTH performed during replay
+            //     (ReplayTarget::ensure_capacity -> set_len) is durably recorded
+            //     BEFORE we persist the index (whose offsets reference the grown
+            //     region) and truncate the WAL. `msync` flushes page contents but
+            //     does not guarantee the inode size is journaled; on such a
+            //     filesystem a crash after the WAL truncation could leave the data
+            //     file at its pre-growth length while vectors.idx points past EOF
+            //     -> next open, load_index rejects "offset exceeds data file size"
+            //     and open fails with the WAL already gone. Ordering the sync here
+            //     closes that window; the WAL is only cleared once both the data
+            //     file (size + bytes) and the index are durable.
+            data_file.sync_all()?;
             // 2. Persist the rebuilt index so the recovered state survives even
             //    after the WAL is cleared.
             Self::persist_index_file(index_path, index)?;
@@ -496,6 +569,18 @@ impl MmapStorage {
     /// Returns an error if any I/O operation fails.
     pub fn flush_full(&mut self) -> io::Result<()> {
         self.flush()?;
+        // fsync the data file BEFORE persisting the index (mirrors the replay
+        // growth path in `replay_wal`). `flush()` msyncs the mmap and fsyncs the
+        // WAL, but neither guarantees a live `set_len` growth (from
+        // `ensure_capacity`) has its inode size journaled. `flush_index()` then
+        // persists `vectors.idx` with offsets that reference the grown region.
+        // On a filesystem where the size update is not durable, a crash could
+        // leave the data file at its pre-growth length while the persisted index
+        // points past EOF -> next open, `load_index` rejects it ("index offset
+        // exceeds data file size") and open fails before `replay_wal` can rebuild
+        // from the (still-intact) WAL. Syncing the size here keeps the data file
+        // and the index we persist next mutually consistent.
+        self.data_file.sync_all()?;
         self.flush_index()
     }
 

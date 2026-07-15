@@ -16,6 +16,7 @@ use velesdb_core::velesql::{
 
 use crate::database::DatabaseInner;
 use crate::graph_store::WasmEdge;
+use crate::observer::WasmQueryOperationKind;
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::{resolve_value, Params};
 
@@ -25,7 +26,23 @@ pub(crate) fn execute_match(
     query: &Query,
     params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
+    // Read-path gate (audit F-5.4, #1392). The graph store is inferred from
+    // the pattern, so the collection hint is best-effort: the first annotated
+    // pattern node's collection, else empty. Zero-overhead without an observer.
+    let collection = match_collection_hint(query);
+    db.check_query_access(collection, WasmQueryOperationKind::GraphTraversal)?;
     crate::velesql_match::execute_match(db, query, params)
+}
+
+/// Best-effort collection name for a MATCH read gate: the first pattern node
+/// carrying an `@collection` annotation, or `""` when none is present.
+fn match_collection_hint(query: &Query) -> &str {
+    query
+        .match_clause
+        .as_ref()
+        .and_then(|clause| clause.patterns.first())
+        .and_then(|pattern| pattern.nodes.iter().find_map(|n| n.collection.as_deref()))
+        .unwrap_or("")
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +156,8 @@ pub(crate) fn select_edges(
     stmt: &SelectEdgesStatement,
     _params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
+    // Read-path gate (audit F-5.4, #1392) — zero-overhead without an observer.
+    db.check_query_access(&stmt.collection, WasmQueryOperationKind::GraphTraversal)?;
     let store = db
         .get_graph_store(&stmt.collection)
         .ok_or_else(|| format!("Graph '{}' not found", stmt.collection))?;
