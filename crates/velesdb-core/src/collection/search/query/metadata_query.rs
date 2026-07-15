@@ -83,8 +83,11 @@ impl Collection {
     ) -> Vec<SearchResult> {
         let mut results = Vec::new();
         for point in self.get(ids).into_iter().flatten() {
-            let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
-            if filter.matches(&payload) {
+            // `matches` only borrows the payload; pass a reference instead of
+            // deep-cloning the JSON per candidate. A missing payload is treated
+            // as `Null` (unchanged semantics). The borrow ends before `point`
+            // is moved into the result below.
+            if filter.matches(point.payload.as_ref().unwrap_or(&serde_json::Value::Null)) {
                 results.push(SearchResult::new(point, 1.0));
                 if results.len() >= execution_limit {
                     break;
