@@ -7,6 +7,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.12.0] — 2026-07-15
+
+Pre-release hardening ("Vague D"): closes the remaining audit follow-ups
+surfaced by a line-by-line re-challenge of the engine — WAL-replay
+observability, Python governance read-gate parity, and the HNSW memory
+footprint — plus the performance, documentation, and CI items found alongside
+them. No breaking API changes.
+
+### Added
+
+- **GraphFirst full-scan truncation is now observable.** The filtered-vector
+  `GraphFirst` executor caps how many metadata matches it rescores at
+  `SCAN_CAP = 100_000` per query (#901 pathological-query guard). The cap is
+  unchanged, but when it actually bites (matches were still unvisited when the
+  scan stopped) the query now emits **one** structured `tracing::warn!` with
+  the collection name, the cap, the matches scored, and an upper bound on the
+  unvisited remainder — instead of silently degrading recall. Documented in
+  `docs/reference/KNOWN_LIMITATIONS.md` with symptoms and workarounds. (WO-D2.)
+
+### Changed
+
+- **HNSW batch-insert path allocates less.** `allocate_batch` no longer
+  materializes one prepared-query buffer per vector: raw slices are pushed
+  directly into the contiguous storage, and (for the pre-normalized cosine
+  configuration) the pushed range is normalized in place under the same write
+  lock. Phase B (graph connection) re-derives the normalized query per node
+  from a per-thread scratch buffer, keeping at most one owned buffer alive per
+  rayon worker instead of one per batch element. Stored bytes are unchanged
+  for every metric (verbatim in production; normalized for pre-normalized
+  cosine), so recovery byte-comparisons and search scores are unaffected.
+  `DeltaBuffer::extend` now materializes incoming entries **before** taking
+  the write lock, so deferred-indexing batch copies no longer stall concurrent
+  brute-force searches. (WO-D4, PERF2+PERF3.)
+- **HNSW vectors are stored once instead of duplicated.** The `ShardedVectors`
+  sidecar is removed: rerank, brute-force, vacuum, and persistence now read the
+  graph's own `ContiguousVectors` (the single source of truth), cutting up to
+  ~1/3 of resident memory on large indices and removing a duplicate
+  `native_vectors.bin` from every snapshot. Databases written by older binaries
+  are read back unchanged — a legacy `native_vectors.bin` is verified against
+  the #617 generation check and then discarded; the file is deleted on the next
+  save so a stale copy can never shadow newer graph data. (WO-D11, PERF1.)
+- **Payload-mirror upsert prepares rows outside the write lock.** Payload →
+  scalar-cell conversion and per-row allocation now run before the mirror state
+  write lock is taken; only string interning and store insertion remain under
+  it, and the batch stays atomic for concurrent filtered queries. The not-built
+  fast path also skips the global write lock entirely during the pre-build
+  window. (WO-D5.)
+
+### Fixed
+
+- **WAL replay no longer discards recoverable writes silently.** A vector-WAL
+  whose first record is corrupt is no longer misclassified as a legacy
+  (pre-CRC) file: format detection now forward-scans for any CRC-valid frame,
+  so later valid records behind a damaged one are recovered instead of the
+  whole WAL being skipped. A CRC-valid store record whose payload length does
+  not match the collection's vector size is now treated as corruption
+  (metric + `tracing::warn!`, payload not applied) and its id still lands in
+  `touched_ids` so HNSW reconciliation sees the WAL touched it — never a
+  silent drop. (WO-D1, BUG4; builds on the earlier WAL crash-safety fixes.)
+
+### Security
+
+- **Governance read-gate parity on the Python SDK.** `Collection.query()`,
+  `query_ids()`, `match_query()`, `explain_analyze()`, `scroll()`,
+  `scroll_batch()`, `get()`, `all_ids()`, `__contains__`, and the equivalent
+  `GraphCollection` VelesQL methods now route through the gated `Database`
+  facade (or `authorize_read`/`deny_if_scoped` for id-only and cursor shapes),
+  so a registered governance observer's deny/scope decision is enforced on
+  every Python read path — closing the bypass where VelesQL `query()` reached
+  the ungated detached collection. With no observer registered the behavior is
+  unchanged (zero overhead). VelesQL `FROM` on a `Collection` method stays
+  nominal (retargeted to the wrapped collection), preserving LangChain /
+  LlamaIndex / Haystack adapter semantics. (WO-D3, #1405.)
+
+### Documentation
+
+- `FUSION(maximum)` / `FUSION(average)` now document the cosine-vs-BM25
+  scale-mixing caveat (the unbounded BM25 leg dominates; prefer `rrf`/`rsf`),
+  in `VELESQL_SPEC.md` and `KNOWN_LIMITATIONS.md`. `ColumnStore::add_column`
+  documents that it does not backfill and is only sound on an empty store
+  (debug-asserted), pointing callers to `add_column_backfilled`. The
+  intentional re-match after a bitmap prefilter is documented as a correctness
+  invariant (the bitmap can be a superset and never covers the delta buffer).
+  (WO-D6, WO-D7, WO-D8.)
+
+### Internal / CI
+
+- The lint job pins the toolchain to 1.90 (matching the `roaring 0.11.4` MSRV),
+  runs a targeted `cargo clean` of workspace crates before clippy so the
+  incremental fingerprint cache can no longer mask `-D` lints, and runs
+  `check-version-sync.py` at PR time. `rust-toolchain.toml` is pinned so local
+  builds reproduce CI. CI also now triggers on `Dockerfile` / `docker-compose`
+  changes so container-build PRs are no longer merge-blocked by a
+  never-posted required check. (WO-D9.)
+
 ## [3.11.0] — 2026-07-14
 
 Chief-engineer audit resolution: closes every actionable finding from the

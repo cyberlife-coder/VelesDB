@@ -77,6 +77,8 @@ pub mod pushdown;
 #[cfg(test)]
 mod pushdown_tests;
 mod query_pipeline;
+#[cfg(test)]
+mod scan_cap_observability_tests;
 pub mod score_fusion;
 #[cfg(test)]
 mod score_fusion_tests;

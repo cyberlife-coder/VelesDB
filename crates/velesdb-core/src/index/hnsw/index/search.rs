@@ -359,7 +359,7 @@ impl HnswIndex {
             return self.search_brute_force(query, k).map(Some);
         }
 
-        if self.len() <= 100 && self.enable_vector_storage && !self.vectors.is_empty() {
+        if self.len() <= 100 && self.enable_vector_storage && self.graph_vector_count() > 0 {
             return self.search_brute_force(query, k).map(Some);
         }
 

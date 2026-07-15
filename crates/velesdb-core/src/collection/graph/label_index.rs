@@ -152,10 +152,9 @@ impl LabelIndex {
         let mut result = self.labels.get(first.as_str())?.clone();
 
         for label in iter {
-            match self.labels.get(label.as_str()) {
-                Some(bitmap) => result &= bitmap,
-                None => return None, // Label has no nodes → empty intersection
-            }
+            // A missing label means an empty intersection: `?` returns None.
+            let bitmap = self.labels.get(label.as_str())?;
+            result &= bitmap;
             if result.is_empty() {
                 return None;
             }

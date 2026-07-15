@@ -132,14 +132,3 @@ fn live_row_indices_excludes_deleted() {
     let live: Vec<usize> = store.live_row_indices().collect();
     assert_eq!(live, vec![0, 2, 4]);
 }
-
-#[test]
-fn deleted_count_bitmap_matches_set() {
-    let mut store = store_with_id_rows(10);
-    for i in [0, 2, 4, 6] {
-        if let Ok(idx) = u32::try_from(i) {
-            store.deletion_bitmap.insert(idx);
-        }
-    }
-    assert_eq!(store.deleted_count_bitmap(), 4);
-}

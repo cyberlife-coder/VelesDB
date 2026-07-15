@@ -563,9 +563,9 @@ dependencies = [
 
 [[package]]
 name = "cargo-platform"
-version = "0.3.3"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd0061da739915fae12ea00e16397555ed4371a6bb285431aab930f61b0aa4ba"
+checksum = "87a0c0e6148f11f01f32650a2ea02d532b2ad4e81d8bd41e6e565b5adc5e6082"
 dependencies = [
  "serde",
  "serde_core",
@@ -592,7 +592,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef987d17b0a113becdd19d3d0022d04d7ef41f9efe4f3fb63ac44ba61df3ade9"
 dependencies = [
  "camino",
- "cargo-platform 0.3.3",
+ "cargo-platform 0.3.2",
  "semver",
  "serde",
  "serde_json",
@@ -5361,9 +5361,9 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.9.8"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 dependencies = [
  "lock_api",
 ]
@@ -5669,7 +5669,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-velesdb"
-version = "3.11.0"
+version = "3.12.0"
 dependencies = [
  "dirs",
  "parking_lot",
@@ -6668,7 +6668,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "velesdb-cli"
-version = "3.11.0"
+version = "3.12.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -6693,7 +6693,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-core"
-version = "3.11.0"
+version = "3.12.0"
 dependencies = [
  "arc-swap",
  "bytemuck",
@@ -6760,7 +6760,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-migrate"
-version = "3.11.0"
+version = "3.12.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6787,7 +6787,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-mobile"
-version = "3.11.0"
+version = "3.12.0"
 dependencies = [
  "parking_lot",
  "serde",
@@ -6813,7 +6813,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-python"
-version = "3.11.0"
+version = "3.12.0"
 dependencies = [
  "numpy",
  "parking_lot",
@@ -6827,7 +6827,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-server"
-version = "3.11.0"
+version = "3.12.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6859,7 +6859,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-wasm"
-version = "3.11.0"
+version = "3.12.0"
 dependencies = [
  "getrandom 0.3.4",
  "getrandom 0.4.2",

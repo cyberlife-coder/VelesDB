@@ -184,11 +184,25 @@ impl DeltaBuffer {
     /// No-op if the buffer is not in `ACTIVE` state. The check is performed
     /// **inside** the write lock to close the TOCTOU window between `is_active()`
     /// and the actual write.
+    ///
+    /// # Lock scope (PERF3)
+    ///
+    /// The iterator is materialized **before** taking the write lock: callers
+    /// pass lazy iterators whose items perform `O(N×D)` vector copies
+    /// (e.g. `to_vec()` in `bulk_index_or_defer`), and running those copies
+    /// under the write lock would stall every concurrent brute-force search
+    /// (read lock) for the duration of the batch copy. If the buffer turns
+    /// out to be inactive the materialized entries are dropped — a rare,
+    /// benign waste (the deferred path activates the buffer just before
+    /// extending).
     pub fn extend(&self, entries: impl IntoIterator<Item = (u64, Vec<f32>)>) {
+        let new_entries: Vec<(u64, Vec<f32>)> = entries.into_iter().collect();
+        if new_entries.is_empty() {
+            return;
+        }
+        let new_ids: HashSet<u64> = new_entries.iter().map(|(id, _)| *id).collect();
         let mut points = self.points.write();
         if self.state.load(Ordering::Acquire) == ACTIVE {
-            let new_entries: Vec<(u64, Vec<f32>)> = entries.into_iter().collect();
-            let new_ids: HashSet<u64> = new_entries.iter().map(|(id, _)| *id).collect();
             points.retain(|(existing_id, _)| !new_ids.contains(existing_id));
             points.extend(new_entries);
         }
@@ -234,9 +248,13 @@ impl DeltaBuffer {
     /// Brute-force searches the delta buffer for the k nearest neighbors.
     ///
     /// Returns an empty `Vec` if the buffer is neither `ACTIVE` nor `DRAINING`.
-    /// Takes a brief read lock to snapshot the points, releases it, then
-    /// computes distances on the snapshot to avoid holding the lock during
-    /// potentially expensive distance calculations.
+    /// Computes distances directly under a single read lock — without cloning
+    /// the buffer — and only materializes the compact `(id, score)` result Vec
+    /// (`O(M)`), never a full `O(M×D)` copy of the vector data. The distance
+    /// scan is `O(M×D)` regardless, so the lock is held for the same order of
+    /// work as the previous snapshot copy but does useful computation instead
+    /// of allocating and copying. The (potentially larger) sort runs after the
+    /// lock is released.
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, metric: DistanceMetric) -> Vec<(u64, f32)> {
         let current_state = self.state.load(Ordering::Acquire);
@@ -244,16 +262,18 @@ impl DeltaBuffer {
             return Vec::new();
         }
 
-        // Snapshot under a brief read lock, then release before computing distances.
-        let snapshot: Vec<(u64, Vec<f32>)> = self.points.read().clone();
-        if snapshot.is_empty() {
-            return Vec::new();
-        }
-
-        let mut results: Vec<(u64, f32)> = snapshot
-            .iter()
-            .map(|(id, vec)| (*id, metric.calculate(query, vec)))
-            .collect();
+        // Compute distances in place under the read lock; only the compact
+        // result Vec escapes it. Sorting/truncation happen after release.
+        let mut results: Vec<(u64, f32)> = {
+            let points = self.points.read();
+            if points.is_empty() {
+                return Vec::new();
+            }
+            points
+                .iter()
+                .map(|(id, vec)| (*id, metric.calculate(query, vec)))
+                .collect()
+        };
 
         metric.sort_results(&mut results);
         results.truncate(k);

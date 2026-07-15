@@ -40,11 +40,10 @@ impl NativeHnswIndex {
         // full rationale (#617 Devin follow-up).
         persistence::save_graph_generation(path, new_gen)?;
 
-        // Mappings + vectors + meta in one shared call (RF-DEDUP #448 Group C).
+        // Mappings + meta in one shared call (RF-DEDUP #448 Group C).
         persistence::save_sidecars(
             path,
             &self.mappings,
-            &self.vectors,
             &HnswMeta {
                 dimension: self.dimension,
                 metric: self.metric,
@@ -86,16 +85,20 @@ impl NativeHnswIndex {
             meta.storage_mode,
         )?;
 
-        // Mappings + vectors in one shared call (RF-DEDUP #448 Group C).
-        let (mappings, vectors, enable_vector_storage) = persistence::load_sidecars(path, &meta)?;
+        // Mappings (+ legacy vectors-file consistency check) in one shared
+        // call (RF-DEDUP #448 Group C). The graph's own ContiguousVectors —
+        // loaded above — is the single vector store; its count bounds every
+        // mapped internal index.
+        let graph_vector_count =
+            inner.with_contiguous_vectors(crate::perf_optimizations::ContiguousVectors::len);
+        let mappings = persistence::load_sidecars(path, &meta, graph_vector_count)?;
 
         Ok(Self {
             dimension: meta.dimension,
             metric: meta.metric,
             inner: RwLock::new(inner),
             mappings,
-            vectors,
-            enable_vector_storage,
+            enable_vector_storage: meta.enable_vector_storage,
             params: HnswParams::auto(meta.dimension),
         })
     }

@@ -12,14 +12,25 @@
 //! No separate schema-version header is needed because the per-entry
 //! marker already encodes the wire format.
 //!
-//! ## Torn-tail policy
+//! ## Torn-tail and corruption policy
 //!
 //! A crash mid-append leaves a partially-written final record. Because the WAL
 //! is append-only and replayed sequentially, a truncation can only ever be the
-//! last record. [`WalEntry::read`] / [`WalEntry::apply`] therefore signal such a
-//! tail by returning `Ok(None)` instead of an error, so the caller stops replay
+//! last record. [`WalEntry::read`] signals such a tail by returning `None`, and
+//! [`WalEntry::apply`] by returning `Ok(None)`, so the caller stops replay
 //! cleanly and keeps every prior entry rather than failing the collection open.
-//! This mirrors the vector WAL's `#898` policy (`storage::mmap::wal_replay`).
+//!
+//! The CRC only ever covers the id + payload bytes; it never protects the
+//! framing fields (marker and length) that are read *before* any CRC check. A
+//! flipped marker byte, or a shrunk length field that slips past the OOM guard
+//! and desynchronises the framing of the following record, therefore surfaces
+//! as an *unknown marker* mid-stream. [`WalEntry::read`] treats that exactly
+//! like a torn tail — it returns `None` so the caller stops and preserves every
+//! already-replayed entry rather than failing the collection open — and
+//! additionally records the shared `wal_replay_corrupt_entries` metric plus a
+//! warning so the corruption is observable. This mirrors the vector WAL's
+//! `#898` policy (`storage::mmap::wal_replay`), which likewise stops on an
+//! unknown opcode and records the same metric.
 
 use super::log_payload_io::{
     compute_delete_crc, compute_store_crc, CRC_DELETE_MARKER, CRC_STORE_MARKER,
@@ -45,17 +56,24 @@ enum WalOp {
 }
 
 impl WalEntry {
-    /// Reads one WAL entry from the reader. Returns `None` on EOF.
-    pub(super) fn read(reader: &mut BufReader<File>, pos: u64) -> io::Result<Option<Self>> {
+    /// Reads one WAL entry from the reader. Returns `None` to stop replay
+    /// cleanly — on EOF, on a torn tail (truncated header), or on an unknown
+    /// marker (mid-stream corruption); see the module-level policy. The caller
+    /// keeps every entry already read.
+    ///
+    /// Header parsing never surfaces an I/O error: a short read is a torn tail,
+    /// not a failure, so this returns `Option` rather than `io::Result`. The
+    /// payload I/O in [`WalEntry::apply`] is what can genuinely fail.
+    pub(super) fn read(reader: &mut BufReader<File>, pos: u64) -> Option<Self> {
         let mut marker = [0u8; 1];
         if reader.read_exact(&mut marker).is_err() {
-            return Ok(None);
+            return None;
         }
 
         let mut id_bytes = [0u8; 8];
         if reader.read_exact(&mut id_bytes).is_err() {
             // Torn tail: crashed after the marker but before the full id.
-            return Ok(None);
+            return None;
         }
         let id = u64::from_le_bytes(id_bytes);
         let pos_after_header = pos + 1 + 8;
@@ -66,18 +84,28 @@ impl WalEntry {
             CRC_STORE_MARKER => (WalOp::Store { id }, true),
             CRC_DELETE_MARKER => (WalOp::Delete { id }, true),
             _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Unknown WAL marker",
-                ))
+                // Unknown marker: the framing is no longer trustworthy. The CRC
+                // never covers the marker/length framing bytes, so a flipped
+                // marker — or a shrunk length that desynchronised the previous
+                // record's framing — lands here mid-stream. Stop replay cleanly
+                // (keeping every entry read so far) and surface the corruption
+                // via the shared metric + a warning, mirroring the vector WAL's
+                // `#898` policy. Returning `None` matches the torn-tail
+                // contract: the caller stops rather than failing the open.
+                crate::metrics::global_guardrails_metrics().record_wal_replay_corrupt_entry();
+                tracing::warn!(
+                    marker = marker[0],
+                    "Unknown WAL payload marker during replay — stopping at corrupt entry"
+                );
+                return None;
             }
         };
 
-        Ok(Some(Self {
+        Some(Self {
             op,
             pos_after_header,
             has_crc,
-        }))
+        })
     }
 
     /// Applies this entry to the index, returning the new file position.

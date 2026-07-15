@@ -125,8 +125,9 @@ impl Collection {
             }
             None => meta_cond,
         };
-        let filter = crate::filter::Filter::new(crate::filter::Condition::from(combined_cond));
-        let metadata_results = self.execute_scan_query(&filter, limit);
+        let filter =
+            crate::filter::Filter::new(crate::filter::Condition::from(combined_cond.clone()));
+        let metadata_results = self.execute_scan_query(&filter, limit, Some(&combined_cond));
 
         for result in metadata_results {
             // Only add if not already found by similarity search

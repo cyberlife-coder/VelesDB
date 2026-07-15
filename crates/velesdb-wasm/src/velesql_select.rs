@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use velesdb_core::velesql::{Condition, Query, SelectStatement, VectorSearch};
 
 use crate::database::DatabaseInner;
+use crate::observer::WasmQueryOperationKind;
 use crate::vector_ops;
 use crate::velesql_aggregate;
 use crate::velesql_fusion;
@@ -37,6 +38,13 @@ pub(crate) fn execute(
     query: &Query,
     params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
+    // Read-path gate (audit F-5.4, #1392): consulted before any store access.
+    // Placed ahead of the JOIN early-return below so joined SELECTs are gated
+    // too. Set-operation operands re-enter here via `velesql_setops::run_select`,
+    // so each operand is gated with its own source collection. Zero-overhead
+    // when no observer is registered.
+    db.check_query_access(&query.select.from, WasmQueryOperationKind::Select)?;
+
     if !query.let_bindings.is_empty() {
         return Err("LET bindings are not supported in WASM".to_string());
     }

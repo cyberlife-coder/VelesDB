@@ -90,13 +90,13 @@ impl Database {
     ///
     /// Returns the first flush error encountered.
     fn flush_all_collections(&self, full: bool) -> Result<()> {
-        for (_, vc) in self.vector_colls.read().iter() {
+        for vc in self.vector_colls.read().values() {
             flush_dispatch!(vc, full)?;
         }
-        for (_, gc) in self.graph_colls.read().iter() {
+        for gc in self.graph_colls.read().values() {
             flush_dispatch!(gc, full)?;
         }
-        for (_, mc) in self.metadata_colls.read().iter() {
+        for mc in self.metadata_colls.read().values() {
             flush_dispatch!(mc, full)?;
         }
         Ok(())

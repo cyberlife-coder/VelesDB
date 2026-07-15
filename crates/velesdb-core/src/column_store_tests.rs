@@ -462,6 +462,39 @@ mod tests {
         assert!(store.get_column("rating").is_some());
     }
 
+    /// `add_column` does not backfill, so calling it once rows exist would
+    /// silently desynchronize the store. The debug guard must catch it.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "add_column called with 1 existing row(s)")]
+    fn test_add_column_debug_guard_rejects_non_empty_store() {
+        // Arrange - store with one row already pushed
+        let mut store = ColumnStore::with_schema(&[("id", ColumnType::Int)]);
+        store.push_row(&[("id", ColumnValue::Int(1))]);
+
+        // Act - adding a column without backfill must trip the debug guard
+        store.add_column("late", &ColumnType::Float);
+    }
+
+    /// `add_column_backfilled` is the supported path once rows exist: the new
+    /// column must be padded with nulls up to `row_count`.
+    #[test]
+    fn test_add_column_backfilled_aligns_with_existing_rows() {
+        // Arrange - store with two rows already pushed
+        let mut store = ColumnStore::with_schema(&[("id", ColumnType::Int)]);
+        store.push_row(&[("id", ColumnValue::Int(1))]);
+        store.push_row(&[("id", ColumnValue::Int(2))]);
+
+        // Act
+        store.add_column_backfilled("late", &ColumnType::Float);
+
+        // Assert - column exists, aligned with row_count, and backfilled nulls
+        let column = store.get_column("late").expect("column must exist");
+        assert_eq!(column.len(), store.row_count());
+        assert!(column.get_as_json_non_string(0).is_none());
+        assert!(column.get_as_json_non_string(1).is_none());
+    }
+
     // =========================================================================
     // TDD Tests for EPIC-020 US-001: Primary Key Index
     // =========================================================================
@@ -2037,24 +2070,10 @@ mod tests {
     // EPIC-043 US-002: RoaringBitmap Filtering Tests
     // =========================================================================
 
-    #[test]
-    fn test_roaring_bitmap_sync_with_deleted_rows() {
-        // Arrange
-        let mut store = ColumnStore::with_primary_key(&[("id", ColumnType::Int)], "id").unwrap();
-
-        for i in 0..100 {
-            store.insert_row(&[("id", ColumnValue::Int(i))]).unwrap();
-        }
-
-        // Act: Delete some rows
-        for i in 0..30 {
-            store.delete_by_pk(i);
-        }
-
-        // Assert: Both FxHashSet and RoaringBitmap should be in sync
-        assert_eq!(store.deleted_row_count(), 30);
-        assert_eq!(store.deleted_count_bitmap(), 30);
-    }
+    // NOTE: the former `test_roaring_bitmap_sync_with_deleted_rows` compared
+    // `deleted_row_count()` to `deleted_count_bitmap()`, which read the same
+    // RoaringBitmap since the F-2.11 unification (PR #1379) — removed as a
+    // tautology (audit 61b5e8 follow-up R8).
 
     #[test]
     fn test_is_row_deleted_bitmap() {

@@ -5,7 +5,6 @@
 //! duplication.
 
 use super::sharded_mappings::ShardedMappings;
-use super::sharded_vectors::ShardedVectors;
 use crate::validation::validate_dimension_match;
 
 /// Result of an upsert mapping operation, carrying rollback information.
@@ -21,26 +20,18 @@ pub(crate) struct UpsertResult {
     pub old_idx: Option<usize>,
 }
 
-/// Registers an ID with upsert semantics and cleans up stale vector data.
+/// Registers an ID with upsert semantics.
 ///
-/// If the ID already existed, the old mapping is replaced and the stale
-/// sidecar vector (if stored) is removed from `ShardedVectors`.
+/// If the ID already existed, the old mapping is replaced. The old graph
+/// node becomes a tombstone: its vector stays in `ContiguousVectors` but is
+/// unreachable through the mappings, so search/rerank/brute-force never
+/// return it.
 ///
 /// Returns an [`UpsertResult`] containing the new index and optional old
 /// index for rollback purposes.
 #[must_use]
-pub(crate) fn upsert_mapping(
-    mappings: &ShardedMappings,
-    vectors: &ShardedVectors,
-    enable_vector_storage: bool,
-    id: u64,
-) -> UpsertResult {
+pub(crate) fn upsert_mapping(mappings: &ShardedMappings, id: u64) -> UpsertResult {
     let (idx, old_idx) = mappings.register_or_replace(id);
-    if let Some(old) = old_idx {
-        if enable_vector_storage {
-            vectors.remove(old);
-        }
-    }
     UpsertResult { idx, old_idx }
 }
 
@@ -56,23 +47,12 @@ pub(crate) fn upsert_mapping(
 /// without explicit rollback. See `prepare_batch_insert()` in `batch.rs`
 /// for the canonical call sequence.
 #[must_use]
-pub(crate) fn upsert_mapping_batch(
-    mappings: &ShardedMappings,
-    vectors: &ShardedVectors,
-    enable_vector_storage: bool,
-    ids: &[u64],
-) -> Vec<UpsertResult> {
-    let batch_results = mappings.register_or_replace_batch(ids);
-    let mut results = Vec::with_capacity(batch_results.len());
-    for (idx, old_idx) in batch_results {
-        if let Some(old) = old_idx {
-            if enable_vector_storage {
-                vectors.remove(old);
-            }
-        }
-        results.push(UpsertResult { idx, old_idx });
-    }
-    results
+pub(crate) fn upsert_mapping_batch(mappings: &ShardedMappings, ids: &[u64]) -> Vec<UpsertResult> {
+    mappings
+        .register_or_replace_batch(ids)
+        .into_iter()
+        .map(|(idx, old_idx)| UpsertResult { idx, old_idx })
+        .collect()
 }
 
 /// Validates dimensions for every vector in `items`, then registers the IDs
@@ -96,8 +76,6 @@ pub(crate) fn upsert_mapping_batch(
 #[inline]
 pub(crate) fn validate_and_register_batch<V: AsRef<[f32]>>(
     mappings: &ShardedMappings,
-    vectors: &ShardedVectors,
-    enable_vector_storage: bool,
     expected_dimension: usize,
     items: &[(u64, V)],
 ) -> crate::error::Result<Vec<UpsertResult>> {
@@ -106,38 +84,23 @@ pub(crate) fn validate_and_register_batch<V: AsRef<[f32]>>(
     }
 
     let ids: Vec<u64> = items.iter().map(|(id, _)| *id).collect();
-    Ok(upsert_mapping_batch(
-        mappings,
-        vectors,
-        enable_vector_storage,
-        &ids,
-    ))
+    Ok(upsert_mapping_batch(mappings, &ids))
 }
 
-/// Soft-deletes a single ID: removes it from mappings and, when vector
-/// storage is enabled, removes the corresponding sidecar slot.
+/// Soft-deletes a single ID: removes it from the mappings.
 ///
 /// Returns `true` if the ID existed and was removed, `false` if it was
 /// already absent. The HNSW graph node itself is left in place — it becomes
 /// a tombstone that is filtered out during search via the reverse mapping.
+/// Its vector stays in `ContiguousVectors` until [`vacuum`] reclaims it.
 ///
 /// Shared by `HnswIndex::remove` and `NativeHnswIndex::remove` (identical
 /// bodies, #448 Group F consolidation).
+///
+/// [`vacuum`]: crate::index::HnswIndex::vacuum
 #[inline]
-pub(crate) fn soft_delete(
-    mappings: &ShardedMappings,
-    vectors: &ShardedVectors,
-    enable_vector_storage: bool,
-    id: u64,
-) -> bool {
-    if let Some(old_idx) = mappings.remove(id) {
-        if enable_vector_storage {
-            vectors.remove(old_idx);
-        }
-        true
-    } else {
-        false
-    }
+pub(crate) fn soft_delete(mappings: &ShardedMappings, id: u64) -> bool {
+    mappings.remove(id).is_some()
 }
 
 /// Reconciles pre-registered mapping indices with graph-assigned node IDs.
@@ -151,32 +114,23 @@ pub(crate) fn soft_delete(
 /// * Otherwise, remove the stale reverse mapping (`result.idx -> ext_id`) and
 ///   restore the authoritative one (`ext_id <-> assigned_id`).
 ///
-/// Returns the list of authoritative storage indices, in input order, so the
-/// caller can store sidecar vectors at the correct slot.
-///
 /// Both `HnswIndex::insert_batch_parallel` and `NativeHnswIndex::insert_batch`
 /// used to duplicate this logic — consolidated here for #448 Group D.
-#[must_use]
 #[inline]
 pub(crate) fn reconcile_batch_mappings(
     mappings: &ShardedMappings,
     rollback_info: &[(u64, UpsertResult)],
     assigned_ids: &[usize],
-) -> Vec<usize> {
-    let mut storage_ids = Vec::with_capacity(assigned_ids.len());
+) {
     for (assigned_id, (ext_id, result)) in assigned_ids.iter().zip(rollback_info) {
-        if *assigned_id == result.idx {
-            storage_ids.push(result.idx);
-        } else {
+        if *assigned_id != result.idx {
             // Graph assigned a different node ID than upsert_mapping expected.
             // Remove the stale reverse mapping (result.idx -> ext_id) and
             // establish the correct mapping (ext_id <-> assigned_id).
             mappings.remove_reverse(result.idx);
             mappings.restore(*ext_id, *assigned_id);
-            storage_ids.push(*assigned_id);
         }
     }
-    storage_ids
 }
 
 /// Rolls back every upsert in `rollback_info`, in reverse order, after a
@@ -199,19 +153,12 @@ pub(crate) fn rollback_batch(mappings: &ShardedMappings, rollback_info: &[(u64, 
 ///
 /// Removes the newly-allocated mapping and, if this was an update,
 /// restores the previous mapping so the point remains searchable
-/// through its old graph node.
+/// through its old graph node (its vector is still in `ContiguousVectors`).
 ///
 /// **Transient gap**: Between `remove` and `restore`, the ID has no
 /// mapping for a brief window (nanoseconds). A concurrent search during
 /// this window will not find the point. This only occurs on graph-insert
 /// failure, which is rare (allocation error).
-///
-/// **Sidecar loss**: The old sidecar vector (in `ShardedVectors`) was
-/// already removed by [`upsert_mapping`] and cannot be cheaply restored.
-/// The HNSW graph still holds the vector data in `ContiguousVectors` for
-/// traversal, so the point remains searchable -- only sidecar reranking
-/// precision is lost for the affected point until the next successful
-/// upsert.
 pub(crate) fn rollback_upsert(mappings: &ShardedMappings, id: u64, result: &UpsertResult) {
     // Only remove if the current mapping still points to our index.
     // A within-batch duplicate may have already overwritten the mapping

@@ -425,8 +425,20 @@ impl MmapStorage {
             &mut touched_ids,
         )?;
         if replayed > 0 {
-            // 1. Make the recovered vector bytes durable.
+            // 1. Make the recovered vector bytes durable (msync of dirty pages).
             mmap.flush()?;
+            // 1b. fsync the data file so any file GROWTH performed during replay
+            //     (ReplayTarget::ensure_capacity -> set_len) is durably recorded
+            //     BEFORE we persist the index (whose offsets reference the grown
+            //     region) and truncate the WAL. `msync` flushes page contents but
+            //     does not guarantee the inode size is journaled; on such a
+            //     filesystem a crash after the WAL truncation could leave the data
+            //     file at its pre-growth length while vectors.idx points past EOF
+            //     -> next open, load_index rejects "offset exceeds data file size"
+            //     and open fails with the WAL already gone. Ordering the sync here
+            //     closes that window; the WAL is only cleared once both the data
+            //     file (size + bytes) and the index are durable.
+            data_file.sync_all()?;
             // 2. Persist the rebuilt index so the recovered state survives even
             //    after the WAL is cleared.
             Self::persist_index_file(index_path, index)?;
@@ -557,6 +569,18 @@ impl MmapStorage {
     /// Returns an error if any I/O operation fails.
     pub fn flush_full(&mut self) -> io::Result<()> {
         self.flush()?;
+        // fsync the data file BEFORE persisting the index (mirrors the replay
+        // growth path in `replay_wal`). `flush()` msyncs the mmap and fsyncs the
+        // WAL, but neither guarantees a live `set_len` growth (from
+        // `ensure_capacity`) has its inode size journaled. `flush_index()` then
+        // persists `vectors.idx` with offsets that reference the grown region.
+        // On a filesystem where the size update is not durable, a crash could
+        // leave the data file at its pre-growth length while the persisted index
+        // points past EOF -> next open, `load_index` rejects it ("index offset
+        // exceeds data file size") and open fails before `replay_wal` can rebuild
+        // from the (still-intact) WAL. Syncing the size here keeps the data file
+        // and the index we persist next mutually consistent.
+        self.data_file.sync_all()?;
         self.flush_index()
     }
 

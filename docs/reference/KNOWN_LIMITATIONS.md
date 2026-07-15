@@ -41,13 +41,13 @@ Both branches feed into the same `dispatch_vector_query` executor through the `(
 
 **What remains open**: the deeper `PlanGenerator::CandidatePlan` enumeration (SeqScan, IndexScan, VectorSearch, GraphTraversal, hybrid combinations) is still not consumed by `execute_query`. The current two-path routing covers the operationally common cases — full multi-candidate enumeration would only change the decision when the cost landscape is non-trivially multimodal.
 
-**Strategy realization on SELECT (audit F-2.15)**: the `ExecutionStrategy` the planner selects is not executed as three physically distinct engines on the SELECT path. As documented in `velesql/planner.rs`:
+**Strategy realization on SELECT (audit F-2.15 — RESOLVED, #1390)**: on the NEAR + metadata-filter SELECT path (`execution_paths.rs`, `dispatch_vector_with_strategy`), the `ExecutionStrategy` the planner selects is executed as three **physically distinct** plans:
 
-- `VectorFirst` — executed natively (HNSW-first, then filter).
-- `GraphFirst` — realized as an **anchor pre-filter** (compute the candidate id set, then run the vector search constrained to it), not a graph-driven scan.
-- `Parallel` — **collapses to `VectorFirst`** on SELECT; it is not run as concurrent branches. On `MATCH`, `Parallel` executes sequentially.
+- `VectorFirst` — filtered HNSW search (`search_with_filter_and_opts`).
+- `GraphFirst` — a full metadata scan scored by vector similarity (`scan_and_score_by_vector`), physically distinct from the HNSW path.
+- `Parallel` — the GraphFirst scan and the VectorFirst HNSW branch run **concurrently** via `rayon::join`, then merge by best-score-per-id. On `MATCH` (`match_dispatch.rs`, `execute_match_parallel`), `Parallel` likewise runs its GraphFirst and VectorFirst legs concurrently via `rayon::join` and merges by `node_id`.
 
-This is a deliberate, assumed limitation (the planner's cost model still picks the cheapest strategy; the executor just realizes `GraphFirst`/`Parallel` conservatively), not a hidden bug. Hybrid-query optimization that executes these strategies distinctly is a future item.
+The concurrent Parallel result set is identical to the former sequential one (both legs are read-only; the merge is order-insensitive); the shared EXPLAIN counters remain the sum of both legs (atomic `fetch_add`). The other SELECT arms (similarity() threshold, pure NEAR, metadata-only, SELECT *) each have a single sensible physical plan and deliberately ignore the strategy — see the `dispatch_vector_query` match arms for the per-arm rationale. SELECT graph predicates still use their own anchored pre-filter (`graph_prefilter.rs`) independently of `ExecutionStrategy`. Covered by `test_parallel_strategy_returns_best_score_union_of_both_branches`, the forced-`GraphFirst`/`VectorFirst` dispatch tests, and `parallel_counters_sum_both_legs`.
 
 **User impact**: `MATCH` queries use the full CBO via `MatchQueryPlanner::plan`. SELECT queries (including ORDER BY similarity + filter) now use calibrated strategy and over-fetch selection. Covered by `test_cbo_forces_vector_first_for_order_by_similarity_with_selective_filter` + `test_cbo_calibrated_path_still_works_without_order_by_similarity` + `test_filter_strategy_switches_on_selectivity`.
 
@@ -156,6 +156,37 @@ collection holds more than **5,000,000** vectors the query is **rejected** with
 guidance to add a selective metadata filter or use a positive `similarity()`
 predicate (which is index-accelerated).
 
+### GraphFirst full-scan cap (`SCAN_CAP = 100_000`) — truncation is now warned
+
+**Status**: intentional guard-rail, observable since WO-D2. Source:
+`crates/velesdb-core/src/collection/search/query/similarity_filter.rs`
+(`scan_and_score_by_vector`, `SCAN_CAP = 100_000`, #901).
+
+When the planner picks the `GraphFirst` strategy for a filtered vector query
+(highly selective metadata filter), the executor full-scans the metadata
+matches and rescores them by exact vector similarity. To bound the work of a
+pathological query, at most **100,000** metadata matches are scored per query.
+
+**When it bites**: the metadata filter matches more than 100,000 points (or the
+scan reaches 100,000 matches while unvisited points remain). Matches beyond the
+cap are never scored.
+
+**Symptom**: silently degraded recall — the returned top-k is the best of the
+first 100,000 scanned matches, not of all matches. Results stay correctly
+ordered and deduplicated; they may just miss better matches that live past the
+cap. Since WO-D2 the truncation is no longer silent: one structured
+`tracing::warn!` is emitted **per affected query** (never per candidate) with
+the collection name, the cap, the number of matches scored, and an upper bound
+on the unvisited remainder (`unscanned_points`).
+
+**Workaround**: narrow the metadata filter so it matches fewer points —
+ideally on a field with a secondary index (`create_index`), which lets the
+executor scan only the indexed candidate set — or split the query into more
+selective partitions at the application level. A broad filter with low
+selectivity is better served by the `VectorFirst` (ANN) strategy, which the
+cost-based optimizer picks automatically when statistics are available
+(`ANALYZE`).
+
 ### 9. Bounded query-result materialization
 
 **Status**: resolved (bounded memory). Source: `crates/velesdb-core/src/collection/search/query/` (set_operations, parallel_traversal, similarity_filter), `database/query_engine.rs`, `database/query_join.rs`.
@@ -239,6 +270,34 @@ deliberately high *backstop* against arithmetic-wrapped or pathological sizes; i
 is far above any single contiguous buffer VelesDB legitimately allocates, so it
 never rejects a real index. Primary defense against untrusted sizes is the
 per-artifact load-time validation (file-length-bounded counts).
+
+---
+
+## Hybrid search / fusion
+
+### `FUSION(maximum)` / `FUSION(average)` mix raw score scales (BM25 dominates)
+
+**Status**: documented design choice (not a bug). Sources: `crates/velesdb-core/src/fusion/strategy.rs` (`fuse_maximum`, `fuse_average` — no normalization; `fuse_rsf` → `min_max_normalize`), `crates/velesdb-core/src/collection/search/text_fusion.rs` (routes `maximum`/`average`/`rsf` to score-level fusion of the raw vector-similarity and BM25 streams).
+
+**Symptom**: in a hybrid query fusing a vector branch with a text branch — e.g.
+`WHERE vector NEAR $v AND content MATCH '...' USING FUSION(strategy = 'maximum')`
+(or `'average'`) — the fused ranking is dominated by the text (BM25) results,
+and the vector branch has little or no visible influence.
+
+**Why**: `maximum` and `average` operate on the **raw** per-branch scores with
+no normalization. Vector similarity is bounded (cosine ∈ [0, 1]) while BM25 is
+unbounded (routinely > 1, often 5–20 on longer queries), so under `maximum` the
+BM25 score almost always wins, and under `average` it dwarfs the vector
+contribution. These strategies are designed for branches whose scores share a
+scale (e.g. two dense-vector branches over the same metric); the engine
+deliberately does not second-guess the caller by normalizing behind their back.
+
+**Recommendation**: for mixed-scale hybrids (vector + BM25), use
+`FUSION(strategy = 'rrf')` — rank-based, therefore insensitive to score scale —
+or `FUSION(strategy = 'rsf', dense_weight = ..., sparse_weight = ...)`, which
+min-max normalizes each branch to [0, 1] before the weighted sum. Reserve
+`maximum`/`average` for branches with commensurable scores. See the
+scale-mixing caveat in [`VELESQL_SPEC.md` → USING FUSION](../VELESQL_SPEC.md#using-fusion----hybrid-search-v20).
 
 ---
 

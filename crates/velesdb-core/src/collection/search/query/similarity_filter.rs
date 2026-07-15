@@ -11,6 +11,22 @@ use crate::error::Result;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 
+/// Outcome of a tracked metadata scan (WO-D2): the collected matches plus
+/// how many candidate ids were never visited because the scan already
+/// reached `limit`.
+///
+/// `unscanned_ids > 0` means the scan stopped early; the unvisited ids are
+/// an upper bound on the matches missed. Callers that use `limit` as a hard
+/// scan cap (e.g. [`Collection::scan_and_score_by_vector`]) rely on it to
+/// detect and report silent truncation.
+pub(crate) struct TrackedScan {
+    /// Matches collected before the scan stopped (`len() <= limit`).
+    pub(crate) results: Vec<SearchResult>,
+    /// Candidate ids left unvisited when the scan stopped at `limit`;
+    /// `0` when the scan exhausted the candidate set.
+    pub(crate) unscanned_ids: usize,
+}
+
 /// Inverted-similarity threshold bundle for the NOT-similarity scan.
 struct NotSimilarityThreshold {
     op: crate::velesql::CompareOp,
@@ -305,17 +321,35 @@ impl Collection {
         &self,
         filter: &crate::filter::Filter,
         limit: usize,
+        cond: Option<&crate::velesql::Condition>,
     ) -> Vec<SearchResult> {
+        self.execute_scan_query_tracked(filter, limit, cond).results
+    }
+
+    /// Like [`Self::execute_scan_query`], but also reports how many candidate
+    /// ids were left unvisited when the scan stopped at `limit` (WO-D2).
+    ///
+    /// Callers that use `limit` as a hard *scan cap* rather than a user limit
+    /// (e.g. [`Self::scan_and_score_by_vector`]) need `unscanned_ids` to
+    /// detect — and surface — silent truncation. Behavior and results are
+    /// byte-identical to `execute_scan_query`.
+    pub(crate) fn execute_scan_query_tracked(
+        &self,
+        filter: &crate::filter::Filter,
+        limit: usize,
+        cond: Option<&crate::velesql::Condition>,
+    ) -> TrackedScan {
         // Try index-accelerated scan: extract the first Eq condition and use
         // the secondary index to get candidate IDs, then post-filter.
-        // Skip when the index returns too many candidates relative to the limit —
-        // sequential scan with early exit is faster than hydrating thousands of
-        // index hits (e.g., IsMobile=1 matching 20% of rows).
+        // The cost model (audit F-4.7, issue #1391) decides whether hydrating
+        // the candidate set beats a sequential scan with early exit — the former
+        // wins for narrow candidate sets, the latter for broad ones (e.g.
+        // IsMobile=1 matching 20% of rows). Both paths return identical results.
         if let Some(candidate_ids) = self.try_index_accelerated_ids(filter) {
-            if candidate_ids.len() <= limit.saturating_mul(50).max(1000) {
+            if self.prefer_candidate_scan(candidate_ids.len(), limit, cond) {
                 return self.scan_candidate_ids(&candidate_ids, filter, limit);
             }
-            // Fall through to sequential scan — index has too many hits
+            // Fall through to sequential scan — cost model prefers full scan
         }
 
         // Full sequential scan (slow fallback for non-indexed conditions).
@@ -328,6 +362,7 @@ impl Collection {
         } else {
             vector_ids
         };
+        let total_ids = ids.len();
 
         // Record rows actually visited as payload-mirror scan debt: once the
         // debt exceeds one full-scan-equivalent, the next metadata query
@@ -342,7 +377,13 @@ impl Collection {
             limit,
         );
         self.payload_mirror.add_scan_debt(scanned);
-        results
+        // `scanned` counts visited ids out of `total_ids`; on 64-bit targets
+        // the conversion is lossless (falls back to "all visited" otherwise).
+        let visited = usize::try_from(scanned).unwrap_or(total_ids);
+        TrackedScan {
+            results,
+            unscanned_ids: total_ids.saturating_sub(visited),
+        }
     }
 
     /// Shared scan body: iterates `ids`, hydrates each matching point, and
@@ -428,22 +469,28 @@ impl Collection {
         }
     }
 
-    /// Scans a pre-filtered set of candidate IDs with the full filter.
+    /// Scans a pre-filtered set of candidate IDs with the full filter,
+    /// tracking how many candidate ids were left unvisited at `limit`.
     fn scan_candidate_ids(
         &self,
         candidate_ids: &[u64],
         filter: &crate::filter::Filter,
         limit: usize,
-    ) -> Vec<SearchResult> {
+    ) -> TrackedScan {
         let payload_storage = self.payload_storage.read();
         let vector_storage = self.vector_storage.read();
-        Self::collect_filtered_scan(
+        let mut scanned: usize = 0;
+        let results = Self::collect_filtered_scan(
             &*payload_storage,
             &*vector_storage,
-            candidate_ids.iter().copied(),
+            candidate_ids.iter().copied().inspect(|_| scanned += 1),
             filter,
             limit,
-        )
+        );
+        TrackedScan {
+            results,
+            unscanned_ids: candidate_ids.len().saturating_sub(scanned),
+        }
     }
 
     /// Scans all metadata-matching points and rescores them by exact vector similarity.
@@ -480,13 +527,46 @@ impl Collection {
         // heap caps retained memory to O(limit). Results and ordering are
         // identical to the previous full sort + truncate.
         const SCAN_CAP: usize = 100_000;
+        self.scan_and_score_by_vector_capped(metadata_filter, query, limit, SCAN_CAP)
+    }
 
-        let metric = self.config().metric;
+    /// Cap-parameterized body of [`Self::scan_and_score_by_vector`] (WO-D2).
+    ///
+    /// Split out so tests can prove the truncation warning and result
+    /// correctness with a small cap instead of inserting 100k points.
+    /// Production callers always go through the public wrapper
+    /// (`SCAN_CAP = 100_000`); the truncation behavior itself is unchanged.
+    pub(crate) fn scan_and_score_by_vector_capped(
+        &self,
+        metadata_filter: &crate::filter::Filter,
+        query: &[f32],
+        limit: usize,
+        scan_cap: usize,
+    ) -> Vec<SearchResult> {
+        let config = self.config();
+        let metric = config.metric;
         let higher_is_better = metric.higher_is_better();
 
-        let candidates = self.execute_scan_query(metadata_filter, SCAN_CAP);
+        let scan = self.execute_scan_query_tracked(metadata_filter, scan_cap, None);
+        if scan.results.len() >= scan_cap && scan.unscanned_ids > 0 {
+            // Observability (WO-D2): the #901 pathological-query guard
+            // otherwise degrades recall silently once a collection outgrows
+            // the cap. Emitted ONCE per query — never per candidate. The
+            // remainder is an upper bound: unvisited ids may not all match.
+            tracing::warn!(
+                collection = %config.name,
+                scan_cap,
+                matches_scored = scan.results.len(),
+                unscanned_points = scan.unscanned_ids,
+                "vector full-scan truncated at scan cap: up to `unscanned_points` \
+                 remaining points were never scored, so recall may be degraded. \
+                 Narrow the metadata filter (ideally on an indexed field) so it \
+                 matches fewer points, or split the query."
+            );
+        }
+
         let mut topk = super::bounded_top_k::BoundedTopK::new(limit, higher_is_better);
-        for mut r in candidates {
+        for mut r in scan.results {
             // Exact distance computation using the stored vector.
             // Clamp is mandatory (SecDev) to guard against NaN from zero-norm vectors.
             r.score = metric.calculate(&r.point.vector, query).clamp(-1.0, 1.0);

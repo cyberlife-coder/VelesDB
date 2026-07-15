@@ -13,9 +13,13 @@
 //!
 //! # Legacy WAL Format (pre-#317, no CRC)
 //!
-//! Detected by validating the CRC of the first entry. If validation fails,
-//! the file is legacy format and replay is skipped (the persisted index is
-//! authoritative for legacy data).
+//! Distinguished from CRC-framed by scanning for at least one CRC-valid record
+//! (see [`is_crc_framed_wal`]). A file with no CRC-valid record anywhere is
+//! treated as legacy and replay is skipped (the persisted index is
+//! authoritative for legacy data). Keying detection off the FIRST record alone
+//! used to discard the ENTIRE WAL when only that record was corrupt — losing
+//! every valid write behind it — even though the writer always emits CRC frames
+//! (#317), so a "legacy-looking" first record is really a damaged recent write.
 //!
 //! # Corruption policy (#898)
 //!
@@ -28,7 +32,10 @@
 //!   indicates bit-rot or a malformed WAL; the entry is skipped, a metric and
 //!   warning are recorded, and replay continues so later valid entries are
 //!   still recovered. Unknown opcodes mid-stream stop replay (the framing can
-//!   no longer be trusted).
+//!   no longer be trusted). A CRC-valid store record whose payload length does
+//!   not match the collection's vector size gets the same treatment (metric +
+//!   warning, payload not applied), and its id still lands in `touched_ids`
+//!   so the HNSW reconciliation sees the WAL touched it.
 //!
 //! A bare `0x04` byte is the legacy compaction marker: versions prior to the
 //! WAL-truncating compaction protocol appended it after a successful
@@ -203,6 +210,21 @@ fn drain_wal_entries(
 // ---------------------------------------------------------------------------
 
 /// Returns `true` if the WAL uses CRC32-framed entries.
+///
+/// Scans records forward as CRC frames and returns `true` as soon as ANY record
+/// validates its CRC. A genuine legacy (pre-#317) WAL carries no CRC, so —
+/// barring a ~2^-32 spurious collision — no record validates and it is correctly
+/// classified as legacy.
+///
+/// This deliberately does NOT key off the first record alone. The writer always
+/// emits CRC frames (#317), so a first record that fails its CRC is a damaged
+/// recent write, not a legacy file. Classifying such a file as legacy discarded
+/// the whole WAL — and every valid record behind the damaged one — silently.
+/// With a forward scan, that file is detected as CRC-framed and the drain path
+/// handles the damaged record as mid-stream corruption (skip + metric + warn +
+/// continue), recovering the later valid records. A file whose only records are
+/// corrupt/torn still yields `false` (nothing valid to recover), matching the
+/// prior legacy-skip behavior.
 fn is_crc_framed_wal(wal_path: &Path, file_len: u64) -> io::Result<bool> {
     let min_size = MIN_STORE_ENTRY.min(DELETE_ENTRY_SIZE);
     if file_len < min_size {
@@ -210,65 +232,38 @@ fn is_crc_framed_wal(wal_path: &Path, file_len: u64) -> io::Result<bool> {
     }
 
     let mut reader = BufReader::new(File::open(wal_path)?);
-    let mut op = [0u8; 1];
-    // Skip leading legacy compaction markers (bare 0x04 bytes) so a WAL whose
-    // first real record sits behind a marker is still detected as CRC-framed.
     loop {
+        if reader.stream_position()? >= file_len {
+            return Ok(false);
+        }
+
+        let mut op = [0u8; 1];
         if reader.read_exact(&mut op).is_err() {
             return Ok(false);
         }
-        if op[0] != 4 {
-            break;
+
+        match op[0] {
+            1 => match read_store_entry(&mut reader, file_len)? {
+                // A CRC-valid store frame proves the file is CRC-framed.
+                Some((_, _, true)) => return Ok(true),
+                // Framed but CRC-failing: possible mid-stream corruption inside a
+                // CRC-framed file — keep scanning for a valid frame behind it.
+                Some((_, _, false)) => {}
+                // Torn/short tail with nothing validated before it: not CRC.
+                None => return Ok(false),
+            },
+            2 => match read_delete_entry(&mut reader, file_len)? {
+                Some((_, true)) => return Ok(true),
+                Some((_, false)) => {}
+                None => return Ok(false),
+            },
+            // Bare legacy compaction marker (no payload): skip and keep scanning
+            // so a WAL whose first real record sits behind a marker is detected.
+            4 => {}
+            // Unknown opcode: this is not a CRC-framed record boundary.
+            _ => return Ok(false),
         }
     }
-
-    match op[0] {
-        1 => validate_first_store_crc(&mut reader, file_len),
-        2 => Ok(validate_first_delete_crc(&mut reader)),
-        _ => Ok(false),
-    }
-}
-
-/// Validates the CRC of the first store entry.
-fn validate_first_store_crc(reader: &mut BufReader<File>, file_len: u64) -> io::Result<bool> {
-    let mut id_bytes = [0u8; 8];
-    let mut len_bytes = [0u8; 4];
-    if reader.read_exact(&mut id_bytes).is_err() || reader.read_exact(&mut len_bytes).is_err() {
-        return Ok(false);
-    }
-
-    // OOM guard (#897/#898): cap the declared length against the bytes that can
-    // actually follow in the file before allocating.
-    let Some(data_len) = checked_store_data_len(len_bytes, reader, file_len)? else {
-        return Ok(false);
-    };
-
-    let mut data = vec![0u8; data_len];
-    if reader.read_exact(&mut data).is_err() {
-        return Ok(false);
-    }
-
-    let mut stored_crc = [0u8; 4];
-    if reader.read_exact(&mut stored_crc).is_err() {
-        return Ok(false);
-    }
-
-    Ok(store_crc_matches(id_bytes, len_bytes, &data, stored_crc))
-}
-
-/// Validates the CRC of the first delete entry.
-fn validate_first_delete_crc(reader: &mut BufReader<File>) -> bool {
-    let mut id_bytes = [0u8; 8];
-    if reader.read_exact(&mut id_bytes).is_err() {
-        return false;
-    }
-
-    let mut stored_crc = [0u8; 4];
-    if reader.read_exact(&mut stored_crc).is_err() {
-        return false;
-    }
-
-    delete_frame_crc(id_bytes) == u32::from_le_bytes(stored_crc)
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +351,33 @@ fn read_store_entry(
 
     let crc_ok = store_crc_matches(id_bytes, len_bytes, &data, stored_crc);
     Ok(Some((u64::from_le_bytes(id_bytes), data, crc_ok)))
+}
+
+/// Reads a delete entry (`op=2` already consumed), returning `None` for a torn
+/// tail (fewer than `id(8) + crc(4)` bytes remain) and `Some((id, crc_ok))` for
+/// a fully-framed record. Mirrors [`read_store_entry`] so both the format
+/// detection scan and [`replay_delete`] share one framing path.
+fn read_delete_entry(
+    reader: &mut BufReader<File>,
+    file_len: u64,
+) -> io::Result<Option<(u64, bool)>> {
+    let pos = reader.stream_position()?;
+    if file_len.saturating_sub(pos) < 8 + 4 {
+        return Ok(None);
+    }
+
+    let mut id_bytes = [0u8; 8];
+    if reader.read_exact(&mut id_bytes).is_err() {
+        return Ok(None);
+    }
+
+    let mut stored_crc = [0u8; 4];
+    if reader.read_exact(&mut stored_crc).is_err() {
+        return Ok(None);
+    }
+
+    let crc_ok = delete_frame_crc(id_bytes) == u32::from_le_bytes(stored_crc);
+    Ok(Some((u64::from_le_bytes(id_bytes), crc_ok)))
 }
 
 /// Validates a store entry's declared payload length against the bytes that can
@@ -450,8 +472,24 @@ fn replay_store(
 
     if data.len() == vector_size {
         apply_store_to_mmap(id, &data, index, target, next_offset, vector_size)?;
-        touched_ids.push(id);
+    } else {
+        // BUG4: a CRC-valid record whose payload length differs from the
+        // collection's vector size is corruption (or a foreign-dimension
+        // write). The payload is unusable so it is not applied, but per the
+        // module corruption policy it must be OBSERVABLE — warn + the same
+        // corrupt-entry metric as the CRC path above — never a silent drop.
+        crate::metrics::global_guardrails_metrics().record_wal_replay_corrupt_entry();
+        tracing::warn!(
+            id,
+            expected_len = vector_size,
+            actual_len = data.len(),
+            "WAL replay: skipping CRC-valid store entry with payload length mismatch"
+        );
     }
+    // Push the id even when the payload was unusable: the caller truncates the
+    // WAL after replay, so touched_ids is the only remaining witness that this
+    // id was touched — the HNSW open-time reconciliation must still see it.
+    touched_ids.push(id);
 
     Ok(EntryOutcome::Applied)
 }
@@ -494,23 +532,12 @@ fn replay_delete(
     touched_ids: &mut Vec<u64>,
 ) -> io::Result<EntryOutcome> {
     // op(1) already consumed; a delete needs id(8) + crc(4) to follow.
-    let pos = reader.stream_position()?;
-    if file_len.saturating_sub(pos) < 8 + 4 {
+    let Some((id, crc_ok)) = read_delete_entry(reader, file_len)? else {
+        // Torn tail: stop cleanly, keeping prior entries.
         return Ok(EntryOutcome::Stop);
-    }
+    };
 
-    let mut id_bytes = [0u8; 8];
-    if reader.read_exact(&mut id_bytes).is_err() {
-        return Ok(EntryOutcome::Stop);
-    }
-
-    let mut stored_crc = [0u8; 4];
-    if reader.read_exact(&mut stored_crc).is_err() {
-        return Ok(EntryOutcome::Stop);
-    }
-
-    if delete_frame_crc(id_bytes) == u32::from_le_bytes(stored_crc) {
-        let id = u64::from_le_bytes(id_bytes);
+    if crc_ok {
         index.remove(id);
         touched_ids.push(id);
         return Ok(EntryOutcome::Applied);

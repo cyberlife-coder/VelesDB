@@ -236,9 +236,26 @@ impl Collection {
                 Ok(self.scan_and_score_by_vector(filter, vector, execution_limit))
             }
             crate::velesql::ExecutionStrategy::Parallel => {
-                let graph_results = self.scan_and_score_by_vector(filter, vector, execution_limit);
-                let vector_results =
-                    self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts)?;
+                // R2 (#1390): run the GraphFirst scan and the VectorFirst HNSW
+                // branch CONCURRENTLY via `rayon::join`. Both legs are read-only
+                // over immutable collection data and the merge below is a
+                // best-score-by-id union (order-insensitive), so the concurrent
+                // result set is byte-for-byte identical to the former sequential
+                // execution — only wall-clock latency changes. The two closures
+                // each take read locks only (no writer during a query), so there
+                // is no lock-ordering hazard, mirroring the concurrent hybrid
+                // dense/sparse path in `hybrid_sparse::execute_both_branches`.
+                #[cfg(feature = "persistence")]
+                let (graph_results, vector_results) = rayon::join(
+                    || self.scan_and_score_by_vector(filter, vector, execution_limit),
+                    || self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts),
+                );
+                #[cfg(not(feature = "persistence"))]
+                let (graph_results, vector_results) = (
+                    self.scan_and_score_by_vector(filter, vector, execution_limit),
+                    self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts),
+                );
+                let vector_results = vector_results?;
                 let higher = self.config.read().metric.higher_is_better();
                 Ok(merge_select_parallel_results(
                     graph_results,
@@ -264,12 +281,12 @@ impl Collection {
         let empty_filter =
             || crate::filter::Filter::new(crate::filter::Condition::And { conditions: vec![] });
         if skip_metadata_prefilter_for_graph_or {
-            return Ok(self.execute_scan_query(&empty_filter(), execution_limit));
+            return Ok(self.execute_scan_query(&empty_filter(), execution_limit, None));
         }
         let Some(metadata_cond) = Self::extract_metadata_filter(cond) else {
-            return Ok(self.execute_scan_query(&empty_filter(), execution_limit));
+            return Ok(self.execute_scan_query(&empty_filter(), execution_limit, None));
         };
-        Ok(self.dispatch_metadata_filter(cond, metadata_cond, execution_limit))
+        Ok(self.dispatch_metadata_filter(cond, &metadata_cond, execution_limit))
     }
 
     /// Resolves a metadata filter by probing bitmap → indexed → BM25 → scan paths.
@@ -278,7 +295,7 @@ impl Collection {
     fn dispatch_metadata_filter(
         &self,
         cond: &crate::velesql::Condition,
-        metadata_cond: crate::velesql::Condition,
+        metadata_cond: &crate::velesql::Condition,
         execution_limit: usize,
     ) -> Vec<SearchResult> {
         // Fast path: use bitmap from secondary indexes (same mechanism as
@@ -286,13 +303,14 @@ impl Collection {
         // range queries via the bitmap infrastructure.
         let filter =
             crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond.clone()));
-        if let Some(bitmap_results) = self.try_bitmap_prefilter(&filter, execution_limit) {
+        if let Some(bitmap_results) =
+            self.try_bitmap_prefilter(&filter, metadata_cond, execution_limit)
+        {
             return bitmap_results;
         }
 
         tracing::debug!("dispatch_metadata_only: trying indexed path");
-        if let Some(indexed) = self.execute_indexed_metadata_query(&metadata_cond, execution_limit)
-        {
+        if let Some(indexed) = self.execute_indexed_metadata_query(metadata_cond, execution_limit) {
             tracing::debug!("dispatch_metadata_only: indexed path succeeded");
             return indexed;
         }
@@ -312,18 +330,114 @@ impl Collection {
             return like_results;
         }
 
-        let filter = crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
-        self.execute_scan_query(&filter, execution_limit)
+        let filter =
+            crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond.clone()));
+        self.execute_scan_query(&filter, execution_limit, Some(metadata_cond))
+    }
+
+    /// Cost-model-driven fallback decision (audit F-4.7, issue #1391).
+    ///
+    /// Replaces the arbitrary `execution_limit * 50 .max(1000)` candidate budget
+    /// that decided "too many index/bitmap candidates → sequential full scan".
+    /// Compares the estimated cost of hydrating `candidate_count` index/bitmap
+    /// candidates against a full sequential scan that early-exits once
+    /// `exec_limit` matches are produced, using the same [`CostEstimator`](crate::velesql::CostEstimator)
+    /// the ORDER BY router (`ordered_index_scan.rs`) already relies on.
+    ///
+    /// Returns `true` when the candidate scan is the cheaper (or equal) path.
+    ///
+    /// # Guardrails
+    /// - `.max(1000)` floor: candidate sets of ≤ 1000 always take the candidate
+    ///   path — a noisy estimate must never penalise a trivially small set.
+    /// - `cond == None` (SELECT * / empty filter — no indexed Eq exists on those
+    ///   paths anyway): falls back to the historical
+    ///   `execution_limit * 50 .max(1000)` budget.
+    /// - Empty / un-analysed collection (`total == 0`): candidate path.
+    ///
+    /// The choice **never** affects the result set — both branches post-filter
+    /// the same predicate and yield identical rows; only the physical path
+    /// differs, so switching paths is functionally safe.
+    pub(super) fn prefer_candidate_scan(
+        &self,
+        candidate_count: usize,
+        exec_limit: usize,
+        cond: Option<&crate::velesql::Condition>,
+    ) -> bool {
+        Self::candidate_scan_preferred(&self.get_stats(), candidate_count, exec_limit, cond)
+    }
+
+    /// Pure cost comparison behind [`Self::prefer_candidate_scan`], split out so
+    /// the routing decision can be unit-tested against hand-built
+    /// [`CollectionStats`](crate::collection::stats::CollectionStats) without a
+    /// live collection.
+    // Reason: usize/u64 → f64 for cardinality ratios; ±1 ULP has no operational
+    // impact on a routing decision that is guarded by a `.max(1000)` floor.
+    #[allow(clippy::cast_precision_loss)]
+    pub(super) fn candidate_scan_preferred(
+        stats: &crate::collection::stats::CollectionStats,
+        candidate_count: usize,
+        exec_limit: usize,
+        cond: Option<&crate::velesql::Condition>,
+    ) -> bool {
+        /// Floor guard: tiny candidate sets are always cheaper to hydrate
+        /// directly than to scan the whole collection.
+        const CANDIDATE_SCAN_FLOOR: usize = 1000;
+
+        if candidate_count <= CANDIDATE_SCAN_FLOOR {
+            return true;
+        }
+
+        // No condition tree available (SELECT * / empty filter): preserve the
+        // historical budget so behaviour on those paths is unchanged.
+        let Some(cond) = cond else {
+            return candidate_count <= exec_limit.saturating_mul(50).max(CANDIDATE_SCAN_FLOOR);
+        };
+
+        let total = stats.total_points.max(stats.row_count);
+        if total == 0 {
+            return true;
+        }
+        let total_f = total as f64;
+
+        let estimator = crate::velesql::CostEstimator::new(stats);
+        // Clamp selectivity away from 0 so the early-exit row estimate stays
+        // finite; a single-row lower bound is the tightest meaningful floor.
+        let selectivity = estimator
+            .estimate_condition_selectivity(cond)
+            .clamp(1.0 / total_f, 1.0);
+
+        // A full sequential scan with early exit visits ≈ exec_limit /
+        // selectivity rows before it collects `exec_limit` matches (bounded by
+        // the collection size).
+        let full_scan_rows = ((exec_limit.max(1) as f64) / selectivity)
+            .min(total_f)
+            .max(1.0);
+
+        // Cost both paths through the calibrated filter-cost model. Expressing
+        // each cardinality as a selectivity (`rows / total`) reuses
+        // `estimate_filter_cost_from_selectivity`, so calibrated I/O and CPU
+        // factors weight both sides identically; the decision is driven by the
+        // histogram-/cardinality-calibrated selectivity feeding `full_scan_rows`.
+        let candidate_cost = estimator
+            .estimate_filter_cost_from_selectivity(candidate_count as f64 / total_f)
+            .total();
+        let full_scan_cost = estimator
+            .estimate_filter_cost_from_selectivity(full_scan_rows / total_f)
+            .total();
+
+        candidate_cost <= full_scan_cost
     }
 
     /// Attempts a bitmap-prefiltered scan when the candidate set is bounded.
     ///
     /// Returns `Some(results)` when the bitmap path is viable (empty result or
-    /// candidate count within a reasonable multiple of `execution_limit`).
-    /// Returns `None` to let the caller fall through to indexed/scan paths.
+    /// a candidate count the cost model deems cheaper to scan than the full
+    /// collection). Returns `None` to let the caller fall through to
+    /// indexed/scan paths.
     fn try_bitmap_prefilter(
         &self,
         filter: &crate::filter::Filter,
+        cond: &crate::velesql::Condition,
         execution_limit: usize,
     ) -> Option<Vec<SearchResult>> {
         let bitmap = self.build_prefilter_bitmap(filter)?;
@@ -331,8 +445,7 @@ impl Collection {
             return Some(Vec::new());
         }
         let candidate_ids: Vec<u64> = bitmap.iter().map(u64::from).collect();
-        let candidate_budget = execution_limit.saturating_mul(50).max(1000);
-        if candidate_ids.len() <= candidate_budget {
+        if self.prefer_candidate_scan(candidate_ids.len(), execution_limit, Some(cond)) {
             return Some(self.scan_ids_with_filter(&candidate_ids, filter, execution_limit));
         }
         // Too many bitmap hits — fall through to scan with early exit
@@ -473,8 +586,20 @@ impl Collection {
         cbo_strategy: crate::velesql::ExecutionStrategy,
         cbo_over_fetch: usize,
     ) -> Result<Vec<SearchResult>> {
+        // `cbo_strategy` (VectorFirst / GraphFirst / Parallel) only has a
+        // physically distinct realization on the NEAR + metadata-filter arm
+        // below, which routes through `dispatch_vector_with_strategy`. Every
+        // other arm has exactly one sensible physical plan, so it deliberately
+        // ignores `cbo_strategy` (documented per-arm). This is intentional, not
+        // an oversight: forcing a graph/parallel shape onto these arms would add
+        // machinery with no cost benefit (audit F-2.15, #1390).
         match (vector_search, first_similarity, filter_condition) {
-            // similarity() with optional NEAR vector and optional metadata filter
+            // similarity() with optional NEAR vector and optional metadata filter.
+            // Strategy IGNORED (deliberate): a similarity() threshold is
+            // intrinsically VectorFirst — it must score vector candidates before
+            // it can apply the threshold, so GraphFirst/Parallel have no
+            // meaningful realization here. The optional metadata filter is
+            // applied as a post-filter over the scored candidates.
             (search_vec, Some(sim), filter_cond) => self.dispatch_similarity_query(
                 search_vec.map(Vec::as_slice),
                 sim,
@@ -484,7 +609,10 @@ impl Collection {
                 skip_metadata_prefilter_for_graph_or,
                 search_opts,
             ),
-            // NEAR + metadata filter (no similarity threshold)
+            // NEAR + metadata filter (no similarity threshold). This is the ONLY
+            // arm that HONORS `cbo_strategy`: it dispatches to
+            // `dispatch_vector_with_strategy`, which realizes VectorFirst,
+            // GraphFirst, and Parallel as three physically distinct plans.
             (Some(vector), None, Some(cond)) => self.dispatch_near_with_filter(
                 vector,
                 cond,
@@ -494,20 +622,29 @@ impl Collection {
                 cbo_strategy,
                 cbo_over_fetch,
             ),
-            // Pure NEAR (no filter, no similarity threshold)
+            // Pure NEAR (no filter, no similarity threshold).
+            // Strategy IGNORED (deliberate): with no metadata/graph predicate
+            // there is no second leg to run first or in parallel — only the
+            // VectorFirst HNSW search exists, so the strategy is moot.
             (Some(vector), None, None) => {
                 self.dispatch_pure_near(vector, execution_limit, search_opts)
             }
-            // Metadata-only
+            // Metadata-only (no vector query at all).
+            // Strategy IGNORED (deliberate): `ExecutionStrategy` orders a vector
+            // search relative to a filter; with no vector query there is nothing
+            // to order — the path is a pure index/bitmap/scan resolution.
             (None, None, Some(cond)) => self.dispatch_metadata_only(
                 cond,
                 execution_limit,
                 skip_metadata_prefilter_for_graph_or,
             ),
-            // SELECT * (no WHERE)
+            // SELECT * (no WHERE, no vector).
+            // Strategy IGNORED (deliberate): no predicate and no vector query —
+            // a full sequential scan is the only possible plan.
             (None, None, None) => Ok(self.execute_scan_query(
                 &crate::filter::Filter::new(crate::filter::Condition::And { conditions: vec![] }),
                 execution_limit,
+                None,
             )),
         }
     }

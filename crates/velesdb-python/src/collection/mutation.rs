@@ -3,7 +3,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
-use velesdb_core::Point;
+use velesdb_core::{Point, QueryOperationKind};
 
 use crate::collection_helpers::{
     core_err, core_err_with_collection, dict_to_json_map, extract_point_id, extract_point_vector,
@@ -239,15 +239,35 @@ impl Collection {
     }
 
     /// Get points by their IDs.
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read.
+    ///
+    /// When the read gate returns a scope filter, out-of-scope points are
+    /// masked to ``None`` (id-alignment with the input list is preserved).
     #[pyo3(signature = (ids))]
     fn get(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<Vec<Option<Py<PyAny>>>> {
-        // Phase 2: Release GIL during core retrieval
-        let points = py.detach(|| self.inner.get(&ids));
+        // Phase 2: Release GIL during gate + core retrieval. Point lookup is a
+        // payload read, so it consults the read gate: deny fails closed, and a
+        // scope filter masks non-matching (or payload-less) points to `None`
+        // rather than leaking them — narrow-only, alignment preserved. With no
+        // observer this is a single `Option` check (behavior unchanged).
+        let (points, scope) = py.detach(|| -> PyResult<_> {
+            let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+            Ok((self.inner.get(&ids), scope))
+        })?;
 
         // Phase 3: Convert to Python (GIL held)
         let py_points = points
             .into_iter()
-            .map(|opt_point| opt_point.map(|p| crate::collection_helpers::point_to_dict(py, &p)))
+            .map(|opt_point| {
+                opt_point
+                    .filter(|p| match scope.as_ref() {
+                        Some(s) => p.payload.as_ref().is_some_and(|pl| s.matches(pl)),
+                        None => true,
+                    })
+                    .map(|p| crate::collection_helpers::point_to_dict(py, &p))
+            })
             .collect();
         Ok(py_points)
     }

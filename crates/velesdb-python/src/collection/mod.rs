@@ -344,16 +344,22 @@ pub(crate) fn retain_by_filters(
     });
 }
 
-/// Refuses a search whose return shape (IDs and scores only, no payload) cannot
-/// carry an observer scope filter. Rather than silently returning unscoped
-/// rows, the read fails closed and the caller is pointed at a filterable entry
-/// point. A `None` scope (plain allow) is a no-op.
-fn deny_if_scoped(scope: Option<Filter>, context: &str) -> PyResult<()> {
+/// Refuses a read whose return shape cannot carry an observer scope filter
+/// (ids/scores with no payload, or MATCH results with no filterable leaf).
+/// Rather than silently returning unscoped rows, the read fails closed and the
+/// caller is pointed at a filterable entry point. A `None` scope (plain allow)
+/// is a no-op.
+///
+/// Exposed `pub(crate)` so the gate-at-binding-level read paths outside this
+/// module (`PyGraphCollection` VelesQL methods) share the same fail-closed
+/// contract.
+pub(crate) fn deny_if_scoped(scope: Option<Filter>, context: &str) -> PyResult<()> {
     if scope.is_some() {
         return Err(pyo3::exceptions::PyPermissionError::new_err(format!(
             "{context} cannot honor the governance scope filter returned by the observer \
-             (this entry point returns only ids/scores and has no metadata-filtered leaf); \
-             refusing to run unscoped. Use search()/search_request() with the same query instead."
+             (this entry point's result shape has no metadata-filtered leaf); \
+             refusing to run unscoped. Use a filter-capable entry point such as \
+             search()/search_request() or query() with the same predicate instead."
         )));
     }
     Ok(())
@@ -453,8 +459,19 @@ impl Collection {
     ///
     /// Returns:
     ///     List[int]: All point IDs
-    fn all_ids(&self, py: Python<'_>) -> Vec<u64> {
-        py.detach(|| self.inner.all_ids())
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read, or returns a
+    ///         scope filter (ids carry no payload to filter — fail closed).
+    fn all_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
+        py.detach(|| {
+            // Ids-only shape: a governance scope filter cannot be applied, so
+            // a scoped read fails closed (mirrors search_ids); deny is an Err
+            // from authorize(). No observer ⇒ single Option check, unchanged.
+            let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+            deny_if_scoped(scope, "all_ids")?;
+            Ok(self.inner.all_ids())
+        })
     }
 
     /// Full durability flush including vectors.idx serialization.
@@ -638,7 +655,17 @@ impl Collection {
     /// Note: signature must omit ``py: Python<'_>`` so PyO3 installs this
     /// as the ``sq_contains`` slot. Otherwise Python falls back to
     /// ``__iter__`` and raises ``TypeError`` for the ``in`` operator.
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read, or returns a
+    ///         scope filter (membership is id-only — fail closed rather than
+    ///         reveal the existence of out-of-scope points).
     fn __contains__(&self, id: u64) -> PyResult<bool> {
+        // Membership reveals point existence, so it is a gated read. The GIL
+        // stays held (no `py` in the slot signature) — acceptable, since the
+        // observer callback is Python code that needs it anyway.
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "__contains__")?;
         Ok(self.inner.get(&[id]).into_iter().next().flatten().is_some())
     }
 
