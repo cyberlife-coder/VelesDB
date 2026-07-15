@@ -1,3 +1,5 @@
+// Reason: clippy 1.90 similar_names flags idiomatic test bindings (dir/dim, ids/idx).
+#![allow(clippy::similar_names)]
 //! Tests for the `compaction` module.
 //!
 //! Covers `punch_hole()`, `CompactionContext::compact()`,

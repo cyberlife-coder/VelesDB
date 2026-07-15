@@ -1,5 +1,6 @@
 //! Tests for `HnswIndex` (extracted from index.rs for maintainability)
 #![allow(
+    clippy::similar_names, // Reason: clippy 1.90 flags idiomatic test bindings (dir/dim, ids/idx)
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation,
