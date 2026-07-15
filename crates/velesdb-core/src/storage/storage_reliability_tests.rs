@@ -503,6 +503,66 @@ fn test_898_replay_midstream_crc_corruption_skips_and_continues() {
 }
 
 #[test]
+// Reads/writes the process-global `wal_replay_corrupt_entries` metric; serialize
+// with the rest of the metric-asserting group.
+#[serial(wal_corrupt_metric)]
+fn test_replay_length_mismatch_entry_is_observable_and_touches_id() {
+    // BUG4: a CRC-valid store record whose payload length differs from the
+    // collection's vector size must NOT be dropped silently. Policy (module
+    // header): corruption = warn + metric + continue. The payload is unusable,
+    // but the id must still land in the replay's touched_ids so the HNSW
+    // open-time reconciliation knows the WAL touched it (the replay truncates
+    // the WAL, destroying the only other witness).
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let dim = 3;
+
+    // Middle record: CRC-valid framing, but only 2 floats where dim=3 (12 B)
+    // is expected. crc_store_entry computes a CORRECT CRC over the short
+    // payload, so this is precisely the length-mismatch shape.
+    let short_payload: Vec<u8> = [4.0f32, 5.0f32]
+        .iter()
+        .flat_map(|f| f.to_le_bytes())
+        .collect();
+
+    let mut wal = crc_store_entry(1, &vec3_bytes([1.0, 2.0, 3.0]));
+    wal.extend_from_slice(&crc_store_entry(2, &short_payload));
+    wal.extend_from_slice(&crc_store_entry(3, &vec3_bytes([7.0, 8.0, 9.0])));
+    std::fs::write(path.join("vectors.wal"), &wal).unwrap();
+
+    let before = crate::metrics::global_guardrails_metrics()
+        .wal_replay_corrupt_entries
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    let mut storage = MmapStorage::new(&path, dim).unwrap();
+    assert_eq!(storage.retrieve(1).unwrap(), Some(vec![1.0, 2.0, 3.0]));
+    assert!(
+        storage.retrieve(2).unwrap().is_none(),
+        "length-mismatched payload must not be applied"
+    );
+    assert_eq!(
+        storage.retrieve(3).unwrap(),
+        Some(vec![7.0, 8.0, 9.0]),
+        "entries after a length-mismatched entry must still be recovered"
+    );
+
+    let after = crate::metrics::global_guardrails_metrics()
+        .wal_replay_corrupt_entries
+        .load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        after > before,
+        "length-mismatched entry must increment the corrupt-entry metric, not vanish silently"
+    );
+
+    let touched = storage.take_wal_replayed_ids();
+    assert!(
+        touched.contains(&2),
+        "id of a length-mismatched entry must appear in touched_ids for HNSW reconciliation, got {touched:?}"
+    );
+    assert!(touched.contains(&1) && touched.contains(&3));
+}
+
+#[test]
 fn test_898_replay_grows_mmap_no_silent_gap() {
     // A WAL that places vectors past the 16 MB initial mmap must grow the
     // mapping and recover every vector — never silently drop one.
