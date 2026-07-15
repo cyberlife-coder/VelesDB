@@ -156,6 +156,37 @@ collection holds more than **5,000,000** vectors the query is **rejected** with
 guidance to add a selective metadata filter or use a positive `similarity()`
 predicate (which is index-accelerated).
 
+### GraphFirst full-scan cap (`SCAN_CAP = 100_000`) — truncation is now warned
+
+**Status**: intentional guard-rail, observable since WO-D2. Source:
+`crates/velesdb-core/src/collection/search/query/similarity_filter.rs`
+(`scan_and_score_by_vector`, `SCAN_CAP = 100_000`, #901).
+
+When the planner picks the `GraphFirst` strategy for a filtered vector query
+(highly selective metadata filter), the executor full-scans the metadata
+matches and rescores them by exact vector similarity. To bound the work of a
+pathological query, at most **100,000** metadata matches are scored per query.
+
+**When it bites**: the metadata filter matches more than 100,000 points (or the
+scan reaches 100,000 matches while unvisited points remain). Matches beyond the
+cap are never scored.
+
+**Symptom**: silently degraded recall — the returned top-k is the best of the
+first 100,000 scanned matches, not of all matches. Results stay correctly
+ordered and deduplicated; they may just miss better matches that live past the
+cap. Since WO-D2 the truncation is no longer silent: one structured
+`tracing::warn!` is emitted **per affected query** (never per candidate) with
+the collection name, the cap, the number of matches scored, and an upper bound
+on the unvisited remainder (`unscanned_points`).
+
+**Workaround**: narrow the metadata filter so it matches fewer points —
+ideally on a field with a secondary index (`create_index`), which lets the
+executor scan only the indexed candidate set — or split the query into more
+selective partitions at the application level. A broad filter with low
+selectivity is better served by the `VectorFirst` (ANN) strategy, which the
+cost-based optimizer picks automatically when statistics are available
+(`ANALYZE`).
+
 ### 9. Bounded query-result materialization
 
 **Status**: resolved (bounded memory). Source: `crates/velesdb-core/src/collection/search/query/` (set_operations, parallel_traversal, similarity_filter), `database/query_engine.rs`, `database/query_join.rs`.
