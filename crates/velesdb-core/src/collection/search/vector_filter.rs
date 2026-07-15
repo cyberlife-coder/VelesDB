@@ -61,6 +61,10 @@ impl Collection {
             None => self.search_post_filter(query, k, filter, quality, metric)?,
         };
 
+        // The full re-match inside `filter_and_hydrate` is deliberate even on
+        // the bitmap path: the prefilter bitmap can be a SUPERSET of the true
+        // matches (non-indexed conditions, mirror false positives) and never
+        // covers delta-buffer points — skipping it would return false positives.
         Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better))
     }
 
@@ -127,6 +131,8 @@ impl Collection {
                 if is_payload_expired(payload.as_ref(), now_secs) {
                     return None;
                 }
+                // Correctness-bearing re-match (see dispatch above): candidates
+                // may come from an over-approximate bitmap or the delta buffer.
                 let matches = match payload.as_ref() {
                     Some(p) => filter.matches(p),
                     None => filter.matches(&serde_json::Value::Null),

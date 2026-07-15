@@ -227,6 +227,73 @@ fn test_mixed_type_field_falls_back_with_correct_results() {
     assert_eq!(ids, vec![42]);
 }
 
+/// GIVEN a built mirror and a writer thread applying upsert batches where
+///       every point in batch `g` carries `gen == g`
+/// WHEN a reader thread concurrently probes `candidate_ids` for each gen
+/// THEN every observed candidate set is all-or-nothing (0 or the full batch):
+///      `apply_upserts` holds one write lock for the whole batch, so filtered
+///      queries can never see a half-applied batch.
+#[test]
+fn test_apply_upserts_batch_is_atomic_for_concurrent_readers() {
+    use crate::collection::payload_mirror::MirrorAnswer;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const BATCH: usize = 50;
+    const GENS: u64 = 20;
+
+    let (_dir, col) = setup_collection();
+    col.build_payload_mirror();
+    assert!(mirror_built(&col));
+
+    let gen_eq = |gen: u64| crate::filter::Condition::Eq {
+        field: "gen".to_string(),
+        value: serde_json::json!(gen),
+    };
+    let done = AtomicBool::new(false);
+
+    std::thread::scope(|s| {
+        let mirror = &col.payload_mirror;
+        let done_ref = &done;
+        s.spawn(move || {
+            for gen in 1..=GENS {
+                let points: Vec<Point> = (0..BATCH)
+                    .map(|i| Point {
+                        id: i as u64,
+                        vector: vec![0.0; 4],
+                        payload: Some(serde_json::json!({"gen": gen})),
+                        sparse_vectors: None,
+                    })
+                    .collect();
+                mirror.apply_upserts(&points);
+            }
+            done_ref.store(true, Ordering::Release);
+        });
+
+        // At least a few full passes, overlapping the writer when possible.
+        let mut passes_after_done = 0;
+        while passes_after_done < 3 {
+            for gen in 1..=GENS {
+                if let MirrorAnswer::Ids(ids) = mirror.candidate_ids(&gen_eq(gen)) {
+                    assert!(
+                        ids.is_empty() || ids.len() == BATCH,
+                        "half-applied batch visible: gen {gen} matched {} of {BATCH} rows",
+                        ids.len()
+                    );
+                }
+            }
+            if done.load(Ordering::Acquire) {
+                passes_after_done += 1;
+            }
+        }
+    });
+
+    // Once the writer is done, the last generation must be fully visible.
+    match col.payload_mirror.candidate_ids(&gen_eq(GENS)) {
+        MirrorAnswer::Ids(ids) => assert_eq!(ids.len(), BATCH),
+        _ => panic!("mirror must still be built and answer the Eq probe"),
+    }
+}
+
 #[test]
 fn test_metadata_only_collection_uses_mirror() {
     let dir = TempDir::new().expect("tempdir");
