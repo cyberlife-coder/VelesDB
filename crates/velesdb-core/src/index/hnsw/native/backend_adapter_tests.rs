@@ -1043,3 +1043,222 @@ fn test_i2_batch_exceeding_initial_capacity() {
         "nearest neighbor of vector 0 should be itself"
     );
 }
+
+// =========================================================================
+// PERF2 (WO-D4): unit-insert vs batch-insert score parity + storage invariants
+//
+// The batch insert path must produce the same search scores as the unit
+// insert path and must preserve the stored-vector invariants:
+// - non-pre-normalized engines (production): vectors stored VERBATIM;
+// - pre-normalized cosine engine: vectors stored NORMALIZED.
+// These tests pin the behavior before and after the allocation refactor.
+// =========================================================================
+
+/// Deterministic pseudo-random vectors (no external RNG dependency).
+fn parity_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {
+    (0..n)
+        .map(|i| {
+            (0..dim)
+                .map(|j| ((i * dim + j) as f32).mul_add(0.37, 1.0).sin())
+                .collect()
+        })
+        .collect()
+}
+
+/// Asserts unit-insert and batch-insert indexes agree on search scores.
+///
+/// HNSW construction is order/concurrency sensitive, so result SETS may
+/// differ slightly between the two indexes. Scores for common ids must be
+/// exact (same engine, same stored bytes), the best distance must align,
+/// and top-k overlap must stay high.
+fn assert_unit_batch_parity<D: DistanceEngine + Send + Sync>(
+    unit: &NativeHnsw<D>,
+    batch: &NativeHnsw<D>,
+    queries: &[Vec<f32>],
+    k: usize,
+    ef: usize,
+) {
+    for (q_idx, query) in queries.iter().enumerate() {
+        let unit_results = unit.search(query, k, ef);
+        let batch_results = batch.search(query, k, ef);
+        assert_eq!(
+            unit_results.len(),
+            k,
+            "unit search must return k (q={q_idx})"
+        );
+        assert_eq!(
+            batch_results.len(),
+            k,
+            "batch search must return k (q={q_idx})"
+        );
+
+        assert!(
+            (unit_results[0].1 - batch_results[0].1).abs() < 1e-6,
+            "best distance must match between unit and batch insert (q={q_idx}): {} vs {}",
+            unit_results[0].1,
+            batch_results[0].1
+        );
+
+        // Scores for ids returned by both must be bit-comparable (same
+        // engine over the same stored bytes) — tolerance 1e-6.
+        let mut overlap = 0;
+        for &(id, d_batch) in &batch_results {
+            if let Some(&(_, d_unit)) = unit_results.iter().find(|(uid, _)| *uid == id) {
+                overlap += 1;
+                assert!(
+                    (d_unit - d_batch).abs() < 1e-6,
+                    "score mismatch for id {id} (q={q_idx}): unit={d_unit} batch={d_batch}"
+                );
+            }
+        }
+        assert!(
+            overlap * 10 >= k * 8,
+            "top-{k} overlap too low (q={q_idx}): {overlap}/{k}"
+        );
+    }
+}
+
+/// Returns the vector stored in the graph for `node_id`.
+fn stored_vector<D: DistanceEngine>(hnsw: &NativeHnsw<D>, node_id: usize) -> Vec<f32> {
+    let guard = hnsw.vectors.read();
+    let storage = guard.as_ref().expect("storage initialized");
+    storage.get(node_id).expect("node stored").to_vec()
+}
+
+#[test]
+fn test_unit_vs_batch_parity_euclidean() {
+    let dim = 32;
+    let n = 300; // > 100: exercises the batch (allocate_batch) path
+    let vectors = parity_vectors(n, dim);
+
+    let unit = NativeHnsw::new(
+        CachedSimdDistance::new(DistanceMetric::Euclidean, dim),
+        16,
+        100,
+        n,
+    );
+    for v in &vectors {
+        unit.insert(v).expect("unit insert");
+    }
+
+    let batch = NativeHnsw::new(
+        CachedSimdDistance::new(DistanceMetric::Euclidean, dim),
+        16,
+        100,
+        n,
+    );
+    let data: Vec<(&[f32], usize)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (v.as_slice(), i))
+        .collect();
+    batch.parallel_insert(&data).expect("batch insert");
+    assert_eq!(batch.len(), n);
+
+    // Non-cosine: stored bytes must be VERBATIM input bytes.
+    for id in [0, n / 2, n - 1] {
+        assert_eq!(
+            stored_vector(&batch, id),
+            vectors[id],
+            "euclidean batch path must store vectors verbatim (id={id})"
+        );
+    }
+
+    let queries: Vec<Vec<f32>> = (0..5).map(|q| vectors[q * 37].clone()).collect();
+    assert_unit_batch_parity(&unit, &batch, &queries, 10, n);
+}
+
+#[test]
+fn test_unit_vs_batch_parity_cosine_production_engine() {
+    let dim = 32;
+    let n = 300;
+    let vectors = parity_vectors(n, dim);
+
+    // Production configuration: CachedSimdDistance::new — NOT pre-normalized.
+    let unit = NativeHnsw::new(
+        CachedSimdDistance::new(DistanceMetric::Cosine, dim),
+        16,
+        100,
+        n,
+    );
+    for v in &vectors {
+        unit.insert(v).expect("unit insert");
+    }
+
+    let batch = NativeHnsw::new(
+        CachedSimdDistance::new(DistanceMetric::Cosine, dim),
+        16,
+        100,
+        n,
+    );
+    let data: Vec<(&[f32], usize)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (v.as_slice(), i))
+        .collect();
+    batch.parallel_insert(&data).expect("batch insert");
+    assert_eq!(batch.len(), n);
+
+    // Production cosine stores vectors VERBATIM (recovery pass 3 relies on
+    // byte-exact equality between graph storage and vector storage).
+    for id in [0, n / 2, n - 1] {
+        assert_eq!(
+            stored_vector(&batch, id),
+            vectors[id],
+            "production cosine batch path must store vectors verbatim (id={id})"
+        );
+    }
+
+    let queries: Vec<Vec<f32>> = (0..5).map(|q| vectors[q * 37].clone()).collect();
+    assert_unit_batch_parity(&unit, &batch, &queries, 10, n);
+}
+
+#[test]
+fn test_unit_vs_batch_parity_cosine_prenormalized_engine() {
+    let dim = 32;
+    let n = 300;
+    let vectors = parity_vectors(n, dim);
+
+    let unit = NativeHnsw::new(
+        CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, dim),
+        16,
+        100,
+        n,
+    );
+    for v in &vectors {
+        unit.insert(v).expect("unit insert");
+    }
+
+    let batch = NativeHnsw::new(
+        CachedSimdDistance::new_prenormalized(DistanceMetric::Cosine, dim),
+        16,
+        100,
+        n,
+    );
+    let data: Vec<(&[f32], usize)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (v.as_slice(), i))
+        .collect();
+    batch.parallel_insert(&data).expect("batch insert");
+    assert_eq!(batch.len(), n);
+
+    // Pre-normalized cosine: the STORED vectors must be the normalized
+    // form (unit norm), byte-identical to what the unit-insert path stores.
+    for id in [0, n / 2, n - 1] {
+        let stored = stored_vector(&batch, id);
+        let norm: f32 = stored.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-5,
+            "pre-normalized cosine batch path must store unit-norm vectors (id={id}, norm={norm})"
+        );
+        assert_eq!(
+            stored,
+            stored_vector(&unit, id),
+            "batch and unit insert must store byte-identical normalized vectors (id={id})"
+        );
+    }
+
+    let queries: Vec<Vec<f32>> = (0..5).map(|q| vectors[q * 37].clone()).collect();
+    assert_unit_batch_parity(&unit, &batch, &queries, 10, n);
+}

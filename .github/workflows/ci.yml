@@ -29,6 +29,9 @@ on:
       - 'deny.toml'
       - 'sonar-project.properties'
       - '.github/workflows/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker-compose.yml'
   pull_request:
     branches: [main, develop]
     paths:
@@ -46,6 +49,9 @@ on:
       - 'deny.toml'
       - 'sonar-project.properties'
       - '.github/workflows/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker-compose.yml'
   # Manual trigger so coverage can be refreshed on demand (e.g. after a
   # config-only commit to main that skipped the path-filtered CI, leaving the
   # Codacy coverage badge stale).

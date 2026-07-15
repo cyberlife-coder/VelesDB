@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **HNSW batch-insert path allocates less.** `allocate_batch` no longer
+  materializes one prepared-query buffer per vector: raw slices are pushed
+  directly into the contiguous storage, and (for the pre-normalized cosine
+  configuration) the pushed range is normalized in place under the same write
+  lock. Phase B (graph connection) re-derives the normalized query per node
+  from a per-thread scratch buffer, keeping at most one owned buffer alive per
+  rayon worker instead of one per batch element. Stored bytes are unchanged
+  for every metric (verbatim in production; normalized for pre-normalized
+  cosine), so recovery byte-comparisons and search scores are unaffected.
+  `DeltaBuffer::extend` now materializes incoming entries **before** taking
+  the write lock, so deferred-indexing batch copies no longer stall concurrent
+  brute-force searches. (WO-D4, PERF2+PERF3.)
+
 ### Added
 
 - **GraphFirst full-scan truncation is now observable.** The filtered-vector
