@@ -1589,7 +1589,20 @@ USING FUSION(strategy = 'rrf', k = 60)
 | `rrf` | Reciprocal Rank Fusion | `k` (default: 60) | Balanced ranking (default) |
 | `weighted` | Weighted combination | vector+text: `vector_weight`, `graph_weight`; dense+sparse: `dense_weight`, `sparse_weight` | Custom importance |
 | `maximum` | Take highest score | (none) | Best match wins |
-| `rsf` | Relative Score Fusion | `dense_weight`, `sparse_weight` (must sum to 1.0) | Dense + sparse blending |
+| `average` | Mean score across branches | (none) | General-purpose blending of same-scale scores |
+| `rsf` | Relative Score Fusion (alias: `relative_score`) | `dense_weight`, `sparse_weight` (must sum to 1.0) | Dense + sparse blending |
+
+> **Scale-mixing caveat for `maximum` and `average`**: these two strategies
+> combine the **raw** scores of each branch without any normalization. In a
+> vector `NEAR` + text `MATCH` hybrid query, the vector branch produces
+> bounded similarity scores (cosine ∈ [0, 1]) while the text branch produces
+> unbounded BM25 scores (routinely > 1, often 5–20 on longer queries), so the
+> BM25 branch mechanically dominates the fused ranking. This is a documented
+> design choice, not a bug: `maximum`/`average` are intended for branches
+> whose scores share a scale (e.g. two vector branches with the same metric).
+> For mixed-scale hybrids prefer `rrf` (rank-based, insensitive to score
+> scale) or `rsf` (min-max normalizes each branch to [0, 1] before the
+> weighted sum).
 
 > **USING FUSION requires at least two fusable branches** (e.g. `vector NEAR`
 > + `MATCH`, or `vector NEAR` + `vector SPARSE_NEAR`) or a single `NEAR_FUSED`

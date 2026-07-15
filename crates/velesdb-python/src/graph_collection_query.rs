@@ -5,10 +5,13 @@
 
 use pyo3::prelude::*;
 use std::collections::HashMap;
+use velesdb_core::QueryOperationKind;
 
+use crate::collection::deny_if_scoped;
 use crate::collection::query::{
     build_explain_analyze_dict, build_explain_dict, convert_params, parse_velesql,
-    run_velesql_match, run_velesql_select, run_velesql_select_ids, validate_query,
+    retarget_to_collection, run_velesql_match, run_velesql_select, run_velesql_select_ids,
+    validate_query,
 };
 use crate::collection_helpers::core_err;
 use crate::graph_collection::PyGraphCollection;
@@ -49,8 +52,18 @@ impl PyGraphCollection {
         query_str: &str,
         params: Option<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Vec<Py<PyAny>>> {
-        let inner = &self.inner;
-        run_velesql_select(py, query_str, params, |q, p| inner.execute_query(q, p))
+        // Execute through the owning database (not the detached graph leaf) so
+        // the VelesQL read path passes the control-plane observer gate (audit
+        // F-5.4, #1392; mirrors `Collection.query`). A bare MATCH inherits
+        // this collection's name, preserving the leaf semantics (the leaf
+        // always executed against itself, so `params["_collection"]` never
+        // re-targeted this method) while keying the gate on the collection
+        // actually read. `@collection` payload enrichment applies at the
+        // facade as it does for `Database.execute_query`.
+        run_velesql_select(py, query_str, params, |q, p| {
+            self.db
+                .execute_query(&retarget_to_collection(q, &self.name), p)
+        })
     }
 
     /// Execute a MATCH graph traversal query.
@@ -80,6 +93,17 @@ impl PyGraphCollection {
         vector: Option<Py<PyAny>>,
         threshold: f32,
     ) -> PyResult<Vec<Py<PyAny>>> {
+        // No gated `Database` twin returns `MatchResult`, so the read gate is
+        // consulted here: deny fails closed, and a scope filter also fails
+        // closed because the MATCH leaf takes no metadata filter and
+        // `MatchResult` carries no payload to post-filter (mirrors
+        // `Collection.match_query`, #1405 / #1392).
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::GraphTraversal, None, None)
+            .map_err(core_err)?;
+        deny_if_scoped(scope, "match_query")?;
+
         let inner = &self.inner;
         run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {
             if let Some(ref qv) = qv {
@@ -100,6 +124,10 @@ impl PyGraphCollection {
     ///
     /// Returns:
     ///     Dict with tree, estimated_cost_ms, filter_strategy, index_used
+    ///
+    /// Deliberately NOT routed through the read gate: EXPLAIN builds a plan
+    /// from the AST and never touches point data, so there is nothing for a
+    /// governance observer to scope or leak (`explain_analyze` is gated).
     #[pyo3(signature = (query_str))]
     fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<Py<PyAny>> {
         let parsed = parse_velesql(query_str)?;
@@ -131,10 +159,12 @@ impl PyGraphCollection {
     ) -> PyResult<Py<PyAny>> {
         let parsed = parse_velesql(query_str)?;
         let rust_params = convert_params(py, params)?;
-        let inner = &self.inner;
+        // EXPLAIN ANALYZE *executes* the query — route through the gated
+        // `Database` facade twin (deny fails closed, scope narrows the
+        // measured execution), mirroring `Collection.explain_analyze`.
         let output = py.detach(move || {
-            inner
-                .explain_analyze_query(&parsed, &rust_params)
+            self.db
+                .explain_analyze_query(&retarget_to_collection(&parsed, &self.name), &rust_params)
                 .map_err(core_err)
         })?;
         Ok(build_explain_analyze_dict(py, &output))
@@ -155,7 +185,11 @@ impl PyGraphCollection {
         velesql: &str,
         params: Option<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Vec<Py<PyAny>>> {
-        let inner = &self.inner;
-        run_velesql_select_ids(py, velesql, params, |q, p| inner.execute_query(q, p))
+        // Gated facade routing, same rationale as `query()`; a scope filter is
+        // AND-composed into the AST in core, so projected ids are pre-narrowed.
+        run_velesql_select_ids(py, velesql, params, |q, p| {
+            self.db
+                .execute_query(&retarget_to_collection(q, &self.name), p)
+        })
     }
 }

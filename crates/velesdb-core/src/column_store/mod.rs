@@ -156,11 +156,48 @@ impl ColumnStore {
 
     /// Adds a new column to the store.
     ///
+    /// **Warning**: this does **not** backfill nulls for rows that already
+    /// exist, so the new column would be shorter than `row_count` and
+    /// desynchronized from every other column. It is only sound to call this
+    /// while the store is empty (`row_count == 0`, i.e. schema-definition
+    /// time). Use [`ColumnStore::add_column_backfilled`] to add a column once
+    /// rows exist.
+    ///
+    /// Nested arrays are silently treated as scalar arrays; use
+    /// `with_schema_validated` for strict schema validation.
+    ///
     /// # Panics
     ///
-    /// Does not panic. Nested arrays are silently treated as scalar arrays.
-    /// Use `add_column_validated` for strict schema validation.
+    /// In debug builds, panics if the store already contains rows
+    /// (`row_count > 0`). Release builds skip the check for performance, but
+    /// such a call remains a logic error.
     pub fn add_column(&mut self, name: &str, col_type: &ColumnType) {
+        debug_assert!(
+            self.row_count == 0,
+            "ColumnStore::add_column called with {} existing row(s): the new column '{name}' \
+             would not be backfilled and would desynchronize the store. \
+             Use add_column_backfilled instead.",
+            self.row_count
+        );
+        self.insert_empty_column(name, col_type);
+    }
+
+    /// Adds a column after rows already exist, backfilling nulls so the new
+    /// column stays aligned with `row_count` (required by the per-collection
+    /// payload mirror, whose schema evolves as new fields appear).
+    pub(crate) fn add_column_backfilled(&mut self, name: &str, col_type: &ColumnType) {
+        self.insert_empty_column(name, col_type);
+        if let Some(column) = self.columns.get_mut(name) {
+            for _ in 0..self.row_count {
+                column.push_null();
+            }
+        }
+    }
+
+    /// Inserts a fresh, empty column of the requested type (no backfill,
+    /// no emptiness guard). Shared by `add_column` (empty-store path) and
+    /// `add_column_backfilled` (non-empty path, which backfills right after).
+    fn insert_empty_column(&mut self, name: &str, col_type: &ColumnType) {
         let column = match col_type {
             ColumnType::Int => TypedColumn::new_int(0),
             ColumnType::Float => TypedColumn::new_float(0),
@@ -170,18 +207,6 @@ impl ColumnStore {
             ColumnType::GeoPoint => TypedColumn::new_geopoint(0),
         };
         self.columns.insert(name.to_string(), column);
-    }
-
-    /// Adds a column after rows already exist, backfilling nulls so the new
-    /// column stays aligned with `row_count` (required by the per-collection
-    /// payload mirror, whose schema evolves as new fields appear).
-    pub(crate) fn add_column_backfilled(&mut self, name: &str, col_type: &ColumnType) {
-        self.add_column(name, col_type);
-        if let Some(column) = self.columns.get_mut(name) {
-            for _ in 0..self.row_count {
-                column.push_null();
-            }
-        }
     }
 
     /// Tombstones a row by index without requiring the primary-key machinery.
