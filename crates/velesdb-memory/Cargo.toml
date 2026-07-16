@@ -43,8 +43,13 @@ ureq = { version = "2", optional = true, default-features = false }
 # The MCP server transport + binary, and the native file-backed store, are on
 # by default so `cargo build` produces the server; library consumers disable
 # defaults to pick only what they need.
-default = ["mcp", "persistence"]
+default = ["mcp", "persistence", "context"]
 mcp = ["dep:rmcp", "dep:tokio", "persistence"]
+# The deterministic context compiler (EPIC-P-070). Zero new dependencies and
+# `persistence`-free by design, so a wasm-style `default-features = false`
+# consumer can enable it alone; the memory-backed selection layer inside it is
+# additionally gated on `persistence`.
+context = []
 # NativeStore, the file-backed MemoryStore (velesdb-core's Database/AgentMemory
 # — tokio/mio/memmap2). On by default; a backend with its own MemoryStore impl
 # (e.g. velesdb-wasm's in-memory one) builds with `default-features = false`
