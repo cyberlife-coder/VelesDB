@@ -1,6 +1,8 @@
 # Why VelesDB?
 
-VelesDB is a local-first vector database that combines Vector, Graph, and ColumnStore engines into a single, embeddable library. It is designed for AI agent workloads such as RAG, semantic search, and knowledge graphs, with sub-millisecond query latency.
+VelesDB is **the explainable, local-first memory engine for AI agents.** Under the hood it fuses Vector, Graph, and ColumnStore engines into a single embeddable ~9 MB binary, queried through VelesQL — the multi-engine design is *how* it delivers memory that survives restarts, connects facts, and stays on your machine. It targets AI agent workloads such as RAG, semantic search, and knowledge graphs, with sub-millisecond query latency.
+
+The differentiator is **`why()`**: instead of returning only an answer, VelesDB returns the *evidence path* behind every recall — which facts it used and how they connect, by walking typed links to context that shares no words with your question. That built-in, auditable recall trail is exactly the kind of traceability that regulations such as the [EU AI Act](https://artificialintelligenceact.eu/implementation-timeline/) (enforceable from Aug 2026) ask of AI systems; running fully local, VelesDB **helps meet** those data-residency and explainability expectations rather than claiming certified compliance.
 
 ---
 
