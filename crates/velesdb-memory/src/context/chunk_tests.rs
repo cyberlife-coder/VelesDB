@@ -117,6 +117,17 @@ fn test_chunk_text_overlap_repeats_previous_tail() {
 }
 
 #[test]
+fn test_chunk_text_tiny_ceiling_never_panics_on_multibyte() {
+    // A ceiling smaller than one char must advance to the next char
+    // boundary, not force a mid-char cut (which would panic on slicing).
+    let text = "😀😀😀";
+    let chunks = chunk_text(text, &policy(2, ChunkBoundary::Fixed));
+    let rebuilt: String = chunks.iter().map(|c| c.text.as_str()).collect();
+    assert_eq!(rebuilt, text);
+    assert!(chunks.iter().all(|c| !c.text.is_empty()));
+}
+
+#[test]
 fn test_chunk_text_is_deterministic() {
     let text = "Alpha.\n\nBeta gamma delta. Epsilon!\n\n```code\nblock\n```\nZeta.";
     let policy = ChunkPolicy {

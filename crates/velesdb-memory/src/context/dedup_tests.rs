@@ -39,6 +39,21 @@ fn test_find_duplicates_distinct_contents_are_all_kept() {
 }
 
 #[test]
+fn test_find_duplicates_exact_copy_of_a_near_duplicate_reports_exact() {
+    let verdicts = find_duplicates(&["Hello World", "hello  world", "hello  world"], true);
+    let dup = verdicts[2].expect("third entry duplicates the second");
+    assert_eq!(
+        dup.kind,
+        DupKind::Exact,
+        "a byte-identical copy must be recorded as an exact duplicate"
+    );
+    assert_eq!(
+        dup.kept_seq, 0,
+        "the surviving twin is the first occurrence"
+    );
+}
+
+#[test]
 fn test_find_duplicates_chain_points_to_first_occurrence() {
     let verdicts = find_duplicates(&["x", "x", "x"], true);
     assert_eq!(verdicts[1].expect("dup").kept_seq, 0);

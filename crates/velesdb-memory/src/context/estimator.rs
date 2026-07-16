@@ -12,6 +12,16 @@
 pub trait TokenEstimator {
     /// Estimated number of tokens `text` occupies in a model prompt.
     fn estimate(&self, text: &str) -> u64;
+
+    /// Rough bytes-per-token ratio of this estimator, used only as a *hint*
+    /// to size chunk pieces near the budget (every piece is still measured
+    /// by [`Self::estimate`] during packing, so a wrong hint costs
+    /// granularity, never correctness). The default matches the char-ratio
+    /// estimator; a model-exact tokenizer for dense scripts (CJK) should
+    /// lower it.
+    fn bytes_per_token_hint(&self) -> u64 {
+        2
+    }
 }
 
 /// A boxed, object-safe estimator, mirroring [`crate::embedder::DynEmbedder`].
@@ -22,6 +32,10 @@ pub type DynTokenEstimator = Box<dyn TokenEstimator + Send + Sync>;
 impl<T: TokenEstimator + ?Sized> TokenEstimator for Box<T> {
     fn estimate(&self, text: &str) -> u64 {
         (**self).estimate(text)
+    }
+
+    fn bytes_per_token_hint(&self) -> u64 {
+        (**self).bytes_per_token_hint()
     }
 }
 

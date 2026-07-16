@@ -271,7 +271,14 @@ fn append_oversized(
     }
     let mut start = unit.start;
     while start < unit.end {
-        let end = char_floor(text, (start + max).min(unit.end)).max(start + 1);
+        let floored = char_floor(text, (start + max).min(unit.end));
+        // A ceiling smaller than the char at `start` cannot cut inside it:
+        // advance to the next char boundary instead of forcing a mid-char cut.
+        let end = if floored > start {
+            floored
+        } else {
+            char_ceil(text, start + 1).min(unit.end)
+        };
         chunks.push(start..end);
         start = end;
     }

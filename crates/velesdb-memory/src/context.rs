@@ -3,19 +3,27 @@
 //! Classifies, deduplicates, and packs caller-supplied context fragments
 //! under a token budget — **no LLM, no network, no clock**: the pipeline is a
 //! sequence of pure stages (`chunk → classify → dedup → score → pack →
-//! assemble`), so the same [`CompileRequest`](crate::context::CompileRequest) always produces the same
+//! assemble`), so the same [`CompileRequest`](crate::context::CompileRequest)
+//! always produces the same
 //! [`CompiledContext`](crate::context::CompiledContext), byte for byte.
 //!
 //! Invariants:
 //! - **Budget**: the assembled content never exceeds the request's token
-//!   budget (packing accounts per-piece estimates plus joiners, which bounds
-//!   the whole-text estimate for the superadditive default estimator).
+//!   budget — packing accounts per-piece estimates plus joiner costs *priced
+//!   by the injected estimator*, which bounds the whole-text estimate for a
+//!   superadditive estimator (the default rounds every piece up).
 //! - **Provenance**: every input fragment gets exactly one
-//!   [`ContextDecision`](crate::context::ContextDecision) with a stable rule id and a content hash; every
-//!   distinct fragment stays addressable via a `ctx://source/<id>` handle.
+//!   [`ContextDecision`](crate::context::ContextDecision) with a stable rule
+//!   id and a content hash; every fragment stays addressable via a
+//!   **content-addressed** `ctx://source/<content_hash>` handle (immune to
+//!   caller-id collisions).
 //! - **Nothing critical is silently lost**: content that cannot fit becomes
-//!   a [`RetrievalHandle`](crate::context::RetrievalHandle), and losing preserve-classified content raises
-//!   [`CompiledContext::risk`](crate::context::CompiledContext::risk) to [`FidelityRisk::High`](crate::context::FidelityRisk::High).
+//!   a [`RetrievalHandle`](crate::context::RetrievalHandle); losing
+//!   preserve-classified content raises
+//!   [`CompiledContext::risk`](crate::context::CompiledContext::risk) to
+//!   [`FidelityRisk::High`](crate::context::FidelityRisk::High); a critical
+//!   fragment is never sacrificed to near-deduplication, and a duplicate of
+//!   a twin that did not emit verbatim keeps its own handle and risk.
 //!
 //! Memory-backed fragment selection, persisted working contexts, and
 //! compilation events layer on top in the `persistence`-gated bridge
@@ -51,8 +59,8 @@ use classify::RuleMatch;
 use dedup::{DupKind, Duplicate};
 
 /// The stable, content-addressed id of a fragment whose caller supplied none
-/// — the crate's one id scheme (FNV-1a 64), also used as every
-/// decision's content hash.
+/// — the crate's one id scheme (FNV-1a 64), also used as every decision's
+/// content hash and as the tail of every `ctx://source/<hash>` handle.
 #[must_use]
 pub fn fragment_id(content: &str) -> u64 {
     stable_id(content)
@@ -130,10 +138,10 @@ impl ContextCompiler {
     pub fn compile(&self, request: &CompileRequest) -> Result<CompiledContext, MemoryError> {
         let policy = request.policy.as_ref().unwrap_or(&self.policy);
         let usable = validate(request, policy)?;
-        let analyses = analyze(request, policy);
-        let items = pack_items(&analyses, policy, usable);
+        let analyses = analyze(request, policy, self.estimator.as_ref());
+        let items = pack_items(&analyses, policy, usable, self.estimator.as_ref());
         let taken = budget::pack(&items, usable, &self.estimator);
-        let emissions = emissions(&analyses, &items, &taken);
+        let emissions = emissions(&items, &taken);
         Ok(self.finish(request, &analyses, &emissions))
     }
 
@@ -149,18 +157,18 @@ impl ContextCompiler {
             .iter()
             .map(|section| section.content.as_str())
             .collect::<Vec<_>>()
-            .join("\n\n");
+            .join(budget::JOINER);
         let decisions: Vec<ContextDecision> = analyses
             .iter()
-            .map(|analysis| decision(analysis, emissions.get(&analysis.seq)))
+            .map(|analysis| decision(analysis, analyses, emissions))
             .collect();
         let insights = self.insights(request, analyses, &decisions, emissions, &content);
         CompiledContext {
-            retrieval_handles: retrieval_handles(analyses, &decisions, self.estimator.as_ref()),
+            retrieval_handles: retrieval_handles(analyses, &decisions),
             sources: analyses
                 .iter()
                 .filter(|analysis| analysis.dup.is_none())
-                .map(|analysis| provenance::source_for(analysis.fragment_id))
+                .map(|analysis| provenance::source_for(analysis.fragment_id, analysis.content_hash))
                 .collect(),
             risk: decisions
                 .iter()
@@ -186,7 +194,7 @@ impl ContextCompiler {
         let estimator = self.estimator.as_ref();
         let tokens_in: u64 = analyses
             .iter()
-            .map(|analysis| estimator.estimate(&analysis.original))
+            .map(|analysis| analysis.tokens)
             .fold(0, u64::saturating_add);
         let tokens_out = estimator.estimate(content);
         let tokens_saved = tokens_in.saturating_sub(tokens_out);
@@ -211,23 +219,30 @@ impl ContextCompiler {
     }
 }
 
-/// Everything the pipeline derived about one input fragment.
-struct Analysis {
+/// Everything the pipeline derived about one input fragment. Borrows the
+/// request (the pipeline never mutates fragments), so a compile at the size
+/// caps does not double the corpus in memory.
+struct Analysis<'a> {
     /// Input position.
     seq: usize,
     /// Caller id, or the content-derived stable id.
     fragment_id: u64,
-    /// FNV-1a hash of the original content.
+    /// FNV-1a hash of the original content (computed once, reused by ids,
+    /// dedup, and handles).
     content_hash: u64,
-    /// The original text.
-    original: String,
+    /// The original text, borrowed from the request.
+    original: &'a str,
+    /// Estimated tokens of the original (computed once, reused by insights,
+    /// handles, and savings attribution).
+    tokens: u64,
     /// Classification outcome.
     rule: RuleMatch,
     /// Lexical relevance to the query.
     relevance: f32,
     /// Caller priority (default 0).
     priority: u8,
-    /// Set when this fragment duplicates an earlier one.
+    /// Set when this fragment duplicates an earlier one it may safely be
+    /// dropped for (see [`retain_safe_duplicates`]).
     dup: Option<Duplicate>,
 }
 
@@ -239,6 +254,13 @@ struct Emission {
     taken: usize,
     /// Total pieces the fragment was cut into.
     total: usize,
+}
+
+impl Emission {
+    /// Whether the fragment's pieces were all emitted.
+    fn is_full(&self) -> bool {
+        self.taken == self.total
+    }
 }
 
 /// Reject requests over the [`crate::limits`] caps and compute the usable
@@ -274,37 +296,74 @@ fn validate(request: &CompileRequest, policy: &CompilePolicy) -> Result<u64, Mem
 }
 
 /// Run classification, relevance scoring, and duplicate detection over the
-/// input order.
-fn analyze(request: &CompileRequest, policy: &CompilePolicy) -> Vec<Analysis> {
+/// input order, hashing and estimating each fragment exactly once.
+fn analyze<'a>(
+    request: &'a CompileRequest,
+    policy: &CompilePolicy,
+    estimator: &dyn TokenEstimator,
+) -> Vec<Analysis<'a>> {
     let contents: Vec<&str> = request
         .fragments
         .iter()
         .map(|fragment| fragment.content.as_str())
         .collect();
     let duplicates = dedup::find_duplicates(&contents, policy.near_dup_dedup);
-    request
+    let query_terms = relevance::terms(&request.query);
+    let mut analyses: Vec<Analysis<'a>> = request
         .fragments
         .iter()
         .zip(duplicates)
         .enumerate()
-        .map(|(seq, (fragment, dup))| Analysis {
-            seq,
-            fragment_id: fragment.id.unwrap_or_else(|| stable_id(&fragment.content)),
-            content_hash: stable_id(&fragment.content),
-            original: fragment.content.clone(),
-            rule: classify::classify(fragment, policy),
-            relevance: relevance::lexical_relevance(&request.query, &fragment.content),
-            priority: fragment.priority.unwrap_or(0),
-            dup,
+        .map(|(seq, (fragment, dup))| {
+            let content_hash = stable_id(&fragment.content);
+            Analysis {
+                seq,
+                fragment_id: fragment.id.unwrap_or(content_hash),
+                content_hash,
+                original: &fragment.content,
+                tokens: estimator.estimate(&fragment.content),
+                rule: classify::classify(fragment, policy),
+                relevance: relevance::lexical_relevance(&query_terms, &fragment.content),
+                priority: fragment.priority.unwrap_or(0),
+                dup,
+            }
         })
-        .collect()
+        .collect();
+    retain_safe_duplicates(&mut analyses);
+    analyses
+}
+
+/// Keep a duplicate mark only when dropping the fragment loses nothing:
+/// the kept twin must be classified to emit **verbatim** (Preserve or Cache
+/// — an abstracted twin would collapse the duplicate's content), and a
+/// *critical* fragment is never sacrificed to near-deduplication (its bytes
+/// differ from the twin's, and its own classification demands them).
+fn retain_safe_duplicates(analyses: &mut [Analysis<'_>]) {
+    for index in 0..analyses.len() {
+        let Some(dup) = analyses[index].dup else {
+            continue;
+        };
+        let twin_verbatim = matches!(
+            analyses[dup.kept_seq].rule.action,
+            ContextAction::Preserve | ContextAction::Cache
+        );
+        let critical_near = dup.kind == DupKind::Near && analyses[index].rule.critical;
+        if !twin_verbatim || critical_near {
+            analyses[index].dup = None;
+        }
+    }
 }
 
 /// Build the packing input for every non-duplicate fragment: abstracted
 /// fragments emit their collapsed form as one piece, everything else is cut
 /// into budget-sized chunks.
-fn pack_items(analyses: &[Analysis], policy: &CompilePolicy, usable: u64) -> Vec<PackItem> {
-    let chunk_policy = effective_chunk_policy(policy, usable);
+fn pack_items(
+    analyses: &[Analysis],
+    policy: &CompilePolicy,
+    usable: u64,
+    estimator: &dyn TokenEstimator,
+) -> Vec<PackItem> {
+    let chunk_policy = effective_chunk_policy(policy, usable, estimator);
     analyses
         .iter()
         .filter(|analysis| analysis.dup.is_none())
@@ -321,51 +380,51 @@ fn pack_items(analyses: &[Analysis], policy: &CompilePolicy, usable: u64) -> Vec
 /// The emission pieces of one fragment.
 fn pieces(analysis: &Analysis, chunk_policy: &ChunkPolicy) -> Vec<String> {
     if analysis.rule.action == ContextAction::Abstract {
-        return vec![classify::collapse_repeated_lines(&analysis.original)];
+        return vec![classify::collapse_repeated_lines(analysis.original)];
     }
-    chunk_text(&analysis.original, chunk_policy)
+    chunk_text(analysis.original, chunk_policy)
         .into_iter()
         .map(|chunk| chunk.text)
         .collect()
 }
 
-/// Cap the chunk ceiling to roughly the usable budget (2 bytes per usable
-/// token ≈ 0.8 × usable under the default 2.5-chars-per-token ratio), so a
-/// single piece can always fit a small budget. A byte-level *hint* only —
-/// every piece is still measured by the injected estimator during packing.
-fn effective_chunk_policy(policy: &CompilePolicy, usable: u64) -> ChunkPolicy {
-    let budget_bytes = usize::try_from(usable.saturating_mul(2)).unwrap_or(usize::MAX);
+/// The chunk policy the pipeline actually cuts with: the ceiling is capped
+/// near the usable budget (sized via the estimator's bytes-per-token hint,
+/// floored at 8 bytes so tiny budgets still get pieces), and **overlap is
+/// forced to zero** — pipeline pieces are emitted by concatenation, and an
+/// overlap prefix would duplicate every seam in content reported as
+/// verbatim. Overlap stays meaningful only for the standalone
+/// [`chunk_text`] API. The byte ceiling is a *hint*: every piece is still
+/// measured by the injected estimator during packing.
+fn effective_chunk_policy(
+    policy: &CompilePolicy,
+    usable: u64,
+    estimator: &dyn TokenEstimator,
+) -> ChunkPolicy {
+    let budget_bytes = usize::try_from(usable.saturating_mul(estimator.bytes_per_token_hint()))
+        .unwrap_or(usize::MAX);
     ChunkPolicy {
-        max_chunk_bytes: policy.chunk.max_chunk_bytes.min(budget_bytes.max(32)),
-        ..policy.chunk.clone()
+        max_chunk_bytes: policy.chunk.max_chunk_bytes.min(budget_bytes.max(8)),
+        overlap_bytes: 0,
+        boundary: policy.chunk.boundary,
     }
 }
 
 /// Materialize what each packed fragment emits, keyed by `seq`.
-fn emissions(
-    analyses: &[Analysis],
-    items: &[PackItem],
-    taken: &[usize],
-) -> BTreeMap<usize, Emission> {
-    let by_seq: BTreeMap<usize, (&PackItem, usize)> = items
+fn emissions(items: &[PackItem], taken: &[usize]) -> BTreeMap<usize, Emission> {
+    items
         .iter()
         .zip(taken.iter().copied())
-        .map(|(item, count)| (item.seq, (item, count)))
-        .collect();
-    analyses
-        .iter()
-        .filter_map(|analysis| {
-            let &(item, count) = by_seq.get(&analysis.seq)?;
-            (count > 0).then(|| {
-                (
-                    analysis.seq,
-                    Emission {
-                        text: item.pieces[..count].concat(),
-                        taken: count,
-                        total: item.pieces.len(),
-                    },
-                )
-            })
+        .filter(|&(_, count)| count > 0)
+        .map(|(item, count)| {
+            (
+                item.seq,
+                Emission {
+                    text: item.pieces[..count].concat(),
+                    taken: count,
+                    total: item.pieces.len(),
+                },
+            )
         })
         .collect()
 }
@@ -388,7 +447,7 @@ fn sections(analyses: &[Analysis], emissions: &BTreeMap<usize, Emission>) -> Vec
         if !blocks.is_empty() {
             result.push(CompiledSection {
                 kind,
-                content: blocks.join("\n\n"),
+                content: blocks.join(budget::JOINER),
                 fragment_ids: ids,
             });
         }
@@ -397,10 +456,15 @@ fn sections(analyses: &[Analysis], emissions: &BTreeMap<usize, Emission>) -> Vec
 }
 
 /// The auditable decision for one fragment.
-fn decision(analysis: &Analysis, emission: Option<&Emission>) -> ContextDecision {
+fn decision(
+    analysis: &Analysis,
+    all: &[Analysis],
+    emissions: &BTreeMap<usize, Emission>,
+) -> ContextDecision {
+    let emission = emissions.get(&analysis.seq);
     let (action, rule_id, risk, reason, handle) = match (&analysis.dup, emission) {
-        (Some(dup), _) => dup_verdict(*dup),
-        (None, Some(emission)) if emission.taken == emission.total => full_verdict(analysis),
+        (Some(dup), _) => dup_verdict(analysis, *dup, &all[dup.kept_seq], emissions),
+        (None, Some(emission)) if emission.is_full() => full_verdict(analysis),
         (None, Some(emission)) => partial_verdict(analysis, emission),
         (None, None) => externalized_verdict(analysis),
     };
@@ -420,21 +484,41 @@ fn decision(analysis: &Analysis, emission: Option<&Emission>) -> ContextDecision
 /// The decision fields shared by every verdict builder.
 type Verdict = (ContextAction, String, FidelityRisk, String, Option<String>);
 
-/// A duplicate: dropped, content survives through the kept twin.
-fn dup_verdict(dup: Duplicate) -> Verdict {
+/// A duplicate: dropped, and honest about whether its content actually
+/// survived. If the kept twin emitted fully the risk is low; if the twin was
+/// truncated or externalized the duplicate's content is *not* in the prompt,
+/// so the decision carries the elevated risk and stays machine-addressable
+/// through its own content-addressed handle.
+fn dup_verdict(
+    analysis: &Analysis,
+    dup: Duplicate,
+    twin: &Analysis,
+    emissions: &BTreeMap<usize, Emission>,
+) -> Verdict {
     let (rule_id, variant) = match dup.kind {
         DupKind::Exact => ("drop.duplicate", "exact duplicate"),
         DupKind::Near => ("drop.near_duplicate", "near-duplicate"),
     };
+    let twin_full = emissions.get(&twin.seq).is_some_and(Emission::is_full);
+    let (risk, fate) = if twin_full {
+        (FidelityRisk::Low, "content survives through it")
+    } else if analysis.rule.critical {
+        (
+            FidelityRisk::High,
+            "but that twin was not fully emitted — recover via the handle",
+        )
+    } else {
+        (
+            FidelityRisk::Medium,
+            "but that twin was not fully emitted — recover via the handle",
+        )
+    };
     (
         ContextAction::Drop,
         rule_id.to_owned(),
-        FidelityRisk::Low,
-        format!(
-            "{variant} of fragment #{} — content survives through it",
-            dup.kept_seq
-        ),
-        None,
+        risk,
+        format!("{variant} of fragment #{} — {fate}", dup.kept_seq),
+        Some(provenance::handle_for(analysis.content_hash)),
     )
 }
 
@@ -469,7 +553,7 @@ fn partial_verdict(analysis: &Analysis, emission: &Emission) -> Verdict {
             "{} — packed {}/{} chunks, the rest stays retrievable",
             analysis.rule.reason, emission.taken, emission.total
         ),
-        Some(provenance::handle_for(analysis.fragment_id)),
+        Some(provenance::handle_for(analysis.content_hash)),
     )
 }
 
@@ -488,29 +572,28 @@ fn externalized_verdict(analysis: &Analysis) -> Verdict {
             "did not fit the budget ({}); retrievable via its handle",
             analysis.rule.reason
         ),
-        Some(provenance::handle_for(analysis.fragment_id)),
+        Some(provenance::handle_for(analysis.content_hash)),
     )
 }
 
 /// The handles of every fully externalized fragment, in decision order.
-fn retrieval_handles(
-    analyses: &[Analysis],
-    decisions: &[ContextDecision],
-    estimator: &dyn TokenEstimator,
-) -> Vec<RetrievalHandle> {
+fn retrieval_handles(analyses: &[Analysis], decisions: &[ContextDecision]) -> Vec<RetrievalHandle> {
     analyses
         .iter()
         .zip(decisions)
         .filter(|(_, decision)| decision.action == ContextAction::Retrieve)
         .map(|(analysis, _)| RetrievalHandle {
-            handle: provenance::handle_for(analysis.fragment_id),
+            handle: provenance::handle_for(analysis.content_hash),
             fragment_id: analysis.fragment_id,
-            estimated_tokens: estimator.estimate(&analysis.original),
+            estimated_tokens: analysis.tokens,
         })
         .collect()
 }
 
-/// Attribute saved tokens to the rule that saved them.
+/// Attribute saved tokens to the rule that saved them. A fully emitted
+/// verbatim fragment saves nothing, so every attribution comes from drops,
+/// abstractions, externalizations, and partial packs — and the per-rule map
+/// reconciles with the total up to joiner effects.
 fn saved_by_rule(
     analyses: &[Analysis],
     decisions: &[ContextDecision],
@@ -519,12 +602,11 @@ fn saved_by_rule(
 ) -> BTreeMap<String, u64> {
     let mut by_rule = BTreeMap::new();
     for (analysis, decision) in analyses.iter().zip(decisions) {
-        let original = estimator.estimate(&analysis.original);
         let emitted = emissions
             .get(&analysis.seq)
             .map_or(0, |emission| estimator.estimate(&emission.text));
-        let saved = original.saturating_sub(emitted);
-        if saved > 0 && decision.action != ContextAction::Preserve {
+        let saved = analysis.tokens.saturating_sub(emitted);
+        if saved > 0 {
             *by_rule.entry(decision.rule_id.clone()).or_insert(0) += saved;
         }
     }

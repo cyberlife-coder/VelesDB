@@ -23,6 +23,7 @@
       "action": "drop",
       "content_hash": 18021940868160883968,
       "fragment_id": 18021940868160883968,
+      "handle": "ctx://source/18021940868160883968",
       "reason": "exact duplicate of fragment #1 — content survives through it",
       "relevance": 0.5,
       "risk": "low",

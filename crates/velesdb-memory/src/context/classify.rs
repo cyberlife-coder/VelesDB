@@ -94,27 +94,31 @@ const RULES: &[Rule] = &[
     },
 ];
 
+/// Id of the terminal catch-all rule — exempt from `disabled_rules`, so
+/// classification always terminates on a real table row (disabling it would
+/// otherwise be a silent no-op knob).
+const TERMINAL_RULE_ID: &str = "preserve.default";
+
 /// Classify `fragment` under `policy`: the first enabled rule that matches.
 pub(crate) fn classify(fragment: &ContextFragment, policy: &CompilePolicy) -> RuleMatch {
     RULES
         .iter()
-        .filter(|rule| !policy.disabled_rules.iter().any(|d| d == rule.id))
-        .find(|rule| (rule.applies)(fragment))
-        .map_or(DEFAULT_MATCH, |rule| RuleMatch {
-            id: rule.id,
-            action: rule.action,
-            critical: rule.critical,
-            reason: rule.reason,
+        .filter(|rule| {
+            rule.id == TERMINAL_RULE_ID || !policy.disabled_rules.iter().any(|d| d == rule.id)
         })
+        .find(|rule| (rule.applies)(fragment))
+        .map_or_else(|| to_match(&RULES[RULES.len() - 1]), to_match)
 }
 
-/// The fallback when even `preserve.default` was disabled by policy.
-const DEFAULT_MATCH: RuleMatch = RuleMatch {
-    id: "preserve.default",
-    action: ContextAction::Preserve,
-    critical: false,
-    reason: "prose kept subject to budget",
-};
+/// Project a table row into its public match shape.
+fn to_match(rule: &Rule) -> RuleMatch {
+    RuleMatch {
+        id: rule.id,
+        action: rule.action,
+        critical: rule.critical,
+        reason: rule.reason,
+    }
+}
 
 /// `metadata.verbatim == true`.
 fn is_marked_verbatim(fragment: &ContextFragment) -> bool {
@@ -140,7 +144,9 @@ fn is_code(fragment: &ContextFragment) -> bool {
     fragment.kind.as_deref() == Some("code") || fragment.content.contains("```")
 }
 
-/// Contains a negative-constraint marker (English or French).
+/// Contains a negative-constraint marker (English or French). Lowercases
+/// line by line so a megabyte fragment never allocates a second megabyte
+/// (markers contain no newline, so no match can span two lines).
 fn has_negative_constraint(fragment: &ContextFragment) -> bool {
     const MARKERS: &[&str] = &[
         "never ",
@@ -151,8 +157,10 @@ fn has_negative_constraint(fragment: &ContextFragment) -> bool {
         "ne jamais",
         "jamais ",
     ];
-    let lowered = fragment.content.to_lowercase();
-    MARKERS.iter().any(|marker| lowered.contains(marker))
+    fragment.content.lines().any(|line| {
+        let lowered = line.to_lowercase();
+        MARKERS.iter().any(|marker| lowered.contains(marker))
+    })
 }
 
 /// A `kind = "log"` fragment where at least one line repeats.

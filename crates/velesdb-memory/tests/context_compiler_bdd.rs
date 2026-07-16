@@ -414,6 +414,173 @@ fn test_compile_golden_snapshot_matches_committed_output() {
     );
 }
 
+#[test]
+fn test_compile_overlap_policy_never_duplicates_content() {
+    // Given a caller policy asking for chunk overlap and a fragment that
+    // must be split into several chunks
+    let sentence = "The migration copies one shard at a time and verifies checksums. ";
+    let long = sentence.repeat(50);
+    let policy = CompilePolicy {
+        chunk: velesdb_memory::context::ChunkPolicy {
+            max_chunk_bytes: 200,
+            overlap_bytes: 64,
+            boundary: velesdb_memory::context::ChunkBoundary::Fixed,
+        },
+        ..CompilePolicy::default()
+    };
+    let mut req = request(vec![fragment(&long)], 100_000);
+    req.policy = Some(policy);
+
+    // When compiling with a budget generous enough to take everything
+    let out = compile(&req);
+
+    // Then the emitted content reconstructs the original without repeating
+    // any overlap seam (verbatim means verbatim)
+    assert!(
+        out.content.contains(&long),
+        "the full original must be emitted exactly once, unduplicated"
+    );
+    assert!(out.insights.tokens_out <= out.insights.tokens_in);
+}
+
+#[test]
+fn test_compile_budget_holds_with_estimator_counting_joiners_higher() {
+    // Given an injected estimator that prices every char as one token, so
+    // the "\n\n" joiner costs 2 tokens instead of the default estimator's 1
+    struct CharEstimator;
+    impl TokenEstimator for CharEstimator {
+        fn estimate(&self, text: &str) -> u64 {
+            u64::try_from(text.chars().count()).unwrap_or(u64::MAX)
+        }
+    }
+    let fragments: Vec<ContextFragment> = (0..30)
+        .map(|i| fragment(&format!("note {i} about the deploy")))
+        .collect();
+    let budget = 120_u64;
+    let req = request(fragments, budget);
+
+    // When compiling with that estimator
+    let out = ContextCompiler::new(CompilePolicy::default())
+        .with_estimator(Box::new(CharEstimator))
+        .compile(&req)
+        .expect("compile");
+
+    // Then the budget invariant holds under the injected estimator too
+    assert!(
+        CharEstimator.estimate(&out.content) <= budget,
+        "joiner accounting must use the injected estimator, not a constant"
+    );
+}
+
+#[test]
+fn test_compile_same_caller_id_different_content_keeps_handles_unambiguous() {
+    // Given two fragments sharing a caller id but carrying different bytes
+    let a = ContextFragment {
+        id: Some(42),
+        ..fragment("the secrets rotation policy")
+    };
+    let b = ContextFragment {
+        id: Some(42),
+        ..fragment("an unrelated ingestion log line")
+    };
+    let req = request(vec![a, b], 10_000);
+
+    // When compiling
+    let out = compile(&req);
+
+    // Then each source stays addressable by its own content, not the id
+    assert_eq!(out.sources.len(), 2);
+    assert_ne!(
+        out.sources[0].handle, out.sources[1].handle,
+        "handles must be content-addressed so a caller-id collision cannot alias two sources"
+    );
+}
+
+#[test]
+fn test_compile_duplicate_of_externalized_fragment_reports_elevated_risk() {
+    // Given a corpus where the kept twin cannot fit the budget but its
+    // duplicate arrives later
+    let big = "x".repeat(4_000);
+    let filler = "the deploy pipeline note ".repeat(20);
+    let req = request(
+        vec![
+            ContextFragment {
+                priority: Some(0),
+                ..fragment(&big)
+            },
+            ContextFragment {
+                priority: Some(9),
+                ..fragment(&filler)
+            },
+            fragment(&big),
+        ],
+        220,
+    );
+
+    // When compiling under a budget that externalizes the big twin
+    let out = compile(&req);
+
+    // Then the duplicate's decision must not claim its content survived
+    let dup = out
+        .decisions
+        .iter()
+        .find(|d| matches!(d.action, ContextAction::Drop))
+        .expect("the second big fragment is an exact duplicate");
+    assert!(
+        !matches!(dup.risk, FidelityRisk::Low),
+        "a duplicate of an unpacked twin cannot be risk-free"
+    );
+    assert!(
+        dup.handle.is_some(),
+        "the duplicate must stay machine-addressable through a handle"
+    );
+}
+
+#[test]
+fn test_compile_critical_near_duplicate_is_not_dropped() {
+    // Given a verbatim-marked fragment that near-duplicates a lossy log twin
+    let log_twin = ContextFragment {
+        kind: Some("log".to_owned()),
+        ..fragment("ERROR shard timeout\nERROR shard timeout")
+    };
+    let marked = fragment_with_meta(
+        "error shard  timeout\nerror shard  timeout",
+        &[("verbatim", Value::Bool(true))],
+    );
+    let req = request(vec![log_twin, marked], 10_000);
+
+    // When compiling
+    let out = compile(&req);
+
+    // Then the critical fragment is never sacrificed to near-deduplication
+    let marked_decision = decision_for(&out, "error shard  timeout\nerror shard  timeout");
+    assert!(
+        !matches!(marked_decision.action, ContextAction::Drop),
+        "a critical fragment must not be near-dup-dropped, got rule {}",
+        marked_decision.rule_id
+    );
+}
+
+#[test]
+fn test_compile_partial_preserve_savings_are_attributed_by_rule() {
+    // Given a single long prose fragment that only partially fits
+    let sentence = "The migration copies one shard at a time and verifies checksums. ";
+    let long = sentence.repeat(100);
+    let req = request(vec![fragment(&long)], 300);
+
+    // When compiling
+    let out = compile(&req);
+
+    // Then the partial savings are attributed to the deciding rule and the
+    // by-rule map reconciles with the total (single fragment ⇒ no joiners)
+    assert!(out.insights.tokens_saved > 0);
+    let by_rule: u64 = out.insights.tokens_saved_by_rule.values().sum();
+    assert_eq!(
+        by_rule, out.insights.tokens_saved,
+        "per-rule savings must reconcile with the total"
+    );
+}
+
 // --- Edge --------------------------------------------------------------------
 
 #[test]

@@ -38,26 +38,30 @@ pub(crate) fn find_duplicates(contents: &[&str], near: bool) -> Vec<Option<Dupli
         .iter()
         .enumerate()
         .map(|(seq, content)| {
-            let verdict = check(content, near, &exact_seen, &near_seen);
-            if verdict.is_none() {
-                exact_seen.entry(stable_id(content)).or_insert(seq);
-                near_seen
-                    .entry(stable_id(&normalize(content)))
-                    .or_insert(seq);
-            }
+            let exact_hash = stable_id(content);
+            let near_hash = stable_id(&normalize(content));
+            let verdict = check(exact_hash, near_hash, near, &exact_seen, &near_seen);
+            // Record both hashes even for a duplicate (mapped to the kept
+            // twin), so a later byte-identical copy of a near-duplicate is
+            // still reported as *exact* — the audit trail's rule ids depend
+            // on it.
+            let kept = verdict.map_or(seq, |dup| dup.kept_seq);
+            exact_seen.entry(exact_hash).or_insert(kept);
+            near_seen.entry(near_hash).or_insert(kept);
             verdict
         })
         .collect()
 }
 
-/// Classify one content against what was already seen.
+/// Classify one content (by its precomputed hashes) against what was seen.
 fn check(
-    content: &str,
+    exact_hash: u64,
+    near_hash: u64,
     near: bool,
     exact_seen: &BTreeMap<u64, usize>,
     near_seen: &BTreeMap<u64, usize>,
 ) -> Option<Duplicate> {
-    if let Some(&kept_seq) = exact_seen.get(&stable_id(content)) {
+    if let Some(&kept_seq) = exact_seen.get(&exact_hash) {
         return Some(Duplicate {
             kind: DupKind::Exact,
             kept_seq,
@@ -66,12 +70,10 @@ fn check(
     if !near {
         return None;
     }
-    near_seen
-        .get(&stable_id(&normalize(content)))
-        .map(|&kept_seq| Duplicate {
-            kind: DupKind::Near,
-            kept_seq,
-        })
+    near_seen.get(&near_hash).map(|&kept_seq| Duplicate {
+        kind: DupKind::Near,
+        kept_seq,
+    })
 }
 
 /// The near-duplicate normal form: lowercase, single spaces, trimmed.

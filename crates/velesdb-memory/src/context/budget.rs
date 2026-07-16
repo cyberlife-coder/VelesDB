@@ -12,8 +12,10 @@
 
 use super::estimator::TokenEstimator;
 
-/// Cost accounted for the `\n\n` joiner between packed fragments.
-const JOINER_TOKENS: u64 = 1;
+/// The separator emitted between packed fragments — the single source both
+/// the packing accountant and the assembly joins use, so the accounted cost
+/// and the emitted bytes can never drift apart.
+pub(crate) const JOINER: &str = "\n\n";
 
 /// One packable fragment: its emission pieces plus its selection keys.
 #[derive(Debug)]
@@ -36,9 +38,13 @@ pub(crate) struct PackItem {
 pub(crate) fn pack(items: &[PackItem], usable: u64, estimator: &dyn TokenEstimator) -> Vec<usize> {
     let mut taken = vec![0_usize; items.len()];
     let mut remaining = usable;
+    // Priced by the *injected* estimator, not a constant: a tokenizer that
+    // prices "\n\n" higher than the default would otherwise overflow the
+    // budget by one under-counted joiner per fragment.
+    let joiner_tokens = estimator.estimate(JOINER);
     for &index in &selection_order(items) {
         let item = &items[index];
-        taken[index] = take_pieces(&item.pieces, &mut remaining, estimator);
+        taken[index] = take_pieces(&item.pieces, &mut remaining, joiner_tokens, estimator);
     }
     taken
 }
@@ -60,11 +66,16 @@ fn selection_order(items: &[PackItem]) -> Vec<usize> {
 }
 
 /// Greedily take leading pieces while they fit; the first piece also pays
-/// the fragment's joiner token.
-fn take_pieces(pieces: &[String], remaining: &mut u64, estimator: &dyn TokenEstimator) -> usize {
+/// the fragment's joiner cost.
+fn take_pieces(
+    pieces: &[String],
+    remaining: &mut u64,
+    joiner_tokens: u64,
+    estimator: &dyn TokenEstimator,
+) -> usize {
     let mut count = 0_usize;
     for piece in pieces {
-        let joiner = if count == 0 { JOINER_TOKENS } else { 0 };
+        let joiner = if count == 0 { joiner_tokens } else { 0 };
         let cost = estimator.estimate(piece).saturating_add(joiner);
         if cost > *remaining {
             break;

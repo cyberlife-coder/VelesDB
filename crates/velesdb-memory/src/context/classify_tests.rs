@@ -124,6 +124,19 @@ fn test_classify_disabled_rule_falls_through_to_next_match() {
 }
 
 #[test]
+fn test_classify_terminal_default_rule_cannot_be_disabled() {
+    let policy = CompilePolicy {
+        disabled_rules: vec!["preserve.default".to_owned()],
+        ..CompilePolicy::default()
+    };
+    let matched = classify(&fragment("plain prose"), &policy);
+    assert_eq!(
+        matched.id, "preserve.default",
+        "the terminal rule must be exempt from disabling"
+    );
+}
+
+#[test]
 fn test_collapse_repeated_lines_annotates_counts_in_first_seen_order() {
     let collapsed = collapse_repeated_lines("b\na\nb\nb\nc");
     assert_eq!(collapsed, "b (x3)\na\nc");

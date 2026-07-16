@@ -13,9 +13,12 @@ fn test_handle_for_is_deterministic() {
 }
 
 #[test]
-fn test_source_for_carries_id_and_handle_without_memory() {
-    let source = source_for(99);
+fn test_source_for_carries_id_and_content_addressed_handle() {
+    let source = source_for(99, 12345);
     assert_eq!(source.fragment_id, 99);
-    assert_eq!(source.handle, "ctx://source/99");
+    assert_eq!(
+        source.handle, "ctx://source/12345",
+        "the handle must be minted from the content hash, not the caller id"
+    );
     assert!(source.memory_id.is_none());
 }

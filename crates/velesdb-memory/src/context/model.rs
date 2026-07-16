@@ -79,6 +79,7 @@ pub struct ContextFragment {
 /// Consumed by the memory bridge (US-002); carried in the request shape from
 /// the start so the wire contract does not change when it lands.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub struct MemoryScope {
     /// Restrict recalled memories to this project facet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -91,6 +92,7 @@ pub struct MemoryScope {
 /// Tuning knobs of one compilation. `Default` is the recommended profile.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub struct CompilePolicy {
     /// Tokens kept aside for the model's answer; the compiler packs into
     /// `token_budget − response_reserve_tokens`. Default `0`: the caller

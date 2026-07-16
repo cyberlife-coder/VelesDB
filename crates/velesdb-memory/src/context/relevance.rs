@@ -9,8 +9,10 @@
 
 use std::collections::BTreeSet;
 
-/// The distinct lowercase alphanumeric terms of `text`.
-fn terms(text: &str) -> BTreeSet<String> {
+/// The distinct lowercase alphanumeric terms of `text`. Build the query's
+/// set once per compile and score every fragment against it — re-tokenizing
+/// the query per fragment would be pure loop-invariant waste.
+pub(crate) fn terms(text: &str) -> BTreeSet<String> {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|term| !term.is_empty())
         .map(str::to_lowercase)
@@ -20,8 +22,7 @@ fn terms(text: &str) -> BTreeSet<String> {
 /// Fraction of the query's distinct terms found in `content`, in `[0, 1]`.
 /// An empty query scores every fragment `0.0`.
 #[allow(clippy::cast_precision_loss)] // term counts are far below 2^23
-pub(crate) fn lexical_relevance(query: &str, content: &str) -> f32 {
-    let query_terms = terms(query);
+pub(crate) fn lexical_relevance(query_terms: &BTreeSet<String>, content: &str) -> f32 {
     if query_terms.is_empty() {
         return 0.0;
     }
