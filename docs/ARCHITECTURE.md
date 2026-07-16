@@ -51,17 +51,22 @@ idiom for enum-variant access:
    `Err(self)` so the caller recovers ownership.
 3. **Variant discriminants** — `is_vector`, `is_graph`, `is_metadata`
    round out the matrix.
-4. **Facade escape hatch** — the previous
+4. **Facade escape hatch (removed, R1.4)** — the previous
    `as_vector_collection_unchecked` / `into_vector_collection` became
-   `into_vector_unchecked`, and (audit **P0**, PR #1383) is now the
-   **safe** `into_vector_facade(self) -> VectorCollection`. Its body is a
-   plain value move between three newtypes that all wrap the identical
-   `inner: Collection`, so it was never memory-unsafe; the `unsafe` marker —
-   a misuse that flagged a *logical* contract rather than a memory one — has
-   been removed. Only the Python SDK binding uses it (twice), and it relies on
-   the captured `CollectionKind` + `Collection::ensure_vector` guard (which
-   rejects vector ops on graph/metadata facades) rather than an `unsafe`
-   contract.
+   `into_vector_unchecked`, then (audit **P0**, PR #1383) the **safe**
+   `into_vector_facade(self) -> VectorCollection`. That untyped facade — which
+   coerced *any* variant into a `VectorCollection` — has now been removed
+   (R1.4). The Python binding's two call-sites discriminate the real variant
+   directly (`match any_coll { AnyCollection::Vector(c) => …, Graph(c) =>
+   c.into_vector_view(), Metadata(c) => c.into_vector_view() }`), so the
+   captured `CollectionKind` is derived from the actual variant and can no
+   longer diverge from it. The structural re-wrap of a graph/metadata store
+   into the `VectorCollection` newtype that the single Python `Collection` type
+   holds now lives on the concrete newtypes as
+   `GraphCollection::into_vector_view` / `MetadataCollection::into_vector_view`
+   — an ordinary value move over the shared `inner: Collection`, honestly
+   scoped and *not* asserting vector kind. Vector-only ops remain gated by the
+   captured kind via `Collection::ensure_vector`.
 5. The velesdb-mobile and tauri-plugin-velesdb bindings migrated to
    the safe `into_vector()` API — the Rust error path already
    existed in both bindings, so the variant check became free.
@@ -84,11 +89,18 @@ The SDK bindings would then expose a sum type (enum) or union
 interface that forces callers to discriminate the kind before
 invoking any operation. This is estimated at 2-4 weeks of core
 refactoring and is deliberately out of scope for the pre-seed
-remediation cycle. The safe `into_vector_facade` method will be
-removed in full as part of the EPIC, once the Python binding holds the
-shared collection directly instead of coercing to a `VectorCollection`
-facade.
+remediation cycle. The untyped `into_vector_facade` coercion was already
+removed in R1.4 (the Python binding now discriminates the variant and uses
+the honestly-scoped `into_vector_view`); the remaining EPIC work is to have
+the binding hold a kind-discriminated collection directly instead of a
+`VectorCollection` newtype at all.
 
 **When to revisit**: post-seed, within the first 4 weeks of the
 architecture cleanup milestone. Concrete plan, blast radius, and incremental
 sequencing are captured in [issue #1384](https://github.com/cyberlife-coder/VelesDB/issues/1384).
+
+The untyped `into_vector_facade` escape hatch was retired in **R1.4** (see
+point 4 above); the remaining debt is that the Python `Collection` still holds
+a `VectorCollection` newtype (via the honestly-scoped `into_vector_view`)
+rather than a kind-discriminated sum type — the full separation of the shared
+backing store is still the F2.2 EPIC.

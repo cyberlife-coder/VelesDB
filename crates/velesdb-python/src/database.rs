@@ -357,23 +357,31 @@ impl Database {
     fn get_collection(&self, name: &str) -> PyResult<Option<Collection>> {
         match self.inner.get_any_collection(name) {
             Some(any_coll) => {
-                // The Python SDK exposes a single `Collection` facade over all
-                // variants. Capture the real kind so vector-only methods fail
-                // loud on graph/metadata collections (F2.2) instead of silently
-                // returning empty results.
-                let kind = if any_coll.is_graph() {
-                    CollectionKind::Graph
-                } else if any_coll.is_metadata() {
-                    CollectionKind::Metadata
-                } else {
-                    CollectionKind::Vector
+                // The Python SDK exposes a single `Collection` type (backed by a
+                // core `VectorCollection`) over all variants. Discriminate the
+                // real kind via the variant-checked `into_*` accessors, so the
+                // captured `kind` is derived from the actual collection and
+                // cannot diverge from it. Non-vector kinds share the same backing
+                // store and are exposed as a structural `VectorCollection` view;
+                // vector-only methods are still gated by `kind` via
+                // `Collection::ensure_vector`, so they fail loud (F2.2) rather
+                // than returning misleading results. (`AnyCollection` is
+                // `#[non_exhaustive]`, hence the ownership-recovering chain plus
+                // a fail-closed arm for any future variant.)
+                let (vc, kind) = match any_coll.into_vector() {
+                    Ok(v) => (v, CollectionKind::Vector),
+                    Err(other) => match other.into_graph() {
+                        Ok(g) => (g.into_vector_view(), CollectionKind::Graph),
+                        Err(other) => match other.into_metadata() {
+                            Ok(m) => (m.into_vector_view(), CollectionKind::Metadata),
+                            Err(_) => {
+                                return Err(PyRuntimeError::new_err(
+                                    "unsupported collection kind for the Python Collection view",
+                                ));
+                            }
+                        },
+                    },
                 };
-                // `into_vector_facade` is a safe value move (all AnyCollection
-                // variants wrap the same inner Collection). `kind` is captured
-                // above and `Collection::ensure_vector` rejects vector-only ops
-                // on graph/metadata collections, so the facade fails loud rather
-                // than returning misleading results.
-                let vc = any_coll.into_vector_facade();
                 Ok(Some(Collection::new_with_kind(
                     vc,
                     Arc::clone(&self.inner),
@@ -456,10 +464,15 @@ impl Database {
             .get_any_collection(&name_owned)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
         // Wrap the freshly-created metadata collection in the single Collection
-        // facade (mirrors `get_collection` above). `into_vector_facade` is a
-        // safe value move; the `Metadata` kind is recorded below and
-        // `Collection::ensure_vector` rejects vector-only ops on it.
-        let collection = any.into_vector_facade();
+        // type (mirrors `get_collection` above). The variant-checked
+        // `into_metadata` asserts the just-created collection really is metadata,
+        // then `into_vector_view` re-wraps its shared store into the
+        // `VectorCollection` the Python `Collection` holds; the `Metadata` kind
+        // recorded below makes `Collection::ensure_vector` reject vector-only ops.
+        let collection = any
+            .into_metadata()
+            .map_err(|_| PyRuntimeError::new_err("expected a metadata collection after creation"))?
+            .into_vector_view();
 
         Ok(Collection::new_with_kind(
             collection,
