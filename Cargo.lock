@@ -6755,7 +6755,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-memory"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "rmcp",
  "schemars 1.2.1",
@@ -6812,7 +6812,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-node"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "napi",
  "napi-build",

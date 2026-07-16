@@ -18,6 +18,36 @@ fn candidate(id: u64, vector_score: f64, graph_weight: f64) -> Candidate {
 }
 
 #[test]
+fn test_fuse_scored_exposes_ventilation_and_matches_fuse() {
+    let pool = vec![candidate(1, 0.9, 0.0), candidate(2, 0.5, 0.0)];
+    let reached = vec![candidate(3, 0.0, 1.0)];
+
+    let plain = fuse(pool.clone(), &reached, 3, 0.8);
+    let scored = fuse_scored(pool, &reached, 3, 0.8);
+
+    // Iso-behavior: same candidates, same order as the public wrapper.
+    assert_eq!(
+        plain.iter().map(|r| r.id).collect::<Vec<_>>(),
+        scored.iter().map(|s| s.recollection.id).collect::<Vec<_>>()
+    );
+    // Ventilation: fused decomposes exactly into its two terms.
+    for entry in &scored {
+        assert!(
+            (entry.fused - (entry.vector_norm + 0.8 * entry.graph_weight)).abs() < 1e-12,
+            "fused must equal vector_norm + boost * graph_weight"
+        );
+        assert!((0.0..=1.0).contains(&entry.vector_norm));
+    }
+    // A graph-only candidate rides on its weight alone.
+    let graph_only = scored
+        .iter()
+        .find(|s| s.recollection.id == 3)
+        .expect("graph fact surfaced");
+    assert!(graph_only.vector_norm.abs() < 1e-12);
+    assert!((graph_only.graph_weight - 1.0).abs() < 1e-12);
+}
+
+#[test]
 fn test_pool_size_floors_at_pool_min() {
     assert_eq!(pool_size(1), POOL_MIN);
     assert_eq!(pool_size(4), POOL_MIN);

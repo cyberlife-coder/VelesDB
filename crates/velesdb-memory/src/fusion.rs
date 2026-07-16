@@ -37,6 +37,22 @@ pub(crate) struct Candidate {
     pub graph_weight: f64,
 }
 
+/// A fused-ranked candidate with its score ventilation kept: the normalised
+/// vector term, the graph promotion weight, and the combined score. The
+/// context compiler's memory bridge consumes this to record an explainable
+/// `relevance ∈ [0, 1]` in provenance — [`fuse`] (the public recall path)
+/// discards the ventilation, exactly as before.
+#[derive(Debug, Clone)]
+pub(crate) struct ScoredCandidate {
+    pub recollection: Recollection,
+    /// `max(vector_score, 0) / max_score`, in `[0, 1]`.
+    pub vector_norm: f64,
+    /// Graph promotion weight (`0.0` for a pool-only hit).
+    pub graph_weight: f64,
+    /// `vector_norm + graph_boost · graph_weight` — the ranking key.
+    pub fused: f64,
+}
+
 /// Re-rank `pool ∪ reached` by `vector_score/max_score + graph_boost·graph_weight`,
 /// take the top `k`. A fact both vector-ranked and graph-reached keeps its pool
 /// copy (its real vector score, plus the reached weight folded in by
@@ -51,6 +67,21 @@ pub(crate) fn fuse(
     k: usize,
     graph_boost: f64,
 ) -> Vec<Recollection> {
+    fuse_scored(pool, reached, k, graph_boost)
+        .into_iter()
+        .map(|scored| scored.recollection)
+        .collect()
+}
+
+/// [`fuse`]'s core, keeping the per-candidate score ventilation. Same
+/// candidates, same stable ordering, same numbers — `fuse` is a thin wrapper
+/// that drops the breakdown.
+pub(crate) fn fuse_scored(
+    pool: Vec<Candidate>,
+    reached: &[Candidate],
+    k: usize,
+    graph_boost: f64,
+) -> Vec<ScoredCandidate> {
     let weights: HashMap<u64, f64> = reached
         .iter()
         .map(|c| (c.recollection.id, c.graph_weight))
@@ -70,46 +101,39 @@ pub(crate) fn fuse(
             .cloned(),
     );
 
-    candidates.sort_by(|a, b| {
-        fused_score(b, &weights, max_score, graph_boost).total_cmp(&fused_score(
-            a,
-            &weights,
-            max_score,
-            graph_boost,
-        ))
-    });
-    candidates.truncate(k);
-    candidates.into_iter().map(|c| c.recollection).collect()
+    let mut scored: Vec<ScoredCandidate> = candidates
+        .into_iter()
+        .map(|candidate| {
+            let graph_weight = weights
+                .get(&candidate.recollection.id)
+                .copied()
+                .unwrap_or(0.0);
+            let vector_norm = candidate.vector_score.max(0.0) / max_score;
+            ScoredCandidate {
+                recollection: candidate.recollection,
+                vector_norm,
+                graph_weight,
+                fused: vector_norm + graph_boost * graph_weight,
+            }
+        })
+        .collect();
+    scored.sort_by(|a, b| b.fused.total_cmp(&a.fused));
+    scored.truncate(k);
+    scored
 }
 
-/// `max(vector_score, 0)/max_score + graph_boost·graph_weight`. A pure
-/// vector hit (`graph_weight` absent from `weights`) keeps its bare
-/// normalised similarity.
-///
-/// The numerator is floored at `0`, not just the divisor: Cosine scores
-/// range over `[-1, 1]`, so a negative `vector_score` is a legitimate,
-/// in-range "dissimilar" result, not an error state — dividing a negative
-/// numerator by an epsilon-floored *positive* divisor would otherwise invert
-/// its sign into an unbounded negative score (regression: an all-negative
-/// pool scored around `-2.3e14`, dwarfing any `graph_boost` regardless of
-/// actual relevance). Flooring the numerator instead means a fact with no
-/// positive vector signal contributes `0` — the same neutral baseline a
-/// graph-only candidate (`vector_score = 0.0`) already gets — so it can
-/// still be promoted by a real graph connection, but by the same bounded
-/// margin as any other zero-vector-signal candidate, never by an
-/// astronomical, sign-flipped one.
-fn fused_score(
-    candidate: &Candidate,
-    weights: &HashMap<u64, f64>,
-    max_score: f64,
-    graph_boost: f64,
-) -> f64 {
-    let weight = weights
-        .get(&candidate.recollection.id)
-        .copied()
-        .unwrap_or(0.0);
-    candidate.vector_score.max(0.0) / max_score + graph_boost * weight
-}
+// Why `vector_score.max(0.0)` floors the numerator, not just the divisor:
+// Cosine scores range over `[-1, 1]`, so a negative `vector_score` is a
+// legitimate, in-range "dissimilar" result, not an error state — dividing a
+// negative numerator by an epsilon-floored *positive* divisor would invert
+// its sign into an unbounded negative score (regression: an all-negative
+// pool scored around `-2.3e14`, dwarfing any `graph_boost` regardless of
+// actual relevance). Flooring the numerator instead means a fact with no
+// positive vector signal contributes `0` — the same neutral baseline a
+// graph-only candidate (`vector_score = 0.0`) already gets — so it can
+// still be promoted by a real graph connection, but by the same bounded
+// margin as any other zero-vector-signal candidate, never by an
+// astronomical, sign-flipped one.
 
 #[cfg(test)]
 #[path = "fusion_tests.rs"]

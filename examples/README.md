@@ -27,6 +27,18 @@ Also see the [demos/](../demos/) directory for full-stack applications:
 
 ## Rust Examples
 
+### Context Savings Benchmark (`../crates/velesdb-memory/examples/context_savings/`) -- Beginner
+
+Reproducible before/after benchmark of the deterministic context compiler:
+committed fixture corpus (prose turns, duplicates, code, logs), token
+savings per budget, action breakdown, latency — two runs print identical
+token figures.
+
+```bash
+cargo run -p velesdb-memory --example context_savings --no-default-features --features context
+```
+
+
 ### E-commerce Recommendation (`ecommerce_recommendation/`) -- Advanced
 
 **The flagship example** demonstrating VelesDB's combined Vector + Graph + MultiColumn capabilities:

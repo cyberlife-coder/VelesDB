@@ -2,7 +2,7 @@
 name = "velesdb-memory"
 # Independent of the workspace version: velesdb-memory is a young MCP wrapper
 # with its own release cadence, decoupled from the core engine's 3.x line.
-version = "0.7.0"
+version = "0.8.0"
 edition.workspace = true
 rust-version.workspace = true
 license-file = "../../LICENSE"
@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 documentation.workspace = true
 authors.workspace = true
-description = "VelesDB-memory: local-first MCP memory server for AI agents (remember/recall/relate/forget/why)."
+description = "VelesDB-memory: local-first MCP memory server for AI agents (remember/recall/relate/forget/why + deterministic context compiler)."
 readme = "README.md"
 keywords = ["mcp", "agent-memory", "local-first", "knowledge-graph", "ai"]
 categories = ["database", "command-line-utilities"]
@@ -43,8 +43,13 @@ ureq = { version = "2", optional = true, default-features = false }
 # The MCP server transport + binary, and the native file-backed store, are on
 # by default so `cargo build` produces the server; library consumers disable
 # defaults to pick only what they need.
-default = ["mcp", "persistence"]
+default = ["mcp", "persistence", "context"]
 mcp = ["dep:rmcp", "dep:tokio", "persistence"]
+# The deterministic context compiler (EPIC-P-070). Zero new dependencies and
+# `persistence`-free by design, so a wasm-style `default-features = false`
+# consumer can enable it alone; the memory-backed selection layer inside it is
+# additionally gated on `persistence`.
+context = []
 # NativeStore, the file-backed MemoryStore (velesdb-core's Database/AgentMemory
 # — tokio/mio/memmap2). On by default; a backend with its own MemoryStore impl
 # (e.g. velesdb-wasm's in-memory one) builds with `default-features = false`
@@ -68,6 +73,13 @@ name = "velesdb-memory"
 path = "src/main.rs"
 # The binary is the MCP server, so it only builds with the `mcp` feature.
 required-features = ["mcp"]
+
+# Reproducible before/after benchmark of the deterministic context compiler.
+# Offline and dependency-free — needs only the `context` feature.
+[[example]]
+name = "context_savings"
+path = "examples/context_savings/main.rs"
+required-features = ["context"]
 
 # Real-data LoCoMo benchmark. Needs a local Ollama (all-minilm + a generative
 # model), so it only builds with the `ollama` feature.

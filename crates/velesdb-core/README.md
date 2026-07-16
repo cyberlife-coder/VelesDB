@@ -7,6 +7,11 @@
 
 High-performance vector database engine written in Rust.
 
+> Looking for agent memory or the deterministic context compiler
+> (`compile_context`)? Those live one level up, in
+> [`velesdb-memory`](../velesdb-memory/README.md) — this core engine is
+> unchanged by them and never depends on them.
+
 > The engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It fuses vector + graph + columnar under VelesQL; the high-level [`MemoryService` / `why()`](../velesdb-memory/README.md) returns the evidence path behind every recall.
 
 ## Features

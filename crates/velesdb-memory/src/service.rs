@@ -37,6 +37,16 @@ mod fused_recall;
 #[path = "reinforce.rs"]
 mod reinforce;
 
+/// The context compiler's memory bridge (`compile_context`,
+/// `retrieve_context_source`, `context_savings`, working contexts). A child
+/// module of `service`, like [`fused_recall`], so it reuses the private
+/// `store_fact`/`HUB_FIELD` system-fact machinery — compiler system facts
+/// (sources, events, working contexts) are hub-marked so they never surface
+/// in normal recall.
+#[cfg(feature = "context")]
+#[path = "context/memory_bridge.rs"]
+mod memory_bridge;
+
 /// Reserved metadata key marking an entity hub auto-created by
 /// [`MemoryService::remember_extracted`] (value `true`). Namespaced under the
 /// system `_veles_` prefix so it can never collide with a caller's own metadata,

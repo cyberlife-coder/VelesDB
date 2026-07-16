@@ -1,0 +1,112 @@
+{
+  "content": "You are the deploy assistant.\n\nThe deploy pipeline runs clippy before tests.\n\n```rust\nlet x = 42;\n```\n\nNever restart the primary node during a rebalance.\n\nERROR timeout (x2)\nINFO recovered",
+  "decisions": [
+    {
+      "action": "cache",
+      "content_hash": 14526841120422644114,
+      "fragment_id": 14526841120422644114,
+      "reason": "caller marked this fragment cacheable; it forms the stable prefix",
+      "relevance": 0.3333333432674408,
+      "risk": "low",
+      "rule_id": "cache.stable_prefix"
+    },
+    {
+      "action": "preserve",
+      "content_hash": 18021940868160883968,
+      "fragment_id": 18021940868160883968,
+      "reason": "prose kept subject to budget",
+      "relevance": 0.5,
+      "risk": "low",
+      "rule_id": "preserve.default"
+    },
+    {
+      "action": "drop",
+      "content_hash": 18021940868160883968,
+      "fragment_id": 18021940868160883968,
+      "handle": "ctx://source/18021940868160883968",
+      "reason": "exact duplicate of fragment #1 — content survives through it",
+      "relevance": 0.5,
+      "risk": "low",
+      "rule_id": "drop.duplicate"
+    },
+    {
+      "action": "preserve",
+      "content_hash": 13306393161462182196,
+      "fragment_id": 13306393161462182196,
+      "reason": "code must survive verbatim",
+      "relevance": 0.0,
+      "risk": "low",
+      "rule_id": "preserve.code_fence"
+    },
+    {
+      "action": "preserve",
+      "content_hash": 5998238963991047544,
+      "fragment_id": 5998238963991047544,
+      "reason": "negative constraints must never be weakened",
+      "relevance": 0.1666666716337204,
+      "risk": "low",
+      "rule_id": "preserve.negative_constraint"
+    },
+    {
+      "action": "abstract",
+      "content_hash": 863010502420969656,
+      "fragment_id": 863010502420969656,
+      "reason": "repeated log lines collapse into one annotated line",
+      "relevance": 0.0,
+      "risk": "medium",
+      "rule_id": "abstract.log_dedup"
+    }
+  ],
+  "insights": {
+    "tokens_in": 80,
+    "tokens_out": 67,
+    "tokens_saved": 13,
+    "tokens_saved_by_rule": {
+      "abstract.log_dedup": 3,
+      "drop.duplicate": 14
+    }
+  },
+  "retrieval_handles": [],
+  "risk": "medium",
+  "sections": [
+    {
+      "content": "You are the deploy assistant.",
+      "fragment_ids": [
+        14526841120422644114
+      ],
+      "kind": "cache"
+    },
+    {
+      "content": "The deploy pipeline runs clippy before tests.\n\n```rust\nlet x = 42;\n```\n\nNever restart the primary node during a rebalance.\n\nERROR timeout (x2)\nINFO recovered",
+      "fragment_ids": [
+        18021940868160883968,
+        13306393161462182196,
+        5998238963991047544,
+        863010502420969656
+      ],
+      "kind": "body"
+    }
+  ],
+  "sources": [
+    {
+      "fragment_id": 14526841120422644114,
+      "handle": "ctx://source/14526841120422644114"
+    },
+    {
+      "fragment_id": 18021940868160883968,
+      "handle": "ctx://source/18021940868160883968"
+    },
+    {
+      "fragment_id": 13306393161462182196,
+      "handle": "ctx://source/13306393161462182196"
+    },
+    {
+      "fragment_id": 5998238963991047544,
+      "handle": "ctx://source/5998238963991047544"
+    },
+    {
+      "fragment_id": 863010502420969656,
+      "handle": "ctx://source/863010502420969656"
+    }
+  ]
+}

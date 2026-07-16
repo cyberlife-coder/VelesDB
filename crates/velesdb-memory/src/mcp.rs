@@ -29,6 +29,11 @@ use crate::extract::DynExtractor;
 // The request envelopes and small id-results live in their own module so this
 // file stays focused on the server and tool wiring; output shapes reuse the
 // domain types from `crate::model` directly (no duplicate wire/domain struct).
+/// The context compiler's four tools — a second `#[tool_router]` block whose
+/// router is combined with the main one below, extending the ONE server.
+#[cfg(feature = "context")]
+mod context_tools;
+
 mod dto;
 use dto::{
     FeedbackParams, FeedbackResult, ForgetParams, ForgetResult, RecallFusedParams,
@@ -62,7 +67,21 @@ impl McpServer {
             service: Arc::new(service),
             extractor: None,
             default_ttl: None,
-            tool_router: Self::tool_router(),
+            tool_router: Self::combined_router(),
+        }
+    }
+
+    /// The full tool router: the memory tools, plus the context compiler's
+    /// tools when that feature is on. Combined here — rmcp routers add — so
+    /// there is exactly ONE server whichever features are enabled.
+    fn combined_router() -> ToolRouter<McpServer> {
+        #[cfg(feature = "context")]
+        {
+            Self::tool_router() + Self::context_tool_router()
+        }
+        #[cfg(not(feature = "context"))]
+        {
+            Self::tool_router()
         }
     }
 

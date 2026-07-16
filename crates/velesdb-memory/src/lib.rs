@@ -21,6 +21,11 @@
 //! Set" of the Software's features and breach the `VelesDB` Core License 1.0
 //! (§1, No Hosted or Managed Service). See `VISION.md` §5 and `PLAN.md` Phase 4A.
 
+/// The deterministic context compiler (EPIC-P-070): classify, dedup, and pack
+/// caller-supplied context fragments under a token budget — no LLM, no cloud,
+/// every decision auditable. Gated behind the default `context` feature.
+#[cfg(feature = "context")]
+pub mod context;
 /// Format recalled facts as a chronological, date-prefixed timeline with a
 /// "now" anchor — the dated-context representation measured to lift temporal
 /// question answering, shipped as product behavior rather than a harness prompt.
@@ -62,7 +67,7 @@ pub mod storage;
 /// SDK's own default so the server, library, and tests never restate the
 /// value. `velesdb_core::agent` (where the canonical constant lives) is
 /// itself `persistence`-gated, so a `persistence`-free build (e.g.
-/// `velesdb-wasm`) falls back to [`FALLBACK_DIMENSION`].
+/// `velesdb-wasm`) falls back to `FALLBACK_DIMENSION`.
 #[cfg(feature = "persistence")]
 pub const DEFAULT_DIMENSION: usize = velesdb_core::agent::DEFAULT_DIMENSION;
 #[cfg(not(feature = "persistence"))]
@@ -81,6 +86,8 @@ const _: () = assert!(
     "update FALLBACK_DIMENSION to match velesdb_core::agent::DEFAULT_DIMENSION"
 );
 
+#[cfg(feature = "context")]
+pub use context::ContextCompiler;
 pub use dated_context::{format_dated_context, DatedContext};
 pub use embedder::{DynEmbedder, EmbedError, Embedder, HashEmbedder};
 #[cfg(feature = "ollama")]

@@ -4,6 +4,8 @@ VelesDB is **the explainable, local-first memory engine for AI agents.** Under t
 
 The differentiator is **`why()`**: instead of returning only an answer, VelesDB returns the *evidence path* behind every recall — which facts it used and how they connect, by walking typed links to context that shares no words with your question. That built-in, auditable recall trail is exactly the kind of traceability that regulations such as the [EU AI Act](https://artificialintelligenceact.eu/implementation-timeline/) (enforceable from Aug 2026) ask of AI systems; running fully local, VelesDB **helps meet** those data-residency and explainability expectations rather than claiming certified compliance.
 
+The same frame extends to what agents *send*, not just what they recall: the **deterministic context compiler** (`compile_context`). Agents burn most of their token budget re-reading redundant context — repeated facts across turns, hundred-line logs that say three things, stale conversation. VelesDB compiles that context locally, with no LLM and no cloud call: duplicates drop, repeated log lines collapse with counts, code / URLs / numbers / negative constraints survive verbatim, and whatever exceeds the token budget becomes a recoverable `ctx://source/` handle instead of a silent loss. Every decision is auditable (stable rule id, reason, risk) and the whole compilation is reproducible byte for byte — the `why()` explainability contract, applied to token spend. On the committed benchmark corpus this measures **75–82 % estimated token savings** in ~2 ms compile latency (reproducible: `crates/velesdb-memory/examples/context_savings`); the figures are local estimates, deliberately over-counting, never presented as billed tokens.
+
 ---
 
 ## Positioning

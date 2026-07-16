@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — deterministic context compiler (EPIC-P-070; ships as `velesdb-memory` 0.8.0 / `velesdb-node` 0.8.0 via the `velesdb-memory-v0.8.0` tag)
+
+- **`velesdb-memory`**: new default `context` feature — a deterministic
+  context compiler (no LLM, no network, no clock; same request ⇒
+  byte-identical output). Pipeline `chunk → classify → dedup → score → pack →
+  assemble`: duplicates drop, repeated log lines collapse with counts,
+  code/URLs/numbers/negative constraints survive verbatim, over-budget
+  content becomes recoverable `ctx://source/<hash>` handles, every fragment
+  gets one auditable decision (stable rule id, reason, relevance, risk).
+  First text chunker in the workspace (UTF-8-safe, code-fence-atomic), the
+  first shipped `Reranker` implementation (`DeterministicReranker`), a
+  `TokenEstimator` seam, injectable versioned `PricingTable` (u64
+  micro-units, never hardcoded), and a memory bridge
+  (`compile_context`/`retrieve_context_source`/`context_savings`/
+  `save_working_context`) whose stored system facts are invisible to normal
+  recall.
+- **MCP**: four new tools on the one existing server (`compile_context`,
+  `context_savings`, `explain_compilation`, `retrieve_context_source`) —
+  domain types are the wire types, no DTO duplication.
+- **Node** (`@wiscale/velesdb-memory-node`): `compileContext(request)` —
+  pure conversion, ids as decimal strings; ships the
+  `velesdb-context-optimizer` agent skill in the npm package.
+- **Benchmark**: `examples/context_savings`, reproducible (75–82 % estimated
+  token savings on the committed corpus in ~2 ms; figures are local
+  estimates, not billed tokens — cross-checked against a real cl100k
+  tokenizer by the committed `real_measures/` scripts).
+- Internal, non-breaking: `fusion::fuse` re-expressed over `fuse_scored`
+  (identical candidates/order/numbers, iso-behavior pinned by test);
+  intra-doc links fixed so `RUSTDOCFLAGS="-D warnings" cargo doc` passes.
+
 R1 `Collection`-internals train: resolves and **closes the god-object EPIC
 ([#1384](https://github.com/cyberlife-coder/VelesDB/issues/1384))**. The
 internals are organized to the maximum structurally sound point; full per-kind

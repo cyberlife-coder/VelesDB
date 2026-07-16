@@ -6,9 +6,11 @@ binding; no network service. Under the hood it fuses vector + graph + columnar,
 which is *how* it remembers, connects, and explains.
 
 `remember` / `recall` / `recallWhere` / `relate` / `forget` / `why` /
-`rememberExtracted`. The differentiator is **`why()`**: it answers a question with
-the best-matching memory *plus its connected subgraph* — related facts a plain
-vector recall is blind to.
+`rememberExtracted` / `compileContext`. The differentiator is **`why()`**: it
+answers a question with the best-matching memory *plus its connected subgraph*
+— related facts a plain vector recall is blind to. `compileContext` applies
+the same explainability to your token bill: deterministic context compression
+with an auditable decision per fragment.
 
 ![recall() finds the booking but misses the reason; why() reaches it through typed links, across a session restart](https://raw.githubusercontent.com/cyberlife-coder/VelesDB/develop/examples/agent_memory/why_across_sessions.gif)
 
@@ -63,6 +65,41 @@ cross the boundary as **decimal strings** (a JS `number` loses precision above
 // the fact↔topic graph that powers why().
 const ids = await mem.rememberExtracted(longText, 'qwen3', 'http://localhost:11434')
 ```
+
+### Context compilation (`compileContext`)
+
+Your agent burns most of its tokens re-reading redundant context.
+`compileContext` compresses it **deterministically** (no LLM, no cloud): the
+same request always compiles to the same bytes, duplicates drop, repeated log
+lines collapse with counts, code / URLs / numbers / negative constraints
+survive verbatim, and over-budget content becomes a recoverable
+`ctx://source/` handle — never a silent loss.
+
+```js
+const out = await mem.compileContext({
+  query: 'state of the canary deploy',
+  token_budget: 4000,
+  memory_scope: { k: 5 }, // optional: pull relevant stored memories in
+  fragments: [
+    { content: 'You are the deploy assistant.', metadata: { cache: true } },
+    { content: ciLogs, kind: 'log' },
+    { content: 'Never restart the primary during a rebalance.' },
+  ],
+})
+
+out.content            // the compiled prompt context (fits the budget)
+out.risk               // 'low' | 'medium' | 'high' — 'high' means critical content did not fit
+out.decisions          // one auditable decision per fragment (rule_id, reason, risk)
+out.insights           // { tokens_in, tokens_out, tokens_saved, ... } — local estimates
+```
+
+The request/result JSON matches the MCP `compile_context` tool, with two
+binding-wide differences: id fields (`fragment_id`, `content_hash`,
+`memory_id`, `fragment_ids`, input `fragments[].id`) cross as decimal
+strings, and the *top-level* result keys follow the binding's camelCase
+(`out.retrievalHandles` — nested trees keep the wire's snake_case). `tokens_saved` is a local estimate, not billed tokens. The bundled
+[`velesdb-context-optimizer` skill](./skills/velesdb-context-optimizer/SKILL.md)
+teaches an agent the full workflow, including when *not* to compress.
 
 ## License
 

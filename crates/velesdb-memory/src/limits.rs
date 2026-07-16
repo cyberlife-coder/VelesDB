@@ -20,6 +20,26 @@ pub const MAX_RECALL_LIMIT: usize = 1_000;
 /// Cap on `why` hop depth — prevents exponential graph fan-out.
 pub const MAX_WHY_HOPS: usize = 10;
 
+/// Maximum accepted size of a single context-compiler fragment (1 MiB, the
+/// same ceiling as [`MAX_FACT_BYTES`]) — prevents a single fragment from
+/// forcing huge allocations in the compile pipeline.
+pub const MAX_FRAGMENT_BYTES: usize = 1_048_576;
+
+/// Cap on the number of fragments in one compile request — bounds the work a
+/// single call can demand across every adapter.
+pub const MAX_FRAGMENTS: usize = 1_024;
+
+/// Cap on a caller-supplied token budget. A budget cannot force allocations
+/// by itself, but an absurd value would make the savings arithmetic
+/// meaningless, so adapters clamp to this ceiling instead of erroring.
+pub const MAX_TOKEN_BUDGET: u64 = 10_000_000;
+
+/// Clamp a caller-supplied token budget to [`MAX_TOKEN_BUDGET`].
+#[must_use]
+pub fn clamp_token_budget(budget: u64) -> u64 {
+    budget.min(MAX_TOKEN_BUDGET)
+}
+
 /// Clamp a caller-supplied recall limit to [`MAX_RECALL_LIMIT`].
 #[must_use]
 pub fn clamp_recall_limit(k: usize) -> usize {

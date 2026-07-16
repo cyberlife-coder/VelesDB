@@ -2,7 +2,7 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-> The TypeScript engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It ships the `MemoryService` memory wedge (`remember`/`recall`/`relate`/`forget`/[`why()`](../../crates/velesdb-memory/README.md)) in the browser or Node.js — `why()` returns the evidence path behind every recall.
+> The TypeScript engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It ships the `MemoryService` memory wedge (`remember`/`recall`/`relate`/`forget`/[`why()`](../../crates/velesdb-memory/README.md)) in the browser or Node.js — `why()` returns the evidence path behind every recall. The deterministic context compiler (`compileContext`) is available in the native Node binding, [`@wiscale/velesdb-memory-node`](../../crates/velesdb-node/README.md); this WASM SDK does not expose it yet.
 
 **v3.12.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
 

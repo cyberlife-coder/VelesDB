@@ -136,6 +136,10 @@ The same wedge ships in **Python** (`pip install velesdb`), **Node** (`npm i @wi
 
 > **Not a weak-embedder trick.** In each retrieval demo, recall stays blind to the reason **even under a real semantic embedder** (`ollama` / `all-minilm`), not just the offline `hash` default — the reason is connected by a decision, not by surface similarity, which is exactly what a vector store cannot follow.
 
+### The context compiler: `why()` for your token bill
+
+Agents burn most of their budget re-reading redundant context. The memory layer now ships a **deterministic context compiler** (`compile_context` over MCP and Node, `ContextCompiler` in Rust): no LLM, no cloud — duplicates drop, repeated log lines collapse with counts, code / URLs / numbers / negative constraints survive verbatim, and over-budget content becomes a recoverable `ctx://source/` handle instead of a silent loss. Every decision carries a stable rule id, a reason, and a risk level (`explain_compilation` answers "why was this dropped?"), and the same request always compiles to the same bytes. On the committed corpus, the reproducible benchmark measures **75–82 % estimated token savings** in ~2 ms ([`examples/context_savings`](crates/velesdb-memory/examples/context_savings), figures are local estimates, not billed tokens). The [`velesdb-context-optimizer` skill](skills/velesdb-context-optimizer/SKILL.md) packages the workflow — including when *not* to compress. See [Why VelesDB](docs/WHY_VELESDB.md).
+
 ---
 
 For the lower-level building blocks (episodic, procedural, TTL, snapshots):
