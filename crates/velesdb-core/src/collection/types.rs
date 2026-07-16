@@ -392,7 +392,10 @@ pub(crate) struct QueryState {
     pub(super) stats_io_mutex: Arc<Mutex<()>>,
 }
 
-/// Monotonic generation counters that gate compiled-plan cache invalidation.
+/// Monotonic generation counters that gate compiled-plan cache invalidation
+/// (`write_generation`, `analyze_generation`), plus the flush-threshold
+/// counter `inserts_since_last_hnsw_save` (HNSW save cadence, consumed by
+/// `flush()`).
 ///
 /// Concern cluster **generations** of `Collection` (R1.1, EPIC #1384). These
 /// are lock-free atomics; grouping them changes no synchronization.
@@ -491,6 +494,15 @@ pub(crate) struct StreamingState {
 /// Query-execution guard-rails and the runtime ingest/search limits.
 ///
 /// Concern cluster **runtime** of `Collection` (R1.1, EPIC #1384).
+///
+/// **Split criterion vs [`QueryState`]**: this cluster holds
+/// *operator-facing, config-driven runtime limits* — values pushed in from
+/// the outside (`update_guardrails`, [`VelesConfig::limits`](crate::config::VelesConfig)
+/// at registration time) that bound what the engine is *allowed* to do.
+/// [`QueryState`] holds the *internal query-execution machinery* (indexes,
+/// planner, caches, stats) — state the engine builds and consults itself to
+/// decide *how* to execute. Limits change via configuration; engine state
+/// changes via execution.
 #[derive(Clone)]
 pub(crate) struct RuntimeGuards {
     /// Guard-rails for query execution (EPIC-048).
