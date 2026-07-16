@@ -3,18 +3,24 @@
 //! working contexts — the `MemoryService` half of EPIC-P-070's US-002.
 //!
 //! Everything the bridge persists is a **system fact**: hub-marked
-//! (`_veles_hub`, the same reserved marker entity hubs use) so it never
-//! surfaces in normal recall, and stored under a **salted id space** so no
-//! caller fact can collide with it. Events carry metadata and hashes only —
-//! never fragment content. Event recording stamps wall-clock time; the
-//! compile pipeline itself stays clock-free and deterministic.
+//! (`_veles_hub`) and carrying **only reserved `_veles_*` metadata keys**, so
+//! it is invisible to unfiltered recall (hub exclusion), can never match a
+//! caller's include filter (callers cannot name reserved keys), and can never
+//! be forged by a caller fact (reserved keys are rejected at `remember`).
+//! Stored ids are salted, and both the source writer and the handle resolver
+//! verify the `_veles_ctx_source` marker, so a caller fact squatting a salt
+//! preimage is neither overwritten nor ever served back as a source. Events
+//! carry metadata and hashes only — never fragment content. Event recording
+//! stamps wall-clock time; the compile pipeline itself stays clock-free and
+//! deterministic.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Number, Value};
 
-use super::{MemoryService, Metadata, HUB_FIELD};
+use super::{positive_ttl, MemoryService, Metadata, HUB_FIELD};
 use crate::context::model::{
     CompileRequest, CompiledContext, ContextFragment, ContextSavings, MemoryScope, WorkingContext,
 };
@@ -22,7 +28,7 @@ use crate::context::{provenance, ContextCompiler};
 use crate::embedder::Embedder;
 use crate::error::MemoryError;
 use crate::id::stable_id;
-use crate::model::{ColumnFilter, ColumnOp, FusionOptions};
+use crate::model::FusionOptions;
 use crate::storage::MemoryStore;
 
 /// Salt for stored source ids — disjoint from natural fact ids, so a caller
@@ -39,9 +45,27 @@ const WORKING_ID_SALT: &str = "veles-ctx-working:";
 /// vector query can sweep the event family for aggregation.
 const EVENT_ANCHOR: &str = "veles context compilation event";
 
-/// Metadata key flagging a compilation event (unreserved on purpose: it is
-/// what [`MemoryService::context_savings`] filters on through `recall_where`).
-const EVENT_FLAG: &str = "ctx_event";
+/// Reserved metadata keys of the bridge's system facts. Reserved (`_veles_`)
+/// on purpose: callers can neither set them (forgery) nor filter on them, so
+/// system facts are invisible to every caller-facing recall path and
+/// [`MemoryService::context_savings`] aggregates only genuine events (it
+/// filters at the storage layer, below the caller-facing validation).
+const CTX_EVENT_FIELD: &str = "_veles_ctx_event";
+const CTX_PROJECT_FIELD: &str = "_veles_ctx_project";
+const CTX_MODEL_FIELD: &str = "_veles_ctx_model";
+const CTX_SOURCE_FIELD: &str = "_veles_ctx_source";
+const CTX_WORKING_FIELD: &str = "_veles_ctx_working";
+const CTX_SESSION_FIELD: &str = "_veles_ctx_session";
+const CTX_TOKENS_IN_FIELD: &str = "_veles_ctx_tokens_in";
+const CTX_TOKENS_OUT_FIELD: &str = "_veles_ctx_tokens_out";
+const CTX_TOKENS_SAVED_FIELD: &str = "_veles_ctx_tokens_saved";
+const CTX_COST_FIELD: &str = "_veles_ctx_cost_micros";
+const CTX_CURRENCY_FIELD: &str = "_veles_ctx_currency";
+const CTX_AT_FIELD: &str = "_veles_ctx_at";
+
+/// Per-process sequence folded into event ids so two compilations landing on
+/// the same clock tick (coarse timers, concurrent calls) never collide.
+static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// [`ContextCompiler::compile`] with this service's memory folded in:
@@ -86,7 +110,14 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let Some(scope) = &request.memory_scope else {
             return Ok(Vec::new());
         };
-        let k = crate::limits::clamp_recall_limit(scope.k.unwrap_or(DEFAULT_MEMORY_K));
+        // Never let pulled memories push the request over the fragment cap —
+        // the cap is validated after augmentation, and a rejection there would
+        // blame the caller for fragments the bridge itself added.
+        let room = crate::limits::MAX_FRAGMENTS.saturating_sub(request.fragments.len());
+        let k = crate::limits::clamp_recall_limit(scope.k.unwrap_or(DEFAULT_MEMORY_K)).min(room);
+        if k == 0 {
+            return Ok(Vec::new());
+        }
         let filter = scope_filter(scope);
         let scored =
             self.recall_fused_scored(&request.query, k, filter.as_ref(), FusionOptions::default())?;
@@ -132,6 +163,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             .iter()
             .map(|fragment| (stable_id(&fragment.content), fragment.content.as_str()))
             .collect();
+        let ttl_seconds = positive_ttl(ttl_seconds);
         for source in &out.sources {
             let Some(hash) = provenance::parse_handle(&source.handle) else {
                 continue;
@@ -139,16 +171,33 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             let Some(content) = by_hash.get(&hash) else {
                 continue;
             };
+            let slot = source_id(hash);
+            // Never clobber a caller fact that happens to sit at this salted
+            // id (someone remembered the literal salt preimage): the slot is
+            // ours only when empty or already marker-bearing.
+            if self.store.get(slot)?.is_some() && !self.slot_is_context_source(slot)? {
+                continue;
+            }
             let embedding = self.embedder.embed(content)?;
             self.store_fact(
-                source_id(hash),
+                slot,
                 content,
                 &embedding,
-                Some(&system_meta(&[])),
+                Some(&system_meta(&[(CTX_SOURCE_FIELD, Value::Bool(true))])),
                 ttl_seconds,
             )?;
         }
         Ok(())
+    }
+
+    /// Whether the fact at `slot` carries the stored-source marker.
+    fn slot_is_context_source(&self, slot: u64) -> Result<bool, MemoryError> {
+        let payloads = self.store.get_metadata_batch(&[slot])?;
+        Ok(payloads.first().is_some_and(|payload| {
+            payload
+                .as_ref()
+                .is_some_and(|meta| meta.get(CTX_SOURCE_FIELD) == Some(&Value::Bool(true)))
+        }))
     }
 
     /// The original content behind a `ctx://source/<hash>` handle.
@@ -159,8 +208,14 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     pub fn retrieve_context_source(&self, handle: &str) -> Result<String, MemoryError> {
         let unknown = || MemoryError::UnknownHandle(handle.to_owned());
         let hash = provenance::parse_handle(handle).ok_or_else(unknown)?;
+        let slot = source_id(hash);
+        // Only marker-bearing facts are sources: a caller fact squatting the
+        // salted slot is never served back as compiled provenance.
+        if !self.slot_is_context_source(slot)? {
+            return Err(unknown());
+        }
         self.store
-            .get(source_id(hash))?
+            .get(slot)?
             .map(|(content, _)| content)
             .ok_or_else(unknown)
     }
@@ -178,14 +233,20 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             .duration_since(UNIX_EPOCH)
             .map(|elapsed| elapsed.as_nanos())
             .unwrap_or(0);
-        let content = format!("{EVENT_ANCHOR} {occurred_at_nanos}");
-        let id = stable_id(&format!(
-            "{EVENT_ID_SALT}{occurred_at_nanos}:{}:{}",
-            out.insights.tokens_in, out.insights.tokens_out
-        ));
+        // The per-process sequence keeps ids unique even when two compiles
+        // land on the same (possibly coarse) clock tick.
+        let seq = EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
+        let content = format!("{EVENT_ANCHOR} {occurred_at_nanos}-{seq}");
+        let id = stable_id(&format!("{EVENT_ID_SALT}{occurred_at_nanos}:{seq}"));
         let embedding = self.embedder.embed(&content)?;
         let meta = event_meta(request, out, occurred_at_nanos);
-        self.store_fact(id, &content, &embedding, Some(&meta), ttl_seconds)?;
+        self.store_fact(
+            id,
+            &content,
+            &embedding,
+            Some(&meta),
+            positive_ttl(ttl_seconds),
+        )?;
         Ok(())
     }
 
@@ -198,20 +259,25 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// # Errors
     /// Returns [`MemoryError`] if the underlying filtered recall fails.
     pub fn context_savings(&self, project: Option<&str>) -> Result<ContextSavings, MemoryError> {
-        let mut filters = vec![ColumnFilter {
-            field: EVENT_FLAG.to_owned(),
-            op: ColumnOp::Eq,
-            value: Value::Bool(true),
-        }];
+        // Filter at the STORAGE layer on the reserved event marker: callers
+        // can neither set nor query `_veles_*` keys, so only genuine bridge
+        // events can ever match — a caller fact posing as an event counts
+        // for nothing.
+        let mut filter = Map::new();
+        filter.insert(CTX_EVENT_FIELD.to_owned(), Value::Bool(true));
         if let Some(project) = project {
-            filters.push(ColumnFilter {
-                field: "project".to_owned(),
-                op: ColumnOp::Eq,
-                value: Value::String(project.to_owned()),
-            });
+            filter.insert(
+                CTX_PROJECT_FIELD.to_owned(),
+                Value::String(project.to_owned()),
+            );
         }
-        let hits = self.recall_where(EVENT_ANCHOR, crate::limits::MAX_RECALL_LIMIT, &filters)?;
-        Ok(aggregate_events(&hits))
+        let embedding = self.embedder.embed(EVENT_ANCHOR)?;
+        let hits =
+            self.store
+                .query_filtered(&embedding, crate::limits::MAX_RECALL_LIMIT, &filter, 0)?;
+        let ids: Vec<u64> = hits.iter().map(|(id, _, _)| *id).collect();
+        let payloads = self.store.get_metadata_batch(&ids)?;
+        Ok(aggregate_events(&payloads))
     }
 
     /// Persist `working` under `project` + `session` (idempotent upsert:
@@ -233,9 +299,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             .embedder
             .embed(&format!("working context {project} {session}"))?;
         let meta = system_meta(&[
-            ("ctx_working", Value::Bool(true)),
-            ("project", Value::String(project.to_owned())),
-            ("session", Value::String(session.to_owned())),
+            (CTX_WORKING_FIELD, Value::Bool(true)),
+            (CTX_PROJECT_FIELD, Value::String(project.to_owned())),
+            (CTX_SESSION_FIELD, Value::String(session.to_owned())),
         ]);
         self.store_fact(id, &content, &embedding, Some(&meta), None)?;
         Ok(id)
@@ -321,65 +387,75 @@ fn system_meta(extra: &[(&str, Value)]) -> Metadata {
     meta
 }
 
-/// The metadata of one compilation event — counts and identifiers only.
+/// The metadata of one compilation event — counts and identifiers only,
+/// every key reserved.
 fn event_meta(request: &CompileRequest, out: &CompiledContext, nanos: u128) -> Metadata {
     let mut extra: Vec<(&str, Value)> = vec![
-        (EVENT_FLAG, Value::Bool(true)),
-        ("tokens_in", Value::Number(out.insights.tokens_in.into())),
-        ("tokens_out", Value::Number(out.insights.tokens_out.into())),
+        (CTX_EVENT_FIELD, Value::Bool(true)),
         (
-            "tokens_saved",
+            CTX_TOKENS_IN_FIELD,
+            Value::Number(out.insights.tokens_in.into()),
+        ),
+        (
+            CTX_TOKENS_OUT_FIELD,
+            Value::Number(out.insights.tokens_out.into()),
+        ),
+        (
+            CTX_TOKENS_SAVED_FIELD,
             Value::Number(out.insights.tokens_saved.into()),
         ),
         (
-            "occurred_at",
+            CTX_AT_FIELD,
             Value::Number(Number::from(
                 u64::try_from(nanos / 1_000_000_000).unwrap_or(u64::MAX),
             )),
         ),
     ];
     if let Some(project) = &request.project {
-        extra.push(("project", Value::String(project.clone())));
+        extra.push((CTX_PROJECT_FIELD, Value::String(project.clone())));
     }
     if let Some(model) = &request.target_model {
-        extra.push(("model", Value::String(model.clone())));
+        extra.push((CTX_MODEL_FIELD, Value::String(model.clone())));
     }
     if let (Some(micros), Some(currency)) = (
         out.insights.estimated_cost_saved_micros,
         out.insights.currency.as_ref(),
     ) {
-        extra.push(("cost_saved_micros", Value::Number(micros.into())));
-        extra.push(("currency", Value::String(currency.clone())));
+        extra.push((CTX_COST_FIELD, Value::Number(micros.into())));
+        extra.push((CTX_CURRENCY_FIELD, Value::String(currency.clone())));
     }
     system_meta(&extra)
 }
 
-/// Fold recalled event metadata into one [`ContextSavings`].
-fn aggregate_events(hits: &[crate::model::Recollection]) -> ContextSavings {
+/// Fold raw event payloads (reserved keys included) into one
+/// [`ContextSavings`]. Every accumulation saturates — an aggregate must
+/// never panic, whatever the stored numbers.
+fn aggregate_events(payloads: &[Option<Metadata>]) -> ContextSavings {
     let mut savings = ContextSavings {
-        events: hits.len() as u64,
-        truncated: hits.len() >= crate::limits::MAX_RECALL_LIMIT,
+        events: payloads.len() as u64,
+        truncated: payloads.len() >= crate::limits::MAX_RECALL_LIMIT,
         ..ContextSavings::default()
     };
-    for hit in hits {
-        let Some(meta) = &hit.metadata else { continue };
+    for payload in payloads {
+        let Some(meta) = payload else { continue };
         savings.tokens_in = savings
             .tokens_in
-            .saturating_add(meta_u64(meta, "tokens_in"));
+            .saturating_add(meta_u64(meta, CTX_TOKENS_IN_FIELD));
         savings.tokens_out = savings
             .tokens_out
-            .saturating_add(meta_u64(meta, "tokens_out"));
+            .saturating_add(meta_u64(meta, CTX_TOKENS_OUT_FIELD));
         savings.tokens_saved = savings
             .tokens_saved
-            .saturating_add(meta_u64(meta, "tokens_saved"));
+            .saturating_add(meta_u64(meta, CTX_TOKENS_SAVED_FIELD));
         if let (Some(Value::String(currency)), micros) =
-            (meta.get("currency"), meta_u64(meta, "cost_saved_micros"))
+            (meta.get(CTX_CURRENCY_FIELD), meta_u64(meta, CTX_COST_FIELD))
         {
             if micros > 0 {
-                *savings
+                let entry = savings
                     .cost_saved_micros_by_currency
                     .entry(currency.clone())
-                    .or_insert(0) += micros;
+                    .or_insert(0);
+                *entry = entry.saturating_add(micros);
             }
         }
     }

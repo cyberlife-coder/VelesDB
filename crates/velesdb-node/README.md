@@ -93,10 +93,11 @@ out.decisions          // one auditable decision per fragment (rule_id, reason, 
 out.insights           // { tokens_in, tokens_out, tokens_saved, ... } — local estimates
 ```
 
-The request/result JSON matches the MCP `compile_context` tool exactly, with
-the binding's one difference: id fields (`fragment_id`, `content_hash`,
+The request/result JSON matches the MCP `compile_context` tool, with two
+binding-wide differences: id fields (`fragment_id`, `content_hash`,
 `memory_id`, `fragment_ids`, input `fragments[].id`) cross as decimal
-strings. `tokens_saved` is a local estimate, not billed tokens. The bundled
+strings, and the *top-level* result keys follow the binding's camelCase
+(`out.retrievalHandles` — nested trees keep the wire's snake_case). `tokens_saved` is a local estimate, not billed tokens. The bundled
 [`velesdb-context-optimizer` skill](./skills/velesdb-context-optimizer/SKILL.md)
 teaches an agent the full workflow, including when *not* to compress.
 

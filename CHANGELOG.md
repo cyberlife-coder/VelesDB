@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — deterministic context compiler (EPIC-P-070; released as `velesdb-memory` 0.8.0 / `velesdb-node` 0.8.0, 2026-07-16)
+### Added — deterministic context compiler (EPIC-P-070; ships as `velesdb-memory` 0.8.0 / `velesdb-node` 0.8.0 via the `velesdb-memory-v0.8.0` tag)
 
 - **`velesdb-memory`**: new default `context` feature — a deterministic
   context compiler (no LLM, no network, no clock; same request ⇒
@@ -29,9 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Node** (`@wiscale/velesdb-memory-node`): `compileContext(request)` —
   pure conversion, ids as decimal strings; ships the
   `velesdb-context-optimizer` agent skill in the npm package.
-- **Benchmark**: `examples/context_savings`, reproducible (75–86 % estimated
-  token savings on the committed corpus at ~1 ms; figures are local
-  estimates, not billed tokens).
+- **Benchmark**: `examples/context_savings`, reproducible (75–82 % estimated
+  token savings on the committed corpus in ~2 ms; figures are local
+  estimates, not billed tokens — cross-checked against a real cl100k
+  tokenizer by the committed `real_measures/` scripts).
 - Internal, non-breaking: `fusion::fuse` re-expressed over `fuse_scored`
   (identical candidates/order/numbers, iso-behavior pinned by test);
   intra-doc links fixed so `RUSTDOCFLAGS="-D warnings" cargo doc` passes.

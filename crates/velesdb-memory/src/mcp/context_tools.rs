@@ -97,7 +97,7 @@ impl McpServer {
 
     #[tool(
         name = "explain_compilation",
-        description = "Explain why one fragment of a compile_context request was preserved, abstracted, externalized, dropped, or cached. Compilation is deterministic, so the request is re-compiled and the fragment's exact decision (rule id, reason, relevance, risk, handle) is returned — no server-side state needed."
+        description = "Explain why one fragment of a compile_context request was preserved, abstracted, externalized, dropped, or cached. Compilation is deterministic, so the request is re-compiled (with event/source recording off) and the fragment's exact decision (rule id, reason, relevance, risk, handle) is returned — no server-side state needed. Caveat: with a memory_scope the re-compile recalls from CURRENT memory, so decisions about pulled memories reflect the memory as it is now, not as it was."
     )]
     async fn explain_compilation(
         &self,

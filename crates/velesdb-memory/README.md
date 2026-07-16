@@ -17,9 +17,10 @@ traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation
 meet** those data-residency and explainability expectations rather than claiming
 certified compliance.
 
-> **Release 0.8.0 — 2026-07-16** (deterministic context compiler: `compile_context`,
-> `context_savings`, `explain_compilation`, `retrieve_context_source`).
-> `velesdb-memory` **0.8.0** ships on
+> **Release 0.8.0** — deterministic context compiler (`compile_context`,
+> `context_savings`, `explain_compilation`, `retrieve_context_source`);
+> published to the registries by the `velesdb-memory-v0.8.0` tag, so the
+> links below may briefly lag right after merge. `velesdb-memory` ships on
 > [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
@@ -390,7 +391,7 @@ adds `budget.externalize` and dedup adds `drop.duplicate` /
 BPE (cl100k) to deliberately over-count every measured content class
 (+13 %…+55 %) — not the provider's count, not billed tokens, not cache reads.
 The reproducible benchmark ([`examples/context_savings`](examples/context_savings))
-measures 75–86 % estimated savings on its committed corpus at ~1 ms compile
+measures 75–82 % estimated savings on its committed corpus in ~2 ms compile
 latency. The [`velesdb-context-optimizer`](../../skills/velesdb-context-optimizer/SKILL.md)
 skill teaches an agent the full workflow — including when *not* to compress.
 

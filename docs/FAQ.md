@@ -190,7 +190,7 @@ Compile the context before sending it: the `compile_context` MCP tool (also
 `compileContext` in Node, `ContextCompiler` in Rust) deduplicates fragments,
 collapses repeated log lines, and packs what matters under your token budget
 — locally, deterministically, with an auditable decision per fragment. On the
-committed benchmark corpus this measures 75–86 % estimated savings at ~1 ms
+committed benchmark corpus this measures 75–82 % estimated savings in ~2 ms
 (`cargo run -p velesdb-memory --example context_savings --no-default-features
 --features context`).
 

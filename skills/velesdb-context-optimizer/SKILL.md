@@ -41,7 +41,8 @@ silent loss. Same input, same output, byte for byte.
    reductions happened (abstractions, externalized non-critical content) —
    usually fine. `high`: **critical content did not fit** — fall back: raise
    the budget, drop whole fragments yourself, or send uncompressed.
-7. **Use `content` as the prompt context.** Keep `retrieval_handles` at hand:
+7. **Use `content` as the prompt context.** Keep `retrieval_handles`
+   (`retrievalHandles` in the Node binding) at hand:
    if the model asks for something externalized, fetch it back with
    `retrieve_context_source` and re-inject only that.
 8. **Audit when asked.** Any "why was X dropped/shortened?" is answered by

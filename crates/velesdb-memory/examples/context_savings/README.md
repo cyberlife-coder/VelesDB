@@ -24,11 +24,14 @@ of two compilations per budget):
      800 |      2244 |       545 |  75.7% |         13/1/7/0        |     ~1.9ms
 ```
 
-Cross-checked with a **real cl100k tokenizer** through the Node binding: the
-raw corpus is 1461 real tokens, the compiled output at budget 800 is 360 real
-tokens (**75.4 % real savings**, matching the estimated ratio), and the
-output fits the budget in real tokens at every setting. At the DoS caps
-(1024 × 1 KB fragments) a compile takes ~22 ms; a 10 MB corpus ~160 ms.
+Cross-checked with a **real cl100k tokenizer** through the Node binding
+(committed harness: [`real_measures/`](./real_measures/)): the raw corpus is
+1461 real tokens, the compiled output at budget 800 is 360 real tokens
+(**75.4 % real savings**, matching the estimated ratio), and the output fits
+the budget in real tokens at every setting. The stress harness (same
+directory, release addon) measures ~22 ms at the DoS caps (1024 × 1 KB
+fragments) and ~160 ms on a 10 MB corpus; the MCP `compile_context` stdio
+round-trip measures p50 ≈ 0.6 ms on the release binary.
 
 On this corpus the savings come from 7 duplicate drops (repeated pipeline
 facts across turns) and the log collapse (120 lines → 3 annotated lines);
@@ -43,9 +46,9 @@ instead of silently vanishing.
   **over-count every measured content class** (+13 % JSON, +16 % Markdown,
   +19 % Rust code, +20 % URLs, +29 % digit-dense ids, +38 % French prose,
   +52 % logs, +55 % English prose, +14 % CJK). Measured end-to-end with a
-  real cl100k tokenizer on this corpus: the compiled output always fits the
-  budget in *real* tokens, and the real savings ratio matches the printed
-  one (75–86 %).
+  real cl100k tokenizer on this corpus (see `real_measures/`): the compiled
+  output always fits the budget in *real* tokens, and the real savings ratio
+  matches the printed one.
 - **Billed savings**: what your provider actually charges — measure with the
   provider's token counts and inject your `PricingTable`
   (`ContextCompiler::with_pricing`).

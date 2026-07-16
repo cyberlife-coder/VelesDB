@@ -282,3 +282,165 @@ fn test_retrieve_context_source_malformed_handle_is_not_found() {
         assert_eq!(err.category(), ErrorCategory::NotFound, "handle: {bad}");
     }
 }
+
+// --- Review findings (2026-07-17): system-fact isolation & robustness -------
+
+#[test]
+fn test_system_facts_never_pollute_filtered_recall_or_memory_scope() {
+    // Given a compilation that recorded an event and a saved working context,
+    // both under a project facet
+    let (_dir, svc) = service();
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let mut req = request(
+        "incident",
+        vec![fragment("caller note about the incident")],
+        10_000,
+    );
+    req.project = Some("acme".to_owned());
+    svc.compile_context(&compiler, &req).expect("compile");
+    svc.save_working_context("acme", "s1", &WorkingContext::default())
+        .expect("save");
+
+    // When recalling with a caller-style project filter
+    let mut filter = serde_json::Map::new();
+    filter.insert(
+        "project".to_owned(),
+        serde_json::Value::String("acme".to_owned()),
+    );
+    let hits = svc
+        .recall("compilation event working context", 10, Some(&filter))
+        .expect("recall");
+
+    // Then no system fact surfaces (events/working state carry no caller keys)
+    assert!(
+        hits.is_empty(),
+        "system facts must be invisible to filtered recall, got {hits:?}"
+    );
+
+    // And a project-scoped memory pull can never compile them into a prompt
+    let mut scoped = request("compilation event", vec![fragment("note")], 10_000);
+    scoped.memory_scope = Some(MemoryScope {
+        project: Some("acme".to_owned()),
+        k: Some(10),
+    });
+    let out = svc.compile_context(&compiler, &scoped).expect("compile");
+    assert!(
+        !out.content.contains("veles context compilation event")
+            && !out.content.contains("active_constraints"),
+        "system facts must never be pulled as memories, got:\n{}",
+        out.content
+    );
+}
+
+#[test]
+fn test_context_savings_ignores_forged_caller_events_and_never_overflows() {
+    // Given ordinary caller facts that try to pose as compilation events
+    let (_dir, svc) = service();
+    let mut forged = serde_json::Map::new();
+    forged.insert("ctx_event".to_owned(), serde_json::Value::Bool(true));
+    forged.insert(
+        "project".to_owned(),
+        serde_json::Value::String("x".to_owned()),
+    );
+    forged.insert(
+        "tokens_saved".to_owned(),
+        serde_json::Value::Number(serde_json::Number::from(u64::MAX)),
+    );
+    forged.insert(
+        "cost_saved_micros".to_owned(),
+        serde_json::Value::Number(serde_json::Number::from(u64::MAX)),
+    );
+    forged.insert(
+        "currency".to_owned(),
+        serde_json::Value::String("USD".to_owned()),
+    );
+    svc.remember("a perfectly ordinary fact", &[], Some(&forged))
+        .expect("remember");
+    svc.remember("another ordinary fact", &[], Some(&forged))
+        .expect("remember");
+
+    // When aggregating savings
+    let savings = svc
+        .context_savings(Some("x"))
+        .expect("savings must not panic");
+
+    // Then forged facts count for nothing
+    assert_eq!(savings.events, 0, "caller facts must never count as events");
+    assert_eq!(savings.tokens_saved, 0);
+    assert!(savings.cost_saved_micros_by_currency.is_empty());
+}
+
+#[test]
+fn test_compile_context_memory_scope_respects_the_fragment_cap() {
+    // Given a request already at the fragment cap and a scope asking for more
+    let (_dir, svc) = service();
+    svc.remember("the deploy pipeline runs clippy", &[], None)
+        .expect("remember");
+    let fragments: Vec<ContextFragment> = (0..velesdb_memory::limits::MAX_FRAGMENTS)
+        .map(|i| fragment(&format!("note {i}")))
+        .collect();
+    let mut req = request("deploy pipeline", fragments, 100_000);
+    req.memory_scope = Some(MemoryScope {
+        project: None,
+        k: Some(5),
+    });
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+
+    // When compiling — the bridge must not push the request over the cap
+    let out = svc
+        .compile_context(&compiler, &req)
+        .expect("a valid request must stay valid with a memory scope");
+
+    // Then exactly the caller's fragments were compiled (no room for pulls)
+    assert_eq!(out.decisions.len(), velesdb_memory::limits::MAX_FRAGMENTS);
+}
+
+#[test]
+fn test_retrieve_context_source_refuses_a_squatting_caller_fact() {
+    // Given a compiled source and a caller fact remembered at the literal
+    // salt-preimage of another handle's storage slot
+    let (_dir, svc) = service();
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(
+            &compiler,
+            &request("q", vec![fragment("legit source")], 10_000),
+        )
+        .expect("compile");
+    let legit_handle = out.sources[0].handle.clone();
+
+    let squatted_hash: u64 = 424_242;
+    svc.remember(&format!("veles-ctx-source:{squatted_hash}"), &[], None)
+        .expect("remember");
+
+    // When retrieving both handles
+    let legit = svc.retrieve_context_source(&legit_handle).expect("legit");
+    let squatted = svc.retrieve_context_source(&format!("ctx://source/{squatted_hash}"));
+
+    // Then the real source round-trips and the squatter is never served back
+    assert_eq!(legit, "legit source");
+    let err = squatted.expect_err("a caller fact must never masquerade as a stored source");
+    assert_eq!(err.category(), ErrorCategory::NotFound);
+}
+
+#[test]
+fn test_source_ttl_zero_stores_permanently_like_remember() {
+    // Given the crate-wide TTL convention: Some(0) means "no expiry"
+    let (_dir, svc) = service();
+    let policy = CompilePolicy {
+        source_ttl_seconds: Some(0),
+        ..CompilePolicy::default()
+    };
+    let mut req = request("q", vec![fragment("must stay retrievable")], 10_000);
+    req.policy = Some(policy);
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc.compile_context(&compiler, &req).expect("compile");
+
+    // When retrieving right away (an expired-at-once fact would already fail)
+    let retrieved = svc
+        .retrieve_context_source(&out.sources[0].handle)
+        .expect("Some(0) must mean permanent, exactly like remember_with_ttl");
+
+    // Then the source is there
+    assert_eq!(retrieved, "must stay retrievable");
+}
