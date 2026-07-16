@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+R1 `Collection`-internals train: resolves and **closes the god-object EPIC
+([#1384](https://github.com/cyberlife-coder/VelesDB/issues/1384))**. The
+internals are organized to the maximum structurally sound point; full per-kind
+exclusive decomposition was investigated and documented as structurally
+infeasible (see the F2.2 entry in `docs/ARCHITECTURE.md` for the complete
+account).
+
+> **Note for the next release**: this train contains a **breaking Rust core
+> API change** (the `into_vector_facade` removal below). Per the declared
+> SemVer policy, tag the next release accordingly — a major bump, or an
+> explicitly documented exception in these release notes.
+
+### Removed — BREAKING (Rust core API)
+
+- **`AnyCollection::into_vector_facade` is removed** (R1.4). The facade —
+  introduced in 3.11.0 as the safe replacement for `into_vector_unchecked` —
+  coerced *any* variant into a `VectorCollection`, so the kind a caller
+  captured could diverge from the collection's real kind. *Migration*: use the
+  variant-checked `AnyCollection::into_vector()` (returns `Err(self)` on the
+  wrong variant so ownership is recovered); bindings that deliberately need
+  the **structural view** of a graph/metadata store behind the
+  `VectorCollection` newtype (single user-facing `Collection` type, vector-only
+  ops gated by a separately tracked kind) use
+  `GraphCollection::into_vector_view()` /
+  `MetadataCollection::into_vector_view()` instead.
+
+### Changed
+
+- **`Collection` internals regrouped into six named concern sub-structs**
+  (R1.1 — internal-only, `pub(crate)`, non-breaking): `StorageState`,
+  `GraphStore`, `QueryState`, `GenerationCounters`, `StreamingState`,
+  `RuntimeGuards`, with the lock ordering preserved verbatim.
+- **`order_by_advisor` reclassified out of the graph cluster into
+  `QueryState`** (R1.2a — internal-only): it is a generic `ORDER BY` scan
+  concern reached on any collection kind, not graph state.
+- **Graph cluster held as a shared `Arc<GraphStore>` handle** (R1.2b —
+  internal-only): graph state can be shared with `GraphCollection` without an
+  exclusive move; field access and locking are unchanged.
+
 ## [3.12.0] — 2026-07-15
 
 Pre-release hardening ("Vague D"): closes the remaining audit follow-ups
@@ -137,7 +176,10 @@ rushed on a released core.
   still enforced by the captured `CollectionKind` + `Collection::ensure_vector`.
   Removes the workspace's last logically-unsound `unsafe`. *Migration:* if you
   called `into_vector_unchecked` directly, rename to `into_vector_facade` and
-  drop the `unsafe` block (no behavior change). (Audit P0.)
+  drop the `unsafe` block (no behavior change). (Audit P0.) *(Note:
+  `into_vector_facade` was itself removed after 3.12.0 — see the Unreleased
+  section above; use the variant-checked `into_vector()` or, for the
+  structural view, `into_vector_view()`.)*
 - **Uniform `AnyCollection` dispatch** via a single private `inner()` accessor —
   the shared, identical-across-kinds methods no longer mix `c.method()` /
   `c.inner.method()` forwarding. No behavior change. (Audit P2.6.)
