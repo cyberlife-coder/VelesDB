@@ -7,6 +7,8 @@
 
 Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) — a high-performance vector database for AI applications. `numpy>=1.20` ships as a hard runtime dependency since v1.13.8, so a single `pip install velesdb` is sufficient.
 
+> The Python engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It fuses vector + graph + columnar under VelesQL; the [`why()`](#agent-memory-the-why-wedge) wedge below returns the evidence path behind every recall.
+
 ## Agent memory: the `why()` wedge
 
 Beyond raw vector search, VelesDB ships a high-level **`MemoryService`** — local-first agent memory whose differentiator is **`why()`**: it answers a question with the best-matching memory *plus the connected subgraph* reachable through typed links — context that shares **no words** with the question, which a plain vector recall is blind to. The store is on disk, so it works across process restarts.

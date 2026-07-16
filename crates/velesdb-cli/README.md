@@ -6,6 +6,8 @@
 
 Interactive VelesQL REPL and CLI for VelesDB.
 
+> The command line for **VelesDB — the explainable, local-first memory engine for AI agents.** It fuses vector + graph + columnar under VelesQL; the [`why()`](../velesdb-memory/README.md) recall trail returns the evidence path behind every answer.
+
 ## Table of Contents
 
 - [Installation](#installation)

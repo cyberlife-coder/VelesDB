@@ -2,6 +2,8 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
+> The TypeScript engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It ships the `MemoryService` memory wedge (`remember`/`recall`/`relate`/`forget`/[`why()`](../../crates/velesdb-memory/README.md)) in the browser or Node.js — `why()` returns the evidence path behind every recall.
+
 **v3.12.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
 
 ## What's New in v3.6.0

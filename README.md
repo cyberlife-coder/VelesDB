@@ -5,13 +5,16 @@
   <img src="velesdb_icon_pack/favicon/favicon-32x32.png" alt="" width="32" height="32" style="vertical-align: middle;"/> VelesDB
 </h1>
 <h3 align="center">
-  Your AI agents forget everything. VelesDB fixes that.
+  The explainable, local-first memory engine for AI agents.
 </h3>
 <p align="center">
-  <strong>One ~9 MB binary. Three engines. One query language. Zero cloud dependency.</strong><br/>
-  <em>Vector + Graph + ColumnStore — unified under <a href="docs/VELESQL_SPEC.md">VelesQL</a></em><br/><br/>
-  The <strong>explainable</strong> agent memory: <code>why()</code> returns the evidence path behind every recall —<br/>
+  <strong>One ~9 MB binary fuses vector + graph + columnar under <a href="docs/VELESQL_SPEC.md">VelesQL</a>. Zero cloud.</strong><br/>
+  <code>why()</code> returns the evidence path behind every recall.<br/><br/>
+  <em>Your AI agents forget everything — VelesDB fixes that, and shows its work:</em><br/>
   <a href="crates/velesdb-memory/BENCHMARK.md"><strong>measured on public benchmarks</strong></a>, not vibes.
+</p>
+<p align="center">
+  <sub><em>The name nods to <strong>Veles</strong>, a deity of old Slavic myth — a keeper of hidden knowledge and boundaries.</em></sub>
 </p>
 <p align="center">
   <a href="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml"><img src="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -532,7 +535,8 @@ We ship weekly. This is the arc; the committed, dated plan lives in [ROADMAP.md]
 | **v3.4 → v3.7** | The `why()` wedge **everywhere** — Node binding (`velesdb-memory-node`), Python `MemoryService`, MCP `recall_fused`, browser / WASM + TypeScript-SDK `MemoryService`, durable TTL, dated-context recall, indexed prefilter for filtered recall | ✅ Shipped |
 | **v3.8** | u64 point-id precision-safety completed across the REST surface + OpenAPI spec | ✅ Shipped |
 | **v3.9.0 → v3.9.1** | v3.9.0: `DatabaseObserver` read-path control-plane hook (`QueryAccessContext`) — the seam premium uses to enforce access, narrow-only. v3.9.1: `velesdb-memory` 0.7.0 RL Memory (MCP `feedback` tool + learned-confidence recall re-ranking); zero-friction Docker onboarding; release-pipeline harmonisation gate | ✅ Shipped |
-| **v3.9.1 → v3.10.0** *(current: `v3.10.0`)* | Read-path gate now covers **every** HTTP search route (dense/text/hybrid/sparse/batch/multi-query/ids/graph-embedding/`MATCH`), not just VelesQL `SELECT`/`MATCH`; Python SDK observer gained a read-path veto (`on_query_request` on direct `.search()` and variants). No breaking API changes — but any embedder relying on the observer being inert on REST reads (previously true) must account for it now actually enforcing. | ✅ Shipped |
+| **v3.9.1 → v3.10.0** | Read-path gate now covers **every** HTTP search route (dense/text/hybrid/sparse/batch/multi-query/ids/graph-embedding/`MATCH`), not just VelesQL `SELECT`/`MATCH`; Python SDK observer gained a read-path veto (`on_query_request` on direct `.search()` and variants). No breaking API changes — but any embedder relying on the observer being inert on REST reads (previously true) must account for it now actually enforcing. | ✅ Shipped |
+| **v3.11 → v3.12** *(current: `v3.12.0`)* | Chief-engineer audit resolution (soundness, quality-gate coverage across all crates, opt-in fail-closed observer mode); pre-release hardening — WAL replay recovers writes stranded behind a corrupt frame, Python governance read-gate parity, and HNSW stores each vector once (~⅓ less resident memory on large indices). No breaking API changes. | ✅ Shipped |
 | **Next** | Concurrent WAL writer; WASM SIMD128 kernels + 3+ hop `MATCH`; Dual-Precision (VSAG) engine integration; side-by-side Docker-Compose ANN benchmark vs Qdrant / Chroma / FAISS | 🔜 Tracked |
 
 > VelesDB Core is source-available (readable, modifiable, redistributable under the VelesDB Core License 1.0 — not an OSI-approved license; see [docs/LICENSING.md](docs/LICENSING.md)). Enterprise features (distributed replication, managed cloud, RBAC) are available separately via [VelesDB Premium](https://velesdb.com).
@@ -710,6 +714,6 @@ VelesDB Core License 1.0 (based on ELv2). Free for production use, including com
 ---
 
 <p align="center">
-  <strong>VelesDB</strong> &mdash; The Local Knowledge Engine for AI Agents<br/>
+  <strong>VelesDB</strong> &mdash; The explainable, local-first memory engine for AI agents<br/>
   <a href="https://velesdb.com">velesdb.com</a> &bull; <a href="https://github.com/cyberlife-coder/VelesDB">GitHub</a>
 </p>
