@@ -96,6 +96,18 @@ pub enum MemoryError {
     #[error("context request over limit: {0}")]
     ContextOverLimit(String),
 
+    /// A `ctx://source/<hash>` handle was malformed or nothing is stored
+    /// under it (the source was never stored, expired, or was forgotten).
+    #[cfg(feature = "context")]
+    #[error("unknown context source handle: {0}")]
+    UnknownHandle(String),
+
+    /// A persisted working context could not be (de)serialized — the stored
+    /// payload predates or postdates this crate's schema.
+    #[cfg(feature = "context")]
+    #[error("working context codec error: {0}")]
+    WorkingContextCodec(String),
+
     /// A `remember` link failed after the fact was stored AND the
     /// compensating rollback delete also failed — unlike every other error
     /// from `remember`, the fact **remains stored**. Both errors are
@@ -130,6 +142,10 @@ impl MemoryError {
             | Self::InvalidRelation(_) => ErrorCategory::InvalidInput,
             #[cfg(feature = "context")]
             Self::ContextBudget { .. } | Self::ContextOverLimit(_) => ErrorCategory::InvalidInput,
+            #[cfg(feature = "context")]
+            Self::UnknownHandle(_) => ErrorCategory::NotFound,
+            #[cfg(feature = "context")]
+            Self::WorkingContextCodec(_) => ErrorCategory::Internal,
             Self::UnknownMemory(_) => ErrorCategory::NotFound,
             #[cfg(feature = "persistence")]
             Self::Memory(_) => ErrorCategory::Internal,

@@ -22,3 +22,21 @@ fn test_source_for_carries_id_and_content_addressed_handle() {
     );
     assert!(source.memory_id.is_none());
 }
+
+#[test]
+fn test_parse_handle_round_trips_handle_for() {
+    assert_eq!(parse_handle(&handle_for(42)), Some(42));
+}
+
+#[test]
+fn test_parse_handle_rejects_malformed_input() {
+    for bad in [
+        "",
+        "not-a-handle",
+        "ctx://source/",
+        "ctx://source/xyz",
+        "ctx://other/1",
+    ] {
+        assert_eq!(parse_handle(bad), None, "input: {bad}");
+    }
+}

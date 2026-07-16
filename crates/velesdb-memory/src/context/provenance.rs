@@ -20,6 +20,13 @@ pub(crate) fn handle_for(content_hash: u64) -> String {
     format!("{HANDLE_PREFIX}{content_hash}")
 }
 
+/// The content hash behind a `ctx://source/<hash>` handle, or `None` when
+/// the handle does not follow the scheme.
+#[must_use]
+pub(crate) fn parse_handle(handle: &str) -> Option<u64> {
+    handle.strip_prefix(HANDLE_PREFIX)?.parse().ok()
+}
+
 /// The source pointer recorded for one distinct fragment.
 #[must_use]
 pub(crate) fn source_for(fragment_id: u64, content_hash: u64) -> SourceReference {

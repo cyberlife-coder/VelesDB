@@ -107,6 +107,20 @@ pub struct CompilePolicy {
     pub disabled_rules: Vec<String>,
     /// How oversized fragments are split before packing.
     pub chunk: ChunkPolicy,
+    /// Memory bridge only: record a compilation event (metadata and hashes,
+    /// **never fragment content**) so savings stay aggregatable. Default
+    /// `true`; set `false` to opt out entirely.
+    pub record_events: bool,
+    /// Memory bridge only: store each distinct fragment's original (as an
+    /// internal system fact, invisible to normal recall) so its
+    /// `ctx://source/<hash>` handle round-trips. Default `true`.
+    pub store_sources: bool,
+    /// TTL applied to stored sources (`None` keeps them until forgotten).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_ttl_seconds: Option<u64>,
+    /// TTL applied to compilation events (`None` keeps them).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_ttl_seconds: Option<u64>,
 }
 
 impl Default for CompilePolicy {
@@ -116,8 +130,33 @@ impl Default for CompilePolicy {
             near_dup_dedup: true,
             disabled_rules: Vec::new(),
             chunk: ChunkPolicy::default(),
+            record_events: true,
+            store_sources: true,
+            source_ttl_seconds: None,
+            event_ttl_seconds: None,
         }
     }
+}
+
+/// Aggregated savings over the recorded compilation events (memory bridge).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub struct ContextSavings {
+    /// Number of compilation events aggregated.
+    pub events: u64,
+    /// Sum of estimated input tokens across events.
+    pub tokens_in: u64,
+    /// Sum of estimated output tokens across events.
+    pub tokens_out: u64,
+    /// Sum of estimated tokens saved across events.
+    pub tokens_saved: u64,
+    /// Estimated cost avoided, in micro-units, keyed by currency (events
+    /// priced under different pricing tables never silently mix).
+    pub cost_saved_micros_by_currency: std::collections::BTreeMap<String, u64>,
+    /// `true` when the aggregation hit the recall cap
+    /// ([`crate::limits::MAX_RECALL_LIMIT`]) — older events beyond the cap
+    /// were not folded in.
+    pub truncated: bool,
 }
 
 /// A full compile request: what to compile, under which budget, for whom.

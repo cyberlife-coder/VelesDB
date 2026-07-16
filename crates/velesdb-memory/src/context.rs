@@ -36,7 +36,7 @@ mod dedup;
 pub mod estimator;
 pub mod insights;
 pub mod model;
-mod provenance;
+pub(crate) mod provenance;
 mod relevance;
 
 pub use chunk::{chunk_text, ChunkBoundary, ChunkPolicy, TextChunk};
@@ -44,9 +44,10 @@ pub use estimator::{DynTokenEstimator, HeuristicEstimator, TokenEstimator};
 pub use insights::{CompilationInsights, ModelPricing, PricingTable};
 pub use model::{
     CompilePolicy, CompileRequest, CompiledContext, CompiledSection, ContextAction,
-    ContextDecision, ContextDecisionRef, ContextFact, ContextFragment, FidelityRisk, MemoryScope,
-    RetrievalHandle, SectionKind, SourceReference, WorkingContext,
+    ContextDecision, ContextDecisionRef, ContextFact, ContextFragment, ContextSavings,
+    FidelityRisk, MemoryScope, RetrievalHandle, SectionKind, SourceReference, WorkingContext,
 };
+pub use relevance::DeterministicReranker;
 
 use std::collections::BTreeMap;
 
@@ -127,6 +128,13 @@ impl ContextCompiler {
         self
     }
 
+    /// The policy this compilation actually runs under: the request's
+    /// override when present, this compiler's otherwise. The memory bridge
+    /// reads it to honor the storage/event opt-outs.
+    pub(crate) fn effective_policy<'a>(&'a self, request: &'a CompileRequest) -> &'a CompilePolicy {
+        request.policy.as_ref().unwrap_or(&self.policy)
+    }
+
     /// Compile `request` into a budgeted, fully-audited context.
     ///
     /// # Errors
@@ -136,7 +144,7 @@ impl ContextCompiler {
     /// [`MemoryError::ContextBudget`] when the token budget minus the
     /// policy's response reserve leaves no room for any context.
     pub fn compile(&self, request: &CompileRequest) -> Result<CompiledContext, MemoryError> {
-        let policy = request.policy.as_ref().unwrap_or(&self.policy);
+        let policy = self.effective_policy(request);
         let usable = validate(request, policy)?;
         let analyses = analyze(request, policy, self.estimator.as_ref());
         let items = pack_items(&analyses, policy, usable, self.estimator.as_ref());
