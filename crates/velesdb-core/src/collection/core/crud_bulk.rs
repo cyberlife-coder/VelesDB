@@ -72,7 +72,7 @@ impl Collection {
 
         // Parity item E + dimension validation at the cold boundary, before any
         // storage lock / WAL write (shared with the single-upsert path).
-        let dimension = self.config.read().dimension;
+        let dimension = self.storage.config.read().dimension;
         self.validate_vector_upsert_batch(points, dimension)?;
 
         let vector_refs: Vec<(u64, &[f32])> =
@@ -83,7 +83,8 @@ impl Collection {
         // bypasses RaBitQPrecisionHnsw::insert — on a RaBitQ backend that
         // would desynchronize the positional encoding store from the node
         // ids. RaBitQ collections always take the standard path.
-        let use_v2 = self.async_index_builder.is_some() && !self.index.is_rabitq_backend();
+        let use_v2 =
+            self.streaming.async_index_builder.is_some() && !self.storage.index.is_rabitq_backend();
         let count = if use_v2 {
             self.upsert_bulk_v2_path(&vector_refs, points, &sparse_batch, fsync)?
         } else {
@@ -111,7 +112,7 @@ impl Collection {
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
         fsync: bool,
     ) -> Result<usize> {
-        let Some(aib) = self.async_index_builder.as_ref() else {
+        let Some(aib) = self.streaming.async_index_builder.as_ref() else {
             return Err(Error::Config(
                 "bulk v2 path requires async index builder".to_string(),
             ));
@@ -119,7 +120,7 @@ impl Collection {
 
         // Collect pre-batch payloads before overwriting — used for histogram decrements.
         let old_payloads = {
-            let storage = self.payload_storage.read();
+            let storage = self.storage.payload_storage.read();
             Self::collect_old_payloads(points, &storage)
         };
 
@@ -129,7 +130,7 @@ impl Collection {
         // Write directly to the graph's ContiguousVectors so vectors are
         // immediately visible to rerank/brute-force while HNSW construction
         // is deferred.
-        let writer = DirectVectorWriter::new(&self.index);
+        let writer = DirectVectorWriter::new(&self.storage.index);
         writer.write_batch_direct(vector_refs)?;
 
         // Enqueue for deferred HNSW construction.
@@ -140,7 +141,7 @@ impl Collection {
 
         if needs_flush {
             // Buffer reached merge_threshold — flush synchronously.
-            aib.flush_sync(&self.index)?;
+            aib.flush_sync(&self.storage.index)?;
         }
 
         let count = vector_refs.len();
@@ -148,7 +149,8 @@ impl Collection {
 
         // Track inserts for periodic HNSW save (Issue #423 Component 3).
         #[allow(clippy::cast_possible_truncation)]
-        self.inserts_since_last_hnsw_save
+        self.generations
+            .inserts_since_last_hnsw_save
             .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
 
         tracing::debug!(
@@ -168,7 +170,7 @@ impl Collection {
     ) -> Result<usize> {
         // Collect pre-batch payloads before overwriting — used for histogram decrements.
         let old_payloads = {
-            let storage = self.payload_storage.read();
+            let storage = self.storage.payload_storage.read();
             Self::collect_old_payloads(points, &storage)
         };
 
@@ -189,7 +191,7 @@ impl Collection {
         old_payloads: &[Option<serde_json::Value>],
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
     ) -> Result<()> {
-        self.config.write().point_count = self.vector_storage.read().len();
+        self.storage.config.write().point_count = self.storage.vector_storage.read().len();
         self.apply_sparse_batch_bulk(sparse_batch)?;
         // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
         // so only the final payload counts, then atomic decrement + increment.
@@ -259,7 +261,7 @@ impl Collection {
     /// `BufWriter` but `flush()` is skipped entirely. The mmap write is
     /// still performed so the data is immediately readable in-process.
     fn bulk_store_vectors_inner(&self, vectors: &[(u64, &[f32])], fsync: bool) -> Result<()> {
-        let mut storage = self.vector_storage.write();
+        let mut storage = self.storage.vector_storage.write();
         storage.store_batch(vectors)?;
         if fsync {
             storage.flush()?;
@@ -281,9 +283,10 @@ impl Collection {
             .collect();
 
         if fsync {
-            self.payload_storage.write().store_batch(&entries)?;
+            self.storage.payload_storage.write().store_batch(&entries)?;
         } else {
-            self.payload_storage
+            self.storage
+                .payload_storage
                 .write()
                 .store_batch_deferred(&entries)?;
         }
@@ -292,7 +295,7 @@ impl Collection {
         // index is empty, skip the text index loop entirely. The bulk path
         // inserts fresh points (no old documents to remove), so the loop
         // body would be a no-op for every point.
-        if !entries.is_empty() || !self.text_index.is_empty() {
+        if !entries.is_empty() || !self.storage.text_index.is_empty() {
             for point in points {
                 self.update_text_index(point)?;
             }
@@ -303,7 +306,7 @@ impl Collection {
         // per_point_updates for the single-upsert path). Without this,
         // MATCH queries with label patterns (e.g., `(d:Doc)`) return
         // empty results for points inserted via upsert_bulk / REST API.
-        Self::update_label_index_bulk(&self.label_index, points);
+        Self::update_label_index_bulk(&self.graph.label_index, points);
 
         Ok(())
     }
@@ -344,7 +347,7 @@ impl Collection {
                     .map(move |(point_id, sv)| (name.as_str(), *point_id, sv))
             }))?;
         }
-        let mut indexes = self.sparse_indexes.write();
+        let mut indexes = self.query.sparse_indexes.write();
         for (name, docs) in sparse_batch {
             let idx = indexes.entry(name.clone()).or_default();
             idx.insert_batch_chunk(docs);

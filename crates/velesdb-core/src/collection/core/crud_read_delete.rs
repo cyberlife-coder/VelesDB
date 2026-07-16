@@ -36,11 +36,11 @@ impl Collection {
     /// after a restart, so `auto_expire` could never reclaim their storage.
     #[must_use]
     pub(crate) fn get_raw(&self, ids: &[u64]) -> Vec<Option<Point>> {
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let is_metadata_only = config.metadata_only;
         drop(config);
 
-        let payload_storage = self.payload_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
 
         if is_metadata_only {
             // For metadata-only collections, only retrieve payload
@@ -57,7 +57,7 @@ impl Collection {
                 .collect()
         } else {
             // For vector collections, retrieve both vector and payload
-            let vector_storage = self.vector_storage.read();
+            let vector_storage = self.storage.vector_storage.read();
             ids.iter()
                 .map(|&id| {
                     let vector = vector_storage.retrieve(id).ok().flatten()?;
@@ -82,7 +82,7 @@ impl Collection {
         // Collect old payloads for incremental histogram maintenance.
         let old_payloads = self.collect_payloads_for_histogram(ids);
 
-        if self.config.read().metadata_only {
+        if self.storage.config.read().metadata_only {
             self.delete_metadata_only(ids)?;
         } else {
             self.delete_vector_points(ids)?;
@@ -122,32 +122,34 @@ impl Collection {
         // Cascade whenever edges exist — the graph dimension is first-class
         // on every collection type (agent-memory relations live on vector
         // collections). Empty stores (the common case) return immediately.
-        if self.edge_store.is_empty() {
+        if self.graph.edge_store.is_empty() {
             return Ok(());
         }
         let mut removed_any = false;
         for &id in ids {
             // Both directions: `remove_node_edges` clears outgoing AND incoming
             // edges so no dangling edge references the deleted node.
-            let before = self.edge_store.outgoing_degree(id) + self.edge_store.incoming_degree(id);
+            let before = self.graph.edge_store.outgoing_degree(id)
+                + self.graph.edge_store.incoming_degree(id);
             if before > 0 {
                 // WAL-before-apply (crash durability): log the cascade remove
                 // before mutating the store so a crash replays the tombstone.
                 // The WAL lock spans append + apply (see `add_edge`).
-                let _wal_guard = self.edge_wal_lock.lock();
+                let _wal_guard = self.graph.edge_wal_lock.lock();
                 #[cfg(feature = "persistence")]
                 crate::collection::graph::edge_wal::wal_append_remove_node(
-                    &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
+                    &crate::collection::graph::edge_wal::wal_path_for_edges(&self.storage.path),
                     id,
                 )?;
-                self.edge_store.remove_node_edges(id);
+                self.graph.edge_store.remove_node_edges(id);
                 removed_any = true;
             }
         }
         if removed_any {
             // Bump write generation so cached query plans referencing the now
             // removed edges are invalidated on the next query (CACHE-01).
-            self.write_generation
+            self.generations
+                .write_generation
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(())
@@ -155,7 +157,7 @@ impl Collection {
 
     /// Collects current payloads for the given IDs (for histogram decrements on delete).
     fn collect_payloads_for_histogram(&self, ids: &[u64]) -> Vec<Option<serde_json::Value>> {
-        let storage = self.payload_storage.read();
+        let storage = self.storage.payload_storage.read();
         ids.iter()
             .map(|&id| storage.retrieve(id).ok().flatten())
             .collect()
@@ -164,8 +166,8 @@ impl Collection {
     /// Deletes metadata-only points.
     fn delete_metadata_only(&self, ids: &[u64]) -> Result<()> {
         // LOCK ORDER: payload_storage(3) → label_index(7).
-        let mut payload_storage = self.payload_storage.write();
-        let mut label_idx = self.label_index.write();
+        let mut payload_storage = self.storage.payload_storage.write();
+        let mut label_idx = self.graph.label_index.write();
         for &id in ids {
             let old_payload = payload_storage.retrieve(id).ok().flatten();
             payload_storage.delete(id)?;
@@ -173,7 +175,7 @@ impl Collection {
             // recovery replays the remove.
             #[cfg(feature = "persistence")]
             self.append_bm25_wal_remove(id)?;
-            self.text_index.remove_document(id);
+            self.storage.text_index.remove_document(id);
             self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             if let Some(ref old) = old_payload {
                 label_idx.remove_from_payload(id, old);
@@ -182,7 +184,7 @@ impl Collection {
         let point_count = payload_storage.ids().len();
         drop(label_idx);
         drop(payload_storage);
-        self.config.write().point_count = point_count;
+        self.storage.config.write().point_count = point_count;
         Ok(())
     }
 
@@ -197,18 +199,18 @@ impl Collection {
     /// Removes points from vector/payload storage, HNSW index, caches, and label index.
     fn delete_vector_core_stores(&self, ids: &[u64]) -> Result<()> {
         // LOCK ORDER: vector_storage(2) → payload_storage(3) → caches(4) → label_index(7).
-        let mut vector_storage = self.vector_storage.write();
-        let mut payload_storage = self.payload_storage.write();
-        let mut sq8_cache = self.sq8_cache.write();
-        let mut binary_cache = self.binary_cache.write();
-        let mut pq_cache = self.pq_cache.write();
-        let mut label_idx = self.label_index.write();
+        let mut vector_storage = self.storage.vector_storage.write();
+        let mut payload_storage = self.storage.payload_storage.write();
+        let mut sq8_cache = self.storage.sq8_cache.write();
+        let mut binary_cache = self.storage.binary_cache.write();
+        let mut pq_cache = self.storage.pq_cache.write();
+        let mut label_idx = self.graph.label_index.write();
 
         for &id in ids {
             let old_payload = payload_storage.retrieve(id).ok().flatten();
             vector_storage.delete(id)?;
             payload_storage.delete(id)?;
-            self.index.remove(id);
+            self.storage.index.remove(id);
             sq8_cache.remove(&id);
             binary_cache.remove(&id);
             pq_cache.remove(&id);
@@ -216,7 +218,7 @@ impl Collection {
             // recovery replays the remove.
             #[cfg(feature = "persistence")]
             self.append_bm25_wal_remove(id)?;
-            self.text_index.remove_document(id);
+            self.storage.text_index.remove_document(id);
             self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
             if let Some(ref old) = old_payload {
                 label_idx.remove_from_payload(id, old);
@@ -230,7 +232,7 @@ impl Collection {
         drop(sq8_cache);
         drop(binary_cache);
         drop(pq_cache);
-        self.config.write().point_count = point_count;
+        self.storage.config.write().point_count = point_count;
         Ok(())
     }
 
@@ -240,12 +242,12 @@ impl Collection {
         // Lock order: delta_buffer(10) acquired after sparse_indexes(9) released.
         #[cfg(feature = "persistence")]
         for &id in ids {
-            self.delta_buffer.remove(id);
+            self.streaming.delta_buffer.remove(id);
         }
 
         // Lock order: deferred_indexer(11) acquired after delta_buffer(10).
         #[cfg(feature = "persistence")]
-        if let Some(ref di) = self.deferred_indexer {
+        if let Some(ref di) = self.streaming.deferred_indexer {
             for &id in ids {
                 di.remove(id);
             }
@@ -256,16 +258,16 @@ impl Collection {
     fn delete_from_sparse_indexes(&self, ids: &[u64]) -> Result<()> {
         #[cfg(feature = "persistence")]
         {
-            let indexes = self.sparse_indexes.read();
+            let indexes = self.query.sparse_indexes.read();
             for name in indexes.keys() {
                 let wal_path =
-                    crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
+                    crate::index::sparse::persistence::wal_path_for_name(&self.storage.path, name);
                 for &id in ids {
                     crate::index::sparse::persistence::wal_append_delete(&wal_path, id)?;
                 }
             }
         }
-        let indexes = self.sparse_indexes.read();
+        let indexes = self.query.sparse_indexes.read();
         for idx in indexes.values() {
             for &id in ids {
                 idx.delete(id);
@@ -284,7 +286,7 @@ impl Collection {
     /// Perf: Uses cached `point_count` from config instead of acquiring storage lock.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.config.read().point_count
+        self.storage.config.read().point_count
     }
 
     /// Returns true if the collection is empty.
@@ -293,7 +295,7 @@ impl Collection {
     /// the storage count rather than the HNSW-indexed count.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.config.read().point_count == 0
+        self.storage.config.read().point_count == 0
     }
 
     /// Returns all point IDs in the collection.
@@ -303,7 +305,7 @@ impl Collection {
     /// of IDs, use [`all_point_ids`](Self::all_point_ids).
     #[must_use]
     pub fn all_ids(&self) -> Vec<u64> {
-        self.payload_storage.read().ids()
+        self.storage.payload_storage.read().ids()
     }
 
     /// Returns all point IDs from both vector and payload storage.
@@ -317,9 +319,14 @@ impl Collection {
     /// so callers (e.g. `scroll_batch`) need not sort separately.
     #[must_use]
     pub fn all_point_ids(&self) -> Vec<u64> {
-        let mut ids: std::collections::BTreeSet<u64> =
-            self.vector_storage.read().ids().into_iter().collect();
-        for id in self.payload_storage.read().ids() {
+        let mut ids: std::collections::BTreeSet<u64> = self
+            .storage
+            .vector_storage
+            .read()
+            .ids()
+            .into_iter()
+            .collect();
+        for id in self.storage.payload_storage.read().ids() {
             ids.insert(id);
         }
         ids.into_iter().collect()

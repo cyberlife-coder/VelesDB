@@ -263,7 +263,7 @@ impl Collection {
         }
 
         // Use the collection's configured metric for consistent behavior
-        let metric = self.config.read().metric;
+        let metric = self.storage.config.read().metric;
         metric.calculate(a, b)
     }
 }

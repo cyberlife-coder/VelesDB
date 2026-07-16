@@ -148,12 +148,12 @@ impl Collection {
             if !text.is_empty() {
                 #[cfg(feature = "persistence")]
                 self.append_bm25_wal_add(point.id, &text)?;
-                self.text_index.add_document(point.id, &text);
+                self.storage.text_index.add_document(point.id, &text);
             }
         } else {
             #[cfg(feature = "persistence")]
             self.append_bm25_wal_remove(point.id)?;
-            self.text_index.remove_document(point.id);
+            self.storage.text_index.remove_document(point.id);
         }
         Ok(())
     }
@@ -166,7 +166,7 @@ impl Collection {
     #[cfg(feature = "persistence")]
     #[inline]
     pub(super) fn append_bm25_wal_add(&self, id: u64, text: &str) -> Result<()> {
-        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.path);
+        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.storage.path);
         crate::index::bm25_persistence_wal::wal_append_add_document(&wal_path, id, text)
     }
 
@@ -174,7 +174,7 @@ impl Collection {
     #[cfg(feature = "persistence")]
     #[inline]
     pub(super) fn append_bm25_wal_remove(&self, id: u64) -> Result<()> {
-        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.path);
+        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.storage.path);
         crate::index::bm25_persistence_wal::wal_append_remove_document(&wal_path, id)
     }
 
@@ -206,7 +206,7 @@ impl Collection {
         for (name, point_id, sv) in entries {
             if cached.as_ref().map(|(cached_name, _)| *cached_name) != Some(name) {
                 let wal_path =
-                    crate::index::sparse::persistence::wal_path_for_name(&self.path, name);
+                    crate::index::sparse::persistence::wal_path_for_name(&self.storage.path, name);
                 cached = Some((name, wal_path));
             }
             let Some((_, wal_path)) = cached.as_ref() else {
@@ -233,7 +233,7 @@ impl Collection {
                     .map(move |(name, sv)| (name.as_str(), *point_id, sv))
             }))?;
         }
-        let mut indexes = self.sparse_indexes.write();
+        let mut indexes = self.query.sparse_indexes.write();
         for (point_id, sv_map) in sparse_batch {
             for (name, sv) in sv_map {
                 let idx = indexes.entry(name.clone()).or_default();
@@ -249,27 +249,30 @@ impl Collection {
     /// explicitly maintain the mirror must invalidate it so stale columnar
     /// data can never serve queries (it is rebuilt lazily on demand).
     pub(super) fn invalidate_caches_and_bump_generation(&self) {
-        *self.cached_stats.lock() = None;
-        self.payload_mirror.invalidate();
-        self.write_generation
+        *self.query.cached_stats.lock() = None;
+        self.storage.payload_mirror.invalidate();
+        self.generations
+            .write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Like [`Self::invalidate_caches_and_bump_generation`], but keeps the
     /// payload mirror warm by applying the upserted points incrementally.
     pub(super) fn bump_generation_with_mirror_upserts(&self, points: &[crate::point::Point]) {
-        *self.cached_stats.lock() = None;
-        self.payload_mirror.apply_upserts(points);
-        self.write_generation
+        *self.query.cached_stats.lock() = None;
+        self.storage.payload_mirror.apply_upserts(points);
+        self.generations
+            .write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Like [`Self::invalidate_caches_and_bump_generation`], but keeps the
     /// payload mirror warm by tombstoning the deleted ids incrementally.
     pub(super) fn bump_generation_with_mirror_deletes(&self, ids: &[u64]) {
-        *self.cached_stats.lock() = None;
-        self.payload_mirror.apply_deletes(ids);
-        self.write_generation
+        *self.query.cached_stats.lock() = None;
+        self.storage.payload_mirror.apply_deletes(ids);
+        self.generations
+            .write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -280,7 +283,7 @@ impl Collection {
         if drained.is_empty() {
             return;
         }
-        let storage = self.vector_storage.read();
+        let storage = self.storage.vector_storage.read();
         let valid: Vec<(u64, &[f32])> = drained
             .iter()
             .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
@@ -291,7 +294,7 @@ impl Collection {
         if valid.is_empty() {
             return;
         }
-        let inserted = self.index.insert_batch_parallel(valid);
+        let inserted = self.storage.index.insert_batch_parallel(valid);
         if inserted < expected {
             tracing::warn!("merge_deferred_batch: inserted {inserted}/{expected} vectors");
         }
@@ -301,7 +304,7 @@ impl Collection {
     pub(super) fn bulk_index_or_defer(&self, vector_refs: &[(u64, &[f32])]) -> usize {
         let count = vector_refs.len();
         #[cfg(feature = "persistence")]
-        if let Some(ref di) = self.deferred_indexer {
+        if let Some(ref di) = self.streaming.deferred_indexer {
             // PERF3: the per-vector `to_vec()` copy is intrinsic to the
             // deferred contract — `vector_refs` borrows the caller's data and
             // does not outlive this call, while the deferred buffer must own
@@ -315,15 +318,18 @@ impl Collection {
                 self.merge_deferred_batch(di);
             }
             #[allow(clippy::cast_possible_truncation)]
-            self.inserts_since_last_hnsw_save
+            self.generations
+                .inserts_since_last_hnsw_save
                 .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
             return count;
         }
         let inserted = self
+            .storage
             .index
             .insert_batch_parallel(vector_refs.iter().copied());
         #[allow(clippy::cast_possible_truncation)]
-        self.inserts_since_last_hnsw_save
+        self.generations
+            .inserts_since_last_hnsw_save
             .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
         inserted
     }

@@ -149,11 +149,12 @@ impl Collection {
         query: &crate::velesql::Query,
         client_id: &str,
     ) -> Result<crate::guardrails::QueryContext> {
-        self.guard_rails
+        self.runtime
+            .guard_rails
             .pre_check(client_id)
             .map_err(crate::error::Error::from)?;
 
-        let mut ctx = self.guard_rails.create_context();
+        let mut ctx = self.runtime.guard_rails.create_context();
 
         // WITH (timeout_ms=N) overrides the collection-level timeout for this query.
         if let Some(override_ms) = query
@@ -196,7 +197,8 @@ impl Collection {
             // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
             #[allow(clippy::cast_possible_truncation)]
             let vector_latency_us = elapsed.as_micros() as u64;
-            self.query_planner
+            self.query
+                .query_planner
                 .stats()
                 .update_vector_latency(vector_latency_us);
 
@@ -209,10 +211,11 @@ impl Collection {
                 .as_ref()
                 .and_then(crate::velesql::WithClause::get_ef_search)
                 .unwrap_or(100);
-            self.query_planner
+            self.query
+                .query_planner
                 .record_cbo_feedback(dataset_size, ef_search, actual_ms);
         }
-        self.guard_rails.circuit_breaker.record_success();
+        self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(())
     }
 
@@ -355,10 +358,10 @@ impl Collection {
     ) -> Result<()> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
         ctx.check_cardinality(result_count)
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
         Ok(())
     }
 
@@ -393,9 +396,11 @@ impl Collection {
 
         // Issue #469 Phase 2: attach EMA-calibrated ms_per_cost_unit if the
         // feedback loop is warm (≥ MIN_SAMPLES observations on this collection).
-        if let Some(ms_per_unit) = self.query_planner.adjusted_ms_per_cost_unit() {
-            output = output
-                .with_feedback_calibration(ms_per_unit, self.query_planner.cbo_sample_count());
+        if let Some(ms_per_unit) = self.query.query_planner.adjusted_ms_per_cost_unit() {
+            output = output.with_feedback_calibration(
+                ms_per_unit,
+                self.query.query_planner.cbo_sample_count(),
+            );
         }
 
         Ok(output)

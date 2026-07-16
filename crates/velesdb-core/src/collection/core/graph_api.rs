@@ -60,21 +60,22 @@ impl Collection {
         // the store-apply order (replay must resolve id collisions exactly
         // like live execution) and concurrent appends can never interleave
         // a multi-write entry.
-        let _wal_guard = self.edge_wal_lock.lock();
+        let _wal_guard = self.graph.edge_wal_lock.lock();
         #[cfg(feature = "persistence")]
         crate::collection::graph::edge_wal::wal_append_add(
-            &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
+            &crate::collection::graph::edge_wal::wal_path_for_edges(&self.storage.path),
             &edge,
         )?;
 
-        self.edge_store.add_edge(edge)?;
+        self.graph.edge_store.add_edge(edge)?;
 
         // Populate edge property indexes (EPIC-047).
         self.index_edge_properties(edge_id, &rel_type, &properties);
 
         // Bump write generation so any cached plan for this collection is
         // invalidated on the next query (CACHE-01).
-        self.write_generation
+        self.generations
+            .write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
@@ -109,10 +110,10 @@ impl Collection {
         // Unconditional WAL (see add_edge): writing edges implies wanting
         // them back after a restart, whatever the collection type. The WAL
         // lock spans append + apply (see add_edge).
-        let _wal_guard = self.edge_wal_lock.lock();
+        let _wal_guard = self.graph.edge_wal_lock.lock();
         #[cfg(feature = "persistence")]
         crate::collection::graph::edge_wal::wal_append_add_batch(
-            &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
+            &crate::collection::graph::edge_wal::wal_path_for_edges(&self.storage.path),
             &edges,
         )?;
 
@@ -123,14 +124,15 @@ impl Collection {
             .map(|e| (e.id(), e.label().to_string(), e.properties().clone()))
             .collect();
 
-        let count = self.edge_store.add_edges_batch(edges);
+        let count = self.graph.edge_store.add_edges_batch(edges);
 
         for (edge_id, rel_type, properties) in &index_meta {
             self.index_edge_properties(*edge_id, rel_type, properties);
         }
 
         if count > 0 {
-            self.write_generation
+            self.generations
+                .write_generation
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(count)
@@ -140,10 +142,10 @@ impl Collection {
     /// re-running edge-property indexing for replayed ADD entries.
     ///
     /// Called from `Collection::open` AFTER `assemble`, so the snapshot is
-    /// already loaded into `self.edge_store`. A missing WAL file is a cheap
+    /// already loaded into `self.graph.edge_store`. A missing WAL file is a cheap
     /// no-op (legacy DBs predate this feature). The edge store is mutated
     /// in place via its `&self` methods; the closure indexes edge
-    /// properties into `self.edge_range_indexes`.
+    /// properties into `self.graph.edge_range_indexes`.
     ///
     /// # Errors
     ///
@@ -151,8 +153,8 @@ impl Collection {
     #[cfg(feature = "persistence")]
     pub(crate) fn replay_edge_wal(&self) -> Result<u64> {
         use crate::collection::graph::edge_wal::{wal_path_for_edges, wal_replay, ReplayOp};
-        let wal_path = wal_path_for_edges(&self.path);
-        let replayed = wal_replay(&wal_path, &self.edge_store, |op| {
+        let wal_path = wal_path_for_edges(&self.storage.path);
+        let replayed = wal_replay(&wal_path, &self.graph.edge_store, |op| {
             if let ReplayOp::Add(edge) = op {
                 if !edge.properties().is_empty() {
                     self.index_edge_properties(edge.id(), edge.label(), edge.properties());
@@ -161,7 +163,7 @@ impl Collection {
         })?;
         if replayed > 0 {
             // Refresh the CSR read snapshot so traversals see replayed edges.
-            self.edge_store.build_read_snapshot();
+            self.graph.edge_store.build_read_snapshot();
         }
         Ok(replayed)
     }
@@ -178,7 +180,7 @@ impl Collection {
     /// Returns `Error::SchemaValidation` if any label in `_labels` is not
     /// declared in the strict schema.
     fn validate_node_labels_against_schema(&self, payload: &serde_json::Value) -> Result<()> {
-        let schema = match self.config.read().graph_schema.clone() {
+        let schema = match self.storage.config.read().graph_schema.clone() {
             Some(s) if !s.is_schemaless() => s,
             _ => return Ok(()),
         };
@@ -200,7 +202,7 @@ impl Collection {
     /// Returns `Error::SchemaValidation` if an endpoint node is missing, has no
     /// `_labels`, or the edge violates the schema's edge-type constraints.
     fn validate_edge_referential_integrity(&self, edge: &GraphEdge) -> Result<()> {
-        let schema = match self.config.read().graph_schema.clone() {
+        let schema = match self.storage.config.read().graph_schema.clone() {
             Some(s) if !s.is_schemaless() => s,
             _ => return Ok(()),
         };
@@ -218,7 +220,7 @@ impl Collection {
     /// Returns `Error::SchemaValidation` if the node has no stored payload
     /// (referential integrity violation) or the payload declares no `_labels`.
     fn endpoint_node_type(&self, node_id: u64) -> Result<String> {
-        let payload = self.payload_storage.read().retrieve(node_id)?;
+        let payload = self.storage.payload_storage.read().retrieve(node_id)?;
         let Some(payload) = payload else {
             return Err(Error::SchemaValidation(format!(
                 "edge references non-existent node {node_id}"
@@ -241,7 +243,7 @@ impl Collection {
     /// Vector of all edges in the graph (cloned).
     #[must_use]
     pub fn get_all_edges(&self) -> Vec<GraphEdge> {
-        self.edge_store.all_edges()
+        self.graph.edge_store.all_edges()
     }
 
     /// Gets edges filtered by label.
@@ -255,7 +257,7 @@ impl Collection {
     /// Vector of edges with the specified label (cloned).
     #[must_use]
     pub fn get_edges_by_label(&self, label: &str) -> Vec<GraphEdge> {
-        self.edge_store.get_edges_by_label(label)
+        self.graph.edge_store.get_edges_by_label(label)
     }
 
     /// Gets outgoing edges from a specific node.
@@ -269,7 +271,7 @@ impl Collection {
     /// Vector of edges originating from the specified node (cloned).
     #[must_use]
     pub fn get_outgoing_edges(&self, node_id: u64) -> Vec<GraphEdge> {
-        self.edge_store.get_outgoing(node_id)
+        self.graph.edge_store.get_outgoing(node_id)
     }
 
     /// Gets incoming edges to a specific node.
@@ -283,7 +285,7 @@ impl Collection {
     /// Vector of edges pointing to the specified node (cloned).
     #[must_use]
     pub fn get_incoming_edges(&self, node_id: u64) -> Vec<GraphEdge> {
-        self.edge_store.get_incoming(node_id)
+        self.graph.edge_store.get_incoming(node_id)
     }
 
     /// Traverses the graph using BFS from a source node.
@@ -335,7 +337,7 @@ impl Collection {
         limit: usize,
     ) -> TraversalParams<'a> {
         TraversalParams {
-            store: &self.edge_store,
+            store: &self.graph.edge_store,
             filter,
             limit,
             max_depth,
@@ -393,8 +395,8 @@ impl Collection {
     /// Tuple of (`in_degree`, `out_degree`).
     #[must_use]
     pub fn get_node_degree(&self, node_id: u64) -> (usize, usize) {
-        let in_degree = self.edge_store.incoming_degree(node_id);
-        let out_degree = self.edge_store.outgoing_degree(node_id);
+        let in_degree = self.graph.edge_store.incoming_degree(node_id);
+        let out_degree = self.graph.edge_store.outgoing_degree(node_id);
         (in_degree, out_degree)
     }
 
@@ -412,7 +414,7 @@ impl Collection {
         // Cheap pre-check: a remove of a non-existent id must not create or
         // grow the WAL with junk tombstones (a racing remove between this
         // check and the append still replays as a harmless no-op).
-        if !self.edge_store.contains_edge(edge_id) {
+        if !self.graph.edge_store.contains_edge(edge_id) {
             return false;
         }
         // WAL-before-apply (crash durability): log the remove intent before
@@ -420,10 +422,10 @@ impl Collection {
         // mutate the store and report `false` (no panic — matches the
         // no-unwrap policy and the bool return contract). Unconditional for
         // the same reason as add_edge; the WAL lock spans append + apply.
-        let _wal_guard = self.edge_wal_lock.lock();
+        let _wal_guard = self.graph.edge_wal_lock.lock();
         #[cfg(feature = "persistence")]
         if let Err(e) = crate::collection::graph::edge_wal::wal_append_remove(
-            &crate::collection::graph::edge_wal::wal_path_for_edges(&self.path),
+            &crate::collection::graph::edge_wal::wal_path_for_edges(&self.storage.path),
             edge_id,
         ) {
             tracing::error!("Edge WAL append remove failed for edge {edge_id}: {e}");
@@ -431,9 +433,10 @@ impl Collection {
         }
 
         // Atomic check-and-remove — no TOCTOU race.
-        let removed = self.edge_store.remove_edge(edge_id);
+        let removed = self.graph.edge_store.remove_edge(edge_id);
         if removed {
-            self.write_generation
+            self.generations
+                .write_generation
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         removed
@@ -442,17 +445,17 @@ impl Collection {
     /// Returns the total number of edges in the graph.
     #[must_use]
     pub fn edge_count(&self) -> usize {
-        self.edge_store.len()
+        self.graph.edge_store.len()
     }
 
     /// Returns the highest edge id in the graph, if any (no edge cloning).
     pub(crate) fn max_edge_id(&self) -> Option<u64> {
-        self.edge_store.max_edge_id()
+        self.graph.edge_store.max_edge_id()
     }
 
     /// Returns `true` when an edge with `edge_id` exists.
     pub(crate) fn edge_exists(&self, edge_id: u64) -> bool {
-        self.edge_store.contains_edge(edge_id)
+        self.graph.edge_store.contains_edge(edge_id)
     }
 
     /// Rebuilds edge property indexes from edges already in the store.
@@ -463,7 +466,7 @@ impl Collection {
     /// indexed at write time and silently lost once the WAL was truncated
     /// into the snapshot.
     pub(crate) fn reindex_edge_properties_from_store(&self) {
-        for edge in self.edge_store.all_edges() {
+        for edge in self.graph.edge_store.all_edges() {
             if !edge.properties().is_empty() {
                 self.index_edge_properties(edge.id(), edge.label(), edge.properties());
             }
@@ -477,20 +480,20 @@ impl Collection {
     /// Returns the graph schema stored in the collection config, if any.
     #[must_use]
     pub fn graph_schema(&self) -> Option<GraphSchema> {
-        self.config.read().graph_schema.clone()
+        self.storage.config.read().graph_schema.clone()
     }
 
     /// Returns `true` if this collection was created as a graph collection.
     #[must_use]
     #[allow(dead_code)] // Reason: Called via GraphCollection inner delegation + tests
     pub fn is_graph(&self) -> bool {
-        self.config.read().graph_schema.is_some()
+        self.storage.config.read().graph_schema.is_some()
     }
 
     /// Returns `true` if this graph collection stores node embeddings.
     #[must_use]
     pub fn has_embeddings(&self) -> bool {
-        self.config.read().embedding_dimension.is_some()
+        self.storage.config.read().embedding_dimension.is_some()
     }
 
     // -------------------------------------------------------------------------
@@ -521,17 +524,17 @@ impl Collection {
         // LOCK ORDER: payload_storage(3) → label_index(7) → graph_range_indexes(7).
         self.validate_node_labels_against_schema(payload)?;
 
-        let mut storage = self.payload_storage.write();
+        let mut storage = self.storage.payload_storage.write();
 
         // Remove old labels and property indexes if this is an update.
-        let mut label_idx = self.label_index.write();
+        let mut label_idx = self.graph.label_index.write();
         if let Ok(Some(old_payload)) = storage.retrieve(node_id) {
             label_idx.remove_from_payload(node_id, &old_payload);
             // Release label_index before touching graph property indexes
             // (both are at lock order 7, no ordering between them).
             drop(label_idx);
             self.deindex_node_properties(node_id, &old_payload);
-            label_idx = self.label_index.write();
+            label_idx = self.graph.label_index.write();
         }
 
         storage.store(node_id, payload)?;
@@ -544,11 +547,12 @@ impl Collection {
 
         // Node payload writes bypass the upsert mirror hooks — drop the
         // payload mirror so it can never serve stale columnar data.
-        self.payload_mirror.invalidate();
+        self.storage.payload_mirror.invalidate();
 
         // Bump write generation so any cached plan for this collection is
         // invalidated on the next query (CACHE-01).
-        self.write_generation
+        self.generations
+            .write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
@@ -559,7 +563,7 @@ impl Collection {
     ///
     /// Returns an error if retrieval fails.
     pub fn get_node_payload(&self, node_id: u64) -> Result<Option<serde_json::Value>> {
-        Ok(self.payload_storage.read().retrieve(node_id)?)
+        Ok(self.storage.payload_storage.read().retrieve(node_id)?)
     }
 
     // -------------------------------------------------------------------------
@@ -577,7 +581,8 @@ impl Collection {
     ) -> Vec<TraversalResult> {
         let start = std::time::Instant::now();
         let results = self.traverse_bfs_config_inner(source_id, config);
-        self.edge_store
+        self.graph
+            .edge_store
             .metrics()
             .record_traversal(start.elapsed(), results.len() as u64);
         results
@@ -598,9 +603,9 @@ impl Collection {
         // snapshot is stale-but-below-threshold we serve from the
         // authoritative per-shard streaming path instead of rebuilding on
         // every read — correct results, no stale data, no rebuild.
-        if self.edge_store.csr_is_authoritative() || self.edge_store.csr_rebuild_due() {
+        if self.graph.edge_store.csr_is_authoritative() || self.graph.edge_store.csr_rebuild_due() {
             // Prefer the lock-free CSR snapshot path when available (Issue #491).
-            let snapshot = self.edge_store.get_csr_snapshot();
+            let snapshot = self.graph.edge_store.get_csr_snapshot();
             // Guard: only use the CSR path when the snapshot has been populated
             // (node_count > 0). An empty snapshot means no edges have been
             // ingested yet, so we fall through to the per-shard streaming BFS.
@@ -618,7 +623,7 @@ impl Collection {
             max_visited_size: MAX_VISITED_SIZE,
             deadline: config.deadline,
         };
-        concurrent_bfs_stream(&self.edge_store, source_id, streaming)
+        concurrent_bfs_stream(&self.graph.edge_store, source_id, streaming)
             .filter(|result| result.depth >= config.min_depth)
             .take(config.limit)
             .collect()
@@ -635,7 +640,8 @@ impl Collection {
     ) -> Vec<TraversalResult> {
         let start = std::time::Instant::now();
         let results = self.traverse_dfs_config_inner(source_id, config);
-        self.edge_store
+        self.graph
+            .edge_store
             .metrics()
             .record_traversal(start.elapsed(), results.len() as u64);
         results
@@ -696,7 +702,7 @@ impl Collection {
                     max_pending: crate::collection::graph::MAX_VISITED_SIZE,
                 };
                 expand_dfs_neighbors(
-                    &self.edge_store,
+                    &self.graph.edge_store,
                     node_id,
                     depth,
                     &rel_filter,
@@ -730,7 +736,7 @@ impl Collection {
             .with_limit(config.limit);
 
         let traverser = ParallelTraverser::with_config(par_config);
-        let edge_store = &self.edge_store;
+        let edge_store = &self.graph.edge_store;
 
         let rel_types = &config.rel_types;
         let adjacency = |node: u64| -> Vec<(u64, u64)> {
@@ -764,7 +770,7 @@ impl Collection {
     /// Returns `Error::VectorNotAllowed` if no embeddings are configured,
     /// or `Error::DimensionMismatch` if the query dimension is wrong.
     pub fn search_by_embedding(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let emb_dim = config
             .embedding_dimension
             .ok_or_else(|| Error::VectorNotAllowed(config.name.clone()))?;
@@ -780,14 +786,14 @@ impl Collection {
         // Reason: we reuse the existing HNSW index (dimension == emb_dim when created
         // via create_graph_collection_with_embeddings). For graph-without-embeddings
         // the HNSW has dimension 0 and the guard above already rejected the call.
-        let metric = self.config.read().metric;
-        let ids = self.index.search(query, k);
+        let metric = self.storage.config.read().metric;
+        let ids = self.storage.index.search(query, k);
         let ids = self.merge_delta(ids, query, k, metric);
 
         // Acquire each lock once: collect vector data, then collect payload data.
         // This avoids holding vector_storage while locking payload_storage per item.
         let vectors: Vec<(u64, f32, Option<Vec<f32>>)> = {
-            let vector_storage = self.vector_storage.read();
+            let vector_storage = self.storage.vector_storage.read();
             ids.into_iter()
                 .map(|sr| {
                     let vec = vector_storage.retrieve(sr.id).ok().flatten();
@@ -796,7 +802,7 @@ impl Collection {
                 .collect()
         };
         let results = {
-            let payload_storage = self.payload_storage.read();
+            let payload_storage = self.storage.payload_storage.read();
             vectors
                 .into_iter()
                 .filter_map(|(id, score, vector)| {

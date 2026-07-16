@@ -39,7 +39,7 @@ impl Collection {
 
         // Fast path: use label index when labels are specified.
         if !first_node.labels.is_empty() {
-            let has_large = self.label_index.read().has_large_ids();
+            let has_large = self.graph.label_index.read().has_large_ids();
             let indexed = self.find_start_nodes_indexed(first_node);
 
             if has_large {
@@ -81,7 +81,7 @@ impl Collection {
         &self,
         first_node: &crate::velesql::NodePattern,
     ) -> Vec<(u64, HashMap<String, u64>)> {
-        let label_idx = self.label_index.read();
+        let label_idx = self.graph.label_index.read();
         let bitmap = label_idx.lookup_intersection(&first_node.labels);
         drop(label_idx);
 
@@ -96,7 +96,7 @@ impl Collection {
                 .collect();
         }
 
-        let payload_storage = self.payload_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         bitmap
             .iter()
             .filter(|&id| {
@@ -115,8 +115,8 @@ impl Collection {
         &self,
         first_node: &crate::velesql::NodePattern,
     ) -> Vec<(u64, HashMap<String, u64>)> {
-        let payload_storage = self.payload_storage.read();
-        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
         let needs_payload = !first_node.properties.is_empty() || !first_node.labels.is_empty();
 
         let mut all_ids: std::collections::HashSet<u64> =

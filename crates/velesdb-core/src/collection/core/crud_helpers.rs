@@ -31,10 +31,11 @@ impl<'a> QuantizationGuards<'a> {
     /// Acquires all quantization cache guards matching `mode`.
     pub(super) fn acquire(collection: &'a Collection, mode: StorageMode) -> Self {
         Self {
-            sq8: matches!(mode, StorageMode::SQ8).then(|| collection.sq8_cache.write()),
-            binary: matches!(mode, StorageMode::Binary).then(|| collection.binary_cache.write()),
+            sq8: matches!(mode, StorageMode::SQ8).then(|| collection.storage.sq8_cache.write()),
+            binary: matches!(mode, StorageMode::Binary)
+                .then(|| collection.storage.binary_cache.write()),
             pq: matches!(mode, StorageMode::ProductQuantization)
-                .then(|| collection.pq_cache.write()),
+                .then(|| collection.storage.pq_cache.write()),
         }
     }
 
@@ -47,7 +48,7 @@ impl<'a> QuantizationGuards<'a> {
             sq8: None,
             binary: None,
             pq: matches!(mode, StorageMode::ProductQuantization)
-                .then(|| collection.pq_cache.write()),
+                .then(|| collection.storage.pq_cache.write()),
         }
     }
 }
@@ -99,11 +100,11 @@ impl Collection {
         point: &Point,
         pq_cache: Option<&mut std::collections::HashMap<u64, PQVector>>,
     ) {
-        let mut quantizer_guard = self.pq_quantizer.write();
+        let mut quantizer_guard = self.storage.pq_quantizer.write();
         let mut backfill_samples: Vec<(u64, Vec<f32>)> = Vec::new();
 
         if quantizer_guard.is_none() {
-            let mut buffer = self.pq_training_buffer.write();
+            let mut buffer = self.storage.pq_training_buffer.write();
             buffer.push_back((point.id, point.vector.clone()));
             if buffer.len() >= PQ_TRAINING_SAMPLES {
                 let training: Vec<Vec<f32>> =
@@ -117,7 +118,7 @@ impl Collection {
                 .ok();
                 #[cfg(feature = "persistence")]
                 if let Some(ref pq) = trained {
-                    let _ = pq.save_codebook(&self.path);
+                    let _ = pq.save_codebook(&self.storage.path);
                 }
                 *quantizer_guard = trained;
                 backfill_samples = buffer.drain(..).collect();
@@ -144,7 +145,7 @@ impl Collection {
         old_payload: Option<&serde_json::Value>,
         new_payload: Option<&serde_json::Value>,
     ) {
-        let indexes = self.secondary_indexes.read();
+        let indexes = self.query.secondary_indexes.read();
         for (field, index) in indexes.iter() {
             if let Some(old_value) = old_payload
                 .and_then(|p| p.get(field))
@@ -170,7 +171,7 @@ impl Collection {
         let Some(payload) = old_payload else {
             return;
         };
-        let indexes = self.secondary_indexes.read();
+        let indexes = self.query.secondary_indexes.read();
         for (field, index) in indexes.iter() {
             if let Some(old_value) = payload.get(field).and_then(JsonValue::from_json) {
                 self.remove_from_secondary_index(index, &old_value, id);
@@ -228,7 +229,7 @@ impl Collection {
             .par_iter()
             .map(|p| (p.id, QuantizedVector::from_f32(&p.vector)))
             .collect();
-        let mut cache = self.sq8_cache.write();
+        let mut cache = self.storage.sq8_cache.write();
         for (id, qv) in quantized {
             cache.insert(id, qv);
         }
@@ -244,7 +245,7 @@ impl Collection {
             .par_iter()
             .map(|p| (p.id, BinaryQuantizedVector::from_f32(&p.vector)))
             .collect();
-        let mut cache = self.binary_cache.write();
+        let mut cache = self.storage.binary_cache.write();
         for (id, bqv) in quantized {
             cache.insert(id, bqv);
         }

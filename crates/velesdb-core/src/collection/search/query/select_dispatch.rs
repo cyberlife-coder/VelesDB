@@ -47,11 +47,10 @@ impl Collection {
             return self.cbo_strategy_for_order_by_similarity(effective_filter, limit);
         }
         let col_stats = self.get_stats();
-        let result = self.query_planner.choose_strategy_with_cbo_and_overfetch(
-            &col_stats,
-            effective_filter,
-            limit,
-        );
+        let result = self
+            .query
+            .query_planner
+            .choose_strategy_with_cbo_and_overfetch(&col_stats, effective_filter, limit);
         tracing::debug!(
             strategy = ?result.0, over_fetch = result.1,
             "CBO selected execution strategy (calibrated cost path)"
@@ -164,7 +163,7 @@ impl Collection {
         // equivalent values; `u64::try_from(usize)` never fails on 64-bit
         // targets and saturates on 32-bit.
         let limit_u64 = u64::try_from(limit).unwrap_or(u64::MAX);
-        let plan = self.query_planner.choose_hybrid_strategy(
+        let plan = self.query.query_planner.choose_hybrid_strategy(
             true, // has_order_by_similarity
             filter_condition.is_some(),
             Some(limit_u64),
@@ -291,7 +290,7 @@ impl Collection {
             cbo_strategy,
             cbo_over_fetch,
         )
-        .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())
+        .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())
     }
 
     /// Applies the exact WHERE post-filter when graph predicates are present,
@@ -313,7 +312,7 @@ impl Collection {
             &stmt.from_alias,
             graph_cache,
         )
-        .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())
+        .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())
     }
 
     /// Attempts the GraphFirst anchored fetch for the main SELECT path.

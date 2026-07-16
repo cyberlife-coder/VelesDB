@@ -40,7 +40,7 @@ impl Collection {
             return self.search_with_filter(query, k, filter);
         }
 
-        let config = self.config.read();
+        let config = self.storage.config.read();
         validate_dimension_match(config.dimension, query.len())?;
         let higher_is_better = config.metric.higher_is_better();
         let metric = config.metric;
@@ -78,21 +78,25 @@ impl Collection {
         metric: crate::DistanceMetric,
         bitmap: &roaring::RoaringBitmap,
     ) -> Result<Vec<ScoredResult>> {
-        let selectivity = super::vector::estimate_real_selectivity(bitmap, self.index.len());
+        let selectivity =
+            super::vector::estimate_real_selectivity(bitmap, self.storage.index.len());
 
         if selectivity > SELECTIVITY_HIGH_THRESHOLD {
             return self.search_post_filter(query, k, filter, quality, metric);
         }
 
         if selectivity <= SELECTIVITY_THRESHOLD {
-            let results = self.index.full_scan_with_bitmap(query, k, bitmap)?;
+            let results = self.storage.index.full_scan_with_bitmap(query, k, bitmap)?;
             return Ok(self.merge_delta(results, query, k, metric));
         }
 
         let candidates_k = compute_oversampled_k(k, filter);
-        let results =
-            self.index
-                .search_with_quality_and_bitmap(query, candidates_k, quality, bitmap)?;
+        let results = self.storage.index.search_with_quality_and_bitmap(
+            query,
+            candidates_k,
+            quality,
+            bitmap,
+        )?;
         Ok(self.merge_delta(results, query, candidates_k, metric))
     }
 
@@ -107,6 +111,7 @@ impl Collection {
     ) -> Result<Vec<ScoredResult>> {
         let candidates_k = compute_oversampled_k(k, filter);
         let index_results = self
+            .storage
             .index
             .search_with_quality(query, candidates_k, quality)?;
         Ok(self.merge_delta(index_results, query, candidates_k, metric))
@@ -120,8 +125,8 @@ impl Collection {
         k: usize,
         higher_is_better: bool,
     ) -> Vec<SearchResult> {
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let now_secs = now_unix_secs();
 
         let mut results: Vec<SearchResult> = index_results

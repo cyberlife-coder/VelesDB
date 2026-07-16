@@ -30,13 +30,13 @@ impl Collection {
         &self,
     ) -> crate::velesql::match_planner::CollectionStats {
         let total_nodes = self.len();
-        let total_edges = self.edge_store.len();
+        let total_edges = self.graph.edge_store.len();
         let avg_degree = if total_nodes > 0 {
             total_edges as f64 / total_nodes as f64
         } else {
             0.0
         };
-        let label_count = self.edge_store.label_count();
+        let label_count = self.graph.edge_store.label_count();
         let label_selectivity = if label_count > 0 {
             1.0 / label_count as f64
         } else {
@@ -91,10 +91,11 @@ impl Collection {
         match_clause: &crate::velesql::MatchClause,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
-        self.guard_rails
+        self.runtime
+            .guard_rails
             .pre_check("default")
             .map_err(crate::error::Error::from)?;
-        let ctx = self.guard_rails.create_context();
+        let ctx = self.runtime.guard_rails.create_context();
         self.dispatch_match_ordered(match_clause, params, &ctx)
     }
 
@@ -256,7 +257,7 @@ impl Collection {
         let vector_results = vector_results?;
 
         // Merge by node_id (union, best score wins per metric polarity).
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let higher_is_better = config.metric.higher_is_better();
         drop(config);
 
@@ -280,29 +281,30 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
 
         let mut sorted = match_results;
         self.apply_match_order_by(&mut sorted, match_clause, params)
-            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
 
         let mut results = self
             .match_results_to_search_results(sorted)
-            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
         // Final cardinality check for MATCH path (EPIC-048 US-003).
         ctx.check_cardinality(results.len())
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
         if let Some(limit) = match_return_limit(match_clause) {
             results.truncate(limit);
         }
         // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
         #[allow(clippy::cast_possible_truncation)]
         let graph_latency_us = ctx.elapsed().as_micros() as u64;
-        self.query_planner
+        self.query
+            .query_planner
             .stats()
             .update_graph_latency(graph_latency_us);
-        self.guard_rails.circuit_breaker.record_success();
+        self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(results)
     }
 
@@ -322,22 +324,22 @@ impl Collection {
     ) -> Result<Vec<super::match_exec::MatchResult>> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
 
         let mut sorted = match_results;
         self.apply_match_order_by(&mut sorted, match_clause, params)
-            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
 
         // Final cardinality check for MATCH path (EPIC-048 US-003), matching
         // `finalize_match_results` so the ordered surface rejects oversized
         // result sets identically to the SQL path.
         ctx.check_cardinality(sorted.len())
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
         if let Some(limit) = match_return_limit(match_clause) {
             sorted.truncate(limit);
         }
-        self.guard_rails.circuit_breaker.record_success();
+        self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(sorted)
     }
 
@@ -682,14 +684,14 @@ mod tests {
             params.insert("v".to_string(), serde_json::json!([1.0, 0.0]));
 
             // Leg 1 in isolation: GraphFirst (execute_match_with_context).
-            let graph_ctx = col.guard_rails.create_context();
+            let graph_ctx = col.runtime.guard_rails.create_context();
             col.execute_match_with_context(&mc, &params, Some(&graph_ctx))
                 .expect("graph leg");
             let graph_nodes = graph_ctx.traversal_nodes_visited();
             let graph_edges = graph_ctx.traversal_edges_traversed();
 
             // Leg 2 in isolation: VectorFirst (execute_match_vector_first).
-            let vec_ctx = col.guard_rails.create_context();
+            let vec_ctx = col.runtime.guard_rails.create_context();
             col.execute_match_vector_first(&mc, &params, &vec_ctx, "a", 10, 0.0)
                 .expect("vector leg");
             let vec_nodes = vec_ctx.traversal_nodes_visited();
@@ -700,7 +702,7 @@ mod tests {
             assert!(vec_nodes > 0, "vector leg must evaluate candidates");
 
             // Parallel run accumulates BOTH legs into one shared context.
-            let par_ctx = col.guard_rails.create_context();
+            let par_ctx = col.runtime.guard_rails.create_context();
             col.execute_match_parallel(&mc, &params, &par_ctx, &hint)
                 .expect("parallel run");
 

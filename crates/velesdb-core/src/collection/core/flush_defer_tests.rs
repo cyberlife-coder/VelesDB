@@ -101,7 +101,7 @@ fn test_flush_full_saves_hnsw_to_disk() {
     drop(coll);
     let reopened = Collection::open(PathBuf::from(temp.path())).expect("reopen");
     assert_eq!(
-        reopened.index.len(),
+        reopened.storage.index.len(),
         5,
         "HNSW should have 5 vectors after flush_full + reopen"
     );
@@ -123,7 +123,7 @@ fn test_flush_full_then_reopen_has_no_gap() {
     // Reopen — HNSW should already have all vectors (no gap to recover).
     let reopened = Collection::open(PathBuf::from(temp.path())).expect("reopen");
     assert_eq!(
-        reopened.index.len(),
+        reopened.storage.index.len(),
         10,
         "HNSW should have all vectors (saved by flush_full)"
     );
@@ -138,7 +138,8 @@ fn test_flush_saves_hnsw_when_insert_threshold_exceeded() {
         Collection::create(PathBuf::from(temp.path()), 4, DistanceMetric::Cosine).expect("create");
 
     // Artificially set the counter above the threshold.
-    coll.inserts_since_last_hnsw_save
+    coll.generations
+        .inserts_since_last_hnsw_save
         .store(10_001, std::sync::atomic::Ordering::Relaxed);
 
     coll.upsert(make_points(0, 5)).expect("upsert");
@@ -152,7 +153,8 @@ fn test_flush_saves_hnsw_when_insert_threshold_exceeded() {
 
     // Counter should be reset after the save.
     assert_eq!(
-        coll.inserts_since_last_hnsw_save
+        coll.generations
+            .inserts_since_last_hnsw_save
             .load(std::sync::atomic::Ordering::Relaxed),
         0,
         "counter should be reset after HNSW save"
@@ -168,12 +170,14 @@ fn test_upsert_increments_hnsw_save_counter() {
 
     coll.upsert(make_points(0, 5)).expect("upsert");
     let count = coll
+        .generations
         .inserts_since_last_hnsw_save
         .load(std::sync::atomic::Ordering::Relaxed);
     assert_eq!(count, 5, "counter should be 5 after inserting 5 vectors");
 
     coll.upsert(make_points(10, 3)).expect("upsert2");
     let count = coll
+        .generations
         .inserts_since_last_hnsw_save
         .load(std::sync::atomic::Ordering::Relaxed);
     assert_eq!(count, 8, "counter should be 8 after inserting 3 more");

@@ -69,7 +69,7 @@ fn test_execute_query_str_caches_repeated_calls() {
     let params = HashMap::new();
     let sql = "SELECT * FROM col LIMIT 3;";
 
-    let stats_before = col.query_cache.stats();
+    let stats_before = col.query.query_cache.stats();
     // First call — parsed and cached
     let r1 = col
         .execute_query_str(sql, &params)
@@ -85,11 +85,11 @@ fn test_execute_query_str_caches_repeated_calls() {
     );
     // The second identical call must be a cache hit, not a re-parse:
     assert_eq!(
-        col.query_cache.len(),
+        col.query.query_cache.len(),
         1,
         "identical SQL must yield a single cache entry"
     );
-    let hits = col.query_cache.stats().hits - stats_before.hits;
+    let hits = col.query.query_cache.stats().hits - stats_before.hits;
     assert!(
         hits >= 1,
         "second identical call should register a cache hit, got {hits}"
@@ -142,7 +142,7 @@ fn test_e2e_guardrails_cardinality_respected() {
         max_cardinality: 3, // only 3 results allowed
         ..QueryLimits::default()
     };
-    col.guard_rails = Arc::new(GuardRails::with_limits(limits));
+    col.runtime.guard_rails = Arc::new(GuardRails::with_limits(limits));
 
     let params = HashMap::new();
     let result = col.execute_query_str("SELECT * FROM col LIMIT 10;", &params);
@@ -161,7 +161,7 @@ fn test_e2e_guardrails_timeout_zero_disables_check() {
 
     // timeout_ms = 0 is the "disabled" sentinel — the guard-rail must never fire.
     // Reason: 0 means no timeout (batch/offline workloads), not "0 ms budget".
-    col.guard_rails = Arc::new(GuardRails::with_limits(QueryLimits {
+    col.runtime.guard_rails = Arc::new(GuardRails::with_limits(QueryLimits {
         timeout_ms: 0,
         ..QueryLimits::default()
     }));
@@ -178,7 +178,7 @@ fn test_e2e_guardrails_timeout_zero_disables_check() {
 fn test_e2e_guardrails_circuit_breaker_state() {
     let (_dir, mut col) = make_collection();
 
-    col.guard_rails = Arc::new(GuardRails::with_limits(QueryLimits {
+    col.runtime.guard_rails = Arc::new(GuardRails::with_limits(QueryLimits {
         max_cardinality: 1, // forces failures
         circuit_failure_threshold: 2,
         circuit_recovery_seconds: 60,
@@ -190,7 +190,7 @@ fn test_e2e_guardrails_circuit_breaker_state() {
     let _ = col.execute_query_str(sql, &params); // failure 1
     let _ = col.execute_query_str(sql, &params); // failure 2
 
-    let state = col.guard_rails.circuit_breaker.state();
+    let state = col.runtime.guard_rails.circuit_breaker.state();
     assert_eq!(
         state,
         crate::guardrails::CircuitState::Open,

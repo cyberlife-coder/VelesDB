@@ -300,23 +300,29 @@ fn test_flush_drains_delta_buffer_into_hnsw() {
     //    are persisted to storage before being delta-buffered).
     {
         use crate::storage::VectorStorage;
-        let mut vs = collection.vector_storage.write();
+        let mut vs = collection.storage.vector_storage.write();
         vs.store(10, &[0.5, 0.5, 0.0, 0.0]).expect("store 10");
         vs.store(11, &[0.0, 0.0, 0.5, 0.5]).expect("store 11");
     }
 
     // 3. Activate delta buffer (simulates an HNSW rebuild starting)
-    collection.delta_buffer.activate();
+    collection.streaming.delta_buffer.activate();
     assert!(
-        collection.delta_buffer.is_active(),
+        collection.streaming.delta_buffer.is_active(),
         "delta should be active"
     );
 
     // 4. Push vectors into the delta buffer (simulates upserts during rebuild)
-    collection.delta_buffer.push(10, vec![0.5, 0.5, 0.0, 0.0]);
-    collection.delta_buffer.push(11, vec![0.0, 0.0, 0.5, 0.5]);
+    collection
+        .streaming
+        .delta_buffer
+        .push(10, vec![0.5, 0.5, 0.0, 0.0]);
+    collection
+        .streaming
+        .delta_buffer
+        .push(11, vec![0.0, 0.0, 0.5, 0.5]);
     assert_eq!(
-        collection.delta_buffer.len(),
+        collection.streaming.delta_buffer.len(),
         2,
         "delta should hold 2 entries"
     );
@@ -326,16 +332,16 @@ fn test_flush_drains_delta_buffer_into_hnsw() {
 
     // 6. Verify: delta buffer is now empty and inactive
     assert!(
-        !collection.delta_buffer.is_active(),
+        !collection.streaming.delta_buffer.is_active(),
         "delta buffer must be inactive after flush"
     );
     assert!(
-        collection.delta_buffer.is_empty(),
+        collection.streaming.delta_buffer.is_empty(),
         "delta buffer must be empty after flush"
     );
 
     // 7. Verify: the drained vectors are now in the HNSW index (searchable)
-    let results = collection.index.search(&[0.5, 0.5, 0.0, 0.0], 5);
+    let results = collection.storage.index.search(&[0.5, 0.5, 0.0, 0.0], 5);
     let result_ids: Vec<u64> = results.iter().map(|r| r.id).collect();
     assert!(
         result_ids.contains(&10),
@@ -361,7 +367,7 @@ fn test_flush_with_inactive_delta_buffer_is_noop() {
     collection.upsert(points).expect("upsert");
 
     // Delta buffer is NOT active — flush should behave normally
-    assert!(!collection.delta_buffer.is_active());
+    assert!(!collection.streaming.delta_buffer.is_active());
 
     collection
         .flush()

@@ -123,7 +123,7 @@ impl Collection {
         }
 
         let similarity_scores_map = self.precompute_similarity_scores(results, order_by, params)?;
-        let higher_is_better = self.config.read().metric.higher_is_better();
+        let higher_is_better = self.storage.config.read().metric.higher_is_better();
 
         let mut indices: Vec<usize> = (0..results.len()).collect();
         indices.sort_unstable_by(|&i, &j| {
@@ -207,7 +207,7 @@ impl Collection {
         field: &str,
         order_vec: &[f32],
     ) -> Result<Vec<f32>> {
-        let worst = if self.config.read().metric.higher_is_better() {
+        let worst = if self.storage.config.read().metric.higher_is_better() {
             f32::NEG_INFINITY
         } else {
             f32::INFINITY
