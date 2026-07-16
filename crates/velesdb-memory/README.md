@@ -330,6 +330,67 @@ remember_extracted { "text": "Met Dana at the Rust meetup; she now leads the par
 `limit` defaults to 10 (capped at 1000); `max_hops` defaults to 2 (capped at 10);
 `links`, `metadata`, and `filter` are optional.
 
+### The context compiler tools
+
+**Why:** agents spend most of their tokens re-reading redundant context.
+`compile_context` compresses it **deterministically** — no LLM, no cloud, no
+API key: same request, byte-identical output. What must survive verbatim
+does (code fences, URLs, numbers/dates/ids, negative constraints, anything
+marked `{"verbatim": true}`); duplicates drop; repeated log lines collapse
+with counts (`ERROR timeout (x50)`); over-budget content becomes a
+recoverable `ctx://source/` handle instead of a silent loss; and every
+fragment gets one auditable decision (stable rule id, reason, relevance,
+risk). Guarantees, per compilation:
+
+- **Budget**: the assembled content never exceeds `token_budget`.
+- **Provenance**: `sources` + per-decision `content_hash` identify the exact
+  bytes; `retrieval_handles` list what was externalized.
+- **Nothing critical silently lost**: losing preserve-classified content
+  raises the compilation's `risk` to `"high"` — check it before use.
+
+```jsonc
+// compile_context — deterministic compression under a token budget
+compile_context { "query": "state of the canary deploy",
+                  "token_budget": 4000,
+                  "project": "veles",
+                  "memory_scope": { "k": 5 },                 // optional: pull relevant memories in
+                  "fragments": [
+                    { "content": "You are the deploy assistant.", "metadata": { "cache": true } },
+                    { "content": "<600 lines of CI logs>", "kind": "log" },
+                    { "content": "Never restart the primary during a rebalance." } ] }
+→ { "content": "…", "sections": […], "decisions": […], "sources": […],
+    "retrieval_handles": […], "insights": { "tokens_in": 2658, "tokens_out": 656,
+    "tokens_saved": 2002, … }, "risk": "low" }
+
+// retrieve_context_source — what was externalized is recoverable, byte for byte
+retrieve_context_source { "handle": "ctx://source/1234567890" }
+→ { "handle": "ctx://source/1234567890", "content": "…original bytes…" }
+
+// explain_compilation — "why was this fragment dropped/shortened?" (stateless:
+//   compilation is deterministic, so the request is re-compiled)
+explain_compilation { "request": { …same request… }, "fragment_id": 1234567890 }
+→ { "action": "drop", "rule_id": "drop.duplicate", "reason": "…", "risk": "low", … }
+
+// context_savings — aggregate recorded savings, optionally per project
+context_savings { "project": "veles" }
+→ { "events": 12, "tokens_in": …, "tokens_saved": …, "truncated": false }
+```
+
+Preservation rules (stable ids, first match wins): `preserve.marked_verbatim`,
+`cache.stable_prefix` (cache-marked fragments form a stable prefix for
+provider prompt caching), `preserve.code_fence`,
+`preserve.negative_constraint`, `abstract.log_dedup`,
+`preserve.exact_values`, `preserve.url`, `preserve.default`; the budget layer
+adds `budget.externalize` and dedup adds `drop.duplicate` /
+`drop.near_duplicate`.
+
+`insights.tokens_saved` is a **local estimate** (a deliberate ~15 %
+over-count) — not the provider's count, not billed tokens, not cache reads.
+The reproducible benchmark ([`examples/context_savings`](examples/context_savings))
+measures 75–86 % estimated savings on its committed corpus at ~1 ms compile
+latency. The [`velesdb-context-optimizer`](../../skills/velesdb-context-optimizer/SKILL.md)
+skill teaches an agent the full workflow — including when *not* to compress.
+
 **IDs & linking.** `remember` returns a stable id derived from the fact's
 content. Pass it to `relate` / `forget`, or as a `links[].target` on a later
 `remember` — that is how the graph gets built, and what `why` traverses.

@@ -77,6 +77,11 @@ required-features = ["mcp"]
 # Real-data LoCoMo benchmark. Needs a local Ollama (all-minilm + a generative
 # model), so it only builds with the `ollama` feature.
 [[example]]
+name = "context_savings"
+path = "examples/context_savings/main.rs"
+required-features = ["context"]
+
+[[example]]
 name = "locomo"
 path = "examples/locomo/main.rs"
 required-features = ["ollama"]

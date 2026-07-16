@@ -1,6 +1,6 @@
 //! Unit tests for the context compiler MCP tools (split out of
-//! context_tools.rs, same `#[cfg(test)]`-via-`#[path]` pattern as
-//! server_tests.rs).
+//! `context_tools.rs`, same `#[cfg(test)]`-via-`#[path]` pattern as
+//! `server_tests.rs`).
 
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::ErrorCode;
