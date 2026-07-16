@@ -28,7 +28,7 @@ crate-type = ["cdylib"]
 # server stack (rmcp/tokio-server) — the license boundary AND the lean prebuild.
 # `ollama`+`extract` compile the real embedder + auto-extraction into the default
 # prebuild (full PyO3 parity). We MUST NOT depend on velesdb-core directly.
-velesdb-memory = { path = "../velesdb-memory", default-features = false, features = ["persistence", "ollama", "extract"] }
+velesdb-memory = { path = "../velesdb-memory", default-features = false, features = ["persistence", "ollama", "extract", "context"] }
 napi = { version = "3", default-features = false, features = ["napi9", "serde-json"] }
 napi-derive = "3"
 serde_json = { workspace = true }

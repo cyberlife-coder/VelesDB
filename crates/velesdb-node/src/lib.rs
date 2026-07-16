@@ -44,13 +44,15 @@ use std::sync::Arc;
 use napi::bindgen_prelude::AsyncTask;
 use napi_derive::napi;
 use serde_json::Value;
+use velesdb_memory::context::{CompilePolicy, CompileRequest, ContextCompiler};
 use velesdb_memory::{
     DynEmbedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor, DEFAULT_DIMENSION,
     DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::dto::{
-    ColumnFilterJs, DatedRecallJs, ExplanationJs, FusionOptionsJs, LinkJs, RecollectionJs,
+    ColumnFilterJs, CompiledContextJs, DatedRecallJs, ExplanationJs, FusionOptionsJs, LinkJs,
+    RecollectionJs,
 };
 use crate::error::{invalid_input, to_napi_err, CODE_INTERNAL};
 use crate::tasks::Job;
@@ -289,6 +291,32 @@ impl MemoryStore {
             svc.why(&decision, max_hops, filter.as_ref())
                 .map(ExplanationJs::from)
                 .map_err(to_napi_err)
+        }))
+    }
+
+    /// Compile context fragments into a token-budgeted, provenance-audited
+    /// prompt context — deterministic, no LLM call; pure conversion around
+    /// [`velesdb_memory`]'s context compiler (zero logic here). The request
+    /// and result use the same JSON shape as the MCP `compile_context` tool
+    /// (`{query, fragments, token_budget, memory_scope?, policy?, …}`), with
+    /// one binding-wide difference: every id field (`fragment_id`,
+    /// `content_hash`, `memory_id`, `fragment_ids`, and `fragments[].id` on
+    /// input) crosses as a decimal string, like every other method here.
+    #[napi(
+        js_name = "compileContext",
+        ts_return_type = "Promise<CompiledContextJs>"
+    )]
+    pub fn compile_context(&self, request: Value) -> AsyncTask<Job<CompiledContextJs>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let mut request = request;
+            convert::parse_fragment_id_strings(&mut request)?;
+            let request: CompileRequest = serde_json::from_value(request)
+                .map_err(|err| invalid_input(format!("invalid compile request: {err}")))?;
+            let compiled = svc
+                .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+                .map_err(to_napi_err)?;
+            convert::to_compiled_js(&compiled)
         }))
     }
 

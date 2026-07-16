@@ -147,3 +147,25 @@ impl From<Explanation> for ExplanationJs {
         }
     }
 }
+
+/// Result of [`compileContext`](crate::MemoryStore::compile_context): the
+/// top-level fields are typed; the nested trees (`decisions`, `sources`, …)
+/// are plain JSON objects in exactly the MCP wire shape (snake_case keys),
+/// with every id field already converted to a decimal string.
+#[napi(object)]
+pub struct CompiledContextJs {
+    /// The assembled context, ready to inject into a prompt.
+    pub content: String,
+    /// Ordered output blocks (cache prefix first), wire shape.
+    pub sections: Value,
+    /// One auditable decision per input fragment, wire shape.
+    pub decisions: Value,
+    /// One source pointer per distinct fragment, wire shape.
+    pub sources: Value,
+    /// Handles of externalized fragments, wire shape.
+    pub retrieval_handles: Value,
+    /// Token/cost savings of this compilation, wire shape.
+    pub insights: Value,
+    /// Overall fidelity risk: "low" | "medium" | "high".
+    pub risk: String,
+}

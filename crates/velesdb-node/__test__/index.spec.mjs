@@ -22,6 +22,7 @@ test('surface allowlist — exactly the supported methods, no engine leak', () =
     .filter((m) => m !== 'constructor')
     .sort((a, b) => a.localeCompare(b))
   assert.deepEqual(instanceMethods, [
+    'compileContext',
     'forget',
     'recall',
     'recallFused',
@@ -201,6 +202,73 @@ test('rememberExtracted surfaces but errors without a backend (INTERNAL)', async
       () => store.rememberExtracted('some text', 'nonexistent-model', 'http://127.0.0.1:1'),
       (err) => err instanceof Error,
     )
+  } finally {
+    cleanup()
+  }
+})
+
+test('compileContext compiles fragments under a budget with provenance', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const out = await store.compileContext({
+      query: 'deploy pipeline',
+      fragments: [
+        { content: 'The deploy pipeline runs clippy before tests.' },
+        { content: 'The deploy pipeline runs clippy before tests.' },
+        { content: '```rust\nlet x = 42;\n```' },
+      ],
+      token_budget: 10000,
+    })
+    assert.ok(out.content.includes('let x = 42;'), 'code survives verbatim')
+    assert.equal(out.decisions.length, 3, 'one decision per fragment')
+    const dup = out.decisions.find((d) => d.action === 'drop')
+    assert.ok(dup, 'the duplicate must be dropped')
+    assert.equal(typeof dup.fragment_id, 'string', 'ids cross as decimal strings')
+    assert.equal(typeof dup.content_hash, 'string', 'hashes cross as decimal strings')
+    assert.ok(out.insights.tokens_saved > 0, 'the duplicate saves tokens')
+    for (const source of out.sources) {
+      assert.ok(source.handle.startsWith('ctx://source/'), 'sources stay addressable')
+    }
+  } finally {
+    cleanup()
+  }
+})
+
+test('compileContext pulls memory scope and stamps memory ids', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await store.remember('the deploy pipeline runs clippy before tests')
+    const out = await store.compileContext({
+      query: 'deploy pipeline checks',
+      fragments: [{ content: 'Session note: user asked about CI.' }],
+      token_budget: 10000,
+      memory_scope: { k: 3 },
+    })
+    assert.ok(out.content.includes('runs clippy before tests'), 'memory pulled in')
+    const memoryDecision = out.decisions.find((d) => d.memory_id !== undefined && d.memory_id !== null)
+    assert.ok(memoryDecision, 'a decision must carry the backing memory id')
+    assert.equal(typeof memoryDecision.memory_id, 'string', 'memory ids cross as strings')
+  } finally {
+    cleanup()
+  }
+})
+
+test('compileContext zero budget rejects with INVALID_INPUT', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(
+      store.compileContext({ query: 'x', fragments: [{ content: 'y' }], token_budget: 0 }),
+      /INVALID_INPUT/,
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test('compileContext malformed request rejects with INVALID_INPUT', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(store.compileContext({ fragments: 'not-an-array' }), /INVALID_INPUT/)
   } finally {
     cleanup()
   }
