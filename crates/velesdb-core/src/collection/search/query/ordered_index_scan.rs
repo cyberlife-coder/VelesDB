@@ -98,7 +98,7 @@ impl Collection {
         let (limit, fetch_limit) = Self::compute_fetch_limit(stmt);
         let Some(ids) = self.ordered_ids_if_covered(field, order_descending(stmt), fetch_limit)
         else {
-            self.graph.order_by_advisor.write().observe(field);
+            self.query.order_by_advisor.write().observe(field);
             return None;
         };
         let hydrated: Vec<crate::point::Point> = self.get(&ids).into_iter().flatten().collect();
@@ -145,7 +145,7 @@ impl Collection {
         // release before hydrating.
         let Some(ids) = self.ordered_ids_if_covered(field, order_descending(stmt), point_count)
         else {
-            self.graph.order_by_advisor.write().observe(field);
+            self.query.order_by_advisor.write().observe(field);
             return None;
         };
         let predicate =
@@ -180,7 +180,7 @@ impl Collection {
         let Some(ids) =
             self.ordered_prefix_if_covered(lead_field, order_descending(stmt), fetch_limit)
         else {
-            self.graph.order_by_advisor.write().observe(lead_field);
+            self.query.order_by_advisor.write().observe(lead_field);
             return None;
         };
         let mut hydrated: Vec<SearchResult> = self

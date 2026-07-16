@@ -323,16 +323,6 @@ pub(crate) struct GraphState {
     /// Lock order position: **7** (same tier as `property_index` / `range_index`).
     pub(crate) index_advisor: Arc<RwLock<IndexAdvisor>>,
 
-    /// Scalar `ORDER BY <field>` index advisor (EPIC-081 phase 3a).
-    ///
-    /// Records eligible `ORDER BY` queries that fell back to the exhaustive
-    /// sort because the sort field lacks a fully-covering secondary index, so
-    /// an operator can be advised to create one. Recommendation-only — never
-    /// mutates an index or a query result.
-    ///
-    /// Lock order position: **7** (same tier as `index_advisor`).
-    pub(crate) order_by_advisor: Arc<RwLock<OrderByIndexAdvisor>>,
-
     /// Concurrent edge store for knowledge graph relationships (EPIC-015).
     ///
     /// Uses sharded internal locking (256 shards) — no outer `RwLock` needed.
@@ -366,6 +356,19 @@ pub(crate) struct QueryState {
     ///
     /// Lock order position: **6**.
     pub(super) secondary_indexes: Arc<RwLock<HashMap<String, SecondaryIndex>>>,
+
+    /// Scalar `ORDER BY <field>` index advisor (EPIC-081 phase 3a).
+    ///
+    /// Records eligible `ORDER BY` queries that fell back to the exhaustive
+    /// sort because the sort field lacks a fully-covering secondary index, so
+    /// an operator can be advised to create one. Recommendation-only — never
+    /// mutates an index or a query result. A query-execution concern (reached
+    /// by the generic `ORDER BY` scan on any collection kind), not graph state
+    /// — reclassified out of `GraphState` here (R1.2a, EPIC #1384).
+    ///
+    /// Lock order position: **7** (acquired standalone; no other collection
+    /// lock is held while it is held).
+    pub(crate) order_by_advisor: Arc<RwLock<OrderByIndexAdvisor>>,
 
     /// Query planner for cost-based optimization (EPIC-046).
     pub(crate) query_planner: Arc<QueryPlanner>,

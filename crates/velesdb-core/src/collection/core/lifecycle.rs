@@ -104,15 +104,15 @@ impl Collection {
                 composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),
                 query_pattern_tracker: Arc::new(RwLock::new(QueryPatternTracker::new())),
                 index_advisor: Arc::new(RwLock::new(IndexAdvisor::new())),
-                order_by_advisor: Arc::new(RwLock::new(
-                    crate::collection::order_by_advisor::OrderByIndexAdvisor::default(),
-                )),
                 edge_store: Arc::new(parts.edge_store),
                 edge_wal_lock: Arc::new(Mutex::new(())),
             },
             query: crate::collection::types::QueryState {
                 sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),
                 secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
+                order_by_advisor: Arc::new(RwLock::new(
+                    crate::collection::order_by_advisor::OrderByIndexAdvisor::default(),
+                )),
                 query_planner: Arc::new(QueryPlanner::new()),
                 query_cache: Arc::new(QueryCache::new(256)),
                 cached_stats: Arc::new(Mutex::new(None)),

@@ -208,7 +208,7 @@ impl Collection {
         // Snapshot under the advisor lock, release it before touching the
         // secondary-index lock so only one lock is ever held at a time.
         let observed = self
-            .graph
+            .query
             .order_by_advisor
             .read()
             .observed(min_observations);

@@ -530,7 +530,12 @@ jobs:
 
       - name: Install wasm-pack
         if: matrix.package == 'wasm'
-        run: cargo install wasm-pack --locked
+        # Prebuilt binary — NOT `cargo install wasm-pack --locked`, whose own
+        # lockfile pins cargo-platform 0.3.3 (MSRV 1.91) and fails to compile
+        # under the pinned RUST_VERSION (1.90). Matches ci.yml's wasm job.
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: wasm-pack
 
       - name: Build & Publish WASM
         if: matrix.package == 'wasm'
