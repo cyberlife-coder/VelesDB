@@ -14,7 +14,8 @@
 //!
 //! Three different numbers, never to be conflated:
 //! - **theoretical savings** (printed here): local estimates from the
-//!   char-ratio estimator — a deliberate over-count of ~15 %;
+//!   char-class estimator, calibrated against a real BPE (cl100k) to
+//!   over-count every measured content class (+13 %…+55 %);
 //! - **billed savings**: what your provider actually charges — measure with
 //!   the provider's own token counts and your pricing table
 //!   (`ContextCompiler::with_pricing`);
@@ -120,7 +121,7 @@ fn main() {
 
     println!("context_savings — deterministic compile benchmark");
     println!(
-        "corpus: {} fragments, ~{tokens_before} estimated tokens (theoretical, char-ratio estimator)\n",
+        "corpus: {} fragments, ~{tokens_before} estimated tokens (theoretical, char-class estimator)\n",
         fragments.len()
     );
     println!(

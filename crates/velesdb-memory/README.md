@@ -361,8 +361,8 @@ compile_context { "query": "state of the canary deploy",
                     { "content": "<600 lines of CI logs>", "kind": "log" },
                     { "content": "Never restart the primary during a rebalance." } ] }
 → { "content": "…", "sections": […], "decisions": […], "sources": […],
-    "retrieval_handles": […], "insights": { "tokens_in": 2658, "tokens_out": 656,
-    "tokens_saved": 2002, … }, "risk": "low" }
+    "retrieval_handles": […], "insights": { "tokens_in": 2244, "tokens_out": 545,
+    "tokens_saved": 1699, … }, "risk": "low" }
 
 // retrieve_context_source — what was externalized is recoverable, byte for byte
 retrieve_context_source { "handle": "ctx://source/1234567890" }
@@ -386,8 +386,9 @@ provider prompt caching), `preserve.code_fence`,
 adds `budget.externalize` and dedup adds `drop.duplicate` /
 `drop.near_duplicate`.
 
-`insights.tokens_saved` is a **local estimate** (a deliberate ~15 %
-over-count) — not the provider's count, not billed tokens, not cache reads.
+`insights.tokens_saved` is a **local estimate**, calibrated against a real
+BPE (cl100k) to deliberately over-count every measured content class
+(+13 %…+55 %) — not the provider's count, not billed tokens, not cache reads.
 The reproducible benchmark ([`examples/context_savings`](examples/context_savings))
 measures 75–86 % estimated savings on its committed corpus at ~1 ms compile
 latency. The [`velesdb-context-optimizer`](../../skills/velesdb-context-optimizer/SKILL.md)

@@ -58,12 +58,12 @@
     }
   ],
   "insights": {
-    "tokens_in": 95,
-    "tokens_out": 76,
-    "tokens_saved": 19,
+    "tokens_in": 80,
+    "tokens_out": 67,
+    "tokens_saved": 13,
     "tokens_saved_by_rule": {
       "abstract.log_dedup": 3,
-      "drop.duplicate": 18
+      "drop.duplicate": 14
     }
   },
   "retrieval_handles": [],
