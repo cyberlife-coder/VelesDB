@@ -5,6 +5,8 @@
 
 REST API server for VelesDB - a high-performance vector database.
 
+> The engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It fuses vector + graph + columnar under VelesQL; the [`why()`](../velesdb-memory/README.md) recall trail returns the evidence path behind every answer.
+
 ## Features
 
 - **Vector + Sparse + Hybrid search** with RRF/RSF fusion

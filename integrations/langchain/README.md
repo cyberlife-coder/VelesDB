@@ -1,6 +1,6 @@
 # langchain-velesdb
 
-LangChain integration for [VelesDB](https://github.com/cyberlife-coder/VelesDB) vector database.
+LangChain `VectorStore` for [VelesDB](https://github.com/cyberlife-coder/VelesDB) — **the explainable, local-first memory engine for AI agents.** Vector recall here; for the connected `why()` recall trail across typed links, see [velesdb-memory](../../crates/velesdb-memory/README.md) and the [LangGraph integration](../langgraph/README.md).
 
 ## Installation
 

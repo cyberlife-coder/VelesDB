@@ -7,18 +7,23 @@
 [![MCP registry](https://img.shields.io/badge/MCP_registry-io.github.cyberlife--coder%2Fvelesdb--memory-1f6feb?logo=modelcontextprotocol&logoColor=white)](https://registry.modelcontextprotocol.io)
 [![license: VelesDB Core 1.0](https://img.shields.io/badge/license-VelesDB_Core_1.0_(source--available)-e8702a)](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE)
 
-**Local-first memory for AI agents — a single MCP server.** Give your coding
-agent durable memory that never leaves your machine: it remembers decisions,
-recalls them semantically, and — the differentiator — **connects** them so it
-can answer *why* a decision was made, not just retrieve look-alike text.
+**The explainable, local-first memory engine for AI agents — as a single MCP
+server.** Give your coding agent durable memory that never leaves your machine:
+it remembers decisions, recalls them semantically, and — the differentiator —
+**connects** them so it can answer *why* a decision was made, not just retrieve
+look-alike text. That auditable `why()` recall trail is the kind of
+traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation-timeline/)
+(enforceable from Aug 2026) asks of AI systems; running fully local, it **helps
+meet** those data-residency and explainability expectations rather than claiming
+certified compliance.
 
-> **Release 0.6.0 — 2026-07-06.** `velesdb-memory` **0.6.0** ships on
+> **Release 0.7.0 — 2026-07-12.** `velesdb-memory` **0.7.0** ships on
 > [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
-> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.6.0**
-> and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.8.0**.
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.7.0**
+> and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**.
 > **`cargo install velesdb-memory` installs the latest published release.**
 
 Built on [VelesDB](https://velesdb.com)'s in-core Agent Memory SDK, which fuses

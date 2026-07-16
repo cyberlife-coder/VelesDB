@@ -2,13 +2,15 @@
 
 This document is the **15-minute read** an engineer or a technical due-diligence reviewer should start with. It tells you what VelesDB is, how it is shaped, and where to dig deeper.
 
-> **Last updated:** 2026-06-12 — applies to v2.0.x and onward.
+> **Last updated:** 2026-06-12 — applies to v3.x and onward.
 
 ---
 
 ## TL;DR — three sentences
 
-VelesDB is a **single-binary, embeddable database** that fuses a **vector index (HNSW)**, a **graph engine** (nodes + edges + traversal), and a **typed columnstore** behind a **shared SQL-like query language called VelesQL**. The target use case is local-first AI agents and RAG pipelines that today have to stitch together pgvector + Neo4j + PostgreSQL by hand. The whole engine ships as a single ~9 MB binary (6–13 MB depending on platform and binary, measured on v1.18.0 release artifacts), runs on Linux/macOS/Windows/iOS/Android/WASM, and persists to a directory on disk that the user controls.
+VelesDB is **the explainable, local-first memory engine for AI agents**: a **single-binary, embeddable database** that fuses a **vector index (HNSW)**, a **graph engine** (nodes + edges + traversal), and a **typed columnstore** behind a **shared SQL-like query language called VelesQL**. The target use case is local-first AI agents and RAG pipelines that today have to stitch together pgvector + Neo4j + PostgreSQL by hand. The whole engine ships as a single ~9 MB binary (6–13 MB depending on platform and binary, measured on v1.18.0 release artifacts), runs on Linux/macOS/Windows/iOS/Android/WASM, and persists to a directory on disk that the user controls.
+
+Because the graph and columnstore live in the same address space as the vectors, the high-level `MemoryService` can answer **`why()`** — returning not just an answer but the *evidence path* behind every recall (which facts it used and how they connect). That auditable recall trail is the kind of traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation-timeline/) (enforceable from Aug 2026) asks of AI systems; running fully local, VelesDB **helps meet** those data-residency and explainability expectations rather than claiming certified compliance.
 
 ---
 
