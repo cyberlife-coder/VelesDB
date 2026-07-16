@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/llama-index-vector-stores-velesdb)](https://pypi.org/project/llama-index-vector-stores-velesdb/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
-VelesDB vector store integration for [LlamaIndex](https://www.llamaindex.ai/).
+VelesDB vector store integration for [LlamaIndex](https://www.llamaindex.ai/) — the vector-recall face of **VelesDB, the explainable, local-first memory engine for AI agents.** For the connected `why()` recall trail across typed links, see [velesdb-memory](../../crates/velesdb-memory/README.md) and the [LangGraph integration](../langgraph/README.md).
 
 ## Features
 

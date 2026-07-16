@@ -1,8 +1,9 @@
 # @wiscale/velesdb-memory-node
 
-Local-first **agent memory** for Node.js — the VelesDB memory wedge as an
-in-process native addon (napi-rs). Same hardened Rust as the MCP server and the
-Python binding; no network service.
+**The explainable, local-first memory engine for AI agents — as an in-process
+Node.js addon (napi-rs).** Same hardened Rust as the MCP server and the Python
+binding; no network service. Under the hood it fuses vector + graph + columnar,
+which is *how* it remembers, connects, and explains.
 
 `remember` / `recall` / `recallWhere` / `relate` / `forget` / `why` /
 `rememberExtracted`. The differentiator is **`why()`**: it answers a question with

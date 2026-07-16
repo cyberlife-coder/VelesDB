@@ -5,6 +5,8 @@
 
 WebAssembly build of [VelesDB](https://github.com/cyberlife-coder/VelesDB) - vector search in the browser.
 
+> The browser engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It ships the full `remember`/`recall`/`relate`/`forget`/[`why()`](../velesdb-memory/README.md) memory wedge in-memory, client-side — `why()` returns the evidence path behind every recall.
+
 ## Features
 
 - **In-browser vector search** - No server required
