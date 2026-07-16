@@ -275,8 +275,12 @@ pub(crate) struct StorageState {
 ///
 /// Concern cluster **graph** of `Collection` (R1.1, EPIC #1384). See
 /// [`StorageState`] for the lock-order-preservation rationale.
-#[derive(Clone)]
-pub(crate) struct GraphState {
+///
+/// Shared as a single `Arc<GraphStore>` handle from `Collection` (R1.2b,
+/// EPIC #1384) so graph state can later be shared with `GraphCollection`
+/// without an exclusive move; the `Arc` carries the `Clone` for `Collection`,
+/// so this struct itself no longer derives `Clone`.
+pub(crate) struct GraphStore {
     /// Property index for O(1) equality lookups on graph nodes (EPIC-009).
     ///
     /// Lock order position: **7**.
@@ -364,7 +368,8 @@ pub(crate) struct QueryState {
     /// an operator can be advised to create one. Recommendation-only — never
     /// mutates an index or a query result. A query-execution concern (reached
     /// by the generic `ORDER BY` scan on any collection kind), not graph state
-    /// — reclassified out of `GraphState` here (R1.2a, EPIC #1384).
+    /// — reclassified out of `GraphStore` (then `GraphState`) here (R1.2a,
+    /// EPIC #1384).
     ///
     /// Lock order position: **7** (acquired standalone; no other collection
     /// lock is held while it is held).
@@ -510,7 +515,7 @@ pub(crate) struct RuntimeGuards {
 /// `GraphCollection`, or `MetadataCollection` instead.
 ///
 /// The ~39 shared fields are grouped into six concern sub-structs
-/// ([`StorageState`], [`GraphState`], [`QueryState`], [`GenerationCounters`],
+/// ([`StorageState`], [`GraphStore`], [`QueryState`], [`GenerationCounters`],
 /// [`StreamingState`], [`RuntimeGuards`]) as the foundation of the god-object
 /// split (R1.1 of EPIC #1384). This is a pure structural regrouping: the lock
 /// ordering documented above is unchanged (no lock added, removed, merged, or
@@ -522,7 +527,13 @@ pub(crate) struct Collection {
     pub(crate) storage: StorageState,
 
     /// Graph node/edge indexes, advisors and the edge store.
-    pub(crate) graph: GraphState,
+    ///
+    /// Held as a shared `Arc<GraphStore>` (R1.2b) so the same graph state can
+    /// be handed to `GraphCollection` without an exclusive move. Field access
+    /// (`self.graph.<field>`) is unchanged — it resolves through the `Arc`'s
+    /// `Deref`; every inner field is itself `Arc`-wrapped, so nothing is
+    /// deep-copied.
+    pub(crate) graph: Arc<GraphStore>,
 
     /// Secondary/sparse payload indexes and query-execution engine state.
     pub(crate) query: QueryState,

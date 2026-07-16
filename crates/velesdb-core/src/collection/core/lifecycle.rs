@@ -95,7 +95,7 @@ impl Collection {
                     crate::collection::payload_mirror::PayloadMirror::default(),
                 ),
             },
-            graph: crate::collection::types::GraphState {
+            graph: Arc::new(crate::collection::types::GraphStore {
                 property_index: Arc::new(RwLock::new(parts.property_index)),
                 label_index: Arc::new(RwLock::new(parts.label_index)),
                 range_index: Arc::new(RwLock::new(parts.range_index)),
@@ -106,7 +106,7 @@ impl Collection {
                 index_advisor: Arc::new(RwLock::new(IndexAdvisor::new())),
                 edge_store: Arc::new(parts.edge_store),
                 edge_wal_lock: Arc::new(Mutex::new(())),
-            },
+            }),
             query: crate::collection::types::QueryState {
                 sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),
                 secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
