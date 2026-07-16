@@ -85,12 +85,18 @@ impl GraphCollection {
     /// that the collection is vector-kind: invoking vector-specific methods on
     /// the result returns empty or misleading state.
     ///
-    /// It exists solely so the single-`Collection` SDK bindings (Python /
-    /// Mobile / Tauri), whose one user-facing collection type is backed by a
-    /// `VectorCollection`, can hold a graph collection behind that type while
-    /// gating vector-only operations on the real kind they track separately
-    /// (e.g. the Python `Collection::ensure_vector` guard). Callers that need
-    /// the graph surface must use the graph API, not this view.
+    /// It exists solely for the **Python binding**, whose single user-facing
+    /// `Collection` type is backed by a `VectorCollection`: the binding holds a
+    /// graph collection behind that type while gating vector-only operations on
+    /// the real kind it tracks separately (the Python
+    /// `Collection::ensure_vector` guard). The Mobile and Tauri bindings do
+    /// *not* use this view — they go through the variant-checked
+    /// [`AnyCollection::into_vector`](super::AnyCollection::into_vector) and
+    /// reject non-vector collections. Callers that need the graph surface must
+    /// use the graph API, not this view.
+    ///
+    /// [`MetadataCollection::into_vector_view`](super::MetadataCollection::into_vector_view)
+    /// is the exact mirror for metadata collections.
     #[must_use]
     pub fn into_vector_view(self) -> super::VectorCollection {
         super::VectorCollection { inner: self.inner }

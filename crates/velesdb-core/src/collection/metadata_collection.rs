@@ -67,18 +67,10 @@ impl MetadataCollection {
     /// Consumes `self` and returns a [`VectorCollection`](super::VectorCollection)
     /// **structural view** over this metadata collection's shared `inner` store.
     ///
-    /// This is a purely structural re-wrap of the identical `inner: Collection`
-    /// backing store into the `VectorCollection` newtype — an ordinary value
-    /// move, **not** a `transmute` and not memory-unsafe. It does **not** assert
-    /// that the collection is vector-kind: invoking vector-specific methods on
-    /// the result returns empty or misleading state.
-    ///
-    /// It exists solely so the single-`Collection` SDK bindings (Python /
-    /// Mobile / Tauri), whose one user-facing collection type is backed by a
-    /// `VectorCollection`, can hold a metadata collection behind that type while
-    /// gating vector-only operations on the real kind they track separately
-    /// (e.g. the Python `Collection::ensure_vector` guard). Callers that need
-    /// the metadata surface must use the metadata API, not this view.
+    /// Exact mirror of
+    /// [`GraphCollection::into_vector_view`](super::GraphCollection::into_vector_view)
+    /// — see that method for the full contract (purely structural re-wrap, no
+    /// vector-kind assertion, Python-binding-only rationale).
     #[must_use]
     pub fn into_vector_view(self) -> super::VectorCollection {
         super::VectorCollection { inner: self.inner }
