@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — deterministic context compiler (EPIC-P-070, `velesdb-memory` 0.8.0 / `velesdb-node` 0.8.0)
+### Added — deterministic context compiler (EPIC-P-070; released as `velesdb-memory` 0.8.0 / `velesdb-node` 0.8.0, 2026-07-16)
 
 - **`velesdb-memory`**: new default `context` feature — a deterministic
   context compiler (no LLM, no network, no clock; same request ⇒

@@ -1,6 +1,6 @@
 {
   "name": "@wiscale/velesdb-memory-node",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Local-first agent memory for Node.js (napi-rs): remember/recall/relate/forget/why with the why() knowledge-graph wedge, plus auto-extraction.",
   "license": "SEE LICENSE IN LICENSE",
   "author": "Julien Lange <contact@wiscale.fr>",

@@ -2,7 +2,7 @@
 name = "velesdb-node"
 # Tracks velesdb-memory's independent cadence (the npm package version),
 # not the workspace 3.x engine line. Never crates.io-published (publish=false).
-version = "0.7.0"
+version = "0.8.0"
 # Never cargo-published: this cdylib ships to npm as @wiscale/velesdb-memory-node
 # per-platform prebuilds, not to crates.io.
 publish = false

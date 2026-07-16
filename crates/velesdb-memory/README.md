@@ -17,12 +17,14 @@ traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation
 meet** those data-residency and explainability expectations rather than claiming
 certified compliance.
 
-> **Release 0.7.0 — 2026-07-12.** `velesdb-memory` **0.7.0** ships on
+> **Release 0.8.0 — 2026-07-16** (deterministic context compiler: `compile_context`,
+> `context_savings`, `explain_compilation`, `retrieve_context_source`).
+> `velesdb-memory` **0.8.0** ships on
 > [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
-> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.7.0**
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.8.0**
 > and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**.
 > **`cargo install velesdb-memory` installs the latest published release.**
 

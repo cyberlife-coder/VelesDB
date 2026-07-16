@@ -2,7 +2,7 @@
 name = "velesdb-memory"
 # Independent of the workspace version: velesdb-memory is a young MCP wrapper
 # with its own release cadence, decoupled from the core engine's 3.x line.
-version = "0.7.0"
+version = "0.8.0"
 edition.workspace = true
 rust-version.workspace = true
 license-file = "../../LICENSE"
@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 documentation.workspace = true
 authors.workspace = true
-description = "VelesDB-memory: local-first MCP memory server for AI agents (remember/recall/relate/forget/why)."
+description = "VelesDB-memory: local-first MCP memory server for AI agents (remember/recall/relate/forget/why + deterministic context compiler)."
 readme = "README.md"
 keywords = ["mcp", "agent-memory", "local-first", "knowledge-graph", "ai"]
 categories = ["database", "command-line-utilities"]
@@ -74,13 +74,15 @@ path = "src/main.rs"
 # The binary is the MCP server, so it only builds with the `mcp` feature.
 required-features = ["mcp"]
 
-# Real-data LoCoMo benchmark. Needs a local Ollama (all-minilm + a generative
-# model), so it only builds with the `ollama` feature.
+# Reproducible before/after benchmark of the deterministic context compiler.
+# Offline and dependency-free — needs only the `context` feature.
 [[example]]
 name = "context_savings"
 path = "examples/context_savings/main.rs"
 required-features = ["context"]
 
+# Real-data LoCoMo benchmark. Needs a local Ollama (all-minilm + a generative
+# model), so it only builds with the `ollama` feature.
 [[example]]
 name = "locomo"
 path = "examples/locomo/main.rs"
