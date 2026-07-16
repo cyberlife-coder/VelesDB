@@ -11,7 +11,7 @@
 //!
 //! Mirroring the [`crate::embedder`] pattern, the plug-point is dependency-free
 //! (bring your own LLM by implementing [`Extractor`]) while a batteries-included
-//! [`OllamaExtractor`] backend lives behind the `extract` feature.
+//! `OllamaExtractor` backend lives behind the `extract` feature.
 
 /// One extracted, graph-ready fact: a self-contained sentence plus the salient
 /// topics it concerns. The topics become shared graph hubs, so two facts about
@@ -51,7 +51,7 @@ pub trait Extractor {
     fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError>;
 }
 
-/// Forward [`Extractor`] through an [`Arc`], so a shared `Arc<dyn Extractor>`
+/// Forward [`Extractor`] through an [`Arc`](std::sync::Arc), so a shared `Arc<dyn Extractor>`
 /// (e.g. one held by the MCP server) satisfies the `X: Extractor` bound on
 /// [`crate::MemoryService::remember_extracted`].
 impl<T: Extractor + ?Sized> Extractor for std::sync::Arc<T> {

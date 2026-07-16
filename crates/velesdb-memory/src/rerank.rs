@@ -44,7 +44,7 @@ pub trait Reranker {
     ) -> Result<Vec<Recollection>, RerankError>;
 }
 
-/// Forward [`Reranker`] through an [`Arc`], so a shared `Arc<dyn Reranker>`
+/// Forward [`Reranker`] through an [`Arc`](std::sync::Arc), so a shared `Arc<dyn Reranker>`
 /// (e.g. one held by the MCP server) satisfies the `R: Reranker` bound on
 /// [`crate::MemoryService::recall_fused_reranked`].
 impl<T: Reranker + ?Sized> Reranker for std::sync::Arc<T> {
