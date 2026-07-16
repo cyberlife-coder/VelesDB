@@ -45,9 +45,15 @@ pub(crate) struct Candidate {
 #[derive(Debug, Clone)]
 pub(crate) struct ScoredCandidate {
     pub recollection: Recollection,
-    /// `max(vector_score, 0) / max_score`, in `[0, 1]`.
+    /// `max(vector_score, 0) / max_score`, in `[0, 1]`. Read by the context
+    /// memory bridge only — without that feature the ventilation fields are
+    /// computed but unread (allowing them beats `cfg`-splitting the scoring
+    /// logic itself).
+    #[cfg_attr(not(feature = "context"), allow(dead_code))]
     pub vector_norm: f64,
-    /// Graph promotion weight (`0.0` for a pool-only hit).
+    /// Graph promotion weight (`0.0` for a pool-only hit). Same
+    /// `context`-only readership as `vector_norm`.
+    #[cfg_attr(not(feature = "context"), allow(dead_code))]
     pub graph_weight: f64,
     /// `vector_norm + graph_boost · graph_weight` — the ranking key.
     pub fused: f64,
