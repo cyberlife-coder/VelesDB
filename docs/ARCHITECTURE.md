@@ -56,8 +56,9 @@ idiom for enum-variant access:
    `into_vector_unchecked`, then (audit **P0**, PR #1383) the **safe**
    `into_vector_facade(self) -> VectorCollection`. That untyped facade — which
    coerced *any* variant into a `VectorCollection` — has now been removed
-   (R1.4). The Python binding's two call-sites discriminate the real variant
-   directly with a flat match (`match any_coll { AnyCollection::Vector(v) => …,
+   (R1.4). The Python binding's two call-sites (`get_collection`,
+   `create_metadata_collection`) share one wrapping helper that discriminates
+   the real variant with a flat match (`match any_coll { AnyCollection::Vector(v) => …,
    AnyCollection::Graph(g) => g.into_vector_view(), AnyCollection::Metadata(m)
    => m.into_vector_view(), _ => /* fail-closed error */ }`), so the
    captured `CollectionKind` is derived from the actual variant and can no
