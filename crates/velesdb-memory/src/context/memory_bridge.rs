@@ -86,6 +86,42 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         request: &CompileRequest,
     ) -> Result<CompiledContext, MemoryError> {
         let memories = self.context_memories(request)?;
+        self.compile_with_memories(compiler, request, memories)
+    }
+
+    /// [`Self::compile_context`] with a caller-supplied [`crate::Reranker`] driving
+    /// memory selection: the reranker receives the FULL fused candidate pool
+    /// (vector + graph, before the `k` cutoff) and its ordering decides
+    /// which `k` memories are compiled in — the seam for a semantic
+    /// cross-encoder or LLM judge a Rust embedder brings along. Not exposed
+    /// on the wire (a reranker is code, not JSON), and never a default: the
+    /// shipped [`crate::context::DeterministicReranker`] is *lexical*, and a
+    /// lexical second stage demotes exactly the zero-vocabulary-overlap
+    /// evidence the graph walk rescues (measured in the BDD suite) — bring
+    /// a semantic one.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if compilation, recall, the reranker itself,
+    /// or storage fails.
+    pub fn compile_context_reranked<R: crate::Reranker>(
+        &self,
+        compiler: &ContextCompiler,
+        request: &CompileRequest,
+        reranker: &R,
+    ) -> Result<CompiledContext, MemoryError> {
+        let memories = self.context_memories_reranked(request, reranker)?;
+        self.compile_with_memories(compiler, request, memories)
+    }
+
+    /// The shared back half of every compile flavour: augment the request
+    /// with the pulled memories, compile, annotate provenance, persist
+    /// sources/events per policy.
+    fn compile_with_memories(
+        &self,
+        compiler: &ContextCompiler,
+        request: &CompileRequest,
+        memories: Vec<PulledMemory>,
+    ) -> Result<CompiledContext, MemoryError> {
         let mut augmented = request.clone();
         let mut pulled: BTreeMap<u64, PulledMemory> = BTreeMap::new();
         for memory in memories {
@@ -107,17 +143,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// The memories a request's scope pulls in, as compile fragments plus
     /// their id and normalised fused relevance.
     fn context_memories(&self, request: &CompileRequest) -> Result<Vec<PulledMemory>, MemoryError> {
-        let Some(scope) = &request.memory_scope else {
+        let Some((scope, k)) = scope_and_k(request) else {
             return Ok(Vec::new());
         };
-        // Never let pulled memories push the request over the fragment cap —
-        // the cap is validated after augmentation, and a rejection there would
-        // blame the caller for fragments the bridge itself added.
-        let room = crate::limits::MAX_FRAGMENTS.saturating_sub(request.fragments.len());
-        let k = crate::limits::clamp_recall_limit(scope.k.unwrap_or(DEFAULT_MEMORY_K)).min(room);
-        if k == 0 {
-            return Ok(Vec::new());
-        }
         let filter = scope_filter(scope);
         // The scope's fusion knobs (clamped by from_knobs); absent ones fall
         // back to the crate defaults — raising graph_boost lets a curated
@@ -157,6 +185,47 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                     relevance,
                     vector_norm: scored.vector_norm,
                     graph_weight: scored.graph_weight,
+                }
+            })
+            .collect())
+    }
+
+    /// Memory selection driven by a caller-supplied reranker: the fused
+    /// candidate pool (at pool depth, vector + graph) is handed to the
+    /// reranker whole, its ordering is truncated to `k`, and relevance is
+    /// rank-based (the reranker defines the ranking; the fused ventilation
+    /// no longer describes it, so vector/graph read 0 in provenance).
+    fn context_memories_reranked<R: crate::Reranker>(
+        &self,
+        request: &CompileRequest,
+        reranker: &R,
+    ) -> Result<Vec<PulledMemory>, MemoryError> {
+        let Some((scope, k)) = scope_and_k(request) else {
+            return Ok(Vec::new());
+        };
+        let filter = scope_filter(scope);
+        let opts = FusionOptions::from_knobs(scope.hops, scope.graph_boost, None);
+        let ranked =
+            self.recall_fused_reranked(&request.query, k, filter.as_ref(), opts, reranker)?;
+        let count = ranked.len().max(1);
+        Ok(ranked
+            .into_iter()
+            .enumerate()
+            .map(|(rank, recollection)| {
+                #[allow(clippy::cast_precision_loss)] // rank/count are tiny
+                let relevance = 1.0 - (rank as f32 / count as f32);
+                PulledMemory {
+                    fragment: ContextFragment {
+                        id: None,
+                        content: recollection.content,
+                        kind: Some("memory".to_owned()),
+                        priority: None,
+                        metadata: None,
+                    },
+                    memory_id: recollection.id,
+                    relevance,
+                    vector_norm: 0.0,
+                    graph_weight: 0.0,
                 }
             })
             .collect())
@@ -344,6 +413,18 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
 
 /// How many memories a scope pulls when it does not say (`k` absent).
 const DEFAULT_MEMORY_K: usize = 5;
+
+/// The request's memory scope plus the clamped pull count — `None` when
+/// there is no scope or no room: pulled memories must never push the
+/// request over the fragment cap (the cap is validated after augmentation,
+/// and a rejection there would blame the caller for fragments the bridge
+/// itself added).
+fn scope_and_k(request: &CompileRequest) -> Option<(&MemoryScope, usize)> {
+    let scope = request.memory_scope.as_ref()?;
+    let room = crate::limits::MAX_FRAGMENTS.saturating_sub(request.fragments.len());
+    let k = crate::limits::clamp_recall_limit(scope.k.unwrap_or(DEFAULT_MEMORY_K)).min(room);
+    (k > 0).then_some((scope, k))
+}
 
 /// The recall filter a scope narrows to (its project facet), if any.
 fn scope_filter(scope: &MemoryScope) -> Option<Metadata> {

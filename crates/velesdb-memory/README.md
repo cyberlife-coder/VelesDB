@@ -31,6 +31,16 @@ certified compliance.
 > Python agents reach it through the MCP server).
 > **`cargo install velesdb-memory` installs the latest published release.**
 
+> **Bring your own reranker (Rust)**: `compile_context_reranked` hands the
+> full fused candidate pool (vector + graph, pre-cutoff) to any
+> [`Reranker`] you inject — a cross-encoder, an LLM judge — and its
+> ordering decides which memories get compiled in. Never a default, and
+> deliberately not on the wire: the shipped `DeterministicReranker` is
+> lexical, and a lexical second stage demotes exactly the
+> zero-vocabulary-overlap evidence the graph walk rescues (both behaviours
+> pinned by tests). `recall_fused_reranked` is the same seam for plain
+> recall.
+
 Built on [VelesDB](https://velesdb.com)'s in-core Agent Memory SDK, which fuses
 three engines behind its memory tools:
 

@@ -605,3 +605,122 @@ fn test_memory_scope_graph_boost_pulls_evidence_sharing_no_words_with_the_query(
         .expect("the fix must carry its memory id in provenance");
     assert!(fix_decision.relevance > 0.0);
 }
+
+// --- Reranker seam (2026-07-17): the last engine capability wired in -------
+
+/// A stand-in for a caller's cross-encoder: promotes the memory containing
+/// its marker to the front, keeps every other candidate in place.
+struct MarkerReranker(&'static str);
+
+impl velesdb_memory::Reranker for MarkerReranker {
+    fn rerank(
+        &self,
+        _query: &str,
+        mut candidates: Vec<velesdb_memory::Recollection>,
+    ) -> Result<Vec<velesdb_memory::Recollection>, velesdb_memory::RerankError> {
+        candidates.sort_by_key(|c| usize::from(!c.content.contains(self.0)));
+        Ok(candidates)
+    }
+}
+
+#[test]
+fn test_compile_context_reranked_lets_a_cross_encoder_drive_memory_selection() {
+    // Given two memories where the fused (lexical-vector) ranking prefers
+    // the wordy near-miss, while a semantic reranker knows the terse one is
+    // the real answer
+    let (_dir, svc) = service();
+    svc.remember(
+        "the deploy pipeline deploy checks deploy the canary deploy stage",
+        &[],
+        None,
+    )
+    .expect("remember wordy near-miss");
+    let answer = svc
+        .remember("promotion is gated on checksum verification", &[], None)
+        .expect("remember terse answer");
+
+    let mut req = request(
+        "deploy pipeline checks",
+        vec![fragment("Session note.")],
+        10_000,
+    );
+    req.memory_scope = Some(MemoryScope {
+        k: Some(1),
+        ..MemoryScope::default()
+    });
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+
+    // When compiling once with the fused default and once with the reranker
+    let fused_only = svc.compile_context(&compiler, &req).expect("compile");
+    let reranked = svc
+        .compile_context_reranked(&compiler, &req, &MarkerReranker("checksum"))
+        .expect("compile reranked");
+
+    // Then the reranker changed which memory was selected (k=1), and the
+    // selected memory carries its provenance
+    assert!(
+        !fused_only.content.contains("checksum verification"),
+        "precondition: the fused default must prefer the wordy near-miss"
+    );
+    assert!(
+        reranked
+            .content
+            .contains("promotion is gated on checksum verification"),
+        "the reranker must drive selection, got:\n{}",
+        reranked.content
+    );
+    let picked = reranked
+        .decisions
+        .iter()
+        .find(|d| d.memory_id == Some(answer))
+        .expect("the reranked pull must carry its memory id");
+    assert!(picked.relevance > 0.0);
+}
+
+#[test]
+fn test_compile_context_reranked_with_a_lexical_reranker_demotes_graph_rescues() {
+    // Given a symptom -> fix chain whose fix shares no vocabulary with the
+    // query (the tri-engine rescue case)
+    let (_dir, svc) = service();
+    let symptom = svc
+        .remember("checkout requests fail under peak load", &[], None)
+        .expect("remember");
+    let fix = svc
+        .remember(
+            "raising the acquisition timeout stopped the cascade",
+            &[],
+            None,
+        )
+        .expect("remember");
+    svc.relate(symptom, fix, "fixed_by").expect("relate");
+
+    let raw = r#"{
+        "query": "why do checkout requests fail under peak load",
+        "token_budget": 4000,
+        "fragments": [{"content": "Session note."}],
+        "memory_scope": {"k": 2, "graph_boost": 0.8}
+    }"#;
+    let req: CompileRequest = serde_json::from_str(raw).expect("wire shape");
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+
+    // When selecting with the boosted fusion vs re-ranking that same pool
+    // with the shipped LEXICAL reranker
+    let fused = svc.compile_context(&compiler, &req).expect("compile");
+    let lexical = velesdb_memory::context::DeterministicReranker;
+    let reranked = svc
+        .compile_context_reranked(&compiler, &req, &lexical)
+        .expect("compile reranked");
+
+    // Then fusion surfaces the zero-overlap fix — and the lexical reranker
+    // (scoring by word overlap alone) demotes it out of k=2's front, which
+    // is exactly why no reranker runs by default: a lexical second stage
+    // would undo the graph rescue. The seam exists for SEMANTIC rerankers.
+    assert!(
+        fused.content.contains("stopped the cascade"),
+        "precondition: the boosted fusion must rescue the fix"
+    );
+    assert!(
+        reranked.decisions.iter().any(|d| d.memory_id == Some(fix)),
+        "rerank reorders but never drops: the fix stays in the pulled set"
+    );
+}

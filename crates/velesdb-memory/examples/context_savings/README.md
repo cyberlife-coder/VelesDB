@@ -108,7 +108,11 @@ in under a millisecond. This is the compound story: the skill's
 `remember` + `relate` discipline turns into measurably answerable compiled
 contexts. The `graph_boost: 0.6` knob (new on `memory_scope`) is what lets
 a curated chain out-rank lexical noise; the default (0.15, conversational
-tuning) is measured in the same run for honesty.
+tuning) is measured in the same run for honesty. For a *semantic* second
+stage, Rust embedders can inject any [`Reranker`] via
+`compile_context_reranked` — the full fused pool, reranked before the `k`
+cutoff; the BDD suite pins both that seam and why a lexical reranker must
+not be the default (it demotes the graph rescues).
 
 ## Compile latency at scale
 
