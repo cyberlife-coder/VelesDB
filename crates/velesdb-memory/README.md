@@ -385,28 +385,28 @@ risk). Guarantees, per compilation:
 
 #### How it works
 
-![compile_context pipeline: agent fragments flow through dedup, abstract, pack, externalize, producing content, ctx://source handles and auditable decisions](https://raw.githubusercontent.com/cyberlife-coder/VelesDB/develop/crates/velesdb-memory/docs/diagrams/compile-flow.svg)
+![compile_context pipeline: agent fragments flow through dedup, abstract, pack, externalize, producing content, ctx://source handles and auditable decisions](docs/diagrams/compile-flow.svg)
 
 **Not a transparent proxy.** `compile_context` only touches what your agent
 explicitly hands it as `fragments` — logs, retrieved docs, conversation
 history you choose to route through the call. It never sees or compresses
 the harness's system prompt or tool-call schemas; those stay outside the
 compiler entirely. Knowing *when* and *what* to route through it is the
-[`velesdb-context-optimizer`](../../skills/velesdb-context-optimizer/SKILL.md)
+[`velesdb-context-optimizer`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
 skill's job, not the compiler's — the compiler just compresses what it's
 given, deterministically.
 
-**No automatic repo indexing.** Nothing enters the memory store unless you
-call `remember` / `relate` / `remember_extracted` explicitly — compilation
-itself is **stateless**: call `compile_context` a thousand times and nothing
-is written. The only two exceptions: fragments the budget layer externalizes
-(content that didn't fit) are cached locally under `VELESDB_MEMORY_PATH`
-(default `~/.velesdb-memory`) so `retrieve_context_source` can fetch them
-back by handle, and `context_savings` records aggregate stats (tokens
-in/out/saved) per project. Both stay on disk — local-first, nothing is ever
-sent off the machine.
+**No automatic repo indexing.** Nothing enters *recallable* memory — what
+`recall` / `why` / `memory_scope` can surface — unless you call `remember` /
+`relate` / `remember_extracted` explicitly. Compilation does write two things
+to the local store under `VELESDB_MEMORY_PATH` (default `~/.velesdb-memory`):
+**all** fragment sources are cached locally (content-addressed — not just the
+over-budget ones) so every `ctx://source/` handle stays recoverable via
+`retrieve_context_source`, and `context_savings` records aggregate stats
+(tokens in/out/saved) per project. Both stay on disk — local-first, nothing
+is ever sent off the machine.
 
-![the two data paths: stateless compile vs explicit memory writes — nothing is stored without an explicit remember/relate/remember_extracted call](https://raw.githubusercontent.com/cyberlife-coder/VelesDB/develop/crates/velesdb-memory/docs/diagrams/data-paths.svg)
+![the two data paths: compile caches sources locally but writes no recallable memory vs explicit memory writes — nothing enters recallable memory without an explicit remember/relate/remember_extracted call](docs/diagrams/data-paths.svg)
 
 ```jsonc
 // compile_context — minimal call: query + token_budget + fragments

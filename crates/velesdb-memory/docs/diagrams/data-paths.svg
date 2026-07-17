@@ -1,5 +1,5 @@
 <svg viewBox="0 0 980 300" xmlns="http://www.w3.org/2000/svg" role="img"
-     aria-label="two data paths: stateless compile versus explicit memory writes, separated by the rule that nothing is stored without an explicit action">
+     aria-label="two data paths: compile caches sources locally but writes no recallable memory, versus explicit memory writes via remember and relate">
   <defs>
     <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
@@ -8,7 +8,7 @@
 
   <rect x="0" y="0" width="980" height="300" fill="#ffffff"/>
 
-  <text x="490" y="32" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="15" fill="#0f172a" font-weight="700">nothing is stored without an explicit action</text>
+  <text x="490" y="32" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="15" fill="#0f172a" font-weight="700">nothing enters recallable memory without an explicit action</text>
 
   <!-- Lane 1: stateless compile -->
   <text x="30" y="80" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0e7490" font-weight="700">STATELESS COMPILE</text>
@@ -23,11 +23,11 @@
 
   <line x1="375" y1="122" x2="417" y2="122" stroke="#334155" stroke-width="2" marker-end="url(#arrow2)"/>
 
-  <rect x="420" y="95" width="230" height="55" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="2" stroke-dasharray="5 3"/>
-  <text x="535" y="118" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#334155" font-weight="600">nothing persisted</text>
-  <text x="535" y="135" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#475569">(compile again = same bytes)</text>
+  <rect x="420" y="95" width="260" height="55" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="2" stroke-dasharray="5 3"/>
+  <text x="550" y="118" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#334155" font-weight="600">no recallable memory written</text>
+  <text x="550" y="135" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#475569">(sources cached locally for retrieval)</text>
 
-  <text x="30" y="175" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#57534e">exceptions: over-budget fragments cached locally for retrieve_context_source; context_savings keeps aggregate stats</text>
+  <text x="30" y="175" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#57534e">every fragment's source is content-addressed to local disk for retrieve_context_source; context_savings keeps aggregate stats</text>
 
   <!-- divider -->
   <line x1="20" y1="195" x2="960" y2="195" stroke="#cbd5e1" stroke-width="2" stroke-dasharray="2 4"/>
