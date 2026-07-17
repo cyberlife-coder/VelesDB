@@ -233,20 +233,22 @@ cargo build --release -p velesdb-memory   # → target/release/velesdb-memory
 ## Configure your client
 
 All clients use the same stdio shape — point `command` at the built binary.
+`cargo install velesdb-memory` puts it at `~/.cargo/bin/velesdb-memory`
+(or the path of your local build, `target/release/velesdb-memory`).
 
 **Claude Code**
 
 ```bash
 claude mcp add velesdb-memory \
   --env VELESDB_MEMORY_PATH="$HOME/.velesdb-memory" \
-  -- /path/to/velesdb-memory
+  -- ~/.cargo/bin/velesdb-memory
 ```
 
 **Cursor** — `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project)
 
 ```json
 { "mcpServers": { "velesdb-memory": {
-  "command": "/path/to/velesdb-memory",
+  "command": "~/.cargo/bin/velesdb-memory",
   "env": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
 } } }
 ```
@@ -257,7 +259,7 @@ claude mcp add velesdb-memory \
 
 ```json
 { "context_servers": { "velesdb-memory": {
-  "command": { "path": "/path/to/velesdb-memory", "args": [],
+  "command": { "path": "~/.cargo/bin/velesdb-memory", "args": [],
     "env": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" } }
 } } }
 ```
@@ -267,13 +269,13 @@ claude mcp add velesdb-memory \
 ```bash
 codex mcp add velesdb-memory \
   --env VELESDB_MEMORY_PATH="$HOME/.velesdb-memory" \
-  -- /path/to/velesdb-memory
+  -- ~/.cargo/bin/velesdb-memory
 ```
 
 ```toml
 # equivalent ~/.codex/config.toml entry
 [mcp_servers.velesdb-memory]
-command = "/path/to/velesdb-memory"
+command = "~/.cargo/bin/velesdb-memory"
 args = []
 env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
 ```
@@ -283,7 +285,7 @@ env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
 ```json
 { "mcp": { "velesdb-memory": {
   "type": "local",
-  "command": ["/path/to/velesdb-memory"],
+  "command": ["~/.cargo/bin/velesdb-memory"],
   "enabled": true,
   "environment": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
 } } }
