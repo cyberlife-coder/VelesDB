@@ -1,0 +1,72 @@
+<svg viewBox="0 0 980 320" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="compile_context pipeline: agent fragments flow through dedup, abstract, pack, externalize, producing content, ctx source handles, and auditable decisions">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="320" fill="#ffffff"/>
+
+  <!-- Agent -->
+  <rect x="20" y="130" width="110" height="60" rx="8" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+  <text x="75" y="165" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="15" fill="#1e1b4b" font-weight="600">Agent</text>
+
+  <line x1="130" y1="160" x2="172" y2="160" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Fragments -->
+  <rect x="175" y="120" width="130" height="80" rx="8" fill="#f0fdf4" stroke="#15803d" stroke-width="2"/>
+  <text x="240" y="150" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="14" fill="#14532d" font-weight="600">fragments[]</text>
+  <text x="240" y="170" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#166534">logs, docs,</text>
+  <text x="240" y="185" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#166534">history, code</text>
+
+  <line x1="305" y1="160" x2="347" y2="160" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Pipeline container -->
+  <rect x="350" y="60" width="430" height="220" rx="10" fill="#fafaf9" stroke="#78716c" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="565" y="82" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#57534e" font-weight="600">deterministic pipeline (no LLM, no cloud)</text>
+
+  <!-- Step 1: dedup -->
+  <rect x="368" y="130" width="88" height="60" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1.5"/>
+  <text x="412" y="165" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#78350f" font-weight="600">dedup</text>
+
+  <line x1="456" y1="160" x2="486" y2="160" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 2: abstract -->
+  <rect x="489" y="130" width="88" height="60" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1.5"/>
+  <text x="533" y="158" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#78350f" font-weight="600">abstract</text>
+  <text x="533" y="174" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#92400e">(log dedup)</text>
+
+  <line x1="577" y1="160" x2="607" y2="160" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 3: pack -->
+  <rect x="610" y="130" width="88" height="60" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1.5"/>
+  <text x="654" y="165" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#78350f" font-weight="600">pack</text>
+
+  <line x1="698" y1="160" x2="728" y2="160" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 4: externalize -->
+  <rect x="731" y="130" width="88" height="60" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1.5"/>
+  <text x="775" y="158" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#78350f" font-weight="600">externalize</text>
+  <text x="775" y="174" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#92400e">(over budget)</text>
+
+  <text x="565" y="230" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#57534e">token_budget applied throughout · every fragment gets one auditable decision</text>
+
+  <line x1="819" y1="160" x2="857" y2="160" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Outputs -->
+  <rect x="860" y="30" width="110" height="55" rx="8" fill="#ecfeff" stroke="#0e7490" stroke-width="2"/>
+  <text x="915" y="53" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#164e63" font-weight="600">content</text>
+  <text x="915" y="70" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#155e75">(fits budget)</text>
+
+  <rect x="860" y="132" width="110" height="55" rx="8" fill="#ecfeff" stroke="#0e7490" stroke-width="2"/>
+  <text x="915" y="152" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#164e63" font-weight="600">ctx://source/</text>
+  <text x="915" y="168" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#155e75">handles</text>
+
+  <rect x="860" y="234" width="110" height="55" rx="8" fill="#ecfeff" stroke="#0e7490" stroke-width="2"/>
+  <text x="915" y="254" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#164e63" font-weight="600">decisions[]</text>
+  <text x="915" y="270" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#155e75">(auditable)</text>
+
+  <line x1="857" y1="160" x2="857" y2="57" stroke="#334155" stroke-width="1.5"/>
+  <line x1="857" y1="160" x2="857" y2="261" stroke="#334155" stroke-width="1.5"/>
+</svg>

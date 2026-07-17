@@ -1,0 +1,47 @@
+<svg viewBox="0 0 980 300" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="two data paths: stateless compile versus explicit memory writes, separated by the rule that nothing is stored without an explicit action">
+  <defs>
+    <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="300" fill="#ffffff"/>
+
+  <text x="490" y="32" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="15" fill="#0f172a" font-weight="700">nothing is stored without an explicit action</text>
+
+  <!-- Lane 1: stateless compile -->
+  <text x="30" y="80" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#0e7490" font-weight="700">STATELESS COMPILE</text>
+
+  <rect x="30" y="95" width="150" height="55" rx="8" fill="#ecfeff" stroke="#0e7490" stroke-width="2"/>
+  <text x="105" y="128" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#164e63" font-weight="600">compile_context</text>
+
+  <line x1="180" y1="122" x2="222" y2="122" stroke="#334155" stroke-width="2" marker-end="url(#arrow2)"/>
+
+  <rect x="225" y="95" width="150" height="55" rx="8" fill="#ecfeff" stroke="#0e7490" stroke-width="2"/>
+  <text x="300" y="128" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#164e63" font-weight="600">content returned</text>
+
+  <line x1="375" y1="122" x2="417" y2="122" stroke="#334155" stroke-width="2" marker-end="url(#arrow2)"/>
+
+  <rect x="420" y="95" width="230" height="55" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="2" stroke-dasharray="5 3"/>
+  <text x="535" y="118" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#334155" font-weight="600">nothing persisted</text>
+  <text x="535" y="135" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#475569">(compile again = same bytes)</text>
+
+  <text x="30" y="175" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#57534e">exceptions: over-budget fragments cached locally for retrieve_context_source; context_savings keeps aggregate stats</text>
+
+  <!-- divider -->
+  <line x1="20" y1="195" x2="960" y2="195" stroke="#cbd5e1" stroke-width="2" stroke-dasharray="2 4"/>
+
+  <!-- Lane 2: explicit memory -->
+  <text x="30" y="225" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#15803d" font-weight="700">EXPLICIT MEMORY</text>
+
+  <rect x="30" y="240" width="220" height="55" rx="8" fill="#f0fdf4" stroke="#15803d" stroke-width="2"/>
+  <text x="140" y="263" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#14532d" font-weight="600">remember / relate /</text>
+  <text x="140" y="280" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#14532d" font-weight="600">remember_extracted</text>
+
+  <line x1="250" y1="267" x2="292" y2="267" stroke="#334155" stroke-width="2" marker-end="url(#arrow2)"/>
+
+  <rect x="295" y="240" width="300" height="55" rx="8" fill="#f0fdf4" stroke="#15803d" stroke-width="2"/>
+  <text x="445" y="263" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#14532d" font-weight="600">stored on disk, local-first</text>
+  <text x="445" y="280" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#166534">VELESDB_MEMORY_PATH (~/.velesdb-memory)</text>
+</svg>
