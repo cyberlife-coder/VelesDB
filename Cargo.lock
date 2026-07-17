@@ -6757,6 +6757,7 @@ dependencies = [
 name = "velesdb-memory"
 version = "0.8.0"
 dependencies = [
+ "criterion",
  "rmcp",
  "schemars 1.2.1",
  "serde",

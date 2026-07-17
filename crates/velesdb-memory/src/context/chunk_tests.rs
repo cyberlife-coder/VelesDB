@@ -89,6 +89,27 @@ fn test_chunk_text_keeps_code_fences_atomic() {
 }
 
 #[test]
+fn test_chunk_text_sentence_boundary_does_not_treat_inline_backticks_as_a_real_fence() {
+    // A sentence-cut can land right before literal triple backticks that are
+    // NOT a real fenced block (no paired open/close line — just inline
+    // prose). `append_oversized` must not mistake that cut boundary for a
+    // genuine `Segment::Fence` and refuse to hard-split it.
+    let long_tail = "x".repeat(200);
+    let text = format!("See the example below. ```{long_tail}");
+    let chunks = chunk_text(&text, &policy(30, ChunkBoundary::Sentence));
+    let rebuilt: String = chunks.iter().map(|c| c.text.as_str()).collect();
+    assert_eq!(
+        rebuilt, text,
+        "chunks must still reconstruct the input exactly"
+    );
+    assert!(
+        chunks.iter().all(|c| c.byte_range.len() <= 30),
+        "inline backticks mid-sentence are not a real fence and must still be hard-split, got chunk sizes: {:?}",
+        chunks.iter().map(|c| c.byte_range.len()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_chunk_text_hard_splits_an_oversized_paragraph() {
     let text = "x".repeat(100);
     let chunks = chunk_text(&text, &policy(30, ChunkBoundary::Paragraph));

@@ -80,17 +80,32 @@ pub fn chunk_text(text: &str, policy: &ChunkPolicy) -> Vec<TextChunk> {
     assemble(text, &ranges, policy.overlap_bytes)
 }
 
+/// One partition of the text: a byte range plus whether it is atomic
+/// (a genuine fenced block — never split, however large) or plain-text-
+/// derived (always eligible for a hard split when oversized). `atomic` is
+/// carried explicitly rather than re-derived from the range's content, so a
+/// plain-text cut that merely happens to start with `` ``` `` (e.g. a
+/// sentence boundary landing right before literal backticks in prose) is
+/// never mistaken for a real fence.
+struct Unit {
+    range: core::ops::Range<usize>,
+    atomic: bool,
+}
+
 /// Split `text` into atomic unit ranges: fenced blocks stay whole, the rest
 /// is cut at the preferred boundary. The ranges partition the text.
-fn units(text: &str, boundary: ChunkBoundary) -> Vec<core::ops::Range<usize>> {
-    let mut ranges = Vec::new();
+fn units(text: &str, boundary: ChunkBoundary) -> Vec<Unit> {
+    let mut units = Vec::new();
     for segment in fence_segments(text) {
         match segment {
-            Segment::Fence(range) => ranges.push(range),
-            Segment::Plain(range) => split_plain(text, range, boundary, &mut ranges),
+            Segment::Fence(range) => units.push(Unit {
+                range,
+                atomic: true,
+            }),
+            Segment::Plain(range) => split_plain(text, range, boundary, &mut units),
         }
     }
-    ranges
+    units
 }
 
 /// A top-level slice of the text: either a whole fenced block or plain text.
@@ -141,21 +156,29 @@ fn push_tail(segments: &mut Vec<Segment>, fence_start: Option<usize>, cursor: us
     }
 }
 
-/// Cut one plain-text range at the preferred boundary, appending the pieces.
+/// Cut one plain-text range at the preferred boundary, appending the pieces
+/// — always non-atomic: nothing derived from a `Plain` segment is ever a
+/// real fence, however it happens to start.
 fn split_plain(
     text: &str,
     range: core::ops::Range<usize>,
     boundary: ChunkBoundary,
-    out: &mut Vec<core::ops::Range<usize>>,
+    out: &mut Vec<Unit>,
 ) {
     let slice = &text[range.clone()];
     let mut piece_start = 0_usize;
     for cut in boundary_cuts(slice, boundary) {
-        out.push(range.start + piece_start..range.start + cut);
+        out.push(Unit {
+            range: range.start + piece_start..range.start + cut,
+            atomic: false,
+        });
         piece_start = cut;
     }
     if piece_start < slice.len() {
-        out.push(range.start + piece_start..range.end);
+        out.push(Unit {
+            range: range.start + piece_start..range.end,
+            atomic: false,
+        });
     }
 }
 
@@ -208,24 +231,18 @@ fn find_from(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
         .map(|position| from + position)
 }
 
-/// Greedily merge unit ranges into chunk ranges of at most `max` bytes. A
-/// single unit larger than `max` is hard-split at char boundaries — unless it
-/// is a unit the splitter kept atomic on purpose (a fence), which `units`
-/// never asks to split, so oversized fences arrive here whole and stay whole
-/// only when they are fences; plain oversized units are split.
-fn pack_units(
-    text: &str,
-    unit_ranges: &[core::ops::Range<usize>],
-    max: usize,
-) -> Vec<core::ops::Range<usize>> {
+/// Greedily merge units into chunk ranges of at most `max` bytes. A single
+/// unit larger than `max` is hard-split at char boundaries — unless it is
+/// marked atomic (a genuine fence), which stays whole regardless of size.
+fn pack_units(text: &str, units: &[Unit], max: usize) -> Vec<core::ops::Range<usize>> {
     let mut chunks: Vec<core::ops::Range<usize>> = Vec::new();
     let mut open: Option<core::ops::Range<usize>> = None;
-    for unit in unit_ranges {
-        if unit.len() > max {
+    for unit in units {
+        if unit.range.len() > max {
             flush(&mut chunks, &mut open);
-            append_oversized(text, unit.clone(), max, &mut chunks);
+            append_oversized(text, unit, max, &mut chunks);
         } else {
-            open = Some(merge_or_flush(&mut chunks, open, unit.clone(), max));
+            open = Some(merge_or_flush(&mut chunks, open, unit.range.clone(), max));
         }
     }
     flush(&mut chunks, &mut open);
@@ -257,27 +274,28 @@ fn flush(chunks: &mut Vec<core::ops::Range<usize>>, open: &mut Option<core::ops:
     }
 }
 
-/// Append an oversized unit: fences stay atomic, plain text hard-splits at
-/// char boundaries every `max` bytes.
+/// Append an oversized unit: an atomic unit (a genuine fence) stays whole,
+/// everything else hard-splits at char boundaries every `max` bytes — the
+/// unit's `atomic` flag decides, never its leading bytes (see [`Unit`]).
 fn append_oversized(
     text: &str,
-    unit: core::ops::Range<usize>,
+    unit: &Unit,
     max: usize,
     chunks: &mut Vec<core::ops::Range<usize>>,
 ) {
-    if text[unit.clone()].trim_start().starts_with("```") {
-        chunks.push(unit);
+    if unit.atomic {
+        chunks.push(unit.range.clone());
         return;
     }
-    let mut start = unit.start;
-    while start < unit.end {
-        let floored = char_floor(text, (start + max).min(unit.end));
+    let mut start = unit.range.start;
+    while start < unit.range.end {
+        let floored = char_floor(text, (start + max).min(unit.range.end));
         // A ceiling smaller than the char at `start` cannot cut inside it:
         // advance to the next char boundary instead of forcing a mid-char cut.
         let end = if floored > start {
             floored
         } else {
-            char_ceil(text, start + 1).min(unit.end)
+            char_ceil(text, start + 1).min(unit.range.end)
         };
         chunks.push(start..end);
         start = end;

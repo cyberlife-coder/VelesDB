@@ -418,12 +418,16 @@ fn effective_chunk_policy(
     }
 }
 
-/// Materialize what each packed fragment emits, keyed by `seq`.
+/// Materialize what each packed fragment emits, keyed by `seq`. A fragment
+/// with no pieces at all (empty content) is kept here with `taken == total
+/// == 0` — trivially fully emitted, since there is nothing to lose — rather
+/// than dropped as "took none of what was offered", which is reserved for a
+/// fragment that had pieces and the budget could not fit any of them.
 fn emissions(items: &[PackItem], taken: &[usize]) -> BTreeMap<usize, Emission> {
     items
         .iter()
         .zip(taken.iter().copied())
-        .filter(|&(_, count)| count > 0)
+        .filter(|&(item, count)| count > 0 || item.pieces.is_empty())
         .map(|(item, count)| {
             (
                 item.seq,

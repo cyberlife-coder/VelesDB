@@ -40,6 +40,13 @@ fn test_find_duplicates_distinct_contents_are_all_kept() {
 
 #[test]
 fn test_find_duplicates_exact_copy_of_a_near_duplicate_reports_exact() {
+    // "hello  world" (#1) is only a NEAR duplicate of "Hello World" (#0) —
+    // its bytes differ (case, spacing). #2 is a byte-identical copy of #1,
+    // not of #0: kept_seq must point at #1, the fragment #2 is actually
+    // byte-identical to, never at the root #0 it merely resembles. Pointing
+    // at #0 would let downstream code (`dup_verdict`) assume #2's exact
+    // bytes survive whenever #0 is emitted verbatim — false whenever #0 and
+    // #1/#2 differ, which is exactly why they were only a *near* match.
     let verdicts = find_duplicates(&["Hello World", "hello  world", "hello  world"], true);
     let dup = verdicts[2].expect("third entry duplicates the second");
     assert_eq!(
@@ -48,9 +55,22 @@ fn test_find_duplicates_exact_copy_of_a_near_duplicate_reports_exact() {
         "a byte-identical copy must be recorded as an exact duplicate"
     );
     assert_eq!(
-        dup.kept_seq, 0,
-        "the surviving twin is the first occurrence"
+        dup.kept_seq, 1,
+        "the byte-identical twin is #1, not the near-duplicate root #0"
     );
+}
+
+#[test]
+fn test_find_duplicates_near_dup_still_anchors_the_near_chain_at_the_root() {
+    // Even though an exact-duplicate chain now anchors at the nearest byte-
+    // identical twin (previous test), the *near*-duplicate chain must still
+    // anchor every near match at the true root: a fourth, distinct-again
+    // near-duplicate of "Hello World" must point at #0, not at #1.
+    let verdicts = find_duplicates(
+        &["Hello World", "hello  world", "hello  world", "HELLO WORLD"],
+        true,
+    );
+    assert_eq!(verdicts[3].expect("near dup").kept_seq, 0);
 }
 
 #[test]

@@ -537,6 +537,68 @@ fn test_compile_duplicate_of_externalized_fragment_reports_elevated_risk() {
 }
 
 #[test]
+fn test_compile_critical_duplicate_of_partially_emitted_twin_reports_high_risk() {
+    // Given a critical (verbatim-marked) exact duplicate whose surviving
+    // twin itself only partially fits the budget
+    let big = "x".repeat(4_000);
+    let req = request(
+        vec![
+            fragment(&big),
+            fragment_with_meta(&big, &[("verbatim", Value::Bool(true))]),
+        ],
+        300,
+    );
+
+    // When compiling under a budget too small to fully emit the twin
+    let out = compile(&req);
+
+    // Then the critical duplicate's decision is High risk specifically —
+    // not merely "not Low" — its own bytes are provably absent from the
+    // output and it demands verbatim survival
+    let dup = out
+        .decisions
+        .iter()
+        .find(|d| matches!(d.action, ContextAction::Drop))
+        .expect("the verbatim-marked copy is an exact duplicate of the first");
+    assert!(
+        matches!(dup.risk, FidelityRisk::High),
+        "a critical duplicate of a not-fully-emitted twin must be High risk, got {:?}",
+        dup.risk
+    );
+}
+
+#[test]
+fn test_compile_near_dup_dedup_can_be_disabled_via_policy() {
+    // Given two near-duplicate (not byte-identical) fragments and a policy
+    // that disables near-duplicate detection
+    let policy = CompilePolicy {
+        near_dup_dedup: false,
+        ..CompilePolicy::default()
+    };
+    let mut req = request(
+        vec![
+            fragment("The server restarts nightly."),
+            fragment("the  server   restarts  nightly."),
+        ],
+        10_000,
+    );
+    req.policy = Some(policy);
+
+    // When compiling
+    let out = compile(&req);
+
+    // Then neither fragment is dropped as a near-duplicate — both are
+    // independently classified and packed
+    assert!(
+        out.decisions
+            .iter()
+            .all(|d| d.action != ContextAction::Drop),
+        "near-dup detection was disabled, nothing should be dropped as a duplicate"
+    );
+    assert_eq!(out.decisions.len(), 2);
+}
+
+#[test]
 fn test_compile_critical_near_duplicate_is_not_dropped() {
     // Given a verbatim-marked fragment that near-duplicates a lossy log twin
     let log_twin = ContextFragment {
@@ -649,6 +711,27 @@ fn test_compile_empty_fragments_yields_empty_context() {
     assert!(out.decisions.is_empty());
     assert_eq!(out.insights.tokens_in, 0);
     assert_eq!(out.insights.tokens_out, 0);
+    assert!(matches!(out.risk, FidelityRisk::Low));
+}
+
+#[test]
+fn test_compile_empty_content_critical_fragment_is_low_risk_not_a_budget_miss() {
+    // Given a critical (verbatim-marked) fragment whose content is empty —
+    // there is trivially nothing to lose — under a budget large enough that
+    // a real fit failure cannot be the explanation
+    let empty_critical = fragment_with_meta("", &[("verbatim", Value::Bool(true))]);
+    let req = request(vec![empty_critical], 10_000);
+
+    // When compiling
+    let out = compile(&req);
+    let decision = decision_for(&out, "");
+
+    // Then it is reported as fully (trivially) emitted — Low risk, no
+    // "did not fit the budget" story and no retrieval handle needed for
+    // content that was never going to be lost
+    assert_eq!(decision.action, ContextAction::Preserve);
+    assert!(matches!(decision.risk, FidelityRisk::Low));
+    assert_eq!(decision.rule_id, "preserve.marked_verbatim");
     assert!(matches!(out.risk, FidelityRisk::Low));
 }
 

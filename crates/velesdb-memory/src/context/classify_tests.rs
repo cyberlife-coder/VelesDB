@@ -71,6 +71,32 @@ fn test_classify_negative_constraint_english_and_french() {
 }
 
 #[test]
+fn test_classify_negative_constraint_detected_even_before_punctuation() {
+    // "never "/"jamais " require a trailing space in the marker table, so a
+    // marker word immediately followed by punctuation instead of whitespace
+    // ("Never," "jamais.") — or ending the line outright — must still be
+    // recognized; a purely-`contains("never ")`-style check misses both.
+    assert_eq!(
+        classify_default(&fragment("Never, under any circumstances, delete vol-042.")).id,
+        "preserve.negative_constraint",
+        "a marker followed by a comma must still be detected"
+    );
+    assert_eq!(
+        classify_default(&fragment(
+            "Ne jamais: relancer le primaire sans validation."
+        ))
+        .id,
+        "preserve.negative_constraint",
+        "a marker followed by a colon must still be detected"
+    );
+    assert_eq!(
+        classify_default(&fragment("The primary must never")).id,
+        "preserve.negative_constraint",
+        "a marker ending the line, with no trailing character at all, must still be detected"
+    );
+}
+
+#[test]
 fn test_classify_repetitive_log_abstracts() {
     let log = ContextFragment {
         kind: Some("log".to_owned()),

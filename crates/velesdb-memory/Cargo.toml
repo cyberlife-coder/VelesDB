@@ -67,12 +67,20 @@ extract = ["dep:ureq"]
 tempfile = "3"
 serde_json = { workspace = true }
 tokio = { workspace = true }
+criterion = { workspace = true }
 
 [[bin]]
 name = "velesdb-memory"
 path = "src/main.rs"
 # The binary is the MCP server, so it only builds with the `mcp` feature.
 required-features = ["mcp"]
+
+# Latency of the deterministic context compiler's `compile()` pipeline
+# across fragment counts, budgets, and content shapes — see BENCHMARK.md.
+[[bench]]
+name = "context_compiler_benchmark"
+harness = false
+required-features = ["context"]
 
 # Reproducible before/after benchmark of the deterministic context compiler.
 # Offline and dependency-free — needs only the `context` feature.

@@ -158,9 +158,29 @@ fn has_negative_constraint(fragment: &ContextFragment) -> bool {
         "jamais ",
     ];
     fragment.content.lines().any(|line| {
-        let lowered = line.to_lowercase();
+        let lowered = word_bounded(&line.to_lowercase());
         MARKERS.iter().any(|marker| lowered.contains(marker))
     })
+}
+
+/// Normalize a lowercased line so a trailing-space marker (`"never "`,
+/// `"jamais "`) still matches when the word is followed by punctuation
+/// ("Never,") or ends the line outright, instead of only whitespace: ASCII
+/// punctuation (apostrophe excluded, so `"don't"` stays intact) becomes a
+/// space, and a trailing space is appended.
+fn word_bounded(line: &str) -> String {
+    let mut normalized: String = line
+        .chars()
+        .map(|c| {
+            if c.is_ascii_punctuation() && c != '\'' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    normalized.push(' ');
+    normalized
 }
 
 /// A `kind = "log"` fragment where at least one line repeats.

@@ -39,25 +39,40 @@ pub(crate) fn find_duplicates(contents: &[&str], near: bool) -> Vec<Option<Dupli
         .enumerate()
         .map(|(seq, content)| {
             let exact_hash = stable_id(content);
-            let near_hash = stable_id(&normalize(content));
-            let verdict = check(exact_hash, near_hash, near, &exact_seen, &near_seen);
-            // Record both hashes even for a duplicate (mapped to the kept
-            // twin), so a later byte-identical copy of a near-duplicate is
-            // still reported as *exact* — the audit trail's rule ids depend
-            // on it.
-            let kept = verdict.map_or(seq, |dup| dup.kept_seq);
-            exact_seen.entry(exact_hash).or_insert(kept);
-            near_seen.entry(near_hash).or_insert(kept);
+            // Skip the normalize+hash pass entirely when near-dup detection
+            // is off — the value would never be read.
+            let near_hash = near.then(|| stable_id(&normalize(content)));
+            let verdict = check(exact_hash, near_hash, &exact_seen, &near_seen);
+            // Anchor differently per hash: `near_seen` must always chain to
+            // the true root (only the root's bytes are ever emitted, so
+            // that is the only fragment whose survival matters), but
+            // `exact_seen` must anchor at THIS fragment whenever it is only
+            // a *near* match of its twin — its own bytes differ from the
+            // root's, so a later byte-identical copy is exact-duplicating
+            // *this* fragment, not the root it merely resembles. Chaining an
+            // exact match to the root there would let downstream code
+            // assume the copy's exact bytes survive whenever the root is
+            // emitted verbatim, which is false whenever root and twin
+            // differ (exactly why they were only a near match).
+            let near_root = verdict.map_or(seq, |dup| dup.kept_seq);
+            let exact_anchor = match verdict {
+                Some(dup) if dup.kind == DupKind::Exact => dup.kept_seq,
+                _ => seq,
+            };
+            exact_seen.entry(exact_hash).or_insert(exact_anchor);
+            if let Some(near_hash) = near_hash {
+                near_seen.entry(near_hash).or_insert(near_root);
+            }
             verdict
         })
         .collect()
 }
 
 /// Classify one content (by its precomputed hashes) against what was seen.
+/// `near_hash` is `None` exactly when near-duplicate detection is off.
 fn check(
     exact_hash: u64,
-    near_hash: u64,
-    near: bool,
+    near_hash: Option<u64>,
     exact_seen: &BTreeMap<u64, usize>,
     near_seen: &BTreeMap<u64, usize>,
 ) -> Option<Duplicate> {
@@ -67,10 +82,7 @@ fn check(
             kept_seq,
         });
     }
-    if !near {
-        return None;
-    }
-    near_seen.get(&near_hash).map(|&kept_seq| Duplicate {
+    near_seen.get(&near_hash?).map(|&kept_seq| Duplicate {
         kind: DupKind::Near,
         kept_seq,
     })
