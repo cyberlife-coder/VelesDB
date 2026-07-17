@@ -172,5 +172,59 @@ const again = await repro(1)
 const once = await repro(2)
 console.log(`reproducibility      : ${again.content === once.content ? 'OK (byte-identical)' : 'FAILED'}`)
 
+// --- RL x GRAPH SYNERGY (EPIC-P-071/US-002 importance blend) ---------------
+// One ranking out of every engine: a fact the team reinforced via feedback()
+// AND that only the graph BFS reaches must out-rank a fact that is merely
+// lexically similar to the question. Runs AFTER the measurements above on
+// purpose — feedback() mutates the learned confidence recall() re-ranks by.
+//
+// Setup, per the real triage workflow: a wordy report fact that shares the
+// question's vocabulary but answers nothing is added and flagged as noise;
+// the zero-overlap pool fix (graph-reached through checkout -> retry_storm
+// -> pool_fix) is repeatedly marked useful.
+console.log('')
+console.log('RL x GRAPH SYNERGY (importance blend over the fused pool)')
+const SIMILAR_ONLY = 'Failed checkout attempts during peak periods are tallied in the weekly payments report.'
+const similarId = await mem.remember(SIMILAR_ONLY)
+for (let i = 0; i < 20; i++) await mem.feedback(ids.pool_fix, true)
+for (let i = 0; i < 5; i++) await mem.feedback(similarId, false)
+
+const synergyCompile = (importance) =>
+  mem.compileContext({
+    query: CASES[0].q,
+    token_budget: 500,
+    fragments: [{ content: 'You are the on-call assistant. Answer strictly from the provided context.', metadata: { cache: true } }],
+    memory_scope: { k: K, graph_boost: 0.6 },
+    policy: { store_sources: false, record_events: false, importance },
+  })
+
+const synergyRun = async () => {
+  // Blend OFF (zero weights): the wordy near-miss out-ranks the real fix.
+  const off = await synergyCompile({ confidence: 0.0, recency: 0.0 })
+  // Blend ON: learned confidence re-ranks INSIDE the fused-selected pool.
+  const on = await synergyCompile({ confidence: 0.8, recency: 0.0 })
+  const posOf = (out, text) => out.content.indexOf(text)
+  return {
+    offFixPos: posOf(off, FACTS.pool_fix),
+    offSimPos: posOf(off, SIMILAR_ONLY),
+    onFixPos: posOf(on, FACTS.pool_fix),
+    onSimPos: posOf(on, SIMILAR_ONLY),
+    onContent: on.content,
+    onReasons: on.decisions.filter((d) => d.memory_id != null).map((d) => d.reason.slice(d.reason.indexOf('pulled from memory'))),
+  }
+}
+
+const r1 = await synergyRun()
+const r2 = await synergyRun()
+const present = (p) => p >= 0
+const offLeads = present(r1.offSimPos) && present(r1.offFixPos) && r1.offSimPos < r1.offFixPos
+const onFixLeads = present(r1.onFixPos) && present(r1.onSimPos) && r1.onFixPos < r1.onSimPos
+console.log(`  blend OFF (weights 0)        : similar-only fact precedes the graph-reached fix: ${offLeads} (sim@${r1.offSimPos}, fix@${r1.offFixPos}) — 0.8.0 behaviour`)
+console.log(`  blend ON  (confidence 0.8)   : reinforced graph-reached fix precedes the similar-only fact: ${onFixLeads} (fix@${r1.onFixPos}, sim@${r1.onSimPos})`)
+for (const reason of r1.onReasons) console.log(`    ${reason}`)
+const synergyReproducible = JSON.stringify(r1) === JSON.stringify(r2)
+console.log(`  reproducibility              : ${synergyReproducible ? 'OK (two identical runs)' : 'FAILED'}`)
+
 rmSync(dir, { recursive: true, force: true })
 if (fusedFound <= vectorFound || again.content !== once.content) process.exit(1)
+if (!offLeads || !onFixLeads || !synergyReproducible) process.exit(1)

@@ -265,6 +265,21 @@ impl MemoryStore {
         }))
     }
 
+    /// Record an outcome for a recalled fact: `success = true` reinforces it,
+    /// `false` weakens it. Resolves to the fact's new learned confidence in
+    /// `[0, 1]` — the signal `recall` re-ranks by and the context compiler's
+    /// importance blend (`policy.importance`) folds into memory selection.
+    #[napi(ts_return_type = "Promise<number>")]
+    pub fn feedback(&self, id: String, success: bool) -> AsyncTask<Job<f64>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let id = convert::parse_id(&id)?;
+            svc.feedback(id, success)
+                .map(f64::from)
+                .map_err(to_napi_err)
+        }))
+    }
+
     /// Delete a memory by id.
     #[napi(ts_return_type = "Promise<void>")]
     pub fn forget(&self, id: String) -> AsyncTask<Job<()>> {
