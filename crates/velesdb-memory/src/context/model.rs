@@ -113,7 +113,18 @@ pub struct MemoryScope {
 /// pulled batch**, never against wall time).
 ///
 /// Both weights at `0.0` disable the blend entirely: the output is
-/// byte-identical to the 0.8.0 behaviour (pinned by a golden test).
+/// byte-identical to the 0.8.0 behaviour (pinned by a golden test). The
+/// defaults are **active** on purpose — upgrading from 0.8.0 with the
+/// default policy, RL-reinforced memories rank higher out of the box; zero
+/// the weights to restore the exact 0.8.0 ordering.
+///
+/// Recommended range for both weights: `[0.0, 1.0]` (at `1.0` a term can
+/// fully offset the similarity gap within the pool). Values outside that
+/// range are **accepted verbatim, never clamped** — a negative weight
+/// deliberately inverts its term (e.g. demote reinforced facts), a weight
+/// above `1.0` lets the term dominate similarity. Only the recorded
+/// decision `relevance` is clamped into `[0, 1]`; the ranking itself uses
+/// the raw blended score.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct ImportanceWeights {

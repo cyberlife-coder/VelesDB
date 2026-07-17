@@ -47,7 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `compile_context_reranked` seam, and ventilates all four signals in each
   decision's `reason` (`vector …, graph …, confidence …, recency …`). Both
   weights at 0 reproduce the 0.8.0 output byte for byte (golden-pinned).
-  [EPIC-P-071/US-002]
+  **Behavioral change**: with the default policy the blend is active
+  (`confidence: 0.2`), so RL-reinforced memories now rank higher out of the
+  box after an upgrade; set the importance weights to 0 to restore the exact
+  0.8.0 ordering (byte-identical, golden-tested). Recommended weight range
+  is `[0, 1]`; out-of-range values are accepted verbatim, never clamped
+  (documented and regression-tested). [EPIC-P-071/US-002]
 - **Node** (`@wiscale/velesdb-memory-node`): `feedback(id, success)` binding
   (resolves to the fact's new learned confidence), and a committed RL×graph
   synergy case in the `tri_engine_rescue` benchmark: a fact reinforced by

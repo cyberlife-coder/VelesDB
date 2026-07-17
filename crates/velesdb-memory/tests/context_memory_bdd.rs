@@ -1120,3 +1120,50 @@ fn test_importance_blend_composes_with_reranked_memory_selection() {
         blended.content
     );
 }
+
+#[test]
+fn test_importance_out_of_range_weight_is_accepted_verbatim_not_clamped() {
+    // Given the reinforced-twin scenario, but with a NEGATIVE confidence
+    // weight — the documented (unclamped) inversion: demote reinforced facts
+    let (_dir, svc) = service();
+    let alpha = "postgres pool sizing guidance from runbook alpha";
+    let beta = "postgres pool sizing guidance from runbook beta";
+    let alpha_id = svc.remember(alpha, &[], None).expect("remember");
+    let beta_id = svc.remember(beta, &[], None).expect("remember");
+
+    let mut req = request(
+        "postgres pool sizing",
+        vec![fragment("Session note.")],
+        10_000,
+    );
+    req.memory_scope = Some(MemoryScope {
+        k: Some(2),
+        ..MemoryScope::default()
+    });
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+
+    // When the LEADING fact is the one the team reinforced
+    req.policy = Some(importance_policy(0.0, 0.0, None));
+    let baseline = svc.compile_context(&compiler, &req).expect("baseline");
+    let (leading_text, leading_id, other) = if pos(&baseline, alpha) < pos(&baseline, beta) {
+        (alpha, alpha_id, beta)
+    } else {
+        (beta, beta_id, alpha)
+    };
+    for _ in 0..15 {
+        svc.feedback(leading_id, true).expect("feedback");
+    }
+
+    // And compiling with confidence weight -1.0 (outside the recommended
+    // [0, 1] range — accepted verbatim, per the documented contract)
+    req.policy = Some(importance_policy(-1.0, 0.0, None));
+    let blended = svc.compile_context(&compiler, &req).expect("blended");
+
+    // Then the term is inverted, not clamped to zero: the reinforced fact
+    // is demoted behind its twin (a clamp to 0 would keep it leading)
+    assert!(
+        pos(&blended, other) < pos(&blended, leading_text),
+        "a negative weight must invert the confidence term, got:\n{}",
+        blended.content
+    );
+}
