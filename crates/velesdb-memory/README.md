@@ -365,10 +365,11 @@ remember_extracted { "text": "Met Dana at the Rust meetup; she now leads the par
 
 ### The context compiler tools
 
-**Compiler surfaces today: MCP server, Node, Rust. Python binding: in
-progress** (tracked as a follow-up EPIC) — Python agents reach it through the
-MCP server for now; `from velesdb import MemoryService` covers the memory API
-only, not `compile_context` yet.
+**Compiler surfaces today: MCP server, Node, Rust, and Python** —
+`from velesdb import MemoryService` includes full context-compiler parity
+(`compile_context` / `retrieve_context_source` / `context_savings` /
+`save_working_context` / `load_working_context`, ids as exact native ints);
+any other client reaches the same tools through the MCP server.
 
 **Why:** agents spend most of their tokens re-reading redundant context.
 `compile_context` compresses it **deterministically** — no LLM, no cloud, no
@@ -506,6 +507,14 @@ score = fused_norm + confidence·(rl_confidence − 0.5)·2 + recency·recency_n
   relative to the batch, so compilation stays byte-deterministic.
 - **Compat.** Both weights at `0.0` reproduce the 0.8.0 output byte for
   byte (golden-pinned); requests without `importance` parse unchanged.
+  **Behavioral change on upgrade**: the defaults are active, so with an
+  untouched policy RL-reinforced memories rank higher out of the box —
+  zero the weights to restore the exact 0.8.0 ordering.
+- **Weight range.** Recommended `[0, 1]` for both weights. Out-of-range
+  values are accepted verbatim, never clamped: a negative weight inverts
+  its term (e.g. demote reinforced facts), a weight above `1` lets the
+  term dominate similarity; only the recorded decision `relevance` is
+  clamped into `[0, 1]`.
 - **Explainable.** Every pulled memory's decision `reason` ventilates all
   four signals, e.g. (from the committed tri-engine benchmark):
   `pulled from memory 1444253315203703248 (vector 0.00, graph 1.00,
