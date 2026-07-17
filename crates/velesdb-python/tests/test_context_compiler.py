@@ -213,6 +213,51 @@ def test_compile_context_result_shape_matches_the_mcp_wire_contract(mem):
     assert savings["events"] == 1
 
 
+# --- numeric boundary round-trips through the shared converters ---------------
+# The u64 fix in src/utils.rs changes the whole binding's observable behavior
+# (payloads, search, VelesQL, graph props all share python_to_json /
+# json_to_python): ints in (i64::MAX, u64::MAX] now round-trip exactly as int
+# instead of silently degrading to a lossy float. These pin the boundary
+# contract: exact ints inside [i64::MIN, u64::MAX], floats stay float, bools
+# stay bool (bool is an int subclass in Python — order of checks matters), and
+# anything outside the range is an explicit ValueError, never silent precision
+# loss.
+# ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(2**64 - 1, id="u64-max"),
+        pytest.param(2**63, id="i64-max-plus-1"),
+        pytest.param(1.5, id="float-stays-float"),
+        pytest.param(True, id="bool-stays-bool-not-int"),
+    ],
+)
+def test_metadata_boundary_values_round_trip_exactly(mem, value):
+    fid = mem.remember("numeric boundary probe", metadata={"v": value})
+    hits = mem.recall("numeric boundary probe", k=5)
+    hit = next(h for h in hits if h["id"] == fid)
+    got = hit["metadata"]["v"]
+    assert got == value
+    # `True == 1` and `1 == 1.0` in Python, so equality alone cannot catch a
+    # bool→int or int→float degradation — the exact type must survive too.
+    assert type(got) is type(value)
+
+
+def test_metadata_int_above_u64_max_raises_value_error(mem):
+    # 2**64 fits neither i64 nor u64; before the fix it silently fell through
+    # to a lossy f64 (1.8446744073709552e19) — it must be an explicit error.
+    with pytest.raises(ValueError):
+        mem.remember("too big", metadata={"v": 2**64})
+
+
+def test_metadata_int_below_i64_min_raises_value_error(mem):
+    # Same guard on the low side: -(2**63) - 1 is below i64::MIN.
+    with pytest.raises(ValueError):
+        mem.remember("too small", metadata={"v": -(2**63) - 1})
+
+
 def test_compile_context_ids_survive_full_u64_precision(mem):
     # stable_id (FNV-1a 64) ids are uniform over u64, so ~50% exceed
     # i64::MAX; the binding must carry them as native Python ints, never a
