@@ -444,3 +444,107 @@ fn test_source_ttl_zero_stores_permanently_like_remember() {
     // Then the source is there
     assert_eq!(retrieved, "must stay retrievable");
 }
+
+// --- Coverage round (2026-07-17): pricing trail, writer guard, provenance ----
+
+#[test]
+fn test_context_savings_aggregates_cost_by_currency_when_pricing_injected() {
+    // Given a service compiling twice with a pricing table and a project
+    let (_dir, svc) = service();
+    let mut models = std::collections::BTreeMap::new();
+    models.insert(
+        "claude-sonnet-5".to_owned(),
+        velesdb_memory::context::ModelPricing {
+            input_micros_per_million_tokens: 3_000_000,
+        },
+    );
+    let pricing = velesdb_memory::context::PricingTable {
+        version: "2026-07".to_owned(),
+        currency: "EUR".to_owned(),
+        models,
+    };
+    let compiler = ContextCompiler::new(CompilePolicy::default()).with_pricing(pricing);
+    let dup = "The rebalance pauses ingestion on the affected shard.";
+    let mut expected_micros = 0_u64;
+    for _ in 0..2 {
+        let mut req = request("rebalance", vec![fragment(dup), fragment(dup)], 10_000);
+        req.project = Some("acme".to_owned());
+        req.target_model = Some("claude-sonnet-5".to_owned());
+        let out = svc.compile_context(&compiler, &req).expect("compile");
+        expected_micros += out
+            .insights
+            .estimated_cost_saved_micros
+            .expect("priced model must yield a cost figure");
+    }
+
+    // When aggregating the project's savings
+    let savings = svc.context_savings(Some("acme")).expect("savings");
+
+    // Then the cost trail sums per currency, exactly
+    assert_eq!(savings.events, 2);
+    assert!(expected_micros > 0);
+    assert_eq!(
+        savings.cost_saved_micros_by_currency.get("EUR").copied(),
+        Some(expected_micros),
+        "the recorded events must carry and aggregate the cost figures"
+    );
+}
+
+#[test]
+fn test_store_context_sources_never_clobbers_a_caller_fact_squatting_the_slot() {
+    // Given a caller fact remembered at the literal salt-preimage of the
+    // slot where a future compile would store its source
+    let (_dir, svc) = service();
+    let content = "a fragment whose source slot is already squatted";
+    let hash = velesdb_memory::context::fragment_id(content);
+    let squat = format!("veles-ctx-source:{hash}");
+    let squat_id = svc.remember(&squat, &[], None).expect("remember");
+
+    // When compiling that content (store_sources defaults to true)
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    svc.compile_context(&compiler, &request("q", vec![fragment(content)], 10_000))
+        .expect("compile");
+
+    // Then the caller's fact is intact (never overwritten by the writer) ...
+    let hits = svc.recall(&squat, 3, None).expect("recall");
+    assert!(
+        hits.iter().any(|h| h.id == squat_id && h.content == squat),
+        "the squatting caller fact must survive a compile of the colliding content"
+    );
+    // ... and the handle stays unresolvable rather than serving wrong bytes
+    let err = svc
+        .retrieve_context_source(&format!("ctx://source/{hash}"))
+        .expect_err("a squatted slot must not resolve");
+    assert_eq!(err.category(), ErrorCategory::NotFound);
+}
+
+#[test]
+fn test_pulled_memory_source_reference_carries_its_memory_id() {
+    // Given a remembered fact pulled into a compilation via memory scope
+    let (_dir, svc) = service();
+    let memory_id = svc
+        .remember("the canary stage rolls to five percent first", &[], None)
+        .expect("remember");
+    let mut req = request("canary rollout", vec![fragment("Session note.")], 10_000);
+    req.memory_scope = Some(MemoryScope {
+        project: None,
+        k: Some(3),
+    });
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+
+    // When compiling
+    let out = svc.compile_context(&compiler, &req).expect("compile");
+
+    // Then the pulled memory's source reference links back to the memory id
+    let hash = velesdb_memory::context::fragment_id("the canary stage rolls to five percent first");
+    let source = out
+        .sources
+        .iter()
+        .find(|s| s.handle.ends_with(&hash.to_string()))
+        .expect("the pulled memory must have a source reference");
+    assert_eq!(
+        source.memory_id,
+        Some(memory_id),
+        "provenance must link the source back to the memory it came from"
+    );
+}

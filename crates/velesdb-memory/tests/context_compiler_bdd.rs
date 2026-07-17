@@ -777,6 +777,76 @@ fn test_compile_empty_fragments_interleaved_never_inject_unaccounted_joiners() {
     assert!(clippy < canary && canary < checksums, "order preserved");
 }
 
+#[test]
+fn test_compile_with_pricing_reports_cost_savings_in_micros() {
+    // Given a compiler carrying a versioned pricing table (3 EUR / 1M input
+    // tokens for the target model) and a corpus with real savings
+    let mut models = std::collections::BTreeMap::new();
+    models.insert(
+        "claude-sonnet-5".to_owned(),
+        velesdb_memory::context::ModelPricing {
+            input_micros_per_million_tokens: 3_000_000,
+        },
+    );
+    let pricing = velesdb_memory::context::PricingTable {
+        version: "2026-07".to_owned(),
+        currency: "EUR".to_owned(),
+        models,
+    };
+    let duplicated = "The deploy pipeline runs clippy before promoting any build.";
+    let mut req = request(
+        vec![
+            fragment(duplicated),
+            fragment(duplicated),
+            fragment(duplicated),
+        ],
+        10_000,
+    );
+    req.target_model = Some("claude-sonnet-5".to_owned());
+
+    // When compiling with the pricing injected
+    let out = ContextCompiler::new(CompilePolicy::default())
+        .with_pricing(pricing)
+        .compile(&req)
+        .expect("compile");
+
+    // Then the cost figure is exactly tokens_saved × rate / 1M, in
+    // micro-units, with the currency and table version traceable
+    assert!(out.insights.tokens_saved > 0, "duplicates must save tokens");
+    let expected_micros = out.insights.tokens_saved * 3_000_000 / 1_000_000;
+    assert_eq!(
+        out.insights.estimated_cost_saved_micros,
+        Some(expected_micros)
+    );
+    assert_eq!(out.insights.currency.as_deref(), Some("EUR"));
+    assert_eq!(out.insights.pricing_version.as_deref(), Some("2026-07"));
+}
+
+#[test]
+fn test_compile_with_pricing_but_unpriced_model_reports_tokens_only() {
+    // Given a pricing table that does NOT price the request's target model
+    let pricing = velesdb_memory::context::PricingTable {
+        version: "2026-07".to_owned(),
+        currency: "EUR".to_owned(),
+        models: std::collections::BTreeMap::new(),
+    };
+    let dup = "A repeated observation about the canary stage.";
+    let mut req = request(vec![fragment(dup), fragment(dup)], 10_000);
+    req.target_model = Some("some-unknown-model".to_owned());
+
+    // When compiling
+    let out = ContextCompiler::new(CompilePolicy::default())
+        .with_pricing(pricing)
+        .compile(&req)
+        .expect("compile");
+
+    // Then no cost is invented — tokens only, no currency, no version
+    assert!(out.insights.tokens_saved > 0);
+    assert_eq!(out.insights.estimated_cost_saved_micros, None);
+    assert_eq!(out.insights.currency, None);
+    assert_eq!(out.insights.pricing_version, None);
+}
+
 // --- Negative ----------------------------------------------------------------
 
 #[test]
