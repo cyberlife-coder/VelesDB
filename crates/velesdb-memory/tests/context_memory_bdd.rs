@@ -724,3 +724,446 @@ fn test_compile_context_reranked_with_a_lexical_reranker_demotes_graph_rescues()
         "rerank reorders but never drops: the fix stays in the pulled set"
     );
 }
+
+// --- Usage-driven importance blend (EPIC-P-071/US-002) ----------------------
+//
+// The blend composes the whole retrieval stack — HNSW seed, BFS `relate`
+// reach, `graph_boost` fusion, the reranker seam, RL confidence, recency —
+// into ONE ranking: `fused_norm + w_c·(confidence−0.5)·2 + w_r·recency_norm`,
+// applied strictly AFTER the fused similarity selected the pool.
+
+use velesdb_memory::context::ImportanceWeights;
+
+fn importance_policy(confidence: f64, recency: f64, field: Option<&str>) -> CompilePolicy {
+    CompilePolicy {
+        importance: ImportanceWeights {
+            confidence,
+            recency,
+            recency_field: field.map(str::to_owned),
+        },
+        ..CompilePolicy::default()
+    }
+}
+
+/// Position of `needle` in the compiled content, panicking when absent.
+fn pos(out: &velesdb_memory::context::CompiledContext, needle: &str) -> usize {
+    out.content
+        .find(needle)
+        .unwrap_or_else(|| panic!("`{needle}` must be compiled in, got:\n{}", out.content))
+}
+
+#[test]
+fn test_importance_confidence_reinforced_memory_leads_at_equal_similarity() {
+    // Given two equally on-topic memories about the same runbook topic
+    let (_dir, svc) = service();
+    let alpha = "postgres pool sizing guidance from runbook alpha";
+    let beta = "postgres pool sizing guidance from runbook beta";
+    let alpha_id = svc.remember(alpha, &[], None).expect("remember");
+    let beta_id = svc.remember(beta, &[], None).expect("remember");
+
+    let mut req = request(
+        "postgres pool sizing",
+        vec![fragment("Session note.")],
+        10_000,
+    );
+    req.memory_scope = Some(MemoryScope {
+        k: Some(2),
+        ..MemoryScope::default()
+    });
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+
+    // When compiling with the blend OFF, one of the two trails
+    req.policy = Some(importance_policy(0.0, 0.0, None));
+    let baseline = svc.compile_context(&compiler, &req).expect("baseline");
+    let (trailing_text, trailing_id) = if pos(&baseline, alpha) < pos(&baseline, beta) {
+        (beta, beta_id)
+    } else {
+        (alpha, alpha_id)
+    };
+
+    // And the team keeps marking the trailing fact useful, session after
+    // session, then compiles with the confidence blend ON
+    for _ in 0..15 {
+        svc.feedback(trailing_id, true).expect("feedback");
+    }
+    req.policy = Some(importance_policy(1.0, 0.0, None));
+    let blended = svc.compile_context(&compiler, &req).expect("blended");
+
+    // Then the reinforced memory now leads the compiled context
+    let other = if trailing_text == alpha { beta } else { alpha };
+    assert!(
+        pos(&blended, trailing_text) < pos(&blended, other),
+        "the reinforced memory must out-rank its equally-similar twin, got:\n{}",
+        blended.content
+    );
+}
+
+#[test]
+fn test_importance_recency_field_recent_memory_leads_over_older_one() {
+    // Given an OLD memory lexically closer to the query and a NEWER one,
+    // both dated with the YYYYMMDD convention of dated recall
+    let (_dir, svc) = service();
+    let old_text = "database connection tuning notes: keep the pool small";
+    let new_text = "database defaults changed after the platform upgrade";
+    svc.remember(
+        old_text,
+        &[],
+        Some(&common::meta(&[("day", serde_json::json!(20_240_101))])),
+    )
+    .expect("remember");
+    svc.remember(
+        new_text,
+        &[],
+        Some(&common::meta(&[("day", serde_json::json!(20_260_715))])),
+    )
+    .expect("remember");
+
+    let mut req = request(
+        "database connection tuning",
+        vec![fragment("Session note.")],
+        10_000,
+    );
+    req.memory_scope = Some(MemoryScope {
+        k: Some(2),
+        ..MemoryScope::default()
+    });
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+
+    // When compiling with the blend OFF the older, wordier fact leads
+    req.policy = Some(importance_policy(0.0, 0.0, None));
+    let baseline = svc.compile_context(&compiler, &req).expect("baseline");
+    assert!(
+        pos(&baseline, old_text) < pos(&baseline, new_text),
+        "precondition: similarity alone must prefer the older fact"
+    );
+
+    // And compiling again with the recency term active
+    req.policy = Some(importance_policy(0.0, 1.0, Some("day")));
+    let blended = svc.compile_context(&compiler, &req).expect("blended");
+
+    // Then the recent memory leads — recency is batch-relative, no clock
+    assert!(
+        pos(&blended, new_text) < pos(&blended, old_text),
+        "the recent memory must lead once recency weighs in, got:\n{}",
+        blended.content
+    );
+}
+
+#[test]
+fn test_importance_zero_weights_output_is_byte_identical_to_0_8_0_golden() {
+    // Given the exact scenario the committed 0.8.0 golden was captured on:
+    // dated memories, a relate chain, and a heavily reinforced fact
+    let (_dir, svc) = service();
+    let old_id = svc
+        .remember(
+            "the deploy pipeline ran mandatory clippy gates last winter",
+            &[],
+            Some(&common::meta(&[("day", serde_json::json!(20_260_101))])),
+        )
+        .expect("remember");
+    let new_id = svc
+        .remember(
+            "the deploy pipeline now runs clippy pedantic before tests",
+            &[],
+            Some(&common::meta(&[("day", serde_json::json!(20_260_715))])),
+        )
+        .expect("remember");
+    let fix = svc
+        .remember(
+            "switching the runner image stopped the flaky gate",
+            &[],
+            None,
+        )
+        .expect("remember");
+    svc.relate(new_id, fix, "fixed_by").expect("relate");
+    for _ in 0..10 {
+        svc.feedback(old_id, true).expect("feedback");
+    }
+
+    // When compiling with BOTH importance weights at zero (the recency
+    // field may even be named — a zero weight keeps it inert)
+    let mut req = request(
+        "deploy pipeline clippy checks",
+        vec![fragment("Session note: user asked about CI.")],
+        10_000,
+    );
+    req.memory_scope = Some(MemoryScope {
+        k: Some(3),
+        ..MemoryScope::default()
+    });
+    req.policy = Some(importance_policy(0.0, 0.0, Some("day")));
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc.compile_context(&compiler, &req).expect("compile");
+
+    // Then the serialized output matches the pre-blend golden byte for byte
+    let actual = serde_json::to_value(&out).expect("serialize");
+    let golden: serde_json::Value =
+        serde_json::from_str(include_str!("golden/context/compile_importance_zero.json"))
+            .expect("parse committed golden");
+    assert_eq!(
+        actual,
+        golden,
+        "zero importance weights must reproduce the 0.8.0 output exactly — actual:\n{}",
+        serde_json::to_string_pretty(&actual).expect("pretty")
+    );
+}
+
+#[test]
+fn test_importance_confidence_never_admits_off_topic_memory_into_pool() {
+    // Given on-topic memories and an OFF-topic fact the team over-reinforced
+    let (_dir, svc) = service();
+    svc.remember("the deploy pipeline runs clippy before tests", &[], None)
+        .expect("remember");
+    svc.remember("the deploy pipeline gates on cargo deny", &[], None)
+        .expect("remember");
+    let coffee = svc
+        .remember(
+            "the office coffee machine descaling schedule is pinned in the kitchen",
+            &[],
+            None,
+        )
+        .expect("remember");
+    for _ in 0..20 {
+        svc.feedback(coffee, true).expect("feedback");
+    }
+
+    // When compiling with the confidence blend at full strength
+    let mut req = request(
+        "deploy pipeline checks",
+        vec![fragment("Session note.")],
+        10_000,
+    );
+    req.memory_scope = Some(MemoryScope {
+        k: Some(2),
+        ..MemoryScope::default()
+    });
+    req.policy = Some(importance_policy(1.0, 0.0, None));
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc.compile_context(&compiler, &req).expect("compile");
+
+    // Then the off-topic fact is NOT in the pool: confidence is not
+    // relevance — the blend only re-ranks what similarity already selected
+    assert!(
+        !out.content.contains("coffee"),
+        "an over-reinforced off-topic fact must never enter the pool, got:\n{}",
+        out.content
+    );
+    assert!(
+        out.decisions.iter().all(|d| d.memory_id != Some(coffee)),
+        "no decision may be backed by the off-topic memory"
+    );
+}
+
+#[test]
+fn test_importance_reason_ventilates_vector_graph_confidence_and_recency() {
+    // Given a reinforced, dated memory pulled under an active blend
+    let (_dir, svc) = service();
+    let id = svc
+        .remember(
+            "the canary stage rolls to five percent first",
+            &[],
+            Some(&common::meta(&[("day", serde_json::json!(20_260_701))])),
+        )
+        .expect("remember");
+    svc.feedback(id, true).expect("feedback");
+
+    let mut req = request("canary rollout", vec![fragment("Session note.")], 10_000);
+    req.memory_scope = Some(MemoryScope {
+        k: Some(2),
+        ..MemoryScope::default()
+    });
+    req.policy = Some(importance_policy(0.2, 0.1, Some("day")));
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+
+    // When compiling
+    let out = svc.compile_context(&compiler, &req).expect("compile");
+
+    // Then the decision's reason ventilates all four ranking signals
+    let decision = out
+        .decisions
+        .iter()
+        .find(|d| d.memory_id == Some(id))
+        .expect("the pulled memory must carry provenance");
+    for signal in ["vector ", "graph ", "confidence ", "recency "] {
+        assert!(
+            decision.reason.contains(signal),
+            "reason must ventilate `{signal}`, got: {}",
+            decision.reason
+        );
+    }
+}
+
+#[test]
+fn test_importance_recency_missing_key_and_degenerate_batch_stay_neutral() {
+    // Given one dated pair plus one memory WITHOUT the recency key
+    let (_dir, svc) = service();
+    svc.remember(
+        "the rollout freeze applies to the payments cluster",
+        &[],
+        Some(&common::meta(&[("day", serde_json::json!(20_250_101))])),
+    )
+    .expect("remember");
+    svc.remember(
+        "the rollout freeze applies to the search cluster",
+        &[],
+        Some(&common::meta(&[("day", serde_json::json!(20_260_601))])),
+    )
+    .expect("remember");
+    let keyless = svc
+        .remember("the rollout freeze applies to the auth cluster", &[], None)
+        .expect("remember");
+
+    let mut req = request("rollout freeze", vec![fragment("Session note.")], 10_000);
+    req.memory_scope = Some(MemoryScope {
+        k: Some(3),
+        ..MemoryScope::default()
+    });
+    req.policy = Some(importance_policy(0.0, 1.0, Some("day")));
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+
+    // When compiling with the recency term active
+    let out = svc.compile_context(&compiler, &req).expect("compile");
+
+    // Then the keyless memory contributes 0 — present, never penalised
+    let keyless_decision = out
+        .decisions
+        .iter()
+        .find(|d| d.memory_id == Some(keyless))
+        .expect("the keyless memory must still be pulled");
+    assert!(
+        keyless_decision.reason.contains("recency 0.00"),
+        "a memory without the key must read recency 0, got: {}",
+        keyless_decision.reason
+    );
+    // And min/max normalisation is batch-relative: newest 1, oldest 0
+    let reasons: Vec<&str> = out
+        .decisions
+        .iter()
+        .filter(|d| d.memory_id.is_some())
+        .map(|d| d.reason.as_str())
+        .collect();
+    assert!(
+        reasons.iter().any(|r| r.contains("recency 1.00")),
+        "the newest dated memory must read recency 1.00, got: {reasons:?}"
+    );
+
+    // And given a degenerate batch (every date equal), all contributions are 0
+    let (_dir2, svc2) = service();
+    for cluster in ["payments", "search"] {
+        svc2.remember(
+            &format!("the rollout freeze applies to the {cluster} cluster"),
+            &[],
+            Some(&common::meta(&[("day", serde_json::json!(20_260_601))])),
+        )
+        .expect("remember");
+    }
+    let mut req2 = request("rollout freeze", vec![fragment("Session note.")], 10_000);
+    req2.memory_scope = Some(MemoryScope {
+        k: Some(2),
+        ..MemoryScope::default()
+    });
+    req2.policy = Some(importance_policy(0.0, 1.0, Some("day")));
+    let out2 = svc2.compile_context(&compiler, &req2).expect("compile");
+    for decision in out2.decisions.iter().filter(|d| d.memory_id.is_some()) {
+        assert!(
+            decision.reason.contains("recency 0.00"),
+            "max == min must zero every recency contribution, got: {}",
+            decision.reason
+        );
+    }
+}
+
+#[test]
+fn test_importance_blend_composes_with_reranked_memory_selection() {
+    // Given two memories where a semantic reranker (the seam) puts the
+    // marker fact first, but the OTHER fact is the one the team reinforced
+    let (_dir, svc) = service();
+    svc.remember("promotion is gated on checksum verification", &[], None)
+        .expect("remember");
+    let reinforced = svc
+        .remember("promotion is gated on the canary error budget", &[], None)
+        .expect("remember");
+    for _ in 0..15 {
+        svc.feedback(reinforced, true).expect("feedback");
+    }
+
+    let mut req = request(
+        "what gates the promotion",
+        vec![fragment("Session note.")],
+        10_000,
+    );
+    req.memory_scope = Some(MemoryScope {
+        k: Some(2),
+        ..MemoryScope::default()
+    });
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+
+    // When the reranker drives selection with the blend OFF, then ON
+    req.policy = Some(importance_policy(0.0, 0.0, None));
+    let baseline = svc
+        .compile_context_reranked(&compiler, &req, &MarkerReranker("checksum"))
+        .expect("compile reranked");
+    assert!(
+        pos(&baseline, "checksum verification") < pos(&baseline, "canary error budget"),
+        "precondition: the reranker alone must lead with its marker pick"
+    );
+    req.policy = Some(importance_policy(1.0, 0.0, None));
+    let blended = svc
+        .compile_context_reranked(&compiler, &req, &MarkerReranker("checksum"))
+        .expect("compile reranked");
+
+    // Then the blend composes with the seam: same pool, learned confidence
+    // re-ranks inside it — one coherent ranking across every engine
+    assert!(
+        pos(&blended, "canary error budget") < pos(&blended, "checksum verification"),
+        "the reinforced memory must lead inside the reranked pool, got:\n{}",
+        blended.content
+    );
+}
+
+#[test]
+fn test_importance_out_of_range_weight_is_accepted_verbatim_not_clamped() {
+    // Given the reinforced-twin scenario, but with a NEGATIVE confidence
+    // weight — the documented (unclamped) inversion: demote reinforced facts
+    let (_dir, svc) = service();
+    let alpha = "postgres pool sizing guidance from runbook alpha";
+    let beta = "postgres pool sizing guidance from runbook beta";
+    let alpha_id = svc.remember(alpha, &[], None).expect("remember");
+    let beta_id = svc.remember(beta, &[], None).expect("remember");
+
+    let mut req = request(
+        "postgres pool sizing",
+        vec![fragment("Session note.")],
+        10_000,
+    );
+    req.memory_scope = Some(MemoryScope {
+        k: Some(2),
+        ..MemoryScope::default()
+    });
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+
+    // When the LEADING fact is the one the team reinforced
+    req.policy = Some(importance_policy(0.0, 0.0, None));
+    let baseline = svc.compile_context(&compiler, &req).expect("baseline");
+    let (leading_text, leading_id, other) = if pos(&baseline, alpha) < pos(&baseline, beta) {
+        (alpha, alpha_id, beta)
+    } else {
+        (beta, beta_id, alpha)
+    };
+    for _ in 0..15 {
+        svc.feedback(leading_id, true).expect("feedback");
+    }
+
+    // And compiling with confidence weight -1.0 (outside the recommended
+    // [0, 1] range — accepted verbatim, per the documented contract)
+    req.policy = Some(importance_policy(-1.0, 0.0, None));
+    let blended = svc.compile_context(&compiler, &req).expect("blended");
+
+    // Then the term is inverted, not clamped to zero: the reinforced fact
+    // is demoted behind its twin (a clamp to 0 would keep it leading)
+    assert!(
+        pos(&blended, other) < pos(&blended, leading_text),
+        "a negative weight must invert the confidence term, got:\n{}",
+        blended.content
+    );
+}

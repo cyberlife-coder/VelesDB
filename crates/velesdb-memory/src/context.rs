@@ -45,7 +45,8 @@ pub use insights::{CompilationInsights, ModelPricing, PricingTable};
 pub use model::{
     CompilePolicy, CompileRequest, CompiledContext, CompiledSection, ContextAction,
     ContextDecision, ContextDecisionRef, ContextFact, ContextFragment, ContextSavings,
-    FidelityRisk, MemoryScope, RetrievalHandle, SectionKind, SourceReference, WorkingContext,
+    FidelityRisk, ImportanceWeights, MemoryScope, RetrievalHandle, SectionKind, SourceReference,
+    WorkingContext,
 };
 pub use relevance::DeterministicReranker;
 

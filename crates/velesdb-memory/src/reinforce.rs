@@ -158,12 +158,15 @@ fn blended_score(similarity: f32, confidence: f32) -> f32 {
 }
 
 /// Read a fact's persisted confidence, clamped to `[0.0, 1.0]`; neutral when
-/// absent or malformed (a corrupt value never poisons ranking).
+/// absent or malformed (a corrupt value never poisons ranking). Shared with
+/// the context memory bridge, whose importance blend reads the same learned
+/// signal off the raw payload batch (`_veles_rl_confidence` stays the single
+/// source of truth).
 #[allow(
     clippy::cast_possible_truncation,
     reason = "confidence is a bounded [0,1] weight; f64→f32 rounding is immaterial and the result is clamped"
 )]
-fn read_confidence(payload: &Metadata) -> f32 {
+pub(crate) fn read_confidence(payload: &Metadata) -> f32 {
     payload
         .get(RL_CONFIDENCE_KEY)
         .and_then(Value::as_f64)

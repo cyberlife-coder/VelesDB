@@ -22,7 +22,8 @@ use serde_json::{Map, Number, Value};
 
 use super::{positive_ttl, MemoryService, Metadata, HUB_FIELD};
 use crate::context::model::{
-    CompileRequest, CompiledContext, ContextFragment, ContextSavings, MemoryScope, WorkingContext,
+    CompileRequest, CompiledContext, ContextFragment, ContextSavings, ImportanceWeights,
+    MemoryScope, WorkingContext,
 };
 use crate::context::{provenance, ContextCompiler};
 use crate::embedder::Embedder;
@@ -85,7 +86,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         compiler: &ContextCompiler,
         request: &CompileRequest,
     ) -> Result<CompiledContext, MemoryError> {
-        let memories = self.context_memories(request)?;
+        let importance = compiler.effective_policy(request).importance.clone();
+        let memories = self.context_memories(request, &importance)?;
         self.compile_with_memories(compiler, request, memories)
     }
 
@@ -109,7 +111,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         request: &CompileRequest,
         reranker: &R,
     ) -> Result<CompiledContext, MemoryError> {
-        let memories = self.context_memories_reranked(request, reranker)?;
+        let importance = compiler.effective_policy(request).importance.clone();
+        let memories = self.context_memories_reranked(request, reranker, &importance)?;
         self.compile_with_memories(compiler, request, memories)
     }
 
@@ -141,8 +144,13 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     }
 
     /// The memories a request's scope pulls in, as compile fragments plus
-    /// their id and normalised fused relevance.
-    fn context_memories(&self, request: &CompileRequest) -> Result<Vec<PulledMemory>, MemoryError> {
+    /// their id and normalised fused relevance, importance-blended
+    /// ([`Self::blend_importance`]) when the policy's weights are active.
+    fn context_memories(
+        &self,
+        request: &CompileRequest,
+        importance: &ImportanceWeights,
+    ) -> Result<Vec<PulledMemory>, MemoryError> {
         let Some((scope, k)) = scope_and_k(request) else {
             return Ok(Vec::new());
         };
@@ -157,10 +165,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             .map(|s| s.fused)
             .fold(f64::MIN, f64::max)
             .max(f64::EPSILON);
-        Ok(scored
+        let candidates = scored
             .into_iter()
             .map(|scored| {
-                let memory_id = scored.recollection.id;
                 // Sanitise a non-finite fused score to 0 before normalising:
                 // `f32::clamp` returns NaN for a NaN input (it does not clamp),
                 // which would put a non-`[0, 1]` value — serialising as JSON
@@ -170,35 +177,31 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 } else {
                     0.0
                 };
-                #[allow(clippy::cast_possible_truncation)] // normalised into [0, 1]
-                let relevance = (fused / max_fused).clamp(0.0, 1.0) as f32;
-                let fragment = ContextFragment {
-                    id: None,
-                    content: scored.recollection.content,
-                    kind: Some("memory".to_owned()),
-                    priority: None,
-                    metadata: None,
-                };
-                PulledMemory {
-                    fragment,
-                    memory_id,
-                    relevance,
+                MemoryCandidate {
+                    memory_id: scored.recollection.id,
+                    base: (fused / max_fused).clamp(0.0, 1.0),
                     vector_norm: scored.vector_norm,
                     graph_weight: scored.graph_weight,
+                    metadata: scored.recollection.metadata,
+                    content: scored.recollection.content,
                 }
             })
-            .collect())
+            .collect();
+        self.blend_importance(candidates, importance)
     }
 
     /// Memory selection driven by a caller-supplied reranker: the fused
     /// candidate pool (at pool depth, vector + graph) is handed to the
     /// reranker whole, its ordering is truncated to `k`, and relevance is
     /// rank-based (the reranker defines the ranking; the fused ventilation
-    /// no longer describes it, so vector/graph read 0 in provenance).
+    /// no longer describes it, so vector/graph read 0 in provenance). The
+    /// importance blend then composes with the seam: it re-ranks INSIDE the
+    /// reranker-selected pool, exactly as it does over the fused pool.
     fn context_memories_reranked<R: crate::Reranker>(
         &self,
         request: &CompileRequest,
         reranker: &R,
+        importance: &ImportanceWeights,
     ) -> Result<Vec<PulledMemory>, MemoryError> {
         let Some((scope, k)) = scope_and_k(request) else {
             return Ok(Vec::new());
@@ -208,27 +211,77 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let ranked =
             self.recall_fused_reranked(&request.query, k, filter.as_ref(), opts, reranker)?;
         let count = ranked.len().max(1);
-        Ok(ranked
+        let candidates = ranked
             .into_iter()
             .enumerate()
             .map(|(rank, recollection)| {
+                // Computed in f32 exactly as 0.8.0 did, so inactive weights
+                // reproduce the historical relevance bytes.
                 #[allow(clippy::cast_precision_loss)] // rank/count are tiny
                 let relevance = 1.0 - (rank as f32 / count as f32);
-                PulledMemory {
-                    fragment: ContextFragment {
-                        id: None,
-                        content: recollection.content,
-                        kind: Some("memory".to_owned()),
-                        priority: None,
-                        metadata: None,
-                    },
+                MemoryCandidate {
                     memory_id: recollection.id,
-                    relevance,
+                    base: f64::from(relevance),
                     vector_norm: 0.0,
                     graph_weight: 0.0,
+                    metadata: recollection.metadata,
+                    content: recollection.content,
                 }
             })
-            .collect())
+            .collect();
+        self.blend_importance(candidates, importance)
+    }
+
+    /// Fold usage-driven importance into an already-selected memory pool —
+    /// the one ranking the whole engine stack shares (US-002 of EPIC-P-071):
+    /// per candidate the key becomes `base + w_c·(confidence − 0.5)·2 +
+    /// w_r·recency_norm`, where `base` is the fused (or rank-based)
+    /// similarity in `[0, 1]`. Selection is untouched on purpose: confidence
+    /// is not relevance, so a reinforced-but-off-topic fact can never buy
+    /// its way into the pool here. Inactive weights take the zero-cost path
+    /// and reproduce the 0.8.0 output byte for byte (golden-pinned). The
+    /// stable sort keeps equal keys in selection order, and no clock is ever
+    /// read — recency is min-max normalised within the batch.
+    fn blend_importance(
+        &self,
+        candidates: Vec<MemoryCandidate>,
+        weights: &ImportanceWeights,
+    ) -> Result<Vec<PulledMemory>, MemoryError> {
+        if !importance_active(weights) {
+            return Ok(candidates
+                .into_iter()
+                .map(MemoryCandidate::into_pulled)
+                .collect());
+        }
+        let ids: Vec<u64> = candidates.iter().map(|c| c.memory_id).collect();
+        // Raw payloads (reserved keys included): the learned confidence
+        // lives under `_veles_rl_confidence`, which caller-facing metadata
+        // strips.
+        let raw = self.store.get_metadata_batch(&ids)?;
+        let recencies = recency_norms(&candidates, weights);
+        let mut blended: Vec<(f64, PulledMemory)> = candidates
+            .into_iter()
+            .zip(raw)
+            .zip(recencies)
+            .map(|((candidate, payload), recency)| {
+                let confidence = payload_confidence(payload.as_ref());
+                let score = candidate.base
+                    + weights.confidence * (confidence - NEUTRAL_CONFIDENCE) * 2.0
+                    + weights.recency * recency;
+                let mut pulled = candidate.into_pulled();
+                #[allow(clippy::cast_possible_truncation)] // clamped into [0, 1]
+                {
+                    pulled.relevance = score.clamp(0.0, 1.0) as f32;
+                }
+                pulled.confidence = confidence;
+                pulled.recency = recency;
+                pulled.ventilated = true;
+                (score, pulled)
+            })
+            .collect();
+        // Stable: equal blended keys keep the selection order.
+        blended.sort_by(|a, b| b.0.total_cmp(&a.0));
+        Ok(blended.into_iter().map(|(_, pulled)| pulled).collect())
     }
 
     /// Store every distinct fragment's original as a hub-marked system fact
@@ -439,28 +492,164 @@ fn scope_filter(scope: &MemoryScope) -> Option<Metadata> {
 struct PulledMemory {
     fragment: ContextFragment,
     memory_id: u64,
-    /// Fused score normalised over the pulled batch, in `[0, 1]`.
+    /// Fused score normalised over the pulled batch, in `[0, 1]` — the
+    /// importance-blended key (clamped) when the blend is active.
     relevance: f32,
     /// Normalised vector term of the fused score.
     vector_norm: f64,
     /// Graph promotion weight of the fused score.
     graph_weight: f64,
+    /// Learned RL confidence the blend used (neutral `0.5` when the memory
+    /// never received feedback).
+    confidence: f64,
+    /// Batch-relative recency contribution in `[0, 1]` (`0` when the term
+    /// is inactive, the key is absent, or the batch is degenerate).
+    recency: f64,
+    /// Whether the importance blend ran — drives the extended four-signal
+    /// reason ventilation; `false` keeps the exact 0.8.0 reason bytes.
+    ventilated: bool,
+}
+
+/// A selected memory before the importance blend: its similarity base, its
+/// fused ventilation, and the caller-visible metadata the recency term reads.
+struct MemoryCandidate {
+    memory_id: u64,
+    /// Fused-normalised (or rank-based) similarity in `[0, 1]`.
+    base: f64,
+    vector_norm: f64,
+    graph_weight: f64,
+    metadata: Option<Metadata>,
+    content: String,
+}
+
+impl MemoryCandidate {
+    /// The unblended [`PulledMemory`] — bytes identical to the 0.8.0 pull.
+    fn into_pulled(self) -> PulledMemory {
+        #[allow(clippy::cast_possible_truncation)] // base is clamped into [0, 1]
+        let relevance = self.base as f32;
+        PulledMemory {
+            fragment: ContextFragment {
+                id: None,
+                content: self.content,
+                kind: Some("memory".to_owned()),
+                priority: None,
+                metadata: None,
+            },
+            memory_id: self.memory_id,
+            relevance,
+            vector_norm: self.vector_norm,
+            graph_weight: self.graph_weight,
+            confidence: NEUTRAL_CONFIDENCE,
+            recency: 0.0,
+            ventilated: false,
+        }
+    }
+}
+
+/// The neutral confidence of a memory with no feedback history — mirrors
+/// `reinforce::RL_NEUTRAL_CONFIDENCE`, whose module is `persistence`-gated:
+/// its contribution to the blend is exactly `0`.
+const NEUTRAL_CONFIDENCE: f64 = 0.5;
+
+/// The learned RL confidence off a raw payload, in `[0, 1]`. Without the
+/// `persistence` feature the RL module (and thus `feedback`) does not exist,
+/// so every memory reads neutral.
+#[cfg(feature = "persistence")]
+fn payload_confidence(payload: Option<&Metadata>) -> f64 {
+    f64::from(payload.map_or(
+        super::reinforce::RL_NEUTRAL_CONFIDENCE,
+        super::reinforce::read_confidence,
+    ))
+}
+
+/// See the `persistence` twin: no RL module, always neutral.
+#[cfg(not(feature = "persistence"))]
+fn payload_confidence(_payload: Option<&Metadata>) -> f64 {
+    NEUTRAL_CONFIDENCE
+}
+
+/// Whether the policy's importance weights change anything at all: a
+/// non-zero confidence weight, or a non-zero recency weight WITH a field to
+/// read. Zero weights must cost nothing and change nothing (0.8.0 parity).
+#[allow(
+    clippy::float_cmp,
+    reason = "an exact zero weight is the documented off switch; any non-zero weight, however small, is active"
+)]
+fn importance_active(weights: &ImportanceWeights) -> bool {
+    weights.confidence != 0.0 || (weights.recency != 0.0 && weights.recency_field.is_some())
+}
+
+/// The batch-relative recency contribution of every candidate, in `[0, 1]`:
+/// min-max over the candidates that carry the policy's `recency_field` as a
+/// number (one monotone scale per batch — `YYYYMMDD` or an epoch, the
+/// caller's choice). A candidate without the key contributes `0` (never
+/// penalised), and a degenerate batch (`max == min`) contributes `0` for
+/// all. No clock: recency is relative to the newest of the batch.
+#[allow(
+    clippy::float_cmp,
+    reason = "an exact zero weight is the documented off switch for the recency term"
+)]
+fn recency_norms(candidates: &[MemoryCandidate], weights: &ImportanceWeights) -> Vec<f64> {
+    let field = weights
+        .recency_field
+        .as_ref()
+        .filter(|_| weights.recency != 0.0);
+    let Some(field) = field else {
+        return vec![0.0; candidates.len()];
+    };
+    let values: Vec<Option<f64>> = candidates
+        .iter()
+        .map(|candidate| {
+            candidate
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get(field.as_str()))
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite())
+        })
+        .collect();
+    let (min, max) = values
+        .iter()
+        .flatten()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &v| {
+            (lo.min(v), hi.max(v))
+        });
+    if max <= min {
+        return vec![0.0; candidates.len()];
+    }
+    values
+        .into_iter()
+        .map(|value| value.map_or(0.0, |v| ((v - min) / (max - min)).clamp(0.0, 1.0)))
+        .collect()
 }
 
 /// Stamp pulled memories into the compiled provenance: their decisions and
 /// sources gain the backing `memory_id`, the decision's relevance becomes
-/// the normalised fused-ranking score, and the reason spells out the score
-/// ventilation (vector vs graph) so `why this memory` is answerable from
-/// the decision alone.
+/// the normalised (importance-blended, when active) ranking score, and the
+/// reason spells out the full score ventilation — vector and graph always,
+/// plus confidence and recency when the blend ran — so `why this memory` is
+/// answerable from the decision alone.
 fn annotate_memory_provenance(out: &mut CompiledContext, pulled: &BTreeMap<u64, PulledMemory>) {
     for decision in &mut out.decisions {
         if let Some(memory) = pulled.get(&decision.content_hash) {
             decision.memory_id = Some(memory.memory_id);
             decision.relevance = memory.relevance;
-            decision.reason = format!(
-                "{} — pulled from memory {} (vector {:.2}, graph {:.2})",
-                decision.reason, memory.memory_id, memory.vector_norm, memory.graph_weight
-            );
+            decision.reason = if memory.ventilated {
+                format!(
+                    "{} — pulled from memory {} (vector {:.2}, graph {:.2}, confidence {:.2}, recency {:.2})",
+                    decision.reason,
+                    memory.memory_id,
+                    memory.vector_norm,
+                    memory.graph_weight,
+                    memory.confidence,
+                    memory.recency
+                )
+            } else {
+                format!(
+                    "{} — pulled from memory {} (vector {:.2}, graph {:.2})",
+                    decision.reason, memory.memory_id, memory.vector_norm, memory.graph_weight
+                )
+            };
         }
     }
     for source in &mut out.sources {

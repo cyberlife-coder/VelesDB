@@ -100,6 +100,65 @@ pub struct MemoryScope {
     pub graph_boost: Option<f64>,
 }
 
+/// Usage-driven importance weights of the memory-bridge blend (US-002 of
+/// EPIC-P-071): how much a pulled memory's learned RL confidence and its
+/// batch-relative recency tilt the fused similarity ranking.
+///
+/// The blend only ever applies to the pool the fused vector+graph similarity
+/// already selected — confidence is *not* relevance, so a heavily reinforced
+/// but off-topic fact can never enter the pool through these weights. Per
+/// pulled memory the ranking key becomes
+/// `fused_norm + confidence_weight·(confidence − 0.5)·2 + recency_weight·recency_norm`,
+/// clock-free and deterministic (recency is min-max normalised **within the
+/// pulled batch**, never against wall time).
+///
+/// Both weights at `0.0` disable the blend entirely: the output is
+/// byte-identical to the 0.8.0 behaviour (pinned by a golden test). The
+/// defaults are **active** on purpose — upgrading from 0.8.0 with the
+/// default policy, RL-reinforced memories rank higher out of the box; zero
+/// the weights to restore the exact 0.8.0 ordering.
+///
+/// Recommended range for both weights: `[0.0, 1.0]` (at `1.0` a term can
+/// fully offset the similarity gap within the pool). Values outside that
+/// range are **accepted verbatim, never clamped** — a negative weight
+/// deliberately inverts its term (e.g. demote reinforced facts), a weight
+/// above `1.0` lets the term dominate similarity. Only the recorded
+/// decision `relevance` is clamped into `[0, 1]`; the ranking itself uses
+/// the raw blended score.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct ImportanceWeights {
+    /// Weight of the learned RL confidence (`_veles_rl_*`, fed by
+    /// [`feedback`](crate::MemoryService::feedback)). A memory with no
+    /// feedback history counts as the neutral `0.5`, contributing exactly
+    /// `0`. Default `0.2`.
+    pub confidence: f64,
+    /// Weight of the batch-relative recency term. Inert unless
+    /// [`Self::recency_field`] is also set. Default `0.1`.
+    pub recency: f64,
+    /// Caller metadata key holding each memory's **numeric** timestamp-like
+    /// value. `None` (the default) disables the recency term completely —
+    /// there is no standard key to guess. The scale must be monotone and
+    /// homogeneous across the batch (e.g. `YYYYMMDD` integers as in
+    /// [`crate::format_dated_context`], or an epoch); it is documented, not
+    /// verified at run time. Values are min-max normalised over the pulled
+    /// memories that carry the key; a memory without the key contributes `0`
+    /// (never penalised), and a degenerate batch (`max == min`) contributes
+    /// `0` for all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recency_field: Option<String>,
+}
+
+impl Default for ImportanceWeights {
+    fn default() -> Self {
+        Self {
+            confidence: 0.2,
+            recency: 0.1,
+            recency_field: None,
+        }
+    }
+}
+
 /// Tuning knobs of one compilation. `Default` is the recommended profile.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
@@ -145,6 +204,10 @@ pub struct CompilePolicy {
     /// reports tokens only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pricing: Option<super::insights::PricingTable>,
+    /// Memory bridge only: usage-driven importance blend over the pulled
+    /// memories (RL confidence + batch-relative recency). The struct-level
+    /// `#[serde(default)]` keeps 0.8.0 requests wire-compatible.
+    pub importance: ImportanceWeights,
 }
 
 impl Default for CompilePolicy {
@@ -159,6 +222,7 @@ impl Default for CompilePolicy {
             source_ttl_seconds: None,
             event_ttl_seconds: None,
             pricing: None,
+            importance: ImportanceWeights::default(),
         }
     }
 }

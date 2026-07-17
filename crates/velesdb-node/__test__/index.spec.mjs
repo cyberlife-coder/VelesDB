@@ -23,6 +23,7 @@ test('surface allowlist — exactly the supported methods, no engine leak', () =
     .sort((a, b) => a.localeCompare(b))
   assert.deepEqual(instanceMethods, [
     'compileContext',
+    'feedback',
     'forget',
     'recall',
     'recallFused',
@@ -165,6 +166,25 @@ test('recallFusedDated returns a chronological timeline and a now anchor', async
       'timeline is oldest-first',
     )
     assert.equal(res.now, '2026-07-01', 'now anchors on the latest date')
+  } finally {
+    cleanup()
+  }
+})
+
+test('feedback reinforces a fact, weakens on failure, NOT_FOUND on unknown id', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const id = await store.remember('the deploy pipeline runs clippy before tests')
+    const up = await store.feedback(id, true)
+    assert.equal(typeof up, 'number', 'feedback resolves to the learned confidence')
+    assert.ok(up > 0.5 && up <= 1, `success must raise confidence above neutral, got ${up}`)
+    const down = await store.feedback(id, false)
+    assert.ok(down < up, `failure must lower confidence, got ${down} after ${up}`)
+    await assert.rejects(
+      store.feedback('999999', true),
+      (err) => err.message.includes('NOT_FOUND'),
+      'feedback on an unknown id → NOT_FOUND',
+    )
   } finally {
     cleanup()
   }
