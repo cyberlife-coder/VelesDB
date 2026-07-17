@@ -362,6 +362,11 @@ remember_extracted { "text": "Met Dana at the Rust meetup; she now leads the par
 
 ### The context compiler tools
 
+**Compiler surfaces today: MCP server, Node, Rust. Python binding: in
+progress** (tracked as a follow-up EPIC) — Python agents reach it through the
+MCP server for now; `from velesdb import MemoryService` covers the memory API
+only, not `compile_context` yet.
+
 **Why:** agents spend most of their tokens re-reading redundant context.
 `compile_context` compresses it **deterministically** — no LLM, no cloud, no
 API key: same request, byte-identical output. What must survive verbatim
@@ -377,6 +382,45 @@ risk). Guarantees, per compilation:
   bytes; `retrieval_handles` list what was externalized.
 - **Nothing critical silently lost**: losing preserve-classified content
   raises the compilation's `risk` to `"high"` — check it before use.
+
+#### How it works
+
+![compile_context pipeline: agent fragments flow through dedup, abstract, pack, externalize, producing content, ctx://source handles and auditable decisions](https://raw.githubusercontent.com/cyberlife-coder/VelesDB/develop/crates/velesdb-memory/docs/diagrams/compile-flow.svg)
+
+**Not a transparent proxy.** `compile_context` only touches what your agent
+explicitly hands it as `fragments` — logs, retrieved docs, conversation
+history you choose to route through the call. It never sees or compresses
+the harness's system prompt or tool-call schemas; those stay outside the
+compiler entirely. Knowing *when* and *what* to route through it is the
+[`velesdb-context-optimizer`](../../skills/velesdb-context-optimizer/SKILL.md)
+skill's job, not the compiler's — the compiler just compresses what it's
+given, deterministically.
+
+**No automatic repo indexing.** Nothing enters the memory store unless you
+call `remember` / `relate` / `remember_extracted` explicitly — compilation
+itself is **stateless**: call `compile_context` a thousand times and nothing
+is written. The only two exceptions: fragments the budget layer externalizes
+(content that didn't fit) are cached locally under `VELESDB_MEMORY_PATH`
+(default `~/.velesdb-memory`) so `retrieve_context_source` can fetch them
+back by handle, and `context_savings` records aggregate stats (tokens
+in/out/saved) per project. Both stay on disk — local-first, nothing is ever
+sent off the machine.
+
+![the two data paths: stateless compile vs explicit memory writes — nothing is stored without an explicit remember/relate/remember_extracted call](https://raw.githubusercontent.com/cyberlife-coder/VelesDB/develop/crates/velesdb-memory/docs/diagrams/data-paths.svg)
+
+```jsonc
+// compile_context — minimal call: query + token_budget + fragments
+compile_context { "query": "state of the canary deploy",
+                  "token_budget": 500,
+                  "fragments": [
+                    { "content": "The canary is green: 2% traffic, zero errors in the last 10 minutes." },
+                    { "content": "Rollback runbook: kubectl rollout undo deployment/canary." } ] }
+→ { "content": "…both fragments packed…", "decisions": […2 entries, "action": "preserve"…],
+    "insights": { "tokens_in": 44, "tokens_out": 45, "tokens_saved": 0 }, "risk": "low" }
+```
+
+Add `memory_scope`, `project`, and `metadata: {"cache": true}` once you need
+stored-memory recall or provider prompt-cache alignment — the full request:
 
 ```jsonc
 // compile_context — deterministic compression under a token budget
@@ -419,7 +463,11 @@ BPE (cl100k) to deliberately over-count every measured content class
 (+13 %…+55 %) — not the provider's count, not billed tokens, not cache reads.
 The reproducible benchmark ([`examples/context_savings`](examples/context_savings))
 measures **82.5 % real (cl100k) token savings on a committed 12-turn agent-session benchmark** (sub-ms stateless compiles), 75–82 % estimated savings on its static corpus in ~2 ms compile, and — with `memory_scope`'s fused HNSW + graph-walk recall over `relate`-linked fact chains — **9/9 answer facts surfaced vs 3/9 for vector-only recall** on the committed tri-engine benchmark
-latency. The [`velesdb-context-optimizer`](../../skills/velesdb-context-optimizer/SKILL.md)
+latency. That tri-engine path — the one `memory_scope` drives inside `compile_context` — looks like this:
+
+![tri-engine retrieval: query seeds an HNSW vector search, a graph walk follows relate edges, fusion combines both, then ranking produces the result](https://raw.githubusercontent.com/cyberlife-coder/VelesDB/develop/crates/velesdb-memory/docs/diagrams/tri-engine.svg)
+
+The [`velesdb-context-optimizer`](../../skills/velesdb-context-optimizer/SKILL.md)
 skill teaches an agent the full workflow — including when *not* to compress.
 
 **IDs & linking.** `remember` returns a stable id derived from the fact's
