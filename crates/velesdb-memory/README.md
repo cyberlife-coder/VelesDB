@@ -473,6 +473,59 @@ latency. That tri-engine path — the one `memory_scope` drives inside `compile_
 The [`velesdb-context-optimizer`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
 skill teaches an agent the full workflow — including when *not* to compress.
 
+#### Usage-driven importance: RL confidence + recency in the same ranking
+
+`memory_scope` selection composes one more engine pair: the learned RL
+confidence that [`feedback`] trains, and a batch-relative recency term.
+`policy.importance` drives the blend; per pulled memory the ranking key is
+
+```text
+score = fused_norm + confidence·(rl_confidence − 0.5)·2 + recency·recency_norm
+```
+
+```jsonc
+"policy": { "importance": {
+  "confidence": 0.2,          // default; 0.0 switches the term off
+  "recency": 0.1,             // default; inert without recency_field
+  "recency_field": "day"      // optional caller metadata key; no default
+} }
+```
+
+- **Selection is untouched.** The blend re-ranks only the pool the fused
+  vector+graph similarity already selected — confidence is *not* relevance,
+  so an over-reinforced but off-topic fact can never buy its way in (pinned
+  by an adversarial test).
+- **Recency contract (strict).** `recency_field: null` disables the term —
+  no implicit default key exists. When set, it must name a **numeric**
+  caller metadata field on one monotone scale per batch (e.g. `YYYYMMDD`
+  integers as in dated recall, or an epoch); the scale is documented, not
+  verified. Values are min-max normalised **within the pulled batch**: the
+  newest reads `1.0`, the oldest `0.0`, a memory without the key contributes
+  `0` (never penalised), and a degenerate batch (`max == min`) contributes
+  `0` for all. The compile pipeline never reads a clock — recency is
+  relative to the batch, so compilation stays byte-deterministic.
+- **Compat.** Both weights at `0.0` reproduce the 0.8.0 output byte for
+  byte (golden-pinned); requests without `importance` parse unchanged.
+- **Explainable.** Every pulled memory's decision `reason` ventilates all
+  four signals, e.g. (from the committed tri-engine benchmark):
+  `pulled from memory 1444253315203703248 (vector 0.00, graph 1.00,
+  confidence 1.00, recency 0.00)` — a fact invisible to vector search,
+  rescued by the graph walk, promoted by learned confidence.
+- **Reranker seam.** The blend also composes with
+  `compile_context_reranked` (Rust-only seam for a semantic cross-encoder
+  or LLM judge): the reranker picks and orders the pool, then the same
+  importance blend re-ranks inside it — one coherent, auditable ranking
+  across HNSW seed, graph reach, fusion, reranker, confidence, and recency.
+
+The committed [`tri_engine_rescue`](examples/context_savings/real_measures/tri_engine_rescue.mjs)
+harness measures the synergy end-to-end: with zero weights the wordy
+similar-only fact precedes the real fix (0.8.0 behaviour); with
+`confidence: 0.8`, the fact the team reinforced via `feedback` **and** that
+only the typed-edge walk reaches leads the compiled context — identical
+across two runs.
+
+[`feedback`]: https://docs.rs/velesdb-memory
+
 **IDs & linking.** `remember` returns a stable id derived from the fact's
 content. Pass it to `relate` / `forget`, or as a `links[].target` on a later
 `remember` — that is how the graph gets built, and what `why` traverses.

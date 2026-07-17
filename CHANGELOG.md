@@ -34,6 +34,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `save_working_context` / `load_working_context`, same wire shapes as the
   MCP tools; ids cross as exact native Python ints (vs decimal strings on
   Node). [EPIC-P-071/US-001]
+- **`velesdb-memory`**: usage-driven importance blend in `context_memories`
+  — `CompilePolicy.importance` (`{confidence: 0.2, recency: 0.1,
+  recency_field: null}`, serde-defaulted so 0.8.0 requests stay
+  wire-compatible) folds the RL confidence `feedback` trains and a
+  batch-relative recency term into the fused ranking of pulled memories:
+  `fused_norm + w_c·(confidence−0.5)·2 + w_r·recency_norm`. Applies only to
+  the similarity-selected pool (confidence is not relevance — an adversarial
+  test pins that an over-reinforced off-topic fact never enters), reads no
+  clock (recency is min-max normalised within the batch; an absent key or a
+  degenerate batch contributes 0), composes with the
+  `compile_context_reranked` seam, and ventilates all four signals in each
+  decision's `reason` (`vector …, graph …, confidence …, recency …`). Both
+  weights at 0 reproduce the 0.8.0 output byte for byte (golden-pinned).
+  [EPIC-P-071/US-002]
+- **Node** (`@wiscale/velesdb-memory-node`): `feedback(id, success)` binding
+  (resolves to the fact's new learned confidence), and a committed RL×graph
+  synergy case in the `tri_engine_rescue` benchmark: a fact reinforced by
+  `feedback` and reachable only through the typed-edge walk out-ranks a
+  merely-similar fact once `policy.importance` is active — reproducible
+  across runs. [EPIC-P-071/US-002]
 - **Benchmark**: `examples/context_savings`, reproducible (75–82 % estimated
   token savings on the committed corpus in ~2 ms; figures are local
   estimates, not billed tokens — cross-checked against a real cl100k
