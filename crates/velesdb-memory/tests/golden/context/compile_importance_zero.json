@@ -1,0 +1,85 @@
+{
+  "content": "Session note: user asked about CI.\n\nthe deploy pipeline now runs clippy pedantic before tests\n\nthe deploy pipeline ran mandatory clippy gates last winter\n\nswitching the runner image stopped the flaky gate",
+  "decisions": [
+    {
+      "action": "preserve",
+      "content_hash": 3413808986207762015,
+      "fragment_id": 3413808986207762015,
+      "reason": "prose kept subject to budget",
+      "relevance": 0.0,
+      "risk": "low",
+      "rule_id": "preserve.default"
+    },
+    {
+      "action": "preserve",
+      "content_hash": 5649922643216548560,
+      "fragment_id": 5649922643216548560,
+      "memory_id": 5649922643216548560,
+      "reason": "prose kept subject to budget — pulled from memory 5649922643216548560 (vector 1.00, graph 0.00)",
+      "relevance": 1.0,
+      "risk": "low",
+      "rule_id": "preserve.default"
+    },
+    {
+      "action": "preserve",
+      "content_hash": 1337758366350361003,
+      "fragment_id": 1337758366350361003,
+      "memory_id": 1337758366350361003,
+      "reason": "prose kept subject to budget — pulled from memory 1337758366350361003 (vector 1.00, graph 0.00)",
+      "relevance": 1.0,
+      "risk": "low",
+      "rule_id": "preserve.default"
+    },
+    {
+      "action": "preserve",
+      "content_hash": 10130694843258298959,
+      "fragment_id": 10130694843258298959,
+      "memory_id": 10130694843258298959,
+      "reason": "prose kept subject to budget — pulled from memory 10130694843258298959 (vector 0.00, graph 1.00)",
+      "relevance": 0.15000000596046448,
+      "risk": "low",
+      "rule_id": "preserve.default"
+    }
+  ],
+  "insights": {
+    "tokens_in": 64,
+    "tokens_out": 67,
+    "tokens_saved": 0,
+    "tokens_saved_by_rule": {}
+  },
+  "retrieval_handles": [],
+  "risk": "low",
+  "sections": [
+    {
+      "content": "Session note: user asked about CI.\n\nthe deploy pipeline now runs clippy pedantic before tests\n\nthe deploy pipeline ran mandatory clippy gates last winter\n\nswitching the runner image stopped the flaky gate",
+      "fragment_ids": [
+        3413808986207762015,
+        5649922643216548560,
+        1337758366350361003,
+        10130694843258298959
+      ],
+      "kind": "body"
+    }
+  ],
+  "sources": [
+    {
+      "fragment_id": 3413808986207762015,
+      "handle": "ctx://source/3413808986207762015"
+    },
+    {
+      "fragment_id": 5649922643216548560,
+      "handle": "ctx://source/5649922643216548560",
+      "memory_id": 5649922643216548560
+    },
+    {
+      "fragment_id": 1337758366350361003,
+      "handle": "ctx://source/1337758366350361003",
+      "memory_id": 1337758366350361003
+    },
+    {
+      "fragment_id": 10130694843258298959,
+      "handle": "ctx://source/10130694843258298959",
+      "memory_id": 10130694843258298959
+    }
+  ]
+}
