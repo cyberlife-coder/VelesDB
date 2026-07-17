@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Node** (`@wiscale/velesdb-memory-node`): `compileContext(request)` —
   pure conversion, ids as decimal strings; ships the
   `velesdb-context-optimizer` agent skill in the npm package.
+- **Python** (`velesdb`): context-compiler parity on `MemoryService` —
+  `compile_context` / `retrieve_context_source` / `context_savings` /
+  `save_working_context` / `load_working_context`, same wire shapes as the
+  MCP tools; ids cross as exact native Python ints (vs decimal strings on
+  Node). [EPIC-P-071/US-001]
 - **Benchmark**: `examples/context_savings`, reproducible (75–82 % estimated
   token savings on the committed corpus in ~2 ms; figures are local
   estimates, not billed tokens — cross-checked against a real cl100k
@@ -75,6 +80,17 @@ account).
 - **Graph cluster held as a shared `Arc<GraphStore>` handle** (R1.2b —
   internal-only): graph state can be shared with `GraphCollection` without an
   exclusive move; field access and locking are unchanged.
+
+### Fixed
+
+- **python: integers greater than `i64::MAX` now round-trip exactly as `int`**
+  (previously silently converted to a lossy `float`). Affects every surface
+  sharing the binding's JSON converters — payloads, search results, VelesQL
+  params, graph properties, memory metadata — and is required by the context
+  compiler's content-addressed ids (FNV-1a 64, uniform over `u64`, so ~50%
+  exceed `i64::MAX`). Integers outside `[i64::MIN, u64::MAX]` now raise an
+  explicit `ValueError` stating the supported range instead of silently losing
+  precision. [EPIC-P-071/US-001]
 
 ## [3.12.0] — 2026-07-15
 
