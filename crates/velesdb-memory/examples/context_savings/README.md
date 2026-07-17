@@ -71,6 +71,45 @@ preamble stays **byte-identical across every turn** — exactly what provider
 prompt caching needs to hit. Latency varies with the machine; token figures
 do not (the run asserts byte-identity itself).
 
+## The tri-engine rescue benchmark (HNSW + graph BFS + fusion)
+
+Caller-fragment relevance is deliberately lexical (word overlap — fast,
+deterministic, no model). Its structural limit: evidence that shares no
+vocabulary with the question. VelesDB's answer is the **memory path** —
+`memory_scope` runs a fused recall: an **HNSW vector search** seeds on the
+query, a **graph walk** follows the typed `relate` edges outward from the
+seed, and **fusion** ranks both together into the compiled context.
+`real_measures/tri_engine_rescue.mjs` measures exactly that, on the
+realistic worst case: a post-mortem knowledge base where symptoms are
+described in user language but causes and fixes in infrastructure language
+(zero vocabulary overlap with the questions), plus distractors:
+
+```text
+knowledge base: 13 facts, 6 typed edges | k=5 | real cl100k tokens
+
+case 1: "why do checkout requests fail during peak traffic and what fixed it"
+  vector-only recall           : 1/3 answer facts  -> checkout
+  fused, graph_boost=0.6       : 3/3 answer facts  -> checkout, retry_storm, pool_fix
+  graph rescue vs vector-only  : 2 facts only the BFS reach surfaced
+
+--- totals over 3 cases ---
+answer-fact coverage : vector-only 3/9  vs  fused 9/9
+graph rescues        : 6/9 answer facts were reachable ONLY through the typed-edge walk
+fully answerable     : 3/3 compiled contexts contain every answer fact (~90 real tokens each)
+reproducibility      : OK (byte-identical)
+```
+
+Reading it: pure vector/lexical matching finds only the symptom facts
+(3/9 — the causes and fixes share no words with the questions and **cannot**
+be surfaced by similarity at any k). The fused walk reaches all of them
+through the `caused_by`/`fixed_by` edges, fusion ranks them into the top-k,
+and the compiler packs them with full provenance (`memory_id`, relevance)
+in under a millisecond. This is the compound story: the skill's
+`remember` + `relate` discipline turns into measurably answerable compiled
+contexts. The `graph_boost: 0.6` knob (new on `memory_scope`) is what lets
+a curated chain out-rank lexical noise; the default (0.15, conversational
+tuning) is measured in the same run for honesty.
+
 ## Compile latency at scale
 
 The 20-fragment fixture above is representative of one turn's context, not

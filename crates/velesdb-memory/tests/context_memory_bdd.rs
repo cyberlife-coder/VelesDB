@@ -54,8 +54,8 @@ fn test_compile_context_memory_scope_pulls_relevant_memory_with_provenance() {
         10_000,
     );
     req.memory_scope = Some(MemoryScope {
-        project: None,
         k: Some(3),
+        ..MemoryScope::default()
     });
     let compiler = ContextCompiler::new(CompilePolicy::default());
     let out = svc.compile_context(&compiler, &req).expect("compile");
@@ -322,6 +322,7 @@ fn test_system_facts_never_pollute_filtered_recall_or_memory_scope() {
     scoped.memory_scope = Some(MemoryScope {
         project: Some("acme".to_owned()),
         k: Some(10),
+        ..MemoryScope::default()
     });
     let out = svc.compile_context(&compiler, &scoped).expect("compile");
     assert!(
@@ -381,8 +382,8 @@ fn test_compile_context_memory_scope_respects_the_fragment_cap() {
         .collect();
     let mut req = request("deploy pipeline", fragments, 100_000);
     req.memory_scope = Some(MemoryScope {
-        project: None,
         k: Some(5),
+        ..MemoryScope::default()
     });
     let compiler = ContextCompiler::new(CompilePolicy::default());
 
@@ -527,8 +528,8 @@ fn test_pulled_memory_source_reference_carries_its_memory_id() {
         .expect("remember");
     let mut req = request("canary rollout", vec![fragment("Session note.")], 10_000);
     req.memory_scope = Some(MemoryScope {
-        project: None,
         k: Some(3),
+        ..MemoryScope::default()
     });
     let compiler = ContextCompiler::new(CompilePolicy::default());
 
@@ -547,4 +548,60 @@ fn test_pulled_memory_source_reference_carries_its_memory_id() {
         Some(memory_id),
         "provenance must link the source back to the memory it came from"
     );
+}
+
+#[test]
+fn test_memory_scope_graph_boost_pulls_evidence_sharing_no_words_with_the_query() {
+    // Given a cause-chain in memory: a symptom fact (lexically close to the
+    // query) linked to a fix fact that shares NO vocabulary with the query,
+    // plus a distractor that out-scores the fix in the lexical vector space
+    let (_dir, svc) = service();
+    let symptom = svc
+        .remember(
+            "the payments checkout flow returns five hundred and two errors under peak load",
+            &[],
+            None,
+        )
+        .expect("remember");
+    let fix = svc
+        .remember(
+            "raising the pool acquisition timeout to forty-five seconds stopped the cascade",
+            &[],
+            None,
+        )
+        .expect("remember");
+    svc.relate(symptom, fix, "fixed_by").expect("relate");
+    svc.remember(
+        "the release notifications are posted to the payments channel under the weekly load report",
+        &[],
+        None,
+    )
+    .expect("remember distractor");
+
+    // When compiling with a memory scope that raises the graph boost —
+    // built from the exact wire JSON an MCP/Node caller sends
+    let raw = r#"{
+        "query": "why does the payments checkout flow fail under peak load",
+        "token_budget": 4000,
+        "fragments": [{"content": "Session note."}],
+        "memory_scope": {"k": 2, "graph_boost": 0.8}
+    }"#;
+    let req: CompileRequest = serde_json::from_str(raw).expect("wire shape");
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc.compile_context(&compiler, &req).expect("compile");
+
+    // Then the graph-reached fix — invisible to lexical/vector matching —
+    // is compiled into the context with memory provenance
+    assert!(
+        out.content
+            .contains("forty-five seconds stopped the cascade"),
+        "the boosted graph walk must pull the zero-overlap evidence, got:\n{}",
+        out.content
+    );
+    let fix_decision = out
+        .decisions
+        .iter()
+        .find(|d| d.memory_id == Some(fix))
+        .expect("the fix must carry its memory id in provenance");
+    assert!(fix_decision.relevance > 0.0);
 }

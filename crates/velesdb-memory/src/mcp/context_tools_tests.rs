@@ -77,8 +77,8 @@ async fn test_compile_context_tool_pulls_memory_scope() {
     .expect("remember");
     let mut req = request("deploy pipeline checks", vec![fragment("note")], 10_000);
     req.memory_scope = Some(MemoryScope {
-        project: None,
         k: Some(3),
+        ..MemoryScope::default()
     });
 
     // When compiling through the tool

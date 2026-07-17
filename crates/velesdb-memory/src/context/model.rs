@@ -78,7 +78,7 @@ pub struct ContextFragment {
 /// Which memories the compiler may pull in alongside the caller's fragments.
 /// Consumed by the memory bridge (US-002); carried in the request shape from
 /// the start so the wire contract does not change when it lands.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct MemoryScope {
     /// Restrict recalled memories to this project facet.
@@ -87,6 +87,17 @@ pub struct MemoryScope {
     /// How many memories to consider (adapter-clamped).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub k: Option<usize>,
+    /// Graph-walk depth of the fused recall (default 2). Deeper hops reach
+    /// longer cause/fix chains from the vector seed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hops: Option<usize>,
+    /// Fusion weight added to graph-reached memories (default 0.15). Raise
+    /// it (e.g. `0.5`–`0.8`) when pulling from curated fact chains built
+    /// with `relate`: evidence that shares **no vocabulary** with the query
+    /// can then out-rank lexically-noisy near-misses — the tri-engine's
+    /// answer to the purely lexical relevance of caller fragments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_boost: Option<f64>,
 }
 
 /// Tuning knobs of one compilation. `Default` is the recommended profile.

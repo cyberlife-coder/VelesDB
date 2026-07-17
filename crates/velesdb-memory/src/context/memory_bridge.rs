@@ -119,8 +119,11 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             return Ok(Vec::new());
         }
         let filter = scope_filter(scope);
-        let scored =
-            self.recall_fused_scored(&request.query, k, filter.as_ref(), FusionOptions::default())?;
+        // The scope's fusion knobs (clamped by from_knobs); absent ones fall
+        // back to the crate defaults — raising graph_boost lets a curated
+        // relate-chain out-rank lexically-noisy near-misses (see MemoryScope).
+        let opts = FusionOptions::from_knobs(scope.hops, scope.graph_boost, None);
+        let scored = self.recall_fused_scored(&request.query, k, filter.as_ref(), opts)?;
         let max_fused = scored
             .iter()
             .map(|s| s.fused)

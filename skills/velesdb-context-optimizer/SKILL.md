@@ -36,7 +36,15 @@ silent loss. Same input, same output, byte for byte.
    `policy.response_reserve_tokens`).
 5. **Call `compile_context`** with a `query` describing the current task —
    relevance to it orders what packs first. Add
-   `memory_scope: {k: 5, project: "..."}` to pull relevant stored memories in.
+   `memory_scope: {k: 5, project: "..."}` to pull relevant stored memories in
+   — this is the tri-engine path: an HNSW vector search seeds on your query,
+   a graph walk follows the typed `relate` edges outward from that seed, and
+   fusion ranks both together. When the memory holds curated cause/fix
+   chains (built with `remember` + `relate`), raise the walk's weight:
+   `memory_scope: {k: 5, graph_boost: 0.6, hops: 2}` — measured on the
+   committed benchmark, that pulls the linked evidence even when it shares
+   **zero vocabulary** with the query (9/9 answer facts vs 3/9 for
+   vector-only recall).
 6. **Check `risk`, then check `decisions` against YOUR question —
    the label alone is not enough.** `low`: nothing was dropped, use `content`
    as-is. `medium`/`high`: something was abstracted, dropped, or externalized
@@ -46,7 +54,10 @@ silent loss. Same input, same output, byte for byte.
    `query`), not semantic**: a terse fragment that actually contains the
    answer can rank *below* verbose, repetitive filler that merely shares
    more words with the query — "medium ... usually fine" is about
-   *fidelity*, not about *whether the one fact you need survived*. If any
+   *fidelity*, not about *whether the one fact you need survived*. (The
+   durable remedy for this lexical limit is the memory path of step 5:
+   facts stored with `remember` + `relate` are reached by the graph walk
+   regardless of vocabulary — retrieval here is the tactical fallback.) If any
    externalized/abstracted fragment looks relevant, retrieve it now (step 7)
    — do not wait for the downstream model to notice something is missing; it
    cannot ask about content it never saw existed. `high` additionally means
