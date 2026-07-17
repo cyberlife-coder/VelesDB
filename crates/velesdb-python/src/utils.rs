@@ -135,6 +135,18 @@ pub fn python_to_json(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<serde_json::V
     if let Ok(u) = obj.extract::<u64>(py) {
         return Ok(serde_json::Value::Number(u.into()));
     }
+    // Any remaining Python int is outside [i64::MIN, u64::MAX] (unbounded
+    // precision on the Python side). Reject it explicitly: letting it fall
+    // through to the f64 branch below would silently round it — exactly the
+    // lossy degradation the u64 branch above exists to prevent.
+    if obj.bind(py).is_instance_of::<pyo3::types::PyInt>() {
+        return Err(PyValueError::new_err(format!(
+            "Integer out of the supported range [{}, {}] (i64::MIN to u64::MAX); \
+             larger values would silently lose precision",
+            i64::MIN,
+            u64::MAX
+        )));
+    }
     if let Ok(f) = obj.extract::<f64>(py) {
         return serde_json::Number::from_f64(f)
             .map(serde_json::Value::Number)
