@@ -808,13 +808,13 @@ fn test_importance_recency_field_recent_memory_leads_over_older_one() {
     svc.remember(
         old_text,
         &[],
-        Some(&common::meta(&[("day", serde_json::json!(20240101))])),
+        Some(&common::meta(&[("day", serde_json::json!(20_240_101))])),
     )
     .expect("remember");
     svc.remember(
         new_text,
         &[],
-        Some(&common::meta(&[("day", serde_json::json!(20260715))])),
+        Some(&common::meta(&[("day", serde_json::json!(20_260_715))])),
     )
     .expect("remember");
 
@@ -858,14 +858,14 @@ fn test_importance_zero_weights_output_is_byte_identical_to_0_8_0_golden() {
         .remember(
             "the deploy pipeline ran mandatory clippy gates last winter",
             &[],
-            Some(&common::meta(&[("day", serde_json::json!(20260101))])),
+            Some(&common::meta(&[("day", serde_json::json!(20_260_101))])),
         )
         .expect("remember");
     let new_id = svc
         .remember(
             "the deploy pipeline now runs clippy pedantic before tests",
             &[],
-            Some(&common::meta(&[("day", serde_json::json!(20260715))])),
+            Some(&common::meta(&[("day", serde_json::json!(20_260_715))])),
         )
         .expect("remember");
     let fix = svc
@@ -962,7 +962,7 @@ fn test_importance_reason_ventilates_vector_graph_confidence_and_recency() {
         .remember(
             "the canary stage rolls to five percent first",
             &[],
-            Some(&common::meta(&[("day", serde_json::json!(20260701))])),
+            Some(&common::meta(&[("day", serde_json::json!(20_260_701))])),
         )
         .expect("remember");
     svc.feedback(id, true).expect("feedback");
@@ -1000,13 +1000,13 @@ fn test_importance_recency_missing_key_and_degenerate_batch_stay_neutral() {
     svc.remember(
         "the rollout freeze applies to the payments cluster",
         &[],
-        Some(&common::meta(&[("day", serde_json::json!(20250101))])),
+        Some(&common::meta(&[("day", serde_json::json!(20_250_101))])),
     )
     .expect("remember");
     svc.remember(
         "the rollout freeze applies to the search cluster",
         &[],
-        Some(&common::meta(&[("day", serde_json::json!(20260601))])),
+        Some(&common::meta(&[("day", serde_json::json!(20_260_601))])),
     )
     .expect("remember");
     let keyless = svc
@@ -1053,7 +1053,7 @@ fn test_importance_recency_missing_key_and_degenerate_batch_stay_neutral() {
         svc2.remember(
             &format!("the rollout freeze applies to the {cluster} cluster"),
             &[],
-            Some(&common::meta(&[("day", serde_json::json!(20260601))])),
+            Some(&common::meta(&[("day", serde_json::json!(20_260_601))])),
         )
         .expect("remember");
     }
