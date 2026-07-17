@@ -320,7 +320,7 @@ same way:
 cp -r skills/velesdb-context-optimizer ~/.claude/skills/
 ```
 
-[`skills/velesdb-context-optimizer/SKILL.md`](../../skills/velesdb-context-optimizer/SKILL.md)
+[`skills/velesdb-context-optimizer/SKILL.md`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
 — see [The context compiler tools](#the-context-compiler-tools) below.
 
 ## Using the tools
@@ -468,9 +468,9 @@ The reproducible benchmark ([`examples/context_savings`](examples/context_saving
 measures **82.5 % real (cl100k) token savings on a committed 12-turn agent-session benchmark** (sub-ms stateless compiles), 75–82 % estimated savings on its static corpus in ~2 ms compile, and — with `memory_scope`'s fused HNSW + graph-walk recall over `relate`-linked fact chains — **9/9 answer facts surfaced vs 3/9 for vector-only recall** on the committed tri-engine benchmark
 latency. That tri-engine path — the one `memory_scope` drives inside `compile_context` — looks like this:
 
-![tri-engine retrieval: query seeds an HNSW vector search, a graph walk follows relate edges, fusion combines both, then ranking produces the result](https://raw.githubusercontent.com/cyberlife-coder/VelesDB/develop/crates/velesdb-memory/docs/diagrams/tri-engine.svg)
+![tri-engine retrieval: query seeds an HNSW vector search, a graph walk follows relate edges, fusion combines both, then ranking produces the result](docs/diagrams/tri-engine.svg)
 
-The [`velesdb-context-optimizer`](../../skills/velesdb-context-optimizer/SKILL.md)
+The [`velesdb-context-optimizer`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
 skill teaches an agent the full workflow — including when *not* to compress.
 
 **IDs & linking.** `remember` returns a stable id derived from the fact's
