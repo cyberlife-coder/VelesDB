@@ -105,7 +105,12 @@ pub struct CompilePolicy {
     /// skipped during classification; their fragments fall through to the
     /// next matching rule.
     pub disabled_rules: Vec<String>,
-    /// How oversized fragments are split before packing.
+    /// How oversized fragments are split before packing. Only
+    /// [`ChunkPolicy::max_chunk_bytes`] and [`ChunkPolicy::boundary`] apply
+    /// here — the compiler forces `overlap_bytes` to `0`, since it emits
+    /// pieces by concatenation and an overlap prefix would duplicate content
+    /// reported as verbatim. `overlap_bytes` is honoured only by the
+    /// standalone [`crate::context::chunk::chunk_text`] API.
     pub chunk: ChunkPolicy,
     /// Memory bridge only: record a compilation event (metadata and hashes,
     /// **never fragment content**) so savings stay aggregatable. Default

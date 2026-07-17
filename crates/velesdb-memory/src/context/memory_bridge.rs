@@ -130,8 +130,17 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             .into_iter()
             .map(|scored| {
                 let memory_id = scored.recollection.id;
+                // Sanitise a non-finite fused score to 0 before normalising:
+                // `f32::clamp` returns NaN for a NaN input (it does not clamp),
+                // which would put a non-`[0, 1]` value — serialising as JSON
+                // `null` — into an output sold as deterministic and auditable.
+                let fused = if scored.fused.is_finite() {
+                    scored.fused
+                } else {
+                    0.0
+                };
                 #[allow(clippy::cast_possible_truncation)] // normalised into [0, 1]
-                let relevance = (scored.fused / max_fused).clamp(0.0, 1.0) as f32;
+                let relevance = (fused / max_fused).clamp(0.0, 1.0) as f32;
                 let fragment = ContextFragment {
                     id: None,
                     content: scored.recollection.content,

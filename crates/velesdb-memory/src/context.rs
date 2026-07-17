@@ -396,14 +396,26 @@ fn pieces(analysis: &Analysis, chunk_policy: &ChunkPolicy) -> Vec<String> {
         .collect()
 }
 
-/// The chunk policy the pipeline actually cuts with: the ceiling is capped
-/// near the usable budget (sized via the estimator's bytes-per-token hint,
-/// floored at 8 bytes so tiny budgets still get pieces), and **overlap is
-/// forced to zero** — pipeline pieces are emitted by concatenation, and an
-/// overlap prefix would duplicate every seam in content reported as
-/// verbatim. Overlap stays meaningful only for the standalone
-/// [`chunk_text`] API. The byte ceiling is a *hint*: every piece is still
-/// measured by the injected estimator during packing.
+/// Lower bound on the pipeline's effective chunk size, regardless of budget
+/// or caller policy. Guards against memory-amplification: without a floor, a
+/// tiny `token_budget` (or a tiny caller-supplied `max_chunk_bytes`) would
+/// drive the ceiling toward one byte and explode a large fragment into one
+/// heap `String` per byte. At 256 bytes the per-piece `String` overhead is
+/// under 10 %, so pieces stay bounded by ~`input_bytes / 256` — no
+/// amplification beyond the already-capped input size ([`crate::limits`]).
+const MIN_CHUNK_BYTES: usize = 256;
+
+/// The chunk policy the pipeline actually cuts with: the ceiling tracks the
+/// usable budget (sized via the estimator's bytes-per-token hint) but is
+/// **floored at [`MIN_CHUNK_BYTES`]** so neither a tiny budget nor a tiny
+/// caller-supplied `max_chunk_bytes` can drive it toward a byte (a
+/// memory-amplification `DoS`). A budget too small to hold a floored piece
+/// simply externalizes everything, which is the correct outcome anyway.
+/// **Overlap is forced to zero** — pipeline pieces are emitted by
+/// concatenation, and an overlap prefix would duplicate every seam in
+/// content reported as verbatim; overlap stays meaningful only for the
+/// standalone [`chunk_text`] API. The byte ceiling is a *hint*: every piece
+/// is still measured by the injected estimator during packing.
 fn effective_chunk_policy(
     policy: &CompilePolicy,
     usable: u64,
@@ -412,7 +424,11 @@ fn effective_chunk_policy(
     let budget_bytes = usize::try_from(usable.saturating_mul(estimator.bytes_per_token_hint()))
         .unwrap_or(usize::MAX);
     ChunkPolicy {
-        max_chunk_bytes: policy.chunk.max_chunk_bytes.min(budget_bytes.max(8)),
+        max_chunk_bytes: policy
+            .chunk
+            .max_chunk_bytes
+            .min(budget_bytes)
+            .max(MIN_CHUNK_BYTES),
         overlap_bytes: 0,
         boundary: policy.chunk.boundary,
     }
@@ -451,7 +467,15 @@ fn sections(analyses: &[Analysis], emissions: &BTreeMap<usize, Emission>) -> Vec
         for analysis in analyses {
             let cache = analysis.rule.action == ContextAction::Cache;
             let wanted = (kind == SectionKind::Cache) == cache;
-            if let Some(emission) = emissions.get(&analysis.seq).filter(|_| wanted) {
+            // Skip empty emissions: a trivially-emitted empty fragment
+            // (taken == total == 0) still gets its own decision, but must
+            // contribute no block — otherwise `join(JOINER)` would wrap it in
+            // joiners the packer never accounted for, breaking the budget
+            // invariant once more than one empty fragment is present.
+            if let Some(emission) = emissions
+                .get(&analysis.seq)
+                .filter(|emission| wanted && !emission.text.is_empty())
+            {
                 blocks.push(&emission.text);
                 ids.push(analysis.fragment_id);
             }
@@ -496,6 +520,18 @@ fn decision(
 /// The decision fields shared by every verdict builder.
 type Verdict = (ContextAction, String, FidelityRisk, String, Option<String>);
 
+/// The fidelity risk of content that did not make it fully into the output:
+/// **High** when the classification marked it critical (its loss matters),
+/// **Medium** otherwise. The single source of this policy — shared by the
+/// duplicate, partial, and externalized verdicts.
+fn critical_risk(critical: bool) -> FidelityRisk {
+    if critical {
+        FidelityRisk::High
+    } else {
+        FidelityRisk::Medium
+    }
+}
+
 /// A duplicate: dropped, and honest about whether its content actually
 /// survived. If the kept twin emitted fully the risk is low; if the twin was
 /// truncated or externalized the duplicate's content is *not* in the prompt,
@@ -514,14 +550,9 @@ fn dup_verdict(
     let twin_full = emissions.get(&twin.seq).is_some_and(Emission::is_full);
     let (risk, fate) = if twin_full {
         (FidelityRisk::Low, "content survives through it")
-    } else if analysis.rule.critical {
-        (
-            FidelityRisk::High,
-            "but that twin was not fully emitted — recover via the handle",
-        )
     } else {
         (
-            FidelityRisk::Medium,
+            critical_risk(analysis.rule.critical),
             "but that twin was not fully emitted — recover via the handle",
         )
     };
@@ -552,15 +583,10 @@ fn full_verdict(analysis: &Analysis) -> Verdict {
 
 /// Partially emitted: a chunk prefix is in, the rest stays retrievable.
 fn partial_verdict(analysis: &Analysis, emission: &Emission) -> Verdict {
-    let risk = if analysis.rule.critical {
-        FidelityRisk::High
-    } else {
-        FidelityRisk::Medium
-    };
     (
         analysis.rule.action,
         analysis.rule.id.to_owned(),
-        risk,
+        critical_risk(analysis.rule.critical),
         format!(
             "{} — packed {}/{} chunks, the rest stays retrievable",
             analysis.rule.reason, emission.taken, emission.total
@@ -571,15 +597,10 @@ fn partial_verdict(analysis: &Analysis, emission: &Emission) -> Verdict {
 
 /// Not emitted at all: externalized behind a retrieval handle.
 fn externalized_verdict(analysis: &Analysis) -> Verdict {
-    let risk = if analysis.rule.critical {
-        FidelityRisk::High
-    } else {
-        FidelityRisk::Medium
-    };
     (
         ContextAction::Retrieve,
         "budget.externalize".to_owned(),
-        risk,
+        critical_risk(analysis.rule.critical),
         format!(
             "did not fit the budget ({}); retrievable via its handle",
             analysis.rule.reason
@@ -623,4 +644,39 @@ fn saved_by_rule(
         }
     }
     by_rule
+}
+
+#[cfg(test)]
+mod chunk_policy_tests {
+    use super::{effective_chunk_policy, MIN_CHUNK_BYTES};
+    use crate::context::estimator::HeuristicEstimator;
+    use crate::context::model::CompilePolicy;
+
+    #[test]
+    fn test_effective_chunk_policy_floors_chunk_size_under_a_tiny_budget() {
+        // A budget of one usable token must NOT drive the chunk ceiling down
+        // toward a byte, which would explode a large fragment into one heap
+        // String per byte (a caller-controlled memory-amplification DoS).
+        let policy = CompilePolicy::default();
+        let effective = effective_chunk_policy(&policy, 1, &HeuristicEstimator);
+        assert!(
+            effective.max_chunk_bytes >= MIN_CHUNK_BYTES,
+            "tiny budget drove chunk size to {} bytes, below the {MIN_CHUNK_BYTES}-byte floor",
+            effective.max_chunk_bytes
+        );
+    }
+
+    #[test]
+    fn test_effective_chunk_policy_floors_a_caller_supplied_tiny_chunk_size() {
+        // A caller cannot bypass the floor by setting a tiny max_chunk_bytes
+        // in the request policy — the same amplification vector otherwise.
+        let mut policy = CompilePolicy::default();
+        policy.chunk.max_chunk_bytes = 1;
+        let effective = effective_chunk_policy(&policy, 1_000, &HeuristicEstimator);
+        assert!(
+            effective.max_chunk_bytes >= MIN_CHUNK_BYTES,
+            "caller max_chunk_bytes=1 bypassed the {MIN_CHUNK_BYTES}-byte floor, got {}",
+            effective.max_chunk_bytes
+        );
+    }
 }

@@ -42,8 +42,10 @@ impl<T: TokenEstimator + ?Sized> TokenEstimator for Box<T> {
 /// Deterministic char-class estimator, calibrated against a real BPE
 /// (cl100k) on a mixed corpus. Per whitespace-separated word, each char
 /// costs: CJK **5/6** token, ASCII digit **1** token, anything else
-/// **3/10** token; the word's cost is the ceiling of the sum (whitespace is
-/// free — BPE folds it into the following token).
+/// **3/10** token; the word's cost is the ceiling of the sum. Inter-word
+/// spaces and tabs are free (BPE folds them into the following token), but
+/// each **newline** costs half a token — cl100k spends ~one token per
+/// newline run — added on top of the per-word sum (see `estimate`).
 ///
 /// Measured margins vs cl100k (estimate − real, positive = safe over-count):
 /// English prose **+55 %**, French prose **+38 %**, repetitive logs

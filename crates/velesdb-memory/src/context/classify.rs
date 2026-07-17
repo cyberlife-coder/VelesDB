@@ -223,8 +223,11 @@ pub(crate) fn collapse_repeated_lines(content: &str) -> String {
     let mut emitted: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     let mut lines: Vec<String> = Vec::new();
     for line in content.lines() {
+        // On first sight of a line, emit it annotated with its total count.
+        // Every line was just inserted into `counts`, so the lookup is always
+        // `Some` — `&0` is unreachable, and `annotated(_, 0)` would be wrong.
         if emitted.insert(line) {
-            lines.push(annotated(line, counts.get(line).copied().unwrap_or(1)));
+            lines.push(annotated(line, counts[line]));
         }
     }
     lines.join("\n")

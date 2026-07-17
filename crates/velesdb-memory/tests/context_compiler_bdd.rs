@@ -735,6 +735,48 @@ fn test_compile_empty_content_critical_fragment_is_low_risk_not_a_budget_miss() 
     assert!(matches!(out.risk, FidelityRisk::Low));
 }
 
+#[test]
+fn test_compile_empty_fragments_interleaved_never_inject_unaccounted_joiners() {
+    // Given real fragments with several empty (trivially emitted) fragments
+    // interleaved between them — a caller can send any number of these
+    let fragments = vec![
+        fragment("The deploy pipeline runs clippy before promoting a build."),
+        fragment(""),
+        fragment(""),
+        fragment("The canary stage rolls out to five percent of the fleet first."),
+        fragment(""),
+        fragment("Checksums are verified on every shard before the rebalance."),
+    ];
+    let req = request(fragments, 10_000);
+
+    // When compiling under a budget generous enough that everything real fits
+    let out = compile(&req);
+
+    // Then the assembled output never exceeds the budget (empty fragments must
+    // not inject joiner tokens the packer never accounted for) ...
+    let estimator = HeuristicEstimator;
+    assert!(
+        estimator.estimate(&out.content) <= req.token_budget,
+        "empty fragments injected unaccounted joiners: {} tokens > {} budget",
+        estimator.estimate(&out.content),
+        req.token_budget
+    );
+    // ... and no empty fragment leaves a doubled joiner in the output
+    assert!(
+        !out.content.contains("\n\n\n\n"),
+        "an empty block produced a doubled joiner:\n{:?}",
+        out.content
+    );
+    // ... while the real content is all present, in order
+    let clippy = out.content.find("clippy").expect("first fragment present");
+    let canary = out.content.find("canary").expect("second fragment present");
+    let checksums = out
+        .content
+        .find("Checksums")
+        .expect("third fragment present");
+    assert!(clippy < canary && canary < checksums, "order preserved");
+}
+
 // --- Negative ----------------------------------------------------------------
 
 #[test]
