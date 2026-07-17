@@ -127,6 +127,26 @@ pub fn python_to_json(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<serde_json::V
     if let Ok(i) = obj.extract::<i64>(py) {
         return Ok(serde_json::Value::Number(i.into()));
     }
+    // A Python int outside i64's range (up to u64::MAX) still round-trips
+    // exactly as a JSON number — needed for u64 ids (e.g. the context
+    // compiler's FNV-1a `stable_id`, which is uniform over u64 and so
+    // exceeds i64::MAX roughly half the time). Falling through to f64 here
+    // would silently truncate precision instead of erroring or round-tripping.
+    if let Ok(u) = obj.extract::<u64>(py) {
+        return Ok(serde_json::Value::Number(u.into()));
+    }
+    // Any remaining Python int is outside [i64::MIN, u64::MAX] (unbounded
+    // precision on the Python side). Reject it explicitly: letting it fall
+    // through to the f64 branch below would silently round it — exactly the
+    // lossy degradation the u64 branch above exists to prevent.
+    if obj.bind(py).is_instance_of::<pyo3::types::PyInt>() {
+        return Err(PyValueError::new_err(format!(
+            "Integer out of the supported range [{}, {}] (i64::MIN to u64::MAX); \
+             larger values would silently lose precision",
+            i64::MIN,
+            u64::MAX
+        )));
+    }
     if let Ok(f) = obj.extract::<f64>(py) {
         return serde_json::Number::from_f64(f)
             .map(serde_json::Value::Number)
@@ -191,6 +211,11 @@ pub fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> Py<PyAny> {
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
                 to_pyobject(py, i)
+            } else if let Some(u) = n.as_u64() {
+                // A u64 that does not fit i64 (e.g. a `stable_id` above
+                // i64::MAX) — convert directly instead of falling through to
+                // f64, which would silently lose precision.
+                to_pyobject(py, u)
             } else if let Some(f) = n.as_f64() {
                 to_pyobject(py, f)
             } else {

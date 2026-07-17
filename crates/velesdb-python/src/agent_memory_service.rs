@@ -12,6 +12,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 
+use velesdb_memory::context::{
+    CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextSavings, WorkingContext,
+};
 use velesdb_memory::{
     format_dated_context, limits, ColumnFilter, ColumnOp, DynEmbedder, ErrorCategory, Explanation,
     FusionOptions, HashEmbedder, Link, MemoryError, MemoryService, Metadata, OllamaEmbedder,
@@ -20,6 +23,32 @@ use velesdb_memory::{
 
 use crate::collection::query::convert_params;
 use crate::utils::{json_to_python, opt_field, python_to_json};
+
+/// Serialize a context-compiler output value to its Python dict — the exact
+/// same JSON shape the MCP tools and the Node binding serialize, going
+/// through `serde_json` + the crate's manual [`json_to_python`] converter
+/// rather than hand-rolled field-by-field construction. `to_value` failure is
+/// an internal bug (every field here is JSON-representable), never a caller
+/// input problem, hence `RuntimeError`.
+macro_rules! serde_to_python {
+    ($py:expr, $value:expr, $what:literal) => {{
+        let json = serde_json::to_value($value).map_err(|err| {
+            PyRuntimeError::new_err(format!(concat!("failed to serialize ", $what, ": {}"), err))
+        })?;
+        json_to_python($py, &json)
+    }};
+}
+
+/// Deserialize a Python dict (the same JSON shape as the corresponding MCP
+/// tool input) into a context-compiler request type.
+macro_rules! python_to_serde {
+    ($py:expr, $obj:expr, $what:literal) => {{
+        let json = python_to_json($py, $obj)?;
+        serde_json::from_value(json).map_err(|err| {
+            PyValueError::new_err(format!(concat!("invalid ", $what, ": {}"), err))
+        })?
+    }};
+}
 
 /// Map a [`MemoryError`] to the most specific Python exception, driven by its
 /// transport-neutral [`ErrorCategory`] so the taxonomy stays identical to the
@@ -372,5 +401,86 @@ impl PyMemoryService {
                 .remember_extracted(text, &extractor, metadata.as_ref())
                 .map_err(to_py_err)
         })
+    }
+
+    /// Compile context fragments into a token-budgeted, provenance-audited
+    /// prompt context — deterministic, no LLM call. Delegates directly to the
+    /// same `velesdb_memory::context` bridge the MCP `compile_context` tool
+    /// and the Node binding use (zero new logic here). `request` is the same
+    /// JSON shape as the MCP tool's input (`{query, fragments, token_budget,
+    /// project?, target_model?, memory_scope?, policy?}`); the result is the
+    /// same shape as its output (`{content, sections, decisions, sources,
+    /// retrieval_handles, insights, risk}`). One documented difference from
+    /// the Node binding: every u64 id (`fragment_id`, `content_hash`,
+    /// `memory_id`, entries of `fragment_ids`) crosses as a **native Python
+    /// int** (unlimited precision), not a decimal string — both are faithful
+    /// renderings of the same value, never truncated.
+    fn compile_context(&self, py: Python<'_>, request: Py<PyAny>) -> PyResult<Py<PyAny>> {
+        let request: CompileRequest = python_to_serde!(py, &request, "compile request");
+        let compiled: CompiledContext = py.detach(|| {
+            self.svc
+                .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+                .map_err(to_py_err)
+        })?;
+        Ok(serde_to_python!(py, &compiled, "compiled context"))
+    }
+
+    /// Fetch back the exact original content behind a `ctx://source/<hash>`
+    /// handle from a [`compile_context`](Self::compile_context) result —
+    /// what was externalized or partially packed is recoverable, not lost.
+    fn retrieve_context_source(&self, py: Python<'_>, handle: &str) -> PyResult<String> {
+        py.detach(|| self.svc.retrieve_context_source(handle).map_err(to_py_err))
+    }
+
+    /// Aggregate the token (and cost) savings of past
+    /// [`compile_context`](Self::compile_context) calls, optionally narrowed
+    /// to one `project`. Figures are local estimates recorded per
+    /// compilation (metadata only, never fragment content); `truncated`
+    /// reports when the sweep hit the recall cap.
+    #[pyo3(signature = (project = None))]
+    fn context_savings(&self, py: Python<'_>, project: Option<&str>) -> PyResult<Py<PyAny>> {
+        let savings: ContextSavings =
+            py.detach(|| self.svc.context_savings(project).map_err(to_py_err))?;
+        Ok(serde_to_python!(py, &savings, "context savings"))
+    }
+
+    /// Persist `working` (the same JSON shape as `WorkingContext` on the
+    /// wire: `{goal?, active_constraints, verified_facts, open_hypotheses,
+    /// decisions, exact_evidence, pending_actions}`) under `project` +
+    /// `session`. Saving again under the same pair replaces the previous
+    /// state (idempotent upsert). Returns the stored system fact id.
+    fn save_working_context(
+        &self,
+        py: Python<'_>,
+        project: &str,
+        session: &str,
+        working: Py<PyAny>,
+    ) -> PyResult<u64> {
+        let working: WorkingContext = python_to_serde!(py, &working, "working context");
+        py.detach(|| {
+            self.svc
+                .save_working_context(project, session, &working)
+                .map_err(to_py_err)
+        })
+    }
+
+    /// The working context previously saved under `project` + `session` (see
+    /// [`save_working_context`](Self::save_working_context)), or `None` when
+    /// there is none.
+    fn load_working_context(
+        &self,
+        py: Python<'_>,
+        project: &str,
+        session: &str,
+    ) -> PyResult<Py<PyAny>> {
+        let working = py.detach(|| {
+            self.svc
+                .load_working_context(project, session)
+                .map_err(to_py_err)
+        })?;
+        match working {
+            None => Ok(py.None()),
+            Some(working) => Ok(serde_to_python!(py, &working, "working context")),
+        }
     }
 }

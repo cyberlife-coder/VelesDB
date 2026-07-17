@@ -28,6 +28,120 @@ mem.why("why the aisle seat on Robert's flight?")   # walks booking → reason �
 
 Full runnable demo: [`examples/agent_memory/why_across_sessions.py`](https://github.com/cyberlife-coder/VelesDB/blob/develop/examples/agent_memory/why_across_sessions.py). The same wedge ships for [Node](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) and as a local [MCP server](https://github.com/cyberlife-coder/VelesDB/tree/develop/crates/velesdb-memory).
 
+## Context Compiler: token-budgeted, provenance-audited prompt context
+
+Your agent burns most of its tokens re-reading redundant context.
+`MemoryService.compile_context` compresses it **deterministically** (no LLM,
+no cloud, zero new logic in the binding — it delegates straight to the same
+`velesdb_memory::context` bridge the MCP server and the Node binding use): the
+same request always compiles to the same bytes, duplicates drop, repeated log
+lines collapse with counts, code / URLs / numbers / negative constraints
+survive verbatim (`metadata={"verbatim": True}` forces it), a stable
+cache-friendly prefix can be pinned (`metadata={"cache": True}`), and
+over-budget content becomes a recoverable `ctx://source/<hash>` handle —
+never a silent loss.
+
+```python
+mem = MemoryService("./agent_memory")
+
+compiled = mem.compile_context({
+    "query": "deploy pipeline safety",
+    "token_budget": 2000,
+    "project": "veles",
+    "fragments": [
+        {"content": "The deploy pipeline runs clippy before tests."},
+        {"content": "The deploy pipeline runs clippy before tests."},  # duplicate, dropped
+        {"content": "Never restart the primary during a rebalance.",
+         "metadata": {"verbatim": True}},
+    ],
+})
+compiled["content"]    # the compiled prompt context (fits the budget)
+compiled["risk"]       # "low" | "medium" | "high" -- "high" means critical content did not fit
+compiled["decisions"]  # one auditable decision per fragment (rule_id, reason, risk)
+compiled["insights"]   # {"tokens_in", "tokens_out", "tokens_saved", ...} -- local estimates
+
+# What did not fit stays recoverable, byte for byte:
+handle = compiled["sources"][0]["handle"]        # "ctx://source/18021940868160883968"
+mem.retrieve_context_source(handle)              # -> the original fragment text
+
+# Aggregate savings across every compile_context call (optionally per project):
+mem.context_savings(project="veles")             # {"events", "tokens_saved", ...}
+
+# Persist/reload an agent's distilled working state across sessions:
+wid = mem.save_working_context("veles", "session-1", {
+    "goal": "ship the release",
+    "active_constraints": [{"text": "never restart during rebalance"}],
+    "verified_facts": [], "open_hypotheses": [], "decisions": [],
+    "exact_evidence": [], "pending_actions": ["run smoke tests"],
+})
+mem.load_working_context("veles", "session-1")   # -> the same dict, or None if never saved
+```
+
+The request/result JSON matches the MCP `compile_context` / `context_savings`
+tools field for field, with one documented difference: every u64 id
+(`fragment_id`, `content_hash`, `memory_id`, entries of `fragment_ids`, and
+input `fragments[].id`) crosses as a **native Python int** (unlimited
+precision) here, versus a decimal string on the [Node
+binding](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) — both
+are faithful renderings of the same value, never truncated (ids are FNV-1a
+64-bit hashes, uniformly spread over the full `u64` range, so roughly half of
+them exceed `i64::MAX` — see `handle` above). `tokens_saved` is a local
+estimate, not billed tokens.
+
+<details>
+<summary>Wiring into LangChain (executed, no mocks)</summary>
+
+```python
+from langchain_core.documents import Document
+from langchain_core.runnables import RunnableLambda
+from velesdb import MemoryService
+
+mem = MemoryService("./agent_memory")
+
+
+def compile_docs(inputs: dict) -> str:
+    fragments = [{"content": d.page_content} for d in inputs["docs"]]
+    compiled = mem.compile_context(
+        {"query": inputs["query"], "token_budget": 2000, "fragments": fragments}
+    )
+    return compiled["content"]
+
+
+compile_step = RunnableLambda(compile_docs)
+docs = [
+    Document(page_content="The deploy pipeline runs clippy before tests."),
+    Document(page_content="The deploy pipeline runs clippy before tests."),
+    Document(page_content="Never restart the primary during a rebalance."),
+]
+compile_step.invoke({"query": "deploy pipeline safety", "docs": docs})
+# -> "The deploy pipeline runs clippy before tests.\n\nNever restart the primary during a rebalance."
+```
+
+</details>
+
+<details>
+<summary>Wiring into LlamaIndex (executed, no mocks)</summary>
+
+```python
+from llama_index.core import Document
+from velesdb import MemoryService
+
+mem = MemoryService("./agent_memory")
+docs = [
+    Document(text="The deploy pipeline runs clippy before tests."),
+    Document(text="The deploy pipeline runs clippy before tests."),
+    Document(text="Never restart the primary during a rebalance."),
+]
+fragments = [{"content": d.text} for d in docs]
+compiled = mem.compile_context(
+    {"query": "deploy pipeline safety", "token_budget": 2000, "fragments": fragments}
+)
+compiled["content"]                    # same deduped, budgeted context
+compiled["insights"]["tokens_saved"]   # 13
+```
+
+</details>
+
 ## Features
 
 - **Dense + Sparse Vector Search**: HNSW index with SIMD-optimized distance, plus inverted-index sparse search and hybrid dense+sparse fusion
