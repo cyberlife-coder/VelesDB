@@ -14,6 +14,11 @@ description: >
 
 # VelesDB context optimizer
 
+## Installation
+
+Install: `cp -r skills/velesdb-context-optimizer ~/.claude/skills/` (repo clone; the npm package bundles it at `node_modules/@wiscale/velesdb-memory-node/skills/`).
+Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB/blob/main/crates/velesdb-memory/README.md#configure-your-client).
+
 You compress context with `compile_context` — a **deterministic** compiler
 (no LLM, no cloud): duplicates drop, repeated log lines collapse with counts,
 code / URLs / numbers / negative constraints survive verbatim, and whatever

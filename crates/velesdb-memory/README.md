@@ -233,20 +233,25 @@ cargo build --release -p velesdb-memory   # → target/release/velesdb-memory
 ## Configure your client
 
 All clients use the same stdio shape — point `command` at the built binary.
+`cargo install velesdb-memory` puts it at `~/.cargo/bin/velesdb-memory`
+(or the path of your local build, `target/release/velesdb-memory`).
+JSON/TOML configs spawn the binary without a shell, so `~` is **not**
+expanded there — use an absolute path (shown below as
+`/home/you/.cargo/bin/velesdb-memory`; adjust to your home directory).
 
 **Claude Code**
 
 ```bash
 claude mcp add velesdb-memory \
   --env VELESDB_MEMORY_PATH="$HOME/.velesdb-memory" \
-  -- /path/to/velesdb-memory
+  -- ~/.cargo/bin/velesdb-memory
 ```
 
 **Cursor** — `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project)
 
 ```json
 { "mcpServers": { "velesdb-memory": {
-  "command": "/path/to/velesdb-memory",
+  "command": "/home/you/.cargo/bin/velesdb-memory",
   "env": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
 } } }
 ```
@@ -257,7 +262,7 @@ claude mcp add velesdb-memory \
 
 ```json
 { "context_servers": { "velesdb-memory": {
-  "command": { "path": "/path/to/velesdb-memory", "args": [],
+  "command": { "path": "/home/you/.cargo/bin/velesdb-memory", "args": [],
     "env": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" } }
 } } }
 ```
@@ -267,13 +272,13 @@ claude mcp add velesdb-memory \
 ```bash
 codex mcp add velesdb-memory \
   --env VELESDB_MEMORY_PATH="$HOME/.velesdb-memory" \
-  -- /path/to/velesdb-memory
+  -- ~/.cargo/bin/velesdb-memory
 ```
 
 ```toml
 # equivalent ~/.codex/config.toml entry
 [mcp_servers.velesdb-memory]
-command = "/path/to/velesdb-memory"
+command = "/home/you/.cargo/bin/velesdb-memory"
 args = []
 env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
 ```
@@ -283,7 +288,7 @@ env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
 ```json
 { "mcp": { "velesdb-memory": {
   "type": "local",
-  "command": ["/path/to/velesdb-memory"],
+  "command": ["/home/you/.cargo/bin/velesdb-memory"],
   "enabled": true,
   "environment": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
 } } }
@@ -306,6 +311,17 @@ the loop — *recall before acting → remember decisions with metadata **and** 
 with concrete scenarios (incident→decision→"why?", onboarding, cross-session
 continuity). Without it, an agent will call `recall` at best and never build the
 graph that makes `why` shine.
+
+A second bundled skill, **`velesdb-context-optimizer`**, teaches the compiler
+workflow below (when/what to compress, how to read `risk`). Install it the
+same way:
+
+```bash
+cp -r skills/velesdb-context-optimizer ~/.claude/skills/
+```
+
+[`skills/velesdb-context-optimizer/SKILL.md`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
+— see [The context compiler tools](#the-context-compiler-tools) below.
 
 ## Using the tools
 
@@ -349,6 +365,11 @@ remember_extracted { "text": "Met Dana at the Rust meetup; she now leads the par
 
 ### The context compiler tools
 
+**Compiler surfaces today: MCP server, Node, Rust. Python binding: in
+progress** (tracked as a follow-up EPIC) — Python agents reach it through the
+MCP server for now; `from velesdb import MemoryService` covers the memory API
+only, not `compile_context` yet.
+
 **Why:** agents spend most of their tokens re-reading redundant context.
 `compile_context` compresses it **deterministically** — no LLM, no cloud, no
 API key: same request, byte-identical output. What must survive verbatim
@@ -364,6 +385,45 @@ risk). Guarantees, per compilation:
   bytes; `retrieval_handles` list what was externalized.
 - **Nothing critical silently lost**: losing preserve-classified content
   raises the compilation's `risk` to `"high"` — check it before use.
+
+#### How it works
+
+![compile_context pipeline: agent fragments flow through dedup, abstract, pack, externalize, producing content, ctx://source handles and auditable decisions](docs/diagrams/compile-flow.svg)
+
+**Not a transparent proxy.** `compile_context` only touches what your agent
+explicitly hands it as `fragments` — logs, retrieved docs, conversation
+history you choose to route through the call. It never sees or compresses
+the harness's system prompt or tool-call schemas; those stay outside the
+compiler entirely. Knowing *when* and *what* to route through it is the
+[`velesdb-context-optimizer`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
+skill's job, not the compiler's — the compiler just compresses what it's
+given, deterministically.
+
+**No automatic repo indexing.** Nothing enters *recallable* memory — what
+`recall` / `why` / `memory_scope` can surface — unless you call `remember` /
+`relate` / `remember_extracted` explicitly. Compilation does write two things
+to the local store under `VELESDB_MEMORY_PATH` (default `~/.velesdb-memory`):
+**all** fragment sources are cached locally (content-addressed — not just the
+over-budget ones) so every `ctx://source/` handle stays recoverable via
+`retrieve_context_source`, and `context_savings` records aggregate stats
+(tokens in/out/saved) per project. Both stay on disk — local-first, nothing
+is ever sent off the machine.
+
+![the two data paths: compile caches sources locally but writes no recallable memory vs explicit memory writes — nothing enters recallable memory without an explicit remember/relate/remember_extracted call](docs/diagrams/data-paths.svg)
+
+```jsonc
+// compile_context — minimal call: query + token_budget + fragments
+compile_context { "query": "state of the canary deploy",
+                  "token_budget": 500,
+                  "fragments": [
+                    { "content": "The canary is green: 2% traffic, zero errors in the last 10 minutes." },
+                    { "content": "Rollback runbook: kubectl rollout undo deployment/canary." } ] }
+→ { "content": "…both fragments packed…", "decisions": […2 entries, "action": "preserve"…],
+    "insights": { "tokens_in": 44, "tokens_out": 45, "tokens_saved": 0 }, "risk": "low" }
+```
+
+Add `memory_scope`, `project`, and `metadata: {"cache": true}` once you need
+stored-memory recall or provider prompt-cache alignment — the full request:
 
 ```jsonc
 // compile_context — deterministic compression under a token budget
@@ -406,7 +466,11 @@ BPE (cl100k) to deliberately over-count every measured content class
 (+13 %…+55 %) — not the provider's count, not billed tokens, not cache reads.
 The reproducible benchmark ([`examples/context_savings`](examples/context_savings))
 measures **82.5 % real (cl100k) token savings on a committed 12-turn agent-session benchmark** (sub-ms stateless compiles), 75–82 % estimated savings on its static corpus in ~2 ms compile, and — with `memory_scope`'s fused HNSW + graph-walk recall over `relate`-linked fact chains — **9/9 answer facts surfaced vs 3/9 for vector-only recall** on the committed tri-engine benchmark
-latency. The [`velesdb-context-optimizer`](../../skills/velesdb-context-optimizer/SKILL.md)
+latency. That tri-engine path — the one `memory_scope` drives inside `compile_context` — looks like this:
+
+![tri-engine retrieval: query seeds an HNSW vector search, a graph walk follows relate edges, fusion combines both, then ranking produces the result](docs/diagrams/tri-engine.svg)
+
+The [`velesdb-context-optimizer`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
 skill teaches an agent the full workflow — including when *not* to compress.
 
 **IDs & linking.** `remember` returns a stable id derived from the fact's

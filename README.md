@@ -140,6 +140,34 @@ The same wedge ships in **Python** (`pip install velesdb`), **Node** (`npm i @wi
 
 Agents burn most of their budget re-reading redundant context. The memory layer now ships a **deterministic context compiler** (`compile_context` over MCP and Node, `ContextCompiler` in Rust): no LLM, no cloud — duplicates drop, repeated log lines collapse with counts, code / URLs / numbers / negative constraints survive verbatim, and over-budget content becomes a recoverable `ctx://source/` handle instead of a silent loss. Every decision carries a stable rule id, a reason, and a risk level (`explain_compilation` answers "why was this dropped?"), and the same request always compiles to the same bytes. On a committed 12-turn agent-session benchmark this measures **82.5 % real (cl100k) input-token savings** with sub-millisecond stateless compiles, and 75–82 % estimated savings on the static corpus in ~2 ms ([`examples/context_savings`](crates/velesdb-memory/examples/context_savings), figures are local estimates, not billed tokens). The [`velesdb-context-optimizer` skill](skills/velesdb-context-optimizer/SKILL.md) packages the workflow — including when *not* to compress. See [Why VelesDB](docs/WHY_VELESDB.md).
 
+**Compiler surfaces today: MCP server, Node, Rust. Python binding: in progress** — Python agents reach `compile_context` through the MCP server for now.
+
+**Quickstart (3 steps):**
+
+```bash
+# 1. Install the MCP server binary
+cargo install velesdb-memory
+
+# 2. Point your MCP client at it (Claude Code example)
+claude mcp add velesdb-memory -- ~/.cargo/bin/velesdb-memory
+```
+
+```jsonc
+// 3. Call compile_context — query + token_budget + fragments
+compile_context { "query": "state of the canary deploy", "token_budget": 500,
+                  "fragments": [
+                    { "content": "The canary is green: 2% traffic, zero errors in the last 10 minutes." },
+                    { "content": "Rollback runbook: kubectl rollout undo deployment/canary." } ] }
+→ { "content": "…both fragments packed…", "risk": "low",
+    "decisions": […one auditable entry per fragment…] }
+```
+
+No Rust toolchain? Use npm instead: [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node).
+
+**Not a transparent proxy, and no automatic indexing.** The compiler only compresses what your agent explicitly hands it as `fragments` (logs, retrieved docs, history) — never the harness's system prompt or tool schemas, and it's the skill above that teaches an agent when/what to route through it. Every compiled fragment is content-addressed to disk under the store path so `retrieve_context_source` can always recover it, and aggregate savings stats are recorded — but nothing enters *recallable memory* (what `recall` / `memory_scope` can surface) without an explicit `remember` / `relate` / `remember_extracted` call. Local-first — nothing leaves the machine. Details: [crates/velesdb-memory/README.md § How it works](crates/velesdb-memory/README.md#how-it-works).
+
+![compile_context pipeline: agent fragments flow through dedup, abstract, pack, externalize, producing content, ctx://source handles and auditable decisions](crates/velesdb-memory/docs/diagrams/compile-flow.svg)
+
 ---
 
 For the lower-level building blocks (episodic, procedural, TTL, snapshots):

@@ -1,0 +1,50 @@
+<svg viewBox="0 0 980 260" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="tri-engine retrieval: query seeds an HNSW vector search, a graph walk follows relate edges, fusion combines both, then ranking produces the result">
+  <defs>
+    <marker id="arrow3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="260" fill="#ffffff"/>
+
+  <!-- Query -->
+  <rect x="20" y="100" width="110" height="60" rx="8" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+  <text x="75" y="135" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="14" fill="#1e1b4b" font-weight="600">query</text>
+
+  <line x1="130" y1="130" x2="165" y2="70" stroke="#334155" stroke-width="2" marker-end="url(#arrow3)"/>
+  <line x1="130" y1="130" x2="165" y2="190" stroke="#334155" stroke-width="2" marker-end="url(#arrow3)"/>
+
+  <!-- HNSW seed -->
+  <rect x="168" y="40" width="170" height="60" rx="8" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+  <text x="253" y="65" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#78350f" font-weight="600">HNSW seed</text>
+  <text x="253" y="82" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#92400e">vector similarity</text>
+
+  <!-- Graph walk -->
+  <rect x="168" y="160" width="170" height="60" rx="8" fill="#f0fdf4" stroke="#15803d" stroke-width="2"/>
+  <text x="253" y="185" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#14532d" font-weight="600">graph walk</text>
+  <text x="253" y="202" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#166534">follows relate edges</text>
+
+  <line x1="338" y1="70" x2="420" y2="120" stroke="#334155" stroke-width="2" marker-end="url(#arrow3)"/>
+  <line x1="338" y1="190" x2="420" y2="140" stroke="#334155" stroke-width="2" marker-end="url(#arrow3)"/>
+
+  <!-- Fusion -->
+  <rect x="423" y="100" width="140" height="60" rx="8" fill="#ecfeff" stroke="#0e7490" stroke-width="2"/>
+  <text x="493" y="135" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#164e63" font-weight="600">fusion</text>
+
+  <line x1="563" y1="130" x2="605" y2="130" stroke="#334155" stroke-width="2" marker-end="url(#arrow3)"/>
+
+  <!-- Ranking -->
+  <rect x="608" y="100" width="150" height="60" rx="8" fill="#ecfeff" stroke="#0e7490" stroke-width="2"/>
+  <text x="683" y="125" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#164e63" font-weight="600">ranking</text>
+  <text x="683" y="142" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#155e75">graph_boost, hops</text>
+
+  <line x1="758" y1="130" x2="800" y2="130" stroke="#334155" stroke-width="2" marker-end="url(#arrow3)"/>
+
+  <!-- Result -->
+  <rect x="803" y="100" width="150" height="60" rx="8" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+  <text x="878" y="125" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#1e1b4b" font-weight="600">ranked memories</text>
+  <text x="878" y="142" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#312e81">fed into compile_context</text>
+
+  <text x="490" y="245" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#57534e">graph reaches evidence that shares zero vocabulary with the query — vector alone cannot</text>
+</svg>

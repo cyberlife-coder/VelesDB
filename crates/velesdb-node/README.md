@@ -99,7 +99,12 @@ binding-wide differences: id fields (`fragment_id`, `content_hash`,
 strings, and the *top-level* result keys follow the binding's camelCase
 (`out.retrievalHandles` — nested trees keep the wire's snake_case). `tokens_saved` is a local estimate, not billed tokens. The bundled
 [`velesdb-context-optimizer` skill](./skills/velesdb-context-optimizer/SKILL.md)
-teaches an agent the full workflow, including when *not* to compress.
+teaches an agent the full workflow, including when *not* to compress. Install
+it into your agent's skills directory:
+
+```bash
+cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-context-optimizer ~/.claude/skills/
+```
 
 ## License
 
