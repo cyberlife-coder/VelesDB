@@ -126,6 +126,14 @@ pub struct CompilePolicy {
     /// TTL applied to compilation events (`None` keeps them).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_ttl_seconds: Option<u64>,
+    /// Caller-supplied pricing table so the insights also report the
+    /// estimated cost avoided for [`super::model::CompileRequest::target_model`] — the
+    /// **wire channel** for cost accounting (MCP and the bindings cannot
+    /// reach the Rust-only [`super::ContextCompiler::with_pricing`] builder).
+    /// Takes precedence over a builder-injected table. `None` (default)
+    /// reports tokens only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<super::insights::PricingTable>,
 }
 
 impl Default for CompilePolicy {
@@ -139,6 +147,7 @@ impl Default for CompilePolicy {
             store_sources: true,
             source_ttl_seconds: None,
             event_ttl_seconds: None,
+            pricing: None,
         }
     }
 }
@@ -175,7 +184,10 @@ pub struct CompileRequest {
     /// Project facet, recorded in provenance and used by the memory bridge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
-    /// Target model name — selects the pricing row for cost insights.
+    /// Target model name — selects the row of the pricing table
+    /// ([`CompilePolicy::pricing`] on the wire, or the Rust
+    /// [`super::ContextCompiler::with_pricing`] builder) for cost insights.
+    /// Without a table, insights report tokens only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_model: Option<String>,
     /// Hard token ceiling for the assembled content.

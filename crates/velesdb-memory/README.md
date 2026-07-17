@@ -26,7 +26,9 @@ certified compliance.
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
 > [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.8.0**
-> and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**.
+> and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**
+> (memory API — the context compiler is **not exposed in Python yet**;
+> Python agents reach it through the MCP server).
 > **`cargo install velesdb-memory` installs the latest published release.**
 
 Built on [VelesDB](https://velesdb.com)'s in-core Agent Memory SDK, which fuses

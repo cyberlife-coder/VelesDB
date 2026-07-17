@@ -41,7 +41,7 @@ cargo add velesdb-core
 ## Quick Start
 
 ```rust
-use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
+use velesdb_core::{Database, DistanceMetric, Point};
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

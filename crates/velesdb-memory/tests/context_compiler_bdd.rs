@@ -914,3 +914,45 @@ fn test_compile_single_oversized_fragment_returns_invalid_input() {
     // Then the request is rejected as invalid input
     assert_eq!(err.category(), ErrorCategory::InvalidInput);
 }
+
+#[test]
+fn test_compile_wire_request_with_policy_pricing_yields_cost_insights() {
+    // Given a request built EXACTLY the way MCP/Node callers send it — raw
+    // JSON, pricing carried inside the policy (the only channel a wire
+    // caller has; the Rust-only with_pricing builder is out of their reach)
+    let raw = r#"{
+        "query": "state of the deploy pipeline",
+        "token_budget": 10000,
+        "target_model": "claude-sonnet-5",
+        "fragments": [
+            {"content": "The deploy pipeline runs clippy before promoting."},
+            {"content": "The deploy pipeline runs clippy before promoting."}
+        ],
+        "policy": {
+            "pricing": {
+                "version": "2026-07",
+                "currency": "EUR",
+                "models": {
+                    "claude-sonnet-5": {"input_micros_per_million_tokens": 3000000}
+                }
+            }
+        }
+    }"#;
+    let req: CompileRequest = serde_json::from_str(raw).expect("the wire shape must deserialize");
+
+    // When compiling with a plain compiler (no Rust-side pricing injected)
+    let out = ContextCompiler::new(CompilePolicy::default())
+        .compile(&req)
+        .expect("compile");
+
+    // Then the cost insights are populated from the wire-supplied table
+    assert!(out.insights.tokens_saved > 0);
+    let expected = out.insights.tokens_saved * 3_000_000 / 1_000_000;
+    assert_eq!(
+        out.insights.estimated_cost_saved_micros,
+        Some(expected),
+        "a wire caller must be able to obtain cost figures via policy.pricing"
+    );
+    assert_eq!(out.insights.currency.as_deref(), Some("EUR"));
+    assert_eq!(out.insights.pricing_version.as_deref(), Some("2026-07"));
+}

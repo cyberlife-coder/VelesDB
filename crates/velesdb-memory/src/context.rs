@@ -214,7 +214,14 @@ impl ContextCompiler {
             ..CompilationInsights::default()
         };
         let cost = request.target_model.as_deref().and_then(|model| {
-            let pricing = self.pricing.as_ref()?;
+            // The request's own table wins (it is the only channel wire
+            // callers — MCP, Node — have); the builder-injected one is the
+            // Rust-embedder fallback.
+            let pricing = self
+                .effective_policy(request)
+                .pricing
+                .as_ref()
+                .or(self.pricing.as_ref())?;
             let micros = pricing.cost_micros(model, tokens_saved)?;
             Some((micros, pricing.currency.clone(), pricing.version.clone()))
         });

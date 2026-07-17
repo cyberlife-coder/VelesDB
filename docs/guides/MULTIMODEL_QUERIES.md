@@ -25,7 +25,7 @@ for r in results:
 ```typescript
 import { VelesDB } from '@wiscale/velesdb-sdk';
 
-const db = new VelesDB({ baseUrl: 'http://localhost:8080' });
+const db = new VelesDB({ url: 'http://localhost:8080', backend: 'rest' });
 await db.init();
 
 const response = await db.query('documents', 

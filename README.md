@@ -260,8 +260,8 @@ docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb \
 # Verify it's running
 curl http://localhost:8080/health
 ```
-Pin a specific version with `ghcr.io/cyberlife-coder/velesdb:3.9` (or a full
-`3.9.1`). To build the image yourself instead: `git clone` the repo and
+Pin a specific version with `ghcr.io/cyberlife-coder/velesdb:3.12` (or a full
+`3.12.0`). To build the image yourself instead: `git clone` the repo and
 `docker build -t velesdb .`.
 
 Data is stored in `/data` inside the container; the named volume `velesdb_data` persists across restarts.

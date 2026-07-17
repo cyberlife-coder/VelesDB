@@ -49,8 +49,14 @@ silent loss. Same input, same output, byte for byte.
    `explain_compilation` (re-submit the same request + the fragment id) — the
    decision carries the rule id, reason, relevance, and risk.
 9. **Report savings honestly.** `insights.tokens_saved` is a *local
-   estimate* (deliberate over-count), not billed tokens. Track the trend with
-   `context_savings` (per project); never present estimates as billed.
+   estimate* (deliberate over-count), not billed tokens — and it counts
+   externalized content too, so never quote savings from a `risk: high`
+   compilation you decided to reject. For money figures, pass a pricing
+   table in the request: `policy.pricing = {version, currency, models:
+   {"<model>": {input_micros_per_million_tokens}}}` with `target_model`
+   set — insights then carry `estimated_cost_saved_micros`, and
+   `context_savings` aggregates it per currency. Track the trend per
+   project; never present estimates as billed.
 10. **Iterate.** If the output reads truncated or the model misses facts,
     raise the budget or mark more fragments verbatim — then recompile; it is
     cheap (~ms) and deterministic.
@@ -66,6 +72,9 @@ silent loss. Same input, same output, byte for byte.
 - **Content whose exact formatting is the payload** (diffs to apply, config
   files) — `kind: "code"` preserves fenced blocks, but if it is not fenced,
   mark it verbatim.
+- **Timestamped logs**: line collapse (`(xN)`) only fires on byte-identical
+  lines — timestamps/counters defeat it and the log then packs or
+  externalizes whole. Pre-strip volatile prefixes if you want the collapse.
 - **When risk comes back `high`** and you cannot raise the budget: prefer an
   uncompressed prompt over a lossy one.
 
@@ -99,6 +108,10 @@ never a gate.
 ```json
 {"tool": "explain_compilation", "arguments": {"request": {"...": "same request"}, "fragment_id": 1234567890}}
 ```
+
+(`fragment_id` is a JSON **number**, exactly as it appeared in the
+decisions; note that byte-identical fragments share one content-derived id —
+explaining that id returns the surviving twin's decision.)
 
 ```json
 {"tool": "context_savings", "arguments": {"project": "veles"}}

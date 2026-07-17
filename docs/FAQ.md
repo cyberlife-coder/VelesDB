@@ -219,9 +219,10 @@ estimate** from a char-class estimator calibrated against a real BPE
 (cl100k): it deliberately over-counts every measured content class
 (+13 % on JSON up to +55 % on English prose), so the budget guarantee errs
 on the safe side. Billed savings depend on your provider's tokenizer and
-pricing (inject a `PricingTable` and your own `TokenEstimator` for exact
-figures); *validated* savings — proving answer quality did not degrade —
-require a task-level evaluation harness.
+pricing — pass your `PricingTable` in `policy.pricing` (works over MCP,
+Node, and Rust; set `target_model` to pick the row) and inject your own
+`TokenEstimator` (Rust) for exact figures; *validated* savings — proving
+answer quality did not degrade — require a task-level evaluation harness.
 
 ## VelesQL vs SQL
 
