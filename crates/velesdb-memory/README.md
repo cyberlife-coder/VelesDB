@@ -37,6 +37,8 @@ three engines behind its memory tools:
 | `remember` | store a fact, optionally linked + tagged with metadata, with an optional expiry (`ttl_seconds`) | Vector + Graph + ColumnStore |
 | `recall`   | semantic retrieval, optional exact-match metadata filter   | Vector + ColumnStore |
 | `relate`   | create a typed edge between two memories                   | Graph |
+| `recall_fused` | recall with graph-aware re-ranking (vector + typed links fused) | Vector + Graph |
+| `recall_where` | recall filtered by typed column predicates (ranges, comparisons) | Vector + ColumnStore |
 | `forget`   | delete a memory                                            | — |
 | `why`      | recall a decision **+ its connected subgraph** (multi-hop) | Vector + Graph + ColumnStore |
 | `feedback` | reinforce a recalled fact (**useful/noise**) — `recall` re-ranks by this learned confidence, so the memory **improves with use** without retraining | Vector |
@@ -391,7 +393,7 @@ adds `budget.externalize` and dedup adds `drop.duplicate` /
 BPE (cl100k) to deliberately over-count every measured content class
 (+13 %…+55 %) — not the provider's count, not billed tokens, not cache reads.
 The reproducible benchmark ([`examples/context_savings`](examples/context_savings))
-measures 75–82 % estimated savings on its committed corpus in ~2 ms compile
+measures **82.5 % real (cl100k) token savings on a committed 12-turn agent-session benchmark** (sub-ms stateless compiles), and 75–82 % estimated savings on its static corpus in ~2 ms compile
 latency. The [`velesdb-context-optimizer`](../../skills/velesdb-context-optimizer/SKILL.md)
 skill teaches an agent the full workflow — including when *not* to compress.
 

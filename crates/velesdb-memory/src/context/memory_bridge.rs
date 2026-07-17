@@ -181,10 +181,13 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 continue;
             };
             let slot = source_id(hash);
-            // Never clobber a caller fact that happens to sit at this salted
-            // id (someone remembered the literal salt preimage): the slot is
-            // ours only when empty or already marker-bearing.
-            if self.store.get(slot)?.is_some() && !self.slot_is_context_source(slot)? {
+            // An occupied slot is never rewritten: without our marker it is a
+            // caller fact squatting the salt preimage (clobbering it would
+            // destroy user data); with the marker it already holds these
+            // exact bytes — sources are content-addressed — so re-embedding
+            // and re-storing would only burn work (quadratically, on an
+            // agent session whose context accumulates across turns).
+            if self.store.get(slot)?.is_some() {
                 continue;
             }
             let embedding = self.embedder.embed(content)?;

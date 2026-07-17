@@ -39,6 +39,38 @@ everything critical (code, the negative constraint, exact values) survives
 verbatim, and what a tight budget cannot hold becomes `ctx://source/` handles
 instead of silently vanishing.
 
+## The agent-session benchmark (real tokens, agent conditions)
+
+The corpus above is one static context. `real_measures/agent_session.mjs`
+measures what an operator actually cares about: a **12-turn agent session**
+whose context accumulates the way a real coding agent's does (growing turn
+history, the same source file read twice by tools, a 180-line CI log, a
+negative constraint, exact values), compiled before every model call the way
+the [`velesdb-context-optimizer` skill](../../../../skills/velesdb-context-optimizer/SKILL.md)
+prescribes — budget 4 000, everything counted with a **real cl100k BPE**:
+
+```text
+turn | fragments | raw_tokens | compiled_tokens | saved% | latency_ms
+   3 |         6 |       2412 |             304 |  87.4% |       34.3
+   8 |        14 |       2694 |             452 |  83.2% |       21.2
+  12 |        18 |       2776 |             534 |  80.8% |       23.8
+
+session totals: 26533 raw -> 4647 compiled real tokens = 82.5% saved
+compile latency (with source/event persistence, default): mean 27.3 ms, max 36.4 ms
+compile latency (stateless: store_sources/record_events off): mean 0.5 ms, max 0.7 ms
+cache-marked prefix: byte-stable across all 12 turns (45 real tokens reusable by provider prompt caching)
+reproducibility: OK (every turn compiled twice, byte-identical)
+```
+
+Reading it: per-turn savings hold at **80–87 %** as the session grows
+(the compiler keeps re-dropping the accumulated redundancy each turn), the
+**stateless compile is sub-millisecond**, the default mode's ~27 ms is the
+price of persisting recoverable sources + the savings event (opt out with
+`policy.store_sources/record_events = false`), and the cache-marked system
+preamble stays **byte-identical across every turn** — exactly what provider
+prompt caching needs to hit. Latency varies with the machine; token figures
+do not (the run asserts byte-identity itself).
+
 ## Compile latency at scale
 
 The 20-fragment fixture above is representative of one turn's context, not
