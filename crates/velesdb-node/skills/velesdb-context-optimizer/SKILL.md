@@ -37,14 +37,26 @@ silent loss. Same input, same output, byte for byte.
 5. **Call `compile_context`** with a `query` describing the current task —
    relevance to it orders what packs first. Add
    `memory_scope: {k: 5, project: "..."}` to pull relevant stored memories in.
-6. **Check `risk`.** `low`: use the content as-is. `medium`: recoverable
-   reductions happened (abstractions, externalized non-critical content) —
-   usually fine. `high`: **critical content did not fit** — fall back: raise
-   the budget, drop whole fragments yourself, or send uncompressed.
-7. **Use `content` as the prompt context.** Keep `retrieval_handles`
-   (`retrievalHandles` in the Node binding) at hand:
-   if the model asks for something externalized, fetch it back with
-   `retrieve_context_source` and re-inject only that.
+6. **Check `risk`, then check `decisions` against YOUR question —
+   the label alone is not enough.** `low`: nothing was dropped, use `content`
+   as-is. `medium`/`high`: something was abstracted, dropped, or externalized
+   — before proceeding, scan `decisions` for any `action` other than
+   `preserve`/`cache` and ask "could this fragment plausibly answer what I
+   was asked?" **Relevance ranking is lexical (word overlap with your
+   `query`), not semantic**: a terse fragment that actually contains the
+   answer can rank *below* verbose, repetitive filler that merely shares
+   more words with the query — "medium ... usually fine" is about
+   *fidelity*, not about *whether the one fact you need survived*. If any
+   externalized/abstracted fragment looks relevant, retrieve it now (step 7)
+   — do not wait for the downstream model to notice something is missing; it
+   cannot ask about content it never saw existed. `high` additionally means
+   **critical content did not fit** — fall back: raise the budget, drop
+   whole fragments yourself, or send uncompressed.
+7. **Use `content` as the prompt context, after the check above.** Keep
+   `retrieval_handles` (`retrievalHandles` in the Node binding) at hand for
+   anything you flagged in step 6, and fetch any content back with
+   `retrieve_context_source` before answering — re-inject only what you
+   need.
 8. **Audit when asked.** Any "why was X dropped/shortened?" is answered by
    `explain_compilation` (re-submit the same request + the fragment id) — the
    decision carries the rule id, reason, relevance, and risk.
