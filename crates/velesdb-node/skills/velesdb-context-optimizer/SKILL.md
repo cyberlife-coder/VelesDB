@@ -14,6 +14,22 @@ description: >
 
 # VelesDB context optimizer
 
+## Installation
+
+Copy the skill into your agent's skills directory:
+
+```bash
+# From a clone of the VelesDB repo
+cp -r skills/velesdb-context-optimizer ~/.claude/skills/
+
+# From the npm package (the skill ships bundled inside
+# @wiscale/velesdb-memory-node, so it's already in node_modules)
+cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-context-optimizer ~/.claude/skills/
+```
+
+Requires the `velesdb-memory` MCP server configured in your client — see
+[Configure your client](https://github.com/cyberlife-coder/VelesDB/blob/main/crates/velesdb-memory/README.md#configure-your-client).
+
 You compress context with `compile_context` — a **deterministic** compiler
 (no LLM, no cloud): duplicates drop, repeated log lines collapse with counts,
 code / URLs / numbers / negative constraints survive verbatim, and whatever

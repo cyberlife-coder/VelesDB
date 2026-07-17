@@ -307,6 +307,17 @@ with concrete scenarios (incident→decision→"why?", onboarding, cross-session
 continuity). Without it, an agent will call `recall` at best and never build the
 graph that makes `why` shine.
 
+A second bundled skill, **`velesdb-context-optimizer`**, teaches the compiler
+workflow below (when/what to compress, how to read `risk`). Install it the
+same way:
+
+```bash
+cp -r skills/velesdb-context-optimizer ~/.claude/skills/
+```
+
+[`skills/velesdb-context-optimizer/SKILL.md`](../../skills/velesdb-context-optimizer/SKILL.md)
+— see [The context compiler tools](#the-context-compiler-tools) below.
+
 ## Using the tools
 
 Once configured, your agent discovers the tools automatically (via MCP
