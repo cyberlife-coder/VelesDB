@@ -354,8 +354,10 @@ impl PyMemoryService {
         py.detach(|| self.svc.relate(from_id, to_id, relation).map_err(to_py_err))
     }
 
-    /// Delete a memory by id.
-    fn forget(&self, py: Python<'_>, id: u64) -> PyResult<()> {
+    /// Delete a memory by id. Returns whether a memory actually existed
+    /// under that id and was deleted — `False` means nothing was stored
+    /// there (a stale id or a typo), not a second successful deletion.
+    fn forget(&self, py: Python<'_>, id: u64) -> PyResult<bool> {
         py.detach(|| self.svc.forget(id).map_err(to_py_err))
     }
 

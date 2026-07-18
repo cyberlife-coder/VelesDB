@@ -153,8 +153,12 @@ pub(super) struct ForgetParams {
 #[derive(Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct ForgetResult {
-    /// Id of the forgotten memory.
+    /// Id that was requested for deletion.
     pub(super) id: u64,
+    /// Whether a memory actually existed under `id` and was deleted.
+    /// `false` means nothing was stored there — a stale id or a typo, not a
+    /// second successful deletion — so a caller can tell the two apart.
+    pub(super) found: bool,
 }
 
 /// Parameters for the `feedback` tool.

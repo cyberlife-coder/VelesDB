@@ -443,9 +443,11 @@ impl WasmMemoryService {
             .map_err(to_js_err)
     }
 
-    /// Delete a memory by id.
+    /// Delete a memory by id. Returns whether a memory actually existed
+    /// under that id and was deleted — `false` means nothing was stored
+    /// there (a stale id or a typo), not a second successful deletion.
     #[wasm_bindgen(js_name = forget)]
-    pub fn forget(&self, id: &str) -> Result<(), JsValue> {
+    pub fn forget(&self, id: &str) -> Result<bool, JsValue> {
         let id = parse_id(id)?;
         self.inner.forget(id).map_err(to_js_err)
     }

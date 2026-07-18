@@ -190,6 +190,26 @@ test('feedback reinforces a fact, weakens on failure, NOT_FOUND on unknown id', 
   }
 })
 
+test('forget reports found=true on a real deletion, found=false on a typo id', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const id = await store.remember('ephemeral note to forget')
+    assert.equal(await store.forget(id), true, 'deleting an existing fact resolves true')
+    assert.equal(
+      await store.forget(id),
+      false,
+      'a second forget of the same id finds nothing — distinguishable from the first',
+    )
+    assert.equal(
+      await store.forget('999999999'),
+      false,
+      'a never-stored id resolves false (a no-op, not an error)',
+    )
+  } finally {
+    cleanup()
+  }
+})
+
 test('error codes — INVALID_INPUT on empty fact, NOT_FOUND on missing relate endpoint', async () => {
   const { store, cleanup } = freshStore()
   try {

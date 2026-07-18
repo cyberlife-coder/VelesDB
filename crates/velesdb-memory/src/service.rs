@@ -549,12 +549,22 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         self.store.relate(from, to, relation)
     }
 
-    /// Forget (delete) the memory with `fact_id`.
+    /// Forget (delete) the memory with `fact_id`. Returns whether a memory
+    /// actually existed under that id — the underlying store's `delete` is a
+    /// silent no-op on an unknown id (matching most backends' idempotent
+    /// delete semantics), which is indistinguishable from a real deletion
+    /// unless existence is checked first. Every surface that exposes
+    /// `forget` (MCP, Node, WASM, Python) forwards this so a caller can tell
+    /// "I removed something" from "that id was a typo".
     ///
     /// # Errors
-    /// Returns [`MemoryError`] if the deletion fails.
-    pub fn forget(&self, fact_id: u64) -> Result<(), MemoryError> {
-        self.store.delete(fact_id)
+    /// Returns [`MemoryError`] if the existence check or the deletion fails.
+    pub fn forget(&self, fact_id: u64) -> Result<bool, MemoryError> {
+        let found = self.store.get(fact_id)?.is_some();
+        if found {
+            self.store.delete(fact_id)?;
+        }
+        Ok(found)
     }
 
     /// Explain a `decision`: find the best-matching memory (optionally scoped to

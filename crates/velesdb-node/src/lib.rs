@@ -280,9 +280,11 @@ impl MemoryStore {
         }))
     }
 
-    /// Delete a memory by id.
-    #[napi(ts_return_type = "Promise<void>")]
-    pub fn forget(&self, id: String) -> AsyncTask<Job<()>> {
+    /// Delete a memory by id. Resolves to whether a memory actually existed
+    /// under that id and was deleted — `false` means nothing was stored
+    /// there (a stale id or a typo), not a second successful deletion.
+    #[napi(ts_return_type = "Promise<boolean>")]
+    pub fn forget(&self, id: String) -> AsyncTask<Job<bool>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             let id = convert::parse_id(&id)?;
