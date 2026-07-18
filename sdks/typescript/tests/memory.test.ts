@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryService } from '../src/memory';
+import type { CompileContextFragment } from '../src/memory';
 import { ConnectionError, NotFoundError, ValidationError } from '../src/types';
 
 // Captures the most recently constructed mock instance so a test can
@@ -231,6 +232,33 @@ describe('MemoryService', () => {
       expect(compiled.content).toBe('compiled');
       const decisions = compiled.decisions as Array<{ fragment_id: string }>;
       expect(decisions[0].fragment_id).toBe('18446744073709551615');
+    });
+
+    it('compileContext() passes a media fragment through untouched (US-009)', async () => {
+      // Regression this attrapes: a future refactor of compileContext() that
+      // reconstructs the request object field-by-field (instead of a plain
+      // passthrough) would silently drop an unlisted key like `media` —
+      // this fails the moment that happens, without needing a real wasm
+      // build to observe it.
+      const request = {
+        query: 'a screenshot of the failing build',
+        token_budget: 4000,
+        fragments: [
+          {
+            content: 'the failing build, before the fix',
+            kind: 'screenshot',
+            metadata: { target: 'deploy-status-page' },
+            media: { mime: 'image/png', bytes_b64: 'aGVsbG8=' },
+          },
+        ],
+      };
+      await memory.compileContext(request);
+      expect(lastMockInstance!.compileContext).toHaveBeenCalledWith(request);
+      // Type-level check: CompileContextFragment must accept `media` without
+      // a cast — this line fails to *compile* (not just run) if the field is
+      // ever removed from the interface.
+      const fragment: CompileContextFragment = request.fragments[0];
+      expect(fragment.media?.bytes_b64).toBe('aGVsbG8=');
     });
 
     it('why() returns the explanation subgraph', async () => {

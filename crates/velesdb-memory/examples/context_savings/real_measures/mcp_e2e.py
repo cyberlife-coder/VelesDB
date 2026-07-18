@@ -81,6 +81,22 @@ assert explain["rule_id"] in {"drop.duplicate", "preserve.default"}, explain
 savings = srv.call("context_savings", {"project": "veles"})
 assert savings["events"] == 1 and savings["tokens_saved"] > 0, savings
 
+# --- media fragment: compile with an image -> externalize -> retrieve byte-identical (US-009, PR3) ---
+# A real, independently-decodable 1x1 transparent PNG (IHDR + IDAT + IEND) --
+# fixed bytes, never derived from the fragment's caption.
+PNG_1X1_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+media_req = {"query": "a screenshot of the failing build", "token_budget": 1, "project": "veles",
+             "fragments": [{"content": "the failing build, before the fix",
+                            "media": {"mime": "image/png", "bytes_b64": PNG_1X1_B64}}]}
+media_out = srv.call("compile_context", media_req)
+assert len(media_out["retrieval_handles"]) >= 1, f"the oversized image must externalize: {media_out}"
+media_handle = media_out["retrieval_handles"][0]["handle"]
+assert media_handle.startswith("ctx://source/")
+
+media_src = srv.call("retrieve_context_source", {"handle": media_handle})
+assert media_src["media"]["mime"] == "image/png", media_src
+assert media_src["media"]["bytes_b64"] == PNG_1X1_B64, "base64 payload must round-trip byte-identical"
+
 err = srv.call("compile_context", {"query": "x", "token_budget": 0, "fragments": [{"content": "y"}]})
 assert "__error__" in err and err["__error__"]["code"] == -32602, err
 
@@ -109,5 +125,6 @@ assert resumed["pending_actions"] == working["pending_actions"], resumed
 srv2.terminate()
 
 print("MCP E2E OK — 6 tools exercised over real stdio: list, compile (dedup+insights+handles), "
-      "retrieve round-trip, explain, savings, error taxonomy, and save/load_working_context "
-      "round-tripping ACROSS two separate server processes")
+      "retrieve round-trip (text AND a real PNG media fragment, byte-identical base64), explain, "
+      "savings, error taxonomy, and save/load_working_context round-tripping ACROSS two separate "
+      "server processes")

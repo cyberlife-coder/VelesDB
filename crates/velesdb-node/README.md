@@ -106,6 +106,37 @@ it into your agent's skills directory:
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-context-optimizer ~/.claude/skills/
 ```
 
+#### Media fragments (`retrieveContextSource`)
+
+A fragment may carry an inline screenshot alongside its caption — set
+`media: {mime, bytes_b64}` on a fragment:
+
+```js
+const out = await mem.compileContext({
+  query: 'a screenshot of the failing build',
+  token_budget: 4000,
+  fragments: [
+    { content: 'the failing build, before the fix', media: { mime: 'image/png', bytes_b64: pngB64 } },
+  ],
+})
+```
+
+The image packs atomically (never chunked) and costs tokens from its actual
+pixels, not its base64 text — see the crate README's "Media fragments"
+section for the full model. `out.sources[i].handle` is a pointer only
+(`fragment_id` + `handle`); fetch the image itself back — inline or
+externalized by budget, it makes no difference — with `retrieveContextSource`:
+
+```js
+const source = await mem.retrieveContextSource(out.sources[0].handle)
+source.content   // the caption, byte for byte
+source.media     // { mime, bytes_b64 } when the fragment carried one, else undefined
+```
+
+Same JSON shape as the MCP `retrieve_context_source` tool
+(`{handle, content, media?}`); an unknown or expired handle rejects with
+`NOT_FOUND`.
+
 ## Need the full engine?
 
 This addon is the **memory wedge**: `remember` / `recall` / `relate` /

@@ -138,6 +138,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (the `velesdb-memory` and `velesdb-context-optimizer` agent skills, one
   folder per skill at the archive root) — `curl -L … | tar -xz -C
   ~/.claude/skills/` installs both without cloning the repo. [EPIC-P-071]
+- **Media fragments now wired on every surface** (US-009, PR3 of 3 —
+  PR1/PR2 shipped the compiler-side atomic packing, dedup, cost, screenshot
+  supersession, and the MCP/Python bindings): the MCP `compile_context` /
+  `retrieve_context_source` advertised JSON schemas now carry
+  `fragments[].media` and the optional `media` on the retrieve result
+  (pinned by structural schema tests, not just accepted-on-input); the Node
+  binding (`@wiscale/velesdb-memory-node`) gains
+  `retrieveContextSource(handle)` (`{handle, content, media?}`, same shape
+  as the MCP tool) alongside `compileContext`'s existing media passthrough;
+  WASM's `compileContext` compiles, dedups, and prices media fragments
+  correctly on the in-memory `WasmStore` (`retrieveContextSource` is not
+  yet exposed there — a deliberately separate follow-up, not required to
+  prove media fragments compile on wasm); the TypeScript SDK's
+  `CompileContextFragment` type gains `media?: {mime, bytes_b64}`. The
+  `velesdb-context-optimizer` skill documents when to route a screenshot
+  through `media` and how `metadata.target` drives supersession.
+  [EPIC-P-071/US-009]
 
 R1 `Collection`-internals train: resolves and **closes the god-object EPIC
 ([#1384](https://github.com/cyberlife-coder/VelesDB/issues/1384))**. The

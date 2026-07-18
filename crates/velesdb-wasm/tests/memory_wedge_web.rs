@@ -188,3 +188,96 @@ fn compile_context_memory_scope_pulls_stored_memories() {
         "the scoped memory must be pulled into the compiled context, got: {content}"
     );
 }
+
+// --- media fragments (US-009, PR3) ------------------------------------------
+//
+// `WasmMemoryService::compile_context` takes the request as a plain JS
+// object and returns the wire JSON as-is (`serde_wasm_bindgen`, no field
+// remapping), so `fragments[].media` already crosses the boundary via the
+// same passthrough `compile_context_round_trips_with_string_ids` pins for
+// ids — nothing wasm-specific needed to be built for a fragment to CARRY
+// media across. What was never exercised is that the media-aware rules
+// (`media.atomic`, dedup, cost) actually run correctly on `WasmStore`
+// (a different `MemoryStore` impl than the native one every other media
+// test in this workspace runs against).
+//
+// `retrieve_context_source` is not exposed on `WasmMemoryService` at all
+// (checked against `src/memory_service.rs` before writing this test) — so
+// resolving a media handle back to its bytes within a wasm session is not
+// covered here; that lands whenever wasm gets a `retrieveContextSource`
+// binding of its own (mirroring the Node one added in this same PR). Adding
+// that binding is out of scope for this PR: it is a new, independently
+// reviewable surface, not required to prove media fragments compile
+// correctly on `WasmStore`.
+
+/// A real, independently-decodable 1x1 transparent PNG (IHDR + IDAT + IEND),
+/// fixed bytes never derived from the fragment's caption or any other
+/// property under test.
+const PNG_1X1_B64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+/// Regression this attrapes: `WasmStore`'s `MemoryStore` impl diverges from
+/// the native file-backed one (different metadata batch/get paths) — a
+/// media-specific bug there (e.g. the atomic-packing rule never matching, or
+/// the media source never getting a handle) would show up only on wasm,
+/// never in the native `context_memory_bdd` suite.
+#[wasm_bindgen_test]
+fn compile_context_with_media_fragment_decides_atomic_preserve_and_mints_a_handle() {
+    let svc = WasmMemoryService::new(16);
+    let request = js_sys::JSON::parse(&format!(
+        r#"{{
+            "query": "a screenshot of the failing build",
+            "token_budget": 4000,
+            "fragments": [
+                {{"content": "the failing build, before the fix",
+                  "media": {{"mime": "image/png", "bytes_b64": "{PNG_1X1_B64}"}}}}
+            ]
+        }}"#
+    ))
+    .unwrap();
+
+    let compiled = svc.compile_context(request).unwrap();
+    let decisions = js_sys::Reflect::get(&compiled, &"decisions".into()).unwrap();
+    let first = js_sys::Reflect::get(&decisions, &0.into()).unwrap();
+    let rule_id = js_sys::Reflect::get(&first, &"rule_id".into()).unwrap();
+    assert_eq!(
+        rule_id.as_string().as_deref(),
+        Some("media.atomic"),
+        "the media fragment must be decided by the atomic-packing rule"
+    );
+    let action = js_sys::Reflect::get(&first, &"action".into()).unwrap();
+    assert_eq!(action.as_string().as_deref(), Some("preserve"));
+
+    let sources = js_sys::Reflect::get(&compiled, &"sources".into()).unwrap();
+    let source = js_sys::Reflect::get(&sources, &0.into()).unwrap();
+    let handle = js_sys::Reflect::get(&source, &"handle".into())
+        .unwrap()
+        .as_string()
+        .expect("the media fragment gets an addressable ctx://source/ handle");
+    assert!(handle.starts_with("ctx://source/"));
+}
+
+/// Byte-determinism of media fragments across the wasm boundary — the same
+/// media-carrying request compiles to the exact same bytes twice, extending
+/// `compile_context_is_deterministic` (text-only) to a fragment whose
+/// classification depends on the decoded image (dimensions, token cost).
+/// Regression this attrapes: a non-deterministic path in the image
+/// estimator or the media dedup hash (e.g. an uninitialized buffer, a
+/// HashMap iteration order leak) would flap this test across runs while a
+/// single-compile assertion could not tell determinism from luck.
+#[wasm_bindgen_test]
+fn compile_context_with_media_fragment_is_deterministic() {
+    let svc = WasmMemoryService::new(16);
+    let request = || {
+        js_sys::JSON::parse(&format!(
+            r#"{{"query": "q", "token_budget": 4000,
+                "fragments": [{{"content": "same caption",
+                  "media": {{"mime": "image/png", "bytes_b64": "{PNG_1X1_B64}"}}}}]}}"#
+        ))
+        .unwrap()
+    };
+    let a = svc.compile_context(request()).unwrap();
+    let b = svc.compile_context(request()).unwrap();
+    let stringify = |v: &JsValue| js_sys::JSON::stringify(v).unwrap().as_string().unwrap();
+    assert_eq!(stringify(&a), stringify(&b), "same media input, same bytes");
+}
