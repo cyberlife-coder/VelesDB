@@ -67,10 +67,15 @@ export async function runCliTurn(turn, opts = {}) {
     '-p',
     '--model',
     MODEL,
+    // stream-json input REQUIRES stream-json output (CLI-enforced, caught
+    // live at the first calibration turn of the billed campaign): we parse
+    // the final NDJSON `result` event, which carries the same usage /
+    // total_cost_usd fields as --output-format json.
     '--output-format',
-    'json',
+    'stream-json',
     '--input-format',
     'stream-json',
+    '--verbose',
     '--tools',
     '',
     '--system-prompt',
@@ -104,7 +109,24 @@ export async function runCliTurn(turn, opts = {}) {
     child.stdin.end()
   })
 
-  const json = JSON.parse(stdout)
+  // stream-json output is NDJSON: one JSON event per line, the final
+  // `type: "result"` event carries usage and total_cost_usd.
+  let json = null
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    try {
+      const evt = JSON.parse(trimmed)
+      if (evt && evt.type === 'result') json = evt
+    } catch {
+      // non-JSON noise on stdout: ignore (defensive)
+    }
+  }
+  if (!json) {
+    throw new Error(
+      `claude CLI produced no result event in stream-json output (got ${stdout.length} bytes)`,
+    )
+  }
   const usage = json.usage ?? {}
   if (!('input_tokens' in usage) && !warnedMissingUsage) {
     warnedMissingUsage = true

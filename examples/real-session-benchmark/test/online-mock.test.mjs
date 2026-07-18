@@ -6,8 +6,10 @@
 //     field-mapping and response-text extraction.
 //   - the cli runner is pointed at a fake `claude` executable (a tiny Node
 //     script on a scratch PATH) that ASSERTS the argv flags it receives
-//     (review fix A5: removing --tools ""/--model/--output-format json/
-//     --input-format stream-json from claude-cli.mjs now FAILS these tests)
+//     (review fix A5: removing --tools ""/--model/--output-format
+//     stream-json/--input-format stream-json/--verbose from claude-cli.mjs
+//     now FAILS these tests; output MUST be stream-json — the CLI rejects
+//     json output with stream-json input, caught live at calibration)
 //     and validates the stdin NDJSON envelope before printing a fixed JSON
 //     result — proves argv construction, stdin write, and usage parsing.
 //
@@ -123,8 +125,9 @@ function requireFlagPair(flag, expected) {
 }
 if (!args.includes('-p')) { process.stderr.write('missing -p'); process.exit(1) }
 requireFlagPair('--model', 'claude-sonnet-5')
-requireFlagPair('--output-format', 'json')
+requireFlagPair('--output-format', 'stream-json') // CLI-enforced pairing with stream-json input
 requireFlagPair('--input-format', 'stream-json')
+if (!args.includes('--verbose')) { process.stderr.write('missing --verbose (required for stream-json output in print mode)'); process.exit(1) }
 requireFlagPair('--tools', '')          // empty string = disable all built-in tools
 requireFlagPair('--system-prompt')      // present, any value
 let input = ''
@@ -138,7 +141,11 @@ process.stdin.on('end', () => {
     process.stderr.write('malformed stdin envelope: ' + line)
     process.exit(1)
   }
-  process.stdout.write(JSON.stringify(${JSON.stringify(fixedJson)}))
+  // stream-json output = NDJSON events; the runner reads the final
+  // type:"result" event. Emit a leading non-result event too, so the
+  // parser's event filtering is exercised, not just trivially satisfied.
+  process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init' }) + '\\n')
+  process.stdout.write(JSON.stringify(Object.assign({ type: 'result' }, ${JSON.stringify(fixedJson)})) + '\\n')
   process.exit(0)
 })
 `
