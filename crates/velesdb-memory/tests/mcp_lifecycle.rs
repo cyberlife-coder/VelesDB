@@ -41,9 +41,9 @@ fn read_line_with_timeout(mut reader: BufReader<ChildStdout>, timeout: Duration)
         let _ = tx.send(result);
     });
     match rx.recv_timeout(timeout) {
-        Ok(Ok((0, _))) => None, // EOF before any line arrived
+        // 0 bytes = EOF before any line arrived; read/recv errors read the same.
+        Ok(Ok((0, _))) | Ok(Err(_)) | Err(_) => None,
         Ok(Ok((_, line))) => Some(line),
-        Ok(Err(_)) | Err(_) => None,
     }
 }
 
@@ -161,12 +161,20 @@ fn store_lock_is_released_after_stdin_eof_so_a_second_session_can_connect() {
     // `initialize` hang or fail with `Storage(DatabaseLocked)` — exactly the
     // "opaque Failed to connect" symptom reported in #1448.
     let mut second = spawn_server(store_dir.path());
-    let mut stdin = second.stdin.take().expect("second child stdin must be piped");
-    let stdout = second.stdout.take().expect("second child stdout must be piped");
+    let mut stdin = second
+        .stdin
+        .take()
+        .expect("second child stdin must be piped");
+    let stdout = second
+        .stdout
+        .take()
+        .expect("second child stdout must be piped");
     let reader = BufReader::new(stdout);
 
     writeln!(stdin, "{}", initialize_request(1)).expect("write initialize to second child");
-    stdin.flush().expect("flush initialize request to second child");
+    stdin
+        .flush()
+        .expect("flush initialize request to second child");
 
     let response = read_line_with_timeout(reader, SHUTDOWN_TIMEOUT).unwrap_or_else(|| {
         let _ = second.kill();
