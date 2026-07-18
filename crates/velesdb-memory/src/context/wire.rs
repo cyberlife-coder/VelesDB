@@ -137,28 +137,28 @@ pub(crate) fn parse_u64(text: &str) -> Result<u64, String> {
 /// serializes `u64` as a JS-safe string by convention) can resubmit it
 /// as-is. Reuses [`parse_u64`] — the same decimal-parsing rule
 /// [`parse_fragment_id_strings`] and [`parse_ids_in`] already apply,
-/// centralized once.
+/// centralized once. Matched by hand over a [`Value`] (not an untagged
+/// enum) so a rejected value gets a message naming it and the accepted
+/// forms, instead of serde's opaque "did not match any variant".
 ///
 /// # Errors
-/// Returns a deserialize error if a string value does not parse as a
-/// decimal `u64`.
+/// Returns a deserialize error naming the offending value if it is neither
+/// a `u64` JSON number nor a decimal-`u64` string.
 pub(crate) fn deserialize_optional_id<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
+    use serde::de::Error;
     use serde::Deserialize;
 
-    #[derive(serde::Deserialize)]
-    #[serde(untagged)]
-    enum IdOrString {
-        Id(u64),
-        Text(String),
-    }
-
-    Option::<IdOrString>::deserialize(deserializer)?
+    let expected = "expected a u64 number or a decimal u64 string";
+    Option::<Value>::deserialize(deserializer)?
         .map(|value| match value {
-            IdOrString::Id(id) => Ok(id),
-            IdOrString::Text(text) => parse_u64(&text).map_err(serde::de::Error::custom),
+            Value::Number(number) => number
+                .as_u64()
+                .ok_or_else(|| Error::custom(format!("invalid id {number} ({expected})"))),
+            Value::String(text) => parse_u64(&text).map_err(Error::custom),
+            other => Err(Error::custom(format!("invalid id {other} ({expected})"))),
         })
         .transpose()
 }

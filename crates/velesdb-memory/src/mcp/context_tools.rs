@@ -10,16 +10,16 @@
 
 use std::sync::Arc;
 
-use rmcp::handler::server::tool::schema_for_output;
+use rmcp::handler::server::tool::{schema_for_input, schema_for_output};
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::ErrorCode;
+use rmcp::model::{ErrorCode, JsonObject};
 use rmcp::{tool, tool_router, ErrorData};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
 use super::{join_error, to_error, McpServer};
-use crate::context::wire::stringify_id_fields;
+use crate::context::wire::{stringify_id_fields, ID_KEYS};
 use crate::context::{
     CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextDecision,
     ContextSavings, WorkingContext,
@@ -43,6 +43,43 @@ fn to_wire_value<T: serde::Serialize>(
         stringify_id_fields(&mut value);
     }
     Ok(value)
+}
+
+/// The advertised-schema half of the [`CompilePolicy::ids_as_strings`]
+/// contract: the response may carry each [`ID_KEYS`] field as an integer OR
+/// a decimal string, and the official MCP SDKs validate `structuredContent`
+/// against the advertised `outputSchema` (spec 2025-06-18) — so those
+/// fields must be typed `["integer", "string"]`, or every opted-in response
+/// would fail client-side validation for exactly the clients the option
+/// exists for.
+fn wire_safe_output_schema<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
+    let schema = schema_for_output::<T>().unwrap_or_else(|e| {
+        panic!(
+            "Invalid output schema for {}: {e}",
+            std::any::type_name::<T>()
+        )
+    });
+    let mut map = (*schema).clone();
+    crate::schema::widen_id_properties(&mut map, ID_KEYS);
+    Arc::new(map)
+}
+
+/// Input-side counterpart: `fragments[].id` accepts an integer or a decimal
+/// string ([`crate::context::wire::deserialize_optional_id`]), so the
+/// advertised input schema announces both — a client generating requests
+/// from the schema must be able to discover the string form. Scoped to the
+/// `id` property only: `explain_compilation`'s own `fragment_id` parameter
+/// deserializes as a strict `u64` and stays typed `integer`.
+fn wire_safe_input_schema<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
+    let schema = schema_for_input::<Parameters<T>>().unwrap_or_else(|e| {
+        panic!(
+            "Invalid input schema for {}: {e}",
+            std::any::type_name::<T>()
+        )
+    });
+    let mut map = (*schema).clone();
+    crate::schema::widen_id_properties(&mut map, &["id"]);
+    Arc::new(map)
 }
 
 // --- Thin request envelopes --------------------------------------------------
@@ -144,8 +181,8 @@ impl McpServer {
     #[tool(
         name = "compile_context",
         description = "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministically, with no LLM call. Duplicates are dropped, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles instead of silently vanishing, and `memory_scope` pulls relevant stored memories into the result. Returns the assembled content plus one auditable decision per fragment (rule id, reason, risk), the sources, the retrieval handles, and token-savings insights. `policy.ids_as_strings` (default false) rewrites every id field of the response into a decimal string, for MCP clients without u64-safe JSON number parsing.",
-        output_schema = schema_for_output::<CompiledContext>()
-            .unwrap_or_else(|e| panic!("Invalid output schema for `CompiledContext`: {e}"))
+        input_schema = wire_safe_input_schema::<CompileRequest>(),
+        output_schema = wire_safe_output_schema::<CompiledContext>()
     )]
     async fn compile_context(
         &self,
@@ -182,8 +219,8 @@ impl McpServer {
     #[tool(
         name = "explain_compilation",
         description = "Explain why one fragment of a compile_context request was preserved, abstracted, externalized, dropped, or cached. Compilation is deterministic, so the request is re-compiled (with event/source recording off) and the fragment's exact decision (rule id, reason, relevance, risk, handle) is returned — no server-side state needed. Caveat: with a memory_scope the re-compile recalls from CURRENT memory, so decisions about pulled memories reflect the memory as it is now, not as it was. Pass `fragment_index` (0-based position in request.fragments) instead of relying on `fragment_id` alone when fragments are byte-identical — a shared content-addressed id otherwise always resolves to the deduplication survivor's decision. `policy.ids_as_strings` on the request rewrites the response's id fields into decimal strings, like compile_context.",
-        output_schema = schema_for_output::<ContextDecision>()
-            .unwrap_or_else(|e| panic!("Invalid output schema for `ContextDecision`: {e}"))
+        input_schema = wire_safe_input_schema::<ExplainCompilationParams>(),
+        output_schema = wire_safe_output_schema::<ContextDecision>()
     )]
     async fn explain_compilation(
         &self,

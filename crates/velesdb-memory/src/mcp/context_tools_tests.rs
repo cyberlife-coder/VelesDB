@@ -309,6 +309,156 @@ async fn test_compile_context_tool_accepts_fragment_id_as_decimal_string_on_inpu
     );
 }
 
+// --- advertised schemas match the ids_as_strings wire contract -------------
+// The official MCP SDKs (TS/Python, spec 2025-06-18) validate a tool's
+// `structuredContent` against its advertised `outputSchema`. If the schema
+// typed the id fields `integer` only, every `ids_as_strings: true` response
+// would fail validation for exactly the clients the option exists for — so
+// the advertised schemas must type each id field `["integer", "string"]`.
+
+/// Recursively collect the type of every property named in `keys` across
+/// the whole schema tree (`$defs` included), resolving array-typed
+/// properties to their `items` type — so the assertions below cover every
+/// occurrence, not just a hand-picked path.
+fn collect_id_property_types(
+    value: &serde_json::Value,
+    keys: &[&str],
+    found: &mut Vec<(String, serde_json::Value)>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::Object(properties)) = map.get("properties") {
+                for (name, subschema) in properties {
+                    if keys.contains(&name.as_str()) {
+                        let leaf = if subschema.get("type") == Some(&serde_json::json!("array")) {
+                            subschema
+                                .get("items")
+                                .unwrap_or_else(|| panic!("array property {name} declares items"))
+                        } else {
+                            subschema
+                        };
+                        found.push((name.clone(), leaf["type"].clone()));
+                    }
+                }
+            }
+            for entry in map.values() {
+                collect_id_property_types(entry, keys, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_id_property_types(item, keys, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every collected id type must advertise BOTH `integer` and `string`.
+fn assert_ids_widened(found: &[(String, serde_json::Value)]) {
+    for (name, type_value) in found {
+        let types = type_value
+            .as_array()
+            .unwrap_or_else(|| panic!("{name} must type a list of forms, got {type_value}"));
+        assert!(
+            types.contains(&serde_json::json!("integer"))
+                && types.contains(&serde_json::json!("string")),
+            "{name} must advertise integer|string on the wire, got {type_value}"
+        );
+    }
+}
+
+#[test]
+fn test_compile_context_output_schema_advertises_string_ids() {
+    let tool = McpServer::compile_context_tool_attr();
+    let schema = serde_json::to_value(
+        tool.output_schema
+            .expect("compile_context declares an output schema"),
+    )
+    .expect("schema serializes");
+
+    let mut found = Vec::new();
+    collect_id_property_types(&schema, crate::context::wire::ID_KEYS, &mut found);
+
+    let names: std::collections::BTreeSet<&str> =
+        found.iter().map(|(name, _)| name.as_str()).collect();
+    for expected in ["fragment_id", "content_hash", "memory_id", "fragment_ids"] {
+        assert!(
+            names.contains(expected),
+            "the compile_context output schema must carry {expected}; found {names:?}"
+        );
+    }
+    assert_ids_widened(&found);
+}
+
+#[test]
+fn test_explain_compilation_output_schema_advertises_string_ids() {
+    let tool = McpServer::explain_compilation_tool_attr();
+    let schema = serde_json::to_value(
+        tool.output_schema
+            .expect("explain_compilation declares an output schema"),
+    )
+    .expect("schema serializes");
+
+    let mut found = Vec::new();
+    collect_id_property_types(&schema, crate::context::wire::ID_KEYS, &mut found);
+
+    let names: std::collections::BTreeSet<&str> =
+        found.iter().map(|(name, _)| name.as_str()).collect();
+    for expected in ["fragment_id", "content_hash", "memory_id"] {
+        assert!(
+            names.contains(expected),
+            "the explain_compilation output schema must carry {expected}; found {names:?}"
+        );
+    }
+    assert_ids_widened(&found);
+}
+
+#[test]
+fn test_compile_context_input_schema_advertises_string_fragment_id() {
+    // fragments[].id accepts a decimal string on input (see
+    // wire::deserialize_optional_id) — a client generating requests from the
+    // advertised schema must be able to discover that.
+    let tool = McpServer::compile_context_tool_attr();
+    let schema = serde_json::to_value(&tool.input_schema).expect("schema serializes");
+
+    let id_type = &schema["$defs"]["ContextFragment"]["properties"]["id"]["type"];
+    let types = id_type
+        .as_array()
+        .unwrap_or_else(|| panic!("fragments[].id must type a list of forms, got {id_type}"));
+    for expected in ["integer", "string", "null"] {
+        assert!(
+            types.contains(&serde_json::json!(expected)),
+            "fragments[].id must advertise {expected} on input, got {id_type}"
+        );
+    }
+}
+
+#[test]
+fn test_explain_compilation_input_schema_keeps_top_level_fragment_id_strict() {
+    // The widening is scoped to fragments[].id: the tool's own fragment_id
+    // parameter is deserialized as a strict u64 (a string is rejected), so
+    // its advertised type must stay integer-only — announcing a string there
+    // would over-promise.
+    let tool = McpServer::explain_compilation_tool_attr();
+    let schema = serde_json::to_value(&tool.input_schema).expect("schema serializes");
+
+    assert_eq!(
+        schema["properties"]["fragment_id"]["type"],
+        serde_json::json!("integer"),
+        "top-level fragment_id stays integer-only"
+    );
+    // …while the nested fragments[].id is widened, like compile_context's.
+    let id_type = &schema["$defs"]["ContextFragment"]["properties"]["id"]["type"];
+    let types = id_type
+        .as_array()
+        .unwrap_or_else(|| panic!("fragments[].id must type a list of forms, got {id_type}"));
+    assert!(
+        types.contains(&serde_json::json!("string")),
+        "request.fragments[].id must advertise string on input, got {id_type}"
+    );
+}
+
 // --- fragment_index (positional disambiguation, EPIC-P-071 wave 5 / 5.2) ---
 
 #[tokio::test]
