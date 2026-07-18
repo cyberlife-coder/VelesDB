@@ -157,3 +157,50 @@ fn test_image_token_estimator_is_deterministic() {
     let b = ImageTokenEstimator::estimate("image/png", PNG_1024X768, "x");
     assert_eq!(a, b);
 }
+
+/// A forged IHDR declaring width = 0 (multi-MiB payload could hide behind
+/// it): must be treated as unparseable so the safe over-counting fallback
+/// prices it, never 0 tokens.
+const PNG_0X768: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, // signature
+    0, 0, 0, 13, // IHDR length = 13
+    73, 72, 68, 82, // "IHDR"
+    0, 0, 0, 0, // width = 0 (forged)
+    0, 0, 3, 0, // height = 768
+    8, 6, 0, 0, 0, // bit depth, color type, compression, filter, interlace
+    0, 0, 0, 0, // crc (unchecked)
+];
+
+/// A JPEG SOF0 declaring height = 0 (legal DNL-deferred form): unpriceable
+/// by the pixel formula — must fall back to the over-counting estimate.
+const JPEG_SOF0_800X0: &[u8] = &[
+    255, 216, // SOI
+    255, 192, // SOF0
+    0, 17, // segment length = 17
+    8,  // precision
+    0, 0, // height = 0 (DNL-deferred)
+    3, 32, // width = 800
+    3,  // num components
+    1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, // component specs
+    255, 217, // EOI
+];
+
+#[test]
+fn test_zero_dimension_png_falls_back_to_overcounting_text_estimate() {
+    let bytes_b64 = "a-large-payload-stand-in";
+    let cost = ImageTokenEstimator::estimate("image/png", PNG_0X768, bytes_b64);
+    assert_eq!(
+        cost,
+        HeuristicEstimator.estimate(bytes_b64),
+        "a forged zero dimension must never price a payload at 0 tokens"
+    );
+    assert!(cost > 0);
+}
+
+#[test]
+fn test_zero_dimension_jpeg_falls_back_to_overcounting_text_estimate() {
+    let bytes_b64 = "another-large-payload-stand-in";
+    let cost = ImageTokenEstimator::estimate("image/jpeg", JPEG_SOF0_800X0, bytes_b64);
+    assert_eq!(cost, HeuristicEstimator.estimate(bytes_b64));
+    assert!(cost > 0);
+}

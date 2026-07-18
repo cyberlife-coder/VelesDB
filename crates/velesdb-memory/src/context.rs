@@ -364,10 +364,18 @@ fn validate(request: &CompileRequest, policy: &CompilePolicy) -> Result<u64, Mem
 /// payload never reaches the pipeline (fail fast, same `INVALID_PARAMS`
 /// shape as every other cap in [`validate`]).
 fn validate_media(fragments: &[ContextFragment]) -> Result<(), MemoryError> {
+    let mut total_media_bytes: usize = 0;
     for (seq, fragment) in fragments.iter().enumerate() {
         let Some(media_ref) = &fragment.media else {
             continue;
         };
+        total_media_bytes = total_media_bytes.saturating_add(media_ref.bytes_b64.len());
+        if total_media_bytes > limits::MAX_TOTAL_MEDIA_BYTES {
+            return Err(MemoryError::ContextOverLimit(format!(
+                "total media payload exceeds the request cap of {} base64 bytes",
+                limits::MAX_TOTAL_MEDIA_BYTES
+            )));
+        }
         if media_ref.bytes_b64.len() > limits::MAX_MEDIA_BYTES {
             return Err(MemoryError::ContextOverLimit(format!(
                 "fragment #{seq} media payload of {} base64 bytes exceeds the cap of {} bytes",
@@ -692,14 +700,26 @@ fn dup_verdict(
     };
     let twin_full = emissions.get(&twin.seq).is_some_and(Emission::is_full);
     if twin_full {
+        // Media dedup keys on the image bytes alone: the twin carries the
+        // image, but a caption that differs from the twin's does NOT
+        // survive — say so instead of claiming full survival.
+        let caption_diverges = analysis.media.is_some() && analysis.original != twin.original;
+        let reason = if caption_diverges {
+            format!(
+                "{variant} of fragment #{} — image survives through it; this fragment's differing caption does not",
+                dup.kept_seq
+            )
+        } else {
+            format!(
+                "{variant} of fragment #{} — content survives through it",
+                dup.kept_seq
+            )
+        };
         return (
             ContextAction::Drop,
             rule_id.to_owned(),
             FidelityRisk::Low,
-            format!(
-                "{variant} of fragment #{} — content survives through it",
-                dup.kept_seq
-            ),
+            reason,
             Some(provenance::handle_for(analysis.content_hash)),
         );
     }

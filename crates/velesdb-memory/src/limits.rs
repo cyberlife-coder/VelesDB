@@ -39,6 +39,13 @@ pub const MAX_FRAGMENTS: usize = 1_024;
 /// oversized payload before any base64 decoding is attempted.
 pub const MAX_MEDIA_BYTES: usize = 4 * 1024 * 1024;
 
+/// Aggregate cap on ALL media payloads of one request (base64 length,
+/// summed). Without it, `MAX_FRAGMENTS` fragments each at [`MAX_MEDIA_BYTES`]
+/// would let a single request carry 4 GiB of media — far past the ~1 GiB
+/// worst case the text caps allow. 64 MiB comfortably fits a real
+/// screenshot-heavy session while bounding decode work.
+pub const MAX_TOTAL_MEDIA_BYTES: usize = 64 * 1024 * 1024;
+
 /// Cap on a caller-supplied token budget. A budget cannot force allocations
 /// by itself, but an absurd value would make the savings arithmetic
 /// meaningless, so adapters clamp to this ceiling instead of erroring.

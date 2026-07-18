@@ -1206,6 +1206,34 @@ fn test_identical_media_bytes_are_deduped_even_with_different_captions() {
     assert_eq!(out.decisions[1].action, ContextAction::Drop);
     assert_eq!(out.decisions[1].rule_id, "drop.duplicate");
     assert_eq!(out.decisions[1].risk, FidelityRisk::Low);
+    // And the reason is honest: the image survives, the differing caption
+    // does not — never a blanket "content survives" claim.
+    assert!(
+        out.decisions[1]
+            .reason
+            .contains("differing caption does not"),
+        "reason must not overclaim survival, got: {}",
+        out.decisions[1].reason
+    );
+}
+
+#[test]
+fn test_total_media_payload_over_the_aggregate_cap_is_rejected() {
+    // Given fragments whose individual payloads pass the per-fragment cap
+    // but whose SUM exceeds the aggregate request cap (64 MiB of base64)
+    let one_mib_b64 = "A".repeat(1024 * 1024);
+    let fragments: Vec<ContextFragment> = (0..65)
+        .map(|i| media_fragment(&format!("shot {i}"), &one_mib_b64))
+        .collect();
+    let err = ContextCompiler::new(CompilePolicy::default())
+        .compile(&request(fragments, 10_000))
+        .expect_err("65 MiB of aggregate media must be rejected");
+
+    // Then the rejection names the aggregate cap, before any decode work
+    assert!(
+        err.to_string().contains("total media payload"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

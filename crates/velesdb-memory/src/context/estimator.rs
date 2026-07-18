@@ -180,6 +180,12 @@ fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     }
     let width = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
     let height = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
+    // A forged zero dimension would price a multi-MiB payload at 0 tokens —
+    // a silent under-count. Treat it as unparseable: the caller falls back
+    // to the safe over-counting text estimate.
+    if width == 0 || height == 0 {
+        return None;
+    }
     Some((width, height))
 }
 
@@ -217,6 +223,12 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
             let payload = bytes.get(pos + 4..pos + 9)?;
             let height = u16::from_be_bytes([payload[1], payload[2]]);
             let width = u16::from_be_bytes([payload[3], payload[4]]);
+            // height == 0 is legal JPEG (DNL-deferred) but unpriceable, and
+            // width == 0 is forged either way: fall back to the safe
+            // over-counting text estimate rather than a 0-token under-count.
+            if width == 0 || height == 0 {
+                return None;
+            }
             return Some((u32::from(width), u32::from(height)));
         }
         pos += 2 + seg_len;

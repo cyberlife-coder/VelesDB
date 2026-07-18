@@ -33,7 +33,10 @@ pub(crate) struct MediaAnalysis {
 ///
 /// Called only after [`validate_media`] has already confirmed `bytes_b64` is
 /// well-formed and within [`crate::limits::MAX_MEDIA_BYTES`] for every
-/// fragment in the request — a decode failure here would mean that check has
+/// fragment in the request (so each payload is decoded twice — once to
+/// validate, once here; bounded by
+/// [`crate::limits::MAX_TOTAL_MEDIA_BYTES`], a deliberate simplicity
+/// trade-off over threading decoded bytes through the pipeline) — a decode failure here would mean that check has
 /// a bug, so this degrades to an empty payload (zero dimensions, the text
 /// fallback cost) rather than panicking on what is, by this point, trusted
 /// input.
