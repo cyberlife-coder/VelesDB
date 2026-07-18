@@ -277,7 +277,11 @@ jobs:
 
       - name: Run tests
         run: |
-          cargo test --workspace --features persistence,gpu,update-check
+          cargo test --workspace --features persistence,gpu,update-check \
+            --exclude velesdb-python --exclude velesdb-node \
+            -- --test-threads=1
+        env:
+          RUST_TEST_THREADS: 1
 
       # Real-stdio MCP end-to-end (6 tools + text/media retrieve round-trip).
       # The debug binary is already built by the workspace test compile above;
@@ -285,11 +289,7 @@ jobs:
       - name: MCP server e2e (stdio)
         run: |
           cargo build -p velesdb-memory
-          python3 crates/velesdb-memory/examples/context_savings/real_measures/mcp_e2e.py \
-            --exclude velesdb-python --exclude velesdb-node \
-            -- --test-threads=1
-        env:
-          RUST_TEST_THREADS: 1
+          python3 crates/velesdb-memory/examples/context_savings/real_measures/mcp_e2e.py
 
   # ===========================================================================
   # Security Audit (parallèle - outils pré-compilés)
