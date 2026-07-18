@@ -617,13 +617,12 @@ so an audit trail always shows *why* a log collapsed the way it did. Off by
 default: it changes what "duplicate" means for logs, so existing callers
 keep byte-exact grouping unless they opt in.
 
-#### Media fragments (experimental, PR1/3)
+#### Media fragments (experimental, PR2/3)
 
 A fragment may carry an inline image alongside its text: set
 `media: {"mime": "image/png", "bytes_b64": "<base64>"}` on a
 `ContextFragment`; `content` stays the caption (often empty for a bare
-screenshot). This is **PR1 of 3** for media support — honest about what it
-does and does not do yet:
+screenshot). This is **PR2 of 3** for media support:
 
 - **Atomic packing**: a media fragment is never chunked — it packs whole
   under the budget or not at all, so an image can never be cut mid-stream.
@@ -638,13 +637,32 @@ does and does not do yet:
 - **Capped at 4 MiB of base64** (`limits::MAX_MEDIA_BYTES`, ≈3 MiB decoded),
   independent of the text-content cap; malformed base64 is rejected at
   validation.
-- **No binary retrieval store yet.** A media fragment that does not fit the
-  budget is `drop`ped with an explicit reason
-  (`decision.rule_id == "drop.media_unavailable"`) instead of being handed a
-  `ctx://source/` handle — PR1 has nowhere to persist the bytes behind such a
-  handle, so it does not pretend one exists. Externalized-media storage,
-  screenshot expiry, and the Node/WASM/wire surface are **not yet built**;
-  they land in PR2/PR3.
+- **Real retrieval, through the memory bridge.** A media fragment that does
+  not fit the budget externalizes exactly like text: `decision.action ==
+  "retrieve"`, `rule_id == "budget.externalize"`, and a `ctx://source/`
+  handle. `MemoryService::compile_context` (with `policy.store_sources`,
+  the default) persists the fragment's base64 payload alongside its caption
+  — `MemoryService::retrieve_context_source(handle)` returns `{content,
+  media?}`, `media` present whenever the original fragment carried one.
+  Media is embedded with a deterministic placeholder vector derived from
+  its raw bytes' hash, never through the text embedder: resolution is by
+  content-addressed hash only, never by vector search. The bare
+  `ContextCompiler` (no memory) still just *mints* the handle, exactly as
+  it does for text — it never knows or cares whether a resolver is
+  attached.
+- **Screenshot supersession.** Fragments that share `media`, `kind:
+  "screenshot"`, and the same `metadata.target` value form a succession
+  series: only the LAST one in the request (input order — never a clock)
+  stays inline; every earlier one is reclassified
+  `retrieve.screenshot_superseded` and externalized behind a resolvable
+  handle, regardless of budget — a stale screenshot never competes with the
+  current one for space. `metadata.target` should identify the *subject*
+  being screenshotted (a URL, a test name, a UI element id — the caller's
+  choice); a screenshot with no `metadata.target` is never superseded, since
+  there is no evidence it succeeds anything. Opt out per request with
+  `policy.disabled_rules: ["retrieve.screenshot_superseded"]`.
+- **Node/WASM/wire surface** beyond the MCP tools and the Python binding
+  above is **not yet built**; it lands in PR3.
 
 #### Source TTL & disk growth
 

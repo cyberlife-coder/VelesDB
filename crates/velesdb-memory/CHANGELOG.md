@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Media source storage & screenshot supersession (experimental, PR2/3 of
+  US-009 in EPIC-P-071)** — the memory bridge now persists a media
+  fragment's base64 payload alongside its caption when storing a compiled
+  source (reserved key `_veles_ctx_source_media`, embedded with a
+  deterministic bytes-hash-derived placeholder vector rather than the text
+  embedder — `retrieve_context_source` resolves media sources by
+  content-addressed hash only, never by vector search). PR1's provisional
+  `drop.media_unavailable` verdict is gone: a media fragment that cannot fit
+  the budget now externalizes exactly like text (`budget.externalize`, a
+  resolvable `ctx://source` handle), and a duplicate media fragment whose
+  twin also failed to pack recovers through its own handle too.
+  `MemoryService::retrieve_context_source` returns the new `ContextSource {
+  content, media? }` shape (`media` is `#[serde(default)]`, so every
+  pre-PR2 text-only source round-trips unchanged); the MCP
+  `retrieve_context_source` tool result gained the same optional `media`
+  field, and the Python `retrieve_context_source` binding now returns a
+  dict instead of a bare string.
+  **Screenshot supersession**: fragments sharing `media` + `kind:
+  "screenshot"` + the same `metadata.target` value are a succession
+  series — only the LAST one (input order, no clock) stays inline
+  (`Preserve`, budget permitting); every earlier one is proactively
+  reclassified `retrieve.screenshot_superseded` and externalized behind a
+  resolvable handle, regardless of budget, with an explicit reason. A
+  screenshot with no `metadata.target` is never superseded (no target is no
+  evidence of succession). Opt out per request via
+  `policy.disabled_rules: ["retrieve.screenshot_superseded"]`. Byte-compat:
+  a request with no media is unaffected.
 - **Media fragments (experimental, PR1/3 of US-009 in EPIC-P-071)** —
   `ContextFragment.media: Option<MediaRef>` lets a fragment carry an inline
   base64-encoded image (`mime` + `bytes_b64`) alongside its text/caption
@@ -21,12 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ceil(width * height / 750)`; unsupported mimes or unreadable headers fall
   back to a safe text-based over-count). Capped at 4 MiB of base64
   (`limits::MAX_MEDIA_BYTES`), separate from the existing per-fragment text
-  cap; malformed base64 is rejected at validation time. PR1 ships no binary
-  retrieval store: a media fragment that cannot fit the budget is `drop`ped
-  with an explicit reason (`drop.media_unavailable`) rather than handed a
-  `ctx://source` handle that would not resolve — externalized-media storage,
-  screenshot expiry, and the Node/WASM/wire surface land in a later PR. Wire-
-  compatible: `media` is `#[serde(default)]`, so every existing request still
+  cap; malformed base64 is rejected at validation time. Wire-compatible:
+  `media` is `#[serde(default)]`, so every existing request still
   deserializes unchanged.
 
 ## [0.6.0] - 2026-07-06

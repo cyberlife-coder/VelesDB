@@ -13,7 +13,8 @@ use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 
 use velesdb_memory::context::{
-    CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextSavings, WorkingContext,
+    CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextSavings, ContextSource,
+    WorkingContext,
 };
 use velesdb_memory::{
     format_dated_context, limits, ColumnFilter, ColumnOp, DynEmbedder, ErrorCategory, Explanation,
@@ -427,11 +428,16 @@ impl PyMemoryService {
         Ok(serde_to_python!(py, &compiled, "compiled context"))
     }
 
-    /// Fetch back the exact original content behind a `ctx://source/<hash>`
-    /// handle from a [`compile_context`](Self::compile_context) result —
-    /// what was externalized or partially packed is recoverable, not lost.
-    fn retrieve_context_source(&self, py: Python<'_>, handle: &str) -> PyResult<String> {
-        py.detach(|| self.svc.retrieve_context_source(handle).map_err(to_py_err))
+    /// Fetch back the exact original content — and media, when the fragment
+    /// carried one (US-009, PR2) — behind a `ctx://source/<hash>` handle
+    /// from a [`compile_context`](Self::compile_context) result: what was
+    /// externalized or partially packed is recoverable, not lost. Returns a
+    /// dict shaped `{content, media?}`, `media` present only for a source
+    /// whose fragment carried one.
+    fn retrieve_context_source(&self, py: Python<'_>, handle: &str) -> PyResult<Py<PyAny>> {
+        let source: ContextSource =
+            py.detach(|| self.svc.retrieve_context_source(handle).map_err(to_py_err))?;
+        Ok(serde_to_python!(py, &source, "context source"))
     }
 
     /// Aggregate the token (and cost) savings of past

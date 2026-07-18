@@ -56,13 +56,15 @@ pub enum FidelityRisk {
 /// text/caption — often empty for a bare screenshot — while the pixels live
 /// here, base64-encoded so the JSON wire never needs a binary frame.
 ///
-/// PR1 scope: the fragment packs atomically (see [`super::pieces`] in the
-/// compiler) and its token cost comes from
-/// [`super::estimator::ImageTokenEstimator`], but there is no externalized
-/// binary store yet — a media fragment that cannot fit the budget is
-/// `drop`ped with an explicit reason rather than handed a `ctx://source`
-/// handle that would not actually resolve. See the crate README's "media
-/// fragments" section.
+/// The fragment packs atomically (see [`super::pieces`] in the compiler)
+/// and its token cost comes from [`super::estimator::ImageTokenEstimator`].
+/// A media fragment that cannot fit the budget is externalized behind a
+/// `ctx://source` handle exactly like text (US-009, PR2: the memory bridge
+/// persists the bytes behind it — see
+/// [`crate::MemoryService::retrieve_context_source`]); the memoryless core
+/// compiler mints the same handle either way, since it never knows whether
+/// a resolver is attached. See the crate README's "media fragments"
+/// section.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MediaRef {
     /// Declared MIME type (e.g. `"image/png"`, `"image/jpeg"`). Only PNG and
@@ -76,6 +78,22 @@ pub struct MediaRef {
     /// well-formedness at compile time — a request carrying an oversized or
     /// malformed payload is rejected before any other work.
     pub bytes_b64: String,
+}
+
+/// The resolved original behind a `ctx://source/<hash>` handle (US-002:
+/// text sources; US-009 PR2 extends this with the fragment's inline media,
+/// when it carried one). `media` is `#[serde(default)]`: every source
+/// stored before PR2, and every text-only fragment since, round-trips with
+/// `media: None` — the exact pre-PR2 shape for a caller reading only
+/// `.content`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ContextSource {
+    /// The original fragment content, byte for byte (a media fragment's
+    /// caption — often empty for a bare screenshot).
+    pub content: String,
+    /// The original media payload, when the fragment carried one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaRef>,
 }
 
 /// One unit of caller-supplied context to compile.

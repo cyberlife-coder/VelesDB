@@ -67,7 +67,9 @@ def test_retrieve_context_source_round_trips_a_compiled_fragment(mem):
     out = mem.compile_context(req)
     handle = out["sources"][0]["handle"]
     assert handle.startswith("ctx://source/")
-    assert mem.retrieve_context_source(handle) == content_text
+    source = mem.retrieve_context_source(handle)
+    assert source["content"] == content_text
+    assert "media" not in source or source["media"] is None
 
 
 def test_retrieve_context_source_unknown_handle_raises_key_error(mem):

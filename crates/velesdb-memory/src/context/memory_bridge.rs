@@ -42,10 +42,10 @@ use serde_json::{Map, Number, Value};
 
 use super::{positive_ttl, MemoryService, Metadata, HUB_FIELD};
 use crate::context::model::{
-    CompileRequest, CompiledContext, ContextFragment, ContextSavings, ImportanceWeights,
-    MemoryScope, WorkingContext,
+    CompileRequest, CompiledContext, ContextFragment, ContextSavings, ContextSource,
+    ImportanceWeights, MediaRef, MemoryScope, WorkingContext,
 };
-use crate::context::{provenance, ContextCompiler};
+use crate::context::{media, provenance, ContextCompiler};
 use crate::embedder::Embedder;
 use crate::error::MemoryError;
 use crate::id::stable_id;
@@ -75,6 +75,11 @@ const CTX_EVENT_FIELD: &str = "_veles_ctx_event";
 const CTX_PROJECT_FIELD: &str = "_veles_ctx_project";
 const CTX_MODEL_FIELD: &str = "_veles_ctx_model";
 const CTX_SOURCE_FIELD: &str = "_veles_ctx_source";
+/// A stored source's media payload (US-009, PR2): `{"mime", "bytes_b64"}`,
+/// the exact [`MediaRef`] shape, set only when the source fragment carried
+/// one. Reserved like every other `_veles_ctx_*` key — a caller can neither
+/// set nor filter on it.
+const CTX_SOURCE_MEDIA_FIELD: &str = "_veles_ctx_source_media";
 const CTX_WORKING_FIELD: &str = "_veles_ctx_working";
 const CTX_SESSION_FIELD: &str = "_veles_ctx_session";
 const CTX_TOKENS_IN_FIELD: &str = "_veles_ctx_tokens_in";
@@ -306,23 +311,42 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
 
     /// Store every distinct fragment's original as a hub-marked system fact
     /// keyed by its salted content hash, so its handle can be resolved later.
+    /// A fragment carrying media (US-009, PR2) has its base64 payload
+    /// persisted alongside the caption under the reserved
+    /// [`CTX_SOURCE_MEDIA_FIELD`] key — the slot is still keyed on
+    /// [`stable_id`] of `fragment.content` (the caption), the SAME handle
+    /// namespace [`provenance::handle_for`] already mints for text: two
+    /// media fragments that happen to share an identical caption (most
+    /// commonly both blank) collide onto the same slot, first-write-wins,
+    /// exactly as two identical-caption TEXT fragments already do — PR2
+    /// extends what lives at an existing address, it does not add a second
+    /// one keyed on the media bytes.
+    ///
+    /// Size: [`crate::limits::MAX_MEDIA_BYTES`] /
+    /// [`crate::limits::MAX_TOTAL_MEDIA_BYTES`] already bounded every
+    /// fragment's `bytes_b64` before `compiler.compile` ever ran (see
+    /// `validate_media`, called from `compile`'s `validate`) — `augmented`
+    /// here is exactly the request that passed that check, so no separate
+    /// size guard is needed on the write path itself
+    /// ([`crate::limits::MAX_FACT_BYTES`] governs the unrelated MCP
+    /// `remember`/`extract` text ceiling, not this one).
     fn store_context_sources(
         &self,
         augmented: &CompileRequest,
         out: &CompiledContext,
         ttl_seconds: Option<u64>,
     ) -> Result<(), MemoryError> {
-        let by_hash: BTreeMap<u64, &str> = augmented
+        let by_hash: BTreeMap<u64, &ContextFragment> = augmented
             .fragments
             .iter()
-            .map(|fragment| (stable_id(&fragment.content), fragment.content.as_str()))
+            .map(|fragment| (stable_id(&fragment.content), fragment))
             .collect();
         let ttl_seconds = positive_ttl(ttl_seconds);
         for source in &out.sources {
             let Some(hash) = provenance::parse_handle(&source.handle) else {
                 continue;
             };
-            let Some(content) = by_hash.get(&hash) else {
+            let Some(fragment) = by_hash.get(&hash) else {
                 continue;
             };
             let slot = source_id(hash);
@@ -335,46 +359,88 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             if self.store.get(slot)?.is_some() {
                 continue;
             }
-            let embedding = self.embedder.embed(content)?;
+            let content = fragment.content.as_str();
+            let mut extra: Vec<(&str, Value)> = vec![(CTX_SOURCE_FIELD, Value::Bool(true))];
+            let embedding = if let Some(media_ref) = &fragment.media {
+                extra.push((
+                    CTX_SOURCE_MEDIA_FIELD,
+                    serde_json::to_value(media_ref).unwrap_or(Value::Null),
+                ));
+                // Deterministic, derived from the DECODED bytes — never the
+                // text embedder over `content` (often blank) or over the
+                // base64 payload itself (opaque, not language). Correct
+                // because `retrieve_context_source` resolves a media source
+                // EXCLUSIVELY by its content-addressed hash/slot, never by
+                // vector search — this vector only needs to be well-formed
+                // and non-degenerate for the underlying index, never
+                // semantically meaningful.
+                self.media_placeholder_embedding(media::analyze(media_ref).raw_hash)
+            } else {
+                self.embedder.embed(content)?
+            };
             self.store_fact(
                 slot,
                 content,
                 &embedding,
-                Some(&system_meta(&[(CTX_SOURCE_FIELD, Value::Bool(true))])),
+                Some(&system_meta(&extra)),
                 ttl_seconds,
             )?;
         }
         Ok(())
     }
 
-    /// Whether the fact at `slot` carries the stored-source marker.
-    fn slot_is_context_source(&self, slot: u64) -> Result<bool, MemoryError> {
-        let payloads = self.store.get_metadata_batch(&[slot])?;
-        Ok(payloads.first().is_some_and(|payload| {
-            payload
-                .as_ref()
-                .is_some_and(|meta| meta.get(CTX_SOURCE_FIELD) == Some(&Value::Bool(true)))
-        }))
+    /// A deterministic, non-degenerate embedding for a media source (US-009,
+    /// PR2) — see [`Self::store_context_sources`] for why it is bytes-hash
+    /// derived rather than text-embedded.
+    fn media_placeholder_embedding(&self, raw_hash: u64) -> Vec<f32> {
+        let dim = self.embedder.dimension();
+        let mut vector = vec![0.0_f32; dim];
+        let Ok(dim_u64) = u64::try_from(dim) else {
+            return vector;
+        };
+        if dim_u64 == 0 {
+            return vector;
+        }
+        let bucket = usize::try_from(raw_hash % dim_u64).unwrap_or(0);
+        vector[bucket] = 1.0;
+        velesdb_core::simd_native::normalize_inplace_native(&mut vector);
+        vector
     }
 
-    /// The original content behind a `ctx://source/<hash>` handle.
+    /// The fact at `slot`'s metadata, when it carries the stored-source
+    /// marker (`None` otherwise — absent, or a caller fact squatting the
+    /// slot).
+    fn context_source_metadata(&self, slot: u64) -> Result<Option<Metadata>, MemoryError> {
+        let payloads = self.store.get_metadata_batch(&[slot])?;
+        Ok(payloads
+            .into_iter()
+            .next()
+            .flatten()
+            .filter(|meta| meta.get(CTX_SOURCE_FIELD) == Some(&Value::Bool(true))))
+    }
+
+    /// The original content — and media, when the fragment carried one —
+    /// behind a `ctx://source/<hash>` handle.
     ///
     /// # Errors
     /// Returns [`MemoryError::UnknownHandle`] when the handle is malformed
     /// or nothing is stored under it (never stored, expired, or forgotten).
-    pub fn retrieve_context_source(&self, handle: &str) -> Result<String, MemoryError> {
+    pub fn retrieve_context_source(&self, handle: &str) -> Result<ContextSource, MemoryError> {
         let unknown = || MemoryError::UnknownHandle(handle.to_owned());
         let hash = provenance::parse_handle(handle).ok_or_else(unknown)?;
         let slot = source_id(hash);
         // Only marker-bearing facts are sources: a caller fact squatting the
         // salted slot is never served back as compiled provenance.
-        if !self.slot_is_context_source(slot)? {
-            return Err(unknown());
-        }
-        self.store
+        let meta = self.context_source_metadata(slot)?.ok_or_else(unknown)?;
+        let content = self
+            .store
             .get(slot)?
-            .map(|(content, _)| content)
-            .ok_or_else(unknown)
+            .map(|(content, _embedding)| content)
+            .ok_or_else(unknown)?;
+        Ok(ContextSource {
+            content,
+            media: source_media(&meta),
+        })
     }
 
     /// Record one compilation's savings as a metadata-only system fact
@@ -773,6 +839,17 @@ fn meta_u64(meta: &Metadata, key: &str) -> u64 {
 /// The salted system-fact id of a stored source.
 fn source_id(content_hash: u64) -> u64 {
     stable_id(&format!("{SOURCE_ID_SALT}{content_hash}"))
+}
+
+/// A stored source's media payload (US-009, PR2), when its metadata carries
+/// one — absent (or malformed, which should never happen for a payload this
+/// bridge wrote itself) round-trips as `None` rather than an error, so a
+/// media decode hiccup degrades to "text-only", never breaks the whole
+/// retrieval.
+fn source_media(meta: &Metadata) -> Option<MediaRef> {
+    meta.get(CTX_SOURCE_MEDIA_FIELD)
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
 }
 
 /// The salted, deterministic system-fact id of a working context.

@@ -1132,24 +1132,26 @@ fn test_media_fragment_insights_tokens_in_and_out_reflect_the_image_cost() {
 }
 
 #[test]
-fn test_media_fragment_that_cannot_fit_the_budget_is_dropped_not_retrieved() {
+fn test_media_fragment_that_cannot_fit_the_budget_is_externalized_not_dropped() {
     // Given a media fragment far too large for the budget
     let frag = media_fragment("a huge screenshot", PNG_1024X768_B64);
     let out = compile(&request(vec![frag], 10));
 
-    // Then it is dropped with an explicit PR1-scope reason — never handed a
-    // ctx://source handle, since no binary retrieval store exists yet
+    // Then it is externalized exactly like an unfit text fragment (US-009,
+    // PR2: the memory bridge now persists media sources, so the PR1
+    // `drop.media_unavailable` provisional verdict is gone) — a resolvable
+    // handle is minted, and it appears in `retrieval_handles`.
     let decision = &out.decisions[0];
-    assert_eq!(decision.action, ContextAction::Drop);
-    assert_eq!(decision.rule_id, "drop.media_unavailable");
+    assert_eq!(decision.action, ContextAction::Retrieve);
+    assert_eq!(decision.rule_id, "budget.externalize");
     assert_eq!(decision.risk, FidelityRisk::High);
-    assert!(decision.handle.is_none());
+    assert!(decision.handle.is_some());
     assert!(
-        decision.reason.contains("next PR"),
-        "the reason must be honest about the PR1 scope gap: {}",
+        decision.reason.contains("did not fit the budget"),
+        "unexpected reason: {}",
         decision.reason
     );
-    assert!(out.retrieval_handles.is_empty());
+    assert_eq!(out.retrieval_handles.len(), 1);
     assert_eq!(out.content, "");
 }
 
@@ -1167,14 +1169,19 @@ fn test_media_fragment_pack_is_all_or_nothing_at_the_exact_budget_boundary() {
         PNG_64X48_COST + joiner - 1,
     );
 
-    // Then it packs fully right at the boundary, and not at all one token
-    // under it — atomic packing never yields a partial byte-range
+    // Then it packs fully right at the boundary, and is externalized (never
+    // partially) one token under it — atomic packing never yields a partial
+    // byte-range, and an unfit media fragment externalizes exactly like an
+    // unfit text one (US-009, PR2)
     assert_eq!(compile(&exact).decisions[0].action, ContextAction::Preserve);
-    assert_eq!(compile(&one_short).decisions[0].action, ContextAction::Drop);
+    assert_eq!(
+        compile(&one_short).decisions[0].action,
+        ContextAction::Retrieve
+    );
 }
 
 #[test]
-fn test_dropped_media_fragment_attributes_its_full_cost_to_the_pr1_drop_rule() {
+fn test_externalized_media_fragment_attributes_its_full_cost_to_the_externalize_rule() {
     // Given a media fragment that cannot fit
     let frag = media_fragment("", PNG_1024X768_B64);
     let out = compile(&request(vec![frag], 10));
@@ -1298,5 +1305,145 @@ fn test_media_compilation_is_fully_deterministic() {
         serde_json::to_string(&first).expect("serialize first"),
         serde_json::to_string(&second).expect("serialize second"),
         "media compilation must be fully deterministic, exactly like text compilation"
+    );
+}
+
+// --- Screenshot supersession (US-009 of EPIC-P-071, PR2) --------------------
+
+/// A well-formed base64 payload distinct from every other caption's — media
+/// dedup keys on raw bytes alone, so two screenshots in the same series need
+/// DIFFERENT bytes or they would collide as exact media duplicates instead
+/// of exercising supersession. Only the final base64 character is varied
+/// (still a valid quad, no padding), derived from `caption` so calls with
+/// different literal captions in the same test always decode to different
+/// bytes.
+fn distinct_media_b64(caption: &str) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let seed = caption.bytes().fold(0_u8, u8::wrapping_add);
+    let mut b64 = PNG_64X48_B64.to_owned();
+    b64.pop();
+    b64.push(ALPHABET[seed as usize % ALPHABET.len()] as char);
+    b64
+}
+
+/// Build a `kind: "screenshot"` media fragment naming its `metadata.target`.
+fn screenshot(caption: &str, target: &str) -> ContextFragment {
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        "target".to_owned(),
+        serde_json::Value::String(target.to_owned()),
+    );
+    ContextFragment {
+        kind: Some("screenshot".to_owned()),
+        metadata: Some(meta),
+        ..media_fragment(caption, &distinct_media_b64(caption))
+    }
+}
+
+#[test]
+fn test_three_screenshots_of_the_same_target_only_the_last_stays_inline() {
+    // Given three screenshots of the same target, in order
+    let fragments = vec![
+        screenshot("v1", "login-page"),
+        screenshot("v2", "login-page"),
+        screenshot("v3", "login-page"),
+    ];
+    let out = compile(&request(fragments, 10_000));
+
+    // Then only the last is preserved inline; the first two are externalized
+    // as superseded, each with its own resolvable handle
+    assert_eq!(out.decisions[0].action, ContextAction::Retrieve);
+    assert_eq!(out.decisions[0].rule_id, "retrieve.screenshot_superseded");
+    assert!(out.decisions[0].handle.is_some());
+    assert!(out.decisions[0]
+        .reason
+        .contains("superseded by a newer screenshot"));
+
+    assert_eq!(out.decisions[1].action, ContextAction::Retrieve);
+    assert_eq!(out.decisions[1].rule_id, "retrieve.screenshot_superseded");
+    assert!(out.decisions[1].handle.is_some());
+
+    assert_eq!(out.decisions[2].action, ContextAction::Preserve);
+    assert_eq!(out.decisions[2].rule_id, "media.atomic");
+    assert!(out.decisions[2].handle.is_none());
+
+    assert_eq!(out.retrieval_handles.len(), 2);
+}
+
+#[test]
+fn test_screenshots_of_different_targets_are_never_superseded() {
+    // Given screenshots of two DIFFERENT targets
+    let fragments = vec![
+        screenshot("login v1", "login-page"),
+        screenshot("checkout v1", "checkout-page"),
+    ];
+    let out = compile(&request(fragments, 10_000));
+
+    // Then both stay inline — no succession within either target's series
+    assert_eq!(out.decisions[0].action, ContextAction::Preserve);
+    assert_eq!(out.decisions[1].action, ContextAction::Preserve);
+    assert!(out.retrieval_handles.is_empty());
+}
+
+#[test]
+fn test_screenshots_without_a_target_are_never_superseded() {
+    // Given two screenshots with no `metadata.target` at all
+    let fragments = vec![
+        ContextFragment {
+            kind: Some("screenshot".to_owned()),
+            ..media_fragment("v1", &distinct_media_b64("v1"))
+        },
+        ContextFragment {
+            kind: Some("screenshot".to_owned()),
+            ..media_fragment("v2", &distinct_media_b64("v2"))
+        },
+    ];
+    let out = compile(&request(fragments, 10_000));
+
+    // Then no target means no evidence of succession — both stay inline
+    assert_eq!(out.decisions[0].action, ContextAction::Preserve);
+    assert_eq!(out.decisions[1].action, ContextAction::Preserve);
+    assert!(out.retrieval_handles.is_empty());
+}
+
+#[test]
+fn test_superseded_screenshot_is_excluded_from_the_assembled_content() {
+    // Given two screenshots of the same target with non-empty captions
+    let fragments = vec![
+        screenshot("first look", "login-page"),
+        screenshot("second look", "login-page"),
+    ];
+    let out = compile(&request(fragments, 10_000));
+
+    // Then the superseded caption never appears in the assembled prompt
+    assert!(!out.content.contains("first look"));
+}
+
+#[test]
+fn test_screenshot_supersession_rule_can_be_disabled() {
+    // Given the same three-screenshot series, with the rule opted out
+    let fragments = vec![
+        screenshot("v1", "login-page"),
+        screenshot("v2", "login-page"),
+        screenshot("v3", "login-page"),
+    ];
+    let policy = CompilePolicy {
+        disabled_rules: vec!["retrieve.screenshot_superseded".to_owned()],
+        ..CompilePolicy::default()
+    };
+    let mut req = request(fragments, 10_000);
+    req.policy = Some(policy);
+    let out = ContextCompiler::new(CompilePolicy::default())
+        .compile(&req)
+        .expect("compile");
+
+    // Then every screenshot stays inline — the rule is opt-outable like any
+    // other named rule
+    assert!(
+        out.decisions
+            .iter()
+            .all(|d| d.action == ContextAction::Preserve),
+        "disabling the rule must leave every screenshot inline, got: {:?}",
+        out.decisions
     );
 }
