@@ -115,6 +115,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prefix on all 9 consecutive turn pairs, reproducible) and frames the
   naive full-input-rate cost of not caching it against an injected,
   never-hardcoded `policy.pricing` table. [EPIC-P-071/US-008]
+- **Proof harness**: `examples/node-llm-middleware/` — a minimal
+  middleware wrapper measuring `compile_context` savings offline (real
+  cl100k via `gpt-tokenizer`, always) and, opt-in
+  (`RUN_BILLED_MEASURE=1` + an API key never asked for by the harness), the
+  provider's own billed `usage` on a real minimal-cost call.
+  [EPIC-P-071/US-007]
 
 R1 `Collection`-internals train: resolves and **closes the god-object EPIC
 ([#1384](https://github.com/cyberlife-coder/VelesDB/issues/1384))**. The
