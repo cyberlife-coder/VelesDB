@@ -79,3 +79,68 @@ export function buildCiLog() {
 }
 
 export const CI_LOG = { kind: 'log', content: buildCiLog() }
+
+// --- Long-session variant addition (corpus/session-long.mjs) -------------
+// Second CI run, next day: the NaN failure from CI_LOG is now green, ONE new
+// failure appears in the gift-card suite. Same deterministic construction
+// and representativity rules as buildCiLog() above — sized like a real run
+// of the grown (27-file) suite, repetition only where a real CI log repeats.
+export function buildCiLog2() {
+  const base = Date.UTC(2026, 6, 15, 14, 5, 0) // fixed, deterministic — 2026-07-15T14:05:00Z
+  const lines = []
+  let t = 0
+  const push = (deltaMs, line) => {
+    t += deltaMs
+    lines.push(`${iso(base, t)} ${line}`)
+  }
+
+  push(0, 'INFO  gate suite started on runner linux-x64-large (job #48377)')
+  push(120, 'INFO  checking out commit 4e19c0aa on branch feat/gift-card-redemption')
+  push(340, 'INFO  installing dependencies (cache hit: node_modules)')
+  push(220, 'INFO  gate "lint" started (eslint --max-warnings 0)')
+  push(1390, 'INFO  gate "lint" passed (0 errors, 0 warnings, 121 files)')
+  push(90, 'INFO  gate "typecheck" started (tsc --noEmit)')
+  push(2410, 'INFO  gate "typecheck" passed (0 errors, 349 files)')
+  push(200, 'INFO  gate "test" started')
+  push(610, 'INFO  jest config resolved: 27 test files, 4 workers')
+
+  const files = [
+    'cart.test.ts', 'cart.selectors.test.ts', 'catalog.test.ts', 'catalog.search.test.ts',
+    'checkout.summary.test.ts', 'checkout.discount.test.ts', 'checkout.tax.test.ts',
+    'checkout.rounding.test.ts', 'coupons.percentage.test.ts', 'coupons.flat.test.ts',
+    'coupons.stacking.test.ts', 'currency.format.test.ts', 'giftcard.redemption.test.ts',
+    'giftcard.balance.test.ts', 'inventory.reserve.test.ts', 'inventory.release.test.ts',
+    'loyalty.credits.test.ts', 'payment.intent.test.ts', 'payment.capture.test.ts',
+    'pricing.tiers.test.ts', 'pricing.overrides.test.ts', 'shipping.rates.test.ts',
+    'shipping.address.test.ts', 'tax.jurisdiction.test.ts', 'user.session.test.ts',
+    'user.preferences.test.ts', 'webhook.dispatch.test.ts',
+  ]
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i]
+    push(275 + (i % 5) * 41, `INFO  jest worker ${1 + (i % 4)} picked up ${file}`)
+    if (i === 7) {
+      push(150, 'WARN  retrying flaky network fetch for crates.io index (attempt 2/3)')
+    }
+    if (file === 'giftcard.balance.test.ts') {
+      push(430, `ERROR test_remaining_balance_uses_post_tax_total FAILED in ${file}`)
+      push(20, '  AssertionError: expected -320 to equal 1180')
+      push(15, '      at Object.<anonymous> (giftcard.balance.test.ts:41:29)')
+    } else {
+      const nTests = 4 + (i % 6)
+      push(185 + (i % 3) * 27, `PASS  ${file} (${nTests} tests)`)
+      push(15, `  ✓ ${file} renders without throwing (${7 + (i % 4)}ms)`)
+      push(12, `  ✓ ${file} matches snapshot (${2 + (i % 3)}ms)`)
+    }
+  }
+
+  push(500, 'INFO  jest run complete: 26 passed, 1 failed, 0 skipped (161 assertions)')
+  push(80, 'INFO  uploading coverage report to codecov (87.9% lines)')
+  push(310, 'ERROR gate "test" exited with code 1')
+  push(60, 'INFO  gate suite finished in 43.7s, 1 gate failed')
+  push(40, 'INFO  artifact retention: 14 days')
+
+  return lines.join('\n')
+}
+
+export const CI_LOG_2 = { kind: 'log', content: buildCiLog2() }

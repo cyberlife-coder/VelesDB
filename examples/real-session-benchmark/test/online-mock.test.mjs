@@ -1,18 +1,23 @@
 // Proves the ONLINE-mode parsing/aggregation code (lib/anthropic-api.mjs,
-// lib/claude-cli.mjs, lib/runner.mjs) is correct WITHOUT spending any real
-// API quota or invoking a real `claude` CLI session:
+// lib/claude-cli.mjs, lib/runner.mjs, lib/grade.mjs) is correct WITHOUT
+// spending any real API quota or invoking a real `claude` CLI session:
 //   - the api runner is pointed at a local, ephemeral http server that
-//     returns a fixed `usage` JSON — proves fetch/parse/field-mapping.
+//     returns a fixed `usage` + content JSON — proves fetch/parse/
+//     field-mapping and response-text extraction.
 //   - the cli runner is pointed at a fake `claude` executable (a tiny Node
-//     script on a scratch PATH) that ignores stdin and prints a fixed JSON
+//     script on a scratch PATH) that ASSERTS the argv flags it receives
+//     (review fix A5: removing --tools ""/--model/--output-format json/
+//     --input-format stream-json from claude-cli.mjs now FAILS these tests)
+//     and validates the stdin NDJSON envelope before printing a fixed JSON
 //     result — proves argv construction, stdin write, and usage parsing.
-// Neither test asserts anything about whether the REAL Anthropic API or the
-// REAL claude CLI actually returns these shapes — see lib/claude-cli.mjs's
-// header for the explicit "unverified" caveat on the CLI's usage-field
-// names. What this DOES catch: a regression in this repo's own request
-// construction or response parsing (e.g. reading `usage.inputTokens` instead
-// of `usage.input_tokens`, or forgetting to close stdin so the CLI process
-// hangs).
+//
+// The wire shapes these fakes speak were verified against a real
+// `claude -p` calibration call at review time (see lib/claude-cli.mjs's
+// header — the single source of truth for the verification status); these
+// tests pin THIS repo's request construction and response parsing against
+// that verified shape, so a regression here (e.g. reading usage.inputTokens
+// instead of usage.input_tokens, dropping a flag, or forgetting to close
+// stdin) fails loudly without any network call.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
@@ -24,9 +29,10 @@ import { runApiTurn } from '../lib/anthropic-api.mjs'
 import { runCliTurn, claudeCliAvailable } from '../lib/claude-cli.mjs'
 import { resolveRunnerKind, mean, stddev } from '../lib/runner.mjs'
 import { pixelCostTokens, pngDimensions } from '../lib/pixel-cost.mjs'
+import { gradeResponse, normalizeForGrade } from '../lib/grade.mjs'
 import { IMG_FIXED } from '../corpus/images.mjs'
 
-test('runApiTurn parses usage from a mocked /v1/messages response, no real network', async () => {
+test('runApiTurn parses usage + response text from a mocked /v1/messages response, no real network', async () => {
   const fixedUsage = {
     input_tokens: 1234,
     output_tokens: 5,
@@ -40,7 +46,14 @@ test('runApiTurn parses usage from a mocked /v1/messages response, no real netwo
     req.on('end', () => {
       receivedBody = JSON.parse(raw)
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ id: 'msg_mock', model: 'claude-sonnet-5', usage: fixedUsage, content: [] }))
+      res.end(
+        JSON.stringify({
+          id: 'msg_mock',
+          model: 'claude-sonnet-5',
+          usage: fixedUsage,
+          content: [{ type: 'text', text: 'The total was $NaN after applying FALL20.' }],
+        }),
+      )
     })
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -48,12 +61,15 @@ test('runApiTurn parses usage from a mocked /v1/messages response, no real netwo
   try {
     const result = await runApiTurn(
       { text: 'hello world', imageBlocks: [{ mime: 'image/png', bytesB64: IMG_FIXED.bytesB64 }] },
-      { apiKey: 'sk-mock-not-real', baseUrl: `http://127.0.0.1:${port}` },
+      { apiKey: 'sk-mock-not-real', baseUrl: `http://127.0.0.1:${port}`, maxTokens: 64 },
     )
-    assert.deepEqual(result, fixedUsage)
-    // Request-construction assertions: model, tiny max_tokens, both content blocks present.
+    assert.equal(result.input_tokens, 1234)
+    assert.equal(result.cache_creation_input_tokens, 100)
+    assert.equal(result.cache_read_input_tokens, 900)
+    assert.equal(result.responseText, 'The total was $NaN after applying FALL20.')
+    // Request-construction assertions: model, maxTokens passthrough, both content blocks present.
     assert.equal(receivedBody.model, 'claude-sonnet-5')
-    assert.equal(receivedBody.max_tokens, 16)
+    assert.equal(receivedBody.max_tokens, 64)
     const content = receivedBody.messages[0].content
     assert.equal(content.length, 2)
     assert.equal(content[0].type, 'text')
@@ -85,6 +101,11 @@ test('runApiTurn surfaces a non-2xx response as an Error, not a silent zero', as
   }
 })
 
+// The fake `claude` binary ASSERTS its argv (review fix A5): every flag the
+// real invocation depends on must be present with the right value, so a
+// regression in claude-cli.mjs's argv construction (dropping --tools "",
+// changing the model, switching output format) fails these tests instead of
+// silently producing a differently-behaving billed campaign.
 function makeFakeClaudeBin(dir, { fixedJson, versionExitCode = 0 } = {}) {
   const binPath = join(dir, 'claude')
   const script = `#!/usr/bin/env node
@@ -92,12 +113,25 @@ const args = process.argv.slice(2)
 if (args[0] === '--version') {
   process.exit(${versionExitCode})
 }
+function requireFlagPair(flag, expected) {
+  const i = args.indexOf(flag)
+  if (i === -1) { process.stderr.write('missing flag: ' + flag); process.exit(1) }
+  if (expected !== undefined && args[i + 1] !== expected) {
+    process.stderr.write('flag ' + flag + ' expected ' + JSON.stringify(expected) + ' got ' + JSON.stringify(args[i + 1]))
+    process.exit(1)
+  }
+}
+if (!args.includes('-p')) { process.stderr.write('missing -p'); process.exit(1) }
+requireFlagPair('--model', 'claude-sonnet-5')
+requireFlagPair('--output-format', 'json')
+requireFlagPair('--input-format', 'stream-json')
+requireFlagPair('--tools', '')          // empty string = disable all built-in tools
+requireFlagPair('--system-prompt')      // present, any value
 let input = ''
 process.stdin.on('data', (c) => (input += c))
 process.stdin.on('end', () => {
-  // Sanity-check the stdin line is well-formed NDJSON with the expected
-  // envelope shape before "responding" — a malformed line here would be a
-  // real bug in claude-cli.mjs's request construction.
+  // Validate the stdin line is well-formed NDJSON with the verified envelope
+  // shape — a malformed line here is a real bug in claude-cli.mjs.
   const line = input.trim().split('\\n')[0]
   const parsed = JSON.parse(line)
   if (parsed.type !== 'user' || parsed.message?.role !== 'user' || !Array.isArray(parsed.message?.content)) {
@@ -113,10 +147,10 @@ process.stdin.on('end', () => {
   return binPath
 }
 
-test('runCliTurn parses usage + total_cost_usd from a mocked claude binary, no real CLI call', async () => {
+test('runCliTurn passes the verified argv flags and parses usage + total_cost_usd + result text (mocked claude binary)', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'veles-fake-claude-'))
   const fixedJson = {
-    result: 'OK',
+    result: 'OK — the total shows $84.50 now.',
     session_id: 'sess_mock',
     total_cost_usd: 0.0042,
     usage: {
@@ -137,6 +171,7 @@ test('runCliTurn parses usage + total_cost_usd from a mocked claude binary, no r
     assert.equal(result.cache_creation_input_tokens, 0)
     assert.equal(result.cache_read_input_tokens, 500)
     assert.equal(result.total_cost_usd, 0.0042)
+    assert.equal(result.responseText, 'OK — the total shows $84.50 now.')
     assert.equal(result.raw.session_id, 'sess_mock')
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -151,6 +186,7 @@ test('runCliTurn defensively defaults missing usage fields to 0 rather than thro
     assert.equal(result.input_tokens, 0)
     assert.equal(result.output_tokens, 0)
     assert.equal(result.total_cost_usd, null)
+    assert.equal(result.responseText, 'OK')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -185,6 +221,20 @@ test('mean/stddev aggregation helpers are correct on a known sample', () => {
   const xs = [10, 20, 30, 40]
   assert.equal(mean(xs), 25)
   assert.ok(Math.abs(stddev(xs) - 11.180339887498949) < 1e-9)
+})
+
+test('gradeResponse is deterministic, case-insensitive and whitespace-insensitive', () => {
+  const facts = ['$84.50', 'preDiscountSubtotal', 'AC3']
+  const response = 'The total is  $84.50 ; the fix divides by PREDISCOUNTSUBTOTAL per\n ac3.'
+  const g1 = gradeResponse(response, facts)
+  const g2 = gradeResponse(response, facts)
+  assert.deepEqual(g1, g2) // deterministic
+  assert.equal(g1.found, 3)
+  assert.deepEqual(g1.missing, [])
+  const partial = gradeResponse('It divides by runningTotal.', facts)
+  assert.equal(partial.found, 0)
+  assert.deepEqual(partial.missing, facts)
+  assert.equal(normalizeForGrade('  A\tB\n C '), 'a b c')
 })
 
 test('pixelCostTokens matches the committed corpus image dimensions (960x600 -> 768 tokens)', () => {

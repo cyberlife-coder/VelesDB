@@ -22,7 +22,7 @@ export async function resolveRunnerKind() {
 /**
  * @param {'api'|'cli'} kind
  * @param {{ text?: string, imageBlocks?: Array<{mime:string,bytesB64:string}> }} turn
- * @returns {Promise<{input_tokens:number, output_tokens:number, cache_creation_input_tokens:number, cache_read_input_tokens:number, total_cost_usd: number|null}>}
+ * @returns {Promise<{input_tokens:number, output_tokens:number, cache_creation_input_tokens:number, cache_read_input_tokens:number, total_cost_usd: number|null, responseText: string}>}
  */
 export async function runTurn(kind, turn) {
   if (kind === 'api') {

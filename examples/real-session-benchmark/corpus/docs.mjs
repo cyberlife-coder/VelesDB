@@ -148,3 +148,45 @@ const readmeLines = [
 
 export const SPEC = { kind: 'doc', content: specLines.join('\n') }
 export const README_EXCERPT = { kind: 'doc', content: readmeLines.join('\n') }
+
+// --- Long-session variant addition (corpus/session-long.mjs) -------------
+// Spec section 5: gift cards — authored for the long-session variant with
+// the same provenance rules as sections above (realistic voice/size, not
+// padded). Injected when the gift-card work starts and RE-injected once
+// later (an agent re-reading its reference mid-feature), like SPEC above.
+const giftCardLines = [
+  '# Checkout Totals — Product Spec (excerpt, section 5: Gift Cards)',
+  '',
+  '## 5.1 Redemption order',
+  '',
+  'Gift cards redeem LAST — after percentage coupons, flat coupons, loyalty',
+  'credits, and tax. A gift card can never reduce the total below $0.00; any',
+  'unredeemed value stays on the card as the remaining balance.',
+  '',
+  '## 5.2 Remaining balance',
+  '',
+  'The modal shows the remaining balance after redemption. It is computed',
+  'from the POST-TAX total: balance_after = card_value - min(card_value,',
+  'post_tax_total). Computing it from the pre-tax total is the known footgun',
+  '(incident GC-2031: customers shown a negative remaining balance after',
+  'partial redemption) — a negative displayed balance is a P1 defect, same',
+  'severity class as the $NaN total in section 4.4.',
+  '',
+  '## 5.3 Partial redemption',
+  '',
+  'When card_value < post_tax_total, the card is fully consumed and the',
+  'customer pays the remainder by the primary payment method. When',
+  'card_value >= post_tax_total, the order total becomes exactly $0.00 and',
+  'the remaining balance stays on the card.',
+  '',
+  '## 5.4 Acceptance criteria',
+  '',
+  '- AC5: The remaining balance shown in the modal derives from the POST-TAX',
+  '  total, never the pre-tax running total.',
+  '- AC6: No redemption path may ever display a negative remaining balance;',
+  '  clamp at $0.00 and log a telemetry event instead.',
+  '- AC7: A $25.00 card against a $13.20 post-tax order leaves exactly',
+  '  $11.80 on the card.',
+]
+
+export const SPEC_GIFT_CARDS = { kind: 'doc', content: giftCardLines.join('\n') }

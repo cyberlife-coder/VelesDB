@@ -81,12 +81,20 @@ export function makeScreenshotPng(width, height, badgeColor, opts = {}) {
 
 const BUG_RED = [0xdc, 0x26, 0x26]
 const FIX_GREEN = [0x16, 0xa3, 0x4a]
+// The long-session gift-card modal shots use a different banner shade
+// (indigo) and a smaller 880x540 canvas — a modal capture, not a full page —
+// so their pixel cost (ceil(880*540/750) = 634 tokens) differs from the
+// checkout-page series' 768, exercising the estimator on a second geometry.
+const GC_BANNER = 0x312e81
 
 export function generateCorpusImages() {
   return {
     IMG_BUG: makeScreenshotPng(960, 600, BUG_RED, { badgeX0Frac: 0.66, badgeX1Frac: 0.9 }),
     IMG_ATTEMPT: makeScreenshotPng(960, 600, BUG_RED, { badgeX0Frac: 0.6, badgeX1Frac: 0.92 }),
     IMG_FIXED: makeScreenshotPng(960, 600, FIX_GREEN, { badgeX0Frac: 0.64, badgeX1Frac: 0.88 }),
+    // Long-session variant additions (corpus/session-long.mjs).
+    IMG_GC_BUG: makeScreenshotPng(880, 540, BUG_RED, { bannerShade: GC_BANNER, badgeX0Frac: 0.58, badgeX1Frac: 0.86 }),
+    IMG_GC_FIXED: makeScreenshotPng(880, 540, FIX_GREEN, { bannerShade: GC_BANNER, badgeX0Frac: 0.6, badgeX1Frac: 0.88 }),
   }
 }
 

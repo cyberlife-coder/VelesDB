@@ -117,3 +117,82 @@ export const CODE_FILE_1_V1 = { kind: 'code', content: file1V1.join('\n') }
 export const CODE_FILE_1_V2 = { kind: 'code', content: file1V2.join('\n') }
 export const CODE_FILE_2_V1 = { kind: 'code', content: file2V1.join('\n') }
 export const CODE_FILE_2_V2 = { kind: 'code', content: file2V2.join('\n') }
+
+// --- Long-session variant additions (corpus/session-long.mjs) ------------
+// A NEW file (giftCard.ts) appearing mid-session as the feature work starts,
+// with the same v1-buggy / v2-fixed re-read arc as the files above (spec
+// 5.2's known footgun: remaining balance from the PRE-tax total), plus a
+// small v3 of discountUtils integrating the call — realistic continued
+// iteration, not a mechanical repeat of the earlier mix.
+
+const file3V1 = [
+  "import { computeCheckoutTotal } from './discountUtils'",
+  '',
+  'export interface GiftCardResult {',
+  '  chargedCents: number',
+  '  remainingBalanceCents: number',
+  '}',
+  '',
+  'export function applyGiftCard(preTaxTotalCents: number, postTaxTotalCents: number, cardValueCents: number): GiftCardResult {',
+  '  const charged = Math.min(cardValueCents, postTaxTotalCents)',
+  '  // BUG (spec 5.2 footgun): remaining balance derived from the PRE-tax',
+  '  // total — under partial redemption this can go negative and the modal',
+  '  // renders "$-3.20" (incident GC-2031 pattern).',
+  '  const remainingBalance = cardValueCents - preTaxTotalCents',
+  '  return { chargedCents: charged, remainingBalanceCents: remainingBalance }',
+  '}',
+]
+
+const file3V2 = [
+  "import { computeCheckoutTotal } from './discountUtils'",
+  '',
+  'export interface GiftCardResult {',
+  '  chargedCents: number',
+  '  remainingBalanceCents: number',
+  '}',
+  '',
+  'export function applyGiftCard(preTaxTotalCents: number, postTaxTotalCents: number, cardValueCents: number): GiftCardResult {',
+  '  const charged = Math.min(cardValueCents, postTaxTotalCents)',
+  '  // FIX (spec 5.2/AC5/AC6): remaining balance derives from the POST-tax',
+  '  // total and is clamped at zero — a negative displayed balance is a P1,',
+  '  // clamp and emit telemetry instead.',
+  '  const remainingBalance = Math.max(0, cardValueCents - charged)',
+  '  if (cardValueCents - charged < 0) telemetry.record("gift_card_negative_balance_clamped")',
+  '  return { chargedCents: charged, remainingBalanceCents: remainingBalance }',
+  '}',
+]
+
+const file2V3 = [
+  'export interface CouponResult {',
+  '  totalCents: number',
+  '  discountAppliedCents: number',
+  '  discountRatio: number',
+  '  postTaxTotalCents: number',
+  '}',
+  '',
+  'export function computeCheckoutTotal(subtotalCents: number, coupons: Coupon[], taxRate: number): CouponResult {',
+  '  const preDiscountSubtotal = subtotalCents',
+  '  let runningTotal = subtotalCents',
+  '  let discountApplied = 0',
+  '  for (const coupon of coupons) {',
+  "    if (coupon.kind === 'percentage') {",
+  '      const next = Math.round(runningTotal * (1 - coupon.value))',
+  '      discountApplied += runningTotal - next',
+  '      runningTotal = next',
+  '    } else {',
+  '      const next = Math.max(0, runningTotal - coupon.value)',
+  '      discountApplied += runningTotal - next',
+  '      runningTotal = next',
+  '    }',
+  '  }',
+  '  const discountRatio = preDiscountSubtotal > 0 ? discountApplied / preDiscountSubtotal : 0',
+  '  // New for gift cards (spec 5.1): expose the post-tax total so the',
+  '  // gift-card step can redeem LAST, against the taxed amount.',
+  '  const postTaxTotal = Math.round(runningTotal * (1 + taxRate))',
+  '  return { totalCents: runningTotal, discountAppliedCents: discountApplied, discountRatio, postTaxTotalCents: postTaxTotal }',
+  '}',
+]
+
+export const CODE_FILE_3_V1 = { kind: 'code', content: file3V1.join('\n') }
+export const CODE_FILE_3_V2 = { kind: 'code', content: file3V2.join('\n') }
+export const CODE_FILE_2_V3 = { kind: 'code', content: file2V3.join('\n') }
