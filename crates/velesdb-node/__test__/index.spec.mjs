@@ -368,7 +368,7 @@ test('retrieveContextSource resolves a text-only source with no media field', as
     const resolved = await store.retrieveContextSource(handle)
     assert.equal(resolved.handle, handle)
     assert.equal(resolved.content, 'never restart the primary node during a rebalance')
-    assert.equal(resolved.media, undefined, 'a text-only source must not carry a media field')
+    assert.strictEqual(resolved.media, undefined, 'a text-only source must not carry a media field')
   } finally {
     cleanup()
   }
@@ -402,6 +402,20 @@ test('retrieveContextSource round-trips a media source byte-identical, even when
       PNG_1X1_B64,
       'the base64 payload must be byte-identical after the store round-trip',
     )
+  } finally {
+    cleanup()
+  }
+})
+
+test('retrieveContextSource malformed handles reject with NOT_FOUND, never crash', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    // Regression caught: a handle that is not ctx://source/<u64> at all must
+    // fail through the same NOT_FOUND taxonomy as an unknown-but-well-formed
+    // one — never an INTERNAL error or a crash.
+    for (const bad of ['garbage', 'ctx://source/zzzz', '']) {
+      await assert.rejects(store.retrieveContextSource(bad), /NOT_FOUND/, `handle: ${JSON.stringify(bad)}`)
+    }
   } finally {
     cleanup()
   }
