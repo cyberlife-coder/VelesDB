@@ -125,9 +125,42 @@ pub fn parse_fragment_id_strings(request: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_u64(text: &str) -> Result<u64, String> {
+pub(crate) fn parse_u64(text: &str) -> Result<u64, String> {
     text.parse()
         .map_err(|_| format!("invalid id '{text}' (expected a decimal u64 string)"))
+}
+
+/// Serde `deserialize_with` for [`super::model::ContextFragment::id`]:
+/// accepts either a JSON number or a decimal string, so a caller who
+/// received an id as a string (e.g. echoing back a `fragment_id` handed out
+/// under [`super::model::CompilePolicy::ids_as_strings`], or any client that
+/// serializes `u64` as a JS-safe string by convention) can resubmit it
+/// as-is. Reuses [`parse_u64`] — the same decimal-parsing rule
+/// [`parse_fragment_id_strings`] and [`parse_ids_in`] already apply,
+/// centralized once.
+///
+/// # Errors
+/// Returns a deserialize error if a string value does not parse as a
+/// decimal `u64`.
+pub(crate) fn deserialize_optional_id<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum IdOrString {
+        Id(u64),
+        Text(String),
+    }
+
+    Option::<IdOrString>::deserialize(deserializer)?
+        .map(|value| match value {
+            IdOrString::Id(id) => Ok(id),
+            IdOrString::Text(text) => parse_u64(&text).map_err(serde::de::Error::custom),
+        })
+        .transpose()
 }
 
 #[cfg(test)]

@@ -43,6 +43,18 @@ fn request(query: &str, fragments: Vec<ContextFragment>, budget: u64) -> Compile
     }
 }
 
+/// `compile_context`/`explain_compilation` now return the wire `Value`
+/// directly (so `policy.ids_as_strings` can rewrite it before it leaves the
+/// process) — deserialize back into the domain type for tests that assert
+/// on typed fields, exactly mirroring what a Rust MCP client would do.
+fn compiled_context_of(value: serde_json::Value) -> CompiledContext {
+    serde_json::from_value(value).expect("valid CompiledContext wire value")
+}
+
+fn decision_of(value: serde_json::Value) -> ContextDecision {
+    serde_json::from_value(value).expect("valid ContextDecision wire value")
+}
+
 #[tokio::test]
 async fn test_compile_context_tool_returns_compiled_context_and_insights() {
     // Given a server and a compile request with a duplicate
@@ -54,10 +66,11 @@ async fn test_compile_context_tool_returns_compiled_context_and_insights() {
     );
 
     // When calling the compile_context tool
-    let Json(out) = srv
+    let Json(value) = srv
         .compile_context(Parameters(req))
         .await
         .expect("compile_context");
+    let out = compiled_context_of(value);
 
     // Then the compiled context carries content, decisions, and insights
     assert!(out.content.contains("a fact"));
@@ -84,10 +97,11 @@ async fn test_compile_context_tool_pulls_memory_scope() {
     });
 
     // When compiling through the tool
-    let Json(out) = srv
+    let Json(value) = srv
         .compile_context(Parameters(req))
         .await
         .expect("compile_context");
+    let out = compiled_context_of(value);
 
     // Then the memory is pulled in with provenance
     assert!(out.content.contains("runs clippy before tests"));
@@ -131,13 +145,15 @@ async fn test_explain_compilation_tool_returns_decision_for_fragment() {
     let wanted = fragment_id("a fact");
 
     // When asking why that fragment was treated the way it was
-    let Json(decision) = srv
+    let Json(value) = srv
         .explain_compilation(Parameters(ExplainCompilationParams {
             request: req,
             fragment_id: wanted,
+            fragment_index: None,
         }))
         .await
         .expect("explain_compilation");
+    let decision = decision_of(value);
 
     // Then the decision is returned with its rule and reason
     assert_eq!(decision.fragment_id, wanted);
@@ -154,6 +170,7 @@ async fn test_explain_compilation_tool_unknown_fragment_is_invalid_params() {
         .explain_compilation(Parameters(ExplainCompilationParams {
             request: req,
             fragment_id: 424_242,
+            fragment_index: None,
         }))
         .await
     else {
@@ -162,16 +179,216 @@ async fn test_explain_compilation_tool_unknown_fragment_is_invalid_params() {
     assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
 }
 
+// --- ids_as_strings (wire-compat, EPIC-P-071 wave 5 / 5.1) -----------------
+
+/// A fragment id above 2^53 — the point where a raw JS `number` (IEEE-754
+/// double) silently loses precision. `2^53 = 9_007_199_254_740_992`.
+const ID_ABOVE_JS_SAFE_INTEGER: u64 = 9_007_199_254_740_993;
+
+#[tokio::test]
+async fn test_compile_context_tool_ids_as_strings_stringifies_response_ids() {
+    // Given a fragment whose caller-supplied id exceeds 2^53
+    let (_dir, srv) = server();
+    let mut fragment = fragment("a fact above the safe integer range");
+    fragment.id = Some(ID_ABOVE_JS_SAFE_INTEGER);
+    let mut req = request("deploy", vec![fragment], 10_000);
+    req.policy = Some(CompilePolicy {
+        ids_as_strings: true,
+        ..CompilePolicy::default()
+    });
+
+    // When compiling with the option active
+    let Json(value) = srv
+        .compile_context(Parameters(req))
+        .await
+        .expect("compile_context");
+
+    // Then every id field on the wire is a decimal string, not a number —
+    // a raw JS client parses this losslessly.
+    let decision_id = &value["decisions"][0]["fragment_id"];
+    assert_eq!(
+        decision_id.as_str(),
+        Some(ID_ABOVE_JS_SAFE_INTEGER.to_string().as_str()),
+        "fragment_id must be a JSON string when ids_as_strings is active: {value}"
+    );
+    assert!(
+        !decision_id.is_number(),
+        "fragment_id must not still be a JSON number: {value}"
+    );
+}
+
+#[tokio::test]
+async fn test_compile_context_tool_ids_as_strings_default_false_is_byte_identical() {
+    // Given the exact same request compiled with the option left at its
+    // default (false) and explicitly set to false
+    let (_dir, srv) = server();
+    let fragment_a = {
+        let mut f = fragment("a fact above the safe integer range");
+        f.id = Some(ID_ABOVE_JS_SAFE_INTEGER);
+        f
+    };
+    let fragment_b = fragment_a.clone();
+    let req_default = request("deploy", vec![fragment_a], 10_000);
+    let mut req_explicit_false = request("deploy", vec![fragment_b], 10_000);
+    req_explicit_false.policy = Some(CompilePolicy {
+        ids_as_strings: false,
+        ..CompilePolicy::default()
+    });
+
+    // When compiling both
+    let Json(default_value) = srv
+        .compile_context(Parameters(req_default))
+        .await
+        .expect("compile_context (default policy)");
+    let Json(explicit_value) = srv
+        .compile_context(Parameters(req_explicit_false))
+        .await
+        .expect("compile_context (ids_as_strings: false)");
+
+    // Then the response keeps ids as JSON numbers, byte-identical either way
+    assert!(default_value["decisions"][0]["fragment_id"].is_number());
+    assert_eq!(default_value, explicit_value);
+}
+
+#[tokio::test]
+async fn test_explain_compilation_tool_ids_as_strings_stringifies_response_ids() {
+    // Given a request whose policy opts into string ids
+    let (_dir, srv) = server();
+    let mut fragment = fragment("a fact above the safe integer range");
+    fragment.id = Some(ID_ABOVE_JS_SAFE_INTEGER);
+    let mut req = request("deploy", vec![fragment], 10_000);
+    req.policy = Some(CompilePolicy {
+        ids_as_strings: true,
+        ..CompilePolicy::default()
+    });
+
+    // When explaining that fragment's decision
+    let Json(value) = srv
+        .explain_compilation(Parameters(ExplainCompilationParams {
+            request: req,
+            fragment_id: ID_ABOVE_JS_SAFE_INTEGER,
+            fragment_index: None,
+        }))
+        .await
+        .expect("explain_compilation");
+
+    // Then fragment_id and content_hash are decimal strings on the wire
+    assert_eq!(
+        value["fragment_id"].as_str(),
+        Some(ID_ABOVE_JS_SAFE_INTEGER.to_string().as_str())
+    );
+    assert!(value["content_hash"].is_string());
+}
+
+#[tokio::test]
+async fn test_compile_context_tool_accepts_fragment_id_as_decimal_string_on_input() {
+    // Given a fragment whose id is supplied as a decimal string (e.g. a
+    // client resubmitting an id it previously received stringified)
+    let (_dir, srv) = server();
+    let mut req_value = serde_json::to_value(request(
+        "deploy",
+        vec![fragment("a fact above the safe integer range")],
+        10_000,
+    ))
+    .expect("serialize request");
+    req_value["fragments"][0]["id"] =
+        serde_json::Value::String(ID_ABOVE_JS_SAFE_INTEGER.to_string());
+    let req: CompileRequest =
+        serde_json::from_value(req_value).expect("fragment id accepts a decimal string");
+
+    // When compiling
+    let Json(value) = srv
+        .compile_context(Parameters(req))
+        .await
+        .expect("compile_context");
+
+    // Then the fragment id round-trips exactly (as a number by default)
+    assert_eq!(
+        value["decisions"][0]["fragment_id"].as_u64(),
+        Some(ID_ABOVE_JS_SAFE_INTEGER)
+    );
+}
+
+// --- fragment_index (positional disambiguation, EPIC-P-071 wave 5 / 5.2) ---
+
+#[tokio::test]
+async fn test_explain_compilation_tool_fragment_index_disambiguates_byte_identical_twins() {
+    // Given two byte-identical fragments (same content ⇒ same
+    // content-addressed fragment_id, since neither sets a caller id)
+    let (_dir, srv) = server();
+    let req = request(
+        "deploy",
+        vec![fragment("duplicate payload"), fragment("duplicate payload")],
+        10_000,
+    );
+    let shared_id = fragment_id("duplicate payload");
+
+    // When asking for the decision by fragment_id alone (today's behavior)
+    let Json(survivor_value) = srv
+        .explain_compilation(Parameters(ExplainCompilationParams {
+            request: req.clone(),
+            fragment_id: shared_id,
+            fragment_index: None,
+        }))
+        .await
+        .expect("explain_compilation (by id)");
+    let survivor = decision_of(survivor_value);
+
+    // And when asking for the SECOND fragment's decision by position
+    let Json(twin_value) = srv
+        .explain_compilation(Parameters(ExplainCompilationParams {
+            request: req,
+            fragment_id: shared_id,
+            fragment_index: Some(1),
+        }))
+        .await
+        .expect("explain_compilation (by index)");
+    let twin = decision_of(twin_value);
+
+    // Then the id-based lookup returns the deduplication survivor (kept,
+    // verbatim), while the positional lookup returns the dropped twin's own
+    // decision — not the same decision.
+    assert!(matches!(survivor.action, ContextAction::Preserve));
+    assert!(matches!(twin.action, ContextAction::Drop));
+    assert_eq!(twin.rule_id, "drop.duplicate");
+    assert_eq!(twin.fragment_id, shared_id);
+}
+
+#[tokio::test]
+async fn test_explain_compilation_tool_fragment_index_out_of_bounds_is_invalid_params() {
+    // Given a request with only one fragment
+    let (_dir, srv) = server();
+    let req = request("deploy", vec![fragment("a fact")], 10_000);
+    let wanted = fragment_id("a fact");
+
+    // When asking for an index beyond the fragment list
+    let Err(err) = srv
+        .explain_compilation(Parameters(ExplainCompilationParams {
+            request: req,
+            fragment_id: wanted,
+            fragment_index: Some(5),
+        }))
+        .await
+    else {
+        panic!("fragment_index 5 has no fragment — the tool must fail");
+    };
+
+    // Then the tool reports an invalid-params error with a clear reason
+    assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    assert!(err.message.contains("fragment_index"));
+}
+
 #[tokio::test]
 async fn test_retrieve_context_source_tool_round_trips_original() {
     // Given a compiled fragment whose source was stored
     let (_dir, srv) = server();
     let original = "Never restart the primary node during a rebalance.";
     let req = request("rebalance", vec![fragment(original)], 10_000);
-    let Json(out) = srv
+    let Json(value) = srv
         .compile_context(Parameters(req))
         .await
         .expect("compile_context");
+    let out = compiled_context_of(value);
     let handle = out.sources[0].handle.clone();
 
     // When retrieving through the tool

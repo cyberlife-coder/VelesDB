@@ -187,6 +187,21 @@ account).
   exceed `i64::MAX`). Integers outside `[i64::MIN, u64::MAX]` now raise an
   explicit `ValueError` stating the supported range instead of silently losing
   precision. [EPIC-P-071/US-001]
+- **MCP**: `CompilePolicy.ids_as_strings` (default `false`) — opts the
+  `compile_context` / `explain_compilation` response into decimal-string ids
+  (`fragment_id`, `content_hash`, `memory_id`, `fragment_ids`), reusing the
+  same tree walk the Node/WASM bindings already apply, for raw MCP clients
+  without u64-safe JSON number parsing. `fragments[].id` on input now also
+  accepts either a JSON number or a decimal string. [EPIC-P-071]
+- **MCP**: `explain_compilation` gains an optional `fragment_index` (0-based
+  position in `request.fragments`), so byte-identical fragments — which
+  share a content-addressed `fragment_id` — can be disambiguated instead of
+  always resolving to the deduplication survivor's decision. Default
+  behavior (no `fragment_index`) is unchanged. [EPIC-P-071]
+- **Release**: every GitHub Release now attaches `velesdb-skills.tar.gz`
+  (the `velesdb-memory` and `velesdb-context-optimizer` agent skills, one
+  folder per skill at the archive root) — `curl -L … | tar -xz -C
+  ~/.claude/skills/` installs both without cloning the repo. [EPIC-P-071]
 
 ## [3.12.0] — 2026-07-15
 
