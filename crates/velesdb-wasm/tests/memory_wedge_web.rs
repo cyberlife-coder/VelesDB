@@ -95,3 +95,63 @@ fn recall_without_metadata_marshals_undefined() {
     let metadata = js_sys::Reflect::get(&first, &"metadata".into()).unwrap();
     assert!(metadata.is_undefined(), "absent metadata must be undefined");
 }
+
+/// `compileContext` marshalling across the wasm boundary: the request goes
+/// in as a plain JS object (fragment ids as decimal strings), the compiled
+/// result comes back as a plain object (not a Map) with every id field as a
+/// decimal string — u64::MAX must survive, which proves ids never pass
+/// through a JS number.
+#[wasm_bindgen_test]
+fn compile_context_round_trips_with_string_ids() {
+    let svc = WasmMemoryService::new(16);
+    let request = js_sys::JSON::parse(
+        r#"{
+            "query": "state of the canary deploy",
+            "token_budget": 500,
+            "fragments": [
+                {"id": "18446744073709551615", "content": "The canary is green: 2% traffic."},
+                {"content": "Rollback runbook: kubectl rollout undo deployment/canary."}
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let compiled = svc.compile_context(request).unwrap();
+    assert!(
+        !compiled.is_instance_of::<js_sys::Map>(),
+        "compiled context must be a plain object"
+    );
+
+    let risk = js_sys::Reflect::get(&compiled, &"risk".into()).unwrap();
+    assert_eq!(risk.as_string().as_deref(), Some("low"));
+    let content = js_sys::Reflect::get(&compiled, &"content".into()).unwrap();
+    let content = content.as_string().unwrap();
+    assert!(content.contains("canary is green"));
+    assert!(content.contains("Rollback runbook"));
+
+    let decisions = js_sys::Reflect::get(&compiled, &"decisions".into()).unwrap();
+    let first = js_sys::Reflect::get(&decisions, &0.into()).unwrap();
+    let fragment_id = js_sys::Reflect::get(&first, &"fragment_id".into()).unwrap();
+    let fragment_id = fragment_id
+        .as_string()
+        .expect("fragment_id must cross as a decimal string, not a number");
+    assert_eq!(fragment_id, "18446744073709551615", "u64::MAX survives");
+}
+
+/// Determinism across the boundary: the same request compiles to the same
+/// bytes twice (JSON-stringified equality of the full result).
+#[wasm_bindgen_test]
+fn compile_context_is_deterministic() {
+    let svc = WasmMemoryService::new(16);
+    let request = || {
+        js_sys::JSON::parse(
+            r#"{"query": "q", "token_budget": 400,
+                "fragments": [{"content": "same line"}, {"content": "same line"}]}"#,
+        )
+        .unwrap()
+    };
+    let a = svc.compile_context(request()).unwrap();
+    let b = svc.compile_context(request()).unwrap();
+    let stringify = |v: &JsValue| js_sys::JSON::stringify(v).unwrap().as_string().unwrap();
+    assert_eq!(stringify(&a), stringify(&b), "same input, same bytes");
+}

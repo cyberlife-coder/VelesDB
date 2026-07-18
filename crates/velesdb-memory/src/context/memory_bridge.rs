@@ -16,7 +16,27 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Wall-clock nanos since the Unix epoch, stamped on savings events only —
+/// never in the compile pipeline. On `wasm32-unknown-unknown`
+/// `SystemTime::now()` aborts (`std` has no clock there), so events carry 0:
+/// the per-process sequence alone uniquifies their ids, and wasm stats are
+/// per-session by design (in-memory store).
+fn now_nanos() -> u128 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        0
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0)
+    }
+}
 
 use serde_json::{Map, Number, Value};
 
@@ -366,10 +386,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         out: &CompiledContext,
         ttl_seconds: Option<u64>,
     ) -> Result<(), MemoryError> {
-        let occurred_at_nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos())
-            .unwrap_or(0);
+        let occurred_at_nanos = now_nanos();
         // The per-process sequence keeps ids unique even when two compiles
         // land on the same (possibly coarse) clock tick.
         let seq = EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
