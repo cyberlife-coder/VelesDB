@@ -125,6 +125,8 @@ Memories are permanent by default; `forget(id)` deletes one, and `remember(…, 
 
 The same wedge ships in **Python** (`pip install velesdb`), **Node** (`npm i @wiscale/velesdb-memory-node`), as a local **[MCP server](crates/velesdb-memory)**, and — in-memory only, no disk access under WASM — in the **[TypeScript SDK](sdks/typescript)** (`npm i @wiscale/velesdb-sdk`), running entirely in the browser or Node.js with no server.
 
+For Node/TypeScript: `@wiscale/velesdb-memory-node` is memory-semantics-only by license design ([why](crates/velesdb-node/README.md#need-the-full-engine)); the full engine (VelesQL, deep `MATCH`, administration) is reached from Node/TS via `velesdb-server` + the [TypeScript SDK](sdks/typescript)'s REST backend.
+
 **Four runnable ways to see it** — each shows what plain vector recall misses and `why()` recovers:
 
 | Demo | What it shows |
