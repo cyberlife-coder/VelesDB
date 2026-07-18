@@ -179,3 +179,18 @@ test(
     assert.equal(failures.length, 0, `${failures.length} fact(s) lost in the WINDOW-8000 arm:\n${formatFailureReport(failures)}`)
   },
 )
+
+test('facts survive even under a destructive 1-token budget — via recoverable handles (pins the checker resolve path)', async () => {
+  // Regression caught: if retrieveContextSource stops resolving externalized
+  // sources (or the checker stops re-verifying facts in resolved content),
+  // this test fails — the committed corpus never exercises that branch
+  // (all 22 facts land inline at the real budgets), so without this test
+  // the checker's recovery path would be dead code in CI.
+  const { failures, turnReports } = await checkFactsSurviveArm({
+    budget: 1,
+    label: 'destructive-budget',
+  })
+  assert.deepStrictEqual(failures, [], 'every fact must still be inline or genuinely recoverable')
+  const recovered = turnReports.filter((r) => r.status === 'recoverable').length
+  assert.ok(recovered >= 1, `expected at least one fact through the recoverable path, got ${recovered}`)
+})

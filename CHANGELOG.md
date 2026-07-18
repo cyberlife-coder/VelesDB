@@ -245,6 +245,15 @@ account).
 
 ### Fixed
 
+- **Benchmark online mode**: the CLI runner now uses the CLI-enforced
+  `--output-format stream-json` pairing (parsing the final NDJSON `result`
+  event) — the previous `json` output form was rejected by the CLI at the
+  first real call; and the online summary now prints per-arm BILLED dollars
+  (`total_cost_usd` summed per session) plus cache-field totals, because on
+  a caching runner the context lives in cache_creation/cache_read, not
+  `input_tokens` (measured: input_tokens≈2 on every turn of both arms).
+  [EPIC-P-071]
+
 - **The context compiler no longer aborts on `wasm32-unknown-unknown`** when
   recording savings events: `SystemTime::now()` (unsupported in wasm `std`,
   panics) is only reached on native targets now; wasm events carry a 0

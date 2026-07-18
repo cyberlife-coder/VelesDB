@@ -82,6 +82,7 @@ export async function runCliTurn(turn, opts = {}) {
     systemPrompt,
   ]
 
+  let stderrText = ''
   const stdout = await new Promise((resolve, reject) => {
     const child = spawn(claudeBin, args, { stdio: ['pipe', 'pipe', 'pipe'] })
     let out = ''
@@ -94,7 +95,10 @@ export async function runCliTurn(turn, opts = {}) {
       opts.timeoutMs ?? 120000,
     )
     child.stdout.on('data', (d) => (out += d))
-    child.stderr.on('data', (d) => (err += d))
+    child.stderr.on('data', (d) => {
+      err += d
+      stderrText = err
+    })
     child.on('error', (e) => {
       clearTimeout(timer)
       reject(e)
@@ -124,7 +128,7 @@ export async function runCliTurn(turn, opts = {}) {
   }
   if (!json) {
     throw new Error(
-      `claude CLI produced no result event in stream-json output (got ${stdout.length} bytes)`,
+      `claude CLI produced no result event in stream-json output (got ${stdout.length} bytes; stderr: ${stderrText.slice(0, 2000)})`,
     )
   }
   const usage = json.usage ?? {}
