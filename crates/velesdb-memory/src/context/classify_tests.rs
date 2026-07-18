@@ -164,13 +164,64 @@ fn test_classify_terminal_default_rule_cannot_be_disabled() {
 
 #[test]
 fn test_collapse_repeated_lines_annotates_counts_in_first_seen_order() {
-    let collapsed = collapse_repeated_lines("b\na\nb\nb\nc");
+    let (collapsed, normalized) = collapse_repeated_lines("b\na\nb\nb\nc", false);
     assert_eq!(collapsed, "b (x3)\na\nc");
+    assert!(
+        !normalized,
+        "normalization is off, nothing should be flagged"
+    );
 }
 
 #[test]
 fn test_collapse_repeated_lines_without_repeats_is_identity() {
-    assert_eq!(collapse_repeated_lines("a\nb\nc"), "a\nb\nc");
+    let (collapsed, normalized) = collapse_repeated_lines("a\nb\nc", false);
+    assert_eq!(collapsed, "a\nb\nc");
+    assert!(!normalized);
+}
+
+#[test]
+fn test_collapse_repeated_lines_timestamped_duplicates_do_not_collapse_by_default() {
+    // RED (pre-fix) baseline: a real log where every line differs only by an
+    // ISO timestamp does not collapse today — this is the documented
+    // limitation the skill's "Timestamped logs" bullet calls out.
+    let log = "2026-07-18T10:23:45.001Z INFO canary check passed for shard-1\n\
+               2026-07-18T10:23:45.501Z INFO canary check passed for shard-1\n\
+               2026-07-18T10:23:46.002Z INFO canary check passed for shard-1";
+    let (collapsed, normalized) = collapse_repeated_lines(log, false);
+    assert_eq!(
+        collapsed, log,
+        "without the option, timestamp-only variants must stay distinct (golden, unchanged)"
+    );
+    assert!(!normalized);
+}
+
+#[test]
+fn test_collapse_repeated_lines_timestamped_duplicates_collapse_when_normalized() {
+    // GREEN (post-fix): the same log, with normalize_log_timestamps on,
+    // collapses to one annotated line — the volatile ISO prefix is masked
+    // before grouping, so the three lines are recognized as the same log
+    // event.
+    let log = "2026-07-18T10:23:45.001Z INFO canary check passed for shard-1\n\
+               2026-07-18T10:23:45.501Z INFO canary check passed for shard-1\n\
+               2026-07-18T10:23:46.002Z INFO canary check passed for shard-1";
+    let (collapsed, normalized) = collapse_repeated_lines(log, true);
+    assert_eq!(
+        collapsed,
+        "2026-07-18T10:23:45.001Z INFO canary check passed for shard-1 (x3)"
+    );
+    assert!(
+        normalized,
+        "masking must be reported as having changed the grouping"
+    );
+}
+
+#[test]
+fn test_collapse_repeated_lines_normalize_on_but_no_timestamps_reports_unmodified() {
+    // The option being on must not itself flag "modified" when nothing in
+    // the content actually had a volatile prefix to mask.
+    let (collapsed, normalized) = collapse_repeated_lines("a\nb\nc", true);
+    assert_eq!(collapsed, "a\nb\nc");
+    assert!(!normalized);
 }
 
 #[test]

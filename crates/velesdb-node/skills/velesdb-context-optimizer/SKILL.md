@@ -77,7 +77,14 @@ silent loss. Same input, same output, byte for byte.
    need.
 8. **Audit when asked.** Any "why was X dropped/shortened?" is answered by
    `explain_compilation` (re-submit the same request + the fragment id) — the
-   decision carries the rule id, reason, relevance, and risk.
+   decision carries the rule id, reason, relevance, and risk. To audit an
+   entire batch before committing to a budget, dry-run it: call
+   `compile_context` with `token_budget: 10000000` (the request's own
+   ceiling) so nothing is dropped, abstracted, or externalized — `risk`
+   comes back `low` and every fragment's `decisions` entry still carries its
+   `relevance`; sort that array by `relevance` descending yourself for an
+   importance report of what a tighter budget would prioritize, without
+   actually losing anything.
 9. **Report savings honestly.** `insights.tokens_saved` is a *local
    estimate* (deliberate over-count), not billed tokens — and it counts
    externalized content too, so never quote savings from a `risk: high`
@@ -138,8 +145,12 @@ Compression keeps one prompt small; `save_working_context` /
   files) — `kind: "code"` preserves fenced blocks, but if it is not fenced,
   mark it verbatim.
 - **Timestamped logs**: line collapse (`(xN)`) only fires on byte-identical
-  lines — timestamps/counters defeat it and the log then packs or
-  externalizes whole. Pre-strip volatile prefixes if you want the collapse.
+  lines by default — timestamps/counters defeat it and the log then packs or
+  externalizes whole. Set `policy.normalize_log_timestamps: true` instead of
+  pre-stripping yourself: it masks the usual volatile prefixes (ISO/syslog
+  timestamps, bracketed hex/pid counters) on `kind: "log"` fragments only,
+  with fixed patterns, before grouping — off by default because it changes
+  what "duplicate" means for logs.
 - **When risk comes back `high`** and you cannot raise the budget: prefer an
   uncompressed prompt over a lossy one.
 

@@ -91,6 +91,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to — same behavior (pinned by the moved logic's own new unit tests plus
   the existing Node/WASM suites), one source of truth for future `context`
   id fields instead of two to keep in sync.
+- **`velesdb-memory`**: `CompilePolicy.normalize_log_timestamps` (default
+  `false`, serde-defaulted so existing requests stay wire-compatible) — an
+  opt-in, deterministic mask of `kind: "log"` fragments' volatile prefixes
+  (ISO/syslog timestamps, bracketed hex/pid counters, fixed patterns only)
+  applied before `abstract.log_dedup` groups repeated lines, so lines
+  identical modulo timestamp now collapse; the emitted line is still the
+  first occurrence's exact bytes, and the decision `reason` says so when
+  normalization actually changed the grouping. Off by default: byte-exact
+  grouping is unchanged for existing callers (pinned by a golden test).
+  [EPIC-P-071/US-006]
+- Doc-only: crate README sections on injecting a model-exact
+  `TokenEstimator` per provider (`examples/context_savings/real_measures/exact_estimator.mjs`
+  reproduces the `HeuristicEstimator` calibration margins on fresh corpus
+  snippets — always a safe over-count, +9.6 % to +63.8 % measured), the
+  `MAX_TOKEN_BUDGET` dry-run audit pattern (sort `decisions` by `relevance`
+  client-side, nothing is lost), and `source_ttl_seconds`'s permanent-by-
+  default trade-off with a manual-purge "disk growth" section.
+  [EPIC-P-071/US-005, US-006]
+- **Proof harness**: `examples/context_savings/real_measures/cache_prefix.mjs`
+  measures the `cache: true` section's byte-stable-prefix percentage across
+  10 consecutive compiles with changing volatile content (100 % stable
+  prefix on all 9 consecutive turn pairs, reproducible) and frames the
+  naive full-input-rate cost of not caching it against an injected,
+  never-hardcoded `policy.pricing` table. [EPIC-P-071/US-008]
+- **Proof harness**: `examples/node-llm-middleware/` — a minimal
+  middleware wrapper measuring `compile_context` savings offline (real
+  cl100k via `gpt-tokenizer`, always) and, opt-in
+  (`RUN_BILLED_MEASURE=1` + an API key never asked for by the harness), the
+  provider's own billed `usage` on a real minimal-cost call.
+  [EPIC-P-071/US-007]
 
 R1 `Collection`-internals train: resolves and **closes the god-object EPIC
 ([#1384](https://github.com/cyberlife-coder/VelesDB/issues/1384))**. The

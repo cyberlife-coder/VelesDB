@@ -467,12 +467,150 @@ BPE (cl100k) to deliberately over-count every measured content class
 (+13 %…+55 %) — not the provider's count, not billed tokens, not cache reads.
 The reproducible benchmark ([`examples/context_savings`](examples/context_savings))
 measures **82.5 % real (cl100k) token savings on a committed 12-turn agent-session benchmark** (sub-ms stateless compiles), 75–82 % estimated savings on its static corpus in ~2 ms compile, and — with `memory_scope`'s fused HNSW + graph-walk recall over `relate`-linked fact chains — **9/9 answer facts surfaced vs 3/9 for vector-only recall** on the committed tri-engine benchmark
-latency. That tri-engine path — the one `memory_scope` drives inside `compile_context` — looks like this:
+latency. The committed
+[`cache_prefix`](examples/context_savings/real_measures/cache_prefix.mjs)
+harness measures the `cache: true` prefix's byte stability directly: across
+10 consecutive compiles with changing volatile content, the cache section is
+a byte-identical **100 % stable prefix on all 9 consecutive turn pairs**
+(reproducible: two full 10-turn runs, byte-identical). That tri-engine path — the one `memory_scope` drives inside `compile_context` — looks like this:
 
 ![tri-engine retrieval: query seeds an HNSW vector search, a graph walk follows relate edges, fusion combines both, then ranking produces the result](docs/diagrams/tri-engine.svg)
 
 The [`velesdb-context-optimizer`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
 skill teaches an agent the full workflow — including when *not* to compress.
+
+#### Exact token estimators
+
+The default [`HeuristicEstimator`](https://docs.rs/velesdb-memory/latest/velesdb_memory/context/struct.HeuristicEstimator.html)
+is a deterministic, dependency-free char-class approximation, calibrated to
+**always over-count** a real BPE (never under, so packing never silently
+overflows a provider's window) — measured margins from +9.6 % (CJK) to
++63.8 % (English prose) on the committed
+[`exact_estimator`](examples/context_savings/real_measures/exact_estimator.mjs)
+harness (numbers below are from its own runs, reproducible: two runs, byte-
+and figure-identical). For an id-dense corpus against a tight budget, or
+whenever you need the provider's real count instead of a safe
+over-approximation, inject a model-exact
+[`TokenEstimator`](https://docs.rs/velesdb-memory/latest/velesdb_memory/context/trait.TokenEstimator.html)
+via `ContextCompiler::with_estimator` — the trait is two methods, one of
+them defaulted:
+
+```rust
+use velesdb_memory::context::TokenEstimator;
+
+/// OpenAI cl100k, via any tiktoken-style encoder you already depend on
+/// (not a VelesDB dependency — bring your own, e.g. `tiktoken-rs`).
+struct Cl100kEstimator(tiktoken_rs::CoreBPE);
+
+impl TokenEstimator for Cl100kEstimator {
+    fn estimate(&self, text: &str) -> u64 {
+        self.0.encode_ordinary(text).len() as u64
+    }
+    // bytes_per_token_hint: default (3) is a fine sizing hint for cl100k prose.
+}
+
+// with_estimator takes a boxed trait object (DynTokenEstimator):
+let compiler = ContextCompiler::new(CompilePolicy::default())
+    .with_estimator(Box::new(Cl100kEstimator(bpe)));
+```
+
+Anthropic does not publish a tokenizer, so there is no exact-count
+equivalent to plug in the same way; the closest honest option is to price
+and pack against a cl100k estimator (Claude's real count runs close to it
+for prose/code) or to keep the default heuristic's safe over-count, which
+never claims to be exact. Injecting a custom estimator only changes
+`estimate()`'s output — the pipeline (`chunk → classify → dedup → score →
+pack → assemble`) and its determinism guarantee are unaffected either way.
+
+Measured on the harness's per-category corpus (two runs, identical):
+
+| Category | Default estimate | Real (cl100k) | Error | Direction |
+|---|---:|---:|---:|---|
+| English prose | 77 | 47 | +63.8 % | over (safe) |
+| French prose | 90 | 59 | +52.5 % | over (safe) |
+| Repetitive logs | 730 | 479 | +52.4 % | over (safe) |
+| Rust code | 64 | 49 | +30.6 % | over (safe) |
+| Digit-dense ids/dates | 89 | 68 | +30.9 % | over (safe) |
+| Markdown | 78 | 69 | +13.0 % | over (safe) |
+| JSON | 50 | 44 | +13.6 % | over (safe) |
+| URLs | 57 | 51 | +11.8 % | over (safe) |
+| CJK | 80 | 73 | +9.6 % | over (safe) |
+
+#### Audit mode: a dry-run importance report
+
+`compile_context` has no separate "audit" flag — pass a budget large enough
+that nothing gets dropped, abstracted, or externalized (the request's own
+hard ceiling, `MAX_TOKEN_BUDGET` = 10,000,000 tokens, always qualifies), and
+the response *is* the audit: every fragment gets a full
+[`ContextDecision`](https://docs.rs/velesdb-memory/latest/velesdb_memory/context/struct.ContextDecision.html)
+(rule id, `relevance` in `[0, 1]`, reason, content hash) with `risk: "low"`
+(nothing critical was lost — a dry run should never itself lose anything).
+Sort `decisions` by `relevance` descending client-side for an at-a-glance
+importance report of what the compiler *would* prioritize under a tighter
+budget, without actually dropping anything:
+
+```jsonc
+compile_context { "query": "state of the canary deploy",
+                   "token_budget": 10000000,               // MAX_TOKEN_BUDGET: dry-run, nothing lost
+                   "fragments": [ /* … */ ] }
+→ { "risk": "low", "decisions": [ /* one per fragment, every action + relevance + reason */ ], … }
+```
+
+#### Normalizing timestamped logs
+
+By default, `abstract.log_dedup` collapses only **byte-identical** repeated
+lines — real logs are usually timestamped, so a burst of otherwise-identical
+lines survives as distinct entries and the fragment falls through to
+whichever rule matches its literal bytes instead (see the skill's
+"Timestamped logs" note). Set `policy.normalize_log_timestamps: true` to
+opt in to a **deterministic, fixed-pattern** mask applied before grouping,
+for `kind: "log"` fragments only:
+
+- a leading timestamp — ISO-8601 (`2026-07-18T10:23:45.123Z`,
+  `2026-07-18T10:23:45+02:00`) or the space/comma log4j variant
+  (`2026-07-18 10:23:45,123`), or syslog (`Jul 18 10:23:45`);
+- one or more immediately-following bracketed hex/decimal counters
+  (`[a1b2c3]`, `[1234]`) — a bracket whose content is not purely hex/decimal
+  (`[ERROR]`, `[shard-3]`) is left alone, so level tags and named ids never
+  match.
+
+Only the **grouping key** changes — the emitted line is still the first
+occurrence's exact bytes, so nothing is rewritten into the output. The
+patterns are fixed in the compiler (never a caller-supplied regex), so the
+same request keeps producing the same collapse. When normalization actually
+merged lines that would otherwise have stayed distinct, the fragment's
+`decision.reason` says so (`"… — timestamps normalized before collapsing"`),
+so an audit trail always shows *why* a log collapsed the way it did. Off by
+default: it changes what "duplicate" means for logs, so existing callers
+keep byte-exact grouping unless they opt in.
+
+#### Source TTL & disk growth
+
+`policy.source_ttl_seconds` (`None` by default) controls how long a
+compiled fragment's cached original — the bytes behind its
+`ctx://source/<hash>` handle — stays retrievable. **Default is permanent**:
+every distinct fragment compiled through the memory bridge is kept until
+explicitly forgotten, on purpose — a compiler that silently expired sources
+would make `retrieve_context_source` unreliable exactly when an audit needs
+it most (auditability over disk thrift). Set a TTL (seconds) when you
+compile high-volume, low-value volatile content (e.g. per-turn logs in a
+long-running agent) and do not need those sources recoverable past a
+bounded window; `policy.event_ttl_seconds` applies the same trade-off to
+`context_savings`' aggregated compilation events.
+
+**Disk growth**: with the default permanent TTL, every distinct fragment's
+source accumulates under `VELESDB_MEMORY_PATH` (default
+`~/.velesdb-memory`) for as long as the process compiles new content — by
+design, since sources are what makes retrieval and audit trustworthy. To
+reclaim space:
+
+- set `source_ttl_seconds` / `event_ttl_seconds` going forward so new
+  compilations self-expire;
+- or purge the whole store manually: stop every process using it, then
+  delete the store directory at `VELESDB_MEMORY_PATH` (the same manual
+  purge documented above for `remember`-stored facts) — there is no
+  selective "purge sources older than N days" command today, only whole-
+  store deletion or per-fact `forget`.
 
 #### Usage-driven importance: RL confidence + recency in the same ranking
 
