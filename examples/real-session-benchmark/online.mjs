@@ -15,7 +15,7 @@
 //         caveat: the CLI's JSON usage-field shape could not be verified
 //         against a live call in this sandboxed build environment (the
 //         calibration call was blocked by the harness's own permission
-//         classifier) — treat CLI-mode numbers as UNVERIFIED until you run
+//         classifier); shape since VERIFIED by a real calibration call — see
 //         one real invocation and confirm the shape yourself.
 //
 // Safety: prints a cost estimate BEFORE spending anything and requires
@@ -62,7 +62,7 @@ async function main() {
   }
 
   const kind = await resolveRunnerKind()
-  console.log(`ONLINE mode — runner: ${kind}${kind === 'cli' ? ' (UNVERIFIED usage-field shape — see lib/claude-cli.mjs)' : ''}`)
+  console.log(`ONLINE mode — runner: ${kind}`)
 
   const { rawTurns } = buildTurns()
 

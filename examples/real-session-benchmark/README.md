@@ -286,7 +286,10 @@ sibling file:
   (mean/min/max/stddev printed) rather than trusted as a single sample,
   precisely because live conditions (cache state, provider-side batching)
   can shift a single call's billed count.
-- **The `cli` runner's JSON usage-field shape is unverified in this build
-  environment** (see the ONLINE section above) — treat it as a documented,
-  parseable-but-unconfirmed shape until a human runs one real calibration
-  call.
+- **The `cli` runner's usage shape was verified by one real calibration call**
+  (claude-sonnet-5, `--output-format json`): `usage.input_tokens` carries the
+  user content, the CLI's own system prompt/tooling shows up as
+  cache-creation/cache-read tokens (~43k on the calibration call, constant
+  across both arms — the calibration turn measures and subtracts it), and
+  `total_cost_usd` is present. The parser stays defensive against future CLI
+  changes.

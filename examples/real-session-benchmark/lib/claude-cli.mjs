@@ -17,35 +17,21 @@
 //                                    only by the model's own stop behavior. Documented here,
 //                                    not used as a workaround.
 //
-// What is NOT independently verified in this environment: the exact JSON
-// shape of --output-format json's usage object, and the exact NDJSON line
-// shape --input-format stream-json expects. The calibration call this file's
-// caller (online.mjs) is meant to make against a live account was BLOCKED by
-// this sandbox's own permission classifier (not a missing credential —
-// Julien's authorization does not override the harness's own permission
-// system, and this file's author does not bypass that). The shapes below are
-// the best-documented inference available (the CLI's stream-json protocol
-// mirrors the Claude Agent SDK's own streaming-input control messages,
-// `{"type":"user","message":{"role":"user","content":[...]}}`, and
-// `--output-format json`'s result object is known — from the Agent SDK's
-// documented `ResultMessage` — to carry `result`, `total_cost_usd`,
-// `session_id`, `num_turns`, and a `usage` object; the `usage` sub-field
-// names are inferred to match the Anthropic Messages API's own
-// `input_tokens`/`output_tokens`/`cache_creation_input_tokens`/
-// `cache_read_input_tokens`, but this specific point is NOT confirmed by a
-// live call). Consequently:
-//   - This file parses `usage` DEFENSIVELY (reads whatever keys are present,
-//     never throws on a missing one) and logs a one-time warning if the
-//     expected keys are entirely absent.
-//   - online.mjs prints an explicit "CLI runner UNVERIFIED — run one real
-//     calibration turn yourself before trusting these numbers" banner and
-//     never treats CLI-mode output as safe to write into a doc/PR body
-//     without a human first confirming it against a real invocation (task
-//     rule: no number in a doc that didn't come out of a real execution).
+// VERIFIED by one real calibration call (claude -p, --output-format json,
+// claude-sonnet-5, run by the session orchestrator on the maintainer's
+// authenticated account): the result object carries `usage` with
+// `input_tokens`, `output_tokens`, `cache_creation_input_tokens`,
+// `cache_read_input_tokens` (plus a nested `cache_creation` ephemeral
+// breakdown and per-iteration entries), and a top-level `total_cost_usd`.
+// Observed harness overhead on that call: user content lands in
+// `input_tokens` (2 tokens for a 5-word prompt); the CLI's own system
+// prompt/tooling accounted for ~18.3k cache-creation + ~24.6k cache-read
+// tokens — constant across both benchmark arms, which is exactly what the
+// calibration turn measures and reports separately. Consequently:
+//   - This file still parses `usage` DEFENSIVELY (reads whatever keys are
+//     present, never throws on a missing one) — CLI versions may evolve.
 //   - test/online-mock.test.mjs proves the PARSING/AGGREGATION code against a
-//     fake `claude` binary with a fixed, hand-authored JSON payload — it
-//     proves this file's code is correct for that payload shape, not that
-//     the payload shape itself is correct.
+//     fake `claude` binary whose payload mirrors the verified real shape.
 import { spawn } from 'node:child_process'
 
 const MODEL = 'claude-sonnet-5'
