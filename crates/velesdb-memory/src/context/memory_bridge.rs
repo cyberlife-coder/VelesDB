@@ -310,17 +310,24 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     }
 
     /// Store every distinct fragment's original as a hub-marked system fact
-    /// keyed by its salted content hash, so its handle can be resolved later.
+    /// keyed by its salted handle hash, so its handle can be resolved later.
     /// A fragment carrying media (US-009, PR2) has its base64 payload
     /// persisted alongside the caption under the reserved
-    /// [`CTX_SOURCE_MEDIA_FIELD`] key — the slot is still keyed on
-    /// [`stable_id`] of `fragment.content` (the caption), the SAME handle
-    /// namespace [`provenance::handle_for`] already mints for text: two
-    /// media fragments that happen to share an identical caption (most
-    /// commonly both blank) collide onto the same slot, first-write-wins,
-    /// exactly as two identical-caption TEXT fragments already do — PR2
-    /// extends what lives at an existing address, it does not add a second
-    /// one keyed on the media bytes.
+    /// [`CTX_SOURCE_MEDIA_FIELD`] key.
+    ///
+    /// **Identity**: the key mirrors what the compiler mints handles from
+    /// (`Analysis::handle_hash` in `context.rs`) — the caption's
+    /// [`stable_id`] for text, the raw decoded bytes' hash
+    /// ([`media::MediaAnalysis::raw_hash`]) for media, the same identity
+    /// PR1's dedup keys on. Keying media on the caption instead was the PR2
+    /// review's proven blocker: every captionless image collided onto one
+    /// slot and one handle, serving arbitrary wrong bytes back. The slot
+    /// stays inside the salted system-fact namespace ([`source_id`] applies
+    /// `SOURCE_ID_SALT` to the hash) — same salt, no new namespace. On a
+    /// same-key collision (byte-identical images with different captions)
+    /// the FIRST occurrence wins, matching the dedup twin the compiler
+    /// keeps — a divergent duplicate caption does not survive, exactly as
+    /// its decision reason already says.
     ///
     /// Size: [`crate::limits::MAX_MEDIA_BYTES`] /
     /// [`crate::limits::MAX_TOTAL_MEDIA_BYTES`] already bounded every
@@ -336,11 +343,14 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         out: &CompiledContext,
         ttl_seconds: Option<u64>,
     ) -> Result<(), MemoryError> {
-        let by_hash: BTreeMap<u64, &ContextFragment> = augmented
-            .fragments
-            .iter()
-            .map(|fragment| (stable_id(&fragment.content), fragment))
-            .collect();
+        let mut by_hash: BTreeMap<u64, &ContextFragment> = BTreeMap::new();
+        for fragment in &augmented.fragments {
+            // First occurrence wins (see the identity note above): `entry`
+            // + `or_insert`, never a blind overwrite.
+            by_hash
+                .entry(fragment_handle_hash(fragment))
+                .or_insert(fragment);
+        }
         let ttl_seconds = positive_ttl(ttl_seconds);
         for source in &out.sources {
             let Some(hash) = provenance::parse_handle(&source.handle) else {
@@ -373,8 +383,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 // EXCLUSIVELY by its content-addressed hash/slot, never by
                 // vector search — this vector only needs to be well-formed
                 // and non-degenerate for the underlying index, never
-                // semantically meaningful.
-                self.media_placeholder_embedding(media::analyze(media_ref).raw_hash)
+                // semantically meaningful. For a media fragment `hash` IS
+                // the raw-bytes hash (see `fragment_handle_hash`), so no
+                // re-decode is needed here.
+                self.media_placeholder_embedding(hash)
             } else {
                 self.embedder.embed(content)?
             };
@@ -839,6 +851,18 @@ fn meta_u64(meta: &Metadata, key: &str) -> u64 {
 /// The salted system-fact id of a stored source.
 fn source_id(content_hash: u64) -> u64 {
     stable_id(&format!("{SOURCE_ID_SALT}{content_hash}"))
+}
+
+/// The handle-identity hash of one request fragment — the bridge-side twin
+/// of `Analysis::handle_hash` in `context.rs` (kept in lockstep; the two
+/// must key the same identity or stored slots and minted handles drift
+/// apart): raw decoded media bytes for a media fragment, caption/content
+/// [`stable_id`] otherwise.
+fn fragment_handle_hash(fragment: &ContextFragment) -> u64 {
+    fragment.media.as_ref().map_or_else(
+        || stable_id(&fragment.content),
+        |media_ref| media::analyze(media_ref).raw_hash,
+    )
 }
 
 /// A stored source's media payload (US-009, PR2), when its metadata carries

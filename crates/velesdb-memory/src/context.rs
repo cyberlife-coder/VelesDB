@@ -15,8 +15,11 @@
 //! - **Provenance**: every input fragment gets exactly one
 //!   [`ContextDecision`](crate::context::ContextDecision) with a stable rule
 //!   id and a content hash; every fragment stays addressable via a
-//!   **content-addressed** `ctx://source/<content_hash>` handle (immune to
-//!   caller-id collisions).
+//!   **content-addressed** `ctx://source/<hash>` handle (immune to
+//!   caller-id collisions) — hashed over the text for a text fragment, over
+//!   the raw decoded media bytes for a media fragment (see
+//!   `Analysis::handle_hash`: captions are typically blank, so a
+//!   caption-keyed handle would collide every captionless image).
 //! - **Nothing critical is silently lost**: content that cannot fit becomes
 //!   a [`RetrievalHandle`](crate::context::RetrievalHandle); losing
 //!   preserve-classified content raises
@@ -188,7 +191,9 @@ impl ContextCompiler {
             sources: analyses
                 .iter()
                 .filter(|analysis| analysis.dup.is_none())
-                .map(|analysis| provenance::source_for(analysis.fragment_id, analysis.content_hash))
+                .map(|analysis| {
+                    provenance::source_for(analysis.fragment_id, analysis.handle_hash())
+                })
                 .collect(),
             risk: decisions
                 .iter()
@@ -303,6 +308,25 @@ struct Analysis<'a> {
     /// whatever [`classify::classify`] returned) — only this flag steers
     /// packing and the decision; nothing else needs to know why.
     superseded: bool,
+}
+
+impl Analysis<'_> {
+    /// The hash every `ctx://source/<hash>` handle (and thus every bridge
+    /// storage slot) for this fragment is minted from. **Media identity is
+    /// the raw decoded BYTES** ([`media::MediaAnalysis::raw_hash`]), exactly
+    /// like PR1's dedup — never the caption text: captions are typically
+    /// blank, and keying on them would collide every captionless image onto
+    /// one handle (serving arbitrary wrong bytes back). Two different
+    /// images therefore always get two different handles; byte-identical
+    /// images share one handle and resolve the same stored bytes (with the
+    /// kept instance's caption — divergent duplicate captions do not
+    /// survive, same as PR1's dedup semantics). Text fragments keep the
+    /// content hash, byte-identical to every pre-PR2 handle.
+    fn handle_hash(&self) -> u64 {
+        self.media
+            .as_ref()
+            .map_or(self.content_hash, |media| media.raw_hash)
+    }
 }
 
 /// A media fragment's total precomputed token cost: the image alone (from
@@ -752,7 +776,7 @@ fn dup_verdict(
             rule_id.to_owned(),
             FidelityRisk::Low,
             reason,
-            Some(provenance::handle_for(analysis.content_hash)),
+            Some(provenance::handle_for(analysis.handle_hash())),
         );
     }
     // Media dedup is otherwise unremarkable here: the twin's bytes were not
@@ -767,7 +791,7 @@ fn dup_verdict(
             "{variant} of fragment #{} — but that twin was not fully emitted — recover via the handle",
             dup.kept_seq
         ),
-        Some(provenance::handle_for(analysis.content_hash)),
+        Some(provenance::handle_for(analysis.handle_hash())),
     )
 }
 
@@ -784,7 +808,7 @@ fn superseded_screenshot_verdict(analysis: &Analysis) -> Verdict {
         classify::SCREENSHOT_SUPERSEDED_RULE_ID.to_owned(),
         FidelityRisk::Medium,
         classify::SCREENSHOT_SUPERSEDED_REASON.to_owned(),
-        Some(provenance::handle_for(analysis.content_hash)),
+        Some(provenance::handle_for(analysis.handle_hash())),
     )
 }
 
@@ -816,7 +840,7 @@ fn partial_verdict(analysis: &Analysis, emission: &Emission) -> Verdict {
             emission.taken,
             emission.total
         ),
-        Some(provenance::handle_for(analysis.content_hash)),
+        Some(provenance::handle_for(analysis.handle_hash())),
     )
 }
 
@@ -847,7 +871,7 @@ fn externalized_verdict(analysis: &Analysis) -> Verdict {
             "did not fit the budget ({}); retrievable via its handle",
             analysis.rule.reason
         ),
-        Some(provenance::handle_for(analysis.content_hash)),
+        Some(provenance::handle_for(analysis.handle_hash())),
     )
 }
 
@@ -858,7 +882,7 @@ fn retrieval_handles(analyses: &[Analysis], decisions: &[ContextDecision]) -> Ve
         .zip(decisions)
         .filter(|(_, decision)| decision.action == ContextAction::Retrieve)
         .map(|(analysis, _)| RetrievalHandle {
-            handle: provenance::handle_for(analysis.content_hash),
+            handle: provenance::handle_for(analysis.handle_hash()),
             fragment_id: analysis.fragment_id,
             estimated_tokens: analysis.tokens,
         })

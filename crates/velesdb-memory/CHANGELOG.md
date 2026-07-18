@@ -17,7 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source (reserved key `_veles_ctx_source_media`, embedded with a
   deterministic bytes-hash-derived placeholder vector rather than the text
   embedder — `retrieve_context_source` resolves media sources by
-  content-addressed hash only, never by vector search). PR1's provisional
+  content-addressed hash only, never by vector search). A media fragment's
+  handle — and its storage slot, still under the same salted system-fact
+  namespace — is keyed on the **raw decoded bytes' hash** (the identity
+  PR1's dedup already uses), never the caption text: two different images
+  always get two different, independently resolving handles even with
+  identical (typically blank) captions, while byte-identical images share
+  one handle and resolve the same stored bytes with the kept instance's
+  caption. Storage note: each distinct media source fact carries its full
+  base64 payload — up to 4 MiB (`limits::MAX_MEDIA_BYTES`), above the 1 MiB
+  `MAX_FACT_BYTES` ceiling which only guards MCP `remember`/`extract` text
+  input — bounded per request by `MAX_MEDIA_BYTES`/`MAX_TOTAL_MEDIA_BYTES`
+  and by `policy.source_ttl_seconds` over time. PR1's provisional
   `drop.media_unavailable` verdict is gone: a media fragment that cannot fit
   the budget now externalizes exactly like text (`budget.externalize`, a
   resolvable `ctx://source` handle), and a duplicate media fragment whose

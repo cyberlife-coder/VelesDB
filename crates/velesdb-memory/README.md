@@ -640,6 +640,10 @@ screenshot). This is **PR2 of 3** for media support:
 - **Real retrieval, through the memory bridge.** A media fragment that does
   not fit the budget externalizes exactly like text: `decision.action ==
   "retrieve"`, `rule_id == "budget.externalize"`, and a `ctx://source/`
+  handle. A media handle is content-addressed on the **raw decoded bytes**
+  (the same identity dedup uses), never the caption — two different images
+  always get two distinct, independently resolving handles even when both
+  captions are blank (the common case), and byte-identical images share one
   handle. `MemoryService::compile_context` (with `policy.store_sources`,
   the default) persists the fragment's base64 payload alongside its caption
   — `MemoryService::retrieve_context_source(handle)` returns `{content,
