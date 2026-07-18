@@ -10,6 +10,8 @@ mod lifecycle;
 mod search;
 #[cfg(test)]
 mod search_tests;
+#[cfg(test)]
+mod traverse_tests;
 
 use crate::collection::types::Collection;
 
