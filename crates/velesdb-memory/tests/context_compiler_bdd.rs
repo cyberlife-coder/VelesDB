@@ -1310,23 +1310,29 @@ fn test_media_compilation_is_fully_deterministic() {
 
 // --- Screenshot supersession (US-009 of EPIC-P-071, PR2) --------------------
 
-/// A well-formed base64 payload distinct from every other caption's — media
-/// dedup keys on raw bytes alone, so two screenshots in the same series need
-/// DIFFERENT bytes or they would collide as exact media duplicates instead
-/// of exercising supersession. Only the final base64 character is varied
-/// (still a valid quad, no padding), derived from `caption` so calls with
-/// different literal captions in the same test always decode to different
-/// bytes.
-fn distinct_media_b64(caption: &str) -> String {
+/// A well-formed base64 payload distinct per `seed` — media dedup keys on
+/// raw bytes alone, so two screenshots in the same series need DIFFERENT
+/// bytes or they would collide as exact media duplicates instead of
+/// exercising supersession. The seed is an explicit parameter independent
+/// of any caption (see the memory-bridge BDD twin of this fixture for why);
+/// the last two base64 characters are varied (still a valid unpadded quad,
+/// past the sniffed PNG header) via a multiplicative fold so same-length
+/// seeds never trivially collide.
+fn distinct_media_b64(seed: &str) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let seed = caption.bytes().fold(0_u8, u8::wrapping_add);
-    let mut b64 = PNG_64X48_B64.to_owned();
-    b64.pop();
-    b64.push(ALPHABET[seed as usize % ALPHABET.len()] as char);
+    let hash = seed
+        .bytes()
+        .fold(0_u64, |h, b| h.wrapping_mul(131).wrapping_add(u64::from(b)));
+    let mut b64 = PNG_64X48_B64[..PNG_64X48_B64.len() - 2].to_owned();
+    b64.push(ALPHABET[usize::try_from(hash % 64).unwrap_or(0)] as char);
+    b64.push(ALPHABET[usize::try_from((hash / 64) % 64).unwrap_or(0)] as char);
     b64
 }
 
-/// Build a `kind: "screenshot"` media fragment naming its `metadata.target`.
+/// Build a `kind: "screenshot"` media fragment naming its `metadata.target`,
+/// with bytes seeded by the caption (these compiler-only tests never resolve
+/// handles, so caption-independence is not load-bearing here — the
+/// memory-bridge BDD suite covers that axis with explicit seeds).
 fn screenshot(caption: &str, target: &str) -> ContextFragment {
     let mut meta = serde_json::Map::new();
     meta.insert(

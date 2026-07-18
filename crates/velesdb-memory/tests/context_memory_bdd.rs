@@ -42,21 +42,30 @@ fn media_fragment(caption: &str, bytes_b64: &str) -> ContextFragment {
     }
 }
 
-/// A well-formed base64 payload distinct from every other caption's — media
-/// dedup keys on raw bytes alone, so screenshots in the same series need
-/// DIFFERENT bytes or they collide as exact media duplicates instead of
-/// exercising supersession. Only the final base64 character is varied.
-fn distinct_media_b64(caption: &str) -> String {
+/// A well-formed base64 payload distinct per `seed` — media dedup keys on
+/// raw bytes alone, so two fragments needing DIFFERENT bytes must pass
+/// different seeds. The seed is an explicit, caption-INDEPENDENT parameter
+/// on purpose (review finding on PR2's first cut): deriving bytes from the
+/// caption would make "same caption, different bytes" — the exact scenario
+/// of the media handle-collision bug — inexpressible in these tests. Only
+/// the final base64 character is varied (still a valid unpadded quad).
+fn distinct_media_b64(seed: &str) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let seed = caption.bytes().fold(0_u8, u8::wrapping_add);
-    let mut b64 = PNG_B64.to_owned();
-    b64.pop();
-    b64.push(ALPHABET[seed as usize % ALPHABET.len()] as char);
+    // A multiplicative fold, not a plain byte sum: same-length seeds like
+    // "stale-A"/"fresh-B" must not collide.
+    let hash = seed
+        .bytes()
+        .fold(0_u64, |h, b| h.wrapping_mul(131).wrapping_add(u64::from(b)));
+    let mut b64 = PNG_B64[..PNG_B64.len() - 2].to_owned();
+    b64.push(ALPHABET[usize::try_from(hash % 64).unwrap_or(0)] as char);
+    b64.push(ALPHABET[usize::try_from((hash / 64) % 64).unwrap_or(0)] as char);
     b64
 }
 
-/// Build a `kind: "screenshot"` media fragment naming its `metadata.target`.
-fn screenshot(caption: &str, target: &str) -> ContextFragment {
+/// Build a `kind: "screenshot"` media fragment naming its `metadata.target`,
+/// with bytes derived from `seed` (independent of `caption` — see
+/// [`distinct_media_b64`]).
+fn screenshot_with_seed(caption: &str, target: &str, seed: &str) -> ContextFragment {
     let mut meta = serde_json::Map::new();
     meta.insert(
         "target".to_owned(),
@@ -65,8 +74,14 @@ fn screenshot(caption: &str, target: &str) -> ContextFragment {
     ContextFragment {
         kind: Some("screenshot".to_owned()),
         metadata: Some(meta),
-        ..media_fragment(caption, &distinct_media_b64(caption))
+        ..media_fragment(caption, &distinct_media_b64(seed))
     }
+}
+
+/// [`screenshot_with_seed`] with the caption reused as the byte seed — for
+/// tests where the two need not be independent.
+fn screenshot(caption: &str, target: &str) -> ContextFragment {
+    screenshot_with_seed(caption, target, caption)
 }
 
 fn request(query: &str, fragments: Vec<ContextFragment>, budget: u64) -> CompileRequest {
@@ -1345,4 +1360,163 @@ fn test_screenshots_of_different_targets_all_round_trip_independently() {
         .all(|d| d.action == ContextAction::Preserve));
     assert!(out.content.contains("login shot"));
     assert!(out.content.contains("checkout shot"));
+}
+
+// --- Review probes (PR2 cross-review): media identity must be the BYTES ----
+//
+// Media dedup already keys on the raw decoded bytes (PR1); handles and
+// storage slots must key on the same identity, or two media fragments with
+// identical (typically blank) captions but different bytes collide onto one
+// handle and one slot — and "externalized behind a resolvable handle"
+// silently serves the wrong image in the nominal captionless case.
+
+#[test]
+fn test_two_blank_caption_media_fragments_with_different_bytes_get_distinct_resolving_handles() {
+    // P1 — same compile: two media fragments, both captions BLANK, bytes
+    // A != B, budget too small for either (the 64x48 fixture image costs 5
+    // tokens), so both externalize
+    let (_dir, svc) = service();
+    let bytes_a = distinct_media_b64("bytes-A");
+    let bytes_b = distinct_media_b64("bytes-B");
+    assert_ne!(bytes_a, bytes_b, "fixture must yield distinct bytes");
+    let fragments = vec![media_fragment("", &bytes_a), media_fragment("", &bytes_b)];
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(&compiler, &request("q", fragments, 4))
+        .expect("compile");
+
+    // Then the two handles are DISTINCT ...
+    let handle_a = out.decisions[0].handle.clone().expect("A externalized");
+    let handle_b = out.decisions[1].handle.clone().expect("B externalized");
+    assert_ne!(
+        handle_a, handle_b,
+        "different bytes must never share a handle, blank captions or not"
+    );
+
+    // ... and each resolves ITS OWN bytes
+    let source_a = svc.retrieve_context_source(&handle_a).expect("retrieve A");
+    let source_b = svc.retrieve_context_source(&handle_b).expect("retrieve B");
+    assert_eq!(source_a.media.expect("A media").bytes_b64, bytes_a);
+    assert_eq!(source_b.media.expect("B media").bytes_b64, bytes_b);
+}
+
+#[test]
+fn test_cross_compile_blank_caption_media_sources_never_serve_stale_bytes() {
+    // P2 — cross-compile: compile blank-caption image A first (its source is
+    // stored), then blank-caption image B in a SECOND compile
+    let (_dir, svc) = service();
+    let bytes_a = distinct_media_b64("stale-A");
+    let bytes_b = distinct_media_b64("fresh-B");
+    assert_ne!(bytes_a, bytes_b, "fixture must yield distinct bytes");
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    svc.compile_context(
+        &compiler,
+        &request("q", vec![media_fragment("", &bytes_a)], 10_000),
+    )
+    .expect("compile A");
+    let out_b = svc
+        .compile_context(
+            &compiler,
+            &request("q", vec![media_fragment("", &bytes_b)], 10_000),
+        )
+        .expect("compile B");
+
+    // When resolving B's handle from the second compile
+    let handle_b = out_b.sources[0].handle.clone();
+    let source_b = svc.retrieve_context_source(&handle_b).expect("retrieve B");
+
+    // Then B's own bytes come back — never A's, stored earlier at what must
+    // NOT be the same slot
+    assert_eq!(
+        source_b.media.expect("B media").bytes_b64,
+        bytes_b,
+        "an occupied slot from an earlier compile must never serve stale bytes for a new handle"
+    );
+}
+
+#[test]
+fn test_superseded_blank_caption_screenshots_resolve_their_own_bytes_not_the_survivors() {
+    // P3 — supersession: three screenshots of the same target, ALL captions
+    // blank, three different byte payloads; the first two are superseded
+    let (_dir, svc) = service();
+    let seeds = ["shot-1", "shot-2", "shot-3"];
+    let fragments: Vec<ContextFragment> = seeds
+        .iter()
+        .map(|seed| screenshot_with_seed("", "login-page", seed))
+        .collect();
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(&compiler, &request("q", fragments, 10_000))
+        .expect("compile");
+
+    // Then the two superseded screenshots carry DISTINCT handles, each
+    // resolving its own bytes — never the surviving third's
+    let handle_0 = out.decisions[0].handle.clone().expect("superseded 0");
+    let handle_1 = out.decisions[1].handle.clone().expect("superseded 1");
+    assert_ne!(handle_0, handle_1, "distinct bytes, distinct handles");
+    for (handle, seed) in [(handle_0, seeds[0]), (handle_1, seeds[1])] {
+        let source = svc.retrieve_context_source(&handle).expect("retrieve");
+        assert_eq!(
+            source.media.expect("media").bytes_b64,
+            distinct_media_b64(seed),
+            "a superseded screenshot's handle must resolve ITS OWN bytes, not the survivor's"
+        );
+    }
+    assert_eq!(out.decisions[2].action, ContextAction::Preserve);
+}
+
+// --- Review minors: dedup × supersession, and recall invisibility ----------
+
+#[test]
+fn test_byte_identical_screenshot_duplicate_wins_over_supersession_and_resolves() {
+    // Given two BYTE-IDENTICAL screenshots of a target plus a newer,
+    // different one — dedup and supersession both apply to fragment #1;
+    // the dup arm must win (it is checked first in `decision`)
+    let (_dir, svc) = service();
+    let same = distinct_media_b64("same-bytes");
+    let fragments = vec![
+        screenshot_with_seed("", "login-page", "same-bytes"),
+        screenshot_with_seed("", "login-page", "same-bytes"),
+        screenshot_with_seed("", "login-page", "newer"),
+    ];
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(&compiler, &request("q", fragments, 10_000))
+        .expect("compile");
+
+    // Then #0 is superseded (older of the series), #1 is its exact
+    // duplicate (dup verdict wins over the supersession flag), #2 survives
+    assert_eq!(out.decisions[0].rule_id, "retrieve.screenshot_superseded");
+    assert_eq!(out.decisions[1].rule_id, "drop.duplicate");
+    assert_eq!(out.decisions[1].action, ContextAction::Drop);
+    assert_eq!(out.decisions[2].action, ContextAction::Preserve);
+
+    // And the duplicate's handle (same bytes as #0) still resolves those bytes
+    let dup_handle = out.decisions[1]
+        .handle
+        .clone()
+        .expect("media duplicate keeps a handle");
+    let source = svc.retrieve_context_source(&dup_handle).expect("retrieve");
+    assert_eq!(source.media.expect("media").bytes_b64, same);
+}
+
+#[test]
+fn test_stored_media_sources_are_invisible_to_normal_recall() {
+    // Given a compiled (and stored) media source with a distinctive caption
+    let (_dir, svc) = service();
+    let caption = "zebra quantum flamingo caption";
+    let frag = media_fragment(caption, &distinct_media_b64("invisible"));
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    svc.compile_context(&compiler, &request("q", vec![frag], 10_000))
+        .expect("compile");
+
+    // When recalling with the caption itself as the query
+    let hits = svc.recall(caption, 10, None).expect("recall");
+
+    // Then the media source system fact (hub-marked, placeholder-embedded)
+    // never surfaces in caller-facing recall
+    assert!(
+        hits.is_empty(),
+        "a stored media source must be invisible to normal recall, got {hits:?}"
+    );
 }
