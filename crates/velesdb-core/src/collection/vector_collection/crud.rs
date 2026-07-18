@@ -179,4 +179,24 @@ impl VectorCollection {
     pub fn edge_exists(&self, edge_id: u64) -> bool {
         self.inner.edge_exists(edge_id)
     }
+
+    /// Performs BFS traversal from a source node over the collection's
+    /// shared edge store.
+    ///
+    /// Edges are a first-class, kind-agnostic feature (see
+    /// [`Self::add_edge`] and `docs/ARCHITECTURE.md` §F2.2 R1.2c): they can
+    /// be created on any collection kind via REST `/relations` or the
+    /// agent-memory wedge (`velesdb-memory`), so traversal must be reachable
+    /// from `VectorCollection` too — mirroring
+    /// [`GraphCollection::traverse_bfs`](crate::GraphCollection::traverse_bfs).
+    ///
+    /// Traversal that finds nothing reachable returns an empty `Vec`.
+    #[must_use]
+    pub fn traverse_bfs(
+        &self,
+        source_id: u64,
+        config: &crate::collection::TraversalConfig,
+    ) -> Vec<crate::collection::TraversalResult> {
+        self.inner.traverse_bfs_config(source_id, config)
+    }
 }
