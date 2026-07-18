@@ -222,7 +222,7 @@ the verification status: the header of `lib/claude-cli.mjs`):
   with Messages-API-shaped content blocks.
 - **Calibration finding**: the CLI harness's own overhead (its system
   prompt/tooling preamble) lands in the **cache fields**
-  (`cache_creation`/`cache_read` ≈ tens of thousands of tokens) while
+  (~18.3k cache-creation + ~24.6k cache-read tokens observed) while
   `usage.input_tokens` for a near-empty prompt is ≈ 2. So arm-vs-arm
   `input_tokens` comparisons are **not** inflated by harness overhead and
   nothing is subtracted from them; the calibration turn `online.mjs` runs on

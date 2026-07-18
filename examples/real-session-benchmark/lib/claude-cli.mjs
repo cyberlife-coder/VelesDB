@@ -9,21 +9,25 @@
 //     --input-format stream-json, --tools "" to disable the built-in
 //     toolset, --system-prompt REPLACING the default) — confirmed from the
 //     help text, verbatim.
-//   - `--output-format json` result shape — confirmed by the real call: the
-//     JSON result carries `result` (the response text), `session_id`,
-//     `total_cost_usd`, and a `usage` object with `input_tokens`,
-//     `output_tokens`, `cache_creation_input_tokens`,
-//     `cache_read_input_tokens` (Anthropic Messages API field names).
+//   - `--output-format json` result shape — confirmed by the real call
+//     (claude-sonnet-5, run by the session orchestrator on the maintainer's
+//     authenticated account): the JSON result carries `result` (the
+//     response text), `session_id`, `total_cost_usd`, and a `usage` object
+//     with `input_tokens`, `output_tokens`, `cache_creation_input_tokens`,
+//     `cache_read_input_tokens` (Anthropic Messages API field names; plus a
+//     nested `cache_creation` ephemeral breakdown and per-iteration
+//     entries, which this parser does not need).
 //   - stdin NDJSON envelope `{"type":"user","message":{"role":"user",
 //     "content":[...]}}` with Messages-API-shaped content blocks (text +
 //     base64 image) — confirmed by the same call.
-//   - Calibration behavior: the CLI harness's own overhead (its system
-//     prompt / tooling preamble) lands in the CACHE fields
-//     (cache_creation/cache_read ≈ tens of thousands of tokens), while
-//     `usage.input_tokens` for a near-empty prompt is ≈ 2. So input_tokens
-//     comparisons between arms are NOT inflated by harness overhead — the
-//     overhead must be reported via the cache fields, never subtracted from
-//     input_tokens (there is nothing to subtract there).
+//   - Calibration behavior, observed on that call: user content lands in
+//     `input_tokens` (2 tokens for a 5-word prompt), while the CLI's own
+//     system prompt/tooling accounted for ~18.3k cache-creation + ~24.6k
+//     cache-read tokens. So input_tokens comparisons between arms are NOT
+//     inflated by harness overhead — the overhead is constant across both
+//     arms, lives in the cache fields, and is reported separately by the
+//     calibration turn; nothing is subtracted from input_tokens (there is
+//     nothing to subtract there).
 //
 // The parser below still reads the fields DEFENSIVELY (missing keys default
 // to 0/null, one-time warning if `usage.input_tokens` is absent) — not
