@@ -25,33 +25,45 @@ import { measureSession, LOSSLESS_BUDGET } from './lib/ab-session.mjs'
 const WINDOW_BUDGET = 8000
 const THRESHOLD = Number(process.env.COMPACTION_THRESHOLD ?? 180000)
 const CONTEXT_WINDOW = 200000
-const GROWTH_WINDOW = 10 // turns used for the growth extrapolation
+const TAIL_WINDOW = 10 // secondary, phase-specific growth window (wrap-up turns)
 
+// Two growth rates, both reported: the FULL-session mean is the honest
+// basis for any projection (a session that keeps adding features grows at
+// this rate); the tail window covers the verification/wrap-up phase, where
+// most turns are re-reads — the compiler's most favorable phase. Quoting
+// only the tail would flatter the compiler (first review of this file's
+// numbers caught exactly that), so projections use the full-session mean
+// and the tail is labeled as phase-specific.
 function growthStats(perTurn, key) {
   const totals = perTurn.map((t) => t[key])
-  const deltas = []
-  for (let i = Math.max(1, totals.length - GROWTH_WINDOW); i < totals.length; i++) {
-    deltas.push(totals[i] - totals[i - 1])
+  const fullDeltas = []
+  for (let i = 1; i < totals.length; i++) {
+    fullDeltas.push(totals[i] - totals[i - 1])
   }
-  const meanGrowth = deltas.reduce((a, b) => a + b, 0) / deltas.length
-  const final = totals[totals.length - 1]
-  return { final, meanGrowth }
+  const tailDeltas = fullDeltas.slice(-TAIL_WINDOW)
+  const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length
+  return {
+    final: totals[totals.length - 1],
+    meanGrowth: mean(fullDeltas),
+    tailGrowth: mean(tailDeltas),
+  }
 }
 
 function headroom(perTurn, key, label) {
-  const { final, meanGrowth } = growthStats(perTurn, key)
+  const { final, meanGrowth, tailGrowth } = growthStats(perTurn, key)
   const measuredCross = perTurn.find((t) => t[key] >= THRESHOLD)
   if (measuredCross) {
-    return { label, final, meanGrowth, crossTurn: measuredCross.turn, projected: false, headroomTurns: 0 }
+    return { label, final, meanGrowth, tailGrowth, crossTurn: measuredCross.turn, projected: false, headroomTurns: 0 }
   }
   if (meanGrowth <= 0) {
-    return { label, final, meanGrowth, crossTurn: null, projected: true, headroomTurns: Infinity }
+    return { label, final, meanGrowth, tailGrowth, crossTurn: null, projected: true, headroomTurns: Infinity }
   }
   const turnsToCross = Math.ceil((THRESHOLD - final) / meanGrowth)
   return {
     label,
     final,
     meanGrowth,
+    tailGrowth,
     crossTurn: perTurn.length + turnsToCross,
     projected: true,
     headroomTurns: turnsToCross,
@@ -97,7 +109,7 @@ async function main() {
     headroom(windowed.perTurn, 'cmpTotal', 'B2 compiled/window-8000'),
   ]
   console.log(`--- headroom to the ${THRESHOLD}-token compaction threshold ---`)
-  console.log(`(growth = mean per-turn delta over the last ${GROWTH_WINDOW} measured turns; crossings beyond turn ${lossless.perTurn.length} are LINEAR PROJECTIONS from that measured growth, labeled as such)`)
+  console.log(`(growth = mean per-turn delta over the FULL measured session — the honest projection basis; the last-${TAIL_WINDOW}-turn wrap-up rate is reported separately as phase-specific. Crossings beyond turn ${lossless.perTurn.length} are LINEAR PROJECTIONS from the full-session growth, labeled as such)`)
   for (const a of arms) {
     const cross =
       a.headroomTurns === Infinity
@@ -113,9 +125,14 @@ async function main() {
   const rawArm = arms[0]
   const b1 = arms[1]
   const b2 = arms[2]
+  const fullRatio = (rawArm.meanGrowth / b1.meanGrowth).toFixed(1)
+  const tailRatio = (rawArm.tailGrowth / b1.tailGrowth).toFixed(1)
   console.log('--- marketing summary (long-session, measured + labeled projection) ---')
   console.log(
-    `Over a 36-turn continued-iteration session, the raw arm ends at ${rawArm.final} tokens growing ~${rawArm.meanGrowth.toFixed(0)}/turn — on that measured trend it would hit a ${THRESHOLD}-token compaction threshold around turn ~${rawArm.crossTurn} (projected). The compiled lossless arm ends at ${b1.final} tokens (~${b1.meanGrowth.toFixed(0)}/turn), projecting to turn ~${b1.crossTurn}; with an 8000-token window the compiled arm ends at ${b2.final} tokens and ${b2.headroomTurns === Infinity ? 'never crosses at this growth rate' : `projects to turn ~${b2.crossTurn}`} — that is the sustained-iteration headroom the compiler buys.`,
+    `Over a 36-turn continued-iteration session, the raw arm ends at ${rawArm.final} tokens growing ~${rawArm.meanGrowth.toFixed(0)}/turn on the full session — on that measured trend it would hit a ${THRESHOLD}-token compaction threshold around turn ~${rawArm.crossTurn} (projected). The compiled lossless arm ends at ${b1.final} tokens (~${b1.meanGrowth.toFixed(0)}/turn full-session), projecting to turn ~${b1.crossTurn}; with an 8000-token window the compiled arm ends at ${b2.final} tokens and ${b2.headroomTurns === Infinity ? 'never crosses at this growth rate' : `projects to turn ~${b2.crossTurn}`}.`,
+  )
+  console.log(
+    `Headroom, honestly stated: the compiled session's context grows ${fullRatio}x slower over the FULL measured session (feature-building included), and up to ${tailRatio}x slower in the verification/wrap-up phase (turns ${LONG_TURN_EVENTS.length - 9}-${LONG_TURN_EVENTS.length}), where most turns are re-reads — the compiler's best case. Projections above use the full-session rate.`,
   )
 
   if (!lossless.reproducible || !windowed.reproducible) process.exit(1)

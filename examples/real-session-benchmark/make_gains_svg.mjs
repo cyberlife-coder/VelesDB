@@ -144,7 +144,7 @@ function gainsSvg() {
        Axis starts at zero; both arms shown; values are the measured session totals. -->
   <rect x="0" y="0" width="${W}" height="${H}" fill="#ffffff"/>
   <text x="${W / 2}" y="34" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="700" fill="#0f172a">Tokens sent per session (fewer is cheaper)</text>
-  <text x="${W / 2}" y="56" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#475569">tokens = what LLM providers bill you for &#8226; same information in both bars, counted with a real tokenizer</text>
+  <text x="${W / 2}" y="56" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#475569">tokens = what LLM providers bill you for &#8226; same or on-demand-recoverable information in both bars, counted with a real tokenizer</text>
   <!-- legend -->
   <rect x="330" y="66" width="14" height="14" rx="2" fill="#cbd5e1" stroke="#475569" stroke-width="1.5"/>
   <text x="350" y="78" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#334155">without VelesDB (everything re-sent)</text>
@@ -160,12 +160,17 @@ ${bars}
 }
 
 // --- Chart 2: headroom growth curves ----------------------------------------
+// Full-session mean growth — the honest projection basis (the last-10-turn
+// wrap-up rate flatters the compiler; the review of these numbers caught
+// exactly that, so the SVG mirrors long-session.mjs's dual reporting).
 function growthStats(perTurn, key) {
   const totals = perTurn.map((t) => t[key])
   const deltas = []
-  for (let i = Math.max(1, totals.length - 10); i < totals.length; i++) deltas.push(totals[i] - totals[i - 1])
+  for (let i = 1; i < totals.length; i++) deltas.push(totals[i] - totals[i - 1])
   const meanGrowth = deltas.reduce((a, b) => a + b, 0) / deltas.length
-  return { final: totals[totals.length - 1], meanGrowth }
+  const tailDeltas = deltas.slice(-10)
+  const tailGrowth = tailDeltas.reduce((a, b) => a + b, 0) / tailDeltas.length
+  return { final: totals[totals.length - 1], meanGrowth, tailGrowth }
 }
 
 function headroomSvg() {
@@ -218,6 +223,7 @@ function headroomSvg() {
   <text x="734" y="${plotT + 76}" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#475569">growth per turn (measured):</text>
   <text x="734" y="${plotT + 93}" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#334155">&#8226; without: ~${rawStats.meanGrowth.toFixed(0)} tokens/turn</text>
   <text x="734" y="${plotT + 110}" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#14532d">&#8226; with: ~${cmpStats.meanGrowth.toFixed(0)} tokens/turn</text>
+  <text x="734" y="${plotT + 127}" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#64748b">full session; up to ${(rawStats.tailGrowth / cmpStats.tailGrowth).toFixed(1)}x in re-read phases</text>
   <text x="734" y="${plotT + 138}" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#475569">a 180k compaction threshold is</text>
   <text x="734" y="${plotT + 155}" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#475569">reached ~turn ${fmt(rawCross)} vs ~turn ${fmt(cmpCross)}</text>
   <text x="734" y="${plotT + 172}" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#64748b">(projected from measured growth)</text>

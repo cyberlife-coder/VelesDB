@@ -539,12 +539,15 @@ byte-identical:
 
 ![Tokens sent per session, without VelesDB versus with VelesDB, across four measured scenarios; savings range from 17.2 to 30.9 percent](docs/diagrams/benchmark-gains.svg)
 
-The long session also answers the endurance question: without VelesDB the
-context grows ~234 tokens per message on the measured trend; compiled, ~35 —
-about **6.6× more headroom** (how many more turns fit in one session before
-the context limit forces a summarize-and-restart):
+The long session also answers the endurance question: over the full
+measured session (feature-building included) the raw context grows ~555
+tokens per message versus ~333 compiled — **1.7× more headroom** (how many
+more turns fit in one session before the context limit forces a
+summarize-and-restart), and **up to 6.6×** in the verification/wrap-up
+phase, where most turns are re-reads. Projections always use the
+full-session rate:
 
-![Context size per turn over a 36-turn session: without VelesDB it grows about 234 tokens per turn, with VelesDB about 35 — roughly 6.6 times more headroom before the context limit](docs/diagrams/benchmark-headroom.svg)
+![Context size per turn over a 36-turn session: without VelesDB it grows about 555 tokens per turn on the full session, with VelesDB about 333 — 1.7 times more headroom, and up to 6.6 times in re-read-heavy phases](docs/diagrams/benchmark-headroom.svg)
 
 Reproduce any of these in one command, no key and no network needed
 (`node examples/real-session-benchmark/offline.mjs`, `long-session.mjs`,

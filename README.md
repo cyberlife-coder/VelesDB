@@ -176,6 +176,18 @@ compile_context { "query": "state of the canary deploy", "token_budget": 500,
 
 No Rust toolchain? Use npm instead: [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node).
 
+**Measured on real coding sessions** (A/B, same session sent raw vs
+compiled, counted with a real tokenizer and the same image-token formula the
+API uses): **17.2 %** saved on a balanced bug-fix session with zero
+information loss, **18.4 %** with the memory features on, **30.9-55.1 %**
+on a 36-turn session where you keep iterating — and the compiled context
+grows **1.7× slower** over the full session (up to 6.6× in re-read-heavy
+phases), so one session lasts far longer before hitting the context limit.
+Every number reproduces in one offline command:
+[`examples/real-session-benchmark`](examples/real-session-benchmark) (an
+opt-in billed mode re-measures it against real provider usage, through your
+own Claude Code CLI account — no API key needed).
+
 **Not a transparent proxy, and no automatic indexing.** The compiler only compresses what your agent explicitly hands it as `fragments` (logs, retrieved docs, history) — never the harness's system prompt or tool schemas, and it's the skill above that teaches an agent when/what to route through it. Every compiled fragment is content-addressed to disk under the store path so `retrieve_context_source` can always recover it, and aggregate savings stats are recorded — but nothing enters *recallable memory* (what `recall` / `memory_scope` can surface) without an explicit `remember` / `relate` / `remember_extracted` call. Local-first — nothing leaves the machine. Details: [crates/velesdb-memory/README.md § How it works](crates/velesdb-memory/README.md#how-it-works).
 
 ![compile_context pipeline: agent fragments flow through dedup, abstract, pack, externalize, producing content, ctx://source handles and auditable decisions](crates/velesdb-memory/docs/diagrams/compile-flow.svg)

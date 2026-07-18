@@ -5,7 +5,7 @@
        Axis starts at zero; both arms shown; values are the measured session totals. -->
   <rect x="0" y="0" width="980" height="520" fill="#ffffff"/>
   <text x="490" y="34" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="700" fill="#0f172a">Tokens sent per session (fewer is cheaper)</text>
-  <text x="490" y="56" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#475569">tokens = what LLM providers bill you for &#8226; same information in both bars, counted with a real tokenizer</text>
+  <text x="490" y="56" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#475569">tokens = what LLM providers bill you for &#8226; same or on-demand-recoverable information in both bars, counted with a real tokenizer</text>
   <!-- legend -->
   <rect x="330" y="66" width="14" height="14" rx="2" fill="#cbd5e1" stroke="#475569" stroke-width="1.5"/>
   <text x="350" y="78" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#334155">without VelesDB (everything re-sent)</text>

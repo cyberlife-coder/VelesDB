@@ -126,15 +126,17 @@ session totals: raw 449836 -> lossless 310850 (30.9% saved) | windowed 202097 (5
 reproducibility: lossless OK | windowed OK (every turn compiled twice, byte-identical)
 
 --- headroom to the 180000-token compaction threshold ---
-(growth = mean per-turn delta over the last 10 measured turns; crossings beyond turn 36 are LINEAR PROJECTIONS from that measured growth, labeled as such)
-  A  raw                   final   20280 tokens | growth   234/turn | crosses 180000: turn ~721 (projected) | headroom: ~685 more turns
-  B1 compiled/lossless     final   12513 tokens | growth    35/turn | crosses 180000: turn ~4768 (projected) | headroom: ~4732 more turns
-  B2 compiled/window-8000  final    6320 tokens | growth    16/turn | crosses 180000: turn ~10960 (projected) | headroom: ~10924 more turns
+(growth = mean per-turn delta over the FULL measured session — the honest projection basis; the last-10-turn wrap-up rate is reported separately as phase-specific. Crossings beyond turn 36 are LINEAR PROJECTIONS from the full-session growth, labeled as such)
+  A  raw                   final   20280 tokens | growth   555/turn | crosses 180000: turn ~324 (projected) | headroom: ~288 more turns
+  B1 compiled/lossless     final   12513 tokens | growth   333/turn | crosses 180000: turn ~539 (projected) | headroom: ~503 more turns
+  B2 compiled/window-8000  final    6320 tokens | growth   156/turn | crosses 180000: turn ~1149 (projected) | headroom: ~1113 more turns
 ```
 
-**Reading it**: the raw arm grows ~234 tokens/turn on the measured trend;
-the compiled lossless arm ~35/turn (6.7× slower window consumption), the
-windowed arm ~16/turn. None of the arms reaches 180k inside the 36 measured
+**Reading it**: over the FULL measured session the raw arm grows ~555
+tokens/turn versus ~333 compiled (1.7× slower window consumption) and ~156
+windowed; in the verification/wrap-up phase (turns 27-36, mostly re-reads)
+the gap widens to ~234 vs ~35/turn (6.6×) — that tail rate is
+phase-specific and is never used for the projections. None of the arms reaches 180k inside the 36 measured
 turns, so the crossing turns are **labeled linear projections** from the
 measured growth, not measurements — the full per-turn curve is printed so
 the projection is checkable. The threshold is a parameter
