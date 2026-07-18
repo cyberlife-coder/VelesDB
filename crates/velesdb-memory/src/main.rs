@@ -16,6 +16,15 @@ use velesdb_memory::mcp::McpServer;
 use velesdb_memory::{DynEmbedder, HashEmbedder, MemoryService, NativeStore, DEFAULT_DIMENSION};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Captured FIRST — before the (possibly seconds-long) embedder probe and
+    // store open — so a client that exits during our own startup still
+    // reparents us AFTER the baseline, and the watchdog sees the change. A
+    // baseline taken later would read the already-reparented pid and go
+    // permanently inert (review finding on #1449).
+    #[cfg(unix)]
+    let original_parent = std::os::unix::process::parent_id();
+    #[cfg(not(unix))]
+    let original_parent = 0_u32;
     let store_path = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
 
     // All synchronous setup (env probing, blocking HTTP to Ollama, disk open)
@@ -26,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = apply_default_ttl(build_server(service)?)?;
 
     tokio::runtime::Runtime::new()?.block_on(async move {
-        spawn_orphan_watchdog();
+        spawn_orphan_watchdog(original_parent);
         let running = server
             .serve((tokio::io::stdin(), tokio::io::stdout()))
             .await?;
@@ -67,10 +76,9 @@ const ORPHAN_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_sec
 /// and therefore unlocks — unconditionally on process exit, confirmed by
 /// the investigation on #1448 ("released by the kernel even on SIGKILL").
 #[cfg(unix)]
-fn spawn_orphan_watchdog() {
+fn spawn_orphan_watchdog(original_parent: u32) {
     use std::os::unix::process::parent_id;
 
-    let original_parent = parent_id();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(ORPHAN_CHECK_INTERVAL).await;
@@ -91,7 +99,7 @@ fn spawn_orphan_watchdog() {
 /// parent this cheaply, so this hardening is Unix-only for now — behavior on
 /// Windows is unchanged (still relies on the stdin-EOF path).
 #[cfg(not(unix))]
-fn spawn_orphan_watchdog() {}
+fn spawn_orphan_watchdog(_original_parent: u32) {}
 
 /// Attempts before giving up on a locked store and printing the actionable
 /// error. Three short tries (with [`LOCK_RETRY_DELAY`] between them) is
