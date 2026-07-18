@@ -551,6 +551,7 @@ impl MemoryCandidate {
                 kind: Some("memory".to_owned()),
                 priority: None,
                 metadata: None,
+                media: None,
             },
             memory_id: self.memory_id,
             relevance,

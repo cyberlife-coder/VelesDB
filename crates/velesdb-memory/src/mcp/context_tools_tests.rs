@@ -28,6 +28,7 @@ fn fragment(content: &str) -> ContextFragment {
         kind: None,
         priority: None,
         metadata: None,
+        media: None,
     }
 }
 

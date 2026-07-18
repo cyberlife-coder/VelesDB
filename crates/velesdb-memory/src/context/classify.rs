@@ -39,6 +39,13 @@ struct Rule {
 /// unconditional last entry, so classification always yields a rule.
 const RULES: &[Rule] = &[
     Rule {
+        id: "media.atomic",
+        action: ContextAction::Preserve,
+        critical: true,
+        reason: "media fragment packs as one atomic, unsplittable piece",
+        applies: is_media,
+    },
+    Rule {
         id: "preserve.marked_verbatim",
         action: ContextAction::Preserve,
         critical: true,
@@ -120,6 +127,17 @@ fn to_match(rule: &Rule) -> RuleMatch {
         critical: rule.critical,
         reason: rule.reason,
     }
+}
+
+/// The fragment carries an inline media payload (US-009, PR1). Checked
+/// first, unconditionally: a media fragment's classification must never
+/// depend on its (often empty) caption text — a caption that happens to
+/// contain a code fence, a URL, or a `verbatim`/`cache` metadata flag must
+/// not steer a screenshot away from atomic packing. This also guarantees no
+/// text-scanning rule below ever needs to consider `bytes_b64` — by the time
+/// any of them run, a media fragment has already matched here.
+fn is_media(fragment: &ContextFragment, _policy: &CompilePolicy) -> bool {
+    fragment.media.is_some()
 }
 
 /// `metadata.verbatim == true`.

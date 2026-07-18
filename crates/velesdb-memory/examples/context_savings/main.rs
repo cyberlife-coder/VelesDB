@@ -106,6 +106,7 @@ fn to_fragments(fixtures: &[Fixture]) -> Vec<ContextFragment> {
             kind: fixture.kind.map(str::to_owned),
             priority: None,
             metadata: None,
+            media: None,
         })
         .collect()
 }

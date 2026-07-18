@@ -9,7 +9,28 @@ fn item(seq: usize, critical: bool, priority: u8, relevance: f32, pieces: &[&str
         critical,
         priority,
         relevance,
-        pieces: pieces.iter().map(|p| (*p).to_owned()).collect(),
+        pieces: pieces
+            .iter()
+            .map(|p| Piece {
+                text: (*p).to_owned(),
+                cost: None,
+            })
+            .collect(),
+    }
+}
+
+/// A single atomic piece with a precomputed cost, ignoring its text's own
+/// estimated cost entirely — the media packing shape (US-009, PR1).
+fn media_item(seq: usize, critical: bool, precomputed_cost: u64) -> PackItem {
+    PackItem {
+        seq,
+        critical,
+        priority: 0,
+        relevance: 0.0,
+        pieces: vec![Piece {
+            text: String::new(),
+            cost: Some(precomputed_cost),
+        }],
     }
 }
 
@@ -96,4 +117,38 @@ fn test_pack_zero_budget_takes_nothing() {
 #[test]
 fn test_pack_empty_items_yields_empty_result() {
     assert!(pack(&[], 100, &HeuristicEstimator).is_empty());
+}
+
+#[test]
+fn test_pack_uses_a_piece_precomputed_cost_instead_of_estimating_its_text() {
+    // The piece's text is empty (would estimate to 0 tokens); its
+    // precomputed cost of 900 must still be what's charged against the
+    // budget — proving `take_pieces` never falls back to `estimator.estimate`
+    // when `Piece::cost` is set.
+    let items = vec![media_item(0, false, 900)];
+    // Budget covers the precomputed cost (900) + 1 joiner token, not more.
+    let joiner = HeuristicEstimator.estimate(JOINER);
+    let taken = pack(&items, 900 + joiner, &HeuristicEstimator);
+    assert_eq!(
+        taken,
+        vec![1],
+        "the precomputed-cost piece must fit exactly"
+    );
+    let too_tight = pack(&items, 900 + joiner - 1, &HeuristicEstimator);
+    assert_eq!(
+        too_tight,
+        vec![0],
+        "one token under the precomputed cost must not fit"
+    );
+}
+
+#[test]
+fn test_pack_precomputed_cost_piece_is_atomic_never_partially_taken() {
+    // A media item always has exactly one piece, so `taken` can only ever be
+    // 0 or 1 — there is no partial state to assert against, but this pins
+    // that a too-small budget takes nothing rather than some fractional
+    // amount.
+    let items = vec![media_item(0, true, 1_000_000)];
+    let taken = pack(&items, 10, &HeuristicEstimator);
+    assert_eq!(taken, vec![0]);
 }

@@ -617,6 +617,35 @@ so an audit trail always shows *why* a log collapsed the way it did. Off by
 default: it changes what "duplicate" means for logs, so existing callers
 keep byte-exact grouping unless they opt in.
 
+#### Media fragments (experimental, PR1/3)
+
+A fragment may carry an inline image alongside its text: set
+`media: {"mime": "image/png", "bytes_b64": "<base64>"}` on a
+`ContextFragment`; `content` stays the caption (often empty for a bare
+screenshot). This is **PR1 of 3** for media support — honest about what it
+does and does not do yet:
+
+- **Atomic packing**: a media fragment is never chunked — it packs whole
+  under the budget or not at all, so an image can never be cut mid-stream.
+- **Token cost from the image itself**, not its base64 text: PNG/JPEG
+  dimensions are sniffed from the header (`ceil(width * height / 750)`, a
+  published Claude image-token constant); an unsupported mime or an
+  unreadable header falls back to a safe over-count of the base64 text.
+- **Dedup on raw bytes**: two fragments with byte-identical decoded media
+  are deduplicated regardless of their caption text (screenshots are often
+  captionless, so caption-text dedup would false-positive on "" == "").
+  Media is never near-duplicated.
+- **Capped at 4 MiB of base64** (`limits::MAX_MEDIA_BYTES`, ≈3 MiB decoded),
+  independent of the text-content cap; malformed base64 is rejected at
+  validation.
+- **No binary retrieval store yet.** A media fragment that does not fit the
+  budget is `drop`ped with an explicit reason
+  (`decision.rule_id == "drop.media_unavailable"`) instead of being handed a
+  `ctx://source/` handle — PR1 has nowhere to persist the bytes behind such a
+  handle, so it does not pretend one exists. Externalized-media storage,
+  screenshot expiry, and the Node/WASM/wire surface are **not yet built**;
+  they land in PR2/PR3.
+
 #### Source TTL & disk growth
 
 `policy.source_ttl_seconds` (`None` by default) controls how long a

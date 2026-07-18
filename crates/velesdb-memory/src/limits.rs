@@ -29,6 +29,16 @@ pub const MAX_FRAGMENT_BYTES: usize = 1_048_576;
 /// single call can demand across every adapter.
 pub const MAX_FRAGMENTS: usize = 1_024;
 
+/// Maximum accepted size of a fragment's base64-encoded media payload
+/// (US-009, PR1: inline images) — 4 MiB of base64 text, roughly 3 MiB of raw
+/// bytes once decoded. Deliberately separate from [`MAX_FRAGMENT_BYTES`],
+/// which only ever measures [`crate::context::model::ContextFragment::content`]
+/// (the caption): a screenshot is not text, and capping it at the 1 MiB text
+/// ceiling would reject ordinary screenshots outright. Measured against
+/// `bytes_b64.len()` (the encoded string), so the cap can reject an
+/// oversized payload before any base64 decoding is attempted.
+pub const MAX_MEDIA_BYTES: usize = 4 * 1024 * 1024;
+
 /// Cap on a caller-supplied token budget. A budget cannot force allocations
 /// by itself, but an absurd value would make the savings arithmetic
 /// meaningless, so adapters clamp to this ceiling instead of erroring.

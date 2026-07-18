@@ -18,7 +18,16 @@ const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 /// Derive a stable `u64` id from arbitrary text via FNV-1a 64-bit.
 #[must_use]
 pub fn stable_id(text: &str) -> u64 {
-    text.bytes().fold(FNV_OFFSET, |hash, byte| {
+    stable_id_bytes(text.as_bytes())
+}
+
+/// Derive a stable `u64` id from arbitrary bytes via FNV-1a 64-bit — the
+/// same scheme as [`stable_id`], generalized to raw bytes so binary payloads
+/// (e.g. decoded media, US-009) can be content-addressed without a lossy
+/// round-trip through `String`.
+#[must_use]
+pub fn stable_id_bytes(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(FNV_OFFSET, |hash, &byte| {
         (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
     })
 }
@@ -40,5 +49,17 @@ mod tests {
     #[test]
     fn empty_string_yields_offset_basis() {
         assert_eq!(stable_id(""), FNV_OFFSET);
+    }
+
+    #[test]
+    fn stable_id_bytes_agrees_with_stable_id_on_valid_utf8() {
+        assert_eq!(stable_id_bytes("hello".as_bytes()), stable_id("hello"));
+    }
+
+    #[test]
+    fn stable_id_bytes_hashes_non_utf8_bytes() {
+        let bytes = [0xFFu8, 0x00, 0x89, 0x50, 0x4E, 0x47];
+        assert_eq!(stable_id_bytes(&bytes), stable_id_bytes(&bytes));
+        assert_ne!(stable_id_bytes(&bytes), stable_id_bytes(&bytes[1..]));
     }
 }
