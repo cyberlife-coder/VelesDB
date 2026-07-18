@@ -69,61 +69,18 @@ fn parse_id(s: &str) -> Result<u64, JsValue> {
         .map_err(|_| invalid_input(format!("invalid id '{s}' (expected a decimal u64 string)")))
 }
 
-/// Object keys whose `u64` values (or arrays of them) cross to JS as decimal
-/// strings — same contract and key list as the Node binding's `convert.rs`
-/// (`fragment_id`, `content_hash`, `memory_id`, `fragment_ids`). Token counts
-/// stay numbers: the budget caps bound them far below 2^53.
-const ID_KEYS: &[&str] = &["fragment_id", "content_hash", "memory_id", "fragment_ids"];
-
-/// Recursively rewrite every [`ID_KEYS`] field of an outgoing JSON tree into
-/// its decimal-string form.
+/// Recursively rewrite every `context` id field (see
+/// [`velesdb_memory::context::wire::ID_KEYS`]) of an outgoing JSON tree into
+/// its decimal-string form. Shared with the Node binding via
+/// `velesdb_memory::context::wire`, not duplicated here.
 fn stringify_id_fields(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            for (key, entry) in map.iter_mut() {
-                if ID_KEYS.contains(&key.as_str()) {
-                    stringify_ids_in(entry);
-                } else {
-                    stringify_id_fields(entry);
-                }
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(stringify_id_fields),
-        _ => {}
-    }
-}
-
-/// Rewrite one id value (or an array of them) into decimal strings.
-fn stringify_ids_in(value: &mut Value) {
-    match value {
-        Value::Number(number) => {
-            if let Some(id) = number.as_u64() {
-                *value = Value::String(id.to_string());
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(stringify_ids_in),
-        _ => {}
-    }
+    velesdb_memory::context::wire::stringify_id_fields(value);
 }
 
 /// Accept `fragments[].id` in decimal-string form (the Node binding's
-/// contract, mirrored) by rewriting it to the numeric wire form. The other
-/// [`ID_KEYS`] never appear in a compile *request*, only in the output — a
-/// blanket rule over every `id` key would corrupt caller metadata that
-/// happens to use that name.
+/// contract, mirrored) by rewriting it to the numeric wire form.
 fn parse_fragment_id_strings(request: &mut Value) -> Result<(), JsValue> {
-    let Some(fragments) = request.get_mut("fragments").and_then(Value::as_array_mut) else {
-        return Ok(());
-    };
-    for fragment in fragments {
-        let Some(id) = fragment.get_mut("id") else {
-            continue;
-        };
-        if let Value::String(text) = id {
-            *id = Value::Number(parse_id(text)?.into());
-        }
-    }
-    Ok(())
+    velesdb_memory::context::wire::parse_fragment_id_strings(request).map_err(invalid_input)
 }
 
 /// `undefined`/`null` → `None`; a plain object → `Some(Metadata)`; anything

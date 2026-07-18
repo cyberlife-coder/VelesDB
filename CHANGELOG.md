@@ -84,6 +84,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Internal, non-breaking: `fusion::fuse` re-expressed over `fuse_scored`
   (identical candidates/order/numbers, iso-behavior pinned by test);
   intra-doc links fixed so `RUSTDOCFLAGS="-D warnings" cargo doc` passes.
+- Internal, non-breaking: the `context` id wire contract (`ID_KEYS`,
+  decimal-string ⇄ `u64` tree rewrite) moved from two copy-pasted
+  implementations (Node's `convert.rs`, WASM's `memory_service.rs`) to one
+  shared `velesdb_memory::context::wire` module both bindings now delegate
+  to — same behavior (pinned by the moved logic's own new unit tests plus
+  the existing Node/WASM suites), one source of truth for future `context`
+  id fields instead of two to keep in sync.
 
 R1 `Collection`-internals train: resolves and **closes the god-object EPIC
 ([#1384](https://github.com/cyberlife-coder/VelesDB/issues/1384))**. The
