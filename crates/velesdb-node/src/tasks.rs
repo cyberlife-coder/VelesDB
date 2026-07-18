@@ -4,8 +4,34 @@
 //! so all of them go through here off the JS event-loop thread — there are no
 //! synchronous variants.
 
-use napi::bindgen_prelude::{ToNapiValue, TypeName};
+use napi::bindgen_prelude::{ToNapiValue, TypeName, ValueType};
 use napi::{Env, Error, Result, Task};
+
+/// Arbitrary JSON resolved as-is to JavaScript (`serde_json::Value` alone
+/// cannot be a [`Task`] output: it implements [`ToNapiValue`] but not
+/// [`TypeName`]). Keeps the exact wire shape — field names and `null`
+/// included — where a `#[napi(object)]` DTO would re-case the keys.
+pub struct JsonOut(pub serde_json::Value);
+
+impl TypeName for JsonOut {
+    fn type_name() -> &'static str {
+        "object"
+    }
+
+    fn value_type() -> ValueType {
+        ValueType::Object
+    }
+}
+
+// `ToNapiValue::to_napi_value` is an `unsafe fn` by napi's trait design; this
+// impl adds no unsafe operations of its own — it only delegates to the
+// existing `serde_json::Value` implementation.
+#[allow(unsafe_code)]
+impl ToNapiValue for JsonOut {
+    unsafe fn to_napi_value(env: napi::sys::napi_env, val: Self) -> Result<napi::sys::napi_value> {
+        serde_json::Value::to_napi_value(env, val.0)
+    }
+}
 
 /// A deferred unit of blocking work producing `O`.
 pub struct Job<O: Send + 'static> {

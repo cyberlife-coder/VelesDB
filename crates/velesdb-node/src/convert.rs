@@ -133,6 +133,47 @@ fn stringify_ids_in(value: &mut Value) {
     }
 }
 
+/// The inverse of [`stringify_id_fields`]: recursively rewrite every
+/// [`ID_KEYS`] field given in the binding's decimal-string form back into the
+/// numeric form the domain types deserialize. Non-string id values pass
+/// through untouched (serde reports them with its own error).
+pub fn parse_id_fields(value: &mut Value) -> napi::Result<()> {
+    match value {
+        Value::Object(map) => {
+            for (key, entry) in map.iter_mut() {
+                if ID_KEYS.contains(&key.as_str()) {
+                    parse_ids_in(entry)?;
+                } else {
+                    parse_id_fields(entry)?;
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                parse_id_fields(item)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Rewrite one id value (or an array of them) from decimal string to number.
+fn parse_ids_in(value: &mut Value) -> napi::Result<()> {
+    match value {
+        Value::String(text) => {
+            *value = Value::Number(parse_id(text)?.into());
+        }
+        Value::Array(items) => {
+            for item in items {
+                parse_ids_in(item)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Accept `fragments[].id` in the binding's decimal-string form by rewriting
 /// it to the numeric form the domain type deserializes.
 pub fn parse_fragment_id_strings(request: &mut Value) -> napi::Result<()> {

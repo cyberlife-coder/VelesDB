@@ -44,7 +44,7 @@ use std::sync::Arc;
 use napi::bindgen_prelude::AsyncTask;
 use napi_derive::napi;
 use serde_json::Value;
-use velesdb_memory::context::{CompilePolicy, CompileRequest, ContextCompiler};
+use velesdb_memory::context::{CompilePolicy, CompileRequest, ContextCompiler, WorkingContext};
 use velesdb_memory::{
     DynEmbedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor, DEFAULT_DIMENSION,
     DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
@@ -55,7 +55,7 @@ use crate::dto::{
     RecollectionJs,
 };
 use crate::error::{invalid_input, to_napi_err, CODE_INTERNAL};
-use crate::tasks::Job;
+use crate::tasks::{Job, JsonOut};
 
 /// Build the requested embedder. `"hash"` is deterministic and offline;
 /// `"ollama"` calls a local embedding model (real semantic recall).
@@ -334,6 +334,61 @@ impl MemoryStore {
                 .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
                 .map_err(to_napi_err)?;
             convert::to_compiled_js(&compiled)
+        }))
+    }
+
+    /// Persist the agent's distilled working state under `project` +
+    /// `session` (idempotent upsert: saving again replaces the previous
+    /// state), for inter-session resumption. Same JSON shape as the MCP
+    /// `save_working_context` tool; resolves to the stored fact id as a
+    /// decimal string, like every other id here. Pure delegation to
+    /// [`velesdb_memory`]'s bridge — zero logic in the binding.
+    #[napi(js_name = "saveWorkingContext", ts_return_type = "Promise<string>")]
+    pub fn save_working_context(
+        &self,
+        project: String,
+        session: String,
+        working: Value,
+    ) -> AsyncTask<Job<String>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let mut working = working;
+            convert::parse_id_fields(&mut working)?;
+            let working: WorkingContext = serde_json::from_value(working)
+                .map_err(|err| invalid_input(format!("invalid working context: {err}")))?;
+            svc.save_working_context(&project, &session, &working)
+                .map(convert::id_to_string)
+                .map_err(to_napi_err)
+        }))
+    }
+
+    /// The working context previously saved under `project` + `session`,
+    /// `null` when there is none — the start-of-session mirror of
+    /// [`Self::save_working_context`].
+    #[napi(
+        js_name = "loadWorkingContext",
+        ts_return_type = "Promise<object | null>"
+    )]
+    pub fn load_working_context(
+        &self,
+        project: String,
+        session: String,
+    ) -> AsyncTask<Job<JsonOut>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let loaded = svc
+                .load_working_context(&project, &session)
+                .map_err(to_napi_err)?;
+            match loaded {
+                Some(working) => {
+                    let mut value = serde_json::to_value(working).map_err(|err| {
+                        invalid_input(format!("working context serialization: {err}"))
+                    })?;
+                    convert::stringify_id_fields(&mut value);
+                    Ok(JsonOut(value))
+                }
+                None => Ok(JsonOut(Value::Null)),
+            }
         }))
     }
 
