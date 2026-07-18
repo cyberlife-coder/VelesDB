@@ -80,6 +80,7 @@ fn generated_fragment(rng: &mut Lcg, pool: &mut Vec<String>) -> ContextFragment 
         },
         priority: u8::try_from(rng.below(4)).ok(),
         metadata: None,
+        media: None,
     }
 }
 
@@ -226,6 +227,7 @@ fn test_compiler_keeps_critical_facts_a_naive_truncation_loses() {
             kind: None,
             priority: None,
             metadata: None,
+            media: None,
         })
         .collect();
     let constraints: Vec<String> = (0..5)
@@ -238,6 +240,7 @@ fn test_compiler_keeps_critical_facts_a_naive_truncation_loses() {
             kind: None,
             priority: None,
             metadata: None,
+            media: None,
         });
     }
 
@@ -328,6 +331,7 @@ fn test_adversarial_pathological_inputs_never_panic() {
                     kind: None,
                     priority: None,
                     metadata: None,
+                    media: None,
                 }],
                 project: None,
                 target_model: None,
@@ -352,6 +356,7 @@ fn test_adversarial_duplicate_avalanche_stays_linear_and_correct() {
             kind: None,
             priority: None,
             metadata: None,
+            media: None,
         })
         .collect();
     let out = ContextCompiler::new(CompilePolicy::default())

@@ -24,6 +24,7 @@ fn fragment(content: &str) -> ContextFragment {
         kind: None,
         priority: None,
         metadata: None,
+        media: None,
     }
 }
 
@@ -1055,4 +1056,247 @@ fn test_compile_wire_request_with_policy_pricing_yields_cost_insights() {
     );
     assert_eq!(out.insights.currency.as_deref(), Some("EUR"));
     assert_eq!(out.insights.pricing_version.as_deref(), Some("2026-07"));
+}
+
+// --- Media fragments (US-009 of EPIC-P-071, PR1: inline images) --------------
+
+use velesdb_memory::context::MediaRef;
+
+/// A synthetic, well-formed PNG signature + IHDR chunk declaring 64x48
+/// pixels — token cost `ceil(64*48/750) = 5`. No binary file is committed;
+/// this is the base64 of a hand-built 33-byte header (see the crate's
+/// `ImageTokenEstimator` unit tests for the byte-level fixture it mirrors).
+const PNG_64X48_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAYAAAAAAAAA";
+const PNG_64X48_COST: u64 = 5;
+
+/// A synthetic PNG declaring 1024x768 pixels — token cost
+/// `ceil(1024*768/750) = 1049`.
+const PNG_1024X768_B64: &str = "iVBORw0KGgoAAAANSUhEUgAABAAAAAMACAYAAAAAAAAA";
+const PNG_1024X768_COST: u64 = 1049;
+
+/// Build a fragment carrying an inline PNG media payload.
+fn media_fragment(caption: &str, bytes_b64: &str) -> ContextFragment {
+    ContextFragment {
+        media: Some(MediaRef {
+            mime: "image/png".to_owned(),
+            bytes_b64: bytes_b64.to_owned(),
+        }),
+        ..fragment(caption)
+    }
+}
+
+#[test]
+fn test_media_fragment_packs_atomically_and_is_preserved_when_budget_allows() {
+    // Given a media fragment with a caption, and a generous budget
+    let frag = media_fragment("a screenshot of the crash", PNG_64X48_B64);
+    let out = compile(&request(vec![frag], 10_000));
+
+    // Then it is preserved whole, under its own dedicated rule
+    let decision = &out.decisions[0];
+    assert_eq!(decision.action, ContextAction::Preserve);
+    assert_eq!(decision.rule_id, "media.atomic");
+    assert_eq!(decision.risk, FidelityRisk::Low);
+    assert!(decision.handle.is_none());
+    assert!(out.retrieval_handles.is_empty());
+    assert!(out.content.contains("a screenshot of the crash"));
+}
+
+#[test]
+fn test_media_fragment_with_blank_caption_is_preserved_but_contributes_no_visible_text() {
+    // Given a bare screenshot with no caption (the common case)
+    let frag = media_fragment("", PNG_1024X768_B64);
+    let out = compile(&request(vec![frag], 10_000));
+
+    // Then it is still preserved (the decision honestly reflects that the
+    // image survived the budget), but the assembled prompt text carries
+    // nothing for it — PR1 does not inject binary/image content into
+    // `content`, only accounts for its token cost (see the crate README).
+    assert_eq!(out.decisions[0].action, ContextAction::Preserve);
+    assert_eq!(out.content, "");
+    assert!(out.sections.is_empty());
+}
+
+#[test]
+fn test_media_fragment_insights_tokens_in_and_out_reflect_the_image_cost() {
+    // Given a single, blank-caption media fragment
+    let frag = media_fragment("", PNG_1024X768_B64);
+    let out = compile(&request(vec![frag], 10_000));
+
+    // Then the image's real token cost is what gets accounted, not a
+    // near-zero text-estimate of its (empty) caption
+    assert_eq!(out.insights.tokens_in, PNG_1024X768_COST);
+    assert_eq!(
+        out.insights.tokens_saved, 0,
+        "a fully preserved image must report zero tokens saved"
+    );
+}
+
+#[test]
+fn test_media_fragment_that_cannot_fit_the_budget_is_dropped_not_retrieved() {
+    // Given a media fragment far too large for the budget
+    let frag = media_fragment("a huge screenshot", PNG_1024X768_B64);
+    let out = compile(&request(vec![frag], 10));
+
+    // Then it is dropped with an explicit PR1-scope reason — never handed a
+    // ctx://source handle, since no binary retrieval store exists yet
+    let decision = &out.decisions[0];
+    assert_eq!(decision.action, ContextAction::Drop);
+    assert_eq!(decision.rule_id, "drop.media_unavailable");
+    assert_eq!(decision.risk, FidelityRisk::High);
+    assert!(decision.handle.is_none());
+    assert!(
+        decision.reason.contains("next PR"),
+        "the reason must be honest about the PR1 scope gap: {}",
+        decision.reason
+    );
+    assert!(out.retrieval_handles.is_empty());
+    assert_eq!(out.content, "");
+}
+
+#[test]
+fn test_media_fragment_pack_is_all_or_nothing_at_the_exact_budget_boundary() {
+    // Given the exact budget the image needs (its cost plus one joiner
+    // token) versus one token short of it
+    let joiner = HeuristicEstimator.estimate("\n\n");
+    let exact = request(
+        vec![media_fragment("", PNG_64X48_B64)],
+        PNG_64X48_COST + joiner,
+    );
+    let one_short = request(
+        vec![media_fragment("", PNG_64X48_B64)],
+        PNG_64X48_COST + joiner - 1,
+    );
+
+    // Then it packs fully right at the boundary, and not at all one token
+    // under it — atomic packing never yields a partial byte-range
+    assert_eq!(compile(&exact).decisions[0].action, ContextAction::Preserve);
+    assert_eq!(compile(&one_short).decisions[0].action, ContextAction::Drop);
+}
+
+#[test]
+fn test_dropped_media_fragment_attributes_its_full_cost_to_the_pr1_drop_rule() {
+    // Given a media fragment that cannot fit
+    let frag = media_fragment("", PNG_1024X768_B64);
+    let out = compile(&request(vec![frag], 10));
+
+    // Then its full precomputed cost is attributed to the rule that dropped
+    // it, exactly like every other savings-by-rule attribution
+    let decision = &out.decisions[0];
+    let saved = out
+        .insights
+        .tokens_saved_by_rule
+        .get(&decision.rule_id)
+        .copied()
+        .unwrap_or(0);
+    assert_eq!(saved, PNG_1024X768_COST);
+}
+
+#[test]
+fn test_identical_media_bytes_are_deduped_even_with_different_captions() {
+    // Given two fragments with byte-identical media but different captions
+    let fragments = vec![
+        media_fragment("shot A", PNG_64X48_B64),
+        media_fragment("shot B", PNG_64X48_B64),
+    ];
+    let out = compile(&request(fragments, 10_000));
+
+    // Then the first survives and the second is dropped as its duplicate —
+    // media identity is the raw bytes, never the caption text
+    assert_eq!(out.decisions[0].action, ContextAction::Preserve);
+    assert_eq!(out.decisions[1].action, ContextAction::Drop);
+    assert_eq!(out.decisions[1].rule_id, "drop.duplicate");
+    assert_eq!(out.decisions[1].risk, FidelityRisk::Low);
+    // And the reason is honest: the image survives, the differing caption
+    // does not — never a blanket "content survives" claim.
+    assert!(
+        out.decisions[1]
+            .reason
+            .contains("differing caption does not"),
+        "reason must not overclaim survival, got: {}",
+        out.decisions[1].reason
+    );
+}
+
+#[test]
+fn test_total_media_payload_over_the_aggregate_cap_is_rejected() {
+    // Given fragments whose individual payloads pass the per-fragment cap
+    // but whose SUM exceeds the aggregate request cap (64 MiB of base64)
+    let one_mib_b64 = "A".repeat(1024 * 1024);
+    let fragments: Vec<ContextFragment> = (0..65)
+        .map(|i| media_fragment(&format!("shot {i}"), &one_mib_b64))
+        .collect();
+    let err = ContextCompiler::new(CompilePolicy::default())
+        .compile(&request(fragments, 10_000))
+        .expect_err("65 MiB of aggregate media must be rejected");
+
+    // Then the rejection names the aggregate cap, before any decode work
+    assert!(
+        err.to_string().contains("total media payload"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_media_fragments_with_blank_captions_and_different_bytes_are_not_deduped() {
+    // Given two DISTINCT images that both happen to carry a blank caption —
+    // under plain text-content dedup these would collide ("" == ""); media
+    // identity must never fall back to comparing captions.
+    let fragments = vec![
+        media_fragment("", PNG_64X48_B64),
+        media_fragment("", PNG_1024X768_B64),
+    ];
+    let out = compile(&request(fragments, 10_000));
+
+    assert_eq!(out.decisions[0].action, ContextAction::Preserve);
+    assert_eq!(
+        out.decisions[1].action,
+        ContextAction::Preserve,
+        "distinct images with blank captions must never be falsely deduped"
+    );
+}
+
+#[test]
+fn test_media_fragment_never_scans_bytes_b64_for_text_classification_rules() {
+    // Given a media fragment whose base64 payload happens to embed
+    // substrings that would trigger text rules (a URL-shaped fragment, code
+    // fences) if it were ever treated as content
+    let frag = ContextFragment {
+        media: Some(MediaRef {
+            mime: "image/png".to_owned(),
+            // Deliberately not valid base64 semantics-wise for a real PNG,
+            // but well-formed base64 syntax (required by validation) that
+            // *contains* "http" and "```"-shaped runs if naively scanned as
+            // text — proving classification never reads `bytes_b64`.
+            bytes_b64: "aHR0cDovL2BgYA==".to_owned(),
+        }),
+        ..fragment("")
+    };
+    let out = compile(&request(vec![frag], 10_000));
+
+    // Then it still classifies as media.atomic, not preserve.url or
+    // preserve.code_fence
+    assert_eq!(out.decisions[0].rule_id, "media.atomic");
+}
+
+#[test]
+fn test_media_compilation_is_fully_deterministic() {
+    // Given a mixed corpus of media fragments: distinct, duplicated, and
+    // budget-exceeding
+    let fragments = vec![
+        media_fragment("first shot", PNG_64X48_B64),
+        media_fragment("", PNG_1024X768_B64),
+        media_fragment("first shot dup", PNG_64X48_B64),
+    ];
+    let req = request(fragments, 2_000);
+
+    // When compiling the same request twice
+    let first = compile(&req);
+    let second = compile(&req);
+
+    // Then the outputs are identical byte for byte
+    assert_eq!(
+        serde_json::to_string(&first).expect("serialize first"),
+        serde_json::to_string(&second).expect("serialize second"),
+        "media compilation must be fully deterministic, exactly like text compilation"
+    );
 }

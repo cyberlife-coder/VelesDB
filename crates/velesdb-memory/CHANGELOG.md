@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Media fragments (experimental, PR1/3 of US-009 in EPIC-P-071)** —
+  `ContextFragment.media: Option<MediaRef>` lets a fragment carry an inline
+  base64-encoded image (`mime` + `bytes_b64`) alongside its text/caption
+  `content`. A media fragment packs as one atomic, unsplittable piece (never
+  chunked mid-image), is deduplicated on its *raw decoded bytes* (never the
+  caption text, and never near-duplicated), and its token cost comes from a
+  new dependency-free `ImageTokenEstimator` (PNG/JPEG header dimensions,
+  `ceil(width * height / 750)`; unsupported mimes or unreadable headers fall
+  back to a safe text-based over-count). Capped at 4 MiB of base64
+  (`limits::MAX_MEDIA_BYTES`), separate from the existing per-fragment text
+  cap; malformed base64 is rejected at validation time. PR1 ships no binary
+  retrieval store: a media fragment that cannot fit the budget is `drop`ped
+  with an explicit reason (`drop.media_unavailable`) rather than handed a
+  `ctx://source` handle that would not resolve — externalized-media storage,
+  screenshot expiry, and the Node/WASM/wire surface land in a later PR. Wire-
+  compatible: `media` is `#[serde(default)]`, so every existing request still
+  deserializes unchanged.
+
 ## [0.6.0] - 2026-07-06
 
 ### Changed

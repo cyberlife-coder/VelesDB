@@ -5,6 +5,19 @@
 //! content, near-duplicates hash a normalized form (lowercased, whitespace
 //! runs collapsed). The **first** occurrence survives; later ones are marked
 //! duplicates of it. Deterministic by construction: input order decides.
+//!
+//! **Media fragments** (US-009, PR1) opt out of this entirely: a media
+//! fragment's identity is its *raw decoded media bytes*
+//! ([`crate::context::media::MediaAnalysis::raw_hash`]), never its caption
+//! text — captions are often empty, and two distinct screenshots with blank
+//! captions would otherwise collide under the text-content check. Media
+//! identity lives in its own namespace (`media_seen`, keyed on the caller-
+//! supplied `media_hashes` slice) and is Exact-only: near-duplication (case/
+//! whitespace normalization) is a *text* notion and never applies to media.
+//! A media fragment neither reads nor writes the text-content tables, so it
+//! can never be mistaken for — or mistakenly anchor — a plain-text
+//! fragment's dedup chain, even when both have identical (often empty)
+//! content strings.
 
 use std::collections::BTreeMap;
 
@@ -31,13 +44,34 @@ pub(crate) struct Duplicate {
 /// For each content (in input order): `None` if it is a first occurrence,
 /// `Some(duplicate)` if an earlier fragment already covers it. Near-duplicate
 /// detection is skipped when `near` is `false`.
-pub(crate) fn find_duplicates(contents: &[&str], near: bool) -> Vec<Option<Duplicate>> {
+///
+/// `media_hashes[i]` is `Some(raw_hash)` when fragment `i` carries media
+/// (its identity — see the module doc), `None` for an ordinary text
+/// fragment; it must be the same length as `contents` (one entry per
+/// fragment, same input order).
+pub(crate) fn find_duplicates(
+    contents: &[&str],
+    near: bool,
+    media_hashes: &[Option<u64>],
+) -> Vec<Option<Duplicate>> {
     let mut exact_seen: BTreeMap<u64, usize> = BTreeMap::new();
     let mut near_seen: BTreeMap<u64, usize> = BTreeMap::new();
+    let mut media_seen: BTreeMap<u64, usize> = BTreeMap::new();
     contents
         .iter()
+        .zip(media_hashes)
         .enumerate()
-        .map(|(seq, content)| {
+        .map(|(seq, (content, media_hash))| {
+            if let Some(&hash) = media_hash.as_ref() {
+                // Media's own namespace: Exact-only, never reads or writes
+                // the text-content tables below (see the module doc).
+                let verdict = media_seen.get(&hash).map(|&kept_seq| Duplicate {
+                    kind: DupKind::Exact,
+                    kept_seq,
+                });
+                media_seen.entry(hash).or_insert(seq);
+                return verdict;
+            }
             let exact_hash = stable_id(content);
             // Skip the normalize+hash pass entirely when near-dup detection
             // is off — the value would never be read.

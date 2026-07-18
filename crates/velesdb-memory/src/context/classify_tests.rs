@@ -12,6 +12,7 @@ fn fragment(content: &str) -> ContextFragment {
         kind: None,
         priority: None,
         metadata: None,
+        media: None,
     }
 }
 
@@ -230,4 +231,67 @@ fn test_classify_plain_prose_gets_default_rule() {
     assert_eq!(matched.id, "preserve.default");
     assert_eq!(matched.action, ContextAction::Preserve);
     assert!(!matched.critical);
+}
+
+fn media_fragment(caption: &str) -> ContextFragment {
+    ContextFragment {
+        media: Some(crate::context::model::MediaRef {
+            mime: "image/png".to_owned(),
+            bytes_b64: "iVBORw0KGgo=".to_owned(),
+        }),
+        ..fragment(caption)
+    }
+}
+
+#[test]
+fn test_classify_media_fragment_gets_its_own_atomic_rule() {
+    let matched = classify_default(&media_fragment(""));
+    assert_eq!(matched.id, "media.atomic");
+    assert_eq!(matched.action, ContextAction::Preserve);
+    assert!(matched.critical);
+}
+
+#[test]
+fn test_classify_media_fragment_wins_over_every_text_rule() {
+    // A caption that would otherwise match code/url/negative-constraint/
+    // value-dense rules must still classify as media.atomic — the media
+    // rule never lets a fragment's own text content steer its
+    // classification away from atomic packing.
+    let matched = classify_default(&media_fragment(
+        "```rust\nfn f() {}\n``` never do this http://x 1 2 3",
+    ));
+    assert_eq!(matched.id, "media.atomic");
+}
+
+#[test]
+fn test_classify_media_fragment_wins_even_over_marked_verbatim_and_cache() {
+    let mut meta = Map::new();
+    meta.insert("cache".to_owned(), Value::Bool(true));
+    let frag = ContextFragment {
+        metadata: Some(meta),
+        ..media_fragment("caption")
+    };
+    assert_eq!(classify_default(&frag).id, "media.atomic");
+}
+
+#[test]
+fn test_classify_media_atomic_rule_can_be_disabled() {
+    let policy = CompilePolicy {
+        disabled_rules: vec!["media.atomic".to_owned()],
+        ..CompilePolicy::default()
+    };
+    // With the rule disabled, an otherwise-plain-prose caption falls through
+    // to the next matching rule exactly like any other disabled rule.
+    assert_eq!(
+        classify(&media_fragment("plain caption"), &policy).id,
+        "preserve.default"
+    );
+}
+
+#[test]
+fn test_classify_non_media_fragment_is_unaffected_by_the_media_rule() {
+    assert_ne!(
+        classify_default(&fragment("plain prose")).id,
+        "media.atomic"
+    );
 }

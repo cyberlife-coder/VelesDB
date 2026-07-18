@@ -17,6 +17,19 @@ use super::estimator::TokenEstimator;
 /// and the emitted bytes can never drift apart.
 pub(crate) const JOINER: &str = "\n\n";
 
+/// One emission piece: its text, and — for a piece whose token cost is
+/// precomputed outside the injected estimator (a media fragment's single
+/// atomic piece, US-009 PR1) — that fixed cost. `None` (every non-media
+/// piece) means "measure `text` with the injected estimator", the unchanged
+/// pre-media behavior; `Some` must never be re-derived from `text` (for
+/// media, `text` is only the caption, which on its own would grossly
+/// under-price the piece).
+#[derive(Debug, Clone)]
+pub(crate) struct Piece {
+    pub text: String,
+    pub cost: Option<u64>,
+}
+
 /// One packable fragment: its emission pieces plus its selection keys.
 #[derive(Debug)]
 pub(crate) struct PackItem {
@@ -30,7 +43,7 @@ pub(crate) struct PackItem {
     pub relevance: f32,
     /// The fragment's text, pre-cut into orderly pieces (chunks); packing
     /// takes a prefix of them.
-    pub pieces: Vec<String>,
+    pub pieces: Vec<Piece>,
 }
 
 /// How many leading pieces of each item fit under `usable` tokens. The
@@ -66,9 +79,10 @@ fn selection_order(items: &[PackItem]) -> Vec<usize> {
 }
 
 /// Greedily take leading pieces while they fit; the first piece also pays
-/// the fragment's joiner cost.
+/// the fragment's joiner cost. A piece's own cost is its precomputed
+/// [`Piece::cost`] when set, otherwise the injected estimator over its text.
 fn take_pieces(
-    pieces: &[String],
+    pieces: &[Piece],
     remaining: &mut u64,
     joiner_tokens: u64,
     estimator: &dyn TokenEstimator,
@@ -76,7 +90,10 @@ fn take_pieces(
     let mut count = 0_usize;
     for piece in pieces {
         let joiner = if count == 0 { joiner_tokens } else { 0 };
-        let cost = estimator.estimate(piece).saturating_add(joiner);
+        let base = piece
+            .cost
+            .unwrap_or_else(|| estimator.estimate(&piece.text));
+        let cost = base.saturating_add(joiner);
         if cost > *remaining {
             break;
         }

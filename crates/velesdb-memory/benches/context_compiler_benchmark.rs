@@ -45,6 +45,7 @@ fn plain_fragments(n: usize) -> Vec<ContextFragment> {
             kind: None,
             priority: None,
             metadata: None,
+            media: None,
         })
         .collect()
 }
@@ -61,6 +62,7 @@ fn duplicate_heavy_fragments(n: usize) -> Vec<ContextFragment> {
                 kind: None,
                 priority: None,
                 metadata: None,
+                media: None,
             }
         })
         .collect()
@@ -140,6 +142,7 @@ fn bench_oversized_fragment(c: &mut Criterion) {
                 kind: None,
                 priority: None,
                 metadata: None,
+                media: None,
             }],
             budget,
         );

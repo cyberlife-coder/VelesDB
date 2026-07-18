@@ -36,6 +36,7 @@ mod dedup;
 pub mod estimator;
 pub mod insights;
 mod log_normalize;
+mod media;
 pub mod model;
 pub(crate) mod provenance;
 mod relevance;
@@ -50,8 +51,8 @@ pub use insights::{CompilationInsights, ModelPricing, PricingTable};
 pub use model::{
     CompilePolicy, CompileRequest, CompiledContext, CompiledSection, ContextAction,
     ContextDecision, ContextDecisionRef, ContextFact, ContextFragment, ContextSavings,
-    FidelityRisk, ImportanceWeights, MemoryScope, RetrievalHandle, SectionKind, SourceReference,
-    WorkingContext,
+    FidelityRisk, ImportanceWeights, MediaRef, MemoryScope, RetrievalHandle, SectionKind,
+    SourceReference, WorkingContext,
 };
 pub use relevance::DeterministicReranker;
 
@@ -91,6 +92,7 @@ pub fn fragment_id(content: &str) -> u64 {
 ///             kind: None,
 ///             priority: None,
 ///             metadata: None,
+///             media: None,
 ///         }],
 ///         project: None,
 ///         target_model: None,
@@ -210,7 +212,20 @@ impl ContextCompiler {
             .iter()
             .map(|analysis| analysis.tokens)
             .fold(0, u64::saturating_add);
-        let tokens_out = estimator.estimate(content);
+        // `content` already carries every emitted fragment's TEXT — for a
+        // media fragment (US-009, PR1) that means its caption only, since
+        // raw media bytes are never turned into packed text (see `pieces`).
+        // The image's own cost has to be added on top, but only for media
+        // that actually made it into the output (an emissions entry exists)
+        // — a dropped image (see `media_unavailable_verdict`) contributed
+        // nothing and must not appear here either.
+        let media_tokens_out: u64 = analyses
+            .iter()
+            .filter(|analysis| emissions.contains_key(&analysis.seq))
+            .filter_map(|analysis| analysis.media.as_ref())
+            .map(|media| media.image_tokens)
+            .fold(0, u64::saturating_add);
+        let tokens_out = estimator.estimate(content).saturating_add(media_tokens_out);
         let tokens_saved = tokens_in.saturating_sub(tokens_out);
         let mut insights = CompilationInsights {
             tokens_in,
@@ -271,6 +286,26 @@ struct Analysis<'a> {
     /// grouping (ventilated into the decision `reason`). Computed once here
     /// so [`pieces`] and [`decision`] never redo the line-scan.
     abstract_collapse: Option<(String, bool)>,
+    /// Set when the fragment carries inline media (US-009, PR1): its
+    /// dedup identity and precomputed image token cost, computed once here
+    /// (decoding is not free) and reused by dedup, packing, and insights.
+    media: Option<media::MediaAnalysis>,
+}
+
+/// A media fragment's total precomputed token cost: the image alone (from
+/// [`media::MediaAnalysis::image_tokens`]) plus its caption's own (usually
+/// tiny, often zero for a blank caption) text cost. Shared by [`analyze`]
+/// (feeds [`Analysis::tokens`]) and [`pieces`] (feeds the packed piece's
+/// cost) so the two can never drift apart — the same total is what gets
+/// budgeted and what gets reported as "emitted" once packed.
+fn media_fragment_tokens(
+    media: &media::MediaAnalysis,
+    caption: &str,
+    estimator: &dyn TokenEstimator,
+) -> u64 {
+    media
+        .image_tokens
+        .saturating_add(estimator.estimate(caption))
 }
 
 /// What actually got emitted for one packed fragment.
@@ -311,6 +346,7 @@ fn validate(request: &CompileRequest, policy: &CompilePolicy) -> Result<u64, Mem
             limits::MAX_FRAGMENT_BYTES
         )));
     }
+    validate_media(&request.fragments)?;
     let budget = limits::clamp_token_budget(request.token_budget);
     let usable = budget.saturating_sub(policy.response_reserve_tokens);
     if usable == 0 {
@@ -320,6 +356,40 @@ fn validate(request: &CompileRequest, policy: &CompilePolicy) -> Result<u64, Mem
         });
     }
     Ok(usable)
+}
+
+/// Reject a fragment whose media payload violates
+/// [`limits::MAX_MEDIA_BYTES`] or is not well-formed base64 — checked eagerly
+/// here, before any decoding/hashing/estimation downstream, so a malformed
+/// payload never reaches the pipeline (fail fast, same `INVALID_PARAMS`
+/// shape as every other cap in [`validate`]).
+fn validate_media(fragments: &[ContextFragment]) -> Result<(), MemoryError> {
+    let mut total_media_bytes: usize = 0;
+    for (seq, fragment) in fragments.iter().enumerate() {
+        let Some(media_ref) = &fragment.media else {
+            continue;
+        };
+        total_media_bytes = total_media_bytes.saturating_add(media_ref.bytes_b64.len());
+        if total_media_bytes > limits::MAX_TOTAL_MEDIA_BYTES {
+            return Err(MemoryError::ContextOverLimit(format!(
+                "total media payload exceeds the request cap of {} base64 bytes",
+                limits::MAX_TOTAL_MEDIA_BYTES
+            )));
+        }
+        if media_ref.bytes_b64.len() > limits::MAX_MEDIA_BYTES {
+            return Err(MemoryError::ContextOverLimit(format!(
+                "fragment #{seq} media payload of {} base64 bytes exceeds the cap of {} bytes",
+                media_ref.bytes_b64.len(),
+                limits::MAX_MEDIA_BYTES
+            )));
+        }
+        if !media::is_valid_base64(&media_ref.bytes_b64) {
+            return Err(MemoryError::ContextOverLimit(format!(
+                "fragment #{seq} media payload is not valid base64"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Run classification, relevance scoring, and duplicate detection over the
@@ -334,14 +404,27 @@ fn analyze<'a>(
         .iter()
         .map(|fragment| fragment.content.as_str())
         .collect();
-    let duplicates = dedup::find_duplicates(&contents, policy.near_dup_dedup);
+    // Decode/analyze media exactly once per fragment (decoding is not
+    // free), reused below both to feed dedup's media namespace and to build
+    // each Analysis's own `media` field.
+    let media_analyses: Vec<Option<media::MediaAnalysis>> = request
+        .fragments
+        .iter()
+        .map(|fragment| fragment.media.as_ref().map(media::analyze))
+        .collect();
+    let media_hashes: Vec<Option<u64>> = media_analyses
+        .iter()
+        .map(|analysis| analysis.as_ref().map(|analysis| analysis.raw_hash))
+        .collect();
+    let duplicates = dedup::find_duplicates(&contents, policy.near_dup_dedup, &media_hashes);
     let query_terms = relevance::terms(&request.query);
     let mut analyses: Vec<Analysis<'a>> = request
         .fragments
         .iter()
         .zip(duplicates)
+        .zip(media_analyses)
         .enumerate()
-        .map(|(seq, (fragment, dup))| {
+        .map(|(seq, ((fragment, dup), media_analysis))| {
             let content_hash = stable_id(&fragment.content);
             let rule = classify::classify(fragment, policy);
             let abstract_collapse = (rule.action == ContextAction::Abstract).then(|| {
@@ -350,17 +433,22 @@ fn analyze<'a>(
                     policy.normalize_log_timestamps,
                 )
             });
+            let tokens = media_analysis.as_ref().map_or_else(
+                || estimator.estimate(&fragment.content),
+                |media| media_fragment_tokens(media, &fragment.content, estimator),
+            );
             Analysis {
                 seq,
                 fragment_id: fragment.id.unwrap_or(content_hash),
                 content_hash,
                 original: &fragment.content,
-                tokens: estimator.estimate(&fragment.content),
+                tokens,
                 rule,
                 relevance: relevance::lexical_relevance(&query_terms, &fragment.content),
                 priority: fragment.priority.unwrap_or(0),
                 dup,
                 abstract_collapse,
+                media: media_analysis,
             }
         })
         .collect();
@@ -407,19 +495,45 @@ fn pack_items(
             critical: analysis.rule.critical,
             priority: analysis.priority,
             relevance: analysis.relevance,
-            pieces: pieces(analysis, &chunk_policy),
+            pieces: pieces(analysis, &chunk_policy, estimator),
         })
         .collect()
 }
 
 /// The emission pieces of one fragment.
-fn pieces(analysis: &Analysis, chunk_policy: &ChunkPolicy) -> Vec<String> {
+///
+/// A media fragment (US-009, PR1) is always exactly one atomic, all-or-
+/// nothing piece — never passed to [`chunk_text`], mirroring the
+/// `abstract.log_dedup` case below: packing can take it whole or not at all,
+/// never a byte-range prefix, so an image can never be cut mid-stream. Its
+/// text is only the caption (raw media bytes never become packable "piece"
+/// text); its cost is the precomputed [`media_fragment_tokens`] total, so
+/// packing never re-derives a media fragment's cost from `estimator.estimate`
+/// over an empty or near-empty caption.
+fn pieces(
+    analysis: &Analysis,
+    chunk_policy: &ChunkPolicy,
+    estimator: &dyn TokenEstimator,
+) -> Vec<budget::Piece> {
+    if let Some(media) = &analysis.media {
+        let cost = media_fragment_tokens(media, analysis.original, estimator);
+        return vec![budget::Piece {
+            text: analysis.original.to_owned(),
+            cost: Some(cost),
+        }];
+    }
     if let Some((collapsed, _normalized)) = &analysis.abstract_collapse {
-        return vec![collapsed.clone()];
+        return vec![budget::Piece {
+            text: collapsed.clone(),
+            cost: None,
+        }];
     }
     chunk_text(analysis.original, chunk_policy)
         .into_iter()
-        .map(|chunk| chunk.text)
+        .map(|chunk| budget::Piece {
+            text: chunk.text,
+            cost: None,
+        })
         .collect()
 }
 
@@ -475,7 +589,10 @@ fn emissions(items: &[PackItem], taken: &[usize]) -> BTreeMap<usize, Emission> {
             (
                 item.seq,
                 Emission {
-                    text: item.pieces[..count].concat(),
+                    text: item.pieces[..count]
+                        .iter()
+                        .map(|piece| piece.text.as_str())
+                        .collect(),
                     taken: count,
                     total: item.pieces.len(),
                 },
@@ -529,6 +646,13 @@ fn decision(
         (Some(dup), _) => dup_verdict(analysis, *dup, &all[dup.kept_seq], emissions),
         (None, Some(emission)) if emission.is_full() => full_verdict(analysis),
         (None, Some(emission)) => partial_verdict(analysis, emission),
+        // A media fragment's single atomic piece is always taken whole or
+        // not at all (see `pieces`), so a missing emission for one means
+        // "did not fit" — never "took none of what was offered" from a
+        // multi-piece fragment. PR1 has no binary retrieval store, so
+        // externalizing it behind a `ctx://source` handle would promise a
+        // fetch that cannot succeed; drop it instead, honestly.
+        (None, None) if analysis.media.is_some() => media_unavailable_verdict(analysis),
         (None, None) => externalized_verdict(analysis),
     };
     ContextDecision {
@@ -575,20 +699,77 @@ fn dup_verdict(
         DupKind::Near => ("drop.near_duplicate", "near-duplicate"),
     };
     let twin_full = emissions.get(&twin.seq).is_some_and(Emission::is_full);
-    let (risk, fate) = if twin_full {
-        (FidelityRisk::Low, "content survives through it")
-    } else {
-        (
+    if twin_full {
+        // Media dedup keys on the image bytes alone: the twin carries the
+        // image, but a caption that differs from the twin's does NOT
+        // survive — say so instead of claiming full survival.
+        let caption_diverges = analysis.media.is_some() && analysis.original != twin.original;
+        let reason = if caption_diverges {
+            format!(
+                "{variant} of fragment #{} — image survives through it; this fragment's differing caption does not",
+                dup.kept_seq
+            )
+        } else {
+            format!(
+                "{variant} of fragment #{} — content survives through it",
+                dup.kept_seq
+            )
+        };
+        return (
+            ContextAction::Drop,
+            rule_id.to_owned(),
+            FidelityRisk::Low,
+            reason,
+            Some(provenance::handle_for(analysis.content_hash)),
+        );
+    }
+    if analysis.media.is_some() {
+        // Same PR1 honesty gap as `media_unavailable_verdict`: the twin
+        // itself did not fully pack, and there is no binary retrieval store
+        // yet, so this duplicate is not recoverable through a handle either
+        // — unlike the text case below, do not hand out one that would not
+        // resolve.
+        return (
+            ContextAction::Drop,
+            rule_id.to_owned(),
             critical_risk(analysis.rule.critical),
-            "but that twin was not fully emitted — recover via the handle",
-        )
-    };
+            format!(
+                "{variant} of fragment #{} — that twin was not fully emitted, and media \
+                 externalization lands in the next PR, so this duplicate is not retrievable either",
+                dup.kept_seq
+            ),
+            None,
+        );
+    }
     (
         ContextAction::Drop,
         rule_id.to_owned(),
-        risk,
-        format!("{variant} of fragment #{} — {fate}", dup.kept_seq),
+        critical_risk(analysis.rule.critical),
+        format!(
+            "{variant} of fragment #{} — but that twin was not fully emitted — recover via the handle",
+            dup.kept_seq
+        ),
         Some(provenance::handle_for(analysis.content_hash)),
+    )
+}
+
+/// A media fragment (US-009, PR1) that did not fit the budget: `drop`ped
+/// with an explicit, honest reason instead of the generic
+/// [`externalized_verdict`] — PR1 ships no binary retrieval store, so
+/// handing out a `ctx://source` handle here would promise a fetch that can
+/// never resolve. A future PR that lands media externalization changes this
+/// verdict, not the atomic-packing or dedup behavior around it.
+fn media_unavailable_verdict(analysis: &Analysis) -> Verdict {
+    (
+        ContextAction::Drop,
+        "drop.media_unavailable".to_owned(),
+        critical_risk(analysis.rule.critical),
+        format!(
+            "did not fit the budget ({}); media externalization lands in the next PR, so it is \
+             dropped rather than given a retrieval handle that would not resolve",
+            analysis.rule.reason
+        ),
+        None,
     )
 }
 
@@ -669,6 +850,30 @@ fn retrieval_handles(analyses: &[Analysis], decisions: &[ContextDecision]) -> Ve
         .collect()
 }
 
+/// Tokens actually reflected in the output for one fragment. For an
+/// ordinary fragment this is the injected estimator over whatever prefix of
+/// pieces was emitted (unchanged pre-media behavior). For a media fragment
+/// (US-009, PR1) packing is atomic (see `pieces`): an emission's mere
+/// presence already means the *whole* precomputed cost (image +
+/// caption — [`media_fragment_tokens`], the same total [`Analysis::tokens`]
+/// holds) was spent, never a partial text-estimate of the caption alone —
+/// which would misreport a fully preserved image as almost entirely
+/// "saved" whenever its caption happens to be blank.
+fn emitted_tokens(
+    analysis: &Analysis,
+    emissions: &BTreeMap<usize, Emission>,
+    estimator: &dyn TokenEstimator,
+) -> u64 {
+    let Some(emission) = emissions.get(&analysis.seq) else {
+        return 0;
+    };
+    if analysis.media.is_some() {
+        analysis.tokens
+    } else {
+        estimator.estimate(&emission.text)
+    }
+}
+
 /// Attribute saved tokens to the rule that saved them. A fully emitted
 /// verbatim fragment saves nothing, so every attribution comes from drops,
 /// abstractions, externalizations, and partial packs — and the per-rule map
@@ -681,9 +886,7 @@ fn saved_by_rule(
 ) -> BTreeMap<String, u64> {
     let mut by_rule = BTreeMap::new();
     for (analysis, decision) in analyses.iter().zip(decisions) {
-        let emitted = emissions
-            .get(&analysis.seq)
-            .map_or(0, |emission| estimator.estimate(&emission.text));
+        let emitted = emitted_tokens(analysis, emissions, estimator);
         let saved = analysis.tokens.saturating_sub(emitted);
         if saved > 0 {
             *by_rule.entry(decision.rule_id.clone()).or_insert(0) += saved;
@@ -691,6 +894,10 @@ fn saved_by_rule(
     }
     by_rule
 }
+
+#[cfg(test)]
+#[path = "context/media_pipeline_tests.rs"]
+mod media_pipeline_tests;
 
 #[cfg(test)]
 mod chunk_policy_tests {

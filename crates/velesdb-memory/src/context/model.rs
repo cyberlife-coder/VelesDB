@@ -51,6 +51,33 @@ pub enum FidelityRisk {
     High,
 }
 
+/// Inline media payload attached to a [`ContextFragment`] (US-009, PR1:
+/// screenshots/images only). `ContextFragment::content` stays the
+/// text/caption — often empty for a bare screenshot — while the pixels live
+/// here, base64-encoded so the JSON wire never needs a binary frame.
+///
+/// PR1 scope: the fragment packs atomically (see [`super::pieces`] in the
+/// compiler) and its token cost comes from
+/// [`super::estimator::ImageTokenEstimator`], but there is no externalized
+/// binary store yet — a media fragment that cannot fit the budget is
+/// `drop`ped with an explicit reason rather than handed a `ctx://source`
+/// handle that would not actually resolve. See the crate README's "media
+/// fragments" section.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MediaRef {
+    /// Declared MIME type (e.g. `"image/png"`, `"image/jpeg"`). Only PNG and
+    /// JPEG headers are sniffed for dimensions; any other value (or an
+    /// unreadable header) falls back to a deterministic, safe over-count
+    /// (see [`super::estimator::ImageTokenEstimator`]) — never rejected for
+    /// an unrecognized mime alone.
+    pub mime: String,
+    /// The raw media bytes, base64-encoded (standard alphabet, padded).
+    /// Capped at [`crate::limits::MAX_MEDIA_BYTES`] and validated for
+    /// well-formedness at compile time — a request carrying an oversized or
+    /// malformed payload is rejected before any other work.
+    pub bytes_b64: String,
+}
+
 /// One unit of caller-supplied context to compile.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
@@ -81,6 +108,11 @@ pub struct ContextFragment {
     /// [`ContextAction::Cache`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
+    /// Inline media payload (US-009, PR1). `None` (the default) keeps every
+    /// pre-0.9.0 request wire-compatible. When set, the fragment packs as one
+    /// atomic piece — see [`MediaRef`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaRef>,
 }
 
 /// Which memories the compiler may pull in alongside the caller's fragments.
