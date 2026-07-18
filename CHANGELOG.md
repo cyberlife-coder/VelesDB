@@ -204,6 +204,13 @@ account).
   exceed `i64::MAX`). Integers outside `[i64::MIN, u64::MAX]` now raise an
   explicit `ValueError` stating the supported range instead of silently losing
   precision. [EPIC-P-071/US-001]
+- **`VectorCollection::traverse_bfs` is now usable** — edges are a
+  kind-agnostic feature (`add_edge`/`remove_edge`/`get_outgoing_edges` were
+  already shared, see `docs/ARCHITECTURE.md` §F2.2 R1.2c: REST `/relations`
+  and the agent-memory wedge create edges on any collection kind), but BFS
+  traversal was only reachable through `GraphCollection`. `VectorCollection`
+  now exposes `traverse_bfs`, delegating to the same shared edge store as
+  `GraphCollection::traverse_bfs`. (#1439)
 
 ## [3.12.0] — 2026-07-15
 
