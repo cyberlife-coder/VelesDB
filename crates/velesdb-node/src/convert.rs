@@ -95,59 +95,27 @@ pub fn to_fusion_options(opts: Option<FusionOptionsJs>) -> FusionOptions {
     }
 }
 
-/// Object keys whose `u64` values (or arrays of them) must cross to JS as
-/// decimal strings — JS `number` loses precision above 2^53. Token counts
-/// stay numbers: they are bounded far below 2^53 by the budget caps.
-const ID_KEYS: &[&str] = &["fragment_id", "content_hash", "memory_id", "fragment_ids"];
-
-/// Recursively rewrite every [`ID_KEYS`] field of a serialized
+/// Recursively rewrite every `context` id field (see
+/// [`velesdb_memory::context::wire::ID_KEYS`]) of a serialized
 /// `CompiledContext` into its decimal-string form — the same id contract as
 /// every other method of this binding, applied to a whole tree at once so
-/// the domain type needs no JS-specific duplicate.
+/// the domain type needs no JS-specific duplicate. Shared with the WASM
+/// binding via `velesdb_memory::context::wire`, not duplicated here.
 pub fn stringify_id_fields(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            for (key, entry) in map.iter_mut() {
-                if ID_KEYS.contains(&key.as_str()) {
-                    stringify_ids_in(entry);
-                } else {
-                    stringify_id_fields(entry);
-                }
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(stringify_id_fields),
-        _ => {}
-    }
+    velesdb_memory::context::wire::stringify_id_fields(value);
 }
 
-/// Rewrite one id value (or an array of them) into decimal strings.
-fn stringify_ids_in(value: &mut Value) {
-    match value {
-        Value::Number(number) => {
-            if let Some(id) = number.as_u64() {
-                *value = Value::String(id.to_string());
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(stringify_ids_in),
-        _ => {}
-    }
+/// The inverse of [`stringify_id_fields`]: recursively rewrite every
+/// `context` id field given in the binding's decimal-string form back into
+/// the numeric form the domain types deserialize.
+pub fn parse_id_fields(value: &mut Value) -> napi::Result<()> {
+    velesdb_memory::context::wire::parse_id_fields(value).map_err(invalid_input)
 }
 
 /// Accept `fragments[].id` in the binding's decimal-string form by rewriting
 /// it to the numeric form the domain type deserializes.
 pub fn parse_fragment_id_strings(request: &mut Value) -> napi::Result<()> {
-    let Some(fragments) = request.get_mut("fragments").and_then(Value::as_array_mut) else {
-        return Ok(());
-    };
-    for fragment in fragments {
-        let Some(id) = fragment.get_mut("id") else {
-            continue;
-        };
-        if let Value::String(text) = id {
-            *id = Value::Number(parse_id(text)?.into());
-        }
-    }
-    Ok(())
+    velesdb_memory::context::wire::parse_fragment_id_strings(request).map_err(invalid_input)
 }
 
 /// Marshal a compiled context into its JS shape: serialize to the wire JSON,

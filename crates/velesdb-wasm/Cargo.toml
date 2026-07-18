@@ -26,8 +26,9 @@ velesdb-core = { workspace = true, default-features = false }
 # The agent-memory wedge orchestration (remember/recall/recall_fused/relate/
 # forget/why), generic over MemoryStore — this crate supplies the in-memory
 # backend (memory_store.rs). default-features=false drops the default `mcp`
-# feature (rmcp/tokio), leaving the offline, zero-dep HashEmbedder.
-velesdb-memory = { path = "../velesdb-memory", default-features = false }
+# feature (rmcp/tokio), leaving the offline, zero-dep HashEmbedder; `context`
+# adds the deterministic compiler (zero new dependencies, persistence-free).
+velesdb-memory = { path = "../velesdb-memory", default-features = false, features = ["context"] }
 
 # getrandom must use the JS backend on wasm32-unknown-unknown.
 # `rand 0.10` depends directly on `getrandom 0.4`; other workspace

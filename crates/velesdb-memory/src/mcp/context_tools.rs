@@ -19,7 +19,7 @@ use serde::Deserialize;
 use super::{join_error, to_error, McpServer};
 use crate::context::{
     CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextDecision,
-    ContextSavings,
+    ContextSavings, WorkingContext,
 };
 
 // --- Thin request envelopes --------------------------------------------------
@@ -56,6 +56,50 @@ pub(super) struct RetrieveContextSourceResult {
     pub handle: String,
     /// The original fragment content, byte for byte.
     pub content: String,
+}
+
+/// Input of the `save_working_context` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct SaveWorkingContextParams {
+    /// Project facet this working context belongs to (matches `remember`'s
+    /// `project` metadata convention).
+    pub project: String,
+    /// Session identifier — pick something stable for the agent run you want
+    /// to resume later (e.g. a conversation id).
+    pub session: String,
+    /// The distilled state to persist: goal, active constraints, verified
+    /// facts, open hypotheses, decisions taken, exact evidence, and pending
+    /// actions.
+    pub working: WorkingContext,
+}
+
+/// Output of the `save_working_context` tool.
+#[derive(Debug, serde::Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct SaveWorkingContextResult {
+    /// Id of the stored system fact backing this working context.
+    pub id: u64,
+}
+
+/// Input of the `load_working_context` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct LoadWorkingContextParams {
+    /// Project facet the working context was saved under.
+    pub project: String,
+    /// Session identifier the working context was saved under.
+    pub session: String,
+}
+
+/// Output of the `load_working_context` tool. An envelope (not a bare
+/// `Option<WorkingContext>`): the MCP spec requires the output schema's
+/// root to be an object, so a nullable root is rejected by rmcp.
+#[derive(Debug, serde::Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct LoadWorkingContextResult {
+    /// The previously saved working context, or `null` when nothing was ever
+    /// saved under that project + session (a fresh start, not an error).
+    pub working: Option<WorkingContext>,
 }
 
 #[tool_router(router = context_tool_router, vis = "pub(super)")]
@@ -151,6 +195,47 @@ impl McpServer {
             .map_err(join_error)?
             .map_err(to_error)?;
         Ok(Json(RetrieveContextSourceResult { handle, content }))
+    }
+
+    #[tool(
+        name = "save_working_context",
+        description = "Persist this session's distilled working state (goal, active constraints, verified facts, open hypotheses, decisions, exact evidence, pending actions) under a project + session id — so a LATER session (a fresh agent run, a new conversation, a resumed process) can pick up exactly where this one left off instead of re-deriving context from scratch. Call this near the end of a session, or whenever the working state changes meaningfully. Saving again under the same project+session replaces the previous state (idempotent upsert). Returns the stored fact's id."
+    )]
+    async fn save_working_context(
+        &self,
+        Parameters(params): Parameters<SaveWorkingContextParams>,
+    ) -> Result<Json<SaveWorkingContextResult>, ErrorData> {
+        let service = Arc::clone(&self.service);
+        let SaveWorkingContextParams {
+            project,
+            session,
+            working,
+        } = params;
+        let id = tokio::task::spawn_blocking(move || {
+            service.save_working_context(&project, &session, &working)
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
+        Ok(Json(SaveWorkingContextResult { id }))
+    }
+
+    #[tool(
+        name = "load_working_context",
+        description = "Resume a session: load back the working context previously saved by save_working_context under the same project + session id — the goal, constraints, verified facts, open hypotheses, decisions, exact evidence, and pending actions a PRIOR session left off with. Call this at the START of a new session before doing anything else, so work continues instead of restarting. Returns null when nothing was ever saved under that project + session (a fresh start, not an error)."
+    )]
+    async fn load_working_context(
+        &self,
+        Parameters(params): Parameters<LoadWorkingContextParams>,
+    ) -> Result<Json<LoadWorkingContextResult>, ErrorData> {
+        let service = Arc::clone(&self.service);
+        let LoadWorkingContextParams { project, session } = params;
+        let working =
+            tokio::task::spawn_blocking(move || service.load_working_context(&project, &session))
+                .await
+                .map_err(join_error)?
+                .map_err(to_error)?;
+        Ok(Json(LoadWorkingContextResult { working }))
     }
 }
 

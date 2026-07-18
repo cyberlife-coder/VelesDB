@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -25,6 +26,7 @@ test('surface allowlist — exactly the supported methods, no engine leak', () =
     'compileContext',
     'feedback',
     'forget',
+    'loadWorkingContext',
     'recall',
     'recallFused',
     'recallFusedDated',
@@ -32,6 +34,7 @@ test('surface allowlist — exactly the supported methods, no engine leak', () =
     'relate',
     'remember',
     'rememberExtracted',
+    'saveWorkingContext',
     'why',
   ])
   assert.equal(typeof MemoryService.open, 'function', 'open is the static factory')
@@ -190,6 +193,26 @@ test('feedback reinforces a fact, weakens on failure, NOT_FOUND on unknown id', 
   }
 })
 
+test('forget reports found=true on a real deletion, found=false on a typo id', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const id = await store.remember('ephemeral note to forget')
+    assert.equal(await store.forget(id), true, 'deleting an existing fact resolves true')
+    assert.equal(
+      await store.forget(id),
+      false,
+      'a second forget of the same id finds nothing — distinguishable from the first',
+    )
+    assert.equal(
+      await store.forget('999999999'),
+      false,
+      'a never-stored id resolves false (a no-op, not an error)',
+    )
+  } finally {
+    cleanup()
+  }
+})
+
 test('error codes — INVALID_INPUT on empty fact, NOT_FOUND on missing relate endpoint', async () => {
   const { store, cleanup } = freshStore()
   try {
@@ -289,6 +312,94 @@ test('compileContext malformed request rejects with INVALID_INPUT', async () => 
   const { store, cleanup } = freshStore()
   try {
     await assert.rejects(store.compileContext({ fragments: 'not-an-array' }), /INVALID_INPUT/)
+  } finally {
+    cleanup()
+  }
+})
+
+test('saveWorkingContext → loadWorkingContext round-trips across processes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const working = {
+      goal: 'ship the working-context Node surface',
+      active_constraints: [{ text: 'never merge without green gates' }],
+      verified_facts: [{ text: 'the MCP tools already round-trip' }],
+      pending_actions: ['load this back from a fresh MemoryService'],
+    }
+    // Save from a CHILD process (the store's single-writer lock is released
+    // deterministically when it exits — a block-scoped handle in this
+    // process would keep the lock until GC).
+    const script = `
+      const { MemoryService } = require(${JSON.stringify(new URL('../index.js', import.meta.url).pathname)})
+      const store = MemoryService.open(${JSON.stringify(dir)}, 'hash')
+      store.saveWorkingContext('veles', 'session-1', ${JSON.stringify(working)}).then((id) => {
+        if (!/^\\d+$/.test(id)) throw new Error('id must be a decimal string, got: ' + id)
+      })
+    `
+    const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' })
+    assert.equal(child.status, 0, `child save failed: ${child.stderr}`)
+    // A separate MemoryService in THIS process: the next session resumes.
+    const reopened = MemoryService.open(dir, 'hash')
+    const loaded = await reopened.loadWorkingContext('veles', 'session-1')
+    assert.ok(loaded, 'the saved working context must survive the process boundary')
+    assert.equal(loaded.goal, working.goal)
+    assert.deepEqual(
+      loaded.active_constraints.map((f) => f.text),
+      ['never merge without green gates'],
+    )
+    assert.deepEqual(loaded.pending_actions, working.pending_actions)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('loadWorkingContext resolves null when nothing was saved', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const loaded = await store.loadWorkingContext('veles', 'never-saved')
+    assert.equal(loaded, null, 'a fresh start reads as null, not an error')
+  } finally {
+    cleanup()
+  }
+})
+
+test('saveWorkingContext replaces the previous state (idempotent upsert)', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await store.saveWorkingContext('veles', 's', { goal: 'first' })
+    await store.saveWorkingContext('veles', 's', { goal: 'second' })
+    const loaded = await store.loadWorkingContext('veles', 's')
+    assert.equal(loaded.goal, 'second', 'the latest save wins')
+  } finally {
+    cleanup()
+  }
+})
+
+test('saveWorkingContext malformed working state rejects with INVALID_INPUT', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(
+      store.saveWorkingContext('veles', 's', { active_constraints: 'not-an-array' }),
+      /INVALID_INPUT/,
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test('working context id fields cross as decimal strings in both directions', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    // Ids inside the working context (decision refs, evidence) follow the
+    // binding-wide contract: decimal strings on the JS side, u64 on the wire.
+    const bigId = '18446744073709551615' // u64::MAX — would corrupt as a JS number
+    await store.saveWorkingContext('veles', 'ids', {
+      decisions: [{ fragment_id: bigId, rule_id: 'preserve.default' }],
+      exact_evidence: [{ fragment_id: bigId, handle: 'ctx://source/1' }],
+    })
+    const loaded = await store.loadWorkingContext('veles', 'ids')
+    assert.equal(loaded.decisions[0].fragment_id, bigId, 'decision ids survive as strings')
+    assert.equal(loaded.exact_evidence[0].fragment_id, bigId, 'evidence ids survive as strings')
   } finally {
     cleanup()
   }

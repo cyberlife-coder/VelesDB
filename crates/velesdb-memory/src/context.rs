@@ -38,6 +38,10 @@ pub mod insights;
 pub mod model;
 pub(crate) mod provenance;
 mod relevance;
+/// The id wire contract (decimal-string `u64`) shared by every JS-facing
+/// binding of these types — one source of truth for [`wire::ID_KEYS`]
+/// instead of a Node/WASM copy each.
+pub mod wire;
 
 pub use chunk::{chunk_text, ChunkBoundary, ChunkPolicy, TextChunk};
 pub use estimator::{DynTokenEstimator, HeuristicEstimator, TokenEstimator};

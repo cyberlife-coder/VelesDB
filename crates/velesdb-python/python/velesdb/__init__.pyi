@@ -2463,14 +2463,17 @@ class MemoryService:
         """
         ...
 
-    def forget(self, id: int) -> None:
+    def forget(self, id: int) -> bool:
         """Delete a memory by id.
 
         Args:
             id: The memory id to remove.
 
-        Raises:
-            KeyError: If no memory with ``id`` exists.
+        Returns:
+            ``True`` if a memory actually existed under ``id`` and was
+            deleted, ``False`` if nothing was stored there (a stale id or a
+            typo) — a no-op, not an error, but distinguishable from a real
+            deletion.
         """
         ...
 

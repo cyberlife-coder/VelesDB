@@ -39,6 +39,60 @@ export interface MemoryRecollection {
   metadata?: Record<string, unknown>;
 }
 
+/** One input fragment of {@link MemoryService.compileContext}. */
+export interface CompileContextFragment {
+  /** Optional caller id as a decimal string (content-derived when absent). */
+  id?: string;
+  /** The fragment text. */
+  content: string;
+  /** Classification hint (`"code"`, `"log"`, …). */
+  kind?: string;
+  /** Fragment flags, e.g. `{ verbatim: true }` or `{ cache: true }`. */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Input of {@link MemoryService.compileContext} — the MCP `compile_context`
+ * wire shape (snake_case keys, ids as decimal strings).
+ */
+export interface CompileContextRequest {
+  /** The current task — relevance ordering anchors on it. */
+  query: string;
+  /** Hard budget for the compiled context, in estimated tokens. */
+  token_budget: number;
+  /** The fragments to compile. */
+  fragments: CompileContextFragment[];
+  /** Pull stored memories into the compile (tri-engine recall). */
+  memory_scope?: Record<string, unknown>;
+  /** Compile policy overrides (importance weights, pricing, …). */
+  policy?: Record<string, unknown>;
+  /** Project facet for savings aggregation. */
+  project?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Output of {@link MemoryService.compileContext} — the MCP wire shape
+ * (snake_case keys; every id field is a decimal string).
+ */
+export interface CompiledContext {
+  /** The assembled context, ready to inject into a prompt. */
+  content: string;
+  /** Ordered output blocks (cache prefix first). */
+  sections: unknown;
+  /** One auditable decision per input fragment. */
+  decisions: unknown;
+  /** One source pointer per distinct fragment. */
+  sources: unknown;
+  /** Handles of externalized fragments (`ctx://source/…`). */
+  retrieval_handles: unknown;
+  /** Token/cost savings of this compilation. */
+  insights: unknown;
+  /** Overall fidelity risk. */
+  risk: 'low' | 'medium' | 'high';
+  [key: string]: unknown;
+}
+
 /** A structured predicate for {@link MemoryService.recallWhere}. */
 export interface MemoryColumnFilter {
   /** Metadata field name (alphanumeric/underscore). */
@@ -124,8 +178,9 @@ interface WasmMemoryServiceInstance {
     opts: unknown
   ): unknown;
   relate(from: string, to: string, relation: string): string;
-  forget(id: string): void;
+  forget(id: string): boolean;
   why(decision: string, maxHops: number | null | undefined, filter: unknown): unknown;
+  compileContext(request: unknown): unknown;
   free(): void;
 }
 
@@ -370,11 +425,13 @@ export class MemoryService {
     return wrapWasmCall(() => this.ensureInitialized().relate(from, to, relation));
   }
 
-  /** Delete a memory by id. */
-  forget(id: string): Promise<void> {
-    return wrapWasmCall(() => {
-      this.ensureInitialized().forget(id);
-    });
+  /**
+   * Delete a memory by id. Resolves to whether a memory actually existed
+   * under that id and was deleted — `false` means nothing was stored there
+   * (a stale id or a typo), not a second successful deletion.
+   */
+  forget(id: string): Promise<boolean> {
+    return wrapWasmCall(() => this.ensureInitialized().forget(id));
   }
 
   /**
@@ -388,6 +445,23 @@ export class MemoryService {
   ): Promise<MemoryExplanation> {
     return wrapWasmCall(
       () => this.ensureInitialized().why(decision, maxHops, filter) as MemoryExplanation
+    );
+  }
+
+  /**
+   * Compile context fragments into a token-budgeted, provenance-audited
+   * prompt context — deterministic, no LLM, running the same compiler as the
+   * MCP server and the Node binding, in the browser. Request and result use
+   * the MCP `compile_context` wire shape; every id field crosses as a
+   * decimal string.
+   *
+   * In-memory semantics: externalized sources and savings events live in
+   * this session's store — `ctx://source/` handles resolve only within the
+   * current browser session.
+   */
+  compileContext(request: CompileContextRequest): Promise<CompiledContext> {
+    return wrapWasmCall(
+      () => this.ensureInitialized().compileContext(request) as CompiledContext
     );
   }
 }

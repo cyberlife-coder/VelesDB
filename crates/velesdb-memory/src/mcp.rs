@@ -260,7 +260,7 @@ impl McpServer {
 
     #[tool(
         name = "forget",
-        description = "Permanently delete a memory by its `id` (as returned by `remember` or `recall`), removing the fact and its graph links. The deletion is durable and cannot be undone — use it to retract or correct stored knowledge. For automatic time-based expiry instead, set a TTL when calling `remember`. Returns the deleted id."
+        description = "Permanently delete a memory by its `id` (as returned by `remember` or `recall`), removing the fact and its graph links. The deletion is durable and cannot be undone — use it to retract or correct stored knowledge. For automatic time-based expiry instead, set a TTL when calling `remember`. Returns the requested id plus `found`: `true` if a memory actually existed and was deleted, `false` if nothing was stored under that id (a stale id or a typo) — a no-op, not an error, but distinguishable from a real deletion."
     )]
     async fn forget(
         &self,
@@ -268,11 +268,11 @@ impl McpServer {
     ) -> Result<Json<ForgetResult>, ErrorData> {
         let service = Arc::clone(&self.service);
         let id = params.id;
-        tokio::task::spawn_blocking(move || service.forget(id))
+        let found = tokio::task::spawn_blocking(move || service.forget(id))
             .await
             .map_err(join_error)?
             .map_err(to_error)?;
-        Ok(Json(ForgetResult { id }))
+        Ok(Json(ForgetResult { id, found }))
     }
 
     #[tool(
