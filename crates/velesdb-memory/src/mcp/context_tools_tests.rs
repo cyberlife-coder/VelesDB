@@ -8,7 +8,9 @@ use tempfile::TempDir;
 
 use super::super::dto::RememberParams;
 use super::*;
-use crate::context::{fragment_id, ContextAction, ContextFragment, MemoryScope};
+use crate::context::{
+    fragment_id, ContextAction, ContextFact, ContextFragment, MemoryScope, WorkingContext,
+};
 use crate::embedder::{DynEmbedder, HashEmbedder};
 use crate::service::MemoryService;
 
@@ -208,4 +210,110 @@ async fn test_retrieve_context_source_tool_unknown_handle_is_invalid_params() {
         panic!("nothing stored under this handle — the tool must fail");
     };
     assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+}
+
+// --- save_working_context / load_working_context ---------------------------
+
+fn working() -> WorkingContext {
+    WorkingContext {
+        goal: Some("ship EPIC-P-071 PR3".to_owned()),
+        active_constraints: vec![ContextFact {
+            text: "never merge without green gates".to_owned(),
+            source: None,
+        }],
+        verified_facts: vec![ContextFact {
+            text: "compile_context already ships on MCP+Node".to_owned(),
+            source: None,
+        }],
+        open_hypotheses: Vec::new(),
+        decisions: Vec::new(),
+        exact_evidence: Vec::new(),
+        pending_actions: vec!["wire save/load working-context tools".to_owned()],
+    }
+}
+
+#[tokio::test]
+async fn test_save_working_context_tool_then_load_round_trips() {
+    // Given a server and a working context to persist
+    let (_dir, srv) = server();
+    let saved = working();
+
+    // When saving through the tool
+    let Json(save_result) = srv
+        .save_working_context(Parameters(SaveWorkingContextParams {
+            project: "veles".to_owned(),
+            session: "session-1".to_owned(),
+            working: saved.clone(),
+        }))
+        .await
+        .expect("save_working_context");
+    assert!(save_result.id > 0);
+
+    // Then a later load (a fresh "session") recovers the exact same state —
+    // this is the inter-session resumption the tool exists for.
+    let Json(loaded) = srv
+        .load_working_context(Parameters(LoadWorkingContextParams {
+            project: "veles".to_owned(),
+            session: "session-1".to_owned(),
+        }))
+        .await
+        .expect("load_working_context");
+    let recovered = loaded
+        .working
+        .expect("a previously saved working context must load back");
+    assert_eq!(recovered.goal, saved.goal);
+    assert_eq!(recovered.pending_actions, saved.pending_actions);
+    assert_eq!(recovered.active_constraints.len(), 1);
+}
+
+#[tokio::test]
+async fn test_load_working_context_tool_none_when_never_saved() {
+    // Given a server with nothing saved under this project/session pair
+    let (_dir, srv) = server();
+
+    // When loading through the tool
+    let Json(loaded) = srv
+        .load_working_context(Parameters(LoadWorkingContextParams {
+            project: "veles".to_owned(),
+            session: "never-saved".to_owned(),
+        }))
+        .await
+        .expect("load_working_context");
+
+    // Then there is nothing to resume
+    assert!(loaded.working.is_none());
+}
+
+#[tokio::test]
+async fn test_save_working_context_tool_is_idempotent_upsert() {
+    // Given an already-saved working context
+    let (_dir, srv) = server();
+    let mut state = working();
+    srv.save_working_context(Parameters(SaveWorkingContextParams {
+        project: "veles".to_owned(),
+        session: "session-2".to_owned(),
+        working: state.clone(),
+    }))
+    .await
+    .expect("save_working_context");
+
+    // When saving again under the same project+session with a new goal
+    state.goal = Some("ship a follow-up PR".to_owned());
+    srv.save_working_context(Parameters(SaveWorkingContextParams {
+        project: "veles".to_owned(),
+        session: "session-2".to_owned(),
+        working: state.clone(),
+    }))
+    .await
+    .expect("save_working_context (replace)");
+
+    // Then loading returns the latest state, not the first
+    let Json(loaded) = srv
+        .load_working_context(Parameters(LoadWorkingContextParams {
+            project: "veles".to_owned(),
+            session: "session-2".to_owned(),
+        }))
+        .await
+        .expect("load_working_context");
+    assert_eq!(loaded.working.expect("saved").goal, state.goal);
 }
