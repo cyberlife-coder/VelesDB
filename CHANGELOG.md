@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   effect: one leaked client can no longer brick every later session, and
   when a store really is locked, the user is told what to do about it.
 
-### Added — deterministic context compiler (EPIC-P-070; ships as `velesdb-memory` 0.8.0 / `velesdb-node` 0.8.0 via the `velesdb-memory-v0.8.0` tag)
+### Added — deterministic context compiler (EPIC-P-070 base feature; shipped as `velesdb-memory` 0.8.0 / `velesdb-node` 0.8.0 via the `velesdb-memory-v0.8.0` tag — the EPIC-P-071 follow-ups further down in this section ship separately, see the note below)
 
 - **`velesdb-memory`**: new default `context` feature — a deterministic
   context compiler (no LLM, no network, no clock; same request ⇒
@@ -49,11 +49,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Node** (`@wiscale/velesdb-memory-node`): `compileContext(request)` —
   pure conversion, ids as decimal strings; ships the
   `velesdb-context-optimizer` agent skill in the npm package.
+> **From here on, this section is EPIC-P-071.** Unless a bullet says
+> otherwise, these items ship as `velesdb-memory` / `velesdb-node` 0.9.0
+> via the `velesdb-memory-v0.9.0` tag. The Python bullet immediately below
+> is the one exception.
+
 - **Python** (`velesdb`): context-compiler parity on `MemoryService` —
   `compile_context` / `retrieve_context_source` / `context_savings` /
   `save_working_context` / `load_working_context`, same wire shapes as the
   MCP tools; ids cross as exact native Python ints (vs decimal strings on
-  Node). [EPIC-P-071/US-001]
+  Node). Ships with the **next workspace release** (the `velesdb` PyPI
+  package's own version line), not with the `velesdb-memory-v0.9.0` tag —
+  the published `velesdb` 3.12.0 wheel does not include `compile_context`
+  yet. [EPIC-P-071/US-001]
 - **`velesdb-memory`**: usage-driven importance blend in `context_memories`
   — `CompilePolicy.importance` (`{confidence: 0.2, recency: 0.1,
   recency_field: null}`, serde-defaulted so 0.8.0 requests stay
