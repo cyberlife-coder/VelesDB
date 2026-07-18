@@ -42,7 +42,7 @@ fn read_line_with_timeout(mut reader: BufReader<ChildStdout>, timeout: Duration)
     });
     match rx.recv_timeout(timeout) {
         // 0 bytes = EOF before any line arrived; read/recv errors read the same.
-        Ok(Ok((0, _))) | Ok(Err(_)) | Err(_) => None,
+        Ok(Ok((0, _)) | Err(_)) | Err(_) => None,
         Ok(Ok((_, line))) => Some(line),
     }
 }
