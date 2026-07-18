@@ -211,6 +211,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every later session, and when a store really is locked, the user is told
   what to do about it.
 
+## [0.8.0] — 2026-07-17
+
+Retroactive cut — this release shipped without its own section here (its
+full detail lives in the workspace-root CHANGELOG under "EPIC-P-070").
+
+### Added
+
+- **The deterministic context compiler** (`context` feature, on by default):
+  `compile_context` / `retrieve_context_source` / `explain_compilation` /
+  `context_savings` over MCP, plus the memory bridge (`memory_scope`
+  tri-engine pull, content-addressed recoverable sources, compilation
+  events) and `save_working_context`/`load_working_context` on the bridge.
+  No LLM, no network, no clock: same request ⇒ byte-identical output.
+- Node binding `@wiscale/velesdb-memory-node` 0.8.0 (`compileContext`),
+  bundling the `velesdb-context-optimizer` agent skill.
+
+## [0.7.0] — 2026-07-15
+
+Retroactive cut — versions realigned with the workspace release train; no
+crate-level feature change beyond dependency refreshes.
+
 ## [0.6.0] - 2026-07-06
 
 ### Changed
