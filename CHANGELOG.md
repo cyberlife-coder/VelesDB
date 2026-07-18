@@ -101,6 +101,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   normalization actually changed the grouping. Off by default: byte-exact
   grouping is unchanged for existing callers (pinned by a golden test).
   [EPIC-P-071/US-006]
+- Doc-only: crate README sections on injecting a model-exact
+  `TokenEstimator` per provider (`examples/context_savings/real_measures/exact_estimator.mjs`
+  reproduces the `HeuristicEstimator` calibration margins on fresh corpus
+  snippets — always a safe over-count, +9.6 % to +63.8 % measured), the
+  `MAX_TOKEN_BUDGET` dry-run audit pattern (sort `decisions` by `relevance`
+  client-side, nothing is lost), and `source_ttl_seconds`'s permanent-by-
+  default trade-off with a manual-purge "disk growth" section.
+  [EPIC-P-071/US-005, US-006]
+- **Proof harness**: `examples/context_savings/real_measures/cache_prefix.mjs`
+  measures the `cache: true` section's byte-stable-prefix percentage across
+  10 consecutive compiles with changing volatile content (100 % stable
+  prefix on all 9 consecutive turn pairs, reproducible) and frames the
+  naive full-input-rate cost of not caching it against an injected,
+  never-hardcoded `policy.pricing` table. [EPIC-P-071/US-008]
 
 R1 `Collection`-internals train: resolves and **closes the god-object EPIC
 ([#1384](https://github.com/cyberlife-coder/VelesDB/issues/1384))**. The
