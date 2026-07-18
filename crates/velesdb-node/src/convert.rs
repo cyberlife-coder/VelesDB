@@ -137,6 +137,11 @@ fn stringify_ids_in(value: &mut Value) {
 /// [`ID_KEYS`] field given in the binding's decimal-string form back into the
 /// numeric form the domain types deserialize. Non-string id values pass
 /// through untouched (serde reports them with its own error).
+///
+/// Deliberately stricter than serde: an [`ID_KEYS`]-named field with a
+/// non-numeric string is rejected here even where serde would have dropped
+/// it as an unknown field — a rejected typo beats a silently ignored one,
+/// and an id key can never be user data on these wire shapes.
 pub fn parse_id_fields(value: &mut Value) -> napi::Result<()> {
     match value {
         Value::Object(map) => {

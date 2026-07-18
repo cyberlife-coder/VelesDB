@@ -557,13 +557,18 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// `forget` (MCP, Node, WASM, Python) forwards this so a caller can tell
     /// "I removed something" from "that id was a typo".
     ///
+    /// The delete always runs, even when `get` reports the id absent: `get`
+    /// filters TTL-expired facts, and an expired-but-unpurged row must still
+    /// be reclaimed (the caller is told `false` — the memory was already
+    /// gone from its perspective). Existence check and delete are two store
+    /// calls, not one atomic operation: two concurrent forgets of one id may
+    /// both report `true`.
+    ///
     /// # Errors
     /// Returns [`MemoryError`] if the existence check or the deletion fails.
     pub fn forget(&self, fact_id: u64) -> Result<bool, MemoryError> {
         let found = self.store.get(fact_id)?.is_some();
-        if found {
-            self.store.delete(fact_id)?;
-        }
+        self.store.delete(fact_id)?;
         Ok(found)
     }
 

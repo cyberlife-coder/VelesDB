@@ -155,3 +155,36 @@ fn compile_context_is_deterministic() {
     let stringify = |v: &JsValue| js_sys::JSON::stringify(v).unwrap().as_string().unwrap();
     assert_eq!(stringify(&a), stringify(&b), "same input, same bytes");
 }
+
+/// `memory_scope` on the in-memory store: the tri-engine pull (fused recall
+/// + PR2's importance blend, whose default weights are active) must work on
+/// `WasmStore` — this pins the whole `recall_fused_scored` path in wasm.
+#[wasm_bindgen_test]
+fn compile_context_memory_scope_pulls_stored_memories() {
+    let svc = WasmMemoryService::new(16);
+    svc.remember(
+        "the canary rollback runbook is kubectl rollout undo",
+        JsValue::UNDEFINED,
+        JsValue::UNDEFINED,
+        None,
+    )
+    .unwrap();
+
+    let request = js_sys::JSON::parse(
+        r#"{
+            "query": "canary rollback runbook",
+            "token_budget": 800,
+            "memory_scope": {"k": 3},
+            "fragments": [{"content": "Current task: fix the canary deploy."}]
+        }"#,
+    )
+    .unwrap();
+
+    let compiled = svc.compile_context(request).unwrap();
+    let content = js_sys::Reflect::get(&compiled, &"content".into()).unwrap();
+    let content = content.as_string().unwrap();
+    assert!(
+        content.contains("rollback runbook"),
+        "the scoped memory must be pulled into the compiled context, got: {content}"
+    );
+}

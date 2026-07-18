@@ -127,9 +127,11 @@ account).
 - **`forget` now reports whether the id actually existed** on every surface
   (Rust bridge → `bool`, MCP `{found}`, Node/WASM/TS `boolean`,
   Python `bool`): deleting an unknown id used to read as success, so an
-  agent could not tell a real deletion from a typo'd or stale id. Wire- and
-  signature-compatible everywhere except the TS SDK's `forget`
-  (`Promise<void>` → `Promise<boolean>` — a widening no caller breaks on).
+  agent could not tell a real deletion from a typo'd or stale id. Wire-compatible
+  everywhere (the MCP result gains an additive `found` field); the Node
+  typings and the TS SDK's `forget` widen `Promise<void>` → `Promise<boolean>`
+  — only a caller with an explicit `: Promise<void>`/`: void` annotation on
+  the result needs a touch.
   [EPIC-P-071/US-004]
 
 ### Fixed
