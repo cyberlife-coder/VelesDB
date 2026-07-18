@@ -170,6 +170,59 @@ async function main() {
   const rawRuns = await runArm(rawTurns, 'RAW (bras A)')
   const compiledRuns = await runArm(compiledTurns, 'COMPILED (bras B)')
 
+  // Per-arm BILLED DOLLARS and cache-field totals. On a caching runner (the
+  // CLI, and any real harness) the context lives in cache_creation /
+  // cache_read, NOT input_tokens — the first campaign measured
+  // input_tokens=2 on every turn of both arms, which reads as "0% saved"
+  // while the actual billing difference (raw arm re-creates cache every
+  // turn; the compiled arm's byte-stable output cache-HITS) was invisible.
+  // total_cost_usd, when the runner provides it, is the ground truth.
+  function armMoney(runs) {
+    let cost = 0
+    let costSamples = 0
+    let cacheCreate = 0
+    let cacheRead = 0
+    let input = 0
+    for (const samples of runs) {
+      for (const sVal of samples) {
+        if (typeof sVal.total_cost_usd === 'number') {
+          cost += sVal.total_cost_usd
+          costSamples++
+        }
+        cacheCreate += sVal.cache_creation_input_tokens
+        cacheRead += sVal.cache_read_input_tokens
+        input += sVal.input_tokens
+      }
+    }
+    const runsCount = runs[0]?.length ?? 1
+    return {
+      meanCostPerSession: costSamples > 0 ? cost / runsCount : null,
+      costSamples,
+      cacheCreatePerSession: cacheCreate / runsCount,
+      cacheReadPerSession: cacheRead / runsCount,
+      inputPerSession: input / runsCount,
+    }
+  }
+  const rawMoney = armMoney(rawRuns)
+  const compiledMoney = armMoney(compiledRuns)
+  console.log('')
+  console.log('--- session totals: BILLED DOLLARS + cache fields (per session, mean over runs) ---')
+  for (const [label, m] of [
+    ['raw     ', rawMoney],
+    ['compiled', compiledMoney],
+  ]) {
+    console.log(
+      `  ${label}: total_cost_usd=${m.meanCostPerSession === null ? 'n/a (runner reports no cost)' : '$' + m.meanCostPerSession.toFixed(4)}` +
+        ` | input=${m.inputPerSession.toFixed(0)} cache_creation=${m.cacheCreatePerSession.toFixed(0)} cache_read=${m.cacheReadPerSession.toFixed(0)} tokens`,
+    )
+  }
+  if (rawMoney.meanCostPerSession !== null && compiledMoney.meanCostPerSession !== null && rawMoney.meanCostPerSession > 0) {
+    const saved = (1 - compiledMoney.meanCostPerSession / rawMoney.meanCostPerSession) * 100
+    console.log(
+      `  BILLED savings: ${saved.toFixed(1)}% per session in real dollars (includes the constant harness overhead in both arms — the content-only gap is wider)`,
+    )
+  }
+
   console.log('')
   console.log('--- session totals: TOKENS (billed usage.input_tokens, mean over N runs per turn) + QUALITY (deterministic grader) ---')
   let totalRawMean = 0

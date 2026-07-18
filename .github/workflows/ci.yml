@@ -583,6 +583,18 @@ jobs:
           npx napi build --platform
           node --test __test__/index.spec.mjs
 
+      # EPIC-P-071/A1 non-regression gate: "the facts survive compilation".
+      # Reuses the napi addon just built above (no second Rust build) — this
+      # job is the cheapest place to run it: the "Tests" job never sets up
+      # Node or builds the addon, so branching there would pay for a full
+      # extra napi build for one offline, network-free JS test file.
+      # gpt-tokenizer is installed here (not committed) per
+      # examples/real-session-benchmark/README.md's prereqs.
+      - name: Real-session benchmark — facts-survive gate (offline, no network)
+        run: |
+          npm install --no-save --no-audit --no-fund --prefix crates/velesdb-node gpt-tokenizer
+          node --test examples/real-session-benchmark/test/facts-survive.test.mjs
+
   # ===========================================================================
   # Coverage (main seulement)
   # ===========================================================================

@@ -254,6 +254,11 @@ pins the deterministic grader's case/whitespace-insensitivity.
 is byte-for-byte reproducible from its committed generator, and pins the
 byte-level relationships each US-009 mechanism needs (distinct bytes for
 supersession, identical bytes for dedup, per series).
+`test/facts-survive.test.mjs` proves, for every turn and both compiled arms
+(lossless and window-8000), that every ground-truth fact from
+`corpus/questions.mjs` survives compilation — inline or via a handle that
+`retrieveContextSource` actually resolves — **this promise is CI-enforced**
+(runs offline, no network, in the `Node Binding Tests` CI job).
 
 ## Corpus (`corpus/*.mjs`)
 

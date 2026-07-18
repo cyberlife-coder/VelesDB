@@ -183,6 +183,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Claude Code CLI's headless mode (`BENCH_RUNNER=cli`, no key — the user's
   own authenticated account; wire shapes verified by a real calibration
   call). [EPIC-P-071]
+- **CI gate — ground-truth facts survive compilation** (EPIC-P-071/A1):
+  `examples/real-session-benchmark/test/facts-survive.test.mjs` turns the
+  benchmark's per-turn fact checklists (`corpus/questions.mjs`) into an
+  executable non-regression check: for every turn of the base session, in
+  BOTH the lossless and the window-8000 compiled arms, every ground-truth
+  fact must be present in what that arm would actually send to the model —
+  inline, or PROVEN recoverable by really resolving its `ctx://source/`
+  handle via `retrieveContextSource` (never assumed from a listed handle).
+  Runs offline, no network, in CI's `Node Binding Tests` job (reuses the
+  napi addon already built there). [EPIC-P-071]
 
 R1 `Collection`-internals train: resolves and **closes the god-object EPIC
 ([#1384](https://github.com/cyberlife-coder/VelesDB/issues/1384))**. The
@@ -234,6 +244,15 @@ account).
   [EPIC-P-071/US-004]
 
 ### Fixed
+
+- **Benchmark online mode**: the CLI runner now uses the CLI-enforced
+  `--output-format stream-json` pairing (parsing the final NDJSON `result`
+  event) — the previous `json` output form was rejected by the CLI at the
+  first real call; and the online summary now prints per-arm BILLED dollars
+  (`total_cost_usd` summed per session) plus cache-field totals, because on
+  a caching runner the context lives in cache_creation/cache_read, not
+  `input_tokens` (measured: input_tokens≈2 on every turn of both arms).
+  [EPIC-P-071]
 
 - **The context compiler no longer aborts on `wasm32-unknown-unknown`** when
   recording savings events: `SystemTime::now()` (unsupported in wasm `std`,
