@@ -283,6 +283,14 @@ jobs:
         env:
           RUST_TEST_THREADS: 1
 
+      # Real-stdio MCP end-to-end (6 tools + text/media retrieve round-trip).
+      # The debug binary is already built by the workspace test compile above;
+      # cargo build is a cache no-op that guarantees it exists.
+      - name: MCP server e2e (stdio)
+        run: |
+          cargo build -p velesdb-memory
+          python3 crates/velesdb-memory/examples/context_savings/real_measures/mcp_e2e.py
+
   # ===========================================================================
   # Security Audit (parallèle - outils pré-compilés)
   # ===========================================================================

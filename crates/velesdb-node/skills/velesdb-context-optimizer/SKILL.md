@@ -133,6 +133,52 @@ Compression keeps one prompt small; `save_working_context` /
 {"tool": "load_working_context", "arguments": {"project": "veles", "session": "task-1234"}}
 ```
 
+## Screenshots and images
+
+A fragment may carry an inline image alongside its caption:
+`media: {"mime": "image/png", "bytes_b64": "<base64>"}` on a fragment passed
+to `compile_context`. Route a screenshot into a fragment's `media` field
+instead of describing it in prose — the compiler prices it from the actual
+pixels (`ceil(width * height / 750)` for PNG/JPEG, a published per-image token
+constant), not from a text description that either under- or over-states its
+cost.
+
+- **Set `metadata.target`** to whatever the screenshot is *of* (a URL, a test
+  name, a UI element id) whenever you take repeated screenshots of the same
+  subject over a session (e.g. re-checking the same failing page after each
+  fix attempt). Fragments that share `media`, `kind: "screenshot"`, and the
+  same `metadata.target` form a succession series: only the LAST one (input
+  order in the request — never a clock) stays inline, every earlier one is
+  externalized behind a `ctx://source/` handle regardless of budget. Skipping
+  `metadata.target` means every screenshot competes for space on equal
+  footing with everything else — fine for one-off images, wasteful for a
+  before/after/after-again sequence of the same page.
+- **Pixel cost adds up fast.** A handful of full-resolution screenshots can
+  consume more budget than a page of text; prefer cropping to the relevant
+  region before attaching it, and lean on `metadata.target` supersession so
+  only the current state of a repeatedly-screenshotted subject stays inline.
+- **Fetching a media source back** is `retrieve_context_source` — like any
+  other handle, but the result carries `media: {mime, bytes_b64}` alongside
+  `content` (the caption) whenever the original fragment carried one.
+
+```json
+{"tool": "compile_context", "arguments": {
+  "query": "why is the deploy page still red",
+  "token_budget": 4000,
+  "fragments": [
+    {"content": "before the fix", "kind": "screenshot",
+     "metadata": {"target": "deploy-status-page"},
+     "media": {"mime": "image/png", "bytes_b64": "<base64>"}},
+    {"content": "after the fix", "kind": "screenshot",
+     "metadata": {"target": "deploy-status-page"},
+     "media": {"mime": "image/png", "bytes_b64": "<base64>"}}
+  ]
+}}
+```
+
+Here only "after the fix" stays inline; "before the fix" is retrievable on
+demand, not silently dropped.
+
 ## When NOT to compress
 
 - **Small contexts.** Below a few hundred tokens the joiner/section overhead

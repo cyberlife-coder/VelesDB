@@ -337,6 +337,26 @@ impl MemoryStore {
         }))
     }
 
+    /// Fetch back the exact original content — and media, when the fragment
+    /// carried one (US-009, PR3) — behind a `ctx://source/<hash>` handle
+    /// from a [`Self::compile_context`] result: what was externalized or
+    /// partially packed is recoverable, not lost. Same JSON shape as the MCP
+    /// `retrieve_context_source` tool: `{handle, content, media?}`, `media`
+    /// present only for a source whose fragment carried one. Pure
+    /// delegation to [`velesdb_memory`]'s bridge — zero logic in the
+    /// binding.
+    #[napi(
+        js_name = "retrieveContextSource",
+        ts_return_type = "Promise<{ handle: string; content: string; media?: { mime: string; bytes_b64: string } }>"
+    )]
+    pub fn retrieve_context_source(&self, handle: String) -> AsyncTask<Job<JsonOut>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let source = svc.retrieve_context_source(&handle).map_err(to_napi_err)?;
+            convert::to_retrieve_source_js(&handle, &source).map(JsonOut)
+        }))
+    }
+
     /// Persist the agent's distilled working state under `project` +
     /// `session` (idempotent upsert: saving again replaces the previous
     /// state), for inter-session resumption. Same JSON shape as the MCP

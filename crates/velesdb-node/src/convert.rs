@@ -118,6 +118,28 @@ pub fn parse_fragment_id_strings(request: &mut Value) -> napi::Result<()> {
     velesdb_memory::context::wire::parse_fragment_id_strings(request).map_err(invalid_input)
 }
 
+/// Marshal a resolved `ctx://source/<hash>` lookup into the binding's
+/// `{handle, content, media?}` wire shape (US-009, PR3) — the same envelope
+/// the MCP `retrieve_context_source` tool returns, built here since
+/// [`velesdb_memory::context::ContextSource`] itself carries no `handle`
+/// (the caller already has it; the service only resolves content + media).
+pub fn to_retrieve_source_js(
+    handle: &str,
+    source: &velesdb_memory::context::ContextSource,
+) -> napi::Result<Value> {
+    let internal =
+        |what: &str| napi::Error::from_reason(format!("[INTERNAL] context source: {what}"));
+    let Value::Object(fields) =
+        serde_json::to_value(source).map_err(|err| internal(&format!("serialize: {err}")))?
+    else {
+        return Err(internal("not an object"));
+    };
+    let mut map = serde_json::Map::new();
+    map.insert("handle".to_owned(), Value::String(handle.to_owned()));
+    map.extend(fields);
+    Ok(Value::Object(map))
+}
+
 /// Marshal a compiled context into its JS shape: serialize to the wire JSON,
 /// stringify every id field, then lift the top-level fields into the typed
 /// [`CompiledContextJs`] envelope. Pure conversion — no compile logic.

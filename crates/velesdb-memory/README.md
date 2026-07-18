@@ -617,12 +617,12 @@ so an audit trail always shows *why* a log collapsed the way it did. Off by
 default: it changes what "duplicate" means for logs, so existing callers
 keep byte-exact grouping unless they opt in.
 
-#### Media fragments (experimental, PR2/3)
+#### Media fragments
 
 A fragment may carry an inline image alongside its text: set
 `media: {"mime": "image/png", "bytes_b64": "<base64>"}` on a
 `ContextFragment`; `content` stays the caption (often empty for a bare
-screenshot). This is **PR2 of 3** for media support:
+screenshot).
 
 - **Atomic packing**: a media fragment is never chunked — it packs whole
   under the budget or not at all, so an image can never be cut mid-stream.
@@ -665,8 +665,31 @@ screenshot). This is **PR2 of 3** for media support:
   choice); a screenshot with no `metadata.target` is never superseded, since
   there is no evidence it succeeds anything. Opt out per request with
   `policy.disabled_rules: ["retrieve.screenshot_superseded"]`.
-- **Node/WASM/wire surface** beyond the MCP tools and the Python binding
-  above is **not yet built**; it lands in PR3.
+- **Every surface carries media**: the MCP tools (`compile_context` /
+  `retrieve_context_source`, schemas included — `fragments[].media` and the
+  optional `media` on the retrieve result are both advertised, not just
+  accepted), the Python binding, the Node binding (`compileContext` /
+  `retrieveContextSource`, same `{handle, content, media?}` shape as the MCP
+  tool — see the [Node README](../velesdb-node/README.md#media-fragments-retrievecontextsource)),
+  and WASM's `compileContext` (media fragments compile, dedup, and cost
+  correctly on the in-memory `WasmStore`; `retrieveContextSource` is not yet
+  exposed on the WASM binding, so resolving a media handle back to bytes
+  *within* a wasm session is Node/Python/MCP-only for now).
+
+Minimal end-to-end example, over the MCP tools (the exact calls
+`examples/context_savings/real_measures/mcp_e2e.py` makes against a real
+`velesdb-memory` server over stdio):
+
+```python
+handle_req = {"query": "a screenshot of the failing build", "token_budget": 1,
+              "fragments": [{"content": "the failing build, before the fix",
+                             "media": {"mime": "image/png", "bytes_b64": png_b64}}]}
+out = server.call("compile_context", handle_req)
+handle = out["retrieval_handles"][0]["handle"]      # too big for budget=1, externalized
+
+source = server.call("retrieve_context_source", {"handle": handle})
+assert source["media"]["bytes_b64"] == png_b64      # byte-identical round trip
+```
 
 #### Source TTL & disk growth
 

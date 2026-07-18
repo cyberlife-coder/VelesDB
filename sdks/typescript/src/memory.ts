@@ -39,16 +39,40 @@ export interface MemoryRecollection {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * An inline media payload on a {@link CompileContextFragment} (US-009).
+ * `content` on the fragment stays the caption — often empty for a bare
+ * screenshot — while the pixels live here, base64-encoded. The fragment
+ * packs atomically (never chunked) and its token cost comes from the
+ * image itself (dimensions sniffed from the PNG/JPEG header), not its
+ * base64 text.
+ */
+export interface CompileContextMedia {
+  /** Declared MIME type, e.g. `"image/png"` or `"image/jpeg"`. */
+  mime: string;
+  /** The raw media bytes, base64-encoded (standard alphabet, padded). */
+  bytes_b64: string;
+}
+
 /** One input fragment of {@link MemoryService.compileContext}. */
 export interface CompileContextFragment {
   /** Optional caller id as a decimal string (content-derived when absent). */
   id?: string;
-  /** The fragment text. */
+  /** The fragment text (the caption, when {@link media} is set). */
   content: string;
-  /** Classification hint (`"code"`, `"log"`, …). */
+  /** Classification hint (`"code"`, `"log"`, `"screenshot"`, …). */
   kind?: string;
   /** Fragment flags, e.g. `{ verbatim: true }` or `{ cache: true }`. */
   metadata?: Record<string, unknown>;
+  /**
+   * Inline media payload (US-009). `undefined` keeps every pre-existing
+   * request wire-compatible. Fetch it back later — inline or externalized
+   * by budget, it makes no difference — through `retrieve_context_source`
+   * over the underlying `compileContext` handle (not yet exposed on this
+   * WASM-backed SDK client; see the Node binding's `retrieveContextSource`
+   * for the same shape).
+   */
+  media?: CompileContextMedia;
 }
 
 /**

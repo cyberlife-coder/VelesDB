@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Media source storage & screenshot supersession (experimental, PR2/3 of
+- **Media source storage & screenshot supersession (complete as of PR3: MCP schemas, Node retrieve, WASM compile, TS types of
   US-009 in EPIC-P-071)** — the memory bridge now persists a media
   fragment's base64 payload alongside its caption when storing a compiled
   source (reserved key `_veles_ctx_source_media`, embedded with a

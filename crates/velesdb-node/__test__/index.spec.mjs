@@ -34,6 +34,7 @@ test('surface allowlist — exactly the supported methods, no engine leak', () =
     'relate',
     'remember',
     'rememberExtracted',
+    'retrieveContextSource',
     'saveWorkingContext',
     'why',
   ])
@@ -312,6 +313,118 @@ test('compileContext malformed request rejects with INVALID_INPUT', async () => 
   const { store, cleanup } = freshStore()
   try {
     await assert.rejects(store.compileContext({ fragments: 'not-an-array' }), /INVALID_INPUT/)
+  } finally {
+    cleanup()
+  }
+})
+
+// --- media fragments (US-009, PR3) ------------------------------------------
+// A real, independently-decodable 1x1 transparent PNG (IHDR + IDAT + IEND) —
+// fixed bytes, never derived from any caption or property under test (per
+// the fixture-independence rule: PR2's real incident was test bytes derived
+// from the caption, which masked a corruption).
+const PNG_1X1_B64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+
+test('compileContext with a media fragment: atomic preserve decision, handle resolves the image', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const out = await store.compileContext({
+      query: 'a screenshot of the failing build',
+      fragments: [
+        {
+          content: 'the failing build, before the fix',
+          media: { mime: 'image/png', bytes_b64: PNG_1X1_B64 },
+        },
+      ],
+      token_budget: 10000,
+    })
+    // Media fragments pack whole-or-nothing (rule_id "media.atomic"); with a
+    // generous budget the image fits inline and the decision preserves it.
+    assert.equal(out.decisions.length, 1)
+    assert.equal(out.decisions[0].rule_id, 'media.atomic')
+    assert.equal(out.decisions[0].action, 'preserve')
+    assert.equal(typeof out.decisions[0].fragment_id, 'string', 'media fragment ids stay strings too')
+    // `compile_context`'s own `sources` entries are pointers only
+    // (fragment_id + handle) — the image itself is fetched back through
+    // retrieveContextSource, exercised by the tests below.
+    assert.equal(out.sources.length, 1)
+    assert.ok(out.sources[0].handle.startsWith('ctx://source/'))
+  } finally {
+    cleanup()
+  }
+})
+
+test('retrieveContextSource resolves a text-only source with no media field', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const out = await store.compileContext({
+      query: 'a plain fact',
+      fragments: [{ content: 'never restart the primary node during a rebalance' }],
+      token_budget: 10000,
+    })
+    const handle = out.sources[0].handle
+
+    const resolved = await store.retrieveContextSource(handle)
+    assert.equal(resolved.handle, handle)
+    assert.equal(resolved.content, 'never restart the primary node during a rebalance')
+    assert.strictEqual(resolved.media, undefined, 'a text-only source must not carry a media field')
+  } finally {
+    cleanup()
+  }
+})
+
+test('retrieveContextSource round-trips a media source byte-identical, even when externalized by budget', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    // A budget far too small for the image forces it behind a retrieval
+    // handle — this is the path a caller actually needs retrieveContextSource
+    // for (an inline media fragment is already in `content`, nothing to fetch).
+    const out = await store.compileContext({
+      query: 'a screenshot',
+      fragments: [
+        {
+          content: 'a screenshot',
+          media: { mime: 'image/png', bytes_b64: PNG_1X1_B64 },
+        },
+      ],
+      token_budget: 1,
+    })
+    assert.ok(out.retrievalHandles.length >= 1, 'the oversized media fragment must externalize')
+    const handle = out.retrievalHandles[0].handle
+
+    const resolved = await store.retrieveContextSource(handle)
+    assert.equal(resolved.handle, handle)
+    assert.ok(resolved.media, 'the resolved source must carry its media back')
+    assert.equal(resolved.media.mime, 'image/png')
+    assert.equal(
+      resolved.media.bytes_b64,
+      PNG_1X1_B64,
+      'the base64 payload must be byte-identical after the store round-trip',
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test('retrieveContextSource malformed handles reject with NOT_FOUND, never crash', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    // Regression caught: a handle that is not ctx://source/<u64> at all must
+    // fail through the same NOT_FOUND taxonomy as an unknown-but-well-formed
+    // one — never an INTERNAL error or a crash.
+    for (const bad of ['garbage', 'ctx://source/zzzz', '']) {
+      await assert.rejects(store.retrieveContextSource(bad), /NOT_FOUND/, `handle: ${JSON.stringify(bad)}`)
+    }
+  } finally {
+    cleanup()
+  }
+})
+
+test('retrieveContextSource unknown handle rejects with NOT_FOUND', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(store.retrieveContextSource('ctx://source/999999'), /NOT_FOUND/)
   } finally {
     cleanup()
   }

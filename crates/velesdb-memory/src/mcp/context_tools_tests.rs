@@ -555,6 +555,173 @@ async fn test_retrieve_context_source_tool_round_trips_original() {
     assert_eq!(retrieved.handle, handle);
 }
 
+// --- media fragments through the MCP tools (US-009, PR3) -------------------
+//
+// PR2 already pins media round-tripping at the `MemoryService` level
+// (`tests/context_memory_bdd.rs`); these cover the MCP tool WRAPPER
+// specifically — `compile_context`/`retrieve_context_source` serialize
+// through `to_wire_value`/`Json<RetrieveContextSourceResult>` on a separate
+// path from the bare service call, and nothing exercised that path with a
+// real media payload before this PR.
+
+/// A syntactically valid (well-formed base64), tiny PNG header — fixed,
+/// independent bytes (never derived from a caption or any other property
+/// under test — see the incident this rule prevents in PR2's dedup tests).
+const PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAYAAAAAAAAA";
+
+fn media_fragment(caption: &str) -> ContextFragment {
+    ContextFragment {
+        media: Some(crate::context::MediaRef {
+            mime: "image/png".to_owned(),
+            bytes_b64: PNG_B64.to_owned(),
+        }),
+        ..fragment(caption)
+    }
+}
+
+/// Regression this attrapes: the MCP `retrieve_context_source` tool builds
+/// its own `RetrieveContextSourceResult` envelope (handle, content, media)
+/// rather than returning the service's `ContextSource` directly — a field
+/// rename or a dropped `media: source.media` in that wrapper would silently
+/// lose the picture for every MCP client while the underlying
+/// `MemoryService` test suite kept passing.
+#[tokio::test]
+async fn test_retrieve_context_source_tool_round_trips_media_byte_identical() {
+    // Given a media fragment too large for the budget, so it externalizes
+    let (_dir, srv) = server();
+    let req = request("a screenshot", vec![media_fragment("a screenshot")], 1);
+    let Json(value) = srv
+        .compile_context(Parameters(req))
+        .await
+        .expect("compile_context");
+    let out = compiled_context_of(value);
+    let handle = out
+        .retrieval_handles
+        .first()
+        .expect("the oversized media fragment must externalize")
+        .handle
+        .clone();
+
+    // When retrieving through the tool
+    let Json(retrieved) = srv
+        .retrieve_context_source(Parameters(RetrieveContextSourceParams {
+            handle: handle.clone(),
+        }))
+        .await
+        .expect("retrieve_context_source");
+
+    // Then the media round-trips byte for byte through the MCP wrapper
+    let media = retrieved
+        .media
+        .expect("a media source must carry its media back through the MCP tool");
+    assert_eq!(media.mime, "image/png");
+    assert_eq!(media.bytes_b64, PNG_B64);
+}
+
+/// Regression this attrapes: a text-only source picking up a spurious
+/// `media` field through the MCP wrapper (e.g. a `Some(default)` instead of
+/// `None`) would be invisible to every other test here, which only ever
+/// compiles text fragments and checks `.content`.
+#[tokio::test]
+async fn test_retrieve_context_source_tool_text_only_carries_no_media() {
+    let (_dir, srv) = server();
+    let req = request("plain", vec![fragment("no picture here")], 10_000);
+    let Json(value) = srv
+        .compile_context(Parameters(req))
+        .await
+        .expect("compile_context");
+    let out = compiled_context_of(value);
+    let handle = out.sources[0].handle.clone();
+
+    let Json(retrieved) = srv
+        .retrieve_context_source(Parameters(RetrieveContextSourceParams { handle }))
+        .await
+        .expect("retrieve_context_source");
+
+    assert!(retrieved.media.is_none());
+}
+
+// --- MCP schema advertises the media fragment shape (US-009, PR3) ----------
+//
+// `schemars` derives the schema straight from `MediaRef`/`ContextFragment`/
+// `RetrieveContextSourceResult`, so nothing here is hand-authored — these
+// tests pin the schema the server ACTUALLY publishes (not just "it should
+// compile"), the same structural-test pattern the wave-5 id-widening tests
+// use above (`test_compile_context_output_schema_advertises_string_ids`).
+// Regression this attrapes: an MCP client generates requests/validates
+// responses from the advertised JSON Schema alone — if a future refactor
+// moved `media` behind a `#[serde(skip)]`, a renamed field, or a schemars
+// attribute that hides it from `$defs`, a client would never learn the
+// fragment/source can carry media at all, even though the Rust type still
+// round-trips it — these tests fail on that class of regression while every
+// behavioral test above still passes (they talk to the Rust struct, not the
+// advertised JSON).
+
+#[test]
+fn test_compile_context_input_schema_advertises_fragment_media_field() {
+    let tool = McpServer::compile_context_tool_attr();
+    let schema = serde_json::to_value(&tool.input_schema).expect("schema serializes");
+
+    let media_property = &schema["$defs"]["ContextFragment"]["properties"]["media"];
+    assert!(
+        !media_property.is_null(),
+        "fragments[].media must be advertised on compile_context's input schema"
+    );
+    // Resolve the (possibly $ref'd) MediaRef schema and check its shape.
+    let media_schema = if let Some(reference) = media_property.get("$ref") {
+        let reference = reference
+            .as_str()
+            .expect("$ref is a string")
+            .trim_start_matches("#/$defs/");
+        &schema["$defs"][reference]
+    } else if let Some(one_of) = media_property
+        .get("anyOf")
+        .or_else(|| media_property.get("oneOf"))
+    {
+        // Optional fields sometimes wrap the ref in anyOf: [{$ref}, {type: null}]
+        one_of
+            .as_array()
+            .and_then(|variants| variants.iter().find(|v| v.get("$ref").is_some()))
+            .and_then(|v| v.get("$ref"))
+            .and_then(serde_json::Value::as_str)
+            .map(|r| r.trim_start_matches("#/$defs/"))
+            .map_or(media_property, |name| &schema["$defs"][name])
+    } else {
+        media_property
+    };
+    for expected in ["mime", "bytes_b64"] {
+        assert!(
+            !media_schema["properties"][expected].is_null(),
+            "MediaRef must advertise '{expected}'; media schema was {media_schema}"
+        );
+    }
+}
+
+#[test]
+fn test_retrieve_context_source_output_schema_advertises_optional_media_field() {
+    let tool = McpServer::retrieve_context_source_tool_attr();
+    let schema = serde_json::to_value(
+        tool.output_schema
+            .expect("retrieve_context_source declares an output schema"),
+    )
+    .expect("schema serializes");
+
+    let media_property = &schema["properties"]["media"];
+    assert!(
+        !media_property.is_null(),
+        "retrieve_context_source's output schema must advertise 'media'; schema was {schema}"
+    );
+    // Required stays scoped to handle/content: media is optional (US-009 PR2
+    // kept every pre-PR2 text-only response byte-identical).
+    let required = schema["required"]
+        .as_array()
+        .expect("output schema declares required properties");
+    assert!(
+        !required.contains(&serde_json::json!("media")),
+        "media must stay optional on the advertised schema, got required: {required:?}"
+    );
+}
+
 #[tokio::test]
 async fn test_compile_context_tool_zero_budget_is_invalid_params() {
     let (_dir, srv) = server();
