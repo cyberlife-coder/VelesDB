@@ -63,6 +63,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token savings on the committed corpus in ~2 ms; figures are local
   estimates, not billed tokens — cross-checked against a real cl100k
   tokenizer by the committed `real_measures/` scripts).
+- **MCP**: two working-context tools on the one existing server —
+  `save_working_context` / `load_working_context` (pure delegation to the
+  memory bridge), so an agent can persist its distilled session state and a
+  later session can resume from it; the committed `mcp_e2e.py` harness
+  proves the round-trip **across two separate server processes** on one
+  store. [EPIC-P-071/US-003]
+- **Node** (`@wiscale/velesdb-memory-node`): `saveWorkingContext` /
+  `loadWorkingContext` — same wire shape, ids as decimal strings in both
+  directions (u64::MAX-safe), `null` when nothing was saved; the spec suite
+  proves the cross-process round-trip via a child-process save.
+  [EPIC-P-071/US-003]
+- **WASM** (`@wiscale/velesdb-wasm`) + **TypeScript SDK**
+  (`@wiscale/velesdb-sdk`): `compileContext(request)` — the same
+  deterministic compiler, compiled to wasm, running fully in the browser
+  (`velesdb-memory`'s zero-dependency `context` feature enabled on the wasm
+  build). Ids cross as decimal strings; in-memory semantics documented
+  (`ctx://source/` handles and savings events live for the browser session —
+  no persistence in WASM). [EPIC-P-071/US-004]
 - Internal, non-breaking: `fusion::fuse` re-expressed over `fuse_scored`
   (identical candidates/order/numbers, iso-behavior pinned by test);
   intra-doc links fixed so `RUSTDOCFLAGS="-D warnings" cargo doc` passes.
@@ -106,8 +124,22 @@ account).
   internal-only): graph state can be shared with `GraphCollection` without an
   exclusive move; field access and locking are unchanged.
 
+- **`forget` now reports whether the id actually existed** on every surface
+  (Rust bridge → `bool`, MCP `{found}`, Node/WASM/TS `boolean`,
+  Python `bool`): deleting an unknown id used to read as success, so an
+  agent could not tell a real deletion from a typo'd or stale id. Wire- and
+  signature-compatible everywhere except the TS SDK's `forget`
+  (`Promise<void>` → `Promise<boolean>` — a widening no caller breaks on).
+  [EPIC-P-071/US-004]
+
 ### Fixed
 
+- **The context compiler no longer aborts on `wasm32-unknown-unknown`** when
+  recording savings events: `SystemTime::now()` (unsupported in wasm `std`,
+  panics) is only reached on native targets now; wasm events carry a 0
+  timestamp (their per-process sequence keeps ids unique, and wasm stats are
+  per-browser-session by design). The compile pipeline itself was already
+  clock-free. [EPIC-P-071/US-004]
 - **python: integers greater than `i64::MAX` now round-trip exactly as `int`**
   (previously silently converted to a lossy `float`). Affects every surface
   sharing the binding's JSON converters — payloads, search results, VelesQL

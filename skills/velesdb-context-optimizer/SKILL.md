@@ -7,9 +7,11 @@ description: >
   repeated context, long logs, or accumulated conversation turns; when token
   costs need to drop measurably; or when the user says "compress my context",
   "optimize my prompt", "reduce token usage", "context is too big", or asks
-  why part of their context was dropped. Requires the velesdb-memory MCP
-  server (tools: compile_context, context_savings, explain_compilation,
-  retrieve_context_source).
+  why part of their context was dropped; or when a session should be
+  resumable later (save the working context at the end, load it back at the
+  start of the next one). Requires the velesdb-memory MCP server (tools:
+  compile_context, context_savings, explain_compilation,
+  retrieve_context_source, save_working_context, load_working_context).
 ---
 
 # VelesDB context optimizer
@@ -88,6 +90,41 @@ silent loss. Same input, same output, byte for byte.
 10. **Iterate.** If the output reads truncated or the model misses facts,
     raise the budget or mark more fragments verbatim — then recompile; it is
     cheap (~ms) and deterministic.
+
+## Inter-session resumption (save at the end, load at the start)
+
+Compression keeps one prompt small; `save_working_context` /
+`load_working_context` keep the *session itself* resumable:
+
+- **At the START of a session**, call `load_working_context` with the
+  project and a stable session id (e.g. the conversation/task id). If it
+  returns a non-null `working`, a prior session left off here: adopt its
+  `goal`, re-assert `active_constraints`, trust `verified_facts` (re-fetch
+  `exact_evidence` handles with `retrieve_context_source` when you need the
+  bytes), and continue from `pending_actions` instead of re-deriving
+  everything. A `null` means a fresh start, not an error.
+- **At the END of a session** (or whenever the state changes meaningfully),
+  call `save_working_context` with the distilled state: `goal`,
+  `active_constraints`, `verified_facts` (with sources), `open_hypotheses`,
+  `decisions`, `exact_evidence`, `pending_actions`. Keep it small — this is
+  the hand-off note, not the transcript. Saving again under the same
+  project + session replaces the previous state (idempotent upsert).
+
+```json
+{"tool": "save_working_context", "arguments": {
+  "project": "veles", "session": "task-1234",
+  "working": {
+    "goal": "fix the failing canary deploy",
+    "active_constraints": [{"text": "never restart the primary during a rebalance"}],
+    "verified_facts": [{"text": "the canary fails only on arm64 runners"}],
+    "pending_actions": ["bisect the arm64-only failure", "re-run the canary"]
+  }
+}}
+```
+
+```json
+{"tool": "load_working_context", "arguments": {"project": "veles", "session": "task-1234"}}
+```
 
 ## When NOT to compress
 
