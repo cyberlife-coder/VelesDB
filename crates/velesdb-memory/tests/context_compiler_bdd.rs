@@ -301,6 +301,106 @@ fn test_compile_abstracts_repeated_log_lines_with_count() {
     assert!(out.insights.tokens_saved > 0);
 }
 
+/// A real repetitive log where every line differs only by an ISO timestamp
+/// (a shape `abstract.log_dedup`'s byte-exact grouping cannot collapse on
+/// its own — see the golden test right after this one).
+fn timestamped_log() -> String {
+    [
+        "2026-07-18T10:23:45.001Z INFO canary check passed for shard-1",
+        "2026-07-18T10:23:45.501Z INFO canary check passed for shard-1",
+        "2026-07-18T10:23:46.002Z INFO canary check passed for shard-1",
+        "2026-07-18T10:23:46.502Z WARN retrying upstream connection",
+    ]
+    .join("\n")
+}
+
+#[test]
+fn test_compile_timestamped_log_lines_do_not_collapse_by_default() {
+    // Given a timestamped log and the default policy (normalize off) —
+    // golden: this is the pre-existing, unchanged behavior. Byte-exact
+    // `abstract.log_dedup` never even recognizes this fragment as
+    // repetitive (every line differs by its timestamp), so it falls
+    // through — here to `preserve.exact_values`, since the timestamps
+    // themselves are digit-dense — exactly the documented limitation the
+    // `velesdb-context-optimizer` skill's "Timestamped logs" bullet warns
+    // about.
+    let log = timestamped_log();
+    let req = request(
+        vec![ContextFragment {
+            kind: Some("log".to_owned()),
+            ..fragment(&log)
+        }],
+        10_000,
+    );
+
+    // When compiling
+    let out = compile(&req);
+
+    // Then all three timestamp variants of the repeated line survive
+    // distinctly — nothing collapsed, no normalization mentioned
+    let decision = decision_for(&out, &log);
+    assert_ne!(
+        decision.rule_id, "abstract.log_dedup",
+        "byte-exact log_dedup must not recognize timestamp-only variants as repeats"
+    );
+    assert!(
+        !decision.reason.contains("normalized"),
+        "reason must not mention normalization when the policy is off, got: {}",
+        decision.reason
+    );
+    assert_eq!(
+        out.content
+            .matches("INFO canary check passed for shard-1")
+            .count(),
+        3,
+        "without normalize_log_timestamps, the three timestamp variants stay distinct:\n{}",
+        out.content
+    );
+}
+
+#[test]
+fn test_compile_normalize_log_timestamps_collapses_timestamped_duplicates() {
+    // Given the same timestamped log and normalize_log_timestamps enabled
+    let log = timestamped_log();
+    let mut req = request(
+        vec![ContextFragment {
+            kind: Some("log".to_owned()),
+            ..fragment(&log)
+        }],
+        10_000,
+    );
+    req.policy = Some(CompilePolicy {
+        normalize_log_timestamps: true,
+        ..CompilePolicy::default()
+    });
+
+    // When compiling
+    let out = compile(&req);
+
+    // Then the three timestamp variants collapse into one annotated line,
+    // and the decision reason ventilates the normalization
+    let decision = decision_for(&out, &log);
+    assert_eq!(decision.rule_id, "abstract.log_dedup");
+    assert!(
+        decision.reason.contains("normalized"),
+        "reason must mention normalization once it changed the grouping, got: {}",
+        decision.reason
+    );
+    assert_eq!(
+        out.content
+            .matches("INFO canary check passed for shard-1")
+            .count(),
+        1,
+        "with normalize_log_timestamps, the three variants collapse to one line:\n{}",
+        out.content
+    );
+    assert!(
+        out.content.contains("(x3)"),
+        "the collapsed line must be annotated with its count, got:\n{}",
+        out.content
+    );
+}
+
 #[test]
 fn test_compile_places_cache_marked_fragments_first() {
     // Given a stable system-prompt-like fragment marked cacheable, listed last

@@ -91,6 +91,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to — same behavior (pinned by the moved logic's own new unit tests plus
   the existing Node/WASM suites), one source of truth for future `context`
   id fields instead of two to keep in sync.
+- **`velesdb-memory`**: `CompilePolicy.normalize_log_timestamps` (default
+  `false`, serde-defaulted so existing requests stay wire-compatible) — an
+  opt-in, deterministic mask of `kind: "log"` fragments' volatile prefixes
+  (ISO/syslog timestamps, bracketed hex/pid counters, fixed patterns only)
+  applied before `abstract.log_dedup` groups repeated lines, so lines
+  identical modulo timestamp now collapse; the emitted line is still the
+  first occurrence's exact bytes, and the decision `reason` says so when
+  normalization actually changed the grouping. Off by default: byte-exact
+  grouping is unchanged for existing callers (pinned by a golden test).
+  [EPIC-P-071/US-006]
 
 R1 `Collection`-internals train: resolves and **closes the god-object EPIC
 ([#1384](https://github.com/cyberlife-coder/VelesDB/issues/1384))**. The

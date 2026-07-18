@@ -24,13 +24,15 @@ pub(crate) struct RuleMatch {
     pub reason: &'static str,
 }
 
-/// One classification rule.
+/// One classification rule. `applies` takes the policy too — only
+/// `is_repetitive_log` reads it (`normalize_log_timestamps` changes what
+/// counts as "repeated"), everything else ignores the parameter.
 struct Rule {
     id: &'static str,
     action: ContextAction,
     critical: bool,
     reason: &'static str,
-    applies: fn(&ContextFragment) -> bool,
+    applies: fn(&ContextFragment, &CompilePolicy) -> bool,
 }
 
 /// The ordered rule table — first match wins. `preserve.default` is the
@@ -90,7 +92,7 @@ const RULES: &[Rule] = &[
         action: ContextAction::Preserve,
         critical: false,
         reason: "prose kept subject to budget",
-        applies: |_| true,
+        applies: |_, _| true,
     },
 ];
 
@@ -106,7 +108,7 @@ pub(crate) fn classify(fragment: &ContextFragment, policy: &CompilePolicy) -> Ru
         .filter(|rule| {
             rule.id == TERMINAL_RULE_ID || !policy.disabled_rules.iter().any(|d| d == rule.id)
         })
-        .find(|rule| (rule.applies)(fragment))
+        .find(|rule| (rule.applies)(fragment, policy))
         .map_or_else(|| to_match(&RULES[RULES.len() - 1]), to_match)
 }
 
@@ -121,12 +123,12 @@ fn to_match(rule: &Rule) -> RuleMatch {
 }
 
 /// `metadata.verbatim == true`.
-fn is_marked_verbatim(fragment: &ContextFragment) -> bool {
+fn is_marked_verbatim(fragment: &ContextFragment, _policy: &CompilePolicy) -> bool {
     bool_meta(fragment, "verbatim")
 }
 
 /// `metadata.cache == true`.
-fn is_marked_cache(fragment: &ContextFragment) -> bool {
+fn is_marked_cache(fragment: &ContextFragment, _policy: &CompilePolicy) -> bool {
     bool_meta(fragment, "cache")
 }
 
@@ -140,14 +142,14 @@ fn bool_meta(fragment: &ContextFragment, key: &str) -> bool {
 }
 
 /// A triple-backtick-fenced block, or a caller-declared `kind = "code"`.
-fn is_code(fragment: &ContextFragment) -> bool {
+fn is_code(fragment: &ContextFragment, _policy: &CompilePolicy) -> bool {
     fragment.kind.as_deref() == Some("code") || fragment.content.contains("```")
 }
 
 /// Contains a negative-constraint marker (English or French). Lowercases
 /// line by line so a megabyte fragment never allocates a second megabyte
 /// (markers contain no newline, so no match can span two lines).
-fn has_negative_constraint(fragment: &ContextFragment) -> bool {
+fn has_negative_constraint(fragment: &ContextFragment, _policy: &CompilePolicy) -> bool {
     const MARKERS: &[&str] = &[
         "never ",
         "must not",
@@ -183,21 +185,25 @@ fn word_bounded(line: &str) -> String {
     normalized
 }
 
-/// A `kind = "log"` fragment where at least one line repeats.
-fn is_repetitive_log(fragment: &ContextFragment) -> bool {
+/// A `kind = "log"` fragment where at least one line repeats — under
+/// [`CompilePolicy::normalize_log_timestamps`], "repeats" is judged on the
+/// same masked grouping key [`collapse_repeated_lines`] will use, so a log
+/// whose lines differ only by a timestamp is recognized as repetitive here
+/// too (otherwise the rule would never fire for exactly the fragments the
+/// option exists for).
+fn is_repetitive_log(fragment: &ContextFragment, policy: &CompilePolicy) -> bool {
     if fragment.kind.as_deref() != Some("log") {
         return false;
     }
     let mut seen = std::collections::BTreeSet::new();
-    fragment
-        .content
-        .lines()
-        .any(|line| !line.trim().is_empty() && !seen.insert(line))
+    fragment.content.lines().any(|line| {
+        !line.trim().is_empty() && !seen.insert(dedup_key(line, policy.normalize_log_timestamps))
+    })
 }
 
 /// At least three whitespace-separated tokens carry an ASCII digit — the
 /// fragment is dense with exact values (ids, dates, quantities).
-fn is_value_dense(fragment: &ContextFragment) -> bool {
+fn is_value_dense(fragment: &ContextFragment, _policy: &CompilePolicy) -> bool {
     fragment
         .content
         .split_whitespace()
@@ -207,7 +213,7 @@ fn is_value_dense(fragment: &ContextFragment) -> bool {
 }
 
 /// Contains an http(s) URL.
-fn has_url(fragment: &ContextFragment) -> bool {
+fn has_url(fragment: &ContextFragment, _policy: &CompilePolicy) -> bool {
     fragment.content.contains("http://") || fragment.content.contains("https://")
 }
 
@@ -215,22 +221,64 @@ fn has_url(fragment: &ContextFragment) -> bool {
 /// occurrence (in order) and annotate repeated ones with their total count —
 /// a *structured* reduction, never a generative summary, so it is exactly
 /// reproducible and reversible through the fragment's source handle.
-pub(crate) fn collapse_repeated_lines(content: &str) -> String {
-    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-    for line in content.lines() {
-        *counts.entry(line).or_insert(0) += 1;
-    }
-    let mut emitted: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+///
+/// When `normalize_timestamps` is set
+/// ([`CompilePolicy::normalize_log_timestamps`]), lines are grouped by a
+/// masked key (see [`super::log_normalize::mask_volatile_prefix`]) instead
+/// of their raw text, so lines that differ only by a timestamp or a
+/// bracketed hex/pid counter collapse together; the *emitted* line is still
+/// the first occurrence's exact bytes — masking only changes grouping, never
+/// what gets printed. Returns whether masking actually changed the grouping
+/// (used to ventilate the decision `reason`); with the option off, or with
+/// it on but nothing to mask, this is always `false` and the output is
+/// byte-identical to the un-normalized path.
+pub(crate) fn collapse_repeated_lines(content: &str, normalize_timestamps: bool) -> (String, bool) {
+    let counts = line_groups(content, normalize_timestamps);
+    let mut emitted: std::collections::BTreeSet<std::borrow::Cow<'_, str>> =
+        std::collections::BTreeSet::new();
     let mut lines: Vec<String> = Vec::new();
     for line in content.lines() {
-        // On first sight of a line, emit it annotated with its total count.
-        // Every line was just inserted into `counts`, so the lookup is always
-        // `Some` — `&0` is unreachable, and `annotated(_, 0)` would be wrong.
-        if emitted.insert(line) {
-            lines.push(annotated(line, counts[line]));
+        let key = dedup_key(line, normalize_timestamps);
+        // On first sight of a key, emit its line annotated with the group's
+        // total count. Every key was just inserted into `counts`, so the
+        // lookup is always `Some` — `&0` is unreachable, and
+        // `annotated(_, 0)` would be wrong.
+        if emitted.insert(key.clone()) {
+            lines.push(annotated(line, counts[&key]));
         }
     }
-    lines.join("\n")
+    // Masking "modified" the fragment only when it actually merged lines
+    // that would otherwise have stayed distinct — not merely when some line
+    // happened to have a maskable prefix.
+    let modified = normalize_timestamps && counts.len() < line_groups(content, false).len();
+    (lines.join("\n"), modified)
+}
+
+/// This line's grouping key: the raw line when normalization is off, or its
+/// masked form when normalization is on and a volatile prefix matched
+/// ([`super::log_normalize::mask_volatile_prefix`]); unmasked lines fall
+/// back to their raw text either way.
+fn dedup_key(line: &str, normalize_timestamps: bool) -> std::borrow::Cow<'_, str> {
+    if normalize_timestamps {
+        if let Some(masked) = super::log_normalize::mask_volatile_prefix(line) {
+            return std::borrow::Cow::Owned(masked);
+        }
+    }
+    std::borrow::Cow::Borrowed(line)
+}
+
+/// Group `content`'s lines by [`dedup_key`], counting occurrences per group.
+fn line_groups(
+    content: &str,
+    normalize_timestamps: bool,
+) -> std::collections::BTreeMap<std::borrow::Cow<'_, str>, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for line in content.lines() {
+        *counts
+            .entry(dedup_key(line, normalize_timestamps))
+            .or_insert(0) += 1;
+    }
+    counts
 }
 
 /// A line plus its repetition annotation when it occurred more than once.

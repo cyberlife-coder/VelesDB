@@ -35,6 +35,7 @@ mod classify;
 mod dedup;
 pub mod estimator;
 pub mod insights;
+mod log_normalize;
 pub mod model;
 pub(crate) mod provenance;
 mod relevance;
@@ -264,6 +265,12 @@ struct Analysis<'a> {
     /// Set when this fragment duplicates an earlier one it may safely be
     /// dropped for (see [`retain_safe_duplicates`]).
     dup: Option<Duplicate>,
+    /// Only set for `abstract.log_dedup`-classified fragments: the
+    /// collapsed single piece, and whether
+    /// [`CompilePolicy::normalize_log_timestamps`] actually changed the
+    /// grouping (ventilated into the decision `reason`). Computed once here
+    /// so [`pieces`] and [`decision`] never redo the line-scan.
+    abstract_collapse: Option<(String, bool)>,
 }
 
 /// What actually got emitted for one packed fragment.
@@ -336,16 +343,24 @@ fn analyze<'a>(
         .enumerate()
         .map(|(seq, (fragment, dup))| {
             let content_hash = stable_id(&fragment.content);
+            let rule = classify::classify(fragment, policy);
+            let abstract_collapse = (rule.action == ContextAction::Abstract).then(|| {
+                classify::collapse_repeated_lines(
+                    &fragment.content,
+                    policy.normalize_log_timestamps,
+                )
+            });
             Analysis {
                 seq,
                 fragment_id: fragment.id.unwrap_or(content_hash),
                 content_hash,
                 original: &fragment.content,
                 tokens: estimator.estimate(&fragment.content),
-                rule: classify::classify(fragment, policy),
+                rule,
                 relevance: relevance::lexical_relevance(&query_terms, &fragment.content),
                 priority: fragment.priority.unwrap_or(0),
                 dup,
+                abstract_collapse,
             }
         })
         .collect();
@@ -399,8 +414,8 @@ fn pack_items(
 
 /// The emission pieces of one fragment.
 fn pieces(analysis: &Analysis, chunk_policy: &ChunkPolicy) -> Vec<String> {
-    if analysis.rule.action == ContextAction::Abstract {
-        return vec![classify::collapse_repeated_lines(analysis.original)];
+    if let Some((collapsed, _normalized)) = &analysis.abstract_collapse {
+        return vec![collapsed.clone()];
     }
     chunk_text(analysis.original, chunk_policy)
         .into_iter()
@@ -588,7 +603,7 @@ fn full_verdict(analysis: &Analysis) -> Verdict {
         analysis.rule.action,
         analysis.rule.id.to_owned(),
         risk,
-        analysis.rule.reason.to_owned(),
+        reason_with_normalization(analysis),
         None,
     )
 }
@@ -601,10 +616,29 @@ fn partial_verdict(analysis: &Analysis, emission: &Emission) -> Verdict {
         critical_risk(analysis.rule.critical),
         format!(
             "{} — packed {}/{} chunks, the rest stays retrievable",
-            analysis.rule.reason, emission.taken, emission.total
+            reason_with_normalization(analysis),
+            emission.taken,
+            emission.total
         ),
         Some(provenance::handle_for(analysis.content_hash)),
     )
+}
+
+/// The rule's base reason, with a mention of timestamp normalization
+/// appended when [`CompilePolicy::normalize_log_timestamps`] actually merged
+/// lines for this fragment (see [`Analysis::abstract_collapse`]) — an
+/// auditor asking "why did this log collapse the way it did?" sees the
+/// normalization in the same `reason` string as the rule that fired.
+fn reason_with_normalization(analysis: &Analysis) -> String {
+    match &analysis.abstract_collapse {
+        Some((_, true)) => {
+            format!(
+                "{} — timestamps normalized before collapsing",
+                analysis.rule.reason
+            )
+        }
+        _ => analysis.rule.reason.to_owned(),
+    }
 }
 
 /// Not emitted at all: externalized behind a retrieval handle.

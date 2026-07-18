@@ -163,6 +163,7 @@ impl Default for ImportanceWeights {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 #[schemars(transform = crate::schema::strip_int_formats)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct CompilePolicy {
     /// Tokens kept aside for the model's answer; the compiler packs into
     /// `token_budget − response_reserve_tokens`. Default `0`: the caller
@@ -208,6 +209,18 @@ pub struct CompilePolicy {
     /// memories (RL confidence + batch-relative recency). The struct-level
     /// `#[serde(default)]` keeps 0.8.0 requests wire-compatible.
     pub importance: ImportanceWeights,
+    /// Opt-in, deterministic: before `abstract.log_dedup` groups a `kind =
+    /// "log"` fragment's repeated lines, mask each line's volatile prefix
+    /// (ISO/syslog timestamps, bracketed hex/pid counters) with **fixed**
+    /// patterns — never a caller-supplied regex, so the collapse stays
+    /// reproducible — so lines identical modulo timestamp collapse into one
+    /// annotated line instead of surviving as distinct entries. The emitted
+    /// line is still the first occurrence's exact bytes; only the grouping
+    /// key changes. Default `false`: masking is opt-in because it changes
+    /// what "duplicate" means for logs, so callers who rely on the previous
+    /// byte-exact grouping keep it unless they ask. See the crate README's
+    /// "Normalizing timestamped logs" section for the exact patterns.
+    pub normalize_log_timestamps: bool,
 }
 
 impl Default for CompilePolicy {
@@ -223,6 +236,7 @@ impl Default for CompilePolicy {
             event_ttl_seconds: None,
             pricing: None,
             importance: ImportanceWeights::default(),
+            normalize_log_timestamps: false,
         }
     }
 }
