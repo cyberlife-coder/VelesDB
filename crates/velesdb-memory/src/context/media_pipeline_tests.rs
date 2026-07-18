@@ -74,6 +74,7 @@ fn analysis_for(
         dup: None,
         abstract_collapse: None,
         media,
+        superseded: false,
     }
 }
 
@@ -222,10 +223,13 @@ fn test_pieces_non_media_fragment_is_unaffected() {
     assert!(result.iter().all(|piece| piece.cost.is_none()));
 }
 
-// --- decision routing: media fragments never get a dangling handle ------
+// --- decision routing: an unfit media fragment externalizes like text ---
 
 #[test]
-fn test_decision_routes_an_unfit_media_fragment_to_drop_not_retrieve() {
+fn test_decision_routes_an_unfit_media_fragment_to_retrieve_with_a_handle() {
+    // US-009, PR2: the memory bridge now persists media sources, so an
+    // unfit media fragment externalizes exactly like text — the PR1
+    // `drop.media_unavailable` provisional verdict is gone.
     let media_analysis = media::MediaAnalysis {
         raw_hash: 1,
         image_tokens: 500,
@@ -234,14 +238,14 @@ fn test_decision_routes_an_unfit_media_fragment_to_drop_not_retrieve() {
     let all: Vec<Analysis<'_>> = Vec::new();
     let emissions: BTreeMap<usize, Emission> = BTreeMap::new();
     let recorded = decision(&analysis, &all, &emissions);
-    assert_eq!(recorded.action, ContextAction::Drop);
-    assert_eq!(recorded.rule_id, "drop.media_unavailable");
+    assert_eq!(recorded.action, ContextAction::Retrieve);
+    assert_eq!(recorded.rule_id, "budget.externalize");
     assert_eq!(recorded.risk, FidelityRisk::High);
     assert!(
-        recorded.handle.is_none(),
-        "no binary retrieval store exists yet in PR1 — no handle must be promised"
+        recorded.handle.is_some(),
+        "PR2 media sources are stored, so a resolvable handle must be handed out"
     );
-    assert!(recorded.reason.contains("next PR"));
+    assert!(recorded.reason.contains("did not fit the budget"));
 }
 
 #[test]
@@ -268,10 +272,13 @@ fn test_decision_routes_a_fitting_media_fragment_to_preserve() {
     assert!(recorded.handle.is_none());
 }
 
-// --- dup_verdict: media duplicates never get a dangling handle either ---
+// --- dup_verdict: media duplicates recover via a handle, like text ------
 
 #[test]
-fn test_dup_verdict_media_duplicate_whose_twin_is_also_unfit_gets_no_handle() {
+fn test_dup_verdict_media_duplicate_whose_twin_is_also_unfit_still_gets_a_handle() {
+    // US-009, PR2: the memory bridge persists every non-duplicate source
+    // (media included), so a duplicate whose twin also failed to pack is
+    // recoverable through its own handle, exactly like a text duplicate.
     let twin = analysis_for(
         0,
         "",
@@ -300,8 +307,11 @@ fn test_dup_verdict_media_duplicate_whose_twin_is_also_unfit_gets_no_handle() {
     assert_eq!(action, ContextAction::Drop);
     assert_eq!(rule_id, "drop.duplicate");
     assert_eq!(risk, FidelityRisk::High);
-    assert!(handle.is_none());
-    assert!(reason.contains("next PR"));
+    assert!(
+        handle.is_some(),
+        "PR2 media sources are stored, so this duplicate's own bytes stay recoverable"
+    );
+    assert!(reason.contains("recover via the handle"));
 }
 
 #[test]

@@ -22,7 +22,7 @@ use super::{join_error, to_error, McpServer};
 use crate::context::wire::{stringify_id_fields, ID_KEYS};
 use crate::context::{
     CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextDecision,
-    ContextSavings, WorkingContext,
+    ContextSavings, MediaRef, WorkingContext,
 };
 
 /// Serialize `payload`, opt-in rewriting every id field into decimal-string
@@ -130,6 +130,10 @@ pub(super) struct RetrieveContextSourceResult {
     pub handle: String,
     /// The original fragment content, byte for byte.
     pub content: String,
+    /// The original media payload, when the fragment carried one (US-009,
+    /// PR2). Absent for every text-only source — the exact pre-PR2 shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaRef>,
 }
 
 /// Input of the `save_working_context` tool.
@@ -290,11 +294,15 @@ impl McpServer {
         let service = Arc::clone(&self.service);
         let RetrieveContextSourceParams { handle } = params;
         let lookup = handle.clone();
-        let content = tokio::task::spawn_blocking(move || service.retrieve_context_source(&lookup))
+        let source = tokio::task::spawn_blocking(move || service.retrieve_context_source(&lookup))
             .await
             .map_err(join_error)?
             .map_err(to_error)?;
-        Ok(Json(RetrieveContextSourceResult { handle, content }))
+        Ok(Json(RetrieveContextSourceResult {
+            handle,
+            content: source.content,
+            media: source.media,
+        }))
     }
 
     #[tool(

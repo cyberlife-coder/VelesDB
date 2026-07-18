@@ -243,6 +243,84 @@ fn media_fragment(caption: &str) -> ContextFragment {
     }
 }
 
+// --- screenshot_supersession (US-009, PR2) --------------------------------
+
+fn screenshot(caption: &str, target: &str) -> ContextFragment {
+    let mut meta = Map::new();
+    meta.insert("target".to_owned(), Value::String(target.to_owned()));
+    ContextFragment {
+        kind: Some("screenshot".to_owned()),
+        metadata: Some(meta),
+        ..media_fragment(caption)
+    }
+}
+
+#[test]
+fn test_screenshot_supersession_three_same_target_supersedes_all_but_the_last() {
+    let fragments = vec![
+        screenshot("v1", "login-page"),
+        screenshot("v2", "login-page"),
+        screenshot("v3", "login-page"),
+    ];
+    assert_eq!(screenshot_supersession(&fragments), vec![true, true, false]);
+}
+
+#[test]
+fn test_screenshot_supersession_different_targets_are_never_superseded() {
+    let fragments = vec![
+        screenshot("a", "login-page"),
+        screenshot("b", "checkout-page"),
+    ];
+    assert_eq!(screenshot_supersession(&fragments), vec![false, false]);
+}
+
+#[test]
+fn test_screenshot_supersession_without_target_is_never_superseded() {
+    let no_target = media_fragment_kind("screenshot");
+    let fragments = vec![no_target.clone(), no_target];
+    assert_eq!(screenshot_supersession(&fragments), vec![false, false]);
+}
+
+#[test]
+fn test_screenshot_supersession_ignores_media_fragments_without_screenshot_kind() {
+    // Same media bytes, same metadata shape, but not `kind: "screenshot"` —
+    // never a supersession candidate.
+    let mut meta = Map::new();
+    meta.insert("target".to_owned(), Value::String("login-page".to_owned()));
+    let not_a_screenshot = ContextFragment {
+        metadata: Some(meta),
+        ..media_fragment("a")
+    };
+    let fragments = vec![not_a_screenshot.clone(), not_a_screenshot];
+    assert_eq!(screenshot_supersession(&fragments), vec![false, false]);
+}
+
+#[test]
+fn test_screenshot_supersession_ignores_non_media_fragments_even_with_matching_metadata() {
+    let mut meta = Map::new();
+    meta.insert("target".to_owned(), Value::String("login-page".to_owned()));
+    let text_only = ContextFragment {
+        kind: Some("screenshot".to_owned()),
+        metadata: Some(meta),
+        ..fragment("no media here")
+    };
+    let fragments = vec![text_only.clone(), text_only];
+    assert_eq!(screenshot_supersession(&fragments), vec![false, false]);
+}
+
+#[test]
+fn test_screenshot_supersession_a_single_screenshot_is_never_superseded() {
+    let fragments = vec![screenshot("only one", "login-page")];
+    assert_eq!(screenshot_supersession(&fragments), vec![false]);
+}
+
+fn media_fragment_kind(kind: &str) -> ContextFragment {
+    ContextFragment {
+        kind: Some(kind.to_owned()),
+        ..media_fragment("no target")
+    }
+}
+
 #[test]
 fn test_classify_media_fragment_gets_its_own_atomic_rule() {
     let matched = classify_default(&media_fragment(""));

@@ -12,8 +12,10 @@ use super::model::SourceReference;
 pub(crate) const HANDLE_PREFIX: &str = "ctx://source/";
 
 /// The recoverable address of a fragment's original content. Handles are
-/// **content-addressed** (FNV-1a hash of the original bytes), never minted
-/// from caller-supplied ids — two different fragments sharing a caller id
+/// **content-addressed** (FNV-1a hash of the original bytes — the text for
+/// a text fragment, the raw decoded media bytes for a media fragment, see
+/// `Analysis::handle_hash` in `context.rs`), never minted from
+/// caller-supplied ids — two different fragments sharing a caller id
 /// therefore keep two distinct, unambiguous addresses.
 #[must_use]
 pub(crate) fn handle_for(content_hash: u64) -> String {

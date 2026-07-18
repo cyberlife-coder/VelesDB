@@ -15,8 +15,11 @@
 //! - **Provenance**: every input fragment gets exactly one
 //!   [`ContextDecision`](crate::context::ContextDecision) with a stable rule
 //!   id and a content hash; every fragment stays addressable via a
-//!   **content-addressed** `ctx://source/<content_hash>` handle (immune to
-//!   caller-id collisions).
+//!   **content-addressed** `ctx://source/<hash>` handle (immune to
+//!   caller-id collisions) — hashed over the text for a text fragment, over
+//!   the raw decoded media bytes for a media fragment (see
+//!   `Analysis::handle_hash`: captions are typically blank, so a
+//!   caption-keyed handle would collide every captionless image).
 //! - **Nothing critical is silently lost**: content that cannot fit becomes
 //!   a [`RetrievalHandle`](crate::context::RetrievalHandle); losing
 //!   preserve-classified content raises
@@ -36,7 +39,11 @@ mod dedup;
 pub mod estimator;
 pub mod insights;
 mod log_normalize;
-mod media;
+// `pub(crate)`, not private: the memory bridge (`service::memory_bridge`,
+// physically stored under `context/` but logically a sibling module of
+// `context`, see `service.rs`) decodes media bytes itself (US-009, PR2) to
+// derive a deterministic placeholder embedding for a stored media source.
+pub(crate) mod media;
 pub mod model;
 pub(crate) mod provenance;
 mod relevance;
@@ -51,8 +58,8 @@ pub use insights::{CompilationInsights, ModelPricing, PricingTable};
 pub use model::{
     CompilePolicy, CompileRequest, CompiledContext, CompiledSection, ContextAction,
     ContextDecision, ContextDecisionRef, ContextFact, ContextFragment, ContextSavings,
-    FidelityRisk, ImportanceWeights, MediaRef, MemoryScope, RetrievalHandle, SectionKind,
-    SourceReference, WorkingContext,
+    ContextSource, FidelityRisk, ImportanceWeights, MediaRef, MemoryScope, RetrievalHandle,
+    SectionKind, SourceReference, WorkingContext,
 };
 pub use relevance::DeterministicReranker;
 
@@ -184,7 +191,9 @@ impl ContextCompiler {
             sources: analyses
                 .iter()
                 .filter(|analysis| analysis.dup.is_none())
-                .map(|analysis| provenance::source_for(analysis.fragment_id, analysis.content_hash))
+                .map(|analysis| {
+                    provenance::source_for(analysis.fragment_id, analysis.handle_hash())
+                })
                 .collect(),
             risk: decisions
                 .iter()
@@ -217,8 +226,8 @@ impl ContextCompiler {
         // raw media bytes are never turned into packed text (see `pieces`).
         // The image's own cost has to be added on top, but only for media
         // that actually made it into the output (an emissions entry exists)
-        // — a dropped image (see `media_unavailable_verdict`) contributed
-        // nothing and must not appear here either.
+        // — an externalized or superseded image contributed nothing and
+        // must not appear here either (see `pack_items`).
         let media_tokens_out: u64 = analyses
             .iter()
             .filter(|analysis| emissions.contains_key(&analysis.seq))
@@ -290,6 +299,34 @@ struct Analysis<'a> {
     /// dedup identity and precomputed image token cost, computed once here
     /// (decoding is not free) and reused by dedup, packing, and insights.
     media: Option<media::MediaAnalysis>,
+    /// Set when a LATER fragment in the same request shares this one's
+    /// `kind == "screenshot"` and `metadata.target` value (US-009, PR2 —
+    /// see [`classify::screenshot_supersession`]): excluded from packing
+    /// entirely regardless of budget (see [`pack_items`]) and routed to
+    /// [`superseded_screenshot_verdict`] instead of the ordinary
+    /// pack-outcome verdicts. `analysis.rule` is left untouched (still
+    /// whatever [`classify::classify`] returned) — only this flag steers
+    /// packing and the decision; nothing else needs to know why.
+    superseded: bool,
+}
+
+impl Analysis<'_> {
+    /// The hash every `ctx://source/<hash>` handle (and thus every bridge
+    /// storage slot) for this fragment is minted from. **Media identity is
+    /// the raw decoded BYTES** ([`media::MediaAnalysis::raw_hash`]), exactly
+    /// like PR1's dedup — never the caption text: captions are typically
+    /// blank, and keying on them would collide every captionless image onto
+    /// one handle (serving arbitrary wrong bytes back). Two different
+    /// images therefore always get two different handles; byte-identical
+    /// images share one handle and resolve the same stored bytes (with the
+    /// kept instance's caption — divergent duplicate captions do not
+    /// survive, same as PR1's dedup semantics). Text fragments keep the
+    /// content hash, byte-identical to every pre-PR2 handle.
+    fn handle_hash(&self) -> u64 {
+        self.media
+            .as_ref()
+            .map_or(self.content_hash, |media| media.raw_hash)
+    }
 }
 
 /// A media fragment's total precomputed token cost: the image alone (from
@@ -417,6 +454,10 @@ fn analyze<'a>(
         .map(|analysis| analysis.as_ref().map(|analysis| analysis.raw_hash))
         .collect();
     let duplicates = dedup::find_duplicates(&contents, policy.near_dup_dedup, &media_hashes);
+    // Whole-batch pass, symmetric to `dedup::find_duplicates` above: needs
+    // every fragment's `kind` + `metadata.target` at once, which a per-
+    // fragment `classify::classify` call cannot see.
+    let superseded_flags = classify::screenshot_supersession(&request.fragments);
     let query_terms = relevance::terms(&request.query);
     let mut analyses: Vec<Analysis<'a>> = request
         .fragments
@@ -437,6 +478,13 @@ fn analyze<'a>(
                 || estimator.estimate(&fragment.content),
                 |media| media_fragment_tokens(media, &fragment.content, estimator),
             );
+            // A caller can opt out via `disabled_rules`, exactly like every
+            // other named rule — even though this one is not a `RULES` row.
+            let superseded = superseded_flags[seq]
+                && !policy
+                    .disabled_rules
+                    .iter()
+                    .any(|disabled| disabled == classify::SCREENSHOT_SUPERSEDED_RULE_ID);
             Analysis {
                 seq,
                 fragment_id: fragment.id.unwrap_or(content_hash),
@@ -449,6 +497,7 @@ fn analyze<'a>(
                 dup,
                 abstract_collapse,
                 media: media_analysis,
+                superseded,
             }
         })
         .collect();
@@ -489,7 +538,9 @@ fn pack_items(
     let chunk_policy = effective_chunk_policy(policy, usable, estimator);
     analyses
         .iter()
-        .filter(|analysis| analysis.dup.is_none())
+        // A superseded screenshot (US-009, PR2) is never attempted, budget
+        // or no budget — see `Analysis::superseded`.
+        .filter(|analysis| analysis.dup.is_none() && !analysis.superseded)
         .map(|analysis| PackItem {
             seq: analysis.seq,
             critical: analysis.rule.critical,
@@ -644,15 +695,20 @@ fn decision(
     let emission = emissions.get(&analysis.seq);
     let (action, rule_id, risk, reason, handle) = match (&analysis.dup, emission) {
         (Some(dup), _) => dup_verdict(analysis, *dup, &all[dup.kept_seq], emissions),
+        // Checked before the emission-based arms: a superseded screenshot
+        // (US-009, PR2) is excluded from packing entirely (see
+        // `pack_items`), so `emission` is always `None` here anyway — this
+        // arm exists to give it its own rule id and reason rather than
+        // falling into the generic `externalized_verdict` below.
+        (None, _) if analysis.superseded => superseded_screenshot_verdict(analysis),
         (None, Some(emission)) if emission.is_full() => full_verdict(analysis),
         (None, Some(emission)) => partial_verdict(analysis, emission),
         // A media fragment's single atomic piece is always taken whole or
         // not at all (see `pieces`), so a missing emission for one means
         // "did not fit" — never "took none of what was offered" from a
-        // multi-piece fragment. PR1 has no binary retrieval store, so
-        // externalizing it behind a `ctx://source` handle would promise a
-        // fetch that cannot succeed; drop it instead, honestly.
-        (None, None) if analysis.media.is_some() => media_unavailable_verdict(analysis),
+        // multi-piece fragment. Media externalizes exactly like text
+        // (US-009, PR2): the memory bridge persists the bytes behind the
+        // handle this mints (see `MemoryService::retrieve_context_source`).
         (None, None) => externalized_verdict(analysis),
     };
     ContextDecision {
@@ -720,27 +776,13 @@ fn dup_verdict(
             rule_id.to_owned(),
             FidelityRisk::Low,
             reason,
-            Some(provenance::handle_for(analysis.content_hash)),
+            Some(provenance::handle_for(analysis.handle_hash())),
         );
     }
-    if analysis.media.is_some() {
-        // Same PR1 honesty gap as `media_unavailable_verdict`: the twin
-        // itself did not fully pack, and there is no binary retrieval store
-        // yet, so this duplicate is not recoverable through a handle either
-        // — unlike the text case below, do not hand out one that would not
-        // resolve.
-        return (
-            ContextAction::Drop,
-            rule_id.to_owned(),
-            critical_risk(analysis.rule.critical),
-            format!(
-                "{variant} of fragment #{} — that twin was not fully emitted, and media \
-                 externalization lands in the next PR, so this duplicate is not retrievable either",
-                dup.kept_seq
-            ),
-            None,
-        );
-    }
+    // Media dedup is otherwise unremarkable here: the twin's bytes were not
+    // fully packed either, but (US-009, PR2) the memory bridge now persists
+    // every non-duplicate fragment's original — media included — so a
+    // duplicate's own handle resolves exactly like a text duplicate's.
     (
         ContextAction::Drop,
         rule_id.to_owned(),
@@ -749,27 +791,24 @@ fn dup_verdict(
             "{variant} of fragment #{} — but that twin was not fully emitted — recover via the handle",
             dup.kept_seq
         ),
-        Some(provenance::handle_for(analysis.content_hash)),
+        Some(provenance::handle_for(analysis.handle_hash())),
     )
 }
 
-/// A media fragment (US-009, PR1) that did not fit the budget: `drop`ped
-/// with an explicit, honest reason instead of the generic
-/// [`externalized_verdict`] — PR1 ships no binary retrieval store, so
-/// handing out a `ctx://source` handle here would promise a fetch that can
-/// never resolve. A future PR that lands media externalization changes this
-/// verdict, not the atomic-packing or dedup behavior around it.
-fn media_unavailable_verdict(analysis: &Analysis) -> Verdict {
+/// A screenshot the whole-batch pass reclassified
+/// `retrieve.screenshot_superseded` (US-009, PR2 — see
+/// [`classify::screenshot_supersession`]): excluded from packing entirely,
+/// regardless of budget (see [`pack_items`]), because a LATER fragment in
+/// the same request already carries the current state of the same
+/// `metadata.target`. Always gets a resolvable handle — the memory bridge
+/// stores every non-duplicate fragment's original, media included.
+fn superseded_screenshot_verdict(analysis: &Analysis) -> Verdict {
     (
-        ContextAction::Drop,
-        "drop.media_unavailable".to_owned(),
-        critical_risk(analysis.rule.critical),
-        format!(
-            "did not fit the budget ({}); media externalization lands in the next PR, so it is \
-             dropped rather than given a retrieval handle that would not resolve",
-            analysis.rule.reason
-        ),
-        None,
+        ContextAction::Retrieve,
+        classify::SCREENSHOT_SUPERSEDED_RULE_ID.to_owned(),
+        FidelityRisk::Medium,
+        classify::SCREENSHOT_SUPERSEDED_REASON.to_owned(),
+        Some(provenance::handle_for(analysis.handle_hash())),
     )
 }
 
@@ -801,7 +840,7 @@ fn partial_verdict(analysis: &Analysis, emission: &Emission) -> Verdict {
             emission.taken,
             emission.total
         ),
-        Some(provenance::handle_for(analysis.content_hash)),
+        Some(provenance::handle_for(analysis.handle_hash())),
     )
 }
 
@@ -832,7 +871,7 @@ fn externalized_verdict(analysis: &Analysis) -> Verdict {
             "did not fit the budget ({}); retrievable via its handle",
             analysis.rule.reason
         ),
-        Some(provenance::handle_for(analysis.content_hash)),
+        Some(provenance::handle_for(analysis.handle_hash())),
     )
 }
 
@@ -843,7 +882,7 @@ fn retrieval_handles(analyses: &[Analysis], decisions: &[ContextDecision]) -> Ve
         .zip(decisions)
         .filter(|(_, decision)| decision.action == ContextAction::Retrieve)
         .map(|(analysis, _)| RetrievalHandle {
-            handle: provenance::handle_for(analysis.content_hash),
+            handle: provenance::handle_for(analysis.handle_hash()),
             fragment_id: analysis.fragment_id,
             estimated_tokens: analysis.tokens,
         })

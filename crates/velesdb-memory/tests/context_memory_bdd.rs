@@ -10,8 +10,8 @@ mod common;
 
 use common::service;
 use velesdb_memory::context::{
-    CompilePolicy, CompileRequest, ContextCompiler, ContextFragment, DeterministicReranker,
-    MemoryScope, WorkingContext,
+    CompilePolicy, CompileRequest, ContextAction, ContextCompiler, ContextFragment,
+    DeterministicReranker, MediaRef, MemoryScope, WorkingContext,
 };
 use velesdb_memory::{ErrorCategory, FusionOptions, HashEmbedder, MemoryService};
 
@@ -24,6 +24,64 @@ fn fragment(content: &str) -> ContextFragment {
         metadata: None,
         media: None,
     }
+}
+
+/// A syntactically valid (well-formed base64), tiny PNG header — its exact
+/// bytes don't matter to these tests, only that `media::decode_base64`
+/// accepts them.
+const PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAYAAAAAAAAA";
+
+/// Build a fragment carrying an inline PNG media payload.
+fn media_fragment(caption: &str, bytes_b64: &str) -> ContextFragment {
+    ContextFragment {
+        media: Some(MediaRef {
+            mime: "image/png".to_owned(),
+            bytes_b64: bytes_b64.to_owned(),
+        }),
+        ..fragment(caption)
+    }
+}
+
+/// A well-formed base64 payload distinct per `seed` — media dedup keys on
+/// raw bytes alone, so two fragments needing DIFFERENT bytes must pass
+/// different seeds. The seed is an explicit, caption-INDEPENDENT parameter
+/// on purpose (review finding on PR2's first cut): deriving bytes from the
+/// caption would make "same caption, different bytes" — the exact scenario
+/// of the media handle-collision bug — inexpressible in these tests. Only
+/// the final base64 character is varied (still a valid unpadded quad).
+fn distinct_media_b64(seed: &str) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    // A multiplicative fold, not a plain byte sum: same-length seeds like
+    // "stale-A"/"fresh-B" must not collide.
+    let hash = seed
+        .bytes()
+        .fold(0_u64, |h, b| h.wrapping_mul(131).wrapping_add(u64::from(b)));
+    let mut b64 = PNG_B64[..PNG_B64.len() - 2].to_owned();
+    b64.push(ALPHABET[usize::try_from(hash % 64).unwrap_or(0)] as char);
+    b64.push(ALPHABET[usize::try_from((hash / 64) % 64).unwrap_or(0)] as char);
+    b64
+}
+
+/// Build a `kind: "screenshot"` media fragment naming its `metadata.target`,
+/// with bytes derived from `seed` (independent of `caption` — see
+/// [`distinct_media_b64`]).
+fn screenshot_with_seed(caption: &str, target: &str, seed: &str) -> ContextFragment {
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        "target".to_owned(),
+        serde_json::Value::String(target.to_owned()),
+    );
+    ContextFragment {
+        kind: Some("screenshot".to_owned()),
+        metadata: Some(meta),
+        ..media_fragment(caption, &distinct_media_b64(seed))
+    }
+}
+
+/// [`screenshot_with_seed`] with the caption reused as the byte seed — for
+/// tests where the two need not be independent.
+fn screenshot(caption: &str, target: &str) -> ContextFragment {
+    screenshot_with_seed(caption, target, caption)
 }
 
 fn request(query: &str, fragments: Vec<ContextFragment>, budget: u64) -> CompileRequest {
@@ -110,8 +168,9 @@ fn test_retrieve_context_source_round_trips_original() {
     let handle = &out.sources[0].handle;
     let retrieved = svc.retrieve_context_source(handle).expect("retrieve");
 
-    // Then the exact original bytes come back
-    assert_eq!(retrieved, original);
+    // Then the exact original bytes come back, with no media (text-only)
+    assert_eq!(retrieved.content, original);
+    assert!(retrieved.media.is_none());
 }
 
 #[test]
@@ -420,7 +479,7 @@ fn test_retrieve_context_source_refuses_a_squatting_caller_fact() {
     let squatted = svc.retrieve_context_source(&format!("ctx://source/{squatted_hash}"));
 
     // Then the real source round-trips and the squatter is never served back
-    assert_eq!(legit, "legit source");
+    assert_eq!(legit.content, "legit source");
     let err = squatted.expect_err("a caller fact must never masquerade as a stored source");
     assert_eq!(err.category(), ErrorCategory::NotFound);
 }
@@ -444,7 +503,7 @@ fn test_source_ttl_zero_stores_permanently_like_remember() {
         .expect("Some(0) must mean permanent, exactly like remember_with_ttl");
 
     // Then the source is there
-    assert_eq!(retrieved, "must stay retrievable");
+    assert_eq!(retrieved.content, "must stay retrievable");
 }
 
 // --- Coverage round (2026-07-17): pricing trail, writer guard, provenance ----
@@ -1166,5 +1225,298 @@ fn test_importance_out_of_range_weight_is_accepted_verbatim_not_clamped() {
         pos(&blended, other) < pos(&blended, leading_text),
         "a negative weight must invert the confidence term, got:\n{}",
         blended.content
+    );
+}
+
+// --- Media source storage & screenshot supersession (US-009, PR2) ----------
+
+#[test]
+fn test_media_fragment_dropped_by_budget_round_trips_byte_identical_via_its_handle() {
+    // Given a media fragment far too large for the budget, so it never
+    // packs inline
+    let (_dir, svc) = service();
+    let frag = media_fragment("a huge screenshot", PNG_B64);
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(&compiler, &request("q", vec![frag], 10))
+        .expect("compile");
+    let decision = &out.decisions[0];
+    assert_eq!(decision.action, ContextAction::Retrieve);
+    let handle = decision
+        .handle
+        .clone()
+        .expect("externalized media gets a handle");
+
+    // When retrieving the source behind its handle
+    let source = svc.retrieve_context_source(&handle).expect("retrieve");
+
+    // Then the caption AND the media (mime + bytes_b64) round-trip exactly
+    assert_eq!(source.content, "a huge screenshot");
+    let media = source
+        .media
+        .expect("a media source must carry its media back");
+    assert_eq!(media.mime, "image/png");
+    assert_eq!(media.bytes_b64, PNG_B64);
+}
+
+#[test]
+fn test_media_fragment_source_round_trips_via_out_sources_handle_too() {
+    // Given a media fragment that fits inline (still gets a source entry)
+    let (_dir, svc) = service();
+    let frag = media_fragment("caption", PNG_B64);
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(&compiler, &request("q", vec![frag], 10_000))
+        .expect("compile");
+
+    // When retrieving via `out.sources[0].handle` (not just a drop/retrieve
+    // decision's handle)
+    let handle = &out.sources[0].handle;
+    let source = svc.retrieve_context_source(handle).expect("retrieve");
+
+    // Then the media round-trips byte for byte
+    assert_eq!(source.content, "caption");
+    assert_eq!(
+        source
+            .media
+            .expect("media must be stored for every non-duplicate source")
+            .bytes_b64,
+        PNG_B64
+    );
+}
+
+#[test]
+fn test_text_only_source_still_carries_no_media_after_pr2() {
+    // Byte-compat guard: a plain text fragment's stored source must still
+    // carry no media field at all (never Some(default)).
+    let (_dir, svc) = service();
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(
+            &compiler,
+            &request("q", vec![fragment("plain text, no media here")], 10_000),
+        )
+        .expect("compile");
+    let source = svc
+        .retrieve_context_source(&out.sources[0].handle)
+        .expect("retrieve");
+    assert_eq!(source.content, "plain text, no media here");
+    assert!(source.media.is_none());
+}
+
+#[test]
+fn test_three_screenshots_same_target_first_two_externalize_with_working_handles() {
+    // Given three screenshots of the same target, compiled through the
+    // bridge so store_sources actually persists them
+    let (_dir, svc) = service();
+    let fragments = vec![
+        screenshot("v1", "login-page"),
+        screenshot("v2", "login-page"),
+        screenshot("v3", "login-page"),
+    ];
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(&compiler, &request("q", fragments, 10_000))
+        .expect("compile");
+
+    // Then the first two are superseded, and each is genuinely retrievable
+    // (not merely handed a dangling handle) with its OWN distinct bytes
+    for (seq, caption) in [(0, "v1"), (1, "v2")] {
+        let decision = &out.decisions[seq];
+        assert_eq!(decision.action, ContextAction::Retrieve);
+        assert_eq!(decision.rule_id, "retrieve.screenshot_superseded");
+        let handle = decision
+            .handle
+            .clone()
+            .expect("superseded screenshot gets a handle");
+        let source = svc.retrieve_context_source(&handle).expect("retrieve");
+        assert_eq!(
+            source.media.expect("media must round-trip").bytes_b64,
+            distinct_media_b64(caption)
+        );
+    }
+
+    // And the last stays inline, never externalized
+    assert_eq!(out.decisions[2].action, ContextAction::Preserve);
+}
+
+#[test]
+fn test_screenshots_of_different_targets_all_round_trip_independently() {
+    // Given screenshots of two different targets, both fitting the budget
+    let (_dir, svc) = service();
+    let fragments = vec![
+        screenshot("login shot", "login-page"),
+        screenshot("checkout shot", "checkout-page"),
+    ];
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(&compiler, &request("q", fragments, 10_000))
+        .expect("compile");
+
+    // Then neither is superseded, and both stay inline
+    assert!(out
+        .decisions
+        .iter()
+        .all(|d| d.action == ContextAction::Preserve));
+    assert!(out.content.contains("login shot"));
+    assert!(out.content.contains("checkout shot"));
+}
+
+// --- Review probes (PR2 cross-review): media identity must be the BYTES ----
+//
+// Media dedup already keys on the raw decoded bytes (PR1); handles and
+// storage slots must key on the same identity, or two media fragments with
+// identical (typically blank) captions but different bytes collide onto one
+// handle and one slot — and "externalized behind a resolvable handle"
+// silently serves the wrong image in the nominal captionless case.
+
+#[test]
+fn test_two_blank_caption_media_fragments_with_different_bytes_get_distinct_resolving_handles() {
+    // P1 — same compile: two media fragments, both captions BLANK, bytes
+    // A != B, budget too small for either (the 64x48 fixture image costs 5
+    // tokens), so both externalize
+    let (_dir, svc) = service();
+    let bytes_a = distinct_media_b64("bytes-A");
+    let bytes_b = distinct_media_b64("bytes-B");
+    assert_ne!(bytes_a, bytes_b, "fixture must yield distinct bytes");
+    let fragments = vec![media_fragment("", &bytes_a), media_fragment("", &bytes_b)];
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(&compiler, &request("q", fragments, 4))
+        .expect("compile");
+
+    // Then the two handles are DISTINCT ...
+    let handle_a = out.decisions[0].handle.clone().expect("A externalized");
+    let handle_b = out.decisions[1].handle.clone().expect("B externalized");
+    assert_ne!(
+        handle_a, handle_b,
+        "different bytes must never share a handle, blank captions or not"
+    );
+
+    // ... and each resolves ITS OWN bytes
+    let source_a = svc.retrieve_context_source(&handle_a).expect("retrieve A");
+    let source_b = svc.retrieve_context_source(&handle_b).expect("retrieve B");
+    assert_eq!(source_a.media.expect("A media").bytes_b64, bytes_a);
+    assert_eq!(source_b.media.expect("B media").bytes_b64, bytes_b);
+}
+
+#[test]
+fn test_cross_compile_blank_caption_media_sources_never_serve_stale_bytes() {
+    // P2 — cross-compile: compile blank-caption image A first (its source is
+    // stored), then blank-caption image B in a SECOND compile
+    let (_dir, svc) = service();
+    let bytes_a = distinct_media_b64("stale-A");
+    let bytes_b = distinct_media_b64("fresh-B");
+    assert_ne!(bytes_a, bytes_b, "fixture must yield distinct bytes");
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    svc.compile_context(
+        &compiler,
+        &request("q", vec![media_fragment("", &bytes_a)], 10_000),
+    )
+    .expect("compile A");
+    let out_b = svc
+        .compile_context(
+            &compiler,
+            &request("q", vec![media_fragment("", &bytes_b)], 10_000),
+        )
+        .expect("compile B");
+
+    // When resolving B's handle from the second compile
+    let handle_b = out_b.sources[0].handle.clone();
+    let source_b = svc.retrieve_context_source(&handle_b).expect("retrieve B");
+
+    // Then B's own bytes come back — never A's, stored earlier at what must
+    // NOT be the same slot
+    assert_eq!(
+        source_b.media.expect("B media").bytes_b64,
+        bytes_b,
+        "an occupied slot from an earlier compile must never serve stale bytes for a new handle"
+    );
+}
+
+#[test]
+fn test_superseded_blank_caption_screenshots_resolve_their_own_bytes_not_the_survivors() {
+    // P3 — supersession: three screenshots of the same target, ALL captions
+    // blank, three different byte payloads; the first two are superseded
+    let (_dir, svc) = service();
+    let seeds = ["shot-1", "shot-2", "shot-3"];
+    let fragments: Vec<ContextFragment> = seeds
+        .iter()
+        .map(|seed| screenshot_with_seed("", "login-page", seed))
+        .collect();
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(&compiler, &request("q", fragments, 10_000))
+        .expect("compile");
+
+    // Then the two superseded screenshots carry DISTINCT handles, each
+    // resolving its own bytes — never the surviving third's
+    let handle_0 = out.decisions[0].handle.clone().expect("superseded 0");
+    let handle_1 = out.decisions[1].handle.clone().expect("superseded 1");
+    assert_ne!(handle_0, handle_1, "distinct bytes, distinct handles");
+    for (handle, seed) in [(handle_0, seeds[0]), (handle_1, seeds[1])] {
+        let source = svc.retrieve_context_source(&handle).expect("retrieve");
+        assert_eq!(
+            source.media.expect("media").bytes_b64,
+            distinct_media_b64(seed),
+            "a superseded screenshot's handle must resolve ITS OWN bytes, not the survivor's"
+        );
+    }
+    assert_eq!(out.decisions[2].action, ContextAction::Preserve);
+}
+
+// --- Review minors: dedup × supersession, and recall invisibility ----------
+
+#[test]
+fn test_byte_identical_screenshot_duplicate_wins_over_supersession_and_resolves() {
+    // Given two BYTE-IDENTICAL screenshots of a target plus a newer,
+    // different one — dedup and supersession both apply to fragment #1;
+    // the dup arm must win (it is checked first in `decision`)
+    let (_dir, svc) = service();
+    let same = distinct_media_b64("same-bytes");
+    let fragments = vec![
+        screenshot_with_seed("", "login-page", "same-bytes"),
+        screenshot_with_seed("", "login-page", "same-bytes"),
+        screenshot_with_seed("", "login-page", "newer"),
+    ];
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(&compiler, &request("q", fragments, 10_000))
+        .expect("compile");
+
+    // Then #0 is superseded (older of the series), #1 is its exact
+    // duplicate (dup verdict wins over the supersession flag), #2 survives
+    assert_eq!(out.decisions[0].rule_id, "retrieve.screenshot_superseded");
+    assert_eq!(out.decisions[1].rule_id, "drop.duplicate");
+    assert_eq!(out.decisions[1].action, ContextAction::Drop);
+    assert_eq!(out.decisions[2].action, ContextAction::Preserve);
+
+    // And the duplicate's handle (same bytes as #0) still resolves those bytes
+    let dup_handle = out.decisions[1]
+        .handle
+        .clone()
+        .expect("media duplicate keeps a handle");
+    let source = svc.retrieve_context_source(&dup_handle).expect("retrieve");
+    assert_eq!(source.media.expect("media").bytes_b64, same);
+}
+
+#[test]
+fn test_stored_media_sources_are_invisible_to_normal_recall() {
+    // Given a compiled (and stored) media source with a distinctive caption
+    let (_dir, svc) = service();
+    let caption = "zebra quantum flamingo caption";
+    let frag = media_fragment(caption, &distinct_media_b64("invisible"));
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    svc.compile_context(&compiler, &request("q", vec![frag], 10_000))
+        .expect("compile");
+
+    // When recalling with the caption itself as the query
+    let hits = svc.recall(caption, 10, None).expect("recall");
+
+    // Then the media source system fact (hub-marked, placeholder-embedded)
+    // never surfaces in caller-facing recall
+    assert!(
+        hits.is_empty(),
+        "a stored media source must be invisible to normal recall, got {hits:?}"
     );
 }

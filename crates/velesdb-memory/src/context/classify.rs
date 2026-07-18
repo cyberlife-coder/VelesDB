@@ -308,6 +308,58 @@ fn annotated(line: &str, count: usize) -> String {
     }
 }
 
+/// Stable id of the screenshot-supersession verdict (US-009, PR2). Not a row
+/// in the [`RULES`] table above — it needs cross-fragment visibility a
+/// per-fragment `applies: fn(&ContextFragment, &CompilePolicy) -> bool`
+/// cannot have (whether THIS fragment is the last of its series) — but it is
+/// disclosed here, next to [`screenshot_supersession`], because in every
+/// sense a caller cares about it IS a classification rule: a stable public
+/// id that decides a fragment's fate before budget packing ever runs (see
+/// `super::pack_items` and `super::superseded_screenshot_verdict`).
+pub(crate) const SCREENSHOT_SUPERSEDED_RULE_ID: &str = "retrieve.screenshot_superseded";
+
+/// The reason recorded for every screenshot [`screenshot_supersession`]
+/// supersedes.
+pub(crate) const SCREENSHOT_SUPERSEDED_REASON: &str =
+    "superseded by a newer screenshot of the same target";
+
+/// Reserved fragment metadata key naming a screenshot's subject — the value
+/// two `kind: "screenshot"` fragments must share (JSON equality) to belong
+/// to the same succession series.
+const SCREENSHOT_TARGET_KEY: &str = "target";
+
+/// This fragment's screenshot-succession identity: `Some(target)` only when
+/// it carries media, is `kind == "screenshot"`, AND names a
+/// `metadata.target` — a screenshot with no target is never part of a
+/// series (no target is no evidence of succession), and a plain media
+/// fragment (no `kind` at all, or a different `kind`) is never a candidate
+/// either, however similar its metadata looks.
+fn screenshot_target(fragment: &ContextFragment) -> Option<&Value> {
+    if fragment.media.is_none() || fragment.kind.as_deref() != Some("screenshot") {
+        return None;
+    }
+    fragment.metadata.as_ref()?.get(SCREENSHOT_TARGET_KEY)
+}
+
+/// For each fragment, in input order: whether a LATER fragment in the same
+/// request shares its screenshot-succession identity ([`screenshot_target`])
+/// — i.e. `true` for every screenshot of a target EXCEPT the last. Whole-
+/// batch pass, symmetric to [`super::dedup::find_duplicates`]: both need
+/// every fragment at once and both key on an identity narrower than full
+/// content equality, but here the picture is reversed — an ordered
+/// succession survives at its LAST member (the freshest screenshot), not
+/// its first duplicate-detection anchor. Deterministic and clock-free: input
+/// order is the only signal, exactly like every other rule in this module.
+pub(crate) fn screenshot_supersession(fragments: &[ContextFragment]) -> Vec<bool> {
+    let targets: Vec<Option<&Value>> = fragments.iter().map(screenshot_target).collect();
+    (0..fragments.len())
+        .map(|seq| match targets[seq] {
+            Some(target) => targets[seq + 1..].contains(&Some(target)),
+            None => false,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[path = "classify_tests.rs"]
 mod tests;
