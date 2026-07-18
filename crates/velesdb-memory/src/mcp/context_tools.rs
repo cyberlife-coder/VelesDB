@@ -10,17 +10,77 @@
 
 use std::sync::Arc;
 
+use rmcp::handler::server::tool::{schema_for_input, schema_for_output};
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::ErrorCode;
+use rmcp::model::{ErrorCode, JsonObject};
 use rmcp::{tool, tool_router, ErrorData};
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde_json::Value;
 
 use super::{join_error, to_error, McpServer};
+use crate::context::wire::{stringify_id_fields, ID_KEYS};
 use crate::context::{
     CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextDecision,
     ContextSavings, WorkingContext,
 };
+
+/// Serialize `payload`, opt-in rewriting every id field into decimal-string
+/// form ([`CompilePolicy::ids_as_strings`]) — the shared response-side half
+/// of the wire-compat contract, reused by both `compile_context` and
+/// `explain_compilation` so the id rewrite is expressed exactly once.
+fn to_wire_value<T: serde::Serialize>(
+    payload: &T,
+    ids_as_strings: bool,
+) -> Result<Value, ErrorData> {
+    let mut value = serde_json::to_value(payload).map_err(|err| {
+        ErrorData::internal_error(
+            format!("Failed to serialize structured content: {err}"),
+            None,
+        )
+    })?;
+    if ids_as_strings {
+        stringify_id_fields(&mut value);
+    }
+    Ok(value)
+}
+
+/// The advertised-schema half of the [`CompilePolicy::ids_as_strings`]
+/// contract: the response may carry each [`ID_KEYS`] field as an integer OR
+/// a decimal string, and the official MCP SDKs validate `structuredContent`
+/// against the advertised `outputSchema` (spec 2025-06-18) — so those
+/// fields must be typed `["integer", "string"]`, or every opted-in response
+/// would fail client-side validation for exactly the clients the option
+/// exists for.
+fn wire_safe_output_schema<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
+    let schema = schema_for_output::<T>().unwrap_or_else(|e| {
+        panic!(
+            "Invalid output schema for {}: {e}",
+            std::any::type_name::<T>()
+        )
+    });
+    let mut map = (*schema).clone();
+    crate::schema::widen_id_properties(&mut map, ID_KEYS);
+    Arc::new(map)
+}
+
+/// Input-side counterpart: `fragments[].id` accepts an integer or a decimal
+/// string ([`crate::context::wire::deserialize_optional_id`]), so the
+/// advertised input schema announces both — a client generating requests
+/// from the schema must be able to discover the string form. Scoped to the
+/// `id` property only: `explain_compilation`'s own `fragment_id` parameter
+/// deserializes as a strict `u64` and stays typed `integer`.
+fn wire_safe_input_schema<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
+    let schema = schema_for_input::<Parameters<T>>().unwrap_or_else(|e| {
+        panic!(
+            "Invalid input schema for {}: {e}",
+            std::any::type_name::<T>()
+        )
+    });
+    let mut map = (*schema).clone();
+    crate::schema::widen_id_properties(&mut map, &["id"]);
+    Arc::new(map)
+}
 
 // --- Thin request envelopes --------------------------------------------------
 
@@ -38,8 +98,22 @@ pub(super) struct ExplainCompilationParams {
     /// The compile request to explain (compilation is deterministic, so
     /// re-submitting the request reproduces the exact decisions).
     pub request: CompileRequest,
-    /// The fragment whose decision to return.
+    /// The fragment whose decision to return. Looked up by matching
+    /// `ContextDecision::fragment_id`, UNLESS `fragment_index` is also
+    /// given (see there) — still required even then, since it is the only
+    /// disambiguator when `fragment_index` is absent.
     pub fragment_id: u64,
+    /// Optional, 0-based position of the fragment in `request.fragments`.
+    /// When given, TAKES PRIORITY over `fragment_id` for locating the
+    /// decision: `compile_context` records exactly one decision per input
+    /// fragment, in order, so `decisions[fragment_index]` is unambiguous
+    /// even when several fragments are byte-identical and therefore share
+    /// the same content-addressed `fragment_id` — a plain `fragment_id`
+    /// lookup always returns the FIRST such decision (the deduplication
+    /// survivor), never a dropped twin's. Absent (the default): behavior is
+    /// unchanged, the decision is found by `fragment_id` alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fragment_index: Option<usize>,
 }
 
 /// Input of the `retrieve_context_source` tool.
@@ -106,12 +180,15 @@ pub(super) struct LoadWorkingContextResult {
 impl McpServer {
     #[tool(
         name = "compile_context",
-        description = "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministically, with no LLM call. Duplicates are dropped, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles instead of silently vanishing, and `memory_scope` pulls relevant stored memories into the result. Returns the assembled content plus one auditable decision per fragment (rule id, reason, risk), the sources, the retrieval handles, and token-savings insights."
+        description = "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministically, with no LLM call. Duplicates are dropped, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles instead of silently vanishing, and `memory_scope` pulls relevant stored memories into the result. Returns the assembled content plus one auditable decision per fragment (rule id, reason, risk), the sources, the retrieval handles, and token-savings insights. `policy.ids_as_strings` (default false) rewrites every id field of the response into a decimal string, for MCP clients without u64-safe JSON number parsing.",
+        input_schema = wire_safe_input_schema::<CompileRequest>(),
+        output_schema = wire_safe_output_schema::<CompiledContext>()
     )]
     async fn compile_context(
         &self,
         Parameters(request): Parameters<CompileRequest>,
-    ) -> Result<Json<CompiledContext>, ErrorData> {
+    ) -> Result<Json<Value>, ErrorData> {
+        let ids_as_strings = request.policy.as_ref().is_some_and(|p| p.ids_as_strings);
         let service = Arc::clone(&self.service);
         let compiled = tokio::task::spawn_blocking(move || {
             service.compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
@@ -119,7 +196,7 @@ impl McpServer {
         .await
         .map_err(join_error)?
         .map_err(to_error)?;
-        Ok(Json(compiled))
+        Ok(Json(to_wire_value(&compiled, ids_as_strings)?))
     }
 
     #[tool(
@@ -141,17 +218,33 @@ impl McpServer {
 
     #[tool(
         name = "explain_compilation",
-        description = "Explain why one fragment of a compile_context request was preserved, abstracted, externalized, dropped, or cached. Compilation is deterministic, so the request is re-compiled (with event/source recording off) and the fragment's exact decision (rule id, reason, relevance, risk, handle) is returned — no server-side state needed. Caveat: with a memory_scope the re-compile recalls from CURRENT memory, so decisions about pulled memories reflect the memory as it is now, not as it was."
+        description = "Explain why one fragment of a compile_context request was preserved, abstracted, externalized, dropped, or cached. Compilation is deterministic, so the request is re-compiled (with event/source recording off) and the fragment's exact decision (rule id, reason, relevance, risk, handle) is returned — no server-side state needed. Caveat: with a memory_scope the re-compile recalls from CURRENT memory, so decisions about pulled memories reflect the memory as it is now, not as it was. Pass `fragment_index` (0-based position in request.fragments) instead of relying on `fragment_id` alone when fragments are byte-identical — a shared content-addressed id otherwise always resolves to the deduplication survivor's decision. `policy.ids_as_strings` on the request rewrites the response's id fields into decimal strings, like compile_context.",
+        input_schema = wire_safe_input_schema::<ExplainCompilationParams>(),
+        output_schema = wire_safe_output_schema::<ContextDecision>()
     )]
     async fn explain_compilation(
         &self,
         Parameters(params): Parameters<ExplainCompilationParams>,
-    ) -> Result<Json<ContextDecision>, ErrorData> {
+    ) -> Result<Json<Value>, ErrorData> {
         let service = Arc::clone(&self.service);
         let ExplainCompilationParams {
             request,
             fragment_id,
+            fragment_index,
         } = params;
+        if let Some(index) = fragment_index {
+            let fragment_count = request.fragments.len();
+            if index >= fragment_count {
+                return Err(ErrorData::new(
+                    ErrorCode::INVALID_PARAMS,
+                    format!(
+                        "fragment_index {index} is out of bounds: request.fragments has {fragment_count} entries"
+                    ),
+                    None,
+                ));
+            }
+        }
+        let ids_as_strings = request.policy.as_ref().is_some_and(|p| p.ids_as_strings);
         let compiled = tokio::task::spawn_blocking(move || {
             // Explanation must not re-record an event or re-store sources:
             // it is a read-only question about a deterministic function.
@@ -165,18 +258,25 @@ impl McpServer {
         .await
         .map_err(join_error)?
         .map_err(to_error)?;
-        compiled
-            .decisions
-            .into_iter()
-            .find(|decision| decision.fragment_id == fragment_id)
-            .map(Json)
-            .ok_or_else(|| {
-                ErrorData::new(
-                    ErrorCode::INVALID_PARAMS,
-                    format!("the request contains no fragment with id {fragment_id}"),
-                    None,
-                )
-            })
+        let decision = if let Some(index) = fragment_index {
+            // Bounds were already validated against `request.fragments`
+            // above; memory-pulled fragments only ever append, so
+            // `compiled.decisions` is at least as long.
+            compiled.decisions.into_iter().nth(index)
+        } else {
+            compiled
+                .decisions
+                .into_iter()
+                .find(|decision| decision.fragment_id == fragment_id)
+        };
+        let decision = decision.ok_or_else(|| {
+            ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                format!("the request contains no fragment with id {fragment_id}"),
+                None,
+            )
+        })?;
+        Ok(Json(to_wire_value(&decision, ids_as_strings)?))
     }
 
     #[tool(

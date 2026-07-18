@@ -323,6 +323,15 @@ cp -r skills/velesdb-context-optimizer ~/.claude/skills/
 [`skills/velesdb-context-optimizer/SKILL.md`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
 — see [The context compiler tools](#the-context-compiler-tools) below.
 
+**No repo clone needed:** every [GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
+attaches `velesdb-skills.tar.gz` — both skills, one folder per skill at the
+archive root — so a one-liner installs them straight from the release:
+
+```bash
+curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz \
+  | tar -xz -C ~/.claude/skills/
+```
+
 ## Using the tools
 
 Once configured, your agent discovers the tools automatically (via MCP
@@ -449,10 +458,34 @@ retrieve_context_source { "handle": "ctx://source/1234567890" }
 explain_compilation { "request": { …same request… }, "fragment_id": 1234567890 }
 → { "action": "drop", "rule_id": "drop.duplicate", "reason": "…", "risk": "low", … }
 
+// explain_compilation — byte-identical fragments share a content-addressed
+//   fragment_id, so a plain fragment_id lookup always resolves to the
+//   deduplication survivor. Pass fragment_index (0-based position in
+//   request.fragments) to target one specific fragment instead:
+explain_compilation { "request": { …fragments: [a, a]… }, "fragment_id": 1234567890,
+                       "fragment_index": 1 }
+→ { "action": "drop", "rule_id": "drop.duplicate", … }   // the SECOND "a", not the survivor
+
 // context_savings — aggregate recorded savings, optionally per project
 context_savings { "project": "veles" }
 → { "events": 12, "tokens_in": …, "tokens_saved": …, "truncated": false }
 ```
+
+> **JS clients talking raw MCP (no Node binding): watch `fragment_id` /
+> `content_hash` / `memory_id` precision.** Every id in a `compile_context` or
+> `explain_compilation` response is a `u64`. The [`velesdb-node`
+> binding](https://www.npmjs.com/package/velesdb-node) always crosses ids as
+> decimal strings, so it is unaffected — but a plain MCP client speaking JSON
+> straight over stdio/SSE (no binding in between) gets a JSON *number*, and
+> `JSON.parse` in JS represents that as an IEEE-754 double: ids above
+> `2^53 − 1` (`9007199254740991`) silently lose precision. Set
+> `"policy": { "ids_as_strings": true }` on the request to opt every id field
+> of that response into decimal-string form instead (same rewrite the Node
+> binding applies internally, reused — not reimplemented). Default `false`:
+> existing clients keep today's numeric response unless they opt in.
+> `fragments[].id` on the way IN already accepts either a JSON number or a
+> decimal string, so a caller can resubmit an id it received stringified
+> without converting it back.
 
 Preservation rules (stable ids, first match wins): `preserve.marked_verbatim`,
 `cache.stable_prefix` (cache-marked fragments form a stable prefix for

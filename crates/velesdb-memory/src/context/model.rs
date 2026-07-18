@@ -56,8 +56,16 @@ pub enum FidelityRisk {
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct ContextFragment {
     /// Caller-side identifier. When absent, the compiler derives a stable
-    /// content-addressed id (see [`super::fragment_id`]).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// content-addressed id (see [`super::fragment_id`]). Accepts a JSON
+    /// number or a decimal string on input (see
+    /// [`super::wire::deserialize_optional_id`]) — a caller that got a
+    /// `fragment_id` back as a string (e.g. under
+    /// [`CompilePolicy::ids_as_strings`]) can resubmit it unchanged.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::wire::deserialize_optional_id"
+    )]
     pub id: Option<u64>,
     /// The fragment text.
     pub content: String,
@@ -221,6 +229,18 @@ pub struct CompilePolicy {
     /// byte-exact grouping keep it unless they ask. See the crate README's
     /// "Normalizing timestamped logs" section for the exact patterns.
     pub normalize_log_timestamps: bool,
+    /// Wire-compat opt-in for the MCP context tools (`compile_context`,
+    /// `explain_compilation`): when `true`, every [`super::wire::ID_KEYS`]
+    /// field of the RESPONSE (`fragment_id`, `content_hash`, `memory_id`,
+    /// `fragment_ids`) is rewritten into its decimal-string form, through
+    /// the exact same tree walk the Node and WASM bindings already apply on
+    /// every response ([`super::wire::stringify_id_fields`]). A raw MCP
+    /// client — one that talks JSON-RPC directly, without either binding —
+    /// parses ids as JS `number`s (IEEE-754 doubles), which silently lose
+    /// precision above 2^53; string ids round-trip exactly. Default
+    /// `false`: existing MCP clients keep today's byte-identical numeric
+    /// response unless they opt in.
+    pub ids_as_strings: bool,
 }
 
 impl Default for CompilePolicy {
@@ -237,6 +257,7 @@ impl Default for CompilePolicy {
             pricing: None,
             importance: ImportanceWeights::default(),
             normalize_log_timestamps: false,
+            ids_as_strings: false,
         }
     }
 }

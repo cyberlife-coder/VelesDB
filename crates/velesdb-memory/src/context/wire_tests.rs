@@ -88,3 +88,62 @@ fn round_trip_stringify_then_parse_is_identity_for_id_keys() {
 
     assert_eq!(value, original);
 }
+
+// --- deserialize_optional_id (`ContextFragment.id` on the typed wire) -------
+
+use crate::context::ContextFragment;
+
+#[test]
+fn deserialize_optional_id_accepts_a_json_number() {
+    // The 0.8.0 wire form: a plain JSON number, including full-u64 range.
+    let fragment: ContextFragment = serde_json::from_value(json!({
+        "id": 18_446_744_073_709_551_615u64,
+        "content": "a",
+    }))
+    .expect("numeric ids are the historical wire form and must keep working");
+
+    assert_eq!(fragment.id, Some(u64::MAX));
+}
+
+#[test]
+fn deserialize_optional_id_accepts_a_decimal_string() {
+    let fragment: ContextFragment = serde_json::from_value(json!({
+        "id": "9007199254740993",
+        "content": "a",
+    }))
+    .expect("decimal-string ids are the JS-safe wire form");
+
+    assert_eq!(fragment.id, Some(9_007_199_254_740_993));
+}
+
+#[test]
+fn deserialize_optional_id_rejects_a_non_numeric_string_with_a_clear_message() {
+    let err = serde_json::from_value::<ContextFragment>(json!({
+        "id": "abc",
+        "content": "a",
+    }))
+    .expect_err("a non-numeric id string cannot silently pass");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("abc") && message.contains("u64"),
+        "the error names the offending value and the expected forms, \
+         not an opaque untagged-enum mismatch: {message}"
+    );
+}
+
+#[test]
+fn deserialize_optional_id_rejects_a_non_integer_number_with_a_clear_message() {
+    let err = serde_json::from_value::<ContextFragment>(json!({
+        "id": 1.5,
+        "content": "a",
+    }))
+    .expect_err("a fractional id cannot silently pass");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("1.5") && message.contains("u64"),
+        "the error names the offending value and the expected forms, \
+         not an opaque untagged-enum mismatch: {message}"
+    );
+}

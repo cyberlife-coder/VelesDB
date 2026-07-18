@@ -142,6 +142,16 @@ Agents burn most of their budget re-reading redundant context. The memory layer 
 
 **Compiler surfaces today: MCP server, Node, Rust, and Python** — `compile_context` and its companions ship on every binding (`MemoryService.compile_context` in Python since 0.8.x parity), and MCP covers any other client.
 
+**Install both bundled skills without cloning the repo** — every
+[GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
+attaches `velesdb-skills.tar.gz` (`velesdb-memory` + `velesdb-context-optimizer`,
+one folder per skill):
+
+```bash
+curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz \
+  | tar -xz -C ~/.claude/skills/
+```
+
 **Quickstart (3 steps):**
 
 ```bash
