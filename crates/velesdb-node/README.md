@@ -106,6 +106,50 @@ it into your agent's skills directory:
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-context-optimizer ~/.claude/skills/
 ```
 
+## Need the full engine?
+
+This addon is the **memory wedge**: `remember` / `recall` / `relate` /
+`forget` / `why` / `compileContext` — memory semantics only, by design (see
+[License](#license) below). It does not expose raw VelesQL, deep graph
+`MATCH`, collection administration, or any other database-shaped capability —
+that would cross the
+[`VelesDB Core License 1.0`](https://github.com/cyberlife-coder/VelesDB/blob/develop/LICENSE)
+§1 "Substantial Set" line.
+
+For the full engine (VelesQL, multi-hop `MATCH`, collection/index
+administration) from Node/TypeScript, run the REST server and talk to it with
+[`@wiscale/velesdb-sdk`](https://www.npmjs.com/package/@wiscale/velesdb-sdk)
+instead:
+
+```bash
+# 1. Start the server (from source, or `cargo install velesdb-server`)
+velesdb-server --port 8080
+```
+
+```typescript
+// 2. Point the TypeScript SDK's REST backend at it.
+import { VelesDB } from '@wiscale/velesdb-sdk';
+
+const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
+await db.init();
+
+await db.createCollection('docs', { dimension: 4, metric: 'cosine' });
+await db.upsert('docs', { id: 1, vector: [0.1, 0.2, 0.3, 0.4], payload: { title: 'Hello' } });
+
+// Raw VelesQL — not available through this wedge.
+const result = await db.query(
+  'docs',
+  'SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 5',
+  { v: [0.1, 0.2, 0.3, 0.4] },
+);
+```
+
+See the
+[server README](https://github.com/cyberlife-coder/VelesDB/blob/develop/crates/velesdb-server/README.md)
+for the full REST API (VelesQL, graph `MATCH`, auth, TLS) and the
+[TypeScript SDK README](https://github.com/cyberlife-coder/VelesDB/blob/develop/sdks/typescript/README.md)
+for the REST-backend client surface.
+
 ## License
 
 VelesDB Core License 1.0 (based on ELv2). See [LICENSE](./LICENSE). This addon

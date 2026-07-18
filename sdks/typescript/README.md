@@ -190,6 +190,15 @@ const results = await db.search('products', queryVector, { k: 10 });
 > are accepted for backward compatibility but are deprecated and will be removed
 > in a future major version. Always target `/v1/` in custom HTTP clients.
 
+> **This is the full-engine path.** If you came from
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node)
+> (the in-process agent-memory wedge — `remember`/`recall`/`relate`/`forget`/`why`/`compileContext`
+> only, by license design) and need raw VelesQL, multi-hop `MATCH`, or collection
+> administration, this REST backend against a running
+> [`velesdb-server`](https://github.com/cyberlife-coder/VelesDB/blob/develop/crates/velesdb-server/README.md)
+> is the way to reach it from Node/TypeScript — see `db.query()` under
+> [VelesQL Queries](#velesql-queries) below.
+
 ## Embedding helper
 
 The SDK ships an optional `OpenAIEmbedder` so you can turn text into vectors without
