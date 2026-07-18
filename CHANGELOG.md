@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`velesdb-memory`**: hardened the MCP server against a leaked client
+  process (#1448). The server itself was already healthy (it exits cleanly
+  on stdin EOF), but a client that leaks its child process — observed in
+  practice with a headless `claude -p` run — never closes stdin, so the
+  server correctly kept serving forever and held the store's single-writer
+  lock, making every later session fail with an opaque `Storage
+  (DatabaseLocked)` / "Failed to connect". Two defensive fixes: (1) the
+  server now detects a dead parent (`std::os::unix::process::parent_id()`
+  polled every ~2s, Unix-only, no new dependency) and self-exits, releasing
+  the lock, even when stdin is artificially held open; (2) a `DatabaseLocked`
+  at startup now retries briefly (3 × 500ms, covering a normal
+  close/reopen handover) and, if the store is still locked, prints an
+  actionable message on stderr naming the fix (`pkill velesdb-memory` or
+  set `VELESDB_MEMORY_PATH` elsewhere) instead of a bare error dump — and
+  exits non-zero so client health-checks can detect the failure. Net
+  effect: one leaked client can no longer brick every later session, and
+  when a store really is locked, the user is told what to do about it.
+
 ### Added — deterministic context compiler (EPIC-P-070; ships as `velesdb-memory` 0.8.0 / `velesdb-node` 0.8.0 via the `velesdb-memory-v0.8.0` tag)
 
 - **`velesdb-memory`**: new default `context` feature — a deterministic
