@@ -155,6 +155,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `velesdb-context-optimizer` skill documents when to route a screenshot
   through `media` and how `metadata.target` drives supersession.
   [EPIC-P-071/US-009]
+- **Benchmark**: `examples/real-session-benchmark/` — realistic agentic
+  sessions (screenshots with US-009 dedup/supersession, CI logs for
+  `normalize_log_timestamps`, re-injected docs, re-read code files) run A/B:
+  raw ("vraie vie", everything resent every turn) vs compiled
+  (`compileContext`; the compiled arm is billed for the `ctx://source/`
+  handles it sends). OFFLINE (default; real cl100k tokenizer + the API's own
+  pixels/750 image-token formula; every variant reproduced twice,
+  byte-identical) measures, on the committed corpora: **17.2%** saved on the
+  base 14-turn session in lossless mode (pure redundancy elimination, zero
+  unique information removed — externalized: 0), **20.3%** in
+  window-enforcement mode (budget 8000; the extra ~3 points explicitly
+  attributed to `budget.externalize` of unique content, not redundancy),
+  **30.9%** lossless / **55.1%** windowed on the 36-turn long-session
+  variant (with per-arm context-growth curves and labeled projected headroom
+  to a configurable compaction threshold: raw ~234 tokens/turn vs compiled
+  ~35/turn), and **18.4%** on the memory-enabled variant (docs stored once
+  via `remember`/`relate`, pulled back per turn via the default
+  `memory_scope` — the product's intended pattern, untuned k=5). ONLINE
+  (opt-in, `RUN_BILLED_MEASURE=1` + `CONFIRM_SPEND=1`) bills the same
+  session for real on `claude-sonnet-5` — reading the provider's own
+  `usage.input_tokens` with cache fields reported separately — AND grades
+  real generated answers in both arms against committed per-turn fact
+  checklists (deterministic substring grader): token savings and answer
+  adequacy are reported side by side, so a saving that costs answers is a
+  reported failure. Runners: native `fetch` (`ANTHROPIC_API_KEY`) or the
+  Claude Code CLI's headless mode (`BENCH_RUNNER=cli`, no key — the user's
+  own authenticated account; wire shapes verified by a real calibration
+  call). [EPIC-P-071]
 
 R1 `Collection`-internals train: resolves and **closes the god-object EPIC
 ([#1384](https://github.com/cyberlife-coder/VelesDB/issues/1384))**. The

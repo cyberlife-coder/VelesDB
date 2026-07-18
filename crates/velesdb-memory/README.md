@@ -512,6 +512,54 @@ a byte-identical **100 % stable prefix on all 9 consecutive turn pairs**
 The [`velesdb-context-optimizer`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
 skill teaches an agent the full workflow — including when *not* to compress.
 
+#### Measured on a real coding session
+
+Your AI coding assistant re-sends everything it has seen on every single
+message — old screenshots, logs it already read, files it re-opened. VelesDB
+compiles that context first: same information, fewer tokens (what LLM
+providers bill you for), so each message costs less and your session lasts
+longer before hitting the context limit.
+
+To measure that, a committed benchmark replays a realistic multi-turn coding
+session — screenshots, CI logs, documents the assistant reads again, code
+files re-opened after edits — two ways: once sending everything raw, once
+compiled through `compile_context`. Everything is counted with cl100k (a
+real tokenizer — the same counting the API does) and the API's own
+image-pricing formula. Every run is deterministic and was reproduced twice,
+byte-identical:
+
+![Benchmark protocol: one realistic coding session is sent to the model two ways — without VelesDB everything is re-sent every message, with VelesDB the context is compiled first; both arms are measured on billed tokens and graded answer quality](docs/diagrams/benchmark-protocol.svg)
+
+| Scenario | Without VelesDB | With VelesDB | Saved |
+|---|---|---|---|
+| A balanced bug-fix session (14 turns) | 84,334 tokens | 69,843 tokens | **17.2 %** — duplicates and outdated screenshots only; nothing unique removed |
+| The same session with a hard 8,000-token window | 84,334 tokens | 67,194 tokens | **20.3 %** — the extra points come from content set aside (retrievable on demand — never deleted), not from more duplicates |
+| A long session where you keep iterating (36 turns) | 449,836 tokens | 310,850 tokens | **30.9 %** — savings compound as the session grows |
+| With the memory features turned on (14 turns) | 84,334 tokens | 68,839 tokens | **18.4 %** — reference docs stored once, recalled per turn, out-of-the-box settings |
+
+![Tokens sent per session, without VelesDB versus with VelesDB, across four measured scenarios; savings range from 17.2 to 30.9 percent](docs/diagrams/benchmark-gains.svg)
+
+The long session also answers the endurance question: over the full
+measured session (feature-building included) the raw context grows ~555
+tokens per message versus ~333 compiled — **1.7× more headroom** (how many
+more turns fit in one session before the context limit forces a
+summarize-and-restart), and **up to 6.6×** in the verification/wrap-up
+phase, where most turns are re-reads. Projections always use the
+full-session rate:
+
+![Context size per turn over a 36-turn session: without VelesDB it grows about 555 tokens per turn on the full session, with VelesDB about 333 — 1.7 times more headroom, and up to 6.6 times in re-read-heavy phases](docs/diagrams/benchmark-headroom.svg)
+
+Reproduce any of these in one command, no key and no network needed
+(`node examples/real-session-benchmark/offline.mjs`, `long-session.mjs`,
+`memory-enabled.mjs`). An opt-in billed mode measures the same session
+against real provider usage — through your own Claude Code CLI account with
+zero configuration, or an API key — and additionally grades real generated
+answers in both arms against a committed fact checklist, so a token saving
+that costs answer quality is reported, never hidden. Full protocol,
+attribution details, and caveats →
+[`examples/real-session-benchmark/`](https://github.com/cyberlife-coder/VelesDB/tree/main/examples/real-session-benchmark)
+(repo root — commands above run from a repo checkout).
+
 #### Exact token estimators
 
 The default [`HeuristicEstimator`](https://docs.rs/velesdb-memory/latest/velesdb_memory/context/struct.HeuristicEstimator.html)
