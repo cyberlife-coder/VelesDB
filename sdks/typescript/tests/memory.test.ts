@@ -30,10 +30,19 @@ class MockWasmMemoryService {
     now: '2026-01-03',
   }));
   relate = vi.fn(() => '5');
-  forget = vi.fn();
+  forget = vi.fn(() => true);
   why = vi.fn(() => ({
     nodes: [{ id: '1', content: 'we chose parking_lot', hop: 0 }],
     edges: [],
+  }));
+  compileContext = vi.fn(() => ({
+    content: 'compiled',
+    sections: [],
+    decisions: [{ fragment_id: '18446744073709551615', rule_id: 'preserve.default' }],
+    sources: [],
+    retrieval_handles: [],
+    insights: { tokens_saved: 0 },
+    risk: 'low',
   }));
   free = vi.fn();
 
@@ -204,8 +213,24 @@ describe('MemoryService', () => {
       expect(lastMockInstance!.relate).toHaveBeenCalledWith('1', '2', 'decided_in');
     });
 
-    it('forget() resolves', async () => {
-      await expect(memory.forget('1')).resolves.toBeUndefined();
+    it('forget() resolves to whether the id existed', async () => {
+      await expect(memory.forget('1')).resolves.toBe(true);
+      lastMockInstance!.forget.mockReturnValueOnce(false);
+      await expect(memory.forget('999')).resolves.toBe(false);
+    });
+
+    it('compileContext() delegates the request and returns the wire shape', async () => {
+      const request = {
+        query: 'state of the canary deploy',
+        token_budget: 500,
+        fragments: [{ content: 'The canary is green.' }],
+      };
+      const compiled = await memory.compileContext(request);
+      expect(lastMockInstance!.compileContext).toHaveBeenCalledWith(request);
+      expect(compiled.risk).toBe('low');
+      expect(compiled.content).toBe('compiled');
+      const decisions = compiled.decisions as Array<{ fragment_id: string }>;
+      expect(decisions[0].fragment_id).toBe('18446744073709551615');
     });
 
     it('why() returns the explanation subgraph', async () => {
