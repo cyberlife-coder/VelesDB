@@ -508,6 +508,10 @@ impl TokenEstimator for Cl100kEstimator {
     }
     // bytes_per_token_hint: default (3) is a fine sizing hint for cl100k prose.
 }
+
+// with_estimator takes a boxed trait object (DynTokenEstimator):
+let compiler = ContextCompiler::new(CompilePolicy::default())
+    .with_estimator(Box::new(Cl100kEstimator(bpe)));
 ```
 
 Anthropic does not publish a tokenizer, so there is no exact-count

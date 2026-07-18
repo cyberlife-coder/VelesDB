@@ -2,40 +2,42 @@
 //! [`super::classify::collapse_repeated_lines`] when
 //! [`super::model::CompilePolicy::normalize_log_timestamps`] is on.
 //!
-//! Two patterns are recognized, each optional and applied in order — never a
-//! caller-supplied pattern, so masking stays deterministic and the same
-//! request always yields the same collapse:
+//! Two patterns are recognized, applied in order — never a caller-supplied
+//! pattern, so masking stays deterministic and the same request always
+//! yields the same collapse:
 //!
-//! 1. a leading timestamp: ISO-8601 (`2026-07-18T10:23:45(.123)?(Z|+02:00)?`
-//!    or the space/comma log4j variant `2026-07-18 10:23:45,123`), or
-//!    syslog (`Jul 18 10:23:45`);
-//! 2. one or more immediately-following bracketed hex/decimal counters
+//! 1. a leading timestamp (REQUIRED for any masking at all): ISO-8601
+//!    (`2026-07-18T10:23:45(.123)?(Z|+02:00)?` or the space/comma log4j
+//!    variant `2026-07-18 10:23:45,123`), or syslog (`Jul 18 10:23:45`);
+//! 2. zero or more immediately-following bracketed hex/decimal counters
 //!    (`[a1b2c3]`, `[1234]`) — a bracket whose content is not purely
 //!    hex/decimal (`[ERROR]`, `[shard-3]`) is left alone, so level tags and
 //!    ids survive untouched.
 //!
-//! Known adversarial bias (documented, not fixed): a bracketed token made
-//! purely of hex *letters* (`[deadbeef]`) masks like a pid even when it is
-//! actually a meaningful id — the same class of trade-off
+//! A bracketed token with NO timestamp before it is never masked — `[abc]
+//! deploy done` and `[fed] deploy done` are two distinct lines, not one
+//! repeated line. Known adversarial bias (documented, not fixed): after a
+//! real timestamp, a bracketed token made purely of hex *letters*
+//! (`[deadbeef]`) masks like a pid even when it is actually a meaningful id
+//! — the same class of trade-off
 //! [`super::estimator::HeuristicEstimator`] already documents for its own
 //! hex-letter corpus.
 
-/// Mask `line`'s volatile prefix. Returns `None` when neither pattern
+/// The masked-prefix sentinel: NUL-delimited so it can never collide with a
+/// literal log line (no real log content carries `\0`; a line literally
+/// starting with `<TS>` must stay distinct from a masked one).
+const MASK_SENTINEL: &str = "\u{0}TS\u{0}";
+
+/// Mask `line`'s volatile prefix. Returns `None` when no leading timestamp
 /// matched, so the caller can tell "not modified" apart from "matched and
 /// the masked form happens to equal the input" (impossible here, but keeps
 /// the contract explicit for callers that key on the `Option`).
 pub(crate) fn mask_volatile_prefix(line: &str) -> Option<String> {
-    let mut rest = line;
-    let mut changed = false;
-    if let Some(after) = strip_iso_timestamp(rest).or_else(|| strip_syslog_timestamp(rest)) {
-        rest = after;
-        changed = true;
-    }
+    let mut rest = strip_iso_timestamp(line).or_else(|| strip_syslog_timestamp(line))?;
     while let Some(after) = strip_bracketed_counter(rest) {
         rest = after;
-        changed = true;
     }
-    changed.then(|| format!("<TS>{rest}"))
+    Some(format!("{MASK_SENTINEL}{rest}"))
 }
 
 /// `s`'s first `n` bytes are ASCII digits: the remainder after them.
