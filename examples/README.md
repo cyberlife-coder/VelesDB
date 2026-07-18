@@ -15,6 +15,7 @@ This directory contains examples demonstrating various VelesDB features and inte
 | [agent_memory/](./agent_memory/) | Python / Rust / TS | Intermediate | Agent memory: semantic + episodic + procedural, namespaced TTL, snapshots |
 | [velesdb-memory/](../crates/velesdb-memory/examples/) | Rust | Beginner | MCP memory server: offline `why` wedge demo + multi-hop graph benchmark |
 | [node-llm-middleware/](./node-llm-middleware/) | Node.js | Beginner | Minimal LLM middleware wrapper around `compile_context` — offline tokenizer proof always, real billed `usage` opt-in |
+| [real-session-benchmark/](./real-session-benchmark/) | Node.js | Intermediate | 14-turn realistic agentic debugging session, raw vs `compileContext` A/B — offline (real tokenizer) always, real billed `usage.input_tokens` opt-in (API key or Claude Code CLI) |
 | [python/](./python/) | Python | Beginner | SDK usage patterns (fusion, graph, hybrid) |
 | [python_example.py](./python_example.py) | Python | Beginner | REST API client (legacy) |
 | [wasm-browser-demo/](./wasm-browser-demo/) | HTML/JS | Beginner | Browser-based vector search, no server needed |

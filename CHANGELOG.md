@@ -155,6 +155,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `velesdb-context-optimizer` skill documents when to route a screenshot
   through `media` and how `metadata.target` drives supersession.
   [EPIC-P-071/US-009]
+- **Benchmark**: `examples/real-session-benchmark/` — a 14-turn realistic
+  agentic debugging session (screenshots with US-009 dedup/supersession, a
+  CI log for `normalize_log_timestamps`, re-injected docs, re-read code
+  files) run A/B: raw ("vraie vie", everything resent every turn) vs
+  compiled (`compileContext`, realistic budget/policy). OFFLINE mode
+  (default, real cl100k tokenizer + the API's own pixels/750 image-token
+  formula, two runs byte-identical) measures 21.4% session-level savings on
+  the committed corpus; ONLINE mode (opt-in, `RUN_BILLED_MEASURE=1` +
+  `CONFIRM_SPEND=1`) bills the same session for real on `claude-sonnet-5`
+  and reads the provider's own `usage.input_tokens`, via either a native
+  `fetch` runner (`ANTHROPIC_API_KEY`) or the Claude Code CLI's headless
+  mode (`BENCH_RUNNER=cli`, no key — the user's own authenticated account).
+  [EPIC-P-071]
 
 R1 `Collection`-internals train: resolves and **closes the god-object EPIC
 ([#1384](https://github.com/cyberlife-coder/VelesDB/issues/1384))**. The
