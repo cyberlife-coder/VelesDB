@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-07-18
+
 ### Added
 
 - **Media source storage & screenshot supersession (complete as of PR3: MCP schemas, Node retrieve, WASM compile, TS types of
@@ -49,7 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   evidence of succession). Opt out per request via
   `policy.disabled_rules: ["retrieve.screenshot_superseded"]`. Byte-compat:
   a request with no media is unaffected.
-- **Media fragments (experimental, PR1/3 of US-009 in EPIC-P-071)** —
+- **Media fragments — foundational primitive (PR1 of 3 for US-009 in
+  EPIC-P-071; wired end-to-end by the entry above)** —
   `ContextFragment.media: Option<MediaRef>` lets a fragment carry an inline
   base64-encoded image (`mime` + `bytes_b64`) alongside its text/caption
   `content`. A media fragment packs as one atomic, unsplittable piece (never
@@ -62,6 +65,151 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cap; malformed base64 is rejected at validation time. Wire-compatible:
   `media` is `#[serde(default)]`, so every existing request still
   deserializes unchanged.
+- **Usage-driven importance blend in `context_memories`** —
+  `CompilePolicy.importance` (`{confidence: 0.2, recency: 0.1,
+  recency_field: null}`, serde-defaulted so 0.8.0 requests stay
+  wire-compatible) folds the RL confidence `feedback` trains and a
+  batch-relative recency term into the fused ranking of pulled memories:
+  `fused_norm + w_c·(confidence−0.5)·2 + w_r·recency_norm`. Applies only to
+  the similarity-selected pool (confidence is not relevance — an adversarial
+  test pins that an over-reinforced off-topic fact never enters), reads no
+  clock (recency is min-max normalised within the batch; an absent key or a
+  degenerate batch contributes 0), composes with the
+  `compile_context_reranked` seam, and ventilates all four signals in each
+  decision's `reason` (`vector …, graph …, confidence …, recency …`). Both
+  weights at 0 reproduce the 0.8.0 output byte for byte (golden-pinned).
+  **Behavioral change**: with the default policy the blend is active
+  (`confidence: 0.2`), so RL-reinforced memories now rank higher out of the
+  box after an upgrade; set the importance weights to 0 to restore the exact
+  0.8.0 ordering (byte-identical, golden-tested). Recommended weight range
+  is `[0, 1]`; out-of-range values are accepted verbatim, never clamped
+  (documented and regression-tested). [EPIC-P-071/US-002]
+- **Node** (`@wiscale/velesdb-memory-node`): `feedback(id, success)` binding
+  (resolves to the fact's new learned confidence), and a committed RL×graph
+  synergy case in the `tri_engine_rescue` benchmark: a fact reinforced by
+  `feedback` and reachable only through the typed-edge walk out-ranks a
+  merely-similar fact once `policy.importance` is active — reproducible
+  across runs. [EPIC-P-071/US-002]
+- **Benchmark**: `examples/context_savings`, reproducible (75–82 % estimated
+  token savings on the committed corpus in ~2 ms; figures are local
+  estimates, not billed tokens — cross-checked against a real cl100k
+  tokenizer by the committed `real_measures/` scripts).
+- **MCP**: two working-context tools on the one existing server —
+  `save_working_context` / `load_working_context` (pure delegation to the
+  memory bridge), so an agent can persist its distilled session state and a
+  later session can resume from it; the committed `mcp_e2e.py` harness
+  proves the round-trip **across two separate server processes** on one
+  store. [EPIC-P-071/US-003]
+- **Node** (`@wiscale/velesdb-memory-node`): `saveWorkingContext` /
+  `loadWorkingContext` — same wire shape, ids as decimal strings in both
+  directions (u64::MAX-safe), `null` when nothing was saved; the spec suite
+  proves the cross-process round-trip via a child-process save.
+  [EPIC-P-071/US-003]
+- **`velesdb-memory`**: `CompilePolicy.normalize_log_timestamps` (default
+  `false`, serde-defaulted so existing requests stay wire-compatible) — an
+  opt-in, deterministic mask of `kind: "log"` fragments' volatile prefixes
+  (ISO/syslog timestamps, bracketed hex/pid counters, fixed patterns only)
+  applied before `abstract.log_dedup` groups repeated lines, so lines
+  identical modulo timestamp now collapse; the emitted line is still the
+  first occurrence's exact bytes, and the decision `reason` says so when
+  normalization actually changed the grouping. Off by default: byte-exact
+  grouping is unchanged for existing callers (pinned by a golden test).
+  [EPIC-P-071/US-006]
+- **Proof harness**: `examples/context_savings/real_measures/cache_prefix.mjs`
+  measures the `cache: true` section's byte-stable-prefix percentage across
+  10 consecutive compiles with changing volatile content (100 % stable
+  prefix on all 9 consecutive turn pairs, reproducible) and frames the
+  naive full-input-rate cost of not caching it against an injected,
+  never-hardcoded `policy.pricing` table. [EPIC-P-071/US-008]
+- **Proof harness**: `examples/node-llm-middleware/` — a minimal
+  middleware wrapper measuring `compile_context` savings offline (real
+  cl100k via `gpt-tokenizer`, always) and, opt-in
+  (`RUN_BILLED_MEASURE=1` + an API key never asked for by the harness), the
+  provider's own billed `usage` on a real minimal-cost call.
+  [EPIC-P-071/US-007]
+- **MCP**: `CompilePolicy.ids_as_strings` (default `false`) — opts the
+  `compile_context` / `explain_compilation` response into decimal-string ids
+  (`fragment_id`, `content_hash`, `memory_id`, `fragment_ids`), reusing the
+  same tree walk the Node/WASM bindings already apply, for raw MCP clients
+  without u64-safe JSON number parsing. `fragments[].id` on input now also
+  accepts either a JSON number or a decimal string, and the advertised tool
+  schemas type every such field `["integer", "string"]` so schema-validating
+  clients accept the opt-in form. [EPIC-P-071]
+- **MCP**: `explain_compilation` gains an optional `fragment_index` (0-based
+  position in `request.fragments`), so byte-identical fragments — which
+  share a content-addressed `fragment_id` — can be disambiguated instead of
+  always resolving to the deduplication survivor's decision. Default
+  behavior (no `fragment_index`) is unchanged. [EPIC-P-071]
+- **Benchmark**: `examples/real-session-benchmark/` — realistic agentic
+  sessions (screenshots with US-009 dedup/supersession, CI logs for
+  `normalize_log_timestamps`, re-injected docs, re-read code files) run A/B:
+  raw ("vraie vie", everything resent every turn) vs compiled
+  (`compileContext`; the compiled arm is billed for the `ctx://source/`
+  handles it sends). OFFLINE (default; real cl100k tokenizer + the API's own
+  pixels/750 image-token formula; every variant reproduced twice,
+  byte-identical) measures, on the committed corpora: **17.2%** saved on the
+  base 14-turn session in lossless mode (pure redundancy elimination, zero
+  unique information removed — externalized: 0), **20.3%** in
+  window-enforcement mode (budget 8000; the extra ~3 points explicitly
+  attributed to `budget.externalize` of unique content, not redundancy),
+  **30.9%** lossless / **55.1%** windowed on the 36-turn long-session
+  variant (with per-arm context-growth curves and labeled projected headroom
+  to a configurable compaction threshold: raw ~234 tokens/turn vs compiled
+  ~35/turn), and **18.4%** on the memory-enabled variant (docs stored once
+  via `remember`/`relate`, pulled back per turn via the default
+  `memory_scope` — the product's intended pattern, untuned k=5). ONLINE
+  (opt-in, `RUN_BILLED_MEASURE=1` + `CONFIRM_SPEND=1`) bills the same
+  session for real on `claude-sonnet-5` — reading the provider's own
+  `usage.input_tokens` with cache fields reported separately — AND grades
+  real generated answers in both arms against committed per-turn fact
+  checklists (deterministic substring grader): token savings and answer
+  adequacy are reported side by side, so a saving that costs answers is a
+  reported failure. Runners: native `fetch` (`ANTHROPIC_API_KEY`) or the
+  Claude Code CLI's headless mode (`BENCH_RUNNER=cli`, no key — the user's
+  own authenticated account; wire shapes verified by a real calibration
+  call). [EPIC-P-071]
+- **CI gate — ground-truth facts survive compilation** (EPIC-P-071/A1):
+  `examples/real-session-benchmark/test/facts-survive.test.mjs` turns the
+  benchmark's per-turn fact checklists (`corpus/questions.mjs`) into an
+  executable non-regression check: for every turn of the base session, in
+  BOTH the lossless and the window-8000 compiled arms, every ground-truth
+  fact must be present in what that arm would actually send to the model —
+  inline, or PROVEN recoverable by really resolving its `ctx://source/`
+  handle via `retrieveContextSource` (never assumed from a listed handle).
+  Runs offline, no network, in CI's `Node Binding Tests` job (reuses the
+  napi addon already built there). [EPIC-P-071]
+
+### Changed
+
+- **`forget` now reports whether the id actually existed** on every surface
+  (Rust bridge → `bool`, MCP `{found}`, Node/WASM/TS `boolean`,
+  Python `bool`): deleting an unknown id used to read as success, so an
+  agent could not tell a real deletion from a typo'd or stale id. Wire-compatible
+  everywhere (the MCP result gains an additive `found` field); the Node
+  typings and the TS SDK's `forget` widen `Promise<void>` → `Promise<boolean>`
+  — only a caller with an explicit `: Promise<void>`/`: void` annotation on
+  the result needs a touch.
+  [EPIC-P-071/US-004]
+
+### Fixed
+
+- **MCP server hardened against a leaked client process (#1448)**. The
+  server itself was already healthy (it exits cleanly on stdin EOF), but a
+  client that leaks its child process — observed in practice with a
+  headless `claude -p` run — never closes stdin, so the server correctly
+  kept serving forever and held the store's single-writer lock, making every
+  later session fail with an opaque `Storage (DatabaseLocked)` / "Failed to
+  connect". Two defensive fixes: (1) the server now detects a dead parent
+  (`std::os::unix::process::parent_id()` polled every ~2s, Unix-only, no new
+  dependency) and self-exits, releasing the lock, even when stdin is
+  artificially held open; (2) a `DatabaseLocked` at startup now retries
+  briefly (3 × 500ms, covering a normal close/reopen handover) and, if the
+  store is still locked, prints an actionable message on stderr naming the
+  fix (`pkill velesdb-memory` or set `VELESDB_MEMORY_PATH` elsewhere)
+  instead of a bare error dump — and exits non-zero so client health-checks
+  can detect the failure. Net effect: one leaked client can no longer brick
+  every later session, and when a store really is locked, the user is told
+  what to do about it.
 
 ## [0.6.0] - 2026-07-06
 
