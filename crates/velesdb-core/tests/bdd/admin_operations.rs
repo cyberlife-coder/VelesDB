@@ -442,7 +442,14 @@ fn test_truncate_graph_edges_only_no_node_payloads() {
     )
     .expect("create");
 
-    // Insert edges without explicit node payloads (nodes exist as edge endpoints).
+    // Edge endpoints must exist before an edge can reference them (#1442).
+    for id in [100, 200] {
+        execute_sql(
+            &db,
+            &format!("INSERT NODE INTO edges_only (id = {id}, payload = '{{}}')"),
+        )
+        .expect("node");
+    }
     execute_sql(
         &db,
         "INSERT EDGE INTO edges_only (id = 1, source = 100, target = 200, label = 'REF')",

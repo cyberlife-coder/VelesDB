@@ -587,7 +587,14 @@ fn test_graph_collection_without_embeddings() {
     );
     assert!(gc.schema().is_schemaless());
 
-    // Insert edge via SQL with explicit ID
+    // Insert edge via SQL with explicit ID (endpoints must exist first, #1442)
+    for id in [10, 20] {
+        execute_sql(
+            &db,
+            &format!("INSERT NODE INTO pure_graph (id = {id}, payload = '{{}}');"),
+        )
+        .expect("test: INSERT NODE should succeed");
+    }
     execute_sql(
         &db,
         "INSERT EDGE INTO pure_graph (id = 1, source = 10, target = 20, label = 'LINKED');",
@@ -614,6 +621,13 @@ fn test_insert_edge_with_properties_round_trip() {
     )
     .expect("test: CREATE graph");
 
+    for id in [1, 2] {
+        execute_sql(
+            &db,
+            &format!("INSERT NODE INTO props_kg (id = {id}, payload = '{{}}');"),
+        )
+        .expect("test: INSERT NODE should succeed");
+    }
     execute_sql(
         &db,
         "INSERT EDGE INTO props_kg (id = 1, source = 1, target = 2, label = 'FRIEND') WITH PROPERTIES (since = 2020, weight = 0.85);",
@@ -655,6 +669,15 @@ fn test_multiple_edges_selective_delete() {
         "CREATE GRAPH COLLECTION multi_edge (dimension = 4, metric = 'cosine') SCHEMALESS;",
     )
     .expect("test: CREATE graph");
+
+    // Endpoints must exist before edges can reference them (#1442).
+    for id in [1, 2, 3] {
+        execute_sql(
+            &db,
+            &format!("INSERT NODE INTO multi_edge (id = {id}, payload = '{{}}');"),
+        )
+        .expect("test: INSERT NODE should succeed");
+    }
 
     // Insert 3 edges with explicit IDs
     execute_sql(

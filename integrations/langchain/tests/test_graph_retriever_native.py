@@ -162,6 +162,13 @@ class TestBug5SeedExpansion:
                 f"Graph collection '{graph_collection_name}' not found. "
                 "The test must create it explicitly before populating."
             )
+        # add_edge requires both endpoints to have a stored node payload
+        # (#1442) — the graph collection here is separate from the vector
+        # store's document collection, so seed nodes are never otherwise
+        # created in it.
+        for seed_id in seed_ids:
+            graph.add_node(seed_id, payload={})
+
         # Add edges: seed[0] → seed[1], seed[1] → seed[0]
         if len(seed_ids) >= 2:
             graph.add_edge({

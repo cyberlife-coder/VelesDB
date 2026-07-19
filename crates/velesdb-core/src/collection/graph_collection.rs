@@ -494,6 +494,9 @@ mod tests {
         let (_dir, col) = make_test_collection(None);
 
         assert_eq!(col.edge_count(), 0);
+        for id in [10, 20, 30] {
+            col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+        }
 
         let edge1 = crate::collection::graph::GraphEdge::new(1, 10, 20, "knows").unwrap();
         col.add_edge(edge1).unwrap();
@@ -509,6 +512,9 @@ mod tests {
         let (_dir, col) = make_test_collection(None);
 
         // Build chain: 1->2->3
+        for id in [1, 2, 3] {
+            col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+        }
         col.add_edge(GraphEdge::new(1, 1, 2, "NEXT").unwrap())
             .unwrap();
         col.add_edge(GraphEdge::new(2, 2, 3, "NEXT").unwrap())
@@ -579,6 +585,9 @@ mod tests {
     fn test_has_edge_and_remove_edge() {
         let (_dir, col) = make_test_collection(None);
         assert!(!col.has_edge(7), "unknown edge id is absent");
+        for id in [10, 20] {
+            col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+        }
 
         col.add_edge(GraphEdge::new(7, 10, 20, "KNOWS").unwrap())
             .unwrap();
@@ -606,6 +615,9 @@ mod tests {
     #[test]
     fn test_get_edges_filtered_by_label() {
         let (_dir, col) = make_test_collection(None);
+        for id in [10, 20, 30, 40] {
+            col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+        }
         col.add_edge(GraphEdge::new(1, 10, 20, "KNOWS").unwrap())
             .unwrap();
         col.add_edge(GraphEdge::new(2, 20, 30, "LIKES").unwrap())
@@ -624,6 +636,9 @@ mod tests {
     #[test]
     fn test_node_degree_and_directional_edges() {
         let (_dir, col) = make_test_collection(None);
+        for id in [10, 20, 30, 40] {
+            col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+        }
         col.add_edge(GraphEdge::new(1, 10, 20, "NEXT").unwrap())
             .unwrap();
         col.add_edge(GraphEdge::new(2, 30, 20, "NEXT").unwrap())
@@ -688,6 +703,7 @@ mod tests {
         let (_dir, col) = make_test_collection(None);
         col.upsert_node_payload(1, &serde_json::json!({"k": 1}))
             .unwrap();
+        col.upsert_node_payload(2, &serde_json::json!({})).unwrap();
         col.add_edge(GraphEdge::new(1, 1, 2, "NEXT").unwrap())
             .unwrap();
         col.flush().expect("fast-path flush succeeds");
@@ -709,6 +725,7 @@ mod tests {
             .unwrap();
             col.upsert_node_payload(1, &serde_json::json!({"name": "A"}))
                 .unwrap();
+            col.upsert_node_payload(2, &serde_json::json!({})).unwrap();
             col.add_edge(GraphEdge::new(5, 1, 2, "NEXT").unwrap())
                 .unwrap();
             col.flush_full().unwrap();

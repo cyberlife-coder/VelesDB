@@ -205,6 +205,70 @@ The snapshot invalidation / debounced rebuild (see below) runs **after** the
 `edge_ids` write lock is released, never while holding it, to avoid deadlocking
 against the downstream rebuild lock acquisition.
 
+### Collection-level lock order
+
+Separate from the HNSW `LockRank` total ordering above, `Collection`'s own
+fields (`config`, `vector_storage`, `payload_storage`, the quantization
+caches, `edge_wal_lock`, the property/range/label indexes, ...) follow a
+documentation-enforced ascending order recorded as a plain comment block at
+the top of `crates/velesdb-core/src/collection/types.rs` (`=== LOCK
+ORDERING ===`). It is not backed by a typed `LockRank`-style assertion —
+this section only narrates one addition to it: position **3b**,
+`edge_wal_lock`, sitting right after `payload_storage` (3).
+
+`edge_wal_lock` has two acquisition patterns:
+
+- `add_edge`/`add_edges_batch` (`collection/core/graph_api.rs`) hold
+  `payload_storage`'s **read** guard from the endpoint referential-integrity
+  check through the end of the edge write, and acquire `edge_wal_lock`
+  **while that read guard is still held** — so the acquisition order for
+  this path is `payload_storage(3) → edge_wal_lock(3b)`.
+- `remove_edge` and the delete-cascade path
+  (`collection/core/crud_read_delete.rs`'s `cascade_delete_node_edges`)
+  acquire `edge_wal_lock` **alone**, with no other collection lock held —
+  the delete path has already released its `payload_storage` write guard by
+  the time it reaches the cascade.
+
+This closes a race left open by the original #1442 fix: `add_edge` used to
+release `payload_storage`'s read guard immediately after checking that both
+endpoints exist, then separately acquire `edge_wal_lock` to write the edge.
+A concurrent `delete()` of an endpoint could land in that window — its own
+write guard acquisition would not contend with anything, since the reader
+had already let go — and finish removing the node (and, if the edge
+happened to already exist, cascading its removal) before `add_edge` ever
+wrote it. The result was a "phantom" edge: present in the edge store,
+invisible to `all_node_ids()`/`MATCH`, since both resolve nodes from the
+payload store.
+
+Holding `payload_storage`(3) across `edge_wal_lock`(3b) fixes this: a
+concurrent `delete()` needs `payload_storage`'s **write** guard, which
+cannot be acquired while `add_edge` holds the read guard, so the delete
+blocks until the edge is fully durable (WAL + edge-store apply). By the
+time the delete proceeds, the edge already exists, so its own cascade sees
+and removes it — no phantom, no compensation logic, no rollback. The same
+guard is held once for the whole batch in `add_edges_batch`, so "an
+endpoint disappears mid-batch" is impossible by construction.
+
+The order stays acyclic: neither `remove_edge` nor the delete cascade ever
+acquires `payload_storage` while holding `edge_wal_lock`, so there is no
+path back from 3b to 3.
+
+**Residual latency**: writers to `payload_storage` (upserts, deletes) can
+now stall behind an in-flight edge write for up to one `fsync` (the edge
+WAL append) — typically 0.05–5 ms on an SSD, consistent with the
+single-writer-per-collection model this section belongs under (see
+[`guides/WRITE_CONCURRENCY.md`](guides/WRITE_CONCURRENCY.md#edge-writes-and-payload-contention)).
+
+**Known limitation (accepted)**: this only protects edges written through
+`Collection::add_edge`/`add_edges_batch`. Edges loaded from a pre-existing
+WAL/snapshot at `Collection::open` (replay) are trusted as-is and never
+re-validated — replay intentionally bypasses referential-integrity
+validation so legitimate edge-only databases created before the #1442 fix
+keep their data. A follow-up CLI tool to audit/repair such legacy phantom
+edges is tracked in issue
+[#1469](https://github.com/cyberlife-coder/VelesDB/issues/1469) (see also
+`guides/GRAPH_PATTERNS.md`).
+
 ## RaBitQ Interior Mutability
 
 ### Lock Layout

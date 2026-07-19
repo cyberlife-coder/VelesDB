@@ -126,6 +126,14 @@ impl<'a> GraphMigrationPhase<'a> {
         let mut created = 0u64;
         let mut failed = 0u64;
         let mut offset = None;
+        // add_edges_batch now requires every edge endpoint to have a stored
+        // node payload (#1442). This graph collection is a fresh, edge-only
+        // index — the real point data lives in the vector destination
+        // collection — so every endpoint needs a minimal stub payload
+        // seeded here. Tracks ids already stubbed across the whole
+        // relation so a node referenced by many edges (e.g. a popular FK
+        // target) is not re-written on every recurrence.
+        let mut seeded_nodes: std::collections::HashSet<u64> = std::collections::HashSet::new();
 
         loop {
             let batch = self
@@ -153,12 +161,34 @@ impl<'a> GraphMigrationPhase<'a> {
             }
 
             if !edges.is_empty() {
+                seed_edge_endpoints(&edges, &mut seeded_nodes, |id| {
+                    gc.upsert_node_payload(id, &serde_json::json!({}))
+                });
+
                 let total = edges.len() as u64;
-                let inserted = gc.add_edges_batch(edges).map_err(|e| {
-                    Error::DestinationConnection(format!("Edge batch insert failed: {e}"))
-                })? as u64;
-                created += inserted;
-                failed += total.saturating_sub(inserted);
+                match gc.add_edges_batch(edges.clone()) {
+                    Ok(inserted) => {
+                        created += inserted as u64;
+                        failed += total.saturating_sub(inserted as u64);
+                    }
+                    Err(e) => {
+                        // add_edges_batch validates the whole batch before any
+                        // write, so one genuinely bad edge (e.g. node-seeding
+                        // above failed for one id) fails the entire batch.
+                        // Fall back to per-edge inserts so that degrades to a
+                        // counted failure instead of aborting the migration.
+                        warn!("Edge batch insert failed ({e}); retrying edges individually");
+                        for edge in edges {
+                            match gc.add_edge(edge) {
+                                Ok(()) => created += 1,
+                                Err(e) => {
+                                    failed += 1;
+                                    debug!("Edge insert failed: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             if !batch.has_more {
@@ -216,6 +246,44 @@ fn attach_weight(
         "weight".to_string(),
         serde_json::json!(weight),
     )]))
+}
+
+/// Seeds a stub node payload for each not-yet-seeded edge endpoint.
+///
+/// Extracted from `migrate_relation_edges` so the seed/retry bookkeeping is
+/// unit-testable with an injectable `upsert` closure (real usage passes
+/// `GraphCollection::upsert_node_payload`; tests can simulate a failure for a
+/// specific id). `seeded_nodes` is shared across the whole relation so a node
+/// referenced by many edges (e.g. a popular FK target) is not re-written on
+/// every recurrence.
+///
+/// A node is only marked seeded on a successful upsert. A failed upsert logs
+/// a warning and leaves the id out of `seeded_nodes`, so the next edge
+/// referencing the same node retries the upsert instead of silently skipping
+/// it forever (upserts are idempotent, so a retry is always safe).
+fn seed_edge_endpoints<F, E>(
+    edges: &[velesdb_core::GraphEdge],
+    seeded_nodes: &mut std::collections::HashSet<u64>,
+    mut upsert: F,
+) where
+    F: FnMut(u64) -> std::result::Result<(), E>,
+    E: std::fmt::Display,
+{
+    for edge in edges {
+        for id in [edge.source(), edge.target()] {
+            if seeded_nodes.contains(&id) {
+                continue;
+            }
+            match upsert(id) {
+                Ok(()) => {
+                    seeded_nodes.insert(id);
+                }
+                Err(e) => {
+                    warn!("Failed to seed graph node {id}: {e}; will retry on next occurrence")
+                }
+            }
+        }
+    }
 }
 
 fn value_to_id_str(value: &serde_json::Value) -> Option<String> {
@@ -397,5 +465,51 @@ mod tests {
         // THEN: the non-numeric value is ignored, no weight property attached
         assert!(edge.property("weight").is_none());
         assert!(edge.properties().is_empty());
+    }
+
+    #[test]
+    fn seed_retries_failed_node_on_next_occurrence() {
+        // Regression guard: a node whose stub-seed upsert fails must NOT be
+        // marked as seeded, so a later edge referencing the same node id
+        // retries the upsert instead of silently skipping it forever (which
+        // would leave that node's edges permanently rejected by #1442's
+        // add_edges_batch validation, since the endpoint was never actually
+        // stored).
+        let attempts = std::cell::RefCell::new(Vec::new());
+        let mut seeded = std::collections::HashSet::new();
+
+        let edge1 = velesdb_core::GraphEdge::new(1, 100, 200, "REL").expect("valid edge");
+        let edge2 = velesdb_core::GraphEdge::new(2, 100, 300, "REL").expect("valid edge");
+
+        // First occurrence of node 100: its upsert fails.
+        seed_edge_endpoints(std::slice::from_ref(&edge1), &mut seeded, |id| {
+            attempts.borrow_mut().push(id);
+            if id == 100 {
+                Err("simulated storage failure")
+            } else {
+                Ok(())
+            }
+        });
+        assert!(
+            !seeded.contains(&100),
+            "a failed upsert must not mark the node as seeded"
+        );
+        assert!(seeded.contains(&200), "the succeeding endpoint is seeded");
+
+        // Second occurrence of node 100 (via edge2): must retry since it was
+        // never marked seeded.
+        seed_edge_endpoints(std::slice::from_ref(&edge2), &mut seeded, |id| {
+            attempts.borrow_mut().push(id);
+            Ok::<(), &str>(())
+        });
+        assert!(
+            seeded.contains(&100),
+            "node 100 must be seeded after a successful retry"
+        );
+        assert_eq!(
+            *attempts.borrow(),
+            vec![100, 200, 100, 300],
+            "node 100's upsert must be attempted again on its next occurrence"
+        );
     }
 }

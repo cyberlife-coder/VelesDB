@@ -37,13 +37,16 @@ mod tests {
 
         {
             let coll = create_graph(path.clone());
+            for id in [356, 200, 300] {
+                coll.store_node_payload(id, &serde_json::json!({})).unwrap();
+            }
+            coll.store_node_payload(100, &serde_json::json!({"name": "A"}))
+                .unwrap();
             // Same-shard edge (source 100, target 356 → both shard 100).
             coll.add_edge(make_edge(1, 100, 356, "KNOWS")).unwrap();
             // Cross-shard edge (source 100 → shard 100, target 200 → shard 200).
             coll.add_edge(make_edge(2, 100, 200, "KNOWS")).unwrap();
             coll.add_edge(make_edge(3, 200, 300, "FOLLOWS")).unwrap();
-            coll.store_node_payload(100, &serde_json::json!({"name": "A"}))
-                .unwrap();
             // DROP without flush → edge_store.bin is never written (crash sim).
         }
 
@@ -66,6 +69,9 @@ mod tests {
 
         {
             let coll = create_graph(path.clone());
+            for id in [1, 2, 3, 4] {
+                coll.store_node_payload(id, &serde_json::json!({})).unwrap();
+            }
             coll.add_edge(make_edge(1, 1, 2, "KNOWS")).unwrap();
             coll.add_edge(make_edge(2, 2, 3, "KNOWS")).unwrap();
             coll.add_edge(make_edge(3, 3, 4, "KNOWS")).unwrap();
@@ -86,6 +92,9 @@ mod tests {
 
         {
             let coll = create_graph(path.clone());
+            for id in [60, 70, 80, 90] {
+                coll.store_node_payload(id, &serde_json::json!({})).unwrap();
+            }
             coll.store_node_payload(50, &serde_json::json!({"n": "N"}))
                 .unwrap();
             coll.add_edge(make_edge(1, 50, 60, "E")).unwrap();
@@ -110,6 +119,11 @@ mod tests {
 
         {
             let coll = create_graph(path.clone());
+            let nodes: Vec<crate::point::Point> = (0..50)
+                .flat_map(|i| [i, i + 1000])
+                .map(|id| crate::point::Point::metadata_only(id, serde_json::json!({})))
+                .collect();
+            coll.upsert(nodes).unwrap();
             let edges: Vec<GraphEdge> = (0..50)
                 .map(|i| make_edge(i, i, i + 1000, "BATCH"))
                 .collect();
@@ -129,6 +143,9 @@ mod tests {
         let wal = path.join("edges.wal");
 
         let coll = create_graph(path.clone());
+        for id in [1, 2, 3, 4] {
+            coll.store_node_payload(id, &serde_json::json!({})).unwrap();
+        }
         coll.add_edge(make_edge(1, 1, 2, "A")).unwrap();
         coll.add_edge(make_edge(2, 2, 3, "A")).unwrap();
         assert!(wal.metadata().unwrap().len() > 0, "WAL has entries");
@@ -158,6 +175,9 @@ mod tests {
 
         {
             let coll = create_graph(path.clone());
+            for id in [1, 2] {
+                coll.store_node_payload(id, &serde_json::json!({})).unwrap();
+            }
             coll.add_edge(make_edge(1, 1, 2, "L")).unwrap();
             coll.flush_full().unwrap();
         }
@@ -178,6 +198,9 @@ mod tests {
 
         {
             let coll = create_graph(path.clone());
+            for id in [1, 2] {
+                coll.store_node_payload(id, &serde_json::json!({})).unwrap();
+            }
             coll.add_edge(make_edge(1, 1, 2, "T")).unwrap();
         }
         // Append a truncated partial entry: a length prefix declaring 32
@@ -200,6 +223,9 @@ mod tests {
 
         {
             let coll = create_graph(path.clone());
+            for id in [1, 2] {
+                coll.store_node_payload(id, &serde_json::json!({})).unwrap();
+            }
             let mut props = HashMap::new();
             props.insert("weight".to_string(), serde_json::json!(42));
             let edge = make_edge(1, 1, 2, "WEIGHTED").with_properties(props);

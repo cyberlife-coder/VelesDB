@@ -118,7 +118,10 @@ def test_get_graph_collection_roundtrip(temp_db) -> None:
 def test_graph_collection_edge_aliases_and_payload(temp_db) -> None:
     """Documented graph alternatives work on persistent graph collections."""
     gc = temp_db.create_graph_collection("gil_graph_aliases")
+    # add_edge requires both endpoints to have a stored node payload
+    # (#1442) — store node 20 in addition to node 10.
     gc.upsert_node_payload(10, {"name": "Alice"})
+    gc.upsert_node_payload(20, {})
     gc.add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})
 
     assert gc.get_outgoing_edges(10) == gc.get_outgoing(10)
