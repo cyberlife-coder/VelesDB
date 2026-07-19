@@ -404,8 +404,15 @@ compiled-arm budget — same protocol as the base campaign above. Raw logs:
 |---|---|---|---|---|---|
 | base, 19-turn, with-screenshots (cropped) | cli | $0.4442 → $0.3960 | 10.9% | 5.8% | 22.8/23 vs 23.0/23 |
 | vibe, 19-turn, retina screenshots (1512x982) | cli | $0.5693 → $0.4444 | 21.9% | 17.6% | 23.0/23 vs 23.0/23 |
-| long-session, 36-turn | cli | $1.8613 → $1.5876 | 14.7% | 17.0% | 49.6/50 vs 49.2/50 |
+| long-session, 36-turn | cli | $1.8613 → $1.5876 | 14.7% | 17.0% | 49.6/50 vs 49.2/50 (46.6/47 vs 46.2/47 hors tours 20/22 — voir note) |
 | vibe, 19-turn, with-screenshots (baseline images) | api (direct) | n/a — runner reports no cost | — | 14.6% (input_tokens 15.1%) | 23.0/23 vs 23.0/23 |
+
+**Grading-key disclosure (post-run review):** a post-run review found a
+defective grading key on turns 20 and 22 (fixed in this PR — see
+`corpus/questions-long.mjs`). Both arms scored full marks on those turns,
+so the A/B parity conclusion is unaffected; excluding them, adequacy is raw
+46.6/47 vs compiled 46.2/47. The published 49.6/50 vs 49.2/50 totals include
+the flawed turns and are therefore upper bounds against the corrected key.
 
 Campaign totals (sum of the per-arm `campaign` parenthetical in each log —
 the real dollars spent, not per-session means): base
