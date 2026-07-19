@@ -304,6 +304,12 @@ fn test_insert_edge_into_graph() {
     });
     execute_ddl(&db, create).expect("create graph");
 
+    let gc = db.get_graph_collection("edges_g").expect("get graph");
+    for id in [100, 200] {
+        gc.upsert_node_payload(id, &serde_json::json!({}))
+            .expect("store node");
+    }
+
     let dml = DmlStatement::InsertEdge(InsertEdgeStatement {
         collection: "edges_g".to_string(),
         edge_id: Some(42),
@@ -339,6 +345,12 @@ fn test_insert_edge_with_properties() {
         }),
     });
     execute_ddl(&db, create).expect("create graph");
+
+    let gc = db.get_graph_collection("props_g").expect("get graph");
+    for id in [1, 2] {
+        gc.upsert_node_payload(id, &serde_json::json!({}))
+            .expect("store node");
+    }
 
     let dml = DmlStatement::InsertEdge(InsertEdgeStatement {
         collection: "props_g".to_string(),
@@ -449,6 +461,10 @@ fn test_delete_edge() {
 
     // Insert two edges.
     let gc = db.get_graph_collection("del_edge_g").expect("get");
+    for id in [10, 20, 30] {
+        gc.upsert_node_payload(id, &serde_json::json!({}))
+            .expect("store node");
+    }
     gc.add_edge(crate::GraphEdge::new(1, 10, 20, "A").expect("edge"))
         .expect("add 1");
     gc.add_edge(crate::GraphEdge::new(2, 20, 30, "B").expect("edge"))
@@ -585,6 +601,12 @@ fn test_insert_edge_auto_generates_id_when_none() {
         }),
     });
     execute_ddl(&db, create).expect("create graph");
+
+    let gc = db.get_graph_collection("autoid_g").expect("get");
+    for id in [1, 2] {
+        gc.upsert_node_payload(id, &serde_json::json!({}))
+            .expect("store node");
+    }
 
     let dml = DmlStatement::InsertEdge(InsertEdgeStatement {
         collection: "autoid_g".to_string(),
@@ -798,6 +820,12 @@ fn test_default_observer_allows_dml_mutations() {
     });
     execute_ddl(&db, create).expect("create graph");
 
+    let gc = db.get_graph_collection("dml_graph").expect("get");
+    for id in [10, 20] {
+        gc.upsert_node_payload(id, &serde_json::json!({}))
+            .expect("store node");
+    }
+
     // INSERT EDGE should succeed.
     let dml = DmlStatement::InsertEdge(InsertEdgeStatement {
         collection: "dml_graph".to_string(),
@@ -997,6 +1025,10 @@ fn test_select_edges_and_swaps_for_selectivity() {
     execute_ddl(&db, create).expect("create graph");
 
     let gc = db.get_graph_collection("sel_and_g").expect("get");
+    for id in [10, 20, 30, 40, 50] {
+        gc.upsert_node_payload(id, &serde_json::json!({}))
+            .expect("store node");
+    }
     gc.add_edge(crate::GraphEdge::new(1, 10, 20, "KNOWS").expect("edge"))
         .expect("add 1");
     gc.add_edge(crate::GraphEdge::new(2, 10, 30, "LIKES").expect("edge"))

@@ -395,9 +395,9 @@ fn test_open_without_edge_store_bin_recovers_gracefully() {
     let col_path = temp_dir.path().join("graph_col");
 
     // 1. Create a graph collection, flush to persist config.json, then drop.
-    //    Schemaless: this test exercises edge_store.bin recovery, not strict
-    //    referential-integrity enforcement (which would reject this dangling
-    //    edge with no endpoint node payloads).
+    //    Schemaless: this test exercises edge_store.bin recovery, not
+    //    referential-integrity enforcement, so endpoint nodes are created
+    //    explicitly first (add_edge now requires them to exist, #1442).
     {
         let schema = GraphSchema::schemaless();
         let collection = Collection::create_graph_collection(
@@ -409,6 +409,11 @@ fn test_open_without_edge_store_bin_recovers_gracefully() {
         )
         .expect("graph collection should be created");
 
+        for id in [100, 200] {
+            collection
+                .store_node_payload(id, &serde_json::json!({}))
+                .expect("store node payload should succeed");
+        }
         let edge = GraphEdge::new(1, 100, 200, "KNOWS").expect("valid edge");
         collection.add_edge(edge).expect("add edge should succeed");
 
@@ -440,6 +445,11 @@ fn test_open_without_edge_store_bin_recovers_gracefully() {
     );
 
     // 5. Graph operations must work on the recovered collection.
+    for id in [1, 2] {
+        reopened
+            .store_node_payload(id, &serde_json::json!({}))
+            .expect("store node payload should succeed");
+    }
     let edge_a = GraphEdge::new(10, 1, 2, "LIKES").expect("valid edge");
     reopened
         .add_edge(edge_a)

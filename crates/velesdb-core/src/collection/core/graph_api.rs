@@ -30,6 +30,11 @@ impl Collection {
     /// # Errors
     ///
     /// Returns `Error::EdgeExists` if an edge with the same ID already exists.
+    /// Returns `Error::NodeNotFound` (schemaless) or `Error::SchemaValidation`
+    /// (strict schema) if `source` or `target` has no stored node payload —
+    /// an edge to a node that was never created would otherwise be invisible
+    /// to `all_node_ids()` and MATCH (issue #1442), since both derive their
+    /// node set from the payload store, not the edge store.
     ///
     /// # Example
     ///
@@ -40,9 +45,8 @@ impl Collection {
     /// collection.add_edge(edge)?;
     /// ```
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
-        // Strict-schema referential integrity: reject before any mutation so a
-        // violation leaves no partial write and does not bump write_generation.
-        // Schemaless collections (the default) short-circuit at zero added cost.
+        // Reject before any mutation so a violation leaves no partial write
+        // and does not bump write_generation.
         self.validate_edge_referential_integrity(&edge)?;
 
         let edge_id = edge.id();
@@ -93,16 +97,17 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if WAL logging fails (fail-closed: the in-memory
-    /// store is not mutated when the WAL append fails).
+    /// store is not mutated when the WAL append fails). Returns
+    /// `Error::NodeNotFound` if any edge's `source` or `target` has no
+    /// stored node payload (see [`Self::add_edge`]).
     pub fn add_edges_batch(&self, edges: Vec<GraphEdge>) -> Result<usize> {
         if edges.is_empty() {
             return Ok(0);
         }
 
-        // Strict-schema referential integrity: validate the ENTIRE batch before
-        // any mutation (WAL append or store write), so a single violating edge
-        // fails the whole batch with no partial write and no orphaned WAL entry.
-        // Schemaless collections (the default) short-circuit at zero added cost.
+        // Validate the ENTIRE batch before any mutation (WAL append or store
+        // write), so a single violating edge fails the whole batch with no
+        // partial write and no orphaned WAL entry.
         for edge in &edges {
             self.validate_edge_referential_integrity(edge)?;
         }
@@ -191,20 +196,45 @@ impl Collection {
         Ok(())
     }
 
-    /// Enforces strict-schema referential integrity for an edge write.
-    ///
-    /// In schemaless mode (the default), this is a no-op and returns
-    /// immediately. In strict mode it verifies that both endpoint nodes exist
-    /// and that the edge type / endpoint types satisfy the declared schema.
+    /// Enforces that both edge endpoints have a stored node payload
+    /// (schemaless-mode existence check — see
+    /// [`Self::validate_edge_referential_integrity`]). Unlike
+    /// [`Self::endpoint_node_type`], this does not require a `_labels`
+    /// field — plain (untyped) node payloads are enough.
     ///
     /// # Errors
     ///
-    /// Returns `Error::SchemaValidation` if an endpoint node is missing, has no
-    /// `_labels`, or the edge violates the schema's edge-type constraints.
+    /// Returns `Error::NodeNotFound` if `source` or `target` has no stored
+    /// payload.
+    fn validate_edge_endpoints_exist(&self, edge: &GraphEdge) -> Result<()> {
+        let storage = self.storage.payload_storage.read();
+        for node_id in [edge.source(), edge.target()] {
+            if storage.retrieve(node_id)?.is_none() {
+                return Err(Error::NodeNotFound(node_id));
+            }
+        }
+        Ok(())
+    }
+
+    /// Enforces referential integrity for an edge write.
+    ///
+    /// In schemaless mode (the default), only endpoint existence is checked
+    /// (`Error::NodeNotFound`) — an edge to a node that was never created
+    /// would otherwise be accepted into the edge store while staying
+    /// invisible to `all_node_ids()` and MATCH, which both resolve their
+    /// node set from the payload store rather than the edge store (#1442).
+    /// In strict mode it additionally verifies that the edge type /
+    /// endpoint types satisfy the declared schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::NodeNotFound` (schemaless) or `Error::SchemaValidation`
+    /// (strict mode: missing endpoint, no `_labels`, or an edge-type
+    /// constraint violation).
     fn validate_edge_referential_integrity(&self, edge: &GraphEdge) -> Result<()> {
         let schema = match self.storage.config.read().graph_schema.clone() {
             Some(s) if !s.is_schemaless() => s,
-            _ => return Ok(()),
+            _ => return self.validate_edge_endpoints_exist(edge),
         };
 
         let from_type = self.endpoint_node_type(edge.source())?;

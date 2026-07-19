@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`velesdb-core` / `velesdb-server`**: `add_edge` and `add_edges_batch`
+  now reject an edge whose `source` or `target` node has no stored payload
+  (#1442), instead of silently accepting it. Previously, on schemaless
+  graph collections (the default), an edge could reference a node ID that
+  was never explicitly created — the edge was stored, but the node stayed
+  invisible to `GET /graph/nodes`, `all_node_ids()`, and `MATCH`, since all
+  three resolve their node set from the payload store, not the edge store.
+  The REST layer now returns `404 NodeNotFound` (`VELES-022`) for such an
+  edge, matching the existing strict-schema behavior and the
+  `velesdb-memory` wedge's `relate()`, which already required both
+  endpoints to exist. **Migration note:** code that called `addEdge`/
+  `INSERT EDGE` without first creating the endpoint nodes (via a point
+  upsert or `PUT /graph/nodes/{id}/payload`) must now create them first —
+  see `docs/guides/GRAPH_PATTERNS.md`.
+
 - **`velesdb-memory`**: hardened the MCP server against a leaked client
   process (#1448). The server itself was already healthy (it exits cleanly
   on stdin EOF), but a client that leaks its child process — observed in

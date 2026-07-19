@@ -12,6 +12,7 @@ use tempfile::TempDir;
 
 use crate::collection::graph::{GraphEdge, TraversalConfig};
 use crate::distance::DistanceMetric;
+use crate::point::Point;
 use crate::quantization::StorageMode;
 use crate::VectorCollection;
 
@@ -27,6 +28,11 @@ fn create_test_vc() -> (VectorCollection, TempDir) {
 #[test]
 fn test_traverse_bfs_reaches_edges_added_via_shared_edge_store() {
     let (coll, _dir) = create_test_vc();
+
+    for id in [1u64, 2, 3] {
+        coll.upsert(vec![Point::new(id, vec![0.0; 4], Some(serde_json::json!({})))])
+            .unwrap();
+    }
 
     // Same path REST `/relations` and the memory wedge use: `add_edge`
     // delegates to the shared `Collection` edge store.
@@ -50,6 +56,11 @@ fn test_traverse_bfs_reaches_edges_added_via_shared_edge_store() {
 #[test]
 fn test_traverse_bfs_respects_max_depth_on_vector_collection() {
     let (coll, _dir) = create_test_vc();
+
+    for id in [1u64, 2, 3] {
+        coll.upsert(vec![Point::new(id, vec![0.0; 4], Some(serde_json::json!({})))])
+            .unwrap();
+    }
 
     coll.add_edge(GraphEdge::new(1, 1, 2, "KNOWS").unwrap())
         .unwrap();

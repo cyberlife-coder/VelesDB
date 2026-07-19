@@ -392,7 +392,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: Collection not found
+          description: Collection not found, or source/target node has no stored payload (VELES-022 NodeNotFound)
           content:
             application/json:
               schema:
@@ -435,7 +435,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: Collection not found
+          description: Collection not found, or a source/target node has no stored payload (VELES-022 NodeNotFound) — the whole batch is rejected
           content:
             application/json:
               schema:

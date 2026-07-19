@@ -149,7 +149,7 @@ pub async fn get_edges(
     responses(
         (status = 201, description = "Edge added successfully"),
         (status = 400, description = "Invalid request", body = ErrorResponse),
-        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 404, description = "Collection not found, or source/target node has no stored payload (VELES-022 NodeNotFound)", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
     tag = "graph"
@@ -219,7 +219,7 @@ fn build_edge(request: AddEdgeRequest) -> Result<GraphEdge, (StatusCode, Json<Er
     responses(
         (status = 201, description = "Edges added successfully", body = AddEdgesBatchResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
-        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 404, description = "Collection not found, or a source/target node has no stored payload (VELES-022 NodeNotFound) — the whole batch is rejected", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
     tag = "graph"

@@ -355,6 +355,11 @@ fn test_regression_select_edges_returns_inserted_edges() {
     )
     .expect("create");
 
+    for id in [1, 2] {
+        execute_sql(&db, &format!("INSERT NODE INTO g (id = {id}, payload = '{{}}')"))
+            .expect("insert node");
+    }
+
     execute_sql(
         &db,
         "INSERT EDGE INTO g (source = 1, target = 2, label = 'KNOWS')",

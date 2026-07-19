@@ -52,6 +52,10 @@ mod tests {
         // Graph: 1 --KNOWS--> 2 --KNOWS--> 3 --KNOWS--> 4
         //                     |
         //                     +--WROTE--> 5
+        for id in [1, 2, 3, 4, 5] {
+            coll.upsert_node_payload(id, &serde_json::json!({}))
+                .unwrap();
+        }
         for (id, src, tgt, lbl) in [
             (100, 1, 2, "KNOWS"),
             (101, 2, 3, "KNOWS"),
@@ -66,6 +70,9 @@ mod tests {
     #[test]
     fn test_graph_collection_add_and_get_edges() {
         let (coll, _dir) = make_graph();
+        for id in [100, 200] {
+            coll.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+        }
         coll.add_edge(GraphEdge::new(1, 100, 200, "KNOWS").unwrap())
             .unwrap();
         let edges = coll.get_edges(Some("KNOWS"));
@@ -211,35 +218,20 @@ mod tests {
 
     #[test]
     fn test_all_node_ids() {
+        // `all_node_ids` delegates to `inner.all_ids()`, which enumerates
+        // payload-stored IDs. Since add_edge now requires both endpoints to
+        // have a stored payload before the edge is accepted (#1442), every
+        // node reachable via add_test_edges is necessarily already visible
+        // here — this asserts that invariant end-to-end rather than the
+        // pre-payload/post-payload distinction from before the fix.
         let (coll, _dir) = make_graph();
         add_test_edges(&coll);
 
-        // Precondition: `all_node_ids` delegates to
-        // `inner.all_ids()` which enumerates payload-stored IDs
-        // only — nodes referenced purely by edges do not appear
-        // in the result. Before any payload is written, the
-        // method must therefore return an empty set even though
-        // `add_test_edges` populated the edge store with nodes
-        // 1..5. The previous version of this test computed and
-        // discarded the pre-payload result (`let _ids = ...`);
-        // asserting the empty invariant turns that scaffold into
-        // a real guard against regressions in the payload-vs-edge
-        // distinction.
-        let pre_payload_ids = coll.all_node_ids();
-        assert!(
-            pre_payload_ids.is_empty(),
-            "all_node_ids must be empty before any payload is stored, got {:?}",
-            pre_payload_ids
-        );
-
-        // Store payloads for nodes 1 and 2 so they become visible
-        // to `all_node_ids`.
-        coll.upsert_node_payload(1, &serde_json::json!({})).unwrap();
-        coll.upsert_node_payload(2, &serde_json::json!({})).unwrap();
         let ids = coll.all_node_ids();
-        assert!(ids.contains(&1));
-        assert!(ids.contains(&2));
-        assert_eq!(ids.len(), 2);
+        for id in [1, 2, 3, 4, 5] {
+            assert!(ids.contains(&id), "node {id} should be visible");
+        }
+        assert_eq!(ids.len(), 5);
     }
 
     #[test]
