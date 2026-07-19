@@ -209,7 +209,7 @@ mod tests {
 
         // Manually populate the secondary index
         {
-            let indexes = collection.secondary_indexes.read();
+            let indexes = collection.query.secondary_indexes.read();
             if let Some(crate::index::SecondaryIndex::BTree(tree)) = indexes.get("category") {
                 let mut t = tree.write();
                 t.insert(
@@ -245,7 +245,7 @@ mod tests {
 
         // Populate both indexes
         {
-            let indexes = collection.secondary_indexes.read();
+            let indexes = collection.query.secondary_indexes.read();
             if let Some(crate::index::SecondaryIndex::BTree(tree)) = indexes.get("category") {
                 let mut t = tree.write();
                 t.insert(
@@ -296,7 +296,7 @@ mod tests {
     /// mapped to point IDs 1, 2, 3, 4, 5 respectively.
     fn populate_price_index(collection: &Collection) {
         use crate::index::secondary::F64Key;
-        let indexes = collection.secondary_indexes.read();
+        let indexes = collection.query.secondary_indexes.read();
         if let Some(crate::index::SecondaryIndex::BTree(tree)) = indexes.get("price") {
             let mut t = tree.write();
             for (price, id) in [(10, 1u64), (20, 2), (30, 3), (40, 4), (50, 5)] {
@@ -491,7 +491,7 @@ mod tests {
             .expect("test: index creation");
 
         {
-            let indexes = collection.secondary_indexes.read();
+            let indexes = collection.query.secondary_indexes.read();
             if let Some(crate::index::SecondaryIndex::BTree(tree)) = indexes.get("category") {
                 let mut t = tree.write();
                 t.insert(
@@ -541,7 +541,7 @@ mod tests {
             .expect("test: index creation");
 
         {
-            let indexes = collection.secondary_indexes.read();
+            let indexes = collection.query.secondary_indexes.read();
             if let Some(crate::index::SecondaryIndex::BTree(tree)) = indexes.get("category") {
                 let mut t = tree.write();
                 t.insert(
@@ -601,7 +601,7 @@ mod tests {
 
         // Manually populate: 3 tech (IDs 1,5,10) + 2 science (IDs 2,7)
         {
-            let indexes = collection.secondary_indexes.read();
+            let indexes = collection.query.secondary_indexes.read();
             if let Some(crate::index::SecondaryIndex::BTree(tree)) = indexes.get("category") {
                 let mut t = tree.write();
                 t.insert(
@@ -644,7 +644,7 @@ mod tests {
         populate_price_index(&collection);
 
         {
-            let indexes = collection.secondary_indexes.read();
+            let indexes = collection.query.secondary_indexes.read();
             if let Some(crate::index::SecondaryIndex::BTree(tree)) = indexes.get("category") {
                 let mut t = tree.write();
                 t.insert(
@@ -706,7 +706,7 @@ mod tests {
     /// Helper: populates a "category" secondary index with tech=[1,5,10],
     /// science=[2,7], art=[3].
     fn populate_category_index(collection: &Collection) {
-        let indexes = collection.secondary_indexes.read();
+        let indexes = collection.query.secondary_indexes.read();
         if let Some(crate::index::SecondaryIndex::BTree(tree)) = indexes.get("category") {
             let mut t = tree.write();
             t.insert(
@@ -866,7 +866,7 @@ mod tests {
 
         let large_id = u64::from(u32::MAX) + 1;
         {
-            let indexes = collection.secondary_indexes.read();
+            let indexes = collection.query.secondary_indexes.read();
             if let Some(crate::index::SecondaryIndex::BTree(tree)) = indexes.get("category") {
                 let mut t = tree.write();
                 t.insert(

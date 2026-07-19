@@ -7,6 +7,303 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`velesdb-memory`**: hardened the MCP server against a leaked client
+  process (#1448). The server itself was already healthy (it exits cleanly
+  on stdin EOF), but a client that leaks its child process — observed in
+  practice with a headless `claude -p` run — never closes stdin, so the
+  server correctly kept serving forever and held the store's single-writer
+  lock, making every later session fail with an opaque `Storage
+  (DatabaseLocked)` / "Failed to connect". Two defensive fixes: (1) the
+  server now detects a dead parent (`std::os::unix::process::parent_id()`
+  polled every ~2s, Unix-only, no new dependency) and self-exits, releasing
+  the lock, even when stdin is artificially held open; (2) a `DatabaseLocked`
+  at startup now retries briefly (3 × 500ms, covering a normal
+  close/reopen handover) and, if the store is still locked, prints an
+  actionable message on stderr naming the fix (`pkill velesdb-memory` or
+  set `VELESDB_MEMORY_PATH` elsewhere) instead of a bare error dump — and
+  exits non-zero so client health-checks can detect the failure. Net
+  effect: one leaked client can no longer brick every later session, and
+  when a store really is locked, the user is told what to do about it.
+
+### Added — deterministic context compiler (EPIC-P-070 base feature; shipped as `velesdb-memory` 0.8.0 / `velesdb-node` 0.8.0 via the `velesdb-memory-v0.8.0` tag — the EPIC-P-071 follow-ups further down in this section ship separately, see the note below)
+
+- **`velesdb-memory`**: new default `context` feature — a deterministic
+  context compiler (no LLM, no network, no clock; same request ⇒
+  byte-identical output). Pipeline `chunk → classify → dedup → score → pack →
+  assemble`: duplicates drop, repeated log lines collapse with counts,
+  code/URLs/numbers/negative constraints survive verbatim, over-budget
+  content becomes recoverable `ctx://source/<hash>` handles, every fragment
+  gets one auditable decision (stable rule id, reason, relevance, risk).
+  First text chunker in the workspace (UTF-8-safe, code-fence-atomic), the
+  first shipped `Reranker` implementation (`DeterministicReranker`), a
+  `TokenEstimator` seam, injectable versioned `PricingTable` (u64
+  micro-units, never hardcoded), and a memory bridge
+  (`compile_context`/`retrieve_context_source`/`context_savings`/
+  `save_working_context`) whose stored system facts are invisible to normal
+  recall.
+- **MCP**: four new tools on the one existing server (`compile_context`,
+  `context_savings`, `explain_compilation`, `retrieve_context_source`) —
+  domain types are the wire types, no DTO duplication.
+- **Node** (`@wiscale/velesdb-memory-node`): `compileContext(request)` —
+  pure conversion, ids as decimal strings; ships the
+  `velesdb-context-optimizer` agent skill in the npm package.
+> **From here on, this section is EPIC-P-071.** Unless a bullet says
+> otherwise, these items ship as `velesdb-memory` / `velesdb-node` 0.9.0
+> via the `velesdb-memory-v0.9.0` tag. The Python bullet immediately below
+> is the one exception.
+
+- **Python** (`velesdb`): context-compiler parity on `MemoryService` —
+  `compile_context` / `retrieve_context_source` / `context_savings` /
+  `save_working_context` / `load_working_context`, same wire shapes as the
+  MCP tools; ids cross as exact native Python ints (vs decimal strings on
+  Node). Ships with the **next workspace release** (the `velesdb` PyPI
+  package's own version line), not with the `velesdb-memory-v0.9.0` tag —
+  the published `velesdb` 3.12.0 wheel does not include `compile_context`
+  yet. [EPIC-P-071/US-001]
+- **`velesdb-memory`**: usage-driven importance blend in `context_memories`
+  — `CompilePolicy.importance` (`{confidence: 0.2, recency: 0.1,
+  recency_field: null}`, serde-defaulted so 0.8.0 requests stay
+  wire-compatible) folds the RL confidence `feedback` trains and a
+  batch-relative recency term into the fused ranking of pulled memories:
+  `fused_norm + w_c·(confidence−0.5)·2 + w_r·recency_norm`. Applies only to
+  the similarity-selected pool (confidence is not relevance — an adversarial
+  test pins that an over-reinforced off-topic fact never enters), reads no
+  clock (recency is min-max normalised within the batch; an absent key or a
+  degenerate batch contributes 0), composes with the
+  `compile_context_reranked` seam, and ventilates all four signals in each
+  decision's `reason` (`vector …, graph …, confidence …, recency …`). Both
+  weights at 0 reproduce the 0.8.0 output byte for byte (golden-pinned).
+  **Behavioral change**: with the default policy the blend is active
+  (`confidence: 0.2`), so RL-reinforced memories now rank higher out of the
+  box after an upgrade; set the importance weights to 0 to restore the exact
+  0.8.0 ordering (byte-identical, golden-tested). Recommended weight range
+  is `[0, 1]`; out-of-range values are accepted verbatim, never clamped
+  (documented and regression-tested). [EPIC-P-071/US-002]
+- **Node** (`@wiscale/velesdb-memory-node`): `feedback(id, success)` binding
+  (resolves to the fact's new learned confidence), and a committed RL×graph
+  synergy case in the `tri_engine_rescue` benchmark: a fact reinforced by
+  `feedback` and reachable only through the typed-edge walk out-ranks a
+  merely-similar fact once `policy.importance` is active — reproducible
+  across runs. [EPIC-P-071/US-002]
+- **Benchmark**: `examples/context_savings`, reproducible (75–82 % estimated
+  token savings on the committed corpus in ~2 ms; figures are local
+  estimates, not billed tokens — cross-checked against a real cl100k
+  tokenizer by the committed `real_measures/` scripts).
+- **MCP**: two working-context tools on the one existing server —
+  `save_working_context` / `load_working_context` (pure delegation to the
+  memory bridge), so an agent can persist its distilled session state and a
+  later session can resume from it; the committed `mcp_e2e.py` harness
+  proves the round-trip **across two separate server processes** on one
+  store. [EPIC-P-071/US-003]
+- **Node** (`@wiscale/velesdb-memory-node`): `saveWorkingContext` /
+  `loadWorkingContext` — same wire shape, ids as decimal strings in both
+  directions (u64::MAX-safe), `null` when nothing was saved; the spec suite
+  proves the cross-process round-trip via a child-process save.
+  [EPIC-P-071/US-003]
+- **WASM** (`@wiscale/velesdb-wasm`) + **TypeScript SDK**
+  (`@wiscale/velesdb-sdk`): `compileContext(request)` — the same
+  deterministic compiler, compiled to wasm, running fully in the browser
+  (`velesdb-memory`'s zero-dependency `context` feature enabled on the wasm
+  build). Ids cross as decimal strings; in-memory semantics documented
+  (`ctx://source/` handles and savings events live for the browser session —
+  no persistence in WASM). [EPIC-P-071/US-004]
+- Internal, non-breaking: `fusion::fuse` re-expressed over `fuse_scored`
+  (identical candidates/order/numbers, iso-behavior pinned by test);
+  intra-doc links fixed so `RUSTDOCFLAGS="-D warnings" cargo doc` passes.
+- Internal, non-breaking: the `context` id wire contract (`ID_KEYS`,
+  decimal-string ⇄ `u64` tree rewrite) moved from two copy-pasted
+  implementations (Node's `convert.rs`, WASM's `memory_service.rs`) to one
+  shared `velesdb_memory::context::wire` module both bindings now delegate
+  to — same behavior (pinned by the moved logic's own new unit tests plus
+  the existing Node/WASM suites), one source of truth for future `context`
+  id fields instead of two to keep in sync.
+- **`velesdb-memory`**: `CompilePolicy.normalize_log_timestamps` (default
+  `false`, serde-defaulted so existing requests stay wire-compatible) — an
+  opt-in, deterministic mask of `kind: "log"` fragments' volatile prefixes
+  (ISO/syslog timestamps, bracketed hex/pid counters, fixed patterns only)
+  applied before `abstract.log_dedup` groups repeated lines, so lines
+  identical modulo timestamp now collapse; the emitted line is still the
+  first occurrence's exact bytes, and the decision `reason` says so when
+  normalization actually changed the grouping. Off by default: byte-exact
+  grouping is unchanged for existing callers (pinned by a golden test).
+  [EPIC-P-071/US-006]
+- Doc-only: crate README sections on injecting a model-exact
+  `TokenEstimator` per provider (`examples/context_savings/real_measures/exact_estimator.mjs`
+  reproduces the `HeuristicEstimator` calibration margins on fresh corpus
+  snippets — always a safe over-count, +9.6 % to +63.8 % measured), the
+  `MAX_TOKEN_BUDGET` dry-run audit pattern (sort `decisions` by `relevance`
+  client-side, nothing is lost), and `source_ttl_seconds`'s permanent-by-
+  default trade-off with a manual-purge "disk growth" section.
+  [EPIC-P-071/US-005, US-006]
+- **Proof harness**: `examples/context_savings/real_measures/cache_prefix.mjs`
+  measures the `cache: true` section's byte-stable-prefix percentage across
+  10 consecutive compiles with changing volatile content (100 % stable
+  prefix on all 9 consecutive turn pairs, reproducible) and frames the
+  naive full-input-rate cost of not caching it against an injected,
+  never-hardcoded `policy.pricing` table. [EPIC-P-071/US-008]
+- **Proof harness**: `examples/node-llm-middleware/` — a minimal
+  middleware wrapper measuring `compile_context` savings offline (real
+  cl100k via `gpt-tokenizer`, always) and, opt-in
+  (`RUN_BILLED_MEASURE=1` + an API key never asked for by the harness), the
+  provider's own billed `usage` on a real minimal-cost call.
+  [EPIC-P-071/US-007]
+- **MCP**: `CompilePolicy.ids_as_strings` (default `false`) — opts the
+  `compile_context` / `explain_compilation` response into decimal-string ids
+  (`fragment_id`, `content_hash`, `memory_id`, `fragment_ids`), reusing the
+  same tree walk the Node/WASM bindings already apply, for raw MCP clients
+  without u64-safe JSON number parsing. `fragments[].id` on input now also
+  accepts either a JSON number or a decimal string, and the advertised tool
+  schemas type every such field `["integer", "string"]` so schema-validating
+  clients accept the opt-in form. [EPIC-P-071]
+- **MCP**: `explain_compilation` gains an optional `fragment_index` (0-based
+  position in `request.fragments`), so byte-identical fragments — which
+  share a content-addressed `fragment_id` — can be disambiguated instead of
+  always resolving to the deduplication survivor's decision. Default
+  behavior (no `fragment_index`) is unchanged. [EPIC-P-071]
+- **Release**: every GitHub Release now attaches `velesdb-skills.tar.gz`
+  (the `velesdb-memory` and `velesdb-context-optimizer` agent skills, one
+  folder per skill at the archive root) — `curl -L … | tar -xz -C
+  ~/.claude/skills/` installs both without cloning the repo. [EPIC-P-071]
+- **Media fragments now wired on every surface** (US-009, PR3 of 3 —
+  PR1/PR2 shipped the compiler-side atomic packing, dedup, cost, screenshot
+  supersession, and the MCP/Python bindings): the MCP `compile_context` /
+  `retrieve_context_source` advertised JSON schemas now carry
+  `fragments[].media` and the optional `media` on the retrieve result
+  (pinned by structural schema tests, not just accepted-on-input); the Node
+  binding (`@wiscale/velesdb-memory-node`) gains
+  `retrieveContextSource(handle)` (`{handle, content, media?}`, same shape
+  as the MCP tool) alongside `compileContext`'s existing media passthrough;
+  WASM's `compileContext` compiles, dedups, and prices media fragments
+  correctly on the in-memory `WasmStore` (`retrieveContextSource` is not
+  yet exposed there — a deliberately separate follow-up, not required to
+  prove media fragments compile on wasm); the TypeScript SDK's
+  `CompileContextFragment` type gains `media?: {mime, bytes_b64}`. The
+  `velesdb-context-optimizer` skill documents when to route a screenshot
+  through `media` and how `metadata.target` drives supersession.
+  [EPIC-P-071/US-009]
+- **Benchmark**: `examples/real-session-benchmark/` — realistic agentic
+  sessions (screenshots with US-009 dedup/supersession, CI logs for
+  `normalize_log_timestamps`, re-injected docs, re-read code files) run A/B:
+  raw ("vraie vie", everything resent every turn) vs compiled
+  (`compileContext`; the compiled arm is billed for the `ctx://source/`
+  handles it sends). OFFLINE (default; real cl100k tokenizer + the API's own
+  pixels/750 image-token formula; every variant reproduced twice,
+  byte-identical) measures, on the committed corpora: **17.2%** saved on the
+  base 14-turn session in lossless mode (pure redundancy elimination, zero
+  unique information removed — externalized: 0), **20.3%** in
+  window-enforcement mode (budget 8000; the extra ~3 points explicitly
+  attributed to `budget.externalize` of unique content, not redundancy),
+  **30.9%** lossless / **55.1%** windowed on the 36-turn long-session
+  variant (with per-arm context-growth curves and labeled projected headroom
+  to a configurable compaction threshold: raw ~234 tokens/turn vs compiled
+  ~35/turn), and **18.4%** on the memory-enabled variant (docs stored once
+  via `remember`/`relate`, pulled back per turn via the default
+  `memory_scope` — the product's intended pattern, untuned k=5). ONLINE
+  (opt-in, `RUN_BILLED_MEASURE=1` + `CONFIRM_SPEND=1`) bills the same
+  session for real on `claude-sonnet-5` — reading the provider's own
+  `usage.input_tokens` with cache fields reported separately — AND grades
+  real generated answers in both arms against committed per-turn fact
+  checklists (deterministic substring grader): token savings and answer
+  adequacy are reported side by side, so a saving that costs answers is a
+  reported failure. Runners: native `fetch` (`ANTHROPIC_API_KEY`) or the
+  Claude Code CLI's headless mode (`BENCH_RUNNER=cli`, no key — the user's
+  own authenticated account; wire shapes verified by a real calibration
+  call). [EPIC-P-071]
+- **CI gate — ground-truth facts survive compilation** (EPIC-P-071/A1):
+  `examples/real-session-benchmark/test/facts-survive.test.mjs` turns the
+  benchmark's per-turn fact checklists (`corpus/questions.mjs`) into an
+  executable non-regression check: for every turn of the base session, in
+  BOTH the lossless and the window-8000 compiled arms, every ground-truth
+  fact must be present in what that arm would actually send to the model —
+  inline, or PROVEN recoverable by really resolving its `ctx://source/`
+  handle via `retrieveContextSource` (never assumed from a listed handle).
+  Runs offline, no network, in CI's `Node Binding Tests` job (reuses the
+  napi addon already built there). [EPIC-P-071]
+
+R1 `Collection`-internals train: resolves and **closes the god-object EPIC
+([#1384](https://github.com/cyberlife-coder/VelesDB/issues/1384))**. The
+internals are organized to the maximum structurally sound point; full per-kind
+exclusive decomposition was investigated and documented as structurally
+infeasible (see the F2.2 entry in `docs/ARCHITECTURE.md` for the complete
+account).
+
+> **Note for the next release**: this train contains a **breaking Rust core
+> API change** (the `into_vector_facade` removal below). Per the declared
+> SemVer policy, tag the next release accordingly — a major bump, or an
+> explicitly documented exception in these release notes.
+
+### Removed — BREAKING (Rust core API)
+
+- **`AnyCollection::into_vector_facade` is removed** (R1.4). The facade —
+  introduced in 3.11.0 as the safe replacement for `into_vector_unchecked` —
+  coerced *any* variant into a `VectorCollection`, so the kind a caller
+  captured could diverge from the collection's real kind. *Migration*: use the
+  variant-checked `AnyCollection::into_vector()` (returns `Err(self)` on the
+  wrong variant so ownership is recovered); bindings that deliberately need
+  the **structural view** of a graph/metadata store behind the
+  `VectorCollection` newtype (single user-facing `Collection` type, vector-only
+  ops gated by a separately tracked kind) use
+  `GraphCollection::into_vector_view()` /
+  `MetadataCollection::into_vector_view()` instead.
+
+### Changed
+
+- **`Collection` internals regrouped into six named concern sub-structs**
+  (R1.1 — internal-only, `pub(crate)`, non-breaking): `StorageState`,
+  `GraphStore`, `QueryState`, `GenerationCounters`, `StreamingState`,
+  `RuntimeGuards`, with the lock ordering preserved verbatim.
+- **`order_by_advisor` reclassified out of the graph cluster into
+  `QueryState`** (R1.2a — internal-only): it is a generic `ORDER BY` scan
+  concern reached on any collection kind, not graph state.
+- **Graph cluster held as a shared `Arc<GraphStore>` handle** (R1.2b —
+  internal-only): graph state can be shared with `GraphCollection` without an
+  exclusive move; field access and locking are unchanged.
+
+- **`forget` now reports whether the id actually existed** on every surface
+  (Rust bridge → `bool`, MCP `{found}`, Node/WASM/TS `boolean`,
+  Python `bool`): deleting an unknown id used to read as success, so an
+  agent could not tell a real deletion from a typo'd or stale id. Wire-compatible
+  everywhere (the MCP result gains an additive `found` field); the Node
+  typings and the TS SDK's `forget` widen `Promise<void>` → `Promise<boolean>`
+  — only a caller with an explicit `: Promise<void>`/`: void` annotation on
+  the result needs a touch.
+  [EPIC-P-071/US-004]
+
+### Fixed
+
+- **Benchmark online mode**: the CLI runner now uses the CLI-enforced
+  `--output-format stream-json` pairing (parsing the final NDJSON `result`
+  event) — the previous `json` output form was rejected by the CLI at the
+  first real call; and the online summary now prints per-arm BILLED dollars
+  (`total_cost_usd` summed per session) plus cache-field totals, because on
+  a caching runner the context lives in cache_creation/cache_read, not
+  `input_tokens` (measured: input_tokens≈2 on every turn of both arms).
+  [EPIC-P-071]
+
+- **The context compiler no longer aborts on `wasm32-unknown-unknown`** when
+  recording savings events: `SystemTime::now()` (unsupported in wasm `std`,
+  panics) is only reached on native targets now; wasm events carry a 0
+  timestamp (their per-process sequence keeps ids unique, and wasm stats are
+  per-browser-session by design). The compile pipeline itself was already
+  clock-free. [EPIC-P-071/US-004]
+- **python: integers greater than `i64::MAX` now round-trip exactly as `int`**
+  (previously silently converted to a lossy `float`). Affects every surface
+  sharing the binding's JSON converters — payloads, search results, VelesQL
+  params, graph properties, memory metadata — and is required by the context
+  compiler's content-addressed ids (FNV-1a 64, uniform over `u64`, so ~50%
+  exceed `i64::MAX`). Integers outside `[i64::MIN, u64::MAX]` now raise an
+  explicit `ValueError` stating the supported range instead of silently losing
+  precision. [EPIC-P-071/US-001]
+- **`VectorCollection::traverse_bfs` is now usable** — edges are a
+  kind-agnostic feature (`add_edge`/`remove_edge`/`get_outgoing_edges` were
+  already shared, see `docs/ARCHITECTURE.md` §F2.2 R1.2c: REST `/relations`
+  and the agent-memory wedge create edges on any collection kind), but BFS
+  traversal was only reachable through `GraphCollection`. `VectorCollection`
+  now exposes `traverse_bfs`, delegating to the same shared edge store as
+  `GraphCollection::traverse_bfs`. (#1439)
+
 ## [3.12.0] — 2026-07-15
 
 Pre-release hardening ("Vague D"): closes the remaining audit follow-ups
@@ -137,7 +434,10 @@ rushed on a released core.
   still enforced by the captured `CollectionKind` + `Collection::ensure_vector`.
   Removes the workspace's last logically-unsound `unsafe`. *Migration:* if you
   called `into_vector_unchecked` directly, rename to `into_vector_facade` and
-  drop the `unsafe` block (no behavior change). (Audit P0.)
+  drop the `unsafe` block (no behavior change). (Audit P0.) *(Note:
+  `into_vector_facade` was itself removed after 3.12.0 — see the Unreleased
+  section above; use the variant-checked `into_vector()` or, for the
+  structural view, `into_vector_view()`.)*
 - **Uniform `AnyCollection` dispatch** via a single private `inner()` accessor —
   the shared, identical-across-kinds methods no longer mix `c.method()` /
   `c.inner.method()` forwarding. No behavior change. (Audit P2.6.)

@@ -2,13 +2,15 @@
 
 This document is the **15-minute read** an engineer or a technical due-diligence reviewer should start with. It tells you what VelesDB is, how it is shaped, and where to dig deeper.
 
-> **Last updated:** 2026-06-12 — applies to v2.0.x and onward.
+> **Last updated:** 2026-07-16 — applies to v3.x and onward.
 
 ---
 
 ## TL;DR — three sentences
 
-VelesDB is a **single-binary, embeddable database** that fuses a **vector index (HNSW)**, a **graph engine** (nodes + edges + traversal), and a **typed columnstore** behind a **shared SQL-like query language called VelesQL**. The target use case is local-first AI agents and RAG pipelines that today have to stitch together pgvector + Neo4j + PostgreSQL by hand. The whole engine ships as a single ~9 MB binary (6–13 MB depending on platform and binary, measured on v1.18.0 release artifacts), runs on Linux/macOS/Windows/iOS/Android/WASM, and persists to a directory on disk that the user controls.
+VelesDB is **the explainable, local-first memory engine for AI agents**: a **single-binary, embeddable database** that fuses a **vector index (HNSW)**, a **graph engine** (nodes + edges + traversal), and a **typed columnstore** behind a **shared SQL-like query language called VelesQL**. The target use case is local-first AI agents and RAG pipelines that today have to stitch together pgvector + Neo4j + PostgreSQL by hand. The whole engine ships as a single ~9 MB binary (6–13 MB depending on platform and binary, measured on v1.18.0 release artifacts), runs on Linux/macOS/Windows/iOS/Android/WASM, and persists to a directory on disk that the user controls.
+
+Because the graph and columnstore live in the same address space as the vectors, the high-level `MemoryService` can answer **`why()`** — returning not just an answer but the *evidence path* behind every recall (which facts it used and how they connect). That auditable recall trail is the kind of traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation-timeline/) (enforceable from Aug 2026) asks of AI systems; running fully local, VelesDB **helps meet** those data-residency and explainability expectations rather than claiming certified compliance. The memory layer's **deterministic context compiler** extends that trail to what agents *send*: every compression decision is recorded with a stable rule id, reason, and risk (`explain_compilation` re-derives it on demand, since compilation is reproducible byte for byte), and originals stay recoverable through content-addressed `ctx://source/` handles — the same helps-meet-not-certified framing applies. Architecturally it is a pure pipeline (`chunk → classify → dedup → score → pack → assemble`) inside `velesdb-memory`'s `context/` module, with injectable seams (`TokenEstimator`, `Reranker`, `CompilePolicy`) a control plane can build on without the core ever referencing one.
 
 ---
 
@@ -78,7 +80,7 @@ The workspace is laid out as eight crates with one-way dependencies (no cycles).
 | **`velesdb-mobile`** | iOS / Android bindings via UniFFI. | Swift + Kotlin | One binding crate, two outputs. |
 | **`velesdb-cli`** | Interactive REPL for VelesQL. | Single binary | Wraps `velesdb-core`. |
 | **`velesdb-migrate`** | Migration tooling: import from Pinecone / Qdrant / Milvus / Weaviate / Chroma / Elasticsearch / Redis. | CLI tool | Strategic candidate to extract to a separate repo (see ROADMAP.md Horizon 4). |
-| **`velesdb-memory`** | Local-first MCP agent-memory server: the high-level `MemoryService` wedge (remember/recall/recall_where/relate/forget/why/remember_extracted). | MCP server + Rust/Python/Node API | Independent `0.1.0` cadence. Depends on `velesdb-core` (not the engine's `3.x` line). |
+| **`velesdb-memory`** | Local-first MCP agent-memory server: the high-level `MemoryService` wedge (remember/recall/recall_where/relate/forget/why/remember_extracted) plus the deterministic context compiler (`compile_context` / `context_savings` / `explain_compilation` / `retrieve_context_source`). | MCP server + Rust/Python/Node API | Independent `0.1.0` cadence. Depends on `velesdb-core` (not the engine's `3.x` line). |
 | **`velesdb-node`** | Node.js (napi-rs) binding of the memory wedge. | `@wiscale/velesdb-memory-node` (npm) | Depends on `velesdb-memory` only (never `velesdb-core` directly) — the license boundary. |
 | **`tauri-plugin-velesdb`** | Tauri desktop integration. | Plugin | Used by `demos/tauri-rag-app`. |
 
@@ -221,4 +223,4 @@ The full performance budget gates are in [`QUALITY_BAR.md`](QUALITY_BAR.md). The
 
 ## A note on naming
 
-`docs/ARCHITECTURE.md` exists in this repo, but despite its name it is **a tracker for architectural tech debt** (e.g. the `Collection` god-object split planned for post-seed), not an architecture overview. The actual architecture documents are this file (high-level, narrative) and [`docs/reference/ARCHITECTURE.md`](docs/reference/ARCHITECTURE.md) (deep, comprehensive). The tech-debt registry is kept under its current name because eight in-code references depend on the path; renaming it is on the cleanup backlog.
+`docs/ARCHITECTURE.md` exists in this repo, but despite its name it is **a tracker for architectural tech debt** (e.g. the `Collection` god-object split, EPIC #1384 — resolved: the internals were organized into named concern sub-structs and a shared `Arc<GraphStore>` handle, while exclusive per-kind ownership was shown to be infeasible because edge/graph, label-index, and query-engine state are legitimately shared across all three collection kinds; see the F2.2 section), not an architecture overview. The actual architecture documents are this file (high-level, narrative) and [`docs/reference/ARCHITECTURE.md`](docs/reference/ARCHITECTURE.md) (deep, comprehensive). The tech-debt registry is kept under its current name because eight in-code references depend on the path; renaming it is on the cleanup backlog.

@@ -11,6 +11,7 @@
 - [Performance Tips](#performance-tips)
 - [Known Limitations](#known-limitations)
 - [VelesQL vs SQL](#velesql-vs-sql)
+- [Context Compiler](#context-compiler)
 - [WASM Support](#wasm-support)
 - [Python Bindings](#python-bindings)
 
@@ -180,6 +181,48 @@ coll.stream_insert([
 - Graph traversal in VelesQL is limited to `MATCH` patterns; recursive CTEs are not available.
 
 ---
+
+## Context Compiler
+
+### How do I reduce my agent's token costs?
+
+Compile the context before sending it: the `compile_context` MCP tool (also
+`compileContext` in Node, `ContextCompiler` in Rust) deduplicates fragments,
+collapses repeated log lines, and packs what matters under your token budget
+— locally, deterministically, with an auditable decision per fragment. On the
+committed benchmark corpus this measures 75–82 % estimated savings in ~2 ms
+(`cargo run -p velesdb-memory --example context_savings --no-default-features
+--features context`).
+
+### Is the compression an LLM summary?
+
+No. The compiler is **strictly deterministic** — no model, no network, no
+clock: the same request always compiles to the same bytes. "Abstraction" is a
+structured, reversible reduction (e.g. `ERROR timeout (x50)` for a repeated
+log line), never a generative summary. Anything critical — code fences, URLs,
+numbers/dates/ids, negative constraints, fragments marked
+`{"verbatim": true}` — survives byte for byte.
+
+### Can I get back what was compressed away?
+
+Yes. Nothing is silently lost: over-budget content becomes a
+`ctx://source/<hash>` handle listed in `retrieval_handles`, and
+`retrieve_context_source` returns the exact original bytes. If critical
+content could not fit, the compilation's `risk` comes back `"high"` so you
+can raise the budget or send uncompressed. `explain_compilation` answers
+"why was this fragment dropped/shortened?" with the deciding rule and reason.
+
+### Are the reported savings my billed savings?
+
+No — and the docs never claim so. `insights.tokens_saved` is a **local
+estimate** from a char-class estimator calibrated against a real BPE
+(cl100k): it deliberately over-counts every measured content class
+(+13 % on JSON up to +55 % on English prose), so the budget guarantee errs
+on the safe side. Billed savings depend on your provider's tokenizer and
+pricing — pass your `PricingTable` in `policy.pricing` (works over MCP,
+Node, and Rust; set `target_model` to pick the row) and inject your own
+`TokenEstimator` (Rust) for exact figures; *validated* savings — proving
+answer quality did not degrade — require a task-level evaluation harness.
 
 ## VelesQL vs SQL
 

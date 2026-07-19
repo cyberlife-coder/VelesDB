@@ -239,6 +239,39 @@ jobs:
             *.deb
 
   # ===========================================================================
+  # 2b. Package the agent skills (installable without cloning the repo)
+  # ===========================================================================
+  package-skills:
+    name: Package skills bundle
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'push' || inputs.publish_binaries
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Build velesdb-skills.tar.gz
+        # One folder per skill at the archive root, so
+        # `tar -xz -C ~/.claude/skills/` drops each skill straight into
+        # place — the one-line install README documents. Staged in a temp
+        # dir first (the two skills live under different source trees) so
+        # the tar entries carry no leading path noise.
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d)"
+          cp -r crates/velesdb-memory/skill/velesdb-memory "$stage/"
+          cp -r skills/velesdb-context-optimizer "$stage/"
+          tar -czf velesdb-skills.tar.gz -C "$stage" velesdb-memory velesdb-context-optimizer
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # `binaries-*` on purpose: the GitHub Release job downloads every
+          # artifact matching that pattern and attaches it as-is, so this
+          # rides the same collection step the platform binaries use
+          # without needing a second download/attach path.
+          name: binaries-skills
+          path: velesdb-skills.tar.gz
+
+  # ===========================================================================
   # 3. Publish to crates.io (each crate independently)
   # ===========================================================================
   publish-crates:
@@ -629,12 +662,13 @@ jobs:
   github-release:
     name: GitHub Release
     runs-on: ubuntu-latest
-    needs: [validate, build]
+    needs: [validate, build, package-skills]
     if: |
       always() &&
       needs.validate.result == 'success' &&
       (github.event_name == 'push' || inputs.publish_github) &&
-      (needs.build.result == 'success' || needs.build.result == 'skipped')
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      (needs.package-skills.result == 'success' || needs.package-skills.result == 'skipped')
     permissions:
       contents: write
     steps:

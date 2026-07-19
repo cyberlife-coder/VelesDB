@@ -45,7 +45,7 @@ fn test_execute_query_pre_check_rate_limit() {
         rate_limit_qps: 2,
         ..QueryLimits::default()
     };
-    col.guard_rails = Arc::new(GuardRails::with_limits(limits));
+    col.runtime.guard_rails = Arc::new(GuardRails::with_limits(limits));
 
     let sql = "SELECT * FROM col LIMIT 5;";
     let query = Parser::parse(sql).expect("parse failed");
@@ -74,7 +74,7 @@ fn test_execute_query_cardinality_enforced() {
         max_cardinality: 3, // collection has 10 points
         ..QueryLimits::default()
     };
-    col.guard_rails = Arc::new(GuardRails::with_limits(limits));
+    col.runtime.guard_rails = Arc::new(GuardRails::with_limits(limits));
 
     let sql = "SELECT * FROM col LIMIT 100;";
     let query = Parser::parse(sql).expect("parse failed");
@@ -103,7 +103,7 @@ fn test_execute_query_timeout_disabled_at_zero() {
         timeout_ms: 0,
         ..QueryLimits::default()
     };
-    col.guard_rails = Arc::new(GuardRails::with_limits(limits));
+    col.runtime.guard_rails = Arc::new(GuardRails::with_limits(limits));
 
     let sql = "SELECT * FROM col LIMIT 10;";
     let query = Parser::parse(sql).expect("parse failed");
@@ -152,7 +152,7 @@ fn test_execute_query_circuit_breaker_opens_after_failures() {
         circuit_recovery_seconds: 60,
         ..QueryLimits::default()
     };
-    col.guard_rails = Arc::new(GuardRails::with_limits(limits));
+    col.runtime.guard_rails = Arc::new(GuardRails::with_limits(limits));
 
     let sql = "SELECT * FROM col LIMIT 10;";
     let query = Parser::parse(sql).expect("parse failed");
@@ -163,7 +163,7 @@ fn test_execute_query_circuit_breaker_opens_after_failures() {
     let _ = col.execute_query(&query, &params); // failure 2 → circuit opens
 
     // After 2 cardinality violations, the circuit breaker should be Open
-    let state = col.guard_rails.circuit_breaker.state();
+    let state = col.runtime.guard_rails.circuit_breaker.state();
     assert_eq!(
         state,
         CircuitState::Open,
@@ -186,7 +186,7 @@ fn test_execute_query_normal_query_records_success() {
 
     // Circuit breaker stays closed after successful query
     assert_eq!(
-        col.guard_rails.circuit_breaker.state(),
+        col.runtime.guard_rails.circuit_breaker.state(),
         CircuitState::Closed
     );
 }
@@ -211,7 +211,7 @@ fn test_not_similarity_query_cardinality_enforced() {
         max_cardinality: 3, // collection has 10 points; NOT-sim returns ~all
         ..QueryLimits::default()
     };
-    col.guard_rails = Arc::new(GuardRails::with_limits(limits));
+    col.runtime.guard_rails = Arc::new(GuardRails::with_limits(limits));
 
     // Build NOT (similarity(vector, $v) > 0.99) programmatically.
     // The parser does not yet support NOT-wrapping similarity (EPIC-005 planned),
@@ -263,7 +263,7 @@ fn test_union_query_cardinality_enforced() {
         max_cardinality: 3, // collection has 10 points; union returns ~all
         ..QueryLimits::default()
     };
-    col.guard_rails = Arc::new(GuardRails::with_limits(limits));
+    col.runtime.guard_rails = Arc::new(GuardRails::with_limits(limits));
 
     // Build similarity(vector, $v) > 0.0 OR idx >= 0
     // One side has similarity, the other is metadata → triggers union path.
@@ -328,7 +328,7 @@ fn test_match_cardinality_enforced_below_100_iterations() {
         max_cardinality: 2,
         ..QueryLimits::default()
     };
-    col.guard_rails = Arc::new(GuardRails::with_limits(limits));
+    col.runtime.guard_rails = Arc::new(GuardRails::with_limits(limits));
 
     let sql = "MATCH (a)-[r]->(b) RETURN b LIMIT 10;";
     let query = Parser::parse(sql).expect("parse failed");
@@ -365,7 +365,7 @@ fn test_match_query_ordered_cardinality_enforced() {
         max_cardinality: 2, // 3 results > 2 → must be rejected
         ..QueryLimits::default()
     };
-    col.guard_rails = Arc::new(GuardRails::with_limits(limits));
+    col.runtime.guard_rails = Arc::new(GuardRails::with_limits(limits));
 
     let match_clause = Parser::parse("MATCH (a)-[r]->(b) RETURN b ORDER BY depth LIMIT 10;")
         .expect("parse failed")
@@ -393,7 +393,7 @@ fn test_per_client_rate_limiting_is_independent() {
         rate_limit_qps: 1,
         ..QueryLimits::default()
     };
-    col.guard_rails = Arc::new(GuardRails::with_limits(limits));
+    col.runtime.guard_rails = Arc::new(GuardRails::with_limits(limits));
 
     let sql = "SELECT * FROM col LIMIT 5;";
     let query = Parser::parse(sql).expect("parse failed");
@@ -429,7 +429,7 @@ fn test_execute_match_depth_limit_enforced() {
         max_depth: 0,
         ..QueryLimits::default()
     };
-    col.guard_rails = Arc::new(GuardRails::with_limits(limits));
+    col.runtime.guard_rails = Arc::new(GuardRails::with_limits(limits));
 
     // Add a simple edge so traversal actually runs
     let edge =

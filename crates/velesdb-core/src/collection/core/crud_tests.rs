@@ -46,11 +46,11 @@ fn test_upsert_product_quantization_after_training_backfills_cache() {
 
     // ASSERT
     assert!(
-        collection.pq_quantizer.read().is_some(),
+        collection.storage.pq_quantizer.read().is_some(),
         "quantizer should be trained after reaching sample threshold"
     );
     assert_eq!(
-        collection.pq_cache.read().len(),
+        collection.storage.pq_cache.read().len(),
         128,
         "all training samples should be backfilled in PQ cache"
     );
@@ -283,7 +283,7 @@ fn test_upsert_batch_produces_searchable_results() {
     let query: Vec<f32> = (0..16).map(|d| d as f32 * 0.01).collect();
     let results = coll.search(&query, 10).expect("search should succeed");
     assert_eq!(results.len(), 10, "search should return k results");
-    assert_eq!(coll.config.read().point_count, 200);
+    assert_eq!(coll.storage.config.read().point_count, 200);
 }
 
 /// Regression test: `upsert()` throughput should be close to `upsert_bulk()`.
@@ -507,7 +507,7 @@ fn test_upsert_intra_batch_wal_dedup_reduces_entries() {
 
     // The payload WAL should contain exactly 1 store entry (not 3)
     // Verify by counting IDs in the payload storage index
-    let payload_ids = coll.payload_storage.read().ids();
+    let payload_ids = coll.storage.payload_storage.read().ids();
     assert_eq!(payload_ids.len(), 1, "should have 1 unique payload ID");
     assert!(
         payload_ids.contains(&1),
@@ -515,7 +515,7 @@ fn test_upsert_intra_batch_wal_dedup_reduces_entries() {
     );
 
     // Verify correctness: last writer wins
-    let payload = coll.payload_storage.read().retrieve(1).unwrap();
+    let payload = coll.storage.payload_storage.read().retrieve(1).unwrap();
     assert_eq!(payload, Some(serde_json::json!({"v": "C"})));
 }
 
@@ -973,7 +973,7 @@ fn test_phase2_runs_when_secondary_indexes_exist() {
     coll.upsert(points).unwrap();
 
     // Verify the secondary index was populated
-    let indexes = coll.secondary_indexes.read();
+    let indexes = coll.query.secondary_indexes.read();
     let cat_index = indexes.get("category").expect("index should exist");
     match cat_index {
         crate::index::SecondaryIndex::BTree(tree) => {
@@ -1083,7 +1083,7 @@ fn test_bulk_bm25_skip_does_not_lose_text() {
 
     // BM25 should have indexed the text from point 1
     assert!(
-        !coll.text_index.is_empty(),
+        !coll.storage.text_index.is_empty(),
         "BM25 index should contain the document from bulk insert"
     );
 }
@@ -1155,7 +1155,7 @@ fn test_phase2_runs_for_sq8_storage_mode() {
 
     // SQ8 cache should have been populated by Phase 2
     assert_eq!(
-        coll.sq8_cache.read().len(),
+        coll.storage.sq8_cache.read().len(),
         1,
         "SQ8 cache should be populated — Phase 2 must not skip"
     );
@@ -1187,7 +1187,7 @@ fn test_parallel_sq8_quantization_correctness() {
     coll.upsert(points.clone()).unwrap();
 
     // Verify all 50 entries are in the SQ8 cache
-    let cache = coll.sq8_cache.read();
+    let cache = coll.storage.sq8_cache.read();
     assert_eq!(
         cache.len(),
         50,
@@ -1249,7 +1249,7 @@ fn test_parallel_binary_quantization_correctness() {
         .collect();
     coll.upsert(points.clone()).unwrap();
 
-    let cache = coll.binary_cache.read();
+    let cache = coll.storage.binary_cache.read();
     assert_eq!(
         cache.len(),
         50,
@@ -1415,7 +1415,7 @@ fn test_upsert_removes_stale_labels_from_label_index() {
     collection.upsert(vec![p1]).expect("upsert with labels");
 
     // Verify label is indexed
-    let label_idx = collection.label_index.read();
+    let label_idx = collection.graph.label_index.read();
     assert!(
         label_idx.lookup("Person").is_some_and(|b| b.contains(1)),
         "Person label should be indexed for node 1"
@@ -1433,7 +1433,7 @@ fn test_upsert_removes_stale_labels_from_label_index() {
         .expect("upsert without labels");
 
     // Verify stale label is removed
-    let label_idx = collection.label_index.read();
+    let label_idx = collection.graph.label_index.read();
     let still_has = label_idx.lookup("Person").is_some_and(|b| b.contains(1));
     assert!(
         !still_has,
@@ -1464,7 +1464,7 @@ fn test_can_skip_phase2_respects_populated_label_index() {
     collection.upsert(vec![p1]).expect("upsert with labels");
 
     // Verify label index is populated.
-    let label_idx = collection.label_index.read();
+    let label_idx = collection.graph.label_index.read();
     assert!(
         label_idx.lookup("Person").is_some_and(|b| b.contains(1)),
         "Person label should be indexed for node 1"
@@ -1480,7 +1480,7 @@ fn test_can_skip_phase2_respects_populated_label_index() {
         .expect("upsert without payload");
 
     // Verify stale label is removed — Phase 2 must have run.
-    let label_idx = collection.label_index.read();
+    let label_idx = collection.graph.label_index.read();
     let still_has = label_idx.lookup("Person").is_some_and(|b| b.contains(1));
     assert!(
         !still_has,
@@ -1522,7 +1522,7 @@ fn test_full_scan_fallback_filters_by_labels() {
         .expect("upsert large-ID nodes");
 
     // Confirm the label index has large_ids set and no indexed entries.
-    let label_idx = collection.label_index.read();
+    let label_idx = collection.graph.label_index.read();
     assert!(
         label_idx.has_large_ids(),
         "has_large_ids should be true after indexing nodes with ID > u32::MAX"

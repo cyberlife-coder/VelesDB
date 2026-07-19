@@ -50,6 +50,7 @@ impl Collection {
         // the end of this statement, before `save_config` takes a read guard
         // (parking_lot RwLock is non-reentrant).
         let newly_tracked = self
+            .storage
             .config
             .write()
             .indexed_fields
@@ -68,7 +69,7 @@ impl Collection {
     /// where the config set is already the authority, so neither path rewrites
     /// `config.json` during an open-time restore.
     pub(crate) fn build_and_backfill_secondary_index(&self, field_name: &str) {
-        let mut indexes = self.secondary_indexes.write();
+        let mut indexes = self.query.secondary_indexes.write();
         let is_new = !indexes.contains_key(field_name);
         indexes
             .entry(field_name.to_string())
@@ -88,9 +89,9 @@ impl Collection {
     fn backfill_secondary_index(&self, field_name: &str, is_new: bool) {
         use crate::storage::PayloadStorage;
 
-        let payload_storage = self.payload_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let ids = PayloadStorage::ids(&*payload_storage);
-        let indexes = self.secondary_indexes.read();
+        let indexes = self.query.secondary_indexes.read();
         let Some(index) = indexes.get(field_name) else {
             return;
         };
@@ -148,8 +149,18 @@ impl Collection {
     /// [`CollectionConfig::indexed_fields`]: crate::collection::types::CollectionConfig::indexed_fields
     #[must_use]
     pub fn drop_secondary_index(&self, field_name: &str) -> bool {
-        let removed_from_map = self.secondary_indexes.write().remove(field_name).is_some();
-        let untracked = self.config.write().indexed_fields.remove(field_name);
+        let removed_from_map = self
+            .query
+            .secondary_indexes
+            .write()
+            .remove(field_name)
+            .is_some();
+        let untracked = self
+            .storage
+            .config
+            .write()
+            .indexed_fields
+            .remove(field_name);
         if untracked {
             if let Err(e) = self.save_config() {
                 tracing::warn!(
@@ -166,7 +177,7 @@ impl Collection {
     /// Checks whether a secondary metadata index exists for a field.
     #[must_use]
     pub fn has_secondary_index(&self, field_name: &str) -> bool {
-        self.secondary_indexes.read().contains_key(field_name)
+        self.query.secondary_indexes.read().contains_key(field_name)
     }
 
     /// Recommends secondary indexes for scalar `ORDER BY <field>` queries
@@ -196,7 +207,11 @@ impl Collection {
         use crate::collection::order_by_advisor::OrderByIndexSuggestion;
         // Snapshot under the advisor lock, release it before touching the
         // secondary-index lock so only one lock is ever held at a time.
-        let observed = self.order_by_advisor.read().observed(min_observations);
+        let observed = self
+            .query
+            .order_by_advisor
+            .read()
+            .observed(min_observations);
         observed
             .into_iter()
             .filter_map(|(field, observed_count)| {
@@ -221,7 +236,7 @@ impl Collection {
     ) -> Option<crate::collection::order_by_advisor::OrderByIndexState> {
         use crate::collection::order_by_advisor::OrderByIndexState;
         let point_count = self.len();
-        let indexes = self.secondary_indexes.read();
+        let indexes = self.query.secondary_indexes.read();
         match indexes.get(field) {
             None => Some(OrderByIndexState::Missing),
             Some(index)
@@ -244,7 +259,12 @@ impl Collection {
     /// Returns an empty set for collections with no indexes registered.
     #[must_use]
     pub fn indexed_field_names(&self) -> std::collections::HashSet<String> {
-        self.secondary_indexes.read().keys().cloned().collect()
+        self.query
+            .secondary_indexes
+            .read()
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// Returns the top `limit` point IDs for `field_name` in index order
@@ -263,7 +283,7 @@ impl Collection {
         limit: usize,
     ) -> Option<Vec<u64>> {
         let point_count = self.len();
-        let indexes = self.secondary_indexes.read();
+        let indexes = self.query.secondary_indexes.read();
         indexes
             .get(field_name)?
             .ordered_ids_if_covered(descending, limit, point_count)
@@ -286,7 +306,7 @@ impl Collection {
         min_rows: usize,
     ) -> Option<Vec<u64>> {
         let point_count = self.len();
-        let indexes = self.secondary_indexes.read();
+        let indexes = self.query.secondary_indexes.read();
         indexes
             .get(field_name)?
             .ordered_prefix_if_covered(descending, min_rows, point_count)
@@ -295,7 +315,7 @@ impl Collection {
     /// Looks up matching point IDs for an indexed field value.
     #[must_use]
     pub fn secondary_index_lookup(&self, field_name: &str, value: &JsonValue) -> Option<Vec<u64>> {
-        let indexes = self.secondary_indexes.read();
+        let indexes = self.query.secondary_indexes.read();
         let index = indexes.get(field_name)?;
         match index {
             SecondaryIndex::BTree(tree) => tree.read().get(value).cloned(),
@@ -314,7 +334,7 @@ impl Collection {
         &self,
         filter: &crate::filter::Filter,
     ) -> Option<roaring::RoaringBitmap> {
-        Self::bitmap_from_condition(&self.secondary_indexes, &filter.condition)
+        Self::bitmap_from_condition(&self.query.secondary_indexes, &filter.condition)
     }
 
     /// Recursively extracts bitmaps from conditions backed by secondary indexes.
@@ -511,7 +531,7 @@ impl Collection {
     /// Returns Ok(()) on success. Index creation is idempotent.
     #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
     pub fn create_property_index(&self, label: &str, property: &str) -> Result<()> {
-        let mut index = self.property_index.write();
+        let mut index = self.graph.property_index.write();
         index.create_index(label, property);
         Ok(())
     }
@@ -528,7 +548,7 @@ impl Collection {
     /// Returns Ok(()) on success. Index creation is idempotent.
     #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
     pub fn create_range_index(&self, label: &str, property: &str) -> Result<()> {
-        let mut index = self.range_index.write();
+        let mut index = self.graph.range_index.write();
         index.create_index(label, property);
         Ok(())
     }
@@ -536,13 +556,13 @@ impl Collection {
     /// Check if a property index exists.
     #[must_use]
     pub fn has_property_index(&self, label: &str, property: &str) -> bool {
-        self.property_index.read().has_index(label, property)
+        self.graph.property_index.read().has_index(label, property)
     }
 
     /// Check if a range index exists.
     #[must_use]
     pub fn has_range_index(&self, label: &str, property: &str) -> bool {
-        self.range_index.read().has_index(label, property)
+        self.graph.range_index.read().has_index(label, property)
     }
 
     /// List all indexes on this collection.
@@ -551,7 +571,7 @@ impl Collection {
         let mut indexes = Vec::new();
 
         // Secondary indexes (metadata field indexes created via create_index)
-        let sec_indexes = self.secondary_indexes.read();
+        let sec_indexes = self.query.secondary_indexes.read();
         for (field, index) in sec_indexes.iter() {
             let cardinality = match index {
                 crate::index::SecondaryIndex::BTree(tree) => tree.read().len(),
@@ -568,7 +588,7 @@ impl Collection {
 
         // LOCK ORDER: property_index(7) read — then range_index(7) read.
         // Same level, reads-only; canonical order prevents deadlock.
-        let prop_index = self.property_index.read();
+        let prop_index = self.graph.property_index.read();
         for (label, property) in prop_index.indexed_properties() {
             let cardinality = prop_index.cardinality(&label, &property).unwrap_or(0);
             indexes.push(IndexInfo {
@@ -581,7 +601,7 @@ impl Collection {
         }
 
         // List range indexes
-        let range_idx = self.range_index.read();
+        let range_idx = self.graph.range_index.read();
         for (label, property) in range_idx.indexed_properties() {
             indexes.push(IndexInfo {
                 label,
@@ -612,13 +632,17 @@ impl Collection {
     #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
     pub fn drop_index(&self, label: &str, property: &str) -> Result<bool> {
         // Try property index first
-        let dropped_prop = self.property_index.write().drop_index(label, property);
+        let dropped_prop = self
+            .graph
+            .property_index
+            .write()
+            .drop_index(label, property);
         if dropped_prop {
             return Ok(true);
         }
 
         // Try range index
-        let dropped_range = self.range_index.write().drop_index(label, property);
+        let dropped_range = self.graph.range_index.write().drop_index(label, property);
         Ok(dropped_range)
     }
 
@@ -627,8 +651,8 @@ impl Collection {
     pub fn indexes_memory_usage(&self) -> usize {
         // LOCK ORDER: property_index(7) read — then range_index(7) read.
         // Same level, reads-only; canonical order prevents deadlock.
-        let prop_mem = self.property_index.read().memory_usage();
-        let range_mem = self.range_index.read().memory_usage();
+        let prop_mem = self.graph.property_index.read().memory_usage();
+        let range_mem = self.graph.range_index.read().memory_usage();
         prop_mem + range_mem
     }
 
@@ -653,6 +677,6 @@ impl Collection {
     ///
     /// Returns an error if vector storage reordering fails.
     pub fn reorder_for_locality(&self) -> Result<()> {
-        self.index.reorder_for_locality()
+        self.storage.index.reorder_for_locality()
     }
 }

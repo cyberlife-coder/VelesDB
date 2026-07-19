@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -22,7 +23,10 @@ test('surface allowlist — exactly the supported methods, no engine leak', () =
     .filter((m) => m !== 'constructor')
     .sort((a, b) => a.localeCompare(b))
   assert.deepEqual(instanceMethods, [
+    'compileContext',
+    'feedback',
     'forget',
+    'loadWorkingContext',
     'recall',
     'recallFused',
     'recallFusedDated',
@@ -30,6 +34,8 @@ test('surface allowlist — exactly the supported methods, no engine leak', () =
     'relate',
     'remember',
     'rememberExtracted',
+    'retrieveContextSource',
+    'saveWorkingContext',
     'why',
   ])
   assert.equal(typeof MemoryService.open, 'function', 'open is the static factory')
@@ -169,6 +175,45 @@ test('recallFusedDated returns a chronological timeline and a now anchor', async
   }
 })
 
+test('feedback reinforces a fact, weakens on failure, NOT_FOUND on unknown id', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const id = await store.remember('the deploy pipeline runs clippy before tests')
+    const up = await store.feedback(id, true)
+    assert.equal(typeof up, 'number', 'feedback resolves to the learned confidence')
+    assert.ok(up > 0.5 && up <= 1, `success must raise confidence above neutral, got ${up}`)
+    const down = await store.feedback(id, false)
+    assert.ok(down < up, `failure must lower confidence, got ${down} after ${up}`)
+    await assert.rejects(
+      store.feedback('999999', true),
+      (err) => err.message.includes('NOT_FOUND'),
+      'feedback on an unknown id → NOT_FOUND',
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test('forget reports found=true on a real deletion, found=false on a typo id', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const id = await store.remember('ephemeral note to forget')
+    assert.equal(await store.forget(id), true, 'deleting an existing fact resolves true')
+    assert.equal(
+      await store.forget(id),
+      false,
+      'a second forget of the same id finds nothing — distinguishable from the first',
+    )
+    assert.equal(
+      await store.forget('999999999'),
+      false,
+      'a never-stored id resolves false (a no-op, not an error)',
+    )
+  } finally {
+    cleanup()
+  }
+})
+
 test('error codes — INVALID_INPUT on empty fact, NOT_FOUND on missing relate endpoint', async () => {
   const { store, cleanup } = freshStore()
   try {
@@ -201,6 +246,273 @@ test('rememberExtracted surfaces but errors without a backend (INTERNAL)', async
       () => store.rememberExtracted('some text', 'nonexistent-model', 'http://127.0.0.1:1'),
       (err) => err instanceof Error,
     )
+  } finally {
+    cleanup()
+  }
+})
+
+test('compileContext compiles fragments under a budget with provenance', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const out = await store.compileContext({
+      query: 'deploy pipeline',
+      fragments: [
+        { content: 'The deploy pipeline runs clippy before tests.' },
+        { content: 'The deploy pipeline runs clippy before tests.' },
+        { content: '```rust\nlet x = 42;\n```' },
+      ],
+      token_budget: 10000,
+    })
+    assert.ok(out.content.includes('let x = 42;'), 'code survives verbatim')
+    assert.equal(out.decisions.length, 3, 'one decision per fragment')
+    const dup = out.decisions.find((d) => d.action === 'drop')
+    assert.ok(dup, 'the duplicate must be dropped')
+    assert.equal(typeof dup.fragment_id, 'string', 'ids cross as decimal strings')
+    assert.equal(typeof dup.content_hash, 'string', 'hashes cross as decimal strings')
+    assert.ok(out.insights.tokens_saved > 0, 'the duplicate saves tokens')
+    for (const source of out.sources) {
+      assert.ok(source.handle.startsWith('ctx://source/'), 'sources stay addressable')
+    }
+  } finally {
+    cleanup()
+  }
+})
+
+test('compileContext pulls memory scope and stamps memory ids', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await store.remember('the deploy pipeline runs clippy before tests')
+    const out = await store.compileContext({
+      query: 'deploy pipeline checks',
+      fragments: [{ content: 'Session note: user asked about CI.' }],
+      token_budget: 10000,
+      memory_scope: { k: 3 },
+    })
+    assert.ok(out.content.includes('runs clippy before tests'), 'memory pulled in')
+    const memoryDecision = out.decisions.find((d) => d.memory_id !== undefined && d.memory_id !== null)
+    assert.ok(memoryDecision, 'a decision must carry the backing memory id')
+    assert.equal(typeof memoryDecision.memory_id, 'string', 'memory ids cross as strings')
+  } finally {
+    cleanup()
+  }
+})
+
+test('compileContext zero budget rejects with INVALID_INPUT', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(
+      store.compileContext({ query: 'x', fragments: [{ content: 'y' }], token_budget: 0 }),
+      /INVALID_INPUT/,
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test('compileContext malformed request rejects with INVALID_INPUT', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(store.compileContext({ fragments: 'not-an-array' }), /INVALID_INPUT/)
+  } finally {
+    cleanup()
+  }
+})
+
+// --- media fragments (US-009, PR3) ------------------------------------------
+// A real, independently-decodable 1x1 transparent PNG (IHDR + IDAT + IEND) —
+// fixed bytes, never derived from any caption or property under test (per
+// the fixture-independence rule: PR2's real incident was test bytes derived
+// from the caption, which masked a corruption).
+const PNG_1X1_B64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+
+test('compileContext with a media fragment: atomic preserve decision, handle resolves the image', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const out = await store.compileContext({
+      query: 'a screenshot of the failing build',
+      fragments: [
+        {
+          content: 'the failing build, before the fix',
+          media: { mime: 'image/png', bytes_b64: PNG_1X1_B64 },
+        },
+      ],
+      token_budget: 10000,
+    })
+    // Media fragments pack whole-or-nothing (rule_id "media.atomic"); with a
+    // generous budget the image fits inline and the decision preserves it.
+    assert.equal(out.decisions.length, 1)
+    assert.equal(out.decisions[0].rule_id, 'media.atomic')
+    assert.equal(out.decisions[0].action, 'preserve')
+    assert.equal(typeof out.decisions[0].fragment_id, 'string', 'media fragment ids stay strings too')
+    // `compile_context`'s own `sources` entries are pointers only
+    // (fragment_id + handle) — the image itself is fetched back through
+    // retrieveContextSource, exercised by the tests below.
+    assert.equal(out.sources.length, 1)
+    assert.ok(out.sources[0].handle.startsWith('ctx://source/'))
+  } finally {
+    cleanup()
+  }
+})
+
+test('retrieveContextSource resolves a text-only source with no media field', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const out = await store.compileContext({
+      query: 'a plain fact',
+      fragments: [{ content: 'never restart the primary node during a rebalance' }],
+      token_budget: 10000,
+    })
+    const handle = out.sources[0].handle
+
+    const resolved = await store.retrieveContextSource(handle)
+    assert.equal(resolved.handle, handle)
+    assert.equal(resolved.content, 'never restart the primary node during a rebalance')
+    assert.strictEqual(resolved.media, undefined, 'a text-only source must not carry a media field')
+  } finally {
+    cleanup()
+  }
+})
+
+test('retrieveContextSource round-trips a media source byte-identical, even when externalized by budget', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    // A budget far too small for the image forces it behind a retrieval
+    // handle — this is the path a caller actually needs retrieveContextSource
+    // for (an inline media fragment is already in `content`, nothing to fetch).
+    const out = await store.compileContext({
+      query: 'a screenshot',
+      fragments: [
+        {
+          content: 'a screenshot',
+          media: { mime: 'image/png', bytes_b64: PNG_1X1_B64 },
+        },
+      ],
+      token_budget: 1,
+    })
+    assert.ok(out.retrievalHandles.length >= 1, 'the oversized media fragment must externalize')
+    const handle = out.retrievalHandles[0].handle
+
+    const resolved = await store.retrieveContextSource(handle)
+    assert.equal(resolved.handle, handle)
+    assert.ok(resolved.media, 'the resolved source must carry its media back')
+    assert.equal(resolved.media.mime, 'image/png')
+    assert.equal(
+      resolved.media.bytes_b64,
+      PNG_1X1_B64,
+      'the base64 payload must be byte-identical after the store round-trip',
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test('retrieveContextSource malformed handles reject with NOT_FOUND, never crash', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    // Regression caught: a handle that is not ctx://source/<u64> at all must
+    // fail through the same NOT_FOUND taxonomy as an unknown-but-well-formed
+    // one — never an INTERNAL error or a crash.
+    for (const bad of ['garbage', 'ctx://source/zzzz', '']) {
+      await assert.rejects(store.retrieveContextSource(bad), /NOT_FOUND/, `handle: ${JSON.stringify(bad)}`)
+    }
+  } finally {
+    cleanup()
+  }
+})
+
+test('retrieveContextSource unknown handle rejects with NOT_FOUND', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(store.retrieveContextSource('ctx://source/999999'), /NOT_FOUND/)
+  } finally {
+    cleanup()
+  }
+})
+
+test('saveWorkingContext → loadWorkingContext round-trips across processes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const working = {
+      goal: 'ship the working-context Node surface',
+      active_constraints: [{ text: 'never merge without green gates' }],
+      verified_facts: [{ text: 'the MCP tools already round-trip' }],
+      pending_actions: ['load this back from a fresh MemoryService'],
+    }
+    // Save from a CHILD process (the store's single-writer lock is released
+    // deterministically when it exits — a block-scoped handle in this
+    // process would keep the lock until GC).
+    const script = `
+      const { MemoryService } = require(${JSON.stringify(new URL('../index.js', import.meta.url).pathname)})
+      const store = MemoryService.open(${JSON.stringify(dir)}, 'hash')
+      store.saveWorkingContext('veles', 'session-1', ${JSON.stringify(working)}).then((id) => {
+        if (!/^\\d+$/.test(id)) throw new Error('id must be a decimal string, got: ' + id)
+      })
+    `
+    const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' })
+    assert.equal(child.status, 0, `child save failed: ${child.stderr}`)
+    // A separate MemoryService in THIS process: the next session resumes.
+    const reopened = MemoryService.open(dir, 'hash')
+    const loaded = await reopened.loadWorkingContext('veles', 'session-1')
+    assert.ok(loaded, 'the saved working context must survive the process boundary')
+    assert.equal(loaded.goal, working.goal)
+    assert.deepEqual(
+      loaded.active_constraints.map((f) => f.text),
+      ['never merge without green gates'],
+    )
+    assert.deepEqual(loaded.pending_actions, working.pending_actions)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('loadWorkingContext resolves null when nothing was saved', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const loaded = await store.loadWorkingContext('veles', 'never-saved')
+    assert.equal(loaded, null, 'a fresh start reads as null, not an error')
+  } finally {
+    cleanup()
+  }
+})
+
+test('saveWorkingContext replaces the previous state (idempotent upsert)', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await store.saveWorkingContext('veles', 's', { goal: 'first' })
+    await store.saveWorkingContext('veles', 's', { goal: 'second' })
+    const loaded = await store.loadWorkingContext('veles', 's')
+    assert.equal(loaded.goal, 'second', 'the latest save wins')
+  } finally {
+    cleanup()
+  }
+})
+
+test('saveWorkingContext malformed working state rejects with INVALID_INPUT', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(
+      store.saveWorkingContext('veles', 's', { active_constraints: 'not-an-array' }),
+      /INVALID_INPUT/,
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test('working context id fields cross as decimal strings in both directions', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    // Ids inside the working context (decision refs, evidence) follow the
+    // binding-wide contract: decimal strings on the JS side, u64 on the wire.
+    const bigId = '18446744073709551615' // u64::MAX — would corrupt as a JS number
+    await store.saveWorkingContext('veles', 'ids', {
+      decisions: [{ fragment_id: bigId, rule_id: 'preserve.default' }],
+      exact_evidence: [{ fragment_id: bigId, handle: 'ctx://source/1' }],
+    })
+    const loaded = await store.loadWorkingContext('veles', 'ids')
+    assert.equal(loaded.decisions[0].fragment_id, bigId, 'decision ids survive as strings')
+    assert.equal(loaded.exact_evidence[0].fragment_id, bigId, 'evidence ids survive as strings')
   } finally {
     cleanup()
   }

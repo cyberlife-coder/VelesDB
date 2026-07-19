@@ -51,9 +51,15 @@ def test_why_returns_the_connected_subgraph(mem):
 
 def test_forget_removes_a_memory(mem):
     fid = mem.remember("ephemeral note about France")
-    mem.forget(fid)
+    assert mem.forget(fid) is True
     hits = mem.recall("France", k=5)
     assert all(h["id"] != fid for h in hits)
+
+
+def test_forget_unknown_id_reports_not_found(mem):
+    # An id that was never stored: a no-op, not an error — but the caller
+    # must be able to tell it apart from a real deletion.
+    assert mem.forget(999_999) is False
 
 
 def test_reserved_metadata_key_raises_value_error(mem):

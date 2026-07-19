@@ -21,8 +21,11 @@ crate-type = ["cdylib"]
 velesdb-core = { workspace = true }
 # The high-level memory wedge (MemoryService: remember/recall/relate/forget/why
 # + remember_extracted). `default-features = false` drops the MCP server stack
-# (rmcp/tokio-server); `ollama`+`extract` enable real embeddings and extraction.
-velesdb-memory = { path = "../velesdb-memory", default-features = false, features = ["persistence", "ollama", "extract"] }
+# (rmcp/tokio-server); `ollama`+`extract` enable real embeddings and extraction;
+# `context` enables the deterministic context compiler (EPIC-P-071/US-001) —
+# zero new dependencies (`context = []` in velesdb-memory), same feature set
+# velesdb-node already builds with.
+velesdb-memory = { path = "../velesdb-memory", default-features = false, features = ["persistence", "ollama", "extract", "context"] }
 pyo3 = { version = "0.29", features = ["extension-module", "multiple-pymethods", "abi3-py39", "generate-import-lib"] }
 serde_json = { workspace = true }
 numpy = "0.29"

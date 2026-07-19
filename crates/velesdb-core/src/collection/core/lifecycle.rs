@@ -79,52 +79,66 @@ impl Collection {
         let async_index_builder = Self::build_async_index_builder(&parts.config);
 
         Self {
-            path: parts.path,
-            config: Arc::new(RwLock::new(parts.config)),
-            vector_storage: parts.vector_storage,
-            payload_storage: parts.payload_storage,
-            index: parts.index,
-            text_index: parts.text_index,
-            sq8_cache: Arc::new(RwLock::new(HashMap::new())),
-            binary_cache: Arc::new(RwLock::new(HashMap::new())),
-            pq_cache: Arc::new(RwLock::new(HashMap::new())),
-            pq_quantizer: Arc::new(RwLock::new(None)),
-            pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
-            property_index: Arc::new(RwLock::new(parts.property_index)),
-            label_index: Arc::new(RwLock::new(parts.label_index)),
-            range_index: Arc::new(RwLock::new(parts.range_index)),
-            graph_range_indexes: Arc::new(RwLock::new(HashMap::new())),
-            edge_range_indexes: Arc::new(RwLock::new(HashMap::new())),
-            composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),
-            query_pattern_tracker: Arc::new(RwLock::new(QueryPatternTracker::new())),
-            index_advisor: Arc::new(RwLock::new(IndexAdvisor::new())),
-            order_by_advisor: Arc::new(RwLock::new(
-                crate::collection::order_by_advisor::OrderByIndexAdvisor::default(),
-            )),
-            edge_store: Arc::new(parts.edge_store),
-            edge_wal_lock: Arc::new(Mutex::new(())),
-            sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),
-            secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
-            payload_mirror: Arc::new(crate::collection::payload_mirror::PayloadMirror::default()),
-            guard_rails: Arc::new(GuardRails::default()),
-            runtime_limits: Arc::new(RwLock::new(
-                crate::collection::types::RuntimeLimits::default(),
-            )),
-            query_planner: Arc::new(QueryPlanner::new()),
-            query_cache: Arc::new(QueryCache::new(256)),
-            cached_stats: Arc::new(Mutex::new(None)),
-            stats_io_mutex: Arc::new(Mutex::new(())),
-            write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            analyze_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            inserts_since_last_hnsw_save: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            #[cfg(feature = "persistence")]
-            stream_ingester: Arc::new(RwLock::new(None)),
-            #[cfg(feature = "persistence")]
-            delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
-            #[cfg(feature = "persistence")]
-            deferred_indexer,
-            async_index_builder,
-            auto_reindex: Arc::new(RwLock::new(None)),
+            storage: crate::collection::types::StorageState {
+                path: parts.path,
+                config: Arc::new(RwLock::new(parts.config)),
+                vector_storage: parts.vector_storage,
+                payload_storage: parts.payload_storage,
+                index: parts.index,
+                text_index: parts.text_index,
+                sq8_cache: Arc::new(RwLock::new(HashMap::new())),
+                binary_cache: Arc::new(RwLock::new(HashMap::new())),
+                pq_cache: Arc::new(RwLock::new(HashMap::new())),
+                pq_quantizer: Arc::new(RwLock::new(None)),
+                pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
+                payload_mirror: Arc::new(
+                    crate::collection::payload_mirror::PayloadMirror::default(),
+                ),
+            },
+            graph: Arc::new(crate::collection::types::GraphStore {
+                property_index: Arc::new(RwLock::new(parts.property_index)),
+                label_index: Arc::new(RwLock::new(parts.label_index)),
+                range_index: Arc::new(RwLock::new(parts.range_index)),
+                graph_range_indexes: Arc::new(RwLock::new(HashMap::new())),
+                edge_range_indexes: Arc::new(RwLock::new(HashMap::new())),
+                composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),
+                query_pattern_tracker: Arc::new(RwLock::new(QueryPatternTracker::new())),
+                index_advisor: Arc::new(RwLock::new(IndexAdvisor::new())),
+                edge_store: Arc::new(parts.edge_store),
+                edge_wal_lock: Arc::new(Mutex::new(())),
+            }),
+            query: crate::collection::types::QueryState {
+                sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),
+                secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
+                order_by_advisor: Arc::new(RwLock::new(
+                    crate::collection::order_by_advisor::OrderByIndexAdvisor::default(),
+                )),
+                query_planner: Arc::new(QueryPlanner::new()),
+                query_cache: Arc::new(QueryCache::new(256)),
+                cached_stats: Arc::new(Mutex::new(None)),
+                stats_io_mutex: Arc::new(Mutex::new(())),
+            },
+            generations: crate::collection::types::GenerationCounters {
+                write_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                analyze_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                inserts_since_last_hnsw_save: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            },
+            streaming: crate::collection::types::StreamingState {
+                #[cfg(feature = "persistence")]
+                stream_ingester: Arc::new(RwLock::new(None)),
+                #[cfg(feature = "persistence")]
+                delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
+                #[cfg(feature = "persistence")]
+                deferred_indexer,
+                async_index_builder,
+                auto_reindex: Arc::new(RwLock::new(None)),
+            },
+            runtime: crate::collection::types::RuntimeGuards {
+                guard_rails: Arc::new(GuardRails::default()),
+                runtime_limits: Arc::new(RwLock::new(
+                    crate::collection::types::RuntimeLimits::default(),
+                )),
+            },
         }
     }
 
@@ -260,7 +274,7 @@ impl Collection {
     /// Returns true if this is a metadata-only collection.
     #[must_use]
     pub fn is_metadata_only(&self) -> bool {
-        self.config.read().metadata_only
+        self.storage.config.read().metadata_only
     }
 
     /// Opens an existing collection from the specified path.
@@ -351,7 +365,14 @@ impl Collection {
     ///
     /// [`CollectionConfig::indexed_fields`]: crate::collection::types::CollectionConfig::indexed_fields
     fn restore_secondary_indexes_from_config(&self) {
-        let fields: Vec<String> = self.config.read().indexed_fields.iter().cloned().collect();
+        let fields: Vec<String> = self
+            .storage
+            .config
+            .read()
+            .indexed_fields
+            .iter()
+            .cloned()
+            .collect();
         for field in fields {
             self.build_and_backfill_secondary_index(&field);
         }
@@ -365,7 +386,7 @@ impl Collection {
     /// be re-attached manually after every open
     /// (see `docs/CORE_WIRING_DEBT.md` entry 2).
     fn restore_auto_reindex_from_config(&self) {
-        let cfg = self.config.read().auto_reindex_config.clone();
+        let cfg = self.storage.config.read().auto_reindex_config.clone();
         if let Some(cfg) = cfg {
             let manager = Arc::new(crate::collection::auto_reindex::AutoReindexManager::new(
                 cfg,
@@ -667,39 +688,39 @@ impl Collection {
     /// Returns a reference to the collection's guard rails.
     #[must_use]
     pub fn guard_rails(&self) -> &std::sync::Arc<crate::guardrails::GuardRails> {
-        &self.guard_rails
+        &self.runtime.guard_rails
     }
 
     /// Returns the collection configuration.
     #[must_use]
     pub fn config(&self) -> CollectionConfig {
-        self.config.read().clone()
+        self.storage.config.read().clone()
     }
 
     /// Returns a reference to the collection's data path.
     #[must_use]
     pub(crate) fn data_path(&self) -> &std::path::Path {
-        &self.path
+        &self.storage.path
     }
 
     /// Returns a write guard on the collection config for mutation.
     pub(crate) fn config_write(
         &self,
     ) -> parking_lot::RwLockWriteGuard<'_, crate::collection::types::CollectionConfig> {
-        self.config.write()
+        self.storage.config.write()
     }
 
     /// Returns a write guard on the PQ quantizer slot.
     pub(crate) fn pq_quantizer_write(
         &self,
     ) -> parking_lot::RwLockWriteGuard<'_, Option<crate::quantization::ProductQuantizer>> {
-        self.pq_quantizer.write()
+        self.storage.pq_quantizer.write()
     }
 
     /// Returns a read guard on the PQ quantizer slot.
     pub(crate) fn pq_quantizer_read(
         &self,
     ) -> parking_lot::RwLockReadGuard<'_, Option<crate::quantization::ProductQuantizer>> {
-        self.pq_quantizer.read()
+        self.storage.pq_quantizer.read()
     }
 }

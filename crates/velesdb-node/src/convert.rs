@@ -94,3 +94,85 @@ pub fn to_fusion_options(opts: Option<FusionOptionsJs>) -> FusionOptions {
             .or(defaults.pool),
     }
 }
+
+/// Recursively rewrite every `context` id field (see
+/// [`velesdb_memory::context::wire::ID_KEYS`]) of a serialized
+/// `CompiledContext` into its decimal-string form — the same id contract as
+/// every other method of this binding, applied to a whole tree at once so
+/// the domain type needs no JS-specific duplicate. Shared with the WASM
+/// binding via `velesdb_memory::context::wire`, not duplicated here.
+pub fn stringify_id_fields(value: &mut Value) {
+    velesdb_memory::context::wire::stringify_id_fields(value);
+}
+
+/// The inverse of [`stringify_id_fields`]: recursively rewrite every
+/// `context` id field given in the binding's decimal-string form back into
+/// the numeric form the domain types deserialize.
+pub fn parse_id_fields(value: &mut Value) -> napi::Result<()> {
+    velesdb_memory::context::wire::parse_id_fields(value).map_err(invalid_input)
+}
+
+/// Accept `fragments[].id` in the binding's decimal-string form by rewriting
+/// it to the numeric form the domain type deserializes.
+pub fn parse_fragment_id_strings(request: &mut Value) -> napi::Result<()> {
+    velesdb_memory::context::wire::parse_fragment_id_strings(request).map_err(invalid_input)
+}
+
+/// Marshal a resolved `ctx://source/<hash>` lookup into the binding's
+/// `{handle, content, media?}` wire shape (US-009, PR3) — the same envelope
+/// the MCP `retrieve_context_source` tool returns, built here since
+/// [`velesdb_memory::context::ContextSource`] itself carries no `handle`
+/// (the caller already has it; the service only resolves content + media).
+pub fn to_retrieve_source_js(
+    handle: &str,
+    source: &velesdb_memory::context::ContextSource,
+) -> napi::Result<Value> {
+    let internal =
+        |what: &str| napi::Error::from_reason(format!("[INTERNAL] context source: {what}"));
+    let Value::Object(fields) =
+        serde_json::to_value(source).map_err(|err| internal(&format!("serialize: {err}")))?
+    else {
+        return Err(internal("not an object"));
+    };
+    let mut map = serde_json::Map::new();
+    map.insert("handle".to_owned(), Value::String(handle.to_owned()));
+    map.extend(fields);
+    Ok(Value::Object(map))
+}
+
+/// Marshal a compiled context into its JS shape: serialize to the wire JSON,
+/// stringify every id field, then lift the top-level fields into the typed
+/// [`CompiledContextJs`] envelope. Pure conversion — no compile logic.
+pub fn to_compiled_js(
+    compiled: &velesdb_memory::context::CompiledContext,
+) -> napi::Result<crate::dto::CompiledContextJs> {
+    let internal =
+        |what: &str| napi::Error::from_reason(format!("[INTERNAL] compiled context: {what}"));
+    let mut value =
+        serde_json::to_value(compiled).map_err(|err| internal(&format!("serialize: {err}")))?;
+    stringify_id_fields(&mut value);
+    let Value::Object(mut map) = value else {
+        return Err(internal("not an object"));
+    };
+    let field = |map: &mut serde_json::Map<String, Value>, key: &str| {
+        map.remove(key)
+            .ok_or_else(|| internal(&format!("missing field {key}")))
+    };
+    let content = match field(&mut map, "content")? {
+        Value::String(text) => text,
+        _ => return Err(internal("content is not a string")),
+    };
+    let risk = match field(&mut map, "risk")? {
+        Value::String(level) => level,
+        _ => return Err(internal("risk is not a string")),
+    };
+    Ok(crate::dto::CompiledContextJs {
+        content,
+        sections: field(&mut map, "sections")?,
+        decisions: field(&mut map, "decisions")?,
+        sources: field(&mut map, "sources")?,
+        retrieval_handles: field(&mut map, "retrieval_handles")?,
+        insights: field(&mut map, "insights")?,
+        risk,
+    })
+}

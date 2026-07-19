@@ -25,6 +25,7 @@ use serde::Serialize;
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
+use velesdb_memory::context::{CompilePolicy, CompileRequest, ContextCompiler};
 use velesdb_memory::{
     ColumnFilter, ColumnOp, Explanation, FusionOptions, HashEmbedder, MemoryEdge, MemoryError,
     MemoryNode, MemoryService, Metadata, Recollection,
@@ -66,6 +67,20 @@ fn id_to_string(id: u64) -> String {
 fn parse_id(s: &str) -> Result<u64, JsValue> {
     s.parse::<u64>()
         .map_err(|_| invalid_input(format!("invalid id '{s}' (expected a decimal u64 string)")))
+}
+
+/// Recursively rewrite every `context` id field (see
+/// [`velesdb_memory::context::wire::ID_KEYS`]) of an outgoing JSON tree into
+/// its decimal-string form. Shared with the Node binding via
+/// `velesdb_memory::context::wire`, not duplicated here.
+fn stringify_id_fields(value: &mut Value) {
+    velesdb_memory::context::wire::stringify_id_fields(value);
+}
+
+/// Accept `fragments[].id` in decimal-string form (the Node binding's
+/// contract, mirrored) by rewriting it to the numeric wire form.
+fn parse_fragment_id_strings(request: &mut Value) -> Result<(), JsValue> {
+    velesdb_memory::context::wire::parse_fragment_id_strings(request).map_err(invalid_input)
 }
 
 /// `undefined`/`null` → `None`; a plain object → `Some(Metadata)`; anything
@@ -443,9 +458,11 @@ impl WasmMemoryService {
             .map_err(to_js_err)
     }
 
-    /// Delete a memory by id.
+    /// Delete a memory by id. Returns whether a memory actually existed
+    /// under that id and was deleted — `false` means nothing was stored
+    /// there (a stale id or a typo), not a second successful deletion.
     #[wasm_bindgen(js_name = forget)]
-    pub fn forget(&self, id: &str) -> Result<(), JsValue> {
+    pub fn forget(&self, id: &str) -> Result<bool, JsValue> {
         let id = parse_id(id)?;
         self.inner.forget(id).map_err(to_js_err)
     }
@@ -469,6 +486,32 @@ impl WasmMemoryService {
             .why(decision, max_hops, filter.as_ref())
             .map_err(to_js_err)?;
         to_js(&ExplanationOut::from(explanation))
+    }
+
+    /// Compile context fragments into a token-budgeted, provenance-audited
+    /// prompt context — deterministic, no LLM, byte-identical to the native
+    /// compiler on the same input (same core code). Request and result use
+    /// the MCP `compile_context` wire shape, with this binding's id contract:
+    /// every id field crosses as a decimal string.
+    ///
+    /// In-memory semantics: externalized sources and savings events live in
+    /// this session's [`WasmStore`] — `ctx://source/` handles resolve only
+    /// within the current browser session (no persistence in WASM).
+    #[wasm_bindgen(js_name = compileContext)]
+    pub fn compile_context(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let mut request: Value = serde_wasm_bindgen::from_value(request)
+            .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
+        parse_fragment_id_strings(&mut request)?;
+        let request: CompileRequest = serde_json::from_value(request)
+            .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
+        let compiled = self
+            .inner
+            .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+            .map_err(to_js_err)?;
+        let mut value = serde_json::to_value(&compiled)
+            .map_err(|e| structured_js_error(CODE_INTERNAL, &format!("serialize: {e}")))?;
+        stringify_id_fields(&mut value);
+        to_js(&value)
     }
 }
 

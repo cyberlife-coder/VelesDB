@@ -64,6 +64,18 @@ impl MetadataCollection {
         })
     }
 
+    /// Consumes `self` and returns a [`VectorCollection`](super::VectorCollection)
+    /// **structural view** over this metadata collection's shared `inner` store.
+    ///
+    /// Exact mirror of
+    /// [`GraphCollection::into_vector_view`](super::GraphCollection::into_vector_view)
+    /// — see that method for the full contract (purely structural re-wrap, no
+    /// vector-kind assertion, Python-binding-only rationale).
+    #[must_use]
+    pub fn into_vector_view(self) -> super::VectorCollection {
+        super::VectorCollection { inner: self.inner }
+    }
+
     /// Flushes to disk.
     ///
     /// Issue #423: This fast-path flush skips `vectors.idx` serialization.

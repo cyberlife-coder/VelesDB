@@ -76,6 +76,32 @@ impl GraphCollection {
         })
     }
 
+    /// Consumes `self` and returns a [`VectorCollection`](super::VectorCollection)
+    /// **structural view** over this graph collection's shared `inner` store.
+    ///
+    /// This is a purely structural re-wrap of the identical `inner: Collection`
+    /// backing store into the `VectorCollection` newtype — an ordinary value
+    /// move, **not** a `transmute` and not memory-unsafe. It does **not** assert
+    /// that the collection is vector-kind: invoking vector-specific methods on
+    /// the result returns empty or misleading state.
+    ///
+    /// It exists solely for the **Python binding**, whose single user-facing
+    /// `Collection` type is backed by a `VectorCollection`: the binding holds a
+    /// graph collection behind that type while gating vector-only operations on
+    /// the real kind it tracks separately (the Python
+    /// `Collection::ensure_vector` guard). The Mobile and Tauri bindings do
+    /// *not* use this view — they go through the variant-checked
+    /// [`AnyCollection::into_vector`](super::AnyCollection::into_vector) and
+    /// reject non-vector collections. Callers that need the graph surface must
+    /// use the graph API, not this view.
+    ///
+    /// [`MetadataCollection::into_vector_view`](super::MetadataCollection::into_vector_view)
+    /// is the exact mirror for metadata collections.
+    #[must_use]
+    pub fn into_vector_view(self) -> super::VectorCollection {
+        super::VectorCollection { inner: self.inner }
+    }
+
     /// Flushes all state to disk.
     ///
     /// Issue #423: This fast-path flush skips `vectors.idx` serialization.

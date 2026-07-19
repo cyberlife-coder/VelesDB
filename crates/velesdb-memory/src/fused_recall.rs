@@ -58,6 +58,36 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         Ok(fusion::fuse(pool, &reached, k, opts.graph_boost))
     }
 
+    /// [`Self::recall_fused`] with the per-candidate score ventilation kept
+    /// (normalised vector term, graph weight, fused score) — consumed by the
+    /// context compiler's memory bridge, whose provenance records an
+    /// explainable `relevance ∈ [0, 1]` per pulled memory. Same pipeline,
+    /// same ordering, same numbers as [`Self::recall_fused`]; only the
+    /// breakdown is kept instead of dropped.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if embedding, vector search, or graph
+    /// traversal fails.
+    #[cfg(feature = "context")]
+    pub(crate) fn recall_fused_scored(
+        &self,
+        query: &str,
+        k: usize,
+        filter: Option<&Metadata>,
+        opts: FusionOptions,
+    ) -> Result<Vec<fusion::ScoredCandidate>, MemoryError> {
+        let query = query.trim();
+        if query.is_empty() || k == 0 {
+            return Ok(Vec::new());
+        }
+        let opts = opts.sanitized();
+        reject_reserved_keys(filter)?;
+        let embedding = self.embedder.embed(query)?;
+        let pool = self.fused_pool(&embedding, pool_depth(k, opts), filter)?;
+        let reached = self.graph_reached(&embedding, filter, opts.hops)?;
+        Ok(fusion::fuse_scored(pool, &reached, k, opts.graph_boost))
+    }
+
     /// [`Self::recall_fused`] paired with the dated-context rendering of its
     /// results: returns the recalled facts and the
     /// [`DatedContext`](crate::DatedContext) built from their `date_field`

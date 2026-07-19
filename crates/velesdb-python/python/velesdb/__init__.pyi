@@ -2463,14 +2463,17 @@ class MemoryService:
         """
         ...
 
-    def forget(self, id: int) -> None:
+    def forget(self, id: int) -> bool:
         """Delete a memory by id.
 
         Args:
             id: The memory id to remove.
 
-        Raises:
-            KeyError: If no memory with ``id`` exists.
+        Returns:
+            ``True`` if a memory actually existed under ``id`` and was
+            deleted, ``False`` if nothing was stored there (a stale id or a
+            typo) — a no-op, not an error, but distinguishable from a real
+            deletion.
         """
         ...
 
@@ -2520,6 +2523,104 @@ class MemoryService:
 
         Raises:
             RuntimeError: If Ollama is unreachable or extraction fails.
+        """
+        ...
+
+    def compile_context(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Compile context fragments into a token-budgeted, provenance-audited
+        prompt context — deterministic, no LLM call.
+
+        Delegates directly to the same ``velesdb_memory::context`` bridge the
+        MCP ``compile_context`` tool and the Node binding use (no logic is
+        reimplemented in the binding).
+
+        Args:
+            request: Same JSON shape as the MCP tool's input: ``{"query": str,
+                "fragments": [{"content": str, "id"?: int, "kind"?: str,
+                "priority"?: int, "metadata"?: dict}], "token_budget": int,
+                "project"?: str, "target_model"?: str, "memory_scope"?: dict,
+                "policy"?: dict}``.
+
+        Returns:
+            Same shape as the MCP tool's output: ``{"content": str,
+            "sections": [...], "decisions": [...], "sources": [...],
+            "retrieval_handles": [...], "insights": dict, "risk": str}``.
+            Every u64 id (``fragment_id``, ``content_hash``, ``memory_id``,
+            entries of ``fragment_ids``) is a native Python int (unlimited
+            precision) — unlike the Node binding, which crosses ids as
+            decimal strings.
+
+        Raises:
+            ValueError: If the request is malformed or the token budget
+                cannot fit any content (e.g. ``token_budget=0``).
+        """
+        ...
+
+    def retrieve_context_source(self, handle: str) -> str:
+        """Fetch back the exact original content behind a
+        ``ctx://source/<hash>`` handle from a :meth:`compile_context` result.
+
+        Args:
+            handle: A ``ctx://source/<hash>`` handle from a compiled context.
+
+        Returns:
+            The original fragment content, byte for byte.
+
+        Raises:
+            KeyError: If the handle is malformed or nothing is stored under it.
+        """
+        ...
+
+    def context_savings(self, project: Optional[str] = None) -> Dict[str, Any]:
+        """Aggregate the token (and cost) savings of past
+        :meth:`compile_context` calls, optionally narrowed to one ``project``.
+
+        Args:
+            project: Restrict the aggregation to this project facet.
+
+        Returns:
+            ``{"events": int, "tokens_in": int, "tokens_out": int,
+            "tokens_saved": int, "cost_saved_micros_by_currency": Dict[str,
+            int], "truncated": bool}``. ``truncated`` is ``True`` when the
+            sweep hit the recall cap.
+        """
+        ...
+
+    def save_working_context(
+        self,
+        project: str,
+        session: str,
+        working: Dict[str, Any],
+    ) -> int:
+        """Persist ``working`` under ``project`` + ``session`` (idempotent
+        upsert: saving again replaces the previous state).
+
+        Args:
+            project: Project facet.
+            session: Session identifier.
+            working: Same JSON shape as ``WorkingContext`` on the wire:
+                ``{"goal"?: str, "active_constraints": [...],
+                "verified_facts": [...], "open_hypotheses": [...],
+                "decisions": [...], "exact_evidence": [...],
+                "pending_actions": [str]}``.
+
+        Returns:
+            The stored system fact id (native Python int, unlimited precision).
+        """
+        ...
+
+    def load_working_context(
+        self, project: str, session: str
+    ) -> Optional[Dict[str, Any]]:
+        """The working context previously saved under ``project`` + ``session``.
+
+        Args:
+            project: Project facet.
+            session: Session identifier.
+
+        Returns:
+            The same dict shape passed to :meth:`save_working_context`, or
+            ``None`` when nothing was saved under this ``project``/``session``.
         """
         ...
 

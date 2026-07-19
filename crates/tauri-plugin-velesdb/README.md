@@ -5,6 +5,8 @@
 
 A Tauri plugin for **VelesDB** — Vector search in desktop applications.
 
+> The desktop engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It fuses vector + graph + columnar under VelesQL; the [`why()`](../velesdb-memory/README.md) recall trail returns the evidence path behind every answer.
+
 ## Features
 
 - **Fast Vector Search** — Microsecond latency similarity search (HNSW + AVX2/AVX-512)

@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryService } from '../src/memory';
+import type { CompileContextFragment } from '../src/memory';
 import { ConnectionError, NotFoundError, ValidationError } from '../src/types';
 
 // Captures the most recently constructed mock instance so a test can
@@ -30,10 +31,19 @@ class MockWasmMemoryService {
     now: '2026-01-03',
   }));
   relate = vi.fn(() => '5');
-  forget = vi.fn();
+  forget = vi.fn(() => true);
   why = vi.fn(() => ({
     nodes: [{ id: '1', content: 'we chose parking_lot', hop: 0 }],
     edges: [],
+  }));
+  compileContext = vi.fn(() => ({
+    content: 'compiled',
+    sections: [],
+    decisions: [{ fragment_id: '18446744073709551615', rule_id: 'preserve.default' }],
+    sources: [],
+    retrieval_handles: [],
+    insights: { tokens_saved: 0 },
+    risk: 'low',
   }));
   free = vi.fn();
 
@@ -204,8 +214,51 @@ describe('MemoryService', () => {
       expect(lastMockInstance!.relate).toHaveBeenCalledWith('1', '2', 'decided_in');
     });
 
-    it('forget() resolves', async () => {
-      await expect(memory.forget('1')).resolves.toBeUndefined();
+    it('forget() resolves to whether the id existed', async () => {
+      await expect(memory.forget('1')).resolves.toBe(true);
+      lastMockInstance!.forget.mockReturnValueOnce(false);
+      await expect(memory.forget('999')).resolves.toBe(false);
+    });
+
+    it('compileContext() delegates the request and returns the wire shape', async () => {
+      const request = {
+        query: 'state of the canary deploy',
+        token_budget: 500,
+        fragments: [{ content: 'The canary is green.' }],
+      };
+      const compiled = await memory.compileContext(request);
+      expect(lastMockInstance!.compileContext).toHaveBeenCalledWith(request);
+      expect(compiled.risk).toBe('low');
+      expect(compiled.content).toBe('compiled');
+      const decisions = compiled.decisions as Array<{ fragment_id: string }>;
+      expect(decisions[0].fragment_id).toBe('18446744073709551615');
+    });
+
+    it('compileContext() passes a media fragment through untouched (US-009)', async () => {
+      // Regression this attrapes: a future refactor of compileContext() that
+      // reconstructs the request object field-by-field (instead of a plain
+      // passthrough) would silently drop an unlisted key like `media` —
+      // this fails the moment that happens, without needing a real wasm
+      // build to observe it.
+      const request = {
+        query: 'a screenshot of the failing build',
+        token_budget: 4000,
+        fragments: [
+          {
+            content: 'the failing build, before the fix',
+            kind: 'screenshot',
+            metadata: { target: 'deploy-status-page' },
+            media: { mime: 'image/png', bytes_b64: 'aGVsbG8=' },
+          },
+        ],
+      };
+      await memory.compileContext(request);
+      expect(lastMockInstance!.compileContext).toHaveBeenCalledWith(request);
+      // Type-level check: CompileContextFragment must accept `media` without
+      // a cast — this line fails to *compile* (not just run) if the field is
+      // ever removed from the interface.
+      const fragment: CompileContextFragment = request.fragments[0];
+      expect(fragment.media?.bytes_b64).toBe('aGVsbG8=');
     });
 
     it('why() returns the explanation subgraph', async () => {

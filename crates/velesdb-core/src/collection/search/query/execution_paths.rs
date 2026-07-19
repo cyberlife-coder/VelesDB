@@ -256,7 +256,7 @@ impl Collection {
                     self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts),
                 );
                 let vector_results = vector_results?;
-                let higher = self.config.read().metric.higher_is_better();
+                let higher = self.storage.config.read().metric.higher_is_better();
                 Ok(merge_select_parallel_results(
                     graph_results,
                     vector_results,
@@ -533,7 +533,10 @@ impl Collection {
         }
 
         // Use BM25 text index to find candidates (over-fetch 10× for post-filter headroom).
-        let text_results = self.text_index.search(word, limit.saturating_mul(10));
+        let text_results = self
+            .storage
+            .text_index
+            .search(word, limit.saturating_mul(10));
         if text_results.is_empty() {
             return None;
         }

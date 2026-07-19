@@ -6,6 +6,8 @@ Native bindings for **iOS** (Swift) and **Android** (Kotlin) via [UniFFI](https:
 
 VelesDB Mobile brings microsecond vector search to edge devices - perfect for on-device AI, semantic search, and RAG applications.
 
+> The mobile engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It fuses vector + graph + columnar under VelesQL; the [`why()`](../velesdb-memory/README.md) recall trail returns the evidence path behind every answer.
+
 ## Features
 
 - **Native Performance**: Direct Rust bindings, minimal FFI overhead

@@ -14,7 +14,9 @@ use crate::options::{AutoReindexOptions, HnswOptions, VelesConfigOptions};
 use crate::utils::{self, parse_metric, parse_storage_mode};
 
 use velesdb_core::collection::auto_reindex::AutoReindexManager;
-use velesdb_core::{CollectionType, Database as CoreDatabase, DatabaseObserver, GraphSchema};
+use velesdb_core::{
+    AnyCollection, CollectionType, Database as CoreDatabase, DatabaseObserver, GraphSchema,
+};
 
 /// The full set of guardrail fields. `update_guardrails` is an explicit full
 /// replacement (matching the Mobile/Tauri typed structs), so the supplied dict
@@ -67,6 +69,49 @@ fn open_core(
         (None, Some(obs)) => CoreDatabase::open_with_observer(path, obs),
         (None, None) => CoreDatabase::open(path),
     }
+}
+
+/// Wraps an [`AnyCollection`] in the single Python-facing [`Collection`] type.
+///
+/// The Python SDK exposes one `Collection` class (backed by a core
+/// `VectorCollection`) over all collection kinds. A flat match discriminates
+/// the real variant, so the captured [`CollectionKind`] is derived from the
+/// actual collection and cannot diverge from it. Non-vector kinds share the
+/// same backing store and are exposed through the structural
+/// `into_vector_view()` re-wrap; vector-only methods remain gated by `kind`
+/// via `Collection::ensure_vector`, so they fail loud (F2.2) rather than
+/// returning misleading results.
+///
+/// `AnyCollection` is `#[non_exhaustive]`, which outside the defining crate
+/// merely requires a wildcard arm — the flat match here satisfies that, and
+/// the `_` arm doubles as the fail-closed path for any future variant. (The
+/// nested `into_vector()`/`into_graph()`/`into_metadata()` chain this
+/// replaces was never *required* by `#[non_exhaustive]`.)
+///
+/// Shared by [`Database::get_collection`] and
+/// [`Database::create_metadata_collection`] so both construct the wrapper
+/// through one path with identical errors.
+fn wrap_any_collection(
+    any_coll: AnyCollection,
+    db: &Arc<CoreDatabase>,
+    name: &str,
+) -> PyResult<Collection> {
+    let (vc, kind) = match any_coll {
+        AnyCollection::Vector(v) => (v, CollectionKind::Vector),
+        AnyCollection::Graph(g) => (g.into_vector_view(), CollectionKind::Graph),
+        AnyCollection::Metadata(m) => (m.into_vector_view(), CollectionKind::Metadata),
+        _ => {
+            return Err(PyRuntimeError::new_err(
+                "unsupported collection kind for the Python Collection view",
+            ));
+        }
+    };
+    Ok(Collection::new_with_kind(
+        vc,
+        Arc::clone(db),
+        name.to_string(),
+        kind,
+    ))
 }
 
 /// VelesDB Database - the main entry point for interacting with VelesDB.
@@ -355,34 +400,13 @@ impl Database {
     /// Returns the collection regardless of its type (vector, graph, or metadata).
     /// Returns None if the collection does not exist.
     fn get_collection(&self, name: &str) -> PyResult<Option<Collection>> {
-        match self.inner.get_any_collection(name) {
-            Some(any_coll) => {
-                // The Python SDK exposes a single `Collection` facade over all
-                // variants. Capture the real kind so vector-only methods fail
-                // loud on graph/metadata collections (F2.2) instead of silently
-                // returning empty results.
-                let kind = if any_coll.is_graph() {
-                    CollectionKind::Graph
-                } else if any_coll.is_metadata() {
-                    CollectionKind::Metadata
-                } else {
-                    CollectionKind::Vector
-                };
-                // `into_vector_facade` is a safe value move (all AnyCollection
-                // variants wrap the same inner Collection). `kind` is captured
-                // above and `Collection::ensure_vector` rejects vector-only ops
-                // on graph/metadata collections, so the facade fails loud rather
-                // than returning misleading results.
-                let vc = any_coll.into_vector_facade();
-                Ok(Some(Collection::new_with_kind(
-                    vc,
-                    Arc::clone(&self.inner),
-                    name.to_string(),
-                    kind,
-                )))
-            }
-            None => Ok(None),
-        }
+        // Discrimination + wrapping live in `wrap_any_collection` (shared with
+        // `create_metadata_collection`): a flat match derives the kind from the
+        // actual variant, with a fail-closed `_` arm for future variants.
+        self.inner
+            .get_any_collection(name)
+            .map(|any_coll| wrap_any_collection(any_coll, &self.inner, name))
+            .transpose()
     }
 
     /// List all collection names in the database.
@@ -455,18 +479,11 @@ impl Database {
             .inner
             .get_any_collection(&name_owned)
             .ok_or_else(|| PyRuntimeError::new_err("Collection not found after creation"))?;
-        // Wrap the freshly-created metadata collection in the single Collection
-        // facade (mirrors `get_collection` above). `into_vector_facade` is a
-        // safe value move; the `Metadata` kind is recorded below and
+        // Wrap it through the same path as `get_collection`: the flat match in
+        // `wrap_any_collection` derives the kind from the actual variant, so the
+        // freshly-created collection records `CollectionKind::Metadata` and
         // `Collection::ensure_vector` rejects vector-only ops on it.
-        let collection = any.into_vector_facade();
-
-        Ok(Collection::new_with_kind(
-            collection,
-            Arc::clone(&self.inner),
-            name_owned,
-            CollectionKind::Metadata,
-        ))
+        wrap_any_collection(any, &self.inner, &name_owned)
     }
 
     /// Create an AgentMemory instance for AI agent workflows.

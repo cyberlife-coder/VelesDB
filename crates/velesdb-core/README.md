@@ -7,6 +7,13 @@
 
 High-performance vector database engine written in Rust.
 
+> Looking for agent memory or the deterministic context compiler
+> (`compile_context`)? Those live one level up, in
+> [`velesdb-memory`](../velesdb-memory/README.md) — this core engine is
+> unchanged by them and never depends on them.
+
+> The engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It fuses vector + graph + columnar under VelesQL; the high-level [`MemoryService` / `why()`](../velesdb-memory/README.md) returns the evidence path behind every recall.
+
 ## Features
 
 - **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD — 450µs p50 end-to-end (10K/384D, WAL ON, recall>=96%); 55µs HNSW index-only micro-benchmark (5K/768D, k=10); 21.7ns dot product (768D AVX2). See `docs/BENCHMARKS.md` for measurement context.
@@ -34,7 +41,7 @@ cargo add velesdb-core
 ## Quick Start
 
 ```rust
-use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
+use velesdb_core::{Database, DistanceMetric, Point};
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -44,7 +44,11 @@ well is a *loop you run throughout a task*, not a one-shot lookup.
      is what makes `why` work.** A fact with no edges is invisible to `why`.
 
 3. **Connect facts as relationships appear (`relate`).** Whenever a new fact
-   relates to an existing memory, create a typed, directional edge. Good relation
+   relates to an existing memory, create a typed, directional edge. **Direction
+   rule**: `why` walks *outgoing* edges only — always point `from` at the thing
+   you will later ask about and `to` at its evidence (decision → cause,
+   fact → source). An edge pointing *into* a memory is invisible to
+   `why(that memory)`. Good relation
    labels: `caused_by`, `decided_in`, `supersedes`, `references`, `depends_on`,
    `fixes`, `concerns`. This is the differentiator's fuel — build the graph
    incrementally, don't batch it up "later" (later never comes).

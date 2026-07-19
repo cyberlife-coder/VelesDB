@@ -156,7 +156,7 @@ impl FusionOptions {
     /// A copy with any non-finite `graph_boost` (NaN or ±∞) reset to the
     /// default. A non-finite boost poisons fusion catastrophically: the score
     /// term `graph_boost · weight` is `NaN` for *every* candidate — even a
-    /// pool-only one, since `NaN · 0.0 == NaN` — so [`crate::fusion::fuse`]'s
+    /// pool-only one, since `NaN · 0.0 == NaN` — so `crate::fusion::fuse`'s
     /// `total_cmp` sort sees all scores as equal, degenerates to a no-op, and
     /// then truncates away the graph-reached facts fusion exists to surface
     /// (they are appended after the vector pool). The result is silently worse

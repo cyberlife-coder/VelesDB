@@ -44,16 +44,18 @@ use std::sync::Arc;
 use napi::bindgen_prelude::AsyncTask;
 use napi_derive::napi;
 use serde_json::Value;
+use velesdb_memory::context::{CompilePolicy, CompileRequest, ContextCompiler, WorkingContext};
 use velesdb_memory::{
     DynEmbedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor, DEFAULT_DIMENSION,
     DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::dto::{
-    ColumnFilterJs, DatedRecallJs, ExplanationJs, FusionOptionsJs, LinkJs, RecollectionJs,
+    ColumnFilterJs, CompiledContextJs, DatedRecallJs, ExplanationJs, FusionOptionsJs, LinkJs,
+    RecollectionJs,
 };
 use crate::error::{invalid_input, to_napi_err, CODE_INTERNAL};
-use crate::tasks::Job;
+use crate::tasks::{Job, JsonOut};
 
 /// Build the requested embedder. `"hash"` is deterministic and offline;
 /// `"ollama"` calls a local embedding model (real semantic recall).
@@ -263,9 +265,26 @@ impl MemoryStore {
         }))
     }
 
-    /// Delete a memory by id.
-    #[napi(ts_return_type = "Promise<void>")]
-    pub fn forget(&self, id: String) -> AsyncTask<Job<()>> {
+    /// Record an outcome for a recalled fact: `success = true` reinforces it,
+    /// `false` weakens it. Resolves to the fact's new learned confidence in
+    /// `[0, 1]` — the signal `recall` re-ranks by and the context compiler's
+    /// importance blend (`policy.importance`) folds into memory selection.
+    #[napi(ts_return_type = "Promise<number>")]
+    pub fn feedback(&self, id: String, success: bool) -> AsyncTask<Job<f64>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let id = convert::parse_id(&id)?;
+            svc.feedback(id, success)
+                .map(f64::from)
+                .map_err(to_napi_err)
+        }))
+    }
+
+    /// Delete a memory by id. Resolves to whether a memory actually existed
+    /// under that id and was deleted — `false` means nothing was stored
+    /// there (a stale id or a typo), not a second successful deletion.
+    #[napi(ts_return_type = "Promise<boolean>")]
+    pub fn forget(&self, id: String) -> AsyncTask<Job<bool>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             let id = convert::parse_id(&id)?;
@@ -289,6 +308,107 @@ impl MemoryStore {
             svc.why(&decision, max_hops, filter.as_ref())
                 .map(ExplanationJs::from)
                 .map_err(to_napi_err)
+        }))
+    }
+
+    /// Compile context fragments into a token-budgeted, provenance-audited
+    /// prompt context — deterministic, no LLM call; pure conversion around
+    /// [`velesdb_memory`]'s context compiler (zero logic here). The request
+    /// and result use the same JSON shape as the MCP `compile_context` tool
+    /// (`{query, fragments, token_budget, memory_scope?, policy?, …}`), with
+    /// one binding-wide difference: every id field (`fragment_id`,
+    /// `content_hash`, `memory_id`, `fragment_ids`, and `fragments[].id` on
+    /// input) crosses as a decimal string, like every other method here.
+    #[napi(
+        js_name = "compileContext",
+        ts_return_type = "Promise<CompiledContextJs>"
+    )]
+    pub fn compile_context(&self, request: Value) -> AsyncTask<Job<CompiledContextJs>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let mut request = request;
+            convert::parse_fragment_id_strings(&mut request)?;
+            let request: CompileRequest = serde_json::from_value(request)
+                .map_err(|err| invalid_input(format!("invalid compile request: {err}")))?;
+            let compiled = svc
+                .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+                .map_err(to_napi_err)?;
+            convert::to_compiled_js(&compiled)
+        }))
+    }
+
+    /// Fetch back the exact original content — and media, when the fragment
+    /// carried one (US-009, PR3) — behind a `ctx://source/<hash>` handle
+    /// from a [`Self::compile_context`] result: what was externalized or
+    /// partially packed is recoverable, not lost. Same JSON shape as the MCP
+    /// `retrieve_context_source` tool: `{handle, content, media?}`, `media`
+    /// present only for a source whose fragment carried one. Pure
+    /// delegation to [`velesdb_memory`]'s bridge — zero logic in the
+    /// binding.
+    #[napi(
+        js_name = "retrieveContextSource",
+        ts_return_type = "Promise<{ handle: string; content: string; media?: { mime: string; bytes_b64: string } }>"
+    )]
+    pub fn retrieve_context_source(&self, handle: String) -> AsyncTask<Job<JsonOut>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let source = svc.retrieve_context_source(&handle).map_err(to_napi_err)?;
+            convert::to_retrieve_source_js(&handle, &source).map(JsonOut)
+        }))
+    }
+
+    /// Persist the agent's distilled working state under `project` +
+    /// `session` (idempotent upsert: saving again replaces the previous
+    /// state), for inter-session resumption. Same JSON shape as the MCP
+    /// `save_working_context` tool; resolves to the stored fact id as a
+    /// decimal string, like every other id here. Pure delegation to
+    /// [`velesdb_memory`]'s bridge — zero logic in the binding.
+    #[napi(js_name = "saveWorkingContext", ts_return_type = "Promise<string>")]
+    pub fn save_working_context(
+        &self,
+        project: String,
+        session: String,
+        working: Value,
+    ) -> AsyncTask<Job<String>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let mut working = working;
+            convert::parse_id_fields(&mut working)?;
+            let working: WorkingContext = serde_json::from_value(working)
+                .map_err(|err| invalid_input(format!("invalid working context: {err}")))?;
+            svc.save_working_context(&project, &session, &working)
+                .map(convert::id_to_string)
+                .map_err(to_napi_err)
+        }))
+    }
+
+    /// The working context previously saved under `project` + `session`,
+    /// `null` when there is none — the start-of-session mirror of
+    /// [`Self::save_working_context`].
+    #[napi(
+        js_name = "loadWorkingContext",
+        ts_return_type = "Promise<object | null>"
+    )]
+    pub fn load_working_context(
+        &self,
+        project: String,
+        session: String,
+    ) -> AsyncTask<Job<JsonOut>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let loaded = svc
+                .load_working_context(&project, &session)
+                .map_err(to_napi_err)?;
+            match loaded {
+                Some(working) => {
+                    let mut value = serde_json::to_value(working).map_err(|err| {
+                        invalid_input(format!("working context serialization: {err}"))
+                    })?;
+                    convert::stringify_id_fields(&mut value);
+                    Ok(JsonOut(value))
+                }
+                None => Ok(JsonOut(Value::Null)),
+            }
         }))
     }
 

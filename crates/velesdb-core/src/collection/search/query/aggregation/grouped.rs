@@ -64,8 +64,8 @@ impl Collection {
         let filter = Self::build_static_filter(where_clause, use_runtime, params)?;
         let (columns_vec, has_count_star) = Self::prepare_agg_columns(aggregations);
 
-        let payload_storage = self.payload_storage.read();
-        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
         let ids = vector_storage.ids();
         let mut graph_cache = GraphMatchEvalCache::default();
         let mut groups: HashMap<GroupKey, Aggregator> = HashMap::new();

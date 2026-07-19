@@ -283,6 +283,14 @@ jobs:
         env:
           RUST_TEST_THREADS: 1
 
+      # Real-stdio MCP end-to-end (6 tools + text/media retrieve round-trip).
+      # The debug binary is already built by the workspace test compile above;
+      # cargo build is a cache no-op that guarantees it exists.
+      - name: MCP server e2e (stdio)
+        run: |
+          cargo build -p velesdb-memory
+          python3 crates/velesdb-memory/examples/context_savings/real_measures/mcp_e2e.py
+
   # ===========================================================================
   # Security Audit (parallèle - outils pré-compilés)
   # ===========================================================================
@@ -574,6 +582,18 @@ jobs:
           npm install --no-audit --no-fund
           npx napi build --platform
           node --test __test__/index.spec.mjs
+
+      # EPIC-P-071/A1 non-regression gate: "the facts survive compilation".
+      # Reuses the napi addon just built above (no second Rust build) — this
+      # job is the cheapest place to run it: the "Tests" job never sets up
+      # Node or builds the addon, so branching there would pay for a full
+      # extra napi build for one offline, network-free JS test file.
+      # gpt-tokenizer is installed here (not committed) per
+      # examples/real-session-benchmark/README.md's prereqs.
+      - name: Real-session benchmark — facts-survive gate (offline, no network)
+        run: |
+          npm install --no-save --no-audit --no-fund --prefix crates/velesdb-node gpt-tokenizer
+          node --test examples/real-session-benchmark/test/facts-survive.test.mjs
 
   # ===========================================================================
   # Coverage (main seulement)

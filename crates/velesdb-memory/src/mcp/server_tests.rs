@@ -148,9 +148,12 @@ async fn forget_removes_a_memory_through_the_server() {
         .await
         .expect("remember");
 
-    srv.forget(Parameters(ForgetParams { id: stored.id }))
+    let Json(forgotten) = srv
+        .forget(Parameters(ForgetParams { id: stored.id }))
         .await
         .expect("forget");
+    assert!(forgotten.found, "an existing memory must report found=true");
+    assert_eq!(forgotten.id, stored.id);
 
     let Json(recalled) = srv
         .recall(Parameters(RecallParams {
@@ -161,6 +164,21 @@ async fn forget_removes_a_memory_through_the_server() {
         .await
         .expect("recall");
     assert!(recalled.memories.iter().all(|m| m.id != stored.id));
+}
+
+#[tokio::test]
+async fn forget_unknown_id_through_the_server_reports_not_found() {
+    let (_dir, srv) = server();
+
+    let Json(forgotten) = srv
+        .forget(Parameters(ForgetParams { id: 999_999 }))
+        .await
+        .expect("forget on an unknown id must not error");
+
+    assert!(
+        !forgotten.found,
+        "forget of an id that was never stored must report found=false"
+    );
 }
 
 #[tokio::test]

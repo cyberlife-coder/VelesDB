@@ -43,7 +43,7 @@ pub(super) fn tag_vector_component_scores(results: &mut [SearchResult]) {
 
 impl Collection {
     fn search_ids_with_adc_if_pq(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let is_pq = matches!(config.storage_mode, StorageMode::ProductQuantization);
         let higher_is_better = config.metric.higher_is_better();
         let metric = config.metric;
@@ -53,12 +53,12 @@ impl Collection {
         drop(config);
 
         if !is_pq || oversampling == 0 {
-            let results = self.index.search(query, k);
+            let results = self.storage.index.search(query, k);
             return self.merge_delta(results, query, k, metric);
         }
 
         let candidates_k = k.saturating_mul(oversampling).max(k + 32);
-        let index_results = self.index.search(query, candidates_k);
+        let index_results = self.storage.index.search(query, candidates_k);
         let rescored =
             self.rescore_pq_candidates(query, k, metric, higher_is_better, index_results);
         self.merge_delta(rescored, query, k, metric)
@@ -77,8 +77,8 @@ impl Collection {
         higher_is_better: bool,
         index_results: Vec<ScoredResult>,
     ) -> Vec<ScoredResult> {
-        let pq_cache = self.pq_cache.read();
-        let quantizer = self.pq_quantizer.read();
+        let pq_cache = self.storage.pq_cache.read();
+        let quantizer = self.storage.pq_quantizer.read();
         let Some(quantizer) = quantizer.as_ref() else {
             return index_results.into_iter().take(k).collect();
         };
@@ -109,7 +109,7 @@ impl Collection {
     ) -> Vec<ScoredResult> {
         let after_delta = crate::collection::streaming::merge_with_delta_scored(
             results,
-            &self.delta_buffer,
+            &self.streaming.delta_buffer,
             query,
             k,
             metric,
@@ -128,7 +128,7 @@ impl Collection {
         k: usize,
         metric: DistanceMetric,
     ) -> Vec<ScoredResult> {
-        let Some(ref di) = self.deferred_indexer else {
+        let Some(ref di) = self.streaming.deferred_indexer else {
             return results;
         };
         if !di.is_searchable() {
@@ -263,7 +263,7 @@ impl Collection {
     /// `#[inline]` preserves pre-refactor inlining (Phase 3.2 learning).
     #[inline]
     pub(super) fn validate_query_and_read_metric(&self, query: &[f32]) -> Result<DistanceMetric> {
-        let config = self.config.read();
+        let config = self.storage.config.read();
         if config.metadata_only {
             return Err(Error::SearchNotSupported(config.name.clone()));
         }
@@ -288,8 +288,8 @@ impl Collection {
     ) -> Vec<SearchResult> {
         let index_results = self.merge_delta(index_results, query, k, metric);
 
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
 
         let mut results =
             resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
@@ -306,7 +306,7 @@ impl Collection {
     /// Returns an error if the query vector dimension doesn't match the collection,
     /// or if this is a metadata-only collection (use `query()` instead).
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
-        let config = self.config.read();
+        let config = self.storage.config.read();
 
         // Metadata-only collections don't support vector search
         if config.metadata_only {
@@ -319,8 +319,8 @@ impl Collection {
         // Use HNSW index for fast ANN search
         let index_results = self.search_ids_with_adc_if_pq(query, k);
 
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
 
         let mut results =
             resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
@@ -347,7 +347,7 @@ impl Collection {
         // Convert ef_search to a value-preserving SearchQuality.
         let quality = super::vector_filter::ef_to_quality(ef_search);
 
-        let index_results = self.index.search_with_quality(query, k, quality)?;
+        let index_results = self.storage.index.search_with_quality(query, k, quality)?;
         Ok(self.finalize_search_results(query, k, metric, index_results))
     }
 
@@ -370,7 +370,7 @@ impl Collection {
             return Ok(());
         }
         let cap = self.runtime_limits().max_perfect_mode_vectors;
-        let size = self.index.len();
+        let size = self.storage.index.len();
         if size > cap {
             return Err(Error::GuardRail(format!(
                 "Perfect (brute-force) search rejected: collection has {size} vectors, \
@@ -398,7 +398,7 @@ impl Collection {
         let metric = self.validate_query_and_read_metric(query)?;
         self.enforce_perfect_mode_limit(quality)?;
 
-        let index_results = self.index.search_with_quality(query, k, quality)?;
+        let index_results = self.storage.index.search_with_quality(query, k, quality)?;
         Ok(self.finalize_search_results(query, k, metric, index_results))
     }
 
@@ -453,6 +453,7 @@ impl Collection {
 
         let rerank_k = k.saturating_mul(4).max(k + 32);
         let index_results = self
+            .storage
             .index
             .search_with_rerank_quality(query, k, rerank_k, quality)?;
         Ok(self.finalize_search_results(query, k, metric, index_results))
@@ -475,8 +476,8 @@ impl Collection {
         // a smaller ef than search_with_quality on >10K datasets, breaking the
         // implicit contract that "no rerank" only suppresses reranking, not the
         // candidate-pool sizing.
-        let ef_search = quality.ef_search_for_scale(k, self.index.len());
-        let index_results = self.index.search_hnsw_only(query, k, ef_search);
+        let ef_search = quality.ef_search_for_scale(k, self.storage.index.len());
+        let index_results = self.storage.index.search_hnsw_only(query, k, ef_search);
         Ok(self.finalize_search_results(query, k, metric, index_results))
     }
 
@@ -552,9 +553,12 @@ impl Collection {
     ) -> Vec<ScoredResult> {
         if let Some(bitmap) = self.build_prefilter_bitmap(filter) {
             let ef_search = candidates_k.max(k * 10);
-            let results =
-                self.index
-                    .search_hnsw_only_filtered(query, candidates_k, ef_search, &bitmap);
+            let results = self.storage.index.search_hnsw_only_filtered(
+                query,
+                candidates_k,
+                ef_search,
+                &bitmap,
+            );
             return self.merge_delta(results, query, candidates_k, metric);
         }
         self.search_ids_with_adc_if_pq(query, candidates_k)

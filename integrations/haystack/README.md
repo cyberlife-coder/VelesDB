@@ -1,7 +1,9 @@
 # haystack-velesdb
 
 A Haystack 2.x `DocumentStore` backed by [VelesDB](https://github.com/cyberlife-coder/VelesDB) —
-the local-first, microsecond-latency vector database.
+**the explainable, local-first memory engine for AI agents** (microsecond vector
+search is the proof, not the pitch). For the connected `why()` recall trail
+across typed links, see [velesdb-memory](../../crates/velesdb-memory/README.md).
 
 This integration joins the existing [LangChain](../langchain/) and [LlamaIndex](../llamaindex/)
 connectors, completing the trio of major Python RAG frameworks supported by VelesDB.

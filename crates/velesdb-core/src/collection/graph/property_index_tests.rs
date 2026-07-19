@@ -328,17 +328,22 @@ fn test_property_index_persists_across_collection_reopen() {
 
         // Create a property index
         collection
+            .graph
             .property_index
             .write()
             .create_index("Person", "email");
-        collection
-            .property_index
-            .write()
-            .insert("Person", "email", &json!("alice@example.com"), 1);
-        collection
-            .property_index
-            .write()
-            .insert("Person", "email", &json!("bob@example.com"), 2);
+        collection.graph.property_index.write().insert(
+            "Person",
+            "email",
+            &json!("alice@example.com"),
+            1,
+        );
+        collection.graph.property_index.write().insert(
+            "Person",
+            "email",
+            &json!("bob@example.com"),
+            2,
+        );
 
         // Flush to persist
         collection.flush().unwrap();
@@ -349,7 +354,7 @@ fn test_property_index_persists_across_collection_reopen() {
         let collection = Collection::open(path).unwrap();
 
         // Verify index exists and data is preserved
-        let index = collection.property_index.read();
+        let index = collection.graph.property_index.read();
         assert!(
             index.has_index("Person", "email"),
             "Property index should be loaded from disk"

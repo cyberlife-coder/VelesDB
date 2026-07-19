@@ -160,8 +160,8 @@ impl Collection {
         early: &EarlyReturnCtx<'_>,
         graph_cache: &mut super::where_eval::GraphMatchEvalCache,
     ) -> Result<Vec<SearchResult>> {
-        let mut results =
-            execute_fn(self).inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+        let mut results = execute_fn(self)
+            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
         if early.has_graph_predicates {
             results = self
                 .apply_where_condition_to_results_with_cache(
@@ -171,7 +171,7 @@ impl Collection {
                     &early.stmt.from_alias,
                     graph_cache,
                 )
-                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+                .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
         }
         self.finalize_early_results(results, early)
     }
@@ -188,7 +188,7 @@ impl Collection {
         }
         if let Some(ref order_by) = early.stmt.order_by {
             self.apply_order_by(&mut results, order_by, early.params)
-                .inspect_err(|_| self.guard_rails.circuit_breaker.record_failure())?;
+                .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
         }
         // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
         if let Some(offset) = early.stmt.offset {
@@ -205,7 +205,7 @@ impl Collection {
         .min(MAX_LIMIT);
         results.truncate(final_limit);
         self.check_guardrails_and_record(early.ctx, results.len())?;
-        self.guard_rails.circuit_breaker.record_success();
+        self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(results)
     }
 }

@@ -341,7 +341,7 @@ async fn flush_batch(collection: &Collection, batch: &mut Vec<Point>) {
 
     // Snapshot vectors for delta buffer before moving points into upsert.
     // Only allocate if delta is active (common case: delta is inactive).
-    let delta_entries: Vec<(u64, Vec<f32>)> = if collection.delta_buffer.is_active() {
+    let delta_entries: Vec<(u64, Vec<f32>)> = if collection.streaming.delta_buffer.is_active() {
         points.iter().map(|p| (p.id, p.vector.clone())).collect()
     } else {
         Vec::new()
@@ -357,7 +357,7 @@ async fn flush_batch(collection: &Collection, batch: &mut Vec<Point>) {
             // The upsert wrote to storage+WAL; delta is an additional runtime
             // copy so search can find these vectors before HNSW is rebuilt.
             if !delta_entries.is_empty() {
-                collection.delta_buffer.extend(delta_entries);
+                collection.streaming.delta_buffer.extend(delta_entries);
             }
         }
         Ok(Err(e)) => {

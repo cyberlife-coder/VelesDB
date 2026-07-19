@@ -1,5 +1,7 @@
 # 📚 VelesDB Documentation
 
+> **VelesDB — the explainable, local-first memory engine for AI agents.** One ~9 MB binary fuses vector + graph + columnar under VelesQL; [`why()`](./guides/AGENT_MEMORY.md) returns the evidence path behind every recall. Zero cloud.
+
 Welcome to the VelesDB documentation. This guide will help you get started and make the most of VelesDB.
 
 ---
@@ -45,7 +47,7 @@ In-depth technical documentation:
 | Reference | Description |
 |-----------|-------------|
 | [Architecture](./reference/ARCHITECTURE.md) | System design and internals |
-| [VelesQL Specification](./VELESQL_SPEC.md) | Query language grammar and syntax (v3.10.0, canonical) |
+| [VelesQL Specification](./VELESQL_SPEC.md) | Query language grammar and syntax (v3.12.0, canonical) |
 | [VelesQL Cheat Sheet](./reference/VELESQL_CHEATSHEET.md) | One-page quick reference: search, filter, graph MATCH, fusion, sparse, EXPLAIN |
 | [VelesQL Contract](./reference/VELESQL_CONTRACT.md) | Canonical REST contract (`/query`, `/match`, error model) |
 | [VelesQL Conformance](./reference/VELESQL_CONFORMANCE_MATRIX.md) | Cross-ecosystem conformance matrix |
@@ -123,4 +125,4 @@ Each crate has its own README with specific documentation:
 
 ---
 
-*VelesDB — Vector Search in Microseconds*
+*VelesDB — the explainable, local-first memory engine for AI agents. (Microsecond vector search is the proof, not the pitch.)*

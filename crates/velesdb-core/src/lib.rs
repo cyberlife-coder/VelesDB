@@ -1,15 +1,21 @@
 //! # `VelesDB` Core
 //!
-//! High-performance vector database engine written in Rust.
-//!
-//! `VelesDB` is a local-first vector database designed for semantic search,
-//! recommendation systems, and RAG (Retrieval-Augmented Generation) applications.
+//! Local-first **tri-engine** database for AI agents, written in Rust:
+//! **vector** (HNSW + SIMD) + **graph** (typed edges, traversal, `MATCH`) +
+//! **columnar** (typed metadata filters), queried together through
+//! **`VelesQL`** — parse with [`velesql::Parser`] and run with
+//! `Database::execute_query`, mixing `NEAR $v`, `WHERE` predicates, and
+//! `MATCH` graph patterns in one statement (see the repository guide
+//! `docs/guides/MULTIMODEL_QUERIES.md` for the full multi-model tour).
+//! Designed for semantic search, agent memory, recommendation, and RAG.
 //!
 //! ## Features
 //!
 //! - **Blazing Fast**: HNSW index with explicit SIMD (4x faster)
 //! - **5 Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
 //! - **Hybrid Search**: Vector + BM25 full-text with RRF fusion
+//! - **Graph Engine**: typed edges on any collection, BFS/DFS, `MATCH` patterns
+//! - **`VelesQL`**: one SQL-like language across all three engines
 //! - **Quantization**: SQ8 (4x) and Binary (32x) memory compression
 //! - **Persistent Storage**: Memory-mapped files for efficient disk access
 //!

@@ -309,7 +309,7 @@ async fn test_stream_delta_drain_loop_routes_to_delta_when_active() {
     };
     let coll_clone = coll.clone();
 
-    coll.delta_buffer.activate();
+    coll.streaming.delta_buffer.activate();
 
     let ingester = StreamIngester::new(coll, config);
 
@@ -323,13 +323,13 @@ async fn test_stream_delta_drain_loop_routes_to_delta_when_active() {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let found = coll_clone.get(&[1, 2, 3, 4]).iter().flatten().count();
-        if found == 4 && coll_clone.delta_buffer.len() == 4 {
+        if found == 4 && coll_clone.streaming.delta_buffer.len() == 4 {
             break;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
             "timed out waiting for delta drain flush (storage={found}/4, delta={})",
-            coll_clone.delta_buffer.len()
+            coll_clone.streaming.delta_buffer.len()
         );
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
@@ -339,7 +339,7 @@ async fn test_stream_delta_drain_loop_routes_to_delta_when_active() {
     assert_eq!(found, 4, "upsert should write all points to storage");
 
     assert_eq!(
-        coll_clone.delta_buffer.len(),
+        coll_clone.streaming.delta_buffer.len(),
         4,
         "delta buffer should contain the streamed points when active"
     );
@@ -409,8 +409,8 @@ async fn test_stream_delta_rebuild_no_data_loss() {
         .collect();
     coll.upsert(initial_points).expect("upsert initial points");
 
-    coll.delta_buffer.activate();
-    assert!(coll.delta_buffer.is_active());
+    coll.streaming.delta_buffer.activate();
+    assert!(coll.streaming.delta_buffer.is_active());
 
     let config = StreamingConfig {
         buffer_size: 100,
@@ -467,8 +467,8 @@ async fn test_stream_delta_rebuild_no_data_loss() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
-    let drained = coll_clone.delta_buffer.deactivate_and_drain();
-    assert!(!coll_clone.delta_buffer.is_active());
+    let drained = coll_clone.streaming.delta_buffer.deactivate_and_drain();
+    assert!(!coll_clone.streaming.delta_buffer.is_active());
     assert_eq!(drained.len(), 5, "delta should have had 5 entries");
 
     ingester.shutdown().await;

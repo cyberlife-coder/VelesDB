@@ -7,19 +7,39 @@
 [![MCP registry](https://img.shields.io/badge/MCP_registry-io.github.cyberlife--coder%2Fvelesdb--memory-1f6feb?logo=modelcontextprotocol&logoColor=white)](https://registry.modelcontextprotocol.io)
 [![license: VelesDB Core 1.0](https://img.shields.io/badge/license-VelesDB_Core_1.0_(source--available)-e8702a)](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE)
 
-**Local-first memory for AI agents — a single MCP server.** Give your coding
-agent durable memory that never leaves your machine: it remembers decisions,
-recalls them semantically, and — the differentiator — **connects** them so it
-can answer *why* a decision was made, not just retrieve look-alike text.
+**The explainable, local-first memory engine for AI agents — as a single MCP
+server.** Give your coding agent durable memory that never leaves your machine:
+it remembers decisions, recalls them semantically, and — the differentiator —
+**connects** them so it can answer *why* a decision was made, not just retrieve
+look-alike text. That auditable `why()` recall trail is the kind of
+traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation-timeline/)
+(enforceable from Aug 2026) asks of AI systems; running fully local, it **helps
+meet** those data-residency and explainability expectations rather than claiming
+certified compliance.
 
-> **Release 0.6.0 — 2026-07-06.** `velesdb-memory` **0.6.0** ships on
+> **Release 0.9.0** — deterministic context compiler (`compile_context`,
+> `context_savings`, `explain_compilation`, `retrieve_context_source`);
+> published to the registries by the `velesdb-memory-v0.9.0` tag, so the
+> links below may briefly lag right after merge. `velesdb-memory` ships on
 > [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
-> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.6.0**
-> and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.8.0**.
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.9.0**
+> and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**
+> (memory API — the context compiler is **not exposed in Python yet**;
+> Python agents reach it through the MCP server).
 > **`cargo install velesdb-memory` installs the latest published release.**
+
+> **Bring your own reranker (Rust)**: `compile_context_reranked` hands the
+> full fused candidate pool (vector + graph, pre-cutoff) to any
+> [`Reranker`] you inject — a cross-encoder, an LLM judge — and its
+> ordering decides which memories get compiled in. Never a default, and
+> deliberately not on the wire: the shipped `DeterministicReranker` is
+> lexical, and a lexical second stage demotes exactly the
+> zero-vocabulary-overlap evidence the graph walk rescues (both behaviours
+> pinned by tests). `recall_fused_reranked` is the same seam for plain
+> recall.
 
 Built on [VelesDB](https://velesdb.com)'s in-core Agent Memory SDK, which fuses
 three engines behind its memory tools:
@@ -29,6 +49,8 @@ three engines behind its memory tools:
 | `remember` | store a fact, optionally linked + tagged with metadata, with an optional expiry (`ttl_seconds`) | Vector + Graph + ColumnStore |
 | `recall`   | semantic retrieval, optional exact-match metadata filter   | Vector + ColumnStore |
 | `relate`   | create a typed edge between two memories                   | Graph |
+| `recall_fused` | recall with graph-aware re-ranking (vector + typed links fused) | Vector + Graph |
+| `recall_where` | recall filtered by typed column predicates (ranges, comparisons) | Vector + ColumnStore |
 | `forget`   | delete a memory                                            | — |
 | `why`      | recall a decision **+ its connected subgraph** (multi-hop) | Vector + Graph + ColumnStore |
 | `feedback` | reinforce a recalled fact (**useful/noise**) — `recall` re-ranks by this learned confidence, so the memory **improves with use** without retraining | Vector |
@@ -211,20 +233,25 @@ cargo build --release -p velesdb-memory   # → target/release/velesdb-memory
 ## Configure your client
 
 All clients use the same stdio shape — point `command` at the built binary.
+`cargo install velesdb-memory` puts it at `~/.cargo/bin/velesdb-memory`
+(or the path of your local build, `target/release/velesdb-memory`).
+JSON/TOML configs spawn the binary without a shell, so `~` is **not**
+expanded there — use an absolute path (shown below as
+`/home/you/.cargo/bin/velesdb-memory`; adjust to your home directory).
 
 **Claude Code**
 
 ```bash
 claude mcp add velesdb-memory \
   --env VELESDB_MEMORY_PATH="$HOME/.velesdb-memory" \
-  -- /path/to/velesdb-memory
+  -- ~/.cargo/bin/velesdb-memory
 ```
 
 **Cursor** — `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project)
 
 ```json
 { "mcpServers": { "velesdb-memory": {
-  "command": "/path/to/velesdb-memory",
+  "command": "/home/you/.cargo/bin/velesdb-memory",
   "env": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
 } } }
 ```
@@ -235,7 +262,7 @@ claude mcp add velesdb-memory \
 
 ```json
 { "context_servers": { "velesdb-memory": {
-  "command": { "path": "/path/to/velesdb-memory", "args": [],
+  "command": { "path": "/home/you/.cargo/bin/velesdb-memory", "args": [],
     "env": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" } }
 } } }
 ```
@@ -245,13 +272,13 @@ claude mcp add velesdb-memory \
 ```bash
 codex mcp add velesdb-memory \
   --env VELESDB_MEMORY_PATH="$HOME/.velesdb-memory" \
-  -- /path/to/velesdb-memory
+  -- ~/.cargo/bin/velesdb-memory
 ```
 
 ```toml
 # equivalent ~/.codex/config.toml entry
 [mcp_servers.velesdb-memory]
-command = "/path/to/velesdb-memory"
+command = "/home/you/.cargo/bin/velesdb-memory"
 args = []
 env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
 ```
@@ -261,7 +288,7 @@ env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
 ```json
 { "mcp": { "velesdb-memory": {
   "type": "local",
-  "command": ["/path/to/velesdb-memory"],
+  "command": ["/home/you/.cargo/bin/velesdb-memory"],
   "enabled": true,
   "environment": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
 } } }
@@ -284,6 +311,26 @@ the loop — *recall before acting → remember decisions with metadata **and** 
 with concrete scenarios (incident→decision→"why?", onboarding, cross-session
 continuity). Without it, an agent will call `recall` at best and never build the
 graph that makes `why` shine.
+
+A second bundled skill, **`velesdb-context-optimizer`**, teaches the compiler
+workflow below (when/what to compress, how to read `risk`). Install it the
+same way:
+
+```bash
+cp -r skills/velesdb-context-optimizer ~/.claude/skills/
+```
+
+[`skills/velesdb-context-optimizer/SKILL.md`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
+— see [The context compiler tools](#the-context-compiler-tools) below.
+
+**No repo clone needed:** every [GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
+attaches `velesdb-skills.tar.gz` — both skills, one folder per skill at the
+archive root — so a one-liner installs them straight from the release:
+
+```bash
+curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz \
+  | tar -xz -C ~/.claude/skills/
+```
 
 ## Using the tools
 
@@ -324,6 +371,462 @@ remember_extracted { "text": "Met Dana at the Rust meetup; she now leads the par
 
 `limit` defaults to 10 (capped at 1000); `max_hops` defaults to 2 (capped at 10);
 `links`, `metadata`, and `filter` are optional.
+
+### The context compiler tools
+
+**Compiler surfaces today: MCP server, Node, Rust, and Python** —
+`from velesdb import MemoryService` includes full context-compiler parity
+(`compile_context` / `retrieve_context_source` / `context_savings` /
+`save_working_context` / `load_working_context`, ids as exact native ints);
+any other client reaches the same tools through the MCP server.
+
+**Why:** agents spend most of their tokens re-reading redundant context.
+`compile_context` compresses it **deterministically** — no LLM, no cloud, no
+API key: same request, byte-identical output. What must survive verbatim
+does (code fences, URLs, numbers/dates/ids, negative constraints, anything
+marked `{"verbatim": true}`); duplicates drop; repeated log lines collapse
+with counts (`ERROR timeout (x50)`); over-budget content becomes a
+recoverable `ctx://source/` handle instead of a silent loss; and every
+fragment gets one auditable decision (stable rule id, reason, relevance,
+risk). Guarantees, per compilation:
+
+- **Budget**: the assembled content never exceeds `token_budget`.
+- **Provenance**: `sources` + per-decision `content_hash` identify the exact
+  bytes; `retrieval_handles` list what was externalized.
+- **Nothing critical silently lost**: losing preserve-classified content
+  raises the compilation's `risk` to `"high"` — check it before use.
+
+#### How it works
+
+![compile_context pipeline: agent fragments flow through dedup, abstract, pack, externalize, producing content, ctx://source handles and auditable decisions](docs/diagrams/compile-flow.svg)
+
+**Not a transparent proxy.** `compile_context` only touches what your agent
+explicitly hands it as `fragments` — logs, retrieved docs, conversation
+history you choose to route through the call. It never sees or compresses
+the harness's system prompt or tool-call schemas; those stay outside the
+compiler entirely. Knowing *when* and *what* to route through it is the
+[`velesdb-context-optimizer`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
+skill's job, not the compiler's — the compiler just compresses what it's
+given, deterministically.
+
+**No automatic repo indexing.** Nothing enters *recallable* memory — what
+`recall` / `why` / `memory_scope` can surface — unless you call `remember` /
+`relate` / `remember_extracted` explicitly. Compilation does write two things
+to the local store under `VELESDB_MEMORY_PATH` (default `~/.velesdb-memory`):
+**all** fragment sources are cached locally (content-addressed — not just the
+over-budget ones) so every `ctx://source/` handle stays recoverable via
+`retrieve_context_source`, and `context_savings` records aggregate stats
+(tokens in/out/saved) per project. Both stay on disk — local-first, nothing
+is ever sent off the machine.
+
+![the two data paths: compile caches sources locally but writes no recallable memory vs explicit memory writes — nothing enters recallable memory without an explicit remember/relate/remember_extracted call](docs/diagrams/data-paths.svg)
+
+```jsonc
+// compile_context — minimal call: query + token_budget + fragments
+compile_context { "query": "state of the canary deploy",
+                  "token_budget": 500,
+                  "fragments": [
+                    { "content": "The canary is green: 2% traffic, zero errors in the last 10 minutes." },
+                    { "content": "Rollback runbook: kubectl rollout undo deployment/canary." } ] }
+→ { "content": "…both fragments packed…", "decisions": […2 entries, "action": "preserve"…],
+    "insights": { "tokens_in": 44, "tokens_out": 45, "tokens_saved": 0 }, "risk": "low" }
+```
+
+Add `memory_scope`, `project`, and `metadata: {"cache": true}` once you need
+stored-memory recall or provider prompt-cache alignment — the full request:
+
+```jsonc
+// compile_context — deterministic compression under a token budget
+compile_context { "query": "state of the canary deploy",
+                  "token_budget": 4000,
+                  "project": "veles",
+                  "memory_scope": { "k": 5 },                 // optional: pull relevant memories in
+                  "fragments": [
+                    { "content": "You are the deploy assistant.", "metadata": { "cache": true } },
+                    { "content": "<600 lines of CI logs>", "kind": "log" },
+                    { "content": "Never restart the primary during a rebalance." } ] }
+→ { "content": "…", "sections": […], "decisions": […], "sources": […],
+    "retrieval_handles": […], "insights": { "tokens_in": 2244, "tokens_out": 545,
+    "tokens_saved": 1699, … }, "risk": "low" }
+
+// retrieve_context_source — what was externalized is recoverable, byte for byte
+retrieve_context_source { "handle": "ctx://source/1234567890" }
+→ { "handle": "ctx://source/1234567890", "content": "…original bytes…" }
+
+// explain_compilation — "why was this fragment dropped/shortened?" (stateless:
+//   compilation is deterministic, so the request is re-compiled)
+explain_compilation { "request": { …same request… }, "fragment_id": 1234567890 }
+→ { "action": "drop", "rule_id": "drop.duplicate", "reason": "…", "risk": "low", … }
+
+// explain_compilation — byte-identical fragments share a content-addressed
+//   fragment_id, so a plain fragment_id lookup always resolves to the
+//   deduplication survivor. Pass fragment_index (0-based position in
+//   request.fragments) to target one specific fragment instead:
+explain_compilation { "request": { …fragments: [a, a]… }, "fragment_id": 1234567890,
+                       "fragment_index": 1 }
+→ { "action": "drop", "rule_id": "drop.duplicate", … }   // the SECOND "a", not the survivor
+
+// context_savings — aggregate recorded savings, optionally per project
+context_savings { "project": "veles" }
+→ { "events": 12, "tokens_in": …, "tokens_saved": …, "truncated": false }
+```
+
+> **JS clients talking raw MCP (no Node binding): watch `fragment_id` /
+> `content_hash` / `memory_id` precision.** Every id in a `compile_context` or
+> `explain_compilation` response is a `u64`. The [`velesdb-node`
+> binding](https://www.npmjs.com/package/velesdb-node) always crosses ids as
+> decimal strings, so it is unaffected — but a plain MCP client speaking JSON
+> straight over stdio/SSE (no binding in between) gets a JSON *number*, and
+> `JSON.parse` in JS represents that as an IEEE-754 double: ids above
+> `2^53 − 1` (`9007199254740991`) silently lose precision. Set
+> `"policy": { "ids_as_strings": true }` on the request to opt every id field
+> of that response into decimal-string form instead (same rewrite the Node
+> binding applies internally, reused — not reimplemented). Default `false`:
+> existing clients keep today's numeric response unless they opt in.
+> `fragments[].id` on the way IN already accepts either a JSON number or a
+> decimal string, so a caller can resubmit an id it received stringified
+> without converting it back.
+
+Preservation rules (stable ids, first match wins): `preserve.marked_verbatim`,
+`cache.stable_prefix` (cache-marked fragments form a stable prefix for
+provider prompt caching), `preserve.code_fence`,
+`preserve.negative_constraint`, `abstract.log_dedup`,
+`preserve.exact_values`, `preserve.url`, `preserve.default`; the budget layer
+adds `budget.externalize` and dedup adds `drop.duplicate` /
+`drop.near_duplicate`.
+
+`insights.tokens_saved` is a **local estimate**, calibrated against a real
+BPE (cl100k) to deliberately over-count every measured content class
+(+13 %…+55 %) — not the provider's count, not billed tokens, not cache reads.
+The reproducible benchmark ([`examples/context_savings`](examples/context_savings))
+measures **82.5 % real (cl100k) token savings on a committed 12-turn agent-session benchmark** (sub-ms stateless compiles), 75–82 % estimated savings on its static corpus in ~2 ms compile, and — with `memory_scope`'s fused HNSW + graph-walk recall over `relate`-linked fact chains — **9/9 answer facts surfaced vs 3/9 for vector-only recall** on the committed tri-engine benchmark
+latency. The committed
+[`cache_prefix`](examples/context_savings/real_measures/cache_prefix.mjs)
+harness measures the `cache: true` prefix's byte stability directly: across
+10 consecutive compiles with changing volatile content, the cache section is
+a byte-identical **100 % stable prefix on all 9 consecutive turn pairs**
+(reproducible: two full 10-turn runs, byte-identical). That tri-engine path — the one `memory_scope` drives inside `compile_context` — looks like this:
+
+![tri-engine retrieval: query seeds an HNSW vector search, a graph walk follows relate edges, fusion combines both, then ranking produces the result](docs/diagrams/tri-engine.svg)
+
+The [`velesdb-context-optimizer`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
+skill teaches an agent the full workflow — including when *not* to compress.
+
+#### Measured on a real coding session
+
+Your AI coding assistant re-sends everything it has seen on every single
+message — old screenshots, logs it already read, files it re-opened. VelesDB
+compiles that context first: same information, fewer tokens (what LLM
+providers bill you for), so each message costs less and your session lasts
+longer before hitting the context limit.
+
+To measure that, a committed benchmark replays a realistic multi-turn coding
+session — screenshots, CI logs, documents the assistant reads again, code
+files re-opened after edits — two ways: once sending everything raw, once
+compiled through `compile_context`. Everything is counted with cl100k (a
+real tokenizer — the same counting the API does) and the API's own
+image-pricing formula. Every run is deterministic and was reproduced twice,
+byte-identical:
+
+![Benchmark protocol: one realistic coding session is sent to the model two ways — without VelesDB everything is re-sent every message, with VelesDB the context is compiled first; both arms are measured on billed tokens and graded answer quality](docs/diagrams/benchmark-protocol.svg)
+
+| Scenario | Without VelesDB | With VelesDB | Saved |
+|---|---|---|---|
+| A balanced bug-fix session (14 turns) | 84,334 tokens | 69,843 tokens | **17.2 %** — duplicates and outdated screenshots only; nothing unique removed |
+| The same session with a hard 8,000-token window | 84,334 tokens | 67,194 tokens | **20.3 %** — the extra points come from content set aside (retrievable on demand — never deleted), not from more duplicates |
+| A long session where you keep iterating (36 turns) | 449,836 tokens | 310,850 tokens | **30.9 %** — savings compound as the session grows |
+| With the memory features turned on (14 turns) | 84,334 tokens | 68,839 tokens | **18.4 %** — reference docs stored once, recalled per turn, out-of-the-box settings |
+
+![Tokens sent per session, without VelesDB versus with VelesDB, across four measured scenarios; savings range from 17.2 to 30.9 percent](docs/diagrams/benchmark-gains.svg)
+
+The long session also answers the endurance question: over the full
+measured session (feature-building included) the raw context grows ~555
+tokens per message versus ~333 compiled — **1.7× more headroom** (how many
+more turns fit in one session before the context limit forces a
+summarize-and-restart), and **up to 6.6×** in the verification/wrap-up
+phase, where most turns are re-reads. Projections always use the
+full-session rate:
+
+![Context size per turn over a 36-turn session: without VelesDB it grows about 555 tokens per turn on the full session, with VelesDB about 333 — 1.7 times more headroom, and up to 6.6 times in re-read-heavy phases](docs/diagrams/benchmark-headroom.svg)
+
+Reproduce any of these in one command, no key and no network needed
+(`node examples/real-session-benchmark/offline.mjs`, `long-session.mjs`,
+`memory-enabled.mjs`). An opt-in billed mode measures the same session
+against real provider usage — through your own Claude Code CLI account with
+zero configuration, or an API key — and additionally grades real generated
+answers in both arms against a committed fact checklist, so a token saving
+that costs answer quality is reported, never hidden. Full protocol,
+attribution details, and caveats →
+[`examples/real-session-benchmark/`](https://github.com/cyberlife-coder/VelesDB/tree/main/examples/real-session-benchmark)
+(repo root — commands above run from a repo checkout).
+
+#### Exact token estimators
+
+The default [`HeuristicEstimator`](https://docs.rs/velesdb-memory/latest/velesdb_memory/context/struct.HeuristicEstimator.html)
+is a deterministic, dependency-free char-class approximation, calibrated to
+**always over-count** a real BPE (never under, so packing never silently
+overflows a provider's window) — measured margins from +9.6 % (CJK) to
++63.8 % (English prose) on the committed
+[`exact_estimator`](examples/context_savings/real_measures/exact_estimator.mjs)
+harness (numbers below are from its own runs, reproducible: two runs, byte-
+and figure-identical). For an id-dense corpus against a tight budget, or
+whenever you need the provider's real count instead of a safe
+over-approximation, inject a model-exact
+[`TokenEstimator`](https://docs.rs/velesdb-memory/latest/velesdb_memory/context/trait.TokenEstimator.html)
+via `ContextCompiler::with_estimator` — the trait is two methods, one of
+them defaulted:
+
+```rust
+use velesdb_memory::context::TokenEstimator;
+
+/// OpenAI cl100k, via any tiktoken-style encoder you already depend on
+/// (not a VelesDB dependency — bring your own, e.g. `tiktoken-rs`).
+struct Cl100kEstimator(tiktoken_rs::CoreBPE);
+
+impl TokenEstimator for Cl100kEstimator {
+    fn estimate(&self, text: &str) -> u64 {
+        self.0.encode_ordinary(text).len() as u64
+    }
+    // bytes_per_token_hint: default (3) is a fine sizing hint for cl100k prose.
+}
+
+// with_estimator takes a boxed trait object (DynTokenEstimator):
+let compiler = ContextCompiler::new(CompilePolicy::default())
+    .with_estimator(Box::new(Cl100kEstimator(bpe)));
+```
+
+Anthropic does not publish a tokenizer, so there is no exact-count
+equivalent to plug in the same way; the closest honest option is to price
+and pack against a cl100k estimator (Claude's real count runs close to it
+for prose/code) or to keep the default heuristic's safe over-count, which
+never claims to be exact. Injecting a custom estimator only changes
+`estimate()`'s output — the pipeline (`chunk → classify → dedup → score →
+pack → assemble`) and its determinism guarantee are unaffected either way.
+
+Measured on the harness's per-category corpus (two runs, identical):
+
+| Category | Default estimate | Real (cl100k) | Error | Direction |
+|---|---:|---:|---:|---|
+| English prose | 77 | 47 | +63.8 % | over (safe) |
+| French prose | 90 | 59 | +52.5 % | over (safe) |
+| Repetitive logs | 730 | 479 | +52.4 % | over (safe) |
+| Rust code | 64 | 49 | +30.6 % | over (safe) |
+| Digit-dense ids/dates | 89 | 68 | +30.9 % | over (safe) |
+| Markdown | 78 | 69 | +13.0 % | over (safe) |
+| JSON | 50 | 44 | +13.6 % | over (safe) |
+| URLs | 57 | 51 | +11.8 % | over (safe) |
+| CJK | 80 | 73 | +9.6 % | over (safe) |
+
+#### Audit mode: a dry-run importance report
+
+`compile_context` has no separate "audit" flag — pass a budget large enough
+that nothing gets dropped, abstracted, or externalized (the request's own
+hard ceiling, `MAX_TOKEN_BUDGET` = 10,000,000 tokens, always qualifies), and
+the response *is* the audit: every fragment gets a full
+[`ContextDecision`](https://docs.rs/velesdb-memory/latest/velesdb_memory/context/struct.ContextDecision.html)
+(rule id, `relevance` in `[0, 1]`, reason, content hash) with `risk: "low"`
+(nothing critical was lost — a dry run should never itself lose anything).
+Sort `decisions` by `relevance` descending client-side for an at-a-glance
+importance report of what the compiler *would* prioritize under a tighter
+budget, without actually dropping anything:
+
+```jsonc
+compile_context { "query": "state of the canary deploy",
+                   "token_budget": 10000000,               // MAX_TOKEN_BUDGET: dry-run, nothing lost
+                   "fragments": [ /* … */ ] }
+→ { "risk": "low", "decisions": [ /* one per fragment, every action + relevance + reason */ ], … }
+```
+
+#### Normalizing timestamped logs
+
+By default, `abstract.log_dedup` collapses only **byte-identical** repeated
+lines — real logs are usually timestamped, so a burst of otherwise-identical
+lines survives as distinct entries and the fragment falls through to
+whichever rule matches its literal bytes instead (see the skill's
+"Timestamped logs" note). Set `policy.normalize_log_timestamps: true` to
+opt in to a **deterministic, fixed-pattern** mask applied before grouping,
+for `kind: "log"` fragments only:
+
+- a leading timestamp — ISO-8601 (`2026-07-18T10:23:45.123Z`,
+  `2026-07-18T10:23:45+02:00`) or the space/comma log4j variant
+  (`2026-07-18 10:23:45,123`), or syslog (`Jul 18 10:23:45`);
+- one or more immediately-following bracketed hex/decimal counters
+  (`[a1b2c3]`, `[1234]`) — a bracket whose content is not purely hex/decimal
+  (`[ERROR]`, `[shard-3]`) is left alone, so level tags and named ids never
+  match.
+
+Only the **grouping key** changes — the emitted line is still the first
+occurrence's exact bytes, so nothing is rewritten into the output. The
+patterns are fixed in the compiler (never a caller-supplied regex), so the
+same request keeps producing the same collapse. When normalization actually
+merged lines that would otherwise have stayed distinct, the fragment's
+`decision.reason` says so (`"… — timestamps normalized before collapsing"`),
+so an audit trail always shows *why* a log collapsed the way it did. Off by
+default: it changes what "duplicate" means for logs, so existing callers
+keep byte-exact grouping unless they opt in.
+
+#### Media fragments
+
+A fragment may carry an inline image alongside its text: set
+`media: {"mime": "image/png", "bytes_b64": "<base64>"}` on a
+`ContextFragment`; `content` stays the caption (often empty for a bare
+screenshot).
+
+- **Atomic packing**: a media fragment is never chunked — it packs whole
+  under the budget or not at all, so an image can never be cut mid-stream.
+- **Token cost from the image itself**, not its base64 text: PNG/JPEG
+  dimensions are sniffed from the header (`ceil(width * height / 750)`, a
+  published Claude image-token constant); an unsupported mime or an
+  unreadable header falls back to a safe over-count of the base64 text.
+- **Dedup on raw bytes**: two fragments with byte-identical decoded media
+  are deduplicated regardless of their caption text (screenshots are often
+  captionless, so caption-text dedup would false-positive on "" == "").
+  Media is never near-duplicated.
+- **Capped at 4 MiB of base64** (`limits::MAX_MEDIA_BYTES`, ≈3 MiB decoded),
+  independent of the text-content cap; malformed base64 is rejected at
+  validation.
+- **Real retrieval, through the memory bridge.** A media fragment that does
+  not fit the budget externalizes exactly like text: `decision.action ==
+  "retrieve"`, `rule_id == "budget.externalize"`, and a `ctx://source/`
+  handle. A media handle is content-addressed on the **raw decoded bytes**
+  (the same identity dedup uses), never the caption — two different images
+  always get two distinct, independently resolving handles even when both
+  captions are blank (the common case), and byte-identical images share one
+  handle. `MemoryService::compile_context` (with `policy.store_sources`,
+  the default) persists the fragment's base64 payload alongside its caption
+  — `MemoryService::retrieve_context_source(handle)` returns `{content,
+  media?}`, `media` present whenever the original fragment carried one.
+  Media is embedded with a deterministic placeholder vector derived from
+  its raw bytes' hash, never through the text embedder: resolution is by
+  content-addressed hash only, never by vector search. The bare
+  `ContextCompiler` (no memory) still just *mints* the handle, exactly as
+  it does for text — it never knows or cares whether a resolver is
+  attached.
+- **Screenshot supersession.** Fragments that share `media`, `kind:
+  "screenshot"`, and the same `metadata.target` value form a succession
+  series: only the LAST one in the request (input order — never a clock)
+  stays inline; every earlier one is reclassified
+  `retrieve.screenshot_superseded` and externalized behind a resolvable
+  handle, regardless of budget — a stale screenshot never competes with the
+  current one for space. `metadata.target` should identify the *subject*
+  being screenshotted (a URL, a test name, a UI element id — the caller's
+  choice); a screenshot with no `metadata.target` is never superseded, since
+  there is no evidence it succeeds anything. Opt out per request with
+  `policy.disabled_rules: ["retrieve.screenshot_superseded"]`.
+- **Every surface carries media**: the MCP tools (`compile_context` /
+  `retrieve_context_source`, schemas included — `fragments[].media` and the
+  optional `media` on the retrieve result are both advertised, not just
+  accepted), the Python binding, the Node binding (`compileContext` /
+  `retrieveContextSource`, same `{handle, content, media?}` shape as the MCP
+  tool — see the [Node README](../velesdb-node/README.md#media-fragments-retrievecontextsource)),
+  and WASM's `compileContext` (media fragments compile, dedup, and cost
+  correctly on the in-memory `WasmStore`; `retrieveContextSource` is not yet
+  exposed on the WASM binding, so resolving a media handle back to bytes
+  *within* a wasm session is Node/Python/MCP-only for now).
+
+Minimal end-to-end example, over the MCP tools (the exact calls
+`examples/context_savings/real_measures/mcp_e2e.py` makes against a real
+`velesdb-memory` server over stdio):
+
+```python
+handle_req = {"query": "a screenshot of the failing build", "token_budget": 1,
+              "fragments": [{"content": "the failing build, before the fix",
+                             "media": {"mime": "image/png", "bytes_b64": png_b64}}]}
+out = server.call("compile_context", handle_req)
+handle = out["retrieval_handles"][0]["handle"]      # too big for budget=1, externalized
+
+source = server.call("retrieve_context_source", {"handle": handle})
+assert source["media"]["bytes_b64"] == png_b64      # byte-identical round trip
+```
+
+#### Source TTL & disk growth
+
+`policy.source_ttl_seconds` (`None` by default) controls how long a
+compiled fragment's cached original — the bytes behind its
+`ctx://source/<hash>` handle — stays retrievable. **Default is permanent**:
+every distinct fragment compiled through the memory bridge is kept until
+explicitly forgotten, on purpose — a compiler that silently expired sources
+would make `retrieve_context_source` unreliable exactly when an audit needs
+it most (auditability over disk thrift). Set a TTL (seconds) when you
+compile high-volume, low-value volatile content (e.g. per-turn logs in a
+long-running agent) and do not need those sources recoverable past a
+bounded window; `policy.event_ttl_seconds` applies the same trade-off to
+`context_savings`' aggregated compilation events.
+
+**Disk growth**: with the default permanent TTL, every distinct fragment's
+source accumulates under `VELESDB_MEMORY_PATH` (default
+`~/.velesdb-memory`) for as long as the process compiles new content — by
+design, since sources are what makes retrieval and audit trustworthy. To
+reclaim space:
+
+- set `source_ttl_seconds` / `event_ttl_seconds` going forward so new
+  compilations self-expire;
+- or purge the whole store manually: stop every process using it, then
+  delete the store directory at `VELESDB_MEMORY_PATH` (the same manual
+  purge documented above for `remember`-stored facts) — there is no
+  selective "purge sources older than N days" command today, only whole-
+  store deletion or per-fact `forget`.
+
+#### Usage-driven importance: RL confidence + recency in the same ranking
+
+`memory_scope` selection composes one more engine pair: the learned RL
+confidence that [`feedback`] trains, and a batch-relative recency term.
+`policy.importance` drives the blend; per pulled memory the ranking key is
+
+```text
+score = fused_norm + confidence·(rl_confidence − 0.5)·2 + recency·recency_norm
+```
+
+```jsonc
+"policy": { "importance": {
+  "confidence": 0.2,          // default; 0.0 switches the term off
+  "recency": 0.1,             // default; inert without recency_field
+  "recency_field": "day"      // optional caller metadata key; no default
+} }
+```
+
+- **Selection is untouched.** The blend re-ranks only the pool the fused
+  vector+graph similarity already selected — confidence is *not* relevance,
+  so an over-reinforced but off-topic fact can never buy its way in (pinned
+  by an adversarial test).
+- **Recency contract (strict).** `recency_field: null` disables the term —
+  no implicit default key exists. When set, it must name a **numeric**
+  caller metadata field on one monotone scale per batch (e.g. `YYYYMMDD`
+  integers as in dated recall, or an epoch); the scale is documented, not
+  verified. Values are min-max normalised **within the pulled batch**: the
+  newest reads `1.0`, the oldest `0.0`, a memory without the key contributes
+  `0` (never penalised), and a degenerate batch (`max == min`) contributes
+  `0` for all. The compile pipeline never reads a clock — recency is
+  relative to the batch, so compilation stays byte-deterministic.
+- **Compat.** Both weights at `0.0` reproduce the 0.8.0 output byte for
+  byte (golden-pinned); requests without `importance` parse unchanged.
+  **Behavioral change on upgrade**: the defaults are active, so with an
+  untouched policy RL-reinforced memories rank higher out of the box —
+  zero the weights to restore the exact 0.8.0 ordering.
+- **Weight range.** Recommended `[0, 1]` for both weights. Out-of-range
+  values are accepted verbatim, never clamped: a negative weight inverts
+  its term (e.g. demote reinforced facts), a weight above `1` lets the
+  term dominate similarity; only the recorded decision `relevance` is
+  clamped into `[0, 1]`.
+- **Explainable.** Every pulled memory's decision `reason` ventilates all
+  four signals, e.g. (from the committed tri-engine benchmark):
+  `pulled from memory 1444253315203703248 (vector 0.00, graph 1.00,
+  confidence 1.00, recency 0.00)` — a fact invisible to vector search,
+  rescued by the graph walk, promoted by learned confidence.
+- **Reranker seam.** The blend also composes with
+  `compile_context_reranked` (Rust-only seam for a semantic cross-encoder
+  or LLM judge): the reranker picks and orders the pool, then the same
+  importance blend re-ranks inside it — one coherent, auditable ranking
+  across HNSW seed, graph reach, fusion, reranker, confidence, and recency.
+
+The committed [`tri_engine_rescue`](examples/context_savings/real_measures/tri_engine_rescue.mjs)
+harness measures the synergy end-to-end: with zero weights the wordy
+similar-only fact precedes the real fix (0.8.0 behaviour); with
+`confidence: 0.8`, the fact the team reinforced via `feedback` **and** that
+only the typed-edge walk reaches leads the compiled context — identical
+across two runs.
+
+[`feedback`]: https://docs.rs/velesdb-memory
 
 **IDs & linking.** `remember` returns a stable id derived from the fact's
 content. Pass it to `relate` / `forget`, or as a `links[].target` on a later

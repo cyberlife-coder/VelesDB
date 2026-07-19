@@ -324,6 +324,7 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         let query = self
+            .query
             .query_cache
             .parse(sql)
             .map_err(|e| crate::error::Error::Query(e.to_string()))?;

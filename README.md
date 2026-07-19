@@ -5,13 +5,16 @@
   <img src="velesdb_icon_pack/favicon/favicon-32x32.png" alt="" width="32" height="32" style="vertical-align: middle;"/> VelesDB
 </h1>
 <h3 align="center">
-  Your AI agents forget everything. VelesDB fixes that.
+  The explainable, local-first memory engine for AI agents.
 </h3>
 <p align="center">
-  <strong>One ~9 MB binary. Three engines. One query language. Zero cloud dependency.</strong><br/>
-  <em>Vector + Graph + ColumnStore — unified under <a href="docs/VELESQL_SPEC.md">VelesQL</a></em><br/><br/>
-  The <strong>explainable</strong> agent memory: <code>why()</code> returns the evidence path behind every recall —<br/>
+  <strong>One ~9 MB binary fuses vector + graph + columnar under <a href="docs/VELESQL_SPEC.md">VelesQL</a>. Zero cloud.</strong><br/>
+  <code>why()</code> returns the evidence path behind every recall.<br/><br/>
+  <em>Your AI agents forget everything — VelesDB fixes that, and shows its work:</em><br/>
   <a href="crates/velesdb-memory/BENCHMARK.md"><strong>measured on public benchmarks</strong></a>, not vibes.
+</p>
+<p align="center">
+  <sub><em>The name nods to <strong>Veles</strong>, a deity of old Slavic myth — a keeper of hidden knowledge and boundaries.</em></sub>
 </p>
 <p align="center">
   <a href="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml"><img src="https://github.com/cyberlife-coder/VelesDB/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -122,6 +125,8 @@ Memories are permanent by default; `forget(id)` deletes one, and `remember(…, 
 
 The same wedge ships in **Python** (`pip install velesdb`), **Node** (`npm i @wiscale/velesdb-memory-node`), as a local **[MCP server](crates/velesdb-memory)**, and — in-memory only, no disk access under WASM — in the **[TypeScript SDK](sdks/typescript)** (`npm i @wiscale/velesdb-sdk`), running entirely in the browser or Node.js with no server.
 
+For Node/TypeScript: `@wiscale/velesdb-memory-node` is memory-semantics-only by license design ([why](crates/velesdb-node/README.md#need-the-full-engine)); the full engine (VelesQL, deep `MATCH`, administration) is reached from Node/TS via `velesdb-server` + the [TypeScript SDK](sdks/typescript)'s REST backend.
+
 **Four runnable ways to see it** — each shows what plain vector recall misses and `why()` recovers:
 
 | Demo | What it shows |
@@ -132,6 +137,60 @@ The same wedge ships in **Python** (`pip install velesdb`), **Node** (`npm i @wi
 | [`why_magic_constant.mjs`](crates/velesdb-node/examples/why_magic_constant.mjs) | the same engine and wedge in the **Node** binding |
 
 > **Not a weak-embedder trick.** In each retrieval demo, recall stays blind to the reason **even under a real semantic embedder** (`ollama` / `all-minilm`), not just the offline `hash` default — the reason is connected by a decision, not by surface similarity, which is exactly what a vector store cannot follow.
+
+### The context compiler: `why()` for your token bill
+
+Agents burn most of their budget re-reading redundant context. The memory layer now ships a **deterministic context compiler** (`compile_context` over MCP and Node, `ContextCompiler` in Rust): no LLM, no cloud — duplicates drop, repeated log lines collapse with counts, code / URLs / numbers / negative constraints survive verbatim, and over-budget content becomes a recoverable `ctx://source/` handle instead of a silent loss. Every decision carries a stable rule id, a reason, and a risk level (`explain_compilation` answers "why was this dropped?"), and the same request always compiles to the same bytes. On a committed 12-turn agent-session benchmark this measures **82.5 % real (cl100k) input-token savings** with sub-millisecond stateless compiles, and 75–82 % estimated savings on the static corpus in ~2 ms ([`examples/context_savings`](crates/velesdb-memory/examples/context_savings), figures are local estimates, not billed tokens). The [`velesdb-context-optimizer` skill](skills/velesdb-context-optimizer/SKILL.md) packages the workflow — including when *not* to compress. See [Why VelesDB](docs/WHY_VELESDB.md).
+
+**Compiler surfaces published today: MCP server, Node, Rust, WASM, and the TypeScript SDK** — `compile_context` and its companions ship on all of them, and MCP covers any other client. Python parity (`MemoryService.compile_context`) is merged and ships with the next workspace release; until then, Python agents reach the compiler through the MCP server.
+
+**Install both bundled skills without cloning the repo** — every
+[GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
+attaches `velesdb-skills.tar.gz` (`velesdb-memory` + `velesdb-context-optimizer`,
+one folder per skill):
+
+```bash
+curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz \
+  | tar -xz -C ~/.claude/skills/
+```
+
+**Quickstart (3 steps):**
+
+```bash
+# 1. Install the MCP server binary
+cargo install velesdb-memory
+
+# 2. Point your MCP client at it (Claude Code example)
+claude mcp add velesdb-memory -- ~/.cargo/bin/velesdb-memory
+```
+
+```jsonc
+// 3. Call compile_context — query + token_budget + fragments
+compile_context { "query": "state of the canary deploy", "token_budget": 500,
+                  "fragments": [
+                    { "content": "The canary is green: 2% traffic, zero errors in the last 10 minutes." },
+                    { "content": "Rollback runbook: kubectl rollout undo deployment/canary." } ] }
+→ { "content": "…both fragments packed…", "risk": "low",
+    "decisions": […one auditable entry per fragment…] }
+```
+
+No Rust toolchain? Use npm instead: [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node).
+
+**Measured on real coding sessions** (A/B, same session sent raw vs
+compiled, counted with a real tokenizer and the same image-token formula the
+API uses): **17.2 %** saved on a balanced bug-fix session with zero
+information loss, **18.4 %** with the memory features on, **30.9-55.1 %**
+on a 36-turn session where you keep iterating — and the compiled context
+grows **1.7× slower** over the full session (up to 6.6× in re-read-heavy
+phases), so one session lasts far longer before hitting the context limit.
+Every number reproduces in one offline command:
+[`examples/real-session-benchmark`](examples/real-session-benchmark) (an
+opt-in billed mode re-measures it against real provider usage, through your
+own Claude Code CLI account — no API key needed).
+
+**Not a transparent proxy, and no automatic indexing.** The compiler only compresses what your agent explicitly hands it as `fragments` (logs, retrieved docs, history) — never the harness's system prompt or tool schemas, and it's the skill above that teaches an agent when/what to route through it. Every compiled fragment is content-addressed to disk under the store path so `retrieve_context_source` can always recover it, and aggregate savings stats are recorded — but nothing enters *recallable memory* (what `recall` / `memory_scope` can surface) without an explicit `remember` / `relate` / `remember_extracted` call. Local-first — nothing leaves the machine. Details: [crates/velesdb-memory/README.md § How it works](crates/velesdb-memory/README.md#how-it-works).
+
+![compile_context pipeline: agent fragments flow through dedup, abstract, pack, externalize, producing content, ctx://source handles and auditable decisions](crates/velesdb-memory/docs/diagrams/compile-flow.svg)
 
 ---
 
@@ -253,8 +312,8 @@ docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb \
 # Verify it's running
 curl http://localhost:8080/health
 ```
-Pin a specific version with `ghcr.io/cyberlife-coder/velesdb:3.9` (or a full
-`3.9.1`). To build the image yourself instead: `git clone` the repo and
+Pin a specific version with `ghcr.io/cyberlife-coder/velesdb:3.12` (or a full
+`3.12.0`). To build the image yourself instead: `git clone` the repo and
 `docker build -t velesdb .`.
 
 Data is stored in `/data` inside the container; the named volume `velesdb_data` persists across restarts.
@@ -532,7 +591,8 @@ We ship weekly. This is the arc; the committed, dated plan lives in [ROADMAP.md]
 | **v3.4 → v3.7** | The `why()` wedge **everywhere** — Node binding (`velesdb-memory-node`), Python `MemoryService`, MCP `recall_fused`, browser / WASM + TypeScript-SDK `MemoryService`, durable TTL, dated-context recall, indexed prefilter for filtered recall | ✅ Shipped |
 | **v3.8** | u64 point-id precision-safety completed across the REST surface + OpenAPI spec | ✅ Shipped |
 | **v3.9.0 → v3.9.1** | v3.9.0: `DatabaseObserver` read-path control-plane hook (`QueryAccessContext`) — the seam premium uses to enforce access, narrow-only. v3.9.1: `velesdb-memory` 0.7.0 RL Memory (MCP `feedback` tool + learned-confidence recall re-ranking); zero-friction Docker onboarding; release-pipeline harmonisation gate | ✅ Shipped |
-| **v3.9.1 → v3.10.0** *(current: `v3.10.0`)* | Read-path gate now covers **every** HTTP search route (dense/text/hybrid/sparse/batch/multi-query/ids/graph-embedding/`MATCH`), not just VelesQL `SELECT`/`MATCH`; Python SDK observer gained a read-path veto (`on_query_request` on direct `.search()` and variants). No breaking API changes — but any embedder relying on the observer being inert on REST reads (previously true) must account for it now actually enforcing. | ✅ Shipped |
+| **v3.9.1 → v3.10.0** | Read-path gate now covers **every** HTTP search route (dense/text/hybrid/sparse/batch/multi-query/ids/graph-embedding/`MATCH`), not just VelesQL `SELECT`/`MATCH`; Python SDK observer gained a read-path veto (`on_query_request` on direct `.search()` and variants). No breaking API changes — but any embedder relying on the observer being inert on REST reads (previously true) must account for it now actually enforcing. | ✅ Shipped |
+| **v3.11 → v3.12** *(current: `v3.12.0`)* | Chief-engineer audit resolution (soundness, quality-gate coverage across all crates, opt-in fail-closed observer mode); pre-release hardening — WAL replay recovers writes stranded behind a corrupt frame, Python governance read-gate parity, and HNSW stores each vector once (~⅓ less resident memory on large indices). No breaking API changes. | ✅ Shipped |
 | **Next** | Concurrent WAL writer; WASM SIMD128 kernels + 3+ hop `MATCH`; Dual-Precision (VSAG) engine integration; side-by-side Docker-Compose ANN benchmark vs Qdrant / Chroma / FAISS | 🔜 Tracked |
 
 > VelesDB Core is source-available (readable, modifiable, redistributable under the VelesDB Core License 1.0 — not an OSI-approved license; see [docs/LICENSING.md](docs/LICENSING.md)). Enterprise features (distributed replication, managed cloud, RBAC) are available separately via [VelesDB Premium](https://velesdb.com).
@@ -710,6 +770,6 @@ VelesDB Core License 1.0 (based on ELv2). Free for production use, including com
 ---
 
 <p align="center">
-  <strong>VelesDB</strong> &mdash; The Local Knowledge Engine for AI Agents<br/>
+  <strong>VelesDB</strong> &mdash; The explainable, local-first memory engine for AI agents<br/>
   <a href="https://velesdb.com">velesdb.com</a> &bull; <a href="https://github.com/cyberlife-coder/VelesDB">GitHub</a>
 </p>

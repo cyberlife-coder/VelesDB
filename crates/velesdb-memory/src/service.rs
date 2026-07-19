@@ -37,6 +37,16 @@ mod fused_recall;
 #[path = "reinforce.rs"]
 mod reinforce;
 
+/// The context compiler's memory bridge (`compile_context`,
+/// `retrieve_context_source`, `context_savings`, working contexts). A child
+/// module of `service`, like [`fused_recall`], so it reuses the private
+/// `store_fact`/`HUB_FIELD` system-fact machinery — compiler system facts
+/// (sources, events, working contexts) are hub-marked so they never surface
+/// in normal recall.
+#[cfg(feature = "context")]
+#[path = "context/memory_bridge.rs"]
+mod memory_bridge;
+
 /// Reserved metadata key marking an entity hub auto-created by
 /// [`MemoryService::remember_extracted`] (value `true`). Namespaced under the
 /// system `_veles_` prefix so it can never collide with a caller's own metadata,
@@ -539,12 +549,27 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         self.store.relate(from, to, relation)
     }
 
-    /// Forget (delete) the memory with `fact_id`.
+    /// Forget (delete) the memory with `fact_id`. Returns whether a memory
+    /// actually existed under that id — the underlying store's `delete` is a
+    /// silent no-op on an unknown id (matching most backends' idempotent
+    /// delete semantics), which is indistinguishable from a real deletion
+    /// unless existence is checked first. Every surface that exposes
+    /// `forget` (MCP, Node, WASM, Python) forwards this so a caller can tell
+    /// "I removed something" from "that id was a typo".
+    ///
+    /// The delete always runs, even when `get` reports the id absent: `get`
+    /// filters TTL-expired facts, and an expired-but-unpurged row must still
+    /// be reclaimed (the caller is told `false` — the memory was already
+    /// gone from its perspective). Existence check and delete are two store
+    /// calls, not one atomic operation: two concurrent forgets of one id may
+    /// both report `true`.
     ///
     /// # Errors
-    /// Returns [`MemoryError`] if the deletion fails.
-    pub fn forget(&self, fact_id: u64) -> Result<(), MemoryError> {
-        self.store.delete(fact_id)
+    /// Returns [`MemoryError`] if the existence check or the deletion fails.
+    pub fn forget(&self, fact_id: u64) -> Result<bool, MemoryError> {
+        let found = self.store.get(fact_id)?.is_some();
+        self.store.delete(fact_id)?;
+        Ok(found)
     }
 
     /// Explain a `decision`: find the best-matching memory (optionally scoped to

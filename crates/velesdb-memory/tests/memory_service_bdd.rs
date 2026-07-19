@@ -141,13 +141,29 @@ fn forget_removes_the_fact_from_recall() {
     let id = svc
         .remember("ephemeral scratch note about France", &[], None)
         .expect("remember");
-    svc.forget(id).expect("forget");
+    let found = svc.forget(id).expect("forget");
+    assert!(found, "forget of an existing fact must report found=true");
 
     let hits = svc.recall("France", 5, None).expect("recall after forget");
 
     assert!(
         !hits.iter().any(|h| h.id == id),
         "forgotten fact must not be recalled"
+    );
+}
+
+#[test]
+fn forget_unknown_id_reports_not_found_instead_of_silent_success() {
+    let (_dir, svc) = service();
+
+    let found = svc
+        .forget(999_999)
+        .expect("forget on an unknown id must not error");
+
+    assert!(
+        !found,
+        "forget of an id that was never stored must report found=false, \
+         so a caller can distinguish a real deletion from a typo"
     );
 }
 

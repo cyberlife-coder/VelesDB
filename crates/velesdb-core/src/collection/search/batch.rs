@@ -41,7 +41,7 @@ impl Collection {
         }
 
         let (dimension, metric) = {
-            let cfg = self.config.read();
+            let cfg = self.storage.config.read();
             (cfg.dimension, cfg.metric)
         };
         for query in queries {
@@ -50,12 +50,14 @@ impl Collection {
 
         let candidates_k = k.saturating_mul(4).max(k + 10);
         let higher_is_better = metric.higher_is_better();
-        let index_results =
-            self.index
-                .search_batch_parallel(queries, candidates_k, SearchQuality::Balanced)?;
+        let index_results = self.storage.index.search_batch_parallel(
+            queries,
+            candidates_k,
+            SearchQuality::Balanced,
+        )?;
 
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
 
         // Pre-merge delta per query (requires &self, safe for rayon via shared ref)
         let merged: Vec<_> = index_results
@@ -139,7 +141,7 @@ impl Collection {
         k: usize,
     ) -> Result<Vec<Vec<SearchResult>>> {
         let (dimension, metric) = {
-            let cfg = self.config.read();
+            let cfg = self.storage.config.read();
             (cfg.dimension, cfg.metric)
         };
 
@@ -150,7 +152,8 @@ impl Collection {
 
         // Perf: Use parallel HNSW search (P0 optimization)
         let index_results =
-            self.index
+            self.storage
+                .index
                 .search_batch_parallel(queries, k, SearchQuality::Balanced)?;
 
         // Pre-merge delta per query (requires &self)
@@ -161,8 +164,8 @@ impl Collection {
             .collect();
 
         // Parallel result resolution across queries (P0 QPS optimization)
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let vs: &dyn VectorStorage = &*vector_storage;
         let ps: &dyn PayloadStorage = &*payload_storage;
 
@@ -235,7 +238,7 @@ impl Collection {
             )));
         }
 
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let dimension = config.dimension;
         let metric = config.metric;
         drop(config);
@@ -269,7 +272,7 @@ impl Collection {
         overfetch_k: usize,
         metric: crate::DistanceMetric,
     ) -> Result<Vec<Vec<(u64, f32)>>> {
-        let batch_results = self.index.search_batch_parallel(
+        let batch_results = self.storage.index.search_batch_parallel(
             vectors,
             overfetch_k,
             crate::SearchQuality::Balanced,
@@ -296,7 +299,7 @@ impl Collection {
         let Some(f) = filter else {
             return batch_results;
         };
-        let payload_storage = self.payload_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         batch_results
             .into_iter()
             .map(|query_results| {
@@ -316,8 +319,8 @@ impl Collection {
 
     /// Fetches full point data for the top-k fused results.
     fn hydrate_fused_results(&self, fused: &[(u64, f32)], top_k: usize) -> Vec<SearchResult> {
-        let vector_storage = self.vector_storage.read();
-        let payload_storage = self.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
 
         resolve::resolve_id_score_pairs(fused, top_k, &*vector_storage, &*payload_storage)
     }

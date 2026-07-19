@@ -61,7 +61,7 @@ impl Collection {
         // pre-batch value; duplicates get None so the old value is decremented
         // exactly once.
         let old_payloads: Vec<Option<serde_json::Value>> = if payloads.is_some() {
-            let storage = self.payload_storage.read();
+            let storage = self.storage.payload_storage.read();
             let mut seen = HashSet::new();
             ids.iter()
                 .map(|&id| {
@@ -93,7 +93,7 @@ impl Collection {
         self.update_secondary_indexes_from_raw(ids, payloads, &old_payloads);
 
         let inserted = self.bulk_index_or_defer(&vector_refs);
-        self.config.write().point_count = self.vector_storage.read().len();
+        self.storage.config.write().point_count = self.storage.vector_storage.read().len();
 
         self.maintain_histograms_for_raw(ids, payloads, &old_payloads);
 
@@ -190,7 +190,7 @@ impl Collection {
                 )));
             }
         }
-        let collection_dim = self.config.read().dimension;
+        let collection_dim = self.storage.config.read().dimension;
         validate_dimension_match(collection_dim, dimension)?;
         self.enforce_raw_upsert_limits(ids, payloads)?;
         Ok(())
@@ -214,9 +214,12 @@ impl Collection {
             return Ok(());
         }
         if fsync {
-            self.payload_storage.write().store_batch(entries)?;
+            self.storage.payload_storage.write().store_batch(entries)?;
         } else {
-            self.payload_storage.write().store_batch_deferred(entries)?;
+            self.storage
+                .payload_storage
+                .write()
+                .store_batch_deferred(entries)?;
         }
         Ok(())
     }
@@ -272,7 +275,7 @@ impl Collection {
         old_payloads: &[Option<serde_json::Value>],
     ) {
         let Some(ps) = payloads else { return };
-        if self.secondary_indexes.read().is_empty() {
+        if self.query.secondary_indexes.read().is_empty() {
             return;
         }
         for (i, opt) in ps.iter().enumerate() {
@@ -307,12 +310,12 @@ impl Collection {
                 if !text.is_empty() {
                     #[cfg(feature = "persistence")]
                     self.append_bm25_wal_add(ids[i], &text)?;
-                    self.text_index.add_document(ids[i], &text);
+                    self.storage.text_index.add_document(ids[i], &text);
                 }
             } else {
                 #[cfg(feature = "persistence")]
                 self.append_bm25_wal_remove(ids[i])?;
-                self.text_index.remove_document(ids[i]);
+                self.storage.text_index.remove_document(ids[i]);
             }
         }
         Ok(())
@@ -336,7 +339,7 @@ impl Collection {
         if !has_labels {
             return;
         }
-        let mut label_idx = self.label_index.write();
+        let mut label_idx = self.graph.label_index.write();
         for (i, opt) in ps.iter().enumerate() {
             if let Some(payload) = opt {
                 label_idx.index_from_payload(ids[i], payload);

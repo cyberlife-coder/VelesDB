@@ -14,6 +14,8 @@ This directory contains examples demonstrating various VelesDB features and inte
 | [haystack/](../integrations/haystack/examples/) | Python | Intermediate | Haystack 2.x DocumentStore + RAG pipeline (lives under `integrations/haystack/`) |
 | [agent_memory/](./agent_memory/) | Python / Rust / TS | Intermediate | Agent memory: semantic + episodic + procedural, namespaced TTL, snapshots |
 | [velesdb-memory/](../crates/velesdb-memory/examples/) | Rust | Beginner | MCP memory server: offline `why` wedge demo + multi-hop graph benchmark |
+| [node-llm-middleware/](./node-llm-middleware/) | Node.js | Beginner | Minimal LLM middleware wrapper around `compile_context` — offline tokenizer proof always, real billed `usage` opt-in |
+| [real-session-benchmark/](./real-session-benchmark/) | Node.js | Intermediate | Realistic agentic sessions, raw vs `compileContext` A/B — offline (real tokenizer, lossless + windowed + 36-turn long-session + memory-enabled variants) always; opt-in billed `usage.input_tokens` + graded answer quality (API key or Claude Code CLI) |
 | [python/](./python/) | Python | Beginner | SDK usage patterns (fusion, graph, hybrid) |
 | [python_example.py](./python_example.py) | Python | Beginner | REST API client (legacy) |
 | [wasm-browser-demo/](./wasm-browser-demo/) | HTML/JS | Beginner | Browser-based vector search, no server needed |
@@ -26,6 +28,18 @@ Also see the [demos/](../demos/) directory for full-stack applications:
 | [tauri-rag-app/](../demos/tauri-rag-app/) | Rust + React + Tauri | Advanced | Offline desktop RAG app with knowledge graph |
 
 ## Rust Examples
+
+### Context Savings Benchmark (`../crates/velesdb-memory/examples/context_savings/`) -- Beginner
+
+Reproducible before/after benchmark of the deterministic context compiler:
+committed fixture corpus (prose turns, duplicates, code, logs), token
+savings per budget, action breakdown, latency — two runs print identical
+token figures.
+
+```bash
+cargo run -p velesdb-memory --example context_savings --no-default-features --features context
+```
+
 
 ### E-commerce Recommendation (`ecommerce_recommendation/`) -- Advanced
 

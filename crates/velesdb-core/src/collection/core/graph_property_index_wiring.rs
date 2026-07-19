@@ -60,7 +60,7 @@ impl Collection {
 
         // Populate range indexes
         {
-            let mut range_indexes = self.graph_range_indexes.write();
+            let mut range_indexes = self.graph.graph_range_indexes.write();
             for label in &labels {
                 for &(prop_name, prop_value) in &properties {
                     let key = range_index_key(label, prop_name);
@@ -76,7 +76,7 @@ impl Collection {
 
         // Populate composite indexes
         {
-            let mut composite_mgr = self.composite_index_manager.write();
+            let mut composite_mgr = self.graph.composite_index_manager.write();
             for label in &labels {
                 let props_map: HashMap<String, Value> = properties
                     .iter()
@@ -97,7 +97,7 @@ impl Collection {
         }
 
         {
-            let mut range_indexes = self.graph_range_indexes.write();
+            let mut range_indexes = self.graph.graph_range_indexes.write();
             for label in &labels {
                 for &(prop_name, prop_value) in &properties {
                     let key = range_index_key(label, prop_name);
@@ -109,7 +109,7 @@ impl Collection {
         }
 
         {
-            let mut composite_mgr = self.composite_index_manager.write();
+            let mut composite_mgr = self.graph.composite_index_manager.write();
             for label in &labels {
                 let props_map: HashMap<String, Value> = properties
                     .iter()
@@ -131,7 +131,7 @@ impl Collection {
             return;
         }
 
-        let mut edge_indexes = self.edge_range_indexes.write();
+        let mut edge_indexes = self.graph.edge_range_indexes.write();
         for (prop_name, prop_value) in properties {
             let key = edge_index_key(rel_type, prop_name);
             edge_indexes
@@ -161,7 +161,8 @@ impl Collection {
             predicates,
         };
 
-        self.query_pattern_tracker
+        self.graph
+            .query_pattern_tracker
             .write()
             .record(pattern, execution_time_ms);
     }
@@ -170,8 +171,8 @@ impl Collection {
     #[must_use]
     #[allow(dead_code)] // Reason: Public API for query evaluator — called when MATCH pipeline integrates auto-suggestion
     pub(crate) fn index_suggestions(&self) -> Vec<IndexSuggestion> {
-        let tracker = self.query_pattern_tracker.read();
-        self.index_advisor.read().suggest(&tracker)
+        let tracker = self.graph.query_pattern_tracker.read();
+        self.graph.index_advisor.read().suggest(&tracker)
     }
 
     /// Looks up node IDs matching a greater-than predicate.
@@ -183,7 +184,7 @@ impl Collection {
         value: &Value,
     ) -> Option<Vec<u64>> {
         let key = range_index_key(label, property);
-        let indexes = self.graph_range_indexes.read();
+        let indexes = self.graph.graph_range_indexes.read();
         indexes
             .get(&key)
             .map(|idx: &CompositeRangeIndex| idx.lookup_gt(value))
@@ -198,7 +199,7 @@ impl Collection {
         value: &Value,
     ) -> Option<Vec<u64>> {
         let key = range_index_key(label, property);
-        let indexes = self.graph_range_indexes.read();
+        let indexes = self.graph.graph_range_indexes.read();
         indexes
             .get(&key)
             .map(|idx: &CompositeRangeIndex| idx.lookup_lt(value))
@@ -214,7 +215,7 @@ impl Collection {
         upper: Option<&Value>,
     ) -> Option<Vec<u64>> {
         let key = range_index_key(label, property);
-        let indexes = self.graph_range_indexes.read();
+        let indexes = self.graph.graph_range_indexes.read();
         indexes
             .get(&key)
             .map(|idx: &CompositeRangeIndex| idx.lookup_range(lower, upper))
@@ -229,7 +230,7 @@ impl Collection {
         value: &Value,
     ) -> Option<Vec<u64>> {
         let key = range_index_key(label, property);
-        let indexes = self.graph_range_indexes.read();
+        let indexes = self.graph.graph_range_indexes.read();
         indexes
             .get(&key)
             .map(|idx: &CompositeRangeIndex| idx.lookup_exact(value).to_vec())
@@ -243,7 +244,7 @@ impl Collection {
         properties: &[&str],
         values: &[Value],
     ) -> Option<Vec<u64>> {
-        let mgr = self.composite_index_manager.read();
+        let mgr = self.graph.composite_index_manager.read();
         let covering = mgr.find_covering_indexes(label, properties);
         let index_name = covering.first()?;
         let idx = mgr.get(index_name)?;

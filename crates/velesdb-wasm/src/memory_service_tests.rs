@@ -39,7 +39,8 @@ fn test_relate_and_forget_round_trip_through_the_wasm_boundary() {
         "relate() through the wasm boundary must produce a traversable edge"
     );
 
-    svc.forget(&a.to_string()).unwrap();
+    let found = svc.forget(&a.to_string()).unwrap();
+    assert!(found, "forget() of an existing fact must report found=true");
     let hits = svc.inner.recall("fact a", 5, None).unwrap();
     assert!(
         hits.iter().all(|h| h.id != a),
@@ -48,13 +49,16 @@ fn test_relate_and_forget_round_trip_through_the_wasm_boundary() {
 }
 
 #[test]
-fn test_forget_unknown_id_is_ok_idempotent_delete() {
+fn test_forget_unknown_id_is_ok_but_reports_not_found() {
     let svc = WasmMemoryService::new(4);
-    // MemoryStore::delete on a WasmStore is a plain removal, not an
-    // existence check — deleting a never-stored id is a no-op, not an error
-    // (matches the native backend's `delete` semantics), so this stays on
-    // the Ok path and never touches JsValue.
-    assert!(svc.forget("999999999").is_ok());
+    // Deleting a never-stored id is a no-op, not an error (idempotent
+    // delete) — but the caller must be able to tell it apart from a real
+    // deletion, so it reports found=false. Stays on the Ok path and never
+    // touches JsValue, so it is safe to probe natively.
+    assert!(
+        !svc.forget("999999999").unwrap(),
+        "an id that was never stored must report found=false"
+    );
 }
 
 // --- Pure-Rust coverage of the underlying orchestration (via `svc.inner`,

@@ -77,6 +77,37 @@ pub enum MemoryError {
     #[error("invalid relation label: {0}")]
     InvalidRelation(String),
 
+    /// A context-compile request carried a token budget that cannot hold any
+    /// context: zero, or not larger than the response reserve the policy
+    /// keeps aside for the model's answer.
+    #[cfg(feature = "context")]
+    #[error("token budget {budget} cannot hold any context (reserve {reserve})")]
+    ContextBudget {
+        /// The caller-supplied token budget.
+        budget: u64,
+        /// The response reserve the policy subtracts from the budget.
+        reserve: u64,
+    },
+
+    /// A context-compile request exceeded a resource cap from
+    /// [`crate::limits`] — too many fragments, or one fragment larger than
+    /// the per-fragment byte ceiling.
+    #[cfg(feature = "context")]
+    #[error("context request over limit: {0}")]
+    ContextOverLimit(String),
+
+    /// A `ctx://source/<hash>` handle was malformed or nothing is stored
+    /// under it (the source was never stored, expired, or was forgotten).
+    #[cfg(feature = "context")]
+    #[error("unknown context source handle: {0}")]
+    UnknownHandle(String),
+
+    /// A persisted working context could not be (de)serialized — the stored
+    /// payload predates or postdates this crate's schema.
+    #[cfg(feature = "context")]
+    #[error("working context codec error: {0}")]
+    WorkingContextCodec(String),
+
     /// A `remember` link failed after the fact was stored AND the
     /// compensating rollback delete also failed — unlike every other error
     /// from `remember`, the fact **remains stored**. Both errors are
@@ -109,6 +140,12 @@ impl MemoryError {
             | Self::ReservedKey(_)
             | Self::InvalidFilter(_)
             | Self::InvalidRelation(_) => ErrorCategory::InvalidInput,
+            #[cfg(feature = "context")]
+            Self::ContextBudget { .. } | Self::ContextOverLimit(_) => ErrorCategory::InvalidInput,
+            #[cfg(feature = "context")]
+            Self::UnknownHandle(_) => ErrorCategory::NotFound,
+            #[cfg(feature = "context")]
+            Self::WorkingContextCodec(_) => ErrorCategory::Internal,
             Self::UnknownMemory(_) => ErrorCategory::NotFound,
             #[cfg(feature = "persistence")]
             Self::Memory(_) => ErrorCategory::Internal,

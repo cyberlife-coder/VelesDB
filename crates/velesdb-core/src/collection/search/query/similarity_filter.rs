@@ -58,7 +58,7 @@ impl Collection {
         threshold: f64,
         limit: usize,
     ) -> Vec<SearchResult> {
-        let config = self.config.read();
+        let config = self.storage.config.read();
         let higher_is_better = config.metric.higher_is_better();
         drop(config);
 
@@ -130,7 +130,7 @@ impl Collection {
                 sorted.sort_unstable();
                 sorted
             }
-            None => self.vector_storage.read().ids(),
+            None => self.storage.vector_storage.read().ids(),
         };
         let total_count = all_ids.len();
         Self::guard_not_similarity_scan(total_count)?;
@@ -140,7 +140,7 @@ impl Collection {
         let filter = metadata_filter
             .map(|cond| crate::filter::Filter::new(crate::filter::Condition::from(cond)));
 
-        let higher_is_better = self.config.read().metric.higher_is_better();
+        let higher_is_better = self.storage.config.read().metric.higher_is_better();
 
         #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
         let threshold_f32 = sim_threshold as f32;
@@ -190,7 +190,13 @@ impl Collection {
         ) {
             return None; // excluded by the NOT-similarity threshold
         }
-        let payload = self.payload_storage.read().retrieve(id).ok().flatten();
+        let payload = self
+            .storage
+            .payload_storage
+            .read()
+            .retrieve(id)
+            .ok()
+            .flatten();
         if is_payload_expired(payload.as_ref(), now_unix_secs()) {
             return None;
         }
@@ -353,8 +359,8 @@ impl Collection {
         }
 
         // Full sequential scan (slow fallback for non-indexed conditions).
-        let payload_storage = self.payload_storage.read();
-        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
 
         let vector_ids = vector_storage.ids();
         let ids: Vec<u64> = if vector_ids.is_empty() {
@@ -376,7 +382,7 @@ impl Collection {
             filter,
             limit,
         );
-        self.payload_mirror.add_scan_debt(scanned);
+        self.storage.payload_mirror.add_scan_debt(scanned);
         // `scanned` counts visited ids out of `total_ids`; on 64-bit targets
         // the conversion is lossless (falls back to "all visited" otherwise).
         let visited = usize::try_from(scanned).unwrap_or(total_ids);
@@ -477,8 +483,8 @@ impl Collection {
         filter: &crate::filter::Filter,
         limit: usize,
     ) -> TrackedScan {
-        let payload_storage = self.payload_storage.read();
-        let vector_storage = self.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
+        let vector_storage = self.storage.vector_storage.read();
         let mut scanned: usize = 0;
         let results = Self::collect_filtered_scan(
             &*payload_storage,

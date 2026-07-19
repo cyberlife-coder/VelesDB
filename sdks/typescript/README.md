@@ -2,6 +2,8 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
+> The TypeScript engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It ships the `MemoryService` memory wedge (`remember`/`recall`/`relate`/`forget`/[`why()`](../../crates/velesdb-memory/README.md)) in the browser or Node.js — `why()` returns the evidence path behind every recall. The deterministic context compiler (`compileContext`) runs here too — fully in the browser (WASM), media fragments included — and in the native Node binding, [`@wiscale/velesdb-memory-node`](../../crates/velesdb-node/README.md) (which additionally exposes `retrieveContextSource` for externalized-source retrieval).
+
 **v3.12.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
 
 ## What's New in v3.6.0
@@ -187,6 +189,15 @@ const results = await db.search('products', queryVector, { k: 10 });
 > (e.g. `POST /v1/collections/{name}/search`). Legacy routes without the prefix
 > are accepted for backward compatibility but are deprecated and will be removed
 > in a future major version. Always target `/v1/` in custom HTTP clients.
+
+> **This is the full-engine path.** If you came from
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node)
+> (the in-process agent-memory wedge — `remember`/`recall`/`relate`/`forget`/`why`/`compileContext`
+> only, by license design) and need raw VelesQL, multi-hop `MATCH`, or collection
+> administration, this REST backend against a running
+> [`velesdb-server`](https://github.com/cyberlife-coder/VelesDB/blob/develop/crates/velesdb-server/README.md)
+> is the way to reach it from Node/TypeScript — see `db.query()` under
+> [VelesQL Queries](#velesql-queries) below.
 
 ## Embedding helper
 
