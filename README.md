@@ -48,7 +48,7 @@
 
 ## Four properties no competitor combines
 
-The leading agent-memory products (Mem0, Zep, Letta) put an AI model **in the memory write path**: every memory saved runs 2–3 model calls — by default, paid cloud calls with an API key — so every write is generative, non-reproducible, and unexplainable by construction. VelesDB is built on the opposite bet:
+The leading agent-memory products ([Mem0, Zep, Letta — compared in detail here, as of mid-2026](docs/WHY_VELESDB.md)) put an AI model **in the memory write path**: every memory saved runs model calls — by default, paid cloud calls with an API key — so every write is generative, non-reproducible, and unexplainable by construction. VelesDB is built on the opposite bet:
 
 | Property | What it means concretely |
 |---|---|
