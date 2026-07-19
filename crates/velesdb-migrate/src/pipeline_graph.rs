@@ -278,7 +278,9 @@ fn seed_edge_endpoints<F, E>(
                 Ok(()) => {
                     seeded_nodes.insert(id);
                 }
-                Err(e) => warn!("Failed to seed graph node {id}: {e}; will retry on next occurrence"),
+                Err(e) => {
+                    warn!("Failed to seed graph node {id}: {e}; will retry on next occurrence")
+                }
             }
         }
     }

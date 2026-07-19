@@ -1263,7 +1263,7 @@ mod tests {
     fn add_edge_concurrent_delete_never_leaves_phantom_edge() {
         for i in 0..10 {
             let (delete_raced_ahead, is_phantom) =
-                race_write_vs_delete_iteration(i, i, |c, edge| c.add_edge(edge));
+                race_write_vs_delete_iteration(i, i, Collection::add_edge);
             assert!(
                 !delete_raced_ahead,
                 "iteration {i}: delete() must block on payload_storage while \
@@ -1279,9 +1279,10 @@ mod tests {
     #[test]
     fn add_edges_batch_concurrent_delete_never_leaves_phantom_edge() {
         for i in 0..10 {
-            let (delete_raced_ahead, is_phantom) = race_write_vs_delete_iteration(i, i, |c, edge| {
-                c.add_edges_batch(vec![edge]).map(|_| ())
-            });
+            let (delete_raced_ahead, is_phantom) =
+                race_write_vs_delete_iteration(i, i, |c, edge| {
+                    c.add_edges_batch(vec![edge]).map(|_| ())
+                });
             assert!(
                 !delete_raced_ahead,
                 "iteration {i}: delete() must block on payload_storage while \
