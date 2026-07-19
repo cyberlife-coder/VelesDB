@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Memory-tool ids now survive float-lossy JSON clients (issue #1468).**
+  `remember`, `recall`/`recall_where`/`recall_fused`, `relate`, `forget`,
+  `feedback`, `remember_extracted`, and `why` return `u64` ids as plain JSON
+  numbers, which a client whose JSON layer round-trips numbers through an
+  IEEE-754 `f64` (JS `number`, Claude Code included) silently rounds once the
+  id exceeds 2^53 — the rounded id is then rejected by `relate`/`forget`/
+  `feedback` with "memory does not exist", reported from real dogfooding.
+  Every MCP response now also carries a decimal-string twin of each id
+  (`id_str` on `remember`/`recall*`/`forget`/`feedback`/`why`'s nodes,
+  `edge_id_str` on `relate`, `ids_str` on `remember_extracted`,
+  `from_str`/`to_str` on `why`'s edges) — purely additive, the numeric field
+  is unchanged so 0.9.x callers are unaffected. `relate`'s `from`/`to`,
+  `forget`/`feedback`'s `id`, and `remember`'s `links[].target` also accept
+  that decimal-string form on input (in addition to a plain number), with the
+  advertised tool schemas updated to match, so a client can safely resubmit
+  an `id_str` it received. **Wire-only, no Rust API change**: the string
+  twins live entirely in the MCP DTO layer (`mcp::dto`); the public domain
+  types (`Recollection`, `MemoryNode`, `MemoryEdge`, `Explanation`) are
+  unchanged, so library consumers of the crate (bindings, crates.io users)
+  see no breakage — the only `model` change is that `Link::target`
+  *deserialization* additionally tolerates a decimal string, which is
+  strictly widening. (#1468)
+
 ## [0.9.1] — 2026-07-19
 
 ### Security

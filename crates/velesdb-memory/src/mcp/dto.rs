@@ -1,15 +1,26 @@
 //! Tool parameter / result DTOs for the MCP transport.
 //!
-//! Output shapes reuse the domain types from [`crate::model`] / [`crate::service`]
-//! directly (they derive `Serialize` + `JsonSchema`), so there is no duplicate
-//! wire/domain struct. Only request envelopes and small id-results live here,
-//! split out of [`super`] (`mcp.rs`) so that file stays focused on the server
-//! and tool wiring.
+//! Request envelopes, small id-results, and the id-echoing wire wrappers live
+//! here, split out of [`super`] (`mcp.rs`) so that file stays focused on the
+//! server and tool wiring.
+//!
+//! The `..._str` id twins ([`RecollectionDto::id_str`] and friends) are a
+//! **wire concern of this MCP layer only** (issue #1468: a u64 id above 2^53
+//! is rounded by float-lossy JSON clients): the domain types in
+//! [`crate::model`] stay untouched — no extra field, no changed constructor —
+//! so the crate's public Rust API is unchanged and library consumers
+//! (bindings, crates.io users) see no breakage. Where a tool used to
+//! serialize a domain type directly ([`Recollection`], [`Explanation`]), a
+//! thin `Dto` wrapper here adds the string twins at the serialization
+//! boundary via `From`.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
-use crate::model::{ColumnFilter, Link, Recollection};
+use crate::model::{
+    deserialize_id, ColumnFilter, Explanation, Link, MemoryEdge, MemoryNode, Recollection,
+};
 use crate::service::Metadata;
 
 /// Parameters for the `remember` tool.
@@ -37,6 +48,11 @@ pub(super) struct RememberParams {
 pub(super) struct RememberResult {
     /// Stable id assigned to the remembered fact.
     pub(super) id: u64,
+    /// Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/
+    /// `feedback`, never `id` itself: a u64 above 2^53 loses precision
+    /// through a float-lossy JSON client (issue #1468). Additive: `id` is
+    /// unchanged, so 0.9.x callers are unaffected.
+    pub(super) id_str: String,
 }
 
 /// Parameters for the `recall` tool.
@@ -52,11 +68,56 @@ pub(super) struct RecallParams {
     pub(super) filter: Option<Metadata>,
 }
 
+/// Wire shape of one recalled memory: [`Recollection`] plus the `id_str`
+/// twin (issue #1468). Built via `From<Recollection>` at the serialization
+/// boundary so the domain type itself stays untouched.
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct RecollectionDto {
+    /// Stable id of the memory.
+    pub(super) id: u64,
+    /// Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/
+    /// `feedback`, never `id` itself: a u64 above 2^53 loses precision
+    /// through a float-lossy JSON client (issue #1468). Additive: `id` is
+    /// unchanged and stays present for 0.9.x callers.
+    pub(super) id_str: String,
+    /// Similarity score (higher is closer).
+    pub(super) score: f32,
+    /// Stored fact content.
+    pub(super) content: String,
+    /// Caller-supplied structured metadata stored with the fact, reserved
+    /// system keys excluded — the exact field [`Recollection::metadata`]
+    /// carries, forwarded unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) metadata: Option<Map<String, Value>>,
+}
+
+impl From<Recollection> for RecollectionDto {
+    fn from(memory: Recollection) -> Self {
+        Self {
+            id: memory.id,
+            id_str: memory.id.to_string(),
+            score: memory.score,
+            content: memory.content,
+            metadata: memory.metadata,
+        }
+    }
+}
+
 /// Result of the `recall` tool.
 #[derive(Serialize, JsonSchema)]
 pub(super) struct RecallResult {
     /// Recalled memories, most similar first.
-    pub(super) memories: Vec<Recollection>,
+    pub(super) memories: Vec<RecollectionDto>,
+}
+
+impl RecallResult {
+    /// Wrap recalled domain memories into their wire shape.
+    pub(super) fn new(memories: Vec<Recollection>) -> Self {
+        Self {
+            memories: memories.into_iter().map(RecollectionDto::from).collect(),
+        }
+    }
 }
 
 /// Parameters for the `recall_where` tool.
@@ -108,7 +169,7 @@ pub(super) struct RecallFusedParams {
 #[derive(Serialize, JsonSchema)]
 pub(super) struct RecallFusedResult {
     /// Recalled memories, most relevant first.
-    pub(super) memories: Vec<Recollection>,
+    pub(super) memories: Vec<RecollectionDto>,
     /// Chronological, date-prefixed rendering of `memories` (`- [YYYY-MM-DD]
     /// content` per line, oldest first, undated facts last). Present only when
     /// `date_field` was set.
@@ -120,13 +181,35 @@ pub(super) struct RecallFusedResult {
     pub(super) now: Option<String>,
 }
 
+impl RecallFusedResult {
+    /// Wrap fused-recall domain memories into their wire shape.
+    pub(super) fn new(
+        memories: Vec<Recollection>,
+        dated_context: Option<String>,
+        now: Option<String>,
+    ) -> Self {
+        Self {
+            memories: memories.into_iter().map(RecollectionDto::from).collect(),
+            dated_context,
+            now,
+        }
+    }
+}
+
 /// Parameters for the `relate` tool.
 #[derive(Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RelateParams {
-    /// Source memory id — the link points FROM here (as returned by `remember`/`recall`).
+    /// Source memory id — the link points FROM here (as returned by
+    /// `remember`/`recall`). Accepts a JSON number or a decimal string:
+    /// always relay a previous response's `id_str` here — a plain JSON
+    /// number above 2^53 loses precision on a float-lossy client (issue
+    /// #1468).
+    #[serde(deserialize_with = "deserialize_id")]
     pub(super) from: u64,
-    /// Target memory id — the link points TO here (as returned by `remember`/`recall`).
+    /// Target memory id — the link points TO here (as returned by
+    /// `remember`/`recall`). Same string-or-number contract as `from`.
+    #[serde(deserialize_with = "deserialize_id")]
     pub(super) to: u64,
     /// Directional relationship label, read as `from` <relation> `to`.
     /// Examples: `caused_by`, `depends_on`, `authored_by`, `supersedes`.
@@ -139,13 +222,19 @@ pub(super) struct RelateParams {
 pub(super) struct RelateResult {
     /// Id of the created edge.
     pub(super) edge_id: u64,
+    /// Decimal-string twin of `edge_id` (issue #1468) — see
+    /// [`RememberResult::id_str`].
+    pub(super) edge_id_str: String,
 }
 
 /// Parameters for the `forget` tool.
 #[derive(Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct ForgetParams {
-    /// Id of the memory to permanently delete (as returned by `remember` or `recall`).
+    /// Id of the memory to permanently delete (as returned by `remember` or
+    /// `recall`). Accepts a JSON number or a decimal string — relay `id_str`
+    /// to avoid float-precision loss above 2^53 (issue #1468).
+    #[serde(deserialize_with = "deserialize_id")]
     pub(super) id: u64,
 }
 
@@ -155,6 +244,9 @@ pub(super) struct ForgetParams {
 pub(super) struct ForgetResult {
     /// Id that was requested for deletion.
     pub(super) id: u64,
+    /// Decimal-string twin of `id` (issue #1468) — see
+    /// [`RememberResult::id_str`].
+    pub(super) id_str: String,
     /// Whether a memory actually existed under `id` and was deleted.
     /// `false` means nothing was stored there — a stale id or a typo, not a
     /// second successful deletion — so a caller can tell the two apart.
@@ -165,7 +257,11 @@ pub(super) struct ForgetResult {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct FeedbackParams {
-    /// Id of the recalled memory to reinforce (as returned by `recall`/`remember`).
+    /// Id of the recalled memory to reinforce (as returned by
+    /// `recall`/`remember`). Accepts a JSON number or a decimal string —
+    /// relay `id_str` to avoid float-precision loss above 2^53 (issue
+    /// #1468).
+    #[serde(deserialize_with = "deserialize_id")]
     pub(super) id: u64,
     /// `true` if the memory was useful (reinforce it), `false` if it was noise
     /// (weaken it).
@@ -178,6 +274,9 @@ pub(super) struct FeedbackParams {
 pub(super) struct FeedbackResult {
     /// Id of the reinforced memory.
     pub(super) id: u64,
+    /// Decimal-string twin of `id` (issue #1468) — see
+    /// [`RememberResult::id_str`].
+    pub(super) id_str: String,
     /// The memory's new learned confidence in `[0.0, 1.0]` after this feedback.
     pub(super) confidence: f32,
 }
@@ -195,6 +294,91 @@ pub(super) struct WhyParams {
     pub(super) filter: Option<Metadata>,
 }
 
+/// Wire shape of one node in a `why` subgraph: [`MemoryNode`] plus the
+/// `id_str` twin (issue #1468).
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct MemoryNodeDto {
+    /// Stable id of the memory.
+    pub(super) id: u64,
+    /// Decimal-string twin of `id` (issue #1468) — see
+    /// [`RecollectionDto::id_str`].
+    pub(super) id_str: String,
+    /// Stored fact content.
+    pub(super) content: String,
+    /// Distance in hops from the seed memory (the seed is hop `0`).
+    pub(super) hop: usize,
+}
+
+impl From<MemoryNode> for MemoryNodeDto {
+    fn from(node: MemoryNode) -> Self {
+        Self {
+            id: node.id,
+            id_str: node.id.to_string(),
+            content: node.content,
+            hop: node.hop,
+        }
+    }
+}
+
+/// Wire shape of one edge in a `why` subgraph: [`MemoryEdge`] plus the
+/// `from_str`/`to_str` twins (issue #1468).
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct MemoryEdgeDto {
+    /// Source memory id.
+    pub(super) from: u64,
+    /// Decimal-string twin of `from` (issue #1468) — see
+    /// [`RecollectionDto::id_str`].
+    pub(super) from_str: String,
+    /// Target memory id.
+    pub(super) to: u64,
+    /// Decimal-string twin of `to` (issue #1468) — see
+    /// [`RecollectionDto::id_str`].
+    pub(super) to_str: String,
+    /// Relationship label.
+    pub(super) relation: String,
+}
+
+impl From<MemoryEdge> for MemoryEdgeDto {
+    fn from(edge: MemoryEdge) -> Self {
+        Self {
+            from: edge.from,
+            from_str: edge.from.to_string(),
+            to: edge.to,
+            to_str: edge.to.to_string(),
+            relation: edge.relation,
+        }
+    }
+}
+
+/// Result of the `why` tool: the wire shape of [`Explanation`], with the
+/// decimal-string id twins on every node and edge (issue #1468).
+#[derive(Serialize, JsonSchema)]
+pub(super) struct ExplanationDto {
+    /// Memories in the subgraph, seed first.
+    pub(super) nodes: Vec<MemoryNodeDto>,
+    /// Typed edges connecting the nodes.
+    pub(super) edges: Vec<MemoryEdgeDto>,
+}
+
+impl From<Explanation> for ExplanationDto {
+    fn from(explanation: Explanation) -> Self {
+        Self {
+            nodes: explanation
+                .nodes
+                .into_iter()
+                .map(MemoryNodeDto::from)
+                .collect(),
+            edges: explanation
+                .edges
+                .into_iter()
+                .map(MemoryEdgeDto::from)
+                .collect(),
+        }
+    }
+}
+
 /// Parameters for the `remember_extracted` tool.
 #[derive(Deserialize, JsonSchema)]
 pub(super) struct RememberExtractedParams {
@@ -210,4 +394,7 @@ pub(super) struct RememberExtractedParams {
 pub(super) struct RememberExtractedResult {
     /// Stable ids of the stored facts, in extraction order.
     pub(super) ids: Vec<u64>,
+    /// Decimal-string twins of `ids`, same order (issue #1468) — see
+    /// [`RememberResult::id_str`].
+    pub(super) ids_str: Vec<String>,
 }

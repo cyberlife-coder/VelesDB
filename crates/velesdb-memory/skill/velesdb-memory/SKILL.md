@@ -52,6 +52,12 @@ well is a *loop you run throughout a task*, not a one-shot lookup.
    labels: `caused_by`, `decided_in`, `supersedes`, `references`, `depends_on`,
    `fixes`, `concerns`. This is the differentiator's fuel — build the graph
    incrementally, don't batch it up "later" (later never comes).
+   **Use `id_str`, not `id`, for `from`/`to`** (and for `feedback`/`forget`'s id
+   too): every id in a response also comes back as a decimal-string `id_str`
+   twin specifically because a raw JSON-number id can exceed 2^53 and get
+   rounded by a float-lossy client on the way back in, silently pointing
+   `relate` at the wrong memory — relay `id_str` verbatim instead of retyping
+   the numeric `id`.
 
 4. **Explain with `why`, not `recall`.** When asked to justify a value, a config,
    or a design choice, use `why`: recall alone finds text that *looks* similar;
@@ -59,10 +65,12 @@ well is a *loop you run throughout a task*, not a one-shot lookup.
    with the code but is the actual reason.
 
 5. **Reinforce after use (`feedback`).** After you act on a recalled memory, tell
-   the memory whether it helped: `feedback(id, success=true)` if it was useful,
-   `success=false` if it was noise. Recall re-ranks by this learned confidence, so
-   over time useful facts rise and noise sinks — the memory improves without any
-   retraining. Give feedback on the memory you actually used, not on everything.
+   the memory whether it helped: `feedback(id_str, success=true)` if it was useful,
+   `success=false` if it was noise — pass the recalled memory's `id_str`, not its
+   numeric `id` (see the `id_str` note above). Recall re-ranks by this learned
+   confidence, so over time useful facts rise and noise sinks — the memory
+   improves without any retraining. Give feedback on the memory you actually
+   used, not on everything.
 
 ## Concrete scenarios
 
