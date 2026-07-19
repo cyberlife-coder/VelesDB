@@ -594,9 +594,15 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Persist `working` under `project` + `session` (idempotent upsert:
     /// saving again replaces the previous state). Returns the system fact id.
     ///
+    /// Serialized size is capped at [`crate::limits::MAX_FACT_BYTES`] (1
+    /// MiB) — the same ceiling every other stored fact honors — checked
+    /// BEFORE anything is written, so an oversized working context is never
+    /// partially stored.
+    ///
     /// # Errors
     /// Returns [`MemoryError::WorkingContextCodec`] if serialization fails,
-    /// or a storage/embedding error.
+    /// [`MemoryError::ContextOverLimit`] if the serialized `working` exceeds
+    /// [`crate::limits::MAX_FACT_BYTES`], or a storage/embedding error.
     pub fn save_working_context(
         &self,
         project: &str,
@@ -605,6 +611,13 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     ) -> Result<u64, MemoryError> {
         let content = serde_json::to_string(working)
             .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))?;
+        if content.len() > crate::limits::MAX_FACT_BYTES {
+            return Err(MemoryError::ContextOverLimit(format!(
+                "working context of {} bytes exceeds the cap of {} bytes",
+                content.len(),
+                crate::limits::MAX_FACT_BYTES
+            )));
+        }
         let id = working_id(project, session);
         let embedding = self
             .embedder
@@ -621,6 +634,16 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// The working context previously saved under `project` + `session`,
     /// `None` when there is none.
     ///
+    /// Symmetric to [`Self::context_source_metadata`]'s squatter guard: the
+    /// slot is only ever served back when its metadata carries the reserved
+    /// [`CTX_WORKING_FIELD`] marker (set exclusively by
+    /// [`Self::save_working_context`]). A slot occupied by an unmarked caller
+    /// fact — one that happened to land on this salted id, or a forged
+    /// probe — is indistinguishable from "nothing saved" on purpose: `None`,
+    /// never the forged content, and never an error (the caller cannot tell
+    /// a squatted slot from a genuinely empty one, which is the point — it
+    /// must never learn that *something* occupies this id).
+    ///
     /// # Errors
     /// Returns [`MemoryError::WorkingContextCodec`] if the stored payload
     /// does not parse, or a storage error.
@@ -629,7 +652,17 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         project: &str,
         session: &str,
     ) -> Result<Option<WorkingContext>, MemoryError> {
-        match self.store.get(working_id(project, session))? {
+        let slot = working_id(project, session);
+        let payloads = self.store.get_metadata_batch(&[slot])?;
+        let marked = payloads
+            .into_iter()
+            .next()
+            .flatten()
+            .is_some_and(|meta| meta.get(CTX_WORKING_FIELD) == Some(&Value::Bool(true)));
+        if !marked {
+            return Ok(None);
+        }
+        match self.store.get(slot)? {
             Some((content, _)) => serde_json::from_str(&content)
                 .map(Some)
                 .map_err(|err| MemoryError::WorkingContextCodec(err.to_string())),

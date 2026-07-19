@@ -247,6 +247,36 @@ fn test_ttl_extension_only_extends_a_shorter_ttl() {
 }
 
 #[test]
+fn test_load_working_context_never_serves_an_unmarked_squatter() {
+    // Given a slot occupied by a caller fact that carries none of the
+    // bridge's `_veles_ctx_working` marker (forged directly via the store —
+    // the working-context slot is salted/deterministic, so this can't be
+    // reached through the public API: a real fact's id is `stable_id(fact)`,
+    // not caller-chosen)
+    let (_dir, svc) = open_service();
+    let project = "veles";
+    let session = "forged-session";
+    let slot = working_id(project, session);
+    let forged_content = "{\"goal\":\"forged working state\"}";
+    let embedding = svc.embedder.embed(forged_content).expect("embed");
+    svc.store
+        .store(slot, forged_content, &embedding)
+        .expect("forge an unmarked squatter at the exact working-context slot");
+
+    // When a later session tries to load the working context
+    let loaded = svc
+        .load_working_context(project, session)
+        .expect("load must not error on a squatted slot");
+
+    // Then it must never see the forged content — indistinguishable from no
+    // working context ever having been saved.
+    assert!(
+        loaded.is_none(),
+        "an unmarked occupied working-context slot must never be served back: {loaded:?}"
+    );
+}
+
+#[test]
 fn test_should_store_source_never_rewrites_an_unmarked_occupied_slot() {
     // Given a slot occupied by a caller fact that carries none of the
     // bridge's `_veles_ctx_source` marker (forged directly via the store —
