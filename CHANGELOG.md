@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   effect: one leaked client can no longer brick every later session, and
   when a store really is locked, the user is told what to do about it.
 
+### Documentation
+
+- **Clarified**: images are never resized; oversized media is externalized
+  with a retrieval handle (`ctx://source/<hash>`), not downscaled.
+
 ### Added — deterministic context compiler (EPIC-P-070 base feature; shipped as `velesdb-memory` 0.8.0 / `velesdb-node` 0.8.0 via the `velesdb-memory-v0.8.0` tag — the EPIC-P-071 follow-ups further down in this section ship separately, see the note below)
 
 - **`velesdb-memory`**: new default `context` feature — a deterministic

@@ -4,7 +4,7 @@
 //!
 //! Wire shapes reuse the domain types from [`crate::context`] directly
 //! (`CompileRequest` *is* the tool input, `CompiledContext` the output) —
-//! the only DTOs here are the thin request envelopes of the three smaller
+//! the only DTOs here are the thin request envelopes of the five smaller
 //! tools. Same conventions as every other tool: `spawn_blocking` around the
 //! sync service, errors mapped through the transport-neutral category.
 
