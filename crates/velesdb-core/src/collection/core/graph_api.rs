@@ -10,7 +10,7 @@ use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::index::VectorIndex;
 use crate::point::{Point, SearchResult};
-use crate::storage::{PayloadStorage, VectorStorage};
+use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 
 use super::graph_property_index_wiring::extract_labels;
 use super::graph_traversal_helpers::{
@@ -45,9 +45,18 @@ impl Collection {
     /// collection.add_edge(edge)?;
     /// ```
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
-        // Reject before any mutation so a violation leaves no partial write
-        // and does not bump write_generation.
-        self.validate_edge_referential_integrity(&edge)?;
+        // Position 1, hoisted before the payload guard below (position 3) so
+        // the acquisition order is never 3 → 1 (see LOCK ORDERING in
+        // collection/types.rs).
+        let schema = self.non_schemaless_graph_schema();
+
+        // Position 3, held from the referential-integrity check through the
+        // end of the write below — see `validate_edge_endpoints_exist`'s
+        // "Concurrency guarantee" doc for the race this closes. Reject
+        // before any mutation so a violation leaves no partial write and
+        // does not bump write_generation.
+        let payload_guard = self.storage.payload_storage.read();
+        Self::validate_edge_referential_integrity(&payload_guard, schema.as_ref(), &edge)?;
 
         let edge_id = edge.id();
         let rel_type = edge.label().to_string();
@@ -63,7 +72,8 @@ impl Collection {
         // The WAL lock spans append + apply so the WAL order always equals
         // the store-apply order (replay must resolve id collisions exactly
         // like live execution) and concurrent appends can never interleave
-        // a multi-write entry.
+        // a multi-write entry. Position 3b — acquired here while STILL
+        // holding `payload_guard` (position 3): see `GraphStore::edge_wal_lock`.
         let _wal_guard = self.graph.edge_wal_lock.lock();
         #[cfg(feature = "persistence")]
         crate::collection::graph::edge_wal::wal_append_add(
@@ -81,6 +91,9 @@ impl Collection {
         self.generations
             .write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        // `payload_guard` is dropped here (end of scope), AFTER the edge is
+        // fully durable — see the concurrency guarantee this enforces.
         Ok(())
     }
 
@@ -105,16 +118,24 @@ impl Collection {
             return Ok(0);
         }
 
-        // Validate the ENTIRE batch before any mutation (WAL append or store
-        // write), so a single violating edge fails the whole batch with no
-        // partial write and no orphaned WAL entry.
+        // Position 1, hoisted before the payload guard (see add_edge).
+        let schema = self.non_schemaless_graph_schema();
+
+        // Position 3, held for validating the ENTIRE batch through the end
+        // of the apply below — with the guard held for the whole batch, "an
+        // endpoint disappears mid-batch" is impossible by construction (see
+        // `validate_edge_endpoints_exist`'s concurrency guarantee), so no
+        // rollback is needed. A single violating edge still fails the whole
+        // batch with no partial write and no orphaned WAL entry.
+        let payload_guard = self.storage.payload_storage.read();
         for edge in &edges {
-            self.validate_edge_referential_integrity(edge)?;
+            Self::validate_edge_referential_integrity(&payload_guard, schema.as_ref(), edge)?;
         }
 
         // Unconditional WAL (see add_edge): writing edges implies wanting
         // them back after a restart, whatever the collection type. The WAL
-        // lock spans append + apply (see add_edge).
+        // lock spans append + apply (see add_edge). Position 3b, acquired
+        // while STILL holding `payload_guard` (position 3).
         let _wal_guard = self.graph.edge_wal_lock.lock();
         #[cfg(feature = "persistence")]
         crate::collection::graph::edge_wal::wal_append_add_batch(
@@ -196,26 +217,55 @@ impl Collection {
         Ok(())
     }
 
+    /// Returns the collection's graph schema, but only when it declares a
+    /// non-schemaless mode (`None` otherwise, including "no schema at all").
+    ///
+    /// Reads `config` — lock order position **1**. Callers MUST call this
+    /// BEFORE acquiring `payload_storage` (position 3): resolving the
+    /// schema after the payload guard would invert the documented
+    /// acquisition order to 3 → 1 (see LOCK ORDERING in
+    /// `collection/types.rs`).
+    fn non_schemaless_graph_schema(&self) -> Option<GraphSchema> {
+        match self.storage.config.read().graph_schema.clone() {
+            Some(s) if !s.is_schemaless() => Some(s),
+            _ => None,
+        }
+    }
+
     /// Enforces that both edge endpoints have a stored node payload
     /// (schemaless-mode existence check — see
     /// [`Self::validate_edge_referential_integrity`]). Unlike
     /// [`Self::endpoint_node_type`], this does not require a `_labels`
     /// field — plain (untyped) node payloads are enough.
     ///
-    /// Same check-then-write race as the strict-schema path
-    /// ([`Self::endpoint_node_type`]): the payload-store lock is released
-    /// before the edge is written, so a concurrent `delete()` of an
-    /// endpoint between this check and the write can still land a
-    /// dangling edge. Pre-existing characteristic of this validate-then-
-    /// mutate pattern, not introduced by this check.
+    /// Takes the already-acquired payload-store guard by reference instead
+    /// of re-locking — see the "Concurrency guarantee" section below for
+    /// why a fresh lock acquisition here would be both redundant and unsafe.
+    ///
+    /// # Concurrency guarantee
+    ///
+    /// `add_edge`/`add_edges_batch` hold `payload_storage`'s READ guard from
+    /// this check through the end of the edge write (WAL append + edge-store
+    /// apply). `delete()`'s node-removal path acquires `payload_storage`'s
+    /// WRITE guard before it can remove a payload, so it blocks until that
+    /// read guard is released — by which point the edge is already durable,
+    /// and `delete()`'s own edge cascade (`cascade_delete_node_edges`) will
+    /// see and remove it. This closes the race the previous version of this
+    /// check left open (drop the read guard, THEN write the edge — a
+    /// concurrent delete could interleave in between and land a dangling
+    /// edge). Passing the guard down also avoids a second, nested
+    /// `payload_storage.read()` call from inside the outer guard's scope:
+    /// parking_lot's `RwLock` is not safely re-entrant once a writer is
+    /// queued, so a nested read acquired on the same thread while a writer
+    /// waits would deadlock.
     ///
     /// # Errors
     ///
     /// Returns `Error::NodeNotFound` if `source` or `target` has no stored
     /// payload.
-    fn validate_edge_endpoints_exist(&self, edge: &GraphEdge) -> Result<()> {
+    fn validate_edge_endpoints_exist(payload: &LogPayloadStorage, edge: &GraphEdge) -> Result<()> {
         for node_id in [edge.source(), edge.target()] {
-            if self.get_node_payload(node_id)?.is_none() {
+            if payload.retrieve(node_id)?.is_none() {
                 return Err(Error::NodeNotFound(node_id));
             }
         }
@@ -232,37 +282,49 @@ impl Collection {
     /// In strict mode it additionally verifies that the edge type /
     /// endpoint types satisfy the declared schema.
     ///
+    /// `payload` is the caller's already-acquired `payload_storage` read
+    /// guard (see [`Self::validate_edge_endpoints_exist`]'s concurrency
+    /// guarantee) and `schema` is the caller's [`Self::non_schemaless_graph_schema`]
+    /// result — both resolved by the caller so this function never acquires
+    /// a lock itself.
+    ///
     /// # Errors
     ///
     /// Returns `Error::NodeNotFound` (schemaless) or `Error::SchemaValidation`
     /// (strict mode: missing endpoint, no `_labels`, or an edge-type
     /// constraint violation).
-    fn validate_edge_referential_integrity(&self, edge: &GraphEdge) -> Result<()> {
-        let schema = match self.storage.config.read().graph_schema.clone() {
-            Some(s) if !s.is_schemaless() => s,
-            _ => return self.validate_edge_endpoints_exist(edge),
+    fn validate_edge_referential_integrity(
+        payload: &LogPayloadStorage,
+        schema: Option<&GraphSchema>,
+        edge: &GraphEdge,
+    ) -> Result<()> {
+        let Some(schema) = schema else {
+            return Self::validate_edge_endpoints_exist(payload, edge);
         };
 
-        let from_type = self.endpoint_node_type(edge.source())?;
-        let to_type = self.endpoint_node_type(edge.target())?;
+        let from_type = Self::endpoint_node_type(payload, edge.source())?;
+        let to_type = Self::endpoint_node_type(payload, edge.target())?;
         schema.validate_edge_type(edge.label(), &from_type, &to_type)
     }
 
     /// Resolves the node type (first `_labels` entry) for a graph node,
     /// requiring the node to exist and carry a label (strict-mode helper).
     ///
+    /// Takes the already-acquired payload-store guard by reference — see
+    /// [`Self::validate_edge_endpoints_exist`]'s concurrency guarantee.
+    ///
     /// # Errors
     ///
     /// Returns `Error::SchemaValidation` if the node has no stored payload
     /// (referential integrity violation) or the payload declares no `_labels`.
-    fn endpoint_node_type(&self, node_id: u64) -> Result<String> {
-        let payload = self.storage.payload_storage.read().retrieve(node_id)?;
-        let Some(payload) = payload else {
+    fn endpoint_node_type(payload: &LogPayloadStorage, node_id: u64) -> Result<String> {
+        let stored = payload.retrieve(node_id)?;
+        let Some(stored) = stored else {
             return Err(Error::SchemaValidation(format!(
                 "edge references non-existent node {node_id}"
             )));
         };
-        extract_labels(&payload)
+        extract_labels(&stored)
             .into_iter()
             .next()
             .ok_or_else(|| Error::SchemaValidation(format!("node {node_id} has no '_labels' type")))
