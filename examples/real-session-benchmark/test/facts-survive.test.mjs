@@ -30,6 +30,8 @@ import { SYSTEM, TURN_EVENTS } from '../corpus/session.mjs'
 import { TURN_QUESTIONS } from '../corpus/questions.mjs'
 import { SYSTEM_VIBE, TURN_EVENTS_VIBE } from '../corpus/session-vibe.mjs'
 import { TURN_QUESTIONS_VIBE } from '../corpus/questions-vibe.mjs'
+import { LONG_TURN_EVENTS } from '../corpus/session-long.mjs'
+import { TURN_QUESTIONS_LONG } from '../corpus/questions-long.mjs'
 import { loadNodeAddon } from '../lib/compile-node.mjs'
 import { QUERY, LOSSLESS_BUDGET } from '../lib/ab-session.mjs'
 
@@ -232,6 +234,37 @@ test(
       questions: TURN_QUESTIONS_VIBE,
     })
     assert.equal(failures.length, 0, `${failures.length} fact(s) lost in the VIBE-CODING LOSSLESS arm:\n${formatFailureReport(failures)}`)
+  },
+)
+
+// --- LONG-SESSION scenario extension (corpus/questions-long.mjs, 2026-07) ---
+// The 36-turn corpus became billable (online-long.mjs), so its ground truth
+// gets the same CI-enforced survival gate as the other two scenarios.
+// Turns 1-14 duplicate the base-scenario checks by construction (the long
+// corpus IS the base corpus continued) — accepted cost, the checker is fast.
+test(
+  'LONG-SESSION scenario (36 turns), LOSSLESS arm: every ground-truth fact from every turn survives compileContext, inline or via a handle that actually resolves',
+  async () => {
+    const { failures } = await checkFactsSurviveArm({
+      budget: LOSSLESS_BUDGET,
+      label: 'long-lossless',
+      turnEvents: LONG_TURN_EVENTS,
+      questions: TURN_QUESTIONS_LONG,
+    })
+    assert.equal(failures.length, 0, `${failures.length} fact(s) lost in the LONG-SESSION LOSSLESS arm:\n${formatFailureReport(failures)}`)
+  },
+)
+
+test(
+  'LONG-SESSION scenario (36 turns), WINDOW-8000 arm: every ground-truth fact from every turn survives compileContext, inline or via a handle that actually resolves',
+  async () => {
+    const { failures } = await checkFactsSurviveArm({
+      budget: 8000,
+      label: 'long-window-8000',
+      turnEvents: LONG_TURN_EVENTS,
+      questions: TURN_QUESTIONS_LONG,
+    })
+    assert.equal(failures.length, 0, `${failures.length} fact(s) lost in the LONG-SESSION WINDOW-8000 arm:\n${formatFailureReport(failures)}`)
   },
 )
 

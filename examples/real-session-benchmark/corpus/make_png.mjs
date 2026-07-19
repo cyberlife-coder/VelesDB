@@ -113,8 +113,29 @@ export function generateCorpusImages() {
   }
 }
 
+// Retina vibe-coding set (corpus/images-vibe-retina.mjs, BENCH_RETINA=1):
+// the SAME five vibe captures regenerated at 1512x982 — a full-width Retina
+// (2x, 756x491 logical) browser-window capture, the size an agent
+// screenshot tool actually produces on a MacBook — pixel cost
+// ceil(1512*982/750) = 1980 tokens/image vs 308/392 for the cropped set.
+// Separate function so the committed baseline set above can never drift
+// from a retina-related edit; same badge-parameter relationships (three
+// distinct bell captures, two distinct panel captures) so the US-009
+// mechanisms behave identically, just at day-scale image weight.
+export function generateRetinaImages() {
+  const W = 1512
+  const H = 982
+  return {
+    IMG_BELL_BUG_RETINA: makeScreenshotPng(W, H, BUG_RED, { bannerShade: BELL_BANNER, badgeX0Frac: 0.86, badgeX1Frac: 0.99 }),
+    IMG_BELL_ATTEMPT_RETINA: makeScreenshotPng(W, H, BUG_RED, { bannerShade: BELL_BANNER, badgeX0Frac: 0.8, badgeX1Frac: 0.9 }),
+    IMG_BELL_FIXED_RETINA: makeScreenshotPng(W, H, FIX_GREEN, { bannerShade: BELL_BANNER, badgeX0Frac: 0.88, badgeX1Frac: 0.96 }),
+    IMG_PANEL_BUG_RETINA: makeScreenshotPng(W, H, BUG_RED, { bannerShade: PANEL_BANNER, badgeX0Frac: 0.5, badgeX1Frac: 0.72 }),
+    IMG_PANEL_FIXED_RETINA: makeScreenshotPng(W, H, FIX_GREEN, { bannerShade: PANEL_BANNER, badgeX0Frac: 0.55, badgeX1Frac: 0.68 }),
+  }
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const images = generateCorpusImages()
+  const images = { ...generateCorpusImages(), ...generateRetinaImages() }
   for (const [name, buf] of Object.entries(images)) {
     console.log(`${name}: ${buf.length} bytes, ${buf.toString('base64').length} b64 chars`)
   }
