@@ -7,8 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`velesdb-memory`**: metadata is now size-capped. Caller-supplied
+  `metadata` on `remember`/`remember_with_ttl` and per-fragment metadata in
+  the context compiler were unbounded, letting an arbitrarily large JSON
+  blob be persisted as a DoS vector. Added `MAX_METADATA_BYTES` (64 KiB)
+  and a typed `MemoryError::MetadataTooLarge`, enforced across every
+  adapter (MCP, Python, Node, WASM). `save_working_context` is now capped
+  at the existing 1 MiB `MAX_FACT_BYTES` ceiling, and
+  `load_working_context` now verifies the reserved system marker before
+  returning a stored context, so a slot squatted by an unrelated fact
+  yields `None` instead of being served back. (#1458)
+
+### Added
+
+- **`velesdb-memory` (Python)**: `MemoryService.feedback` is now exposed,
+  closing the RL feedback loop from the Python binding. (#1452)
+
 ### Fixed
 
+- **`velesdb-memory`**: a permanent `ctx://source/` handle could expire
+  silently — a source first written under a TTL was never promoted when a
+  later compile asked for permanent storage. Storage now applies a
+  never-downgrade rule: permanent always wins over an existing TTL, and a
+  TTL never downgrades an existing permanent slot. (#1454)
+- **`velesdb-memory`**: two byte-identical screenshots of the same
+  supersession target could both drop from compiled context instead of one
+  surviving. Media dedup now re-anchors onto the freshest non-superseded
+  occurrence. (#1453)
 - **`velesdb-memory`**: hardened the MCP server against a leaked client
   process (#1448). The server itself was already healthy (it exits cleanly
   on stdin EOF), but a client that leaks its child process — observed in
@@ -31,6 +58,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Clarified**: images are never resized; oversized media is externalized
   with a retrieval handle (`ctx://source/<hash>`), not downscaled.
+- **`velesdb-memory`**: per-surface parity for the context compiler is now
+  stated honestly (MCP/Rust full, Node minus `context_savings`/
+  `explain_compilation`, Python merged on `develop` but not yet in the
+  published wheel, WASM `compileContext` only); fixed
+  `retrieve_context_source`'s documented Python return type (`str` ->
+  `dict`); documented a known limitation that the compiled-context cache
+  prefix is byte-stable only while the compile `query` stays the same —
+  under a tight budget, a query change can reorder competing cache-marked
+  fragments (issue #1455). (#1459)
+
+### Changed
+
+- **CI**: `examples/**` changes now trigger CI, a test guards the
+  generated Node `index.d.ts` against stale hand edits, and four
+  previously-unpinned context-compiler behaviors are now covered by
+  regression tests. (#1456)
 
 ### Added — deterministic context compiler (EPIC-P-070 base feature; shipped as `velesdb-memory` 0.8.0 / `velesdb-node` 0.8.0 via the `velesdb-memory-v0.8.0` tag — the EPIC-P-071 follow-ups further down in this section ship separately, see the note below)
 
