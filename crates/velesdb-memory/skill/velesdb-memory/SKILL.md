@@ -37,8 +37,13 @@ well is a *loop you run throughout a task*, not a one-shot lookup.
    decision is made or a durable fact is established, store it. Two things make it
    valuable later, so never skip them:
    - **metadata** (the `ColumnStore` facet): `{ "type": "decision"|"fact"|"incident",
-     "area": "payments", "project": "acme", "date": "2026-07-11", "status": "active" }`
-     — this is what lets you filter/scope recall later.
+     "area": "payments", "project": "acme", "date": 20260711, "status": "active" }`
+     — this is what lets you filter/scope recall later. **Store dates and other
+     comparable values NUMERICALLY** (`20260711`, not `"2026-07-11"`):
+     `recall_where`'s range/comparison filters (`lt`/`le`/`gt`/`ge`) are
+     type-strict with no coercion (issue #1473) — a numeric filter value never
+     matches a string-stored one, silently returning nothing, no error. Plain
+     equality filters on `recall`/`recall_fused` are unaffected either way.
    - **links** (the graph facet): connect the new fact to the artifacts it concerns
      — the PR, the ticket, the file, the prior decision it supersedes. **The graph
      is what makes `why` work.** A fact with no edges is invisible to `why`.

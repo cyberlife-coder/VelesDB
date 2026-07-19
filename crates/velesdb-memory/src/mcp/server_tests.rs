@@ -1100,3 +1100,25 @@ fn test_get_info_instructions_cover_memory_compiler_and_working_context() {
         );
     }
 }
+
+#[test]
+fn test_recall_where_description_documents_type_strict_comparisons() {
+    // Issue #1473: `recall_where`'s comparisons are type-strict (a
+    // string-stored value never matches a numeric filter value, and vice
+    // versa), with no runtime coercion. The tool description must say so
+    // explicitly instead of silently returning an empty set.
+    let tool = McpServer::recall_where_tool_attr();
+    let description = tool
+        .description
+        .expect("recall_where must declare a description");
+    let lower = description.to_lowercase();
+    assert!(
+        lower.contains("type-strict") || lower.contains("type strict"),
+        "recall_where's description must document type-strict comparisons: {description}"
+    );
+    assert!(
+        description.to_lowercase().contains("numeric"),
+        "recall_where's description must advise storing comparable values \
+         (e.g. dates) numerically: {description}"
+    );
+}
