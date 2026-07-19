@@ -27,6 +27,12 @@ fn populate(db: &Database) {
     let col = db
         .get_graph_collection("kg")
         .expect("test: get graph collection");
+    // add_edge requires both endpoints to have a stored node payload
+    // (#1442) — store all 5 nodes referenced by the edges below first.
+    for id in [1, 2, 3, 4, 5] {
+        col.upsert_node_payload(id, &serde_json::json!({}))
+            .expect("test: store node payload");
+    }
     for (id, src, tgt, lbl) in [
         (100, 1, 2, "KNOWS"),
         (101, 2, 3, "KNOWS"),
@@ -417,8 +423,14 @@ fn test_repl_nodes_nonexistent_collection_returns_error() {
 
 #[test]
 fn test_repl_add_edge_creates_edge() {
-    // GIVEN: an empty graph
+    // GIVEN: an empty graph with the edge's endpoint nodes already created
+    // (add_edge requires both endpoints to have a stored node payload, #1442)
     let (_dir, db) = setup_db();
+    let col = graph_col(&db);
+    col.upsert_node_payload(10, &serde_json::json!({}))
+        .expect("test: store node 10");
+    col.upsert_node_payload(20, &serde_json::json!({}))
+        .expect("test: store node 20");
 
     // WHEN: .graph add-edge kg 1 10 20 KNOWS
     let parts: Vec<&str> = vec![".graph", "add-edge", "kg", "1", "10", "20", "KNOWS"];

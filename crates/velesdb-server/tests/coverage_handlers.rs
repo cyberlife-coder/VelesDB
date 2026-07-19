@@ -20,7 +20,9 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use common::{create_graph_collection, create_graph_node, create_test_app, create_test_app_with_state};
+use common::{
+    create_graph_collection, create_graph_node, create_test_app, create_test_app_with_state,
+};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;

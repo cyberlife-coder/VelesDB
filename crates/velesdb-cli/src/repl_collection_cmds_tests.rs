@@ -53,9 +53,12 @@ fn graph_db(name: &str) -> (Database, TempDir) {
     db.create_graph_collection(name, GraphSchema::schemaless())
         .unwrap();
     let col = db.get_graph_collection(name).unwrap();
-    col.add_edge(GraphEdge::new(1, 10, 11, "LINKS").unwrap())
-        .unwrap();
+    // add_edge requires both endpoints to have a stored node payload
+    // (#1442) — store both nodes before creating the edge.
     col.upsert_node_payload(10, &serde_json::json!({"name": "n10"}))
+        .unwrap();
+    col.upsert_node_payload(11, &serde_json::json!({})).unwrap();
+    col.add_edge(GraphEdge::new(1, 10, 11, "LINKS").unwrap())
         .unwrap();
     col.flush().unwrap();
     (db, dir)

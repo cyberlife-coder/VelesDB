@@ -252,11 +252,11 @@ pub async fn create_graph_node(app: &Router, collection: &str, node_id: u64) {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(format!("/collections/{collection}/graph/nodes/{node_id}/payload"))
-                .header("Content-Type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({ "payload": {} }).to_string(),
+                .uri(format!(
+                    "/collections/{collection}/graph/nodes/{node_id}/payload"
                 ))
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::json!({ "payload": {} }).to_string()))
                 .expect("test: build create graph node request"),
         )
         .await
