@@ -51,6 +51,17 @@ pub enum MemoryError {
     #[error("metadata key '{0}' is reserved")]
     ReservedKey(String),
 
+    /// Caller-supplied `metadata` (on `remember`/`remember_with_ttl` or a
+    /// context-compiler fragment) exceeded [`crate::limits::MAX_METADATA_BYTES`]
+    /// — a `DoS` guard, since metadata is a keyed lookup facet, not a payload.
+    #[error("metadata of {bytes} bytes exceeds the cap of {max} bytes")]
+    MetadataTooLarge {
+        /// The serialized size of the rejected metadata, in bytes.
+        bytes: usize,
+        /// The cap that was exceeded ([`crate::limits::MAX_METADATA_BYTES`]).
+        max: usize,
+    },
+
     /// Failure producing a text embedding.
     #[error("embedding error: {0}")]
     Embed(#[from] EmbedError),
@@ -139,7 +150,8 @@ impl MemoryError {
             Self::EmptyFact
             | Self::ReservedKey(_)
             | Self::InvalidFilter(_)
-            | Self::InvalidRelation(_) => ErrorCategory::InvalidInput,
+            | Self::InvalidRelation(_)
+            | Self::MetadataTooLarge { .. } => ErrorCategory::InvalidInput,
             #[cfg(feature = "context")]
             Self::ContextBudget { .. } | Self::ContextOverLimit(_) => ErrorCategory::InvalidInput,
             #[cfg(feature = "context")]
