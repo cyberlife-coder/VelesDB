@@ -58,8 +58,9 @@ pub use insights::{CompilationInsights, ModelPricing, PricingTable};
 pub use model::{
     CompilePolicy, CompileRequest, CompiledContext, CompiledSection, ContextAction,
     ContextDecision, ContextDecisionRef, ContextFact, ContextFragment, ContextSavings,
-    ContextSource, FidelityRisk, ImportanceWeights, MediaRef, MemoryScope, RetrievalHandle,
-    SectionKind, SourceReference, WorkingContext, WorkingContextIndex, WorkingContextSession,
+    ContextSource, ContextWarning, FidelityRisk, ImportanceWeights, MediaRef, MemoryScope,
+    RetrievalHandle, SectionKind, SourceReference, WorkingContext, WorkingContextIndex,
+    WorkingContextSession,
 };
 pub use relevance::DeterministicReranker;
 
@@ -161,6 +162,19 @@ impl ContextCompiler {
     /// [`MemoryError::ContextBudget`] when the token budget minus the
     /// policy's response reserve leaves no room for any context.
     pub fn compile(&self, request: &CompileRequest) -> Result<CompiledContext, MemoryError> {
+        let compiled = self.compile_raw(request)?;
+        Ok(apply_slim(compiled, self.effective_policy(request)))
+    }
+
+    /// [`Self::compile`] without the [`CompilePolicy::slim_response`]
+    /// post-processing: the memory bridge needs the FULL `decisions` to
+    /// annotate memory provenance and recompute `warnings` (both can change
+    /// a pulled fragment's `relevance`/`reason` after this returns) before
+    /// slimming happens — every other caller should use [`Self::compile`].
+    pub(crate) fn compile_raw(
+        &self,
+        request: &CompileRequest,
+    ) -> Result<CompiledContext, MemoryError> {
         let policy = self.effective_policy(request);
         let usable = validate(request, policy)?;
         let analyses = analyze(request, policy, self.estimator.as_ref());
@@ -188,6 +202,7 @@ impl ContextCompiler {
             .map(|analysis| decision(analysis, analyses, emissions))
             .collect();
         let insights = self.insights(request, analyses, &decisions, emissions, &content);
+        let warnings = warnings_for(&decisions);
         CompiledContext {
             retrieval_handles: retrieval_handles(analyses, &decisions),
             sources: analyses
@@ -206,6 +221,7 @@ impl ContextCompiler {
             sections,
             decisions,
             insights,
+            warnings,
         }
     }
 
@@ -895,6 +911,54 @@ fn externalized_verdict(analysis: &Analysis) -> Verdict {
         ),
         Some(provenance::handle_for(analysis.handle_hash())),
     )
+}
+
+/// Relevance floor a [`ContextAction::Retrieve`] decision must clear to
+/// produce a [`ContextWarning`] (V2a-2 quick win). Chosen so the two
+/// existing compile goldens (neither carries a `Retrieve` decision) stay
+/// byte-identical; recalibrate against a wider corpus if warnings prove too
+/// noisy or too quiet in practice.
+const WARNING_RELEVANCE_THRESHOLD: f32 = 0.35;
+
+/// The warnings computed from `decisions` (V2a-2 quick win): every
+/// [`ContextAction::Retrieve`] decision at or above
+/// [`WARNING_RELEVANCE_THRESHOLD`]. Shared by [`ContextCompiler::finish`]
+/// (the pre-memory-annotation value) and the memory bridge, which
+/// recomputes it AFTER `annotate_memory_provenance` may have rewritten a
+/// pulled fragment's `relevance`/`reason` — a warning must never quote a
+/// stale value.
+///
+/// Deliberately scoped to `Retrieve` only, not `Drop`: every `Drop` this
+/// compiler emits is `dup_verdict`'s byte-identical duplicate, whose content
+/// survives through its kept twin — never a real loss, so including it
+/// would just be noise on every dedup.
+pub(crate) fn warnings_for(decisions: &[ContextDecision]) -> Vec<ContextWarning> {
+    decisions
+        .iter()
+        .filter(|decision| {
+            decision.action == ContextAction::Retrieve
+                && decision.relevance >= WARNING_RELEVANCE_THRESHOLD
+        })
+        .map(|decision| ContextWarning {
+            fragment_id: decision.fragment_id,
+            action: decision.action,
+            relevance: decision.relevance,
+            reason: decision.reason.clone(),
+        })
+        .collect()
+}
+
+/// Apply [`CompilePolicy::slim_response`]: empty `sections`/`decisions`,
+/// leaving `content`/`insights`/`risk`/`warnings`/`sources`/`retrieval_handles`
+/// untouched. Split out of [`ContextCompiler::compile`] so the memory bridge
+/// can call it as its own LAST step, after annotating memory provenance and
+/// recomputing `warnings` on the full `decisions` ([`ContextCompiler::compile_raw`]).
+pub(crate) fn apply_slim(mut compiled: CompiledContext, policy: &CompilePolicy) -> CompiledContext {
+    if policy.slim_response {
+        compiled.sections.clear();
+        compiled.decisions.clear();
+    }
+    compiled
 }
 
 /// The handles of every fully externalized fragment, in decision order.

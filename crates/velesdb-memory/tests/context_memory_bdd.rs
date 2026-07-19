@@ -1600,3 +1600,181 @@ fn test_stored_media_sources_are_invisible_to_normal_recall() {
         "a stored media source must be invisible to normal recall, got {hits:?}"
     );
 }
+
+// --- V2a-2: warnings[] and slim_response ------------------------------------
+
+#[test]
+fn test_compile_context_externalized_relevant_fragment_produces_a_warning() {
+    // Given a fragment that matches the query but cannot fit the budget at
+    // all (a tiny cache-marked filler eats the whole tiny budget first)
+    let (_dir, svc) = service();
+    let filler = fragment("filler");
+    let relevant = fragment(
+        "the deploy pipeline runs clippy before every merge across the whole fleet nightly",
+    );
+    let req = request("deploy pipeline", vec![filler, relevant], 3);
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc.compile_context(&compiler, &req).expect("compile");
+
+    // Sanity: the relevant fragment was indeed externalized, not packed.
+    let retrieve_decision = out
+        .decisions
+        .iter()
+        .find(|d| d.action == ContextAction::Retrieve)
+        .expect("the relevant fragment must not fit this tiny budget");
+    assert!(retrieve_decision.relevance >= 0.35);
+
+    // Then it shows up in `warnings` — a mechanical signal the skill can
+    // check without scanning every decision by hand.
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.fragment_id == retrieve_decision.fragment_id),
+        "an externalized, relevant fragment must produce a warning: {:?}",
+        out.warnings
+    );
+}
+
+#[test]
+fn test_compile_context_externalized_irrelevant_fragment_has_no_warning() {
+    // Given a fragment externalized by budget but sharing NO query terms
+    let (_dir, svc) = service();
+    let filler = fragment("filler");
+    let irrelevant = fragment(
+        "unrelated prose about houseplants and weekend gardening that goes on for a while",
+    );
+    let req = request("deploy pipeline", vec![filler, irrelevant], 3);
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc.compile_context(&compiler, &req).expect("compile");
+
+    let retrieve_decision = out
+        .decisions
+        .iter()
+        .find(|d| d.action == ContextAction::Retrieve)
+        .expect("the irrelevant fragment must not fit this tiny budget");
+    assert!(retrieve_decision.relevance < 0.35);
+
+    // Then it does NOT warn — below the relevance threshold, warnings would
+    // just be noise.
+    assert!(
+        out.warnings.is_empty(),
+        "a below-threshold externalized fragment must not warn: {:?}",
+        out.warnings
+    );
+}
+
+#[test]
+fn test_compile_context_duplicate_drop_never_warns() {
+    // Given two byte-identical fragments (a Drop decision, but the content
+    // survives through the kept twin — nothing is actually lost)
+    let (_dir, svc) = service();
+    let content = "the deploy pipeline runs clippy before tests";
+    let req = request(
+        "deploy pipeline",
+        vec![fragment(content), fragment(content)],
+        10_000,
+    );
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc.compile_context(&compiler, &req).expect("compile");
+
+    assert!(out
+        .decisions
+        .iter()
+        .any(|d| d.action == ContextAction::Drop));
+    // Then `warnings` stays empty: a duplicate whose content survives
+    // elsewhere in the output is not a loss worth flagging.
+    assert!(
+        out.warnings.is_empty(),
+        "a safe duplicate drop must never warn: {:?}",
+        out.warnings
+    );
+}
+
+#[test]
+fn test_compile_context_slim_response_clears_sections_and_decisions_keeps_content() {
+    // Given a normal (non-slim) compile of a request
+    let (_dir, svc) = service();
+    let req = request(
+        "deploy pipeline",
+        vec![fragment("the deploy pipeline runs clippy before tests")],
+        10_000,
+    );
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let full = svc.compile_context(&compiler, &req).expect("full compile");
+
+    // When compiling the same request with slim_response
+    let mut slim_req = req.clone();
+    slim_req.policy = Some(CompilePolicy {
+        slim_response: true,
+        ..CompilePolicy::default()
+    });
+    let slim = svc
+        .compile_context(&compiler, &slim_req)
+        .expect("slim compile");
+
+    // Then content/insights/risk/warnings/handles are preserved byte-for-byte...
+    assert_eq!(slim.content, full.content);
+    assert_eq!(slim.insights.tokens_in, full.insights.tokens_in);
+    assert_eq!(slim.risk, full.risk);
+    assert_eq!(slim.warnings.len(), full.warnings.len());
+    // ...but sections and decisions are emptied out.
+    assert!(slim.sections.is_empty(), "{:?}", slim.sections);
+    assert!(slim.decisions.is_empty(), "{:?}", slim.decisions);
+    assert!(!full.sections.is_empty());
+    assert!(!full.decisions.is_empty());
+}
+
+#[test]
+fn test_compile_context_slim_response_defaults_to_false() {
+    // Given a request with no explicit slim_response
+    let (_dir, svc) = service();
+    let req = request(
+        "deploy pipeline",
+        vec![fragment("the deploy pipeline runs clippy before tests")],
+        10_000,
+    );
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+
+    // When compiling
+    let out = svc.compile_context(&compiler, &req).expect("compile");
+
+    // Then sections/decisions are present — the default is unchanged.
+    assert!(!out.sections.is_empty());
+    assert!(!out.decisions.is_empty());
+}
+
+#[test]
+fn test_compile_context_memory_pulled_warning_reflects_post_annotation_relevance() {
+    // Given a remembered fact that will be pulled in via memory_scope AND
+    // externalized (tiny budget), whose relevance only becomes final after
+    // the bridge's memory-provenance annotation runs (it can rewrite
+    // `relevance` — see `annotate_memory_provenance`)
+    let (_dir, svc) = service();
+    svc.remember(
+        "the deploy pipeline runs clippy before every merge across the fleet",
+        &[],
+        None,
+    )
+    .expect("remember");
+    let mut req = request("deploy pipeline", vec![fragment("filler")], 3);
+    req.memory_scope = Some(MemoryScope {
+        k: Some(1),
+        ..MemoryScope::default()
+    });
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+
+    // When compiling through the bridge
+    let out = svc.compile_context(&compiler, &req).expect("compile");
+
+    // Then any warning's relevance/reason matches what's actually in
+    // `decisions` (post-annotation), never the pre-annotation snapshot.
+    for warning in &out.warnings {
+        let decision = out
+            .decisions
+            .iter()
+            .find(|d| d.fragment_id == warning.fragment_id)
+            .expect("every warning must point at a real decision");
+        assert_eq!(warning.relevance, decision.relevance);
+        assert_eq!(warning.reason, decision.reason);
+    }
+}

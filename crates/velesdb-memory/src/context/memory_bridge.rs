@@ -191,8 +191,14 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             augmented.fragments.push(memory.fragment.clone());
             pulled.insert(stable_id(&memory.fragment.content), memory);
         }
-        let mut out = compiler.compile(&augmented)?;
+        // `compile_raw`, not `compile`: annotating memory provenance below
+        // can rewrite a pulled fragment's `relevance`/`reason` (and thus
+        // whether it crosses the `warnings` threshold), so `decisions` must
+        // stay full until that has happened and `warnings` is recomputed —
+        // `slim_response` (if requested) is applied as the LAST step.
+        let mut out = compiler.compile_raw(&augmented)?;
         annotate_memory_provenance(&mut out, &pulled);
+        out.warnings = crate::context::warnings_for(&out.decisions);
         let policy = compiler.effective_policy(request);
         if policy.store_sources {
             self.store_context_sources(&augmented, &out, policy.source_ttl_seconds)?;
@@ -200,7 +206,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         if policy.record_events {
             self.record_context_event(request, &out, policy.event_ttl_seconds)?;
         }
-        Ok(out)
+        Ok(crate::context::apply_slim(out, policy))
     }
 
     /// The memories a request's scope pulls in, as compile fragments plus

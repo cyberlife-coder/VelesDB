@@ -59,25 +59,32 @@ silent loss. Same input, same output, byte for byte.
    committed benchmark, that pulls the linked evidence even when it shares
    **zero vocabulary** with the query (9/9 answer facts vs 3/9 for
    vector-only recall).
-6. **Check `risk`, then check `decisions` against YOUR question —
-   the label alone is not enough.** `low`: everything fit — only exact
-   duplicates were dropped, so `content` is safe as-is. `medium`/`high`:
-   something was abstracted, dropped, or externalized
-   — before proceeding, scan `decisions` for any `action` other than
-   `preserve`/`cache` and ask "could this fragment plausibly answer what I
-   was asked?" **Relevance ranking is lexical (word overlap with your
-   `query`), not semantic**: a terse fragment that actually contains the
-   answer can rank *below* verbose, repetitive filler that merely shares
-   more words with the query — "medium ... usually fine" is about
-   *fidelity*, not about *whether the one fact you need survived*. (The
-   durable remedy for this lexical limit is the memory path of step 5:
+6. **Check `warnings` first (mechanical), then `risk`, then fall back to
+   scanning `decisions` only if still ambiguous.** `warnings` is a
+   pre-filtered shortlist: every externalized fragment relevant enough to
+   the query (lexical overlap ≥ the compiler's threshold) that you should
+   double-check it was not needed — read it before anything else, it is
+   cheaper than scanning `decisions` by hand. `risk: low`: everything fit —
+   only exact duplicates were dropped, so `content` is safe as-is.
+   `medium`/`high`: something was abstracted, dropped, or externalized. If
+   `warnings` is non-empty, start there; if it is empty but `risk` is
+   `medium`/`high` and you are still unsure, scan `decisions` for any
+   `action` other than `preserve`/`cache` and ask "could this fragment
+   plausibly answer what I was asked?" **Relevance ranking is lexical (word
+   overlap with your `query`), not semantic**: a terse fragment that
+   actually contains the answer can rank *below* verbose, repetitive filler
+   that merely shares more words with the query — "medium ... usually fine"
+   is about *fidelity*, not about *whether the one fact you need survived*.
+   (The durable remedy for this lexical limit is the memory path of step 5:
    facts stored with `remember` + `relate` are reached by the graph walk
-   regardless of vocabulary — retrieval here is the tactical fallback.) If any
-   externalized/abstracted fragment looks relevant, retrieve it now (step 7)
-   — do not wait for the downstream model to notice something is missing; it
-   cannot ask about content it never saw existed. `high` additionally means
-   **critical content did not fit** — fall back: raise the budget, drop
-   whole fragments yourself, or send uncompressed.
+   regardless of vocabulary — retrieval here is the tactical fallback.) If
+   `warnings` or your own scan turns up something relevant, retrieve it now
+   (step 7) — do not wait for the downstream model to notice something is
+   missing; it cannot ask about content it never saw existed. `high`
+   additionally means **critical content did not fit** — fall back: raise
+   the budget, drop whole fragments yourself, or send uncompressed.
+   Note: `warnings` never flags a `drop`-classified duplicate — its content
+   survives through the kept twin, so there is nothing to retrieve.
 7. **Use `content` as the prompt context, after the check above.** Keep
    `retrieval_handles` (`retrievalHandles` in the Node binding) at hand for
    anything you flagged in step 6, and fetch any content back with
@@ -114,6 +121,13 @@ silent loss. Same input, same output, byte for byte.
 10. **Iterate.** If the output reads truncated or the model misses facts,
     raise the budget or mark more fragments verbatim — then recompile; it is
     cheap (~ms) and deterministic.
+
+Once you have checked `warnings`/`risk`/`decisions` and are done auditing a
+given request shape, set `policy.slim_response: true` on later, identical-
+shape calls to drop `sections`/`decisions` from the response and save output
+tokens — `content`, `insights`, `risk`, `warnings`, `sources`, and
+`retrieval_handles` are unaffected, and the full audit trail is one
+re-compile away (deterministic, so nothing is actually lost).
 
 ## Inter-session resumption (save at the end, load at the start)
 
