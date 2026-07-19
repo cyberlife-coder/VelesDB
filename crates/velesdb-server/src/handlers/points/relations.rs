@@ -21,7 +21,7 @@ use velesdb_core::point::Point;
 use crate::types::ErrorResponse;
 use crate::AppState;
 
-use super::super::helpers::{error_response, get_collection_or_404};
+use super::super::helpers::{auto_core_error_response, error_response, get_collection_or_404};
 
 use velesdb_core::EXPIRES_AT_KEY;
 
@@ -106,7 +106,7 @@ pub struct SetTtlRequest {
     responses(
         (status = 201, description = "Relation created", body = RelateResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
-        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 404, description = "Collection not found, or source/target point has no stored payload (VELES-022 NodeNotFound)", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     ),
     tag = "graph"
@@ -174,12 +174,10 @@ fn insert_edge_with_retry(
             Err(velesdb_core::Error::EdgeExists(_)) => {
                 next_id = next_id.saturating_add(1);
             }
-            Err(e) => {
-                return Err(error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("failed to create relation: {e}"),
-                ))
-            }
+            // Route through the shared error→status mapping (e.g.
+            // NodeNotFound -> 404, not a generic 500) instead of collapsing
+            // every non-EdgeExists error into Internal Server Error.
+            Err(e) => return Err(auto_core_error_response(&e)),
         }
     }
     Err(error_response(

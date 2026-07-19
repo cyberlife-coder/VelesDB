@@ -2573,6 +2573,12 @@ INSERT EDGE INTO kg (id = 20, source = 2, target = 3, label = 'KNOWS')
 
 WITH PROPERTIES accepts key-value pairs (strings, integers, or floats).
 
+> `source` and `target` must already exist as nodes (created via
+> `INSERT NODE` or a point upsert) before `INSERT EDGE` — an edge to a
+> node that was never created is rejected with `NodeNotFound` (#1442),
+> since `SELECT NODES` / MATCH resolve nodes from the payload store, not
+> the edge store.
+
 ### DELETE EDGE (v3.3+)
 
 Remove an edge by its ID from a graph collection.

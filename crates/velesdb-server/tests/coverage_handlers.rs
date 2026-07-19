@@ -20,7 +20,9 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use common::{create_graph_collection, create_test_app, create_test_app_with_state};
+use common::{
+    create_graph_collection, create_graph_node, create_test_app, create_test_app_with_state,
+};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -303,6 +305,8 @@ async fn test_add_edge_null_properties_ok() {
     let temp_dir = TempDir::new().expect("temp dir");
     let app = create_test_app(&temp_dir);
     create_graph_collection(&app, "edge_null_props").await;
+    create_graph_node(&app, "edge_null_props", 10).await;
+    create_graph_node(&app, "edge_null_props", 20).await;
 
     let resp = post(
         &app,

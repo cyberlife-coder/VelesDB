@@ -189,6 +189,8 @@ impl Default for RuntimeLimits {
 //   1b. payload_mirror   (held while acquiring 2 and 3 during the lazy build)
 //   2. vector_storage
 //   3. payload_storage
+//   3b. edge_wal_lock    (see below — sometimes nested inside 3, sometimes
+//                          acquired alone)
 //   4. sq8_cache / binary_cache / pq_cache  (any order among themselves)
 //   5. pq_quantizer → pq_training_buffer
 //   6. secondary_indexes
@@ -198,6 +200,19 @@ impl Default for RuntimeLimits {
 //  10. delta_buffer
 //  11. deferred_indexer / async_index_builder (internal locks)
 //  12. stats_io_mutex                         (disk I/O only, no other lock held)
+//
+// `edge_wal_lock` (3b) has two call patterns, both consistent with 3 → 3b:
+//   - `add_edge`/`add_edges_batch` (collection/core/graph_api.rs) acquire it
+//     WHILE STILL HOLDING `payload_storage`'s read guard (see those
+//     functions' rustdoc for the concurrency guarantee this gives —
+//     `docs/CONCURRENCY_MODEL.md`'s "Collection-level lock order" section
+//     has the full narrative).
+//   - `remove_edge` and the delete-cascade path
+//     (collection/core/crud_read_delete.rs) acquire it ALONE, with no other
+//     collection lock held (the delete path has already dropped its
+//     `payload_storage` write guard by the time it reaches the cascade).
+// Neither path ever acquires `payload_storage` while already holding
+// `edge_wal_lock` — the order stays acyclic.
 
 /// Vector + payload storage, quantization caches and the columnar mirror.
 ///
@@ -338,9 +353,14 @@ pub(crate) struct GraphStore {
     /// like live execution) and concurrent appends cannot interleave one
     /// entry's bytes.
     ///
-    /// Lock order position: **7c** — acquired with no other collection lock
-    /// held; the edge store's internal `edge_ids → shards` chain is acquired
-    /// while holding it.
+    /// Lock order position: **3b**. `add_edge`/`add_edges_batch` acquire it
+    /// while still holding `payload_storage`'s (3) read guard, so a
+    /// concurrent `delete()` of an endpoint — which needs `payload_storage`'s
+    /// WRITE guard — blocks until the edge write finishes (see those
+    /// functions' rustdoc in `collection/core/graph_api.rs`). `remove_edge`
+    /// and the delete-cascade path acquire it alone, with no other
+    /// collection lock held. The edge store's internal `edge_ids → shards`
+    /// chain is acquired while holding it in both cases.
     pub(super) edge_wal_lock: Arc<Mutex<()>>,
 }
 
