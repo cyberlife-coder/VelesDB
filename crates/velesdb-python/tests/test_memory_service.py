@@ -223,3 +223,20 @@ def test_oversized_fact_raises_value_error(mem):
     # Facts above the shared 1 MiB cap are rejected before any embedding work.
     with pytest.raises(ValueError):
         mem.remember("x" * (1024 * 1024 + 1))
+
+
+def test_feedback_success_increases_confidence_and_roundtrips(mem):
+    # remember -> feedback(id, True) returns a float, and repeated positive
+    # feedback moves confidence monotonically upward (the RL loop learning).
+    fid = mem.remember("we chose parking_lot to avoid lock poisoning")
+    first = mem.feedback(fid, True)
+    assert isinstance(first, float)
+    second = mem.feedback(fid, True)
+    assert second > first
+
+
+def test_feedback_unknown_id_raises_key_error(mem):
+    # Same taxonomy as forget: a missing memory id is a KeyError, not a
+    # silent no-op — feedback has no result to report if the fact is gone.
+    with pytest.raises(KeyError):
+        mem.feedback(999_999, True)
