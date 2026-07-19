@@ -38,6 +38,27 @@ fn now_nanos() -> u128 {
     }
 }
 
+/// Current Unix time in seconds — used only by
+/// [`MemoryService::should_upgrade_ttl`]'s extension-only comparison (the
+/// storage/expiry layer; the `compile` pipeline itself stays clock-free). On
+/// `wasm32-unknown-unknown` this is 0 (no clock, mirrors [`now_nanos`]); the
+/// wasm `MemoryStore` is in-memory only, so a stored durable expiry (a real
+/// epoch second count) never actually exists there for 0 to be compared
+/// against.
+fn now_unix_secs() -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        0
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or(0)
+    }
+}
+
 use serde_json::{Map, Number, Value};
 
 use super::{positive_ttl, MemoryService, Metadata, HUB_FIELD};
@@ -80,6 +101,12 @@ const CTX_SOURCE_FIELD: &str = "_veles_ctx_source";
 /// one. Reserved like every other `_veles_ctx_*` key — a caller can neither
 /// set nor filter on it.
 const CTX_SOURCE_MEDIA_FIELD: &str = "_veles_ctx_source_media";
+/// The durable-TTL payload key set by [`super::positive_ttl`]-backed writes
+/// (`store_with_ttl`, via `store_fact`). Mirrors `velesdb_core::EXPIRES_AT_KEY`
+/// as a literal rather than an import: that re-export is `persistence`-gated,
+/// and this module (unlike `NativeStore`) must keep compiling under `context`
+/// alone (e.g. `velesdb-wasm`, which never enables `persistence`).
+const EXPIRES_AT_FIELD: &str = "_veles_expires_at";
 const CTX_WORKING_FIELD: &str = "_veles_ctx_working";
 const CTX_SESSION_FIELD: &str = "_veles_ctx_session";
 const CTX_TOKENS_IN_FIELD: &str = "_veles_ctx_tokens_in";
@@ -360,14 +387,29 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 continue;
             };
             let slot = source_id(hash);
-            // An occupied slot is never rewritten: without our marker it is a
-            // caller fact squatting the salt preimage (clobbering it would
-            // destroy user data); with the marker it already holds these
-            // exact bytes — sources are content-addressed — so re-embedding
-            // and re-storing would only burn work (quadratically, on an
-            // agent session whose context accumulates across turns).
-            if self.store.get(slot)?.is_some() {
+            // A slot never marked as ours is never rewritten: it is a caller
+            // fact squatting the salt preimage, and clobbering it would
+            // destroy user data. A slot already marked as ours holds these
+            // exact bytes — sources are content-addressed — so content and
+            // embedding never change; only durability can, and only upward
+            // (never-downgrade TTL upgrade, `should_store_source`) so a
+            // handle sold as permanent never silently expires just because
+            // an earlier compile first wrote it under a TTL.
+            if !self.should_store_source(slot, ttl_seconds)? {
                 continue;
+            }
+            // Upgrading to permanent needs the old point gone, not merely
+            // overwritten: velesdb-core's store path preserves every
+            // `_veles_*` key from a prior version of a re-stored id unless
+            // the new write explicitly sets it (semantic_memory.rs's
+            // `store_internal` carry-forward, so plain `remember` doesn't
+            // silently wipe learned state), and a permanent write has no
+            // expiry to explicitly set (`attach_expiry` is a no-op without
+            // one) — so without this delete, `_veles_expires_at` would
+            // survive the "upgrade" untouched. A TTL-to-TTL extension needs
+            // no delete: its new expiry always overwrites the old one.
+            if ttl_seconds.is_none() && self.store.get(slot)?.is_some() {
+                self.store.delete(slot)?;
             }
             let content = fragment.content.as_str();
             let mut extra: Vec<(&str, Value)> = vec![(CTX_SOURCE_FIELD, Value::Bool(true))];
@@ -399,6 +441,43 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             )?;
         }
         Ok(())
+    }
+
+    /// Whether [`Self::store_context_sources`] should (re-)write `slot` for
+    /// this compile's requested (already [`positive_ttl`]-normalized —
+    /// `None` means permanent) TTL.
+    ///
+    /// - Not marked as ours (absent, or a caller fact squatting the salt
+    ///   preimage): store only if the slot is genuinely empty.
+    /// - Marked as ours: never re-embed or change content (content-addressed);
+    ///   only [`Self::should_upgrade_ttl`] decides whether durability changes.
+    fn should_store_source(
+        &self,
+        slot: u64,
+        requested_ttl: Option<u64>,
+    ) -> Result<bool, MemoryError> {
+        match self.context_source_metadata(slot)? {
+            Some(existing) => Ok(Self::should_upgrade_ttl(&existing, requested_ttl)),
+            None => Ok(self.store.get(slot)?.is_none()),
+        }
+    }
+
+    /// Never-downgrade TTL upgrade rule for an already-stored source: permanent
+    /// once requested stays permanent, and a TTL only ever extends, never
+    /// shortens. The clock read here is fine — this is the storage/expiry
+    /// layer, not the clock-free `compile` pipeline.
+    fn should_upgrade_ttl(existing: &Metadata, requested_ttl: Option<u64>) -> bool {
+        let existing_expiry = existing.get(EXPIRES_AT_FIELD).and_then(Value::as_u64);
+        match (requested_ttl, existing_expiry) {
+            // Permanent requested, slot still carries a TTL: upgrade.
+            (None, Some(_)) => true,
+            // Already permanent, or a TTL requested against a permanent slot:
+            // never downgrade.
+            (None | Some(_), None) => false,
+            // Both carry a TTL: extend only if the new one outlives what
+            // remains — never shorten.
+            (Some(ttl), Some(existing_exp)) => now_unix_secs().saturating_add(ttl) > existing_exp,
+        }
     }
 
     /// A deterministic, non-degenerate embedding for a media source (US-009,
@@ -880,3 +959,7 @@ fn source_media(meta: &Metadata) -> Option<MediaRef> {
 fn working_id(project: &str, session: &str) -> u64 {
     stable_id(&format!("{WORKING_ID_SALT}{project}\u{1f}{session}"))
 }
+
+#[cfg(all(test, feature = "persistence"))]
+#[path = "memory_bridge_tests.rs"]
+mod tests;
