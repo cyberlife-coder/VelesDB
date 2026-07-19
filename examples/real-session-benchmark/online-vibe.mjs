@@ -7,20 +7,20 @@
 // README.md's "Vibe-coding scenario" section for why (spend gate, separate
 // from the code change).
 //
-// media transport note (verified 2026-07 against Claude Code's own docs,
-// see README.md): the `cli` runner (lib/claude-cli.mjs) builds the EXACT
-// content-block shape Claude Code's Streaming Input mode documents for
-// `--input-format stream-json` — `{type: "image", source: {type: "base64",
-// media_type, data}}` alongside a text block — so the with-screenshots arm
-// should carry media to the model on the cli runner too, not just the api
-// runner. That said, the only real calibration call made at review time
-// (lib/claude-cli.mjs's header) used a text-only prompt; an image-bearing
-// calibration call is a genuine billed request and is explicitly OUT OF
-// SCOPE for this change (RUN_BILLED_MEASURE stays off here) — flagged in
-// README.md as a follow-up for the next billed campaign.
+// media transport: CONFIRMED by a real image-bearing calibration call
+// (2026-07-19, CLI 2.1.201, maintainer's account — see
+// lib/claude-cli.mjs's VERIFICATION STATUS header): two base64 images sent
+// as `{type: "image", source: {type: "base64", media_type, data}}` blocks
+// through the stdin envelope; the model answered "2" to "How many images
+// are attached?". The with-screenshots billed arm works on the cli runner —
+// BENCH_RUNNER=api is NOT required for media. The same calibration also
+// established the CLI 2.1.201 cache-routing behavior (user content lands in
+// cache_creation_input_tokens, not input_tokens), which is why the cli
+// runner's headline metric below is total_cost_usd per arm — see
+// lib/runner.mjs's printArmComparison.
 import { TURN_EVENTS_VIBE, SYSTEM_VIBE } from './corpus/session-vibe.mjs'
 import { TURN_QUESTIONS_VIBE } from './corpus/questions-vibe.mjs'
-import { resolveRunnerKind, runTurn, mean, stddev } from './lib/runner.mjs'
+import { resolveRunnerKind, runTurn, mean, stddev, printArmComparison, turnBilledLine } from './lib/runner.mjs'
 import { runCliTurn } from './lib/claude-cli.mjs'
 import { gradeResponse } from './lib/grade.mjs'
 import { measureSession, LOSSLESS_BUDGET, applyBenchMediaFilter, benchMediaEnabled } from './lib/ab-session.mjs'
@@ -128,7 +128,9 @@ async function main() {
       const meanFound = mean(grades.map((g) => g.found))
       const total = TURN_QUESTIONS_VIBE[t].facts.length
       console.log(
-        `  turn ${String(t + 1).padStart(2)}: input_tokens mean=${mean(inputs).toFixed(1)} min=${Math.min(...inputs)} max=${Math.max(...inputs)} stddev=${stddev(inputs).toFixed(2)} | adequacy mean=${meanFound.toFixed(1)}/${total}`,
+        `  turn ${String(t + 1).padStart(2)}: input_tokens mean=${mean(inputs).toFixed(1)} min=${Math.min(...inputs)} max=${Math.max(...inputs)} stddev=${stddev(inputs).toFixed(2)}` +
+          turnBilledLine(samples) +
+          ` | adequacy mean=${meanFound.toFixed(1)}/${total}`,
       )
     }
     return perTurnRuns
@@ -137,6 +139,13 @@ async function main() {
   const rawRuns = await runArm(rawTurns, 'RAW (bras A)')
   const compiledRuns = await runArm(compiledTurns, 'COMPILED (bras B)')
 
+  // Runner-aware A/B summary (shared with online.mjs — lib/runner.mjs):
+  // cli headline = total_cost_usd per arm + summed billed-token volume
+  // (CLI 2.1.201 cache routing makes input_tokens alone read ~0%); api
+  // headline = input_tokens (direct fields) + the same volume figure.
+  console.log('')
+  const { raw: rawMoney, compiled: compiledMoney } = printArmComparison({ kind, rawRuns, compiledRuns })
+
   let totalRawMean = 0
   let totalCompiledMean = 0
   for (let t = 0; t < rawRuns.length; t++) {
@@ -144,8 +153,19 @@ async function main() {
     totalCompiledMean += mean(compiledRuns[t].map((s) => s.input_tokens))
   }
   const savedPct = ((1 - totalCompiledMean / totalRawMean) * 100).toFixed(1)
+  const billedTokenSaved =
+    rawMoney.billedTokensPerSession > 0
+      ? ((1 - compiledMoney.billedTokensPerSession / rawMoney.billedTokensPerSession) * 100).toFixed(1)
+      : '0.0'
   console.log('')
-  console.log(`tokens (vibe-coding, ${mediaOn ? 'with-screenshots' : 'no-screenshots'}) — raw: ${totalRawMean.toFixed(1)} | compiled: ${totalCompiledMean.toFixed(1)} | saved: ${savedPct}%`)
+  console.log('--- marketing summary (ONLINE, vibe-coding scenario, real billed usage) ---')
+  const dollarClause =
+    rawMoney.meanCostPerSession !== null && compiledMoney.meanCostPerSession !== null && rawMoney.meanCostPerSession > 0
+      ? `cut REAL BILLED dollars from $${rawMoney.meanCostPerSession.toFixed(4)} to $${compiledMoney.meanCostPerSession.toFixed(4)}/session (${((1 - compiledMoney.meanCostPerSession / rawMoney.meanCostPerSession) * 100).toFixed(1)}% saved — the cost-reference metric) and `
+      : ''
+  console.log(
+    `Across the ${rawRuns.length}-turn vibe-coding session (${mediaOn ? 'with-screenshots' : 'no-screenshots'}), compiling context ${dollarClause}cut billed token volume (all usage fields summed; per-field breakdown above — cache fields bill below the direct-input rate) from ${rawMoney.billedTokensPerSession.toFixed(0)} to ${compiledMoney.billedTokensPerSession.toFixed(0)}/session (${billedTokenSaved}% saved) on claude-sonnet-5 (${kind} runner, ${N_RUNS} runs/turn/arm; usage.input_tokens alone: ${totalRawMean.toFixed(0)} -> ${totalCompiledMean.toFixed(0)}, ${savedPct}%${kind === 'cli' ? ' — not meaningful on the cli runner, see cache-routing note' : ''}).`,
+  )
 }
 
 main().catch((err) => {

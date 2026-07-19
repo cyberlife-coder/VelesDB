@@ -27,9 +27,11 @@ compiled twice with a byte-compare assert inside the run):
 | Memory-enabled | `node memory-enabled.mjs` | What does the product's intended remember/relate + `memory_scope` usage pattern save? |
 | Vibe-coding (19 turns, media on/off) | `node offline-vibe.mjs` / `BENCH_MEDIA=0 node offline-vibe.mjs` | Same question on an ITERATIVE FEATURE IMPLEMENTATION session (not a bug-fix arc), with vs. without screenshots — see "Vibe-coding scenario" below. |
 
-Plus an **ONLINE mode** (opt-in, real billed calls) measuring both **billed
-tokens** (`usage.input_tokens`) and **answer quality** (deterministic
-fact-checklist grading) on `claude-sonnet-5`.
+Plus an **ONLINE mode** (opt-in, real billed calls) measuring **billed cost
+and volume per arm** (cumulative `total_cost_usd` + the labeled all-fields
+billed-token sum on the cli runner, `usage.input_tokens` on the api runner —
+see "CLI runner — verified wire shapes") and **answer quality**
+(deterministic fact-checklist grading) on `claude-sonnet-5`.
 
 ## Quality rules this benchmark follows (and how)
 
@@ -246,20 +248,18 @@ exactly what the corpus produces.
 
 **ONLINE readiness (not executed — see "Run — ONLINE" below)**:
 `online-vibe.mjs` mirrors `online.mjs` against this corpus and the
-`BENCH_MEDIA` variant. The `cli` runner's media-transport question was
-checked against Claude Code's own documentation (not by a billed
-calibration call, which is out of scope here): `lib/claude-cli.mjs` already
-builds `{type: "image", source: {type: "base64", media_type, data}}` content
-blocks alongside text, sent through the `{"type":"user","message":{...}}`
-stdin envelope — this is the EXACT shape Claude Code's Streaming Input mode
-documents for `--input-format stream-json` (image attachments are
-explicitly listed as a Streaming-Input-mode capability, unavailable in
-single-message mode). So the `cli` runner should carry screenshots to the
-model the same as the `api` runner. This has NOT been confirmed by a real
-image-bearing calibration call (the only calibration made so far, per
-`lib/claude-cli.mjs`'s header, used a text-only prompt) — that would be a
-genuine billed request and is a follow-up for the next billed campaign, not
-this change.
+`BENCH_MEDIA` variant. The `cli` runner's media transport is **CONFIRMED by
+a real image-bearing calibration call** (2026-07-19, CLI 2.1.201,
+maintainer's account — details in `lib/claude-cli.mjs`'s VERIFICATION
+STATUS header): two base64 images sent as `{type: "image", source: {type:
+"base64", media_type, data}}` blocks through the stdin envelope, and the
+model answered "2" to "How many images are attached?". The with-screenshots
+billed arm runs on the cli runner; `BENCH_RUNNER=api` is not required for
+media. The same calibration established the CLI 2.1.201 cache routing (user
+content lands in `cache_creation_input_tokens`, not `input_tokens`), which
+is why both online scripts report cumulative `total_cost_usd` per arm as the
+cli-runner cost headline plus the labeled all-fields billed-token volume —
+see "CLI runner — verified wire shapes" below.
 
 Dry cost estimate (the same chars/4 + pixel-cost formula `online-vibe.mjs`
 prints before its `RUN_BILLED_MEASURE` gate, computed standalone here so
@@ -321,8 +321,10 @@ of the extra token savings).
 ### CLI runner — verified wire shapes
 
 The `claude -p` flags and JSON shapes this runner depends on were **verified
-against a real calibration call at review time** (single source of truth for
-the verification status: the header of `lib/claude-cli.mjs`):
+against real calibration calls** — a text-only call at review time, plus an
+**image-bearing calibration call on 2026-07-19 (CLI 2.1.201)** (single
+source of truth for the verification status: the header of
+`lib/claude-cli.mjs`):
 
 - Flags (from `claude -p --help`, verbatim): `--model`, `--output-format
   json`, `--input-format stream-json`, `--system-prompt` (replaces the
@@ -332,19 +334,34 @@ the verification status: the header of `lib/claude-cli.mjs`):
   `cache_creation_input_tokens` / `cache_read_input_tokens`.
 - stdin NDJSON envelope: `{"type":"user","message":{"role":"user","content":[...]}}`
   with Messages-API-shaped content blocks.
-- **Calibration finding**: the CLI harness's own overhead (its system
-  prompt/tooling preamble) lands in the **cache fields**
-  (~18.3k cache-creation + ~24.6k cache-read tokens observed) while
-  `usage.input_tokens` for a near-empty prompt is ≈ 2. So arm-vs-arm
-  `input_tokens` comparisons are **not** inflated by harness overhead and
-  nothing is subtracted from them; the calibration turn `online.mjs` runs on
-  the cli runner reports the cache-field overhead separately (it is billed,
-  at cache rates, identically on both arms — it shifts absolute $ cost, not
-  the A/B delta).
+- **Image transport: CONFIRMED** (2026-07-19, CLI 2.1.201). Two base64
+  images sent as `{type:"image",source:{type:"base64",...}}` blocks through
+  the stdin envelope; asked "How many images are attached?", the model
+  answered "2". The with-screenshots billed arm works on the cli runner —
+  `BENCH_RUNNER=api` is **not** required for media.
+- **Cache-routing behavior change (2026-07-19, CLI 2.1.201 — supersedes the
+  review-time finding)**: user content (text AND images) now lands in
+  `cache_creation_input_tokens`, **not** `input_tokens`. Measured on the
+  image calibration call: `{"input":2,"out":3,"cache_create":7235,
+  "cache_read":0,"cost":0.044}` for 2 images + a question — `input_tokens`
+  stays ≈ 2 regardless of payload size. Consequence: an A/B comparison on
+  `usage.input_tokens` alone reads ~0% on the cli runner. The **headline
+  per-arm metrics on the cli runner are therefore cumulative
+  `total_cost_usd` (the cost-reference metric — cache fields do not bill at
+  the direct-input rate) and the summed billed-token volume (all four usage
+  fields, explicitly labeled, with the per-field breakdown printed right
+  next to it — never a silent sum)**; `online.mjs` and `online-vibe.mjs`
+  print both, per turn and in the final summary, via the shared
+  `lib/runner.mjs` reporting. The api runner keeps `usage.input_tokens` as
+  its headline (fields are direct on the Messages API) alongside the same
+  volume figure.
 
 The parser stays defensive (missing keys default to 0/null with a one-time
 warning) so a future CLI release changing the shape degrades loudly instead
-of crashing mid-campaign. There is no max-output-tokens flag for `-p`
+of crashing mid-campaign — and on a non-zero exit the error now includes
+the **stdout tail** (the CLI emits its real error, e.g. "Not logged in", as
+an NDJSON event on stdout with an empty stderr — observed in real use,
+2026-07-19). There is no max-output-tokens flag for `-p`
 (`--max-budget-usd` is a dollar cap), so the printed cost estimate is a
 lower bound on the cli runner.
 

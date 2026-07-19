@@ -28,8 +28,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { runApiTurn } from '../lib/anthropic-api.mjs'
-import { runCliTurn, claudeCliAvailable } from '../lib/claude-cli.mjs'
-import { resolveRunnerKind, mean, stddev } from '../lib/runner.mjs'
+import { runCliTurn, claudeCliAvailable, stdoutErrorTail } from '../lib/claude-cli.mjs'
+import { resolveRunnerKind, mean, stddev, armSessionStats } from '../lib/runner.mjs'
 import { pixelCostTokens, pngDimensions } from '../lib/pixel-cost.mjs'
 import { gradeResponse, normalizeForGrade } from '../lib/grade.mjs'
 import { IMG_FIXED } from '../corpus/images.mjs'
@@ -209,6 +209,73 @@ test('claudeCliAvailable reflects the fake binary exit code', async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('runCliTurn non-zero exit surfaces the STDOUT NDJSON error, not just (empty) stderr', async () => {
+  // Regression pinned (real-world defect, 2026-07-19): the CLI emits its
+  // actual error ("Not logged in") as an NDJSON event on STDOUT with an
+  // EMPTY stderr; the old error message showed only stderr, yielding the
+  // useless "claude CLI exited 1: ".
+  const dir = mkdtempSync(join(tmpdir(), 'veles-fake-claude-fail-'))
+  const binPath = join(dir, 'claude')
+  writeFileSync(
+    binPath,
+    `#!/usr/bin/env node
+process.stdin.resume()
+process.stdin.on('end', () => {
+  process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error', is_error: true, result: 'Not logged in' }) + '\\n')
+  process.exit(1)
+})
+`,
+  )
+  chmodSync(binPath, 0o755)
+  try {
+    await assert.rejects(
+      () => runCliTurn({ text: 'x' }, { claudeBin: binPath }),
+      (err) => {
+        assert.match(err.message, /exited 1/)
+        assert.match(err.message, /Not logged in/) // the stdout NDJSON error must be visible
+        return true
+      },
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('stdoutErrorTail prefers the last parsable NDJSON event, falls back to the raw tail, and never returns empty-string', () => {
+  const ndjson = '{"type":"system"}\n{"type":"result","result":"Not logged in"}\n'
+  assert.match(stdoutErrorTail(ndjson), /Not logged in/)
+  const rawOnly = 'x'.repeat(600) + 'TAIL_MARKER'
+  const tail = stdoutErrorTail(rawOnly)
+  assert.ok(tail.length <= 500)
+  assert.match(tail, /TAIL_MARKER$/)
+  assert.equal(stdoutErrorTail(''), '(empty)')
+})
+
+test('armSessionStats reports cumulative $ and the labeled all-fields token sum alongside the per-field breakdown', () => {
+  // Two turns x two runs; usage shaped like the CLI 2.1.201 cache routing
+  // (payload in cache_creation, input_tokens ~2).
+  const runs = [
+    [
+      { input_tokens: 2, output_tokens: 10, cache_creation_input_tokens: 7000, cache_read_input_tokens: 100, total_cost_usd: 0.04 },
+      { input_tokens: 2, output_tokens: 12, cache_creation_input_tokens: 7000, cache_read_input_tokens: 100, total_cost_usd: 0.05 },
+    ],
+    [
+      { input_tokens: 3, output_tokens: 8, cache_creation_input_tokens: 5000, cache_read_input_tokens: 200, total_cost_usd: 0.03 },
+      { input_tokens: 3, output_tokens: 9, cache_creation_input_tokens: 5000, cache_read_input_tokens: 200, total_cost_usd: 0.02 },
+    ],
+  ]
+  const s = armSessionStats(runs)
+  assert.equal(s.campaignCost, 0.04 + 0.05 + 0.03 + 0.02)
+  assert.equal(s.meanCostPerSession, s.campaignCost / 2) // 2 runs per turn
+  const allFields = 2 + 2 + 3 + 3 + 10 + 12 + 8 + 9 + 7000 + 7000 + 5000 + 5000 + 100 + 100 + 200 + 200
+  assert.equal(s.billedTokensCampaign, allFields)
+  assert.equal(s.billedTokensPerSession, allFields / 2)
+  // The breakdown fields stay separately available (the sum is never the
+  // only number).
+  assert.equal(s.inputPerSession, (2 + 2 + 3 + 3) / 2)
+  assert.equal(s.cacheCreatePerSession, (7000 + 7000 + 5000 + 5000) / 2)
 })
 
 test('resolveRunnerKind respects an explicit BENCH_RUNNER override', async () => {
