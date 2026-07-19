@@ -126,6 +126,14 @@ impl<'a> GraphMigrationPhase<'a> {
         let mut created = 0u64;
         let mut failed = 0u64;
         let mut offset = None;
+        // add_edges_batch now requires every edge endpoint to have a stored
+        // node payload (#1442). This graph collection is a fresh, edge-only
+        // index — the real point data lives in the vector destination
+        // collection — so every endpoint needs a minimal stub payload
+        // seeded here. Tracks ids already stubbed across the whole
+        // relation so a node referenced by many edges (e.g. a popular FK
+        // target) is not re-written on every recurrence.
+        let mut seeded_nodes: std::collections::HashSet<u64> = std::collections::HashSet::new();
 
         loop {
             let batch = self
@@ -153,12 +161,40 @@ impl<'a> GraphMigrationPhase<'a> {
             }
 
             if !edges.is_empty() {
+                for edge in &edges {
+                    for id in [edge.source(), edge.target()] {
+                        if seeded_nodes.insert(id) {
+                            if let Err(e) = gc.upsert_node_payload(id, &serde_json::json!({})) {
+                                warn!("Failed to seed graph node {id}: {e}");
+                            }
+                        }
+                    }
+                }
+
                 let total = edges.len() as u64;
-                let inserted = gc.add_edges_batch(edges).map_err(|e| {
-                    Error::DestinationConnection(format!("Edge batch insert failed: {e}"))
-                })? as u64;
-                created += inserted;
-                failed += total.saturating_sub(inserted);
+                match gc.add_edges_batch(edges.clone()) {
+                    Ok(inserted) => {
+                        created += inserted as u64;
+                        failed += total.saturating_sub(inserted as u64);
+                    }
+                    Err(e) => {
+                        // add_edges_batch validates the whole batch before any
+                        // write, so one genuinely bad edge (e.g. node-seeding
+                        // above failed for one id) fails the entire batch.
+                        // Fall back to per-edge inserts so that degrades to a
+                        // counted failure instead of aborting the migration.
+                        warn!("Edge batch insert failed ({e}); retrying edges individually");
+                        for edge in edges {
+                            match gc.add_edge(edge) {
+                                Ok(()) => created += 1,
+                                Err(e) => {
+                                    failed += 1;
+                                    debug!("Edge insert failed: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             if !batch.has_more {

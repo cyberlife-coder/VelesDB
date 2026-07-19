@@ -2349,7 +2349,7 @@
             }
           },
           "404": {
-            "description": "Collection not found",
+            "description": "Collection not found, or source/target point has no stored payload (VELES-022 NodeNotFound)",
             "content": {
               "application/json": {
                 "schema": {

@@ -414,6 +414,15 @@ pub(super) fn add_relation_edge(
             Ok(()) => return Ok(edge_id),
             // Lost the residual allocation race — try the next id.
             Err(crate::error::Error::EdgeExists(_)) => {}
+            // The endpoint was deleted between `ensure_live` and this write
+            // (the same check-then-add race `verify_relation_endpoints`
+            // compensates for after a successful write) — surface the same
+            // `NotFound` contract, not a generic `CollectionError`/Internal.
+            Err(crate::error::Error::NodeNotFound(id)) => {
+                return Err(AgentMemoryError::NotFound(format!(
+                    "a relation endpoint ({id}) was deleted concurrently"
+                )))
+            }
             Err(e) => return Err(AgentMemoryError::CollectionError(e.to_string())),
         }
     }

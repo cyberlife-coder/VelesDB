@@ -17,9 +17,9 @@ use velesdb_server::{
     explain, get_collection, get_collection_config, get_edges, get_node_degree, get_node_payload,
     get_point, health_check, hybrid_search, list_collections, list_nodes, match_query,
     multi_query_search, multi_query_search_ids, query, readiness_check, rebuild_index,
-    reorder_for_locality, scroll_points, search, search_ids, set_point_ttl, stream_insert,
-    stream_upsert_points, text_search, traverse_graph, upsert_node_payload, upsert_points,
-    upsert_points_raw, vacuum_collection, AppState, OnboardingMetrics,
+    relate_points, reorder_for_locality, scroll_points, search, search_ids, set_point_ttl,
+    stream_insert, stream_upsert_points, text_search, traverse_graph, upsert_node_payload,
+    upsert_points, upsert_points_raw, vacuum_collection, AppState, OnboardingMetrics,
 };
 
 fn base_routes() -> Router<Arc<AppState>> {
@@ -92,6 +92,7 @@ fn graph_and_maintenance_routes() -> Router<Arc<AppState>> {
             "/collections/{name}/graph/nodes/{node_id}/payload",
             get(get_node_payload).put(upsert_node_payload),
         )
+        .route("/collections/{name}/relations", post(relate_points))
         // Maintenance + bulk endpoints (PR #648)
         .route(
             "/collections/{name}/points/delete",
