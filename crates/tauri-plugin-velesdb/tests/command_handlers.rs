@@ -767,6 +767,19 @@ fn graph_create_add_edges_traverse_degree() {
     .expect("create_graph_collection");
     assert_eq!(info.storage_mode, "graph");
 
+    // add_edge requires both endpoints to have a stored node payload
+    // (#1442) — store nodes 10, 20, 30 before creating the edges below.
+    st(&app)
+        .with_db(|db| {
+            let coll = db.get_graph_collection("kg").expect("kg collection");
+            for node_id in [10, 20, 30] {
+                coll.upsert_node_payload(node_id, &serde_json::json!({}))
+                    .expect("store node payload");
+            }
+            Ok(())
+        })
+        .expect("seed graph nodes");
+
     // Add a single edge with properties.
     run(add_edge(
         handle(&app),

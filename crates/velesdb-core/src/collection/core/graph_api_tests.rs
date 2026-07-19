@@ -50,8 +50,7 @@ mod tests {
     #[test]
     fn test_add_duplicate_edge_fails() {
         let (collection, _temp) = create_test_collection();
-        add_edge_with_nodes(&collection, make_edge(1, 100, 200, "KNOWS"))
-            .unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 100, 200, "KNOWS")).unwrap();
         let result = add_edge_with_nodes(&collection, make_edge(1, 100, 200, "KNOWS"));
         assert!(result.is_err(), "duplicate edge ID should return error");
     }
@@ -639,8 +638,7 @@ mod tests {
         collection
             .store_node_payload(200, &serde_json::json!({"name": "B"}))
             .unwrap();
-        add_edge_with_nodes(&collection, make_edge(1, 100, 200, "KNOWS"))
-            .unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 100, 200, "KNOWS")).unwrap();
         assert_eq!(collection.edge_count(), 1);
 
         collection.delete(&[100]).unwrap();
@@ -769,7 +767,9 @@ mod tests {
             .collect();
         collection.upsert(nodes).expect("bulk-create nodes");
         for t in 1..=fanout {
-            collection.add_edge(make_edge(t, 0, t, "E")).expect("add edge");
+            collection
+                .add_edge(make_edge(t, 0, t, "E"))
+                .expect("add edge");
         }
 
         let rel_filter: FxHashSet<&str> = FxHashSet::default();
@@ -820,7 +820,9 @@ mod tests {
             .collect();
         collection.upsert(nodes).expect("bulk-create nodes");
         for t in 1..=fanout {
-            collection.add_edge(make_edge(t, 0, t, "E")).expect("add edge");
+            collection
+                .add_edge(make_edge(t, 0, t, "E"))
+                .expect("add edge");
         }
 
         let config = TraversalConfig {

@@ -19,8 +19,11 @@ fn setup_graph_collection(db: &velesdb_core::Database) {
 
 fn populate_graph_edges(db: &velesdb_core::Database) {
     for id in [1, 2, 3] {
-        execute_sql(db, &format!("INSERT NODE INTO kg (id = {id}, payload = '{{}}');"))
-            .expect("test: INSERT NODE should succeed");
+        execute_sql(
+            db,
+            &format!("INSERT NODE INTO kg (id = {id}, payload = '{{}}');"),
+        )
+        .expect("test: INSERT NODE should succeed");
     }
     execute_sql(
         db,

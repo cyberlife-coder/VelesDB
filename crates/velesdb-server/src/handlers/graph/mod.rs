@@ -71,7 +71,8 @@ mod tests {
     fn test_graph_collection_add_and_get_edges() {
         let (coll, _dir) = make_graph();
         for id in [100, 200] {
-            coll.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+            coll.upsert_node_payload(id, &serde_json::json!({}))
+                .unwrap();
         }
         coll.add_edge(GraphEdge::new(1, 100, 200, "KNOWS").unwrap())
             .unwrap();

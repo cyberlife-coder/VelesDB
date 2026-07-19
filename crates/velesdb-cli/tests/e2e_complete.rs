@@ -183,6 +183,22 @@ mod graph_commands {
         let temp = temp_db_dir();
         create_graph(&temp, "g");
 
+        // add-edge requires both endpoints to have a stored node payload
+        // (#1442) — store nodes 10 and 20 before creating the edge.
+        for node_id in ["10", "20"] {
+            cli()
+                .args([
+                    "graph",
+                    "store-payload",
+                    temp.path().to_str().unwrap(),
+                    "g",
+                    node_id,
+                    "{}",
+                ])
+                .assert()
+                .success();
+        }
+
         // Add an edge so traversal has something to find
         cli()
             .args([
@@ -219,6 +235,22 @@ mod graph_commands {
     fn test_graph_traverse_dfs() {
         let temp = temp_db_dir();
         create_graph(&temp, "g");
+
+        // add-edge requires both endpoints to have a stored node payload
+        // (#1442) — store nodes 10 and 20 before creating the edge.
+        for node_id in ["10", "20"] {
+            cli()
+                .args([
+                    "graph",
+                    "store-payload",
+                    temp.path().to_str().unwrap(),
+                    "g",
+                    node_id,
+                    "{}",
+                ])
+                .assert()
+                .success();
+        }
 
         cli()
             .args([
@@ -268,6 +300,22 @@ mod graph_commands {
     fn test_graph_add_edge() {
         let temp = temp_db_dir();
         create_graph(&temp, "g");
+
+        // add-edge requires both endpoints to have a stored node payload
+        // (#1442) — store nodes 100 and 200 before creating the edge.
+        for node_id in ["100", "200"] {
+            cli()
+                .args([
+                    "graph",
+                    "store-payload",
+                    temp.path().to_str().unwrap(),
+                    "g",
+                    node_id,
+                    "{}",
+                ])
+                .assert()
+                .success();
+        }
 
         cli()
             .args([
