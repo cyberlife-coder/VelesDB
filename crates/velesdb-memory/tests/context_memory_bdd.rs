@@ -506,6 +506,14 @@ fn test_source_ttl_zero_stores_permanently_like_remember() {
     assert_eq!(retrieved.content, "must stay retrievable");
 }
 
+// The never-downgrade TTL upgrade rule (permanent-upgrades-TTL,
+// TTL-never-downgrades-permanent, TTL-extension-only) is covered by unit
+// tests in `src/context/memory_bridge_tests.rs`, not here: those assertions
+// read the reserved `_veles_expires_at` metadata directly (unreachable from
+// this integration binary — reserved keys are always stripped from the
+// public API), which is also what keeps them from being a sleep-past-a-real-TTL
+// test, the flaky alternative under this suite's parallel test load.
+
 // --- Coverage round (2026-07-17): pricing trail, writer guard, provenance ----
 
 #[test]
