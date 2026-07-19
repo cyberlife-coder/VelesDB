@@ -81,6 +81,34 @@ assert explain["rule_id"] in {"drop.duplicate", "preserve.default"}, explain
 savings = srv.call("context_savings", {"project": "veles"})
 assert savings["events"] == 1 and savings["tokens_saved"] > 0, savings
 
+# --- memory tools: id_str round-trip closes #1468 (float-lossy JSON ids) ----
+# A float-lossy JSON client (JS `number`, Claude Code included) rounds a u64
+# id above 2^53 on the way out of a response and resubmits the rounded value
+# on the way in, so relate/forget/feedback fail with "memory does not exist".
+# The fix: every id also comes back as a decimal-string `..._str` twin, and
+# every id parameter accepts that string form. Proven here over the REAL
+# stdio JSON-RPC transport — relate is driven with the `id_str` STRINGS, not
+# the numeric `id` field, exactly as a fixed client must.
+mem_a = srv.call("remember", {"fact": "we chose parking_lot to avoid lock poisoning"})
+mem_b = srv.call("remember", {"fact": "PR #42 swaps the mutex"})
+assert mem_a["id_str"] == str(mem_a["id"]), mem_a
+assert mem_b["id_str"] == str(mem_b["id"]), mem_b
+
+rel = srv.call("relate", {"from": mem_a["id_str"], "to": mem_b["id_str"], "relation": "decided_in"})
+assert rel["edge_id_str"] == str(rel["edge_id"]), rel
+
+why_mem = srv.call("why", {"decision": "parking_lot poisoning", "max_hops": 1})
+node_ids = {n["id"] for n in why_mem["nodes"]}
+assert mem_a["id"] in node_ids and mem_b["id"] in node_ids, why_mem
+edge = next(e for e in why_mem["edges"] if e["relation"] == "decided_in")
+assert edge["from_str"] == mem_a["id_str"] and edge["to_str"] == mem_b["id_str"], edge
+
+fb = srv.call("feedback", {"id": mem_a["id_str"], "success": True})
+assert fb["id_str"] == mem_a["id_str"], fb
+
+forgotten = srv.call("forget", {"id": mem_b["id_str"]})
+assert forgotten["found"] and forgotten["id_str"] == mem_b["id_str"], forgotten
+
 # --- media fragment: compile with an image -> externalize -> retrieve byte-identical (US-009, PR3) ---
 # A real, independently-decodable 1x1 transparent PNG (IHDR + IDAT + IEND) --
 # fixed bytes, never derived from the fragment's caption.
@@ -127,4 +155,5 @@ srv2.terminate()
 print("MCP E2E OK — 6 tools exercised over real stdio: list, compile (dedup+insights+handles), "
       "retrieve round-trip (text AND a real PNG media fragment, byte-identical base64), explain, "
       "savings, error taxonomy, and save/load_working_context round-tripping ACROSS two separate "
-      "server processes")
+      "server processes; plus remember/relate/why/feedback/forget driven by id_str STRINGS "
+      "end to end over the real JSON-RPC transport (issue #1468)")

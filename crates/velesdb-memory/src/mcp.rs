@@ -7,12 +7,14 @@
 use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::tool::schema_for_input;
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::{ErrorCode, Implementation, ServerCapabilities, ServerInfo};
+use rmcp::model::{ErrorCode, Implementation, JsonObject, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
+use schemars::JsonSchema;
 
 use crate::limits::{DEFAULT_WHY_HOPS, MAX_FACT_BYTES, MAX_RECALL_LIMIT, MAX_WHY_HOPS};
-use crate::model::{Explanation, FusionOptions};
+use crate::model::FusionOptions;
 use crate::service::MemoryService;
 
 /// Default number of memories returned by `recall`.
@@ -26,9 +28,10 @@ use crate::extract::DynExtractor;
 
 // --- Tool parameter / result DTOs ------------------------------------------
 //
-// The request envelopes and small id-results live in their own module so this
-// file stays focused on the server and tool wiring; output shapes reuse the
-// domain types from `crate::model` directly (no duplicate wire/domain struct).
+// The request envelopes, small id-results, and the id-echoing wire wrappers
+// (`RecollectionDto`, `ExplanationDto` — the `id_str` twins of issue #1468)
+// live in their own module so this file stays focused on the server and tool
+// wiring; the domain types in `crate::model` are unchanged.
 /// The context compiler's six tools — a second `#[tool_router]` block whose
 /// router is combined with the main one below, extending the ONE server.
 #[cfg(feature = "context")]
@@ -36,10 +39,31 @@ mod context_tools;
 
 mod dto;
 use dto::{
-    FeedbackParams, FeedbackResult, ForgetParams, ForgetResult, RecallFusedParams,
+    ExplanationDto, FeedbackParams, FeedbackResult, ForgetParams, ForgetResult, RecallFusedParams,
     RecallFusedResult, RecallParams, RecallResult, RecallWhereParams, RelateParams, RelateResult,
     RememberExtractedParams, RememberExtractedResult, RememberParams, RememberResult, WhyParams,
 };
+
+/// Advertised-schema counterpart of [`crate::model::deserialize_id`]: `keys`
+/// (e.g. `["from", "to"]`) widen from `integer` to `["integer", "string"]` so
+/// a client generating requests from the schema can discover the
+/// decimal-string form (issue #1468). Scoped per tool — each takes a
+/// different set of id-named parameters (`relate`'s `from`/`to`,
+/// `forget`/`feedback`'s `id`, `remember`'s nested `links[].target`) — unlike
+/// the context compiler's `wire_safe_input_schema` (single hardcoded `"id"`
+/// key, `context`-feature-gated). Both reuse the same underlying
+/// [`crate::schema::widen_id_properties`] tree walk.
+fn id_wire_input_schema<T: JsonSchema + std::any::Any>(keys: &[&str]) -> Arc<JsonObject> {
+    let schema = schema_for_input::<Parameters<T>>().unwrap_or_else(|e| {
+        panic!(
+            "Invalid input schema for {}: {e}",
+            std::any::type_name::<T>()
+        )
+    });
+    let mut map = (*schema).clone();
+    crate::schema::widen_id_properties(&mut map, keys);
+    Arc::new(map)
+}
 
 // --- The server ------------------------------------------------------------
 
@@ -103,7 +127,8 @@ impl McpServer {
 
     #[tool(
         name = "remember",
-        description = "Store a fact in durable local memory. Optionally link it to existing memories (graph) and tag it with structured metadata like project/author/type/status/date (ColumnStore) for later filtering — metadata is capped at 64 KiB serialized. Set `ttl_seconds` to make the fact expire after a delay (a durable TTL that survives restarts); omit it for a permanent memory. Returns the fact's stable id."
+        description = "Store a fact in durable local memory. Optionally link it to existing memories (graph) and tag it with structured metadata like project/author/type/status/date (ColumnStore) for later filtering — metadata is capped at 64 KiB serialized. Set `ttl_seconds` to make the fact expire after a delay (a durable TTL that survives restarts); omit it for a permanent memory. Returns the fact's stable id. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
+        input_schema = id_wire_input_schema::<RememberParams>(&["target"])
     )]
     async fn remember(
         &self,
@@ -130,12 +155,15 @@ impl McpServer {
         .await
         .map_err(join_error)?
         .map_err(to_error)?;
-        Ok(Json(RememberResult { id }))
+        Ok(Json(RememberResult {
+            id,
+            id_str: id.to_string(),
+        }))
     }
 
     #[tool(
         name = "recall",
-        description = "Recall memories semantically similar to a query (vector), most similar first. Optionally narrow to exact-match metadata via `filter` (ColumnStore), e.g. {\"project\":\"veles\",\"status\":\"resolved\"}."
+        description = "Recall memories semantically similar to a query (vector), most similar first. Optionally narrow to exact-match metadata via `filter` (ColumnStore), e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients."
     )]
     async fn recall(
         &self,
@@ -152,7 +180,7 @@ impl McpServer {
                 .await
                 .map_err(join_error)?
                 .map_err(to_error)?;
-        Ok(Json(RecallResult { memories }))
+        Ok(Json(RecallResult::new(memories)))
     }
 
     #[tool(
@@ -174,7 +202,7 @@ impl McpServer {
                 .await
                 .map_err(join_error)?
                 .map_err(to_error)?;
-        Ok(Json(RecallResult { memories }))
+        Ok(Json(RecallResult::new(memories)))
     }
 
     #[tool(
@@ -217,16 +245,13 @@ impl McpServer {
             .map_err(to_error)?;
             (hits, None, None)
         };
-        Ok(Json(RecallFusedResult {
-            memories,
-            dated_context,
-            now,
-        }))
+        Ok(Json(RecallFusedResult::new(memories, dated_context, now)))
     }
 
     #[tool(
         name = "feedback",
-        description = "Reinforce a recalled memory with an outcome: `success=true` if the fact was useful, `false` if it was noise. This durably updates the fact's learned confidence, which `recall` uses to re-rank future results — over repeated feedback, useful facts drift up and noise drifts down, so the memory improves with use without retraining the model. Returns the fact's new confidence in [0,1]."
+        description = "Reinforce a recalled memory with an outcome: `success=true` if the fact was useful, `false` if it was noise. This durably updates the fact's learned confidence, which `recall` uses to re-rank future results — over repeated feedback, useful facts drift up and noise drifts down, so the memory improves with use without retraining the model. Returns the fact's new confidence in [0,1].",
+        input_schema = id_wire_input_schema::<FeedbackParams>(&["id"])
     )]
     async fn feedback(
         &self,
@@ -238,12 +263,17 @@ impl McpServer {
             .await
             .map_err(join_error)?
             .map_err(to_error)?;
-        Ok(Json(FeedbackResult { id, confidence }))
+        Ok(Json(FeedbackResult {
+            id,
+            id_str: id.to_string(),
+            confidence,
+        }))
     }
 
     #[tool(
         name = "relate",
-        description = "Create a typed, directional link between two memories (`from` → `to`) labeled by `relation`. These links are the graph edges that `why` and `recall_fused` later traverse to surface connected facts that share no words with the query — build the graph with `relate` so multi-hop reasoning works (e.g. link a decision to its cause, a fact to its source, a task to the person it concerns). Direction matters: traversal follows OUTGOING edges only, so point `from` at the memory you will later ask `why` about and `to` at its evidence (decision → cause, fact → source) — an edge pointing INTO a memory is invisible to `why(that memory)`. Idempotent per (from, relation, to). Returns the new edge id."
+        description = "Create a typed, directional link between two memories (`from` → `to`) labeled by `relation`. These links are the graph edges that `why` and `recall_fused` later traverse to surface connected facts that share no words with the query — build the graph with `relate` so multi-hop reasoning works (e.g. link a decision to its cause, a fact to its source, a task to the person it concerns). Direction matters: traversal follows OUTGOING edges only, so point `from` at the memory you will later ask `why` about and `to` at its evidence (decision → cause, fact → source) — an edge pointing INTO a memory is invisible to `why(that memory)`. Idempotent per (from, relation, to). Returns the new edge id. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
+        input_schema = id_wire_input_schema::<RelateParams>(&["from", "to"])
     )]
     async fn relate(
         &self,
@@ -255,12 +285,16 @@ impl McpServer {
             .await
             .map_err(join_error)?
             .map_err(to_error)?;
-        Ok(Json(RelateResult { edge_id }))
+        Ok(Json(RelateResult {
+            edge_id,
+            edge_id_str: edge_id.to_string(),
+        }))
     }
 
     #[tool(
         name = "forget",
-        description = "Permanently delete a memory by its `id` (as returned by `remember` or `recall`), removing the fact and its graph links. The deletion is durable and cannot be undone — use it to retract or correct stored knowledge. For automatic time-based expiry instead, set a TTL when calling `remember`. Returns the requested id plus `found`: `true` if a memory actually existed and was deleted, `false` if nothing was stored under that id (a stale id or a typo) — a no-op, not an error, but distinguishable from a real deletion."
+        description = "Permanently delete a memory by its `id` (as returned by `remember` or `recall`), removing the fact and its graph links. The deletion is durable and cannot be undone — use it to retract or correct stored knowledge. For automatic time-based expiry instead, set a TTL when calling `remember`. Returns the requested id plus `found`: `true` if a memory actually existed and was deleted, `false` if nothing was stored under that id (a stale id or a typo) — a no-op, not an error, but distinguishable from a real deletion.",
+        input_schema = id_wire_input_schema::<ForgetParams>(&["id"])
     )]
     async fn forget(
         &self,
@@ -272,7 +306,11 @@ impl McpServer {
             .await
             .map_err(join_error)?
             .map_err(to_error)?;
-        Ok(Json(ForgetResult { id, found }))
+        Ok(Json(ForgetResult {
+            id,
+            id_str: id.to_string(),
+            found,
+        }))
     }
 
     #[tool(
@@ -282,7 +320,7 @@ impl McpServer {
     async fn why(
         &self,
         Parameters(params): Parameters<WhyParams>,
-    ) -> Result<Json<Explanation>, ErrorData> {
+    ) -> Result<Json<ExplanationDto>, ErrorData> {
         let max_hops = params
             .max_hops
             .unwrap_or(DEFAULT_WHY_HOPS)
@@ -296,7 +334,7 @@ impl McpServer {
                 .await
                 .map_err(join_error)?
                 .map_err(to_error)?;
-        Ok(Json(explanation))
+        Ok(Json(ExplanationDto::from(explanation)))
     }
 
     #[tool(
@@ -333,7 +371,8 @@ impl McpServer {
         .await
         .map_err(join_error)?
         .map_err(to_error)?;
-        Ok(Json(RememberExtractedResult { ids }))
+        let ids_str = ids.iter().map(u64::to_string).collect();
+        Ok(Json(RememberExtractedResult { ids, ids_str }))
     }
 }
 

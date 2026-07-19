@@ -833,3 +833,244 @@ async fn remember_extracted_without_backend_returns_internal_error() {
         .expect_err("extraction with no backend must error");
     assert_eq!(err.code, ErrorCode::INTERNAL_ERROR);
 }
+
+// --- u64-id wire compatibility (issue #1468) --------------------------------
+//
+// Float-lossy JSON clients (JS `number`, Claude Code included) round a u64
+// id above 2^53 on the way OUT of a response, then resubmit the rounded
+// value on the way IN to relate/forget/feedback — which fails with "memory
+// does not exist" against a real (large) id. The fix is additive: every id a
+// memory tool returns also comes back as a decimal-string `..._str` twin, and
+// every id a memory tool accepts tolerates that string form. Proven at the
+// serde boundary (`serde_json::from_value`), not by constructing the Rust
+// struct directly, since the latter sidesteps JSON entirely and would not
+// have caught the bug.
+
+#[test]
+fn relate_params_accept_string_or_number_ids_on_the_wire() {
+    let numeric: RelateParams =
+        serde_json::from_value(serde_json::json!({"from": 1, "to": 2, "relation": "r"}))
+            .expect("numeric ids must still deserialize (0.9.x compat)");
+    assert_eq!((numeric.from, numeric.to), (1, 2));
+
+    let stringy: RelateParams =
+        serde_json::from_value(serde_json::json!({"from": "1", "to": "2", "relation": "r"}))
+            .expect("decimal-string ids must deserialize");
+    assert_eq!((stringy.from, stringy.to), (1, 2));
+}
+
+#[test]
+fn forget_and_feedback_params_accept_string_ids_on_the_wire() {
+    let forget: ForgetParams = serde_json::from_value(serde_json::json!({"id": "42"}))
+        .expect("forget id must accept a decimal string");
+    assert_eq!(forget.id, 42);
+
+    let feedback: FeedbackParams =
+        serde_json::from_value(serde_json::json!({"id": "42", "success": true}))
+            .expect("feedback id must accept a decimal string");
+    assert_eq!(feedback.id, 42);
+}
+
+#[test]
+fn remember_link_target_accepts_a_string_id_on_the_wire() {
+    let link: Link = serde_json::from_value(serde_json::json!({"target": "7", "relation": "r"}))
+        .expect("Link::target must accept a decimal string");
+    assert_eq!(link.target, 7);
+}
+
+#[tokio::test]
+async fn remember_recall_relate_forget_feedback_responses_echo_an_id_str_twin() {
+    let (_dir, srv) = server();
+    let Json(remembered) = srv
+        .remember(Parameters(RememberParams {
+            fact: DECISION.to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember");
+    assert_eq!(remembered.id_str, remembered.id.to_string());
+
+    let Json(recalled) = srv
+        .recall(Parameters(RecallParams {
+            query: "parking_lot poisoning".to_owned(),
+            limit: None,
+            filter: None,
+        }))
+        .await
+        .expect("recall");
+    let hit = recalled
+        .memories
+        .iter()
+        .find(|m| m.id == remembered.id)
+        .expect("recalled memory present");
+    assert_eq!(hit.id_str, hit.id.to_string());
+
+    let Json(pr) = srv
+        .remember(Parameters(RememberParams {
+            fact: "PR #42 swaps the mutex".to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember pr");
+    let Json(relate_res) = srv
+        .relate(Parameters(RelateParams {
+            from: remembered.id,
+            to: pr.id,
+            relation: "decided_in".to_owned(),
+        }))
+        .await
+        .expect("relate");
+    assert_eq!(relate_res.edge_id_str, relate_res.edge_id.to_string());
+
+    let Json(feedback_res) = srv
+        .feedback(Parameters(FeedbackParams {
+            id: remembered.id,
+            success: true,
+        }))
+        .await
+        .expect("feedback");
+    assert_eq!(feedback_res.id_str, feedback_res.id.to_string());
+
+    let Json(forget_res) = srv
+        .forget(Parameters(ForgetParams { id: pr.id }))
+        .await
+        .expect("forget");
+    assert_eq!(forget_res.id_str, forget_res.id.to_string());
+}
+
+#[tokio::test]
+async fn why_response_echoes_id_str_and_from_to_str_on_nodes_and_edges() {
+    let (_dir, srv) = server();
+    let Json(decision) = srv
+        .remember(Parameters(RememberParams {
+            fact: DECISION.to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember decision");
+    let Json(pr) = srv
+        .remember(Parameters(RememberParams {
+            fact: "PR #42 swaps the mutex".to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember pr");
+    srv.relate(Parameters(RelateParams {
+        from: decision.id,
+        to: pr.id,
+        relation: "decided_in".to_owned(),
+    }))
+    .await
+    .expect("relate");
+
+    let Json(why) = srv
+        .why(Parameters(WhyParams {
+            decision: DECISION.to_owned(),
+            max_hops: Some(1),
+            filter: None,
+        }))
+        .await
+        .expect("why");
+    assert!(!why.nodes.is_empty() && !why.edges.is_empty());
+    for node in &why.nodes {
+        assert_eq!(node.id_str, node.id.to_string());
+    }
+    for edge in &why.edges {
+        assert_eq!(edge.from_str, edge.from.to_string());
+        assert_eq!(edge.to_str, edge.to.to_string());
+    }
+}
+
+#[tokio::test]
+async fn remember_extracted_response_echoes_ids_str() {
+    use crate::extract::{ExtractError, ExtractedFact, Extractor};
+    struct Stub;
+    impl Extractor for Stub {
+        fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+            Ok(vec![ExtractedFact {
+                text: "Alice ships the parser in Rust.".to_owned(),
+                entities: vec!["rust".to_owned()],
+            }])
+        }
+    }
+    let (_dir, srv) = server();
+    let srv = srv.with_extractor(Arc::new(Stub) as DynExtractor);
+    let Json(res) = srv
+        .remember_extracted(Parameters(RememberExtractedParams {
+            text: "Alice works in Rust.".to_owned(),
+            metadata: None,
+        }))
+        .await
+        .expect("remember_extracted");
+    assert_eq!(res.ids_str.len(), res.ids.len());
+    for (id, id_str) in res.ids.iter().zip(res.ids_str.iter()) {
+        assert_eq!(*id_str, id.to_string());
+    }
+}
+
+/// The round-trip that closes #1468. Simulates the reported failure two
+/// ways: (1) a wrong numeric id — the client-side rounding stand-in — is
+/// rejected by `relate` exactly like the maintainer's dogfooding report
+/// ("memory does not exist"); (2) relaying the exact `id_str` decimal-string
+/// twins instead (deserialized straight off raw JSON, not the Rust struct)
+/// succeeds, and `why` finds the resulting edge — proving the fix actually
+/// closes the loop end to end, not just at the DTO level.
+#[tokio::test]
+async fn relate_by_wrong_numeric_id_fails_but_id_str_round_trip_succeeds() {
+    let (_dir, srv) = server();
+    let Json(decision) = srv
+        .remember(Parameters(RememberParams {
+            fact: DECISION.to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember decision");
+    let Json(pr) = srv
+        .remember(Parameters(RememberParams {
+            fact: "PR #42 swaps the mutex".to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember pr");
+
+    // Stand-in for a float-lossy client rounding the id on the way out and
+    // back in: the perturbed id was never stored, so relate must reject it.
+    let wrong_from = decision.id + 1_000_003;
+    let err = srv
+        .relate(Parameters(RelateParams {
+            from: wrong_from,
+            to: pr.id,
+            relation: "decided_in".to_owned(),
+        }))
+        .await
+        .map(|_| ())
+        .expect_err("a rounded/wrong id must not silently resolve to the real memory");
+    assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+
+    // The fix: relay the exact `id_str` twins as JSON strings, off the wire.
+    let params: RelateParams = serde_json::from_value(serde_json::json!({
+        "from": decision.id_str,
+        "to": pr.id_str,
+        "relation": "decided_in",
+    }))
+    .expect("id_str values must deserialize as RelateParams");
+    srv.relate(Parameters(params))
+        .await
+        .expect("relate via id_str must succeed");
+
+    let (ids, edges) = why_one_hop(&srv).await;
+    assert!(ids.contains(&decision.id) && ids.contains(&pr.id));
+    assert_eq!(edges, 1);
+}
