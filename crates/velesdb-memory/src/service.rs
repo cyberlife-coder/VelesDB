@@ -126,6 +126,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Returns [`MemoryError::EmptyFact`] for empty/whitespace facts,
     /// [`MemoryError::ReservedKey`] if `metadata` names a reserved key
     /// (`content` or any `_veles_`-prefixed system key),
+    /// [`MemoryError::MetadataTooLarge`] if `metadata` exceeds
+    /// [`crate::limits::MAX_METADATA_BYTES`],
     /// [`MemoryError::UnknownMemory`] if a link points at a missing memory,
     /// [`MemoryError::InvalidRelation`] for a bad relation label,
     /// [`MemoryError::RollbackFailed`] if an edge write failed and the
@@ -162,6 +164,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             return Err(MemoryError::EmptyFact);
         }
         reject_reserved_keys(metadata)?;
+        reject_oversized_metadata(metadata)?;
         // EVERY link property — relation label and target existence — is
         // validated before any write, so all deterministic link failures
         // happen while nothing has been stored or overwritten yet.
@@ -232,7 +235,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// # Errors
     /// Returns [`MemoryError::EmptyFact`] for empty/whitespace `text`,
     /// [`MemoryError::Extract`] if extraction fails, [`MemoryError::ReservedKey`]
-    /// if `metadata` names a reserved key, or a storage error if persistence fails.
+    /// if `metadata` names a reserved key, [`MemoryError::MetadataTooLarge`] if
+    /// `metadata` exceeds [`crate::limits::MAX_METADATA_BYTES`], or a storage
+    /// error if persistence fails.
     pub fn remember_extracted<X: Extractor>(
         &self,
         text: &str,
@@ -681,6 +686,23 @@ fn reject_reserved_keys(metadata: Option<&Metadata>) -> Result<(), MemoryError> 
         if is_reserved_key(key) {
             return Err(MemoryError::ReservedKey(key.clone()));
         }
+    }
+    Ok(())
+}
+
+/// Reject caller-supplied metadata over [`crate::limits::MAX_METADATA_BYTES`]
+/// — the `DoS` guard every `remember` path shares (see
+/// [`MemoryError::MetadataTooLarge`]).
+fn reject_oversized_metadata(metadata: Option<&Metadata>) -> Result<(), MemoryError> {
+    let Some(meta) = metadata else {
+        return Ok(());
+    };
+    let bytes = crate::limits::metadata_bytes(meta);
+    if bytes > crate::limits::MAX_METADATA_BYTES {
+        return Err(MemoryError::MetadataTooLarge {
+            bytes,
+            max: crate::limits::MAX_METADATA_BYTES,
+        });
     }
     Ok(())
 }

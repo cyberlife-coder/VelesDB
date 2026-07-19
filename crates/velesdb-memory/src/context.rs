@@ -155,7 +155,9 @@ impl ContextCompiler {
     /// # Errors
     ///
     /// [`MemoryError::ContextOverLimit`] when the request exceeds a
-    /// [`crate::limits`] cap (fragment count or single-fragment size), and
+    /// [`crate::limits`] cap (fragment count or single-fragment size),
+    /// [`MemoryError::MetadataTooLarge`] when a fragment's `metadata` exceeds
+    /// [`crate::limits::MAX_METADATA_BYTES`], and
     /// [`MemoryError::ContextBudget`] when the token budget minus the
     /// policy's response reserve leaves no room for any context.
     pub fn compile(&self, request: &CompileRequest) -> Result<CompiledContext, MemoryError> {
@@ -383,6 +385,18 @@ fn validate(request: &CompileRequest, policy: &CompilePolicy) -> Result<u64, Mem
             limits::MAX_FRAGMENT_BYTES
         )));
     }
+    for fragment in &request.fragments {
+        let Some(metadata) = fragment.metadata.as_ref() else {
+            continue;
+        };
+        let bytes = limits::metadata_bytes(metadata);
+        if bytes > limits::MAX_METADATA_BYTES {
+            return Err(MemoryError::MetadataTooLarge {
+                bytes,
+                max: limits::MAX_METADATA_BYTES,
+            });
+        }
+    }
     validate_media(&request.fragments)?;
     let budget = limits::clamp_token_budget(request.token_budget);
     let usable = budget.saturating_sub(policy.response_reserve_tokens);
@@ -453,11 +467,19 @@ fn analyze<'a>(
         .iter()
         .map(|analysis| analysis.as_ref().map(|analysis| analysis.raw_hash))
         .collect();
-    let duplicates = dedup::find_duplicates(&contents, policy.near_dup_dedup, &media_hashes);
-    // Whole-batch pass, symmetric to `dedup::find_duplicates` above: needs
+    // Whole-batch pass, symmetric to `dedup::find_duplicates` below: needs
     // every fragment's `kind` + `metadata.target` at once, which a per-
-    // fragment `classify::classify` call cannot see.
+    // fragment `classify::classify` call cannot see. Computed *before*
+    // dedup so the media namespace can re-anchor off a superseded fragment
+    // (see `dedup::find_duplicates`'s doc) instead of anchoring dedup on a
+    // screenshot that supersession has already excluded from packing.
     let superseded_flags = classify::screenshot_supersession(&request.fragments);
+    let duplicates = dedup::find_duplicates(
+        &contents,
+        policy.near_dup_dedup,
+        &media_hashes,
+        &superseded_flags,
+    );
     let query_terms = relevance::terms(&request.query);
     let mut analyses: Vec<Analysis<'a>> = request
         .fragments

@@ -28,6 +28,8 @@ import { join } from 'node:path'
 
 import { SYSTEM, TURN_EVENTS } from '../corpus/session.mjs'
 import { TURN_QUESTIONS } from '../corpus/questions.mjs'
+import { SYSTEM_VIBE, TURN_EVENTS_VIBE } from '../corpus/session-vibe.mjs'
+import { TURN_QUESTIONS_VIBE } from '../corpus/questions-vibe.mjs'
 import { loadNodeAddon } from '../lib/compile-node.mjs'
 import { QUERY, LOSSLESS_BUDGET } from '../lib/ab-session.mjs'
 
@@ -52,26 +54,39 @@ function contains(haystack, fact) {
  * resolving a retrieval handle. Never assumes recoverability from a listed
  * handle alone.
  *
- * @param {{budget: number, label: string, fragmentFilter?: (f: object) => boolean}} opts
+ * @param {{budget: number, label: string, fragmentFilter?: (f: object) => boolean,
+ *   turnEvents?: Array<Array<object>>, system?: object, questions?: object[]}} opts
  *   `fragmentFilter` is NOT part of the committed gate (always undefined
  *   there — every accumulated fragment is sent, matching the offline
  *   benchmark's non-memory arms exactly). It exists only so a local,
  *   real-policy destructive run (e.g. excluding every media fragment) can
  *   prove this checker actually fails when a fact-bearing fragment never
  *   reaches compileContext at all — see the "red" proof in the PR body.
+ *   `turnEvents`/`system`/`questions` default to the base 14-turn scenario
+ *   (corpus/session.mjs + corpus/questions.mjs); the vibe-coding scenario
+ *   tests below pass the 19-turn corpus/session-vibe.mjs +
+ *   corpus/questions-vibe.mjs instead — same checker, same guarantee,
+ *   different corpus.
  * @returns {Promise<{turnReports: object[], failures: object[]}>}
  *   failures is empty iff every fact from every turn survives this arm.
  */
-export async function checkFactsSurviveArm({ budget, label, fragmentFilter = null }) {
+export async function checkFactsSurviveArm({
+  budget,
+  label,
+  fragmentFilter = null,
+  turnEvents = TURN_EVENTS,
+  system = SYSTEM,
+  questions = TURN_QUESTIONS,
+}) {
   const dir = mkdtempSync(join(tmpdir(), `veles-facts-survive-${label}-`))
   const mem = MemoryService.open(dir, 'hash')
-  const accumulated = [SYSTEM]
+  const accumulated = [system]
   const turnReports = []
   const failures = []
 
   try {
-    for (let turn = 0; turn < TURN_EVENTS.length; turn++) {
-      accumulated.push(...TURN_EVENTS[turn])
+    for (let turn = 0; turn < turnEvents.length; turn++) {
+      accumulated.push(...turnEvents[turn])
       const armBFragments = fragmentFilter ? accumulated.filter(fragmentFilter) : accumulated
 
       const request = {
@@ -92,7 +107,7 @@ export async function checkFactsSurviveArm({ budget, label, fragmentFilter = nul
       )
 
       const sourceByFragmentId = new Map(out.sources.map((s) => [s.fragment_id, s.handle]))
-      const { facts } = TURN_QUESTIONS[turn]
+      const { facts } = questions[turn]
 
       for (const fact of facts) {
         const report = { turn: turn + 1, arm: label, fact, status: null, detail: null }
@@ -194,3 +209,42 @@ test('facts survive even under a destructive 1-token budget — via recoverable 
   const recovered = turnReports.filter((r) => r.status === 'recoverable').length
   assert.ok(recovered >= 1, `expected at least one fact through the recoverable path, got ${recovered}`)
 })
+
+// --- VIBE-CODING scenario extension (corpus/session-vibe.mjs, 2026-07) ---
+// Same gate, same guarantee, applied to the second (19-turn, iterative
+// feature implementation) scenario added alongside the base bug-fix
+// scenario — required by this extension's task spec ("si tu ajoutes des
+// tours/questions, étends la ground truth proprement"). Only the
+// WITH-media (default) corpus is checked here: BENCH_MEDIA=0 deliberately
+// removes whole screenshot fragments (see lib/ab-session.mjs's
+// applyBenchMediaFilter), so a fact whose ONLY source is a screenshot
+// caption is expected to be absent in that variant by design, not a
+// regression — exactly like the base scenario, which this gate also never
+// checks under a media-stripped variant.
+test(
+  'VIBE-CODING scenario, LOSSLESS arm: every ground-truth fact from every turn survives compileContext, inline or via a handle that actually resolves',
+  async () => {
+    const { failures } = await checkFactsSurviveArm({
+      budget: LOSSLESS_BUDGET,
+      label: 'vibe-lossless',
+      turnEvents: TURN_EVENTS_VIBE,
+      system: SYSTEM_VIBE,
+      questions: TURN_QUESTIONS_VIBE,
+    })
+    assert.equal(failures.length, 0, `${failures.length} fact(s) lost in the VIBE-CODING LOSSLESS arm:\n${formatFailureReport(failures)}`)
+  },
+)
+
+test(
+  'VIBE-CODING scenario, WINDOW-8000 arm: every ground-truth fact from every turn survives compileContext, inline or via a handle that actually resolves',
+  async () => {
+    const { failures } = await checkFactsSurviveArm({
+      budget: 8000,
+      label: 'vibe-window-8000',
+      turnEvents: TURN_EVENTS_VIBE,
+      system: SYSTEM_VIBE,
+      questions: TURN_QUESTIONS_VIBE,
+    })
+    assert.equal(failures.length, 0, `${failures.length} fact(s) lost in the VIBE-CODING WINDOW-8000 arm:\n${formatFailureReport(failures)}`)
+  },
+)

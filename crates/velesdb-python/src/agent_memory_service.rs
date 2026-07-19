@@ -362,6 +362,19 @@ impl PyMemoryService {
         py.detach(|| self.svc.forget(id).map_err(to_py_err))
     }
 
+    /// Reinforce (`success=True`) or weaken (`False`) a memory after use,
+    /// closing the RL loop `recall` re-ranks against. Returns the updated
+    /// confidence in `[0.0, 1.0]`. Raises `KeyError` if `id` is not a live
+    /// fact — unlike `forget`, there is no confidence to report back.
+    fn feedback(&self, py: Python<'_>, id: u64, success: bool) -> PyResult<f64> {
+        py.detach(|| {
+            self.svc
+                .feedback(id, success)
+                .map(f64::from)
+                .map_err(to_py_err)
+        })
+    }
+
     /// Explain a decision: the best-matching memory plus its connected subgraph
     /// (multi-hop). Returns `{nodes, edges}` — the wedge a plain recall misses.
     ///

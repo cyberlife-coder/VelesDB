@@ -28,6 +28,8 @@ mem.why("why the aisle seat on Robert's flight?")   # walks booking â†’ reason â
 
 Full runnable demo: [`examples/agent_memory/why_across_sessions.py`](https://github.com/cyberlife-coder/VelesDB/blob/develop/examples/agent_memory/why_across_sessions.py). The same wedge ships for [Node](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) and as a local [MCP server](https://github.com/cyberlife-coder/VelesDB/tree/develop/crates/velesdb-memory).
 
+`mem.feedback(id, success)` closes the RL loop: reinforce or weaken a memory after use and `recall` re-ranks against the updated confidence.
+
 ## Context Compiler: token-budgeted, provenance-audited prompt context
 
 Your agent burns most of its tokens re-reading redundant context.
@@ -62,7 +64,7 @@ compiled["insights"]   # {"tokens_in", "tokens_out", "tokens_saved", ...} -- loc
 
 # What did not fit stays recoverable, byte for byte:
 handle = compiled["sources"][0]["handle"]        # "ctx://source/18021940868160883968"
-mem.retrieve_context_source(handle)              # -> the original fragment text
+mem.retrieve_context_source(handle)              # -> {"content": str, "media"?: ...}
 
 # Aggregate savings across every compile_context call (optionally per project):
 mem.context_savings(project="veles")             # {"events", "tokens_saved", ...}

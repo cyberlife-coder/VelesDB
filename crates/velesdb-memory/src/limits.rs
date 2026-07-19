@@ -7,11 +7,32 @@
 //! them. Each adapter formats its own transport-native error; only the values
 //! and the clamping policy are shared.
 
+use crate::service::Metadata;
+
 /// Default hop budget for `why` traversal when the caller supplies none.
 pub const DEFAULT_WHY_HOPS: usize = 2;
 
 /// Maximum accepted fact size (1 MiB) — prevents allocating huge embeddings.
 pub const MAX_FACT_BYTES: usize = 1_048_576;
+
+/// Maximum accepted size of caller-supplied `metadata` (64 KiB), measured as
+/// its serialized JSON form. Metadata is a keyed lookup facet (project,
+/// author, status, …) — a porte-clés, not a payload — so it gets a much
+/// tighter ceiling than [`MAX_FACT_BYTES`]: without one, a caller could smuggle
+/// an arbitrarily large JSON blob through `metadata` on every write path
+/// (`remember`, `remember_with_ttl`, `remember_extracted`, and each
+/// context-compiler fragment's own `metadata`) and force the same unbounded
+/// allocation and storage growth the fact-size cap exists to prevent.
+pub const MAX_METADATA_BYTES: usize = 64 * 1024;
+
+/// The serialized JSON size of `meta`, in bytes. Returns `usize::MAX` if the
+/// map somehow fails to serialize (it never should — `Metadata` is always
+/// valid JSON), so a serialization hiccup fails a size check closed rather
+/// than silently passing an unmeasured payload.
+#[must_use]
+pub fn metadata_bytes(meta: &Metadata) -> usize {
+    serde_json::to_vec(meta).map_or(usize::MAX, |v| v.len())
+}
 
 /// Cap on a `recall` limit — prevents unbounded vector scans (core does not
 /// cap `k`, so the adapters do).

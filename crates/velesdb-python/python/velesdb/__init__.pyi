@@ -2477,6 +2477,21 @@ class MemoryService:
         """
         ...
 
+    def feedback(self, id: int, success: bool) -> float:
+        """Reinforce (success=True) or weaken (False) a memory after use; returns the updated confidence [0,1].
+
+        Args:
+            id: The memory id that was used.
+            success: Whether the memory was useful.
+
+        Returns:
+            The updated confidence, in ``[0.0, 1.0]``.
+
+        Raises:
+            KeyError: If ``id`` does not exist.
+        """
+        ...
+
     def why(
         self,
         decision: str,
@@ -2556,7 +2571,7 @@ class MemoryService:
         """
         ...
 
-    def retrieve_context_source(self, handle: str) -> str:
+    def retrieve_context_source(self, handle: str) -> Dict[str, Any]:
         """Fetch back the exact original content behind a
         ``ctx://source/<hash>`` handle from a :meth:`compile_context` result.
 
@@ -2564,7 +2579,9 @@ class MemoryService:
             handle: A ``ctx://source/<hash>`` handle from a compiled context.
 
         Returns:
-            The original fragment content, byte for byte.
+            A dict shaped ``{"content": str, "media"?: ...}``, byte-for-byte
+            the original fragment; ``media`` is present only when the
+            fragment carried one.
 
         Raises:
             KeyError: If the handle is malformed or nothing is stored under it.

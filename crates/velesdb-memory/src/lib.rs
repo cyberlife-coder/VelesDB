@@ -2,16 +2,20 @@
 //! # VelesDB-memory
 //!
 //! Local-first **memory** layer for AI agents, exposed through a single MCP
-//! server. This crate is the domain core: it maps five memory operations onto
+//! server. This crate is the domain core: it maps nine memory operations onto
 //! `VelesDB`'s in-core Agent Memory SDK.
 //!
-//! | Operation  | Meaning                                            |
-//! |------------|----------------------------------------------------|
-//! | `remember` | store a fact (+ optional links to other memories)  |
-//! | `recall`   | semantic retrieval of similar facts                |
-//! | `relate`   | create a typed edge between two memories           |
-//! | `forget`   | delete a memory                                    |
-//! | `why`      | recall + multi-hop graph traversal                 |
+//! | Operation           | Meaning                                            |
+//! |--------------------|-----------------------------------------------------|
+//! | `remember`          | store a fact (+ optional links to other memories)  |
+//! | `recall`            | semantic retrieval of similar facts                |
+//! | `recall_where`      | semantic retrieval filtered by metadata            |
+//! | `recall_fused`      | vector + graph fused retrieval                     |
+//! | `relate`            | create a typed edge between two memories           |
+//! | `forget`            | delete a memory                                    |
+//! | `why`               | recall + multi-hop graph traversal                 |
+//! | `feedback`          | reinforce or penalize a memory after use           |
+//! | `remember_extracted`| extract facts from raw text and auto-wire the graph|
 //!
 //! ## License boundary (non-negotiable)
 //!

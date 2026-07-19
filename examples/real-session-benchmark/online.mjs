@@ -25,7 +25,7 @@
 // safe path; nothing here ever runs in CI.
 import { TURN_EVENTS, SYSTEM } from './corpus/session.mjs'
 import { TURN_QUESTIONS } from './corpus/questions.mjs'
-import { resolveRunnerKind, runTurn, mean, stddev } from './lib/runner.mjs'
+import { resolveRunnerKind, runTurn, mean, stddev, printArmComparison, turnBilledLine } from './lib/runner.mjs'
 import { runCliTurn } from './lib/claude-cli.mjs'
 import { gradeResponse } from './lib/grade.mjs'
 import { measureSession, LOSSLESS_BUDGET } from './lib/ab-session.mjs'
@@ -154,9 +154,10 @@ async function main() {
       const total = TURN_QUESTIONS[t].facts.length
       console.log(
         `  turn ${String(t + 1).padStart(2)}: input_tokens mean=${mean(inputs).toFixed(1)} min=${Math.min(...inputs)} max=${Math.max(...inputs)} stddev=${stddev(inputs).toFixed(2)}` +
+          turnBilledLine(samples) +
           ` | adequacy mean=${meanFound.toFixed(1)}/${total}` +
           (cacheCreate.some((x) => x > 0) || cacheRead.some((x) => x > 0)
-            ? ` | cache_creation mean=${mean(cacheCreate).toFixed(1)} cache_read mean=${mean(cacheRead).toFixed(1)} (separate — never summed into input_tokens)`
+            ? ` | cache_creation mean=${mean(cacheCreate).toFixed(1)} cache_read mean=${mean(cacheRead).toFixed(1)} (breakdown of the summed figure)`
             : ''),
       )
       const missingUnion = [...new Set(grades.flatMap((g) => g.missing))]
@@ -170,61 +171,10 @@ async function main() {
   const rawRuns = await runArm(rawTurns, 'RAW (bras A)')
   const compiledRuns = await runArm(compiledTurns, 'COMPILED (bras B)')
 
-  // Per-arm BILLED DOLLARS and cache-field totals. On a caching runner (the
-  // CLI, and any real harness) the context lives in cache_creation /
-  // cache_read, NOT input_tokens — the first campaign measured
-  // input_tokens=2 on every turn of both arms, which reads as "0% saved"
-  // while the actual billing difference (raw arm re-creates cache every
-  // turn; the compiled arm's byte-stable output cache-HITS) was invisible.
-  // total_cost_usd, when the runner provides it, is the ground truth.
-  function armMoney(runs) {
-    let cost = 0
-    let costSamples = 0
-    let cacheCreate = 0
-    let cacheRead = 0
-    let input = 0
-    for (const samples of runs) {
-      for (const sVal of samples) {
-        if (typeof sVal.total_cost_usd === 'number') {
-          cost += sVal.total_cost_usd
-          costSamples++
-        }
-        cacheCreate += sVal.cache_creation_input_tokens
-        cacheRead += sVal.cache_read_input_tokens
-        input += sVal.input_tokens
-      }
-    }
-    const runsCount = runs[0]?.length ?? 1
-    return {
-      meanCostPerSession: costSamples > 0 ? cost / runsCount : null,
-      costSamples,
-      cacheCreatePerSession: cacheCreate / runsCount,
-      cacheReadPerSession: cacheRead / runsCount,
-      inputPerSession: input / runsCount,
-    }
-  }
-  const rawMoney = armMoney(rawRuns)
-  const compiledMoney = armMoney(compiledRuns)
-  console.log('')
-  console.log('--- session totals: BILLED DOLLARS + cache fields (per session, mean over runs) ---')
-  for (const [label, m] of [
-    ['raw     ', rawMoney],
-    ['compiled', compiledMoney],
-  ]) {
-    console.log(
-      `  ${label}: total_cost_usd=${m.meanCostPerSession === null ? 'n/a (runner reports no cost)' : '$' + m.meanCostPerSession.toFixed(4)}` +
-        ` | input=${m.inputPerSession.toFixed(0)} cache_creation=${m.cacheCreatePerSession.toFixed(0)} cache_read=${m.cacheReadPerSession.toFixed(0)} tokens`,
-    )
-  }
-  if (rawMoney.meanCostPerSession !== null && compiledMoney.meanCostPerSession !== null && rawMoney.meanCostPerSession > 0) {
-    const saved = (1 - compiledMoney.meanCostPerSession / rawMoney.meanCostPerSession) * 100
-    console.log(
-      `  BILLED savings: ${saved.toFixed(1)}% per session in real dollars (includes the constant harness overhead in both arms — the content-only gap is wider)`,
-    )
-  }
-
-  console.log('')
-  console.log('--- session totals: TOKENS (billed usage.input_tokens, mean over N runs per turn) + QUALITY (deterministic grader) ---')
+  // Session-total aggregation (tokens + graded adequacy per arm) — computed
+  // BEFORE the per-arm totals block so the adequacy totals print inside it
+  // (2026-07-19 campaign review fix: a log without per-arm adequacy totals
+  // forced re-deriving them by hand from the per-turn lines).
   let totalRawMean = 0
   let totalCompiledMean = 0
   let rawFacts = 0
@@ -239,6 +189,27 @@ async function main() {
     compiledFacts += mean(compiledRuns[t].map((s) => gradeResponse(s.responseText, TURN_QUESTIONS[t].facts).found))
   }
   const savedPct = ((1 - totalCompiledMean / totalRawMean) * 100).toFixed(1)
+
+  // Runner-aware A/B summary (shared with online-vibe.mjs, see
+  // lib/runner.mjs): on the cli runner the HEADLINE is total_cost_usd per
+  // arm — CLI 2.1.201 routes user content (text AND images) into
+  // cache_creation_input_tokens, not input_tokens (verified 2026-07-19,
+  // lib/claude-cli.mjs header), so an input_tokens delta reads ~0% there.
+  // On the api runner the fields are direct and input_tokens stays the
+  // headline. Both get the full per-field breakdown, never summed.
+  console.log('')
+  const { raw: rawMoney, compiled: compiledMoney } = printArmComparison({
+    kind,
+    rawRuns,
+    compiledRuns,
+    adequacy: {
+      raw: { found: rawFacts, total: totalFacts },
+      compiled: { found: compiledFacts, total: totalFacts },
+    },
+  })
+
+  console.log('')
+  console.log(`--- session totals: TOKENS (usage.input_tokens, mean over N runs per turn${kind === 'cli' ? ' — SECONDARY on the cli runner, see cache-routing note above' : ''}) + QUALITY (deterministic grader) ---`)
   console.log(`tokens  — raw: ${totalRawMean.toFixed(1)} | compiled: ${totalCompiledMean.toFixed(1)} | saved: ${savedPct}%`)
   console.log(
     `quality — raw: ${rawFacts.toFixed(1)}/${totalFacts} facts | compiled: ${compiledFacts.toFixed(1)}/${totalFacts} facts` +
@@ -248,9 +219,17 @@ async function main() {
   )
 
   console.log('')
-  console.log('--- marketing summary (ONLINE, real billed usage.input_tokens + graded answers) ---')
+  console.log('--- marketing summary (ONLINE, real billed usage + graded answers) ---')
+  const billedTokenSaved =
+    rawMoney.billedTokensPerSession > 0
+      ? ((1 - compiledMoney.billedTokensPerSession / rawMoney.billedTokensPerSession) * 100).toFixed(1)
+      : '0.0'
+  const dollarClause =
+    rawMoney.meanCostPerSession !== null && compiledMoney.meanCostPerSession !== null && rawMoney.meanCostPerSession > 0
+      ? `cut REAL BILLED dollars from $${rawMoney.meanCostPerSession.toFixed(4)} to $${compiledMoney.meanCostPerSession.toFixed(4)}/session (${((1 - compiledMoney.meanCostPerSession / rawMoney.meanCostPerSession) * 100).toFixed(1)}% saved — the cost-reference metric) and `
+      : ''
   console.log(
-    `Across the same 14-turn session, compiling context cut REAL BILLED input tokens from ${totalRawMean.toFixed(0)} to ${totalCompiledMean.toFixed(0)} on claude-sonnet-5 (${kind} runner, ${N_RUNS} runs/turn/arm, ${savedPct}% saved), while the graded answer adequacy was raw ${rawFacts.toFixed(1)}/${totalFacts} vs compiled ${compiledFacts.toFixed(1)}/${totalFacts} — both dimensions from real executions, neither estimated.`,
+    `Across the same 14-turn session, compiling context ${dollarClause}cut billed token volume (all usage fields summed; per-field breakdown above — cache fields bill below the direct-input rate) from ${rawMoney.billedTokensPerSession.toFixed(0)} to ${compiledMoney.billedTokensPerSession.toFixed(0)}/session (${billedTokenSaved}% saved) on claude-sonnet-5 (${kind} runner, ${N_RUNS} runs/turn/arm; usage.input_tokens alone: ${totalRawMean.toFixed(0)} -> ${totalCompiledMean.toFixed(0)}, ${savedPct}%${kind === 'cli' ? ' — not meaningful on the cli runner, see cache-routing note' : ''}), while the graded answer adequacy was raw ${rawFacts.toFixed(1)}/${totalFacts} vs compiled ${compiledFacts.toFixed(1)}/${totalFacts} — all dimensions from real executions, none estimated.`,
   )
 }
 

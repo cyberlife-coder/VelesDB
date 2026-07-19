@@ -18,6 +18,14 @@ import {
   IMG_GC_FIXED,
   IMG_GC_RESEND,
 } from '../corpus/images.mjs'
+import {
+  IMG_BELL_BUG,
+  IMG_BELL_ATTEMPT,
+  IMG_BELL_FIXED,
+  IMG_BELL_PR_ATTACHMENT,
+  IMG_PANEL_BUG,
+  IMG_PANEL_FIXED,
+} from '../corpus/images-vibe.mjs'
 
 test('committed image base64 is byte-for-byte reproducible from the committed generator', () => {
   const gen = generateCorpusImages()
@@ -26,6 +34,11 @@ test('committed image base64 is byte-for-byte reproducible from the committed ge
   assert.equal(gen.IMG_FIXED.toString('base64'), IMG_FIXED.bytesB64)
   assert.equal(gen.IMG_GC_BUG.toString('base64'), IMG_GC_BUG.bytesB64)
   assert.equal(gen.IMG_GC_FIXED.toString('base64'), IMG_GC_FIXED.bytesB64)
+  assert.equal(gen.IMG_BELL_BUG.toString('base64'), IMG_BELL_BUG.bytesB64)
+  assert.equal(gen.IMG_BELL_ATTEMPT.toString('base64'), IMG_BELL_ATTEMPT.bytesB64)
+  assert.equal(gen.IMG_BELL_FIXED.toString('base64'), IMG_BELL_FIXED.bytesB64)
+  assert.equal(gen.IMG_PANEL_BUG.toString('base64'), IMG_PANEL_BUG.bytesB64)
+  assert.equal(gen.IMG_PANEL_FIXED.toString('base64'), IMG_PANEL_FIXED.bytesB64)
 })
 
 test('IMG_BUG, IMG_ATTEMPT, IMG_FIXED are three DISTINCT byte sequences (supersession, not dedup, must collapse them)', () => {
@@ -51,4 +64,27 @@ test('long-session gift-card series: distinct bytes for supersession, byte-ident
   // (no cross-series dedup can mask a supersession regression).
   assert.notEqual(IMG_GC_BUG.bytesB64, IMG_BUG.bytesB64)
   assert.notEqual(IMG_GC_FIXED.bytesB64, IMG_FIXED.bytesB64)
+})
+
+test('vibe-coding navbar-bell series: THREE distinct captures for supersession, byte-identical PR resend for dedup', () => {
+  assert.notEqual(IMG_BELL_BUG.bytesB64, IMG_BELL_ATTEMPT.bytesB64)
+  assert.notEqual(IMG_BELL_ATTEMPT.bytesB64, IMG_BELL_FIXED.bytesB64)
+  assert.notEqual(IMG_BELL_BUG.bytesB64, IMG_BELL_FIXED.bytesB64)
+  assert.equal(IMG_BELL_PR_ATTACHMENT.bytesB64, IMG_BELL_FIXED.bytesB64) // dedup, not supersession
+  assert.notEqual(IMG_BELL_PR_ATTACHMENT.caption, IMG_BELL_FIXED.caption)
+  assert.equal(IMG_BELL_PR_ATTACHMENT.target, undefined)
+  assert.equal(IMG_BELL_BUG.target, 'navbar-bell')
+  assert.equal(IMG_BELL_FIXED.target, 'navbar-bell')
+})
+
+test('vibe-coding notification-panel series: distinct bytes for supersession, distinct target and geometry from navbar-bell', () => {
+  assert.notEqual(IMG_PANEL_BUG.bytesB64, IMG_PANEL_FIXED.bytesB64)
+  assert.equal(IMG_PANEL_BUG.target, 'notification-panel')
+  assert.equal(IMG_PANEL_FIXED.target, 'notification-panel')
+  // Independent geometry/series — no cross-series or cross-scenario byte
+  // collision is possible (also byte-disjoint from the base and
+  // long-session scenarios' series).
+  assert.notEqual(IMG_PANEL_BUG.bytesB64, IMG_BELL_BUG.bytesB64)
+  assert.notEqual(IMG_PANEL_BUG.bytesB64, IMG_BUG.bytesB64)
+  assert.notEqual(IMG_PANEL_BUG.bytesB64, IMG_GC_BUG.bytesB64)
 })

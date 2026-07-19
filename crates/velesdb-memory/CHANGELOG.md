@@ -9,6 +9,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-07-19
+
+### Security
+
+- **Metadata is now size-capped.** Caller-supplied `metadata` on
+  `remember`/`remember_with_ttl` and per-fragment metadata in the context
+  compiler were unbounded — only fact/fragment content was capped — letting
+  an arbitrarily large JSON blob be persisted as a DoS vector. Added
+  `MAX_METADATA_BYTES` (64 KiB) and a typed `MemoryError::MetadataTooLarge`,
+  enforced centrally so every adapter (MCP, Python, Node, WASM) picks it up
+  through the existing error mapping with no adapter-side changes. (#1458)
+- **Working context integrity.** `save_working_context` had no size guard,
+  unlike every other stored fact (now capped at the same 1 MiB
+  `MAX_FACT_BYTES` ceiling), and `load_working_context` skipped the
+  reserved-marker check every other bridge-stored slot uses — a slot
+  squatted by an unrelated or forged fact would be deserialized and served
+  back as a working context. `load_working_context` now requires the
+  `_veles_ctx_working` marker and returns `None` (not an error) for
+  anything else. (#1458)
+
+### Fixed
+
+- **A permanent `ctx://source/` handle can no longer expire silently.**
+  `store_context_sources()` unconditionally skipped an already-occupied
+  slot, so a source first written under a TTL was never promoted when a
+  later compile asked for permanent storage. Added a never-downgrade
+  upgrade rule: permanent always wins over an existing TTL, a TTL never
+  downgrades an existing permanent slot, and a TTL-to-TTL request only
+  extends. (#1454)
+- **Two byte-identical screenshots of the same target no longer both drop
+  from compiled context.** Media dedup anchored on the first occurrence
+  while screenshot supersession keeps only the last, so with two identical
+  copies both were dropped instead of one surviving. Dedup now re-anchors
+  onto the freshest non-superseded occurrence in the chain. (#1453)
+
+### Added
+
+- **Python**: `MemoryService.feedback` is now exposed, closing the RL
+  feedback loop from the Python binding (previously MCP/Rust/Node only).
+  (#1452)
+
+### Documentation
+
+- Per-surface parity for the context compiler is now stated honestly (MCP
+  and Rust: full; Node: everything except `context_savings` and
+  `explain_compilation`; Python: merged on `develop` but not yet in the
+  published wheel; WASM: `compileContext` only). Fixed
+  `retrieve_context_source`'s documented Python return type (`str` ->
+  `dict`), harmonized the estimator over-count margins across docs to the
+  numbers the `exact_estimator` harness actually produces, and clarified
+  that images are never resized (oversized media is externalized behind a
+  `ctx://source/<hash>` handle instead). (#1459)
+- Documented a known limitation: the compiled-context cache prefix is
+  byte-stable only while the compile `query` stays the same — under a tight
+  budget, a query change can reorder competing cache-marked fragments
+  (issue #1455). (#1456)
+- Regenerated the billed A/B campaign on a new 19-turn vibe-coding
+  scenario (cli runner, claude-sonnet-5, 5 runs/turn/arm, raw logs
+  committed under `examples/real-session-benchmark/results/`): with
+  screenshots, 10.9% billed dollars saved at unchanged answer adequacy
+  (raw 22.8/23 vs compiled 23.0/23); without screenshots, 2.5% — the
+  delta is the measured value of the media supersession/dedup mechanisms.
+  The realistic metadata ceiling was also validated against the new 64 KiB
+  cap (largest realistic fragment: 7% of the cap). (#1462)
+
+### Changed
+
+- CI now runs on `examples/**` changes; a test guards the generated Node
+  `index.d.ts` against stale hand edits; four previously-unpinned
+  context-compiler behaviors are now covered by regression tests. (#1456)
+
 ## [0.9.0] — 2026-07-18
 
 ### Added

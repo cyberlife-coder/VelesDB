@@ -67,6 +67,14 @@ def test_reserved_metadata_key_raises_value_error(mem):
         mem.remember("x", metadata={"_veles_hub": True})
 
 
+def test_oversized_metadata_raises_value_error(mem):
+    # metadata is capped at 64 KiB serialized (a DoS guard: metadata is a
+    # keyed lookup facet, not a payload) — a caller-supplied blob past the
+    # cap must raise, not silently persist.
+    with pytest.raises(ValueError):
+        mem.remember("x", metadata={"v": "y" * (65 * 1024)})
+
+
 def test_unknown_link_target_raises_key_error(mem):
     with pytest.raises(KeyError):
         mem.remember("a decision", links=[(9_999_999, "decided_in")])
@@ -223,3 +231,20 @@ def test_oversized_fact_raises_value_error(mem):
     # Facts above the shared 1 MiB cap are rejected before any embedding work.
     with pytest.raises(ValueError):
         mem.remember("x" * (1024 * 1024 + 1))
+
+
+def test_feedback_success_increases_confidence_and_roundtrips(mem):
+    # remember -> feedback(id, True) returns a float, and repeated positive
+    # feedback moves confidence monotonically upward (the RL loop learning).
+    fid = mem.remember("we chose parking_lot to avoid lock poisoning")
+    first = mem.feedback(fid, True)
+    assert isinstance(first, float)
+    second = mem.feedback(fid, True)
+    assert second > first
+
+
+def test_feedback_unknown_id_raises_key_error(mem):
+    # Same taxonomy as forget: a missing memory id is a KeyError, not a
+    # silent no-op — feedback has no result to report if the fact is gone.
+    with pytest.raises(KeyError):
+        mem.feedback(999_999, True)

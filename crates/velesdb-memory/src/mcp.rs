@@ -29,7 +29,7 @@ use crate::extract::DynExtractor;
 // The request envelopes and small id-results live in their own module so this
 // file stays focused on the server and tool wiring; output shapes reuse the
 // domain types from `crate::model` directly (no duplicate wire/domain struct).
-/// The context compiler's four tools — a second `#[tool_router]` block whose
+/// The context compiler's six tools — a second `#[tool_router]` block whose
 /// router is combined with the main one below, extending the ONE server.
 #[cfg(feature = "context")]
 mod context_tools;
@@ -103,7 +103,7 @@ impl McpServer {
 
     #[tool(
         name = "remember",
-        description = "Store a fact in durable local memory. Optionally link it to existing memories (graph) and tag it with structured metadata like project/author/type/status/date (ColumnStore) for later filtering. Set `ttl_seconds` to make the fact expire after a delay (a durable TTL that survives restarts); omit it for a permanent memory. Returns the fact's stable id."
+        description = "Store a fact in durable local memory. Optionally link it to existing memories (graph) and tag it with structured metadata like project/author/type/status/date (ColumnStore) for later filtering — metadata is capped at 64 KiB serialized. Set `ttl_seconds` to make the fact expire after a delay (a durable TTL that survives restarts); omit it for a permanent memory. Returns the fact's stable id."
     )]
     async fn remember(
         &self,
