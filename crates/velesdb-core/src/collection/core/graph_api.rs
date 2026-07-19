@@ -292,7 +292,12 @@ impl Collection {
     ///
     /// Returns `Error::NodeNotFound` (schemaless) or `Error::SchemaValidation`
     /// (strict mode: missing endpoint, no `_labels`, or an edge-type
-    /// constraint violation).
+    /// constraint violation). This divergence is deliberate and documented,
+    /// not an oversight: `SchemaValidation` is part of the strict-schema
+    /// contract already published, so folding the missing-endpoint case
+    /// into `NodeNotFound` there would be a breaking change. Tracked for
+    /// the next major version in
+    /// <https://github.com/cyberlife-coder/VelesDB/issues/1470>.
     fn validate_edge_referential_integrity(
         payload: &LogPayloadStorage,
         schema: Option<&GraphSchema>,

@@ -59,6 +59,16 @@ created (`404 NodeNotFound` over REST, `Error::NodeNotFound` in Rust). This is
 enforced, not just recommended: create the points first (see "Setting Up Data
 for MATCH" above), then add the edge (#1442).
 
+> **Legacy databases**: this enforcement only applies to edges written
+> through `add_edge`/`add_edges_batch`. A database created before this
+> validation existed may already contain edges whose endpoint was never
+> given a payload — those are loaded as-is on open (re-validating the
+> whole edge store at load time could turn a legitimate edge-only graph
+> into data loss) and stay invisible to `all_node_ids()`/MATCH until you
+> give the missing endpoint a payload yourself. A `velesdb-cli graph
+> doctor` subcommand to scan/purge/stub these is tracked in
+> [issue #1469](https://github.com/cyberlife-coder/VelesDB/issues/1469).
+
 ```bash
 curl -X POST http://localhost:8080/collections/knowledge/graph/edges \
   -H "Content-Type: application/json" \

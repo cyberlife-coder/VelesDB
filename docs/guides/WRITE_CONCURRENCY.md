@@ -81,6 +81,28 @@ The ceiling you hit with the Community model is:
   `docs_tenant_1`, `docs_tenant_2`, ... into separate collections, each
   gets its own writer lock and they run in parallel.
 
+### Edge writes and payload contention
+
+`add_edge`/`add_edges_batch` hold the `payload_storage` read guard for the
+entire edge write (referential-integrity check through the WAL append and
+edge-store apply — see
+[`../CONCURRENCY_MODEL.md`](../CONCURRENCY_MODEL.md#collection-level-lock-order)),
+closing a race that could otherwise leave a dangling edge after a
+concurrent node delete. The practical effect: a payload writer (`upsert`,
+`delete`) racing an in-flight edge write can stall for up to one `fsync` of
+the edge WAL — typically 0.05-5 ms on an SSD, the same per-write fsync cost
+that already existed for edges. This is consistent with the single-writer
+model above, not a new bottleneck class.
+
+If you migrate or seed graphs with many edges per endpoint node, prefer
+`add_edges_batch` with batches of **up to ~10k edges**: the payload guard
+is held once per batch rather than once per edge, so batching amortizes
+this stall the same way it amortizes the WAL fsync itself. Very large
+batches (well beyond 10k) hold the payload read guard longer per batch,
+which increases the worst-case stall for a concurrent payload writer
+without adding throughput — 10k is a reasonable upper bound before that
+trade-off stops paying for itself.
+
 ---
 
 ## Best practices for Community scale

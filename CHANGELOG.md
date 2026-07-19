@@ -60,6 +60,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it now stubs each edge endpoint before inserting, and a batch-level
   validation failure degrades to per-edge accounting instead of aborting
   the whole migration.
+- **`velesdb-core`**: closed a race left by the #1442 fix above —
+  `add_edge`/`add_edges_batch` used to release the payload-store guard
+  right after checking that both endpoints exist, then separately acquire
+  the edge-WAL lock to write the edge. A concurrent `delete()` of an
+  endpoint could land in that window and still leave a "phantom" edge
+  (present in the edge store, invisible to `all_node_ids()`/MATCH). Both
+  entry points now hold the payload-store read guard from the check
+  through the end of the write, so a racing `delete()` blocks until the
+  edge is durable instead of running ahead; see the "Collection-level lock
+  order" section of `docs/CONCURRENCY_MODEL.md` for the full mechanism.
+  Also fixed: `velesdb-migrate`'s FK-relations node-seeding marked a node
+  as seeded even when its stub upsert failed, permanently skipping any
+  retry for that node later in the same relation — it now only marks a
+  node seeded on a successful upsert. **Known, accepted limitation**:
+  edges loaded from a pre-existing WAL/snapshot (replay) are not
+  re-validated, so a database created before the original #1442 fix may
+  still contain legacy phantom edges; tracked in
+  [#1469](https://github.com/cyberlife-coder/VelesDB/issues/1469) (a
+  `velesdb-cli graph doctor` audit/repair subcommand). The
+  strict-vs-schemaless error-type divergence (`SchemaValidation` vs.
+  `NodeNotFound`) noted above remains deliberate; unifying it is tracked
+  for the next major version in
+  [#1470](https://github.com/cyberlife-coder/VelesDB/issues/1470).
 
 - **`velesdb-memory`**: hardened the MCP server against a leaked client
   process (#1448). The server itself was already healthy (it exits cleanly

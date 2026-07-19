@@ -273,3 +273,110 @@ fn test_loom_parallel_insert_no_contention() {
         assert_eq!(store.get_outgoing(2).len(), 1);
     });
 }
+
+// ============================================================================
+// Test 6: add_edge / delete phantom-edge race closure (#1442 re-fix)
+// ============================================================================
+//
+// Models the fix in `collection/core/graph_api.rs`: `add_edge` holds the
+// payload-store READ guard from the endpoint-existence check through the
+// edge-store write (the WAL mutex is acquired WHILE that read guard is
+// still held). `delete()` needs the payload-store WRITE guard to remove a
+// node, so it cannot interleave between the check and the write anymore.
+//
+// The real path is loom-incompatible (the WAL append fsyncs to disk, and
+// loom cannot model syscalls) — same limitation already documented for the
+// rest of this file, hence a simplified model of just the lock
+// interleaving, which is exactly what the fix changes.
+mod loom_payload_guard {
+    use loom::sync::{Mutex, RwLock};
+    use std::collections::HashSet;
+
+    /// Simplified graph: `payload` mirrors `payload_storage`, `wal` mirrors
+    /// `edge_wal_lock`, `edges` mirrors the edge store.
+    pub struct FixedGraph {
+        payload: RwLock<HashSet<u64>>,
+        wal: Mutex<()>,
+        edges: RwLock<HashSet<(u64, u64)>>,
+    }
+
+    impl FixedGraph {
+        pub fn new() -> Self {
+            Self {
+                payload: RwLock::new(HashSet::new()),
+                wal: Mutex::new(()),
+                edges: RwLock::new(HashSet::new()),
+            }
+        }
+
+        pub fn seed(&self, node: u64) {
+            self.payload.write().unwrap().insert(node);
+        }
+
+        /// Mirrors the fixed `add_edge`: the payload read guard spans the
+        /// WAL-mutex acquisition and the edge-store write.
+        pub fn add_edge(&self, source: u64, target: u64) -> bool {
+            let payload = self.payload.read().unwrap();
+            if !payload.contains(&source) || !payload.contains(&target) {
+                return false;
+            }
+            let _wal = self.wal.lock().unwrap();
+            self.edges.write().unwrap().insert((source, target));
+            true
+        }
+
+        /// Mirrors `delete()`: the payload write guard is dropped BEFORE
+        /// the WAL mutex is taken for the edge cascade (same as
+        /// `crud_read_delete.rs`'s `cascade_delete_node_edges`).
+        pub fn delete(&self, node: u64) {
+            self.payload.write().unwrap().remove(&node);
+            let _wal = self.wal.lock().unwrap();
+            self.edges
+                .write()
+                .unwrap()
+                .retain(|(s, t)| *s != node && *t != node);
+        }
+
+        pub fn has_phantom_edge(&self, node: u64) -> bool {
+            let payload_gone = !self.payload.read().unwrap().contains(&node);
+            let edge_remains = self
+                .edges
+                .read()
+                .unwrap()
+                .iter()
+                .any(|(s, t)| *s == node || *t == node);
+            payload_gone && edge_remains
+        }
+    }
+}
+
+use loom_payload_guard::FixedGraph;
+
+#[test]
+fn loom_payload_guard_excludes_delete_during_edge_write() {
+    loom::model(|| {
+        let graph = Arc::new(FixedGraph::new());
+        graph.seed(1);
+        graph.seed(2);
+
+        let g1 = Arc::clone(&graph);
+        let t1 = thread::spawn(move || {
+            g1.add_edge(1, 2);
+        });
+
+        let g2 = Arc::clone(&graph);
+        let t2 = thread::spawn(move || {
+            g2.delete(1);
+        });
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        // Whichever order the two threads actually ran in, the fixed lock
+        // nesting must never leave an edge whose endpoint payload is gone.
+        assert!(
+            !graph.has_phantom_edge(1),
+            "fixed lock order must never leave a phantom edge"
+        );
+    });
+}
