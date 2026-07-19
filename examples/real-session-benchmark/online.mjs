@@ -171,18 +171,10 @@ async function main() {
   const rawRuns = await runArm(rawTurns, 'RAW (bras A)')
   const compiledRuns = await runArm(compiledTurns, 'COMPILED (bras B)')
 
-  // Runner-aware A/B summary (shared with online-vibe.mjs, see
-  // lib/runner.mjs): on the cli runner the HEADLINE is total_cost_usd per
-  // arm — CLI 2.1.201 routes user content (text AND images) into
-  // cache_creation_input_tokens, not input_tokens (verified 2026-07-19,
-  // lib/claude-cli.mjs header), so an input_tokens delta reads ~0% there.
-  // On the api runner the fields are direct and input_tokens stays the
-  // headline. Both get the full per-field breakdown, never summed.
-  console.log('')
-  const { raw: rawMoney, compiled: compiledMoney } = printArmComparison({ kind, rawRuns, compiledRuns })
-
-  console.log('')
-  console.log(`--- session totals: TOKENS (usage.input_tokens, mean over N runs per turn${kind === 'cli' ? ' — SECONDARY on the cli runner, see cache-routing note above' : ''}) + QUALITY (deterministic grader) ---`)
+  // Session-total aggregation (tokens + graded adequacy per arm) — computed
+  // BEFORE the per-arm totals block so the adequacy totals print inside it
+  // (2026-07-19 campaign review fix: a log without per-arm adequacy totals
+  // forced re-deriving them by hand from the per-turn lines).
   let totalRawMean = 0
   let totalCompiledMean = 0
   let rawFacts = 0
@@ -197,6 +189,27 @@ async function main() {
     compiledFacts += mean(compiledRuns[t].map((s) => gradeResponse(s.responseText, TURN_QUESTIONS[t].facts).found))
   }
   const savedPct = ((1 - totalCompiledMean / totalRawMean) * 100).toFixed(1)
+
+  // Runner-aware A/B summary (shared with online-vibe.mjs, see
+  // lib/runner.mjs): on the cli runner the HEADLINE is total_cost_usd per
+  // arm — CLI 2.1.201 routes user content (text AND images) into
+  // cache_creation_input_tokens, not input_tokens (verified 2026-07-19,
+  // lib/claude-cli.mjs header), so an input_tokens delta reads ~0% there.
+  // On the api runner the fields are direct and input_tokens stays the
+  // headline. Both get the full per-field breakdown, never summed.
+  console.log('')
+  const { raw: rawMoney, compiled: compiledMoney } = printArmComparison({
+    kind,
+    rawRuns,
+    compiledRuns,
+    adequacy: {
+      raw: { found: rawFacts, total: totalFacts },
+      compiled: { found: compiledFacts, total: totalFacts },
+    },
+  })
+
+  console.log('')
+  console.log(`--- session totals: TOKENS (usage.input_tokens, mean over N runs per turn${kind === 'cli' ? ' — SECONDARY on the cli runner, see cache-routing note above' : ''}) + QUALITY (deterministic grader) ---`)
   console.log(`tokens  — raw: ${totalRawMean.toFixed(1)} | compiled: ${totalCompiledMean.toFixed(1)} | saved: ${savedPct}%`)
   console.log(
     `quality — raw: ${rawFacts.toFixed(1)}/${totalFacts} facts | compiled: ${compiledFacts.toFixed(1)}/${totalFacts} facts` +

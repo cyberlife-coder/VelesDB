@@ -124,20 +124,26 @@ export function turnBilledLine(samples) {
  *         Messages API; total_cost_usd is not reported by that runner).
  *
  * Both runners always get the full per-field breakdown table.
- * @param {{kind: 'api'|'cli', rawRuns: any[][], compiledRuns: any[][]}} opts
+ * @param {{kind: 'api'|'cli', rawRuns: any[][], compiledRuns: any[][],
+ *   adequacy?: {raw: {found:number,total:number}, compiled: {found:number,total:number}}}} opts
+ *   `adequacy` — session-total graded facts per arm (per-turn means summed
+ *   across turns). When provided it is printed in the per-arm totals block
+ *   so the quality dimension sits next to the cost dimension, not only in
+ *   the per-turn lines.
  */
-export function printArmComparison({ kind, rawRuns, compiledRuns }) {
+export function printArmComparison({ kind, rawRuns, compiledRuns, adequacy = null }) {
   const raw = armSessionStats(rawRuns)
   const compiled = armSessionStats(compiledRuns)
 
   console.log('--- per-arm cumulative totals (mean per session over N runs, campaign total in parentheses) ---')
-  for (const [label, m] of [
-    ['raw     ', raw],
-    ['compiled', compiled],
+  for (const [label, m, adq] of [
+    ['raw     ', raw, adequacy?.raw],
+    ['compiled', compiled, adequacy?.compiled],
   ]) {
     console.log(
       `  ${label}: total_cost_usd=${m.meanCostPerSession === null ? 'n/a (runner reports no cost)' : '$' + m.meanCostPerSession.toFixed(4) + '/session ($' + m.campaignCost.toFixed(4) + ' campaign)'}` +
-        ` | billed tokens (all usage fields summed; breakdown below)=${m.billedTokensPerSession.toFixed(0)}/session (${m.billedTokensCampaign} campaign)`,
+        ` | billed tokens (all usage fields summed; breakdown below)=${m.billedTokensPerSession.toFixed(0)}/session (${m.billedTokensCampaign} campaign)` +
+        (adq ? ` | adequacy=${adq.found.toFixed(1)}/${adq.total} facts` : ''),
     )
     console.log(
       `            breakdown: input=${m.inputPerSession.toFixed(0)} output=${m.outputPerSession.toFixed(0)} cache_creation=${m.cacheCreatePerSession.toFixed(0)} cache_read=${m.cacheReadPerSession.toFixed(0)} tokens/session`,

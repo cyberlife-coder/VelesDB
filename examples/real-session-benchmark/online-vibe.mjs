@@ -143,28 +143,49 @@ async function main() {
   // cli headline = total_cost_usd per arm + summed billed-token volume
   // (CLI 2.1.201 cache routing makes input_tokens alone read ~0%); api
   // headline = input_tokens (direct fields) + the same volume figure.
-  console.log('')
-  const { raw: rawMoney, compiled: compiledMoney } = printArmComparison({ kind, rawRuns, compiledRuns })
-
+  // Session-total aggregation (tokens + graded adequacy per arm) — computed
+  // BEFORE the per-arm totals block so the adequacy totals print inside it
+  // (2026-07-19 campaign review fix: the first billed campaign's logs had
+  // per-turn adequacy only, forcing manual re-derivation of the per-arm
+  // totals).
   let totalRawMean = 0
   let totalCompiledMean = 0
+  let rawFacts = 0
+  let compiledFacts = 0
+  let totalFacts = 0
   for (let t = 0; t < rawRuns.length; t++) {
     totalRawMean += mean(rawRuns[t].map((s) => s.input_tokens))
     totalCompiledMean += mean(compiledRuns[t].map((s) => s.input_tokens))
+    const factsThisTurn = TURN_QUESTIONS_VIBE[t].facts.length
+    totalFacts += factsThisTurn
+    rawFacts += mean(rawRuns[t].map((s) => gradeResponse(s.responseText, TURN_QUESTIONS_VIBE[t].facts).found))
+    compiledFacts += mean(compiledRuns[t].map((s) => gradeResponse(s.responseText, TURN_QUESTIONS_VIBE[t].facts).found))
   }
   const savedPct = ((1 - totalCompiledMean / totalRawMean) * 100).toFixed(1)
+
+  console.log('')
+  const { raw: rawMoney, compiled: compiledMoney } = printArmComparison({
+    kind,
+    rawRuns,
+    compiledRuns,
+    adequacy: {
+      raw: { found: rawFacts, total: totalFacts },
+      compiled: { found: compiledFacts, total: totalFacts },
+    },
+  })
+
   const billedTokenSaved =
     rawMoney.billedTokensPerSession > 0
       ? ((1 - compiledMoney.billedTokensPerSession / rawMoney.billedTokensPerSession) * 100).toFixed(1)
       : '0.0'
   console.log('')
-  console.log('--- marketing summary (ONLINE, vibe-coding scenario, real billed usage) ---')
+  console.log('--- marketing summary (ONLINE, vibe-coding scenario, real billed usage + graded answers) ---')
   const dollarClause =
     rawMoney.meanCostPerSession !== null && compiledMoney.meanCostPerSession !== null && rawMoney.meanCostPerSession > 0
       ? `cut REAL BILLED dollars from $${rawMoney.meanCostPerSession.toFixed(4)} to $${compiledMoney.meanCostPerSession.toFixed(4)}/session (${((1 - compiledMoney.meanCostPerSession / rawMoney.meanCostPerSession) * 100).toFixed(1)}% saved — the cost-reference metric) and `
       : ''
   console.log(
-    `Across the ${rawRuns.length}-turn vibe-coding session (${mediaOn ? 'with-screenshots' : 'no-screenshots'}), compiling context ${dollarClause}cut billed token volume (all usage fields summed; per-field breakdown above — cache fields bill below the direct-input rate) from ${rawMoney.billedTokensPerSession.toFixed(0)} to ${compiledMoney.billedTokensPerSession.toFixed(0)}/session (${billedTokenSaved}% saved) on claude-sonnet-5 (${kind} runner, ${N_RUNS} runs/turn/arm; usage.input_tokens alone: ${totalRawMean.toFixed(0)} -> ${totalCompiledMean.toFixed(0)}, ${savedPct}%${kind === 'cli' ? ' — not meaningful on the cli runner, see cache-routing note' : ''}).`,
+    `Across the ${rawRuns.length}-turn vibe-coding session (${mediaOn ? 'with-screenshots' : 'no-screenshots'}), compiling context ${dollarClause}cut billed token volume (all usage fields summed; per-field breakdown above — cache fields bill below the direct-input rate) from ${rawMoney.billedTokensPerSession.toFixed(0)} to ${compiledMoney.billedTokensPerSession.toFixed(0)}/session (${billedTokenSaved}% saved) on claude-sonnet-5 (${kind} runner, ${N_RUNS} runs/turn/arm; usage.input_tokens alone: ${totalRawMean.toFixed(0)} -> ${totalCompiledMean.toFixed(0)}, ${savedPct}%${kind === 'cli' ? ' — not meaningful on the cli runner, see cache-routing note' : ''}), while the graded answer adequacy was raw ${rawFacts.toFixed(1)}/${totalFacts} vs compiled ${compiledFacts.toFixed(1)}/${totalFacts} facts — all dimensions from real executions, none estimated.`,
   )
 }
 

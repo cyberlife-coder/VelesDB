@@ -271,6 +271,70 @@ variant=with-screenshots  requests=190  estTokensPerRunSet=105261  estCost=$2.99
 variant=no-screenshots    requests=190  estTokensPerRunSet=80922   estCost=$2.7548
 ```
 
+### Billed campaign results (2026-07-19, cli runner, claude-sonnet-5)
+
+Both variants of the vibe-coding scenario were actually billed and measured
+(raw logs committed verbatim under
+[`results/2026-07-19-vibe-cli/`](results/2026-07-19-vibe-cli/); every number
+below is pasted from them). Protocol: `RUN_BILLED_MEASURE=1 CONFIRM_SPEND=1
+node online-vibe.mjs`, 5 runs/turn/arm, 190 requests per variant (19 turns x
+2 arms x 5), cli runner on CLI 2.1.201 (maintainer's authenticated
+account), lossless compiled-arm budget. Per the CLI 2.1.201 cache routing
+(see "CLI runner — verified wire shapes"), the payload lands in
+`cache_creation_input_tokens` — `usage.input_tokens` read 38 -> 38 (0.0%)
+in both variants, which is exactly why the headline metrics are billed
+dollars and the all-fields token volume.
+
+**With screenshots** (`results/2026-07-19-vibe-cli/billed-with-screenshots.log`):
+
+```
+raw     : total_cost_usd=$0.4442/session ($2.2212 campaign) | billed tokens (all usage fields summed)=245664/session
+          breakdown: input=38 output=1292 cache_creation=48867 cache_read=195467 tokens/session
+compiled: total_cost_usd=$0.3960/session ($1.9801 campaign) | billed tokens (all usage fields summed)=231377/session
+          breakdown: input=38 output=1174 cache_creation=42671 cache_read=187494 tokens/session
+HEADLINE: 10.9% billed dollars saved | 5.8% volume saved
+```
+
+Adequacy totals (summed from the per-turn `adequacy mean=` lines of that
+log): **raw 22.8/23 vs compiled 23.0/23 facts** — the compiled arm lost
+nothing (the 0.2 gap is the raw arm missing one fact in one of five runs at
+turn 18).
+
+**Without screenshots** (`BENCH_MEDIA=0`,
+`results/2026-07-19-vibe-cli/billed-no-screenshots.log`):
+
+```
+raw     : total_cost_usd=$0.3747/session ($1.8733 campaign) | billed tokens (all usage fields summed)=229772/session
+          breakdown: input=38 output=2032 cache_creation=35894 cache_read=191808 tokens/session
+compiled: total_cost_usd=$0.3652/session ($1.8258 campaign) | billed tokens (all usage fields summed)=224326/session
+          breakdown: input=38 output=2350 cache_creation=34761 cache_read=187177 tokens/session
+HEADLINE: 2.5% billed dollars saved | 2.4% volume saved
+```
+
+Adequacy totals: **raw 18.0/23 vs compiled 18.0/23 facts** — identical in
+both arms: the five missing facts are the screenshot-caption facts (turns
+6, 9, 12, 13, 16), which exist in NEITHER arm's context once
+`BENCH_MEDIA=0` strips the media fragments. Expected and honest — there the
+grader measures the corpus, not the compiler.
+
+**Honest reading of the 2.5%**: without screenshots this scenario offers
+little compressible redundancy — the strong mechanisms in this corpus are
+screenshot supersession and log collapse, and stripping the media removes
+the former entirely (the offline numbers said the same: 18.2% vs 8.0%
+lossless). The 2.5% is reported as prominently as the 10.9% precisely
+because hiding it would make the with-screenshots figure unbelievable: the
+delta between the two variants IS the measured value of the media
+mechanisms.
+
+**Total real campaign cost**: $2.2212 + $1.9801 + $1.8733 + $1.8258 =
+**$7.90** across the four arms (380 billed requests plus 2 calibration
+calls).
+
+Note on the committed logs: they predate the per-arm adequacy-totals line
+added to the reporting right after this campaign (the totals above are
+summed from their per-turn `adequacy mean=` lines); the next campaign's
+logs will carry the totals directly in the per-arm block.
+
 ### Determinism proof (applies to every offline variant)
 
 ```
