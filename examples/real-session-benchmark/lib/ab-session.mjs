@@ -55,6 +55,76 @@ export const QUERY = 'why does the checkout total show NaN and how do we fix it 
 // pure redundancy/staleness elimination.
 export const LOSSLESS_BUDGET = 1_000_000
 
+// Mirrors crates/velesdb-memory/src/limits.rs::MAX_METADATA_BYTES (64 KiB) —
+// the cap this constant exists to empirically test against a realistic
+// agent-hook corpus (see offline-vibe.mjs's metadata size report and
+// corpus/session-vibe.mjs's turn-18 "loaded" fragment).
+export const MAX_METADATA_BYTES = 64 * 1024
+
+// BENCH_MEDIA=0 (default 1) — the "without screenshots" variant required by
+// the vibe-coding scenario spec: strips every fragment that carries a
+// `media` payload (screenshots) from an already-built TURN_EVENTS array,
+// leaving every text-only fragment untouched (same objects, same order) —
+// so the two variants differ ONLY in whether screenshots exist, never in
+// the surrounding text. Applied once, before the fragments ever reach
+// measureSession, so both the raw and compiled arms see the same reduced
+// corpus (a fair A/B, not a compiled-arm-only exclusion like the
+// memory-enabled variant's fragmentFilter).
+export function benchMediaEnabled() {
+  return process.env.BENCH_MEDIA !== '0'
+}
+
+export function applyBenchMediaFilter(turnEvents) {
+  if (benchMediaEnabled()) return turnEvents
+  return turnEvents.map((turn) => turn.filter((f) => !f.media))
+}
+
+/**
+ * Per-fragment metadata size instrumentation (the 64 KiB cap exercise).
+ * Measures `Buffer.byteLength(JSON.stringify(fragment.metadata))` for every
+ * fragment that carries one — the SAME measure as
+ * crate::limits::metadata_bytes (`serde_json::to_vec(meta).len()`), just
+ * computed from the JS side of the same JSON payload — across the full set
+ * of fragments accumulated by the end of a session (fragments never leave
+ * the accumulated set, so the final turn's list already covers every
+ * fragment ever sent). Reports max/p95/total and each ratio against the
+ * cap, so a future corpus change that pushes a real fragment's metadata
+ * over budget is visible as a ratio > 100%, not silently absorbed.
+ * @param {Array<{metadata?: object}>} fragments
+ */
+export function metadataSizeReport(fragments) {
+  const sizes = []
+  for (const f of fragments) {
+    if (f.metadata) sizes.push(Buffer.byteLength(JSON.stringify(f.metadata)))
+  }
+  sizes.sort((a, b) => a - b)
+  const total = sizes.reduce((a, b) => a + b, 0)
+  const max = sizes.length ? sizes[sizes.length - 1] : 0
+  const p95Index = sizes.length ? Math.min(sizes.length - 1, Math.ceil(sizes.length * 0.95) - 1) : 0
+  const p95 = sizes.length ? sizes[p95Index] : 0
+  return {
+    count: sizes.length,
+    max,
+    p95,
+    total,
+    maxRatioPct: (max / MAX_METADATA_BYTES) * 100,
+    p95RatioPct: (p95 / MAX_METADATA_BYTES) * 100,
+    totalRatioPct: (total / MAX_METADATA_BYTES) * 100,
+  }
+}
+
+export function printMetadataReport(report, label) {
+  console.log(`metadata size report [${label}] (bytes, vs MAX_METADATA_BYTES=${MAX_METADATA_BYTES}):`)
+  console.log(
+    `  fragments-with-metadata: ${report.count} | max: ${report.max} (${report.maxRatioPct.toFixed(2)}% of cap) | p95: ${report.p95} (${report.p95RatioPct.toFixed(2)}% of cap) | total: ${report.total} (${report.totalRatioPct.toFixed(2)}% of cap summed)`,
+  )
+  if (report.maxRatioPct >= 100) {
+    console.log(`  FINDING: at least one realistic fragment's metadata EXCEEDS the 64 KiB cap — the cap is NOT sufficient as-is.`)
+  } else {
+    console.log(`  verdict: the largest realistic fragment here uses ${report.maxRatioPct.toFixed(2)}% of the cap — comfortable headroom.`)
+  }
+}
+
 export function fragmentRawCost(f) {
   let n = bpe(f.content)
   if (f.media) n += pixelCostTokens(f.media.mime, f.media.bytes_b64)

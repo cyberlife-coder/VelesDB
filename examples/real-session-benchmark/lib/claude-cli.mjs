@@ -3,8 +3,10 @@
 // to manage). Added per Julien's mid-mission extension to the benchmark spec.
 //
 // VERIFICATION STATUS (single source of truth — README and online.mjs point
-// here): the wire shapes below are VERIFIED against a real `claude -p`
-// calibration call performed during the PR review:
+// here): the wire shapes below are VERIFIED against real `claude -p`
+// calibration calls — a text-only call during the original PR review, plus
+// an IMAGE-BEARING calibration call on 2026-07-19 (CLI 2.1.201,
+// maintainer's authenticated account):
 //   - `claude -p --help` flag semantics (-p, --model, --output-format json,
 //     --input-format stream-json, --tools "" to disable the built-in
 //     toolset, --system-prompt REPLACING the default) — confirmed from the
@@ -20,14 +22,24 @@
 //   - stdin NDJSON envelope `{"type":"user","message":{"role":"user",
 //     "content":[...]}}` with Messages-API-shaped content blocks (text +
 //     base64 image) — confirmed by the same call.
-//   - Calibration behavior, observed on that call: user content lands in
-//     `input_tokens` (2 tokens for a 5-word prompt), while the CLI's own
-//     system prompt/tooling accounted for ~18.3k cache-creation + ~24.6k
-//     cache-read tokens. So input_tokens comparisons between arms are NOT
-//     inflated by harness overhead — the overhead is constant across both
-//     arms, lives in the cache fields, and is reported separately by the
-//     calibration turn; nothing is subtracted from input_tokens (there is
-//     nothing to subtract there).
+//   - IMAGE TRANSPORT: CONFIRMED (2026-07-19, CLI 2.1.201). Two base64
+//     images sent as `{type:"image",source:{type:"base64",...}}` content
+//     blocks through the stdin envelope; asked "How many images are
+//     attached?", the model answered "2". The with-screenshots billed arm
+//     works on the cli runner — BENCH_RUNNER=api is NOT required for media.
+//   - CACHE-ROUTING BEHAVIOR CHANGE (2026-07-19, CLI 2.1.201 — SUPERSEDES
+//     the earlier review-time finding): user content (text AND images) now
+//     lands in `cache_creation_input_tokens`, NOT in `input_tokens`.
+//     Measured on the image calibration call: {"input":2,"out":3,
+//     "cache_create":7235,"cache_read":0,"cost":0.044} for 2 images + a
+//     question — `input_tokens` stays ≈ 2 regardless of payload size. The
+//     earlier note here ("user content lands in input_tokens") is NO
+//     LONGER true on this CLI version. Measurement consequence: an A/B
+//     comparison on `usage.input_tokens` alone reads ~0% difference on the
+//     cli runner; the robust per-arm headline there is `total_cost_usd`
+//     (mean over N runs), with the full usage-field breakdown reported
+//     alongside and never silently summed — online.mjs / online-vibe.mjs
+//     implement exactly that.
 //
 // The parser below still reads the fields DEFENSIVELY (missing keys default
 // to 0/null, one-time warning if `usage.input_tokens` is absent) — not
@@ -42,6 +54,30 @@ import { spawn } from 'node:child_process'
 
 const MODEL = 'claude-sonnet-5'
 let warnedMissingUsage = false
+
+/**
+ * Diagnostic tail of the CLI's stdout for a non-zero exit: the last
+ * PARSABLE NDJSON event if any line parses (that is where the CLI puts its
+ * actual error, e.g. "Not logged in"), else the raw last 500 characters.
+ * Exported for the mock test.
+ * @param {string} stdout
+ * @returns {string}
+ */
+export function stdoutErrorTail(stdout) {
+  let lastEvent = null
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    try {
+      lastEvent = JSON.parse(trimmed)
+    } catch {
+      // non-JSON line: skip
+    }
+  }
+  if (lastEvent !== null) return JSON.stringify(lastEvent).slice(0, 500)
+  const raw = stdout.trim()
+  return raw ? raw.slice(-500) : '(empty)'
+}
 
 /**
  * @param {{ text?: string, imageBlocks?: Array<{mime:string,bytesB64:string}> }} turn
@@ -105,7 +141,13 @@ export async function runCliTurn(turn, opts = {}) {
     })
     child.on('close', (code) => {
       clearTimeout(timer)
-      if (code !== 0) reject(new Error(`claude CLI exited ${code}: ${err.slice(0, 2000)}`))
+      // On a non-zero exit the CLI emits its actual error as an NDJSON event
+      // on STDOUT with an EMPTY stderr (observed in real use, 2026-07-19:
+      // "claude CLI exited 1:" with no information at all, while the real
+      // cause — "Not logged in" — sat in stdout). Surface the stdout tail
+      // (the last parsable NDJSON event when there is one, else the raw
+      // last 500 chars) alongside stderr so the failure is diagnosable.
+      if (code !== 0) reject(new Error(`claude CLI exited ${code}: stderr: ${err.slice(0, 2000) || '(empty)'} | stdout tail: ${stdoutErrorTail(out)}`))
       else resolve(out)
     })
     const line = JSON.stringify({ type: 'user', message: { role: 'user', content } })
