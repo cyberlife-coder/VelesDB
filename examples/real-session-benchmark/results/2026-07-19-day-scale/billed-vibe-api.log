@@ -1,0 +1,59 @@
+ONLINE mode (vibe-coding scenario) — runner: api | variant: with-screenshots | compiled-arm budget: lossless (non-constraining)
+
+--- cost estimate (before spending anything) ---
+requests: 190 (19 raw-arm turns + 19 compiled-arm turns) x 5 runs
+rough estimated input tokens (chars/4, NOT a measurement): ~106998 per run-set x 5
+estimated cost: ~$3.0156 (claude-sonnet-5 intro pricing; output estimated at up to 1024 tokens/call on the api runner)
+
+--- RAW (bras A) arm: 5 runs per turn ---
+  turn  1: input_tokens mean=170.0 min=170 max=170 stddev=0.00 | billed tokens (all usage fields summed) mean=193 | adequacy mean=1.0/1
+  turn  2: input_tokens mean=791.0 min=791 max=791 stddev=0.00 | billed tokens (all usage fields summed) mean=1047 | adequacy mean=1.0/1
+  turn  3: input_tokens mean=2444.0 min=2444 max=2444 stddev=0.00 | billed tokens (all usage fields summed) mean=2535 | adequacy mean=2.0/2
+  turn  4: input_tokens mean=2512.0 min=2512 max=2512 stddev=0.00 | billed tokens (all usage fields summed) mean=2723 | adequacy mean=2.0/2
+  turn  5: input_tokens mean=2689.0 min=2689 max=2689 stddev=0.00 | billed tokens (all usage fields summed) mean=2776 | adequacy mean=1.0/1
+  turn  6: input_tokens mean=3047.0 min=3047 max=3047 stddev=0.00 | billed tokens (all usage fields summed) mean=3076 | adequacy mean=1.0/1
+  turn  7: input_tokens mean=3072.0 min=3072 max=3072 stddev=0.00 | billed tokens (all usage fields summed) mean=3112 | adequacy mean=1.0/1
+  turn  8: input_tokens mean=3750.0 min=3750 max=3750 stddev=0.00 | billed tokens (all usage fields summed) mean=3949 | adequacy mean=1.0/1
+  turn  9: input_tokens mean=4117.0 min=4117 max=4117 stddev=0.00 | billed tokens (all usage fields summed) mean=4162 | adequacy mean=1.0/1
+  turn 10: input_tokens mean=4170.0 min=4170 max=4170 stddev=0.00 | billed tokens (all usage fields summed) mean=4207 | adequacy mean=1.0/1
+  turn 11: input_tokens mean=4645.0 min=4645 max=4645 stddev=0.00 | billed tokens (all usage fields summed) mean=4786 | adequacy mean=2.0/2
+  turn 12: input_tokens mean=5015.0 min=5015 max=5015 stddev=0.00 | billed tokens (all usage fields summed) mean=5066 | adequacy mean=1.0/1
+  turn 13: input_tokens mean=5456.0 min=5456 max=5456 stddev=0.00 | billed tokens (all usage fields summed) mean=5496 | adequacy mean=1.0/1
+  turn 14: input_tokens mean=5472.0 min=5472 max=5472 stddev=0.00 | billed tokens (all usage fields summed) mean=5500 | adequacy mean=1.0/1
+  turn 15: input_tokens mean=5704.0 min=5704 max=5704 stddev=0.00 | billed tokens (all usage fields summed) mean=5748 | adequacy mean=1.0/1
+  turn 16: input_tokens mean=6158.0 min=6158 max=6158 stddev=0.00 | billed tokens (all usage fields summed) mean=6197 | adequacy mean=1.0/1
+  turn 17: input_tokens mean=11174.0 min=11174 max=11174 stddev=0.00 | billed tokens (all usage fields summed) mean=11288 | adequacy mean=2.0/2
+  turn 18: input_tokens mean=11684.0 min=11684 max=11684 stddev=0.00 | billed tokens (all usage fields summed) mean=11987 | adequacy mean=1.0/1
+  turn 19: input_tokens mean=11689.0 min=11689 max=11689 stddev=0.00 | billed tokens (all usage fields summed) mean=11718 | adequacy mean=1.0/1
+--- COMPILED (bras B) arm: 5 runs per turn ---
+  turn  1: input_tokens mean=170.0 min=170 max=170 stddev=0.00 | billed tokens (all usage fields summed) mean=196 | adequacy mean=1.0/1
+  turn  2: input_tokens mean=791.0 min=791 max=791 stddev=0.00 | billed tokens (all usage fields summed) mean=1017 | adequacy mean=1.0/1
+  turn  3: input_tokens mean=2412.0 min=2412 max=2412 stddev=0.00 | billed tokens (all usage fields summed) mean=2580 | adequacy mean=2.0/2
+  turn  4: input_tokens mean=2480.0 min=2480 max=2480 stddev=0.00 | billed tokens (all usage fields summed) mean=2671 | adequacy mean=2.0/2
+  turn  5: input_tokens mean=2657.0 min=2657 max=2657 stddev=0.00 | billed tokens (all usage fields summed) mean=2916 | adequacy mean=1.0/1
+  turn  6: input_tokens mean=3015.0 min=3015 max=3015 stddev=0.00 | billed tokens (all usage fields summed) mean=3059 | adequacy mean=1.0/1
+  turn  7: input_tokens mean=3040.0 min=3040 max=3040 stddev=0.00 | billed tokens (all usage fields summed) mean=3145 | adequacy mean=1.0/1
+  turn  8: input_tokens mean=3283.0 min=3283 max=3283 stddev=0.00 | billed tokens (all usage fields summed) mean=3488 | adequacy mean=1.0/1
+  turn  9: input_tokens mean=3339.0 min=3339 max=3339 stddev=0.00 | billed tokens (all usage fields summed) mean=3542 | adequacy mean=1.0/1
+  turn 10: input_tokens mean=3392.0 min=3392 max=3392 stddev=0.00 | billed tokens (all usage fields summed) mean=3425 | adequacy mean=1.0/1
+  turn 11: input_tokens mean=3867.0 min=3867 max=3867 stddev=0.00 | billed tokens (all usage fields summed) mean=4002 | adequacy mean=2.0/2
+  turn 12: input_tokens mean=3899.0 min=3899 max=3899 stddev=0.00 | billed tokens (all usage fields summed) mean=3958 | adequacy mean=1.0/1
+  turn 13: input_tokens mean=4340.0 min=4340 max=4340 stddev=0.00 | billed tokens (all usage fields summed) mean=4383 | adequacy mean=1.0/1
+  turn 14: input_tokens mean=4356.0 min=4356 max=4356 stddev=0.00 | billed tokens (all usage fields summed) mean=4381 | adequacy mean=1.0/1
+  turn 15: input_tokens mean=4588.0 min=4588 max=4588 stddev=0.00 | billed tokens (all usage fields summed) mean=4643 | adequacy mean=1.0/1
+  turn 16: input_tokens mean=4640.0 min=4640 max=4640 stddev=0.00 | billed tokens (all usage fields summed) mean=4693 | adequacy mean=1.0/1
+  turn 17: input_tokens mean=9656.0 min=9656 max=9656 stddev=0.00 | billed tokens (all usage fields summed) mean=9780 | adequacy mean=2.0/2
+  turn 18: input_tokens mean=9830.0 min=9830 max=9830 stddev=0.00 | billed tokens (all usage fields summed) mean=9866 | adequacy mean=1.0/1
+  turn 19: input_tokens mean=9835.0 min=9835 max=9835 stddev=0.00 | billed tokens (all usage fields summed) mean=9864 | adequacy mean=1.0/1
+
+--- per-arm cumulative totals (mean per session over N runs, campaign total in parentheses) ---
+  raw     : total_cost_usd=n/a (runner reports no cost) | billed tokens (all usage fields summed; breakdown below)=95566/session (477832 campaign) | adequacy=23.0/23 facts
+            breakdown: input=93759 output=1807 cache_creation=0 cache_read=0 tokens/session
+  compiled: total_cost_usd=n/a (runner reports no cost) | billed tokens (all usage fields summed; breakdown below)=81610/session (408052 campaign) | adequacy=23.0/23 facts
+            breakdown: input=79590 output=2020 cache_creation=0 cache_read=0 tokens/session
+  (cache_creation/cache_read do not bill at the direct-input rate — the $ figure is the cost-reference metric; the summed token figure is a VOLUME metric, valid because the per-field breakdown is right above, not hidden.)
+HEADLINE (api runner): billed usage.input_tokens raw 93759 vs compiled 79590/session = 15.1% saved | billed tokens (all usage fields summed) raw 95566 vs compiled 81610/session = 14.6% volume saved (fields are direct on the Messages API; no total_cost_usd reported by this runner)
+
+--- marketing summary (ONLINE, vibe-coding scenario, real billed usage + graded answers) ---
+Across the 19-turn vibe-coding session (with-screenshots), compiling context cut billed token volume (all usage fields summed; per-field breakdown above — cache fields bill below the direct-input rate) from 95566 to 81610/session (14.6% saved) on claude-sonnet-5 (api runner, 5 runs/turn/arm; usage.input_tokens alone: 93759 -> 79590, 15.1%), while the graded answer adequacy was raw 23.0/23 vs compiled 23.0/23 facts — all dimensions from real executions, none estimated.
+API_EXIT=0
