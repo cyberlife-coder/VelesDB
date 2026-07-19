@@ -32,7 +32,7 @@ use crate::extract::DynExtractor;
 // (`RecollectionDto`, `ExplanationDto` — the `id_str` twins of issue #1468)
 // live in their own module so this file stays focused on the server and tool
 // wiring; the domain types in `crate::model` are unchanged.
-/// The context compiler's six tools — a second `#[tool_router]` block whose
+/// The context compiler's eight tools — a second `#[tool_router]` block whose
 /// router is combined with the main one below, extending the ONE server.
 #[cfg(feature = "context")]
 mod context_tools;
@@ -380,17 +380,24 @@ impl McpServer {
 /// `get_info` is overridden so the server identifies itself as `velesdb-memory`
 /// (the macro default falls back to rmcp's own identity). Per-tool guidance
 /// lives in each `#[tool(description = …)]`.
+/// The server's one-shot vitrine to a connecting agent (V2a-1 quick win):
+/// must cover every tool family, not just memory — a `#[cfg(feature =
+/// "context")]` variant since the context-compiler tools only exist in that
+/// build.
+#[cfg(feature = "context")]
+const SERVER_INSTRUCTIONS: &str = "Local-first memory and context engineering for AI agents, three tool families: (1) durable memory — remember, recall, recall_fused, recall_where, relate, forget, feedback, and why — explainable (why returns the evidence trail) and self-improving (feedback re-ranks future recall); (2) the deterministic context compiler — compile_context, explain_compilation, retrieve_context_source, context_savings, and suggest_budget — token-budgets and audits prompt context with no LLM call, ever; (3) cross-session working-context resumption — save_working_context, load_working_context, and list_working_contexts. Nothing ever leaves the machine.";
+
+#[cfg(not(feature = "context"))]
+const SERVER_INSTRUCTIONS: &str = "Local-first memory for AI agents: remember facts, recall them \
+     semantically, relate them, forget them, and ask why a decision was made (connected subgraph).";
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::default();
         info.server_info = Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
-        info.instructions = Some(
-            "Local-first memory for AI agents: remember facts, recall them semantically, \
-             relate them, forget them, and ask why a decision was made (connected subgraph)."
-                .to_owned(),
-        );
+        info.instructions = Some(SERVER_INSTRUCTIONS.to_owned());
         info
     }
 }

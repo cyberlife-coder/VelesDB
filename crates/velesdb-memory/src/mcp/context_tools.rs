@@ -4,7 +4,7 @@
 //!
 //! Wire shapes reuse the domain types from [`crate::context`] directly
 //! (`CompileRequest` *is* the tool input, `CompiledContext` the output) —
-//! the only DTOs here are the thin request envelopes of the five smaller
+//! the only DTOs here are the thin request envelopes of the seven smaller
 //! tools. Same conventions as every other tool: `spawn_blocking` around the
 //! sync service, errors mapped through the transport-neutral category.
 
@@ -22,7 +22,7 @@ use super::{join_error, to_error, McpServer};
 use crate::context::wire::{stringify_id_fields, ID_KEYS};
 use crate::context::{
     CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextDecision,
-    ContextSavings, MediaRef, WorkingContext,
+    ContextSavings, MediaRef, WorkingContext, WorkingContextSession,
 };
 
 /// Serialize `payload`, opt-in rewriting every id field into decimal-string
@@ -175,9 +175,36 @@ pub(super) struct LoadWorkingContextParams {
 #[derive(Debug, serde::Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct LoadWorkingContextResult {
+    /// `true` when a working context was found under this exact project +
+    /// session. Wire-additive alongside `working` (added V2a-1): a client
+    /// that only reads `working` sees no change.
+    pub found: bool,
     /// The previously saved working context, or `null` when nothing was ever
     /// saved under that project + session (a fresh start, not an error).
     pub working: Option<WorkingContext>,
+    /// Other sessions saved under this SAME project, populated only when
+    /// `found` is `false` — helps recover from a typo in `session` instead
+    /// of silently starting fresh (e.g. `"task-1234"` saved,
+    /// `"task-1235"` requested by mistake). Always empty when `found` is
+    /// `true`.
+    #[serde(default)]
+    pub other_sessions: Vec<String>,
+}
+
+/// Input of the `list_working_contexts` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct ListWorkingContextsParams {
+    /// Project facet to list saved working-context sessions for (same
+    /// convention as `save_working_context`'s `project`).
+    pub project: String,
+}
+
+/// Output of the `list_working_contexts` tool.
+#[derive(Debug, serde::Serialize, JsonSchema)]
+pub(super) struct ListWorkingContextsResult {
+    /// Every session saved under this project, most-recently-saved first.
+    /// Empty (not an error) when the project never saved anything.
+    pub sessions: Vec<WorkingContextSession>,
 }
 
 #[tool_router(router = context_tool_router, vis = "pub(super)")]
@@ -330,20 +357,56 @@ impl McpServer {
 
     #[tool(
         name = "load_working_context",
-        description = "Resume a session: load back the working context previously saved by save_working_context under the same project + session id — the goal, constraints, verified facts, open hypotheses, decisions, exact evidence, and pending actions a PRIOR session left off with. Call this at the START of a new session before doing anything else, so work continues instead of restarting. Returns null when nothing was ever saved under that project + session (a fresh start, not an error)."
+        description = "Resume a session: load back the working context previously saved by save_working_context under the same project + session id — the goal, constraints, verified facts, open hypotheses, decisions, exact evidence, and pending actions a PRIOR session left off with. Call this at the START of a new session before doing anything else, so work continues instead of restarting. `found: false` (with `working: null`) means nothing was ever saved under that exact project + session — not an error, but check `other_sessions`: if it lists a similarly-named session, `session` was likely a typo, not a genuinely fresh start. Use `list_working_contexts` to browse a project's sessions up front."
     )]
     async fn load_working_context(
         &self,
         Parameters(params): Parameters<LoadWorkingContextParams>,
     ) -> Result<Json<LoadWorkingContextResult>, ErrorData> {
-        let service = Arc::clone(&self.service);
         let LoadWorkingContextParams { project, session } = params;
-        let working =
-            tokio::task::spawn_blocking(move || service.load_working_context(&project, &session))
+        let service = Arc::clone(&self.service);
+        let lookup_project = project.clone();
+        let working = tokio::task::spawn_blocking(move || {
+            service.load_working_context(&lookup_project, &session)
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
+        let found = working.is_some();
+        let other_sessions = if found {
+            Vec::new()
+        } else {
+            let service = Arc::clone(&self.service);
+            tokio::task::spawn_blocking(move || service.list_working_contexts(&project))
                 .await
                 .map_err(join_error)?
-                .map_err(to_error)?;
-        Ok(Json(LoadWorkingContextResult { working }))
+                .map_err(to_error)?
+                .into_iter()
+                .map(|s| s.session)
+                .collect()
+        };
+        Ok(Json(LoadWorkingContextResult {
+            found,
+            working,
+            other_sessions,
+        }))
+    }
+
+    #[tool(
+        name = "list_working_contexts",
+        description = "List every session saved under a project via save_working_context, most-recently-saved first — so an agent can discover what is resumable before guessing a session id at load_working_context, or recover from a typo. Empty (not an error) when the project never saved anything."
+    )]
+    async fn list_working_contexts(
+        &self,
+        Parameters(params): Parameters<ListWorkingContextsParams>,
+    ) -> Result<Json<ListWorkingContextsResult>, ErrorData> {
+        let service = Arc::clone(&self.service);
+        let ListWorkingContextsParams { project } = params;
+        let sessions = tokio::task::spawn_blocking(move || service.list_working_contexts(&project))
+            .await
+            .map_err(join_error)?
+            .map_err(to_error)?;
+        Ok(Json(ListWorkingContextsResult { sessions }))
     }
 }
 

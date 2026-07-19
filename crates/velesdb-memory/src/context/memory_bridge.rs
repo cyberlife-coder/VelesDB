@@ -64,7 +64,8 @@ use serde_json::{Map, Number, Value};
 use super::{positive_ttl, MemoryService, Metadata, HUB_FIELD};
 use crate::context::model::{
     CompileRequest, CompiledContext, ContextFragment, ContextSavings, ContextSource,
-    ImportanceWeights, MediaRef, MemoryScope, WorkingContext,
+    ImportanceWeights, MediaRef, MemoryScope, WorkingContext, WorkingContextIndex,
+    WorkingContextSession,
 };
 use crate::context::{media, provenance, ContextCompiler};
 use crate::embedder::Embedder;
@@ -82,6 +83,10 @@ const EVENT_ID_SALT: &str = "veles-ctx-event:";
 /// Salt for working-context ids (deterministic per project+session, so a
 /// save is an idempotent upsert).
 const WORKING_ID_SALT: &str = "veles-ctx-working:";
+/// Salt for a project's working-context index id (deterministic per
+/// project, so every `save_working_context` call updates the SAME system
+/// fact rather than minting a new one).
+const WORKING_INDEX_ID_SALT: &str = "veles-ctx-working-index:";
 
 /// The constant lexical anchor every event's content starts with, so one
 /// vector query can sweep the event family for aggregation.
@@ -108,6 +113,9 @@ const CTX_SOURCE_MEDIA_FIELD: &str = "_veles_ctx_source_media";
 /// alone (e.g. `velesdb-wasm`, which never enables `persistence`).
 const EXPIRES_AT_FIELD: &str = "_veles_expires_at";
 const CTX_WORKING_FIELD: &str = "_veles_ctx_working";
+/// Marks a project's working-context index fact (V2a-1's
+/// `list_working_contexts`), symmetric to [`CTX_WORKING_FIELD`].
+const CTX_WORKING_INDEX_FIELD: &str = "_veles_ctx_working_index";
 const CTX_SESSION_FIELD: &str = "_veles_ctx_session";
 const CTX_TOKENS_IN_FIELD: &str = "_veles_ctx_tokens_in";
 const CTX_TOKENS_OUT_FIELD: &str = "_veles_ctx_tokens_out";
@@ -628,6 +636,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             (CTX_SESSION_FIELD, Value::String(session.to_owned())),
         ]);
         self.store_fact(id, &content, &embedding, Some(&meta), None)?;
+        self.update_working_index(project, session)?;
         Ok(id)
     }
 
@@ -668,6 +677,85 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 .map_err(|err| MemoryError::WorkingContextCodec(err.to_string())),
             None => Ok(None),
         }
+    }
+
+    /// Every session ever saved under `project`'s working-context index
+    /// (V2a-1 quick win), most-recently-saved first. Empty (never an error)
+    /// when the project never saved anything — reading the index is O(1),
+    /// never a store scan.
+    ///
+    /// # Errors
+    /// Returns a storage error if the index fact cannot be read, or
+    /// [`MemoryError::WorkingContextCodec`] if it does not parse (should
+    /// never happen for a payload this bridge wrote itself).
+    pub fn list_working_contexts(
+        &self,
+        project: &str,
+    ) -> Result<Vec<WorkingContextSession>, MemoryError> {
+        let mut sessions = self
+            .working_index(project)?
+            .map(|index| index.sessions)
+            .unwrap_or_default();
+        sessions.sort_by(|a, b| {
+            b.saved_at
+                .cmp(&a.saved_at)
+                .then_with(|| a.session.cmp(&b.session))
+        });
+        Ok(sessions)
+    }
+
+    /// The raw working-context index fact for `project`, `None` when nothing
+    /// was ever saved under it. Symmetric squatter guard to
+    /// [`Self::load_working_context`]: a slot occupied without the reserved
+    /// [`CTX_WORKING_INDEX_FIELD`] marker is treated as empty, never as a
+    /// forged index.
+    fn working_index(&self, project: &str) -> Result<Option<WorkingContextIndex>, MemoryError> {
+        let slot = working_index_id(project);
+        let payloads = self.store.get_metadata_batch(&[slot])?;
+        let marked = payloads
+            .into_iter()
+            .next()
+            .flatten()
+            .is_some_and(|meta| meta.get(CTX_WORKING_INDEX_FIELD) == Some(&Value::Bool(true)));
+        if !marked {
+            return Ok(None);
+        }
+        match self.store.get(slot)? {
+            Some((content, _)) => serde_json::from_str(&content)
+                .map(Some)
+                .map_err(|err| MemoryError::WorkingContextCodec(err.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    /// Append (or refresh) `session`'s entry in `project`'s working-context
+    /// index — called by every [`Self::save_working_context`], so the index
+    /// is always current without a separate maintenance step. A resave of
+    /// the same project+session updates `saved_at` in place rather than
+    /// duplicating the entry.
+    fn update_working_index(&self, project: &str, session: &str) -> Result<(), MemoryError> {
+        let mut index = self.working_index(project)?.unwrap_or_default();
+        let now = now_unix_secs();
+        if let Some(entry) = index.sessions.iter_mut().find(|s| s.session == session) {
+            entry.saved_at = now;
+        } else {
+            index.sessions.push(WorkingContextSession {
+                session: session.to_owned(),
+                saved_at: now,
+            });
+        }
+        let content = serde_json::to_string(&index)
+            .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))?;
+        let slot = working_index_id(project);
+        let embedding = self
+            .embedder
+            .embed(&format!("working context index {project}"))?;
+        let meta = system_meta(&[
+            (CTX_WORKING_INDEX_FIELD, Value::Bool(true)),
+            (CTX_PROJECT_FIELD, Value::String(project.to_owned())),
+        ]);
+        self.store_fact(slot, &content, &embedding, Some(&meta), None)?;
+        Ok(())
     }
 }
 
@@ -991,6 +1079,12 @@ fn source_media(meta: &Metadata) -> Option<MediaRef> {
 /// The salted, deterministic system-fact id of a working context.
 fn working_id(project: &str, session: &str) -> u64 {
     stable_id(&format!("{WORKING_ID_SALT}{project}\u{1f}{session}"))
+}
+
+/// The salted, deterministic system-fact id of a project's working-context
+/// index — one per project, so every save updates the same slot.
+fn working_index_id(project: &str) -> u64 {
+    stable_id(&format!("{WORKING_INDEX_ID_SALT}{project}"))
 }
 
 #[cfg(all(test, feature = "persistence"))]

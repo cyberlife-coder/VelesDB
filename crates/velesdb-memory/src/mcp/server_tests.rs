@@ -1074,3 +1074,29 @@ async fn relate_by_wrong_numeric_id_fails_but_id_str_round_trip_succeeds() {
     assert!(ids.contains(&decision.id) && ids.contains(&pr.id));
     assert_eq!(edges, 1);
 }
+
+#[test]
+fn test_get_info_instructions_cover_memory_compiler_and_working_context() {
+    // The server's `get_info().instructions` is its one-shot vitrine to a
+    // connecting agent — it must not hide half the product behind a
+    // memory-only blurb (quick win V2a-1).
+    let (_dir, srv) = server();
+    let info = srv.get_info();
+    let instructions = info.instructions.expect("instructions must be set");
+
+    assert!(
+        instructions.contains("recall") && instructions.contains("relate"),
+        "must mention the memory family: {instructions}"
+    );
+    #[cfg(feature = "context")]
+    {
+        assert!(
+            instructions.contains("compile_context"),
+            "must mention the context compiler family: {instructions}"
+        );
+        assert!(
+            instructions.contains("working"),
+            "must mention working-context resumption: {instructions}"
+        );
+    }
+}

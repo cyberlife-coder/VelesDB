@@ -502,3 +502,28 @@ pub struct WorkingContext {
     #[serde(default)]
     pub pending_actions: Vec<String>,
 }
+
+/// One session recorded in a project's working-context index (V2a-1's
+/// `list_working_contexts` quick win).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkingContextSession {
+    /// The session id, as passed to `save_working_context`.
+    pub session: String,
+    /// Unix seconds this session was last saved — updated on every
+    /// `save_working_context` call under this project + session, not just
+    /// the first (a resave never duplicates the entry).
+    pub saved_at: u64,
+}
+
+/// The per-project index [`save_working_context`](crate::MemoryService::save_working_context)
+/// maintains so [`list_working_contexts`](crate::MemoryService::list_working_contexts)
+/// never has to scan the whole store: one system fact per project, appended
+/// (or refreshed) on every save. The REJECTED alternative was an approximate
+/// `query_filtered` scan over working-context facts (capped at
+/// `MAX_RECALL_LIMIT`, imprecise) — this index is exact and O(1) to read.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct WorkingContextIndex {
+    /// Every session ever saved under this project.
+    #[serde(default)]
+    pub sessions: Vec<WorkingContextSession>,
+}

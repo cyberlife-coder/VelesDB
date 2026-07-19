@@ -59,7 +59,7 @@ pub use model::{
     CompilePolicy, CompileRequest, CompiledContext, CompiledSection, ContextAction,
     ContextDecision, ContextDecisionRef, ContextFact, ContextFragment, ContextSavings,
     ContextSource, FidelityRisk, ImportanceWeights, MediaRef, MemoryScope, RetrievalHandle,
-    SectionKind, SourceReference, WorkingContext,
+    SectionKind, SourceReference, WorkingContext, WorkingContextIndex, WorkingContextSession,
 };
 pub use relevance::DeterministicReranker;
 
