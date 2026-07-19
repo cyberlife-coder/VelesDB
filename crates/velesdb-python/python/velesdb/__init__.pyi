@@ -2477,6 +2477,21 @@ class MemoryService:
         """
         ...
 
+    def feedback(self, id: int, success: bool) -> float:
+        """Reinforce (success=True) or weaken (False) a memory after use; returns the updated confidence [0,1].
+
+        Args:
+            id: The memory id that was used.
+            success: Whether the memory was useful.
+
+        Returns:
+            The updated confidence, in ``[0.0, 1.0]``.
+
+        Raises:
+            KeyError: If ``id`` does not exist.
+        """
+        ...
+
     def why(
         self,
         decision: str,

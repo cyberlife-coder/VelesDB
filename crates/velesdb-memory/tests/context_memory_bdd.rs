@@ -1509,6 +1509,78 @@ fn test_byte_identical_screenshot_duplicate_wins_over_supersession_and_resolves(
 }
 
 #[test]
+fn test_two_identical_screenshots_same_target_emits_latest() {
+    // Given two BYTE-IDENTICAL screenshots of the same target — dedup
+    // (anchored on #0, the first occurrence) and supersession (which keeps
+    // only the LAST occurrence, #1) disagree on which one survives. Without
+    // re-anchoring, #0 is superseded (dropped) and #1 is "just a duplicate
+    // of #0" (also dropped) — the image vanishes from the compiled output
+    // entirely, contradicting US-009's "the freshest copy stays inline".
+    let (_dir, svc) = service();
+    let fragments = vec![
+        screenshot("dup shot", "login-page"),
+        screenshot("dup shot", "login-page"),
+    ];
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(&compiler, &request("q", fragments, 10_000))
+        .expect("compile");
+
+    // Then the image survives, exactly once, through the LATEST occurrence
+    assert_eq!(
+        out.content.matches("dup shot").count(),
+        1,
+        "the image must appear exactly once in the compiled content"
+    );
+    assert_eq!(out.decisions[0].action, ContextAction::Drop);
+    assert_eq!(out.decisions[0].rule_id, "drop.duplicate");
+    assert!(
+        out.decisions[0]
+            .reason
+            .contains("of fragment #1"),
+        "the stale fragment #0 must be recorded as a duplicate of the LATEST occurrence (#1), got: {}",
+        out.decisions[0].reason
+    );
+    assert_eq!(out.decisions[1].action, ContextAction::Preserve);
+
+    // And dropping the stale twin never registers as a High-fidelity-risk
+    // loss — the content it carried fully survives through #1
+    assert_ne!(
+        out.risk,
+        velesdb_memory::context::FidelityRisk::High,
+        "the surviving twin carries the same bytes, so risk must not reach High"
+    );
+}
+
+#[test]
+fn test_three_identical_screenshots_reanchors_on_last() {
+    // Given three BYTE-IDENTICAL screenshots of the same target — the media
+    // dedup namespace must chain #0 and #1 as duplicates of the final
+    // survivor (#2), never anchor on a superseded fragment.
+    let (_dir, svc) = service();
+    let fragments = vec![
+        screenshot("dup shot", "login-page"),
+        screenshot("dup shot", "login-page"),
+        screenshot("dup shot", "login-page"),
+    ];
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(&compiler, &request("q", fragments, 10_000))
+        .expect("compile");
+
+    // Then the image survives exactly once, and only the last fragment
+    // stays inline
+    assert_eq!(
+        out.content.matches("dup shot").count(),
+        1,
+        "the image must appear exactly once in the compiled content"
+    );
+    assert_eq!(out.decisions[0].action, ContextAction::Drop);
+    assert_eq!(out.decisions[1].action, ContextAction::Drop);
+    assert_eq!(out.decisions[2].action, ContextAction::Preserve);
+}
+
+#[test]
 fn test_stored_media_sources_are_invisible_to_normal_recall() {
     // Given a compiled (and stored) media source with a distinctive caption
     let (_dir, svc) = service();

@@ -453,11 +453,19 @@ fn analyze<'a>(
         .iter()
         .map(|analysis| analysis.as_ref().map(|analysis| analysis.raw_hash))
         .collect();
-    let duplicates = dedup::find_duplicates(&contents, policy.near_dup_dedup, &media_hashes);
-    // Whole-batch pass, symmetric to `dedup::find_duplicates` above: needs
+    // Whole-batch pass, symmetric to `dedup::find_duplicates` below: needs
     // every fragment's `kind` + `metadata.target` at once, which a per-
-    // fragment `classify::classify` call cannot see.
+    // fragment `classify::classify` call cannot see. Computed *before*
+    // dedup so the media namespace can re-anchor off a superseded fragment
+    // (see `dedup::find_duplicates`'s doc) instead of anchoring dedup on a
+    // screenshot that supersession has already excluded from packing.
     let superseded_flags = classify::screenshot_supersession(&request.fragments);
+    let duplicates = dedup::find_duplicates(
+        &contents,
+        policy.near_dup_dedup,
+        &media_hashes,
+        &superseded_flags,
+    );
     let query_terms = relevance::terms(&request.query);
     let mut analyses: Vec<Analysis<'a>> = request
         .fragments
