@@ -40,7 +40,7 @@ const CONTINUATION_QUESTIONS = [
   {
     // turn 20 — spec 5.2 re-read
     question: 'Per spec 5.2, which total must the remaining balance derive from, and which incident is cited for the footgun? Quote the incident id verbatim.',
-    facts: ['GC-2031'],
+    facts: ['POST-TAX total', 'GC-2031'],
   },
   {
     // turn 21 — second CI log
@@ -50,7 +50,7 @@ const CONTINUATION_QUESTIONS = [
   {
     // turn 22 — diagnosis
     question: 'Which variable does the buggy applyGiftCard derive the remaining balance from, and what numeric value did the failing assertion expect to differ from? Quote both verbatim.',
-    facts: ['preTaxTotalCents', '-320'],
+    facts: ['preTaxTotalCents', '1180'],
   },
   {
     // turn 23 — giftCard.ts v2 fix
