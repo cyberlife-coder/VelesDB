@@ -1189,4 +1189,145 @@ mod tests {
             "failed write must leave no payload behind"
         );
     }
+
+    // =========================================================================
+    // Race regression (#1442 re-fix): a concurrent delete() of an edge
+    // endpoint must never leave a phantom edge (edge present in the store,
+    // endpoint payload gone). Deterministic interleaving: the test thread
+    // holds `edge_wal_lock` itself so the writer (add_edge/add_edges_batch)
+    // parks on it; post-fix the writer still holds `payload_storage`'s read
+    // guard while parked there, so a racing delete() must block instead of
+    // running ahead.
+    // =========================================================================
+
+    /// Runs one race iteration. `write` performs the edge write (via
+    /// `add_edge` or `add_edges_batch`) on a fresh collection seeded with
+    /// `source`/`target` payloads. Returns `(delete_raced_ahead, is_phantom)`:
+    /// pre-fix, `delete()` is not blocked by the writer (raced ahead = true)
+    /// and can produce a phantom edge; post-fix `delete()` must block on
+    /// `payload_storage` until the writer finishes.
+    fn race_write_vs_delete_iteration(
+        iteration: u64,
+        edge_id: u64,
+        write: impl FnOnce(&Collection, GraphEdge) -> crate::error::Result<()> + Send + 'static,
+    ) -> (bool, bool) {
+        let (collection, _temp) = create_graph_test_collection();
+        let source = iteration * 10 + 1;
+        let target = iteration * 10 + 2;
+        collection
+            .store_node_payload(source, &serde_json::json!({}))
+            .expect("seed source");
+        collection
+            .store_node_payload(target, &serde_json::json!({}))
+            .expect("seed target");
+        let collection = std::sync::Arc::new(collection);
+
+        // Hold the WAL lock from the test thread so the writer parks on it
+        // right after (post-fix) or well after releasing payload_storage
+        // (pre-fix).
+        let wal_guard = collection.graph.edge_wal_lock.lock();
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        let c1 = std::sync::Arc::clone(&collection);
+        let edge = make_edge(edge_id, source, target, "REL");
+        let t1 = std::thread::spawn(move || {
+            started_tx.send(()).ok();
+            write(&c1, edge)
+        });
+        started_rx.recv().expect("writer thread should start");
+        std::thread::sleep(std::time::Duration::from_millis(30));
+
+        let c2 = std::sync::Arc::clone(&collection);
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let t2 = std::thread::spawn(move || {
+            let _ = c2.delete(&[source]);
+            done_tx.send(()).ok();
+        });
+        let delete_raced_ahead = done_rx
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_ok();
+
+        drop(wal_guard);
+        t1.join().expect("writer thread must not panic").ok();
+        t2.join().expect("delete thread must not panic");
+
+        let edge_exists = collection.edge_exists(edge_id);
+        let payload_present = collection
+            .get_node_payload(source)
+            .expect("retrieve must not error")
+            .is_some();
+        (delete_raced_ahead, edge_exists && !payload_present)
+    }
+
+    #[test]
+    fn add_edge_concurrent_delete_never_leaves_phantom_edge() {
+        for i in 0..10 {
+            let (delete_raced_ahead, is_phantom) =
+                race_write_vs_delete_iteration(i, i, |c, edge| c.add_edge(edge));
+            assert!(
+                !delete_raced_ahead,
+                "iteration {i}: delete() must block on payload_storage while \
+                 add_edge holds its read guard through the WAL pause"
+            );
+            assert!(
+                !is_phantom,
+                "iteration {i}: phantom edge — edge exists but endpoint payload is gone"
+            );
+        }
+    }
+
+    #[test]
+    fn add_edges_batch_concurrent_delete_never_leaves_phantom_edge() {
+        for i in 0..10 {
+            let (delete_raced_ahead, is_phantom) = race_write_vs_delete_iteration(i, i, |c, edge| {
+                c.add_edges_batch(vec![edge]).map(|_| ())
+            });
+            assert!(
+                !delete_raced_ahead,
+                "iteration {i}: delete() must block on payload_storage while \
+                 add_edges_batch holds its read guard through the WAL pause"
+            );
+            assert!(
+                !is_phantom,
+                "iteration {i}: phantom edge — edge exists but endpoint payload is gone"
+            );
+        }
+    }
+
+    #[test]
+    fn stress_add_edge_concurrent_delete_never_leaves_phantom_edge() {
+        // Probabilistic filet (pattern: edge_concurrent_tests.rs) — no forced
+        // rendezvous, just many yield_now-interleaved iterations to catch the
+        // race by chance in addition to the deterministic tests above.
+        for i in 0..2_000u64 {
+            let (collection, _temp) = create_graph_test_collection();
+            let source = i * 10 + 1;
+            let target = i * 10 + 2;
+            collection
+                .store_node_payload(source, &serde_json::json!({}))
+                .expect("seed source");
+            collection
+                .store_node_payload(target, &serde_json::json!({}))
+                .expect("seed target");
+            let collection = std::sync::Arc::new(collection);
+
+            let c1 = std::sync::Arc::clone(&collection);
+            let edge = make_edge(i, source, target, "REL");
+            let h1 = std::thread::spawn(move || {
+                std::thread::yield_now();
+                let _ = c1.add_edge(edge);
+            });
+            let c2 = std::sync::Arc::clone(&collection);
+            let h2 = std::thread::spawn(move || {
+                std::thread::yield_now();
+                let _ = c2.delete(&[source]);
+            });
+            h1.join().expect("add_edge thread must not panic");
+            h2.join().expect("delete thread must not panic");
+
+            let is_phantom =
+                collection.edge_exists(i) && collection.get_node_payload(source).unwrap().is_none();
+            assert!(!is_phantom, "iteration {i}: phantom edge under stress");
+        }
+    }
 }

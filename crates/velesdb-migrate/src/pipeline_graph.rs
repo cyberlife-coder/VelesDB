@@ -161,15 +161,9 @@ impl<'a> GraphMigrationPhase<'a> {
             }
 
             if !edges.is_empty() {
-                for edge in &edges {
-                    for id in [edge.source(), edge.target()] {
-                        if seeded_nodes.insert(id) {
-                            if let Err(e) = gc.upsert_node_payload(id, &serde_json::json!({})) {
-                                warn!("Failed to seed graph node {id}: {e}");
-                            }
-                        }
-                    }
-                }
+                seed_edge_endpoints(&edges, &mut seeded_nodes, |id| {
+                    gc.upsert_node_payload(id, &serde_json::json!({}))
+                });
 
                 let total = edges.len() as u64;
                 match gc.add_edges_batch(edges.clone()) {
@@ -252,6 +246,33 @@ fn attach_weight(
         "weight".to_string(),
         serde_json::json!(weight),
     )]))
+}
+
+/// Seeds a stub node payload for each not-yet-seeded edge endpoint.
+///
+/// Extracted from `migrate_relation_edges` so the seed/retry bookkeeping is
+/// unit-testable with an injectable `upsert` closure (real usage passes
+/// `GraphCollection::upsert_node_payload`; tests can simulate a failure for a
+/// specific id). `seeded_nodes` is shared across the whole relation so a node
+/// referenced by many edges (e.g. a popular FK target) is not re-written on
+/// every recurrence.
+fn seed_edge_endpoints<F, E>(
+    edges: &[velesdb_core::GraphEdge],
+    seeded_nodes: &mut std::collections::HashSet<u64>,
+    mut upsert: F,
+) where
+    F: FnMut(u64) -> std::result::Result<(), E>,
+    E: std::fmt::Display,
+{
+    for edge in edges {
+        for id in [edge.source(), edge.target()] {
+            if seeded_nodes.insert(id) {
+                if let Err(e) = upsert(id) {
+                    warn!("Failed to seed graph node {id}: {e}");
+                }
+            }
+        }
+    }
 }
 
 fn value_to_id_str(value: &serde_json::Value) -> Option<String> {
@@ -433,5 +454,51 @@ mod tests {
         // THEN: the non-numeric value is ignored, no weight property attached
         assert!(edge.property("weight").is_none());
         assert!(edge.properties().is_empty());
+    }
+
+    #[test]
+    fn seed_retries_failed_node_on_next_occurrence() {
+        // Regression guard: a node whose stub-seed upsert fails must NOT be
+        // marked as seeded, so a later edge referencing the same node id
+        // retries the upsert instead of silently skipping it forever (which
+        // would leave that node's edges permanently rejected by #1442's
+        // add_edges_batch validation, since the endpoint was never actually
+        // stored).
+        let attempts = std::cell::RefCell::new(Vec::new());
+        let mut seeded = std::collections::HashSet::new();
+
+        let edge1 = velesdb_core::GraphEdge::new(1, 100, 200, "REL").expect("valid edge");
+        let edge2 = velesdb_core::GraphEdge::new(2, 100, 300, "REL").expect("valid edge");
+
+        // First occurrence of node 100: its upsert fails.
+        seed_edge_endpoints(std::slice::from_ref(&edge1), &mut seeded, |id| {
+            attempts.borrow_mut().push(id);
+            if id == 100 {
+                Err("simulated storage failure")
+            } else {
+                Ok(())
+            }
+        });
+        assert!(
+            !seeded.contains(&100),
+            "a failed upsert must not mark the node as seeded"
+        );
+        assert!(seeded.contains(&200), "the succeeding endpoint is seeded");
+
+        // Second occurrence of node 100 (via edge2): must retry since it was
+        // never marked seeded.
+        seed_edge_endpoints(std::slice::from_ref(&edge2), &mut seeded, |id| {
+            attempts.borrow_mut().push(id);
+            Ok::<(), &str>(())
+        });
+        assert!(
+            seeded.contains(&100),
+            "node 100 must be seeded after a successful retry"
+        );
+        assert_eq!(
+            *attempts.borrow(),
+            vec![100, 200, 100, 300],
+            "node 100's upsert must be attempted again on its next occurrence"
+        );
     }
 }
