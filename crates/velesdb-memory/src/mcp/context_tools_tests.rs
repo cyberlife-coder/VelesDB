@@ -943,6 +943,48 @@ async fn test_list_working_contexts_tool_returns_saved_sessions() {
 }
 
 #[tokio::test]
+async fn test_suggest_budget_tool_known_model_returns_window_and_suggestion() {
+    let (_dir, srv) = server();
+    let Json(suggestion) = srv
+        .suggest_budget(Parameters(SuggestBudgetParams {
+            target_model: "claude-sonnet-4-5".to_owned(),
+            reserve_tokens: Some(10_000),
+        }))
+        .await
+        .expect("suggest_budget");
+    assert_eq!(suggestion.window, Some(200_000));
+    assert_eq!(suggestion.suggested_budget, Some(190_000));
+    assert!(suggestion.source.contains("static table"));
+}
+
+#[tokio::test]
+async fn test_suggest_budget_tool_defaults_reserve_tokens_to_zero() {
+    let (_dir, srv) = server();
+    let Json(suggestion) = srv
+        .suggest_budget(Parameters(SuggestBudgetParams {
+            target_model: "claude-sonnet-4-5".to_owned(),
+            reserve_tokens: None,
+        }))
+        .await
+        .expect("suggest_budget");
+    assert_eq!(suggestion.suggested_budget, suggestion.window);
+}
+
+#[tokio::test]
+async fn test_suggest_budget_tool_unknown_model_returns_nulls() {
+    let (_dir, srv) = server();
+    let Json(suggestion) = srv
+        .suggest_budget(Parameters(SuggestBudgetParams {
+            target_model: "some-model-that-does-not-exist-2099".to_owned(),
+            reserve_tokens: None,
+        }))
+        .await
+        .expect("suggest_budget");
+    assert_eq!(suggestion.window, None);
+    assert_eq!(suggestion.suggested_budget, None);
+}
+
+#[tokio::test]
 async fn test_list_working_contexts_tool_empty_for_unknown_project() {
     // Given a server with nothing saved
     let (_dir, srv) = server();

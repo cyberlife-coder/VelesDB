@@ -47,7 +47,11 @@ silent loss. Same input, same output, byte for byte.
    so size the budget generously for anything marked cacheable.
 4. **Set the budget.** `token_budget` = the model window share you want the
    context to occupy, minus your expected response length (or set
-   `policy.response_reserve_tokens`).
+   `policy.response_reserve_tokens`). Don't know the target model's context
+   window? Call `suggest_budget` (`{target_model, reserve_tokens?}` → a
+   static-table `window`/`suggested_budget`, dated "as of", never a network
+   call) for a starting point instead of guessing — `null` fields mean the
+   model isn't in the table yet.
 5. **Call `compile_context`** with a `query` describing the current task —
    relevance to it orders what packs first. Add
    `memory_scope: {k: 5, project: "..."}` to pull relevant stored memories in

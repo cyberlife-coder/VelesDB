@@ -21,8 +21,9 @@ use serde_json::Value;
 use super::{join_error, to_error, McpServer};
 use crate::context::wire::{stringify_id_fields, ID_KEYS};
 use crate::context::{
-    CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextDecision,
-    ContextSavings, MediaRef, WorkingContext, WorkingContextSession,
+    suggest_token_budget, CompilePolicy, CompileRequest, CompiledContext, ContextCompiler,
+    ContextDecision, ContextSavings, MediaRef, SuggestedBudget, WorkingContext,
+    WorkingContextSession,
 };
 
 /// Serialize `payload`, opt-in rewriting every id field into decimal-string
@@ -205,6 +206,19 @@ pub(super) struct ListWorkingContextsResult {
     /// Every session saved under this project, most-recently-saved first.
     /// Empty (not an error) when the project never saved anything.
     pub sessions: Vec<WorkingContextSession>,
+}
+
+/// Input of the `suggest_budget` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct SuggestBudgetParams {
+    /// The model name to look up in the static window table (e.g.
+    /// `"claude-sonnet-4-5"`). Matched case-insensitively.
+    pub target_model: String,
+    /// Tokens to reserve for the response, subtracted from the model's
+    /// window (default `0`) — mirrors
+    /// [`CompilePolicy::response_reserve_tokens`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserve_tokens: Option<u64>,
 }
 
 #[tool_router(router = context_tool_router, vis = "pub(super)")]
@@ -407,6 +421,24 @@ impl McpServer {
             .map_err(join_error)?
             .map_err(to_error)?;
         Ok(Json(ListWorkingContextsResult { sessions }))
+    }
+
+    #[tool(
+        name = "suggest_budget",
+        description = "Suggest a starting token_budget for compile_context, for a named target model — looked up in a static, committed model-name to context-window table (dated \"as of\", NEVER a network call). Pass `reserve_tokens` (default 0) to reserve room for the response, mirroring compile_context's own `policy.response_reserve_tokens`. `window`/`suggested_budget` come back null when the model is not in the table — an honest \"unknown\", never a guess; extend the table in a new release instead of relying on this for an unlisted model."
+    )]
+    async fn suggest_budget(
+        &self,
+        Parameters(params): Parameters<SuggestBudgetParams>,
+    ) -> Result<Json<SuggestedBudget>, ErrorData> {
+        let SuggestBudgetParams {
+            target_model,
+            reserve_tokens,
+        } = params;
+        Ok(Json(suggest_token_budget(
+            &target_model,
+            reserve_tokens.unwrap_or(0),
+        )))
     }
 }
 

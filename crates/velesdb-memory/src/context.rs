@@ -45,6 +45,9 @@ mod log_normalize;
 // derive a deterministic placeholder embedding for a stored media source.
 pub(crate) mod media;
 pub mod model;
+/// The `suggest_budget` MCP tool's static model→window table (V2a-3 quick
+/// win). No dependency on anything else in the pipeline — a pure lookup.
+pub mod model_windows;
 pub(crate) mod provenance;
 mod relevance;
 /// The id wire contract (decimal-string `u64`) shared by every JS-facing
@@ -62,6 +65,7 @@ pub use model::{
     RetrievalHandle, SectionKind, SourceReference, WorkingContext, WorkingContextIndex,
     WorkingContextSession,
 };
+pub use model_windows::{model_window, suggest_token_budget, SuggestedBudget};
 pub use relevance::DeterministicReranker;
 
 use std::collections::BTreeMap;
