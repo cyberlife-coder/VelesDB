@@ -37,7 +37,14 @@ silent loss. Same input, same output, byte for byte.
    dump, a code block, a constraint). Tag `kind` when you know it
    (`"code"`, `"log"`); mark caller-pinned text `metadata: {"verbatim": true}`
    and stable preambles `metadata: {"cache": true}` (they form the stable
-   prefix, maximizing provider prompt-cache hits).
+   prefix, maximizing provider prompt-cache hits). Two caveats: a media
+   fragment ignores `cache: true` (it always classifies `media.atomic` and
+   packs in the body, never the cache prefix); and the prefix is
+   byte-stable only at a *fixed* query — under a budget too tight for every
+   cache-marked fragment, a query change can reorder them (see the crate
+   README's prompt-cache section and
+   [issue #1455](https://github.com/cyberlife-coder/VelesDB/issues/1455)),
+   so size the budget generously for anything marked cacheable.
 4. **Set the budget.** `token_budget` = the model window share you want the
    context to occupy, minus your expected response length (or set
    `policy.response_reserve_tokens`).
