@@ -2571,7 +2571,7 @@ class MemoryService:
         """
         ...
 
-    def retrieve_context_source(self, handle: str) -> str:
+    def retrieve_context_source(self, handle: str) -> Dict[str, Any]:
         """Fetch back the exact original content behind a
         ``ctx://source/<hash>`` handle from a :meth:`compile_context` result.
 
@@ -2579,7 +2579,9 @@ class MemoryService:
             handle: A ``ctx://source/<hash>`` handle from a compiled context.
 
         Returns:
-            The original fragment content, byte for byte.
+            A dict shaped ``{"content": str, "media"?: ...}``, byte-for-byte
+            the original fragment; ``media`` is present only when the
+            fragment carried one.
 
         Raises:
             KeyError: If the handle is malformed or nothing is stored under it.

@@ -152,12 +152,14 @@ not the bottleneck.
 
 - **Theoretical savings** (what this prints): local estimates from the
   char-class estimator, calibrated against a real BPE (cl100k) to
-  **over-count every measured content class** (+13 % JSON, +16 % Markdown,
-  +19 % Rust code, +20 % URLs, +29 % digit-dense ids, +38 % French prose,
-  +52 % logs, +55 % English prose, +14 % CJK). Measured end-to-end with a
-  real cl100k tokenizer on this corpus (see `real_measures/`): the compiled
-  output always fits the budget in *real* tokens, and the real savings ratio
-  matches the printed one.
+  **over-count every measured content class** (+9.6 % CJK, +11.8 % URLs,
+  +13.0 % Markdown, +13.6 % JSON, +30.6 % Rust code, +30.9 % digit-dense
+  ids/dates, +52.4 % repetitive logs, +52.5 % French prose, +63.8 % English
+  prose — from [`real_measures/exact_estimator.mjs`](real_measures/exact_estimator.mjs),
+  see [`real_measures/README.md`](real_measures/README.md)). Measured
+  end-to-end with a real cl100k tokenizer on this corpus (see
+  `real_measures/`): the compiled output always fits the budget in *real*
+  tokens, and the real savings ratio matches the printed one.
 - **Billed savings**: what your provider actually charges — measure with the
   provider's token counts and inject your `PricingTable`
   (`ContextCompiler::with_pricing`).

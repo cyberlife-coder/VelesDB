@@ -29,7 +29,7 @@ use crate::extract::DynExtractor;
 // The request envelopes and small id-results live in their own module so this
 // file stays focused on the server and tool wiring; output shapes reuse the
 // domain types from `crate::model` directly (no duplicate wire/domain struct).
-/// The context compiler's four tools — a second `#[tool_router]` block whose
+/// The context compiler's six tools — a second `#[tool_router]` block whose
 /// router is combined with the main one below, extending the ONE server.
 #[cfg(feature = "context")]
 mod context_tools;

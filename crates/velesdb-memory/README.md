@@ -27,8 +27,9 @@ certified compliance.
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
 > [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.9.0**
 > and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**
-> (memory API — the context compiler is **not exposed in Python yet**;
-> Python agents reach it through the MCP server).
+> (memory API only — the context compiler is merged on `develop` but **the
+> published 3.12.0 wheel predates it**; it ships with the next PyPI release,
+> until then Python agents reach it through the MCP server).
 > **`cargo install velesdb-memory` installs the latest published release.**
 
 > **Bring your own reranker (Rust)**: `compile_context_reranked` hands the
@@ -361,7 +362,7 @@ why { "decision": "why did we choose parking_lot", "max_hops": 2,
     "edges": [ { "from": …, "to": …, "relation": "decided_in" }, … ] }
 
 // forget — delete a memory by id
-forget { "id": 9876543210 } → { "id": 9876543210 }
+forget { "id": 9876543210 } → { "id": 9876543210, "found": true }
 
 // remember_extracted — extract facts from raw text and auto-wire the graph
 //   (opt-in: needs a server built with --features extract + VELESDB_MEMORY_EXTRACTOR)
@@ -374,11 +375,19 @@ remember_extracted { "text": "Met Dana at the Rust meetup; she now leads the par
 
 ### The context compiler tools
 
-**Compiler surfaces today: MCP server, Node, Rust, and Python** —
-`from velesdb import MemoryService` includes full context-compiler parity
-(`compile_context` / `retrieve_context_source` / `context_savings` /
-`save_working_context` / `load_working_context`, ids as exact native ints);
-any other client reaches the same tools through the MCP server.
+**Compiler surfaces today: MCP server and Rust** ship the full tool set
+(`compile_context`, `retrieve_context_source`, `context_savings`,
+`save_working_context`, `load_working_context`, `explain_compilation`;
+`compile_context_reranked` is Rust-only). **Node**
+(`@wiscale/velesdb-memory-node`) has `compileContext`, `retrieveContextSource`,
+`save/loadWorkingContext`, and `feedback`, but not yet `context_savings` or
+`explain_compilation`. **Python** (`from velesdb import MemoryService`) has
+`compile_context`, `retrieve_context_source`, `context_savings`,
+`save/load_working_context`, and `feedback` merged on `develop` (no
+`explain_compilation` yet) — but the published PyPI wheel predates all of
+it; until the next PyPI release, Python agents reach the compiler through
+the MCP server. Any MCP-speaking client gets the full surface regardless of
+language.
 
 **Why:** agents spend most of their tokens re-reading redundant context.
 `compile_context` compresses it **deterministically** — no LLM, no cloud, no
@@ -473,8 +482,8 @@ context_savings { "project": "veles" }
 
 > **JS clients talking raw MCP (no Node binding): watch `fragment_id` /
 > `content_hash` / `memory_id` precision.** Every id in a `compile_context` or
-> `explain_compilation` response is a `u64`. The [`velesdb-node`
-> binding](https://www.npmjs.com/package/velesdb-node) always crosses ids as
+> `explain_compilation` response is a `u64`. The [`@wiscale/velesdb-memory-node`
+> binding](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) always crosses ids as
 > decimal strings, so it is unaffected — but a plain MCP client speaking JSON
 > straight over stdio/SSE (no binding in between) gets a JSON *number*, and
 > `JSON.parse` in JS represents that as an IEEE-754 double: ids above
@@ -500,7 +509,8 @@ the Cache prefix — the cache flag is ignored on media fragments.
 
 `insights.tokens_saved` is a **local estimate**, calibrated against a real
 BPE (cl100k) to deliberately over-count every measured content class
-(+13 %…+55 %) — not the provider's count, not billed tokens, not cache reads.
+(+9.6 %…+63.8 %, per-class figures in the table below) — not the provider's
+count, not billed tokens, not cache reads.
 The reproducible benchmark ([`examples/context_savings`](examples/context_savings))
 measures **82.5 % real (cl100k) token savings on a committed 12-turn agent-session benchmark** (sub-ms stateless compiles), 75–82 % estimated savings on its static corpus in ~2 ms compile, and — with `memory_scope`'s fused HNSW + graph-walk recall over `relate`-linked fact chains — **9/9 answer facts surfaced vs 3/9 for vector-only recall** on the committed tri-engine benchmark
 latency. The committed

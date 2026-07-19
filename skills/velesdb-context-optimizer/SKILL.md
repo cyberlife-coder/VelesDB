@@ -60,8 +60,9 @@ silent loss. Same input, same output, byte for byte.
    **zero vocabulary** with the query (9/9 answer facts vs 3/9 for
    vector-only recall).
 6. **Check `risk`, then check `decisions` against YOUR question —
-   the label alone is not enough.** `low`: nothing was dropped, use `content`
-   as-is. `medium`/`high`: something was abstracted, dropped, or externalized
+   the label alone is not enough.** `low`: everything fit — only exact
+   duplicates were dropped, so `content` is safe as-is. `medium`/`high`:
+   something was abstracted, dropped, or externalized
    — before proceeding, scan `decisions` for any `action` other than
    `preserve`/`cache` and ask "could this fragment plausibly answer what I
    was asked?" **Relevance ranking is lexical (word overlap with your
@@ -81,10 +82,19 @@ silent loss. Same input, same output, byte for byte.
    `retrieval_handles` (`retrievalHandles` in the Node binding) at hand for
    anything you flagged in step 6, and fetch any content back with
    `retrieve_context_source` before answering — re-inject only what you
-   need.
+   need. Once a decision in your answer actually relied on a fragment that
+   came from `memory_scope` (its `decisions` entry carries a `memory_id`),
+   close the loop: call `feedback(memory_id, true)` — or `false` if it
+   turned out to be wrong — so the next `recall`/`compile_context` ranks
+   that memory accordingly.
 8. **Audit when asked.** Any "why was X dropped/shortened?" is answered by
    `explain_compilation` (re-submit the same request + the fragment id) — the
-   decision carries the rule id, reason, relevance, and risk. To audit an
+   decision carries the rule id, reason, relevance, and risk. When several
+   input fragments are byte-identical (same content-addressed `fragment_id`),
+   a plain `fragment_id` lookup always returns the FIRST one's decision (the
+   deduplication survivor) — pass the optional 0-based `fragment_index`
+   (position in `request.fragments`) to disambiguate a dropped twin;
+   `fragment_id` is still required even then. To audit an
    entire batch before committing to a budget, dry-run it: call
    `compile_context` with `token_budget: 10000000` (the request's own
    ceiling) so nothing is dropped, abstracted, or externalized — `risk`
