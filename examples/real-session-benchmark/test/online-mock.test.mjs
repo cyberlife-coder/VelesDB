@@ -77,6 +77,7 @@ test('runApiTurn parses usage + response text from a mocked /v1/messages respons
     assert.equal(content[0].type, 'text')
     assert.equal(content[1].type, 'image')
     assert.equal(content[1].source.type, 'base64')
+    assert.equal(content[1].source.media_type, 'image/png')
     assert.equal(content[1].source.data, IMG_FIXED.bytesB64)
   } finally {
     server.close()
