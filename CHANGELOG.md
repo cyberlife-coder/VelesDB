@@ -49,7 +49,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   endpoints to exist. **Migration note:** code that called `addEdge`/
   `INSERT EDGE` without first creating the endpoint nodes (via a point
   upsert or `PUT /graph/nodes/{id}/payload`) must now create them first —
-  see `docs/guides/GRAPH_PATTERNS.md`.
+  see `docs/guides/GRAPH_PATTERNS.md`. Follow-on fixes found in review:
+  `POST /collections/{name}/relations` (the point-relations REST endpoint)
+  previously mapped this same error to a generic `500`; it now returns
+  `404`/`VELES-022` like every other graph endpoint. `velesdb-memory`'s
+  `relate()` previously downgraded the identical concurrent-delete race to
+  a generic internal error instead of its documented `NotFound` contract;
+  fixed. `velesdb-migrate`'s FK-relations phase writes into a fresh,
+  edge-only graph collection that never otherwise gets node payloads —
+  it now stubs each edge endpoint before inserting, and a batch-level
+  validation failure degrades to per-edge accounting instead of aborting
+  the whole migration.
 
 - **`velesdb-memory`**: hardened the MCP server against a leaked client
   process (#1448). The server itself was already healthy (it exits cleanly

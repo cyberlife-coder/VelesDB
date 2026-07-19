@@ -5191,3 +5191,127 @@ async fn test_graph_nodes_endpoint_lists_edge_endpoints() {
     assert!(node_ids.contains(&1));
     assert!(node_ids.contains(&2));
 }
+
+/// Regression (#1442): `POST /collections/{name}/relations` referencing a
+/// point that doesn't exist must return 404 with the VELES-022 code, not a
+/// generic 500 — `insert_edge_with_retry`'s catch-all error arm previously
+/// mapped every non-`EdgeExists` error to `INTERNAL_SERVER_ERROR`.
+#[tokio::test]
+async fn test_relate_points_rejects_nonexistent_target_with_404() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({"name": "rel_test", "dimension": 4, "metric": "cosine"}).to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/rel_test/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({"points": [{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {}}]})
+                        .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/rel_test/relations")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({"source": 1, "target": 999, "rel_type": "KNOWS"}).to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    assert_eq!(json["code"], "VELES-022");
+}
+
+/// Happy path: `POST /relations` between two existing points succeeds and
+/// is retrievable via `GET /points/{id}/relations`.
+#[tokio::test]
+async fn test_relate_points_between_existing_points_succeeds() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({"name": "rel_ok", "dimension": 4, "metric": "cosine"}).to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/rel_ok/points")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({"points": [
+                        {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {}},
+                        {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {}}
+                    ]})
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/rel_ok/relations")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({"source": 1, "target": 2, "rel_type": "KNOWS"}).to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+}

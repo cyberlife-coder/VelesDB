@@ -202,14 +202,20 @@ impl Collection {
     /// [`Self::endpoint_node_type`], this does not require a `_labels`
     /// field — plain (untyped) node payloads are enough.
     ///
+    /// Same check-then-write race as the strict-schema path
+    /// ([`Self::endpoint_node_type`]): the payload-store lock is released
+    /// before the edge is written, so a concurrent `delete()` of an
+    /// endpoint between this check and the write can still land a
+    /// dangling edge. Pre-existing characteristic of this validate-then-
+    /// mutate pattern, not introduced by this check.
+    ///
     /// # Errors
     ///
     /// Returns `Error::NodeNotFound` if `source` or `target` has no stored
     /// payload.
     fn validate_edge_endpoints_exist(&self, edge: &GraphEdge) -> Result<()> {
-        let storage = self.storage.payload_storage.read();
         for node_id in [edge.source(), edge.target()] {
-            if storage.retrieve(node_id)?.is_none() {
+            if self.get_node_payload(node_id)?.is_none() {
                 return Err(Error::NodeNotFound(node_id));
             }
         }

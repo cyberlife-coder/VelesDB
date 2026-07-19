@@ -704,11 +704,21 @@ mod tests {
     /// Builds a dense, highly-connected cyclic graph: every node points to the
     /// next `fanout` nodes (mod `n`), creating many cycles and a large frontier.
     fn build_dense_cyclic_graph(collection: &Collection, n: u64, fanout: u64) {
+        // Bulk-create all n node payloads in one upsert (single fsync)
+        // rather than re-storing each node's payload on every edge that
+        // touches it (up to `fanout` redundant WAL fsyncs per node).
+        let nodes: Vec<crate::point::Point> = (0..n)
+            .map(|id| crate::point::Point::metadata_only(id, serde_json::json!({})))
+            .collect();
+        collection.upsert(nodes).expect("bulk-create nodes");
+
         let mut edge_id = 1u64;
         for src in 0..n {
             for step in 1..=fanout {
                 let dst = (src + step) % n;
-                add_edge_with_nodes(collection, make_edge(edge_id, src, dst, "E")).unwrap();
+                collection
+                    .add_edge(make_edge(edge_id, src, dst, "E"))
+                    .unwrap();
                 edge_id += 1;
             }
         }
@@ -956,6 +966,35 @@ mod tests {
         let err = collection
             .add_edge(make_edge(1, 100, 200, "ANY_REL"))
             .expect_err("schemaless collection must reject edges to non-existent nodes");
+        assert!(matches!(err, crate::error::Error::NodeNotFound(100)));
+        assert_eq!(collection.edge_count(), 0, "no partial write on rejection");
+    }
+
+    #[test]
+    fn test_schemaless_mode_rejects_edge_with_only_source_existing() {
+        // Regression guard (#1442): validate_edge_endpoints_exist checks
+        // BOTH endpoints — a partially-satisfied edge (only source stored)
+        // must still be rejected, naming the missing target.
+        let (collection, _temp) = create_graph_test_collection();
+        collection
+            .store_node_payload(100, &serde_json::json!({}))
+            .expect("store source node");
+        let err = collection
+            .add_edge(make_edge(1, 100, 200, "ANY_REL"))
+            .expect_err("edge with a missing target must be rejected");
+        assert!(matches!(err, crate::error::Error::NodeNotFound(200)));
+        assert_eq!(collection.edge_count(), 0, "no partial write on rejection");
+    }
+
+    #[test]
+    fn test_schemaless_mode_rejects_edge_with_only_target_existing() {
+        let (collection, _temp) = create_graph_test_collection();
+        collection
+            .store_node_payload(200, &serde_json::json!({}))
+            .expect("store target node");
+        let err = collection
+            .add_edge(make_edge(1, 100, 200, "ANY_REL"))
+            .expect_err("edge with a missing source must be rejected");
         assert!(matches!(err, crate::error::Error::NodeNotFound(100)));
         assert_eq!(collection.edge_count(), 0, "no partial write on rejection");
     }

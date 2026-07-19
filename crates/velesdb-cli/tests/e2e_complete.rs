@@ -178,25 +178,29 @@ mod graph_commands {
             .success();
     }
 
+    /// `add-edge` requires both endpoints to have a stored node payload
+    /// (#1442) — call this for each endpoint before creating an edge.
+    fn store_payload(temp: &TempDir, collection: &str, node_id: &str) {
+        cli()
+            .args([
+                "graph",
+                "store-payload",
+                temp.path().to_str().unwrap(),
+                collection,
+                node_id,
+                "{}",
+            ])
+            .assert()
+            .success();
+    }
+
     #[test]
     fn test_graph_traverse_bfs() {
         let temp = temp_db_dir();
         create_graph(&temp, "g");
 
-        // add-edge requires both endpoints to have a stored node payload
-        // (#1442) — store nodes 10 and 20 before creating the edge.
         for node_id in ["10", "20"] {
-            cli()
-                .args([
-                    "graph",
-                    "store-payload",
-                    temp.path().to_str().unwrap(),
-                    "g",
-                    node_id,
-                    "{}",
-                ])
-                .assert()
-                .success();
+            store_payload(&temp, "g", node_id);
         }
 
         // Add an edge so traversal has something to find
@@ -236,20 +240,8 @@ mod graph_commands {
         let temp = temp_db_dir();
         create_graph(&temp, "g");
 
-        // add-edge requires both endpoints to have a stored node payload
-        // (#1442) — store nodes 10 and 20 before creating the edge.
         for node_id in ["10", "20"] {
-            cli()
-                .args([
-                    "graph",
-                    "store-payload",
-                    temp.path().to_str().unwrap(),
-                    "g",
-                    node_id,
-                    "{}",
-                ])
-                .assert()
-                .success();
+            store_payload(&temp, "g", node_id);
         }
 
         cli()
@@ -301,20 +293,8 @@ mod graph_commands {
         let temp = temp_db_dir();
         create_graph(&temp, "g");
 
-        // add-edge requires both endpoints to have a stored node payload
-        // (#1442) — store nodes 100 and 200 before creating the edge.
         for node_id in ["100", "200"] {
-            cli()
-                .args([
-                    "graph",
-                    "store-payload",
-                    temp.path().to_str().unwrap(),
-                    "g",
-                    node_id,
-                    "{}",
-                ])
-                .assert()
-                .success();
+            store_payload(&temp, "g", node_id);
         }
 
         cli()
