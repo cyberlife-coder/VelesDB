@@ -86,6 +86,13 @@ const FIX_GREEN = [0x16, 0xa3, 0x4a]
 // so their pixel cost (ceil(880*540/750) = 634 tokens) differs from the
 // checkout-page series' 768, exercising the estimator on a second geometry.
 const GC_BANNER = 0x312e81
+// Vibe-coding scenario (corpus/session-vibe.mjs) shots use their own banner
+// shades and a THIRD/FOURTH geometry — a navbar close-up (640x360, pixel
+// cost ceil(640*360/750) = 308 tokens) and a dropdown-panel capture
+// (700x420, ceil(700*420/750) = 392 tokens) — so all three scenarios exercise
+// distinct image geometries, never reusing bytes across stories.
+const BELL_BANNER = 0x1e3a5f
+const PANEL_BANNER = 0x713f12
 
 export function generateCorpusImages() {
   return {
@@ -95,6 +102,14 @@ export function generateCorpusImages() {
     // Long-session variant additions (corpus/session-long.mjs).
     IMG_GC_BUG: makeScreenshotPng(880, 540, BUG_RED, { bannerShade: GC_BANNER, badgeX0Frac: 0.58, badgeX1Frac: 0.86 }),
     IMG_GC_FIXED: makeScreenshotPng(880, 540, FIX_GREEN, { bannerShade: GC_BANNER, badgeX0Frac: 0.6, badgeX1Frac: 0.88 }),
+    // Vibe-coding scenario additions (corpus/session-vibe.mjs) — two
+    // independent supersession series: the navbar bell badge (3 captures)
+    // and the notification dropdown panel (2 captures).
+    IMG_BELL_BUG: makeScreenshotPng(640, 360, BUG_RED, { bannerShade: BELL_BANNER, badgeX0Frac: 0.86, badgeX1Frac: 0.99 }),
+    IMG_BELL_ATTEMPT: makeScreenshotPng(640, 360, BUG_RED, { bannerShade: BELL_BANNER, badgeX0Frac: 0.8, badgeX1Frac: 0.9 }),
+    IMG_BELL_FIXED: makeScreenshotPng(640, 360, FIX_GREEN, { bannerShade: BELL_BANNER, badgeX0Frac: 0.88, badgeX1Frac: 0.96 }),
+    IMG_PANEL_BUG: makeScreenshotPng(700, 420, BUG_RED, { bannerShade: PANEL_BANNER, badgeX0Frac: 0.5, badgeX1Frac: 0.72 }),
+    IMG_PANEL_FIXED: makeScreenshotPng(700, 420, FIX_GREEN, { bannerShade: PANEL_BANNER, badgeX0Frac: 0.55, badgeX1Frac: 0.68 }),
   }
 }
 

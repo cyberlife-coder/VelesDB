@@ -15,7 +15,7 @@ A/B benchmark for the deterministic context compiler (`compileContext`): a
   arm is billed for the `ctx://source/` handle strings it sends** (they are
   part of its real payload).
 
-Four scenarios, all offline-measurable (no network, no key), each
+Five scenarios, all offline-measurable (no network, no key), each
 deterministic (two consecutive runs byte-identical, and every turn is
 compiled twice with a byte-compare assert inside the run):
 
@@ -25,10 +25,13 @@ compiled twice with a byte-compare assert inside the run):
 | Base, window-enforcement | `node offline.mjs` (mode 2) | What does an 8000-token window add — and how much of it is truncation of unique content, honestly attributed? |
 | Long session (36 turns) | `node long-session.mjs` | How fast does each arm consume the context window; how many more turns of iteration fit before a compaction threshold? |
 | Memory-enabled | `node memory-enabled.mjs` | What does the product's intended remember/relate + `memory_scope` usage pattern save? |
+| Vibe-coding (19 turns, media on/off) | `node offline-vibe.mjs` / `BENCH_MEDIA=0 node offline-vibe.mjs` | Same question on an ITERATIVE FEATURE IMPLEMENTATION session (not a bug-fix arc), with vs. without screenshots — see "Vibe-coding scenario" below. |
 
-Plus an **ONLINE mode** (opt-in, real billed calls) measuring both **billed
-tokens** (`usage.input_tokens`) and **answer quality** (deterministic
-fact-checklist grading) on `claude-sonnet-5`.
+Plus an **ONLINE mode** (opt-in, real billed calls) measuring **billed cost
+and volume per arm** (cumulative `total_cost_usd` + the labeled all-fields
+billed-token sum on the cli runner, `usage.input_tokens` on the api runner —
+see "CLI runner — verified wire shapes") and **answer quality**
+(deterministic fact-checklist grading) on `claude-sonnet-5`.
 
 ## Quality rules this benchmark follows (and how)
 
@@ -161,11 +164,182 @@ local store operation (no model ever sees the full docs in arm B); whether
 the right sections come back is exactly what the number reflects, since the
 pulled content is counted in arm B's tokens.
 
+### Vibe-coding scenario (2026-07)
+
+A second, independent scenario alongside the base bug-fix arc — required by
+three product asks from Julien's review of the billed campaign (EPIC-P-071
+follow-up): (1) a realistic multi-turn "vibe coding" session (iterative
+FEATURE IMPLEMENTATION, not another bug investigation), (2) a WITH- and
+WITHOUT-screenshots variant of the same session, including successive
+re-captures of the same UI target (supersession, not just dedup), and (3) an
+empirical check of the 64 KiB metadata cap (`crate::limits::MAX_METADATA_BYTES`,
+PR #1458) against realistic fragment metadata.
+
+**Corpus** (`corpus/session-vibe.mjs` + siblings `code-vibe.mjs`,
+`docs-vibe.mjs`, `logs-vibe.mjs`, `images-vibe.mjs`, `questions-vibe.mjs` — a
+separate file per artifact type, same layout as the base scenario, chosen
+over extending `session.mjs` in place so the already-documented base numbers
+above can never regress from an unrelated change): 19 turns — a notification
+bell + unread badge is implemented, hits a REAL runtime error (a genuine
+`TypeError` stack trace, not a contrived one), gets fixed, is screenshotted,
+receives CSS feedback, is RE-screenshotted at the same `metadata.target:
+'navbar-bell'` (three captures total — bug, still-off attempt, fixed — two
+`retrieve.screenshot_superseded` decisions), then extends into a second
+component (a notification dropdown panel, its own independent
+`metadata.target: 'notification-panel'` chain, two captures), a full green
+CI run (a second, independently-sized big log), a wrap-up with a
+byte-identical screenshot resend for the PR description (`drop.duplicate`,
+the separate dedup mechanism) and a metadata-heavy pre-commit-hook fragment
+(the 64 KiB exercise, below), and a continuation prompt for the next
+feature. Every fragment's metadata carries `role`, `turn`, `tool_name`,
+`file_path` (when applicable), `ts` (ISO 8601, a fixed deterministic clock),
+and `target` for screenshots — the shape a real Claude-Code-style agent hook
+actually attaches, not a minimal placeholder.
+
+**Media variant**: `BENCH_MEDIA=0` (default `1`, read by
+`lib/ab-session.mjs`'s `applyBenchMediaFilter`) strips every fragment
+carrying a `media` payload from the corpus BEFORE either arm sees it — the
+surrounding text-only turns are byte-identical between variants; only the
+screenshots differ. Both variants run through the same LOSSLESS-mode
+measurement as `offline.mjs` (non-constraining budget, so every saving
+reported is pure redundancy/staleness elimination, not window truncation).
+
+```
+$ node offline-vibe.mjs
+session totals [vibe-coding with-screenshots]: raw 67597 (text 52505 + image 15092) -> compiled 55266 (text 47945 + handles 265 + image 7056) = 18.2% saved
+attribution: redundancy elimination 4286 tokens/14 decisions | supersession 7834 tokens/23 decisions | externalized 0/0 | log collapse 19703 tokens/17 decisions
+
+$ BENCH_MEDIA=0 node offline-vibe.mjs
+session totals [vibe-coding no-screenshots (BENCH_MEDIA=0)]: raw 51589 (text 51589 + image 0) -> compiled 47477 (text 47477 + handles 0 + image 0) = 8.0% saved
+```
+
+**Reading it**: with screenshots, savings come from three mechanisms at
+once — plain redundancy (the design-tokens doc re-read twice, the
+byte-identical PR-attachment resend), screenshot supersession (2 of 3
+navbar-bell captures + 1 of 2 notification-panel captures superseded), and
+log collapse (both CI logs' repeated per-file lines, ~19.7k raw tokens
+collapsed with counts). Without screenshots (`BENCH_MEDIA=0`), the
+supersession mechanism has nothing left to do (no images at all), so the
+saving drops to 8.0% — purely the doc/log mechanisms — which is the honest,
+expected difference: screenshots are not incidental padding in this corpus,
+they are what a large share of the saving depends on.
+
+**Metadata cap (64 KiB) — empirical finding**: every fragment's
+`Buffer.byteLength(JSON.stringify(fragment.metadata))` is measured and
+reported (max/p95/total vs. `MAX_METADATA_BYTES = 65536`, the SAME
+measurement `crate::limits::metadata_bytes` makes on the Rust side):
+
+```
+metadata size report [vibe-coding with-screenshots] (bytes, vs MAX_METADATA_BYTES=65536):
+  fragments-with-metadata: 41 | max: 4688 (7.15% of cap) | p95: 129 (0.20% of cap) | total: 8503 (12.97% of cap summed)
+  verdict: the largest realistic fragment here uses 7.15% of the cap — comfortable headroom.
+```
+
+The turn-18 "loaded" fragment (a pre-commit hook's diff manifest: 50 touched
+files, each with a path/status/additions/deletions, plus the active
+lint/format/test/CI tool configuration — as heavy as a real hook payload for
+a finished feature branch gets, not padded to force a result either way)
+measures 4688 bytes — **7.15% of the 64 KiB cap**. Every other fragment's
+metadata (role/turn/tool/file/timestamp/target) is under 130 bytes. **Verdict:
+for this realistic agent-hook workload, the 64 KiB cap is comfortably
+sufficient — roughly 14x headroom over the heaviest fragment measured.** No
+fragment in this corpus needed to be shrunk to fit; the number above is
+exactly what the corpus produces.
+
+**ONLINE readiness (not executed — see "Run — ONLINE" below)**:
+`online-vibe.mjs` mirrors `online.mjs` against this corpus and the
+`BENCH_MEDIA` variant. The `cli` runner's media transport is **CONFIRMED by
+a real image-bearing calibration call** (2026-07-19, CLI 2.1.201,
+maintainer's account — details in `lib/claude-cli.mjs`'s VERIFICATION
+STATUS header): two base64 images sent as `{type: "image", source: {type:
+"base64", media_type, data}}` blocks through the stdin envelope, and the
+model answered "2" to "How many images are attached?". The with-screenshots
+billed arm runs on the cli runner; `BENCH_RUNNER=api` is not required for
+media. The same calibration established the CLI 2.1.201 cache routing (user
+content lands in `cache_creation_input_tokens`, not `input_tokens`), which
+is why both online scripts report cumulative `total_cost_usd` per arm as the
+cli-runner cost headline plus the labeled all-fields billed-token volume —
+see "CLI runner — verified wire shapes" below.
+
+Dry cost estimate (the same chars/4 + pixel-cost formula `online-vibe.mjs`
+prints before its `RUN_BILLED_MEASURE` gate, computed standalone here so
+`RUN_BILLED_MEASURE` was never set — no spend gate touched by this task), 5
+runs/turn/arm, `claude-sonnet-5` intro pricing:
+
+```
+variant=with-screenshots  requests=190  estTokensPerRunSet=105261  estCost=$2.9982
+variant=no-screenshots    requests=190  estTokensPerRunSet=80922   estCost=$2.7548
+```
+
+### Billed campaign results (2026-07-19, cli runner, claude-sonnet-5)
+
+Both variants of the vibe-coding scenario were actually billed and measured
+(raw logs committed verbatim under
+[`results/2026-07-19-vibe-cli/`](results/2026-07-19-vibe-cli/); every number
+below is pasted from them). Protocol: `RUN_BILLED_MEASURE=1 CONFIRM_SPEND=1
+node online-vibe.mjs`, 5 runs/turn/arm, 190 requests per variant (19 turns x
+2 arms x 5), cli runner on CLI 2.1.201 (maintainer's authenticated
+account), lossless compiled-arm budget. Per the CLI 2.1.201 cache routing
+(see "CLI runner — verified wire shapes"), the payload lands in
+`cache_creation_input_tokens` — `usage.input_tokens` read 38 -> 38 (0.0%)
+in both variants, which is exactly why the headline metrics are billed
+dollars and the all-fields token volume.
+
+**With screenshots** (`results/2026-07-19-vibe-cli/billed-with-screenshots.log`):
+
+```
+raw     : total_cost_usd=$0.4442/session ($2.2212 campaign) | billed tokens (all usage fields summed)=245664/session
+          breakdown: input=38 output=1292 cache_creation=48867 cache_read=195467 tokens/session
+compiled: total_cost_usd=$0.3960/session ($1.9801 campaign) | billed tokens (all usage fields summed)=231377/session
+          breakdown: input=38 output=1174 cache_creation=42671 cache_read=187494 tokens/session
+HEADLINE: 10.9% billed dollars saved | 5.8% volume saved
+```
+
+Adequacy totals (summed from the per-turn `adequacy mean=` lines of that
+log): **raw 22.8/23 vs compiled 23.0/23 facts** — the compiled arm lost
+nothing (the 0.2 gap is the raw arm missing one fact in one of five runs at
+turn 18).
+
+**Without screenshots** (`BENCH_MEDIA=0`,
+`results/2026-07-19-vibe-cli/billed-no-screenshots.log`):
+
+```
+raw     : total_cost_usd=$0.3747/session ($1.8733 campaign) | billed tokens (all usage fields summed)=229772/session
+          breakdown: input=38 output=2032 cache_creation=35894 cache_read=191808 tokens/session
+compiled: total_cost_usd=$0.3652/session ($1.8258 campaign) | billed tokens (all usage fields summed)=224326/session
+          breakdown: input=38 output=2350 cache_creation=34761 cache_read=187177 tokens/session
+HEADLINE: 2.5% billed dollars saved | 2.4% volume saved
+```
+
+Adequacy totals: **raw 18.0/23 vs compiled 18.0/23 facts** — identical in
+both arms: the five missing facts are the screenshot-caption facts (turns
+6, 9, 12, 13, 16), which exist in NEITHER arm's context once
+`BENCH_MEDIA=0` strips the media fragments. Expected and honest — there the
+grader measures the corpus, not the compiler.
+
+**Honest reading of the 2.5%**: without screenshots this scenario offers
+little compressible redundancy — the strong mechanisms in this corpus are
+screenshot supersession and log collapse, and stripping the media removes
+the former entirely (the offline numbers said the same: 18.2% vs 8.0%
+lossless). The 2.5% is reported as prominently as the 10.9% precisely
+because hiding it would make the with-screenshots figure unbelievable: the
+delta between the two variants IS the measured value of the media
+mechanisms.
+
+**Total real campaign cost**: $2.2212 + $1.9801 + $1.8733 + $1.8258 =
+**$7.90** across the four arms (380 billed requests plus 2 calibration
+calls).
+
+Note on the committed logs: they predate the per-arm adequacy-totals line
+added to the reporting right after this campaign (the totals above are
+summed from their per-turn `adequacy mean=` lines); the next campaign's
+logs will carry the totals directly in the per-arm block.
+
 ### Determinism proof (applies to every offline variant)
 
 ```
 $ node offline.mjs > r1.txt && node offline.mjs > r2.txt && diff r1.txt r2.txt && echo IDENTICAL
-IDENTICAL     # same procedure verified for long-session.mjs and memory-enabled.mjs
+IDENTICAL     # same procedure verified for long-session.mjs, memory-enabled.mjs, and offline-vibe.mjs (both BENCH_MEDIA values)
 ```
 
 ### Regenerating the crate-README charts
@@ -211,8 +385,10 @@ of the extra token savings).
 ### CLI runner — verified wire shapes
 
 The `claude -p` flags and JSON shapes this runner depends on were **verified
-against a real calibration call at review time** (single source of truth for
-the verification status: the header of `lib/claude-cli.mjs`):
+against real calibration calls** — a text-only call at review time, plus an
+**image-bearing calibration call on 2026-07-19 (CLI 2.1.201)** (single
+source of truth for the verification status: the header of
+`lib/claude-cli.mjs`):
 
 - Flags (from `claude -p --help`, verbatim): `--model`, `--output-format
   json`, `--input-format stream-json`, `--system-prompt` (replaces the
@@ -222,19 +398,34 @@ the verification status: the header of `lib/claude-cli.mjs`):
   `cache_creation_input_tokens` / `cache_read_input_tokens`.
 - stdin NDJSON envelope: `{"type":"user","message":{"role":"user","content":[...]}}`
   with Messages-API-shaped content blocks.
-- **Calibration finding**: the CLI harness's own overhead (its system
-  prompt/tooling preamble) lands in the **cache fields**
-  (~18.3k cache-creation + ~24.6k cache-read tokens observed) while
-  `usage.input_tokens` for a near-empty prompt is ≈ 2. So arm-vs-arm
-  `input_tokens` comparisons are **not** inflated by harness overhead and
-  nothing is subtracted from them; the calibration turn `online.mjs` runs on
-  the cli runner reports the cache-field overhead separately (it is billed,
-  at cache rates, identically on both arms — it shifts absolute $ cost, not
-  the A/B delta).
+- **Image transport: CONFIRMED** (2026-07-19, CLI 2.1.201). Two base64
+  images sent as `{type:"image",source:{type:"base64",...}}` blocks through
+  the stdin envelope; asked "How many images are attached?", the model
+  answered "2". The with-screenshots billed arm works on the cli runner —
+  `BENCH_RUNNER=api` is **not** required for media.
+- **Cache-routing behavior change (2026-07-19, CLI 2.1.201 — supersedes the
+  review-time finding)**: user content (text AND images) now lands in
+  `cache_creation_input_tokens`, **not** `input_tokens`. Measured on the
+  image calibration call: `{"input":2,"out":3,"cache_create":7235,
+  "cache_read":0,"cost":0.044}` for 2 images + a question — `input_tokens`
+  stays ≈ 2 regardless of payload size. Consequence: an A/B comparison on
+  `usage.input_tokens` alone reads ~0% on the cli runner. The **headline
+  per-arm metrics on the cli runner are therefore cumulative
+  `total_cost_usd` (the cost-reference metric — cache fields do not bill at
+  the direct-input rate) and the summed billed-token volume (all four usage
+  fields, explicitly labeled, with the per-field breakdown printed right
+  next to it — never a silent sum)**; `online.mjs` and `online-vibe.mjs`
+  print both, per turn and in the final summary, via the shared
+  `lib/runner.mjs` reporting. The api runner keeps `usage.input_tokens` as
+  its headline (fields are direct on the Messages API) alongside the same
+  volume figure.
 
 The parser stays defensive (missing keys default to 0/null with a one-time
 warning) so a future CLI release changing the shape degrades loudly instead
-of crashing mid-campaign. There is no max-output-tokens flag for `-p`
+of crashing mid-campaign — and on a non-zero exit the error now includes
+the **stdout tail** (the CLI emits its real error, e.g. "Not logged in", as
+an NDJSON event on stdout with an empty stderr — observed in real use,
+2026-07-19). There is no max-output-tokens flag for `-p`
 (`--max-budget-usd` is a dollar cap), so the printed cost estimate is a
 lower bound on the cli runner.
 
@@ -258,7 +449,11 @@ supersession, identical bytes for dedup, per series).
 (lossless and window-8000), that every ground-truth fact from
 `corpus/questions.mjs` survives compilation — inline or via a handle that
 `retrieveContextSource` actually resolves — **this promise is CI-enforced**
-(runs offline, no network, in the `Node Binding Tests` CI job).
+(runs offline, no network, in the `Node Binding Tests` CI job) — and, since
+this extension, the SAME promise for the vibe-coding scenario's 19 turns
+against `corpus/questions-vibe.mjs` (two more `test()` cases in the same
+file, same checker, WITH-media corpus only — see the "Vibe-coding scenario"
+section above for why BENCH_MEDIA=0 is not gated the same way).
 
 ## Corpus (`corpus/*.mjs`)
 
@@ -279,6 +474,26 @@ breakdown in `corpus/session.mjs`; long-session continuation in
   re-read after its edits (band-aid then real fix; footgun then fix).
 - `corpus/questions.mjs` — the ONLINE quality checklists (facts are exact
   strings from these artifacts).
+
+Vibe-coding scenario: **"implémenter une feature de façon itérative"** — full
+per-turn breakdown in `corpus/session-vibe.mjs`; per-artifact provenance in
+each sibling file:
+
+- `corpus/images-vibe.mjs` (generated by the SAME `corpus/make_png.mjs`,
+  extended with two new geometries) — 5 synthetic PNGs, ~1.3-1.8 KB each;
+  two independent supersession series (`navbar-bell` 640×360, three
+  captures; `notification-panel` 700×420, two captures) and one
+  byte-identical resend for dedup.
+- `corpus/docs-vibe.mjs` — a design-tokens excerpt (spacing scale, badge and
+  row guidelines), re-injected once as an agent re-read.
+- `corpus/logs-vibe.mjs` — a failing local test run (a real `TypeError`
+  stack trace, ~45 lines) and a full green CI gate run (~130 lines,
+  repeated per-file lines with varying timestamps).
+- `corpus/code-vibe.mjs` — six TypeScript versions across two components
+  (NotificationBell: buggy → property-access fix → CSS attempt → responsive
+  fix; NotificationPanel: initial → spacing fix).
+- `corpus/questions-vibe.mjs` — the same fixture-independence rule as
+  `corpus/questions.mjs`, facts drawn from this corpus.
 
 ## Honest limitations
 
