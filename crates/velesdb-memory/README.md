@@ -17,15 +17,17 @@ traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation
 meet** those data-residency and explainability expectations rather than claiming
 certified compliance.
 
-> **Release 0.9.0** — deterministic context compiler (`compile_context`,
-> `context_savings`, `explain_compilation`, `retrieve_context_source`);
-> published to the registries by the `velesdb-memory-v0.9.0` tag, so the
-> links below may briefly lag right after merge. `velesdb-memory` ships on
-> [crates.io](https://crates.io/crates/velesdb-memory) and on the
+> **Release 0.9.1** — hotfix cycle over the 0.9.0 context compiler: a
+> permanent `ctx://source/` handle no longer expires silently, byte-identical
+> screenshot duplicates no longer both drop from compiled context, metadata
+> is now size-capped (64 KiB) and the working context load path verifies its
+> system marker; published to the registries by the `velesdb-memory-v0.9.1`
+> tag, so the links below may briefly lag right after merge. `velesdb-memory`
+> ships on [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
-> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.9.0**
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.9.1**
 > and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**
 > (memory API only — the context compiler is merged on `develop` but **the
 > published 3.12.0 wheel predates it**; it ships with the next PyPI release,
