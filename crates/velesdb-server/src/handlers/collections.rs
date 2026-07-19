@@ -200,7 +200,6 @@ fn apply_advanced_with_rollback(
     };
     if let Err(phase_two_err) = coll.apply_advanced_config(
         advanced.pq_rescore_oversampling,
-        #[cfg(feature = "persistence")]
         advanced.deferred_indexing,
         advanced.async_index_builder,
     ) {
@@ -251,23 +250,16 @@ fn log_rollback_invariant(
 #[derive(Default)]
 struct AdvancedCreateOverrides {
     pq_rescore_oversampling: Option<Option<u32>>,
-    #[cfg(feature = "persistence")]
     deferred_indexing: Option<Option<velesdb_core::collection::streaming::DeferredIndexerConfig>>,
     async_index_builder:
         Option<Option<velesdb_core::collection::streaming::AsyncIndexBuilderConfig>>,
 }
 
 impl AdvancedCreateOverrides {
-    #[cfg(feature = "persistence")]
     fn has_any(&self) -> bool {
         self.pq_rescore_oversampling.is_some()
             || self.deferred_indexing.is_some()
             || self.async_index_builder.is_some()
-    }
-
-    #[cfg(not(feature = "persistence"))]
-    fn has_any(&self) -> bool {
-        self.pq_rescore_oversampling.is_some() || self.async_index_builder.is_some()
     }
 }
 
@@ -283,7 +275,6 @@ fn parse_advanced_config(
         ..Default::default()
     };
 
-    #[cfg(feature = "persistence")]
     if let Some(ref value) = req.deferred_indexing {
         let parsed: velesdb_core::collection::streaming::DeferredIndexerConfig =
             serde_json::from_value(value.clone()).map_err(|e| {
