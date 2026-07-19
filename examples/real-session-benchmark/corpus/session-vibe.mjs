@@ -26,14 +26,25 @@
 import { DESIGN_TOKENS } from './docs-vibe.mjs'
 import { LOG_TEST_FAIL, LOG_CI_GREEN } from './logs-vibe.mjs'
 import { CODE_BELL_V1, CODE_BELL_V2, CODE_BELL_V3, CODE_BELL_V4, CODE_PANEL_V1, CODE_PANEL_V2 } from './code-vibe.mjs'
-import {
-  IMG_BELL_BUG,
-  IMG_BELL_ATTEMPT,
-  IMG_BELL_FIXED,
-  IMG_BELL_PR_ATTACHMENT,
-  IMG_PANEL_BUG,
-  IMG_PANEL_FIXED,
-} from './images-vibe.mjs'
+import * as baselineImages from './images-vibe.mjs'
+import * as retinaImages from './images-vibe-retina.mjs'
+
+// BENCH_RETINA=1 swaps the cropped baseline captures (640x360 / 700x420)
+// for the 1512x982 Retina-size set (corpus/images-vibe-retina.mjs) — same
+// captions, same targets, same byte relationships, ~6.4x the pixel cost.
+// Resolved once at module load (both offline-vibe.mjs and online-vibe.mjs
+// import this module fresh per process, so the flag is stable for a run);
+// with the flag off, the exact same baseline objects as before are used —
+// the committed baseline numbers cannot move.
+const RETINA = process.env.BENCH_RETINA === '1'
+const IMG_BELL_BUG = RETINA ? retinaImages.IMG_BELL_BUG_RETINA : baselineImages.IMG_BELL_BUG
+const IMG_BELL_ATTEMPT = RETINA ? retinaImages.IMG_BELL_ATTEMPT_RETINA : baselineImages.IMG_BELL_ATTEMPT
+const IMG_BELL_FIXED = RETINA ? retinaImages.IMG_BELL_FIXED_RETINA : baselineImages.IMG_BELL_FIXED
+const IMG_BELL_PR_ATTACHMENT = RETINA ? retinaImages.IMG_BELL_PR_ATTACHMENT_RETINA : baselineImages.IMG_BELL_PR_ATTACHMENT
+const IMG_PANEL_BUG = RETINA ? retinaImages.IMG_PANEL_BUG_RETINA : baselineImages.IMG_PANEL_BUG
+const IMG_PANEL_FIXED = RETINA ? retinaImages.IMG_PANEL_FIXED_RETINA : baselineImages.IMG_PANEL_FIXED
+
+export const VIBE_RETINA = RETINA
 
 // Fixed, deterministic ISO-8601 clock — a ~90-minute vibe-coding session,
 // turn timestamps spaced the way a real iterate-run-screenshot loop is

@@ -1,29 +1,28 @@
-// ONLINE mode for the VIBE-CODING scenario — sibling to online.mjs, same
-// structure and the same double gate (RUN_BILLED_MEASURE=1 then
-// CONFIRM_SPEND=1), applied to corpus/session-vibe.mjs +
-// corpus/questions-vibe.mjs instead of the base bug-fix scenario, and aware
-// of the BENCH_MEDIA=0 variant (see lib/ab-session.mjs's
-// applyBenchMediaFilter). NEVER executed by CI or by this task — see
-// README.md's "Vibe-coding scenario" section for why (spend gate, separate
-// from the code change).
+// ONLINE mode for the LONG-SESSION (36-turn) scenario — the billable
+// counterpart of long-session.mjs, built on the same pattern as
+// online-vibe.mjs (same runner/grade/armSessionStats libs, same double gate
+// RUN_BILLED_MEASURE=1 then CONFIRM_SPEND=1, same runner-aware headline: $
+// per arm + all-fields billed-token volume on the cli runner, direct
+// usage.input_tokens on the api runner). NEVER executed by CI.
 //
-// media transport: CONFIRMED by a real image-bearing calibration call
-// (2026-07-19, CLI 2.1.201, maintainer's account — see
-// lib/claude-cli.mjs's VERIFICATION STATUS header): two base64 images sent
-// as `{type: "image", source: {type: "base64", media_type, data}}` blocks
-// through the stdin envelope; the model answered "2" to "How many images
-// are attached?". The with-screenshots billed arm works on the cli runner —
-// BENCH_RUNNER=api is NOT required for media. The same calibration also
-// established the CLI 2.1.201 cache-routing behavior (user content lands in
-// cache_creation_input_tokens, not input_tokens), which is why the cli
-// runner's headline metric below is total_cost_usd per arm — see
-// lib/runner.mjs's printArmComparison.
-import { TURN_EVENTS_VIBE, SYSTEM_VIBE, VIBE_RETINA } from './corpus/session-vibe.mjs'
-import { TURN_QUESTIONS_VIBE } from './corpus/questions-vibe.mjs'
+// Why this scenario is the day-scale one: the 2026-07-19 vibe campaign
+// showed a real content delta (14287 tokens/session) diluted by the CLI
+// harness's constant per-request overhead (~10k cache_read of system
+// prompt per turn) down to 10.9% $ saved. A 36-turn session doubles the
+// content-side accumulation while the per-request overhead stays constant,
+// so the measured $ delta approaches the offline content numbers
+// (30.9-55.1% measured offline by long-session.mjs) instead of being
+// dominated by fixed costs.
+//
+// Ground truth: corpus/questions-long.mjs — turns 1-14 are
+// corpus/questions.mjs verbatim, turns 15-36 written from the committed
+// continuation corpus under the same fixture-independence rule.
+import { LONG_TURN_EVENTS, SYSTEM } from './corpus/session-long.mjs'
+import { TURN_QUESTIONS_LONG } from './corpus/questions-long.mjs'
 import { resolveRunnerKind, runTurn, mean, stddev, printArmComparison, turnBilledLine } from './lib/runner.mjs'
 import { runCliTurn } from './lib/claude-cli.mjs'
 import { gradeResponse } from './lib/grade.mjs'
-import { measureSession, LOSSLESS_BUDGET, applyBenchMediaFilter, benchMediaEnabled } from './lib/ab-session.mjs'
+import { measureSession, LOSSLESS_BUDGET } from './lib/ab-session.mjs'
 import { pixelCostTokens } from './lib/pixel-cost.mjs'
 
 const N_RUNS = Number(process.argv[2] ?? process.env.BENCH_N_RUNS ?? 5)
@@ -37,27 +36,25 @@ const QUESTION_PREAMBLE =
   '\n\n[Benchmark question — answer using ONLY the context above; quote exact values verbatim]\n'
 
 function withQuestion(payloadText, turnIdx) {
-  return payloadText + QUESTION_PREAMBLE + TURN_QUESTIONS_VIBE[turnIdx].question
+  return payloadText + QUESTION_PREAMBLE + TURN_QUESTIONS_LONG[turnIdx].question
 }
 
 async function main() {
   if (process.env.RUN_BILLED_MEASURE !== '1') {
-    console.log('ONLINE mode (vibe-coding scenario) skipped (default): set RUN_BILLED_MEASURE=1 to run it.')
+    console.log('ONLINE mode (long-session scenario, 36 turns) skipped (default): set RUN_BILLED_MEASURE=1 to run it.')
     console.log('Also requires CONFIRM_SPEND=1 after reviewing the printed cost estimate.')
     console.log("Never runs automatically — not part of this repo's CI or review.")
     process.exit(0)
   }
 
   const kind = await resolveRunnerKind()
-  const mediaOn = benchMediaEnabled()
   console.log(
-    `ONLINE mode (vibe-coding scenario) — runner: ${kind} | variant: ${mediaOn ? 'with-screenshots' : 'no-screenshots (BENCH_MEDIA=0)'}${VIBE_RETINA ? ' retina-1512x982 (BENCH_RETINA=1)' : ''} | compiled-arm budget: ${BUDGET === LOSSLESS_BUDGET ? 'lossless (non-constraining)' : BUDGET}`,
+    `ONLINE mode (long-session scenario, ${LONG_TURN_EVENTS.length} turns) — runner: ${kind} | compiled-arm budget: ${BUDGET === LOSSLESS_BUDGET ? 'lossless (non-constraining)' : BUDGET}`,
   )
 
-  const turnEvents = applyBenchMediaFilter(TURN_EVENTS_VIBE)
   const measured = await measureSession({
-    turnEvents,
-    system: SYSTEM_VIBE,
+    turnEvents: LONG_TURN_EVENTS,
+    system: SYSTEM,
     budget: BUDGET,
     collectPayloads: true,
   })
@@ -96,7 +93,7 @@ async function main() {
     `estimated cost: ~$${(estInputCost + estOutputCost).toFixed(4)} (claude-sonnet-5 intro pricing; output estimated at up to ${EST_MAX_OUTPUT_TOKENS} tokens/call on the api runner)`,
   )
   if (kind === 'cli') {
-    console.log("NOTE: the CLI runner has no max-output-tokens flag — treat this estimate as a LOWER BOUND on the cli runner.")
+    console.log('NOTE: the CLI runner has no max-output-tokens flag — treat this estimate as a LOWER BOUND on the cli runner.')
   }
   console.log('')
 
@@ -124,9 +121,9 @@ async function main() {
       }
       perTurnRuns.push(samples)
       const inputs = samples.map((s) => s.input_tokens)
-      const grades = samples.map((s) => gradeResponse(s.responseText, TURN_QUESTIONS_VIBE[t].facts))
+      const grades = samples.map((s) => gradeResponse(s.responseText, TURN_QUESTIONS_LONG[t].facts))
       const meanFound = mean(grades.map((g) => g.found))
-      const total = TURN_QUESTIONS_VIBE[t].facts.length
+      const total = TURN_QUESTIONS_LONG[t].facts.length
       console.log(
         `  turn ${String(t + 1).padStart(2)}: input_tokens mean=${mean(inputs).toFixed(1)} min=${Math.min(...inputs)} max=${Math.max(...inputs)} stddev=${stddev(inputs).toFixed(2)}` +
           turnBilledLine(samples) +
@@ -139,15 +136,8 @@ async function main() {
   const rawRuns = await runArm(rawTurns, 'RAW (bras A)')
   const compiledRuns = await runArm(compiledTurns, 'COMPILED (bras B)')
 
-  // Runner-aware A/B summary (shared with online.mjs — lib/runner.mjs):
-  // cli headline = total_cost_usd per arm + summed billed-token volume
-  // (CLI 2.1.201 cache routing makes input_tokens alone read ~0%); api
-  // headline = input_tokens (direct fields) + the same volume figure.
-  // Session-total aggregation (tokens + graded adequacy per arm) — computed
-  // BEFORE the per-arm totals block so the adequacy totals print inside it
-  // (2026-07-19 campaign review fix: the first billed campaign's logs had
-  // per-turn adequacy only, forcing manual re-derivation of the per-arm
-  // totals).
+  // Session-total aggregation (tokens + graded adequacy per arm), computed
+  // before the per-arm totals block so adequacy totals print inside it.
   let totalRawMean = 0
   let totalCompiledMean = 0
   let rawFacts = 0
@@ -156,10 +146,10 @@ async function main() {
   for (let t = 0; t < rawRuns.length; t++) {
     totalRawMean += mean(rawRuns[t].map((s) => s.input_tokens))
     totalCompiledMean += mean(compiledRuns[t].map((s) => s.input_tokens))
-    const factsThisTurn = TURN_QUESTIONS_VIBE[t].facts.length
+    const factsThisTurn = TURN_QUESTIONS_LONG[t].facts.length
     totalFacts += factsThisTurn
-    rawFacts += mean(rawRuns[t].map((s) => gradeResponse(s.responseText, TURN_QUESTIONS_VIBE[t].facts).found))
-    compiledFacts += mean(compiledRuns[t].map((s) => gradeResponse(s.responseText, TURN_QUESTIONS_VIBE[t].facts).found))
+    rawFacts += mean(rawRuns[t].map((s) => gradeResponse(s.responseText, TURN_QUESTIONS_LONG[t].facts).found))
+    compiledFacts += mean(compiledRuns[t].map((s) => gradeResponse(s.responseText, TURN_QUESTIONS_LONG[t].facts).found))
   }
   const savedPct = ((1 - totalCompiledMean / totalRawMean) * 100).toFixed(1)
 
@@ -179,13 +169,13 @@ async function main() {
       ? ((1 - compiledMoney.billedTokensPerSession / rawMoney.billedTokensPerSession) * 100).toFixed(1)
       : '0.0'
   console.log('')
-  console.log('--- marketing summary (ONLINE, vibe-coding scenario, real billed usage + graded answers) ---')
+  console.log('--- marketing summary (ONLINE, long-session scenario, real billed usage + graded answers) ---')
   const dollarClause =
     rawMoney.meanCostPerSession !== null && compiledMoney.meanCostPerSession !== null && rawMoney.meanCostPerSession > 0
       ? `cut REAL BILLED dollars from $${rawMoney.meanCostPerSession.toFixed(4)} to $${compiledMoney.meanCostPerSession.toFixed(4)}/session (${((1 - compiledMoney.meanCostPerSession / rawMoney.meanCostPerSession) * 100).toFixed(1)}% saved — the cost-reference metric) and `
       : ''
   console.log(
-    `Across the ${rawRuns.length}-turn vibe-coding session (${mediaOn ? 'with-screenshots' : 'no-screenshots'}${VIBE_RETINA ? ', retina-1512x982' : ''}), compiling context ${dollarClause}cut billed token volume (all usage fields summed; per-field breakdown above — cache fields bill below the direct-input rate) from ${rawMoney.billedTokensPerSession.toFixed(0)} to ${compiledMoney.billedTokensPerSession.toFixed(0)}/session (${billedTokenSaved}% saved) on claude-sonnet-5 (${kind} runner, ${N_RUNS} runs/turn/arm; usage.input_tokens alone: ${totalRawMean.toFixed(0)} -> ${totalCompiledMean.toFixed(0)}, ${savedPct}%${kind === 'cli' ? ' — not meaningful on the cli runner, see cache-routing note' : ''}), while the graded answer adequacy was raw ${rawFacts.toFixed(1)}/${totalFacts} vs compiled ${compiledFacts.toFixed(1)}/${totalFacts} facts — all dimensions from real executions, none estimated.`,
+    `Across the ${rawRuns.length}-turn long session (two full bug/feature arcs), compiling context ${dollarClause}cut billed token volume (all usage fields summed; per-field breakdown above — cache fields bill below the direct-input rate) from ${rawMoney.billedTokensPerSession.toFixed(0)} to ${compiledMoney.billedTokensPerSession.toFixed(0)}/session (${billedTokenSaved}% saved) on claude-sonnet-5 (${kind} runner, ${N_RUNS} runs/turn/arm; usage.input_tokens alone: ${totalRawMean.toFixed(0)} -> ${totalCompiledMean.toFixed(0)}, ${savedPct}%${kind === 'cli' ? ' — not meaningful on the cli runner, see cache-routing note' : ''}), while the graded answer adequacy was raw ${rawFacts.toFixed(1)}/${totalFacts} vs compiled ${compiledFacts.toFixed(1)}/${totalFacts} facts — all dimensions from real executions, none estimated.`,
   )
 }
 
