@@ -9,7 +9,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use common::{create_graph_collection, create_test_app};
+use common::{create_graph_collection, create_graph_node, create_test_app};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -135,6 +135,8 @@ async fn test_duplicate_edge_returns_veles_019() {
     let temp_dir = TempDir::new().expect("temp dir");
     let app = create_test_app(&temp_dir);
     create_graph_collection(&app, "social").await;
+    create_graph_node(&app, "social", 10).await;
+    create_graph_node(&app, "social", 20).await;
 
     let edge = json!({
         "id": 1,

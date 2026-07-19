@@ -915,12 +915,14 @@ fn setup_graph_collection(name: &str) -> (std::path::PathBuf, tempfile::TempDir)
     db.create_graph_collection(name, velesdb_core::GraphSchema::schemaless())
         .unwrap();
     let col = db.get_graph_collection(name).unwrap();
-    let edge = velesdb_core::GraphEdge::new(1, 10, 20, "KNOWS").unwrap();
-    col.add_edge(edge).unwrap();
+    // add_edge requires both endpoints to have a stored node payload
+    // (#1442) — store both nodes before creating the edge.
     col.upsert_node_payload(10, &serde_json::json!({"name": "Alice"}))
         .unwrap();
     col.upsert_node_payload(20, &serde_json::json!({"name": "Bob"}))
         .unwrap();
+    let edge = velesdb_core::GraphEdge::new(1, 10, 20, "KNOWS").unwrap();
+    col.add_edge(edge).unwrap();
     drop(db);
     (db_path, temp_dir)
 }
