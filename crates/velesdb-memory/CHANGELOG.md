@@ -62,8 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that images are never resized (oversized media is externalized behind a
   `ctx://source/<hash>` handle instead). (#1459)
 - Documented a known limitation: the compiled-context cache prefix is
-  byte-stable only when queried at a fixed point in time (issue #1455).
-  (#1456)
+  byte-stable only while the compile `query` stays the same — under a tight
+  budget, a query change can reorder competing cache-marked fragments
+  (issue #1455). (#1456)
 
 ### Changed
 
