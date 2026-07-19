@@ -287,6 +287,13 @@ test('error codes — INVALID_INPUT on empty fact, NOT_FOUND on missing relate e
       (err) => err.message.includes('INVALID_INPUT'),
       'bad op → INVALID_INPUT',
     )
+    // metadata is capped at 64 KiB serialized (DoS guard) — oversized
+    // metadata must reject, not silently persist.
+    await assert.rejects(
+      () => store.remember('x', [], { v: 'y'.repeat(65 * 1024) }),
+      (err) => err.message.includes('INVALID_INPUT'),
+      'oversized metadata → INVALID_INPUT',
+    )
   } finally {
     cleanup()
   }

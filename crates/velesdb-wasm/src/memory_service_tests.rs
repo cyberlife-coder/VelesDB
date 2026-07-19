@@ -21,6 +21,24 @@
 use super::*;
 
 #[test]
+fn test_inner_remember_with_oversized_metadata_errors() {
+    // metadata is capped at 64 KiB serialized (DoS guard: metadata is a
+    // keyed lookup facet, not a payload) — exercised through `svc.inner`,
+    // never the JsValue-producing `remember` wrapper (see module docs).
+    let svc = WasmMemoryService::new(4);
+    let mut meta = Metadata::new();
+    meta.insert("v".to_owned(), Value::String("x".repeat(65 * 1024)));
+    let err = svc
+        .inner
+        .remember("x", &[], Some(&meta))
+        .expect_err("oversized metadata must be rejected");
+    assert!(
+        matches!(err, MemoryError::MetadataTooLarge { .. }),
+        "expected MetadataTooLarge, got {err:?}"
+    );
+}
+
+#[test]
 fn test_relate_and_forget_round_trip_through_the_wasm_boundary() {
     let svc = WasmMemoryService::new(4);
     let a = svc.inner.remember("fact a", &[], None).unwrap();

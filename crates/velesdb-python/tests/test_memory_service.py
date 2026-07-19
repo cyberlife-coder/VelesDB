@@ -67,6 +67,14 @@ def test_reserved_metadata_key_raises_value_error(mem):
         mem.remember("x", metadata={"_veles_hub": True})
 
 
+def test_oversized_metadata_raises_value_error(mem):
+    # metadata is capped at 64 KiB serialized (a DoS guard: metadata is a
+    # keyed lookup facet, not a payload) — a caller-supplied blob past the
+    # cap must raise, not silently persist.
+    with pytest.raises(ValueError):
+        mem.remember("x", metadata={"v": "y" * (65 * 1024)})
+
+
 def test_unknown_link_target_raises_key_error(mem):
     with pytest.raises(KeyError):
         mem.remember("a decision", links=[(9_999_999, "decided_in")])
