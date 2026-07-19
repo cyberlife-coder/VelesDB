@@ -82,12 +82,21 @@ async function main() {
     }, 0)
   const estRawTokens = estimateTokensFor(rawTurns)
   const estCompiledTokens = estimateTokensFor(compiledTurns)
-  const nRequests = (rawTurns.length + compiledTurns.length) * N_RUNS
-  const estInputCost = (estRawTokens + estCompiledTokens) * N_RUNS * EST_INPUT_PER_TOKEN
+  // The cli runner spends one extra billed calibration request (below, after
+  // CONFIRM_SPEND) that must be counted here — it happens whether or not the
+  // estimate below was accurate, so the pre-spend estimate must include it.
+  const nCalibrationRequests = kind === 'cli' ? 1 : 0
+  const nRequests = (rawTurns.length + compiledTurns.length) * N_RUNS + nCalibrationRequests
+  const estInputCost =
+    (estRawTokens + estCompiledTokens) * N_RUNS * EST_INPUT_PER_TOKEN +
+    nCalibrationRequests * Math.ceil('ok'.length / 4) * EST_INPUT_PER_TOKEN
   const estOutputCost = nRequests * EST_MAX_OUTPUT_TOKENS * EST_OUTPUT_PER_TOKEN
   console.log('')
   console.log('--- cost estimate (before spending anything) ---')
-  console.log(`requests: ${nRequests} (${rawTurns.length} raw-arm turns + ${compiledTurns.length} compiled-arm turns) x ${N_RUNS} runs`)
+  console.log(
+    `requests: ${nRequests} (${rawTurns.length} raw-arm turns + ${compiledTurns.length} compiled-arm turns) x ${N_RUNS} runs` +
+      (nCalibrationRequests ? ` + ${nCalibrationRequests} cli calibration call` : ''),
+  )
   console.log(`rough estimated input tokens (chars/4, NOT a measurement): ~${estRawTokens + estCompiledTokens} per run-set x ${N_RUNS}`)
   console.log(
     `estimated cost: ~$${(estInputCost + estOutputCost).toFixed(4)} (claude-sonnet-5 intro pricing; output estimated at up to ${EST_MAX_OUTPUT_TOKENS} tokens/call on the api runner)`,

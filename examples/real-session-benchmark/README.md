@@ -341,9 +341,10 @@ The 2026-07-19 campaign's lesson: the real content delta (14287
 tokens/session) was diluted by the CLI harness's constant per-request
 overhead (~10k cache_read of system prompt per turn) down to 10.9% $. Three
 follow-ups make the next campaigns representative of a full working day
-rather than a 19-turn slice; **all three are built and offline-verified
-here — the billed campaigns themselves have not run yet** (spend gate
-untouched):
+rather than a 19-turn slice; **all three are built, offline-verified, and
+now billed** — raw logs committed under `results/2026-07-19-day-scale/`
+(`billed-vibe-retina-cli.log`, `billed-long36-cli.log`,
+`billed-vibe-api.log`):
 
 1. **`BENCH_RETINA=1`** — swaps the vibe corpus's cropped screenshots
    (640x360 / 700x420, 308/392 tokens) for a parallel 1512x982 set
@@ -379,8 +380,9 @@ untouched):
    `{type:"image",source:{type:"base64",media_type,data}}` blocks), and the
    runner-aware headline already uses direct `input_tokens` for api.
 
-Dry cost estimates for the three planned campaigns (same pre-spend formula
-the online scripts print; `RUN_BILLED_MEASURE` never set for any of this):
+Dry cost estimates for the three campaigns, printed before any spend (same
+pre-spend formula the online scripts print; confirmed against the actual
+billed totals below):
 
 ```
 long-36-cli         : requests=360  estTokensPerRunSet=675740  estCost=$10.4438
@@ -390,6 +392,48 @@ vibe-baseline-api   : requests=190  estTokensPerRunSet=105003  estCost=$2.9956
 
 (The cli estimates are lower bounds — no max-output-tokens flag there; the
 api estimate is bounded by `max_tokens: 1024`.)
+
+#### Billed results (2026-07-19, all real executions)
+
+All three ran with 5 runs/turn/arm, cli/api runner-aware, lossless
+compiled-arm budget — same protocol as the base campaign above. Raw logs:
+`results/2026-07-19-day-scale/billed-vibe-retina-cli.log`,
+`billed-long36-cli.log`, `billed-vibe-api.log`.
+
+| Campaign | Runner | $/session raw → compiled | $ saved | Tokens saved | Adequacy raw vs compiled |
+|---|---|---|---|---|---|
+| base, 19-turn, with-screenshots (cropped) | cli | $0.4442 → $0.3960 | 10.9% | 5.8% | 22.8/23 vs 23.0/23 |
+| vibe, 19-turn, retina screenshots (1512x982) | cli | $0.5693 → $0.4444 | 21.9% | 17.6% | 23.0/23 vs 23.0/23 |
+| long-session, 36-turn | cli | $1.8613 → $1.5876 | 14.7% | 17.0% | 49.6/50 vs 49.2/50 (46.6/47 vs 46.2/47 hors tours 20/22 — voir note) |
+| vibe, 19-turn, with-screenshots (baseline images) | api (direct) | n/a — runner reports no cost | — | 14.6% (input_tokens 15.1%) | 23.0/23 vs 23.0/23 |
+
+**Grading-key disclosure (post-run review):** a post-run review found a
+defective grading key on turns 20 and 22 (fixed in this PR — see
+`corpus/questions-long.mjs`). Both arms scored full marks on those turns,
+so the A/B parity conclusion is unaffected; excluding them, adequacy is raw
+46.6/47 vs compiled 46.2/47. The published 49.6/50 vs 49.2/50 totals include
+the flawed turns and are therefore upper bounds against the corrected key.
+
+Campaign totals (sum of the per-arm `campaign` parenthetical in each log —
+the real dollars spent, not per-session means): base
+$2.2212+$1.9801+$1.8733+$1.8258=**$7.90**; retina
+$2.8463+$2.2220=**$5.07**; long-36 $9.3063+$7.9380=**$17.24**; api n/a (no
+`total_cost_usd` on that runner). **Grand total real spend across the four
+cli/api campaigns: ~$30.21** (the api runner's own headline is the
+token-volume one, not a dollar figure).
+
+Honest reading: the discount widens with screenshot weight and session
+length — 10.9% at the cropped-image baseline more than doubles to 21.9%
+once screenshots hit their real Retina byte weight, and the 36-turn arc
+holds at 14.7%, confirming the effect survives a full day-scale session
+rather than a lucky 19-turn slice. The api runner's 15.1% direct
+`input_tokens` figure is the undiluted content signal — no CLI
+cache-routing constant sitting in between — and it lands close to the
+18.2% offline lossless number for the same corpus, the remaining gap being
+the runner's own request preamble. Adequacy holds at parity everywhere;
+the only measurable loss anywhere in the four campaigns is 0.4/50 facts on
+the long-36 arm (one turn drops from 1.0 to 0.6 across five runs), noise at
+that scale rather than a systematic regression.
 
 ### Determinism proof (applies to every offline variant)
 
