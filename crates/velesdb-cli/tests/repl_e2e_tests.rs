@@ -68,13 +68,20 @@ fn setup_graph(name: &str) -> (std::path::PathBuf, TempDir) {
         .unwrap();
     let col = db.get_graph_collection(name).unwrap();
     for i in 1u64..=3 {
-        let edge = GraphEdge::new(i, i * 10, i * 10 + 1, "LINKS").unwrap();
-        col.add_edge(edge).unwrap();
+        // add_edge requires both endpoints to have a stored node payload
+        // (#1442) — store both nodes before creating the edge.
         col.upsert_node_payload(
             i * 10,
             &serde_json::json!({"name": format!("node_{}", i * 10)}),
         )
         .unwrap();
+        col.upsert_node_payload(
+            i * 10 + 1,
+            &serde_json::json!({"name": format!("node_{}", i * 10 + 1)}),
+        )
+        .unwrap();
+        let edge = GraphEdge::new(i, i * 10, i * 10 + 1, "LINKS").unwrap();
+        col.add_edge(edge).unwrap();
     }
     col.flush().unwrap();
     drop(db);

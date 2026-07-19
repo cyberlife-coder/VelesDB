@@ -52,6 +52,12 @@ fn open_graph(path: &PathBuf) -> GraphCollection {
 /// Populate a graph with test edges: 1→2→3→4, 2→5.
 fn populate_edges(path: &PathBuf) {
     let col = open_graph(path);
+    // add_edge requires both endpoints to have a stored node payload
+    // (#1442) — store all 5 nodes referenced by the edges below first.
+    for id in [1, 2, 3, 4, 5] {
+        col.upsert_node_payload(id, &serde_json::json!({}))
+            .expect("test: store node payload");
+    }
     for (id, src, tgt, lbl) in [
         (100, 1, 2, "KNOWS"),
         (101, 2, 3, "KNOWS"),
@@ -125,6 +131,16 @@ fn test_remove_edge_then_readd_same_id() {
         edge_id: 100,
     })
     .expect("remove should succeed");
+
+    // add_edge requires both endpoints to have a stored node payload
+    // (#1442) — store nodes 10 and 20 before the re-add below.
+    let col = open_graph(&path);
+    col.upsert_node_payload(10, &serde_json::json!({}))
+        .expect("test: store node 10");
+    col.upsert_node_payload(20, &serde_json::json!({}))
+        .expect("test: store node 20");
+    col.flush().expect("test: flush");
+    drop(col);
 
     crate::graph::handle(GraphAction::AddEdge {
         path: path.clone(),
