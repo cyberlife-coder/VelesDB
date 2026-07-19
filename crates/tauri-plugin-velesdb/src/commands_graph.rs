@@ -116,8 +116,7 @@ pub async fn add_edge<R: Runtime>(
                 &request.label,
                 request.properties,
             )?;
-            coll.add_edge(edge)
-                .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+            coll.add_edge(edge)?;
             Ok(())
         })
         .map_err(CommandError::from)
@@ -140,9 +139,7 @@ pub async fn add_edges_batch<R: Runtime>(
                 .into_iter()
                 .map(|e| build_edge(e.id, e.source, e.target, &e.label, e.properties))
                 .collect::<std::result::Result<Vec<_>, _>>()?;
-            let added = coll
-                .add_edges_batch(edges)
-                .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+            let added = coll.add_edges_batch(edges)?;
             Ok(u64::try_from(added).unwrap_or(u64::MAX))
         })
         .map_err(CommandError::from)
