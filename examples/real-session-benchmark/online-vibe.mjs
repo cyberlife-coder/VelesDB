@@ -1,0 +1,154 @@
+// ONLINE mode for the VIBE-CODING scenario — sibling to online.mjs, same
+// structure and the same double gate (RUN_BILLED_MEASURE=1 then
+// CONFIRM_SPEND=1), applied to corpus/session-vibe.mjs +
+// corpus/questions-vibe.mjs instead of the base bug-fix scenario, and aware
+// of the BENCH_MEDIA=0 variant (see lib/ab-session.mjs's
+// applyBenchMediaFilter). NEVER executed by CI or by this task — see
+// README.md's "Vibe-coding scenario" section for why (spend gate, separate
+// from the code change).
+//
+// media transport note (verified 2026-07 against Claude Code's own docs,
+// see README.md): the `cli` runner (lib/claude-cli.mjs) builds the EXACT
+// content-block shape Claude Code's Streaming Input mode documents for
+// `--input-format stream-json` — `{type: "image", source: {type: "base64",
+// media_type, data}}` alongside a text block — so the with-screenshots arm
+// should carry media to the model on the cli runner too, not just the api
+// runner. That said, the only real calibration call made at review time
+// (lib/claude-cli.mjs's header) used a text-only prompt; an image-bearing
+// calibration call is a genuine billed request and is explicitly OUT OF
+// SCOPE for this change (RUN_BILLED_MEASURE stays off here) — flagged in
+// README.md as a follow-up for the next billed campaign.
+import { TURN_EVENTS_VIBE, SYSTEM_VIBE } from './corpus/session-vibe.mjs'
+import { TURN_QUESTIONS_VIBE } from './corpus/questions-vibe.mjs'
+import { resolveRunnerKind, runTurn, mean, stddev } from './lib/runner.mjs'
+import { runCliTurn } from './lib/claude-cli.mjs'
+import { gradeResponse } from './lib/grade.mjs'
+import { measureSession, LOSSLESS_BUDGET, applyBenchMediaFilter, benchMediaEnabled } from './lib/ab-session.mjs'
+import { pixelCostTokens } from './lib/pixel-cost.mjs'
+
+const N_RUNS = Number(process.argv[2] ?? process.env.BENCH_N_RUNS ?? 5)
+const BUDGET = Number(process.env.BENCH_BUDGET ?? LOSSLESS_BUDGET)
+
+const EST_INPUT_PER_TOKEN = 2.0 / 1_000_000
+const EST_OUTPUT_PER_TOKEN = 10.0 / 1_000_000
+const EST_MAX_OUTPUT_TOKENS = 1024
+
+const QUESTION_PREAMBLE =
+  '\n\n[Benchmark question — answer using ONLY the context above; quote exact values verbatim]\n'
+
+function withQuestion(payloadText, turnIdx) {
+  return payloadText + QUESTION_PREAMBLE + TURN_QUESTIONS_VIBE[turnIdx].question
+}
+
+async function main() {
+  if (process.env.RUN_BILLED_MEASURE !== '1') {
+    console.log('ONLINE mode (vibe-coding scenario) skipped (default): set RUN_BILLED_MEASURE=1 to run it.')
+    console.log('Also requires CONFIRM_SPEND=1 after reviewing the printed cost estimate.')
+    console.log("Never runs automatically — not part of this repo's CI or review.")
+    process.exit(0)
+  }
+
+  const kind = await resolveRunnerKind()
+  const mediaOn = benchMediaEnabled()
+  console.log(
+    `ONLINE mode (vibe-coding scenario) — runner: ${kind} | variant: ${mediaOn ? 'with-screenshots' : 'no-screenshots (BENCH_MEDIA=0)'} | compiled-arm budget: ${BUDGET === LOSSLESS_BUDGET ? 'lossless (non-constraining)' : BUDGET}`,
+  )
+
+  const turnEvents = applyBenchMediaFilter(TURN_EVENTS_VIBE)
+  const measured = await measureSession({
+    turnEvents,
+    system: SYSTEM_VIBE,
+    budget: BUDGET,
+    collectPayloads: true,
+  })
+  const rawTurns = measured.perTurn.map((t, i) => ({
+    text: withQuestion(t.rawPayload.text, i),
+    imageBlocks: t.rawPayload.imageBlocks,
+  }))
+  const compiledTurns = measured.perTurn.map((t, i) => ({
+    text: withQuestion(
+      t.compiledPayload.text +
+        (t.compiledPayload.handles.length
+          ? '\n\n[retrievable sources]\n' + t.compiledPayload.handles.join('\n')
+          : ''),
+      i,
+    ),
+    imageBlocks: t.compiledPayload.imageBlocks,
+  }))
+
+  // --- Cost estimate, printed BEFORE any spend ---
+  const estimateTokensFor = (turns) =>
+    turns.reduce((sum, t) => {
+      let n = Math.ceil(t.text.length / 4)
+      for (const img of t.imageBlocks) n += pixelCostTokens(img.mime, img.bytesB64)
+      return sum + n
+    }, 0)
+  const estRawTokens = estimateTokensFor(rawTurns)
+  const estCompiledTokens = estimateTokensFor(compiledTurns)
+  const nRequests = (rawTurns.length + compiledTurns.length) * N_RUNS
+  const estInputCost = (estRawTokens + estCompiledTokens) * N_RUNS * EST_INPUT_PER_TOKEN
+  const estOutputCost = nRequests * EST_MAX_OUTPUT_TOKENS * EST_OUTPUT_PER_TOKEN
+  console.log('')
+  console.log('--- cost estimate (before spending anything) ---')
+  console.log(`requests: ${nRequests} (${rawTurns.length} raw-arm turns + ${compiledTurns.length} compiled-arm turns) x ${N_RUNS} runs`)
+  console.log(`rough estimated input tokens (chars/4, NOT a measurement): ~${estRawTokens + estCompiledTokens} per run-set x ${N_RUNS}`)
+  console.log(
+    `estimated cost: ~$${(estInputCost + estOutputCost).toFixed(4)} (claude-sonnet-5 intro pricing; output estimated at up to ${EST_MAX_OUTPUT_TOKENS} tokens/call on the api runner)`,
+  )
+  if (kind === 'cli') {
+    console.log("NOTE: the CLI runner has no max-output-tokens flag — treat this estimate as a LOWER BOUND on the cli runner.")
+  }
+  console.log('')
+
+  if (process.env.CONFIRM_SPEND !== '1') {
+    console.log('Set CONFIRM_SPEND=1 (after reviewing the estimate above) to actually run the billed campaign. Exiting without spending.')
+    process.exit(0)
+  }
+
+  if (kind === 'cli') {
+    console.log('--- CLI calibration turn (near-empty context, 1 call) ---')
+    const calib = await runCliTurn({ text: 'ok' })
+    console.log(
+      `calibration: input_tokens=${calib.input_tokens} | cache_creation=${calib.cache_creation_input_tokens} cache_read=${calib.cache_read_input_tokens}`,
+    )
+    console.log('')
+  }
+
+  async function runArm(turns, label) {
+    console.log(`--- ${label} arm: ${N_RUNS} runs per turn ---`)
+    const perTurnRuns = []
+    for (let t = 0; t < turns.length; t++) {
+      const samples = []
+      for (let r = 0; r < N_RUNS; r++) {
+        samples.push(await runTurn(kind, turns[t]))
+      }
+      perTurnRuns.push(samples)
+      const inputs = samples.map((s) => s.input_tokens)
+      const grades = samples.map((s) => gradeResponse(s.responseText, TURN_QUESTIONS_VIBE[t].facts))
+      const meanFound = mean(grades.map((g) => g.found))
+      const total = TURN_QUESTIONS_VIBE[t].facts.length
+      console.log(
+        `  turn ${String(t + 1).padStart(2)}: input_tokens mean=${mean(inputs).toFixed(1)} min=${Math.min(...inputs)} max=${Math.max(...inputs)} stddev=${stddev(inputs).toFixed(2)} | adequacy mean=${meanFound.toFixed(1)}/${total}`,
+      )
+    }
+    return perTurnRuns
+  }
+
+  const rawRuns = await runArm(rawTurns, 'RAW (bras A)')
+  const compiledRuns = await runArm(compiledTurns, 'COMPILED (bras B)')
+
+  let totalRawMean = 0
+  let totalCompiledMean = 0
+  for (let t = 0; t < rawRuns.length; t++) {
+    totalRawMean += mean(rawRuns[t].map((s) => s.input_tokens))
+    totalCompiledMean += mean(compiledRuns[t].map((s) => s.input_tokens))
+  }
+  const savedPct = ((1 - totalCompiledMean / totalRawMean) * 100).toFixed(1)
+  console.log('')
+  console.log(`tokens (vibe-coding, ${mediaOn ? 'with-screenshots' : 'no-screenshots'}) — raw: ${totalRawMean.toFixed(1)} | compiled: ${totalCompiledMean.toFixed(1)} | saved: ${savedPct}%`)
+}
+
+main().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})

@@ -15,7 +15,7 @@ A/B benchmark for the deterministic context compiler (`compileContext`): a
   arm is billed for the `ctx://source/` handle strings it sends** (they are
   part of its real payload).
 
-Four scenarios, all offline-measurable (no network, no key), each
+Five scenarios, all offline-measurable (no network, no key), each
 deterministic (two consecutive runs byte-identical, and every turn is
 compiled twice with a byte-compare assert inside the run):
 
@@ -25,6 +25,7 @@ compiled twice with a byte-compare assert inside the run):
 | Base, window-enforcement | `node offline.mjs` (mode 2) | What does an 8000-token window add — and how much of it is truncation of unique content, honestly attributed? |
 | Long session (36 turns) | `node long-session.mjs` | How fast does each arm consume the context window; how many more turns of iteration fit before a compaction threshold? |
 | Memory-enabled | `node memory-enabled.mjs` | What does the product's intended remember/relate + `memory_scope` usage pattern save? |
+| Vibe-coding (19 turns, media on/off) | `node offline-vibe.mjs` / `BENCH_MEDIA=0 node offline-vibe.mjs` | Same question on an ITERATIVE FEATURE IMPLEMENTATION session (not a bug-fix arc), with vs. without screenshots — see "Vibe-coding scenario" below. |
 
 Plus an **ONLINE mode** (opt-in, real billed calls) measuring both **billed
 tokens** (`usage.input_tokens`) and **answer quality** (deterministic
@@ -161,11 +162,120 @@ local store operation (no model ever sees the full docs in arm B); whether
 the right sections come back is exactly what the number reflects, since the
 pulled content is counted in arm B's tokens.
 
+### Vibe-coding scenario (2026-07)
+
+A second, independent scenario alongside the base bug-fix arc — required by
+three product asks from Julien's review of the billed campaign (EPIC-P-071
+follow-up): (1) a realistic multi-turn "vibe coding" session (iterative
+FEATURE IMPLEMENTATION, not another bug investigation), (2) a WITH- and
+WITHOUT-screenshots variant of the same session, including successive
+re-captures of the same UI target (supersession, not just dedup), and (3) an
+empirical check of the 64 KiB metadata cap (`crate::limits::MAX_METADATA_BYTES`,
+PR #1458) against realistic fragment metadata.
+
+**Corpus** (`corpus/session-vibe.mjs` + siblings `code-vibe.mjs`,
+`docs-vibe.mjs`, `logs-vibe.mjs`, `images-vibe.mjs`, `questions-vibe.mjs` — a
+separate file per artifact type, same layout as the base scenario, chosen
+over extending `session.mjs` in place so the already-documented base numbers
+above can never regress from an unrelated change): 19 turns — a notification
+bell + unread badge is implemented, hits a REAL runtime error (a genuine
+`TypeError` stack trace, not a contrived one), gets fixed, is screenshotted,
+receives CSS feedback, is RE-screenshotted at the same `metadata.target:
+'navbar-bell'` (three captures total — bug, still-off attempt, fixed — two
+`retrieve.screenshot_superseded` decisions), then extends into a second
+component (a notification dropdown panel, its own independent
+`metadata.target: 'notification-panel'` chain, two captures), a full green
+CI run (a second, independently-sized big log), a wrap-up with a
+byte-identical screenshot resend for the PR description (`drop.duplicate`,
+the separate dedup mechanism) and a metadata-heavy pre-commit-hook fragment
+(the 64 KiB exercise, below), and a continuation prompt for the next
+feature. Every fragment's metadata carries `role`, `turn`, `tool_name`,
+`file_path` (when applicable), `ts` (ISO 8601, a fixed deterministic clock),
+and `target` for screenshots — the shape a real Claude-Code-style agent hook
+actually attaches, not a minimal placeholder.
+
+**Media variant**: `BENCH_MEDIA=0` (default `1`, read by
+`lib/ab-session.mjs`'s `applyBenchMediaFilter`) strips every fragment
+carrying a `media` payload from the corpus BEFORE either arm sees it — the
+surrounding text-only turns are byte-identical between variants; only the
+screenshots differ. Both variants run through the same LOSSLESS-mode
+measurement as `offline.mjs` (non-constraining budget, so every saving
+reported is pure redundancy/staleness elimination, not window truncation).
+
+```
+$ node offline-vibe.mjs
+session totals [vibe-coding with-screenshots]: raw 67597 (text 52505 + image 15092) -> compiled 55266 (text 47945 + handles 265 + image 7056) = 18.2% saved
+attribution: redundancy elimination 4286 tokens/14 decisions | supersession 7834 tokens/23 decisions | externalized 0/0 | log collapse 19703 tokens/17 decisions
+
+$ BENCH_MEDIA=0 node offline-vibe.mjs
+session totals [vibe-coding no-screenshots (BENCH_MEDIA=0)]: raw 51589 (text 51589 + image 0) -> compiled 47477 (text 47477 + handles 0 + image 0) = 8.0% saved
+```
+
+**Reading it**: with screenshots, savings come from three mechanisms at
+once — plain redundancy (the design-tokens doc re-read twice, the
+byte-identical PR-attachment resend), screenshot supersession (2 of 3
+navbar-bell captures + 1 of 2 notification-panel captures superseded), and
+log collapse (both CI logs' repeated per-file lines, ~19.7k raw tokens
+collapsed with counts). Without screenshots (`BENCH_MEDIA=0`), the
+supersession mechanism has nothing left to do (no images at all), so the
+saving drops to 8.0% — purely the doc/log mechanisms — which is the honest,
+expected difference: screenshots are not incidental padding in this corpus,
+they are what a large share of the saving depends on.
+
+**Metadata cap (64 KiB) — empirical finding**: every fragment's
+`Buffer.byteLength(JSON.stringify(fragment.metadata))` is measured and
+reported (max/p95/total vs. `MAX_METADATA_BYTES = 65536`, the SAME
+measurement `crate::limits::metadata_bytes` makes on the Rust side):
+
+```
+metadata size report [vibe-coding with-screenshots] (bytes, vs MAX_METADATA_BYTES=65536):
+  fragments-with-metadata: 41 | max: 4688 (7.15% of cap) | p95: 129 (0.20% of cap) | total: 8503 (12.97% of cap summed)
+  verdict: the largest realistic fragment here uses 7.15% of the cap — comfortable headroom.
+```
+
+The turn-18 "loaded" fragment (a pre-commit hook's diff manifest: 50 touched
+files, each with a path/status/additions/deletions, plus the active
+lint/format/test/CI tool configuration — as heavy as a real hook payload for
+a finished feature branch gets, not padded to force a result either way)
+measures 4688 bytes — **7.15% of the 64 KiB cap**. Every other fragment's
+metadata (role/turn/tool/file/timestamp/target) is under 130 bytes. **Verdict:
+for this realistic agent-hook workload, the 64 KiB cap is comfortably
+sufficient — roughly 14x headroom over the heaviest fragment measured.** No
+fragment in this corpus needed to be shrunk to fit; the number above is
+exactly what the corpus produces.
+
+**ONLINE readiness (not executed — see "Run — ONLINE" below)**:
+`online-vibe.mjs` mirrors `online.mjs` against this corpus and the
+`BENCH_MEDIA` variant. The `cli` runner's media-transport question was
+checked against Claude Code's own documentation (not by a billed
+calibration call, which is out of scope here): `lib/claude-cli.mjs` already
+builds `{type: "image", source: {type: "base64", media_type, data}}` content
+blocks alongside text, sent through the `{"type":"user","message":{...}}`
+stdin envelope — this is the EXACT shape Claude Code's Streaming Input mode
+documents for `--input-format stream-json` (image attachments are
+explicitly listed as a Streaming-Input-mode capability, unavailable in
+single-message mode). So the `cli` runner should carry screenshots to the
+model the same as the `api` runner. This has NOT been confirmed by a real
+image-bearing calibration call (the only calibration made so far, per
+`lib/claude-cli.mjs`'s header, used a text-only prompt) — that would be a
+genuine billed request and is a follow-up for the next billed campaign, not
+this change.
+
+Dry cost estimate (the same chars/4 + pixel-cost formula `online-vibe.mjs`
+prints before its `RUN_BILLED_MEASURE` gate, computed standalone here so
+`RUN_BILLED_MEASURE` was never set — no spend gate touched by this task), 5
+runs/turn/arm, `claude-sonnet-5` intro pricing:
+
+```
+variant=with-screenshots  requests=190  estTokensPerRunSet=105261  estCost=$2.9982
+variant=no-screenshots    requests=190  estTokensPerRunSet=80922   estCost=$2.7548
+```
+
 ### Determinism proof (applies to every offline variant)
 
 ```
 $ node offline.mjs > r1.txt && node offline.mjs > r2.txt && diff r1.txt r2.txt && echo IDENTICAL
-IDENTICAL     # same procedure verified for long-session.mjs and memory-enabled.mjs
+IDENTICAL     # same procedure verified for long-session.mjs, memory-enabled.mjs, and offline-vibe.mjs (both BENCH_MEDIA values)
 ```
 
 ### Regenerating the crate-README charts
@@ -258,7 +368,11 @@ supersession, identical bytes for dedup, per series).
 (lossless and window-8000), that every ground-truth fact from
 `corpus/questions.mjs` survives compilation — inline or via a handle that
 `retrieveContextSource` actually resolves — **this promise is CI-enforced**
-(runs offline, no network, in the `Node Binding Tests` CI job).
+(runs offline, no network, in the `Node Binding Tests` CI job) — and, since
+this extension, the SAME promise for the vibe-coding scenario's 19 turns
+against `corpus/questions-vibe.mjs` (two more `test()` cases in the same
+file, same checker, WITH-media corpus only — see the "Vibe-coding scenario"
+section above for why BENCH_MEDIA=0 is not gated the same way).
 
 ## Corpus (`corpus/*.mjs`)
 
@@ -279,6 +393,26 @@ breakdown in `corpus/session.mjs`; long-session continuation in
   re-read after its edits (band-aid then real fix; footgun then fix).
 - `corpus/questions.mjs` — the ONLINE quality checklists (facts are exact
   strings from these artifacts).
+
+Vibe-coding scenario: **"implémenter une feature de façon itérative"** — full
+per-turn breakdown in `corpus/session-vibe.mjs`; per-artifact provenance in
+each sibling file:
+
+- `corpus/images-vibe.mjs` (generated by the SAME `corpus/make_png.mjs`,
+  extended with two new geometries) — 5 synthetic PNGs, ~1.3-1.8 KB each;
+  two independent supersession series (`navbar-bell` 640×360, three
+  captures; `notification-panel` 700×420, two captures) and one
+  byte-identical resend for dedup.
+- `corpus/docs-vibe.mjs` — a design-tokens excerpt (spacing scale, badge and
+  row guidelines), re-injected once as an agent re-read.
+- `corpus/logs-vibe.mjs` — a failing local test run (a real `TypeError`
+  stack trace, ~45 lines) and a full green CI gate run (~130 lines,
+  repeated per-file lines with varying timestamps).
+- `corpus/code-vibe.mjs` — six TypeScript versions across two components
+  (NotificationBell: buggy → property-access fix → CSS attempt → responsive
+  fix; NotificationPanel: initial → spacing fix).
+- `corpus/questions-vibe.mjs` — the same fixture-independence rule as
+  `corpus/questions.mjs`, facts drawn from this corpus.
 
 ## Honest limitations
 
