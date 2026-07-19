@@ -23,7 +23,7 @@ fi
 
 resolve_config "$cwd"
 
-context="Session memory (velesdb-memory): call load_working_context(project=\"$PROJECT\", session=\"$SESSION\") as your first action, unless you already loaded it earlier this session. It restores the prior distilled state (goal, constraints, verified facts, decisions, pending actions) left by save_working_context, so work continues instead of re-deriving context from scratch. If it returns null, nothing was saved yet — proceed normally."
+context="Session memory (velesdb-memory): call load_working_context(project=\"$PROJECT\", session=\"$SESSION\") as your first action, unless you already loaded it earlier this session. It restores the prior distilled state (goal, constraints, verified facts, decisions, pending actions) left by save_working_context, so work continues instead of re-deriving context from scratch. If it returns null, nothing was saved yet — proceed normally. Reinforcement loop: whenever a memory surfaced by recall/recall_fused (or pulled into compile_context — its decision carries the memory_id) actually helps you, call feedback(id, true) with the id_str string; if it misled you, feedback(id, false). This is what makes ranking improve with use — skipping it keeps confidence flat."
 
 jq -n --arg ctx "$context" \
   '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
