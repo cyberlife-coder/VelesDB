@@ -256,6 +256,11 @@ fn attach_weight(
 /// specific id). `seeded_nodes` is shared across the whole relation so a node
 /// referenced by many edges (e.g. a popular FK target) is not re-written on
 /// every recurrence.
+///
+/// A node is only marked seeded on a successful upsert. A failed upsert logs
+/// a warning and leaves the id out of `seeded_nodes`, so the next edge
+/// referencing the same node retries the upsert instead of silently skipping
+/// it forever (upserts are idempotent, so a retry is always safe).
 fn seed_edge_endpoints<F, E>(
     edges: &[velesdb_core::GraphEdge],
     seeded_nodes: &mut std::collections::HashSet<u64>,
@@ -266,10 +271,14 @@ fn seed_edge_endpoints<F, E>(
 {
     for edge in edges {
         for id in [edge.source(), edge.target()] {
-            if seeded_nodes.insert(id) {
-                if let Err(e) = upsert(id) {
-                    warn!("Failed to seed graph node {id}: {e}");
+            if seeded_nodes.contains(&id) {
+                continue;
+            }
+            match upsert(id) {
+                Ok(()) => {
+                    seeded_nodes.insert(id);
                 }
+                Err(e) => warn!("Failed to seed graph node {id}: {e}; will retry on next occurrence"),
             }
         }
     }
