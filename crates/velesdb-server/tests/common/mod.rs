@@ -14,12 +14,12 @@ use velesdb_server::{
     auth::{auth_middleware, AuthState},
     batch_search, bulk_delete_points, collection_diagnostics, collection_sanity,
     compact_collection, create_collection, delete_collection, delete_point, enable_streaming,
-    explain, get_collection, get_collection_config, get_edges, get_node_degree, get_point,
-    health_check, hybrid_search, list_collections, match_query, multi_query_search,
-    multi_query_search_ids, query, readiness_check, rebuild_index, reorder_for_locality,
-    scroll_points, search, search_ids, set_point_ttl, stream_insert, stream_upsert_points,
-    text_search, traverse_graph, upsert_points, upsert_points_raw, vacuum_collection, AppState,
-    OnboardingMetrics,
+    explain, get_collection, get_collection_config, get_edges, get_node_degree, get_node_payload,
+    get_point, health_check, hybrid_search, list_collections, list_nodes, match_query,
+    multi_query_search, multi_query_search_ids, query, readiness_check, rebuild_index,
+    reorder_for_locality, scroll_points, search, search_ids, set_point_ttl, stream_insert,
+    stream_upsert_points, text_search, traverse_graph, upsert_node_payload, upsert_points,
+    upsert_points_raw, vacuum_collection, AppState, OnboardingMetrics,
 };
 
 fn base_routes() -> Router<Arc<AppState>> {
@@ -86,6 +86,11 @@ fn graph_and_maintenance_routes() -> Router<Arc<AppState>> {
         .route(
             "/collections/{name}/graph/nodes/{node_id}/degree",
             get(get_node_degree),
+        )
+        .route("/collections/{name}/graph/nodes", get(list_nodes))
+        .route(
+            "/collections/{name}/graph/nodes/{node_id}/payload",
+            get(get_node_payload).put(upsert_node_payload),
         )
         // Maintenance + bulk endpoints (PR #648)
         .route(
@@ -229,5 +234,37 @@ pub async fn create_graph_collection(app: &Router, name: &str) {
         response.status(),
         axum::http::StatusCode::CREATED,
         "test: failed to create graph collection '{name}'"
+    );
+}
+
+/// Creates a graph node via `PUT /collections/{name}/graph/nodes/{id}/payload`.
+///
+/// `add_edge`/`add_edges_batch` reject edges whose endpoints have no stored
+/// node payload (`Error::NodeNotFound`, issue #1442), so tests exercising
+/// edges must create their endpoint nodes first.
+pub async fn create_graph_node(app: &Router, collection: &str, node_id: u64) {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/collections/{collection}/graph/nodes/{node_id}/payload"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "payload": {} }).to_string(),
+                ))
+                .expect("test: build create graph node request"),
+        )
+        .await
+        .expect("test: create graph node request failed");
+
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::NO_CONTENT,
+        "test: failed to create graph node {node_id} in '{collection}'"
     );
 }

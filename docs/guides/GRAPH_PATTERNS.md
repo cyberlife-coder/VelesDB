@@ -53,6 +53,12 @@ A point can have multiple labels: `"_labels": ["Document", "Published", "Reviewe
 
 Edges must exist in the collection's edge store before MATCH can traverse them.
 
+**Both endpoints must already have a stored payload before you call `add_edge`** —
+`add_edge`/`add_edges_batch` reject an edge whose `source` or `target` was never
+created (`404 NodeNotFound` over REST, `Error::NodeNotFound` in Rust). This is
+enforced, not just recommended: create the points first (see "Setting Up Data
+for MATCH" above), then add the edge (#1442).
+
 ```bash
 curl -X POST http://localhost:8080/collections/knowledge/graph/edges \
   -H "Content-Type: application/json" \

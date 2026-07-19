@@ -1428,6 +1428,11 @@ fn test_traverse_bfs_config_respects_min_depth() {
     )
     .unwrap();
 
+    for id in [1, 2, 3] {
+        collection
+            .store_node_payload(id, &serde_json::json!({}))
+            .unwrap();
+    }
     collection
         .add_edge(crate::collection::graph::GraphEdge::new(100, 1, 2, "KNOWS").unwrap())
         .unwrap();
@@ -1456,6 +1461,11 @@ fn test_legacy_traverse_paths_use_edge_ids() {
     )
     .unwrap();
 
+    for id in [1, 2, 3] {
+        collection
+            .store_node_payload(id, &serde_json::json!({}))
+            .unwrap();
+    }
     collection
         .add_edge(crate::collection::graph::GraphEdge::new(100, 1, 2, "KNOWS").unwrap())
         .unwrap();

@@ -20,6 +20,17 @@ mod tests {
         GraphEdge::new(id, source, target, label).expect("edge should be valid")
     }
 
+    /// Test helper: stores empty payloads for both edge endpoints, then adds
+    /// the edge. Schemaless `add_edge` requires endpoints to already exist
+    /// (#1442), so tests that only care about edge/traversal mechanics use
+    /// this instead of spelling out `store_node_payload` per endpoint.
+    fn add_edge_with_nodes(collection: &Collection, edge: GraphEdge) -> crate::error::Result<()> {
+        for node_id in [edge.source(), edge.target()] {
+            collection.store_node_payload(node_id, &serde_json::json!({}))?;
+        }
+        collection.add_edge(edge)
+    }
+
     // =========================================================================
     // Edge CRUD
     // =========================================================================
@@ -28,7 +39,7 @@ mod tests {
     fn test_add_edge_success() {
         let (collection, _temp) = create_test_collection();
         let edge = make_edge(1, 100, 200, "KNOWS");
-        assert!(collection.add_edge(edge).is_ok());
+        assert!(add_edge_with_nodes(&collection, edge).is_ok());
         assert_eq!(
             collection.edge_count(),
             1,
@@ -39,10 +50,9 @@ mod tests {
     #[test]
     fn test_add_duplicate_edge_fails() {
         let (collection, _temp) = create_test_collection();
-        collection
-            .add_edge(make_edge(1, 100, 200, "KNOWS"))
+        add_edge_with_nodes(&collection, make_edge(1, 100, 200, "KNOWS"))
             .unwrap();
-        let result = collection.add_edge(make_edge(1, 100, 200, "KNOWS"));
+        let result = add_edge_with_nodes(&collection, make_edge(1, 100, 200, "KNOWS"));
         assert!(result.is_err(), "duplicate edge ID should return error");
     }
 
@@ -55,15 +65,15 @@ mod tests {
     #[test]
     fn test_edge_count_after_adding() {
         let (collection, _temp) = create_test_collection();
-        collection.add_edge(make_edge(1, 1, 2, "KNOWS")).unwrap();
-        collection.add_edge(make_edge(2, 2, 3, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 1, 2, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 2, 3, "KNOWS")).unwrap();
         assert_eq!(collection.edge_count(), 2);
     }
 
     #[test]
     fn test_remove_edge_existing() {
         let (collection, _temp) = create_test_collection();
-        collection.add_edge(make_edge(1, 1, 2, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 1, 2, "KNOWS")).unwrap();
         assert!(collection.remove_edge(1), "should return true when removed");
         assert_eq!(collection.edge_count(), 0);
     }
@@ -90,8 +100,8 @@ mod tests {
     #[test]
     fn test_get_all_edges_returns_all() {
         let (collection, _temp) = create_test_collection();
-        collection.add_edge(make_edge(1, 1, 2, "KNOWS")).unwrap();
-        collection.add_edge(make_edge(2, 2, 3, "LIKES")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 1, 2, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 2, 3, "LIKES")).unwrap();
         let edges = collection.get_all_edges();
         assert_eq!(edges.len(), 2);
     }
@@ -99,9 +109,9 @@ mod tests {
     #[test]
     fn test_get_edges_by_label_matching() {
         let (collection, _temp) = create_test_collection();
-        collection.add_edge(make_edge(1, 1, 2, "KNOWS")).unwrap();
-        collection.add_edge(make_edge(2, 1, 3, "KNOWS")).unwrap();
-        collection.add_edge(make_edge(3, 1, 4, "LIKES")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 1, 2, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 1, 3, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(3, 1, 4, "LIKES")).unwrap();
 
         let knows = collection.get_edges_by_label("KNOWS");
         assert_eq!(knows.len(), 2);
@@ -111,7 +121,7 @@ mod tests {
     #[test]
     fn test_get_edges_by_label_no_match() {
         let (collection, _temp) = create_test_collection();
-        collection.add_edge(make_edge(1, 1, 2, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 1, 2, "KNOWS")).unwrap();
         let result = collection.get_edges_by_label("NONEXISTENT");
         assert!(result.is_empty());
     }
@@ -119,9 +129,9 @@ mod tests {
     #[test]
     fn test_get_outgoing_edges() {
         let (collection, _temp) = create_test_collection();
-        collection.add_edge(make_edge(1, 10, 20, "KNOWS")).unwrap();
-        collection.add_edge(make_edge(2, 10, 30, "LIKES")).unwrap();
-        collection.add_edge(make_edge(3, 20, 30, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 10, 20, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 10, 30, "LIKES")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(3, 20, 30, "KNOWS")).unwrap();
 
         let outgoing = collection.get_outgoing_edges(10);
         assert_eq!(outgoing.len(), 2);
@@ -137,9 +147,9 @@ mod tests {
     #[test]
     fn test_get_incoming_edges() {
         let (collection, _temp) = create_test_collection();
-        collection.add_edge(make_edge(1, 10, 30, "KNOWS")).unwrap();
-        collection.add_edge(make_edge(2, 20, 30, "LIKES")).unwrap();
-        collection.add_edge(make_edge(3, 10, 20, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 10, 30, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 20, 30, "LIKES")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(3, 10, 20, "KNOWS")).unwrap();
 
         let incoming = collection.get_incoming_edges(30);
         assert_eq!(incoming.len(), 2);
@@ -167,8 +177,8 @@ mod tests {
     #[test]
     fn test_get_node_degree_out_only() {
         let (collection, _temp) = create_test_collection();
-        collection.add_edge(make_edge(1, 1, 2, "KNOWS")).unwrap();
-        collection.add_edge(make_edge(2, 1, 3, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 1, 2, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 1, 3, "KNOWS")).unwrap();
         let (in_deg, out_deg) = collection.get_node_degree(1);
         assert_eq!(in_deg, 0);
         assert_eq!(out_deg, 2);
@@ -177,8 +187,8 @@ mod tests {
     #[test]
     fn test_get_node_degree_in_only() {
         let (collection, _temp) = create_test_collection();
-        collection.add_edge(make_edge(1, 2, 5, "KNOWS")).unwrap();
-        collection.add_edge(make_edge(2, 3, 5, "LIKES")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 2, 5, "KNOWS")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 3, 5, "LIKES")).unwrap();
         let (in_deg, out_deg) = collection.get_node_degree(5);
         assert_eq!(in_deg, 2);
         assert_eq!(out_deg, 0);
@@ -187,9 +197,9 @@ mod tests {
     #[test]
     fn test_get_node_degree_both() {
         let (collection, _temp) = create_test_collection();
-        collection.add_edge(make_edge(1, 10, 20, "A")).unwrap();
-        collection.add_edge(make_edge(2, 30, 20, "B")).unwrap();
-        collection.add_edge(make_edge(3, 20, 40, "C")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 10, 20, "A")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 30, 20, "B")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(3, 20, 40, "C")).unwrap();
         let (in_deg, out_deg) = collection.get_node_degree(20);
         assert_eq!(in_deg, 2);
         assert_eq!(out_deg, 1);
@@ -201,9 +211,9 @@ mod tests {
 
     fn build_chain(collection: &Collection) {
         // 1 -> 2 -> 3 -> 4
-        collection.add_edge(make_edge(1, 1, 2, "NEXT")).unwrap();
-        collection.add_edge(make_edge(2, 2, 3, "NEXT")).unwrap();
-        collection.add_edge(make_edge(3, 3, 4, "NEXT")).unwrap();
+        add_edge_with_nodes(collection, make_edge(1, 1, 2, "NEXT")).unwrap();
+        add_edge_with_nodes(collection, make_edge(2, 2, 3, "NEXT")).unwrap();
+        add_edge_with_nodes(collection, make_edge(3, 3, 4, "NEXT")).unwrap();
     }
 
     #[test]
@@ -229,8 +239,8 @@ mod tests {
     #[test]
     fn test_traverse_bfs_label_filter() {
         let (collection, _temp) = create_test_collection();
-        collection.add_edge(make_edge(1, 1, 2, "NEXT")).unwrap();
-        collection.add_edge(make_edge(2, 1, 3, "OTHER")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 1, 2, "NEXT")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 1, 3, "OTHER")).unwrap();
 
         let results = collection.traverse_bfs(1, 3, Some(&["NEXT"]), 100).unwrap();
         assert_eq!(results.len(), 1);
@@ -263,9 +273,9 @@ mod tests {
     fn test_traverse_bfs_no_cycles() {
         let (collection, _temp) = create_test_collection();
         // Cycle: 1 -> 2 -> 3 -> 1
-        collection.add_edge(make_edge(1, 1, 2, "A")).unwrap();
-        collection.add_edge(make_edge(2, 2, 3, "A")).unwrap();
-        collection.add_edge(make_edge(3, 3, 1, "A")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 1, 2, "A")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 2, 3, "A")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(3, 3, 1, "A")).unwrap();
 
         let results = collection.traverse_bfs(1, 10, None, 100).unwrap();
         // Should visit 2 and 3, but not revisit 1
@@ -297,8 +307,8 @@ mod tests {
     #[test]
     fn test_traverse_dfs_label_filter() {
         let (collection, _temp) = create_test_collection();
-        collection.add_edge(make_edge(1, 1, 2, "NEXT")).unwrap();
-        collection.add_edge(make_edge(2, 1, 3, "OTHER")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 1, 2, "NEXT")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 1, 3, "OTHER")).unwrap();
 
         let results = collection.traverse_dfs(1, 3, Some(&["NEXT"]), 100).unwrap();
         assert_eq!(results.len(), 1);
@@ -376,8 +386,8 @@ mod tests {
     #[test]
     fn test_traverse_dfs_config_rel_filter() {
         let (collection, _temp) = create_test_collection();
-        collection.add_edge(make_edge(1, 1, 2, "NEXT")).unwrap();
-        collection.add_edge(make_edge(2, 1, 3, "OTHER")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 1, 2, "NEXT")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 1, 3, "OTHER")).unwrap();
 
         let config = TraversalConfig {
             max_depth: 2,
@@ -519,10 +529,10 @@ mod tests {
     fn test_traverse_bfs_parallel_multiple_starts() {
         let (collection, _temp) = create_test_collection();
         // Two separate chains: 1->2->3 and 10->20->30
-        collection.add_edge(make_edge(1, 1, 2, "NEXT")).unwrap();
-        collection.add_edge(make_edge(2, 2, 3, "NEXT")).unwrap();
-        collection.add_edge(make_edge(10, 10, 20, "NEXT")).unwrap();
-        collection.add_edge(make_edge(20, 20, 30, "NEXT")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 1, 2, "NEXT")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 2, 3, "NEXT")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(10, 10, 20, "NEXT")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(20, 20, 30, "NEXT")).unwrap();
 
         let config = TraversalConfig {
             max_depth: 2,
@@ -629,8 +639,7 @@ mod tests {
         collection
             .store_node_payload(200, &serde_json::json!({"name": "B"}))
             .unwrap();
-        collection
-            .add_edge(make_edge(1, 100, 200, "KNOWS"))
+        add_edge_with_nodes(&collection, make_edge(1, 100, 200, "KNOWS"))
             .unwrap();
         assert_eq!(collection.edge_count(), 1);
 
@@ -657,11 +666,11 @@ mod tests {
         // A -> B and C -> B; deleting B must remove BOTH edges (outgoing from
         // others into B, i.e. incoming on the deleted node).
         let (collection, _temp) = create_graph_test_collection();
-        collection.add_edge(make_edge(1, 100, 200, "OUT")).unwrap();
-        collection.add_edge(make_edge(2, 300, 200, "IN")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 100, 200, "OUT")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 300, 200, "IN")).unwrap();
         // Also an outgoing edge from B so we cover both directions on the
         // deleted node itself.
-        collection.add_edge(make_edge(3, 200, 400, "OUT")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(3, 200, 400, "OUT")).unwrap();
         assert_eq!(collection.edge_count(), 3);
 
         collection.delete(&[200]).unwrap();
@@ -680,8 +689,8 @@ mod tests {
     #[test]
     fn test_delete_node_does_not_touch_unrelated_edges() {
         let (collection, _temp) = create_graph_test_collection();
-        collection.add_edge(make_edge(1, 100, 200, "A")).unwrap();
-        collection.add_edge(make_edge(2, 300, 400, "B")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(1, 100, 200, "A")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 300, 400, "B")).unwrap();
 
         collection.delete(&[100]).unwrap();
 
@@ -701,9 +710,7 @@ mod tests {
         for src in 0..n {
             for step in 1..=fanout {
                 let dst = (src + step) % n;
-                collection
-                    .add_edge(make_edge(edge_id, src, dst, "E"))
-                    .unwrap();
+                add_edge_with_nodes(collection, make_edge(edge_id, src, dst, "E")).unwrap();
                 edge_id += 1;
             }
         }
@@ -752,12 +759,17 @@ mod tests {
         use rustc_hash::{FxHashMap, FxHashSet};
 
         let (collection, _temp) = create_graph_test_collection();
-        // Hub node 0 with 5_000 distinct out-edges.
+        // Hub node 0 with 5_000 distinct out-edges. Bulk-create all endpoint
+        // payloads in one upsert (single fsync) rather than fanout individual
+        // store_node_payload calls (one WAL fsync each — a real hotspot at
+        // this scale, see test_dfs_hub_stays_bounded_and_terminates).
         let fanout = 5_000u64;
+        let nodes: Vec<crate::point::Point> = (0..=fanout)
+            .map(|id| crate::point::Point::metadata_only(id, serde_json::json!({})))
+            .collect();
+        collection.upsert(nodes).expect("bulk-create nodes");
         for t in 1..=fanout {
-            collection
-                .add_edge(make_edge(t, 0, t, "E"))
-                .expect("add edge");
+            collection.add_edge(make_edge(t, 0, t, "E")).expect("add edge");
         }
 
         let rel_filter: FxHashSet<&str> = FxHashSet::default();
@@ -800,11 +812,15 @@ mod tests {
         // no depth-2 node, so with min_depth=2 the result is empty even though
         // the hub queues thousands of neighbors at push time.
         let (collection, _temp) = create_graph_test_collection();
+        // Bulk-create endpoint payloads in one upsert (see
+        // test_expand_dfs_neighbors_bounds_push_growth for why).
         let fanout = 20_000u64;
+        let nodes: Vec<crate::point::Point> = (0..=fanout)
+            .map(|id| crate::point::Point::metadata_only(id, serde_json::json!({})))
+            .collect();
+        collection.upsert(nodes).expect("bulk-create nodes");
         for t in 1..=fanout {
-            collection
-                .add_edge(make_edge(t, 0, t, "E"))
-                .expect("add edge");
+            collection.add_edge(make_edge(t, 0, t, "E")).expect("add edge");
         }
 
         let config = TraversalConfig {
@@ -929,13 +945,31 @@ mod tests {
     }
 
     #[test]
-    fn test_schemaless_mode_allows_dangling_edge() {
-        // Regression guard: default schemaless path is unchanged — no endpoint
-        // payloads, arbitrary edge label, still accepted.
+    fn test_schemaless_mode_rejects_dangling_edge() {
+        // Regression guard (#1442): endpoint existence is required regardless
+        // of schema strictness — a dangling edge would otherwise be invisible
+        // to all_node_ids()/MATCH, which both resolve nodes from the payload
+        // store rather than the edge store.
+        let (collection, _temp) = create_graph_test_collection();
+        let err = collection
+            .add_edge(make_edge(1, 100, 200, "ANY_REL"))
+            .expect_err("schemaless collection must reject edges to non-existent nodes");
+        assert!(matches!(err, crate::error::Error::NodeNotFound(100)));
+        assert_eq!(collection.edge_count(), 0, "no partial write on rejection");
+    }
+
+    #[test]
+    fn test_schemaless_mode_allows_edge_between_existing_nodes() {
         let (collection, _temp) = create_graph_test_collection();
         collection
+            .store_node_payload(100, &serde_json::json!({}))
+            .expect("store node 100");
+        collection
+            .store_node_payload(200, &serde_json::json!({}))
+            .expect("store node 200");
+        collection
             .add_edge(make_edge(1, 100, 200, "ANY_REL"))
-            .expect("schemaless collection must accept dangling edges");
+            .expect("edge between existing nodes must be accepted");
         assert_eq!(collection.edge_count(), 1);
     }
 
@@ -985,15 +1019,38 @@ mod tests {
     }
 
     #[test]
-    fn test_schemaless_batch_allows_dangling_edges() {
-        // Regression guard: schemaless batch path unchanged.
+    fn test_schemaless_batch_rejects_dangling_edges() {
+        // Regression guard (#1442): batch endpoint existence is required
+        // regardless of schema strictness (see test_schemaless_mode_rejects_dangling_edge).
         let (collection, _temp) = create_graph_test_collection();
+        let err = collection
+            .add_edges_batch(vec![
+                make_edge(1, 100, 200, "ANY_REL"),
+                make_edge(2, 300, 400, "OTHER_REL"),
+            ])
+            .expect_err("schemaless batch must reject edges to non-existent nodes");
+        assert!(matches!(err, crate::error::Error::NodeNotFound(100)));
+        assert_eq!(
+            collection.edge_count(),
+            0,
+            "a violating edge must fail the whole batch with no partial write"
+        );
+    }
+
+    #[test]
+    fn test_schemaless_batch_allows_edges_between_existing_nodes() {
+        let (collection, _temp) = create_graph_test_collection();
+        for id in [100, 200, 300, 400] {
+            collection
+                .store_node_payload(id, &serde_json::json!({}))
+                .expect("store node");
+        }
         let added = collection
             .add_edges_batch(vec![
                 make_edge(1, 100, 200, "ANY_REL"),
                 make_edge(2, 300, 400, "OTHER_REL"),
             ])
-            .expect("schemaless collection must accept dangling edges in batch");
+            .expect("batch between existing nodes must be accepted");
         assert_eq!(added, 2);
         assert_eq!(collection.edge_count(), 2);
     }

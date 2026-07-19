@@ -7,7 +7,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use common::{create_graph_collection, create_test_app, create_test_app_with_state};
+use common::{create_graph_collection, create_graph_node, create_test_app, create_test_app_with_state};
 use futures::stream;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -1940,6 +1940,8 @@ async fn test_graph_add_edge() {
 
     // Graph collections must be explicitly created since F-05 (Sprint 1).
     create_graph_collection(&app, "test").await;
+    create_graph_node(&app, "test", 100).await;
+    create_graph_node(&app, "test", 200).await;
 
     // Add edge
     let response = app
@@ -1972,6 +1974,9 @@ async fn test_graph_add_edges_batch() {
     let app = create_test_app(&temp_dir);
 
     create_graph_collection(&app, "test").await;
+    for id in [100, 200, 300] {
+        create_graph_node(&app, "test", id).await;
+    }
 
     // Insert three edges in one batched request.
     let response = app
@@ -2080,6 +2085,9 @@ async fn test_graph_get_edges_by_label() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
     create_graph_collection(&app, "test").await;
+    for id in [100, 200, 300] {
+        create_graph_node(&app, "test", id).await;
+    }
 
     // Add edges
     let response = app
@@ -2174,6 +2182,9 @@ async fn test_graph_traverse_bfs() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
     create_graph_collection(&app, "graph_test").await;
+    for id in [1, 2, 3, 4] {
+        create_graph_node(&app, "graph_test", id).await;
+    }
 
     // Build a graph: 1 -> 2 -> 3 -> 4
     for (id, src, tgt) in [(1, 1, 2), (2, 2, 3), (3, 3, 4)] {
@@ -2242,6 +2253,9 @@ async fn test_graph_traverse_dfs() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
     create_graph_collection(&app, "dfs_test").await;
+    for id in [1, 2, 3] {
+        create_graph_node(&app, "dfs_test", id).await;
+    }
 
     // Build graph
     for (id, src, tgt) in [(1, 1, 2), (2, 2, 3)] {
@@ -2305,6 +2319,9 @@ async fn test_graph_traverse_with_rel_type_filter() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
     create_graph_collection(&app, "filter_test").await;
+    for id in [1, 2, 3] {
+        create_graph_node(&app, "filter_test", id).await;
+    }
 
     // Build graph with mixed edge types: 1 -KNOWS-> 2 -WROTE-> 3
     let edges = [(1, 1, 2, "KNOWS"), (2, 2, 3, "WROTE")];
@@ -2400,6 +2417,9 @@ async fn test_graph_node_degree() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
     create_graph_collection(&app, "degree_test").await;
+    for id in [1, 2, 3, 4] {
+        create_graph_node(&app, "degree_test", id).await;
+    }
 
     // Build graph: 1 -> 2, 3 -> 2, 2 -> 4
     // Node 2 has in_degree=2, out_degree=1
@@ -4072,6 +4092,8 @@ async fn test_graph_endpoint_works_after_explicit_creation() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
     create_graph_collection(&app, "explicit").await;
+    create_graph_node(&app, "explicit", 100).await;
+    create_graph_node(&app, "explicit", 200).await;
 
     let response = app
         .oneshot(
@@ -5070,4 +5092,100 @@ async fn test_graph_endpoint_on_vector_collection_returns_409() {
         .expect("Graph edge request failed");
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+/// Regression (#1442): `POST /graph/edges` referencing a node that was
+/// never created must be rejected with 404, not silently accepted — the
+/// prior behavior left the node invisible to `graph-nodes`/MATCH.
+#[tokio::test]
+async fn test_graph_add_edge_rejects_nonexistent_endpoint() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "dangling").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/dangling/graph/edges")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "id": 1,
+                        "source": 1,
+                        "target": 2,
+                        "label": "KNOWS"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// Regression (#1442): once endpoints are created explicitly, the edge is
+/// accepted and both endpoints are visible through `graph-nodes`.
+#[tokio::test]
+async fn test_graph_nodes_endpoint_lists_edge_endpoints() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "visible").await;
+    create_graph_node(&app, "visible", 1).await;
+    create_graph_node(&app, "visible", 2).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/visible/graph/edges")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "id": 1,
+                        "source": 1,
+                        "target": 2,
+                        "label": "KNOWS"
+                    })
+                    .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections/visible/graph/nodes")
+                .body(Body::empty())
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+    let node_ids: Vec<u64> = json["node_ids"]
+        .as_array()
+        .expect("node_ids should be an array")
+        .iter()
+        .map(|v| {
+            v.as_str()
+                .expect("node id should be a string (precision-safe u64)")
+                .parse()
+                .expect("node id should parse as u64")
+        })
+        .collect();
+
+    assert_eq!(json["count"], 2);
+    assert!(node_ids.contains(&1));
+    assert!(node_ids.contains(&2));
 }

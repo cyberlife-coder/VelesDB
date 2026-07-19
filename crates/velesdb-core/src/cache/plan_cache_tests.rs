@@ -621,11 +621,13 @@ fn test_plan_invalidation_on_graph_mutation() {
     let coll = db.get_vector_collection("cache_graph").unwrap();
 
     // Seed with one vector point so the query returns results and the
-    // planner can produce a stable plan to cache.
+    // planner can produce a stable plan to cache. Payload must be non-None
+    // for add_edge's endpoint-existence check below (#1442): a None payload
+    // is filtered out before it reaches payload_storage.
     coll.upsert(vec![crate::Point {
         id: 1,
         vector: vec![1.0, 0.0, 0.0, 0.0],
-        payload: None,
+        payload: Some(serde_json::json!({})),
         sparse_vectors: None,
     }])
     .unwrap();
@@ -645,6 +647,14 @@ fn test_plan_invalidation_on_graph_mutation() {
     );
 
     // Graph mutation: add_edge bumps write_generation, invalidating the cached plan.
+    // Edge target (id=2) must exist first (#1442).
+    coll.upsert(vec![crate::Point {
+        id: 2,
+        vector: vec![0.0, 1.0, 0.0, 0.0],
+        payload: Some(serde_json::json!({})),
+        sparse_vectors: None,
+    }])
+    .unwrap();
     let edge = crate::GraphEdge::new(1, 1, 2, "KNOWS").expect("edge should be valid");
     coll.add_edge(edge).unwrap();
 
