@@ -65,6 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   byte-stable only while the compile `query` stays the same — under a tight
   budget, a query change can reorder competing cache-marked fragments
   (issue #1455). (#1456)
+- Regenerated the billed A/B campaign on a new 19-turn vibe-coding
+  scenario (cli runner, claude-sonnet-5, 5 runs/turn/arm, raw logs
+  committed under `examples/real-session-benchmark/results/`): with
+  screenshots, 10.9% billed dollars saved at unchanged answer adequacy
+  (raw 22.8/23 vs compiled 23.0/23); without screenshots, 2.5% — the
+  delta is the measured value of the media supersession/dedup mechanisms.
+  The realistic metadata ceiling was also validated against the new 64 KiB
+  cap (largest realistic fragment: 7% of the cap). (#1462)
 
 ### Changed
 
