@@ -8,6 +8,8 @@
 //! `--features extract`, set `VELESDB_MEMORY_EXTRACTOR=ollama` to enable the
 //! `remember_extracted` tool (auto text → fact↔topic graph). Set
 //! `VELESDB_MEMORY_DEFAULT_TTL` (seconds) to expire remembered facts by default.
+//! Run with `--version` (or `-V`) to print the binary's version and exit,
+//! without opening the store.
 
 use std::time::Duration;
 
@@ -16,6 +18,18 @@ use velesdb_memory::mcp::McpServer;
 use velesdb_memory::{DynEmbedder, HashEmbedder, MemoryService, NativeStore, DEFAULT_DIMENSION};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Handled before anything else touches the filesystem or the embedder:
+    // `--version`/`-V` must work even when the store path is unwritable or
+    // absent (e.g. a fresh dev running it once to sanity-check the install),
+    // so it short-circuits ahead of the store open below.
+    if std::env::args()
+        .nth(1)
+        .is_some_and(|arg| arg == "--version" || arg == "-V")
+    {
+        println!("velesdb-memory {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     // Captured FIRST — before the (possibly seconds-long) embedder probe and
     // store open — so a client that exits during our own startup still
     // reparents us AFTER the baseline, and the watchdog sees the change. A
