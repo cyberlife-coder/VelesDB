@@ -74,14 +74,19 @@ fn cache_section_content(out: &CompiledContext) -> Option<String> {
 
 // === Pin (a): cache-prefix byte stability under a CHANGING query ===========
 //
-// `selection_order` (crates/velesdb-memory/src/context/budget.rs:67-78)
-// ranks same-critical, same-priority fragments by lexical relevance to the
-// request's query — and `cache.stable_prefix` marks BOTH of two
-// caller-marked-cache fragments critical with the default priority. Under a
-// budget tight enough for only one of them, the query alone decides which
-// one wins the Cache section. The crate's committed measurement harness
+// Fixed by issue #1455: `selection_order`
+// (crates/velesdb-memory/src/context/budget.rs) used to rank same-critical,
+// same-priority fragments by lexical relevance to the request's query — and
+// `cache.stable_prefix` marks BOTH of two caller-marked-cache fragments
+// critical with the default priority, so under a budget tight enough for
+// only one of them, the query alone decided which one won the Cache
+// section. A cache-marked fragment's rank now never consults relevance (see
+// the `selection_order`/`PackItem::cache` doc comments): two cache-marked
+// fragments tied on priority fall straight to `seq`, so the winner is fixed
+// regardless of the query. The crate's committed measurement harness
 // (`examples/context_savings/real_measures/cache_prefix.mjs`) only ever
-// re-runs the SAME query across turns, so it never exercises this path.
+// re-runs the SAME query across turns, so it never exercised this path —
+// this test is what does.
 
 #[test]
 fn test_cache_prefix_pin_under_a_changing_query_and_a_tight_budget() {
@@ -128,29 +133,29 @@ fn test_cache_prefix_pin_under_a_changing_query_and_a_tight_budget() {
     let cache_mongo_query =
         cache_section_content(&out_mongo_query).expect("a Cache section must exist");
 
-    // PIN of the REAL behavior observed: the two cache-marked fragments tie
-    // on criticality and priority, so relevance (query-dependent) picks the
-    // winner — the Cache prefix is NOT byte-stable across a query change
-    // under a budget too tight for both. This is a real limitation of the
-    // "stable prefix for provider prompt caching" claim: it holds only when
-    // the query stays fixed (exactly what the committed harness measures),
-    // not across an arbitrary query change. See the crate README's
-    // prompt-cache section and the tracking issue linked there.
-    assert_ne!(
+    // FIX (issue #1455): the two cache-marked fragments tie on criticality
+    // and priority; `selection_order` now breaks that tie on `seq` alone,
+    // never on relevance, so the SAME fragment wins the tight budget
+    // regardless of which query was asked — the Cache prefix is byte-stable
+    // across a query change, exactly the guarantee prompt-caching providers
+    // need.
+    assert_eq!(
         cache_redis_query, cache_mongo_query,
-        "documented limitation regressed: the cache prefix used to churn under a \
-         changing query and a tight budget (query-dependent relevance breaks the \
-         tie between two equally-critical cache fragments) — if this now passes \
-         because the prefix is stable, the README/skill limitation note this test \
-         guards should be revisited, not just this assertion"
+        "the cache prefix must be byte-identical regardless of the query: a \
+         cache-marked fragment's selection must never depend on relevance \
+         (issue #1455)"
     );
+    // The winner is deterministic (seq asc: the redis fragment is first in
+    // `fragments()`), independent of which query was compiled against —
+    // pinning that "who wins" is itself query-independent, not just that
+    // both queries happen to agree.
     assert!(
         cache_redis_query.contains("redis"),
-        "the higher-relevance-for-this-query fragment must win: {cache_redis_query}"
+        "the earlier-seq cache fragment must win deterministically: {cache_redis_query}"
     );
     assert!(
-        cache_mongo_query.contains("mongo"),
-        "the higher-relevance-for-this-query fragment must win: {cache_mongo_query}"
+        !cache_redis_query.contains("mongo"),
+        "the losing cache fragment must not partially leak into the prefix: {cache_redis_query}"
     );
 }
 
