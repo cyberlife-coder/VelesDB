@@ -171,13 +171,14 @@ pub fn resolve_fragments(
 
     let mut total_bytes: usize = 0;
     for index in indices {
-        let requested = fragments[index]
-            .path
-            .clone()
-            .expect("index was filtered on path.is_some() above");
+        // Indices were filtered on `path.is_some()` above; `take` both fetches
+        // the path and clears it without a panicking unwrap. On error the whole
+        // request is rejected, so the cleared field is never observed.
+        let Some(requested) = fragments[index].path.take() else {
+            continue;
+        };
         let content = resolve_one(&requested, roots, &mut total_bytes, MAX_INGEST_FILE_BYTES)?;
         fragments[index].content = content;
-        fragments[index].path = None;
     }
     Ok(())
 }

@@ -1106,9 +1106,8 @@ async fn test_compile_transcript_from_path_uses_ingest_checks() {
             segmentation: None,
         }))
         .await;
-    let err = match result {
-        Ok(_) => panic!("path outside the ingest roots must be rejected"),
-        Err(err) => err,
+    let Err(err) = result else {
+        panic!("path outside the ingest roots must be rejected");
     };
 
     // Then it fails with the same ingest security error `compile_context`
@@ -1137,9 +1136,8 @@ async fn test_compile_transcript_without_ingest_roots_reports_disabled() {
             segmentation: None,
         }))
         .await;
-    let err = match result {
-        Ok(_) => panic!("ingestion is disabled without VELESDB_MEMORY_INGEST_ROOTS"),
-        Err(err) => err,
+    let Err(err) = result else {
+        panic!("ingestion is disabled without VELESDB_MEMORY_INGEST_ROOTS");
     };
 
     // Then it reports the same "ingestion disabled" error as compile_context.
@@ -1173,9 +1171,8 @@ async fn test_compile_transcript_rejects_empty_file_same_as_empty_inline_transcr
             segmentation: None,
         }))
         .await;
-    let path_err = match path_result {
-        Ok(_) => panic!("an empty file must be rejected, not silently compiled into nothing"),
-        Err(err) => err,
+    let Err(path_err) = path_result else {
+        panic!("an empty file must be rejected, not silently compiled into nothing");
     };
 
     // And when compiling with an empty inline transcript instead
@@ -1191,9 +1188,8 @@ async fn test_compile_transcript_rejects_empty_file_same_as_empty_inline_transcr
             segmentation: None,
         }))
         .await;
-    let inline_err = match inline_result {
-        Ok(_) => panic!("an empty inline transcript must be rejected"),
-        Err(err) => err,
+    let Err(inline_err) = inline_result else {
+        panic!("an empty inline transcript must be rejected");
     };
 
     // Then both fail the same way, with the exact same actionable message
