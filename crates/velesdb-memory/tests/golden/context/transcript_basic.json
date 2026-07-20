@@ -1,0 +1,102 @@
+{
+  "content": "System: You are the deploy assistant.\n\n\nUser: what changed in the deploy pipeline?\n\n\n```rust\nlet x = 42;\n```\n\n\nAssistant: Never restart the primary node during a rebalance.\n\n\nERROR timeout (x8)",
+  "decisions": [
+    {
+      "action": "cache",
+      "content_hash": 16851729626188896855,
+      "fragment_id": 16851729626188896855,
+      "reason": "caller marked this fragment cacheable; it forms the stable prefix",
+      "relevance": 0.3333333432674408,
+      "risk": "low",
+      "rule_id": "cache.stable_prefix"
+    },
+    {
+      "action": "preserve",
+      "content_hash": 12804954966138698420,
+      "fragment_id": 12804954966138698420,
+      "reason": "prose kept subject to budget",
+      "relevance": 1.0,
+      "risk": "low",
+      "rule_id": "preserve.default"
+    },
+    {
+      "action": "preserve",
+      "content_hash": 7816677558540495962,
+      "fragment_id": 7816677558540495962,
+      "reason": "code must survive verbatim",
+      "relevance": 0.0,
+      "risk": "low",
+      "rule_id": "preserve.code_fence"
+    },
+    {
+      "action": "preserve",
+      "content_hash": 15581793059231841206,
+      "fragment_id": 15581793059231841206,
+      "reason": "negative constraints must never be weakened",
+      "relevance": 0.1666666716337204,
+      "risk": "low",
+      "rule_id": "preserve.negative_constraint"
+    },
+    {
+      "action": "abstract",
+      "content_hash": 4635286298132093749,
+      "fragment_id": 4635286298132093749,
+      "reason": "repeated log lines collapse into one annotated line",
+      "relevance": 0.0,
+      "risk": "medium",
+      "rule_id": "abstract.log_dedup"
+    }
+  ],
+  "insights": {
+    "tokens_in": 104,
+    "tokens_out": 69,
+    "tokens_saved": 35,
+    "tokens_saved_by_rule": {
+      "abstract.log_dedup": 37
+    }
+  },
+  "retrieval_handles": [],
+  "risk": "medium",
+  "sections": [
+    {
+      "content": "System: You are the deploy assistant.\n",
+      "fragment_ids": [
+        16851729626188896855
+      ],
+      "kind": "cache"
+    },
+    {
+      "content": "User: what changed in the deploy pipeline?\n\n\n```rust\nlet x = 42;\n```\n\n\nAssistant: Never restart the primary node during a rebalance.\n\n\nERROR timeout (x8)",
+      "fragment_ids": [
+        12804954966138698420,
+        7816677558540495962,
+        15581793059231841206,
+        4635286298132093749
+      ],
+      "kind": "body"
+    }
+  ],
+  "sources": [
+    {
+      "fragment_id": 16851729626188896855,
+      "handle": "ctx://source/16851729626188896855"
+    },
+    {
+      "fragment_id": 12804954966138698420,
+      "handle": "ctx://source/12804954966138698420"
+    },
+    {
+      "fragment_id": 7816677558540495962,
+      "handle": "ctx://source/7816677558540495962"
+    },
+    {
+      "fragment_id": 15581793059231841206,
+      "handle": "ctx://source/15581793059231841206"
+    },
+    {
+      "fragment_id": 4635286298132093749,
+      "handle": "ctx://source/4635286298132093749"
+    }
+  ],
+  "warnings": []
+}

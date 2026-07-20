@@ -11,8 +11,9 @@
 
 use serde_json::{Map, Value};
 use velesdb_memory::context::{
-    CompilePolicy, CompileRequest, CompiledContext, ContextAction, ContextCompiler,
-    ContextFragment, FidelityRisk, HeuristicEstimator, TokenEstimator,
+    segment_transcript, CompilePolicy, CompileRequest, CompiledContext, ContextAction,
+    ContextCompiler, ContextFragment, FidelityRisk, HeuristicEstimator, SegmentationPolicy,
+    TokenEstimator,
 };
 use velesdb_memory::{ErrorCategory, MemoryError};
 
@@ -512,6 +513,44 @@ fn test_compile_golden_snapshot_matches_committed_output() {
         golden,
         "compiled output drifted from the golden snapshot; if intentional, \
          re-generate tests/golden/context/compile_basic.json — actual:\n{}",
+        serde_json::to_string_pretty(&actual).expect("pretty-print actual")
+    );
+}
+
+#[test]
+fn test_compile_transcript_golden_snapshot_matches_committed_output() {
+    // Given a fixed, representative transcript (system + user + assistant
+    // turns, a fenced code block, a repeated-line log run) — segmented, then
+    // compiled exactly like `compile_context` would with the resulting
+    // fragments. Committed under tests/golden/context/; any change to it
+    // must be a conscious one (V2b-2 non-regression).
+    let transcript = "System: You are the deploy assistant.\n\
+User: what changed in the deploy pipeline?\n\
+```rust\nlet x = 42;\n```\n\
+Assistant: Never restart the primary node during a rebalance.\n\
+ERROR timeout\nERROR timeout\nERROR timeout\nERROR timeout\n\
+ERROR timeout\nERROR timeout\nERROR timeout\nERROR timeout\n";
+    let outcome = segment_transcript(transcript, &SegmentationPolicy::default())
+        .expect("a well-formed transcript segments cleanly");
+    let fragments: Vec<ContextFragment> = outcome
+        .segments
+        .into_iter()
+        .map(|segment| segment.fragment)
+        .collect();
+    let req = request(fragments, 10_000);
+
+    // When compiling the segmented fragments
+    let out = compile(&req);
+
+    // Then the output matches the committed golden snapshot exactly
+    let actual = serde_json::to_value(&out).expect("serialize output");
+    let golden: Value = serde_json::from_str(include_str!("golden/context/transcript_basic.json"))
+        .expect("parse committed golden snapshot");
+    assert_eq!(
+        actual,
+        golden,
+        "compiled transcript output drifted from the golden snapshot; if intentional, \
+         re-generate tests/golden/context/transcript_basic.json — actual:\n{}",
         serde_json::to_string_pretty(&actual).expect("pretty-print actual")
     );
 }
