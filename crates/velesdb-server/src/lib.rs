@@ -393,6 +393,14 @@ mod tests {
         );
     }
 
+    /// Regenerates `docs/openapi.{json,yaml}` in place instead of only
+    /// comparing against them. Opt-in via `UPDATE_OPENAPI_SNAPSHOT=1` so that
+    /// a plain `cargo test` — including the default parallel test threads —
+    /// never mutates the working tree; see `generate_openapi_spec_files`.
+    fn update_openapi_snapshot_requested() -> bool {
+        std::env::var_os("UPDATE_OPENAPI_SNAPSHOT").is_some()
+    }
+
     #[test]
     fn generate_openapi_spec_files() {
         let openapi = ApiDoc::openapi();
@@ -401,17 +409,34 @@ mod tests {
             .expect("Failed to serialize OpenAPI JSON");
         let yaml = serde_yaml::to_string(&openapi).expect("Failed to serialize OpenAPI YAML");
 
-        // Write to docs/ relative to workspace root
+        // docs/ relative to workspace root
         let docs_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("test: CARGO_MANIFEST_DIR has a parent (crates/)")
             .parent()
             .expect("test: crates/ has a parent (workspace root)")
             .join("docs");
-        std::fs::create_dir_all(&docs_dir).expect("Failed to create docs dir");
+        let json_path = docs_dir.join("openapi.json");
+        let yaml_path = docs_dir.join("openapi.yaml");
 
-        std::fs::write(docs_dir.join("openapi.json"), &json).expect("Failed to write openapi.json");
-        std::fs::write(docs_dir.join("openapi.yaml"), &yaml).expect("Failed to write openapi.yaml");
+        if update_openapi_snapshot_requested() {
+            std::fs::create_dir_all(&docs_dir).expect("Failed to create docs dir");
+            std::fs::write(&json_path, &json).expect("Failed to write openapi.json");
+            std::fs::write(&yaml_path, &yaml).expect("Failed to write openapi.yaml");
+        } else {
+            let committed_json = std::fs::read_to_string(&json_path)
+                .expect("Failed to read docs/openapi.json (run with UPDATE_OPENAPI_SNAPSHOT=1 to create it)");
+            let committed_yaml = std::fs::read_to_string(&yaml_path)
+                .expect("Failed to read docs/openapi.yaml (run with UPDATE_OPENAPI_SNAPSHOT=1 to create it)");
+            assert_eq!(
+                json, committed_json,
+                "docs/openapi.json is stale — rerun with UPDATE_OPENAPI_SNAPSHOT=1 to regenerate"
+            );
+            assert_eq!(
+                yaml, committed_yaml,
+                "docs/openapi.yaml is stale — rerun with UPDATE_OPENAPI_SNAPSHOT=1 to regenerate"
+            );
+        }
 
         // Verify key endpoints are present
         assert!(
