@@ -27,6 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Memory-tool id strings now tolerate surrounding whitespace.** Follow-up
+  to issue #1468/#1471: some MCP harnesses (Claude Code included) coerce any
+  all-digit scalar back into a JSON number even when the client sends a
+  string, which defeats the `id_str` string-id workaround and reintroduces
+  precision loss above 2^53. A caller working around this by padding the id
+  with whitespace (e.g. `" 12732540571541475285"`) was rejected by the
+  string-or-number id parser used by `relate`/`forget`/`feedback` (and
+  `Link.target`) with "expected a u64 number or a decimal u64 string" — the
+  id string is now trimmed before parsing. The `+`-prefixed workaround
+  (`"+12732540571541475285"`, already accepted since `u64::from_str` allows a
+  leading `+`) keeps working unchanged.
+
 - **`recall_where`'s type-strict comparisons are now documented (issue
   #1473).** Behavior is unchanged (no runtime coercion added): a numeric
   filter value never matched a string-stored metadata value, and vice

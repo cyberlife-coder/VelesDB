@@ -34,6 +34,7 @@ where
             .as_u64()
             .ok_or_else(|| Error::custom(format!("invalid id {number} ({expected})"))),
         Value::String(text) => text
+            .trim()
             .parse()
             .map_err(|_| Error::custom(format!("invalid id '{text}' ({expected})"))),
         other => Err(Error::custom(format!("invalid id {other} ({expected})"))),
@@ -243,3 +244,7 @@ pub struct Explanation {
     /// Typed edges connecting the nodes.
     pub edges: Vec<MemoryEdge>,
 }
+
+#[cfg(test)]
+#[path = "model_tests.rs"]
+mod tests;
