@@ -2,6 +2,20 @@
 
 *Stable since v1.9.1*
 
+> **Two different paths, same underlying engine.** If you followed the root
+> README's `why()` / MCP / skills narrative here, this guide is the *other*
+> one: a low-level, language-native API (`AgentMemory` with explicit
+> `semantic` / `episodic` / `procedural` stores) for embedding directly into
+> Python or Rust code you control. There is no `why()` graph walk, no MCP
+> tool surface, and no bundled agent skill on this path — for that, see the
+> **[velesdb-memory MCP server](../../crates/velesdb-memory/README.md)**
+> (`remember`/`recall`/`relate`/`why`/`feedback`, plus the deterministic
+> context compiler) and its bundled
+> [`velesdb-memory` skill](../../crates/velesdb-memory/skill/velesdb-memory/SKILL.md)
+> that teaches an agent when to use it. Pick this guide when you want direct
+> control over embeddings and storage from your own code; pick the MCP server
+> when you want an agent (Claude Code, Cursor, etc.) to manage memory itself.
+
 Complete guide for using VelesDB's Agent Memory SDK. Covers the three memory subsystems (semantic, episodic, procedural), embedding generation, TTL configuration, snapshots, and production best practices.
 
 ---
