@@ -67,10 +67,9 @@ export interface CompileContextFragment {
   /**
    * Inline media payload (US-009). `undefined` keeps every pre-existing
    * request wire-compatible. Fetch it back later — inline or externalized
-   * by budget, it makes no difference — through `retrieve_context_source`
-   * over the underlying `compileContext` handle (not yet exposed on this
-   * WASM-backed SDK client; see the Node binding's `retrieveContextSource`
-   * for the same shape).
+   * by budget, it makes no difference — through
+   * {@link MemoryService.retrieveContextSource} over the resulting
+   * `ctx://source/<hash>` handle.
    */
   media?: CompileContextMedia;
 }
@@ -114,6 +113,22 @@ export interface CompiledContext {
   insights: unknown;
   /** Overall fidelity risk. */
   risk: 'low' | 'medium' | 'high';
+  [key: string]: unknown;
+}
+
+/**
+ * Output of {@link MemoryService.retrieveContextSource} — the exact original
+ * content (and media, when the fragment carried one) behind a
+ * `ctx://source/<hash>` handle from a {@link MemoryService.compileContext}
+ * result. Same wire shape as the Node binding's own `retrieveContextSource`.
+ */
+export interface ContextSource {
+  /** The handle this source was resolved from (echoed back). */
+  handle: string;
+  /** The exact original fragment text. */
+  content: string;
+  /** Present only when the fragment carried an inline media payload. */
+  media?: CompileContextMedia;
   [key: string]: unknown;
 }
 
@@ -205,6 +220,7 @@ interface WasmMemoryServiceInstance {
   forget(id: string): boolean;
   why(decision: string, maxHops: number | null | undefined, filter: unknown): unknown;
   compileContext(request: unknown): unknown;
+  retrieveContextSource(handle: string): unknown;
   free(): void;
 }
 
@@ -486,6 +502,22 @@ export class MemoryService {
   compileContext(request: CompileContextRequest): Promise<CompiledContext> {
     return wrapWasmCall(
       () => this.ensureInitialized().compileContext(request) as CompiledContext
+    );
+  }
+
+  /**
+   * Fetch back the exact original content — and media, when the fragment
+   * carried one — behind a `ctx://source/<hash>` handle from a
+   * {@link compileContext} result: what was externalized or partially
+   * packed is recoverable, not lost. Same wire shape as the Node binding's
+   * own `retrieveContextSource`.
+   *
+   * In-memory semantics: the handle resolves only within this session's
+   * store — see {@link compileContext}'s doc comment.
+   */
+  retrieveContextSource(handle: string): Promise<ContextSource> {
+    return wrapWasmCall(
+      () => this.ensureInitialized().retrieveContextSource(handle) as ContextSource
     );
   }
 }

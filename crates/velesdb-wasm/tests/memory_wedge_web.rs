@@ -201,14 +201,10 @@ fn compile_context_memory_scope_pulls_stored_memories() {
 // (a different `MemoryStore` impl than the native one every other media
 // test in this workspace runs against).
 //
-// `retrieve_context_source` is not exposed on `WasmMemoryService` at all
-// (checked against `src/memory_service.rs` before writing this test) — so
-// resolving a media handle back to its bytes within a wasm session is not
-// covered here; that lands whenever wasm gets a `retrieveContextSource`
-// binding of its own (mirroring the Node one added in this same PR). Adding
-// that binding is out of scope for this PR: it is a new, independently
-// reviewable surface, not required to prove media fragments compile
-// correctly on `WasmStore`.
+// `retrieveContextSource` (below, V2d-2/A4) resolves a media handle back to
+// its bytes within a wasm session, mirroring the Node binding's own
+// `retrieveContextSource` — in-memory only, so the handle resolves within
+// the current session's `WasmStore`, never across a process/page reload.
 
 /// A real, independently-decodable 1x1 transparent PNG (IHDR + IDAT + IEND),
 /// fixed bytes never derived from the fragment's caption or any other
@@ -280,4 +276,115 @@ fn compile_context_with_media_fragment_is_deterministic() {
     let b = svc.compile_context(request()).unwrap();
     let stringify = |v: &JsValue| js_sys::JSON::stringify(v).unwrap().as_string().unwrap();
     assert_eq!(stringify(&a), stringify(&b), "same media input, same bytes");
+}
+
+// --- retrieveContextSource (V2d-2/A4) ---------------------------------------
+// In-memory semantics: a handle minted by `compile_context` resolves only
+// within the current session's `WasmStore` (no persistence in WASM) — same
+// caveat `compile_context`'s own doc comment already states.
+
+/// A text-only source resolves back to its exact original content, with no
+/// `media` field on the wire (matches the Node binding's own contract).
+#[wasm_bindgen_test]
+fn retrieve_context_source_resolves_a_text_only_source() {
+    let svc = WasmMemoryService::new(16);
+    let content_text = "Never restart the primary during a rebalance.";
+    let request = js_sys::JSON::parse(&format!(
+        r#"{{"query": "q", "token_budget": 4000, "fragments": [{{"content": "{content_text}"}}]}}"#
+    ))
+    .unwrap();
+    let compiled = svc.compile_context(request).unwrap();
+    let sources = js_sys::Reflect::get(&compiled, &"sources".into()).unwrap();
+    let source = js_sys::Reflect::get(&sources, &0.into()).unwrap();
+    let handle = js_sys::Reflect::get(&source, &"handle".into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+    assert!(handle.starts_with("ctx://source/"));
+
+    let resolved = svc.retrieve_context_source(&handle).unwrap();
+    assert!(
+        !resolved.is_instance_of::<js_sys::Map>(),
+        "resolved source must be a plain object"
+    );
+    let content = js_sys::Reflect::get(&resolved, &"content".into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+    assert_eq!(content, content_text);
+    let handle_field = js_sys::Reflect::get(&resolved, &"handle".into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+    assert_eq!(
+        handle_field, handle,
+        "the resolved object echoes its own handle"
+    );
+    let media = js_sys::Reflect::get(&resolved, &"media".into()).unwrap();
+    assert!(
+        media.is_undefined(),
+        "a text-only source carries no media field"
+    );
+}
+
+/// A media source round-trips byte-identical — the exact regression
+/// `compile_context_with_media_fragment_decides_atomic_preserve_and_mints_a_handle`
+/// flagged as uncovered before this binding existed.
+#[wasm_bindgen_test]
+fn retrieve_context_source_round_trips_a_media_source() {
+    let svc = WasmMemoryService::new(16);
+    let request = js_sys::JSON::parse(&format!(
+        r#"{{
+            "query": "a screenshot of the failing build",
+            "token_budget": 4000,
+            "fragments": [
+                {{"content": "the failing build, before the fix",
+                  "media": {{"mime": "image/png", "bytes_b64": "{PNG_1X1_B64}"}}}}
+            ]
+        }}"#
+    ))
+    .unwrap();
+    let compiled = svc.compile_context(request).unwrap();
+    let sources = js_sys::Reflect::get(&compiled, &"sources".into()).unwrap();
+    let source = js_sys::Reflect::get(&sources, &0.into()).unwrap();
+    let handle = js_sys::Reflect::get(&source, &"handle".into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+
+    let resolved = svc.retrieve_context_source(&handle).unwrap();
+    let media = js_sys::Reflect::get(&resolved, &"media".into()).unwrap();
+    assert!(
+        !media.is_undefined(),
+        "a media fragment's source must carry media back"
+    );
+    let mime = js_sys::Reflect::get(&media, &"mime".into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+    assert_eq!(mime, "image/png");
+    let bytes_b64 = js_sys::Reflect::get(&media, &"bytes_b64".into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+    assert_eq!(
+        bytes_b64, PNG_1X1_B64,
+        "media bytes round-trip byte-identical"
+    );
+}
+
+/// An unknown handle rejects with a structured `{code: "NOT_FOUND"}` error,
+/// mirroring the Node binding's contract, never panicking across the
+/// boundary.
+#[wasm_bindgen_test]
+fn retrieve_context_source_unknown_handle_rejects_with_not_found() {
+    let svc = WasmMemoryService::new(16);
+    let err = svc
+        .retrieve_context_source("ctx://source/999999999999999999")
+        .unwrap_err();
+    let code = js_sys::Reflect::get(&err, &"code".into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+    assert_eq!(code, "NOT_FOUND");
 }
