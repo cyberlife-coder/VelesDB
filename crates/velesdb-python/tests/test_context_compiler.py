@@ -82,6 +82,67 @@ def test_retrieve_context_source_malformed_handle_raises_key_error(mem):
         mem.retrieve_context_source("not-a-handle")
 
 
+# --- explain_compilation: extracted selection primitive (V2d-2) -------------
+# Same deterministic re-compile + select-by-index/id logic the MCP
+# `explain_compilation` tool now delegates to (crates/velesdb-memory/src/
+# context/memory_bridge.rs `MemoryService::explain_compilation`).
+
+
+def test_explain_compilation_returns_decision_for_fragment(mem):
+    req = {
+        "query": "deploy",
+        "token_budget": 10_000,
+        "fragments": [{"content": "a fact"}, {"content": "other"}],
+    }
+    compiled = mem.compile_context(req)
+    fragment_id = compiled["decisions"][0]["fragment_id"]
+
+    decision = mem.explain_compilation(req, fragment_id)
+    assert decision["fragment_id"] == fragment_id
+    assert decision["action"] == "preserve"
+    assert decision["reason"]
+
+
+def test_explain_compilation_fragment_index_disambiguates_byte_identical_twins(mem):
+    req = {
+        "query": "deploy",
+        "token_budget": 10_000,
+        "fragments": [{"content": "duplicate payload"}, {"content": "duplicate payload"}],
+    }
+    compiled = mem.compile_context(req)
+    shared_id = compiled["decisions"][0]["fragment_id"]
+
+    survivor = mem.explain_compilation(req, shared_id)
+    twin = mem.explain_compilation(req, shared_id, fragment_index=1)
+
+    assert survivor["action"] == "preserve"
+    assert twin["action"] == "drop"
+    assert twin["rule_id"] == "drop.duplicate"
+
+
+def test_explain_compilation_unknown_fragment_raises_value_error(mem):
+    req = {"query": "deploy", "token_budget": 10_000, "fragments": [{"content": "a fact"}]}
+    with pytest.raises(ValueError):
+        mem.explain_compilation(req, 424242)
+
+
+def test_explain_compilation_fragment_index_out_of_bounds_raises_value_error(mem):
+    req = {"query": "deploy", "token_budget": 10_000, "fragments": [{"content": "a fact"}]}
+    with pytest.raises(ValueError):
+        mem.explain_compilation(req, 1, fragment_index=5)
+
+
+def test_explain_compilation_never_records_a_compile_event(mem):
+    req = {"query": "deploy", "token_budget": 10_000, "fragments": [{"content": "a fact"}]}
+    compiled = mem.compile_context(req)
+    fragment_id = compiled["decisions"][0]["fragment_id"]
+
+    mem.explain_compilation(req, fragment_id)
+
+    savings = mem.context_savings()
+    assert savings["events"] == 1, "only the compile_context call above must count"
+
+
 # --- context_savings: aggregates after a compile -----------------------------
 
 
