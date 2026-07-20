@@ -313,7 +313,6 @@ pub struct AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use utoipa::OpenApi;
 
     #[test]
     fn test_openapi_spec_generation() {
