@@ -325,3 +325,150 @@ fn transcript_over_cap_rejected() {
         other => panic!("expected ContextOverLimit, got {other:?}"),
     }
 }
+
+// --- Adversarial-review fixes (post-PR #1500) -------------------------------
+
+#[test]
+fn oversized_log_run_is_resplit_not_left_over_the_cap() {
+    // Given ONE contiguous log run whose lines are individually tiny but
+    // together exceed MAX_FRAGMENT_BYTES (B1 repro: ~1 MiB+ of timestamped
+    // lines) — reject_oversized_fences only ever looked at `code` pieces
+    // and resplit_oversized_bodies only ever looked at `body` pieces, so a
+    // `log` piece this large used to sail through unresplit and unrejected,
+    // only to blow up later at compile() time with a confusing "a fragment
+    // of N bytes" error the caller never directly supplied.
+    let mut text = String::from("User: watch this\n");
+    let line_count = (MAX_FRAGMENT_BYTES / 30) + 100;
+    for i in 0..line_count {
+        writeln!(text, "2026-07-18T10:00:00Z tick {i}").expect("write to String never fails");
+    }
+    assert!(
+        text.len() > MAX_FRAGMENT_BYTES,
+        "test setup must exceed the cap"
+    );
+
+    // When segmenting
+    let outcome = segment_transcript(&text, &policy()).expect("must segment, never error");
+
+    // Then the run is resplit into several `log` segments, none over the
+    // cap, and the byte ranges still partition the transcript exactly
+    let log_segments: Vec<_> = outcome
+        .segments
+        .iter()
+        .filter(|s| s.kind == SegmentKind::Log)
+        .collect();
+    assert!(log_segments.len() > 1, "{outcome:?}");
+    for segment in &log_segments {
+        assert!(
+            segment.fragment.content.len() <= MAX_FRAGMENT_BYTES,
+            "log segment of {} bytes exceeds the cap of {MAX_FRAGMENT_BYTES} bytes",
+            segment.fragment.content.len()
+        );
+    }
+    let mut ranges: Vec<(usize, usize)> = outcome
+        .segments
+        .iter()
+        .map(|s| (s.byte_start, s.byte_end))
+        .collect();
+    ranges.sort_unstable();
+    let mut cursor = 0_usize;
+    for (start, end) in ranges {
+        assert_eq!(start, cursor, "gap or overlap at byte {cursor}");
+        cursor = end;
+    }
+    assert_eq!(cursor, text.len());
+}
+
+#[test]
+fn merge_never_recombines_a_resplit_body_over_the_fragment_cap() {
+    // Given a body whose paragraph split leaves one chunk near the cap and
+    // a tiny trailing remainder (M1 repro: ~1 MiB body + a tail under
+    // min_segment_bytes) — merge_tiny used to merge purely on "one side is
+    // small", with no check that the COMBINED size stays under the cap.
+    let big_paragraph = "a".repeat(MAX_FRAGMENT_BYTES - 5);
+    let text = format!("User: {big_paragraph}\n\ntiny tail\n");
+
+    // When segmenting with the default (small) min_segment_bytes, which
+    // would otherwise want to merge the tiny tail into its same-turn,
+    // same-kind neighbor
+    let outcome = segment_transcript(&text, &policy()).expect("segments");
+
+    // Then no resulting body segment exceeds the cap
+    let body_segments: Vec<_> = outcome
+        .segments
+        .iter()
+        .filter(|s| s.kind == SegmentKind::Body)
+        .collect();
+    assert!(body_segments.len() >= 2, "{outcome:?}");
+    for segment in &body_segments {
+        assert!(
+            segment.fragment.content.len() <= MAX_FRAGMENT_BYTES,
+            "body segment of {} bytes exceeds the cap of {MAX_FRAGMENT_BYTES} bytes",
+            segment.fragment.content.len()
+        );
+    }
+}
+
+#[test]
+fn merge_never_recombines_adjacent_fences_over_the_fragment_cap() {
+    // Given two adjacent code fences whose combined size exceeds
+    // MAX_FRAGMENT_BYTES even though each one alone is under the cap (M1's
+    // second repro shape)
+    let near_cap_body = "b".repeat(MAX_FRAGMENT_BYTES - 14);
+    let text = format!("User: two blocks\n```\na\n```\n```\n{near_cap_body}\n```\n");
+
+    // When segmenting with the default (small) min_segment_bytes
+    let outcome = segment_transcript(&text, &policy()).expect("segments");
+
+    // Then the two fences never merge into one oversized fragment
+    let code_segments: Vec<_> = outcome
+        .segments
+        .iter()
+        .filter(|s| s.kind == SegmentKind::Code)
+        .collect();
+    assert_eq!(code_segments.len(), 2, "{outcome:?}");
+    for segment in &code_segments {
+        assert!(
+            segment.fragment.content.len() <= MAX_FRAGMENT_BYTES,
+            "code segment of {} bytes exceeds the cap of {MAX_FRAGMENT_BYTES} bytes",
+            segment.fragment.content.len()
+        );
+    }
+}
+
+#[test]
+fn jsonl_tolerates_a_blank_line_between_turns() {
+    // Given a JSONL transcript with a blank line between two real turns —
+    // jsonl_pieces used to fail to parse the blank line as `{role,
+    // content}`, and detect_and_segment's Auto branch swallowed that
+    // error, silently falling back to a single roleless plain turn for an
+    // otherwise perfectly valid JSONL transcript.
+    let text = "{\"role\":\"system\",\"content\":\"be terse\"}\n\n{\"role\":\"user\",\"content\":\"hi\"}\n";
+
+    // When segmenting with auto-detection (the default)
+    let outcome = segment_transcript(text, &policy()).expect("segments");
+
+    // Then it is still recognized as jsonl, with two correctly-numbered
+    // turns and roles taken straight from the JSON
+    assert_eq!(outcome.format_detected, SegmentFormat::Jsonl, "{outcome:?}");
+    assert_eq!(outcome.segments.len(), 2, "{outcome:?}");
+    assert_eq!(outcome.segments[0].turn, 0);
+    assert_eq!(outcome.segments[0].role, Some("system".to_owned()));
+    assert_eq!(outcome.segments[1].turn, 1);
+    assert_eq!(outcome.segments[1].role, Some("user".to_owned()));
+
+    // And the byte ranges still partition the transcript exactly — the
+    // blank line's bytes must land somewhere, never vanish
+    let mut ranges: Vec<(usize, usize)> = outcome
+        .segments
+        .iter()
+        .map(|s| (s.byte_start, s.byte_end))
+        .collect();
+    ranges.sort_unstable();
+    let mut cursor = 0_usize;
+    for (start, end) in ranges {
+        assert_eq!(start, cursor, "gap or overlap at byte {cursor}");
+        cursor = end;
+    }
+    assert_eq!(cursor, text.len());
+}

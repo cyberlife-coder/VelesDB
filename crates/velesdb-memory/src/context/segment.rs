@@ -288,30 +288,57 @@ struct JsonlLine {
     content: String,
 }
 
-/// Parse every line of `text` as one JSONL turn. `Err` names the first
-/// (1-based) offending line — the first failure short-circuits, so a caller
-/// forcing `jsonl` on a bad transcript gets an actionable pointer instead of
-/// a generic "not jsonl".
+/// Parse every non-blank line of `text` as one JSONL turn. A wholly empty
+/// line (`""` once the trailing `\r`/`\n` is stripped) never fails parsing
+/// and never opens a turn of its own — its bytes fold into the PRECEDING
+/// piece's range (or, for a leading blank run with no preceding piece yet,
+/// are deferred and prepended onto the first real turn once one arrives) so
+/// the byte ranges keep partitioning `text` exactly. Without this, a
+/// perfectly valid JSONL transcript that merely uses a blank line as a
+/// separator would fail to parse and (in [`SegmentFormat::Auto`]) silently
+/// fall back to a single roleless `plain` turn.
+///
+/// `Err` names the first (1-based) offending LINE — not turn — number: the
+/// first failure short-circuits, so a caller forcing `jsonl` on a bad
+/// transcript gets an actionable pointer instead of a generic "not jsonl".
 fn jsonl_pieces(text: &str) -> Result<Vec<RawPiece>, String> {
-    let mut pieces = Vec::new();
+    let mut pieces: Vec<RawPiece> = Vec::new();
+    let mut pending_prefix_start: Option<usize> = None;
+    let mut turn = 0_usize;
     let mut cursor = 0_usize;
-    for (turn, line) in text.split_inclusive('\n').enumerate() {
+    for (line_index, line) in text.split_inclusive('\n').enumerate() {
         let start = cursor;
         cursor += line.len();
         let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            if let Some(last) = pieces.last_mut() {
+                last.range.end = cursor;
+            } else {
+                pending_prefix_start.get_or_insert(start);
+            }
+            continue;
+        }
         let parsed: JsonlLine = serde_json::from_str(trimmed).map_err(|err| {
             format!(
                 "jsonl line {}: not a valid {{role, content}} object: {err}",
-                turn + 1
+                line_index + 1
             )
         })?;
+        let piece_start = pending_prefix_start.take().unwrap_or(start);
         pieces.push(RawPiece {
             kind: SegmentKind::Body,
-            range: start..cursor,
+            range: piece_start..cursor,
             turn,
             role: Some(parsed.role),
             content_override: Some(parsed.content),
         });
+        turn += 1;
+    }
+    if pieces.is_empty() {
+        // Every line (if any at all) was blank — nothing real to call
+        // jsonl; Auto mode falls back to plain, a forced jsonl request gets
+        // an honest error instead of a silently empty result.
+        return Err("no non-blank jsonl line found".to_owned());
     }
     Ok(pieces)
 }
@@ -505,14 +532,11 @@ fn reject_oversized_fences(pieces: &[RawPiece]) -> Result<(), MemoryError> {
     Ok(())
 }
 
-/// Re-split every `body` piece over [`MAX_FRAGMENT_BYTES`] with
-/// [`chunk_text`] — the same re-chunker `compile_context` itself uses for an
-/// oversized fragment. A `jsonl` piece's decoded `content_override` has no
-/// byte-aligned mapping back to the raw (JSON-escaped) source line, so its
-/// re-split children all keep the ORIGINAL line's full byte range — a
-/// documented, deliberately narrow trade-off: the byte-range-covers-the-
-/// transcript property holds at the turn level regardless, and a single
-/// JSONL line's `content` exceeding 1 MiB is an extreme edge case.
+/// Re-split every `body` or `log` piece over [`MAX_FRAGMENT_BYTES`] — see
+/// [`resplit_body`] and [`resplit_log`] for the two (deliberately different)
+/// strategies. A `code` piece is never touched here: it is atomic by
+/// construction (a fence is never cut, see [`super::chunk`]) and already
+/// rejected outright by [`reject_oversized_fences`] when oversized.
 fn resplit_oversized_bodies(text: &str, pieces: Vec<RawPiece>) -> Vec<RawPiece> {
     let chunk_policy = ChunkPolicy {
         max_chunk_bytes: MAX_FRAGMENT_BYTES,
@@ -526,9 +550,22 @@ fn resplit_oversized_bodies(text: &str, pieces: Vec<RawPiece>) -> Vec<RawPiece> 
 }
 
 fn resplit_one(text: &str, piece: RawPiece, chunk_policy: &ChunkPolicy) -> Vec<RawPiece> {
-    if piece.kind != SegmentKind::Body {
-        return vec![piece];
+    match piece.kind {
+        SegmentKind::Body => resplit_body(text, piece, chunk_policy),
+        SegmentKind::Log => resplit_log(text, piece),
+        SegmentKind::Code => vec![piece],
     }
+}
+
+/// Re-split a `body` piece over [`MAX_FRAGMENT_BYTES`] with [`chunk_text`] —
+/// the same re-chunker `compile_context` itself uses for an oversized
+/// fragment. A `jsonl` piece's decoded `content_override` has no
+/// byte-aligned mapping back to the raw (JSON-escaped) source line, so its
+/// re-split children all keep the ORIGINAL line's full byte range — a
+/// documented, deliberately narrow trade-off: the byte-range-covers-the-
+/// transcript property holds at the turn level regardless, and a single
+/// JSONL line's `content` exceeding 1 MiB is an extreme edge case.
+fn resplit_body(text: &str, piece: RawPiece, chunk_policy: &ChunkPolicy) -> Vec<RawPiece> {
     let effective_len = piece
         .content_override
         .as_ref()
@@ -561,12 +598,93 @@ fn resplit_one(text: &str, piece: RawPiece, chunk_policy: &ChunkPolicy) -> Vec<R
     }
 }
 
+/// Re-split a `log` piece over [`MAX_FRAGMENT_BYTES`] on LINE boundaries —
+/// never mid-line, so each resulting sub-run stays meaningful to
+/// `abstract.log_dedup` (which classifies and dedups per fragment, not
+/// across a cut line). Unlike [`resplit_body`], never [`chunk_text`]
+/// directly: paragraph-boundary chunking has no notion of "line", and would
+/// happily cut a log line in half. A `log` piece never carries a
+/// `content_override` (only `jsonl` pieces do, and `jsonl` never produces
+/// `log` — see the module docs), so this always reads straight from `text`.
+///
+/// Lines are packed greedily into chunks of at most [`MAX_FRAGMENT_BYTES`];
+/// a single line that alone exceeds the cap (extreme edge case — one log
+/// line over 1 MiB) is hard-split at char boundaries as a last resort, the
+/// same fallback [`super::chunk::chunk_text`] uses for an oversized atomic
+/// unit.
+fn resplit_log(text: &str, piece: RawPiece) -> Vec<RawPiece> {
+    if piece.range.len() <= MAX_FRAGMENT_BYTES {
+        return vec![piece];
+    }
+    let hard_split_policy = ChunkPolicy {
+        max_chunk_bytes: MAX_FRAGMENT_BYTES,
+        overlap_bytes: 0,
+        boundary: ChunkBoundary::Fixed,
+    };
+    let mut result = Vec::new();
+    let mut chunk_start = piece.range.start;
+    let mut cursor = piece.range.start;
+    for line in text[piece.range.clone()].split_inclusive('\n') {
+        let line_start = cursor;
+        let line_end = line_start + line.len();
+        cursor = line_end;
+
+        if line_end - line_start > MAX_FRAGMENT_BYTES {
+            // The line itself is oversized: seal whatever came before it,
+            // hard-split the line alone, then resume after it.
+            if chunk_start < line_start {
+                result.push(log_piece(&piece, chunk_start..line_start));
+            }
+            for hard in chunk_text(&text[line_start..line_end], &hard_split_policy) {
+                result.push(log_piece(
+                    &piece,
+                    (line_start + hard.byte_range.start)..(line_start + hard.byte_range.end),
+                ));
+            }
+            chunk_start = line_end;
+            continue;
+        }
+
+        if line_end - chunk_start > MAX_FRAGMENT_BYTES {
+            // Adding this line would overflow the open chunk: seal it
+            // first — `chunk_start..line_start` is guaranteed non-empty
+            // here (a lone line never exceeds the cap in this branch).
+            result.push(log_piece(&piece, chunk_start..line_start));
+            chunk_start = line_start;
+        }
+    }
+    if chunk_start < piece.range.end {
+        result.push(log_piece(&piece, chunk_start..piece.range.end));
+    }
+    result
+}
+
+/// A `log`-kind [`RawPiece`] over `range`, inheriting `source`'s turn/role —
+/// the shared constructor [`resplit_log`]'s two push sites use.
+fn log_piece(source: &RawPiece, range: Range<usize>) -> RawPiece {
+    RawPiece {
+        kind: SegmentKind::Log,
+        range,
+        turn: source.turn,
+        role: source.role.clone(),
+        content_override: None,
+    }
+}
+
 /// Merge adjacent pieces of the SAME turn and kind when either side is under
 /// `min_bytes` — see the module docs' step 4. A `jsonl` piece never merges
 /// with another (each holds its own unique `turn`, since `jsonl` is
 /// one-line-one-turn by construction), nor does any piece carrying a
 /// `content_override` (merging would require re-deriving a combined decoded
 /// string, which is not meaningful once JSON escaping is involved).
+///
+/// **Never merges past [`MAX_FRAGMENT_BYTES`]** — a piece that survived
+/// [`resplit_body`]/[`resplit_log`] is only guaranteed to be AT MOST the
+/// cap, so blindly recombining it with even a tiny neighbor can push the
+/// result back over (a ~1 MiB chunk plus a few trailing bytes, or two
+/// adjacent fences each individually under the cap). Merging is an
+/// optimization (fewer, more useful fragments), never allowed to violate the
+/// one invariant every other normalization step exists to uphold.
 fn merge_tiny(pieces: Vec<RawPiece>, min_bytes: usize) -> Vec<RawPiece> {
     let mut merged: Vec<RawPiece> = Vec::new();
     for piece in pieces {
@@ -576,6 +694,7 @@ fn merge_tiny(pieces: Vec<RawPiece>, min_bytes: usize) -> Vec<RawPiece> {
                 && last.content_override.is_none()
                 && piece.content_override.is_none()
                 && last.range.end == piece.range.start
+                && last.range.len() + piece.range.len() <= MAX_FRAGMENT_BYTES
                 && (last.range.len() < min_bytes || piece.range.len() < min_bytes)
         });
         if mergeable {
