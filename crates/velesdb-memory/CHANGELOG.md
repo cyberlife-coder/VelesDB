@@ -34,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the compiled context plus a `segmentation` audit report (detected
   format, one entry per segment with turn/role/kind/byte range/
   `fragment_id`, and how many segments normalization merged).
+  **Node/Python bindings: follow-up.** `compile_transcript` is MCP-only in
+  this release — neither `@wiscale/velesdb-memory-node` nor the Python
+  `MemoryService` binding exposes a one-call convenience method yet; Rust
+  and Node/Python callers compose `context::segment_transcript` +
+  `compile_context` themselves in the meantime.
 
 ## [0.9.2] — 2026-07-20
 
