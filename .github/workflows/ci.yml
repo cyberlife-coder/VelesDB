@@ -33,27 +33,19 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - 'docker-compose.yml'
+  # No `paths:` filter here (unlike push, above): the "CI Success" job is a
+  # required status check on main/develop branch protection. A path filter
+  # on `pull_request` means GitHub creates zero check-runs for a PR whose
+  # diff touches none of the listed paths (a pure backmerge, a docs-only
+  # change outside docs/reference/**, a PR that's a no-op relative to base)
+  # — not "failing", but *absent*, which blocks the merge forever with no
+  # way to resolve it short of a manual `workflow_dispatch`. Hit in
+  # production: PR #1465 (a zero-diff backmerge) sat blocked for ~7h before
+  # this was diagnosed. Required checks must always run; only the
+  # cost-saving `push` trigger (which doesn't gate anything) should be
+  # path-filtered.
   pull_request:
     branches: [main, develop]
-    paths:
-      - '*.md'
-      - 'crates/**'
-      - 'sdks/typescript/**'
-      - 'conformance/**'
-      - 'benchmarks/**'
-      - 'examples/**'
-      - 'scripts/**'
-      - 'docs/reference/**'
-      - 'integrations/**'
-      - 'demos/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'deny.toml'
-      - 'sonar-project.properties'
-      - '.github/workflows/**'
-      - 'Dockerfile'
-      - '.dockerignore'
-      - 'docker-compose.yml'
   # Manual trigger so coverage can be refreshed on demand (e.g. after a
   # config-only commit to main that skipped the path-filtered CI, leaving the
   # Codacy coverage badge stale).
