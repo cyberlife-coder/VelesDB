@@ -335,6 +335,15 @@ curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/vele
   | tar -xz -C ~/.claude/skills/
 ```
 
+**Skills teach an agent what to do; they don't make it remember to do it.**
+[`integrations/agent-hooks/`](https://github.com/cyberlife-coder/VelesDB/tree/develop/integrations/agent-hooks)
+closes that gap for Claude Code with real `SessionStart`/`Stop`/`PreCompact`
+hooks that nudge `load_working_context`/`save_working_context` automatically
+— install once **globally** (`~/.claude/hooks/`) to get continuous memory
+across every project, or per-project if you'd rather vendor the scripts into
+one repo. Codex CLI has no hook mechanism yet; the same directory documents
+an `AGENTS.md`-based convention for it.
+
 ## Using the tools
 
 Once configured, your agent discovers the tools automatically (via MCP
