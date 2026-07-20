@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Path-referenced context fragments.** A `compile_context`/
+  `explain_compilation` fragment may set `path` (an absolute filesystem
+  path) instead of inline `content` to ingest a file by reference — exactly
+  one of `path`, `content`, or `media` per fragment. Opt-in via
+  `VELESDB_MEMORY_INGEST_ROOTS` (a `PATH`-list of allowlisted directories,
+  parsed fail-fast at startup); the resolved file must be a plain UTF-8
+  text file under 1 MiB, and the resolved content flows through the same
+  pipeline as an inline fragment (dedup, classification, budget packing,
+  `ctx://source/` handles).
+- **`compile_transcript` MCP tool.** A one-call shortcut over
+  `compile_context` for a raw agent-session transcript: deterministically
+  segments it into turns (plain marker-based —
+  `System:`/`User:`/`Human:`/`Assistant:`/`AI:`/`Tool:`/`### User`/
+  `### Assistant` — or JSONL, one line per turn) and, within each plain
+  turn, into fenced-code/log-run/body sub-segments (fenced code stays
+  atomic; runs of 8+ log-like lines collapse the same way
+  `abstract.log_dedup` would), then compiles the result exactly like
+  `compile_context`. Accepts `transcript` (inline) or `path` (reusing the
+  ingest allowlist, capped at a wider 8 MiB since the transcript is
+  segmented into sub-1-MiB pieces immediately after being read). Returns
+  the compiled context plus a `segmentation` audit report (detected
+  format, one entry per segment with turn/role/kind/byte range/
+  `fragment_id`, and how many segments normalization merged).
+
 ## [0.9.2] — 2026-07-20
 
 ### Added
