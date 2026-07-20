@@ -379,7 +379,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Regenerate OpenAPI snapshots
-        run: cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --test-threads=1
+        run: cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --ignored
+        env:
+          UPDATE_OPENAPI_SNAPSHOT: "1"
 
       - name: Check OpenAPI snapshots are up to date
         run: git diff --exit-code docs/openapi.json docs/openapi.yaml
