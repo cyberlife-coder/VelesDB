@@ -97,6 +97,15 @@ Each connector persists into the same kind of `./data` directory, but use
 one framework per collection — payload schemas differ across connectors
 (see the table above).
 
+## Agent hooks (Claude Code, Codex)
+
+[`agent-hooks/`](agent-hooks) is a different kind of integration: not a
+vector-store connector, but the wiring that makes a coding agent actually
+*use* `velesdb-memory` continuously (load context on session start, save it
+before stopping/compacting) instead of only on request. See
+[`agent-hooks/README.md`](agent-hooks/README.md) for the mono-process
+constraint that shapes its design and the install steps.
+
 ## Reporting issues
 
 Please file framework-specific issues against the corresponding sub-directory
