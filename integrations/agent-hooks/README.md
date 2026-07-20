@@ -10,7 +10,48 @@ closes that gap for [Claude Code](claude-code/) (real, tested hooks) and
 [Codex CLI](codex/) (a documented instruction-file convention, since Codex
 has no equivalent hook mechanism yet).
 
-## Install (Claude Code, one project)
+## Install
+
+Both variants need `bash` and `jq` on `PATH` — the hooks refuse to run
+without `jq` rather than silently emitting malformed JSON.
+
+**Global (recommended for continuous CLI usage — every project, one-time
+setup):**
+
+```bash
+mkdir -p ~/.claude/hooks/velesdb-memory
+cp /path/to/velesdb/integrations/agent-hooks/claude-code/hooks/*.sh ~/.claude/hooks/velesdb-memory/
+cp -r /path/to/velesdb/integrations/agent-hooks/claude-code/hooks/lib ~/.claude/hooks/velesdb-memory/
+chmod +x ~/.claude/hooks/velesdb-memory/*.sh
+```
+
+Then merge this into `~/.claude/settings.json`'s `"hooks"` key — note the
+**absolute** path, not `$CLAUDE_PROJECT_DIR` (there is no single project to
+be relative to for a global install):
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "bash /Users/you/.claude/hooks/velesdb-memory/session-start.sh" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "bash /Users/you/.claude/hooks/velesdb-memory/stop.sh" }] }
+    ],
+    "PreCompact": [
+      { "hooks": [{ "type": "command", "command": "bash /Users/you/.claude/hooks/velesdb-memory/pre-compact.sh" }] }
+    ]
+  }
+}
+```
+
+Works with zero further setup (each project defaults to
+`project = basename(cwd)`, `session = "rolling"`) — drop a
+`.velesdb-hooks.json` (format below) in a project root only where you want a
+deliberate project label instead of the directory name.
+
+**Per-project** (vendor the scripts into one repo, e.g. to check them in for
+teammates):
 
 ```bash
 mkdir -p .claude/hooks/velesdb-memory
@@ -20,11 +61,15 @@ chmod +x .claude/hooks/velesdb-memory/*.sh
 ```
 
 Then merge [`claude-code/settings-snippet.json`](claude-code/settings-snippet.json)
-into your project's `.claude/settings.json` (or `~/.claude/settings.json`
-for a global install) under its `"hooks"` key. Finally, drop a
-`.velesdb-hooks.json` at your project root (format below). Requires `bash`
-and `jq` on PATH — the hooks refuse to run without `jq` rather than
-silently emitting malformed JSON.
+(which uses `$CLAUDE_PROJECT_DIR`-relative paths — only correct when the
+scripts are vendored inside *that* project) into the project's own
+`.claude/settings.json`. Finally, drop a `.velesdb-hooks.json` at the
+project root (format below).
+
+⚠️ Pasting the per-project snippet's `$CLAUDE_PROJECT_DIR`-relative command
+into `~/.claude/settings.json` does not give you a global install by
+itself — that path only resolves inside a project that also has its own
+vendored copy of the scripts. Use the global pattern above instead.
 
 ## The structural constraint that shapes this whole design
 
