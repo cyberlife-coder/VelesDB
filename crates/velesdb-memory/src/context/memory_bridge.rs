@@ -832,6 +832,7 @@ impl MemoryCandidate {
             fragment: ContextFragment {
                 id: None,
                 content: self.content,
+                path: None,
                 kind: Some("memory".to_owned()),
                 priority: None,
                 metadata: None,

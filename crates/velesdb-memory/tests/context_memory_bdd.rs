@@ -17,6 +17,7 @@ use velesdb_memory::{ErrorCategory, FusionOptions, HashEmbedder, MemoryService};
 
 fn fragment(content: &str) -> ContextFragment {
     ContextFragment {
+        path: None,
         id: None,
         content: content.to_owned(),
         kind: None,

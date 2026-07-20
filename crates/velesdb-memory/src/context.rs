@@ -37,6 +37,14 @@ pub mod chunk;
 mod classify;
 mod dedup;
 pub mod estimator;
+/// Adapter-side I/O pre-pass for `path`-referenced context fragments
+/// (V2b-1): resolves `ContextFragment::path` into `content` under a strict,
+/// short-circuiting security pipeline, BEFORE the request reaches the pure
+/// compiler core. Not compiled for `wasm32` — there is no local filesystem
+/// to read from a WASM host; see [`crate::error::MemoryError::IngestDisabled`]
+/// for what a `path` fragment does there instead.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod ingest;
 pub mod insights;
 mod log_normalize;
 // `pub(crate)`, not private: the memory bridge (`service::memory_bridge`,
@@ -57,6 +65,8 @@ pub mod wire;
 
 pub use chunk::{chunk_text, ChunkBoundary, ChunkPolicy, TextChunk};
 pub use estimator::{DynTokenEstimator, HeuristicEstimator, TokenEstimator};
+#[cfg(not(target_arch = "wasm32"))]
+pub use ingest::IngestRoots;
 pub use insights::{CompilationInsights, ModelPricing, PricingTable};
 pub use model::{
     CompilePolicy, CompileRequest, CompiledContext, CompiledSection, ContextAction,
@@ -101,6 +111,7 @@ pub fn fragment_id(content: &str) -> u64 {
 ///         fragments: vec![ContextFragment {
 ///             id: None,
 ///             content: "The deploy pipeline is green.".to_owned(),
+///             path: None,
 ///             kind: None,
 ///             priority: None,
 ///             metadata: None,
@@ -387,6 +398,15 @@ impl Emission {
 /// Reject requests over the [`crate::limits`] caps and compute the usable
 /// budget (`clamped budget − reserve`).
 fn validate(request: &CompileRequest, policy: &CompilePolicy) -> Result<u64, MemoryError> {
+    // The pure core never resolves `path` (V2b-1): that is an adapter-side
+    // I/O pre-pass (`context::ingest::resolve_fragments`) that clears the
+    // field on success. A `path` still set here means either no adapter ran
+    // (e.g. a binding with no ingest support, such as the WASM build) or
+    // ingestion is disabled — both report the same explicit error rather
+    // than silently compiling an empty-content fragment.
+    if request.fragments.iter().any(|f| f.path.is_some()) {
+        return Err(MemoryError::IngestDisabled);
+    }
     if request.fragments.len() > limits::MAX_FRAGMENTS {
         return Err(MemoryError::ContextOverLimit(format!(
             "{} fragments exceed the cap of {}",

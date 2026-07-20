@@ -19,6 +19,7 @@ use velesdb_memory::{ErrorCategory, MemoryError};
 /// Build a plain fragment with no id, kind, priority, or metadata.
 fn fragment(content: &str) -> ContextFragment {
     ContextFragment {
+        path: None,
         id: None,
         content: content.to_owned(),
         kind: None,
