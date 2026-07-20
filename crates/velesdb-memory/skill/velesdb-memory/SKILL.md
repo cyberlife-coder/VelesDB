@@ -22,6 +22,17 @@ not just look-alike text), it **connects** facts (a typed graph you build as you
 work), and it **learns** which memories are worth surfacing (`feedback`). Using it
 well is a *loop you run throughout a task*, not a one-shot lookup.
 
+## Installation
+
+Install: `cp -r crates/velesdb-memory/skill/velesdb-memory ~/.claude/skills/`
+(repo clone). No repo clone? Every
+[GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
+attaches `velesdb-skills.tar.gz` (both bundled skills, one folder per skill):
+`curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz | tar -xz -C ~/.claude/skills/`.
+The npm package bundles it too, at
+`node_modules/@wiscale/velesdb-memory-node/skills/velesdb-memory`.
+Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB/blob/main/crates/velesdb-memory/README.md#configure-your-client).
+
 ## The loop (run it every task)
 
 1. **Recall before you act.** At the start of a task, retrieve what's already
