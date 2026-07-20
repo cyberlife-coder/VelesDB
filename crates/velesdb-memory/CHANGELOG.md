@@ -9,7 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Agentic quick wins for the MCP surface.** `get_info().instructions` now
+  covers all three tool families (memory, context compiler, working-context
+  resumption) instead of just memory. New `list_working_contexts` tool
+  (per-project index, updated on every `save_working_context`) so an agent
+  can discover resumable sessions instead of guessing a session id;
+  `load_working_context`'s response gains `found` (explicit hit/miss) and
+  `other_sessions` (surfaced on a miss, to recover from a session-id typo) —
+  wire-additive, the existing `working` field is unchanged. `compile_context`
+  gains `warnings[]` (a mechanical shortlist of externalized fragments
+  relevant enough to the query to double-check) and `policy.slim_response`
+  (empties `sections`/`decisions` from the response once auditing is done).
+  New `suggest_budget` tool: a starting `token_budget` for a named model,
+  from a static, committed model→window table (never a network call).
+
 ### Fixed
+
+- **`recall_where`'s type-strict comparisons are now documented (issue
+  #1473).** Behavior is unchanged (no runtime coercion added): a numeric
+  filter value never matched a string-stored metadata value, and vice
+  versa, silently returning an empty set. The tool description and the
+  velesdb-memory skill now say so explicitly and recommend storing
+  comparable values (dates, counters) numerically.
 
 - **Memory-tool ids now survive float-lossy JSON clients (issue #1468).**
   `remember`, `recall`/`recall_where`/`recall_fused`, `relate`, `forget`,

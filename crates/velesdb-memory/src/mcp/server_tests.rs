@@ -1074,3 +1074,51 @@ async fn relate_by_wrong_numeric_id_fails_but_id_str_round_trip_succeeds() {
     assert!(ids.contains(&decision.id) && ids.contains(&pr.id));
     assert_eq!(edges, 1);
 }
+
+#[test]
+fn test_get_info_instructions_cover_memory_compiler_and_working_context() {
+    // The server's `get_info().instructions` is its one-shot vitrine to a
+    // connecting agent — it must not hide half the product behind a
+    // memory-only blurb (quick win V2a-1).
+    let (_dir, srv) = server();
+    let info = srv.get_info();
+    let instructions = info.instructions.expect("instructions must be set");
+
+    assert!(
+        instructions.contains("recall") && instructions.contains("relate"),
+        "must mention the memory family: {instructions}"
+    );
+    #[cfg(feature = "context")]
+    {
+        assert!(
+            instructions.contains("compile_context"),
+            "must mention the context compiler family: {instructions}"
+        );
+        assert!(
+            instructions.contains("working"),
+            "must mention working-context resumption: {instructions}"
+        );
+    }
+}
+
+#[test]
+fn test_recall_where_description_documents_type_strict_comparisons() {
+    // Issue #1473: `recall_where`'s comparisons are type-strict (a
+    // string-stored value never matches a numeric filter value, and vice
+    // versa), with no runtime coercion. The tool description must say so
+    // explicitly instead of silently returning an empty set.
+    let tool = McpServer::recall_where_tool_attr();
+    let description = tool
+        .description
+        .expect("recall_where must declare a description");
+    let lower = description.to_lowercase();
+    assert!(
+        lower.contains("type-strict") || lower.contains("type strict"),
+        "recall_where's description must document type-strict comparisons: {description}"
+    );
+    assert!(
+        description.to_lowercase().contains("numeric"),
+        "recall_where's description must advise storing comparable values \
+         (e.g. dates) numerically: {description}"
+    );
+}
