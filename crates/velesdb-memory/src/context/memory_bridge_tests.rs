@@ -277,6 +277,76 @@ fn test_load_working_context_never_serves_an_unmarked_squatter() {
 }
 
 #[test]
+fn test_list_working_contexts_returns_sessions_saved_under_a_project() {
+    // Given two sessions saved under the same project
+    let (_dir, svc) = open_service();
+    svc.save_working_context("veles", "session-a", &WorkingContext::default())
+        .expect("save session-a");
+    svc.save_working_context("veles", "session-b", &WorkingContext::default())
+        .expect("save session-b");
+
+    // When listing the project's working contexts
+    let sessions = svc
+        .list_working_contexts("veles")
+        .expect("list_working_contexts");
+
+    // Then both sessions are reported, each with a saved_at.
+    let names: Vec<&str> = sessions.iter().map(|s| s.session.as_str()).collect();
+    assert!(names.contains(&"session-a"), "{names:?}");
+    assert!(names.contains(&"session-b"), "{names:?}");
+}
+
+#[test]
+fn test_list_working_contexts_empty_for_unknown_project() {
+    // Given a store with nothing saved
+    let (_dir, svc) = open_service();
+
+    // When listing a project that never saved anything
+    let sessions = svc
+        .list_working_contexts("never-used-project")
+        .expect("list_working_contexts must not error on an empty index");
+
+    // Then the list is empty, not an error.
+    assert!(sessions.is_empty());
+}
+
+#[test]
+fn test_list_working_contexts_resaving_same_session_updates_saved_at_not_duplicates() {
+    // Given a session saved twice under the same project+session
+    let (_dir, svc) = open_service();
+    svc.save_working_context("veles", "session-a", &WorkingContext::default())
+        .expect("save first");
+    let first_at = svc
+        .list_working_contexts("veles")
+        .expect("list")
+        .into_iter()
+        .find(|s| s.session == "session-a")
+        .expect("session-a present")
+        .saved_at;
+
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    svc.save_working_context("veles", "session-a", &WorkingContext::default())
+        .expect("save again");
+
+    // When listing again
+    let sessions = svc
+        .list_working_contexts("veles")
+        .expect("list_working_contexts");
+
+    // Then there is still exactly one entry for that session, with an
+    // updated saved_at.
+    let matches: Vec<_> = sessions
+        .iter()
+        .filter(|s| s.session == "session-a")
+        .collect();
+    assert_eq!(matches.len(), 1, "must not duplicate: {sessions:?}");
+    assert!(
+        matches[0].saved_at >= first_at,
+        "saved_at must advance on resave"
+    );
+}
+
+#[test]
 fn test_should_store_source_never_rewrites_an_unmarked_occupied_slot() {
     // Given a slot occupied by a caller fact that carries none of the
     // bridge's `_veles_ctx_source` marker (forged directly via the store —

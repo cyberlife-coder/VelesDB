@@ -131,7 +131,11 @@ pub(super) struct RecallWhereParams {
     /// Structured `ColumnStore` predicates (ranges/comparisons) combined with AND,
     /// e.g. a date window `[{"field":"ts","op":"ge","value":20230101},
     /// {"field":"ts","op":"le","value":20231231}]`. Each `op` is one of
-    /// `eq`/`ne`/`lt`/`le`/`gt`/`ge`.
+    /// `eq`/`ne`/`lt`/`le`/`gt`/`ge`. **Type-strict, no coercion** (issue
+    /// #1473): `value` is compared to the stored metadata's JSON type
+    /// as-is — a numeric `20230101` never matches a fact stored with
+    /// `{"ts": "20230101"}` (a string). Store comparable values (dates,
+    /// counters) NUMERICALLY at `remember` time so these filters match them.
     #[serde(default)]
     pub(super) filters: Vec<ColumnFilter>,
 }

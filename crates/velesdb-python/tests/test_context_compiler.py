@@ -193,6 +193,7 @@ def test_compile_context_result_shape_matches_the_mcp_wire_contract(mem):
         "retrieval_handles",
         "insights",
         "risk",
+        "warnings",
     }
     assert len(out["decisions"]) == 3
     drop = next(d for d in out["decisions"] if d["action"] == "drop")

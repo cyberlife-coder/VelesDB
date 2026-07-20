@@ -291,6 +291,14 @@ pub struct CompilePolicy {
     /// `false`: existing MCP clients keep today's byte-identical numeric
     /// response unless they opt in.
     pub ids_as_strings: bool,
+    /// Quick win (V2a-2): when `true`, `sections` and `decisions` are
+    /// emptied out of the response after compilation — `content`,
+    /// `insights`, `risk`, `warnings`, `sources`, and `retrieval_handles`
+    /// are unaffected. The full audit trail (`sections`/`decisions`) is
+    /// still recoverable: re-compile the same request without
+    /// `slim_response` (compilation is deterministic, so nothing is lost,
+    /// only not sent this time). Default `false`.
+    pub slim_response: bool,
 }
 
 impl Default for CompilePolicy {
@@ -308,6 +316,7 @@ impl Default for CompilePolicy {
             importance: ImportanceWeights::default(),
             normalize_log_timestamps: false,
             ids_as_strings: false,
+            slim_response: false,
         }
     }
 }
@@ -435,15 +444,39 @@ pub struct ContextDecision {
     pub handle: Option<String>,
 }
 
+/// A mechanical heads-up over one decision, surfaced in
+/// [`CompiledContext::warnings`] so a caller can check "was anything
+/// relevant cut?" without scanning every entry of `decisions` by hand
+/// (V2a-2 quick win). Only [`ContextAction::Retrieve`] decisions at or
+/// above the relevance threshold qualify — a [`ContextAction::Drop`] in
+/// this compiler is always a byte-identical duplicate whose content
+/// survives through its kept twin (see `dup_verdict`), so it is never a
+/// real loss and never warns.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub struct ContextWarning {
+    /// The fragment this warning is about.
+    pub fragment_id: u64,
+    /// What happened to it (always [`ContextAction::Retrieve`] today).
+    pub action: ContextAction,
+    /// Lexical relevance to the request query, in `[0, 1]` — the same value
+    /// as the matching `decisions` entry.
+    pub relevance: f32,
+    /// The matching `decisions` entry's `reason`, copied verbatim.
+    pub reason: String,
+}
+
 /// The compiler's output: the assembled context plus its full audit trail.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct CompiledContext {
     /// The assembled context, ready to inject into a prompt.
     pub content: String,
-    /// The output split into ordered blocks (cache prefix first).
+    /// The output split into ordered blocks (cache prefix first). Emptied by
+    /// [`CompilePolicy::slim_response`].
     pub sections: Vec<CompiledSection>,
-    /// One decision per input fragment (duplicates included).
+    /// One decision per input fragment (duplicates included). Emptied by
+    /// [`CompilePolicy::slim_response`].
     pub decisions: Vec<ContextDecision>,
     /// One source pointer per distinct fragment.
     pub sources: Vec<SourceReference>,
@@ -453,6 +486,13 @@ pub struct CompiledContext {
     pub insights: CompilationInsights,
     /// Overall fidelity risk (the max over all decisions).
     pub risk: FidelityRisk,
+    /// Mechanical, low-noise heads-up over `decisions` (V2a-2 quick win):
+    /// every externalized fragment relevant enough to the query that a
+    /// caller should double-check it was not needed. `#[serde(default)]` so
+    /// a pre-0.10.0 caller reading an older stored/replayed response still
+    /// deserializes (defaults to empty).
+    #[serde(default)]
+    pub warnings: Vec<ContextWarning>,
 }
 
 /// One asserted fact inside a [`WorkingContext`].
@@ -501,4 +541,29 @@ pub struct WorkingContext {
     /// Actions still to do.
     #[serde(default)]
     pub pending_actions: Vec<String>,
+}
+
+/// One session recorded in a project's working-context index (V2a-1's
+/// `list_working_contexts` quick win).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkingContextSession {
+    /// The session id, as passed to `save_working_context`.
+    pub session: String,
+    /// Unix seconds this session was last saved — updated on every
+    /// `save_working_context` call under this project + session, not just
+    /// the first (a resave never duplicates the entry).
+    pub saved_at: u64,
+}
+
+/// The per-project index [`save_working_context`](crate::MemoryService::save_working_context)
+/// maintains so [`list_working_contexts`](crate::MemoryService::list_working_contexts)
+/// never has to scan the whole store: one system fact per project, appended
+/// (or refreshed) on every save. The REJECTED alternative was an approximate
+/// `query_filtered` scan over working-context facts (capped at
+/// `MAX_RECALL_LIMIT`, imprecise) — this index is exact and O(1) to read.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct WorkingContextIndex {
+    /// Every session ever saved under this project.
+    #[serde(default)]
+    pub sessions: Vec<WorkingContextSession>,
 }
