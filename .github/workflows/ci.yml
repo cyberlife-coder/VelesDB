@@ -387,7 +387,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Regenerate OpenAPI snapshots
-        run: cargo test -p velesdb-server --features openapi generate_openapi_spec_files
+        run: cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --ignored
         env:
           UPDATE_OPENAPI_SNAPSHOT: "1"
 

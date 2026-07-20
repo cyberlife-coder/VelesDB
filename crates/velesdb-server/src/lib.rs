@@ -401,7 +401,17 @@ mod tests {
         std::env::var_os("UPDATE_OPENAPI_SNAPSHOT").is_some()
     }
 
+    // #[ignore]: excludes this from the general `cargo test --workspace`
+    // sweep (the "Tests" CI job), which runs with a DIFFERENT feature set
+    // (persistence,gpu,update-check, no `openapi`/`prometheus`) than the one
+    // the committed docs/openapi.{json,yaml} were generated under. Run under
+    // that other feature set, the assert-equal below fails on a real (but
+    // benign) schema difference -- not staleness, a feature-combination
+    // mismatch. Only the dedicated `openapi-drift` CI step, which targets
+    // this test by exact name with `--ignored` under the canonical feature
+    // set, should ever run it.
     #[test]
+    #[ignore = "run explicitly via the openapi-drift CI job; see comment above"]
     fn generate_openapi_spec_files() {
         let openapi = ApiDoc::openapi();
         let json = openapi
