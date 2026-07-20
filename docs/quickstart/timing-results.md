@@ -4,6 +4,16 @@
 
 **Goal**: prove with reproducible measurements that a developer arriving on a clean Linux machine reaches their first vector search result in well under five minutes, regardless of which language stack they pick (Python, Rust, TypeScript, or REST against the server binary).
 
+> **Frozen reference run — 2026-05-01, `velesdb-core@1.14.2` / `velesdb-server@1.14.2`.**
+> The numbers below are a point-in-time measurement, not a live dashboard. The
+> `scripts/dx-timing/scenario_*.sh` harness has since been re-pinned to a
+> newer release (currently `3.12.0`) so it keeps installing cleanly, but these
+> timings were not re-collected against that version — treat them as
+> directionally representative of the onboarding-path *shape* (which step
+> dominates, relative ordering of the four scenarios), not as current
+> absolute numbers. Re-run `bash scripts/dx-timing/run_all.sh` for fresh,
+> version-accurate timings.
+
 ## TL;DR
 
 | Scenario | Median | Range | Status vs. 300 s SLO |

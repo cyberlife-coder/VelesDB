@@ -337,6 +337,71 @@ impl MemoryStore {
         }))
     }
 
+    /// Aggregate the token (and cost) savings of past [`Self::compile_context`]
+    /// calls, optionally narrowed to one `project`. Same computation and JSON
+    /// shape as the MCP `context_savings` tool (figures are local estimates
+    /// recorded per compilation — metadata only, never fragment content;
+    /// `truncated` reports when the aggregation hit the recall cap). Pure
+    /// delegation to [`velesdb_memory`]'s bridge — zero logic in the binding.
+    #[napi(
+        js_name = "contextSavings",
+        ts_return_type = "Promise<{ events: number; tokens_in: number; tokens_out: number; tokens_saved: number; cost_saved_micros_by_currency: Record<string, number>; truncated: boolean }>"
+    )]
+    pub fn context_savings(&self, project: Option<String>) -> AsyncTask<Job<JsonOut>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let savings = svc
+                .context_savings(project.as_deref())
+                .map_err(to_napi_err)?;
+            let value = serde_json::to_value(&savings)
+                .map_err(|err| invalid_input(format!("context savings serialization: {err}")))?;
+            Ok(JsonOut(value))
+        }))
+    }
+
+    /// Explain why one fragment of a [`Self::compile_context`] request was
+    /// preserved, abstracted, externalized, dropped, or cached. Compilation
+    /// is deterministic, so `request` is re-compiled (with event/source
+    /// recording forced off) and the matching decision is returned — no
+    /// server-side state needed. Same JSON request/response shape as the MCP
+    /// `explain_compilation` tool: `request` accepts the same shape as
+    /// [`Self::compile_context`]'s (fragment ids as decimal strings on
+    /// input); `fragmentId` and `fragmentIndex` mirror the MCP tool's own
+    /// parameters, id fields on the returned decision cross as decimal
+    /// strings. `fragmentIndex` (0-based position in `request.fragments`),
+    /// when given, TAKES PRIORITY over `fragmentId` for locating the
+    /// decision — see the MCP tool's own docs for the full disambiguation
+    /// rationale (byte-identical fragments share a content-addressed id).
+    /// Pure delegation to [`velesdb_memory`]'s bridge — zero logic in the
+    /// binding.
+    #[napi(
+        js_name = "explainCompilation",
+        ts_return_type = "Promise<{ fragment_id: string; content_hash: string; action: string; rule_id: string; relevance: number; risk: string; reason: string; memory_id?: string; handle?: string }>"
+    )]
+    pub fn explain_compilation(
+        &self,
+        request: Value,
+        fragment_id: String,
+        fragment_index: Option<u32>,
+    ) -> AsyncTask<Job<JsonOut>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let mut request = request;
+            convert::parse_fragment_id_strings(&mut request)?;
+            let request: CompileRequest = serde_json::from_value(request)
+                .map_err(|err| invalid_input(format!("invalid compile request: {err}")))?;
+            let fragment_id = convert::parse_id(&fragment_id)?;
+            let fragment_index = fragment_index.map(|i| i as usize);
+            let decision = svc
+                .explain_compilation(&request, fragment_id, fragment_index)
+                .map_err(to_napi_err)?;
+            let mut value = serde_json::to_value(&decision)
+                .map_err(|err| invalid_input(format!("context decision serialization: {err}")))?;
+            convert::stringify_id_fields(&mut value);
+            Ok(JsonOut(value))
+        }))
+    }
+
     /// Fetch back the exact original content — and media, when the fragment
     /// carried one (US-009, PR3) — behind a `ctx://source/<hash>` handle
     /// from a [`Self::compile_context`] result: what was externalized or

@@ -109,7 +109,13 @@ fn units(text: &str, boundary: ChunkBoundary) -> Vec<Unit> {
 }
 
 /// A top-level slice of the text: either a whole fenced block or plain text.
-enum Segment {
+///
+/// `pub(crate)` (V2b-2): [`super::segment::segment_transcript`] reuses this
+/// same fence/plain partition to carve atomic code segments out of a
+/// transcript turn before running its own log-run detection over the
+/// remaining plain spans — one fence-detection implementation, never a
+/// second regex-free scanner copy-pasted for the transcript segmenter.
+pub(crate) enum Segment {
     /// A triple-backtick-fenced block, atomic.
     Fence(core::ops::Range<usize>),
     /// Plain text between fences.
@@ -118,7 +124,9 @@ enum Segment {
 
 /// Walk the text line by line, separating triple-backtick-fenced blocks (atomic) from the
 /// plain text around them. An unclosed fence runs to the end of the text.
-fn fence_segments(text: &str) -> Vec<Segment> {
+///
+/// `pub(crate)`, see [`Segment`]'s doc for why.
+pub(crate) fn fence_segments(text: &str) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut cursor = 0_usize;
     let mut fence_start: Option<usize> = None;

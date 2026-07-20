@@ -95,7 +95,7 @@ VelesDB core architecture is explicitly **hybrid by design**:
 - WebAssembly module for browser/Node.js
 - Scalar distance calculations (SIMD128 kernels planned)
 - IndexedDB persistence via binary export/import
-- ~430 KB gzipped (v1.18.0 npm artifact)
+- ~550 KB gzipped (`@wiscale/velesdb-wasm@3.12.0` npm artifact, `velesdb_wasm_bg.wasm` gzip -9 = 549,285 bytes, measured 2026-07-20)
 
 #### velesdb-server
 - Axum-based REST API server

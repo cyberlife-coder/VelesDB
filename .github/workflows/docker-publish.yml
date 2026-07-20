@@ -3,7 +3,11 @@ name: Docker Publish
 on:
   push:
     tags:
-      - "v*"
+      # v3.12.0-style workspace tags only. A bare "v*" also matches the
+      # velesdb-memory-vX.Y.Z tag series (it starts with a "v" too), which
+      # triggered this workflow with an empty semver tag list and failed
+      # every run since velesdb-memory-v0.8.0.
+      - "v[0-9]*"
   workflow_dispatch:
 
 concurrency:

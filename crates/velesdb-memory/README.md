@@ -17,19 +17,21 @@ traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation
 meet** those data-residency and explainability expectations rather than claiming
 certified compliance.
 
-> **Release 0.9.2** — agent-ergonomics cycle over the 0.9.1 memory server:
-> ids now survive float-lossy JSON clients end-to-end (`id_str` decimal-string
-> twins on every id-bearing response, string ids accepted on input, surrounding
-> whitespace tolerated), `get_info` documents all three tool families, new
-> `list_working_contexts` and `suggest_budget` tools, `compile_context` gains
-> `warnings[]` and `policy.slim_response`; published to the registries by the
-> `velesdb-memory-v0.9.2`
+> **Release 0.10.0** — the V2 wave lands: `compile_transcript` (one call
+> turns a raw agent-session transcript into deterministically segmented,
+> budget-compiled context with a full segmentation audit report),
+> path-referenced fragments (opt-in, allowlisted via
+> `VELESDB_MEMORY_INGEST_ROOTS`, symlink-safe), binding parity for the
+> compiler's read tools (`explainCompilation`/`contextSavings` on Node,
+> `explain_compilation` on Python, `retrieveContextSource` on WASM/TS), and
+> a `--version` flag; published to the registries by the
+> `velesdb-memory-v0.10.0`
 > tag, so the links below may briefly lag right after merge. `velesdb-memory`
 > ships on [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
-> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.9.2**
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.10.0**
 > and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**
 > (memory API only — the context compiler is merged on `develop` but **the
 > published 3.12.0 wheel predates it**; it ships with the next PyPI release,
@@ -400,7 +402,11 @@ remember_extracted { "text": "Met Dana at the Rust meetup; she now leads the par
 `explain_compilation` yet) — but the published PyPI wheel predates all of
 it; until the next PyPI release, Python agents reach the compiler through
 the MCP server. Any MCP-speaking client gets the full surface regardless of
-language.
+language. **`compile_transcript` is MCP-only for now** — Rust callers get the
+same building blocks directly (`context::segment_transcript` +
+`ContextCompiler`/`MemoryService::compile_context`), but neither the Node nor
+the Python binding exposes a one-call convenience method yet (tracked as a
+follow-up, see `CHANGELOG.md`).
 
 **Why:** agents spend most of their tokens re-reading redundant context.
 `compile_context` compresses it **deterministically** — no LLM, no cloud, no
@@ -773,6 +779,163 @@ handle = out["retrieval_handles"][0]["handle"]      # too big for budget=1, exte
 source = server.call("retrieve_context_source", {"handle": handle})
 assert source["media"]["bytes_b64"] == png_b64      # byte-identical round trip
 ```
+
+#### Ingesting files by reference (`path`)
+
+A `compile_context` (or `explain_compilation`) fragment may set `path`
+instead of inline `content`, to ingest a file straight off disk:
+
+```jsonc
+compile_context { "query": "review the failing test",
+                   "token_budget": 4000,
+                   "fragments": [ { "path": "/home/you/project/tests/failing_test.rs" } ] }
+```
+
+**Opt-in and allowlisted — off by default.** Nothing is readable until the
+server is started with `VELESDB_MEMORY_INGEST_ROOTS` set to a `PATH`-list of
+directories (`:`-separated on Unix, `;`-separated on Windows, parsed with
+[`std::env::split_paths`](https://doc.rust-lang.org/std/env/fn.split_paths.html)):
+
+```bash
+VELESDB_MEMORY_INGEST_ROOTS="/home/you/project:/home/you/notes" \
+  velesdb-memory
+```
+
+Each root is canonicalized **once, at startup** — an entry that does not
+exist or is not a directory is a fail-fast configuration error (the server
+refuses to start), never something discovered later on a caller's first
+`path` fragment. An unset or empty variable leaves the allowlist empty, which
+disables the field entirely — every `path` fragment then fails with
+`IngestDisabled`, not silently ignored.
+
+Every `path` fragment runs the same ordered, short-circuiting pipeline:
+
+1. A fragment may set exactly one of `path`, non-empty `content`, or
+   `media` — checked first, independent of whether ingestion is enabled.
+2. The path must be **absolute** (an MCP server's working directory is not
+   something a caller can rely on) — a relative path is rejected outright.
+3. [`std::fs::canonicalize`](https://doc.rust-lang.org/std/fs/fn.canonicalize.html)
+   resolves every symlink in one call.
+4. The canonical path is checked against the canonical roots
+   **component-wise** (`Path::starts_with`, never a string prefix — a
+   sibling directory like `/root-evil` next to a root of `/root` is
+   correctly rejected). On failure the error cites the path the caller
+   **asked for**, never the resolved target, so a rejection never leaks
+   where a symlink actually points.
+5. The target must be a plain file (directories are rejected), no larger
+   than **1 MiB** (`MAX_INGEST_FILE_BYTES`) — checked from metadata
+   *before* any read.
+6. The file is read, its length re-checked against the running total for
+   the whole request — capped at **64 MiB** (`MAX_TOTAL_INGEST_BYTES`) — and
+   decoded as UTF-8; non-UTF-8 content is **rejected, never lossily
+   decoded** (a short hint is added when the leading bytes look like a
+   PNG or JPEG, pointing toward a `media` fragment instead).
+
+A request may reference at most **64 files** (`MAX_INGEST_FILES`) via
+`path`. Symlinks are allowed as long as their canonical target lands under a
+root — no special-casing needed, step 3 already resolves them.
+
+**Typed errors** (`INVALID_PARAMS` on the wire): `IngestDisabled` (no root
+configured), `IngestOutsideRoots` (the path escapes every root — carries the
+requested path, never the resolved one), `IngestPath` (a relative path, an
+unreadable/nonexistent/non-file path, a `path` combined with `content` or
+`media`, or non-UTF-8 content), and `ContextOverLimit` for the file-count and
+byte caps.
+
+**WASM builds never ingest.** The `context::ingest` module is compiled only
+under `#[cfg(not(target_arch = "wasm32"))]` — a `path` fragment reaching the
+WASM binding's in-memory compiler is rejected with `IngestDisabled`, the same
+error a native build reports with no roots configured; there is no adapter
+in a wasm session to resolve a filesystem path against.
+
+**Determinism caveat.** A file that changes between two calls compiles
+whatever content was actually read at call time — the deterministic
+contract is on the bytes read, not on the file as it exists at any other
+instant (a documented, accepted TOCTOU non-goal: this is a local,
+single-user server). `explain_compilation` re-reads the path when it
+re-compiles, so its decision reflects the file's *current* content, not
+necessarily what the original `compile_context` call saw.
+
+#### compile_transcript: one-call transcript ingestion
+
+`compile_transcript` is a shortcut over `compile_context` for a raw
+agent-session transcript: it deterministically segments the transcript into
+turns and sub-turns, then compiles the result exactly like `compile_context`
+— an agent no longer has to hand-split a transcript into fragments first.
+
+```jsonc
+compile_transcript { "query": "what did we decide about the canary rollback",
+                      "token_budget": 4000,
+                      "transcript": "System: You are the deploy assistant.\nUser: …\nAssistant: …" }
+→ { "context": { /* byte-compatible with compile_context's output */ },
+    "segmentation": { "format_detected": "plain",
+                       "segments": [ { "index": 0, "turn": 0, "role": "System", "kind": "body",
+                                        "byte_start": 0, "byte_end": 34, "fragment_id": … }, … ],
+                       "merged_segments": 2 } }
+```
+
+Exactly one of `transcript` (inline text) or `path` (an absolute filesystem
+path) must be set. `path` goes through the **same
+`VELESDB_MEMORY_INGEST_ROOTS` allowlist and security pipeline** as a
+`compile_context` fragment's `path` (above), except capped at **8 MiB**
+(`MAX_TRANSCRIPT_BYTES`) instead of the ordinary 1 MiB fragment ceiling — a
+transcript is the one caller-facing shape allowed to read past that limit,
+because it is immediately segmented into sub-1-MiB pieces before compilation
+ever sees it as one oversized fragment.
+
+**Format detection** (`segmentation.format`, default `auto`):
+
+- **`jsonl`** — one line, one turn; each line must parse as a
+  `{"role": …, "content": …}` JSON object. A blank line never opens a turn
+  of its own (its bytes fold into the surrounding turn), so a JSONL
+  transcript that merely uses blank lines as separators still parses.
+- **`plain`** — turns are opened by the first match of a **CLOSED** table
+  of markers at the start of a line, checked in order:
+  `System:`, `User:`, `Human:`, `Assistant:`, `AI:`, `Tool:`,
+  `### User`, `### Assistant`. A transcript with no marker at all is one
+  turn with `role: null`. The table is fixed in the compiler, never a
+  caller-supplied pattern — a `"User:"` cited in prose (a false positive)
+  is a known, accepted trade-off: predictable, deterministic segmentation
+  beats configurable-but-fragile marker matching. Force `plain` when a
+  transcript's content would otherwise trip a false positive, or fall back
+  to plain `compile_context` with hand-built fragments for full control.
+- **`auto`** (default) — tries `jsonl` first, falls back to `plain` when the
+  transcript does not parse as JSONL. A caller-forced format that fails to
+  parse is a **hard error**, never a silent fallback to the other format.
+
+Within each `plain` turn, content is further cut into sub-segments: a
+fenced code block becomes an atomic `code` segment (never split, exactly
+like `compile_context`'s own fence handling); a run of at least 8
+consecutive log-like lines (a volatile timestamp/pid prefix, or a raw-text
+repeat) becomes a `log` segment (so `abstract.log_dedup` can collapse it
+exactly like a caller-declared `kind: "log"` fragment); everything else is
+`body`, left for the ordinary classification rules to judge. Segments under
+`segmentation.min_segment_bytes` (default 256) merge into an adjacent
+segment of the *same turn and kind* — but merging never crosses
+`MAX_FRAGMENT_BYTES` (1 MiB), the one invariant every normalization step
+upholds. When `segmentation.cache_system_turn` is `true` (the default) and
+the first turn's role is `"system"` (case-insensitive), every segment of
+that turn is marked `metadata.cache = true` — the same signal
+`cache.stable_prefix` reads — so a system-prompt turn becomes the compiled
+output's stable, cache-friendly prefix without hand-annotating it.
+
+The response's `segmentation.segments` field is the full audit trail (see
+`SegmentInfo` in the crate docs): index, turn, role, kind, byte range, and
+the `fragment_id` the segment carries into `context.decisions`. **Two
+documented edge cases:**
+
+- **Segmentation failures reuse `compile_context`'s error taxonomy.** An
+  unsplittable fence over 1 MiB, a forced `jsonl` format that fails to
+  parse, or too many fragments after merging all surface as
+  `ContextOverLimit` with a segmentation-specific message — deliberately no
+  new error variant for this PR; revisit if that makes a segmentation
+  failure hard to tell apart from an ordinary budget error.
+- **A single JSONL line whose decoded content alone exceeds 1 MiB** is
+  re-split into several sub-1-MiB segments, but every child segment reports
+  the **same** `byte_start`/`byte_end` (the original line's span) — a JSONL
+  line's decoded text has no byte-aligned mapping back into the raw
+  (JSON-escaped) source bytes. An extreme edge case; every other segment
+  kind keeps a unique, non-overlapping range.
 
 #### Source TTL & disk growth
 

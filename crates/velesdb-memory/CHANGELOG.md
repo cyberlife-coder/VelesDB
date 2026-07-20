@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-07-20
+
+### Added
+
+- **Binding parity for the compiler's read tools (V2d-2/A4).**
+  `MemoryService::explain_compilation` is now a library method (extracted
+  from the MCP-only implementation, behavior byte-identical — the MCP tool
+  delegates to it), exposed as `explainCompilation` on Node and
+  `explain_compilation` on Python; `contextSavings` lands on Node; the WASM
+  binding (and the TypeScript SDK wrapping it) gains `retrieveContextSource`
+  over its in-memory, per-session store.
+- **`velesdb-memory --version` / `-V`.** The MCP server binary now
+  short-circuits the version flags before opening the store — a sanity
+  check for a fresh install that previously had no CLI surface at all.
+- **Path-referenced context fragments.** A `compile_context`/
+  `explain_compilation` fragment may set `path` (an absolute filesystem
+  path) instead of inline `content` to ingest a file by reference — exactly
+  one of `path`, `content`, or `media` per fragment. Opt-in via
+  `VELESDB_MEMORY_INGEST_ROOTS` (a `PATH`-list of allowlisted directories,
+  parsed fail-fast at startup); the resolved file must be a plain UTF-8
+  text file under 1 MiB, and the resolved content flows through the same
+  pipeline as an inline fragment (dedup, classification, budget packing,
+  `ctx://source/` handles).
+- **`compile_transcript` MCP tool.** A one-call shortcut over
+  `compile_context` for a raw agent-session transcript: deterministically
+  segments it into turns (plain marker-based —
+  `System:`/`User:`/`Human:`/`Assistant:`/`AI:`/`Tool:`/`### User`/
+  `### Assistant` — or JSONL, one line per turn) and, within each plain
+  turn, into fenced-code/log-run/body sub-segments (fenced code stays
+  atomic; runs of 8+ log-like lines collapse the same way
+  `abstract.log_dedup` would), then compiles the result exactly like
+  `compile_context`. Accepts `transcript` (inline) or `path` (reusing the
+  ingest allowlist, capped at a wider 8 MiB since the transcript is
+  segmented into sub-1-MiB pieces immediately after being read). Returns
+  the compiled context plus a `segmentation` audit report (detected
+  format, one entry per segment with turn/role/kind/byte range/
+  `fragment_id`, and how many segments normalization merged).
+  **Node/Python bindings: follow-up.** `compile_transcript` is MCP-only in
+  this release — neither `@wiscale/velesdb-memory-node` nor the Python
+  `MemoryService` binding exposes a one-call convenience method yet; Rust
+  and Node/Python callers compose `context::segment_transcript` +
+  `compile_context` themselves in the meantime.
+
 ## [0.9.2] — 2026-07-20
 
 ### Added

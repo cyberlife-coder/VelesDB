@@ -8,6 +8,11 @@
 //! `--features extract`, set `VELESDB_MEMORY_EXTRACTOR=ollama` to enable the
 //! `remember_extracted` tool (auto text → fact↔topic graph). Set
 //! `VELESDB_MEMORY_DEFAULT_TTL` (seconds) to expire remembered facts by default.
+//! Set `VELESDB_MEMORY_INGEST_ROOTS` (a `PATH`-list of directories) to let
+//! `compile_context`/`explain_compilation` fragments reference a file by
+//! `path` instead of inline `content`; unset disables that field entirely.
+//! Run with `--version` (or `-V`) to print the binary's version and exit,
+//! without opening the store.
 
 use std::time::Duration;
 
@@ -16,6 +21,18 @@ use velesdb_memory::mcp::McpServer;
 use velesdb_memory::{DynEmbedder, HashEmbedder, MemoryService, NativeStore, DEFAULT_DIMENSION};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Handled before anything else touches the filesystem or the embedder:
+    // `--version`/`-V` must work even when the store path is unwritable or
+    // absent (e.g. a fresh dev running it once to sanity-check the install),
+    // so it short-circuits ahead of the store open below.
+    if std::env::args()
+        .nth(1)
+        .is_some_and(|arg| arg == "--version" || arg == "-V")
+    {
+        println!("velesdb-memory {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     // Captured FIRST — before the (possibly seconds-long) embedder probe and
     // store open — so a client that exits during our own startup still
     // reparents us AFTER the baseline, and the watchdog sees the change. A
@@ -32,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // worker thread on a synchronous operation.
     let embedder = build_embedder()?;
     let service = open_store_with_actionable_lock_error(&store_path, embedder)?;
-    let server = apply_default_ttl(build_server(service)?)?;
+    let server = apply_ingest_roots(apply_default_ttl(build_server(service)?)?)?;
 
     tokio::runtime::Runtime::new()?.block_on(async move {
         spawn_orphan_watchdog(original_parent);
@@ -193,6 +210,33 @@ fn apply_default_ttl(server: McpServer) -> Result<McpServer, Box<dyn std::error:
         }
         Err(_) => Ok(server),
     }
+}
+
+/// Apply `VELESDB_MEMORY_INGEST_ROOTS` (V2b-1) — a platform `PATH`-list of
+/// directories a `path`-referenced context fragment may read from — enabling
+/// the `compile_context`/`explain_compilation` `path` field. Unset or empty
+/// leaves path ingestion disabled (every `path` fragment then fails with an
+/// explicit error, not a silent no-op). Parsed here, at startup, so a
+/// misconfigured root (missing directory, broken symlink) fails fast instead
+/// of surfacing on a caller's first `path` fragment.
+#[cfg(feature = "context")]
+fn apply_ingest_roots(server: McpServer) -> Result<McpServer, Box<dyn std::error::Error>> {
+    match std::env::var("VELESDB_MEMORY_INGEST_ROOTS") {
+        Ok(raw) if !raw.trim().is_empty() => {
+            let roots = velesdb_memory::context::IngestRoots::parse(&raw)?;
+            Ok(server.with_ingest_roots(roots))
+        }
+        _ => Ok(server),
+    }
+}
+
+/// Without the `context` feature there is no `IngestRoots` type (or `path`
+/// field) to configure. The `Result` return mirrors the `context` arm's
+/// signature so the caller is identical for both builds.
+#[cfg(not(feature = "context"))]
+#[allow(clippy::unnecessary_wraps)]
+fn apply_ingest_roots(server: McpServer) -> Result<McpServer, Box<dyn std::error::Error>> {
+    Ok(server)
 }
 
 /// Build the MCP server, attaching an extraction backend from

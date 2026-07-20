@@ -196,7 +196,7 @@ External soundness audit (Cure53 / independent Rust safety expert) is on the roa
 
 > **The canonical, full-path number is 450 µs p50 end-to-end** (10K vectors, 384D, WAL ON, recall ≥ 96%), measured on the i9-14900KF reference machine, reproducible via `python benchmarks/velesdb_benchmark.py --recall`.
 
-Index-only micro-benchmarks (HNSW search isolated, no WAL, hot cache) measure ~55 µs in the same conditions but at 5K/768D. They are useful to understand where the time goes but they are **not the same number**. The README and the crate README disambiguate explicitly since v1.13.3.
+Index-only micro-benchmarks (HNSW search isolated, no WAL, hot cache) measure ~55 µs in the same conditions at 10K/768D. They are useful to understand where the time goes but they are **not the same number**. The README and the crate README disambiguate explicitly since v1.13.3.
 
 The full performance budget gates are in [`QUALITY_BAR.md`](QUALITY_BAR.md). The benchmark methodology is in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). A reproducible head-to-head benchmark vs Qdrant + Chroma + pgvector under Docker Compose remains on the roadmap (ROADMAP.md Horizon 4).
 

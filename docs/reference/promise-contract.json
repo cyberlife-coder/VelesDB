@@ -1,12 +1,12 @@
 {
-  "last_updated": "2026-07-19",
+  "last_updated": "2026-07-20",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
       "file": "README.md",
-      "must_contain": "HNSW Search index-only (5K/768D, k=10)",
+      "must_contain": "HNSW Search index-only (10K/768D, k=10)",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
-      "source": "benchmarks/results/pr363_365_comparison.md (47-56µs measured) — relabeled as 'index-only' for transparency vs the canonical 450µs end-to-end number",
+      "source": "benchmarks/results/pr363_365_comparison.md (47-56µs measured) — relabeled as 'index-only' for transparency vs the canonical 450µs end-to-end number. Corpus label corrected 5K→10K on 2026-07-20: hnsw_benchmark.rs inserts 10,000 vectors; re-measured quiet (Apple M5 Pro) at 53.2 µs.",
       "last_updated": "2026-04-27"
     },
     {
@@ -95,7 +95,7 @@
       "file": "README.md",
       "must_contain": "130x faster",
       "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark",
-      "source": "README.md: JSON scan 3.84ms vs ColumnStore 29.5us at 100K rows",
+      "source": "README.md: JSON scan 3.84ms vs ColumnStore 29.5us at 100K rows on the i9-14900KF reference. Hardware-dependent ratio, qualified in README since 2026-07-20: Apple M5 Pro quiet re-run measures ~50–105x (JSON scan itself ~2.8x faster there; ColumnStore absolute ~27.15 µs holds).",
       "last_updated": "2026-04-13"
     },
     {
@@ -158,9 +158,9 @@
     {
       "id": "readme_wasm_bundle_gzipped",
       "file": "README.md",
-      "must_contain": "~430 KB gzipped",
-      "validation_command": "npm pack @wiscale/velesdb-wasm --dry-run  # published tarball (gzipped) ~426 KB",
-      "source": "@wiscale/velesdb-wasm v1.18.0 published npm package, ~426 KB gzipped. Replaces the former ~50 KB claim (never matched a published artifact).",
+      "must_contain": "~550 KB gzipped",
+      "validation_command": "npm pack @wiscale/velesdb-wasm --dry-run  # published tarball (gzipped) ~536-550 KB",
+      "source": "@wiscale/velesdb-wasm v3.12.0 published npm package: velesdb_wasm_bg.wasm gzip -9 = 549,285 bytes (~536 KiB / ~549 kB), measured 2026-07-20. Replaces the stale ~430 KB v1.18.0 figure (+25-28% drift found by sequential re-verification).",
       "last_updated": "2026-06-12"
     },
     {

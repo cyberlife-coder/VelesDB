@@ -1098,6 +1098,10 @@ fn test_get_info_instructions_cover_memory_compiler_and_working_context() {
             instructions.contains("working"),
             "must mention working-context resumption: {instructions}"
         );
+        assert!(
+            instructions.contains("compile_transcript"),
+            "must mention the compile_transcript shortcut (V2b-2/V2b-3): {instructions}"
+        );
     }
 }
 

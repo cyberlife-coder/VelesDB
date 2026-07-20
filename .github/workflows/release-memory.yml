@@ -264,7 +264,11 @@ jobs:
         # load test. To close: run the smoke test under an emulator (QEMU for arm64,
         # or a native x86 mac runner) so every shipped .node is load-verified.
         if: ${{ !matrix.cross && matrix.target != 'x86_64-apple-darwin' }}
-        run: node --test __test__/
+        # `npm test` (package.json's __test__/*.spec.mjs glob) rather than a bare
+        # `node --test __test__/` directory argument: directory args stop being
+        # recursively discovered on recent Node majors (verified failing on Node
+        # 26 locally), and the glob also picks up new spec files automatically.
+        run: npm test
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

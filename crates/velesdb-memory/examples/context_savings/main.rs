@@ -101,6 +101,7 @@ fn to_fragments(fixtures: &[Fixture]) -> Vec<ContextFragment> {
     fixtures
         .iter()
         .map(|fixture| ContextFragment {
+            path: None,
             id: None,
             content: fixture.content.clone(),
             kind: fixture.kind.map(str::to_owned),

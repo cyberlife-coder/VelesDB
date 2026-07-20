@@ -16,7 +16,7 @@ High-performance vector database engine written in Rust.
 
 ## Features
 
-- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD — 450µs p50 end-to-end (10K/384D, WAL ON, recall>=96%); 55µs HNSW index-only micro-benchmark (5K/768D, k=10); 21.7ns dot product (768D AVX2). See `docs/BENCHMARKS.md` for measurement context.
+- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD — 450µs p50 end-to-end (10K/384D, WAL ON, recall>=96%); 55µs HNSW index-only micro-benchmark (10K/768D, k=10); 21.7ns dot product (768D AVX2). See `docs/BENCHMARKS.md` for measurement context.
 - **Adaptive Search**: Two-phase ef_search that auto-escalates only for hard queries (2-4x faster median)
 - **Hybrid Search**: Combine vector similarity + BM25 full-text search with RRF fusion
 - **Sparse Vectors**: Named sparse vector indexes with DAAT MaxScore search and RRF/RSF fusion

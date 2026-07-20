@@ -513,6 +513,34 @@ impl WasmMemoryService {
         stringify_id_fields(&mut value);
         to_js(&value)
     }
+
+    /// Fetch back the exact original content — and media, when the fragment
+    /// carried one — behind a `ctx://source/<hash>` handle from a
+    /// [`compile_context`](Self::compile_context) result: what was
+    /// externalized or partially packed is recoverable, not lost. Same wire
+    /// shape as the Node binding's `retrieveContextSource`: `{handle,
+    /// content, media?}`, `media` present only for a source whose fragment
+    /// carried one.
+    ///
+    /// In-memory semantics: the handle resolves only within this session's
+    /// [`WasmStore`] — see [`Self::compile_context`]'s doc comment.
+    #[wasm_bindgen(js_name = retrieveContextSource)]
+    pub fn retrieve_context_source(&self, handle: &str) -> Result<JsValue, JsValue> {
+        let source = self
+            .inner
+            .retrieve_context_source(handle)
+            .map_err(to_js_err)?;
+        let value = serde_json::to_value(&source)
+            .map_err(|e| structured_js_error(CODE_INTERNAL, &format!("serialize: {e}")))?;
+        let Value::Object(mut map) = value else {
+            return Err(structured_js_error(
+                CODE_INTERNAL,
+                "context source is not an object",
+            ));
+        };
+        map.insert("handle".to_owned(), Value::String(handle.to_owned()));
+        to_js(&Value::Object(map))
+    }
 }
 
 #[cfg(test)]
