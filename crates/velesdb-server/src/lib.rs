@@ -82,7 +82,12 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
 // ============================================================================
 // OpenAPI Documentation
 
-/// VelesDB API Documentation
+/// VelesDB API Documentation (paths that exist regardless of build features).
+///
+/// The `/metrics` path lives in [`MetricsApiDoc`] because `utoipa`'s `paths(...)`
+/// list is a fixed macro argument list — individual entries can't carry a
+/// `#[cfg(...)]`, so a handler gated behind the `prometheus` feature can't be
+/// listed here unconditionally without breaking `--no-default-features` builds.
 #[derive(OpenApi)]
 #[openapi(
     info(
@@ -174,7 +179,6 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         handlers::points::relations::unrelate_points,
         handlers::points::relations::get_point_relations,
         handlers::points::relations::set_point_ttl,
-        handlers::metrics::prometheus_metrics
     ),
     components(
         schemas(
@@ -257,7 +261,30 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
         )
     )
 )]
+struct ApiDocBase;
+
+/// OpenAPI doc fragment for the `/metrics` endpoint, only compiled when the
+/// `prometheus` feature is enabled (see [`ApiDocBase`] for why this is split out).
+#[cfg(feature = "prometheus")]
+#[derive(OpenApi)]
+#[openapi(paths(handlers::metrics::prometheus_metrics))]
+struct MetricsApiDoc;
+
+/// Public entry point for the full OpenAPI document. Merges in the
+/// `prometheus`-gated `/metrics` path when that feature is enabled.
 pub struct ApiDoc;
+
+impl ApiDoc {
+    pub fn openapi() -> utoipa::openapi::OpenApi {
+        #[allow(unused_mut)]
+        let mut doc = ApiDocBase::openapi();
+        #[cfg(feature = "prometheus")]
+        {
+            doc = doc.merge_from(MetricsApiDoc::openapi());
+        }
+        doc
+    }
+}
 
 // ============================================================================
 // Application State
@@ -286,7 +313,6 @@ pub struct AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use utoipa::OpenApi;
 
     #[test]
     fn test_openapi_spec_generation() {

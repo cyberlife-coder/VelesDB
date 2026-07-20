@@ -21,7 +21,7 @@ name = "velesdb-server"
 path = "src/main.rs"
 
 [dependencies]
-velesdb-core = { workspace = true, default-features = false, features = ["openapi"] }
+velesdb-core = { workspace = true, default-features = false, features = ["openapi", "persistence"] }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -58,6 +58,12 @@ gpu = ["velesdb-core/gpu"]
 internal-bench = ["velesdb-core/internal-bench"]
 loom = ["velesdb-core/loom"]
 openapi = ["velesdb-core/openapi"]
+## `velesdb-core/persistence` is already forced on unconditionally via the
+## `[dependencies]` entry above (like `openapi`), because velesdb-server's own
+## code uses persistence-gated core APIs (index management, admin
+## diagnostics, graph handlers, etc.) without matching cfg gates throughout.
+## This feature is kept as a no-op alias for backward compatibility with
+## existing `--features persistence` invocations (see #1472).
 persistence = ["velesdb-core/persistence"]
 ## Serves GET /metrics (Prometheus exposition format). Default since 1.19:
 ## released binaries and the Docker image expose operational metrics.

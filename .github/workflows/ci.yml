@@ -124,6 +124,14 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      # Closes the --no-default-features matrix gap from #1472: nothing in CI
+      # previously checked the workspace with every crate's own default
+      # features disabled, so cross-crate feature-unification mismatches
+      # (e.g. a cfg-gated call site in one crate vs. the feature state its
+      # dependency actually ends up unified to) went undetected.
+      - name: Check --no-default-features (workspace matrix gap, #1472)
+        run: cargo check --workspace --no-default-features
+
       - name: Run Clippy (strict)
         run: |
           cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
