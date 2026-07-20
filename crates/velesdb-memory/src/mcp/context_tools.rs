@@ -515,50 +515,17 @@ impl McpServer {
             fragment_index,
         } = params;
         self.resolve_ingest(&mut request.fragments)?;
-        if let Some(index) = fragment_index {
-            let fragment_count = request.fragments.len();
-            if index >= fragment_count {
-                return Err(ErrorData::new(
-                    ErrorCode::INVALID_PARAMS,
-                    format!(
-                        "fragment_index {index} is out of bounds: request.fragments has {fragment_count} entries"
-                    ),
-                    None,
-                ));
-            }
-        }
         let ids_as_strings = request.policy.as_ref().is_some_and(|p| p.ids_as_strings);
-        let compiled = tokio::task::spawn_blocking(move || {
-            // Explanation must not re-record an event or re-store sources:
-            // it is a read-only question about a deterministic function.
-            let mut request = request;
-            let mut policy = request.policy.take().unwrap_or_default();
-            policy.record_events = false;
-            policy.store_sources = false;
-            request.policy = Some(policy);
-            service.compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+        // The selection logic itself (record-off recompile + select by
+        // index/id) lives in the memory bridge now, shared with the Node and
+        // Python bindings — this tool only resolves `path` ingestion (a
+        // server-config concern) and maps the result onto the wire.
+        let decision = tokio::task::spawn_blocking(move || {
+            service.explain_compilation(&request, fragment_id, fragment_index)
         })
         .await
         .map_err(join_error)?
         .map_err(to_error)?;
-        let decision = if let Some(index) = fragment_index {
-            // Bounds were already validated against `request.fragments`
-            // above; memory-pulled fragments only ever append, so
-            // `compiled.decisions` is at least as long.
-            compiled.decisions.into_iter().nth(index)
-        } else {
-            compiled
-                .decisions
-                .into_iter()
-                .find(|decision| decision.fragment_id == fragment_id)
-        };
-        let decision = decision.ok_or_else(|| {
-            ErrorData::new(
-                ErrorCode::INVALID_PARAMS,
-                format!("the request contains no fragment with id {fragment_id}"),
-                None,
-            )
-        })?;
         Ok(Json(to_wire_value(&decision, ids_as_strings)?))
     }
 

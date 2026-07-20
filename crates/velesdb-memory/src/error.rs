@@ -113,6 +113,24 @@ pub enum MemoryError {
     #[error("unknown context source handle: {0}")]
     UnknownHandle(String),
 
+    /// [`crate::service::MemoryService::explain_compilation`]'s
+    /// `fragment_index` named a position beyond `request.fragments`.
+    #[cfg(feature = "context")]
+    #[error("fragment_index {index} is out of bounds: request.fragments has {len} entries")]
+    FragmentIndexOutOfBounds {
+        /// The out-of-bounds index the caller supplied.
+        index: usize,
+        /// The actual number of fragments in the request.
+        len: usize,
+    },
+
+    /// [`crate::service::MemoryService::explain_compilation`] found no
+    /// decision matching the requested `fragment_id` (and no
+    /// `fragment_index` was given, or it selected nothing new to check).
+    #[cfg(feature = "context")]
+    #[error("the request contains no fragment with id {0}")]
+    FragmentNotFound(u64),
+
     /// A persisted working context could not be (de)serialized — the stored
     /// payload predates or postdates this crate's schema.
     #[cfg(feature = "context")]
@@ -191,6 +209,10 @@ impl MemoryError {
             Self::ContextBudget { .. } | Self::ContextOverLimit(_) => ErrorCategory::InvalidInput,
             #[cfg(feature = "context")]
             Self::IngestDisabled | Self::IngestOutsideRoots(_) | Self::IngestPath(_) => {
+                ErrorCategory::InvalidInput
+            }
+            #[cfg(feature = "context")]
+            Self::FragmentIndexOutOfBounds { .. } | Self::FragmentNotFound(_) => {
                 ErrorCategory::InvalidInput
             }
             #[cfg(feature = "context")]

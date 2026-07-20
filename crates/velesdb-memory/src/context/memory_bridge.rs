@@ -63,9 +63,9 @@ use serde_json::{Map, Number, Value};
 
 use super::{positive_ttl, MemoryService, Metadata, HUB_FIELD};
 use crate::context::model::{
-    CompileRequest, CompiledContext, ContextFragment, ContextSavings, ContextSource,
-    ImportanceWeights, MediaRef, MemoryScope, WorkingContext, WorkingContextIndex,
-    WorkingContextSession,
+    CompilePolicy, CompileRequest, CompiledContext, ContextDecision, ContextFragment,
+    ContextSavings, ContextSource, ImportanceWeights, MediaRef, MemoryScope, WorkingContext,
+    WorkingContextIndex, WorkingContextSession,
 };
 use crate::context::{media, provenance, ContextCompiler};
 use crate::embedder::Embedder;
@@ -546,6 +546,66 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             content,
             media: source_media(&meta),
         })
+    }
+
+    /// Explain why one fragment of `request` was preserved, abstracted,
+    /// externalized, dropped, or cached — the selection primitive the MCP
+    /// `explain_compilation` tool delegates to, extracted here so every
+    /// adapter (MCP, Node, Python) shares one implementation instead of
+    /// reimplementing it. Compilation is deterministic, so `request` is
+    /// simply re-compiled — with event/source recording forced off, since an
+    /// explanation must not have side effects — and the matching decision is
+    /// returned.
+    ///
+    /// `fragment_index` (0-based position in `request.fragments`), when
+    /// given, TAKES PRIORITY over `fragment_id` for locating the decision:
+    /// `compile_context` records exactly one decision per input fragment, in
+    /// order, so `decisions[fragment_index]` is unambiguous even when
+    /// several fragments are byte-identical and therefore share the same
+    /// content-addressed `fragment_id` — a plain `fragment_id` lookup always
+    /// resolves to the FIRST such decision (the deduplication survivor's),
+    /// never a dropped twin's.
+    ///
+    /// Caveat inherited from re-compiling rather than replaying stored
+    /// state: with a `memory_scope` the re-compile recalls from CURRENT
+    /// memory, so the decision reflects memory as it is now, not as it was
+    /// at the original `compile_context` call; a caller that already
+    /// resolved a `path` fragment to `content` is unaffected (this method
+    /// does no I/O of its own).
+    ///
+    /// # Errors
+    /// Returns [`MemoryError::FragmentIndexOutOfBounds`] when `fragment_index`
+    /// is beyond `request.fragments`, [`MemoryError::FragmentNotFound`] when
+    /// no decision matches the selector, or any error [`Self::compile_context`]
+    /// itself can return (budget, caps, recall, embedding, storage).
+    pub fn explain_compilation(
+        &self,
+        request: &CompileRequest,
+        fragment_id: u64,
+        fragment_index: Option<usize>,
+    ) -> Result<ContextDecision, MemoryError> {
+        if let Some(index) = fragment_index {
+            let len = request.fragments.len();
+            if index >= len {
+                return Err(MemoryError::FragmentIndexOutOfBounds { index, len });
+            }
+        }
+        let mut request = request.clone();
+        let mut policy = request.policy.take().unwrap_or_default();
+        policy.record_events = false;
+        policy.store_sources = false;
+        request.policy = Some(policy);
+        let compiled =
+            self.compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)?;
+        let decision = if let Some(index) = fragment_index {
+            compiled.decisions.into_iter().nth(index)
+        } else {
+            compiled
+                .decisions
+                .into_iter()
+                .find(|decision| decision.fragment_id == fragment_id)
+        };
+        decision.ok_or(MemoryError::FragmentNotFound(fragment_id))
     }
 
     /// Record one compilation's savings as a metadata-only system fact

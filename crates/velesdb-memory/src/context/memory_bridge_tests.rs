@@ -17,6 +17,7 @@
 
 use super::*;
 use crate::context::model::CompilePolicy;
+use crate::context::{fragment_id, ContextAction};
 use crate::embedder::HashEmbedder;
 
 const DIM: usize = 384;
@@ -374,5 +375,140 @@ fn test_should_store_source_never_rewrites_an_unmarked_occupied_slot() {
     assert!(
         !should_store,
         "an unmarked occupied slot must never be (re-)written by the source writer"
+    );
+}
+
+// --- explain_compilation: extracted selection primitive (V2d-2) -----------
+// The MCP `explain_compilation` tool's selection logic (record-off recompile
+// + select-by-index/id) lives here now, so every adapter (MCP, Node, Python)
+// shares one implementation. These tests pin the primitive's own contract
+// directly, independent of the MCP wire layer.
+
+#[test]
+fn test_explain_compilation_returns_the_decision_for_a_matching_fragment_id() {
+    let (_dir, svc) = open_service();
+    let wanted = fragment_id("a fact");
+    let req = CompileRequest {
+        query: "deploy".to_owned(),
+        fragments: vec![fragment("a fact"), fragment("other")],
+        project: None,
+        target_model: None,
+        token_budget: 10_000,
+        memory_scope: None,
+        policy: None,
+    };
+
+    let decision = svc
+        .explain_compilation(&req, wanted, None)
+        .expect("explain_compilation");
+
+    assert_eq!(decision.fragment_id, wanted);
+    assert!(matches!(decision.action, ContextAction::Preserve));
+    assert!(!decision.reason.is_empty());
+}
+
+#[test]
+fn test_explain_compilation_unknown_fragment_id_is_fragment_not_found() {
+    let (_dir, svc) = open_service();
+    let req = CompileRequest {
+        query: "deploy".to_owned(),
+        fragments: vec![fragment("a fact")],
+        project: None,
+        target_model: None,
+        token_budget: 10_000,
+        memory_scope: None,
+        policy: None,
+    };
+
+    let err = svc
+        .explain_compilation(&req, 424_242, None)
+        .expect_err("no such fragment in the request — must fail");
+
+    assert!(matches!(err, MemoryError::FragmentNotFound(424_242)));
+}
+
+#[test]
+fn test_explain_compilation_fragment_index_out_of_bounds_is_rejected() {
+    let (_dir, svc) = open_service();
+    let wanted = fragment_id("a fact");
+    let req = CompileRequest {
+        query: "deploy".to_owned(),
+        fragments: vec![fragment("a fact")],
+        project: None,
+        target_model: None,
+        token_budget: 10_000,
+        memory_scope: None,
+        policy: None,
+    };
+
+    let err = svc
+        .explain_compilation(&req, wanted, Some(5))
+        .expect_err("fragment_index 5 has no fragment — must fail");
+
+    assert!(matches!(
+        err,
+        MemoryError::FragmentIndexOutOfBounds { index: 5, len: 1 }
+    ));
+}
+
+#[test]
+fn test_explain_compilation_fragment_index_disambiguates_byte_identical_twins() {
+    // Two byte-identical fragments share the same content-addressed
+    // fragment_id — the id-only lookup always resolves to the
+    // deduplication survivor (kept, Preserve), never a dropped twin's own
+    // decision. `fragment_index` picks the SECOND fragment's decision.
+    let (_dir, svc) = open_service();
+    let shared_id = fragment_id("duplicate payload");
+    let req = CompileRequest {
+        query: "deploy".to_owned(),
+        fragments: vec![fragment("duplicate payload"), fragment("duplicate payload")],
+        project: None,
+        target_model: None,
+        token_budget: 10_000,
+        memory_scope: None,
+        policy: None,
+    };
+
+    let survivor = svc
+        .explain_compilation(&req, shared_id, None)
+        .expect("explain_compilation (by id)");
+    let twin = svc
+        .explain_compilation(&req, shared_id, Some(1))
+        .expect("explain_compilation (by index)");
+
+    assert!(matches!(survivor.action, ContextAction::Preserve));
+    assert!(matches!(twin.action, ContextAction::Drop));
+    assert_eq!(twin.rule_id, "drop.duplicate");
+    assert_eq!(twin.fragment_id, shared_id);
+}
+
+#[test]
+fn test_explain_compilation_never_records_an_event_or_stores_a_source() {
+    // An explanation is a read-only question about a deterministic
+    // function: it must not leave side effects behind, even when the
+    // request's own policy asked for them.
+    let (_dir, svc) = open_service();
+    let wanted = fragment_id("a fact");
+    let req = CompileRequest {
+        query: "deploy".to_owned(),
+        fragments: vec![fragment("a fact")],
+        project: None,
+        target_model: None,
+        token_budget: 10_000,
+        memory_scope: None,
+        policy: Some(CompilePolicy {
+            record_events: true,
+            store_sources: true,
+            ..CompilePolicy::default()
+        }),
+    };
+
+    svc.explain_compilation(&req, wanted, None)
+        .expect("explain_compilation");
+
+    let savings = svc.context_savings(None).expect("context_savings");
+    assert_eq!(
+        savings.events, 0,
+        "explain_compilation must not record a compile event"
     );
 }
