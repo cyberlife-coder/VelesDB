@@ -21,8 +21,9 @@ use serde_json::Value;
 use super::{join_error, to_error, McpServer};
 use crate::context::wire::{stringify_id_fields, ID_KEYS};
 use crate::context::{
-    suggest_token_budget, CompilePolicy, CompileRequest, CompiledContext, ContextCompiler,
-    ContextDecision, ContextFragment, ContextSavings, MediaRef, SuggestedBudget, WorkingContext,
+    fragment_id, segment_transcript, suggest_token_budget, CompilePolicy, CompileRequest,
+    CompiledContext, ContextCompiler, ContextDecision, ContextFragment, ContextSavings, MediaRef,
+    SegmentFormat, SegmentKind, SegmentationPolicy, SuggestedBudget, WorkingContext,
     WorkingContextSession,
 };
 
@@ -208,6 +209,96 @@ pub(super) struct ListWorkingContextsResult {
     pub sessions: Vec<WorkingContextSession>,
 }
 
+/// Input of the `compile_transcript` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct CompileTranscriptParams {
+    /// What the agent is working on — drives relevance scoring, exactly like
+    /// `compile_context`'s `query`.
+    pub query: String,
+    /// The raw transcript text (plain, marker-based, or JSONL). Exactly one
+    /// of `transcript` or `path` must be set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<String>,
+    /// Read the transcript from this absolute filesystem path instead of
+    /// inline `transcript` — the same `VELESDB_MEMORY_INGEST_ROOTS`
+    /// allowlist and security pipeline as a `compile_context` fragment's
+    /// `path` (V2b-1), except capped at
+    /// [`crate::limits::MAX_TRANSCRIPT_BYTES`] (8 MiB) instead of the
+    /// ordinary 1 MiB fragment ceiling — the transcript is segmented into
+    /// sub-1-MiB pieces immediately after this read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Hard token ceiling for the assembled content, same as
+    /// `compile_context`'s `token_budget`.
+    pub token_budget: u64,
+    /// Project facet, recorded in provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Target model name, for cost insights.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_model: Option<String>,
+    /// Per-request compile policy override, same as `compile_context`'s
+    /// `policy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<CompilePolicy>,
+    /// Tuning knobs for the transcript segmentation step itself (format,
+    /// merge threshold, system-turn caching). `None` uses
+    /// [`SegmentationPolicy::default`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segmentation: Option<SegmentationPolicy>,
+}
+
+/// One entry of [`SegmentationReport::segments`] — the audit trail of how
+/// `compile_transcript` cut the transcript up, independent of what
+/// `compile_context` then did with the resulting fragments.
+#[derive(Debug, serde::Serialize, serde::Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct SegmentInfo {
+    /// Position of this segment in `segmentation.segments`, in transcript
+    /// order.
+    pub index: usize,
+    /// Which turn (0-based) this segment belongs to.
+    pub turn: usize,
+    /// The turn's role, when one was determined. `null` for a `plain`
+    /// transcript with no matching marker at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// `"body"`, `"code"`, or `"log"`.
+    pub kind: SegmentKind,
+    /// Start byte offset (inclusive) in the original transcript.
+    pub byte_start: usize,
+    /// End byte offset (exclusive) in the original transcript.
+    pub byte_end: usize,
+    /// The id this segment's fragment carries into `context.decisions` —
+    /// content-addressed, same formula as every other `compile_context`
+    /// fragment with no caller-supplied `id`.
+    pub fragment_id: u64,
+}
+
+/// The segmentation audit trail returned alongside `context`.
+#[derive(Debug, serde::Serialize, serde::Deserialize, JsonSchema)]
+pub(super) struct SegmentationReport {
+    /// `"plain"` or `"jsonl"` — the format actually used, never `"auto"`
+    /// even when the request asked for it.
+    pub format_detected: SegmentFormat,
+    /// Every segment, in transcript order.
+    pub segments: Vec<SegmentInfo>,
+    /// How many segments [`SegmentationPolicy::min_segment_bytes`] merging
+    /// eliminated.
+    pub merged_segments: usize,
+}
+
+/// Output of the `compile_transcript` tool.
+#[derive(Debug, serde::Serialize, serde::Deserialize, JsonSchema)]
+pub(super) struct CompileTranscriptResult {
+    /// The compiled context — byte-compatible with `compile_context`'s
+    /// output.
+    pub context: CompiledContext,
+    /// How the transcript was cut into fragments before compilation.
+    pub segmentation: SegmentationReport,
+}
+
 /// Input of the `suggest_budget` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct SuggestBudgetParams {
@@ -250,6 +341,29 @@ impl McpServer {
         Ok(())
     }
 
+    /// Resolve a `compile_transcript` `path` field against this server's
+    /// configured ingest roots (V2b-2) — the same security pipeline as
+    /// [`Self::resolve_ingest`], but through
+    /// [`crate::context::ingest::resolve_transcript_path`] so the byte cap
+    /// is [`crate::limits::MAX_TRANSCRIPT_BYTES`], not the ordinary 1 MiB
+    /// fragment ceiling.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolve_transcript_path(&self, path: &str) -> Result<String, ErrorData> {
+        let roots = self
+            .ingest_roots
+            .as_ref()
+            .filter(|roots| roots.is_enabled())
+            .ok_or_else(|| to_error(crate::error::MemoryError::IngestDisabled))?;
+        crate::context::ingest::resolve_transcript_path(path, roots).map_err(to_error)
+    }
+
+    /// `mcp` never targets `wasm32` (see [`Self::resolve_ingest`]'s wasm
+    /// arm) — kept for call-site uniformity.
+    #[cfg(target_arch = "wasm32")]
+    fn resolve_transcript_path(&self, _path: &str) -> Result<String, ErrorData> {
+        Err(to_error(crate::error::MemoryError::IngestDisabled))
+    }
+
     #[tool(
         name = "compile_context",
         description = "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministically, with no LLM call. Duplicates are dropped, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles instead of silently vanishing, and `memory_scope` pulls relevant stored memories into the result. Each fragment's own `metadata` is capped at 64 KiB serialized. A fragment may set `path` (an absolute filesystem path) instead of inline `content` to ingest a file by reference — exactly one of `path`, `content`, or `media` per fragment; requires the server to be started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories, and the resolved file must be plain UTF-8 text under 1 MiB. Returns the assembled content plus one auditable decision per fragment (rule id, reason, risk), the sources, the retrieval handles, token-savings insights, and `warnings` — a mechanical shortlist of externalized fragments relevant enough to the query that they are worth a second look, so checking `decisions` by hand is only needed when `warnings` is non-empty and still ambiguous. `policy.slim_response` (default false) empties `sections`/`decisions` from the response — keep it off when you need the audit trail, or re-compile without it later (compilation is deterministic). `policy.ids_as_strings` (default false) rewrites every id field of the response into a decimal string, for MCP clients without u64-safe JSON number parsing.",
@@ -270,6 +384,87 @@ impl McpServer {
         .map_err(join_error)?
         .map_err(to_error)?;
         Ok(Json(to_wire_value(&compiled, ids_as_strings)?))
+    }
+
+    #[tool(
+        name = "compile_transcript",
+        description = "One-call shortcut over compile_context for a raw agent-session transcript: deterministically segments it into turns (plain marker-based — System:/User:/Human:/Assistant:/AI:/Tool:/### User/### Assistant — or JSONL, one line per turn) and, within each turn, into code/log/body sub-segments (fenced code blocks stay atomic; runs of 8+ log-like lines collapse the same way abstract.log_dedup would), then compiles the result exactly like compile_context. Exactly one of `transcript` (inline) or `path` (an absolute filesystem path, same VELESDB_MEMORY_INGEST_ROOTS allowlist as compile_context's `path` fragments but capped at 8 MiB) must be set. `segmentation.format` forces plain or jsonl instead of auto-detecting; a forced jsonl format that fails to parse is a hard error, never a silent fallback. The first turn is tagged cache-eligible when it looks like a system prompt (segmentation.cache_system_turn, default true). Returns `context` (byte-compatible with compile_context's output) plus `segmentation` — the detected format and one audit entry (turn, role, kind, byte range, fragment_id) per segment, so a caller can see exactly how the transcript was cut before trusting the compiled result.",
+        input_schema = wire_safe_input_schema::<CompileTranscriptParams>(),
+        output_schema = wire_safe_output_schema::<CompileTranscriptResult>()
+    )]
+    async fn compile_transcript(
+        &self,
+        Parameters(params): Parameters<CompileTranscriptParams>,
+    ) -> Result<Json<Value>, ErrorData> {
+        let CompileTranscriptParams {
+            query,
+            transcript,
+            path,
+            token_budget,
+            project,
+            target_model,
+            policy,
+            segmentation,
+        } = params;
+        let transcript_text = match (transcript, path) {
+            (Some(text), None) if !text.is_empty() => text,
+            (None, Some(path)) => self.resolve_transcript_path(&path)?,
+            _ => {
+                return Err(ErrorData::new(
+                    ErrorCode::INVALID_PARAMS,
+                    "exactly one of `transcript` (non-empty) or `path` must be set".to_owned(),
+                    None,
+                ));
+            }
+        };
+        let segmentation_policy = segmentation.unwrap_or_default();
+        let outcome =
+            segment_transcript(&transcript_text, &segmentation_policy).map_err(to_error)?;
+        let segments_info: Vec<SegmentInfo> = outcome
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(index, segment)| SegmentInfo {
+                index,
+                turn: segment.turn,
+                role: segment.role.clone(),
+                kind: segment.kind,
+                byte_start: segment.byte_start,
+                byte_end: segment.byte_end,
+                fragment_id: fragment_id(&segment.fragment.content),
+            })
+            .collect();
+        let fragments: Vec<ContextFragment> = outcome
+            .segments
+            .into_iter()
+            .map(|segment| segment.fragment)
+            .collect();
+        let ids_as_strings = policy.as_ref().is_some_and(|p| p.ids_as_strings);
+        let request = CompileRequest {
+            query,
+            fragments,
+            project,
+            target_model,
+            token_budget,
+            memory_scope: None,
+            policy,
+        };
+        let service = Arc::clone(&self.service);
+        let compiled = tokio::task::spawn_blocking(move || {
+            service.compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
+        let result = CompileTranscriptResult {
+            context: compiled,
+            segmentation: SegmentationReport {
+                format_detected: outcome.format_detected,
+                segments: segments_info,
+                merged_segments: outcome.merged_segments,
+            },
+        };
+        Ok(Json(to_wire_value(&result, ids_as_strings)?))
     }
 
     #[tool(
