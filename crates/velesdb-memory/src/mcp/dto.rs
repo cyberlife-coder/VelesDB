@@ -25,6 +25,7 @@ use crate::service::Metadata;
 
 /// Parameters for the `remember` tool.
 #[derive(Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RememberParams {
     /// The fact to store in memory.
     pub(super) fact: String,
