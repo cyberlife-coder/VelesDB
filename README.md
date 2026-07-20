@@ -297,6 +297,12 @@ curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/vele
   | tar -xz -C ~/.claude/skills/
 ```
 
+**Want the agent to actually use the memory continuously, not just know it exists?**
+[`integrations/agent-hooks/`](integrations/agent-hooks/README.md) wires
+Claude Code `SessionStart`/`Stop`/`PreCompact` hooks that nudge
+`load_working_context` / `save_working_context` automatically — a one-time
+global install applies to every project.
+
 **Quickstart (3 steps):**
 
 ```bash
