@@ -187,6 +187,34 @@ pub enum GraphAction {
         #[arg(short, long, default_value = "table")]
         format: String,
     },
+
+    /// Scan for legacy phantom edges (edge store entries whose source or
+    /// target node has no stored payload) and report or repair them.
+    ///
+    /// Read-only by default: reports the phantom edge count with no
+    /// mutation unless `--purge` or `--stub` is passed. These predate
+    /// #1442's referential-integrity check and can only exist in a
+    /// database that was created before that fix landed -- WAL replay at
+    /// `Collection::open` intentionally never re-validates edges, so
+    /// filtering them there would risk data loss for legitimate
+    /// edge-only graphs. `doctor` is the explicit, opt-in alternative.
+    Doctor {
+        /// Path to database directory
+        path: PathBuf,
+        /// Graph collection name
+        collection: String,
+        /// Remove phantom edges from the edge store (crash-durable via
+        /// the existing remove_edge/WAL-tombstone path)
+        #[arg(long, conflicts_with = "stub")]
+        purge: bool,
+        /// Seed a minimal `{}` payload for each missing endpoint instead
+        /// of removing the edge
+        #[arg(long, conflicts_with = "purge")]
+        stub: bool,
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+    },
 }
 
 /// Handle graph subcommands with direct core calls.
@@ -277,9 +305,20 @@ pub fn handle(action: GraphAction) -> anyhow::Result<()> {
             page,
             format,
         } => graph_handlers::handle_graph_nodes(&path, &collection, page, &format),
+        GraphAction::Doctor {
+            path,
+            collection,
+            purge,
+            stub,
+            format,
+        } => graph_handlers::handle_graph_doctor(&path, &collection, purge, stub, &format),
     }
 }
 
 #[cfg(test)]
 #[path = "graph_bdd_tests.rs"]
 mod graph_bdd_tests;
+
+#[cfg(test)]
+#[path = "graph_doctor_tests.rs"]
+mod graph_doctor_tests;

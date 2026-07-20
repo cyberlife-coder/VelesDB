@@ -194,6 +194,8 @@ All graph REPL commands operate on graph collections via `.graph <subcommand>`:
 
 > **Naming note:** The REPL uses `.graph edges` while the CLI subcommand uses `graph get-edges`. Both do the same thing.
 
+> **CLI-only:** `graph doctor` (legacy phantom-edge audit/repair, see below) is a standalone CLI subcommand and has no REPL equivalent.
+
 ### Session Commands
 
 Session commands use the backslash prefix (dot prefix also accepted):
@@ -485,6 +487,15 @@ velesdb graph search ./data my_graph '[0.1, 0.2, 0.3]' --format json
 velesdb graph nodes ./data my_graph
 velesdb graph nodes ./data my_graph --page 2
 velesdb graph nodes ./data my_graph --format json
+
+# Audit legacy phantom edges (edge store entries whose source or target
+# node has no stored payload -- can only happen in a database created
+# before the #1442 add_edge referential-integrity fix). Read-only by
+# default; --purge and --stub are mutually exclusive and idempotent.
+velesdb graph doctor ./data my_graph                 # dry-run report
+velesdb graph doctor ./data my_graph --purge          # remove phantom edges
+velesdb graph doctor ./data my_graph --stub           # seed a {} payload for each missing endpoint
+velesdb graph doctor ./data my_graph --format json
 ```
 
 **`traverse` flags:**

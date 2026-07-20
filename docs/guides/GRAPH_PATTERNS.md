@@ -65,9 +65,24 @@ for MATCH" above), then add the edge (#1442).
 > given a payload — those are loaded as-is on open (re-validating the
 > whole edge store at load time could turn a legitimate edge-only graph
 > into data loss) and stay invisible to `all_node_ids()`/MATCH until you
-> give the missing endpoint a payload yourself. A `velesdb-cli graph
-> doctor` subcommand to scan/purge/stub these is tracked in
+> give the missing endpoint a payload yourself. Use `velesdb-cli graph
+> doctor <collection>` to scan for these "phantom" edges — it is
+> read-only by default and only mutates the database when you pass
+> `--purge` (remove the phantom edges) or `--stub` (seed a minimal `{}`
+> payload for each missing endpoint). See the
+> [CLI reference](../../crates/velesdb-cli/README.md#graph) and
 > [issue #1469](https://github.com/cyberlife-coder/VelesDB/issues/1469).
+
+```bash
+# Report phantom edges without changing anything (dry-run, the default)
+velesdb graph doctor ./data knowledge
+
+# Remove phantom edges from the edge store
+velesdb graph doctor ./data knowledge --purge
+
+# Seed a minimal {} payload for each missing endpoint instead
+velesdb graph doctor ./data knowledge --stub
+```
 
 ```bash
 curl -X POST http://localhost:8080/collections/knowledge/graph/edges \
