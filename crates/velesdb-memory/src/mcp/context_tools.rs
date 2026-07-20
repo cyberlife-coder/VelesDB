@@ -22,7 +22,7 @@ use super::{join_error, to_error, McpServer};
 use crate::context::wire::{stringify_id_fields, ID_KEYS};
 use crate::context::{
     suggest_token_budget, CompilePolicy, CompileRequest, CompiledContext, ContextCompiler,
-    ContextDecision, ContextSavings, MediaRef, SuggestedBudget, WorkingContext,
+    ContextDecision, ContextFragment, ContextSavings, MediaRef, SuggestedBudget, WorkingContext,
     WorkingContextSession,
 };
 
@@ -223,16 +223,44 @@ pub(super) struct SuggestBudgetParams {
 
 #[tool_router(router = context_tool_router, vis = "pub(super)")]
 impl McpServer {
+    /// Resolve every `path`-carrying fragment of `fragments` against this
+    /// server's configured ingest roots (V2b-1), turning `path` into
+    /// ordinary `content` in place before the request reaches the compiler
+    /// — the adapter-side pre-pass `context::ingest` describes. A no-op
+    /// when no fragment carries a `path`. Shared by `compile_context` and
+    /// `explain_compilation`, the only two tools that accept a `path`
+    /// fragment.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolve_ingest(&self, fragments: &mut [ContextFragment]) -> Result<(), ErrorData> {
+        crate::context::ingest::resolve_fragments(fragments, self.ingest_roots.as_ref())
+            .map_err(to_error)
+    }
+
+    /// This crate never targets `wasm32` with the `mcp` feature on (the
+    /// server pulls in `rmcp`/`tokio`), so this arm exists only to keep the
+    /// call site uniform if that ever changes — a `path` fragment simply
+    /// reports the same "ingestion disabled" error the pure compiler core
+    /// would (see `context::validate`), since there is no adapter here to
+    /// resolve it.
+    #[cfg(target_arch = "wasm32")]
+    fn resolve_ingest(&self, fragments: &mut [ContextFragment]) -> Result<(), ErrorData> {
+        if fragments.iter().any(|f| f.path.is_some()) {
+            return Err(to_error(crate::error::MemoryError::IngestDisabled));
+        }
+        Ok(())
+    }
+
     #[tool(
         name = "compile_context",
-        description = "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministically, with no LLM call. Duplicates are dropped, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles instead of silently vanishing, and `memory_scope` pulls relevant stored memories into the result. Each fragment's own `metadata` is capped at 64 KiB serialized. Returns the assembled content plus one auditable decision per fragment (rule id, reason, risk), the sources, the retrieval handles, token-savings insights, and `warnings` — a mechanical shortlist of externalized fragments relevant enough to the query that they are worth a second look, so checking `decisions` by hand is only needed when `warnings` is non-empty and still ambiguous. `policy.slim_response` (default false) empties `sections`/`decisions` from the response — keep it off when you need the audit trail, or re-compile without it later (compilation is deterministic). `policy.ids_as_strings` (default false) rewrites every id field of the response into a decimal string, for MCP clients without u64-safe JSON number parsing.",
+        description = "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministically, with no LLM call. Duplicates are dropped, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles instead of silently vanishing, and `memory_scope` pulls relevant stored memories into the result. Each fragment's own `metadata` is capped at 64 KiB serialized. A fragment may set `path` (an absolute filesystem path) instead of inline `content` to ingest a file by reference — exactly one of `path`, `content`, or `media` per fragment; requires the server to be started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories, and the resolved file must be plain UTF-8 text under 1 MiB. Returns the assembled content plus one auditable decision per fragment (rule id, reason, risk), the sources, the retrieval handles, token-savings insights, and `warnings` — a mechanical shortlist of externalized fragments relevant enough to the query that they are worth a second look, so checking `decisions` by hand is only needed when `warnings` is non-empty and still ambiguous. `policy.slim_response` (default false) empties `sections`/`decisions` from the response — keep it off when you need the audit trail, or re-compile without it later (compilation is deterministic). `policy.ids_as_strings` (default false) rewrites every id field of the response into a decimal string, for MCP clients without u64-safe JSON number parsing.",
         input_schema = wire_safe_input_schema::<CompileRequest>(),
         output_schema = wire_safe_output_schema::<CompiledContext>()
     )]
     async fn compile_context(
         &self,
-        Parameters(request): Parameters<CompileRequest>,
+        Parameters(mut request): Parameters<CompileRequest>,
     ) -> Result<Json<Value>, ErrorData> {
+        self.resolve_ingest(&mut request.fragments)?;
         let ids_as_strings = request.policy.as_ref().is_some_and(|p| p.ids_as_strings);
         let service = Arc::clone(&self.service);
         let compiled = tokio::task::spawn_blocking(move || {
@@ -263,7 +291,7 @@ impl McpServer {
 
     #[tool(
         name = "explain_compilation",
-        description = "Explain why one fragment of a compile_context request was preserved, abstracted, externalized, dropped, or cached. Compilation is deterministic, so the request is re-compiled (with event/source recording off) and the fragment's exact decision (rule id, reason, relevance, risk, handle) is returned — no server-side state needed. Caveat: with a memory_scope the re-compile recalls from CURRENT memory, so decisions about pulled memories reflect the memory as it is now, not as it was. Pass `fragment_index` (0-based position in request.fragments) instead of relying on `fragment_id` alone when fragments are byte-identical — a shared content-addressed id otherwise always resolves to the deduplication survivor's decision. `policy.ids_as_strings` on the request rewrites the response's id fields into decimal strings, like compile_context.",
+        description = "Explain why one fragment of a compile_context request was preserved, abstracted, externalized, dropped, or cached. Compilation is deterministic, so the request is re-compiled (with event/source recording off) and the fragment's exact decision (rule id, reason, relevance, risk, handle) is returned — no server-side state needed. Caveat: with a memory_scope the re-compile recalls from CURRENT memory, so decisions about pulled memories reflect the memory as it is now, not as it was; a `path` fragment is likewise re-read from disk, so the decision reflects the file's CURRENT content, not necessarily what the original compile_context call saw. Pass `fragment_index` (0-based position in request.fragments) instead of relying on `fragment_id` alone when fragments are byte-identical — a shared content-addressed id otherwise always resolves to the deduplication survivor's decision. `policy.ids_as_strings` on the request rewrites the response's id fields into decimal strings, like compile_context.",
         input_schema = wire_safe_input_schema::<ExplainCompilationParams>(),
         output_schema = wire_safe_output_schema::<ContextDecision>()
     )]
@@ -273,10 +301,11 @@ impl McpServer {
     ) -> Result<Json<Value>, ErrorData> {
         let service = Arc::clone(&self.service);
         let ExplainCompilationParams {
-            request,
+            mut request,
             fragment_id,
             fragment_index,
         } = params;
+        self.resolve_ingest(&mut request.fragments)?;
         if let Some(index) = fragment_index {
             let fragment_count = request.fragments.len();
             if index >= fragment_count {
