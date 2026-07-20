@@ -282,10 +282,10 @@ On the committed 12-turn agent-session corpus the compiler measures **[82.5 % re
 
 | Surface | Context-compiler tools today |
 |---|---|
-| **MCP server** ([`velesdb-memory`](crates/velesdb-memory)) + **Rust** | Full set: `compile_context`, `retrieve_context_source`, `context_savings`, `save_working_context`, `load_working_context`, `explain_compilation` — MCP covers any other client |
-| **Node** ([`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node)) | `compileContext`, `retrieveContextSource`, `save/loadWorkingContext`, `feedback` — not yet `context_savings` or `explain_compilation` |
-| **Python** (`pip install velesdb`) | Same set as Node plus `context_savings` merged on `develop`, but the published PyPI wheel predates it — until the next release, Python agents reach the compiler through the MCP server |
-| **WASM / TypeScript SDK** | `compileContext` alone, in-memory |
+| **MCP server** ([`velesdb-memory`](crates/velesdb-memory)) + **Rust** | Full set: `compile_context`, `retrieve_context_source`, `context_savings`, `save_working_context`, `load_working_context`, `list_working_contexts`, `explain_compilation` — MCP covers any other client |
+| **Node** ([`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node)) | `compileContext`, `retrieveContextSource`, `save/loadWorkingContext`, `feedback` — not yet `context_savings`, `explain_compilation`, or `list_working_contexts` |
+| **Python** (`pip install velesdb`) | Same set as Node plus `context_savings` merged on `develop`, but the published PyPI wheel predates it — until the next release, Python agents reach the compiler through the MCP server; `list_working_contexts` is also not yet bound |
+| **WASM / TypeScript SDK** | `compileContext` alone, in-memory — no working-context persistence (`save`/`load`/`list_working_contexts`) on this surface |
 
 **Install both bundled skills without cloning the repo** — every
 [GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
