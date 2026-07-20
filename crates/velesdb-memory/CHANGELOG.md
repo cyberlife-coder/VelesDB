@@ -9,8 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-07-20
+
 ### Added
 
+- **Binding parity for the compiler's read tools (V2d-2/A4).**
+  `MemoryService::explain_compilation` is now a library method (extracted
+  from the MCP-only implementation, behavior byte-identical — the MCP tool
+  delegates to it), exposed as `explainCompilation` on Node and
+  `explain_compilation` on Python; `contextSavings` lands on Node; the WASM
+  binding (and the TypeScript SDK wrapping it) gains `retrieveContextSource`
+  over its in-memory, per-session store.
+- **`velesdb-memory --version` / `-V`.** The MCP server binary now
+  short-circuits the version flags before opening the store — a sanity
+  check for a fresh install that previously had no CLI surface at all.
 - **Path-referenced context fragments.** A `compile_context`/
   `explain_compilation` fragment may set `path` (an absolute filesystem
   path) instead of inline `content` to ingest a file by reference — exactly

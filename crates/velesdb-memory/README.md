@@ -17,19 +17,21 @@ traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation
 meet** those data-residency and explainability expectations rather than claiming
 certified compliance.
 
-> **Release 0.9.2** — agent-ergonomics cycle over the 0.9.1 memory server:
-> ids now survive float-lossy JSON clients end-to-end (`id_str` decimal-string
-> twins on every id-bearing response, string ids accepted on input, surrounding
-> whitespace tolerated), `get_info` documents all three tool families, new
-> `list_working_contexts` and `suggest_budget` tools, `compile_context` gains
-> `warnings[]` and `policy.slim_response`; published to the registries by the
-> `velesdb-memory-v0.9.2`
+> **Release 0.10.0** — the V2 wave lands: `compile_transcript` (one call
+> turns a raw agent-session transcript into deterministically segmented,
+> budget-compiled context with a full segmentation audit report),
+> path-referenced fragments (opt-in, allowlisted via
+> `VELESDB_MEMORY_INGEST_ROOTS`, symlink-safe), binding parity for the
+> compiler's read tools (`explainCompilation`/`contextSavings` on Node,
+> `explain_compilation` on Python, `retrieveContextSource` on WASM/TS), and
+> a `--version` flag; published to the registries by the
+> `velesdb-memory-v0.10.0`
 > tag, so the links below may briefly lag right after merge. `velesdb-memory`
 > ships on [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
-> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.9.2**
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.10.0**
 > and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**
 > (memory API only — the context compiler is merged on `develop` but **the
 > published 3.12.0 wheel predates it**; it ships with the next PyPI release,
