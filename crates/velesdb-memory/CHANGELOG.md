@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-07-20
+
 ### Added
 
 - **Agentic quick wins for the MCP surface.** `get_info().instructions` now
