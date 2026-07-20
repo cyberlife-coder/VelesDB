@@ -210,7 +210,7 @@ fn ingest_caps_file_count_and_total_bytes() {
     fs::write(&file, b"just a little bit of content").expect("write");
     let requested = file.to_string_lossy().into_owned();
     let mut total_bytes = MAX_TOTAL_INGEST_BYTES - 10;
-    let err = resolve_one(&requested, &roots, &mut total_bytes)
+    let err = resolve_one(&requested, &roots, &mut total_bytes, MAX_INGEST_FILE_BYTES)
         .expect_err("pushes the running total over the aggregate cap");
     match err {
         MemoryError::ContextOverLimit(msg) => {

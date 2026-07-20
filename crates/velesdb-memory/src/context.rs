@@ -58,6 +58,12 @@ pub mod model;
 pub mod model_windows;
 pub(crate) mod provenance;
 mod relevance;
+/// Deterministic transcript segmentation for the `compile_transcript` MCP
+/// tool (V2b-2): splits a raw agent-session transcript into turns and, within
+/// each turn, into code/log/body sub-segments — pure, zero-regex, zero-clock,
+/// so the same transcript + policy always segments byte-identically. See
+/// [`segment::segment_transcript`].
+pub mod segment;
 /// The id wire contract (decimal-string `u64`) shared by every JS-facing
 /// binding of these types — one source of truth for [`wire::ID_KEYS`]
 /// instead of a Node/WASM copy each.
@@ -77,6 +83,10 @@ pub use model::{
 };
 pub use model_windows::{model_window, suggest_token_budget, SuggestedBudget};
 pub use relevance::DeterministicReranker;
+pub use segment::{
+    segment_transcript, SegmentFormat, SegmentKind, SegmentationOutcome, SegmentationPolicy,
+    TranscriptSegment,
+};
 
 use std::collections::BTreeMap;
 

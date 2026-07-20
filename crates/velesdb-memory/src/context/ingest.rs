@@ -54,7 +54,9 @@ use std::path::{Path, PathBuf};
 
 use crate::context::model::ContextFragment;
 use crate::error::MemoryError;
-use crate::limits::{MAX_INGEST_FILES, MAX_INGEST_FILE_BYTES, MAX_TOTAL_INGEST_BYTES};
+use crate::limits::{
+    MAX_INGEST_FILES, MAX_INGEST_FILE_BYTES, MAX_TOTAL_INGEST_BYTES, MAX_TRANSCRIPT_BYTES,
+};
 
 /// A parsed, canonicalized allowlist of filesystem roots a `path` fragment
 /// may resolve under. The only way to construct one is [`Self::parse`] —
@@ -173,11 +175,39 @@ pub fn resolve_fragments(
             .path
             .clone()
             .expect("index was filtered on path.is_some() above");
-        let content = resolve_one(&requested, roots, &mut total_bytes)?;
+        let content = resolve_one(&requested, roots, &mut total_bytes, MAX_INGEST_FILE_BYTES)?;
         fragments[index].content = content;
         fragments[index].path = None;
     }
     Ok(())
+}
+
+/// Resolve a `compile_transcript` transcript's `path` field (V2b-2): the same
+/// ordered security pipeline as [`resolve_fragments`]'s `path` handling
+/// (steps 4 through 8 below), but with [`MAX_TRANSCRIPT_BYTES`] in place of
+/// [`MAX_INGEST_FILE_BYTES`] — a transcript is the one caller-facing shape
+/// allowed to read past the ordinary 1 MiB fragment ceiling, because
+/// [`super::segment::segment_transcript`] segments it into sub-1-MiB pieces
+/// immediately after this read, never compiling it as one oversized
+/// fragment. `roots` must already be checked enabled by the caller (the MCP
+/// adapter mirrors [`resolve_fragments`]'s step 2 before calling this).
+///
+/// # Errors
+/// [`MemoryError::IngestPath`] for a relative path, an unreadable path, a
+/// non-plain-file, or non-UTF-8 content; [`MemoryError::IngestOutsideRoots`]
+/// when the canonicalized path escapes every root; [`MemoryError::ContextOverLimit`]
+/// when the file exceeds [`MAX_TRANSCRIPT_BYTES`].
+///
+/// `pub`, not `pub(crate)` — like [`resolve_fragments`], part of the public
+/// `context::ingest` surface (the `mcp` adapter is its first caller, but the
+/// module itself only requires `context`; a build with `context` and no
+/// `mcp` would otherwise flag this crate-internal-only function dead code).
+pub fn resolve_transcript_path(
+    requested: &str,
+    roots: &IngestRoots,
+) -> Result<String, MemoryError> {
+    let mut total_bytes: usize = 0;
+    resolve_one(requested, roots, &mut total_bytes, MAX_TRANSCRIPT_BYTES)
 }
 
 /// Resolve a single `path` fragment's content — steps 4 through 8 of the
@@ -185,11 +215,16 @@ pub fn resolve_fragments(
 /// accumulates across the whole request (the caller threads the same
 /// counter through every call) so the aggregate cap
 /// ([`MAX_TOTAL_INGEST_BYTES`]) is enforced across files, not just within
-/// one.
+/// one. `file_cap` is the per-file ceiling: [`MAX_INGEST_FILE_BYTES`] for an
+/// ordinary `path` fragment, [`MAX_TRANSCRIPT_BYTES`] for
+/// [`resolve_transcript_path`] (V2b-2) — parameterized rather than a second
+/// copy of this function, so the ordered pipeline (steps 4-8) can never drift
+/// between the two callers.
 fn resolve_one(
     requested: &str,
     roots: &IngestRoots,
     total_bytes: &mut usize,
+    file_cap: usize,
 ) -> Result<String, MemoryError> {
     // Step 4: relative paths are refused outright.
     let requested_path = Path::new(requested);
@@ -220,10 +255,9 @@ fn resolve_one(
         )));
     }
     let declared_len = usize::try_from(file_metadata.len()).unwrap_or(usize::MAX);
-    if declared_len > MAX_INGEST_FILE_BYTES {
+    if declared_len > file_cap {
         return Err(MemoryError::ContextOverLimit(format!(
-            "file '{requested}' is {declared_len} bytes, exceeding the cap of \
-             {MAX_INGEST_FILE_BYTES} bytes"
+            "file '{requested}' is {declared_len} bytes, exceeding the cap of {file_cap} bytes"
         )));
     }
     let running_total = total_bytes.saturating_add(declared_len);
@@ -239,10 +273,10 @@ fn resolve_one(
     // that would silently blow the byte cap is still caught), then decode.
     let bytes = fs::read(&canonical)
         .map_err(|err| MemoryError::IngestPath(format!("cannot read path '{requested}': {err}")))?;
-    if bytes.len() > MAX_INGEST_FILE_BYTES {
+    if bytes.len() > file_cap {
         return Err(MemoryError::ContextOverLimit(format!(
             "file '{requested}' grew to {} bytes while being read, exceeding the cap of \
-             {MAX_INGEST_FILE_BYTES} bytes",
+             {file_cap} bytes",
             bytes.len()
         )));
     }

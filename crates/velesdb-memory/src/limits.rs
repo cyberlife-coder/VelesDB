@@ -89,6 +89,14 @@ pub const MAX_INGEST_FILES: usize = 64;
 /// per-item constant must not silently loosen the aggregate ceiling.
 pub const MAX_TOTAL_INGEST_BYTES: usize = 64 * 1024 * 1024;
 
+/// Maximum accepted size of a `compile_transcript` transcript (V2b-2), inline
+/// or `path`-referenced — 8 MiB. The ONE caller-facing shape allowed to read
+/// past the ordinary [`MAX_INGEST_FILE_BYTES`]/[`MAX_FRAGMENT_BYTES`] 1 MiB
+/// ceiling: a transcript is segmented into sub-1-MiB pieces immediately after
+/// being read (see `context::segment`), so it is never itself compiled as one
+/// oversized fragment — only the raw pre-segmentation read gets the wider cap.
+pub const MAX_TRANSCRIPT_BYTES: usize = 8 * 1024 * 1024;
+
 /// Cap on a caller-supplied token budget. A budget cannot force allocations
 /// by itself, but an absurd value would make the savings arithmetic
 /// meaningless, so adapters clamp to this ceiling instead of erroring.
