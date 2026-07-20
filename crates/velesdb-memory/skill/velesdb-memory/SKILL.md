@@ -63,6 +63,13 @@ well is a *loop you run throughout a task*, not a one-shot lookup.
    rounded by a float-lossy client on the way back in, silently pointing
    `relate` at the wrong memory — relay `id_str` verbatim instead of retyping
    the numeric `id`.
+   **Harness caveat**: some MCP harnesses coerce any all-digit scalar (even a
+   JSON string) back into a JSON number before it reaches the server, which
+   defeats `id_str` and reintroduces the precision loss it exists to avoid. If
+   that happens, prefix the id with `+` (e.g. `"+12732540571541475285"`) — not
+   a valid JSON number, so the harness leaves it as a string, and the id
+   parser accepts the leading `+`. Surrounding whitespace in an id string is
+   also tolerated (trimmed before parsing).
 
 4. **Explain with `why`, not `recall`.** When asked to justify a value, a config,
    or a design choice, use `why`: recall alone finds text that *looks* similar;
