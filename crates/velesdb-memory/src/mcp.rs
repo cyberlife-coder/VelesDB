@@ -79,6 +79,12 @@ pub struct McpServer {
     /// specify their own `ttl_seconds`. `None` (the default) stores permanently.
     /// Set from `VELESDB_MEMORY_DEFAULT_TTL` by the binary.
     default_ttl: Option<u64>,
+    /// Allowlisted filesystem roots for `path`-referenced context fragments
+    /// (V2b-1). `None` (the default) disables path ingestion entirely — every
+    /// `path` fragment fails with an explicit error. Set from
+    /// `VELESDB_MEMORY_INGEST_ROOTS` by the binary via [`Self::with_ingest_roots`].
+    #[cfg(all(feature = "context", not(target_arch = "wasm32")))]
+    ingest_roots: Option<crate::context::IngestRoots>,
     tool_router: ToolRouter<McpServer>,
 }
 
@@ -91,6 +97,8 @@ impl McpServer {
             service: Arc::new(service),
             extractor: None,
             default_ttl: None,
+            #[cfg(all(feature = "context", not(target_arch = "wasm32")))]
+            ingest_roots: None,
             tool_router: Self::combined_router(),
         }
     }
@@ -122,6 +130,18 @@ impl McpServer {
     #[must_use]
     pub fn with_default_ttl(mut self, ttl_seconds: u64) -> Self {
         self.default_ttl = (ttl_seconds > 0).then_some(ttl_seconds);
+        self
+    }
+
+    /// Enable path ingestion (V2b-1): `compile_context` and
+    /// `explain_compilation` fragments carrying `path` are resolved against
+    /// this allowlist before compilation. Without this (the default), every
+    /// `path` fragment fails with an explicit "ingestion disabled" error —
+    /// same pattern as [`Self::with_extractor`].
+    #[cfg(all(feature = "context", not(target_arch = "wasm32")))]
+    #[must_use]
+    pub fn with_ingest_roots(mut self, roots: crate::context::IngestRoots) -> Self {
+        self.ingest_roots = Some(roots);
         self
     }
 
@@ -385,7 +405,7 @@ impl McpServer {
 /// "context")]` variant since the context-compiler tools only exist in that
 /// build.
 #[cfg(feature = "context")]
-const SERVER_INSTRUCTIONS: &str = "Local-first memory and context engineering for AI agents, three tool families: (1) durable memory — remember, recall, recall_fused, recall_where, relate, forget, feedback, and why — explainable (why returns the evidence trail) and self-improving (feedback re-ranks future recall); (2) the deterministic context compiler — compile_context, explain_compilation, retrieve_context_source, context_savings, and suggest_budget — token-budgets and audits prompt context with no LLM call, ever; (3) cross-session working-context resumption — save_working_context, load_working_context, and list_working_contexts. Nothing ever leaves the machine.";
+const SERVER_INSTRUCTIONS: &str = "Local-first memory and context engineering for AI agents, three tool families: (1) durable memory — remember, recall, recall_fused, recall_where, relate, forget, feedback, and why — explainable (why returns the evidence trail) and self-improving (feedback re-ranks future recall); (2) the deterministic context compiler — compile_context, explain_compilation, retrieve_context_source, context_savings, and suggest_budget — token-budgets and audits prompt context with no LLM call, ever; (3) cross-session working-context resumption — save_working_context, load_working_context, and list_working_contexts. compile_context/explain_compilation fragments accept a `path` instead of inline `content` to ingest a file by reference — disabled unless the server is started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories. Nothing ever leaves the machine.";
 
 #[cfg(not(feature = "context"))]
 const SERVER_INSTRUCTIONS: &str = "Local-first memory for AI agents: remember facts, recall them \

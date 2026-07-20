@@ -37,6 +37,7 @@ fn metadata_of_size(target_bytes: usize) -> Map<String, Value> {
 
 fn fragment(content: &str) -> ContextFragment {
     ContextFragment {
+        path: None,
         id: None,
         content: content.to_owned(),
         kind: None,

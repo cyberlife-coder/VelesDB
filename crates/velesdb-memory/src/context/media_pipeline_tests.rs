@@ -31,6 +31,7 @@ fn plain_fragment(content: &str) -> ContextFragment {
     ContextFragment {
         id: None,
         content: content.to_owned(),
+        path: None,
         kind: None,
         priority: None,
         metadata: None,

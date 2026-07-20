@@ -67,6 +67,36 @@ pub const MAX_MEDIA_BYTES: usize = 4 * 1024 * 1024;
 /// screenshot-heavy session while bounding decode work.
 pub const MAX_TOTAL_MEDIA_BYTES: usize = 64 * 1024 * 1024;
 
+/// Maximum accepted size of a single file read through a `path`-referenced
+/// context fragment (V2b-1 path ingestion) — 1 MiB, the same ceiling as
+/// [`MAX_FRAGMENT_BYTES`]: an ingested file becomes an ordinary fragment's
+/// `content`, so it must not exceed what a fragment is allowed to carry.
+/// Checked from `fs::metadata` BEFORE the file is read, and re-checked after
+/// (`fs::read` can race a concurrent write) — never clamped, always refused,
+/// so a truncated read can never silently masquerade as the whole file.
+pub const MAX_INGEST_FILE_BYTES: usize = 1_048_576;
+
+/// Maximum number of `path`-referenced fragments accepted in one compile
+/// request — bounds the filesystem work (and open-file churn) a single call
+/// can demand, symmetric to [`MAX_FRAGMENTS`] for inline fragments.
+pub const MAX_INGEST_FILES: usize = 64;
+
+/// Aggregate cap on the bytes read across every `path`-referenced fragment of
+/// one request (64 MiB) — symmetric to [`MAX_TOTAL_MEDIA_BYTES`]. Without it,
+/// [`MAX_INGEST_FILES`] fragments each at [`MAX_INGEST_FILE_BYTES`] would
+/// still admit 64 MiB (the two caps happen to coincide at these values), but
+/// this cap is checked independently and first — a future change to either
+/// per-item constant must not silently loosen the aggregate ceiling.
+pub const MAX_TOTAL_INGEST_BYTES: usize = 64 * 1024 * 1024;
+
+/// Maximum accepted size of a `compile_transcript` transcript (V2b-2), inline
+/// or `path`-referenced — 8 MiB. The ONE caller-facing shape allowed to read
+/// past the ordinary [`MAX_INGEST_FILE_BYTES`]/[`MAX_FRAGMENT_BYTES`] 1 MiB
+/// ceiling: a transcript is segmented into sub-1-MiB pieces immediately after
+/// being read (see `context::segment`), so it is never itself compiled as one
+/// oversized fragment — only the raw pre-segmentation read gets the wider cap.
+pub const MAX_TRANSCRIPT_BYTES: usize = 8 * 1024 * 1024;
+
 /// Cap on a caller-supplied token budget. A budget cannot force allocations
 /// by itself, but an absurd value would make the savings arithmetic
 /// meaningless, so adapters clamp to this ceiling instead of erroring.
