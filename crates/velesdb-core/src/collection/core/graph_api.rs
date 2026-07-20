@@ -30,11 +30,14 @@ impl Collection {
     /// # Errors
     ///
     /// Returns `Error::EdgeExists` if an edge with the same ID already exists.
-    /// Returns `Error::NodeNotFound` (schemaless) or `Error::SchemaValidation`
-    /// (strict schema) if `source` or `target` has no stored node payload —
-    /// an edge to a node that was never created would otherwise be invisible
-    /// to `all_node_ids()` and MATCH (issue #1442), since both derive their
-    /// node set from the payload store, not the edge store.
+    /// Returns `Error::NodeNotFound` if `source` or `target` has no stored
+    /// node payload, in both schema modes (issue #1470) — an edge to a node
+    /// that was never created would otherwise be invisible to
+    /// `all_node_ids()` and MATCH (issue #1442), since both derive their
+    /// node set from the payload store, not the edge store. In strict mode,
+    /// `Error::SchemaValidation` is still returned for actual schema-shape
+    /// violations (undeclared node type, undeclared edge type, endpoint
+    /// type mismatch) once both endpoints are confirmed to exist.
     ///
     /// # Example
     ///
@@ -290,14 +293,15 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns `Error::NodeNotFound` (schemaless) or `Error::SchemaValidation`
-    /// (strict mode: missing endpoint, no `_labels`, or an edge-type
-    /// constraint violation). This divergence is deliberate and documented,
-    /// not an oversight: `SchemaValidation` is part of the strict-schema
-    /// contract already published, so folding the missing-endpoint case
-    /// into `NodeNotFound` there would be a breaking change. Tracked for
-    /// the next major version in
-    /// <https://github.com/cyberlife-coder/VelesDB/issues/1470>.
+    /// Returns `Error::NodeNotFound` when `source` or `target` has no stored
+    /// payload, in both schema modes (issue #1470 — unified with the
+    /// schemaless-only behavior described above; strict mode used to
+    /// overload `Error::SchemaValidation` for this case, see the CHANGELOG
+    /// entry for the next major version and issue #1442 for why it
+    /// originally diverged). Returns `Error::SchemaValidation` in strict
+    /// mode for an actual schema-shape violation once both endpoints are
+    /// confirmed to exist: no `_labels` on an endpoint, or an edge-type /
+    /// endpoint-type constraint violation.
     fn validate_edge_referential_integrity(
         payload: &LogPayloadStorage,
         schema: Option<&GraphSchema>,
@@ -320,14 +324,16 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns `Error::SchemaValidation` if the node has no stored payload
-    /// (referential integrity violation) or the payload declares no `_labels`.
+    /// Returns `Error::NodeNotFound` if the node has no stored payload — a
+    /// genuinely missing endpoint, unified with the schemaless-mode contract
+    /// (issue #1470; previously `Error::SchemaValidation`, see the CHANGELOG
+    /// entry for the next major version). Returns `Error::SchemaValidation`
+    /// if the node exists but its payload declares no `_labels` — an actual
+    /// schema-shape violation, not a missing endpoint.
     fn endpoint_node_type(payload: &LogPayloadStorage, node_id: u64) -> Result<String> {
         let stored = payload.retrieve(node_id)?;
         let Some(stored) = stored else {
-            return Err(Error::SchemaValidation(format!(
-                "edge references non-existent node {node_id}"
-            )));
+            return Err(Error::NodeNotFound(node_id));
         };
         extract_labels(&stored)
             .into_iter()
