@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`velesdb-cli`**: new `graph doctor <collection> [--purge|--stub]`
+  subcommand to audit and repair legacy phantom edges -- edges present in
+  a graph collection's edge store whose `source` or `target` node has no
+  stored payload. These can only exist in a database created before the
+  #1442 referential-integrity fix; WAL/snapshot replay at `Collection::open`
+  intentionally never re-validates edges, since filtering them there could
+  silently drop data for legitimate edge-only graphs. `doctor` is
+  read-only by default (reports the phantom count with no mutation);
+  `--purge` removes phantom edges via the existing crash-durable
+  `remove_edge` path, `--stub` seeds a minimal `{}` payload for each
+  missing endpoint instead. Both flags are mutually exclusive and
+  idempotent. (#1469)
 - **`velesdb-memory` (Python)**: `MemoryService.feedback` is now exposed,
   closing the RL feedback loop from the Python binding. (#1452)
 

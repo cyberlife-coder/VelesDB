@@ -264,10 +264,11 @@ single-writer-per-collection model this section belongs under (see
 WAL/snapshot at `Collection::open` (replay) are trusted as-is and never
 re-validated — replay intentionally bypasses referential-integrity
 validation so legitimate edge-only databases created before the #1442 fix
-keep their data. A follow-up CLI tool to audit/repair such legacy phantom
-edges is tracked in issue
-[#1469](https://github.com/cyberlife-coder/VelesDB/issues/1469) (see also
-`guides/GRAPH_PATTERNS.md`).
+keep their data. `velesdb-cli graph doctor <collection>` audits/repairs
+such legacy phantom edges as an explicit, opt-in tool (read-only report by
+default, `--purge`/`--stub` to fix); see
+[#1469](https://github.com/cyberlife-coder/VelesDB/issues/1469) and
+`guides/GRAPH_PATTERNS.md`.
 
 ## RaBitQ Interior Mutability
 

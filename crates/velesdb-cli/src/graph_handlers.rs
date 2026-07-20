@@ -10,6 +10,7 @@ use velesdb_core::GraphEdge;
 
 use crate::graph::{Direction, TraverseAlgo};
 use crate::graph_display;
+use crate::graph_doctor::{self, DoctorMode};
 use crate::helpers;
 
 /// Open a graph collection from a database path.
@@ -321,6 +322,49 @@ pub(crate) fn handle_graph_nodes(
         print_node_page_table(&node_page);
     }
     Ok(())
+}
+
+/// Scans a graph collection for legacy phantom edges and reports them, or
+/// repairs them when `--purge`/`--stub` is passed. Read-only by default.
+pub(crate) fn handle_graph_doctor(
+    path: &PathBuf,
+    collection: &str,
+    purge: bool,
+    stub: bool,
+    format: &str,
+) -> anyhow::Result<()> {
+    let col = open_graph(path, collection)?;
+    let phantoms = graph_doctor::scan_phantom_edges(&col)?;
+
+    let mode = if purge {
+        DoctorMode::Purge
+    } else if stub {
+        DoctorMode::Stub
+    } else {
+        DoctorMode::Report
+    };
+
+    let fixed = match mode {
+        DoctorMode::Purge => {
+            let n = graph_doctor::purge_phantom_edges(&col, &phantoms);
+            if n > 0 {
+                col.flush()
+                    .map_err(|e| anyhow::anyhow!("Flush failed: {e}"))?;
+            }
+            n
+        }
+        DoctorMode::Stub => {
+            let n = graph_doctor::stub_phantom_edges(&col, &phantoms)?;
+            if n > 0 {
+                col.flush()
+                    .map_err(|e| anyhow::anyhow!("Flush failed: {e}"))?;
+            }
+            n
+        }
+        DoctorMode::Report => 0,
+    };
+
+    graph_doctor::print_report(collection, &phantoms, mode, fixed, format)
 }
 
 /// Print paginated node data in table format.
