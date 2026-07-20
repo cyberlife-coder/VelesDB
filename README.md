@@ -356,6 +356,35 @@ Pricing on quote — **contact@wiscale.fr** · [velesdb.com](https://velesdb.com
 | REST server | [`velesdb-server`](https://crates.io/crates/velesdb-server) | 54 REST endpoints, [OpenAPI](docs/openapi.yaml), Docker multi-arch |
 | Mobile / Desktop | [`velesdb-mobile`](crates/velesdb-mobile) · [Tauri plugin](crates/tauri-plugin-velesdb) | iOS / Android / desktop |
 
+<details>
+<summary><strong>API Reference (54 REST endpoints)</strong></summary>
+
+| Category | Key Endpoints |
+|----------|--------------|
+| **Collections** | `POST /collections`, `GET /collections`, `GET/DELETE /collections/{name}` |
+| **Points** | `/collections/{name}/points`, `/collections/{name}/points/scroll`, `/collections/{name}/stream/insert`, `/collections/{name}/points/{id}/relations`, `/collections/{name}/points/{id}/ttl`, `/collections/{name}/relations` |
+| **Search** | `/collections/{name}/search`, `/collections/{name}/search/batch`, `/collections/{name}/search/hybrid`, `/collections/{name}/search/text`, `/collections/{name}/search/multi`, `/collections/{name}/search/ids`, `/collections/{name}/match` |
+| **Graph** | `/collections/{name}/graph/edges`, `/collections/{name}/graph/edges/{id}`, `/collections/{name}/graph/edges/count`, `/collections/{name}/graph/traverse`, `/collections/{name}/graph/traverse/stream`, `/collections/{name}/graph/traverse/parallel`, `/collections/{name}/graph/nodes`, `/collections/{name}/graph/nodes/{id}/degree`, `/collections/{name}/graph/nodes/{id}/edges`, `/collections/{name}/graph/nodes/{id}/payload`, `/collections/{name}/graph/search` |
+| **Indexes** | `GET/POST /collections/{name}/indexes`, `DELETE /collections/{name}/indexes/{label}/{property}`, `/collections/{name}/index/rebuild` |
+| **VelesQL** | `/query`, `/aggregate`, `/query/explain` |
+| **Admin** | `/health`, `/ready`, `/metrics`, `/guardrails`, `/collections/{name}/stats`, `/collections/{name}/config`, `/collections/{name}/flush`, `/collections/{name}/analyze`, `/collections/{name}/empty`, `/collections/{name}/sanity` |
+
+> **Full API reference:** [docs/reference/api-reference.md](docs/reference/api-reference.md) | **OpenAPI spec:** [docs/openapi.yaml](docs/openapi.yaml)
+
+</details>
+
+<details>
+<summary><strong>Server security</strong></summary>
+
+- **API Key Authentication** — Bearer token auth via `VELESDB_API_KEYS` env var
+- **TLS (HTTPS)** — Built-in via rustls (`VELESDB_TLS_CERT` / `VELESDB_TLS_KEY`)
+- **Graceful Shutdown** — SIGTERM triggers connection drain + WAL flush. Zero data loss
+- **Health Endpoints** — `GET /health` and `GET /ready` always public
+
+> [docs/guides/SERVER_SECURITY.md](docs/guides/SERVER_SECURITY.md)
+
+</details>
+
 **Use cases in production shape:** agent memory that survives restarts · RAG with typed metadata filtering · vector + graph + filters in one query (e-commerce, recommendation) · desktop & mobile AI with zero backend. [Worked examples](examples/README.md) · [Demos](examples/).
 
 ---
