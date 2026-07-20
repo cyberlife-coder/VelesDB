@@ -389,7 +389,7 @@ jobs:
       # gh-action-pypi-publish only runs on Linux; upload wheel directly on other OSes
       - name: Publish to PyPI (Linux)
         if: runner.os == 'Linux'
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1
         with:
           packages-dir: crates/velesdb-python/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
@@ -426,7 +426,7 @@ jobs:
           working-directory: crates/velesdb-python
           args: --out dist
       - name: Publish sdist to PyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1
         with:
           packages-dir: crates/velesdb-python/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
@@ -454,7 +454,7 @@ jobs:
           pip install build
           python -m build
       - name: Publish velesdb-common to PyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1
         with:
           packages-dir: integrations/common/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
@@ -493,7 +493,7 @@ jobs:
 
       - name: Publish langchain-velesdb to PyPI
         if: matrix.package == 'langchain-velesdb'
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1
         with:
           packages-dir: integrations/langchain/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
@@ -508,7 +508,7 @@ jobs:
 
       - name: Publish llamaindex-velesdb to PyPI
         if: matrix.package == 'llamaindex-velesdb'
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1
         with:
           packages-dir: integrations/llamaindex/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
@@ -523,7 +523,7 @@ jobs:
 
       - name: Publish haystack-velesdb to PyPI
         if: matrix.package == 'haystack-velesdb'
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1
         with:
           packages-dir: integrations/haystack/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
@@ -566,7 +566,7 @@ jobs:
         # Prebuilt binary — NOT `cargo install wasm-pack --locked`, whose own
         # lockfile pins cargo-platform 0.3.3 (MSRV 1.91) and fails to compile
         # under the pinned RUST_VERSION (1.90). Matches ci.yml's wasm job.
-        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
         with:
           tool: wasm-pack
 
@@ -708,7 +708,7 @@ jobs:
           fi
 
       - name: Create Release
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           name: VelesDB v${{ needs.validate.outputs.version }}
           body_path: RELEASE_NOTES.md
