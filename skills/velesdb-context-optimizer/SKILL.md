@@ -10,7 +10,7 @@ description: >
   why part of their context was dropped; or when a session should be
   resumable later (save the working context at the end, load it back at the
   start of the next one). Requires the velesdb-memory MCP server (tools:
-  compile_context, context_savings, explain_compilation,
+  compile_context, compile_transcript, context_savings, explain_compilation,
   retrieve_context_source, save_working_context, load_working_context).
 ---
 
@@ -26,6 +26,37 @@ You compress context with `compile_context` — a **deterministic** compiler
 code / URLs / numbers / negative constraints survive verbatim, and whatever
 does not fit the budget becomes a recoverable `ctx://source/` handle, never a
 silent loss. Same input, same output, byte for byte.
+
+## Have a raw transcript? Skip steps 1-3.
+
+If what you are about to compress is a raw agent-session transcript (plain
+text with `System:`/`User:`/`Assistant:`/… markers, or JSONL — a saved
+conversation log, a `PreCompact` hook payload, a paste-in from another tool)
+rather than content you are hand-assembling into fragments, call
+`compile_transcript` directly instead of manually splitting it into
+fragments first: `{query, token_budget, transcript}` (or `path`, same
+`VELESDB_MEMORY_INGEST_ROOTS` allowlist as a `compile_context` fragment's
+`path`, capped at 8 MiB). It deterministically segments the transcript into
+turns and sub-turns (fenced code stays atomic, log runs collapse, the system
+turn is cache-tagged automatically) and compiles the result exactly like
+`compile_context` — same `content`/`decisions`/`insights`/`risk`/`warnings`
+output, plus a `segmentation` audit report (`format_detected`, one entry per
+segment with turn/role/kind/byte range/`fragment_id`, `merged_segments`).
+Steps 4-10 below apply unchanged to its output. Force
+`segmentation.format: "plain"` or `"jsonl"` when auto-detection would guess
+wrong (e.g. a transcript that happens to also parse as JSONL, or prose that
+cites `"User:"` and would otherwise falsely open a turn); a forced format
+that fails to parse is a hard error, never a silent fallback. Still building
+fragments from scratch (not segmenting an existing transcript)? Continue
+with steps 1-3.
+
+```json
+{"tool": "compile_transcript", "arguments": {
+  "query": "what did we decide about the canary rollback",
+  "token_budget": 4000,
+  "transcript": "System: You are the deploy assistant.\nUser: why is the canary red\nAssistant: …"
+}}
+```
 
 ## Workflow (10 steps)
 
