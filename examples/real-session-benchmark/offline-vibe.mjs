@@ -24,7 +24,7 @@
 //      If a REALISTIC fragment here ever exceeds the cap, this script
 //      reports that as a finding — it does not shrink the fragment to dodge
 //      the failure.
-import { TURN_EVENTS_VIBE, SYSTEM_VIBE } from './corpus/session-vibe.mjs'
+import { TURN_EVENTS_VIBE, SYSTEM_VIBE, VIBE_RETINA } from './corpus/session-vibe.mjs'
 import {
   measureSession,
   printPerTurnTable,
@@ -41,7 +41,8 @@ import {
 async function main() {
   const mediaOn = benchMediaEnabled()
   const turnEvents = applyBenchMediaFilter(TURN_EVENTS_VIBE)
-  const variantLabel = mediaOn ? 'with-screenshots' : 'no-screenshots (BENCH_MEDIA=0)'
+  const variantLabel =
+    (mediaOn ? 'with-screenshots' : 'no-screenshots (BENCH_MEDIA=0)') + (VIBE_RETINA ? ' retina-1512x982 (BENCH_RETINA=1)' : '')
 
   console.log('OFFLINE — VIBE-CODING scenario (gpt-tokenizer cl100k text + pixels/750 image cost)')
   console.log(`${turnEvents.length} accumulating turns, variant: ${variantLabel}, normalize_log_timestamps: true`)

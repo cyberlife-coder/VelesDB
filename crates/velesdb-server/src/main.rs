@@ -13,8 +13,6 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(feature = "swagger-ui")]
-use utoipa::OpenApi;
-#[cfg(feature = "swagger-ui")]
 use utoipa_swagger_ui::SwaggerUi;
 use velesdb_core::Database;
 #[cfg(feature = "swagger-ui")]

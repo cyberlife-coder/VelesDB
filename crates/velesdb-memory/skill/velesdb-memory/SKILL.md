@@ -37,8 +37,13 @@ well is a *loop you run throughout a task*, not a one-shot lookup.
    decision is made or a durable fact is established, store it. Two things make it
    valuable later, so never skip them:
    - **metadata** (the `ColumnStore` facet): `{ "type": "decision"|"fact"|"incident",
-     "area": "payments", "project": "acme", "date": "2026-07-11", "status": "active" }`
-     — this is what lets you filter/scope recall later.
+     "area": "payments", "project": "acme", "date": 20260711, "status": "active" }`
+     — this is what lets you filter/scope recall later. **Store dates and other
+     comparable values NUMERICALLY** (`20260711`, not `"2026-07-11"`):
+     `recall_where`'s range/comparison filters (`lt`/`le`/`gt`/`ge`) are
+     type-strict with no coercion (issue #1473) — a numeric filter value never
+     matches a string-stored one, silently returning nothing, no error. Plain
+     equality filters on `recall`/`recall_fused` are unaffected either way.
    - **links** (the graph facet): connect the new fact to the artifacts it concerns
      — the PR, the ticket, the file, the prior decision it supersedes. **The graph
      is what makes `why` work.** A fact with no edges is invisible to `why`.
@@ -52,6 +57,19 @@ well is a *loop you run throughout a task*, not a one-shot lookup.
    labels: `caused_by`, `decided_in`, `supersedes`, `references`, `depends_on`,
    `fixes`, `concerns`. This is the differentiator's fuel — build the graph
    incrementally, don't batch it up "later" (later never comes).
+   **Use `id_str`, not `id`, for `from`/`to`** (and for `feedback`/`forget`'s id
+   too): every id in a response also comes back as a decimal-string `id_str`
+   twin specifically because a raw JSON-number id can exceed 2^53 and get
+   rounded by a float-lossy client on the way back in, silently pointing
+   `relate` at the wrong memory — relay `id_str` verbatim instead of retyping
+   the numeric `id`.
+   **Harness caveat**: some MCP harnesses coerce any all-digit scalar (even a
+   JSON string) back into a JSON number before it reaches the server, which
+   defeats `id_str` and reintroduces the precision loss it exists to avoid. If
+   that happens, prefix the id with `+` (e.g. `"+12732540571541475285"`) — not
+   a valid JSON number, so the harness leaves it as a string, and the id
+   parser accepts the leading `+`. Surrounding whitespace in an id string is
+   also tolerated (trimmed before parsing).
 
 4. **Explain with `why`, not `recall`.** When asked to justify a value, a config,
    or a design choice, use `why`: recall alone finds text that *looks* similar;
@@ -59,10 +77,12 @@ well is a *loop you run throughout a task*, not a one-shot lookup.
    with the code but is the actual reason.
 
 5. **Reinforce after use (`feedback`).** After you act on a recalled memory, tell
-   the memory whether it helped: `feedback(id, success=true)` if it was useful,
-   `success=false` if it was noise. Recall re-ranks by this learned confidence, so
-   over time useful facts rise and noise sinks — the memory improves without any
-   retraining. Give feedback on the memory you actually used, not on everything.
+   the memory whether it helped: `feedback(id_str, success=true)` if it was useful,
+   `success=false` if it was noise — pass the recalled memory's `id_str`, not its
+   numeric `id` (see the `id_str` note above). Recall re-ranks by this learned
+   confidence, so over time useful facts rise and noise sinks — the memory
+   improves without any retraining. Give feedback on the memory you actually
+   used, not on everything.
 
 ## Concrete scenarios
 

@@ -10,11 +10,47 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+/// Serde `deserialize_with` for a required `u64` id field: accepts a JSON
+/// number or a decimal string (issue #1468). Sibling of
+/// [`crate::context::wire::deserialize_optional_id`] (that one is
+/// `Option`-shaped and lives behind the `context` feature) — this one is
+/// deliberately feature-independent because [`Link`] is compiled whenever
+/// `model` is, regardless of `context`. Reused by `crate::mcp::dto`'s
+/// `relate`/`forget`/`feedback` id parameters so the accepted-forms rule
+/// lives in exactly one place. Input-side only and purely widening — the
+/// serialized (output) shape of every domain type is unchanged.
+///
+/// # Errors
+/// Returns a deserialize error naming the offending value if it is neither a
+/// `u64` number nor a decimal-`u64` string.
+pub(crate) fn deserialize_id<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let expected = "expected a u64 number or a decimal u64 string";
+    match Value::deserialize(deserializer)? {
+        Value::Number(number) => number
+            .as_u64()
+            .ok_or_else(|| Error::custom(format!("invalid id {number} ({expected})"))),
+        Value::String(text) => text
+            .trim()
+            .parse()
+            .map_err(|_| Error::custom(format!("invalid id '{text}' ({expected})"))),
+        other => Err(Error::custom(format!("invalid id {other} ({expected})"))),
+    }
+}
+
 /// A typed link from a freshly remembered fact to an existing memory.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct Link {
-    /// Id of the memory being linked to.
+    /// Id of the memory being linked to. Accepts a JSON number or a decimal
+    /// string — ids can exceed 2^53, where float-lossy JSON clients (JS
+    /// `number`) round a plain integer, so a caller relaying an `id_str`
+    /// value straight from a previous response must be able to resubmit it
+    /// as-is (see issue #1468).
+    #[serde(deserialize_with = "deserialize_id")]
     pub target: u64,
     /// Relationship label (e.g. `"decided_in"`, `"references"`, `"depends_on"`).
     pub relation: String,
@@ -208,3 +244,7 @@ pub struct Explanation {
     /// Typed edges connecting the nodes.
     pub edges: Vec<MemoryEdge>,
 }
+
+#[cfg(test)]
+#[path = "model_tests.rs"]
+mod tests;

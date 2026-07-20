@@ -53,6 +53,37 @@ A point can have multiple labels: `"_labels": ["Document", "Published", "Reviewe
 
 Edges must exist in the collection's edge store before MATCH can traverse them.
 
+**Both endpoints must already have a stored payload before you call `add_edge`** —
+`add_edge`/`add_edges_batch` reject an edge whose `source` or `target` was never
+created (`404 NodeNotFound` over REST, `Error::NodeNotFound` in Rust). This is
+enforced, not just recommended: create the points first (see "Setting Up Data
+for MATCH" above), then add the edge (#1442).
+
+> **Legacy databases**: this enforcement only applies to edges written
+> through `add_edge`/`add_edges_batch`. A database created before this
+> validation existed may already contain edges whose endpoint was never
+> given a payload — those are loaded as-is on open (re-validating the
+> whole edge store at load time could turn a legitimate edge-only graph
+> into data loss) and stay invisible to `all_node_ids()`/MATCH until you
+> give the missing endpoint a payload yourself. Use `velesdb-cli graph
+> doctor <collection>` to scan for these "phantom" edges — it is
+> read-only by default and only mutates the database when you pass
+> `--purge` (remove the phantom edges) or `--stub` (seed a minimal `{}`
+> payload for each missing endpoint). See the
+> [CLI reference](../../crates/velesdb-cli/README.md#graph) and
+> [issue #1469](https://github.com/cyberlife-coder/VelesDB/issues/1469).
+
+```bash
+# Report phantom edges without changing anything (dry-run, the default)
+velesdb graph doctor ./data knowledge
+
+# Remove phantom edges from the edge store
+velesdb graph doctor ./data knowledge --purge
+
+# Seed a minimal {} payload for each missing endpoint instead
+velesdb graph doctor ./data knowledge --stub
+```
+
 ```bash
 curl -X POST http://localhost:8080/collections/knowledge/graph/edges \
   -H "Content-Type: application/json" \

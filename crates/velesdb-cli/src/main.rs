@@ -21,6 +21,8 @@ mod graph;
 #[allow(clippy::pedantic)]
 mod graph_display;
 #[allow(clippy::pedantic)]
+mod graph_doctor;
+#[allow(clippy::pedantic)]
 mod graph_handlers;
 #[allow(clippy::pedantic)]
 mod handlers;

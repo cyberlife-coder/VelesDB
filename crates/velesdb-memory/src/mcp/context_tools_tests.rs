@@ -852,3 +852,151 @@ async fn test_save_working_context_tool_is_idempotent_upsert() {
         .expect("load_working_context");
     assert_eq!(loaded.working.expect("saved").goal, state.goal);
 }
+
+#[tokio::test]
+async fn test_load_working_context_tool_reports_found_true_on_hit() {
+    // Given a saved working context
+    let (_dir, srv) = server();
+    srv.save_working_context(Parameters(SaveWorkingContextParams {
+        project: "veles".to_owned(),
+        session: "session-x".to_owned(),
+        working: working(),
+    }))
+    .await
+    .expect("save_working_context");
+
+    // When loading it back
+    let Json(loaded) = srv
+        .load_working_context(Parameters(LoadWorkingContextParams {
+            project: "veles".to_owned(),
+            session: "session-x".to_owned(),
+        }))
+        .await
+        .expect("load_working_context");
+
+    // Then `found` is true and there is nothing to recover from.
+    assert!(loaded.found);
+    assert!(loaded.working.is_some());
+    assert!(loaded.other_sessions.is_empty());
+}
+
+#[tokio::test]
+async fn test_load_working_context_tool_reports_found_false_and_other_sessions_on_miss() {
+    // Given a project with a session saved under a DIFFERENT name (a likely
+    // typo scenario)
+    let (_dir, srv) = server();
+    srv.save_working_context(Parameters(SaveWorkingContextParams {
+        project: "veles".to_owned(),
+        session: "task-1234".to_owned(),
+        working: working(),
+    }))
+    .await
+    .expect("save_working_context");
+
+    // When loading a session id that was never saved
+    let Json(loaded) = srv
+        .load_working_context(Parameters(LoadWorkingContextParams {
+            project: "veles".to_owned(),
+            session: "task-1235".to_owned(),
+        }))
+        .await
+        .expect("load_working_context");
+
+    // Then `found` is false, `working` is null, and the real session is
+    // surfaced so the caller can recover from the typo.
+    assert!(!loaded.found);
+    assert!(loaded.working.is_none());
+    assert_eq!(loaded.other_sessions, vec!["task-1234".to_owned()]);
+}
+
+#[tokio::test]
+async fn test_list_working_contexts_tool_returns_saved_sessions() {
+    // Given two sessions saved under the same project
+    let (_dir, srv) = server();
+    srv.save_working_context(Parameters(SaveWorkingContextParams {
+        project: "veles".to_owned(),
+        session: "session-a".to_owned(),
+        working: working(),
+    }))
+    .await
+    .expect("save session-a");
+    srv.save_working_context(Parameters(SaveWorkingContextParams {
+        project: "veles".to_owned(),
+        session: "session-b".to_owned(),
+        working: working(),
+    }))
+    .await
+    .expect("save session-b");
+
+    // When listing the project's working contexts through the tool
+    let Json(listed) = srv
+        .list_working_contexts(Parameters(ListWorkingContextsParams {
+            project: "veles".to_owned(),
+        }))
+        .await
+        .expect("list_working_contexts");
+
+    // Then both sessions come back.
+    let names: Vec<&str> = listed.sessions.iter().map(|s| s.session.as_str()).collect();
+    assert!(names.contains(&"session-a"), "{names:?}");
+    assert!(names.contains(&"session-b"), "{names:?}");
+}
+
+#[tokio::test]
+async fn test_suggest_budget_tool_known_model_returns_window_and_suggestion() {
+    let (_dir, srv) = server();
+    let Json(suggestion) = srv
+        .suggest_budget(Parameters(SuggestBudgetParams {
+            target_model: "claude-sonnet-4-5".to_owned(),
+            reserve_tokens: Some(10_000),
+        }))
+        .await
+        .expect("suggest_budget");
+    assert_eq!(suggestion.window, Some(200_000));
+    assert_eq!(suggestion.suggested_budget, Some(190_000));
+    assert!(suggestion.source.contains("static table"));
+}
+
+#[tokio::test]
+async fn test_suggest_budget_tool_defaults_reserve_tokens_to_zero() {
+    let (_dir, srv) = server();
+    let Json(suggestion) = srv
+        .suggest_budget(Parameters(SuggestBudgetParams {
+            target_model: "claude-sonnet-4-5".to_owned(),
+            reserve_tokens: None,
+        }))
+        .await
+        .expect("suggest_budget");
+    assert_eq!(suggestion.suggested_budget, suggestion.window);
+}
+
+#[tokio::test]
+async fn test_suggest_budget_tool_unknown_model_returns_nulls() {
+    let (_dir, srv) = server();
+    let Json(suggestion) = srv
+        .suggest_budget(Parameters(SuggestBudgetParams {
+            target_model: "some-model-that-does-not-exist-2099".to_owned(),
+            reserve_tokens: None,
+        }))
+        .await
+        .expect("suggest_budget");
+    assert_eq!(suggestion.window, None);
+    assert_eq!(suggestion.suggested_budget, None);
+}
+
+#[tokio::test]
+async fn test_list_working_contexts_tool_empty_for_unknown_project() {
+    // Given a server with nothing saved
+    let (_dir, srv) = server();
+
+    // When listing an unknown project
+    let Json(listed) = srv
+        .list_working_contexts(Parameters(ListWorkingContextsParams {
+            project: "ghost-project".to_owned(),
+        }))
+        .await
+        .expect("list_working_contexts");
+
+    // Then it comes back empty, not an error.
+    assert!(listed.sessions.is_empty());
+}

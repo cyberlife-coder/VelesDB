@@ -63,6 +63,13 @@ fn setup_graph(db: &Database) {
         "CREATE GRAPH COLLECTION kg (dimension = 4, metric = 'cosine') SCHEMALESS;",
     )
     .expect("test: create graph");
+    for id in [1, 2] {
+        execute_sql(
+            db,
+            &format!("INSERT NODE INTO kg (id = {id}, payload = '{{}}');"),
+        )
+        .expect("test: insert node");
+    }
     execute_sql(
         db,
         "INSERT EDGE INTO kg (id = 10, source = 1, target = 2, label = 'KNOWS');",

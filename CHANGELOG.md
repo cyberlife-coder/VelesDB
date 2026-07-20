@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`velesdb-cli`**: new `graph doctor <collection> [--purge|--stub]`
+  subcommand to audit and repair legacy phantom edges -- edges present in
+  a graph collection's edge store whose `source` or `target` node has no
+  stored payload. These can only exist in a database created before the
+  #1442 referential-integrity fix; WAL/snapshot replay at `Collection::open`
+  intentionally never re-validates edges, since filtering them there could
+  silently drop data for legitimate edge-only graphs. `doctor` is
+  read-only by default (reports the phantom count with no mutation);
+  `--purge` removes phantom edges via the existing crash-durable
+  `remove_edge` path, `--stub` seeds a minimal `{}` payload for each
+  missing endpoint instead. Both flags are mutually exclusive and
+  idempotent. (#1469)
 - **`velesdb-memory` (Python)**: `MemoryService.feedback` is now exposed,
   closing the RL feedback loop from the Python binding. (#1452)
 
@@ -36,6 +48,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supersession target could both drop from compiled context instead of one
   surviving. Media dedup now re-anchors onto the freshest non-superseded
   occurrence. (#1453)
+- **`velesdb-core` / `velesdb-server`**: `add_edge` and `add_edges_batch`
+  now reject an edge whose `source` or `target` node has no stored payload
+  (#1442), instead of silently accepting it. Previously, on schemaless
+  graph collections (the default), an edge could reference a node ID that
+  was never explicitly created — the edge was stored, but the node stayed
+  invisible to `GET /graph/nodes`, `all_node_ids()`, and `MATCH`, since all
+  three resolve their node set from the payload store, not the edge store.
+  The REST layer now returns `404 NodeNotFound` (`VELES-022`) for such an
+  edge, matching the existing strict-schema behavior and the
+  `velesdb-memory` wedge's `relate()`, which already required both
+  endpoints to exist. **Migration note:** code that called `addEdge`/
+  `INSERT EDGE` without first creating the endpoint nodes (via a point
+  upsert or `PUT /graph/nodes/{id}/payload`) must now create them first —
+  see `docs/guides/GRAPH_PATTERNS.md`. Follow-on fixes found in review:
+  `POST /collections/{name}/relations` (the point-relations REST endpoint)
+  previously mapped this same error to a generic `500`; it now returns
+  `404`/`VELES-022` like every other graph endpoint. `velesdb-memory`'s
+  `relate()` previously downgraded the identical concurrent-delete race to
+  a generic internal error instead of its documented `NotFound` contract;
+  fixed. `velesdb-migrate`'s FK-relations phase writes into a fresh,
+  edge-only graph collection that never otherwise gets node payloads —
+  it now stubs each edge endpoint before inserting, and a batch-level
+  validation failure degrades to per-edge accounting instead of aborting
+  the whole migration.
+- **`velesdb-core`**: closed a race left by the #1442 fix above —
+  `add_edge`/`add_edges_batch` used to release the payload-store guard
+  right after checking that both endpoints exist, then separately acquire
+  the edge-WAL lock to write the edge. A concurrent `delete()` of an
+  endpoint could land in that window and still leave a "phantom" edge
+  (present in the edge store, invisible to `all_node_ids()`/MATCH). Both
+  entry points now hold the payload-store read guard from the check
+  through the end of the write, so a racing `delete()` blocks until the
+  edge is durable instead of running ahead; see the "Collection-level lock
+  order" section of `docs/CONCURRENCY_MODEL.md` for the full mechanism.
+  Also fixed: `velesdb-migrate`'s FK-relations node-seeding marked a node
+  as seeded even when its stub upsert failed, permanently skipping any
+  retry for that node later in the same relation — it now only marks a
+  node seeded on a successful upsert. **Known, accepted limitation**:
+  edges loaded from a pre-existing WAL/snapshot (replay) are not
+  re-validated, so a database created before the original #1442 fix may
+  still contain legacy phantom edges; tracked in
+  [#1469](https://github.com/cyberlife-coder/VelesDB/issues/1469) (a
+  `velesdb-cli graph doctor` audit/repair subcommand). The
+  strict-vs-schemaless error-type divergence (`SchemaValidation` vs.
+  `NodeNotFound`) noted above remains deliberate; unifying it is tracked
+  for the next major version in
+  [#1470](https://github.com/cyberlife-coder/VelesDB/issues/1470).
+
 - **`velesdb-memory`**: hardened the MCP server against a leaked client
   process (#1448). The server itself was already healthy (it exits cleanly
   on stdin EOF), but a client that leaks its child process — observed in

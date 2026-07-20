@@ -18,6 +18,23 @@ fn create_graph_collection(dir: &std::path::Path, name: &str) {
         .success();
 }
 
+/// Helper: store an empty payload on a graph node via CLI. `add-edge`
+/// requires both endpoints to have a stored node payload (#1442), so tests
+/// that add edges must create the endpoint nodes first.
+fn store_payload(dir: &std::path::Path, name: &str, node_id: &str) {
+    cmd()
+        .args([
+            "graph",
+            "store-payload",
+            dir.to_str().unwrap(),
+            name,
+            node_id,
+            "{}",
+        ])
+        .assert()
+        .success();
+}
+
 // =========================================================================
 // Help / subcommand listing
 // =========================================================================
@@ -45,6 +62,8 @@ fn test_graph_help_lists_all_subcommands() {
 fn test_graph_add_edge_success() {
     let temp = tempfile::tempdir().unwrap();
     create_graph_collection(temp.path(), "kg");
+    store_payload(temp.path(), "kg", "100");
+    store_payload(temp.path(), "kg", "200");
 
     cmd()
         .args([
@@ -125,6 +144,9 @@ fn test_graph_get_edges_empty() {
 fn test_graph_get_edges_after_add() {
     let temp = tempfile::tempdir().unwrap();
     create_graph_collection(temp.path(), "g");
+    for node_id in ["10", "20", "30"] {
+        store_payload(temp.path(), "g", node_id);
+    }
 
     // Add two edges
     cmd()
@@ -168,6 +190,9 @@ fn test_graph_get_edges_after_add() {
 fn test_graph_get_edges_filter_by_label() {
     let temp = tempfile::tempdir().unwrap();
     create_graph_collection(temp.path(), "g");
+    for node_id in ["10", "20", "30"] {
+        store_payload(temp.path(), "g", node_id);
+    }
 
     cmd()
         .args([
@@ -215,6 +240,8 @@ fn test_graph_get_edges_filter_by_label() {
 fn test_graph_get_edges_json_format() {
     let temp = tempfile::tempdir().unwrap();
     create_graph_collection(temp.path(), "g");
+    store_payload(temp.path(), "g", "10");
+    store_payload(temp.path(), "g", "20");
 
     cmd()
         .args([
@@ -284,6 +311,9 @@ fn test_graph_degree_zero_for_isolated_node() {
 fn test_graph_degree_after_edges() {
     let temp = tempfile::tempdir().unwrap();
     create_graph_collection(temp.path(), "g");
+    for node_id in ["10", "20", "30"] {
+        store_payload(temp.path(), "g", node_id);
+    }
 
     // 10 -> 20 and 10 -> 30
     cmd()
@@ -353,6 +383,9 @@ fn test_graph_traverse_bfs_empty() {
 fn test_graph_traverse_bfs_finds_reachable_nodes() {
     let temp = tempfile::tempdir().unwrap();
     create_graph_collection(temp.path(), "g");
+    for node_id in ["1", "2", "3"] {
+        store_payload(temp.path(), "g", node_id);
+    }
 
     // Chain: 1 -> 2 -> 3
     cmd()
@@ -403,6 +436,8 @@ fn test_graph_traverse_bfs_finds_reachable_nodes() {
 fn test_graph_traverse_dfs() {
     let temp = tempfile::tempdir().unwrap();
     create_graph_collection(temp.path(), "g");
+    store_payload(temp.path(), "g", "1");
+    store_payload(temp.path(), "g", "2");
 
     cmd()
         .args([
@@ -438,6 +473,8 @@ fn test_graph_traverse_dfs() {
 fn test_graph_traverse_json_format() {
     let temp = tempfile::tempdir().unwrap();
     create_graph_collection(temp.path(), "g");
+    store_payload(temp.path(), "g", "1");
+    store_payload(temp.path(), "g", "2");
 
     cmd()
         .args([
@@ -478,6 +515,9 @@ fn test_graph_traverse_json_format() {
 fn test_graph_traverse_with_rel_types() {
     let temp = tempfile::tempdir().unwrap();
     create_graph_collection(temp.path(), "g");
+    for node_id in ["1", "2", "3"] {
+        store_payload(temp.path(), "g", node_id);
+    }
 
     // 1 --KNOWS--> 2, 1 --FOLLOWS--> 3
     cmd()
@@ -531,6 +571,8 @@ fn test_graph_traverse_with_rel_types() {
 fn test_graph_neighbors_outgoing() {
     let temp = tempfile::tempdir().unwrap();
     create_graph_collection(temp.path(), "g");
+    store_payload(temp.path(), "g", "10");
+    store_payload(temp.path(), "g", "20");
 
     cmd()
         .args([
@@ -565,6 +607,8 @@ fn test_graph_neighbors_outgoing() {
 fn test_graph_neighbors_incoming() {
     let temp = tempfile::tempdir().unwrap();
     create_graph_collection(temp.path(), "g");
+    store_payload(temp.path(), "g", "10");
+    store_payload(temp.path(), "g", "20");
 
     cmd()
         .args([
@@ -600,6 +644,9 @@ fn test_graph_neighbors_incoming() {
 fn test_graph_neighbors_both() {
     let temp = tempfile::tempdir().unwrap();
     create_graph_collection(temp.path(), "g");
+    for node_id in ["10", "20", "30"] {
+        store_payload(temp.path(), "g", node_id);
+    }
 
     // 10 -> 20 and 30 -> 20
     cmd()
@@ -719,4 +766,184 @@ fn test_graph_store_payload_invalid_json() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("Invalid JSON"));
+}
+
+// =========================================================================
+// doctor — legacy phantom edges (#1469)
+// =========================================================================
+
+/// WAL opcode for an Add entry (`edge_wal.rs`'s private `WAL_OP_ADD`); the
+/// on-disk layout is documented as a stable contract in that module.
+const WAL_OP_ADD: u8 = 0x01;
+
+/// Seeds a legacy phantom edge directly into `<dir>/<collection>/edges.wal`,
+/// bypassing `add_edge`'s referential-integrity validation (#1442), so the
+/// next CLI invocation's `Collection::open` replays it unchecked -- exactly
+/// like a pre-#1442 database.
+fn seed_phantom_edge(
+    dir: &std::path::Path,
+    collection: &str,
+    id: u64,
+    source: u64,
+    target: u64,
+    label: &str,
+) {
+    use std::io::Write;
+    let edge = serde_json::json!({
+        "id": id, "source": source, "target": target,
+        "label": label, "properties": {}
+    });
+    let edge_bytes = serde_json::to_vec(&edge).unwrap();
+    let body_len = u32::try_from(edge_bytes.len() + 1).unwrap();
+    let wal_path = dir.join(collection).join("edges.wal");
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&wal_path)
+        .expect("open edges.wal for append");
+    f.write_all(&body_len.to_le_bytes()).unwrap();
+    f.write_all(&[WAL_OP_ADD]).unwrap();
+    f.write_all(&edge_bytes).unwrap();
+    f.sync_all().unwrap();
+}
+
+#[test]
+fn test_graph_help_lists_doctor_subcommand() {
+    cmd()
+        .args(["graph", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("doctor"));
+}
+
+#[test]
+fn test_graph_doctor_purge_and_stub_are_mutually_exclusive() {
+    let temp = tempfile::tempdir().unwrap();
+    create_graph_collection(temp.path(), "g");
+
+    cmd()
+        .args([
+            "graph",
+            "doctor",
+            temp.path().to_str().unwrap(),
+            "g",
+            "--purge",
+            "--stub",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn test_graph_doctor_clean_graph_reports_no_phantoms() {
+    let temp = tempfile::tempdir().unwrap();
+    create_graph_collection(temp.path(), "g");
+    store_payload(temp.path(), "g", "1");
+    store_payload(temp.path(), "g", "2");
+    cmd()
+        .args([
+            "graph",
+            "add-edge",
+            temp.path().to_str().unwrap(),
+            "g",
+            "1",
+            "1",
+            "2",
+            "KNOWS",
+        ])
+        .assert()
+        .success();
+
+    cmd()
+        .args(["graph", "doctor", temp.path().to_str().unwrap(), "g"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No phantom edges found"));
+}
+
+#[test]
+fn test_graph_doctor_dry_run_reports_phantom_without_mutating() {
+    let temp = tempfile::tempdir().unwrap();
+    create_graph_collection(temp.path(), "g");
+    store_payload(temp.path(), "g", "1");
+    seed_phantom_edge(temp.path(), "g", 99, 1, 2, "LEGACY");
+
+    cmd()
+        .args(["graph", "doctor", temp.path().to_str().unwrap(), "g"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 phantom edge"))
+        .stdout(predicate::str::contains("Dry-run"));
+
+    // The phantom edge must still be there after a dry-run.
+    cmd()
+        .args(["graph", "count", temp.path().to_str().unwrap(), "g"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Edges: 1"));
+}
+
+#[test]
+fn test_graph_doctor_purge_removes_phantom_edge() {
+    let temp = tempfile::tempdir().unwrap();
+    create_graph_collection(temp.path(), "g");
+    store_payload(temp.path(), "g", "1");
+    seed_phantom_edge(temp.path(), "g", 99, 1, 2, "LEGACY");
+
+    cmd()
+        .args([
+            "graph",
+            "doctor",
+            temp.path().to_str().unwrap(),
+            "g",
+            "--purge",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 phantom edge(s) removed"));
+
+    cmd()
+        .args(["graph", "count", temp.path().to_str().unwrap(), "g"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Edges: 0"));
+}
+
+#[test]
+fn test_graph_doctor_stub_seeds_missing_endpoint_payload() {
+    let temp = tempfile::tempdir().unwrap();
+    create_graph_collection(temp.path(), "g");
+    store_payload(temp.path(), "g", "1");
+    seed_phantom_edge(temp.path(), "g", 99, 1, 2, "LEGACY");
+
+    cmd()
+        .args([
+            "graph",
+            "doctor",
+            temp.path().to_str().unwrap(),
+            "g",
+            "--stub",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 missing node(s) stubbed"));
+
+    // The edge is kept, and node 2 now resolves via get-payload.
+    cmd()
+        .args([
+            "graph",
+            "get-payload",
+            temp.path().to_str().unwrap(),
+            "g",
+            "2",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("{}"));
+    cmd()
+        .args(["graph", "count", temp.path().to_str().unwrap(), "g"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Edges: 1"));
 }

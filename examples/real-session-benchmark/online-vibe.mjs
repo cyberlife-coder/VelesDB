@@ -18,7 +18,7 @@
 // cache_creation_input_tokens, not input_tokens), which is why the cli
 // runner's headline metric below is total_cost_usd per arm — see
 // lib/runner.mjs's printArmComparison.
-import { TURN_EVENTS_VIBE, SYSTEM_VIBE } from './corpus/session-vibe.mjs'
+import { TURN_EVENTS_VIBE, SYSTEM_VIBE, VIBE_RETINA } from './corpus/session-vibe.mjs'
 import { TURN_QUESTIONS_VIBE } from './corpus/questions-vibe.mjs'
 import { resolveRunnerKind, runTurn, mean, stddev, printArmComparison, turnBilledLine } from './lib/runner.mjs'
 import { runCliTurn } from './lib/claude-cli.mjs'
@@ -51,7 +51,7 @@ async function main() {
   const kind = await resolveRunnerKind()
   const mediaOn = benchMediaEnabled()
   console.log(
-    `ONLINE mode (vibe-coding scenario) — runner: ${kind} | variant: ${mediaOn ? 'with-screenshots' : 'no-screenshots (BENCH_MEDIA=0)'} | compiled-arm budget: ${BUDGET === LOSSLESS_BUDGET ? 'lossless (non-constraining)' : BUDGET}`,
+    `ONLINE mode (vibe-coding scenario) — runner: ${kind} | variant: ${mediaOn ? 'with-screenshots' : 'no-screenshots (BENCH_MEDIA=0)'}${VIBE_RETINA ? ' retina-1512x982 (BENCH_RETINA=1)' : ''} | compiled-arm budget: ${BUDGET === LOSSLESS_BUDGET ? 'lossless (non-constraining)' : BUDGET}`,
   )
 
   const turnEvents = applyBenchMediaFilter(TURN_EVENTS_VIBE)
@@ -85,12 +85,20 @@ async function main() {
     }, 0)
   const estRawTokens = estimateTokensFor(rawTurns)
   const estCompiledTokens = estimateTokensFor(compiledTurns)
-  const nRequests = (rawTurns.length + compiledTurns.length) * N_RUNS
-  const estInputCost = (estRawTokens + estCompiledTokens) * N_RUNS * EST_INPUT_PER_TOKEN
+  // The cli runner spends one extra billed calibration request (below, after
+  // CONFIRM_SPEND) that must be counted here.
+  const nCalibrationRequests = kind === 'cli' ? 1 : 0
+  const nRequests = (rawTurns.length + compiledTurns.length) * N_RUNS + nCalibrationRequests
+  const estInputCost =
+    (estRawTokens + estCompiledTokens) * N_RUNS * EST_INPUT_PER_TOKEN +
+    nCalibrationRequests * Math.ceil('ok'.length / 4) * EST_INPUT_PER_TOKEN
   const estOutputCost = nRequests * EST_MAX_OUTPUT_TOKENS * EST_OUTPUT_PER_TOKEN
   console.log('')
   console.log('--- cost estimate (before spending anything) ---')
-  console.log(`requests: ${nRequests} (${rawTurns.length} raw-arm turns + ${compiledTurns.length} compiled-arm turns) x ${N_RUNS} runs`)
+  console.log(
+    `requests: ${nRequests} (${rawTurns.length} raw-arm turns + ${compiledTurns.length} compiled-arm turns) x ${N_RUNS} runs` +
+      (nCalibrationRequests ? ` + ${nCalibrationRequests} cli calibration call` : ''),
+  )
   console.log(`rough estimated input tokens (chars/4, NOT a measurement): ~${estRawTokens + estCompiledTokens} per run-set x ${N_RUNS}`)
   console.log(
     `estimated cost: ~$${(estInputCost + estOutputCost).toFixed(4)} (claude-sonnet-5 intro pricing; output estimated at up to ${EST_MAX_OUTPUT_TOKENS} tokens/call on the api runner)`,
@@ -185,7 +193,7 @@ async function main() {
       ? `cut REAL BILLED dollars from $${rawMoney.meanCostPerSession.toFixed(4)} to $${compiledMoney.meanCostPerSession.toFixed(4)}/session (${((1 - compiledMoney.meanCostPerSession / rawMoney.meanCostPerSession) * 100).toFixed(1)}% saved — the cost-reference metric) and `
       : ''
   console.log(
-    `Across the ${rawRuns.length}-turn vibe-coding session (${mediaOn ? 'with-screenshots' : 'no-screenshots'}), compiling context ${dollarClause}cut billed token volume (all usage fields summed; per-field breakdown above — cache fields bill below the direct-input rate) from ${rawMoney.billedTokensPerSession.toFixed(0)} to ${compiledMoney.billedTokensPerSession.toFixed(0)}/session (${billedTokenSaved}% saved) on claude-sonnet-5 (${kind} runner, ${N_RUNS} runs/turn/arm; usage.input_tokens alone: ${totalRawMean.toFixed(0)} -> ${totalCompiledMean.toFixed(0)}, ${savedPct}%${kind === 'cli' ? ' — not meaningful on the cli runner, see cache-routing note' : ''}), while the graded answer adequacy was raw ${rawFacts.toFixed(1)}/${totalFacts} vs compiled ${compiledFacts.toFixed(1)}/${totalFacts} facts — all dimensions from real executions, none estimated.`,
+    `Across the ${rawRuns.length}-turn vibe-coding session (${mediaOn ? 'with-screenshots' : 'no-screenshots'}${VIBE_RETINA ? ', retina-1512x982' : ''}), compiling context ${dollarClause}cut billed token volume (all usage fields summed; per-field breakdown above — cache fields bill below the direct-input rate) from ${rawMoney.billedTokensPerSession.toFixed(0)} to ${compiledMoney.billedTokensPerSession.toFixed(0)}/session (${billedTokenSaved}% saved) on claude-sonnet-5 (${kind} runner, ${N_RUNS} runs/turn/arm; usage.input_tokens alone: ${totalRawMean.toFixed(0)} -> ${totalCompiledMean.toFixed(0)}, ${savedPct}%${kind === 'cli' ? ' — not meaningful on the cli runner, see cache-routing note' : ''}), while the graded answer adequacy was raw ${rawFacts.toFixed(1)}/${totalFacts} vs compiled ${compiledFacts.toFixed(1)}/${totalFacts} facts — all dimensions from real executions, none estimated.`,
   )
 }
 

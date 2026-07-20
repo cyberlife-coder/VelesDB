@@ -190,6 +190,61 @@ async fn test_pipeline_csv_e2e_persists_and_reads_back() {
     );
 }
 
+/// Regression (#1442): `add_edges_batch` now requires every edge endpoint to
+/// have a stored node payload. The graph-relations migration phase writes
+/// edges into a fresh, edge-only `GraphCollection` that never otherwise gets
+/// node payloads — without stubbing endpoints first, every edge would now be
+/// rejected. This proves the migration still completes and produces a
+/// traversable, node-visible graph (not silently empty or hard-aborted).
+#[tokio::test]
+async fn test_pipeline_json_e2e_graph_relations_survive_node_requirement() {
+    let source = TempDir::new().expect("source dir");
+    let destination = TempDir::new().expect("destination dir");
+    let mut file = NamedTempFile::new_in(source.path()).expect("json source file");
+    write_json_source(
+        &mut file,
+        &[
+            serde_json::json!({"id": 1, "vector": [1.0, 0.0], "author_id": 2}),
+            serde_json::json!({"id": 2, "vector": [0.0, 1.0], "author_id": 1}),
+        ],
+    );
+
+    let mut config = json_config(file.path(), destination.path(), "rel_docs");
+    config.destination.graph_collection = Some("rel_docs_graph".to_string());
+    config.relations = vec![velesdb_migrate::config::RelationConfig {
+        from_column: "author_id".to_string(),
+        to_table: "rel_docs".to_string(),
+        to_column: "id".to_string(),
+        edge_label: "AUTHORED_BY".to_string(),
+        weight_column: None,
+    }];
+
+    let mut pipeline = Pipeline::new(config).expect("pipeline");
+    let stats = pipeline.run().await.expect("pipeline run");
+
+    assert_eq!(stats.loaded, 2, "both points load");
+    assert_eq!(stats.relations_processed, 1);
+    assert_eq!(
+        stats.edges_created, 2,
+        "both edges succeed via node stubbing"
+    );
+    assert_eq!(stats.edges_failed, 0);
+
+    let db = Database::open(destination.path()).expect("open database");
+    let gc = db
+        .get_graph_collection("rel_docs_graph")
+        .expect("graph collection exists");
+    assert_eq!(gc.edge_count(), 2);
+
+    // The original bug (#1442): edge endpoints must be visible via
+    // all_node_ids(), not just present in the edge store.
+    let node_ids = gc.all_node_ids();
+    assert!(node_ids.contains(&1), "node 1 must be visible");
+    assert!(node_ids.contains(&2), "node 2 must be visible");
+    assert_eq!(gc.get_outgoing(1).len(), 1);
+    assert_eq!(gc.get_outgoing(2).len(), 1);
+}
+
 #[tokio::test]
 async fn test_pipeline_dry_run_does_not_create_collection() {
     let source = TempDir::new().expect("source dir");

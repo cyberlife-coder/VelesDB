@@ -8,7 +8,7 @@
 // catch).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { generateCorpusImages } from '../corpus/make_png.mjs'
+import { generateCorpusImages, generateRetinaImages } from '../corpus/make_png.mjs'
 import {
   IMG_BUG,
   IMG_ATTEMPT,
@@ -26,6 +26,14 @@ import {
   IMG_PANEL_BUG,
   IMG_PANEL_FIXED,
 } from '../corpus/images-vibe.mjs'
+import {
+  IMG_BELL_BUG_RETINA,
+  IMG_BELL_ATTEMPT_RETINA,
+  IMG_BELL_FIXED_RETINA,
+  IMG_BELL_PR_ATTACHMENT_RETINA,
+  IMG_PANEL_BUG_RETINA,
+  IMG_PANEL_FIXED_RETINA,
+} from '../corpus/images-vibe-retina.mjs'
 
 test('committed image base64 is byte-for-byte reproducible from the committed generator', () => {
   const gen = generateCorpusImages()
@@ -87,4 +95,27 @@ test('vibe-coding notification-panel series: distinct bytes for supersession, di
   assert.notEqual(IMG_PANEL_BUG.bytesB64, IMG_BELL_BUG.bytesB64)
   assert.notEqual(IMG_PANEL_BUG.bytesB64, IMG_BUG.bytesB64)
   assert.notEqual(IMG_PANEL_BUG.bytesB64, IMG_GC_BUG.bytesB64)
+})
+
+test('retina vibe set: byte-for-byte reproducible from generateRetinaImages, same US-009 relationships, disjoint from the baseline set', () => {
+  const gen = generateRetinaImages()
+  assert.equal(gen.IMG_BELL_BUG_RETINA.toString('base64'), IMG_BELL_BUG_RETINA.bytesB64)
+  assert.equal(gen.IMG_BELL_ATTEMPT_RETINA.toString('base64'), IMG_BELL_ATTEMPT_RETINA.bytesB64)
+  assert.equal(gen.IMG_BELL_FIXED_RETINA.toString('base64'), IMG_BELL_FIXED_RETINA.bytesB64)
+  assert.equal(gen.IMG_PANEL_BUG_RETINA.toString('base64'), IMG_PANEL_BUG_RETINA.bytesB64)
+  assert.equal(gen.IMG_PANEL_FIXED_RETINA.toString('base64'), IMG_PANEL_FIXED_RETINA.bytesB64)
+  // Supersession chain: three DISTINCT bell captures.
+  assert.notEqual(IMG_BELL_BUG_RETINA.bytesB64, IMG_BELL_ATTEMPT_RETINA.bytesB64)
+  assert.notEqual(IMG_BELL_ATTEMPT_RETINA.bytesB64, IMG_BELL_FIXED_RETINA.bytesB64)
+  // Dedup: PR resend byte-identical to the survivor, no target, distinct caption.
+  assert.equal(IMG_BELL_PR_ATTACHMENT_RETINA.bytesB64, IMG_BELL_FIXED_RETINA.bytesB64)
+  assert.notEqual(IMG_BELL_PR_ATTACHMENT_RETINA.caption, IMG_BELL_FIXED_RETINA.caption)
+  assert.equal(IMG_BELL_PR_ATTACHMENT_RETINA.target, undefined)
+  // Second chain: two DISTINCT panel captures, own target.
+  assert.notEqual(IMG_PANEL_BUG_RETINA.bytesB64, IMG_PANEL_FIXED_RETINA.bytesB64)
+  assert.equal(IMG_PANEL_BUG_RETINA.target, 'notification-panel')
+  // The retina set is byte-disjoint from the baseline set (a retina-related
+  // change can never silently alter the committed baseline numbers).
+  assert.notEqual(IMG_BELL_BUG_RETINA.bytesB64, IMG_BELL_BUG.bytesB64)
+  assert.notEqual(IMG_PANEL_FIXED_RETINA.bytesB64, IMG_PANEL_FIXED.bytesB64)
 })

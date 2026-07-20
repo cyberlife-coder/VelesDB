@@ -9,6 +9,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-07-20
+
+### Added
+
+- **Agentic quick wins for the MCP surface.** `get_info().instructions` now
+  covers all three tool families (memory, context compiler, working-context
+  resumption) instead of just memory. New `list_working_contexts` tool
+  (per-project index, updated on every `save_working_context`) so an agent
+  can discover resumable sessions instead of guessing a session id;
+  `load_working_context`'s response gains `found` (explicit hit/miss) and
+  `other_sessions` (surfaced on a miss, to recover from a session-id typo) —
+  wire-additive, the existing `working` field is unchanged. `compile_context`
+  gains `warnings[]` (a mechanical shortlist of externalized fragments
+  relevant enough to the query to double-check) and `policy.slim_response`
+  (empties `sections`/`decisions` from the response once auditing is done).
+  New `suggest_budget` tool: a starting `token_budget` for a named model,
+  from a static, committed model→window table (never a network call).
+
+### Fixed
+
+- **Memory-tool id strings now tolerate surrounding whitespace.** Follow-up
+  to issue #1468/#1471: some MCP harnesses (Claude Code included) coerce any
+  all-digit scalar back into a JSON number even when the client sends a
+  string, which defeats the `id_str` string-id workaround and reintroduces
+  precision loss above 2^53. A caller working around this by padding the id
+  with whitespace (e.g. `" 12732540571541475285"`) was rejected by the
+  string-or-number id parser used by `relate`/`forget`/`feedback` (and
+  `Link.target`) with "expected a u64 number or a decimal u64 string" — the
+  id string is now trimmed before parsing. The `+`-prefixed workaround
+  (`"+12732540571541475285"`, already accepted since `u64::from_str` allows a
+  leading `+`) keeps working unchanged.
+
+- **`recall_where`'s type-strict comparisons are now documented (issue
+  #1473).** Behavior is unchanged (no runtime coercion added): a numeric
+  filter value never matched a string-stored metadata value, and vice
+  versa, silently returning an empty set. The tool description and the
+  velesdb-memory skill now say so explicitly and recommend storing
+  comparable values (dates, counters) numerically.
+
+- **Memory-tool ids now survive float-lossy JSON clients (issue #1468).**
+  `remember`, `recall`/`recall_where`/`recall_fused`, `relate`, `forget`,
+  `feedback`, `remember_extracted`, and `why` return `u64` ids as plain JSON
+  numbers, which a client whose JSON layer round-trips numbers through an
+  IEEE-754 `f64` (JS `number`, Claude Code included) silently rounds once the
+  id exceeds 2^53 — the rounded id is then rejected by `relate`/`forget`/
+  `feedback` with "memory does not exist", reported from real dogfooding.
+  Every MCP response now also carries a decimal-string twin of each id
+  (`id_str` on `remember`/`recall*`/`forget`/`feedback`/`why`'s nodes,
+  `edge_id_str` on `relate`, `ids_str` on `remember_extracted`,
+  `from_str`/`to_str` on `why`'s edges) — purely additive, the numeric field
+  is unchanged so 0.9.x callers are unaffected. `relate`'s `from`/`to`,
+  `forget`/`feedback`'s `id`, and `remember`'s `links[].target` also accept
+  that decimal-string form on input (in addition to a plain number), with the
+  advertised tool schemas updated to match, so a client can safely resubmit
+  an `id_str` it received. **Wire-only, no Rust API change**: the string
+  twins live entirely in the MCP DTO layer (`mcp::dto`); the public domain
+  types (`Recollection`, `MemoryNode`, `MemoryEdge`, `Explanation`) are
+  unchanged, so library consumers of the crate (bindings, crates.io users)
+  see no breakage — the only `model` change is that `Link::target`
+  *deserialization* additionally tolerates a decimal string, which is
+  strictly widening. (#1468)
+
 ## [0.9.1] — 2026-07-19
 
 ### Security

@@ -4,7 +4,7 @@
 //!
 //! Wire shapes reuse the domain types from [`crate::context`] directly
 //! (`CompileRequest` *is* the tool input, `CompiledContext` the output) —
-//! the only DTOs here are the thin request envelopes of the five smaller
+//! the only DTOs here are the thin request envelopes of the seven smaller
 //! tools. Same conventions as every other tool: `spawn_blocking` around the
 //! sync service, errors mapped through the transport-neutral category.
 
@@ -21,8 +21,9 @@ use serde_json::Value;
 use super::{join_error, to_error, McpServer};
 use crate::context::wire::{stringify_id_fields, ID_KEYS};
 use crate::context::{
-    CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextDecision,
-    ContextSavings, MediaRef, WorkingContext,
+    suggest_token_budget, CompilePolicy, CompileRequest, CompiledContext, ContextCompiler,
+    ContextDecision, ContextSavings, MediaRef, SuggestedBudget, WorkingContext,
+    WorkingContextSession,
 };
 
 /// Serialize `payload`, opt-in rewriting every id field into decimal-string
@@ -175,16 +176,56 @@ pub(super) struct LoadWorkingContextParams {
 #[derive(Debug, serde::Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct LoadWorkingContextResult {
+    /// `true` when a working context was found under this exact project +
+    /// session. Wire-additive alongside `working` (added V2a-1): a client
+    /// that only reads `working` sees no change.
+    pub found: bool,
     /// The previously saved working context, or `null` when nothing was ever
     /// saved under that project + session (a fresh start, not an error).
     pub working: Option<WorkingContext>,
+    /// Other sessions saved under this SAME project, populated only when
+    /// `found` is `false` — helps recover from a typo in `session` instead
+    /// of silently starting fresh (e.g. `"task-1234"` saved,
+    /// `"task-1235"` requested by mistake). Always empty when `found` is
+    /// `true`.
+    #[serde(default)]
+    pub other_sessions: Vec<String>,
+}
+
+/// Input of the `list_working_contexts` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct ListWorkingContextsParams {
+    /// Project facet to list saved working-context sessions for (same
+    /// convention as `save_working_context`'s `project`).
+    pub project: String,
+}
+
+/// Output of the `list_working_contexts` tool.
+#[derive(Debug, serde::Serialize, JsonSchema)]
+pub(super) struct ListWorkingContextsResult {
+    /// Every session saved under this project, most-recently-saved first.
+    /// Empty (not an error) when the project never saved anything.
+    pub sessions: Vec<WorkingContextSession>,
+}
+
+/// Input of the `suggest_budget` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct SuggestBudgetParams {
+    /// The model name to look up in the static window table (e.g.
+    /// `"claude-sonnet-4-5"`). Matched case-insensitively.
+    pub target_model: String,
+    /// Tokens to reserve for the response, subtracted from the model's
+    /// window (default `0`) — mirrors
+    /// [`CompilePolicy::response_reserve_tokens`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserve_tokens: Option<u64>,
 }
 
 #[tool_router(router = context_tool_router, vis = "pub(super)")]
 impl McpServer {
     #[tool(
         name = "compile_context",
-        description = "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministically, with no LLM call. Duplicates are dropped, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles instead of silently vanishing, and `memory_scope` pulls relevant stored memories into the result. Each fragment's own `metadata` is capped at 64 KiB serialized. Returns the assembled content plus one auditable decision per fragment (rule id, reason, risk), the sources, the retrieval handles, and token-savings insights. `policy.ids_as_strings` (default false) rewrites every id field of the response into a decimal string, for MCP clients without u64-safe JSON number parsing.",
+        description = "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministically, with no LLM call. Duplicates are dropped, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles instead of silently vanishing, and `memory_scope` pulls relevant stored memories into the result. Each fragment's own `metadata` is capped at 64 KiB serialized. Returns the assembled content plus one auditable decision per fragment (rule id, reason, risk), the sources, the retrieval handles, token-savings insights, and `warnings` — a mechanical shortlist of externalized fragments relevant enough to the query that they are worth a second look, so checking `decisions` by hand is only needed when `warnings` is non-empty and still ambiguous. `policy.slim_response` (default false) empties `sections`/`decisions` from the response — keep it off when you need the audit trail, or re-compile without it later (compilation is deterministic). `policy.ids_as_strings` (default false) rewrites every id field of the response into a decimal string, for MCP clients without u64-safe JSON number parsing.",
         input_schema = wire_safe_input_schema::<CompileRequest>(),
         output_schema = wire_safe_output_schema::<CompiledContext>()
     )]
@@ -330,20 +371,74 @@ impl McpServer {
 
     #[tool(
         name = "load_working_context",
-        description = "Resume a session: load back the working context previously saved by save_working_context under the same project + session id — the goal, constraints, verified facts, open hypotheses, decisions, exact evidence, and pending actions a PRIOR session left off with. Call this at the START of a new session before doing anything else, so work continues instead of restarting. Returns null when nothing was ever saved under that project + session (a fresh start, not an error)."
+        description = "Resume a session: load back the working context previously saved by save_working_context under the same project + session id — the goal, constraints, verified facts, open hypotheses, decisions, exact evidence, and pending actions a PRIOR session left off with. Call this at the START of a new session before doing anything else, so work continues instead of restarting. `found: false` (with `working: null`) means nothing was ever saved under that exact project + session — not an error, but check `other_sessions`: if it lists a similarly-named session, `session` was likely a typo, not a genuinely fresh start. Use `list_working_contexts` to browse a project's sessions up front."
     )]
     async fn load_working_context(
         &self,
         Parameters(params): Parameters<LoadWorkingContextParams>,
     ) -> Result<Json<LoadWorkingContextResult>, ErrorData> {
-        let service = Arc::clone(&self.service);
         let LoadWorkingContextParams { project, session } = params;
-        let working =
-            tokio::task::spawn_blocking(move || service.load_working_context(&project, &session))
+        let service = Arc::clone(&self.service);
+        let lookup_project = project.clone();
+        let working = tokio::task::spawn_blocking(move || {
+            service.load_working_context(&lookup_project, &session)
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(to_error)?;
+        let found = working.is_some();
+        let other_sessions = if found {
+            Vec::new()
+        } else {
+            let service = Arc::clone(&self.service);
+            tokio::task::spawn_blocking(move || service.list_working_contexts(&project))
                 .await
                 .map_err(join_error)?
-                .map_err(to_error)?;
-        Ok(Json(LoadWorkingContextResult { working }))
+                .map_err(to_error)?
+                .into_iter()
+                .map(|s| s.session)
+                .collect()
+        };
+        Ok(Json(LoadWorkingContextResult {
+            found,
+            working,
+            other_sessions,
+        }))
+    }
+
+    #[tool(
+        name = "list_working_contexts",
+        description = "List every session saved under a project via save_working_context, most-recently-saved first — so an agent can discover what is resumable before guessing a session id at load_working_context, or recover from a typo. Empty (not an error) when the project never saved anything."
+    )]
+    async fn list_working_contexts(
+        &self,
+        Parameters(params): Parameters<ListWorkingContextsParams>,
+    ) -> Result<Json<ListWorkingContextsResult>, ErrorData> {
+        let service = Arc::clone(&self.service);
+        let ListWorkingContextsParams { project } = params;
+        let sessions = tokio::task::spawn_blocking(move || service.list_working_contexts(&project))
+            .await
+            .map_err(join_error)?
+            .map_err(to_error)?;
+        Ok(Json(ListWorkingContextsResult { sessions }))
+    }
+
+    #[tool(
+        name = "suggest_budget",
+        description = "Suggest a starting token_budget for compile_context, for a named target model — looked up in a static, committed model-name to context-window table (dated \"as of\", NEVER a network call). Pass `reserve_tokens` (default 0) to reserve room for the response, mirroring compile_context's own `policy.response_reserve_tokens`. `window`/`suggested_budget` come back null when the model is not in the table — an honest \"unknown\", never a guess; extend the table in a new release instead of relying on this for an unlisted model."
+    )]
+    async fn suggest_budget(
+        &self,
+        Parameters(params): Parameters<SuggestBudgetParams>,
+    ) -> Result<Json<SuggestedBudget>, ErrorData> {
+        let SuggestBudgetParams {
+            target_model,
+            reserve_tokens,
+        } = params;
+        Ok(Json(suggest_token_budget(
+            &target_model,
+            reserve_tokens.unwrap_or(0),
+        )))
     }
 }
 

@@ -17,17 +17,19 @@ traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation
 meet** those data-residency and explainability expectations rather than claiming
 certified compliance.
 
-> **Release 0.9.1** — hotfix cycle over the 0.9.0 context compiler: a
-> permanent `ctx://source/` handle no longer expires silently, byte-identical
-> screenshot duplicates no longer both drop from compiled context, metadata
-> is now size-capped (64 KiB) and the working context load path verifies its
-> system marker; published to the registries by the `velesdb-memory-v0.9.1`
+> **Release 0.9.2** — agent-ergonomics cycle over the 0.9.1 memory server:
+> ids now survive float-lossy JSON clients end-to-end (`id_str` decimal-string
+> twins on every id-bearing response, string ids accepted on input, surrounding
+> whitespace tolerated), `get_info` documents all three tool families, new
+> `list_working_contexts` and `suggest_budget` tools, `compile_context` gains
+> `warnings[]` and `policy.slim_response`; published to the registries by the
+> `velesdb-memory-v0.9.2`
 > tag, so the links below may briefly lag right after merge. `velesdb-memory`
 > ships on [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
-> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.9.1**
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.9.2**
 > and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**
 > (memory API only — the context compiler is merged on `develop` but **the
 > published 3.12.0 wheel predates it**; it ships with the next PyPI release,
@@ -334,6 +336,15 @@ archive root — so a one-liner installs them straight from the release:
 curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz \
   | tar -xz -C ~/.claude/skills/
 ```
+
+**Skills teach an agent what to do; they don't make it remember to do it.**
+[`integrations/agent-hooks/`](https://github.com/cyberlife-coder/VelesDB/tree/develop/integrations/agent-hooks)
+closes that gap for Claude Code with real `SessionStart`/`Stop`/`PreCompact`
+hooks that nudge `load_working_context`/`save_working_context` automatically
+— install once **globally** (`~/.claude/hooks/`) to get continuous memory
+across every project, or per-project if you'd rather vendor the scripts into
+one repo. Codex CLI has no hook mechanism yet; the same directory documents
+an `AGENTS.md`-based convention for it.
 
 ## Using the tools
 
