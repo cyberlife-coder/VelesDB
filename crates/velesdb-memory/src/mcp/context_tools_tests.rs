@@ -1146,3 +1146,58 @@ async fn test_compile_transcript_without_ingest_roots_reports_disabled() {
     assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
     assert!(err.message.contains("disabled"), "{}", err.message);
 }
+
+#[tokio::test]
+async fn test_compile_transcript_rejects_empty_file_same_as_empty_inline_transcript() {
+    // Given a server with a real, but EMPTY, file inside the ingest
+    // allowlist — an empty inline `transcript` is already rejected
+    // (INVALID_PARAMS), but an empty file reached via `path` used to
+    // resolve cleanly and compile into a silent, zero-fragment result: the
+    // same "nothing to compile" situation reported two different ways.
+    let allowed = TempDir::new().expect("tempdir");
+    let (_dir, srv) = server_with_ingest_roots(allowed.path());
+    let empty_file = allowed.path().join("empty.txt");
+    std::fs::write(&empty_file, "").expect("write empty file");
+    let requested = empty_file.to_string_lossy().into_owned();
+
+    // When compiling via that `path`
+    let path_result = srv
+        .compile_transcript(Parameters(CompileTranscriptParams {
+            query: "q".to_owned(),
+            transcript: None,
+            path: Some(requested),
+            token_budget: 10_000,
+            project: None,
+            target_model: None,
+            policy: None,
+            segmentation: None,
+        }))
+        .await;
+    let path_err = match path_result {
+        Ok(_) => panic!("an empty file must be rejected, not silently compiled into nothing"),
+        Err(err) => err,
+    };
+
+    // And when compiling with an empty inline transcript instead
+    let inline_result = srv
+        .compile_transcript(Parameters(CompileTranscriptParams {
+            query: "q".to_owned(),
+            transcript: Some(String::new()),
+            path: None,
+            token_budget: 10_000,
+            project: None,
+            target_model: None,
+            policy: None,
+            segmentation: None,
+        }))
+        .await;
+    let inline_err = match inline_result {
+        Ok(_) => panic!("an empty inline transcript must be rejected"),
+        Err(err) => err,
+    };
+
+    // Then both fail the same way, with the exact same actionable message
+    assert_eq!(path_err.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(inline_err.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(path_err.message, inline_err.message);
+}

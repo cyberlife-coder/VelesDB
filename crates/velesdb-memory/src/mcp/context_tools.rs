@@ -407,16 +407,30 @@ impl McpServer {
             segmentation,
         } = params;
         let transcript_text = match (transcript, path) {
-            (Some(text), None) if !text.is_empty() => text,
+            (Some(text), None) => text,
             (None, Some(path)) => self.resolve_transcript_path(&path)?,
             _ => {
                 return Err(ErrorData::new(
                     ErrorCode::INVALID_PARAMS,
-                    "exactly one of `transcript` (non-empty) or `path` must be set".to_owned(),
+                    "exactly one of `transcript` or `path` must be set".to_owned(),
                     None,
                 ));
             }
         };
+        // Checked AFTER resolving `path` (not folded into the match guard
+        // above) so an inline empty string and a `path` that resolves to an
+        // empty file are rejected identically — the ingest pipeline itself
+        // happily reads a zero-byte file, so this is the one place that
+        // catches "nothing to compile" regardless of source.
+        if transcript_text.is_empty() {
+            return Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                "the transcript is empty — `transcript` must be non-empty text, or `path` must \
+                 point to a non-empty file"
+                    .to_owned(),
+                None,
+            ));
+        }
         let segmentation_policy = segmentation.unwrap_or_default();
         let outcome =
             segment_transcript(&transcript_text, &segmentation_policy).map_err(to_error)?;
