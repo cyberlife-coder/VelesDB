@@ -1774,7 +1774,9 @@ fn test_compile_context_memory_pulled_warning_reflects_post_annotation_relevance
             .iter()
             .find(|d| d.fragment_id == warning.fragment_id)
             .expect("every warning must point at a real decision");
-        assert_eq!(warning.relevance, decision.relevance);
+        // Bit-exact: a warning copies its decision's relevance verbatim, so
+        // compare bits (satisfies clippy::float_cmp, tests the real invariant).
+        assert_eq!(warning.relevance.to_bits(), decision.relevance.to_bits());
         assert_eq!(warning.reason, decision.reason);
     }
 }
