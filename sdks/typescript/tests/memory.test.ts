@@ -49,6 +49,15 @@ class MockWasmMemoryService {
     handle: 'ctx://source/123',
     content: 'the original fragment text',
   }));
+  saveWorkingContext = vi.fn(() => '42');
+  loadWorkingContext = vi.fn(() => ({
+    goal: 'ship the canary fix',
+    decisions: [{ fragment_id: '18446744073709551615', rule_id: 'media.atomic' }],
+    pending_actions: ['roll back if error rate spikes'],
+  }));
+  listWorkingContexts = vi.fn(() => ({
+    sessions: [{ session: 'session-a', saved_at: 1731000000 }],
+  }));
   free = vi.fn();
 
   constructor(public dimension: number) {
@@ -281,6 +290,38 @@ describe('MemoryService', () => {
       const resolved = await memory.retrieveContextSource('ctx://source/456');
       expect(resolved.media?.bytes_b64).toBe('aGVsbG8=');
       expect(resolved.media?.mime).toBe('image/png');
+    });
+
+    it('saveWorkingContext() delegates project/session/working and returns the fact id', async () => {
+      const working = { goal: 'ship the canary fix', pending_actions: ['watch error rate'] };
+      const id = await memory.saveWorkingContext('veles', 'session-a', working);
+      expect(lastMockInstance!.saveWorkingContext).toHaveBeenCalledWith(
+        'veles',
+        'session-a',
+        working
+      );
+      expect(id).toBe('42');
+    });
+
+    it('loadWorkingContext() returns the mocked working context, decimal ids intact', async () => {
+      const loaded = await memory.loadWorkingContext('veles', 'session-a');
+      expect(lastMockInstance!.loadWorkingContext).toHaveBeenCalledWith('veles', 'session-a');
+      expect(loaded?.goal).toBe('ship the canary fix');
+      const decisions = loaded?.decisions as Array<{ fragment_id: string }>;
+      expect(decisions[0].fragment_id).toBe('18446744073709551615');
+    });
+
+    it('loadWorkingContext() returns null when nothing was saved', async () => {
+      lastMockInstance!.loadWorkingContext.mockReturnValueOnce(null);
+      const loaded = await memory.loadWorkingContext('veles', 'never-saved-session');
+      expect(loaded).toBeNull();
+    });
+
+    it('listWorkingContexts() delegates the project and returns the sessions', async () => {
+      const result = await memory.listWorkingContexts('veles');
+      expect(lastMockInstance!.listWorkingContexts).toHaveBeenCalledWith('veles');
+      expect(result.sessions).toHaveLength(1);
+      expect(result.sessions[0].session).toBe('session-a');
     });
 
     it('why() returns the explanation subgraph', async () => {
