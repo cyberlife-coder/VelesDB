@@ -86,12 +86,121 @@ fn jsonl_roles_detected_and_forced_format_errors_on_bad_line() {
     let err = segment_transcript(bad, &jsonl_policy).expect_err("bad line must error");
 
     // Then it is a hard, actionable error — never a silent fallback to plain
+    // — and it is the dedicated `SegmentationError` variant (m2, issue
+    // #1516): a bad-format parse failure is not a budget breach, so it must
+    // not surface as `ContextOverLimit` (whose "over limit" wording would be
+    // misleading for a caller filtering on the message).
     match err {
-        MemoryError::ContextOverLimit(msg) => {
+        MemoryError::SegmentationError(msg) => {
             assert!(msg.contains("line 2"), "{msg}");
         }
-        other => panic!("expected ContextOverLimit, got {other:?}"),
+        other => panic!("expected SegmentationError, got {other:?}"),
     }
+}
+
+#[test]
+fn forced_jsonl_no_nonblank_line_is_also_segmentation_error() {
+    // Given a "transcript" forced to jsonl that has no non-blank line at
+    // all (jsonl_pieces' other failure mode, distinct from a bad line)
+    let blank_only = "\n\n";
+    let mut jsonl_policy = policy();
+    jsonl_policy.format = SegmentFormat::Jsonl;
+
+    // When forcing jsonl on it
+    let err = segment_transcript(blank_only, &jsonl_policy).expect_err("must error");
+
+    // Then it is still SegmentationError, not ContextOverLimit — same
+    // rationale as the bad-line case above.
+    match err {
+        MemoryError::SegmentationError(_) => {}
+        other => panic!("expected SegmentationError, got {other:?}"),
+    }
+}
+
+#[test]
+fn genuine_budget_breaches_still_return_context_over_limit() {
+    // Non-regression (m2, issue #1516): introducing `SegmentationError` for
+    // format/parsing failures must not change the variant for a REAL
+    // budget/cap breach — those keep returning `ContextOverLimit` exactly
+    // as before.
+    use crate::limits::MAX_TRANSCRIPT_BYTES;
+
+    // Transcript over the byte cap
+    let too_big = "a".repeat(MAX_TRANSCRIPT_BYTES + 1);
+    let err = segment_transcript(&too_big, &policy()).expect_err("over cap");
+    assert!(
+        matches!(err, MemoryError::ContextOverLimit(_)),
+        "expected ContextOverLimit, got {err:?}"
+    );
+
+    // Too many fragments after merging
+    let mut many_turns = String::new();
+    for i in 0..=MAX_FRAGMENTS {
+        writeln!(many_turns, "User: turn {i}").expect("write to String never fails");
+    }
+    let mut tight_policy = policy();
+    tight_policy.min_segment_bytes = 0;
+    let err = segment_transcript(&many_turns, &tight_policy).expect_err("over fragment cap");
+    assert!(
+        matches!(err, MemoryError::ContextOverLimit(_)),
+        "expected ContextOverLimit, got {err:?}"
+    );
+
+    // An unsplittable oversized fence
+    let mut fenced = String::from("```\n");
+    fenced.push_str(&"a".repeat(MAX_FRAGMENT_BYTES + 1));
+    fenced.push_str("\n```\n");
+    let err = segment_transcript(&fenced, &policy()).expect_err("oversized fence");
+    assert!(
+        matches!(err, MemoryError::ContextOverLimit(_)),
+        "expected ContextOverLimit, got {err:?}"
+    );
+}
+
+#[test]
+fn resplit_jsonl_content_override_children_get_distinct_nonoverlapping_ranges() {
+    // Given one jsonl line whose *decoded* content alone exceeds
+    // MAX_FRAGMENT_BYTES (m3, issue #1516): re-split into several children,
+    // none of which has a byte-exact mapping back to the raw JSON-escaped
+    // source line — but the partition property `compile_transcript`
+    // advertises must still hold across those children.
+    let big_content = "a".repeat((MAX_FRAGMENT_BYTES * 2) + 100);
+    let line = serde_json::json!({"role": "user", "content": big_content}).to_string();
+    let mut text = line;
+    text.push('\n');
+
+    let mut jsonl_policy = policy();
+    jsonl_policy.format = SegmentFormat::Jsonl;
+
+    let outcome = segment_transcript(&text, &jsonl_policy).expect("segments");
+
+    // More than one child was produced — the whole point of the test
+    assert!(outcome.segments.len() > 1, "{outcome:?}");
+
+    // Every child stays under the fragment cap
+    for segment in &outcome.segments {
+        assert!(
+            segment.fragment.content.len() <= MAX_FRAGMENT_BYTES,
+            "child of {} bytes exceeds the cap",
+            segment.fragment.content.len()
+        );
+    }
+
+    // No two children overlap, and together they partition the whole line
+    // exactly — no gaps, no duplicated ranges.
+    let mut ranges: Vec<(usize, usize)> = outcome
+        .segments
+        .iter()
+        .map(|s| (s.byte_start, s.byte_end))
+        .collect();
+    ranges.sort_unstable();
+    let mut cursor = 0_usize;
+    for (start, end) in ranges {
+        assert_eq!(start, cursor, "gap or overlap at byte {cursor}");
+        assert!(start <= end, "inverted range {start}..{end}");
+        cursor = end;
+    }
+    assert_eq!(cursor, text.len(), "children must partition the whole line");
 }
 
 #[test]

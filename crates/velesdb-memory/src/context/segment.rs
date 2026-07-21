@@ -20,7 +20,9 @@
 //! 1. **Format detection** ([`detect_and_segment`]): `jsonl` when every
 //!    non-empty line parses as a `{role, content}` JSON object, `plain`
 //!    otherwise. A caller-forced format that does not parse is a hard error —
-//!    never a silent fallback to the other format.
+//!    never a silent fallback to the other format — surfaced as
+//!    [`crate::error::MemoryError::SegmentationError`] (a FORMAT failure,
+//!    distinct from a budget/cap breach; see below).
 //! 2. **Turns**: `jsonl` — one line, one turn, `role` taken directly from the
 //!    parsed JSON. `plain` — a CLOSED table of markers (`"System:"`,
 //!    `"User:"`, `"Human:"`, `"Assistant:"`, `"AI:"`, `"Tool:"`,
@@ -45,12 +47,19 @@
 //!    [`crate::limits::MAX_FRAGMENTS`] segments after merging is a hard,
 //!    actionable error ("raise `min_segment_bytes`") — never a silent drop.
 //!
-//! Every error surfaces as [`crate::error::MemoryError::ContextOverLimit`] or
+//! A genuine budget/cap breach (transcript over
+//! [`crate::limits::MAX_TRANSCRIPT_BYTES`], an unsplittable oversized fence,
+//! or too many fragments after merging) surfaces as
+//! [`crate::error::MemoryError::ContextOverLimit`]; a FORMAT/parsing failure
+//! (a forced `jsonl` line that does not parse) surfaces as the distinct
+//! [`crate::error::MemoryError::SegmentationError`] (issue #1516, m2 — kept
+//! separate precisely so a caller filtering on the error message cannot
+//! confuse a malformed-input error for a size breach, even though both map
+//! to the same `INVALID_PARAMS`-category MCP code). A `path`-sourced
+//! transcript can additionally fail with
 //! [`crate::error::MemoryError::IngestDisabled`]/[`crate::error::MemoryError::IngestOutsideRoots`]/
-//! [`crate::error::MemoryError::IngestPath`] (the last three only for a
-//! `path`-sourced transcript, via [`super::ingest::resolve_transcript_path`])
-//! — the same `INVALID_PARAMS`-category taxonomy `compile_context` already
-//! uses, deliberately not a new variant for this PR.
+//! [`crate::error::MemoryError::IngestPath`], via
+//! [`super::ingest::resolve_transcript_path`].
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -195,10 +204,12 @@ pub struct SegmentationOutcome {
 ///
 /// # Errors
 /// [`MemoryError::ContextOverLimit`] when `text` exceeds
-/// [`MAX_TRANSCRIPT_BYTES`], when [`SegmentFormat::Jsonl`] is forced but a
-/// line does not parse as a `{role, content}` object, when an unsplittable
-/// fence exceeds [`MAX_FRAGMENT_BYTES`], or when the segment count after
-/// merging still exceeds [`MAX_FRAGMENTS`].
+/// [`MAX_TRANSCRIPT_BYTES`], when an unsplittable fence exceeds
+/// [`MAX_FRAGMENT_BYTES`], or when the segment count after merging still
+/// exceeds [`MAX_FRAGMENTS`] — all genuine budget/cap breaches.
+/// [`MemoryError::SegmentationError`] when [`SegmentFormat::Jsonl`] is forced
+/// but a line does not parse as a `{role, content}` object — a FORMAT
+/// failure, not a budget breach (issue #1516, m2).
 pub fn segment_transcript(
     text: &str,
     policy: &SegmentationPolicy,
@@ -262,7 +273,7 @@ fn detect_and_segment(
     match requested {
         SegmentFormat::Plain => Ok((SegmentFormat::Plain, plain_pieces(text))),
         SegmentFormat::Jsonl => {
-            let pieces = jsonl_pieces(text).map_err(MemoryError::ContextOverLimit)?;
+            let pieces = jsonl_pieces(text).map_err(MemoryError::SegmentationError)?;
             Ok((SegmentFormat::Jsonl, pieces))
         }
         SegmentFormat::Auto => {
@@ -559,12 +570,17 @@ fn resplit_one(text: &str, piece: RawPiece, chunk_policy: &ChunkPolicy) -> Vec<R
 
 /// Re-split a `body` piece over [`MAX_FRAGMENT_BYTES`] with [`chunk_text`] —
 /// the same re-chunker `compile_context` itself uses for an oversized
-/// fragment. A `jsonl` piece's decoded `content_override` has no
-/// byte-aligned mapping back to the raw (JSON-escaped) source line, so its
-/// re-split children all keep the ORIGINAL line's full byte range — a
-/// documented, deliberately narrow trade-off: the byte-range-covers-the-
-/// transcript property holds at the turn level regardless, and a single
-/// JSONL line's `content` exceeding 1 MiB is an extreme edge case.
+/// fragment. A `jsonl` piece's decoded `content_override` has no byte-exact
+/// mapping back to the raw (JSON-escaped) source line, so its re-split
+/// children cannot each carry a byte-precise slice of the line the way a
+/// plain-text `body` piece's children do; instead
+/// [`partition_range_by_weight`] divides the ORIGINAL line's byte range
+/// across the children proportionally to each child's share of the decoded
+/// content, which keeps the partition property `compile_transcript`
+/// advertises (no overlap, no gap, covers exactly the parent range) without
+/// claiming a provenance the JSON escaping makes impossible (issue #1516,
+/// m3 — previously every child kept the full, identical parent range,
+/// which duplicated it across `segmentation.segments`).
 fn resplit_body(text: &str, piece: RawPiece, chunk_policy: &ChunkPolicy) -> Vec<RawPiece> {
     let effective_len = piece
         .content_override
@@ -574,16 +590,22 @@ fn resplit_body(text: &str, piece: RawPiece, chunk_policy: &ChunkPolicy) -> Vec<
         return vec![piece];
     }
     match &piece.content_override {
-        Some(content) => chunk_text(content, chunk_policy)
-            .into_iter()
-            .map(|chunk| RawPiece {
-                kind: SegmentKind::Body,
-                range: piece.range.clone(),
-                turn: piece.turn,
-                role: piece.role.clone(),
-                content_override: Some(chunk.text),
-            })
-            .collect(),
+        Some(content) => {
+            let chunks = chunk_text(content, chunk_policy);
+            let weights: Vec<usize> = chunks.iter().map(|chunk| chunk.text.len()).collect();
+            let ranges = partition_range_by_weight(&piece.range, &weights);
+            chunks
+                .into_iter()
+                .zip(ranges)
+                .map(|(chunk, range)| RawPiece {
+                    kind: SegmentKind::Body,
+                    range,
+                    turn: piece.turn,
+                    role: piece.role.clone(),
+                    content_override: Some(chunk.text),
+                })
+                .collect()
+        }
         None => chunk_text(&text[piece.range.clone()], chunk_policy)
             .into_iter()
             .map(|chunk| RawPiece {
@@ -596,6 +618,47 @@ fn resplit_body(text: &str, piece: RawPiece, chunk_policy: &ChunkPolicy) -> Vec<
             })
             .collect(),
     }
+}
+
+/// Divide `range` into `weights.len()` contiguous, non-overlapping
+/// sub-ranges that exactly partition it (no gap, no overlap, first starts at
+/// `range.start`, last ends at `range.end`), each sized proportionally to
+/// its matching entry in `weights` (typically a re-split child's decoded
+/// content length). Used by [`resplit_body`] for a `jsonl` piece's
+/// `content_override` children, whose decoded text has no byte-exact
+/// mapping back into the raw (JSON-escaped) source range: this gives each
+/// child a distinct, deterministic slice of the parent range instead of
+/// every child duplicating the whole thing (issue #1516, m3).
+///
+/// Every prefix sum is monotonically non-decreasing (weights are
+/// non-negative and `range.len()` and the total weight are both fixed), so
+/// the resulting boundaries never go backwards — the partition property
+/// holds even when a weight is `0` (an empty chunk gets an empty
+/// sub-range) or when `weights` sums to `0` (falls back to handing the
+/// whole range to the last entry, cursor stays at `range.start` for every
+/// other one).
+fn partition_range_by_weight(range: &Range<usize>, weights: &[usize]) -> Vec<Range<usize>> {
+    debug_assert!(!weights.is_empty(), "must have at least one child");
+    let total: usize = weights.iter().sum::<usize>().max(1);
+    let span = range.len();
+    let mut start = range.start;
+    let mut cumulative = 0_usize;
+    let last_index = weights.len() - 1;
+    weights
+        .iter()
+        .enumerate()
+        .map(|(index, weight)| {
+            cumulative += weight;
+            let end = if index == last_index {
+                range.end
+            } else {
+                range.start + (span * cumulative) / total
+            };
+            let sub_range = start..end;
+            start = end;
+            sub_range
+        })
+        .collect()
 }
 
 /// Re-split a `log` piece over [`MAX_FRAGMENT_BYTES`] on LINE boundaries —
