@@ -10,7 +10,7 @@ description: >
   why part of their context was dropped; or when a session should be
   resumable later (save the working context at the end, load it back at the
   start of the next one). Requires the velesdb-memory MCP server (tools:
-  compile_context, context_savings, explain_compilation,
+  compile_context, compile_transcript, context_savings, explain_compilation,
   retrieve_context_source, save_working_context, load_working_context).
 ---
 
@@ -27,6 +27,37 @@ code / URLs / numbers / negative constraints survive verbatim, and whatever
 does not fit the budget becomes a recoverable `ctx://source/` handle, never a
 silent loss. Same input, same output, byte for byte.
 
+## Have a raw transcript? Skip steps 1-3.
+
+If what you are about to compress is a raw agent-session transcript (plain
+text with `System:`/`User:`/`Assistant:`/… markers, or JSONL — a saved
+conversation log, a `PreCompact` hook payload, a paste-in from another tool)
+rather than content you are hand-assembling into fragments, call
+`compile_transcript` directly instead of manually splitting it into
+fragments first: `{query, token_budget, transcript}` (or `path`, same
+`VELESDB_MEMORY_INGEST_ROOTS` allowlist as a `compile_context` fragment's
+`path`, capped at 8 MiB). It deterministically segments the transcript into
+turns and sub-turns (fenced code stays atomic, log runs collapse, the system
+turn is cache-tagged automatically) and compiles the result exactly like
+`compile_context` — same `content`/`decisions`/`insights`/`risk`/`warnings`
+output, plus a `segmentation` audit report (`format_detected`, one entry per
+segment with turn/role/kind/byte range/`fragment_id`, `merged_segments`).
+Steps 4-10 below apply unchanged to its output. Force
+`segmentation.format: "plain"` or `"jsonl"` when auto-detection would guess
+wrong (e.g. a transcript that happens to also parse as JSONL, or prose that
+cites `"User:"` and would otherwise falsely open a turn); a forced format
+that fails to parse is a hard error, never a silent fallback. Still building
+fragments from scratch (not segmenting an existing transcript)? Continue
+with steps 1-3.
+
+```json
+{"tool": "compile_transcript", "arguments": {
+  "query": "what did we decide about the canary rollback",
+  "token_budget": 4000,
+  "transcript": "System: You are the deploy assistant.\nUser: why is the canary red\nAssistant: …"
+}}
+```
+
 ## Workflow (10 steps)
 
 1. **Scope the problem.** Identify what is about to be sent to the model:
@@ -37,14 +68,17 @@ silent loss. Same input, same output, byte for byte.
    dump, a code block, a constraint). Tag `kind` when you know it
    (`"code"`, `"log"`); mark caller-pinned text `metadata: {"verbatim": true}`
    and stable preambles `metadata: {"cache": true}` (they form the stable
-   prefix, maximizing provider prompt-cache hits). Two caveats: a media
+   prefix, maximizing provider prompt-cache hits). One caveat: a media
    fragment ignores `cache: true` (it always classifies `media.atomic` and
-   packs in the body, never the cache prefix); and the prefix is
-   byte-stable only at a *fixed* query — under a budget too tight for every
-   cache-marked fragment, a query change can reorder them (see the crate
-   README's prompt-cache section and
-   [issue #1455](https://github.com/cyberlife-coder/VelesDB/issues/1455)),
-   so size the budget generously for anything marked cacheable.
+   packs in the body, never the cache prefix). The prefix is byte-stable
+   across a query change too, even under a budget too tight for every
+   cache-marked fragment — a cache-marked fragment's rank never consults
+   relevance, so which ones survive a tight budget depends only on
+   priority and input order, never the query
+   ([issue #1455](https://github.com/cyberlife-coder/VelesDB/issues/1455),
+   fixed; see the crate README's prompt-cache section). Trade-off: a
+   same-tier non-cache fragment more relevant to the query can still lose
+   that tight-budget race to a cache-marked fragment.
 4. **Set the budget.** `token_budget` = the model window share you want the
    context to occupy, minus your expected response length (or set
    `policy.response_reserve_tokens`). Don't know the target model's context

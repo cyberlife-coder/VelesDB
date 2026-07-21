@@ -13,8 +13,8 @@ use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 
 use velesdb_memory::context::{
-    CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextSavings, ContextSource,
-    WorkingContext,
+    CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextDecision,
+    ContextSavings, ContextSource, WorkingContext,
 };
 use velesdb_memory::{
     format_dated_context, limits, ColumnFilter, ColumnOp, DynEmbedder, ErrorCategory, Explanation,
@@ -463,6 +463,52 @@ impl PyMemoryService {
         let savings: ContextSavings =
             py.detach(|| self.svc.context_savings(project).map_err(to_py_err))?;
         Ok(serde_to_python!(py, &savings, "context savings"))
+    }
+
+    /// Explain why one fragment of a [`compile_context`](Self::compile_context)
+    /// request was preserved, abstracted, externalized, dropped, or cached.
+    /// Compilation is deterministic, so `request` is re-compiled (with
+    /// event/source recording forced off) and the matching decision is
+    /// returned — no server-side state needed. Delegates directly to the
+    /// same `velesdb_memory::context` bridge the MCP `explain_compilation`
+    /// tool and the Node binding use (zero new logic here).
+    ///
+    /// Args:
+    ///     request: Same JSON shape as `compile_context`'s input.
+    ///     fragment_id: The fragment whose decision to return. Looked up by
+    ///         matching `decisions[].fragment_id`, UNLESS `fragment_index`
+    ///         is also given — still required even then, since it is the
+    ///         only disambiguator when `fragment_index` is absent.
+    ///     fragment_index: Optional, 0-based position of the fragment in
+    ///         `request["fragments"]`. When given, TAKES PRIORITY over
+    ///         `fragment_id` for locating the decision — unambiguous even
+    ///         when several fragments are byte-identical (and therefore
+    ///         share the same content-addressed `fragment_id`): a plain
+    ///         `fragment_id` lookup always resolves to the FIRST such
+    ///         decision (the deduplication survivor's), never a dropped
+    ///         twin's.
+    ///
+    /// Returns:
+    ///     Same shape as one entry of `compile_context`'s `decisions`.
+    ///
+    /// Raises:
+    ///     ValueError: If `fragment_index` is out of bounds, or no fragment
+    ///         matches the selector, or the request is malformed.
+    #[pyo3(signature = (request, fragment_id, fragment_index = None))]
+    fn explain_compilation(
+        &self,
+        py: Python<'_>,
+        request: Py<PyAny>,
+        fragment_id: u64,
+        fragment_index: Option<usize>,
+    ) -> PyResult<Py<PyAny>> {
+        let request: CompileRequest = python_to_serde!(py, &request, "compile request");
+        let decision: ContextDecision = py.detach(|| {
+            self.svc
+                .explain_compilation(&request, fragment_id, fragment_index)
+                .map_err(to_py_err)
+        })?;
+        Ok(serde_to_python!(py, &decision, "context decision"))
     }
 
     /// Persist `working` (the same JSON shape as `WorkingContext` on the

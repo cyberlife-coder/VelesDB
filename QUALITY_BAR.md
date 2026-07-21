@@ -85,7 +85,7 @@ A pull request that breaks any of these gates **cannot be merged**. There are no
 
 | Component | Threshold | Reproduce |
 |-----------|-----------|-----------|
-| HNSW Search index-only (5K/768D, k=10) | ≤ 60 µs | `cargo bench -p velesdb-core --bench hnsw_benchmark` |
+| HNSW Search index-only (10K/768D, k=10) | ≤ 60 µs | `cargo bench -p velesdb-core --bench hnsw_benchmark` |
 | SIMD Dot Product (768D, AVX2) | ≤ 25 ns | `cargo bench -p velesdb-core --bench simd_benchmark` |
 | BM25 Sparse Search index-only (10K, top-10) | ≤ 70 µs | `cargo bench -p velesdb-core --bench sparse_benchmark` |
 

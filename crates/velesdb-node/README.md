@@ -58,6 +58,17 @@ cross the boundary as **decimal strings** (a JS `number` loses precision above
 2^53). Errors are `Error`s whose message is prefixed with a stable code:
 `[INVALID_INPUT]`, `[NOT_FOUND]`, or `[INTERNAL]`.
 
+Wiring the API gives your agent the *methods*; it doesn't tell it *when* to use
+them — the bundled
+[`velesdb-memory` skill](./skills/velesdb-memory/SKILL.md) teaches the loop
+(recall before acting → remember decisions with metadata **and** links →
+`relate` facts as relationships appear → `why` to explain → `feedback` to
+reinforce). Install it the same way as the context-optimizer skill below:
+
+```bash
+cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-memory ~/.claude/skills/
+```
+
 ### Auto-extraction (`rememberExtracted`)
 
 ```js

@@ -113,11 +113,64 @@ pub enum MemoryError {
     #[error("unknown context source handle: {0}")]
     UnknownHandle(String),
 
+    /// [`crate::service::MemoryService::explain_compilation`]'s
+    /// `fragment_index` named a position beyond `request.fragments`.
+    #[cfg(feature = "context")]
+    #[error("fragment_index {index} is out of bounds: request.fragments has {len} entries")]
+    FragmentIndexOutOfBounds {
+        /// The out-of-bounds index the caller supplied.
+        index: usize,
+        /// The actual number of fragments in the request.
+        len: usize,
+    },
+
+    /// [`crate::service::MemoryService::explain_compilation`] found no
+    /// decision matching the requested `fragment_id` (and no
+    /// `fragment_index` was given, or it selected nothing new to check).
+    #[cfg(feature = "context")]
+    #[error("the request contains no fragment with id {0}")]
+    FragmentNotFound(u64),
+
     /// A persisted working context could not be (de)serialized — the stored
     /// payload predates or postdates this crate's schema.
     #[cfg(feature = "context")]
     #[error("working context codec error: {0}")]
     WorkingContextCodec(String),
+
+    /// A context fragment carried a `path` (V2b-1 path ingestion) but no
+    /// filesystem root is configured (`VELESDB_MEMORY_INGEST_ROOTS` unset or
+    /// empty) — the tool is always advertised, but ingestion itself is
+    /// opt-in. Also the fallback the pure compiler core reports when a
+    /// `path` fragment reaches it unresolved (e.g. a binding that has no
+    /// ingest adapter, such as the WASM build): [`crate::context`] never
+    /// performs I/O itself, so an un-cleared `path` field always means the
+    /// adapter that should have resolved or rejected it was skipped.
+    #[cfg(feature = "context")]
+    #[error(
+        "path ingestion is disabled: set VELESDB_MEMORY_INGEST_ROOTS to enable the `path` field"
+    )]
+    IngestDisabled,
+
+    /// A `path`-referenced fragment resolved (after following symlinks) to a
+    /// location outside every configured ingest root. Carries the
+    /// caller-supplied `path` VERBATIM, never the canonicalized target — the
+    /// resolved location may be filesystem structure the caller has no
+    /// business learning about (e.g. that a symlink escapes).
+    #[cfg(feature = "context")]
+    #[error("path '{0}' is outside the configured ingest roots")]
+    IngestOutsideRoots(String),
+
+    /// A `path`-referenced fragment could not be read for any reason other
+    /// than escaping the ingest roots: a relative path (an MCP server's
+    /// working directory is unpredictable, so only absolute paths are
+    /// accepted), a path that does not exist or is not a plain file
+    /// (directories are rejected), a `path` fragment combined with
+    /// non-empty `content` or a `media` payload (exactly one of `path`,
+    /// `content`, `media` is accepted), or a file whose bytes are not valid
+    /// UTF-8.
+    #[cfg(feature = "context")]
+    #[error("cannot ingest path: {0}")]
+    IngestPath(String),
 
     /// A `remember` link failed after the fact was stored AND the
     /// compensating rollback delete also failed — unlike every other error
@@ -154,6 +207,14 @@ impl MemoryError {
             | Self::MetadataTooLarge { .. } => ErrorCategory::InvalidInput,
             #[cfg(feature = "context")]
             Self::ContextBudget { .. } | Self::ContextOverLimit(_) => ErrorCategory::InvalidInput,
+            #[cfg(feature = "context")]
+            Self::IngestDisabled | Self::IngestOutsideRoots(_) | Self::IngestPath(_) => {
+                ErrorCategory::InvalidInput
+            }
+            #[cfg(feature = "context")]
+            Self::FragmentIndexOutOfBounds { .. } | Self::FragmentNotFound(_) => {
+                ErrorCategory::InvalidInput
+            }
             #[cfg(feature = "context")]
             Self::UnknownHandle(_) => ErrorCategory::NotFound,
             #[cfg(feature = "context")]

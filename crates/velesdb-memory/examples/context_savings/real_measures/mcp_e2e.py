@@ -55,7 +55,7 @@ store = tempfile.mkdtemp(prefix="veles-mcp-e2e-")
 srv = Server(store)
 
 tools = [t["name"] for t in srv.rpc("tools/list")["tools"]]
-expected = {"compile_context", "context_savings", "explain_compilation",
+expected = {"compile_context", "compile_transcript", "context_savings", "explain_compilation",
             "retrieve_context_source", "save_working_context", "load_working_context",
             "list_working_contexts", "suggest_budget"}
 assert expected <= set(tools), f"missing context tools: {expected - set(tools)} in {tools}"
@@ -138,6 +138,34 @@ assert media_src["media"]["bytes_b64"] == PNG_1X1_B64, "base64 payload must roun
 media_fragment_id = media_out["retrieval_handles"][0]["fragment_id"]
 assert any(w["fragment_id"] == media_fragment_id for w in media_out["warnings"]), media_out["warnings"]
 
+# --- compile_transcript: one-call shortcut over compile_context (V2b-2/V2b-3) ---
+transcript = (
+    "System: You are the deploy assistant.\n"
+    "User: why is the canary red\n"
+    "Assistant: the canary fails only on arm64 runners; never restart the primary during a rebalance.\n"
+)
+transcript_req = {"query": "canary rollback", "token_budget": 10000, "project": "veles",
+                   "transcript": transcript}
+transcript_out = srv.call("compile_transcript", transcript_req)
+assert "__error__" not in transcript_out, transcript_out
+assert transcript_out["segmentation"]["format_detected"] == "plain", transcript_out["segmentation"]
+segments = transcript_out["segmentation"]["segments"]
+assert len(segments) >= 1, transcript_out["segmentation"]
+assert {s["role"] for s in segments} >= {"System", "User", "Assistant"}, segments
+# The system turn is cache-tagged by default (segmentation.cache_system_turn),
+# so it forms compile_context's stable prefix like a hand-marked fragment would.
+system_decision = next(d for d in transcript_out["context"]["decisions"]
+                        if d["fragment_id"] == segments[0]["fragment_id"])
+assert system_decision["rule_id"] == "cache.stable_prefix", system_decision
+assert "never restart the primary" in transcript_out["context"]["content"], transcript_out["context"]
+
+# A caller-forced format that does not parse is a hard error, never a silent
+# fallback to the other format.
+bad_jsonl = srv.call("compile_transcript", {"query": "x", "token_budget": 1000,
+                                             "transcript": "not jsonl at all",
+                                             "segmentation": {"format": "jsonl"}})
+assert "__error__" in bad_jsonl and bad_jsonl["__error__"]["code"] == -32602, bad_jsonl
+
 err = srv.call("compile_context", {"query": "x", "token_budget": 0, "fragments": [{"content": "y"}]})
 assert "__error__" in err and err["__error__"]["code"] == -32602, err
 
@@ -183,9 +211,10 @@ assert [f["text"] for f in resumed["verified_facts"]] == [f["text"] for f in wor
 assert resumed["pending_actions"] == working["pending_actions"], resumed
 srv2.terminate()
 
-print("MCP E2E OK — 8 tools exercised over real stdio: list, compile (dedup+insights+handles+"
-      "warnings+slim_response), retrieve round-trip (text AND a real PNG media fragment, "
-      "byte-identical base64), explain, savings, suggest_budget, error taxonomy, and "
+print("MCP E2E OK — 9 tools exercised over real stdio: list, compile (dedup+insights+handles+"
+      "warnings+slim_response), compile_transcript (plain marker segmentation, cache-tagged "
+      "system turn, forced-format hard error), retrieve round-trip (text AND a real PNG media "
+      "fragment, byte-identical base64), explain, savings, suggest_budget, error taxonomy, and "
       "save/load/list_working_contexts round-tripping ACROSS two separate server processes "
       "(found/other_sessions typo recovery included); plus remember/relate/why/feedback/forget "
       "driven by id_str STRINGS end to end over the real JSON-RPC transport (issue #1468)")

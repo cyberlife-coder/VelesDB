@@ -22,11 +22,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`velesdb-cli`**: new `graph doctor <collection> [--purge|--stub]`
+  subcommand to audit and repair legacy phantom edges -- edges present in
+  a graph collection's edge store whose `source` or `target` node has no
+  stored payload. These can only exist in a database created before the
+  #1442 referential-integrity fix; WAL/snapshot replay at `Collection::open`
+  intentionally never re-validates edges, since filtering them there could
+  silently drop data for legitimate edge-only graphs. `doctor` is
+  read-only by default (reports the phantom count with no mutation);
+  `--purge` removes phantom edges via the existing crash-durable
+  `remove_edge` path, `--stub` seeds a minimal `{}` payload for each
+  missing endpoint instead. Both flags are mutually exclusive and
+  idempotent. (#1469)
 - **`velesdb-memory` (Python)**: `MemoryService.feedback` is now exposed,
   closing the RL feedback loop from the Python binding. (#1452)
 
 ### Fixed
 
+- **`velesdb-memory`**: the `compile_context` prompt-cache prefix could
+  churn when only the query changed. `selection_order`
+  (`src/context/budget.rs`) used lexical relevance to the query as a
+  packing tie-break for every fragment, including `cache: true` ones — so
+  when a budget was too tight to fit two same-priority cache-marked
+  fragments, a query change alone could flip which one won, silently
+  changing the byte content of the Cache section and defeating provider
+  prompt-caching on exactly the turn a new question was asked. A
+  cache-marked fragment's rank now never consults relevance, in either
+  direction: it always outranks a non-cache fragment of the same
+  criticality/priority (a fixed, query-independent tier), and two
+  cache-marked fragments tied on priority fall straight to `seq`.
+  **Trade-off, assumed:** cache stability over relevance, for cache-marked
+  fragments only — a more-relevant non-cache fragment can now lose a
+  tight-budget race it would have won before this fix against a same-tier
+  cache fragment. Non-cache fragments are unaffected. (issue #1455)
 - **`velesdb-memory`**: a permanent `ctx://source/` handle could expire
   silently — a source first written under a TTL was never promoted when a
   later compile asked for permanent storage. Storage now applies a

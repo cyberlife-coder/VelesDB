@@ -2603,6 +2603,48 @@ class MemoryService:
         """
         ...
 
+    def explain_compilation(
+        self,
+        request: Dict[str, Any],
+        fragment_id: int,
+        fragment_index: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Explain why one fragment of a :meth:`compile_context` request was
+        preserved, abstracted, externalized, dropped, or cached.
+
+        Compilation is deterministic, so ``request`` is re-compiled (with
+        event/source recording forced off) and the matching decision is
+        returned — no server-side state needed. Delegates directly to the
+        same ``velesdb_memory::context`` bridge the MCP
+        ``explain_compilation`` tool and the Node binding use (no logic is
+        reimplemented in the binding).
+
+        Args:
+            request: Same JSON shape as :meth:`compile_context`'s input.
+            fragment_id: The fragment whose decision to return. Looked up by
+                matching ``decisions[].fragment_id``, unless
+                ``fragment_index`` is also given.
+            fragment_index: Optional, 0-based position of the fragment in
+                ``request["fragments"]``. When given, TAKES PRIORITY over
+                ``fragment_id`` for locating the decision — unambiguous even
+                when several fragments are byte-identical (and therefore
+                share the same content-addressed ``fragment_id``): a plain
+                ``fragment_id`` lookup always resolves to the FIRST such
+                decision (the deduplication survivor's), never a dropped
+                twin's.
+
+        Returns:
+            Same shape as one entry of :meth:`compile_context`'s
+            ``decisions``: ``{"fragment_id": int, "content_hash": int,
+            "action": str, "rule_id": str, "relevance": float, "risk": str,
+            "reason": str, "memory_id"?: int, "handle"?: str}``.
+
+        Raises:
+            ValueError: If ``fragment_index`` is out of bounds, no fragment
+                matches the selector, or the request is malformed.
+        """
+        ...
+
     def save_working_context(
         self,
         project: str,

@@ -45,6 +45,10 @@ class MockWasmMemoryService {
     insights: { tokens_saved: 0 },
     risk: 'low',
   }));
+  retrieveContextSource = vi.fn(() => ({
+    handle: 'ctx://source/123',
+    content: 'the original fragment text',
+  }));
   free = vi.fn();
 
   constructor(public dimension: number) {
@@ -259,6 +263,24 @@ describe('MemoryService', () => {
       // ever removed from the interface.
       const fragment: CompileContextFragment = request.fragments[0];
       expect(fragment.media?.bytes_b64).toBe('aGVsbG8=');
+    });
+
+    it('retrieveContextSource() delegates the handle and returns the resolved source', async () => {
+      const resolved = await memory.retrieveContextSource('ctx://source/123');
+      expect(lastMockInstance!.retrieveContextSource).toHaveBeenCalledWith('ctx://source/123');
+      expect(resolved.handle).toBe('ctx://source/123');
+      expect(resolved.content).toBe('the original fragment text');
+    });
+
+    it('retrieveContextSource() passes a media source through untouched', async () => {
+      lastMockInstance!.retrieveContextSource.mockReturnValueOnce({
+        handle: 'ctx://source/456',
+        content: 'a screenshot caption',
+        media: { mime: 'image/png', bytes_b64: 'aGVsbG8=' },
+      });
+      const resolved = await memory.retrieveContextSource('ctx://source/456');
+      expect(resolved.media?.bytes_b64).toBe('aGVsbG8=');
+      expect(resolved.media?.mime).toBe('image/png');
     });
 
     it('why() returns the explanation subgraph', async () => {

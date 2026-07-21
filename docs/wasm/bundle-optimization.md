@@ -29,13 +29,13 @@ Development builds skip wasm-opt for faster iteration.
 
 | Build | Aspirational target | Measured (v1.18.0 npm artifact) | Notes |
 |-------|---------------------|--------------------------------|-------|
-| Release (gzipped) | < 200 KB | ~430 KB | Full feature set (VelesQL execution, graph, BM25) outgrew the original vector-only target |
+| Release (gzipped) | < 200 KB | ~550 KB | Full feature set (VelesQL execution, graph, BM25) outgrew the original vector-only target |
 | Release (raw) | < 800 KB | ~1.3 MB | Before compression |
 | Dev | N/A | N/A | Speed over size |
 
 > The original targets predate VelesQL-in-WASM and the graph store; they are
 > kept as the optimization goal for a future feature-gated "core-only" build.
-> The published claim is the measured figure (~430 KB gzipped).
+> The published claim is the measured figure (~550 KB gzipped, `@wiscale/velesdb-wasm@3.12.0`, 2026-07-20).
 
 ## Tree-Shaking
 

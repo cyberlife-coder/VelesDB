@@ -72,6 +72,14 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # rust-toolchain.toml pins the build to its own toolchain, which rustup
+      # auto-installs WITHOUT the cross-compilation target added above (the
+      # action only adds it to `stable`). Add it to the pinned toolchain too,
+      # or every non-native matrix entry fails with E0463 "can't find crate
+      # for `std`" — which is exactly what shelved the 0.8.0–0.9.1 bundles.
+      - name: Add target to the pinned toolchain
+        run: rustup target add ${{ matrix.target }}
+
       - name: Install aarch64 linux cross linker
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |

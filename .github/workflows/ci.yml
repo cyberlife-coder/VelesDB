@@ -379,7 +379,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Regenerate OpenAPI snapshots
-        run: cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --test-threads=1
+        run: cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --ignored
+        env:
+          UPDATE_OPENAPI_SNAPSHOT: "1"
 
       - name: Check OpenAPI snapshots are up to date
         run: git diff --exit-code docs/openapi.json docs/openapi.yaml
@@ -578,12 +580,15 @@ jobs:
 
       # Debug profile (dev = panic=unwind) is sufficient for the functional suite;
       # the release prebuild uses the [profile.release-node] panic=unwind override.
+      # `npm test` (not a hardcoded filename) so every __test__/*.spec.mjs file —
+      # including new ones like skills-sync.spec.mjs — is picked up automatically;
+      # see package.json's "test" script for the single source of truth on the glob.
       - name: Build napi addon + run Node tests
         working-directory: crates/velesdb-node
         run: |
           npm install --no-audit --no-fund
           npx napi build --platform
-          node --test __test__/index.spec.mjs
+          npm test
 
       # EPIC-P-071/A1 non-regression gate: "the facts survive compilation".
       # Reuses the napi addon just built above (no second Rust build) — this

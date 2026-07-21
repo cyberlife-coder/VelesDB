@@ -112,8 +112,29 @@ pub struct ContextFragment {
         deserialize_with = "super::wire::deserialize_optional_id"
     )]
     pub id: Option<u64>,
-    /// The fragment text.
+    /// The fragment text. `#[serde(default)]` (V2b-1): a `path` fragment
+    /// carries no `content` on the wire — the adapter resolves `path` into
+    /// `content` in a pre-pass before the pure compiler core ever sees the
+    /// request, so this stays the only field the core reads.
+    #[serde(default)]
     pub content: String,
+    /// Read this file's content from disk in place of an inline `content`
+    /// (V2b-1 path ingestion): exactly one of `path`, non-empty `content`,
+    /// or `media` is accepted — a fragment carrying `path` together with
+    /// `content` or `media` is rejected. Requires the server to be started
+    /// with `VELESDB_MEMORY_INGEST_ROOTS` set (a colon/semicolon-separated
+    /// allowlist of directories, platform `PATH`-list syntax); otherwise
+    /// every `path` fragment fails with an explicit "ingestion disabled"
+    /// error. The path must be absolute and resolve (after following
+    /// symlinks) to a plain file under one of the configured roots, no
+    /// larger than [`crate::limits::MAX_INGEST_FILE_BYTES`] and valid UTF-8.
+    /// The **pure compiler core never reads this field** — resolution is an
+    /// adapter-side I/O pre-pass (see the crate's `context::ingest`
+    /// module); a `path` fragment that reaches [`super::ContextCompiler`]
+    /// unresolved is rejected with
+    /// [`crate::error::MemoryError::IngestDisabled`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     /// Free-form kind hint (`"code"`, `"log"`, `"prose"`, …) — classification
     /// works without it, but honors it when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]

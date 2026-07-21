@@ -40,6 +40,7 @@ fn paragraph(seed: usize) -> String {
 fn plain_fragments(n: usize) -> Vec<ContextFragment> {
     (0..n)
         .map(|i| ContextFragment {
+            path: None,
             id: None,
             content: paragraph(i),
             kind: None,
@@ -57,6 +58,7 @@ fn duplicate_heavy_fragments(n: usize) -> Vec<ContextFragment> {
         .map(|i| {
             let source = if i % 3 == 0 { i } else { i - (i % 3) };
             ContextFragment {
+                path: None,
                 id: None,
                 content: paragraph(source),
                 kind: None,
@@ -137,6 +139,7 @@ fn bench_oversized_fragment(c: &mut Criterion) {
     for &budget in &[2_000_u64, 1_000_000] {
         let req = request(
             vec![ContextFragment {
+                path: None,
                 id: None,
                 content: huge.clone(),
                 kind: None,

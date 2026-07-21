@@ -71,6 +71,7 @@ fn generated_fragment(rng: &mut Lcg, pool: &mut Vec<String>) -> ContextFragment 
     };
     pool.push(content.clone());
     ContextFragment {
+        path: None,
         id: None,
         content,
         kind: if rng.below(4) == 0 {
@@ -219,6 +220,7 @@ fn test_compiler_keeps_critical_facts_a_naive_truncation_loses() {
     // at the end (where naive head-truncation always cuts).
     let mut fragments: Vec<ContextFragment> = (0..30)
         .map(|i| ContextFragment {
+            path: None,
             id: None,
             content: format!(
                 "Turn {i}: assistant explained the deploy pipeline stages and the \
@@ -235,6 +237,7 @@ fn test_compiler_keeps_critical_facts_a_naive_truncation_loses() {
         .collect();
     for constraint in &constraints {
         fragments.push(ContextFragment {
+            path: None,
             id: None,
             content: constraint.clone(),
             kind: None,
@@ -326,6 +329,7 @@ fn test_adversarial_pathological_inputs_never_panic() {
             let request = CompileRequest {
                 query: String::new(),
                 fragments: vec![ContextFragment {
+                    path: None,
                     id: None,
                     content: (*content).to_owned(),
                     kind: None,
@@ -351,6 +355,7 @@ fn test_adversarial_duplicate_avalanche_stays_linear_and_correct() {
     let content = "the deploy pipeline runs clippy before tests";
     let fragments: Vec<ContextFragment> = (0..1_000)
         .map(|_| ContextFragment {
+            path: None,
             id: None,
             content: content.to_owned(),
             kind: None,

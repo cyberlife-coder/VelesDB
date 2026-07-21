@@ -9,6 +9,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The `compile_context` prompt-cache prefix could churn when only the query
+  changed: `selection_order` (`src/context/budget.rs`) used lexical
+  relevance to the query as a packing tie-break for every fragment,
+  including `cache: true` ones, so when a budget was too tight to fit two
+  same-priority cache-marked fragments, a query change alone could flip
+  which one won, silently changing the Cache section's bytes and defeating
+  provider prompt-caching on exactly the turn a new question was asked. A
+  cache-marked fragment's rank now never consults relevance: it always
+  outranks a non-cache fragment at the same criticality/priority (a fixed,
+  query-independent tier), and two cache-marked fragments tied on priority
+  fall straight to `seq`. **Trade-off, assumed:** cache stability over
+  relevance, for cache-marked fragments only — a more-relevant non-cache
+  fragment can now lose a tight-budget race it would have won before this
+  fix against a same-tier cache fragment. Non-cache fragments are
+  unaffected. (issue #1455)
+
+## [0.10.0] — 2026-07-20
+
+### Added
+
+- **Binding parity for the compiler's read tools (V2d-2/A4).**
+  `MemoryService::explain_compilation` is now a library method (extracted
+  from the MCP-only implementation, behavior byte-identical — the MCP tool
+  delegates to it), exposed as `explainCompilation` on Node and
+  `explain_compilation` on Python; `contextSavings` lands on Node; the WASM
+  binding (and the TypeScript SDK wrapping it) gains `retrieveContextSource`
+  over its in-memory, per-session store.
+- **`velesdb-memory --version` / `-V`.** The MCP server binary now
+  short-circuits the version flags before opening the store — a sanity
+  check for a fresh install that previously had no CLI surface at all.
+- **Path-referenced context fragments.** A `compile_context`/
+  `explain_compilation` fragment may set `path` (an absolute filesystem
+  path) instead of inline `content` to ingest a file by reference — exactly
+  one of `path`, `content`, or `media` per fragment. Opt-in via
+  `VELESDB_MEMORY_INGEST_ROOTS` (a `PATH`-list of allowlisted directories,
+  parsed fail-fast at startup); the resolved file must be a plain UTF-8
+  text file under 1 MiB, and the resolved content flows through the same
+  pipeline as an inline fragment (dedup, classification, budget packing,
+  `ctx://source/` handles).
+- **`compile_transcript` MCP tool.** A one-call shortcut over
+  `compile_context` for a raw agent-session transcript: deterministically
+  segments it into turns (plain marker-based —
+  `System:`/`User:`/`Human:`/`Assistant:`/`AI:`/`Tool:`/`### User`/
+  `### Assistant` — or JSONL, one line per turn) and, within each plain
+  turn, into fenced-code/log-run/body sub-segments (fenced code stays
+  atomic; runs of 8+ log-like lines collapse the same way
+  `abstract.log_dedup` would), then compiles the result exactly like
+  `compile_context`. Accepts `transcript` (inline) or `path` (reusing the
+  ingest allowlist, capped at a wider 8 MiB since the transcript is
+  segmented into sub-1-MiB pieces immediately after being read). Returns
+  the compiled context plus a `segmentation` audit report (detected
+  format, one entry per segment with turn/role/kind/byte range/
+  `fragment_id`, and how many segments normalization merged).
+  **Node/Python bindings: follow-up.** `compile_transcript` is MCP-only in
+  this release — neither `@wiscale/velesdb-memory-node` nor the Python
+  `MemoryService` binding exposes a one-call convenience method yet; Rust
+  and Node/Python callers compose `context::segment_transcript` +
+  `compile_context` themselves in the meantime.
+
+## [0.9.2] — 2026-07-20
+
 ### Added
 
 - **Agentic quick wins for the MCP surface.** `get_info().instructions` now
@@ -26,6 +89,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from a static, committed model→window table (never a network call).
 
 ### Fixed
+
+- **Memory-tool id strings now tolerate surrounding whitespace.** Follow-up
+  to issue #1468/#1471: some MCP harnesses (Claude Code included) coerce any
+  all-digit scalar back into a JSON number even when the client sends a
+  string, which defeats the `id_str` string-id workaround and reintroduces
+  precision loss above 2^53. A caller working around this by padding the id
+  with whitespace (e.g. `" 12732540571541475285"`) was rejected by the
+  string-or-number id parser used by `relate`/`forget`/`feedback` (and
+  `Link.target`) with "expected a u64 number or a decimal u64 string" — the
+  id string is now trimmed before parsing. The `+`-prefixed workaround
+  (`"+12732540571541475285"`, already accepted since `u64::from_str` allows a
+  leading `+`) keeps working unchanged.
 
 - **`recall_where`'s type-strict comparisons are now documented (issue
   #1473).** Behavior is unchanged (no runtime coercion added): a numeric

@@ -9,7 +9,8 @@ use tempfile::TempDir;
 use super::super::dto::RememberParams;
 use super::*;
 use crate::context::{
-    fragment_id, ContextAction, ContextFact, ContextFragment, MemoryScope, WorkingContext,
+    fragment_id, ContextAction, ContextFact, ContextFragment, IngestRoots, MemoryScope,
+    WorkingContext,
 };
 use crate::embedder::{DynEmbedder, HashEmbedder};
 use crate::service::MemoryService;
@@ -21,10 +22,25 @@ fn server() -> (TempDir, McpServer) {
     (dir, McpServer::new(service))
 }
 
+/// A server with `dir` (or a sub-tree of it) allowlisted for path ingestion
+/// (V2b-1/V2b-2).
+fn server_with_ingest_roots(allowed: &std::path::Path) -> (TempDir, McpServer) {
+    let dir = TempDir::new().expect("create tempdir");
+    let embedder: DynEmbedder = Box::new(HashEmbedder::new(crate::DEFAULT_DIMENSION));
+    let service = MemoryService::open(dir.path(), embedder).expect("open memory store");
+    let value = std::env::join_paths([allowed.as_os_str()])
+        .expect("a single absolute path always joins")
+        .to_string_lossy()
+        .into_owned();
+    let roots = IngestRoots::parse(&value).expect("tempdir is a valid, existing directory");
+    (dir, McpServer::new(service).with_ingest_roots(roots))
+}
+
 fn fragment(content: &str) -> ContextFragment {
     ContextFragment {
         id: None,
         content: content.to_owned(),
+        path: None,
         kind: None,
         priority: None,
         metadata: None,
@@ -999,4 +1015,185 @@ async fn test_list_working_contexts_tool_empty_for_unknown_project() {
 
     // Then it comes back empty, not an error.
     assert!(listed.sessions.is_empty());
+}
+
+#[tokio::test]
+async fn test_compile_transcript_tool_end_to_end() {
+    // Given a server and a small plain transcript with a system turn, a
+    // user turn, and an assistant turn
+    let (_dir, srv) = server();
+    let transcript = "System: be terse\nUser: what is 2+2?\nAssistant: 4\n".to_owned();
+
+    // When compiling it via compile_transcript
+    let Json(value) = srv
+        .compile_transcript(Parameters(CompileTranscriptParams {
+            query: "arithmetic".to_owned(),
+            transcript: Some(transcript),
+            path: None,
+            token_budget: 10_000,
+            project: None,
+            target_model: None,
+            policy: None,
+            segmentation: None,
+        }))
+        .await
+        .expect("compile_transcript");
+    let out: CompileTranscriptResult = serde_json::from_value(value).expect("valid result");
+
+    // Then the compiled context carries the transcript's content, and the
+    // segmentation report accounts for every turn with a resolvable
+    // fragment_id and cache metadata on the system turn
+    assert!(out.context.content.contains('4'));
+    assert_eq!(out.segmentation.format_detected, SegmentFormat::Plain);
+    assert_eq!(out.segmentation.segments.len(), 3);
+    assert_eq!(out.segmentation.segments[0].role.as_deref(), Some("System"));
+    assert_eq!(out.segmentation.segments[1].role.as_deref(), Some("User"));
+    assert_eq!(
+        out.segmentation.segments[2].role.as_deref(),
+        Some("Assistant")
+    );
+    assert!(out.segmentation.segments.iter().all(|s| s.fragment_id > 0));
+    assert!(out
+        .context
+        .decisions
+        .iter()
+        .any(|d| d.fragment_id == out.segmentation.segments[0].fragment_id));
+}
+
+#[tokio::test]
+async fn test_compile_transcript_from_path_uses_ingest_checks() {
+    // Given a server allowlisting one directory, and a transcript file
+    // inside it
+    let allowed = TempDir::new().expect("tempdir");
+    let (_dir, srv) = server_with_ingest_roots(allowed.path());
+    let transcript_file = allowed.path().join("session.txt");
+    std::fs::write(&transcript_file, "User: hello from disk\n").expect("write transcript");
+    let requested = transcript_file.to_string_lossy().into_owned();
+
+    // When compiling via `path` inside the allowlist
+    let Json(value) = srv
+        .compile_transcript(Parameters(CompileTranscriptParams {
+            query: "greeting".to_owned(),
+            transcript: None,
+            path: Some(requested),
+            token_budget: 10_000,
+            project: None,
+            target_model: None,
+            policy: None,
+            segmentation: None,
+        }))
+        .await
+        .expect("compile_transcript resolves the path like an ordinary ingest fragment");
+    let out: CompileTranscriptResult = serde_json::from_value(value).expect("valid result");
+    assert!(out.context.content.contains("hello from disk"));
+
+    // Given a second file OUTSIDE the allowlist
+    let outside = TempDir::new().expect("tempdir");
+    let escaping_file = outside.path().join("other.txt");
+    std::fs::write(&escaping_file, "not reachable from the allowlist").expect("write");
+    let escaping_requested = escaping_file.to_string_lossy().into_owned();
+
+    // When compiling via that `path`
+    let result = srv
+        .compile_transcript(Parameters(CompileTranscriptParams {
+            query: "greeting".to_owned(),
+            transcript: None,
+            path: Some(escaping_requested),
+            token_budget: 10_000,
+            project: None,
+            target_model: None,
+            policy: None,
+            segmentation: None,
+        }))
+        .await;
+    let Err(err) = result else {
+        panic!("path outside the ingest roots must be rejected");
+    };
+
+    // Then it fails with the same ingest security error `compile_context`
+    // would produce for an out-of-root `path` fragment — never a generic
+    // "not found". (The symlink-specific no-leak guarantee is covered by
+    // `context::ingest`'s own `outside_roots_error_never_echoes_resolved_target`.)
+    assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    assert!(err.message.contains("outside"), "{}", err.message);
+}
+
+#[tokio::test]
+async fn test_compile_transcript_without_ingest_roots_reports_disabled() {
+    // Given a server with NO ingest roots configured
+    let (_dir, srv) = server();
+
+    // When compiling via `path`
+    let result = srv
+        .compile_transcript(Parameters(CompileTranscriptParams {
+            query: "greeting".to_owned(),
+            transcript: None,
+            path: Some("/does/not/matter.txt".to_owned()),
+            token_budget: 10_000,
+            project: None,
+            target_model: None,
+            policy: None,
+            segmentation: None,
+        }))
+        .await;
+    let Err(err) = result else {
+        panic!("ingestion is disabled without VELESDB_MEMORY_INGEST_ROOTS");
+    };
+
+    // Then it reports the same "ingestion disabled" error as compile_context.
+    assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    assert!(err.message.contains("disabled"), "{}", err.message);
+}
+
+#[tokio::test]
+async fn test_compile_transcript_rejects_empty_file_same_as_empty_inline_transcript() {
+    // Given a server with a real, but EMPTY, file inside the ingest
+    // allowlist — an empty inline `transcript` is already rejected
+    // (INVALID_PARAMS), but an empty file reached via `path` used to
+    // resolve cleanly and compile into a silent, zero-fragment result: the
+    // same "nothing to compile" situation reported two different ways.
+    let allowed = TempDir::new().expect("tempdir");
+    let (_dir, srv) = server_with_ingest_roots(allowed.path());
+    let empty_file = allowed.path().join("empty.txt");
+    std::fs::write(&empty_file, "").expect("write empty file");
+    let requested = empty_file.to_string_lossy().into_owned();
+
+    // When compiling via that `path`
+    let path_result = srv
+        .compile_transcript(Parameters(CompileTranscriptParams {
+            query: "q".to_owned(),
+            transcript: None,
+            path: Some(requested),
+            token_budget: 10_000,
+            project: None,
+            target_model: None,
+            policy: None,
+            segmentation: None,
+        }))
+        .await;
+    let Err(path_err) = path_result else {
+        panic!("an empty file must be rejected, not silently compiled into nothing");
+    };
+
+    // And when compiling with an empty inline transcript instead
+    let inline_result = srv
+        .compile_transcript(Parameters(CompileTranscriptParams {
+            query: "q".to_owned(),
+            transcript: Some(String::new()),
+            path: None,
+            token_budget: 10_000,
+            project: None,
+            target_model: None,
+            policy: None,
+            segmentation: None,
+        }))
+        .await;
+    let Err(inline_err) = inline_result else {
+        panic!("an empty inline transcript must be rejected");
+    };
+
+    // Then both fail the same way, with the exact same actionable message
+    assert_eq!(path_err.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(inline_err.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(path_err.message, inline_err.message);
 }

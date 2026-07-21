@@ -1,12 +1,12 @@
 {
-  "last_updated": "2026-07-10",
+  "last_updated": "2026-07-20",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
       "file": "README.md",
-      "must_contain": "HNSW Search index-only (5K/768D, k=10)",
+      "must_contain": "HNSW Search index-only (10K/768D, k=10)",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
-      "source": "benchmarks/results/pr363_365_comparison.md (47-56µs measured) — relabeled as 'index-only' for transparency vs the canonical 450µs end-to-end number",
+      "source": "benchmarks/results/pr363_365_comparison.md (47-56µs measured) — relabeled as 'index-only' for transparency vs the canonical 450µs end-to-end number. Corpus label corrected 5K→10K on 2026-07-20: hnsw_benchmark.rs inserts 10,000 vectors; re-measured quiet (Apple M5 Pro) at 53.2 µs.",
       "last_updated": "2026-04-27"
     },
     {
@@ -95,7 +95,7 @@
       "file": "README.md",
       "must_contain": "130x faster",
       "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark",
-      "source": "README.md: JSON scan 3.84ms vs ColumnStore 29.5us at 100K rows",
+      "source": "README.md: JSON scan 3.84ms vs ColumnStore 29.5us at 100K rows on the i9-14900KF reference. Hardware-dependent ratio, qualified in README since 2026-07-20: Apple M5 Pro quiet re-run measures ~50–105x (JSON scan itself ~2.8x faster there; ColumnStore absolute ~27.15 µs holds).",
       "last_updated": "2026-04-13"
     },
     {
@@ -158,9 +158,9 @@
     {
       "id": "readme_wasm_bundle_gzipped",
       "file": "README.md",
-      "must_contain": "~430 KB gzipped",
-      "validation_command": "npm pack @wiscale/velesdb-wasm --dry-run  # published tarball (gzipped) ~426 KB",
-      "source": "@wiscale/velesdb-wasm v1.18.0 published npm package, ~426 KB gzipped. Replaces the former ~50 KB claim (never matched a published artifact).",
+      "must_contain": "~550 KB gzipped",
+      "validation_command": "npm pack @wiscale/velesdb-wasm --dry-run  # published tarball (gzipped) ~536-550 KB",
+      "source": "@wiscale/velesdb-wasm v3.12.0 published npm package: velesdb_wasm_bg.wasm gzip -9 = 549,285 bytes (~536 KiB / ~549 kB), measured 2026-07-20. Replaces the stale ~430 KB v1.18.0 figure (+25-28% drift found by sequential re-verification).",
       "last_updated": "2026-06-12"
     },
     {
@@ -170,6 +170,46 @@
       "validation_command": "grep -cE \"^  /\" docs/openapi.yaml  # 54 paths (61 operations counting per-verb)",
       "source": "docs/openapi.yaml on this branch: 54 paths / 61 operations, including the relations + TTL endpoints and GET /metrics. Corroborated by crates/velesdb-server/src/routes.rs (54 .route() registrations). Endpoint count convention = OpenAPI paths.",
       "last_updated": "2026-07-10"
+    },
+    {
+      "id": "readme_economics_cropped_dollars_saved",
+      "file": "README.md",
+      "must_contain": "**10.9 %**",
+      "validation_command": "grep -qF '10.9 %' README.md && grep -qF '10.9%' examples/real-session-benchmark/README.md",
+      "source": "examples/real-session-benchmark/README.md:405 (billed campaign 2026-07-19, 19-turn cropped-screenshot session, cli runner: $0.4442 -> $0.3960 = 10.9% $ saved; raw logs examples/real-session-benchmark/results/2026-07-19-vibe-cli/) — consistency check only, no live billed re-run.",
+      "last_updated": "2026-07-19"
+    },
+    {
+      "id": "readme_economics_retina_dollars_and_tokens_saved",
+      "file": "README.md",
+      "must_contain": "**21.9 %**",
+      "validation_command": "grep -qF '21.9 %' README.md && grep -qF '21.9%' examples/real-session-benchmark/README.md && grep -qF '17.6%' examples/real-session-benchmark/README.md",
+      "source": "examples/real-session-benchmark/README.md:406 (billed campaign 2026-07-19, 19-turn real-Retina-screenshot session, cli runner: $0.5693 -> $0.4444 = 21.9% $ saved, 17.6% tokens saved; raw logs examples/real-session-benchmark/results/2026-07-19-day-scale/) — consistency check only, no live billed re-run.",
+      "last_updated": "2026-07-19"
+    },
+    {
+      "id": "readme_economics_day_scale_dollars_saved",
+      "file": "README.md",
+      "must_contain": "**14.7 %**",
+      "validation_command": "grep -qF '14.7 %' README.md && grep -qF '14.7%' examples/real-session-benchmark/README.md",
+      "source": "examples/real-session-benchmark/README.md:407 (billed campaign 2026-07-19, 36-turn day-scale session, cli runner: $1.8613 -> $1.5876 = 14.7% $ saved; raw log examples/real-session-benchmark/results/2026-07-19-day-scale/billed-long36-cli.log) — consistency check only, no live billed re-run.",
+      "last_updated": "2026-07-19"
+    },
+    {
+      "id": "readme_economics_api_input_tokens_saved",
+      "file": "README.md",
+      "must_contain": "**15.1 %**",
+      "validation_command": "grep -qF '15.1 %' README.md && grep -qF '15.1%' examples/real-session-benchmark/README.md",
+      "source": "examples/real-session-benchmark/README.md:408 (billed campaign 2026-07-19, 19-turn session via direct Messages API runner: input_tokens 15.1% saved; raw log examples/real-session-benchmark/results/2026-07-19-day-scale/billed-vibe-api.log) — consistency check only, no live billed re-run.",
+      "last_updated": "2026-07-19"
+    },
+    {
+      "id": "readme_economics_context_savings_corpus",
+      "file": "README.md",
+      "must_contain": "**82.5 %**",
+      "validation_command": "grep -qF '82.5 %' README.md && grep -qF '82.5% saved' crates/velesdb-memory/examples/context_savings/README.md && grep -qF '26533 raw -> 4647 compiled' crates/velesdb-memory/examples/context_savings/README.md",
+      "source": "crates/velesdb-memory/examples/context_savings/README.md:58 (committed 12-turn agent-session corpus, real cl100k BPE: 26533 raw -> 4647 compiled tokens = 82.5% saved) — consistency check only, no live re-run.",
+      "last_updated": "2026-07-19"
     }
   ]
 }
