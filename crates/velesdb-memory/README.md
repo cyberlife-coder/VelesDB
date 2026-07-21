@@ -17,7 +17,9 @@ traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation
 meet** those data-residency and explainability expectations rather than claiming
 certified compliance.
 
-> **Release 0.10.0** — the V2 wave lands: `compile_transcript` (one call
+> **Release 0.10.1** — patch over the V2 wave: the `compile_context`
+> prompt-cache prefix is now query-independent (issue #1455), so a new
+> question no longer churns the cached prefix. 0.10.0 brought: `compile_transcript` (one call
 > turns a raw agent-session transcript into deterministically segmented,
 > budget-compiled context with a full segmentation audit report),
 > path-referenced fragments (opt-in, allowlisted via
@@ -25,13 +27,13 @@ certified compliance.
 > compiler's read tools (`explainCompilation`/`contextSavings` on Node,
 > `explain_compilation` on Python, `retrieveContextSource` on WASM/TS), and
 > a `--version` flag; published to the registries by the
-> `velesdb-memory-v0.10.0`
+> `velesdb-memory-v0.10.1`
 > tag, so the links below may briefly lag right after merge. `velesdb-memory`
 > ships on [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
-> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.10.0**
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.10.1**
 > and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**
 > (memory API only — the context compiler is merged on `develop` but **the
 > published 3.12.0 wheel predates it**; it ships with the next PyPI release,
