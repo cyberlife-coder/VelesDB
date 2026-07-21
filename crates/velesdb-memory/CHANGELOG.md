@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-07-21
+
 ### Fixed
 
 - The `compile_context` prompt-cache prefix could churn when only the query
