@@ -39,6 +39,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`scripts/check-promise-contract.py`**: the promise-contract guardrail
+  only ever checked that a claim's `must_contain` substring was still
+  present in the file it points at — it never executed
+  `validation_command`, so the contract could guarantee a number wasn't
+  *lost* from a doc without ever proving it was still *true*. Two real
+  drifts (a stale WASM bundle-size figure off by +25-28%, and a benchmark
+  corpus label reading 5K when the bench actually inserts 10K vectors)
+  slipped through and were only caught by a manual re-verification pass.
+  Claims in `docs/reference/promise-contract.json` now carry an explicit
+  `"executable"` flag: claims whose `validation_command` is a fast,
+  deterministic, local, no-network README-vs-committed-file comparison
+  (`grep`/file-content checks) are marked `true` and are now actually run
+  via subprocess, failing the script on a real mismatch; claims needing a
+  costly measurement (`cargo bench`, a release build, a published-package
+  download) stay `false` — documentary only — and are explicitly skipped
+  with a visible message naming the claim and the unverified command,
+  never silently ignored. 6 of 27 claims are now executed for real; 21
+  remain documentary. (issue #1518)
 - **`velesdb-memory`**: the `compile_context` prompt-cache prefix could
   churn when only the query changed. `selection_order`
   (`src/context/budget.rs`) used lexical relevance to the query as a
