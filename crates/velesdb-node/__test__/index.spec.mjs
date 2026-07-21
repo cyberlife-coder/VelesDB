@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { MemoryService } from '../index.js'
 
@@ -670,7 +671,7 @@ test('saveWorkingContext → loadWorkingContext round-trips across processes', a
     // deterministically when it exits — a block-scoped handle in this
     // process would keep the lock until GC).
     const script = `
-      const { MemoryService } = require(${JSON.stringify(new URL('../index.js', import.meta.url).pathname)})
+      const { MemoryService } = require(${JSON.stringify(fileURLToPath(new URL('../index.js', import.meta.url)))})
       const store = MemoryService.open(${JSON.stringify(dir)}, 'hash')
       store.saveWorkingContext('veles', 'session-1', ${JSON.stringify(working)}).then((id) => {
         if (!/^\\d+$/.test(id)) throw new Error('id must be a decimal string, got: ' + id)
