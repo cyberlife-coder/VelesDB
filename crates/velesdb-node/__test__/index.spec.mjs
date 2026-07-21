@@ -11,11 +11,28 @@ import { join } from 'node:path'
 
 import { MemoryService } from '../index.js'
 
+/**
+ * Remove a temp store dir, tolerating Windows lock semantics: the store's
+ * `velesdb.lock` is flock-held for the life of the MemoryService, and the
+ * NAPI finalizer that releases it is not deterministic — on Windows an
+ * lstat/unlink of a held lock file raises EPERM/EBUSY (POSIX allows it).
+ * Retry briefly, then leave the dir behind rather than failing the test:
+ * these are throwaway dirs under os.tmpdir() on ephemeral CI runners.
+ * (Seen live: the 0.10.0 release smoke test on x86_64-pc-windows-msvc.)
+ */
+function rmStoreDir(dir) {
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  } catch (err) {
+    if (err.code !== 'EPERM' && err.code !== 'EBUSY' && err.code !== 'ENOTEMPTY') throw err
+  }
+}
+
 /** Fresh store in an isolated temp dir (one MemoryService per path). */
 function freshStore() {
   const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
   const store = MemoryService.open(dir, 'hash')
-  return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
+  return { store, cleanup: () => rmStoreDir(dir) }
 }
 
 test('surface allowlist — exactly the supported methods, no engine leak', () => {
@@ -672,7 +689,7 @@ test('saveWorkingContext → loadWorkingContext round-trips across processes', a
     )
     assert.deepEqual(loaded.pending_actions, working.pending_actions)
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    rmStoreDir(dir)
   }
 })
 
