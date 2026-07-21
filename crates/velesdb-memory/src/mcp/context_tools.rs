@@ -267,10 +267,14 @@ pub(super) struct SegmentInfo {
     /// `"body"`, `"code"`, or `"log"`.
     pub kind: SegmentKind,
     /// Start byte offset (inclusive) in the original transcript. For a
-    /// `jsonl` transcript this is the raw JSON line's span, not an offset
-    /// into the decoded `content` (see [`SegmentationReport::segments`]'s
-    /// struct docs for the one documented edge case where two segments can
-    /// report the SAME range).
+    /// `jsonl` transcript this is a slice of the raw JSON line's span, not
+    /// an offset into the decoded `content` — a JSONL line's decoded text
+    /// has no byte-exact mapping back into the raw (JSON-escaped) source
+    /// bytes, so when a single line's decoded content is re-split (over
+    /// [`crate::limits::MAX_FRAGMENT_BYTES`]) each child's range is a
+    /// proportional, non-overlapping share of the line's raw range rather
+    /// than a byte-precise one. Every segment's range is still distinct and
+    /// non-overlapping (see [`SegmentationReport::segments`]'s struct docs).
     pub byte_start: usize,
     /// End byte offset (exclusive) in the original transcript. Same caveat
     /// as `byte_start`.
@@ -287,16 +291,18 @@ pub(super) struct SegmentationReport {
     /// `"plain"` or `"jsonl"` — the format actually used, never `"auto"`
     /// even when the request asked for it.
     pub format_detected: SegmentFormat,
-    /// Every segment, in transcript order. **Documented edge case:** a
-    /// single `jsonl` line whose decoded `content` alone exceeds
-    /// [`crate::limits::MAX_FRAGMENT_BYTES`] (1 MiB) is re-split into
-    /// several segments (`compile_context` still gets sub-1-MiB fragments),
-    /// but every child segment reports the SAME `byte_start`/`byte_end` —
-    /// the original JSON line's span — because a JSONL line's decoded text
-    /// has no byte-aligned mapping back into the raw (JSON-escaped) source
-    /// bytes (see `resplit_body` in `context::segment`). An extreme edge
-    /// case (one transcript line over 1 MiB of decoded content); every
-    /// other segment kind keeps a unique, non-overlapping range.
+    /// Every segment, in transcript order, with byte ranges that partition
+    /// the transcript exactly — no gaps, no overlaps, even for a `jsonl`
+    /// line whose decoded `content` alone exceeds
+    /// [`crate::limits::MAX_FRAGMENT_BYTES`] (1 MiB) and gets re-split into
+    /// several segments (`compile_context` still gets sub-1-MiB fragments):
+    /// each child's range is a proportional, non-overlapping share of the
+    /// original JSON line's raw span rather than a byte-exact one, since a
+    /// JSONL line's decoded text has no byte-aligned mapping back into the
+    /// raw (JSON-escaped) source bytes (see `resplit_body` in
+    /// `context::segment`). An extreme edge case (one transcript line over
+    /// 1 MiB of decoded content), but even then every segment keeps a
+    /// distinct, non-overlapping range.
     pub segments: Vec<SegmentInfo>,
     /// How many segments [`SegmentationPolicy::min_segment_bytes`] merging
     /// eliminated.
@@ -400,16 +406,20 @@ impl McpServer {
         Ok(Json(to_wire_value(&compiled, ids_as_strings)?))
     }
 
-    /// **Error taxonomy caveat (acted in PR #1500 review):** every
-    /// segmentation failure — oversized fence, forced `jsonl` that fails to
-    /// parse, too many fragments after merging, transcript over
+    /// **Error taxonomy (issue #1516, m2 — refines the PR #1500 review
+    /// note):** a genuine budget/cap breach — oversized fence, too many
+    /// fragments after merging, transcript over
     /// [`crate::limits::MAX_TRANSCRIPT_BYTES`] — surfaces as
-    /// [`crate::error::MemoryError::ContextOverLimit`] with a
-    /// segmentation-specific message, deliberately reusing
-    /// `compile_context`'s existing `INVALID_PARAMS`-category taxonomy
-    /// rather than minting a new variant for this PR. Revisit if the
-    /// overloaded variant makes segmentation errors hard for a caller to
-    /// distinguish from an ordinary budget/fragment-count error.
+    /// [`crate::error::MemoryError::ContextOverLimit`]. A forced `jsonl`
+    /// format that fails to parse is a FORMAT failure, not a size breach, so
+    /// it surfaces as the distinct
+    /// [`crate::error::MemoryError::SegmentationError`] instead — no longer
+    /// the misleading "over limit" wording. Both variants still map to the
+    /// same `INVALID_PARAMS`-category MCP code (`ContextOverLimit` and
+    /// `SegmentationError` are both [`crate::error::ErrorCategory::InvalidInput`]),
+    /// so this only changes how a caller who inspects `MemoryError`
+    /// programmatically (e.g. via the Rust crate directly, not over MCP)
+    /// tells the two apart.
     #[tool(
         name = "compile_transcript",
         description = "One-call shortcut over compile_context for a raw agent-session transcript: deterministically segments it into turns (plain marker-based — System:/User:/Human:/Assistant:/AI:/Tool:/### User/### Assistant — or JSONL, one line per turn) and, within each turn, into code/log/body sub-segments (fenced code blocks stay atomic; runs of 8+ log-like lines collapse the same way abstract.log_dedup would), then compiles the result exactly like compile_context. Exactly one of `transcript` (inline) or `path` (an absolute filesystem path, same VELESDB_MEMORY_INGEST_ROOTS allowlist as compile_context's `path` fragments but capped at 8 MiB) must be set. `segmentation.format` forces plain or jsonl instead of auto-detecting; a forced jsonl format that fails to parse is a hard error, never a silent fallback. The first turn is tagged cache-eligible when it looks like a system prompt (segmentation.cache_system_turn, default true). Returns `context` (byte-compatible with compile_context's output) plus `segmentation` — the detected format and one audit entry (turn, role, kind, byte range, fragment_id) per segment, so a caller can see exactly how the transcript was cut before trusting the compiled result.",
