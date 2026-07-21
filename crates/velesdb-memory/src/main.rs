@@ -1,4 +1,4 @@
-//! `velesdb-memory` — MCP memory server binary (stdio transport).
+//! `velesdb-memory` — MCP memory server binary (stdio transport by default).
 //!
 //! Serves the memory tools over stdio so any MCP client (Claude Code, Cursor,
 //! Cline, Zed, …) can use it locally. The store never leaves the machine.
@@ -13,6 +13,12 @@
 //! `path` instead of inline `content`; unset disables that field entirely.
 //! Run with `--version` (or `-V`) to print the binary's version and exit,
 //! without opening the store.
+//!
+//! When built with `--features http`, pass `--http` (or set
+//! `VELESDB_MEMORY_HTTP=1`) to serve over the streamable-HTTP transport
+//! instead of stdio — letting several MCP clients share ONE process instead
+//! of each fighting over the store's single-writer `flock`. See
+//! `velesdb_memory::http` and the README's "HTTP transport" section.
 
 use std::time::Duration;
 
@@ -21,12 +27,14 @@ use velesdb_memory::mcp::McpServer;
 use velesdb_memory::{DynEmbedder, HashEmbedder, MemoryService, NativeStore, DEFAULT_DIMENSION};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+
     // Handled before anything else touches the filesystem or the embedder:
     // `--version`/`-V` must work even when the store path is unwritable or
     // absent (e.g. a fresh dev running it once to sanity-check the install),
     // so it short-circuits ahead of the store open below.
-    if std::env::args()
-        .nth(1)
+    if args
+        .get(1)
         .is_some_and(|arg| arg == "--version" || arg == "-V")
     {
         println!("velesdb-memory {}", env!("CARGO_PKG_VERSION"));
@@ -44,6 +52,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let original_parent = 0_u32;
     let store_path = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
 
+    // Decided here, ahead of the (possibly seconds-long) embedder probe and
+    // store open, same manual-parsing style as `--version` above (no `clap`
+    // for a two-flag CLI) — but the transport choice itself only affects how
+    // the server is *served*, further down, since store opening (and its
+    // `flock`) is identical either way.
+    let http_bind = requested_http_bind(&args);
+
     // All synchronous setup (env probing, blocking HTTP to Ollama, disk open)
     // runs here, before the async runtime starts, so we never block a tokio
     // worker thread on a synchronous operation.
@@ -52,13 +67,112 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = apply_ingest_roots(apply_default_ttl(build_server(service)?)?)?;
 
     tokio::runtime::Runtime::new()?.block_on(async move {
-        spawn_orphan_watchdog(original_parent);
-        let running = server
-            .serve((tokio::io::stdin(), tokio::io::stdout()))
-            .await?;
-        running.waiting().await?;
-        Ok::<(), Box<dyn std::error::Error>>(())
+        match http_bind {
+            #[cfg(feature = "http")]
+            Some(bind_addr) => serve_http(server, bind_addr).await,
+            #[cfg(not(feature = "http"))]
+            Some(_never) => unreachable!(
+                "requested_http_bind only returns Some when built with --features http"
+            ),
+            None => {
+                // The orphan watchdog only makes sense for stdio: it exists to
+                // detect a *client process* dying without closing our stdin
+                // (#1448). An HTTP daemon has no such single-client lifecycle
+                // to watch — it's meant to outlive any one client — so it is
+                // never spawned in HTTP mode.
+                spawn_orphan_watchdog(original_parent);
+                let running = server
+                    .serve((tokio::io::stdin(), tokio::io::stdout()))
+                    .await?;
+                running.waiting().await?;
+                Ok::<(), Box<dyn std::error::Error>>(())
+            }
+        }
     })
+}
+
+/// Detect the streamable-HTTP transport request (`--http` flag or
+/// `VELESDB_MEMORY_HTTP=1`) and resolve the bind address it should serve on,
+/// BEFORE the store is opened. Returns `None` for the default stdio
+/// transport.
+///
+/// Without the `http` feature, `--http`/`VELESDB_MEMORY_HTTP=1` is rejected
+/// with an actionable message instead of silently falling back to stdio —
+/// the binary was built without the code to honor the request at all.
+#[cfg(feature = "http")]
+fn requested_http_bind(args: &[String]) -> Option<String> {
+    let http_flag = args.iter().any(|arg| arg == "--http");
+    let http_env = std::env::var("VELESDB_MEMORY_HTTP").as_deref() == Ok("1");
+    if !http_flag && !http_env {
+        return None;
+    }
+
+    let port_override = args
+        .iter()
+        .position(|arg| arg == "--http-port")
+        .and_then(|flag_index| args.get(flag_index + 1));
+
+    let default_bind = std::env::var("VELESDB_MEMORY_HTTP_BIND")
+        .unwrap_or_else(|_| velesdb_memory::http::DEFAULT_HTTP_BIND.to_owned());
+
+    let bind_addr = match port_override {
+        Some(port) => match default_bind.rsplit_once(':') {
+            Some((host, _existing_port)) => format!("{host}:{port}"),
+            None => format!("127.0.0.1:{port}"),
+        },
+        None => default_bind,
+    };
+    Some(bind_addr)
+}
+
+/// See the `http`-feature variant above. Without `http`, no bind address can
+/// ever be resolved — the binary has no HTTP transport built in — so a
+/// `--http`/`VELESDB_MEMORY_HTTP=1` request fails fast with guidance instead
+/// of being silently ignored (which would otherwise look like the server
+/// just hung, or served the wrong transport).
+#[cfg(not(feature = "http"))]
+fn requested_http_bind(args: &[String]) -> Option<String> {
+    let http_flag = args.iter().any(|arg| arg == "--http");
+    let http_env = std::env::var("VELESDB_MEMORY_HTTP").as_deref() == Ok("1");
+    if http_flag || http_env {
+        eprintln!(
+            "[velesdb-memory] --http / VELESDB_MEMORY_HTTP=1 requires a binary built with \
+             `--features http` (e.g. `cargo install velesdb-memory --features http`) — \
+             this binary was built without it"
+        );
+        std::process::exit(1);
+    }
+    None
+}
+
+/// Serve the MCP server over the streamable-HTTP transport (multi-client
+/// mode): binds `bind_addr`, mounts [`velesdb_memory::http::router`], and
+/// runs until either the process receives Ctrl-C or the returned future is
+/// dropped (e.g. process termination) — a background daemon (launchd,
+/// systemd) is expected to just kill the process on stop, which is safe: the
+/// store's `flock` is released by the kernel on exit regardless (see the
+/// orphan-watchdog docs above).
+#[cfg(feature = "http")]
+async fn serve_http(
+    server: McpServer,
+    bind_addr: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ct = tokio_util::sync::CancellationToken::new();
+    let app = velesdb_memory::http::router(server, ct.child_token());
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    eprintln!("[velesdb-memory] HTTP server listening on http://{bind_addr}/mcp");
+
+    let ctrl_c_ct = ct.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            ctrl_c_ct.cancel();
+        }
+    });
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+        .await?;
+    Ok(())
 }
 
 /// How often the orphan watchdog re-checks its parent pid. The MCP stdio

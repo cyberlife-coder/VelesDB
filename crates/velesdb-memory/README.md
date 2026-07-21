@@ -303,6 +303,103 @@ env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
 } } }
 ```
 
+**Claude Desktop** — `claude_desktop_config.json` (macOS:
+`~/Library/Application Support/Claude/claude_desktop_config.json`)
+
+```json
+{ "mcpServers": { "velesdb-memory": {
+  "command": "/home/you/.cargo/bin/velesdb-memory",
+  "env": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
+} } }
+```
+
+**Windsurf** — `~/.codeium/windsurf/mcp_config.json`
+
+```json
+{ "mcpServers": { "velesdb-memory": {
+  "command": "/home/you/.cargo/bin/velesdb-memory",
+  "env": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
+} } }
+```
+
+## HTTP transport (multi-client)
+
+Every config above spawns its own `velesdb-memory` process over stdio — and
+the store's single-writer `flock` means only ONE of those processes can hold
+it open at a time, so only one client can actually use memory at once.
+Switching a client mid-session, or running two clients side by side, fails
+with an opaque `Storage(DatabaseLocked)`.
+
+The fix: build with `--features http` and run ONE `velesdb-memory --http`
+daemon that every client connects to instead of spawning its own process.
+The hash/ollama embedder choice stays a pure runtime switch either way — only
+the transport changes.
+
+```bash
+cargo install velesdb-memory --features http,ollama
+# → still opt into `ollama` at BUILD time only if you want that embedder available;
+#   VELESDB_MEMORY_EMBEDDER stays a runtime choice regardless (see "Embedding backend" below)
+velesdb-memory --http
+# [velesdb-memory] HTTP server listening on http://127.0.0.1:18090/mcp
+```
+
+- `--http` / `VELESDB_MEMORY_HTTP=1` — serve over streamable-HTTP instead of stdio.
+- `--http-port <PORT>` / `VELESDB_MEMORY_HTTP_BIND=<host:port>` — override the
+  bind address (default `127.0.0.1:18090`; `--http-port` overrides just the
+  port on top of `VELESDB_MEMORY_HTTP_BIND`).
+- `GET /health` — plain 200 OK liveness probe (no MCP handshake needed) —
+  what the installer script and CI use to confirm the daemon is up.
+- The store's `flock` is unchanged: a *second* `velesdb-memory --http` (or a
+  stray stdio process) against the same store still fails fast with the same
+  actionable lock message — the daemon is the ONE process that opens the
+  store; every client just connects to it over the network.
+
+Point each client's config at the daemon instead of a local binary:
+
+**Claude Code**
+
+```bash
+claude mcp add --transport http velesdb-memory http://127.0.0.1:18090/mcp
+```
+
+**Cursor** / **Cline** — same `mcpServers` files as above, `type: "http"` instead of `command`:
+
+```json
+{ "mcpServers": { "velesdb-memory": {
+  "type": "http",
+  "url": "http://127.0.0.1:18090/mcp"
+} } }
+```
+
+**Claude Desktop**
+
+```json
+{ "mcpServers": { "velesdb-memory": {
+  "type": "http",
+  "url": "http://127.0.0.1:18090/mcp"
+} } }
+```
+
+> HTTP support is not confirmed for this client — if it doesn't connect
+> after a restart, fall back to the stdio block above. Point the fallback's
+> `VELESDB_MEMORY_PATH` at a **different** directory than the daemon's store:
+> pointed at the same one, the fallback process and the daemon would fight
+> over the same `flock`, reproducing the exact `DatabaseLocked` problem this
+> section exists to avoid.
+
+**Windsurf** — `~/.codeium/windsurf/mcp_config.json`
+
+```json
+{ "mcpServers": { "velesdb-memory": {
+  "serverUrl": "http://127.0.0.1:18090/mcp"
+} } }
+```
+
+`scripts/install-memory-daemon.sh` automates all of this end to end: building
+with the right features, running the daemon (as a macOS `launchd` agent), and
+wiring Claude Code / Claude Desktop / Windsurf — see `--help` for flags
+(`--embedder`, `--port`, `--store`, `--skip-client`, `--uninstall`, …).
+
 ## Teach your agent the flow (skill)
 
 Wiring the MCP server gives your agent the *tools*; it doesn't tell it *when* to

@@ -20,7 +20,6 @@
 //! `remember`+`recall` mix) must all complete with no panic and no deadlock.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use rmcp::model::{CallToolRequestParams, ClientInfo};
 use rmcp::service::RunningService;
@@ -136,10 +135,12 @@ async fn recall_contains(
     needle: &str,
 ) -> bool {
     let result = client
-        .call_tool(CallToolRequestParams::new("recall").with_arguments(as_args(json!({
-            "query": query,
-            "limit": 50,
-        }))))
+        .call_tool(
+            CallToolRequestParams::new("recall").with_arguments(as_args(json!({
+                "query": query,
+                "limit": 50,
+            }))),
+        )
         .await
         .expect("recall call over HTTP");
     let structured = result
@@ -153,7 +154,7 @@ async fn recall_contains(
         .any(|memory| memory["content"].as_str() == Some(needle))
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn initialize_round_trip_succeeds_over_http() {
     let server = spawn_http_server().await;
 
@@ -166,7 +167,7 @@ async fn initialize_round_trip_succeeds_over_http() {
     shutdown(server).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn remember_then_recall_roundtrip_over_http() {
     let server = spawn_http_server().await;
     let client = connect(server.addr).await;
@@ -182,20 +183,22 @@ async fn remember_then_recall_roundtrip_over_http() {
 }
 
 /// The central risk this transport exists to retire: 20 simultaneous
-/// `remember` calls against the ONE shared store, all through the SAME HTTP
-/// connection's session, must all succeed with unique ids and never panic —
-/// proving `Database`'s internal locking (velesdb-core) is enough on its own
-/// without the process-level `flock` (which never applied here — HTTP is
-/// single-process by construction).
-#[tokio::test]
+/// `remember` calls against the ONE shared store — each from its OWN
+/// connected client, exactly like 20 real MCP clients (Claude Code, Claude
+/// Desktop, Windsurf, …) sharing one daemon rather than each spawning its
+/// own stdio process — must all succeed with unique ids and never panic.
+/// This proves `Database`'s internal locking (velesdb-core) is enough on its
+/// own without the process-level `flock`, which never applies here: HTTP
+/// concurrency is many *sessions* in ONE process, not many processes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn twenty_concurrent_remembers_all_succeed_with_unique_ids() {
     let server = spawn_http_server().await;
-    let client = Arc::new(connect(server.addr).await);
 
     let mut tasks = Vec::with_capacity(20);
     for i in 0..20 {
-        let client = Arc::clone(&client);
+        let addr = server.addr;
         tasks.push(tokio::spawn(async move {
+            let client = connect(addr).await;
             remember(&client, &format!("concurrent fact number {i}")).await
         }));
     }
@@ -207,34 +210,37 @@ async fn twenty_concurrent_remembers_all_succeed_with_unique_ids() {
     }
     assert_eq!(ids.len(), 20, "all 20 concurrent remembers must succeed");
 
-    drop(client);
     shutdown(server).await;
 }
 
-/// A mixed `remember` + `recall` race: proves the HTTP transport has no
-/// deadlock or corruption when reads and writes overlap, then — after the
-/// race settles — that every fact written during it is actually recallable
-/// (not silently dropped or corrupted by the concurrent access).
-#[tokio::test]
+/// A mixed `remember` + `recall` race (again, one connection per task —
+/// many concurrent clients, not multiplexed calls on one session): proves
+/// the HTTP transport has no deadlock or corruption when reads and writes
+/// overlap, then — after the race settles — that every fact written during
+/// it is actually recallable (not silently dropped or corrupted).
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn concurrent_remember_and_recall_do_not_deadlock_and_all_facts_recallable() {
     let server = spawn_http_server().await;
-    let client = Arc::new(connect(server.addr).await);
 
-    remember(&client, "seed fact alpha for the concurrency race").await;
-    remember(&client, "seed fact beta for the concurrency race").await;
+    let seed_client = connect(server.addr).await;
+    remember(&seed_client, "seed fact alpha for the concurrency race").await;
+    remember(&seed_client, "seed fact beta for the concurrency race").await;
+    drop(seed_client);
 
     let mut remember_tasks = Vec::with_capacity(10);
     for i in 0..10 {
-        let client = Arc::clone(&client);
+        let addr = server.addr;
         remember_tasks.push(tokio::spawn(async move {
+            let client = connect(addr).await;
             remember(&client, &format!("racing fact {i}")).await
         }));
     }
 
     let mut recall_tasks = Vec::with_capacity(10);
     for _ in 0..10 {
-        let client = Arc::clone(&client);
+        let addr = server.addr;
         recall_tasks.push(tokio::spawn(async move {
+            let client = connect(addr).await;
             // Never asserted mid-race: the race may see a fact before it is
             // durably stored. This only proves recall doesn't panic/hang
             // while writes are in flight.
@@ -246,25 +252,27 @@ async fn concurrent_remember_and_recall_do_not_deadlock_and_all_facts_recallable
         task.await.expect("remember task must not panic");
     }
     for task in recall_tasks {
-        task.await.expect("recall task must not panic during the race");
+        task.await
+            .expect("recall task must not panic during the race");
     }
 
+    let verify_client = connect(server.addr).await;
     for i in 0..10 {
         let fact = format!("racing fact {i}");
         assert!(
-            recall_contains(&client, &fact, &fact).await,
+            recall_contains(&verify_client, &fact, &fact).await,
             "fact {i} written during the concurrent race must be recallable afterwards"
         );
     }
     assert!(
         recall_contains(
-            &client,
+            &verify_client,
             "seed fact",
             "seed fact alpha for the concurrency race"
         )
         .await
     );
+    drop(verify_client);
 
-    drop(client);
     shutdown(server).await;
 }
