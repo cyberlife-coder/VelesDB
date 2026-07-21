@@ -7,8 +7,26 @@
 //! output provably fits.
 //!
 //! Selection is a deterministic total order — critical first, then caller
-//! priority, then relevance, then input order — with `seq` as the final
-//! tie-break so equal fragments can never swap places between runs.
+//! priority, then a cache/non-cache tier, then relevance (non-cache items
+//! only), then input order — with `seq` as the final tie-break so equal
+//! fragments can never swap places between runs.
+//!
+//! **Trade-off (issue #1455): cache stability over relevance, for
+//! cache-marked fragments only.** A `cache: true` fragment (the
+//! `cache.stable_prefix` classification) forms the provider prompt-cache
+//! prefix, whose entire value is being byte-identical across turns. Ranking
+//! it by lexical relevance to the query — like every other fragment — would
+//! let a query change alone decide which of two same-priority cache
+//! fragments wins a tight budget, silently changing the prefix's bytes and
+//! defeating the provider cache on exactly the turn a new question is
+//! asked. So a cache-marked fragment's rank never consults relevance, in
+//! either direction: it always outranks a non-cache fragment of the same
+//! criticality/priority (a fixed, query-independent tier — see
+//! [`selection_order`]), and two cache-marked fragments tied on priority
+//! fall straight to `seq`. Non-cache fragments are unaffected: relevance
+//! remains their tie-break, exactly as before. The accepted cost: a
+//! more-relevant non-cache fragment can lose a tight-budget race it would
+//! have won pre-#1455 against a same-tier cache fragment.
 
 use super::estimator::TokenEstimator;
 
@@ -39,8 +57,16 @@ pub(crate) struct PackItem {
     pub critical: bool,
     /// Caller priority (higher first).
     pub priority: u8,
-    /// Lexical relevance to the query (higher first).
+    /// Lexical relevance to the query (higher first). Never consulted for a
+    /// `cache`-marked item — see the module trade-off note and
+    /// [`selection_order`].
     pub relevance: f32,
+    /// Whether this fragment classified as `cache.stable_prefix` (the
+    /// provider prompt-cache prefix). Cache-marked items rank ahead of
+    /// non-cache items at the same criticality/priority, and break ties
+    /// among themselves on `seq` alone — never on `relevance` — so their
+    /// selection is fully query-independent (issue #1455).
+    pub cache: bool,
     /// The fragment's text, pre-cut into orderly pieces (chunks); packing
     /// takes a prefix of them.
     pub pieces: Vec<Piece>,
@@ -62,8 +88,18 @@ pub(crate) fn pack(items: &[PackItem], usable: u64, estimator: &dyn TokenEstimat
     taken
 }
 
-/// Item indices in packing order: critical desc, priority desc, relevance
-/// desc, seq asc.
+/// Item indices in packing order: critical desc, priority desc, cache
+/// (cache-marked before non-cache) desc, relevance desc (non-cache items
+/// only — see the module trade-off note), seq asc.
+///
+/// The cache tier is decided purely from each item's own `cache` flag, never
+/// from `relevance`, so it can never be perturbed by a query change: two
+/// cache-marked items always tie it (falling to `seq`), and a cache-marked
+/// item always beats a non-cache one at the same criticality/priority. Only
+/// once both sides of a comparison are confirmed non-cache does `relevance`
+/// enter at all — the query can reorder non-cache fragments among
+/// themselves exactly as before, but can never move a cache-marked fragment
+/// relative to anything else.
 fn selection_order(items: &[PackItem]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..items.len()).collect();
     order.sort_by(|&a, &b| {
@@ -72,7 +108,16 @@ fn selection_order(items: &[PackItem]) -> Vec<usize> {
             .critical
             .cmp(&left.critical)
             .then_with(|| right.priority.cmp(&left.priority))
-            .then_with(|| right.relevance.total_cmp(&left.relevance))
+            .then_with(|| right.cache.cmp(&left.cache))
+            .then_with(|| {
+                if left.cache {
+                    // Both cache-marked (the tie-break above matched): never
+                    // consult relevance — fall straight through to `seq`.
+                    std::cmp::Ordering::Equal
+                } else {
+                    right.relevance.total_cmp(&left.relevance)
+                }
+            })
             .then_with(|| left.seq.cmp(&right.seq))
     });
     order

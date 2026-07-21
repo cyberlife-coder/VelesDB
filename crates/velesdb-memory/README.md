@@ -17,7 +17,9 @@ traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation
 meet** those data-residency and explainability expectations rather than claiming
 certified compliance.
 
-> **Release 0.10.0** — the V2 wave lands: `compile_transcript` (one call
+> **Release 0.10.1** — patch over the V2 wave: the `compile_context`
+> prompt-cache prefix is now query-independent (issue #1455), so a new
+> question no longer churns the cached prefix. 0.10.0 brought: `compile_transcript` (one call
 > turns a raw agent-session transcript into deterministically segmented,
 > budget-compiled context with a full segmentation audit report),
 > path-referenced fragments (opt-in, allowlisted via
@@ -25,13 +27,13 @@ certified compliance.
 > compiler's read tools (`explainCompilation`/`contextSavings` on Node,
 > `explain_compilation` on Python, `retrieveContextSource` on WASM/TS), and
 > a `--version` flag; published to the registries by the
-> `velesdb-memory-v0.10.0`
+> `velesdb-memory-v0.10.1`
 > tag, so the links below may briefly lag right after merge. `velesdb-memory`
 > ships on [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
-> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.10.0**
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.10.1**
 > and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**
 > (memory API only — the context compiler is merged on `develop` but **the
 > published 3.12.0 wheel predates it**; it ships with the next PyPI release,
@@ -537,16 +539,17 @@ latency. The committed
 harness measures the `cache: true` prefix's byte stability directly: across
 10 consecutive compiles with changing volatile content, the cache section is
 a byte-identical **100 % stable prefix on all 9 consecutive turn pairs**
-(reproducible: two full 10-turn runs, byte-identical). **Known limitation:**
-that measurement holds the query fixed across turns; the cache prefix is
-byte-stable only at a *fixed* query today — when two same-priority
-cache-marked fragments compete under a budget too tight for both, a query
-change can reorder them (relevance is one of the packing tie-breakers), so
-a caller who marks more than one fragment cacheable and expects a
-query-agnostic prefix should keep the budget generous enough for all of
-them, or track
-[issue #1455](https://github.com/cyberlife-coder/VelesDB/issues/1455) for
-the fix. That tri-engine path — the one `memory_scope` drives inside `compile_context` — looks like this:
+(reproducible: two full 10-turn runs, byte-identical). That measurement
+holds the query fixed across turns; the guarantee also holds when the query
+*changes* ([issue #1455](https://github.com/cyberlife-coder/VelesDB/issues/1455),
+fixed): a `cache: true` fragment's rank never consults relevance, so when a
+budget is too tight for every cache-marked fragment, which ones survive is
+decided by priority then input order alone — never by lexical relevance to
+the query — so the Cache prefix stays byte-identical across a query change
+at a fixed fragment set and budget. The accepted trade-off: a same-tier
+non-cache fragment that is more relevant to the query can still lose that
+tight-budget race to a cache-marked fragment (stability wins over relevance,
+but only for cache-marked fragments). That tri-engine path — the one `memory_scope` drives inside `compile_context` — looks like this:
 
 ![tri-engine retrieval: query seeds an HNSW vector search, a graph walk follows relate edges, fusion combines both, then ranking produces the result](docs/diagrams/tri-engine.svg)
 
