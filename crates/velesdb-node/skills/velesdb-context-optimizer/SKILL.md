@@ -68,14 +68,17 @@ with steps 1-3.
    dump, a code block, a constraint). Tag `kind` when you know it
    (`"code"`, `"log"`); mark caller-pinned text `metadata: {"verbatim": true}`
    and stable preambles `metadata: {"cache": true}` (they form the stable
-   prefix, maximizing provider prompt-cache hits). Two caveats: a media
+   prefix, maximizing provider prompt-cache hits). One caveat: a media
    fragment ignores `cache: true` (it always classifies `media.atomic` and
-   packs in the body, never the cache prefix); and the prefix is
-   byte-stable only at a *fixed* query — under a budget too tight for every
-   cache-marked fragment, a query change can reorder them (see the crate
-   README's prompt-cache section and
-   [issue #1455](https://github.com/cyberlife-coder/VelesDB/issues/1455)),
-   so size the budget generously for anything marked cacheable.
+   packs in the body, never the cache prefix). The prefix is byte-stable
+   across a query change too, even under a budget too tight for every
+   cache-marked fragment — a cache-marked fragment's rank never consults
+   relevance, so which ones survive a tight budget depends only on
+   priority and input order, never the query
+   ([issue #1455](https://github.com/cyberlife-coder/VelesDB/issues/1455),
+   fixed; see the crate README's prompt-cache section). Trade-off: a
+   same-tier non-cache fragment more relevant to the query can still lose
+   that tight-budget race to a cache-marked fragment.
 4. **Set the budget.** `token_budget` = the model window share you want the
    context to occupy, minus your expected response length (or set
    `policy.response_reserve_tokens`). Don't know the target model's context

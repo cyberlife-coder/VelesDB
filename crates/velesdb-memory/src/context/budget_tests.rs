@@ -4,11 +4,25 @@ use super::*;
 use crate::context::estimator::HeuristicEstimator;
 
 fn item(seq: usize, critical: bool, priority: u8, relevance: f32, pieces: &[&str]) -> PackItem {
+    cache_item(seq, critical, priority, relevance, false, pieces)
+}
+
+/// Like [`item`], but with an explicit `cache` flag — for tests exercising
+/// the cache/non-cache selection tier (issue #1455).
+fn cache_item(
+    seq: usize,
+    critical: bool,
+    priority: u8,
+    relevance: f32,
+    cache: bool,
+    pieces: &[&str],
+) -> PackItem {
     PackItem {
         seq,
         critical,
         priority,
         relevance,
+        cache,
         pieces: pieces
             .iter()
             .map(|p| Piece {
@@ -27,6 +41,7 @@ fn media_item(seq: usize, critical: bool, precomputed_cost: u64) -> PackItem {
         critical,
         priority: 0,
         relevance: 0.0,
+        cache: false,
         pieces: vec![Piece {
             text: String::new(),
             cost: Some(precomputed_cost),
@@ -151,4 +166,60 @@ fn test_pack_precomputed_cost_piece_is_atomic_never_partially_taken() {
     let items = vec![media_item(0, true, 1_000_000)];
     let taken = pack(&items, 10, &HeuristicEstimator);
     assert_eq!(taken, vec![0]);
+}
+
+// === Cache selection tier (issue #1455) =====================================
+//
+// A cache-marked item's rank must never consult `relevance` — neither
+// against another cache item nor against a non-cache one — so two
+// same-priority cache items always resolve on `seq` alone, and a cache item
+// always beats a same-tier non-cache item regardless of how relevant that
+// non-cache item is to the (here, simulated by a raw `relevance` field)
+// query.
+
+#[test]
+fn test_pack_two_cache_items_ignore_relevance_and_break_ties_on_seq() {
+    // Same critical/priority, cache-marked, but relevance strongly favors
+    // item 1 — if relevance were consulted, item 1 would win. It must not.
+    let items = vec![
+        cache_item(0, true, 0, 0.1, true, &[PIECE]),
+        cache_item(1, true, 0, 0.9, true, &[PIECE]),
+    ];
+    let taken = pack(&items, 3, &HeuristicEstimator);
+    assert_eq!(
+        taken,
+        vec![1, 0],
+        "earlier seq must win between two cache items regardless of relevance"
+    );
+}
+
+#[test]
+fn test_pack_cache_item_beats_higher_relevance_non_cache_item_at_same_tier() {
+    // Item 0 is non-cache with high relevance; item 1 is cache-marked with
+    // low relevance. Pre-#1455 behavior would let relevance decide (item 0
+    // wins); the fix requires the cache item to win instead, so the cache
+    // prefix never depends on a competing non-cache fragment's relevance.
+    let items = vec![
+        cache_item(0, true, 0, 0.9, false, &[PIECE]),
+        cache_item(1, true, 0, 0.1, true, &[PIECE]),
+    ];
+    let taken = pack(&items, 3, &HeuristicEstimator);
+    assert_eq!(
+        taken,
+        vec![0, 1],
+        "the cache-marked item must win the tight budget over a more relevant non-cache item"
+    );
+}
+
+#[test]
+fn test_pack_non_cache_items_still_use_relevance_unaffected_by_cache_tier() {
+    // No cache items in play at all: behavior must be byte-identical to
+    // pre-#1455 — relevance still breaks priority ties among non-cache
+    // fragments.
+    let items = vec![
+        cache_item(0, false, 0, 0.2, false, &[PIECE]),
+        cache_item(1, false, 0, 0.8, false, &[PIECE]),
+    ];
+    let taken = pack(&items, 3, &HeuristicEstimator);
+    assert_eq!(taken, vec![0, 1], "higher relevance must still pack first");
 }

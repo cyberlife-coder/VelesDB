@@ -618,6 +618,9 @@ fn pack_items(
             critical: analysis.rule.critical,
             priority: analysis.priority,
             relevance: analysis.relevance,
+            // Query-independent selection tier (issue #1455): see
+            // `budget::selection_order`.
+            cache: analysis.rule.action == ContextAction::Cache,
             pieces: pieces(analysis, &chunk_policy, estimator),
         })
         .collect()

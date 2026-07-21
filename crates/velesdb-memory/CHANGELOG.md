@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The `compile_context` prompt-cache prefix could churn when only the query
+  changed: `selection_order` (`src/context/budget.rs`) used lexical
+  relevance to the query as a packing tie-break for every fragment,
+  including `cache: true` ones, so when a budget was too tight to fit two
+  same-priority cache-marked fragments, a query change alone could flip
+  which one won, silently changing the Cache section's bytes and defeating
+  provider prompt-caching on exactly the turn a new question was asked. A
+  cache-marked fragment's rank now never consults relevance: it always
+  outranks a non-cache fragment at the same criticality/priority (a fixed,
+  query-independent tier), and two cache-marked fragments tied on priority
+  fall straight to `seq`. **Trade-off, assumed:** cache stability over
+  relevance, for cache-marked fragments only — a more-relevant non-cache
+  fragment can now lose a tight-budget race it would have won before this
+  fix against a same-tier cache fragment. Non-cache fragments are
+  unaffected. (issue #1455)
+
 ## [0.10.0] — 2026-07-20
 
 ### Added

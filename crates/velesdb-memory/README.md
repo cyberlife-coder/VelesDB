@@ -537,16 +537,17 @@ latency. The committed
 harness measures the `cache: true` prefix's byte stability directly: across
 10 consecutive compiles with changing volatile content, the cache section is
 a byte-identical **100 % stable prefix on all 9 consecutive turn pairs**
-(reproducible: two full 10-turn runs, byte-identical). **Known limitation:**
-that measurement holds the query fixed across turns; the cache prefix is
-byte-stable only at a *fixed* query today — when two same-priority
-cache-marked fragments compete under a budget too tight for both, a query
-change can reorder them (relevance is one of the packing tie-breakers), so
-a caller who marks more than one fragment cacheable and expects a
-query-agnostic prefix should keep the budget generous enough for all of
-them, or track
-[issue #1455](https://github.com/cyberlife-coder/VelesDB/issues/1455) for
-the fix. That tri-engine path — the one `memory_scope` drives inside `compile_context` — looks like this:
+(reproducible: two full 10-turn runs, byte-identical). That measurement
+holds the query fixed across turns; the guarantee also holds when the query
+*changes* ([issue #1455](https://github.com/cyberlife-coder/VelesDB/issues/1455),
+fixed): a `cache: true` fragment's rank never consults relevance, so when a
+budget is too tight for every cache-marked fragment, which ones survive is
+decided by priority then input order alone — never by lexical relevance to
+the query — so the Cache prefix stays byte-identical across a query change
+at a fixed fragment set and budget. The accepted trade-off: a same-tier
+non-cache fragment that is more relevant to the query can still lose that
+tight-budget race to a cache-marked fragment (stability wins over relevance,
+but only for cache-marked fragments). That tri-engine path — the one `memory_scope` drives inside `compile_context` — looks like this:
 
 ![tri-engine retrieval: query seeds an HNSW vector search, a graph walk follows relate edges, fusion combines both, then ranking produces the result](docs/diagrams/tri-engine.svg)
 
