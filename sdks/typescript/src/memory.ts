@@ -132,6 +132,47 @@ export interface ContextSource {
   [key: string]: unknown;
 }
 
+/**
+ * The distilled working state of an agent session, persisted and reloaded
+ * via {@link MemoryService.saveWorkingContext} /
+ * {@link MemoryService.loadWorkingContext} (#1517). Same wire shape as the
+ * Node binding's `WorkingContext` (snake_case keys); nested fact/decision
+ * shapes are kept as `unknown` here, matching {@link CompiledContext}'s own
+ * convention for wire-shaped sub-objects this SDK does not otherwise need
+ * to inspect.
+ */
+export interface WorkingContext {
+  /** What the session is trying to achieve. */
+  goal?: string;
+  /** Constraints currently in force (never compressed away). */
+  active_constraints?: unknown[];
+  /** Facts that were verified, with their sources. */
+  verified_facts?: unknown[];
+  /** Hypotheses still open. */
+  open_hypotheses?: unknown[];
+  /** Decisions taken so far (`{fragment_id, rule_id}`, `fragment_id` a decimal string). */
+  decisions?: unknown[];
+  /** Exact evidence the session relies on (verbatim, addressable). */
+  exact_evidence?: unknown[];
+  /** Actions still to do. */
+  pending_actions?: string[];
+  [key: string]: unknown;
+}
+
+/** One session recorded in a project's working-context index (output of {@link MemoryService.listWorkingContexts}). */
+export interface WorkingContextSession {
+  /** The session id, as passed to {@link MemoryService.saveWorkingContext}. */
+  session: string;
+  /** Unix seconds this session was last saved. */
+  saved_at: number;
+}
+
+/** Result of {@link MemoryService.listWorkingContexts}. */
+export interface ListWorkingContextsResult {
+  /** Every session saved under this project, most-recently-saved first. */
+  sessions: WorkingContextSession[];
+}
+
 /** A structured predicate for {@link MemoryService.recallWhere}. */
 export interface MemoryColumnFilter {
   /** Metadata field name (alphanumeric/underscore). */
@@ -221,6 +262,9 @@ interface WasmMemoryServiceInstance {
   why(decision: string, maxHops: number | null | undefined, filter: unknown): unknown;
   compileContext(request: unknown): unknown;
   retrieveContextSource(handle: string): unknown;
+  saveWorkingContext(project: string, session: string, working: unknown): string;
+  loadWorkingContext(project: string, session: string): unknown;
+  listWorkingContexts(project: string): unknown;
   free(): void;
 }
 
@@ -518,6 +562,64 @@ export class MemoryService {
   retrieveContextSource(handle: string): Promise<ContextSource> {
     return wrapWasmCall(
       () => this.ensureInitialized().retrieveContextSource(handle) as ContextSource
+    );
+  }
+
+  /**
+   * Persist the agent's distilled working state under `project` + `session`
+   * (idempotent upsert: saving again replaces the previous state), for
+   * later resumption (#1517, option 2). Same wire shape as the Node
+   * binding's `saveWorkingContext`. Resolves to the stored fact id as a
+   * decimal string.
+   *
+   * **In-memory semantics**: like {@link compileContext}, this is backed
+   * entirely by this session's in-memory wasm store — there is no
+   * filesystem or IndexedDB persistence behind this binding. A "saved"
+   * working context disappears the moment this `MemoryService` instance
+   * (and the page/worker that created it) is gone. This is useful to carry
+   * state between two calls made within the SAME page load (e.g. across two
+   * {@link compileContext} calls), not to resume a session after a reload —
+   * that would need a real browser-storage backend, which does not exist
+   * yet.
+   */
+  saveWorkingContext(
+    project: string,
+    session: string,
+    working: WorkingContext
+  ): Promise<string> {
+    return wrapWasmCall(
+      () => this.ensureInitialized().saveWorkingContext(project, session, working) as string
+    );
+  }
+
+  /**
+   * The working context previously saved under `project` + `session` —
+   * `null` when there is none, the start-of-session mirror of
+   * {@link saveWorkingContext} (#1517, option 2).
+   *
+   * **In-memory semantics**: see {@link saveWorkingContext}'s doc comment —
+   * this only ever resolves what THIS session's in-memory store still
+   * holds; nothing persists across a page reload.
+   */
+  loadWorkingContext(project: string, session: string): Promise<WorkingContext | null> {
+    return wrapWasmCall(
+      () =>
+        this.ensureInitialized().loadWorkingContext(project, session) as WorkingContext | null
+    );
+  }
+
+  /**
+   * Every session ever saved under `project`'s working-context index,
+   * most-recently-saved first — empty (never an error) when the project
+   * never saved anything (#1517, option 2).
+   *
+   * **In-memory semantics**: see {@link saveWorkingContext}'s doc comment —
+   * reflects only what this session's in-memory store currently holds,
+   * never a cross-session/browser-restart view.
+   */
+  listWorkingContexts(project: string): Promise<ListWorkingContextsResult> {
+    return wrapWasmCall(
+      () => this.ensureInitialized().listWorkingContexts(project) as ListWorkingContextsResult
     );
   }
 }

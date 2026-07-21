@@ -25,7 +25,9 @@ use serde::Serialize;
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
-use velesdb_memory::context::{CompilePolicy, CompileRequest, ContextCompiler};
+use velesdb_memory::context::{
+    CompilePolicy, CompileRequest, ContextCompiler, WorkingContext, WorkingContextSession,
+};
 use velesdb_memory::{
     ColumnFilter, ColumnOp, Explanation, FusionOptions, HashEmbedder, MemoryEdge, MemoryError,
     MemoryNode, MemoryService, Metadata, Recollection,
@@ -75,6 +77,16 @@ fn parse_id(s: &str) -> Result<u64, JsValue> {
 /// `velesdb_memory::context::wire`, not duplicated here.
 fn stringify_id_fields(value: &mut Value) {
     velesdb_memory::context::wire::stringify_id_fields(value);
+}
+
+/// The inverse of [`stringify_id_fields`]: recursively rewrite every
+/// `context` id field given in the binding's decimal-string form back into
+/// the numeric form the domain types deserialize (used by
+/// [`WasmMemoryService::save_working_context`], the same helper the Node
+/// binding applies before deserializing a `WorkingContext`). Shared with the
+/// Node binding via `velesdb_memory::context::wire`, not duplicated here.
+fn parse_id_fields(value: &mut Value) -> Result<(), JsValue> {
+    velesdb_memory::context::wire::parse_id_fields(value).map_err(invalid_input)
 }
 
 /// Accept `fragments[].id` in decimal-string form (the Node binding's
@@ -541,6 +553,95 @@ impl WasmMemoryService {
         map.insert("handle".to_owned(), Value::String(handle.to_owned()));
         to_js(&Value::Object(map))
     }
+
+    /// Persist the agent's distilled working state under `project` +
+    /// `session` (idempotent upsert: saving again replaces the previous
+    /// state), for later resumption (#1517, option 2). Same wire shape as
+    /// the Node binding's `saveWorkingContext` — the request's own field
+    /// names (`goal`, `active_constraints`, `decisions`, …), decimal-string
+    /// ids — pure delegation to `velesdb_memory`'s bridge, no reshaping.
+    /// Resolves to the stored fact id as a decimal string.
+    ///
+    /// **In-memory semantics**: like [`Self::compile_context`], this is
+    /// backed entirely by this session's [`WasmStore`] — there is no
+    /// filesystem or IndexedDB persistence behind this binding. A "saved"
+    /// working context disappears the moment the page (or worker) that
+    /// created this `MemoryService` instance is gone. This is useful to
+    /// carry state between two calls made within the SAME page load (e.g.
+    /// across two `compileContext` calls), not to resume a session after a
+    /// reload — that would need a real browser-storage backend, which does
+    /// not exist yet.
+    #[wasm_bindgen(js_name = saveWorkingContext)]
+    pub fn save_working_context(
+        &self,
+        project: &str,
+        session: &str,
+        working: JsValue,
+    ) -> Result<String, JsValue> {
+        let mut working: Value = serde_wasm_bindgen::from_value(working)
+            .map_err(|e| invalid_input(format!("invalid working context: {e}")))?;
+        parse_id_fields(&mut working)?;
+        let working: WorkingContext = serde_json::from_value(working)
+            .map_err(|e| invalid_input(format!("invalid working context: {e}")))?;
+        self.inner
+            .save_working_context(project, session, &working)
+            .map(id_to_string)
+            .map_err(to_js_err)
+    }
+
+    /// The working context previously saved under `project` + `session` —
+    /// `null` in JS when there is none, the start-of-session mirror of
+    /// [`Self::save_working_context`] (#1517, option 2).
+    ///
+    /// **In-memory semantics**: see [`Self::save_working_context`]'s doc
+    /// comment — this only ever resolves what THIS session's [`WasmStore`]
+    /// still holds; nothing persists across a page reload.
+    #[wasm_bindgen(js_name = loadWorkingContext)]
+    pub fn load_working_context(&self, project: &str, session: &str) -> Result<JsValue, JsValue> {
+        let loaded = self
+            .inner
+            .load_working_context(project, session)
+            .map_err(to_js_err)?;
+        match loaded {
+            Some(working) => {
+                let mut value = serde_json::to_value(&working)
+                    .map_err(|e| structured_js_error(CODE_INTERNAL, &format!("serialize: {e}")))?;
+                stringify_id_fields(&mut value);
+                to_js(&value)
+            }
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    /// Every session ever saved under `project`'s working-context index,
+    /// most-recently-saved first: resolves to `{sessions: [{session,
+    /// saved_at}]}` — empty (never an error) when the project never saved
+    /// anything (#1517, option 2).
+    ///
+    /// **In-memory semantics**: see [`Self::save_working_context`]'s doc
+    /// comment — reflects only what this session's [`WasmStore`] currently
+    /// holds, never a cross-session/browser-restart view.
+    #[wasm_bindgen(js_name = listWorkingContexts)]
+    pub fn list_working_contexts(&self, project: &str) -> Result<JsValue, JsValue> {
+        let sessions = self
+            .inner
+            .list_working_contexts(project)
+            .map_err(to_js_err)?;
+        let value = serde_json::to_value(SessionsOut { sessions })
+            .map_err(|e| structured_js_error(CODE_INTERNAL, &format!("serialize: {e}")))?;
+        to_js(&value)
+    }
+}
+
+/// Wire envelope for [`WasmMemoryService::list_working_contexts`]: same
+/// shape as the MCP `list_working_contexts` tool's result
+/// (`{sessions: [...]}`), field names left as `WorkingContextSession`
+/// serializes them (`session`, `saved_at`) — no camelCase remapping, for the
+/// same reason `compile_context`/`retrieveContextSource` don't reshape their
+/// output either.
+#[derive(Serialize)]
+struct SessionsOut {
+    sessions: Vec<WorkingContextSession>,
 }
 
 #[cfg(test)]
