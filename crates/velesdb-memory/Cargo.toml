@@ -68,6 +68,11 @@ tempfile = "3"
 serde_json = { workspace = true }
 tokio = { workspace = true }
 criterion = { workspace = true }
+# MCP client-side streamable-HTTP transport, dev-only: drives the `http`
+# feature's server transport in tests/http_transport.rs with a real client
+# (the same one exercised by rmcp's own upstream test suite) rather than
+# hand-rolled JSON-RPC-over-HTTP requests.
+rmcp = { version = "2.0.0", features = ["client", "transport-streamable-http-client-reqwest"] }
 
 [[bin]]
 name = "velesdb-memory"
@@ -102,6 +107,15 @@ path = "src/lib.rs"
 
 [lints]
 workspace = true
+
+# Round-trips real MCP calls (initialize/remember/recall) plus a 20-way
+# concurrency stress test over the streamable-HTTP transport built by the
+# `http` feature (router only — no subprocess). Needs the dev-dependency
+# rmcp client transport above, so it only builds under that feature.
+[[test]]
+name = "http_transport"
+path = "tests/http_transport.rs"
+required-features = ["http"]
 
 [[example]]
 name = "multihop"
