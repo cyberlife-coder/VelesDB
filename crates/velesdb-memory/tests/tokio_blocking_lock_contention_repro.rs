@@ -2,35 +2,34 @@
 //! Reproduction of the `velesdb-core` `Collection` lock-contention deadlock
 //! at the `MemoryService` layer — no HTTP, no MCP, no rmcp.
 //!
-//! # Why this file exists (see `.investigation/http-deadlock-2026-07-22/`
-//! in `velesdb-core`'s repo for the full trail)
+//! # Why this file exists — root cause found and fixed in `velesdb-core`
 //!
-//! A hand-assembled repro directly against `velesdb_core::agent::SemanticMemory`
-//! (`crates/velesdb-core/tests/tokio_blocking_lock_contention_repro.rs`,
-//! including a `query` + `get_metadata_batch` pair matching
-//! `MemoryService::recall`'s exact shape) did not reproduce the hang across
-//! 30+ repeated runs, even at production dimension/payload/scale.
+//! (see `.investigation/http-deadlock-2026-07-22/` in `velesdb-core`'s repo
+//! for the full trail)
 //!
-//! A FRESH run of the actual `velesdb-memory` HTTP integration test
-//! (`concurrent_remember_and_recall_do_not_deadlock_and_all_facts_recallable`,
-//! on the (separate, unmerged) `feat/memory-http-transport` branch) DID hang,
-//! mechanically confirmed via two `sample <pid> 3` stack captures 25s apart
-//! showing flat CPU time (0.15s -> 0.16s) and identical stuck frames in
-//! `SemanticMemory::{store, store_internal, query_excluding,
-//! get_metadata_batch}` / `Collection::{crud, crud_read_delete,
-//! search::vector}` both times, with zero rmcp/axum/tower frames in the
-//! stuck chain — i.e. the deadlock is not in the HTTP transport, it is
-//! reachable through `MemoryService`/`NativeStore` alone.
+//! Two bugs in `velesdb-core`'s `Collection` locking contributed to the
+//! end-to-end HTTP hang, both now fixed:
+//!
+//! 1. `Collection::batch_store_all` ran payload/vector writes concurrently
+//!    via `rayon::join`, dispatched from a foreign (`spawn_blocking`) thread
+//!    onto rayon's small global pool — exhaustible under concurrent load.
+//! 2. `Collection::get_raw` acquired `payload_storage` then `vector_storage`,
+//!    the reverse of `Collection::search`'s canonical order — a classic ABBA
+//!    deadlock under `parking_lot`'s writer-preferring `RwLock`. This was the
+//!    dominant failure mode: fixing (1) alone still hung roughly 1 run in
+//!    15-25 (confirmed via a sustained 186s hang with flat CPU and two stack
+//!    samples 33s apart showing identical frames — a real cycle, not benign
+//!    contention).
 //!
 //! This test drives `MemoryService::remember`/`recall` directly (the real
 //! call path `McpServer::remember`/`recall` dispatch to via
 //! `tokio::task::spawn_blocking` — `crates/velesdb-memory/src/mcp.rs:172,199`),
-//! bypassing MCP/rmcp/HTTP/axum entirely, to determine whether the hang is
-//! reachable without the transport layer at all. Unlike the hand-assembled
-//! `velesdb-core`-only repro, this uses the REAL `MemoryService::remember`/
-//! `recall` code paths (id derivation, embedder, TTL bookkeeping, the real
-//! `search` + `get_metadata_batch` pair inside `recall`) rather than an
-//! approximation of them.
+//! bypassing MCP/rmcp/HTTP/axum entirely — confirming the deadlock is
+//! reachable through `MemoryService`/`NativeStore` alone, nothing to do with
+//! the transport. Unlike the `velesdb-core`-only repro, this uses the REAL
+//! `MemoryService::remember`/`recall` code paths (id derivation, embedder,
+//! TTL bookkeeping, the real `search` + `get_metadata_batch` pair inside
+//! `recall`) rather than an approximation of them.
 //!
 //! # Anti-hang guard
 //!
@@ -121,13 +120,20 @@ async fn concurrent_spawn_blocking_remember_and_recall_within_bound() {
         // task finishes — turning a bounded test timeout into an unbounded
         // hang during teardown. Exiting the process immediately makes the
         // failure fast and visible instead.
-        eprintln!(
+        //
+        // Printed from a fresh OS thread, not directly via `eprintln!` here:
+        // libtest captures stdout/stderr per-test on the thread it spawned,
+        // only flushing that capture on a normal panic-based failure — a
+        // direct `eprintln!` immediately followed by `process::exit` is
+        // silently swallowed. A brand new thread has no capture override.
+        let msg = format!(
             "HANG REPRODUCED (MemoryService layer, no HTTP/MCP): 30 concurrent \
              spawn_blocking remember/recall calls did not complete within 20s. \
              Completed before timeout: {}/20 remembers, {}/10 recalls.",
             remembers_completed.load(Ordering::SeqCst),
             recalls_completed.load(Ordering::SeqCst),
         );
+        let _ = std::thread::spawn(move || eprintln!("{msg}")).join();
         std::process::exit(1);
     }
 

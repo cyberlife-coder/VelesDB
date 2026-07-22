@@ -26,28 +26,35 @@
 //!   a `query` (vector read lock) immediately followed by a separate
 //!   `get_metadata_batch` call (payload read lock) over the returned ids.
 //!
-//! # Status as of this revision
+//! # Status as of this revision — root-caused and fixed
 //!
-//! Neither variant has reproduced the hang yet:
-//! - `VectorCollection`-only, dim=8, no payload: passes instantly (~0.1s).
-//! - `SemanticMemory`, dim=384, realistic payload, `query`-only (no
-//!   `get_metadata_batch`): passes instantly, and 30/30 repeated runs pass
-//!   cleanly (~5.7s each, no variance) — see `.investigation/http-deadlock-2026-07-22/`.
-//! - `SemanticMemory` with the `query` + `get_metadata_batch` pair (current
-//!   revision, added because the live PR HTTP test's stack sample showed
-//!   `get_metadata_batch` in the blocked chain, which no earlier revision of
-//!   this repro exercised): under evaluation.
+//! Two independent, now-fixed bugs contributed to the hang, both found by
+//! driving this repro to a live, sustained reproduction rather than trusting
+//! a benign-looking absence of failures:
 //!
-//! A FRESH run of the actual `velesdb-memory` HTTP integration test
-//! (`concurrent_remember_and_recall_do_not_deadlock_and_all_facts_recallable`,
-//! `crates/velesdb-memory/tests/http_transport.rs`) against current
-//! `feat/memory-http-transport` code DID hang, mechanically confirmed via two
-//! `sample <pid> 3` captures 25s apart showing flat CPU time (0.15s → 0.16s)
-//! and identical stuck frames in `SemanticMemory::{store, store_internal,
-//! query_excluding, get_metadata_batch}` / `Collection::{crud,
-//! crud_read_delete, search::vector}` both times — a genuine deadlock, not
-//! resolving starvation. See `.investigation/http-deadlock-2026-07-22/` for
-//! the archived samples.
+//! 1. **`rayon::join` pool exhaustion** (`Collection::batch_store_all`,
+//!    `crates/velesdb-core/src/collection/core/crud.rs`): payload and vector
+//!    writes ran concurrently via `rayon::join`, dispatching onto rayon's
+//!    small global thread pool from a foreign (`spawn_blocking`) thread.
+//!    Fixed by running the two writes sequentially.
+//! 2. **ABBA lock-order deadlock** (`Collection::get_raw`,
+//!    `crates/velesdb-core/src/collection/core/crud_read_delete.rs`): acquired
+//!    `payload_storage` then `vector_storage` — the reverse of
+//!    `Collection::search`'s canonical `vector_storage` (rank 2) then
+//!    `payload_storage` (rank 3) order. Under `parking_lot`'s
+//!    writer-preferring `RwLock`, two readers taking the same lock pair in
+//!    opposite orders — with `batch_store_all`'s writers queued on either
+//!    lock — cycle forever. This was the dominant failure mode: fixing (1)
+//!    alone left the repro red roughly 1 run in 15-25 (a sustained 186s hang,
+//!    flat CPU, two `sample` captures 33s apart with identical stuck frames,
+//!    confirmed this was a real cycle, not benign contention). A wider audit
+//!    found and fixed the same reversed order at every other site in
+//!    `Collection` that acquired both locks — see the fix commits for the
+//!    full list.
+//!
+//! See `.investigation/http-deadlock-2026-07-22/` for the archived stack
+//! samples and the original PR-level reproduction that started this
+//! investigation.
 //!
 //! # Why `tokio::task::spawn_blocking` and not `std::thread::spawn`
 //!
@@ -80,7 +87,12 @@ fn make_vector(dimension: usize, seed: u64) -> Vec<f32> {
         .collect()
 }
 
-fn open_collection(label: &str, dimension: usize) -> Arc<VectorCollection> {
+/// Returns the collection AND its backing `TempDir` — the caller must keep
+/// the `TempDir` alive for as long as the collection is used (it deletes the
+/// directory on drop). Previously this leaked a fresh temp directory on
+/// every single run via `mem::forget`; returning it instead lets the caller
+/// hold it for the test's duration and clean it up normally at the end.
+fn open_collection(label: &str, dimension: usize) -> (Arc<VectorCollection>, tempfile::TempDir) {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join(label);
     let collection = VectorCollection::create(
@@ -91,8 +103,19 @@ fn open_collection(label: &str, dimension: usize) -> Arc<VectorCollection> {
         velesdb_core::StorageMode::Full,
     )
     .expect("create collection");
-    std::mem::forget(dir);
-    Arc::new(collection)
+    (Arc::new(collection), dir)
+}
+
+/// Prints `msg` to the real process stderr even when called from a
+/// `#[tokio::test]` right before `std::process::exit` — libtest captures
+/// stdout/stderr per-test on the thread it spawned to run the test (and only
+/// flushes that capture when the test fails through its normal panic-based
+/// reporting), so a message printed via `eprintln!` on that same thread,
+/// followed immediately by `process::exit`, is silently swallowed. A brand
+/// new OS thread has no capture override installed, so printing from one
+/// bypasses this entirely.
+fn print_to_real_stderr_before_exit(msg: String) {
+    let _ = std::thread::spawn(move || eprintln!("{msg}")).join();
 }
 
 /// The load shape that hung end-to-end: 20 concurrent single-point
@@ -105,7 +128,7 @@ fn open_collection(label: &str, dimension: usize) -> Arc<VectorCollection> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn concurrent_spawn_blocking_upserts_and_searches_complete_within_bound() {
     const DIMENSION: usize = 8;
-    let collection = open_collection("tokio_repro", DIMENSION);
+    let (collection, _tempdir) = open_collection("tokio_repro", DIMENSION);
 
     let remembers_completed = Arc::new(AtomicUsize::new(0));
     let recalls_completed = Arc::new(AtomicUsize::new(0));
@@ -162,13 +185,13 @@ async fn concurrent_spawn_blocking_upserts_and_searches_complete_within_bound() 
         // waiting on exactly this). Exiting the process immediately makes
         // the failure fast and visible instead, matching this crate's
         // anti-hang guarantee for every concurrency test.
-        eprintln!(
+        print_to_real_stderr_before_exit(format!(
             "HANG REPRODUCED (VectorCollection layer): 30 concurrent spawn_blocking \
              upsert/search calls on a shared VectorCollection did not complete within \
              20s. Completed before timeout: {}/20 upserts, {}/10 searches.",
             remembers_completed.load(Ordering::SeqCst),
             recalls_completed.load(Ordering::SeqCst),
-        );
+        ));
         std::process::exit(1);
     }
 
@@ -265,13 +288,13 @@ async fn concurrent_spawn_blocking_semantic_memory_store_and_query_within_bound(
         // `panic!`: uncancellable `spawn_blocking` stragglers can otherwise
         // turn a bounded 20s test timeout into an unbounded hang in the
         // `#[tokio::test]` runtime's teardown.
-        eprintln!(
+        print_to_real_stderr_before_exit(format!(
             "HANG REPRODUCED (SemanticMemory layer, dimension={DIMENSION}): 30 concurrent \
              spawn_blocking store/query calls did not complete within 20s. Completed before \
              timeout: {}/20 stores, {}/10 queries.",
             stores_completed.load(Ordering::SeqCst),
             queries_completed.load(Ordering::SeqCst),
-        );
+        ));
         std::process::exit(1);
     }
 
