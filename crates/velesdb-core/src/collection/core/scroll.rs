@@ -78,8 +78,11 @@ impl Collection {
         let is_metadata_only = config.metadata_only;
         drop(config);
 
-        let payload_storage = self.storage.payload_storage.read();
+        // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
+        // reversed here, an ABBA risk with Collection::search's canonical
+        // order. See .investigation/http-deadlock-2026-07-22/.
         let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let now_secs = now_unix_secs();
 
         let mut points = Vec::with_capacity(batch_size);

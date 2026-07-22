@@ -115,8 +115,10 @@ impl Collection {
         &self,
         first_node: &crate::velesql::NodePattern,
     ) -> Vec<(u64, HashMap<String, u64>)> {
-        let payload_storage = self.storage.payload_storage.read();
+        // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
+        // reversed here. See .investigation/http-deadlock-2026-07-22/.
         let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let needs_payload = !first_node.properties.is_empty() || !first_node.labels.is_empty();
 
         let mut all_ids: std::collections::HashSet<u64> =

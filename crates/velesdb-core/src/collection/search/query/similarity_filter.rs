@@ -359,8 +359,10 @@ impl Collection {
         }
 
         // Full sequential scan (slow fallback for non-indexed conditions).
-        let payload_storage = self.storage.payload_storage.read();
+        // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
+        // reversed here. See .investigation/http-deadlock-2026-07-22/.
         let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
 
         let vector_ids = vector_storage.ids();
         let ids: Vec<u64> = if vector_ids.is_empty() {
@@ -483,8 +485,10 @@ impl Collection {
         filter: &crate::filter::Filter,
         limit: usize,
     ) -> TrackedScan {
-        let payload_storage = self.storage.payload_storage.read();
+        // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
+        // reversed here. See .investigation/http-deadlock-2026-07-22/.
         let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let mut scanned: usize = 0;
         let results = Self::collect_filtered_scan(
             &*payload_storage,
