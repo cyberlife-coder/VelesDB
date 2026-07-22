@@ -19,6 +19,7 @@
 #   --store=PATH             Store directory (default: $HOME/.velesdb-memory)
 #   --ollama-url=URL         Ollama endpoint (default: http://localhost:11434)
 #   --ollama-model=MODEL     Ollama embedding model (default: all-minilm)
+#   --ttl=SECONDS            Default TTL for new facts (default: prompted, empty = permanent)
 #   --yes                    Assume yes to interactive prompts (e.g. `ollama pull`)
 #   --skip-client=NAME       Skip wiring a client (repeatable): claude-code|claude-desktop|windsurf
 #   --force-restart          Reload the daemon even if already running
@@ -52,6 +53,8 @@ PORT="18090"
 STORE="$HOME/.velesdb-memory"
 OLLAMA_URL="http://localhost:11434"
 OLLAMA_MODEL="all-minilm"
+TTL=""
+TTL_SET=0
 ASSUME_YES=0
 FORCE_RESTART=0
 UNINSTALL=0
@@ -64,7 +67,7 @@ DESKTOP_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.j
 WINDSURF_CONFIG="$HOME/.codeium/windsurf/mcp_config.json"
 
 print_usage() {
-  sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # ---- 0. Parse flags ---------------------------------------------------
@@ -75,6 +78,7 @@ for arg in "$@"; do
     --store=*) STORE="${arg#*=}" ;;
     --ollama-url=*) OLLAMA_URL="${arg#*=}" ;;
     --ollama-model=*) OLLAMA_MODEL="${arg#*=}" ;;
+    --ttl=*) TTL="${arg#*=}"; TTL_SET=1 ;;
     --yes) ASSUME_YES=1 ;;
     --skip-client=*) SKIP_CLIENTS="$SKIP_CLIENTS ${arg#*=}" ;;
     --force-restart) FORCE_RESTART=1 ;;
@@ -146,6 +150,20 @@ resolve_embedder() {
   else
     EMBEDDER="hash"
     echo -e "${YELLOW}[velesdb-memory] Using the default 'hash' embedder: deterministic and fully offline, but NOT semantic — recall matches surface form, not meaning. Re-run with --embedder=ollama for real semantic recall.${NC}" >&2
+  fi
+}
+
+# ---- 2b. TTL resolution ----------------------------------------------------
+resolve_ttl() {
+  if [ "$TTL_SET" != "1" ] && [ -t 0 ]; then
+    echo ""
+    printf '%sDefault TTL in seconds for new facts (empty = permanent):%s ' "$BLUE" "$NC"
+    read -r TTL
+  fi
+
+  if [ -n "$TTL" ] && ! [[ "$TTL" =~ ^[0-9]+$ ]]; then
+    echo -e "${RED}❌ --ttl must be a non-negative integer (seconds), got '$TTL'${NC}"
+    exit 1
   fi
 }
 
@@ -256,6 +274,14 @@ setup_daemon() {
   mkdir -p "$HOME/Library/Logs/velesdb-memory"
   mkdir -p "$(dirname "$PLIST_PATH")"
 
+  # Empty TTL means "permanent" (VELESDB_MEMORY_DEFAULT_TTL unset) — matches
+  # the server's own default, so omit the key entirely rather than setting it
+  # to an empty string.
+  TTL_PLIST_ENTRY=""
+  if [ -n "$TTL" ]; then
+    TTL_PLIST_ENTRY="    <key>VELESDB_MEMORY_DEFAULT_TTL</key><string>$TTL</string>"
+  fi
+
   cat > "$PLIST_PATH" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -275,6 +301,7 @@ setup_daemon() {
     <key>VELESDB_MEMORY_EMBEDDER</key><string>$EMBEDDER</string>
     <key>VELESDB_MEMORY_OLLAMA_URL</key><string>$OLLAMA_URL</string>
     <key>VELESDB_MEMORY_OLLAMA_MODEL</key><string>$OLLAMA_MODEL</string>
+$TTL_PLIST_ENTRY
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -443,6 +470,7 @@ print_summary() {
   echo "  Embedder:  $EMBEDDER"
   echo "  Port:      $PORT"
   echo "  Store:     $STORE"
+  echo "  TTL:       ${TTL:-permanent (no expiry)}"
   if [ "$DAEMON_SUPPORTED" = "1" ]; then
     if curl -fsS --max-time 1 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
       if [ "$DAEMON_ALREADY_RUNNING" = "1" ]; then
@@ -475,6 +503,7 @@ main() {
 
   preflight
   resolve_embedder
+  resolve_ttl
   setup_ollama
   build_daemon
   setup_daemon
