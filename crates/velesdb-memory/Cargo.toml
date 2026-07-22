@@ -44,6 +44,20 @@ ureq = { version = "2", optional = true, default-features = false }
 # `CancellationToken` used to drive graceful shutdown of the HTTP listener.
 axum = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
+# Bounds the /mcp request body: rmcp's StreamableHttpService reads the body
+# directly via `Body::collect` (see `expect_json` in rmcp's
+# `transport::common::server_side_http`), bypassing axum's own `Bytes`/`Json`
+# extractor-based `DefaultBodyLimit` entirely — that middleware only patches
+# what those specific extractors read, so it is a no-op for a raw
+# `nest_service` tower::Service like this one. `RequestBodyLimitLayer`
+# instead wraps the actual `http_body::Body` (`http_body_util::Limited`)
+# before it reaches the inner service, so it works regardless of how the
+# body is consumed downstream.
+tower-http = { workspace = true, optional = true, features = ["limit"] }
+# `futures::Stream`, the bound `rmcp::SessionManager`'s streaming methods
+# return — needed to forward them from `BoundedSessionManager` (src/http/
+# session_limit.rs) to the wrapped `LocalSessionManager`.
+futures = { version = "0.3", optional = true }
 
 [features]
 # The MCP server transport + binary, and the native file-backed store, are on
@@ -58,7 +72,7 @@ mcp = ["dep:rmcp", "dep:tokio", "persistence"]
 # velesdb-memory` still produces the tiny, fully-offline stdio-only binary —
 # only the installer script opts a LOCAL build into this at build time; the
 # hash/ollama embedder choice stays a pure runtime switch either way.
-http = ["mcp", "dep:axum", "dep:tokio-util", "rmcp/transport-streamable-http-server"]
+http = ["mcp", "dep:axum", "dep:tokio-util", "dep:tower-http", "dep:futures", "rmcp/transport-streamable-http-server"]
 # The deterministic context compiler (EPIC-P-070). Zero new dependencies and
 # `persistence`-free by design, so a wasm-style `default-features = false`
 # consumer can enable it alone; the memory-backed selection layer inside it is

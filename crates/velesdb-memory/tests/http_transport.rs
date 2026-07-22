@@ -27,10 +27,12 @@ use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::{json, Map, Value};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use velesdb_memory::http::DEFAULT_HTTP_MAX_SESSIONS;
 use velesdb_memory::mcp::McpServer;
 use velesdb_memory::{DynEmbedder, HashEmbedder, MemoryService, DEFAULT_DIMENSION};
 
@@ -59,8 +61,23 @@ async fn shutdown(server: TestServer) {
 /// Spin up the HTTP transport on `127.0.0.1:0` (OS-assigned port) backed by
 /// a fresh scratch store — the same `HashEmbedder` + `MemoryService::open`
 /// setup `src/mcp/server_tests.rs` uses for the stdio-side unit tests, just
-/// wrapped in the new HTTP router instead of called directly.
+/// wrapped in the new HTTP router instead of called directly. Uses the same
+/// body/session limits `router()` defaults to in production.
 async fn spawn_http_server() -> TestServer {
+    spawn_http_server_with_limits(
+        velesdb_memory::http::DEFAULT_HTTP_MAX_BODY_BYTES,
+        velesdb_memory::http::DEFAULT_HTTP_MAX_SESSIONS,
+    )
+    .await
+}
+
+/// [`spawn_http_server`], but with the two DoS-guard limits passed
+/// explicitly — for the adversarial tests below that need a tiny limit to
+/// actually trip within a fast, deterministic test. Deliberately does NOT go
+/// through env vars: `cargo test` runs a crate's tests in parallel by
+/// default, and process-wide env vars are shared mutable state that would
+/// race every other test in this binary reading the same variables.
+async fn spawn_http_server_with_limits(max_body_bytes: usize, max_sessions: usize) -> TestServer {
     let store_dir = tempfile::tempdir().expect("create scratch store dir");
     let embedder: DynEmbedder = Box::new(HashEmbedder::new(DEFAULT_DIMENSION));
     let service =
@@ -68,7 +85,12 @@ async fn spawn_http_server() -> TestServer {
     let server = McpServer::new(service);
 
     let ct = CancellationToken::new();
-    let app = velesdb_memory::http::router(server, ct.child_token());
+    let app = velesdb_memory::http::router_with_limits(
+        server,
+        ct.child_token(),
+        max_body_bytes,
+        max_sessions,
+    );
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind ephemeral loopback port");
@@ -274,5 +296,86 @@ async fn concurrent_remember_and_recall_do_not_deadlock_and_all_facts_recallable
     );
     drop(verify_client);
 
+    shutdown(server).await;
+}
+
+/// Adversarial: the two DoS guards `router()` wraps `/mcp` in (2026-07-22
+/// OOM audit) must actually reject what they claim to bound, not just exist
+/// as unused configuration. `RequestBodyLimit` rejects a request whose
+/// `Content-Length` already exceeds the configured limit before reading any
+/// of the body (see `tower_http::limit::service::RequestBodyLimit::call`) —
+/// exercised here with a hand-rolled request over a raw `TcpStream` rather
+/// than the rmcp client, since a well-behaved MCP client has no way to send
+/// a request this shape.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn oversized_request_body_is_rejected_by_content_length() {
+    const TINY_MAX_BODY_BYTES: usize = 1024;
+    let server =
+        spawn_http_server_with_limits(TINY_MAX_BODY_BYTES, DEFAULT_HTTP_MAX_SESSIONS).await;
+
+    let mut stream = tokio::net::TcpStream::connect(server.addr)
+        .await
+        .expect("connect a raw TCP stream to the HTTP transport");
+    let claimed_len = TINY_MAX_BODY_BYTES * 100;
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\n\
+         Host: {addr}\r\n\
+         Content-Type: application/json\r\n\
+         Accept: application/json, text/event-stream\r\n\
+         Content-Length: {claimed_len}\r\n\
+         Connection: close\r\n\
+         \r\n",
+        addr = server.addr
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write the oversized request's headers");
+    // Deliberately never write the (huge, nonexistent) body: a limit
+    // enforced only after buffering it would hang/OOM right here instead of
+    // responding — the property under test.
+
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .await
+        .expect("read the response before the body would ever be sent");
+    let response = String::from_utf8_lossy(&response);
+    let status_line = response.lines().next().unwrap_or_default();
+    assert!(
+        status_line.contains("413"),
+        "expected a 413 Payload Too Large for a {claimed_len}-byte body against a \
+         {TINY_MAX_BODY_BYTES}-byte limit, got: {status_line:?}"
+    );
+
+    shutdown(server).await;
+}
+
+/// Adversarial: `BoundedSessionManager` (`src/http/session_limit.rs`) must
+/// actually refuse a session past `max_sessions`, not just track a counter
+/// nobody reads. `max_sessions = 1` here — the first `connect()` must
+/// succeed and consume the only slot, the second must fail while the first
+/// is still open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn session_beyond_the_configured_cap_is_refused() {
+    const MAX_SESSIONS: usize = 1;
+    let server = spawn_http_server_with_limits(
+        velesdb_memory::http::DEFAULT_HTTP_MAX_BODY_BYTES,
+        MAX_SESSIONS,
+    )
+    .await;
+
+    let first_client = connect(server.addr).await;
+
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(format!("http://{}/mcp", server.addr)),
+    );
+    let second_attempt = ClientInfo::default().serve(transport).await;
+    assert!(
+        second_attempt.is_err(),
+        "a second session must be refused while the first (the only slot, max_sessions=1) is open"
+    );
+
+    drop(first_client);
     shutdown(server).await;
 }

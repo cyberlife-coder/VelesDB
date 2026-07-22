@@ -6237,6 +6237,7 @@ dependencies = [
  "bytes",
  "http",
  "http-body",
+ "http-body-util",
  "percent-encoding",
  "pin-project-lite",
  "tower-layer",
@@ -6793,6 +6794,7 @@ version = "0.10.1"
 dependencies = [
  "axum",
  "criterion",
+ "futures",
  "rmcp",
  "schemars 1.2.1",
  "serde",
@@ -6801,6 +6803,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tokio-util",
+ "tower-http 0.7.0",
  "ureq",
  "velesdb-core",
 ]

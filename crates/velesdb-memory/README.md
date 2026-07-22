@@ -356,6 +356,17 @@ velesdb-memory --http
   point the bare daemon at a network-reachable address.
 - `GET /health` — plain 200 OK liveness probe (no MCP handshake needed) —
   what the installer script and CI use to confirm the daemon is up.
+- `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES` — max size of a single `/mcp` request
+  body, in bytes (default 16 MiB). A misbehaving or hostile client sending an
+  oversized request is rejected instead of having its body buffered into
+  memory unbounded.
+- `VELESDB_MEMORY_HTTP_MAX_SESSIONS` — max number of concurrent MCP sessions
+  (default 64). Each session holds a worker task and a couple of small
+  bounded channels — cheap individually, but with no ceiling on the *count* a
+  client that opens sessions without closing them (malicious, or just buggy)
+  could otherwise grow that without bound. 64 is generous headroom for this
+  daemon's actual shape: a handful of local, cooperating clients, not a
+  public service.
 - The store's `flock` is unchanged: a *second* `velesdb-memory --http` (or a
   stray stdio process) against the same store still fails fast with the same
   actionable lock message — the daemon is the ONE process that opens the
