@@ -21,21 +21,39 @@
 //! - `concurrent_spawn_blocking_semantic_memory_store_and_query_within_bound`:
 //!   drives `SemanticMemory` (the actual layer `velesdb-memory` calls
 //!   through), at the real production dimension (384) with real text
-//!   payloads and a pre-seeded collection, since a from-scratch/tiny-vector
-//!   `VectorCollection`-only run did not reproduce the hang (see comment
-//!   below) — this variant is what actually reproduces it.
+//!   payloads and a pre-seeded collection, using the EXACT two-read shape
+//!   `MemoryService::recall` performs (`crates/velesdb-memory/src/service.rs:442-462`):
+//!   a `query` (vector read lock) immediately followed by a separate
+//!   `get_metadata_batch` call (payload read lock) over the returned ids.
+//!
+//! # Status as of this revision
+//!
+//! Neither variant has reproduced the hang yet:
+//! - `VectorCollection`-only, dim=8, no payload: passes instantly (~0.1s).
+//! - `SemanticMemory`, dim=384, realistic payload, `query`-only (no
+//!   `get_metadata_batch`): passes instantly, and 30/30 repeated runs pass
+//!   cleanly (~5.7s each, no variance) — see `.investigation/http-deadlock-2026-07-22/`.
+//! - `SemanticMemory` with the `query` + `get_metadata_batch` pair (current
+//!   revision, added because the live PR HTTP test's stack sample showed
+//!   `get_metadata_batch` in the blocked chain, which no earlier revision of
+//!   this repro exercised): under evaluation.
+//!
+//! A FRESH run of the actual `velesdb-memory` HTTP integration test
+//! (`concurrent_remember_and_recall_do_not_deadlock_and_all_facts_recallable`,
+//! `crates/velesdb-memory/tests/http_transport.rs`) against current
+//! `feat/memory-http-transport` code DID hang, mechanically confirmed via two
+//! `sample <pid> 3` captures 25s apart showing flat CPU time (0.15s → 0.16s)
+//! and identical stuck frames in `SemanticMemory::{store, store_internal,
+//! query_excluding, get_metadata_batch}` / `Collection::{crud,
+//! crud_read_delete, search::vector}` both times — a genuine deadlock, not
+//! resolving starvation. See `.investigation/http-deadlock-2026-07-22/` for
+//! the archived samples.
 //!
 //! # Why `tokio::task::spawn_blocking` and not `std::thread::spawn`
 //!
 //! `crates/velesdb-core/tests/stress_concurrency_tests.rs` already stresses
 //! `Collection` with up to 50 raw `std::thread::spawn` threads (25
-//! writers + 25 readers x 100 ops) and completes in ~9s — no hang. A
-//! same-shape `VectorCollection`-only repro through `tokio::spawn_blocking`
-//! (see the first test below) ALSO completes instantly (~0.1s) — so the
-//! hang is not simply "many concurrent Collection ops through
-//! spawn_blocking" either. It only reproduces at the `SemanticMemory`
-//! layer with production-realistic dimension/payload/scale, which is what
-//! the second test drives.
+//! writers + 25 readers x 100 ops) and completes in ~9s — no hang.
 //!
 //! # Anti-hang guard
 //!
@@ -55,6 +73,7 @@ use velesdb_core::distance::DistanceMetric;
 use velesdb_core::point::Point;
 use velesdb_core::{Database, VectorCollection};
 
+#[allow(clippy::cast_precision_loss)] // values are % 97, always < 97.0 — no precision loss
 fn make_vector(dimension: usize, seed: u64) -> Vec<f32> {
     (0..dimension)
         .map(|i| ((seed.wrapping_add(i as u64) % 97) as f32) / 97.0)
@@ -132,13 +151,25 @@ async fn concurrent_spawn_blocking_upserts_and_searches_complete_within_bound() 
     let outcome = tokio::time::timeout(Duration::from_secs(20), all).await;
 
     if outcome.is_err() {
-        panic!(
+        // `std::process::exit`, not `panic!`: `tokio::task::spawn_blocking`
+        // closures cannot be cancelled once started, so a still-stuck one
+        // keeps the OS thread occupied even after this test gives up on it.
+        // A `panic!` here would unwind into the `#[tokio::test]` runtime's
+        // `Drop`, which blocks shutdown until every outstanding blocking
+        // task finishes — turning a bounded test timeout into an unbounded
+        // hang during teardown (observed directly: `sample` on a stuck run
+        // showed `tokio::runtime::blocking::pool::BlockingPool::shutdown`
+        // waiting on exactly this). Exiting the process immediately makes
+        // the failure fast and visible instead, matching this crate's
+        // anti-hang guarantee for every concurrency test.
+        eprintln!(
             "HANG REPRODUCED (VectorCollection layer): 30 concurrent spawn_blocking \
              upsert/search calls on a shared VectorCollection did not complete within \
              20s. Completed before timeout: {}/20 upserts, {}/10 searches.",
             remembers_completed.load(Ordering::SeqCst),
             recalls_completed.load(Ordering::SeqCst),
         );
+        std::process::exit(1);
     }
 
     assert_eq!(remembers_completed.load(Ordering::SeqCst), 20);
@@ -158,7 +189,9 @@ async fn concurrent_spawn_blocking_semantic_memory_store_and_query_within_bound(
 
     let dir = tempdir().expect("tempdir");
     let db = Arc::new(Database::open(dir.path()).expect("open database"));
-    let semantic = Arc::new(SemanticMemory::new_from_db(Arc::clone(&db), DIMENSION).expect("open semantic memory"));
+    let semantic = Arc::new(
+        SemanticMemory::new_from_db(Arc::clone(&db), DIMENSION).expect("open semantic memory"),
+    );
 
     // Pre-seed so searches have a realistic corpus to scan under contention.
     for i in 0..SEED_POINTS {
@@ -195,17 +228,26 @@ async fn concurrent_spawn_blocking_semantic_memory_store_and_query_within_bound(
         });
     }
 
+    // Mirrors MemoryService::recall exactly (crates/velesdb-memory/src/service.rs:442-462):
+    // a `search` (SemanticMemory::query -> Collection::search, vector read lock)
+    // immediately followed by a SEPARATE `get_metadata_batch` call
+    // (SemanticMemory::get_metadata_batch -> Collection::get, payload read lock)
+    // over the ids the search returned. A `recall`-only repro that stops at the
+    // first read (as the earlier revision of this test did) does not reproduce
+    // the hang; this two-read shape is the ingredient that was missing.
     for i in 0..10u64 {
         let semantic = Arc::clone(&semantic);
         let counter = Arc::clone(&queries_completed);
         tasks.spawn(async move {
             tokio::task::spawn_blocking(move || {
                 let query = make_vector(DIMENSION, i * 7);
-                semantic.query(&query, 10)
+                let hits = semantic.query(&query, 10)?;
+                let ids: Vec<u64> = hits.iter().map(|(id, _, _)| *id).collect();
+                semantic.get_metadata_batch(&ids)
             })
             .await
             .expect("query task must not panic")
-            .expect("query must succeed");
+            .expect("query + get_metadata_batch must succeed");
             counter.fetch_add(1, Ordering::SeqCst);
         });
     }
@@ -219,13 +261,18 @@ async fn concurrent_spawn_blocking_semantic_memory_store_and_query_within_bound(
     let outcome = tokio::time::timeout(Duration::from_secs(20), all).await;
 
     if outcome.is_err() {
-        panic!(
+        // See the sibling test's comment on why this is `process::exit`, not
+        // `panic!`: uncancellable `spawn_blocking` stragglers can otherwise
+        // turn a bounded 20s test timeout into an unbounded hang in the
+        // `#[tokio::test]` runtime's teardown.
+        eprintln!(
             "HANG REPRODUCED (SemanticMemory layer, dimension={DIMENSION}): 30 concurrent \
              spawn_blocking store/query calls did not complete within 20s. Completed before \
              timeout: {}/20 stores, {}/10 queries.",
             stores_completed.load(Ordering::SeqCst),
             queries_completed.load(Ordering::SeqCst),
         );
+        std::process::exit(1);
     }
 
     assert_eq!(stores_completed.load(Ordering::SeqCst), 20);
