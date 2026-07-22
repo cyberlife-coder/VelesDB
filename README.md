@@ -116,6 +116,8 @@ curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/vele
 
 Want the memory used *continuously*, not just available? [`integrations/agent-hooks/`](integrations/agent-hooks/README.md) wires `SessionStart`/`Stop`/`PreCompact` hooks that resume and save the working context automatically — one global install covers every project. No Rust toolchain? `npm i @wiscale/velesdb-memory-node`.
 
+Want Claude Code, Claude Desktop, and Windsurf sharing the *same* memory instead of one client at a time? [`scripts/install-memory-daemon.sh`](crates/velesdb-memory/README.md#http-transport-multi-client) runs `velesdb-memory` as a single local HTTP daemon and wires every client to it.
+
 <details>
 <summary><strong>Other install paths — Rust, Docker, WASM, REST server</strong></summary>
 
