@@ -347,6 +347,13 @@ velesdb-memory --http
 - `--http-port <PORT>` / `VELESDB_MEMORY_HTTP_BIND=<host:port>` — override the
   bind address (default `127.0.0.1:18090`; `--http-port` overrides just the
   port on top of `VELESDB_MEMORY_HTTP_BIND`).
+- The transport has **no authentication** — anyone who can reach the socket
+  gets full `remember`/`recall`/`relate` access to the store. That's fine for
+  the default loopback-only bind (only processes on the same machine can
+  reach it), so a non-loopback `VELESDB_MEMORY_HTTP_BIND` host is refused at
+  startup unless you also set `VELESDB_MEMORY_HTTP_ALLOW_REMOTE=1`. Only set
+  that if you're putting an authenticating reverse proxy in front — never
+  point the bare daemon at a network-reachable address.
 - `GET /health` — plain 200 OK liveness probe (no MCP handshake needed) —
   what the installer script and CI use to confirm the daemon is up.
 - The store's `flock` is unchanged: a *second* `velesdb-memory --http` (or a

@@ -122,7 +122,46 @@ fn requested_http_bind(args: &[String]) -> Option<String> {
         },
         None => default_bind,
     };
+
+    // The router (`velesdb_memory::http::router`) authenticates no one: any
+    // caller that can reach the socket gets full `remember`/`recall`/`relate`
+    // access to the store. That's only safe because the default bind is
+    // loopback-only. `VELESDB_MEMORY_HTTP_BIND` lets the *port* be
+    // overridden freely, but overriding the *host* to something reachable
+    // off-box would turn an unauthenticated local daemon into an
+    // unauthenticated network service — so that requires an explicit,
+    // separate opt-in rather than falling out of a bind-address typo.
+    if !is_loopback_host(&bind_addr)
+        && std::env::var("VELESDB_MEMORY_HTTP_ALLOW_REMOTE").as_deref() != Ok("1")
+    {
+        eprintln!(
+            "[velesdb-memory] refusing to bind the HTTP transport to '{bind_addr}': it is not a \
+             loopback address, and the streamable-HTTP transport has no authentication — anyone \
+             who can reach that socket gets full read/write access to the store. Set \
+             VELESDB_MEMORY_HTTP_ALLOW_REMOTE=1 to override (put an authenticating reverse proxy \
+             in front first)."
+        );
+        std::process::exit(1);
+    }
+
     Some(bind_addr)
+}
+
+/// Whether `bind_addr`'s host component (`host:port` or `[ipv6]:port`)
+/// resolves to a loopback address. Used to gate non-local HTTP binds behind
+/// an explicit opt-in — see `requested_http_bind` above. An unparseable host
+/// (e.g. a hostname like `mcp.example.com` rather than a literal IP) is
+/// treated as non-loopback: `TcpListener::bind` does its own DNS resolution
+/// later, so this is a conservative pre-check, not the only one.
+#[cfg(feature = "http")]
+fn is_loopback_host(bind_addr: &str) -> bool {
+    let host = bind_addr
+        .rsplit_once(':')
+        .map_or(bind_addr, |(host, _port)| host)
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    host.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// See the `http`-feature variant above. Without `http`, no bind address can
@@ -447,4 +486,24 @@ fn build_ollama_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
 #[cfg(not(feature = "ollama"))]
 fn build_ollama_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
     Err("the 'ollama' embedder requires building with `--features ollama`".into())
+}
+
+#[cfg(all(test, feature = "http"))]
+mod tests {
+    use super::is_loopback_host;
+
+    #[test]
+    fn loopback_v4_and_v6_are_recognized() {
+        assert!(is_loopback_host("127.0.0.1:18090"));
+        assert!(is_loopback_host("127.0.0.5:18090"));
+        assert!(is_loopback_host("[::1]:18090"));
+    }
+
+    #[test]
+    fn non_loopback_hosts_are_rejected() {
+        assert!(!is_loopback_host("0.0.0.0:18090"));
+        assert!(!is_loopback_host("192.168.1.10:18090"));
+        assert!(!is_loopback_host("[::]:18090"));
+        assert!(!is_loopback_host("mcp.example.com:18090"));
+    }
 }
