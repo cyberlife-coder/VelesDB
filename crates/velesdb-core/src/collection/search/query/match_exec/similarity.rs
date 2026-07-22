@@ -331,8 +331,10 @@ impl Collection {
         validate_dimension_match(expected_dimension, query_vector.len())?;
 
         // Hoist both storage locks once for the entire scoring loop.
-        let payload_guard = self.storage.payload_storage.read();
+        // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
+        // reversed here. See .investigation/http-deadlock-2026-07-22/.
         let vector_storage = self.storage.vector_storage.read();
+        let payload_guard = self.storage.payload_storage.read();
         let higher_is_better = metric.higher_is_better();
 
         let mut scored_results = self.score_match_results(
@@ -482,8 +484,10 @@ impl Collection {
         &self,
         match_results: Vec<MatchResult>,
     ) -> Result<Vec<SearchResult>> {
-        let payload_storage = self.storage.payload_storage.read();
+        // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
+        // reversed here. See .investigation/http-deadlock-2026-07-22/.
         let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
 
         let mut results = Vec::new();
 

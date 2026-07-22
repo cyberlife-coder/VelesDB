@@ -34,16 +34,29 @@ impl Collection {
     /// the backing read for `rebuild_ttl_from_payloads` (agent TTL cache) and
     /// memory snapshots: filtering them out would hide unswept expired points
     /// after a restart, so `auto_expire` could never reclaim their storage.
+    ///
+    /// # Lock order (Issue: ABBA deadlock, see `.investigation/http-deadlock-2026-07-22/`)
+    ///
+    /// Acquires `vector_storage` (rank 2) before `payload_storage` (rank 3),
+    /// matching [`Collection::search`](super::super::search::vector). This
+    /// used to be reversed (payload then vector), which formed a classic
+    /// ABBA deadlock with `search`'s vector-then-payload order: under
+    /// `parking_lot`'s writer-preferring `RwLock`, two readers acquiring the
+    /// same pair of locks in opposite order — with a writer from
+    /// `batch_store_all` queued on either lock — can cycle forever. Confirmed
+    /// live via a sustained hung run (186s, flat CPU, identical stuck frames
+    /// 33s apart). Any future read/write path touching both locks must
+    /// acquire vector before payload.
     #[must_use]
     pub(crate) fn get_raw(&self, ids: &[u64]) -> Vec<Option<Point>> {
         let config = self.storage.config.read();
         let is_metadata_only = config.metadata_only;
         drop(config);
 
-        let payload_storage = self.storage.payload_storage.read();
-
         if is_metadata_only {
-            // For metadata-only collections, only retrieve payload
+            // Metadata-only collections never touch vector_storage, so the
+            // canonical order is trivially satisfied here.
+            let payload_storage = self.storage.payload_storage.read();
             ids.iter()
                 .map(|&id| {
                     let payload = payload_storage.retrieve(id).ok().flatten()?;
@@ -56,8 +69,10 @@ impl Collection {
                 })
                 .collect()
         } else {
-            // For vector collections, retrieve both vector and payload
+            // For vector collections, retrieve both vector and payload —
+            // vector_storage acquired first, see the lock-order note above.
             let vector_storage = self.storage.vector_storage.read();
+            let payload_storage = self.storage.payload_storage.read();
             ids.iter()
                 .map(|&id| {
                     let vector = vector_storage.retrieve(id).ok().flatten()?;
