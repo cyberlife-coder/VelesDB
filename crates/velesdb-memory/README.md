@@ -416,7 +416,7 @@ claude mcp add --transport http velesdb-memory http://127.0.0.1:18090/mcp
 `scripts/install-memory-daemon.sh` automates all of this end to end: building
 with the right features, running the daemon (as a macOS `launchd` agent), and
 wiring Claude Code / Claude Desktop / Windsurf — see `--help` for flags
-(`--embedder`, `--port`, `--store`, `--skip-client`, `--uninstall`, …).
+(`--embedder`, `--port`, `--store`, `--ttl`, `--skip-client`, `--uninstall`, …).
 
 ## Teach your agent the flow (skill)
 
