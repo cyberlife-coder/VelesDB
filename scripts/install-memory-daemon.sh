@@ -164,7 +164,11 @@ setup_ollama() {
     echo -e "${RED}❌ 'ollama' not found.${NC}"
     case "$(uname -s)" in
       Darwin) echo "   Install it with: brew install ollama" ;;
-      Linux) echo "   Install it with: curl -fsSL https://ollama.com/install.sh | sh" ;;
+      # Deliberately not an inline `curl | sh` one-liner: install-time
+      # guidance text shouldn't itself model piping a remote script
+      # straight into a shell. Point at Ollama's own install page instead,
+      # same as the generic fallback below.
+      Linux) echo "   See https://ollama.com/download for Linux install instructions" ;;
       *) echo "   See https://ollama.com/download" ;;
     esac
     exit 1
