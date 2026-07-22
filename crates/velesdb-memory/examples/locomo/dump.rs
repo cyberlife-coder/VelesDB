@@ -225,9 +225,9 @@ fn ymd_to_ordinal(ts: i64) -> Option<i64> {
     let y = if month <= 2 { year - 1 } else { year };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400;
-    let mp = (month + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let month_shifted = (month + 9) % 12;
+    let day_of_year = (153 * month_shifted + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + day_of_year;
     Some(era * 146_097 + doe - 719_468)
 }
 
