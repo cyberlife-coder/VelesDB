@@ -41,6 +41,13 @@ pub mod extract;
 /// [`service::MemoryService::recall_fused`]. Internal: callers reach it only
 /// through that method.
 mod fusion;
+/// The streamable-HTTP transport (multi-client mode): lets several MCP
+/// clients share ONE `velesdb-memory` process instead of each spawning its
+/// own stdio process and fighting over the store's single-writer `flock`.
+/// Gated behind the (non-default) `http` feature — see the module docs and
+/// the crate README's "HTTP transport (multi-client)" section.
+#[cfg(feature = "http")]
+pub mod http;
 /// Content-addressed memory ids — internal; ids surface through the service API.
 pub(crate) mod id;
 /// Resource caps (DoS limits) shared by every adapter — the single source of
