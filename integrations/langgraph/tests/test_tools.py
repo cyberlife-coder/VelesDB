@@ -9,6 +9,45 @@ def _tools_by_name():
     return {t.name: t for t in make_memory_tools(tempfile.mkdtemp())}
 
 
+class _Pre0_11Service:
+    """Stands in for a ``MemoryService`` built against a velesdb wheel
+    published before ``feedback``/``save_working_context``/
+    ``load_working_context`` existed (e.g. the current PyPI 3.12.0) — same
+    shape as the real binding, minus those three methods.
+    """
+
+    def __init__(self):
+        self._facts = {}
+        self._next_id = 1
+
+    def remember(self, fact, links=None, metadata=None, ttl_seconds=None):
+        fid = self._next_id
+        self._next_id += 1
+        self._facts[fid] = fact
+        return fid
+
+    def recall(self, query, k):
+        return [{"id": i, "score": 1.0, "content": f, "metadata": None} for i, f in self._facts.items()]
+
+    def recall_where(self, query, filters, k):
+        return self.recall(query, k)
+
+    def recall_fused(self, query, k, filter=None, *, date_field=None, options=None):
+        return self.recall(query, k)
+
+    def relate(self, from_id, to_id, relation):
+        return 1
+
+    def forget(self, id):
+        return self._facts.pop(id, None) is not None
+
+    def why(self, question, max_hops):
+        return {"nodes": [], "edges": []}
+
+    # feedback / save_working_context / load_working_context intentionally
+    # absent, matching the real gap on PyPI 3.12.0.
+
+
 def test_exposes_the_full_memory_tool_set():
     assert set(_tools_by_name()) == {
         "remember",
@@ -152,3 +191,58 @@ def test_load_working_context_returns_none_when_nothing_was_saved():
         {"project": "veles", "session": "no-such-session"}
     )
     assert loaded is None
+
+
+def _tools_on_pre_0_11_binding():
+    return {t.name: t for t in make_memory_tools(service=_Pre0_11Service())}
+
+
+def test_make_memory_tools_construction_succeeds_even_without_new_binding_methods():
+    # The guard is a call-time check, not a construction-time one: building
+    # the tool list must not itself require feedback/save_working_context/
+    # load_working_context to exist on the service.
+    tools = _tools_on_pre_0_11_binding()
+    assert set(tools) == {
+        "remember",
+        "recall",
+        "recall_where",
+        "recall_fused",
+        "relate",
+        "forget",
+        "feedback",
+        "why",
+        "save_working_context",
+        "load_working_context",
+    }
+
+
+def test_feedback_returns_actionable_error_instead_of_raising_when_unsupported():
+    tools = _tools_on_pre_0_11_binding()
+
+    result = tools["feedback"].invoke({"id": 1, "success": True})
+
+    assert result == {
+        "error": "feedback requires velesdb > 3.12.0 — upgrade with `pip install -U velesdb`"
+    }
+
+
+def test_save_working_context_returns_actionable_error_instead_of_raising_when_unsupported():
+    tools = _tools_on_pre_0_11_binding()
+
+    result = tools["save_working_context"].invoke(
+        {"project": "veles", "session": "s1", "working": {"goal": "x"}}
+    )
+
+    assert result == {
+        "error": "save_working_context requires velesdb > 3.12.0 — upgrade with `pip install -U velesdb`"
+    }
+
+
+def test_load_working_context_returns_actionable_error_instead_of_raising_when_unsupported():
+    tools = _tools_on_pre_0_11_binding()
+
+    result = tools["load_working_context"].invoke({"project": "veles", "session": "s1"})
+
+    assert result == {
+        "error": "load_working_context requires velesdb > 3.12.0 — upgrade with `pip install -U velesdb`"
+    }

@@ -116,7 +116,7 @@ def make_memory_tools(
         """
         return mem.forget(id)
 
-    def feedback(id: int, success: bool) -> float:
+    def feedback(id: int, success: bool) -> Any:
         """Reinforce or weaken a memory after using it, and return its
         updated confidence in ``[0.0, 1.0]``.
 
@@ -125,7 +125,12 @@ def make_memory_tools(
         (``success=False``). This closes the self-improving loop: future
         ``recall``/``recall_where``/``recall_fused`` calls rank
         higher-confidence memories higher.
+
+        If the installed ``velesdb`` predates this method, returns
+        ``{"error": "..."}`` instead of raising, telling you to upgrade.
         """
+        if not hasattr(mem, "feedback"):
+            return _unsupported("feedback")
         return mem.feedback(id, success)
 
     def why(question: str, max_hops: int = 2) -> dict[str, Any]:
@@ -137,7 +142,7 @@ def make_memory_tools(
         project: str,
         session: str,
         working: dict[str, Any],
-    ) -> int:
+    ) -> Any:
         """Persist the current working state under ``project`` + ``session``
         so a later run can resume exactly where this one left off.
 
@@ -147,10 +152,15 @@ def make_memory_tools(
         "pending_actions": [...]}`` — call this near the end of a session, or
         whenever the plan materially changes. Saving again under the same
         ``project`` + ``session`` replaces the previous state (not a merge).
+
+        If the installed ``velesdb`` predates this method, returns
+        ``{"error": "..."}`` instead of raising, telling you to upgrade.
         """
+        if not hasattr(mem, "save_working_context"):
+            return _unsupported("save_working_context")
         return mem.save_working_context(project, session, working)
 
-    def load_working_context(project: str, session: str) -> Optional[dict[str, Any]]:
+    def load_working_context(project: str, session: str) -> Any:
         """Load the working context previously saved under ``project`` +
         ``session`` by ``save_working_context``.
 
@@ -158,7 +168,12 @@ def make_memory_tools(
         to resume a prior session instead of restarting from scratch. Returns
         ``None`` when nothing was ever saved under that exact
         ``project``/``session`` pair — not an error, just a fresh start.
+
+        If the installed ``velesdb`` predates this method, returns
+        ``{"error": "..."}`` instead of raising, telling you to upgrade.
         """
+        if not hasattr(mem, "load_working_context"):
+            return _unsupported("load_working_context")
         return mem.load_working_context(project, session)
 
     return [
@@ -186,3 +201,16 @@ def _resolve_service(
     if path is None:
         raise ValueError("make_memory_tools requires either `path` or `service`")
     return MemoryService(path)
+
+
+def _unsupported(method: str) -> dict[str, str]:
+    """Actionable tool-error payload for a ``MemoryService`` method missing on
+    the installed ``velesdb`` (older than this package expects).
+
+    Returned as a normal tool result rather than raised, so a missing method
+    surfaces to the LLM as a tool error it can react to instead of an
+    uncaught ``AttributeError`` that would kill the whole LangGraph run.
+    """
+    return {
+        "error": f"{method} requires velesdb > 3.12.0 — upgrade with `pip install -U velesdb`"
+    }

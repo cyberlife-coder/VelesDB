@@ -55,7 +55,12 @@ tools = make_memory_tools(service=MemoryService("./agent_memory"))
 `save_working_context` / `load_working_context` let an agent pick up a task
 across separate runs instead of restarting from scratch:
 
+`make_memory_tools` returns a *list* of tools, so index them by name first
+(the same pattern LangGraph's `ToolNode`/`create_react_agent` use internally):
+
 ```python
+tools = {t.name: t for t in make_memory_tools("./agent_memory")}
+
 tools["save_working_context"].invoke({
     "project": "veles",
     "session": "issue-1546",
@@ -76,6 +81,8 @@ Every `remember`-ed fact is auto-stamped with `_veles_date` (today, as a
 `recall_fused` at it to get a chronological timeline instead of a ranked list:
 
 ```python
+tools = {t.name: t for t in make_memory_tools("./agent_memory")}
+
 tools["recall_fused"].invoke({"query": "what changed this week", "date_field": "_veles_date"})
 # -> {"memories": [...], "dated_context": "...", "now": "..."}
 ```
@@ -86,11 +93,20 @@ This package requires `velesdb>=3.12.0`, the highest version published to
 PyPI at the time of writing. `feedback`, `save_working_context`,
 `load_working_context`, and the automatic `_veles_date` metadata stamp landed
 in `velesdb`/`velesdb-memory` *after* the 3.12.0 release cut and are not yet
-in a published wheel — those tools will raise `AttributeError` (and
-`recall_where`/`recall_fused`'s `metadata` will stay empty for auto-dating)
-until `velesdb` publishes a newer release. `forget` works on 3.12.0 but
-returns `None` instead of a `True`/`False` existed-or-not signal until then.
-The floor will be bumped again once that release ships.
+in a published wheel. On a plain 3.12.0 install those three tools detect the
+missing binding method at call time and return an error payload instead of
+raising, e.g.:
+
+```json
+{"error": "feedback requires velesdb > 3.12.0 — upgrade with `pip install -U velesdb`"}
+```
+
+so a single unsupported call surfaces to the agent as a normal tool result it
+can react to, instead of an uncaught `AttributeError` killing the whole graph
+run. `recall_where`/`recall_fused` still work, but their `metadata` stays
+empty for auto-dating until you upgrade. `forget` works on 3.12.0 too, but
+returns `None` instead of a `True`/`False` existed-or-not signal. The floor
+will be bumped again once a `velesdb` release past 3.12.0 ships.
 
 `list_working_contexts` (browse saved sessions for a project) is not exposed
 here: it exists on the WASM and MCP surfaces but not yet on the `velesdb`
