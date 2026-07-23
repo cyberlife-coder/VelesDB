@@ -55,10 +55,10 @@ three engines behind its memory tools:
 
 | Tool       | What it does                                               | Engines |
 |------------|------------------------------------------------------------|---------|
-| `remember` | store a fact, optionally linked + tagged with metadata, with an optional expiry (`ttl_seconds`) | Vector + Graph + ColumnStore |
+| `remember` | store a fact, optionally linked + tagged with metadata, with an optional expiry (`ttl_seconds`); every fact is auto-stamped with today's date (`_veles_date`, a `YYYYMMDD` integer) unless you set it yourself, so temporal recall (`recall_fused`'s `date_field`) works with zero setup — see [Automatic dating](#automatic-dating-_veles_date) | Vector + Graph + ColumnStore |
 | `recall`   | semantic retrieval, optional exact-match metadata filter   | Vector + ColumnStore |
 | `relate`   | create a typed edge between two memories                   | Graph |
-| `recall_fused` | recall with graph-aware re-ranking (vector + typed links fused) | Vector + Graph |
+| `recall_fused` | recall with graph-aware re-ranking (vector + typed links fused); `date_field` (e.g. the automatic `_veles_date`) also returns a chronological `dated_context` timeline + `now` anchor | Vector + Graph |
 | `recall_where` | recall filtered by typed column predicates (ranges, comparisons) | Vector + ColumnStore |
 | `forget`   | delete a memory                                            | — |
 | `why`      | recall a decision **+ its connected subgraph** (multi-hop) | Vector + Graph + ColumnStore |
@@ -72,6 +72,44 @@ your question — exactly what a pure vector search is blind to.
 By design the server exposes **memory semantics only** — never raw database
 capabilities (`query`, `create_collection`, `upsert`, `traverse`). See
 [License](#license).
+
+### Automatic dating (`_veles_date`)
+
+Every `remember`/`remember_extracted` call auto-stamps the fact's metadata with
+`_veles_date` — today's date, read from the system clock, as a `YYYYMMDD`
+integer — **unless the caller already set that key**, in which case it is
+never overwritten. This used to be entirely the caller's job (write a numeric
+date field yourself, e.g. `ts`/`occurred_at`, remember to keep it numeric);
+now it's guaranteed by the server, with zero setup:
+
+```jsonc
+// no metadata at all — still gets a date
+remember({ fact: "we chose parking_lot to avoid lock poisoning" })
+// stored metadata: { "_veles_date": 20260723 }   (today, auto-stamped)
+
+// recall_fused's date_field needs no caller-managed date field anymore
+recall_fused({ query: "why parking_lot", date_field: "_veles_date" })
+// → dated_context: "- [2026-07-23] we chose parking_lot ..."
+//   now: "2026-07-23"
+```
+
+To date a fact **retroactively** (e.g. an incident that happened last month,
+not today), set `_veles_date` explicitly in `metadata` — an explicit value is
+always respected, never replaced:
+
+```jsonc
+remember({
+  fact: "payment provider timeout set to 8s",
+  metadata: { "_veles_date": 20260610 }   // when it actually happened
+})
+```
+
+`_veles_date` behaves like ordinary metadata for every other purpose too — it
+round-trips in `recall`/`recall_where`/`recall_fused` results and can be used
+as a `recall_where` range filter (`{ field: "_veles_date", op: "ge", value:
+20260101 }`) — it is the one metadata key namespaced under the internal
+`_veles_` prefix that a caller MAY still set and see; every other `_veles_*`
+key stays fully reserved (rejected on write, stripped from every read).
 
 ## See it (offline, one command)
 
@@ -1225,9 +1263,11 @@ score = fused_norm + confidence·(rl_confidence − 0.5)·2 + recency·recency_n
   by an adversarial test).
 - **Recency contract (strict).** `recency_field: null` disables the term —
   no implicit default key exists. When set, it must name a **numeric**
-  caller metadata field on one monotone scale per batch (e.g. `YYYYMMDD`
-  integers as in dated recall, or an epoch); the scale is documented, not
-  verified. Values are min-max normalised **within the pulled batch**: the
+  caller metadata field on one monotone scale per batch (e.g. the automatic
+  `_veles_date` `YYYYMMDD` field every `remember`-d fact already carries, per
+  [Automatic dating](#automatic-dating-_veles_date), another `YYYYMMDD`
+  field, or an epoch); the scale is documented, not verified. Values are
+  min-max normalised **within the pulled batch**: the
   newest reads `1.0`, the oldest `0.0`, a memory without the key contributes
   `0` (never penalised), and a degenerate batch (`max == min`) contributes
   `0` for all. The compile pipeline never reads a clock — recency is
