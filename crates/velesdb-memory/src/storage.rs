@@ -352,12 +352,33 @@ impl NativeStore {
     }
 }
 
+/// Reserved metadata key `remember`/`remember_with_ttl` auto-stamp with
+/// today's date (a `YYYYMMDD` integer, [`crate::clock::today_ymd`]) whenever
+/// the caller didn't already set it — see
+/// [`crate::service::MemoryService::remember_with_ttl`] for the full
+/// contract. A deliberate, documented **exception** to every other
+/// `_veles_`-namespaced key: [`is_reserved_key`] still names it (so it can
+/// never be confused with an arbitrary caller field), but unlike a true
+/// system key —
+/// - a caller MAY set it explicitly (to date a fact retroactively; never
+///   overwritten once present), and
+/// - it is NOT stripped from caller-facing results, so
+///   [`crate::dated_context::format_dated_context`]'s `date_field` (wired
+///   through `recall_fused`'s `date_field` parameter) can read it back with
+///   zero caller effort.
+///
+/// `pub` (re-exported at the crate root) so every caller of `date_field`
+/// names this one string in exactly one place, not a copy-pasted literal.
+pub const AUTO_DATE_FIELD: &str = "_veles_date";
+
 /// True for metadata keys the memory layer reserves: the engine's `content`
 /// payload, and any `_veles_`-namespaced system key (durable TTL, entity
-/// hubs). The single source of the reserved-key contract — the service layer
-/// (reject/strip) and every backend enforce it through this one predicate.
+/// hubs) — [`AUTO_DATE_FIELD`] EXCEPTED, since (unlike every other reserved
+/// key) it is caller-settable and caller-visible by design. The single
+/// source of the reserved-key contract — the service layer (reject/strip)
+/// and every backend enforce it through this one predicate.
 pub(crate) fn is_reserved_key(key: &str) -> bool {
-    key == "content" || key.starts_with("_veles_")
+    key != AUTO_DATE_FIELD && (key == "content" || key.starts_with("_veles_"))
 }
 
 /// Drop reserved system keys from a raw payload, and collapse an

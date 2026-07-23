@@ -25,6 +25,11 @@
 //! Set" of the Software's features and breach the `VelesDB` Core License 1.0
 //! (§1, No Hosted or Managed Service). See `VISION.md` §5 and `PLAN.md` Phase 4A.
 
+/// Wall-clock "today" as a `YYYYMMDD` integer, read only by `remember`'s
+/// auto-date stamping (see [`storage::AUTO_DATE_FIELD`]) — never by the
+/// context compiler, which stays clock-free and deterministic. Internal:
+/// nothing outside the crate needs to read the clock directly.
+mod clock;
 /// The deterministic context compiler (EPIC-P-070): classify, dedup, and pack
 /// caller-supplied context fragments under a token budget — no LLM, no cloud,
 /// every decision auditable. Gated behind the default `context` feature.
@@ -120,6 +125,6 @@ pub use model::{
 };
 pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{MemoryService, Metadata};
-pub use storage::MemoryStore;
 #[cfg(feature = "persistence")]
 pub use storage::NativeStore;
+pub use storage::{MemoryStore, AUTO_DATE_FIELD};

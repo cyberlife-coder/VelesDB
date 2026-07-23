@@ -48,6 +48,9 @@ pub enum MemoryError {
 
     /// Caller metadata or a recall filter named a reserved key (`content` or a
     /// `_veles_`-prefixed system key), which callers may not set or filter on.
+    /// [`crate::storage::AUTO_DATE_FIELD`] is the one documented exception:
+    /// a caller MAY set it (e.g. to date a fact retroactively), so it never
+    /// raises this error.
     #[error("metadata key '{0}' is reserved")]
     ReservedKey(String),
 

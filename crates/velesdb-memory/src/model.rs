@@ -67,10 +67,16 @@ pub struct Recollection {
     /// Stored fact content.
     pub content: String,
     /// Caller-supplied structured metadata stored with the fact (the `ColumnStore`
-    /// facet), with reserved system keys (`content`, `_veles_*`) excluded. `None`
-    /// when the fact carries no caller metadata. This is what makes dated recall
-    /// work: store a date (e.g. `occurred_at`) and it round-trips here, so a
-    /// `recall_where` result can be ordered into a chronological timeline.
+    /// facet), with reserved system keys (`content`, `_veles_*`) excluded —
+    /// EXCEPT [`crate::storage::AUTO_DATE_FIELD`] (`_veles_date`), the
+    /// `YYYYMMDD` date `remember` auto-stamps onto (almost) every fact, which
+    /// stays visible here on purpose so `recall_fused`'s `date_field` can read
+    /// it back with no caller effort. `None` only when the fact carries no
+    /// metadata at all AND no auto-date could be stamped (`wasm32-unknown-unknown`,
+    /// which has no clock). This is what makes dated recall work: store a date
+    /// (e.g. `occurred_at`, or just rely on the automatic `_veles_date`) and it
+    /// round-trips here, so a `recall_where`/`recall_fused` result can be
+    /// ordered into a chronological timeline.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
 }
