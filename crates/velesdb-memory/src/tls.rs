@@ -205,22 +205,26 @@ fn create_private_dir(dir: &Path) -> Result<(), TlsError> {
     set_permissions(dir, 0o700)
 }
 
-/// Load the CA from `dir` if both its cert and key are already present
-/// (never regenerating one that exists — see module docs for why that
-/// matters), otherwise generate a fresh self-signed CA and persist it.
-/// Either way, returns an [`Issuer`] ready to sign a leaf certificate.
-fn ensure_ca(dir: &Path) -> Result<Issuer<'static, KeyPair>, TlsError> {
+/// Load the CA from `dir` if both its cert and key are already present —
+/// `None` if either is missing, meaning the caller must generate a fresh one.
+/// Never regenerates one that exists (see module docs for why that matters).
+fn load_existing_ca(dir: &Path) -> Result<Option<Issuer<'static, KeyPair>>, TlsError> {
     let ca_cert_path = dir.join(CA_CERT_FILE);
     let ca_key_path = dir.join(CA_KEY_FILE);
 
-    if ca_cert_path.exists() && ca_key_path.exists() {
-        let ca_cert_pem = read_to_string(&ca_cert_path)?;
-        let ca_key_pem = read_to_string(&ca_key_path)?;
-        let key_pair = KeyPair::from_pem(&ca_key_pem)?;
-        let issuer = Issuer::from_ca_cert_pem(&ca_cert_pem, key_pair)?;
-        return Ok(issuer);
+    if !ca_cert_path.exists() || !ca_key_path.exists() {
+        return Ok(None);
     }
 
+    let ca_cert_pem = read_to_string(&ca_cert_path)?;
+    let ca_key_pem = read_to_string(&ca_key_path)?;
+    let key_pair = KeyPair::from_pem(&ca_key_pem)?;
+    Ok(Some(Issuer::from_ca_cert_pem(&ca_cert_pem, key_pair)?))
+}
+
+/// Generate a fresh self-signed CA and persist it to `dir` (cert `0644`,
+/// private key `0600`).
+fn generate_new_ca(dir: &Path) -> Result<Issuer<'static, KeyPair>, TlsError> {
     let key_pair = KeyPair::generate()?;
     let mut params = CertificateParams::new(Vec::<String>::new())?;
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
@@ -234,10 +238,24 @@ fn ensure_ca(dir: &Path) -> Result<Issuer<'static, KeyPair>, TlsError> {
 
     let ca_cert = params.self_signed(&key_pair)?;
 
-    write_file(&ca_cert_path, ca_cert.pem().as_bytes(), 0o644)?;
-    write_file(&ca_key_path, key_pair.serialize_pem().as_bytes(), 0o600)?;
+    write_file(&dir.join(CA_CERT_FILE), ca_cert.pem().as_bytes(), 0o644)?;
+    write_file(
+        &dir.join(CA_KEY_FILE),
+        key_pair.serialize_pem().as_bytes(),
+        0o600,
+    )?;
 
     Ok(Issuer::new(params, key_pair))
+}
+
+/// Load the CA from `dir` if already present, otherwise generate and persist
+/// a fresh self-signed one. Either way, returns an [`Issuer`] ready to sign a
+/// leaf certificate.
+fn ensure_ca(dir: &Path) -> Result<Issuer<'static, KeyPair>, TlsError> {
+    match load_existing_ca(dir)? {
+        Some(issuer) => Ok(issuer),
+        None => generate_new_ca(dir),
+    }
 }
 
 /// Issue a fresh leaf certificate for `localhost`/`127.0.0.1`/`::1`, signed
