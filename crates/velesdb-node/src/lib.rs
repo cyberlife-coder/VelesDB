@@ -1,6 +1,9 @@
 //! Node.js (napi-rs) binding for the `velesdb-memory` `MemoryService` — the
 //! agent-memory wedge: `remember` / `recall` / `recallWhere` / `relate` /
-//! `forget` / `why` / `rememberExtracted`.
+//! `forget` / `why` / `feedback` / `rememberExtracted` / `compileContext` /
+//! `compileTranscript` / `contextSavings` / `explainCompilation` /
+//! `retrieveContextSource` / `saveWorkingContext` / `loadWorkingContext` /
+//! `listWorkingContexts`.
 //!
 //! It wraps the exact same hardened Rust the MCP server and the `PyO3` binding use
 //! (no logic is reimplemented), mirroring `crates/velesdb-python/src/agent_memory_service.rs`
@@ -474,6 +477,74 @@ impl MemoryStore {
                 }
                 None => Ok(JsonOut(Value::Null)),
             }
+        }))
+    }
+
+    /// Every session ever saved under `project`'s working-context index,
+    /// most-recently-saved first — so an agent can discover what is
+    /// resumable before guessing a session id at
+    /// [`Self::load_working_context`], or recover from a typo. Same JSON
+    /// shape as the MCP `list_working_contexts` tool: `{sessions:
+    /// [{session, saved_at}]}`, empty (never an error) when the project
+    /// never saved anything. Pure delegation to [`velesdb_memory`]'s bridge
+    /// — zero logic in the binding.
+    #[napi(
+        js_name = "listWorkingContexts",
+        ts_return_type = "Promise<{ sessions: Array<{ session: string; saved_at: number }> }>"
+    )]
+    pub fn list_working_contexts(&self, project: String) -> AsyncTask<Job<JsonOut>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let sessions = svc.list_working_contexts(&project).map_err(to_napi_err)?;
+            let sessions_value = serde_json::to_value(&sessions).map_err(|err| {
+                invalid_input(format!("working context sessions serialization: {err}"))
+            })?;
+            let mut map = serde_json::Map::new();
+            map.insert("sessions".to_owned(), sessions_value);
+            Ok(JsonOut(Value::Object(map)))
+        }))
+    }
+
+    /// One-call shortcut over [`Self::compile_context`] for a raw
+    /// agent-session transcript: deterministically segments it into turns
+    /// (plain marker-based — `System:`/`User:`/`Human:`/`Assistant:`/`AI:`/
+    /// `Tool:`/`### User`/`### Assistant` — or JSONL, one line per turn) and,
+    /// within each turn, into code/log/body sub-segments (fenced code blocks
+    /// stay atomic; runs of 8+ log-like lines collapse the same way
+    /// `abstract.log_dedup` would), then compiles the result exactly like
+    /// [`Self::compile_context`]. Same JSON request shape as the MCP
+    /// `compile_transcript` tool's `transcript` (inline) input — this
+    /// binding does not resolve the tool's `path` field (no
+    /// `VELESDB_MEMORY_INGEST_ROOTS`-style configuration surface here; read
+    /// the file yourself and pass its content as `transcript`). Resolves to
+    /// `{context, segmentation}`: `context` is the same wire shape as
+    /// [`Self::compile_context`]'s own output (id fields as decimal
+    /// strings); `segmentation` is the detected format plus one audit entry
+    /// (turn, role, kind, byte range, `fragment_id` — a decimal string) per
+    /// segment, so a caller can see exactly how the transcript was cut
+    /// before trusting the compiled result.
+    #[napi(
+        js_name = "compileTranscript",
+        ts_return_type = "Promise<{ context: { content: string; sections: object; decisions: object; sources: object; retrieval_handles: object; insights: object; risk: string }; segmentation: { format_detected: string; segments: Array<{ index: number; turn: number; role?: string; kind: string; byte_start: number; byte_end: number; fragment_id: string }>; merged_segments: number } }>"
+    )]
+    pub fn compile_transcript(&self, request: Value) -> AsyncTask<Job<JsonOut>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let input: convert::CompileTranscriptInput =
+                serde_json::from_value(request).map_err(|err| {
+                    invalid_input(format!("invalid compile_transcript request: {err}"))
+                })?;
+            let (request, segmentation) = convert::build_transcript_compile_request(input)?;
+            let compiled = svc
+                .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+                .map_err(to_napi_err)?;
+            let mut context_value = serde_json::to_value(&compiled)
+                .map_err(|err| invalid_input(format!("compiled context serialization: {err}")))?;
+            convert::stringify_id_fields(&mut context_value);
+            let mut map = serde_json::Map::new();
+            map.insert("context".to_owned(), context_value);
+            map.insert("segmentation".to_owned(), segmentation);
+            Ok(JsonOut(Value::Object(map)))
         }))
     }
 
