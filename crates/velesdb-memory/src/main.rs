@@ -19,6 +19,15 @@
 //! instead of stdio — letting several MCP clients share ONE process instead
 //! of each fighting over the store's single-writer `flock`. See
 //! `velesdb_memory::http` and the README's "HTTP transport" section.
+//!
+//! The HTTP transport serves HTTPS by default, terminated with a locally
+//! generated CA + leaf certificate (see `velesdb_memory::tls` — no external
+//! `mkcert`/`openssl`/reverse proxy required; some MCP clients, e.g. Claude
+//! Desktop's "Add custom connector", refuse any URL that isn't `https://`,
+//! even for `127.0.0.1`). Pass `--http-insecure` (or set
+//! `VELESDB_MEMORY_HTTP_INSECURE=1`) to fall back to plain HTTP instead —
+//! for local debugging, or when a trusted TLS-terminating proxy already
+//! sits in front.
 
 use std::time::Duration;
 
@@ -69,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::runtime::Runtime::new()?.block_on(async move {
         match http_bind {
             #[cfg(feature = "http")]
-            Some(bind_addr) => serve_http(server, bind_addr).await,
+            Some(request) => serve_http(server, request).await,
             #[cfg(not(feature = "http"))]
             Some(_never) => unreachable!(
                 "requested_http_bind only returns Some when built with --features http"
@@ -91,16 +100,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
 }
 
+/// A resolved `--http`/`VELESDB_MEMORY_HTTP=1` request: where to bind, and
+/// whether TLS should be skipped (`--http-insecure` /
+/// `VELESDB_MEMORY_HTTP_INSECURE=1` — see [`requested_http_bind`]).
+#[cfg(feature = "http")]
+struct HttpServeRequest {
+    bind_addr: String,
+    insecure: bool,
+}
+
 /// Detect the streamable-HTTP transport request (`--http` flag or
-/// `VELESDB_MEMORY_HTTP=1`) and resolve the bind address it should serve on,
-/// BEFORE the store is opened. Returns `None` for the default stdio
-/// transport.
+/// `VELESDB_MEMORY_HTTP=1`) and resolve how it should be served, BEFORE the
+/// store is opened. Returns `None` for the default stdio transport.
 ///
 /// Without the `http` feature, `--http`/`VELESDB_MEMORY_HTTP=1` is rejected
 /// with an actionable message instead of silently falling back to stdio —
 /// the binary was built without the code to honor the request at all.
 #[cfg(feature = "http")]
-fn requested_http_bind(args: &[String]) -> Option<String> {
+fn requested_http_bind(args: &[String]) -> Option<HttpServeRequest> {
     let http_flag = args.iter().any(|arg| arg == "--http");
     let http_env = std::env::var("VELESDB_MEMORY_HTTP").as_deref() == Ok("1");
     if !http_flag && !http_env {
@@ -144,7 +161,23 @@ fn requested_http_bind(args: &[String]) -> Option<String> {
         std::process::exit(1);
     }
 
-    Some(bind_addr)
+    // `--http-insecure` / `VELESDB_MEMORY_HTTP_INSECURE=1` is the explicit
+    // opt-out of HTTPS-by-default (see the crate-level doc comment above and
+    // `velesdb_memory::tls`'s module docs for why HTTPS is the default at
+    // all) — an "insecure escape hatch, loud at startup" flag, same shape as
+    // `VELESDB_MEMORY_HTTP_ALLOW_REMOTE` above. Kept as its own flag rather
+    // than folded into that one: that one is about *who* can reach the
+    // socket, this one is about *whether the bytes on the wire are
+    // encrypted* — independent axes, and conflating them would make an
+    // operator who only wants one silently get the other too.
+    let insecure_flag = args.iter().any(|arg| arg == "--http-insecure");
+    let insecure_env = std::env::var("VELESDB_MEMORY_HTTP_INSECURE").as_deref() == Ok("1");
+    let insecure = insecure_flag || insecure_env;
+
+    Some(HttpServeRequest {
+        bind_addr,
+        insecure,
+    })
 }
 
 /// Whether `bind_addr`'s host component (`host:port` or `[ipv6]:port`)
@@ -185,21 +218,31 @@ fn requested_http_bind(args: &[String]) -> Option<String> {
 }
 
 /// Serve the MCP server over the streamable-HTTP transport (multi-client
-/// mode): binds `bind_addr`, mounts [`velesdb_memory::http::router`], and
-/// runs until either the process receives Ctrl-C or the returned future is
-/// dropped (e.g. process termination) — a background daemon (launchd,
+/// mode): binds `request.bind_addr`, mounts [`velesdb_memory::http::router`],
+/// and runs until either the process receives Ctrl-C or the returned future
+/// is dropped (e.g. process termination) — a background daemon (launchd,
 /// systemd) is expected to just kill the process on stop, which is safe: the
 /// store's `flock` is released by the kernel on exit regardless (see the
 /// orphan-watchdog docs above).
+///
+/// HTTPS by default (a locally-generated CA + leaf cert — see
+/// `velesdb_memory::tls`), unless `request.insecure` opts out
+/// (`--http-insecure` / `VELESDB_MEMORY_HTTP_INSECURE=1`), in which case
+/// this serves plain HTTP via `axum::serve` exactly as before HTTPS
+/// support was added.
 #[cfg(feature = "http")]
 async fn serve_http(
     server: McpServer,
-    bind_addr: String,
+    request: HttpServeRequest,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let HttpServeRequest {
+        bind_addr,
+        insecure,
+    } = request;
+
     let ct = tokio_util::sync::CancellationToken::new();
     let app = velesdb_memory::http::router(server, ct.child_token());
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    eprintln!("[velesdb-memory] HTTP server listening on http://{bind_addr}/mcp");
 
     let ctrl_c_ct = ct.clone();
     tokio::spawn(async move {
@@ -208,9 +251,34 @@ async fn serve_http(
         }
     });
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move { ct.cancelled_owned().await })
-        .await?;
+    if insecure {
+        eprintln!(
+            "[velesdb-memory] WARNING: --http-insecure / VELESDB_MEMORY_HTTP_INSECURE=1 is set — \
+             serving PLAIN HTTP (no TLS) on http://{bind_addr}/mcp. Every request is readable by \
+             anyone who can reach that socket (loopback-only by default — see \
+             VELESDB_MEMORY_HTTP_ALLOW_REMOTE above). Use this only for local debugging, or when \
+             a trusted TLS-terminating proxy already sits in front."
+        );
+        eprintln!("[velesdb-memory] HTTP server listening on http://{bind_addr}/mcp");
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+            .await?;
+        return Ok(());
+    }
+
+    let tls_dir = velesdb_memory::tls::tls_dir_from_env();
+    let material = velesdb_memory::tls::ensure_tls_material(&tls_dir)?;
+    let acceptor = velesdb_memory::tls::tls_acceptor_from_material(&material)?;
+    eprintln!("[velesdb-memory] HTTPS server listening on https://{bind_addr}/mcp");
+    eprintln!(
+        "[velesdb-memory] Local CA: {} — a client only needs to trust this once (see \
+         ./scripts/install-memory-daemon.sh, which does this automatically on macOS); every \
+         future leaf certificate this daemon issues is signed by the same CA and is trusted \
+         automatically after that.",
+        material.ca_cert_path.display()
+    );
+
+    velesdb_memory::http::serve_tls(app, listener, acceptor, ct).await;
     Ok(())
 }
 

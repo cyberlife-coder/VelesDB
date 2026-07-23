@@ -9,6 +9,14 @@
 # `velesdb-memory` with the HTTP transport, runs ONE daemon (a macOS launchd
 # agent), and wires every supported client to it instead.
 #
+# The daemon serves HTTPS by default (a locally-generated CA + leaf
+# certificate — some clients, e.g. Claude Desktop's "Add custom connector"
+# UI, refuse any URL that isn't `https://`, even for 127.0.0.1). This script
+# additionally trusts that CA in your macOS login keychain so a strict HTTPS
+# client (a browser, `curl` without --cacert) connects with no warning — see
+# step 5's "Trusting the local CA" output for what that step actually did on
+# THIS run (macOS may require you to approve a system prompt).
+#
 # Usage:
 #   ./scripts/install-memory-daemon.sh [flags]
 #   ./scripts/install-memory-daemon.sh --uninstall
@@ -17,13 +25,16 @@
 #   --embedder=hash|ollama   Embedding backend (default: prompted, or 'hash' in CI/non-tty)
 #   --port=PORT              HTTP port (default: 18090)
 #   --store=PATH             Store directory (default: $HOME/.velesdb-memory)
+#   --tls-dir=PATH           TLS material (CA + leaf cert) directory (default: $HOME/.velesdb-memory-tls)
 #   --ollama-url=URL         Ollama endpoint (default: http://localhost:11434)
 #   --ollama-model=MODEL     Ollama embedding model (default: all-minilm)
 #   --ttl=SECONDS            Default TTL for new facts (default: prompted, empty = permanent)
 #   --yes                    Assume yes to interactive prompts (e.g. `ollama pull`)
 #   --skip-client=NAME       Skip wiring a client (repeatable): claude-code|claude-desktop|windsurf
+#   --skip-ca-trust          Skip trusting the local CA in the login keychain
 #   --force-restart          Reload the daemon even if already running
-#   --uninstall              Remove the daemon and all client wiring (store is NEVER deleted)
+#   --uninstall              Remove the daemon and all client wiring (store and TLS material/CA
+#                            trust are NEVER touched — same "never delete local state" policy)
 #   -h, --help               Show this help
 # =============================================================================
 
@@ -51,6 +62,10 @@ require_jq() {
 EMBEDDER=""
 PORT="18090"
 STORE="$HOME/.velesdb-memory"
+# Sibling of the default store, matching velesdb_memory::tls::default_tls_dir
+# — deliberately NOT nested inside STORE (see that function's doc comment:
+# the store and the CA have independent lifecycles).
+TLS_DIR="$HOME/.velesdb-memory-tls"
 OLLAMA_URL="http://localhost:11434"
 OLLAMA_MODEL="all-minilm"
 TTL=""
@@ -59,6 +74,7 @@ ASSUME_YES=0
 FORCE_RESTART=0
 UNINSTALL=0
 SKIP_CLIENTS=""
+SKIP_CA_TRUST=0
 
 PLIST_LABEL="com.velesdb.memory"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
@@ -67,7 +83,7 @@ DESKTOP_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.j
 WINDSURF_CONFIG="$HOME/.codeium/windsurf/mcp_config.json"
 
 print_usage() {
-  sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # ---- 0. Parse flags ---------------------------------------------------
@@ -76,11 +92,13 @@ for arg in "$@"; do
     --embedder=*) EMBEDDER="${arg#*=}" ;;
     --port=*) PORT="${arg#*=}" ;;
     --store=*) STORE="${arg#*=}" ;;
+    --tls-dir=*) TLS_DIR="${arg#*=}" ;;
     --ollama-url=*) OLLAMA_URL="${arg#*=}" ;;
     --ollama-model=*) OLLAMA_MODEL="${arg#*=}" ;;
     --ttl=*) TTL="${arg#*=}"; TTL_SET=1 ;;
     --yes) ASSUME_YES=1 ;;
     --skip-client=*) SKIP_CLIENTS="$SKIP_CLIENTS ${arg#*=}" ;;
+    --skip-ca-trust) SKIP_CA_TRUST=1 ;;
     --force-restart) FORCE_RESTART=1 ;;
     --uninstall) UNINSTALL=1 ;;
     -h|--help) print_usage; exit 0 ;;
@@ -298,6 +316,7 @@ setup_daemon() {
   <key>EnvironmentVariables</key>
   <dict>
     <key>VELESDB_MEMORY_PATH</key><string>$STORE</string>
+    <key>VELESDB_MEMORY_TLS_DIR</key><string>$TLS_DIR</string>
     <key>VELESDB_MEMORY_EMBEDDER</key><string>$EMBEDDER</string>
     <key>VELESDB_MEMORY_OLLAMA_URL</key><string>$OLLAMA_URL</string>
     <key>VELESDB_MEMORY_OLLAMA_MODEL</key><string>$OLLAMA_MODEL</string>
@@ -337,9 +356,15 @@ PLIST
   fi
   launchctl enable "gui/$uid/$PLIST_LABEL"
 
+  # The daemon serves HTTPS by default and generates its CA + leaf cert on
+  # first start (see velesdb_memory::tls) — this internal health check uses
+  # --cacert to trust exactly THAT CA rather than the system trust store, so
+  # it succeeds immediately regardless of whether (or how quickly) the
+  # keychain-trust step below completes.
+  local ca_cert="$TLS_DIR/ca-cert.pem"
   echo -e "${YELLOW}⏳ Waiting for the daemon to answer /health...${NC}"
   local waited=0
-  while ! curl -fsS --max-time 1 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; do
+  while ! curl -fsS --max-time 1 --cacert "$ca_cert" "https://127.0.0.1:$PORT/health" >/dev/null 2>&1; do
     waited=$((waited + 1))
     if [ "$waited" -ge 5 ]; then
       echo -e "${YELLOW}⚠️  No response from /health within 5s — check $HOME/Library/Logs/velesdb-memory/daemon.err.log${NC}"
@@ -347,6 +372,87 @@ PLIST
     fi
     sleep 1
   done
+
+  trust_local_ca "$ca_cert"
+}
+
+# Run "$@" with a hard wall-clock timeout of $1 seconds, killing it (and
+# reaping it, so it never lingers as an orphan) if it's still running past
+# the deadline. macOS ships no `timeout(1)`/`gtimeout` by default, so this is
+# a portable bash implementation — used below because `security
+# add-trusted-cert` can block indefinitely on a system authorization prompt
+# (see trust_local_ca), and this script must never hang forever waiting on
+# it.
+run_with_timeout() {
+  local secs="$1"
+  shift
+  "$@" &
+  local pid=$!
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$secs" ]; then
+      kill -9 "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$pid"
+}
+
+# ---- 5b. Trust the local CA in the macOS login keychain --------------------
+# `security add-trusted-cert` (no `-d`, so it targets the USER trust-settings
+# domain, not the admin one — no sudo needed) does two things: (1) import the
+# certificate item into the keychain (fast, no prompt), and (2) write a Trust
+# Settings record marking it as a trusted root for SSL (this is the part that
+# actually makes a strict TLS client accept it). Empirically, step (2) can
+# block on a macOS system authorization prompt (Touch ID / password) that
+# only an interactive login session can answer — there is no way to detect
+# in advance whether THIS run will show one, so this is wrapped in
+# `run_with_timeout` and, on timeout or failure, falls back to printing the
+# exact command to run by hand instead of leaving the terminal stuck.
+trust_local_ca() {
+  local ca_cert="$1"
+
+  if [ "$SKIP_CA_TRUST" = "1" ]; then
+    echo -e "${YELLOW}⏭  Skipping CA trust (--skip-ca-trust).${NC}"
+    return 0
+  fi
+  if [ "$DAEMON_SUPPORTED" != "1" ]; then
+    return 0
+  fi
+  if ! command -v security >/dev/null 2>&1; then
+    echo -e "${YELLOW}⚠️  'security' CLI not found — skipping automatic CA trust.${NC}"
+    return 0
+  fi
+  if [ ! -f "$ca_cert" ]; then
+    echo -e "${YELLOW}⚠️  No CA certificate at $ca_cert (daemon may not have started — see the /health warning above) — skipping CA trust.${NC}"
+    return 0
+  fi
+
+  local keychain
+  keychain="$(security default-keychain -d user 2>/dev/null | tr -d '[:space:]"')"
+  if [ -z "$keychain" ]; then
+    keychain="$HOME/Library/Keychains/login.keychain-db"
+  fi
+  local trust_cmd=(security add-trusted-cert -r trustRoot -p ssl -k "$keychain" "$ca_cert")
+
+  echo ""
+  echo -e "${BLUE}🔐 Trusting the local CA in your login keychain (${ca_cert})...${NC}"
+  echo -e "${YELLOW}   macOS may show a system prompt asking you to approve this (Touch ID / password) —${NC}"
+  echo -e "${YELLOW}   approve it within 60s. Without this, HTTPS clients that verify certificates strictly${NC}"
+  echo -e "${YELLOW}   (browsers, plain \`curl\`) will reject this daemon's certificate until you trust it,${NC}"
+  echo -e "${YELLOW}   here or by hand later.${NC}"
+
+  if run_with_timeout 60 "${trust_cmd[@]}"; then
+    echo -e "${GREEN}✅ Local CA trusted in your login keychain.${NC}"
+  else
+    echo -e "${YELLOW}⚠️  Could not confirm the CA trust automatically (no response to the system prompt within${NC}"
+    echo -e "${YELLOW}   60s, or the command failed). The daemon is still up and serving HTTPS — this only${NC}"
+    echo -e "${YELLOW}   affects clients that verify certificates strictly. Run this yourself to finish:${NC}"
+    echo "     ${trust_cmd[*]}"
+  fi
 }
 
 # ---- 6. Client wiring -------------------------------------------------
@@ -361,9 +467,12 @@ wire_claude_code() {
   fi
 
   claude mcp remove velesdb-memory -s user >/dev/null 2>&1 || true
-  if claude mcp add --transport http --scope user velesdb-memory "http://127.0.0.1:$PORT/mcp" >/dev/null; then
-    echo -e "${GREEN}✅ Claude Code wired (user scope) → http://127.0.0.1:$PORT/mcp${NC}"
+  if claude mcp add --transport http --scope user velesdb-memory "https://127.0.0.1:$PORT/mcp" >/dev/null; then
+    echo -e "${GREEN}✅ Claude Code wired (user scope) → https://127.0.0.1:$PORT/mcp${NC}"
     echo -e "${YELLOW}   Note: project/local-scope entries (if any) are not touched — check with \`claude mcp list\`.${NC}"
+    echo -e "${YELLOW}   Note: Node-based tools don't always consult the macOS keychain for TLS trust. If Claude${NC}"
+    echo -e "${YELLOW}   Code reports a certificate error despite the CA trust step above, set:${NC}"
+    echo -e "${YELLOW}     export NODE_EXTRA_CA_CERTS=\"$TLS_DIR/ca-cert.pem\"${NC}"
   else
     echo -e "${RED}❌ Failed to wire Claude Code.${NC}"
   fi
@@ -415,7 +524,7 @@ wire_json_client() {
 
 wire_claude_desktop() {
   wire_json_client "claude-desktop" "$DESKTOP_CONFIG" \
-    '.mcpServers["velesdb-memory"] = {"type":"http","url":"http://127.0.0.1:'"$PORT"'/mcp"}' \
+    '.mcpServers["velesdb-memory"] = {"type":"http","url":"https://127.0.0.1:'"$PORT"'/mcp"}' \
     1
   if ! should_skip "claude-desktop"; then
     echo -e "${YELLOW}⚠️  HTTP support is not confirmed for Claude Desktop. If it fails to connect after a restart, use this stdio fallback instead:${NC}"
@@ -432,7 +541,7 @@ EOF
 
 wire_windsurf() {
   wire_json_client "windsurf" "$WINDSURF_CONFIG" \
-    '.mcpServers["velesdb-memory"] = {"serverUrl":"http://127.0.0.1:'"$PORT"'/mcp"}' \
+    '.mcpServers["velesdb-memory"] = {"serverUrl":"https://127.0.0.1:'"$PORT"'/mcp"}' \
     0
 }
 
@@ -458,7 +567,10 @@ do_uninstall() {
     done
   fi
 
-  echo -e "${GREEN}✅ Uninstalled. The store ($STORE by default) was left untouched.${NC}"
+  echo -e "${GREEN}✅ Uninstalled. The store ($STORE by default) and the TLS material/CA ($TLS_DIR by default)${NC}"
+  echo -e "${GREEN}   were both left untouched — same policy as the store: nothing local is ever deleted by${NC}"
+  echo -e "${GREEN}   an uninstall. This also means the keychain trust you approved earlier stays valid, so a${NC}"
+  echo -e "${GREEN}   future reinstall needs no new trust prompt. Remove either by hand if you want them gone.${NC}"
 }
 
 # ---- 8. Summary -------------------------------------------------------
@@ -470,13 +582,14 @@ print_summary() {
   echo "  Embedder:  $EMBEDDER"
   echo "  Port:      $PORT"
   echo "  Store:     $STORE"
+  echo "  TLS CA:    $TLS_DIR/ca-cert.pem"
   echo "  TTL:       ${TTL:-permanent (no expiry)}"
   if [ "$DAEMON_SUPPORTED" = "1" ]; then
-    if curl -fsS --max-time 1 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+    if curl -fsS --max-time 1 --cacert "$TLS_DIR/ca-cert.pem" "https://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
       if [ "$DAEMON_ALREADY_RUNNING" = "1" ]; then
-        echo -e "  Daemon:    ${GREEN}running${NC} → http://127.0.0.1:$PORT/mcp (already loaded, not restarted)"
+        echo -e "  Daemon:    ${GREEN}running${NC} → https://127.0.0.1:$PORT/mcp (already loaded, not restarted)"
       else
-        echo -e "  Daemon:    ${GREEN}running${NC} → http://127.0.0.1:$PORT/mcp"
+        echo -e "  Daemon:    ${GREEN}running${NC} → https://127.0.0.1:$PORT/mcp"
       fi
     else
       echo -e "  Daemon:    ${YELLOW}not confirmed up${NC} — check $HOME/Library/Logs/velesdb-memory/daemon.err.log"

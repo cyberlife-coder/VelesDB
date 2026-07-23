@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **HTTPS by default for the HTTP transport.** `--http`/`VELESDB_MEMORY_HTTP=1`
+  now serves TLS by default, terminated with a self-signed local CA + a
+  short-lived `localhost`/`127.0.0.1`/`::1` leaf certificate, both generated
+  natively (`rcgen`, no shelled-out `mkcert`/`openssl`) and cached at
+  `$VELESDB_MEMORY_TLS_DIR` (default `~/.velesdb-memory-tls`, a sibling of
+  the store). The CA is generated once and never regenerated once present —
+  a client only needs to trust it once, and every future leaf cert (even
+  across restarts) is trusted automatically after that. Some MCP clients
+  (Claude Desktop's "Add custom connector" UI) refuse a non-`https://` URL
+  even for `127.0.0.1`, which this closes. `--http-insecure` /
+  `VELESDB_MEMORY_HTTP_INSECURE=1` opts back into plain HTTP (loud warning
+  at startup) for local debugging or when a trusted TLS-terminating proxy
+  already sits in front. `scripts/install-memory-daemon.sh` adds the CA to
+  the macOS login keychain (`security add-trusted-cert`, no `sudo`) and
+  gained `--tls-dir` and `--skip-ca-trust` flags. See the README's "HTTP
+  transport (multi-client)" section.
+
 ## [0.10.1] — 2026-07-21
 
 ### Fixed

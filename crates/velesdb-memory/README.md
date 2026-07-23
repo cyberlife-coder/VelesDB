@@ -394,27 +394,84 @@ daemon that every client connects to instead of spawning its own process.
 The hash/ollama embedder choice stays a pure runtime switch either way — only
 the transport changes.
 
+The daemon serves **HTTPS by default**, terminated with a CA + leaf
+certificate it generates itself — no `mkcert`/`openssl`/reverse proxy to
+install. Some MCP clients (e.g. Claude Desktop's "Add custom connector" UI)
+refuse any URL that isn't `https://`, even for `127.0.0.1`, so plain HTTP is
+no longer viable as the default.
+
 ```bash
 cargo install velesdb-memory --features http,ollama
 # → still opt into `ollama` at BUILD time only if you want that embedder available;
 #   VELESDB_MEMORY_EMBEDDER stays a runtime choice regardless (see "Embedding backend" below)
 velesdb-memory --http
-# [velesdb-memory] HTTP server listening on http://127.0.0.1:18090/mcp
+# [velesdb-memory] HTTPS server listening on https://127.0.0.1:18090/mcp
+# [velesdb-memory] Local CA: /home/you/.velesdb-memory-tls/ca-cert.pem — a client only needs to
+# trust this once (see ./scripts/install-memory-daemon.sh, which does this automatically on
+# macOS); every future leaf certificate this daemon issues is signed by the same CA and is
+# trusted automatically after that.
 ```
 
 - `--http` / `VELESDB_MEMORY_HTTP=1` — serve over streamable-HTTP instead of stdio.
 - `--http-port <PORT>` / `VELESDB_MEMORY_HTTP_BIND=<host:port>` — override the
   bind address (default `127.0.0.1:18090`; `--http-port` overrides just the
   port on top of `VELESDB_MEMORY_HTTP_BIND`).
+- `--http-insecure` / `VELESDB_MEMORY_HTTP_INSECURE=1` — opt OUT of HTTPS and
+  serve plain HTTP instead, printing a loud warning at startup. For local
+  debugging, or when a trusted TLS-terminating proxy already sits in front —
+  not for normal use.
 - The transport has **no authentication** — anyone who can reach the socket
-  gets full `remember`/`recall`/`relate` access to the store. That's fine for
-  the default loopback-only bind (only processes on the same machine can
-  reach it), so a non-loopback `VELESDB_MEMORY_HTTP_BIND` host is refused at
-  startup unless you also set `VELESDB_MEMORY_HTTP_ALLOW_REMOTE=1`. Only set
-  that if you're putting an authenticating reverse proxy in front — never
-  point the bare daemon at a network-reachable address.
+  gets full `remember`/`recall`/`relate` access to the store. HTTPS-by-default
+  protects the bytes on the wire from anyone else on the same machine reading
+  them, but it is not access control: that's still the default loopback-only
+  bind (only processes on the same machine can reach it at all), so a
+  non-loopback `VELESDB_MEMORY_HTTP_BIND` host is refused at startup unless
+  you also set `VELESDB_MEMORY_HTTP_ALLOW_REMOTE=1`. Only set that if you're
+  putting an authenticating reverse proxy in front — never point the bare
+  daemon at a network-reachable address.
+
+### The local CA
+
+On first start, the daemon generates a self-signed root CA and caches it at
+`$VELESDB_MEMORY_TLS_DIR` (default `~/.velesdb-memory-tls`, a sibling of the
+default store — deliberately not nested inside it, since wiping the store to
+reset your memory shouldn't also invalidate a CA your OS has been told to
+trust). **The CA is never regenerated once it exists** — that's the entire
+point of caching it: trust it once, and every leaf certificate it signs
+afterwards (including ones re-issued across restarts) is automatically
+trusted with no further action. The leaf certificate itself (for
+`localhost`/`127.0.0.1`/`::1`) is short-lived (30 days) and silently re-issued
+— re-signed by the same CA, no new trust required — on every daemon start.
+
+The CA's private key is written with `0600` permissions (owner-read/write
+only) and its directory with `0700`; only the certificate itself
+(`ca-cert.pem`) is meant to be handed to a trust store or another machine.
+
+`scripts/install-memory-daemon.sh` adds the CA to your macOS **login**
+keychain (not the system one — no `sudo` needed) as a trusted root for SSL,
+so a strict HTTPS client (a browser, plain `curl`) connects with no warning.
+macOS may show a system prompt (Touch ID / password) to confirm this — the
+installer waits up to 60s for it; if it times out or you'd rather do it by
+hand, it prints the exact command:
+
+```bash
+security add-trusted-cert -r trustRoot -p ssl \
+  -k ~/Library/Keychains/login.keychain-db \
+  ~/.velesdb-memory-tls/ca-cert.pem
+```
+
+Node-based tools (Claude Code's CLI, Electron apps like Claude Desktop) don't
+always consult the OS keychain for TLS trust the way `curl`/Safari do. If one
+of them still reports a certificate error after the keychain step above,
+point it at the CA directly:
+
+```bash
+export NODE_EXTRA_CA_CERTS="$HOME/.velesdb-memory-tls/ca-cert.pem"
+```
+
 - `GET /health` — plain 200 OK liveness probe (no MCP handshake needed) —
-  what the installer script and CI use to confirm the daemon is up.
+  what the installer script and CI use to confirm the daemon is up (over
+  HTTPS too, once TLS is the transport).
 - `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES` — max size of a single `/mcp` request
   body, in bytes (default 16 MiB). A misbehaving or hostile client sending an
   oversized request is rejected instead of having its body buffered into
@@ -436,7 +493,7 @@ Point each client's config at the daemon instead of a local binary:
 **Claude Code**
 
 ```bash
-claude mcp add --transport http velesdb-memory http://127.0.0.1:18090/mcp
+claude mcp add --transport http velesdb-memory https://127.0.0.1:18090/mcp
 ```
 
 **Cursor** / **Cline** — same `mcpServers` files as above, `type: "http"` instead of `command`:
@@ -444,7 +501,7 @@ claude mcp add --transport http velesdb-memory http://127.0.0.1:18090/mcp
 ```json
 { "mcpServers": { "velesdb-memory": {
   "type": "http",
-  "url": "http://127.0.0.1:18090/mcp"
+  "url": "https://127.0.0.1:18090/mcp"
 } } }
 ```
 
@@ -453,7 +510,7 @@ claude mcp add --transport http velesdb-memory http://127.0.0.1:18090/mcp
 ```json
 { "mcpServers": { "velesdb-memory": {
   "type": "http",
-  "url": "http://127.0.0.1:18090/mcp"
+  "url": "https://127.0.0.1:18090/mcp"
 } } }
 ```
 
@@ -468,14 +525,16 @@ claude mcp add --transport http velesdb-memory http://127.0.0.1:18090/mcp
 
 ```json
 { "mcpServers": { "velesdb-memory": {
-  "serverUrl": "http://127.0.0.1:18090/mcp"
+  "serverUrl": "https://127.0.0.1:18090/mcp"
 } } }
 ```
 
 `scripts/install-memory-daemon.sh` automates all of this end to end: building
-with the right features, running the daemon (as a macOS `launchd` agent), and
-wiring Claude Code / Claude Desktop / Windsurf — see `--help` for flags
-(`--embedder`, `--port`, `--store`, `--ttl`, `--skip-client`, `--uninstall`, …).
+with the right features, running the daemon (as a macOS `launchd` agent),
+trusting the local CA in your login keychain, and wiring Claude Code / Claude
+Desktop / Windsurf — see `--help` for flags (`--embedder`, `--port`,
+`--store`, `--tls-dir`, `--ttl`, `--skip-client`, `--skip-ca-trust`,
+`--uninstall`, …).
 
 ## Teach your agent the flow (skill)
 

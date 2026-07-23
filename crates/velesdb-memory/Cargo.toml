@@ -58,6 +58,37 @@ tower-http = { workspace = true, optional = true, features = ["limit"] }
 # return — needed to forward them from `BoundedSessionManager` (src/http/
 # session_limit.rs) to the wrapped `LocalSessionManager`.
 futures = { version = "0.3", optional = true }
+# Native (no shelled-out mkcert/openssl) local CA + leaf certificate
+# generation for HTTPS-by-default (see `src/tls.rs`). `x509-parser` is needed
+# for `Issuer::from_ca_cert_pem` — reloading a CA already persisted to disk
+# without regenerating it (see the module docs for why that matters: clients
+# only need to trust the CA ONCE). Default features (`crypto`, `pem`,
+# `ring`) already cover key generation/PEM (de)serialization.
+rcgen = { version = "0.14", optional = true, features = ["x509-parser"] }
+# `CertificateParams::not_before`/`not_after` are `time::OffsetDateTime` —
+# rcgen's own public field type, not re-exported, so constructing "now" and
+# "now + N days" needs `time` directly. Version pinned to match rcgen's own
+# `^0.3.6` requirement.
+time = { version = "0.3", optional = true }
+# TLS termination for the HTTP transport — same stack `velesdb-server`
+# already uses (`src/tls.rs` there), reused here rather than adding
+# `axum-server` as a second, independent TLS dependency (see `src/tls.rs`'s
+# module docs for the full rationale). `ring` matches `velesdb-server`'s
+# choice, kept explicit (rather than relying on a process-wide default
+# `CryptoProvider`) since the `reqwest` dev-dependency below links a
+# different backend (`aws-lc-rs`) into the very same test binaries.
+rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "logging", "std", "tls12"] }
+tokio-rustls = { version = "0.26", optional = true }
+rustls-pemfile = { version = "2", optional = true }
+# Manual TLS accept loop: `axum::serve` has no listener abstraction for a
+# pre-handshake `TlsAcceptor`, so an accepted TLS connection is served
+# through `hyper`'s own connection builder instead (identical to
+# `velesdb-server`'s `spawn_tls_connection`).
+hyper = { version = "1", optional = true }
+hyper-util = { version = "0.1", optional = true, features = ["tokio", "server-auto"] }
+# `tower::ServiceExt::oneshot` drives the axum `Router` (a `tower::Service`)
+# for a single request inside the manual TLS accept loop.
+tower = { workspace = true, optional = true }
 
 [features]
 # The MCP server transport + binary, and the native file-backed store, are on
@@ -72,7 +103,22 @@ mcp = ["dep:rmcp", "dep:tokio", "persistence"]
 # velesdb-memory` still produces the tiny, fully-offline stdio-only binary —
 # only the installer script opts a LOCAL build into this at build time; the
 # hash/ollama embedder choice stays a pure runtime switch either way.
-http = ["mcp", "dep:axum", "dep:tokio-util", "dep:tower-http", "dep:futures", "rmcp/transport-streamable-http-server"]
+http = [
+    "mcp",
+    "dep:axum",
+    "dep:tokio-util",
+    "dep:tower-http",
+    "dep:futures",
+    "dep:rcgen",
+    "dep:time",
+    "dep:rustls",
+    "dep:tokio-rustls",
+    "dep:rustls-pemfile",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:tower",
+    "rmcp/transport-streamable-http-server",
+]
 # The deterministic context compiler (EPIC-P-070). Zero new dependencies and
 # `persistence`-free by design, so a wasm-style `default-features = false`
 # consumer can enable it alone; the memory-backed selection layer inside it is
@@ -99,8 +145,20 @@ criterion = { workspace = true }
 # MCP client-side streamable-HTTP transport, dev-only: drives the `http`
 # feature's server transport in tests/http_transport.rs with a real client
 # (the same one exercised by rmcp's own upstream test suite) rather than
-# hand-rolled JSON-RPC-over-HTTP requests.
-rmcp = { version = "2.0.0", features = ["client", "transport-streamable-http-client-reqwest"] }
+# hand-rolled JSON-RPC-over-HTTP requests. `reqwest` additionally turns on
+# rmcp's own `reqwest?/rustls` alias so the `reqwest::Client` it hands back
+# has a TLS backend at all — needed by tests/http_tls.rs, which builds its
+# OWN `reqwest::Client`s (one trusting nothing extra, one trusting the
+# generated local CA via `add_root_certificate`) and hands them to
+# `StreamableHttpClientTransport::with_client` for the RED/GREEN proof.
+rmcp = { version = "2.0.0", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
+# Same crate + version rmcp's reqwest transport resolves to (Cargo unifies
+# the two into one compiled `reqwest`), named directly here so
+# tests/http_tls.rs can construct `reqwest::Client`/`reqwest::Certificate`
+# itself rather than only via rmcp's convenience constructors. `blocking` is
+# for tests/http_insecure_process.rs's synchronous polling of a spawned
+# subprocess (that test is plain `#[test]`, not `#[tokio::test]`).
+reqwest = { version = "0.13", features = ["blocking"] }
 
 [[bin]]
 name = "velesdb-memory"
@@ -151,6 +209,25 @@ required-features = ["http"]
 [[test]]
 name = "http_lock_contention"
 path = "tests/http_lock_contention.rs"
+required-features = ["http"]
+
+# RED/GREEN proof that the HTTP transport's TLS termination is real, not a
+# no-op: a client that does NOT trust the freshly-generated local CA must
+# fail the handshake, and one that does must complete a full
+# remember/recall round trip. See `src/tls.rs` for the CA/leaf generation
+# this exercises.
+[[test]]
+name = "http_tls"
+path = "tests/http_tls.rs"
+required-features = ["http"]
+
+# Process-level proof of the `--http-insecure` / `VELESDB_MEMORY_HTTP_INSECURE=1`
+# escape hatch: spawns the actual compiled binary (not the in-process
+# router) and confirms it serves plain HTTP, since that flag is parsed in
+# `src/main.rs` before any router/TLS code runs.
+[[test]]
+name = "http_insecure_process"
+path = "tests/http_insecure_process.rs"
 required-features = ["http"]
 
 [[example]]
