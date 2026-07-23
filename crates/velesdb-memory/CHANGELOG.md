@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Targets **0.11.0** (minor, not patch) on next release: the metadata shape
+`remember`/`recall` return changes observably for every consumer (MCP,
+Python, Node, WASM) — see "Changed" below.
+
 ### Added
 
 - **HTTPS by default for the HTTP transport.** `--http`/`VELESDB_MEMORY_HTTP=1`
@@ -27,6 +31,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the macOS login keychain (`security add-trusted-cert`, no `sudo`) and
   gained `--tls-dir` and `--skip-ca-trust` flags. See the README's "HTTP
   transport (multi-client)" section.
+- **Automatic `_veles_date` stamp.** `remember`/`remember_with_ttl` (and
+  `remember_extracted`, which delegates to `remember` per extracted fact)
+  now auto-stamp every fact's metadata with `_veles_date` — today's date as
+  a `YYYYMMDD` integer, read from the system clock at write time — unless
+  the caller already set that key explicitly (an explicit value, e.g. for
+  retroactive dating, is never overwritten). `recall_fused`'s `date_field`
+  can now be pointed at `_veles_date` to get a correct `dated_context`
+  timeline with zero caller setup — previously every temporal capability
+  depended entirely on the caller managing a numeric date field itself,
+  documented but never guaranteed. The new `AUTO_DATE_FIELD` constant is
+  exported at the crate root as the single source of truth for the key
+  name. The context compiler (`compile_context` and friends) reads no
+  clock and is unaffected — the auto-stamp lives exclusively on the
+  `remember` write path.
+
+### Changed
+
+- **Breaking (observable shape, not a compile break): `metadata` is no
+  longer `None`/`null` for a fact stored with no caller metadata.** Because
+  of the `_veles_date` auto-stamp above, `recall`/`recall_where`/
+  `recall_fused` now return `metadata: {"_veles_date": <today>}` instead of
+  `metadata: None`/`null` for such a fact, on every binding (MCP JSON-RPC,
+  Python, Node, WASM). Callers that previously branched on "metadata is
+  `None`" to mean "nothing was ever stored" should check for the
+  caller-specific key(s) they care about instead.
 
 ## [0.10.1] — 2026-07-21
 
