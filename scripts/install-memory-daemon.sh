@@ -270,6 +270,12 @@ setup_daemon() {
     if [ "$FORCE_RESTART" != "1" ]; then
       echo -e "${GREEN}✅ $PLIST_LABEL is already loaded — skipping (pass --force-restart to reload).${NC}"
       DAEMON_ALREADY_RUNNING=1
+      # Still (re-)attempt CA trust even when the daemon itself isn't
+      # restarted: a daemon can be "already loaded" from a run that predates
+      # the CA existing yet (e.g. a binary rebuilt/kickstarted outside this
+      # script), which used to leave the local CA permanently untrusted
+      # because this early return skipped straight past the trust step below.
+      trust_local_ca "$TLS_DIR/ca-cert.pem"
       return 0
     fi
     echo -e "${YELLOW}🔁 --force-restart: unloading the existing $PLIST_LABEL...${NC}"
@@ -428,6 +434,16 @@ trust_local_ca() {
   fi
   if [ ! -f "$ca_cert" ]; then
     echo -e "${YELLOW}⚠️  No CA certificate at $ca_cert (daemon may not have started — see the /health warning above) — skipping CA trust.${NC}"
+    return 0
+  fi
+
+  # Ground-truth idempotency check: ask curl to verify the daemon's cert
+  # against the SYSTEM trust store (no --cacert override). If that already
+  # succeeds, the CA is trusted — skip re-running `add-trusted-cert`, which
+  # would otherwise re-trigger a Touch ID/password prompt on every re-run of
+  # this script even when nothing needs to change.
+  if curl -fsS --max-time 2 "https://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+    echo -e "${GREEN}✅ Local CA already trusted (strict HTTPS request to the daemon succeeded).${NC}"
     return 0
   fi
 
