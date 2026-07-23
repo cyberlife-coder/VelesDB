@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **SQ8 quantization parity with `velesdb-core` (#1543)**: the WASM SQ8
+  encode/decode paths (`store_insert::encode_sq8`, `store_get::decode_sq8`,
+  `vector_ops::ScratchBuffer::decode_sq8`) used an ad hoc `1e-10`
+  degenerate-range epsilon instead of core's `f32::EPSILON`, and filled
+  degenerate (constant/near-constant) vectors with byte `0` per dimension
+  instead of core's byte `128`. A near-constant vector could quantize
+  differently between the browser and native/server depending on which
+  epsilon a given build used. Also fixed: a non-finite range (e.g. a vector
+  containing `+Infinity`, or finite min/max whose difference overflows to
+  `+Infinity`) could be silently misdecoded as the degenerate case (`min`
+  for every dimension) instead of `NaN` for every dimension, which is what
+  `velesdb-core` actually produces for that input class.
+
+  **Downgrade hazard**: a `VectorStore` created under `SQ8` mode and
+  persisted to `IndexedDB` (`save()`/`export_to_bytes()`) with **this**
+  fixed build encodes constant/near-constant vectors as byte `128`
+  per-dimension (matching core). Loading that same store back
+  (`load()`/`import_from_bytes()`) with an **older** WASM build — i.e.
+  downgrading — decodes those bytes using the old build's SQ8 formula,
+  which does not special-case byte `128` and will reconstruct the wrong
+  values for those specific rows (everything else in the store is
+  unaffected). This does not require and does not get a persistence
+  format-version bump: the on-disk v2 layout (field count/order/size) is
+  unchanged, only which raw bytes an already-degenerate vector encodes to.
+  Forward compatibility (older store loaded by this or a newer build) is
+  unaffected. Affected users: only those who persisted a `SQ8`-mode store
+  containing a constant or near-constant vector with a pre-fix WASM build
+  and then downgrade the WASM build while keeping the same `IndexedDB`
+  database — re-inserting the affected vectors, or not downgrading,
+  avoids the issue entirely.
+
 ### Note
 - Versions 1.12 through the current 3.12.0 (workspace-wide version bumps)
   are tracked in the workspace root `CHANGELOG.md`, not here; this file's

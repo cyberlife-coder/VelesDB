@@ -43,9 +43,12 @@ fn encode_vector(store: &mut VectorStore, vector: &[f32]) {
 /// `scale == 0.0` is stored as an in-band sentinel recording "degenerate
 /// range" for the `decode_sq8` implementations (`vector_ops.rs`,
 /// `store_get.rs`) to mirror core's `to_f32` fallback (`vec![min; len]`).
-/// This is unambiguous: for finite min/max a genuine scale is always
-/// `255.0 / range` with `range >= f32::EPSILON`, which never rounds to
-/// exactly `0.0` in f32.
+/// For a *finite* min/max pair this is unambiguous: a genuine scale is
+/// always `255.0 / range` with `range >= f32::EPSILON`, which never rounds
+/// to exactly `0.0` in f32. It stops being unambiguous when `range` itself
+/// is not finite — see the `!range.is_finite()` branch below, which uses a
+/// second, `f32::NAN` sentinel for that case (Fable review, #1543
+/// follow-up).
 fn encode_sq8(store: &mut VectorStore, vector: &[f32]) {
     let (min, max) = vector
         .iter()
@@ -55,6 +58,40 @@ fn encode_sq8(store: &mut VectorStore, vector: &[f32]) {
     let range = max - min;
 
     store.sq8_mins.push(min);
+
+    // `range` can be non-finite even though it isn't "degenerate" in core's
+    // sense (`range < f32::EPSILON` is false for both `+Infinity` and
+    // `NaN`, so core's own `QuantizedVector::from_f32` takes the *normal*
+    // branch here too): min/max both finite but `max - min` overflows to
+    // `+Infinity` (e.g. `[-f32::MAX, f32::MAX]`), a literal `+/-Infinity`
+    // element, or every element being NaN/infinite (fold settles on
+    // `min == max == +Infinity`, so `range = inf - inf = NaN`).
+    //
+    // Core does NOT special-case this — it just runs its normal-branch
+    // formula (`scale = 255.0 / range`, then `(v - min) * scale` per
+    // element) with a non-finite `range`. `255.0 / range` is exactly `0.0`
+    // when `range == +Infinity`, or `NaN` when `range` is `NaN`; either way
+    // every per-element `(v - min) * scale` term evaluates to `0.0`
+    // (finite operand times `0.0`) or `NaN` (an operand that itself
+    // overflowed, or a `NaN` scale), and `.round().clamp(0.0, 255.0) as
+    // u8` turns both into byte `0`. So core's actual encoded `data` is
+    // always all-zero bytes for this input class, and its `to_f32()`
+    // decode (`q * (range / 255.0) + min`) is always `NaN` for every
+    // dimension (`0.0 * inf` or `q * NaN`, either way `NaN`). Verified
+    // empirically against `QuantizedVector::from_f32`/`to_f32`.
+    //
+    // We mirror that exactly — all-zero bytes here, `f32::NAN` stored as a
+    // second decode sentinel (see `decode_sq8`) so restore reconstructs
+    // `NaN` for every dimension — rather than reusing the `range <
+    // f32::EPSILON` degenerate fallback below (byte 128, decodes to
+    // `min`), which matches neither core's encoded bytes nor its decoded
+    // values for this case.
+    if !range.is_finite() {
+        store.sq8_scales.push(f32::NAN);
+        let new_len = store.data_sq8.len() + vector.len();
+        store.data_sq8.resize(new_len, 0u8);
+        return;
+    }
 
     if range < f32::EPSILON {
         store.sq8_scales.push(0.0);

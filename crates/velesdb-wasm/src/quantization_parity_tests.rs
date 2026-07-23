@@ -39,6 +39,19 @@
 //! and `test_sq8_epsilon_regression_range_matches_core_degenerate_fallback`
 //! failed (RED) on the `near_constant_regression` and `constant` cases; after
 //! the fix all cases pass (GREEN).
+//!
+//! ## Follow-up: non-finite range (Fable review)
+//!
+//! The initial fix's `scale == 0.0` degenerate-range decode sentinel was not
+//! hermetic: a vector whose range overflows to `+Infinity` (finite min/max
+//! whose difference overflows, or a literal `+/-Infinity` element) also
+//! computes `scale = 255.0 / range = 0.0` — through the *normal* branch, not
+//! the degenerate one — colliding with the sentinel. `test_sq8_non_finite_range_matches_core_exactly`
+//! and the `range_*` dataset cases pin this down; they were RED (WASM decoded
+//! to `min`, core decodes to `NaN`) before `store_insert::encode_sq8` grew a
+//! dedicated, empirically-verified-against-core `!range.is_finite()` branch
+//! (all-zero encoded bytes, `f32::NAN` decode sentinel) ahead of the
+//! `range < f32::EPSILON` check.
 
 use crate::store_get::get_vector_at_index;
 use crate::store_insert::insert_vector;
@@ -70,7 +83,47 @@ fn parity_dataset() -> Vec<(&'static str, Vec<f32>)> {
         ("with_nan", vec![1.0, f32::NAN, -3.0, 2.5, 0.0]),
         ("zero_and_neg_zero", vec![0.0, -0.0, 0.0, 0.0, 0.0]),
         ("not_multiple_of_8_dims", vec![1.0, -1.0, 1.0, -1.0, 1.0]),
+        // Non-finite range (Fable review, #1543 follow-up): min/max are
+        // finite but `max - min` overflows to +Infinity in f32. This is
+        // NOT the `range < f32::EPSILON` degenerate case (`+inf` is never
+        // `< EPSILON`) — core's `QuantizedVector::from_f32` takes the
+        // *normal* branch here, computes `scale = 255.0 / range = 0.0`,
+        // and every per-element `(v - min) * 0.0` term evaluates to
+        // exactly `0.0` (finite operand) or `NaN` (an operand that itself
+        // overflowed to infinity), which `round().clamp().cast()` always
+        // turns into byte 0. Confirmed empirically against core: encoded
+        // data is uniformly all-zero, `to_f32()` is uniformly all-NaN
+        // (`q * (range/255.0) + min` = `0.0 * inf + min` = NaN).
+        (
+            "range_overflow_finite_minmax",
+            vec![-f32::MAX, f32::MAX, 0.0, 1.0],
+        ),
+        // A literal +/-Infinity element: min stays finite, max becomes
+        // +inf (or vice versa), range is still +inf — same core behavior
+        // as the overflow case above (all-zero data, all-NaN restore).
+        (
+            "range_infinite_literal_element",
+            vec![1.0, f32::INFINITY, -3.0, 2.0],
+        ),
+        // Every element is NaN or +Infinity: min/max fold (NaN-ignoring)
+        // both settle on +inf, so range = inf - inf = NaN (not +inf, but
+        // still never `< f32::EPSILON`, so core again takes the "normal"
+        // branch). Empirically confirmed identical outcome to the +inf
+        // cases: all-zero data, all-NaN restore.
+        (
+            "range_nan_all_inf_or_nan",
+            vec![f32::NAN, f32::INFINITY, f32::NAN, f32::INFINITY],
+        ),
     ]
+}
+
+/// True when both values are `NaN`, or both are within `tol` of each other.
+/// Plain `(a - b).abs() <= tol` is always false when either side is `NaN`
+/// (IEEE 754), which would wrongly fail restore-parity checks for the
+/// non-finite-range dataset cases where *both* core and WASM legitimately
+/// restore to `NaN`.
+fn nan_aware_close(a: f32, b: f32, tol: f32) -> bool {
+    (a.is_nan() && b.is_nan()) || (a - b).abs() <= tol
 }
 
 /// Encodes `vector` through the real WASM `SQ8` insert path and returns
@@ -180,9 +233,61 @@ fn test_sq8_restore_matches_core_within_float_tolerance() {
         );
         for (i, (&w, &c)) in wasm_restored.iter().zip(core_restored.iter()).enumerate() {
             assert!(
-                (w - c).abs() <= tol,
+                nan_aware_close(w, c, tol),
                 "restore diverges for case `{name}` dim {i}: wasm={w} core={c} tol={tol}"
             );
         }
+    }
+}
+
+#[test]
+fn test_sq8_non_finite_range_matches_core_exactly() {
+    // Fable review follow-up on #1543: the `scale == 0.0` degenerate-range
+    // sentinel (see `store_insert::encode_sq8`) is not hermetic — a
+    // genuinely non-degenerate vector whose range overflows to `+Infinity`
+    // also computes `scale = 255.0 / range = 0.0` through the *normal*
+    // branch, colliding with the sentinel. Before the fix, WASM's decode
+    // then wrongly took the "degenerate" path and returned `min` for every
+    // dimension, where core actually returns `NaN` for every dimension
+    // (`to_f32`'s `q * (range/255.0) + min` with `range = +inf`).
+    for (name, vector) in [
+        (
+            "range_overflow_finite_minmax",
+            vec![-f32::MAX, f32::MAX, 0.0, 1.0],
+        ),
+        (
+            "range_infinite_literal_element",
+            vec![1.0, f32::INFINITY, -3.0, 2.0],
+        ),
+        (
+            "range_nan_all_inf_or_nan",
+            vec![f32::NAN, f32::INFINITY, f32::NAN, f32::INFINITY],
+        ),
+    ] {
+        let core_q = QuantizedVector::from_f32(&vector);
+        let core_restored = core_q.to_f32();
+        assert_eq!(
+            core_q.data,
+            vec![0u8; vector.len()],
+            "sanity: core's own encode is all-zero bytes for case `{name}`"
+        );
+        assert!(
+            core_restored.iter().all(|v| v.is_nan()),
+            "sanity: core's own restore is all-NaN for case `{name}`"
+        );
+
+        let (wasm_bytes, _wasm_min, _wasm_scale) = wasm_encode_sq8(&vector);
+        assert_eq!(
+            wasm_bytes, core_q.data,
+            "SQ8 encoded bytes diverge from core for non-finite-range case `{name}`"
+        );
+
+        let mut store = create_store(vector.len(), DistanceMetric::Euclidean, StorageMode::SQ8);
+        insert_vector(&mut store, 1, &vector);
+        let wasm_restored = get_vector_at_index(&store, 0);
+        assert!(
+            wasm_restored.iter().all(|v| v.is_nan()),
+            "WASM restore must be all-NaN (matching core) for case `{name}`, got {wasm_restored:?}"
+        );
     }
 }
