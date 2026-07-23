@@ -56,6 +56,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MemoryMetadata._veles_date` is now a typed, documented field (was
   untyped `Record<string, unknown>`), and `recallFusedDated`'s TSDoc now
   explains the zero-setup `"_veles_date"` pairing. (#1547)
+- **`velesdb_common`**: `stable_hash_id` gains an opt-in
+  `algorithm="fnv1a"` keyword parameter (default stays `"sha256"`,
+  unchanged) so a Python-derived point ID can agree byte-for-byte with
+  `velesdb_core::hash_id`/`velesdb-migrate`'s FNV-1a derivation for the same
+  string when interop across ingestion paths is needed. Separately,
+  `velesdb-core` now exports a public `hash_id_bytes`, and
+  `velesdb-memory`/`velesdb-migrate` delegate their own FNV-1a derivations to
+  it instead of each re-declaring the FNV-1a constants — a pure internal
+  dedup within the Rust crates, byte-identical output (see the golden-vector
+  regression tests added alongside); it does not by itself change the
+  Rust-vs-Python divergence, which the new opt-in addresses. See
+  `docs/reference/KNOWN_LIMITATIONS.md` #12 for the full contract, including
+  why the SHA-256 default is intentionally preserved. (#1542)
 
 ### Fixed
 

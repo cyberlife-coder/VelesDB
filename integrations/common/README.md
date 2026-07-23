@@ -40,7 +40,7 @@ direct use by end users.
 
 | Export | Type | Description |
 |--------|------|-------------|
-| `stable_hash_id` | function | Deterministic 64-bit hash of an input string (used as collection-stable ID) |
+| `stable_hash_id` | function | Deterministic 64-bit hash of an input string (used as collection-stable ID). SHA-256 by default; pass `algorithm="fnv1a"` to align with VelesDB core's/`velesdb-migrate`'s FNV-1a IDs — see [KNOWN_LIMITATIONS #12](../../docs/reference/KNOWN_LIMITATIONS.md#12-string--u64-point-id-hashing-differs-across-components) before switching |
 | `make_initial_id_counter` | function | Builds a thread-safe sequential ID counter seeded from existing collection state |
 
 **Memory helpers**

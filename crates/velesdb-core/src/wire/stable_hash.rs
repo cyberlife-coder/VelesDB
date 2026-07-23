@@ -62,6 +62,34 @@ pub fn hash_id(input: &str) -> u64 {
     fnv1a_fold(FNV_OFFSET_BASIS, input.as_bytes())
 }
 
+/// Stable, platform-independent bytes → `u64` hash (FNV-1a over raw bytes).
+///
+/// The bytes-level counterpart to [`hash_id`], for callers that already hold
+/// a byte slice rather than a `&str` — binary/non-UTF-8 payloads, or a
+/// pre-serialized buffer (e.g. `serde_json::to_vec` output) that would
+/// otherwise need a lossy round-trip through `String` just to call
+/// [`hash_id`]. Same algorithm (FNV-1a, [`FNV_OFFSET_BASIS`]/[`FNV_PRIME`]),
+/// same determinism guarantee: [`hash_id(s)`](hash_id) and
+/// `hash_id_bytes(s.as_bytes())` always agree for any `&str` `s`.
+///
+/// This is the single exported bytes-level fold other `VelesDB` crates
+/// (`velesdb-memory`, `velesdb-migrate`) delegate to instead of
+/// re-declaring their own FNV-1a constants — see issue #1542.
+///
+/// # Examples
+///
+/// ```
+/// use velesdb_core::{hash_id, hash_id_bytes};
+///
+/// assert_eq!(hash_id("hello"), hash_id_bytes(b"hello"));
+/// // Non-UTF-8 bytes are hashed too — no `&str` conversion required.
+/// assert_eq!(hash_id_bytes(&[0xFF, 0x00]), hash_id_bytes(&[0xFF, 0x00]));
+/// ```
+#[must_use]
+pub fn hash_id_bytes(bytes: &[u8]) -> u64 {
+    fnv1a_fold(FNV_OFFSET_BASIS, bytes)
+}
+
 /// Generates a deterministic graph-edge ID from (source, target, label) using
 /// FNV-1a over the raw little-endian bytes of `source` and `target` followed by
 /// the UTF-8 bytes of `label`.
