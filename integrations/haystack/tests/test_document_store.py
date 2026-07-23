@@ -221,6 +221,20 @@ class _FakeCollection:
     def count(self) -> int:
         return len(self._points)
 
+    def stream_insert(self, points: list) -> None:
+        """Fake streaming ingestion channel — mirrors ``upsert`` semantics
+        (the real SDK forwards through a bounded channel with backpressure;
+        this fake is synchronous and deterministic for tests).
+        """
+        for p in points:
+            self._points[p["id"]] = p
+
+    def is_metadata_only(self) -> bool:
+        return False
+
+    def flush(self) -> None:
+        pass
+
 
 class _FakeDatabase:
     def __init__(self, path: str) -> None:
@@ -292,6 +306,20 @@ def _load_module() -> types.ModuleType:
     vc_ids = importlib.util.module_from_spec(_ids_spec)
     sys.modules["velesdb_common.ids"] = vc_ids
     _ids_spec.loader.exec_module(vc_ids)
+
+    # Load the REAL velesdb_common.collection_admin (pure stdlib, same reasoning
+    # as ids.py above) so the store exercises the canonical CollectionAdminMixin
+    # rather than a forked copy — single-source-of-truth + license hygiene.
+    _admin_path = (
+        Path(__file__).resolve().parents[2] / "common" / "src" / "velesdb_common" / "collection_admin.py"
+    )
+    _admin_spec = importlib.util.spec_from_file_location(
+        "velesdb_common.collection_admin", _admin_path
+    )
+    assert _admin_spec and _admin_spec.loader
+    vc_admin = importlib.util.module_from_spec(_admin_spec)
+    sys.modules["velesdb_common.collection_admin"] = vc_admin
+    _admin_spec.loader.exec_module(vc_admin)
 
     vc_sec = types.ModuleType("velesdb_common.security")
     vc_sec.validate_path = _passthrough  # type: ignore[attr-defined]
@@ -1052,3 +1080,237 @@ def test_id_hashing_uses_canonical_stable_hash_id():
         )
         assert _MOD.stable_hash_id(doc_id) == expected
         assert 0 <= _MOD.stable_hash_id(doc_id) <= 0x7FFFFFFFFFFFFFFF
+
+
+# ---------------------------------------------------------------------------
+# Streaming ingestion — stream_insert() / write_documents_streaming()
+#
+# Mirrors the pattern already shipped by langchain_velesdb.stream_insert /
+# add_texts_streaming and llamaindex_velesdb.stream_insert / add_streaming:
+# both forward to Collection.stream_insert and are tested with mocked
+# collections that record the points they receive (issue #1548).
+# ---------------------------------------------------------------------------
+
+
+def test_stream_insert_calls_collection_stream_insert() -> None:
+    """stream_insert must build points and forward them in one call to
+    Collection.stream_insert, returning the number of points inserted."""
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_stream")
+    inserted_points: List[dict] = []
+
+    class _MockCollection:
+        def stream_insert(self, points: list) -> None:
+            inserted_points.extend(points)
+
+    store._collection = _MockCollection()
+    docs = [
+        Document(id="a", content="hello", embedding=[0.1, 0.2]),
+        Document(id="b", content="world", embedding=[0.3, 0.4]),
+    ]
+    count = store.stream_insert(docs)
+
+    assert count == 2
+    assert len(inserted_points) == 2
+    assert inserted_points[0]["payload"]["_doc_id"] == "a"
+    assert inserted_points[0]["payload"]["content"] == "hello"
+    assert inserted_points[0]["vector"] == [0.1, 0.2]
+
+
+def test_stream_insert_empty_list_returns_zero() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_stream_empty")
+    assert store.stream_insert([]) == 0
+
+
+def test_stream_insert_forwards_named_sparse_vectors() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_stream_sparse")
+    inserted_points: List[dict] = []
+
+    class _MockCollection:
+        def stream_insert(self, points: list) -> None:
+            inserted_points.extend(points)
+
+    store._collection = _MockCollection()
+    store.stream_insert(
+        [Document(id="s1", content="hi", embedding=[0.5])],
+        sparse_vectors=[{"bge_m3": {0: 1.5, 7: 0.8}}],
+    )
+    assert inserted_points[0]["sparse_vector"] == {"bge_m3": {0: 1.5, 7: 0.8}}
+
+
+def test_write_documents_streaming_batches_via_stream_insert() -> None:
+    """write_documents_streaming must chunk points into batch_size-sized
+    calls to Collection.stream_insert (backpressure-friendly bulk loading)."""
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_stream_batches")
+    call_batches: List[list] = []
+
+    class _MockCollection:
+        def stream_insert(self, points: list) -> None:
+            call_batches.append(list(points))
+
+    store._collection = _MockCollection()
+    docs = [
+        Document(id=f"d{i}", content=f"text {i}", embedding=[float(i)])
+        for i in range(5)
+    ]
+    written = store.write_documents_streaming(docs, batch_size=2)
+
+    assert written == 5
+    assert len(call_batches) == 3  # 2 + 2 + 1
+    assert [len(b) for b in call_batches] == [2, 2, 1]
+    assert sum(len(b) for b in call_batches) == 5
+
+
+def test_write_documents_streaming_empty_returns_zero() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_stream_batches_empty")
+    assert store.write_documents_streaming([]) == 0
+
+
+def test_write_documents_streaming_skip_policy_does_not_overwrite_existing() -> None:
+    """write_documents_streaming must honour DuplicatePolicy.SKIP exactly like
+    write_documents: existing documents are left untouched."""
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_stream_skip")
+    original = Document(id="dup", content="original content", embedding=[0.1, 0.2])
+    store.write_documents([original])
+
+    new = Document(id="dup", content="REPLACED CONTENT", embedding=[0.9, 0.9])
+    fresh = Document(id="brand_new", content="fresh", embedding=[0.5, 0.5])
+    written = store.write_documents_streaming([new, fresh], policy=DuplicatePolicy.SKIP)
+
+    assert written == 1, "SKIP should report only the genuinely-new doc as written"
+    docs = {d.id: d for d in store.filter_documents()}
+    assert docs["dup"].content == "original content"
+    assert docs["brand_new"].content == "fresh"
+
+
+def test_write_documents_streaming_forwards_sparse_vectors() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_stream_sparse_batch")
+    call_batches: List[list] = []
+
+    class _MockCollection:
+        def stream_insert(self, points: list) -> None:
+            call_batches.append(list(points))
+
+    store._collection = _MockCollection()
+    store.write_documents_streaming(
+        [Document(id="p1", content="x", embedding=[0.5])],
+        sparse_vectors=[{"bge_m3": {0: 1.5}}],
+    )
+    assert call_batches[0][0]["sparse_vector"] == {"bge_m3": {0: 1.5}}
+
+
+# ---------------------------------------------------------------------------
+# CollectionAdminMixin — get_stats / analyze / train_pq / metadata-only
+#
+# Mirrors the mixin already shared with the LangChain and LlamaIndex stores
+# (velesdb_common.collection_admin.CollectionAdminMixin), now also mixed
+# into VelesDBDocumentStore so all three integrations expose the same
+# admin surface (issue #1548).
+# ---------------------------------------------------------------------------
+
+
+def test_collection_name_property_exposes_constructor_arg() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="my_collection")
+    assert store.collection_name == "my_collection"
+
+
+def test_train_pq_calls_db_train_pq() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_pq")
+    calls: List[dict] = []
+
+    class _MockDb:
+        def train_pq(self, collection_name: str, m: int, k: int, opq: bool) -> str:
+            calls.append({"collection_name": collection_name, "m": m, "k": k, "opq": opq})
+            return "trained"
+
+    store._db = _MockDb()
+    result = store.train_pq(m=16, k=128, opq=True)
+
+    assert result == "trained"
+    assert calls == [{"collection_name": "t_pq", "m": 16, "k": 128, "opq": True}]
+
+
+def test_analyze_collection_calls_db_analyze_collection() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_analyze")
+    calls: List[str] = []
+
+    class _MockDb:
+        def analyze_collection(self, collection_name: str) -> dict:
+            calls.append(collection_name)
+            return {"total_points": 3, "row_count": 3}
+
+    store._db = _MockDb()
+    result = store.analyze_collection()
+
+    assert result == {"total_points": 3, "row_count": 3}
+    assert calls == ["t_analyze"]
+
+
+def test_get_collection_stats_calls_db_get_collection_stats() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_stats")
+    calls: List[str] = []
+
+    class _MockDb:
+        def get_collection_stats(self, collection_name: str) -> Optional[dict]:
+            calls.append(collection_name)
+            return None
+
+    store._db = _MockDb()
+    assert store.get_collection_stats() is None
+    assert calls == ["t_stats"]
+
+
+def test_create_metadata_collection_calls_db_create_metadata_collection() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_meta_coll")
+    calls: List[str] = []
+
+    class _MockDb:
+        def create_metadata_collection(self, name: str) -> None:
+            calls.append(name)
+
+    store._db = _MockDb()
+    store.create_metadata_collection("refs")
+    assert calls == ["refs"]
+
+
+def test_is_metadata_only_false_when_no_collection_yet() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_meta_only_none")
+    assert store.is_metadata_only() is False
+
+
+def test_is_metadata_only_delegates_to_collection() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_meta_only")
+
+    class _MockCollection:
+        def is_metadata_only(self) -> bool:
+            return True
+
+    store._collection = _MockCollection()
+    assert store.is_metadata_only() is True
+
+
+def test_flush_delegates_to_collection() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_flush")
+    calls: List[bool] = []
+
+    class _MockCollection:
+        def flush(self) -> None:
+            calls.append(True)
+
+    store._collection = _MockCollection()
+    store.flush()
+    assert calls == [True]
+
+
+def test_flush_is_noop_without_collection() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_flush_none")
+    store.flush()  # must not raise
+
+
+def test_get_db_reuses_existing_connection() -> None:
+    """_get_db() must return the cached ``self._db`` instead of opening a new
+    ``velesdb.Database`` when one is already set (same contract LangChain and
+    LlamaIndex rely on for the CollectionAdminMixin)."""
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_get_db")
+    sentinel = object()
+    store._db = sentinel
+    assert store._get_db() is sentinel

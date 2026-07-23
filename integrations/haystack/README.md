@@ -76,26 +76,15 @@ indexer.connect("embedder", "writer")
 indexer.run({"converter": {"sources": ["paper.pdf"]}})
 
 # Query pipeline. `InMemoryEmbeddingRetriever` is bound to `InMemoryDocumentStore`
-# and would NOT work against a custom DocumentStore — wrap `embedding_retrieval`
-# in a thin Haystack component that forwards the call. Full working example in
-# `integrations/haystack/examples/rag_pipeline.py` (`_VelesRetriever`).
-from haystack import component
-from haystack.dataclasses import Document
-from typing import List
-
-@component
-class VelesRetriever:
-    def __init__(self, document_store, top_k: int = 10):
-        self._store = document_store
-        self._top_k = top_k
-
-    @component.output_types(documents=List[Document])
-    def run(self, query_embedding: List[float]):
-        return {"documents": self._store.embedding_retrieval(query_embedding, top_k=self._top_k)}
+# and would NOT work against a custom DocumentStore — use the shipped
+# `VelesDBEmbeddingRetriever` instead (like `QdrantEmbeddingRetriever` in the
+# Qdrant integration, no hand-rolled `@component` wrapper needed). Full working
+# example in `integrations/haystack/examples/rag_pipeline.py`.
+from haystack_velesdb import VelesDBEmbeddingRetriever
 
 querier = Pipeline()
 querier.add_component("embedder", SentenceTransformersTextEmbedder(model="all-MiniLM-L6-v2"))
-querier.add_component("retriever", VelesRetriever(document_store=store))
+querier.add_component("retriever", VelesDBEmbeddingRetriever(document_store=store))
 querier.connect("embedder.embedding", "retriever.query_embedding")
 result = querier.run({"embedder": {"text": "What is VelesDB?"}})
 print(result["retriever"]["documents"])
@@ -111,16 +100,25 @@ print(result["retriever"]["documents"])
 | `collection_name` | `"haystack_documents"` | VelesDB collection name |
 | `embedding_dim` | `768` | Embedding vector dimension |
 | `metric` | `"cosine"` | Distance metric: `"cosine"`, `"euclidean"`, `"dot"`, `"hamming"`, or `"jaccard"` |
+| `scroll_limit` | `10_000` | Max documents returned by `filter_documents()`; raise for collections bigger than this |
 
 ### Methods
 
 | Method | Description |
 |--------|-------------|
-| `write_documents(documents, policy)` | Upsert documents; returns count written |
-| `filter_documents(filters)` | Scroll documents matching a VelesDB filter dict |
-| `embedding_retrieval(query_embedding, top_k, filters, scale_score)` | Vector similarity search |
+| `write_documents(documents, policy, sparse_vectors=None)` | Upsert documents; returns count written. `sparse_vectors` is an optional list aligned with `documents` — each entry a flat `dict[int, float]` or a named `dict[str, dict[int, float]]` mapping (e.g. `{"bge_m3": {0: 1.5}}`); a named mapping creates that sparse index for later hybrid retrieval |
+| `stream_insert(documents, sparse_vectors=None)` | Insert documents through VelesDB's streaming ingestion channel in one call (append-only, no `DuplicatePolicy` check); returns count inserted. See "Note on streaming ingestion" below |
+| `write_documents_streaming(documents, policy, sparse_vectors=None, batch_size=100)` | Same `DuplicatePolicy` semantics as `write_documents`, but sent through the streaming channel in `batch_size`-sized chunks — better throughput for large bulk loads. See "Note on streaming ingestion" below |
+| `flush()` | Flush pending changes to disk. See "Note on streaming ingestion" below |
+| `filter_documents(filters)` | Scroll documents matching a VelesDB filter dict, up to `scroll_limit` |
+| `embedding_retrieval(query_embedding, top_k, filters, scale_score, fusion=None, fusion_params=None)` | Vector similarity search. `fusion` selects a `velesdb.FusionStrategy` (`"average"`, `"maximum"`, `"rrf"`, `"weighted"`, `"relative_score"` / `"rsf"`) applied via `Collection.multi_query_search`, changing the ranking; `fusion_params` configures it (e.g. `{"dense_weight": 0.7, "sparse_weight": 0.3}` for `"rsf"`). `filters` cannot be combined with `fusion` |
 | `count_documents()` | Total document count |
 | `delete_documents(document_ids)` | Delete by Haystack string IDs |
+| `train_pq(m=8, k=256, opq=False)` | Train Product Quantization on the collection |
+| `analyze_collection()` | Compute and persist collection statistics (point/row counts, column stats) |
+| `get_collection_stats()` | Return cached statistics from the last `analyze_collection()` call, or `None` |
+| `is_metadata_only()` | Whether the current collection holds no vectors |
+| `create_metadata_collection(name)` | Create a metadata-only collection (no vectors), joinable with vector collections |
 | `to_dict()` / `from_dict()` | Haystack pipeline serialisation |
 
 **Note on `DuplicatePolicy`:** `NONE` and `OVERWRITE` use VelesDB upsert semantics
@@ -137,6 +135,16 @@ if a collision is detected between a new document and an existing one.
 **Note on `scale_score`:** When `True` (default), cosine similarity scores
 are normalised from `[-1, 1]` to `[0, 1]` so they behave like probabilities
 in downstream re-ranking.
+
+**Note on streaming ingestion:** `stream_insert()` and `write_documents_streaming()`
+forward to the underlying `velesdb.Collection.stream_insert`, which requires
+the collection to have `enable_streaming()` called on it first — the same
+caller-managed contract as the LangChain and LlamaIndex integrations (see
+`docs/reference/ECOSYSTEM_PARITY.md`). The channel batches asynchronously on
+its own background interval (engine default ~50ms), so a point may not be
+immediately visible to reads right after either call returns; `flush()`
+flushes pending changes to disk but does **not** guarantee streaming-channel
+visibility.
 
 ## Running tests
 
