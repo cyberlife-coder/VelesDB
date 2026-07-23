@@ -396,6 +396,41 @@ describe('MemoryService', () => {
       }
     );
 
+    it.each([
+      [
+        'compileTranscript',
+        () => memory.compileTranscript({ query: 'q', transcript: 't', token_budget: 100 }),
+      ],
+      [
+        'explainCompilation',
+        () =>
+          memory.explainCompilation(
+            { query: 'q', token_budget: 100, fragments: [{ content: 'x' }] },
+            '1'
+          ),
+      ],
+      ['contextSavings', () => memory.contextSavings()],
+      ['suggestBudget', () => memory.suggestBudget('claude-sonnet-4-5')],
+    ] as const)(
+      '%s() throws an actionable ConnectionError when the resolved wasm build lacks it',
+      async (method, call) => {
+        // Simulates a resolved @wiscale/velesdb-wasm build that HAS the
+        // MemoryService class (so init() already succeeded, per the outer
+        // beforeEach) but predates this specific method — e.g. a lockfile
+        // pinned between the 3.8.0 base floor and whichever release this
+        // method first ships in. Without ensureCapability's guard this call
+        // would fail with a raw, unhelpful `TypeError: x is not a function`
+        // from deep inside wrapWasmCall instead of a typed, actionable error.
+        delete (lastMockInstance as unknown as Record<string, unknown>)[method];
+        await expect(call()).rejects.toSatisfy((e: unknown) => {
+          expect(e).toBeInstanceOf(ConnectionError);
+          expect((e as Error).message).toContain(method);
+          expect((e as Error).message).toMatch(/3\.12\.0/);
+          return true;
+        });
+      }
+    );
+
     it('MemoryMetadata types _veles_date as an optional YYYYMMDD number', () => {
       // Type-level check: this must accept `_veles_date` without a cast —
       // fails to *compile* (not just run) if the field is ever removed.

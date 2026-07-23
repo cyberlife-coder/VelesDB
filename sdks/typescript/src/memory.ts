@@ -563,6 +563,33 @@ export class MemoryService {
   }
 
   /**
+   * Runtime capability guard for a `WasmMemoryService` method that shipped
+   * AFTER the class's own base floor (`runInit()`'s `MemoryService`
+   * presence check, >= 3.8.0): `compileTranscript`, `explainCompilation`,
+   * `contextSavings`, and `suggestBudget` need a @wiscale/velesdb-wasm
+   * release newer than 3.12.0. A resolved build that has the `MemoryService`
+   * class but not yet this specific method would otherwise fail with a raw,
+   * unhelpful `TypeError: x is not a function` from deep inside
+   * `wrapWasmCall` — this throws with the same actionable-cause contract
+   * `runInit()`'s own capability check uses instead, so every version-floor
+   * failure in this file reads the same way regardless of which method hit
+   * it.
+   */
+  private ensureCapability(method: keyof WasmMemoryServiceInstance): WasmMemoryServiceInstance {
+    const svc = this.ensureInitialized();
+    if (typeof svc[method] !== 'function') {
+      throw new ConnectionError(
+        `The resolved @wiscale/velesdb-wasm build does not implement ${method}() — ` +
+          'this method needs a @wiscale/velesdb-wasm release newer than 3.12.0 ' +
+          '(the compileTranscript/explainCompilation/contextSavings/suggestBudget ' +
+          'surface ships in the next @wiscale/velesdb-wasm release after 3.12.0; ' +
+          'update the dependency once it is available)'
+      );
+    }
+    return svc;
+  }
+
+  /**
    * Store a fact; resolves to its decimal-string id (idempotent on
    * identical content). `links` are edges to existing memories; `metadata`
    * is optional structured data for later filtering; `ttlSeconds` makes the
@@ -742,7 +769,10 @@ export class MemoryService {
    */
   compileTranscript(request: CompileTranscriptRequest): Promise<CompileTranscriptResult> {
     return wrapWasmCall(
-      () => this.ensureInitialized().compileTranscript(request) as CompileTranscriptResult
+      () =>
+        this.ensureCapability('compileTranscript').compileTranscript(
+          request
+        ) as CompileTranscriptResult
     );
   }
 
@@ -764,7 +794,7 @@ export class MemoryService {
   ): Promise<ContextDecision> {
     return wrapWasmCall(
       () =>
-        this.ensureInitialized().explainCompilation(
+        this.ensureCapability('explainCompilation').explainCompilation(
           request,
           fragmentId,
           fragmentIndex
@@ -781,7 +811,7 @@ export class MemoryService {
    */
   contextSavings(project?: string): Promise<ContextSavings> {
     return wrapWasmCall(
-      () => this.ensureInitialized().contextSavings(project) as ContextSavings
+      () => this.ensureCapability('contextSavings').contextSavings(project) as ContextSavings
     );
   }
 
@@ -795,6 +825,7 @@ export class MemoryService {
    */
   suggestBudget(targetModel: string, reserveTokens?: number): Promise<SuggestedBudget> {
     return wrapWasmCall(() => {
+      const svc = this.ensureCapability('suggestBudget');
       // Same validation as remember()'s ttlSeconds (see that method's
       // comment for the full rationale): BigInt(1.5) throws a raw
       // RangeError, a negative value dies as an opaque wasm-bindgen u64
@@ -810,7 +841,7 @@ export class MemoryService {
           `reserveTokens must be an integer between 0 and ${Number.MAX_SAFE_INTEGER}, got ${reserveTokens}`
         );
       }
-      return this.ensureInitialized().suggestBudget(
+      return svc.suggestBudget(
         targetModel,
         reserveTokens !== undefined ? BigInt(reserveTokens) : undefined
       ) as SuggestedBudget;
