@@ -9,7 +9,7 @@ use crate::collection_helpers;
 
 /// Handles the `info` subcommand: prints database overview.
 pub fn handle_info(path: &Path) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     println!("VelesDB Database: {}", path.display());
     println!("Collections:");
     for name in db.list_collections() {
@@ -44,7 +44,7 @@ fn print_collection_summary(db: &velesdb_core::Database, name: &str) {
 
 /// Handles the `list` subcommand: lists all collections.
 pub fn handle_list(path: &Path, format: &str) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let collections = db.list_collections();
 
     if format == "json" {
@@ -164,7 +164,7 @@ fn print_collection_row(db: &velesdb_core::Database, name: &str) {
 
 /// Handles the `show` subcommand: shows detailed info about one collection.
 pub fn handle_show(path: &Path, collection: &str, samples: usize, format: &str) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let typed = collection_helpers::resolve_collection(&db, collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
     let type_label = collection_helpers::collection_type_label(&db, collection);
@@ -291,7 +291,7 @@ fn show_metadata(
 
 /// Handles the `analyze` subcommand: collection statistics.
 pub fn handle_analyze(path: &Path, collection: &str, format: &str) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let stats = db
         .analyze_collection(collection)
         .map_err(|e| anyhow::anyhow!("Analyze error: {}", e))?;

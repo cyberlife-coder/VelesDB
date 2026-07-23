@@ -34,9 +34,12 @@ use velesdb_server::{
 struct Args {
     /// Path to velesdb.toml configuration file. Configures both the
     /// server transport ([server]/[auth]/[tls]/[cors]) and the core engine
-    /// ([search]/[hnsw]/[storage]/[limits]/[wal_batch]). An invalid or
-    /// missing explicit path fails fast at startup — never a silent
-    /// fallback to defaults.
+    /// ([search]/[hnsw]/[storage]/[limits]/[quantization]/[wal_batch]) —
+    /// only these engine sections are read into the core config, so a
+    /// same-named [server]/[logging] table stays exclusively the
+    /// server's own. VELESDB_* env vars still override values from the
+    /// file. An invalid or missing explicit path fails fast at startup —
+    /// never a silent fallback to defaults.
     #[arg(short, long, env = "VELESDB_CONFIG")]
     config: Option<PathBuf>,
 

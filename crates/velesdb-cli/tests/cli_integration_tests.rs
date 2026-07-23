@@ -559,3 +559,109 @@ fn test_repl_help() {
         .success()
         .stdout(predicate::str::contains("REPL"));
 }
+
+// =============================================================================
+// Global `--config` Flag Tests (issue #1549)
+//
+// `--config`/`VELESDB_CONFIG` loads the core `VelesConfig` (search/HNSW/
+// storage/limits/WAL batching) and opens the database with
+// `Database::open_with_config` instead of silently applying core defaults.
+// Semantics: fail-fast on a missing/invalid explicit path (never a silent
+// fallback), and the loaded values must be *enforced*, not just parsed.
+// =============================================================================
+
+#[test]
+fn test_global_config_flag_documented_in_help() {
+    velesdb_cmd()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--config"));
+}
+
+#[test]
+fn test_config_missing_explicit_path_fails_fast() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+    fs::create_dir_all(&db_path).unwrap();
+
+    velesdb_cmd()
+        .arg("--config")
+        .arg("/nonexistent/velesdb-issue-1549.toml")
+        .arg("info")
+        .arg(&db_path)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("config file not found"));
+}
+
+#[test]
+fn test_config_invalid_value_fails_fast_with_typed_error() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+    fs::create_dir_all(&db_path).unwrap();
+    let config_path = temp_dir.path().join("velesdb.toml");
+    // max_collections = 0 is out of range — must surface the core
+    // ConfigError, not silently fall back to the default.
+    fs::write(&config_path, "[limits]\nmax_collections = 0\n").unwrap();
+
+    velesdb_cmd()
+        .arg("--config")
+        .arg(&config_path)
+        .arg("info")
+        .arg(&db_path)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("limits.max_collections"));
+}
+
+#[test]
+fn test_config_custom_toml_limit_is_enforced_end_to_end() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+    fs::create_dir_all(&db_path).unwrap();
+    let config_path = temp_dir.path().join("velesdb.toml");
+    fs::write(&config_path, "[limits]\nmax_collections = 1\n").unwrap();
+
+    // First collection is within the configured cap.
+    velesdb_cmd()
+        .arg("--config")
+        .arg(&config_path)
+        .args(["collection", "create"])
+        .arg(&db_path)
+        .arg("first")
+        .args(["--dimension", "4"])
+        .assert()
+        .success();
+
+    // Second collection proves the limit is actually enforced by the
+    // running database, not just parsed from the TOML.
+    velesdb_cmd()
+        .arg("--config")
+        .arg(&config_path)
+        .args(["collection", "create"])
+        .arg(&db_path)
+        .arg("second")
+        .args(["--dimension", "4"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("max_collections"));
+}
+
+#[test]
+fn test_config_flag_works_after_subcommand_too() {
+    // `global = true` in clap means `--config` is accepted both before and
+    // after the subcommand — verify the latter position also works.
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+    fs::create_dir_all(&db_path).unwrap();
+
+    velesdb_cmd()
+        .arg("info")
+        .arg(&db_path)
+        .arg("--config")
+        .arg("/nonexistent/velesdb-issue-1549.toml")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("config file not found"));
+}

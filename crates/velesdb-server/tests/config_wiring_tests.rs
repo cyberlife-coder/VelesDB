@@ -74,6 +74,54 @@ async fn test_custom_toml_limit_is_enforced_by_the_running_server() {
     );
 }
 
+/// Regression test (Fable review finding): a TOML file with a legitimate
+/// low `[server] port = 443` (this crate's own HTTP transport section —
+/// e.g. running behind `setcap`/a privileged process) plus a genuine
+/// engine section must still start the server successfully, and the
+/// engine section must be applied. Before the fix, `[server] port = 443`
+/// also landed in `VelesConfig`'s own `server.port` field and was
+/// rejected by its `>= 1024` validation rule, aborting startup with
+/// "server.port value 443 must be >= 1024" even though the value was
+/// never meant for that struct.
+#[tokio::test]
+async fn test_shell_owned_server_port_below_1024_does_not_block_startup() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let config_dir = TempDir::new().expect("Failed to create config dir");
+    let config_path = config_dir.path().join("velesdb.toml");
+    std::fs::write(
+        &config_path,
+        "[server]\nport = 443\n\n[limits]\nmax_collections = 2\n",
+    )
+    .expect("Failed to write config");
+
+    // Mirrors `main::init_app_state`: must not error just because the
+    // file's [server] section has a value that's invalid for
+    // `VelesConfig`'s own (irrelevant, in this context) server.port field.
+    let app = common::create_test_app_with_core_config(&temp_dir, &config_path);
+
+    let (status, _body) = create_collection(app.clone(), "first").await;
+    assert_eq!(status, StatusCode::CREATED, "server must have started");
+
+    let (status, _body) = create_collection(app.clone(), "second").await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "second collection is within the configured max_collections=2 cap"
+    );
+
+    let (status, body) = create_collection(app, "third").await;
+    assert_ne!(
+        status,
+        StatusCode::CREATED,
+        "third collection exceeds the configured cap"
+    );
+    let message = body["error"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("max_collections"),
+        "expected the limit error to mention max_collections, got: {message}"
+    );
+}
+
 /// Without `--config`, behaviour is unchanged: core defaults apply, so
 /// creating a handful of collections still works.
 #[tokio::test]

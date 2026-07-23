@@ -56,6 +56,7 @@ mod repl_search_cmds;
 mod session;
 
 use clap::Parser;
+use std::path::PathBuf;
 
 use commands::{CollectionCommands, Commands, DataCommands, QueryCommands};
 
@@ -68,6 +69,13 @@ use commands::{CollectionCommands, Commands, DataCommands, QueryCommands};
 )]
 #[command(propagate_version = true, disable_help_subcommand = false)]
 struct Cli {
+    /// Path to a VelesDB TOML config file (search/HNSW/storage/limits/WAL
+    /// batching). Applies to every command that opens a database, including
+    /// the REPL. An invalid or missing path fails fast — never silently
+    /// falls back to defaults.
+    #[arg(long = "config", global = true, env = "VELESDB_CONFIG")]
+    config: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -87,6 +95,9 @@ fn cli_main() -> anyhow::Result<()> {
     );
 
     let cli = Cli::parse();
+    // Recorded once here; every command that opens a database (REPL and
+    // one-shot alike) reads it back via `helpers::open_database`.
+    helpers::set_config_path(cli.config);
     dispatch(cli.command)
 }
 
@@ -266,7 +277,7 @@ fn dispatch_query(
     collection: Option<&str>,
     format: &str,
 ) -> anyhow::Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = helpers::open_database(path)?;
     let result = repl::execute_query(&db, query, collection, None)?;
     repl::print_result(&result, format);
     Ok(())

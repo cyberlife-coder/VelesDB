@@ -11,19 +11,34 @@ use std::path::{Path, PathBuf};
 // ============================================================================
 
 /// Loads the core [`velesdb_core::config::VelesConfig`] (search/HNSW/storage/
-/// limits/WAL batching) from the same TOML file consumed by
+/// limits/quantization/WAL batching) from the same TOML file consumed by
 /// [`ServerConfig::load`] for the server-transport sections (`[server]`,
 /// `[auth]`, `[tls]`, `[cors]`).
 ///
-/// The two structs deserialize independently from the same file — core's
-/// `#[serde(default)]` sections silently ignore keys they don't recognise
-/// (e.g. `[server].data_dir`), so one `velesdb.toml` can carry both the
-/// server-transport settings and the engine settings without conflict.
+/// The two structs deserialize independently from the same file, but
+/// **`VelesConfig` also has its own `[server]` and `[logging]` fields**
+/// (for standalone/embedded consumers) that collide in key name — not
+/// meaning — with this crate's own `[server]` transport section. A
+/// `[server] port = 443` meant as this crate's HTTP bind port would
+/// otherwise *also* land in `VelesConfig.server.port` and be rejected by
+/// its `>= 1024` validation rule, a spurious failure unrelated to the
+/// value actually being configured. This function therefore uses
+/// [`velesdb_core::config::VelesConfig::load_from_path_engine_only`],
+/// which parses **only** the engine sections (`[search]`/`[hnsw]`/
+/// `[storage]`/`[limits]`/`[quantization]`/`[wal_batch]`) and silently
+/// drops every other top-level table before validating — so
+/// `[server]`/`[auth]`/`[tls]`/`[cors]` stay exclusively owned by
+/// [`ServerConfig::load`].
+///
+/// `VELESDB_*` environment variables still layer on top of the (filtered)
+/// file, same as [`velesdb_core::config::VelesConfig::load_from_path`] —
+/// e.g. `VELESDB_LIMITS_MAX_COLLECTIONS=5` overrides a `[limits]` value
+/// from the file even though the file is filtered first.
 ///
 /// - `config_path: Some(path)` — the caller passed `--config`/`VELESDB_CONFIG`
 ///   explicitly. The file **must** exist and pass
-///   [`velesdb_core::config::VelesConfig::load_from_path`] validation —
-///   never a silent fallback to defaults on a broken path.
+///   `load_from_path_engine_only` validation — never a silent fallback to
+///   defaults on a broken path.
 /// - `config_path: None` — mirrors [`load_toml_file`]'s default-file
 ///   behaviour: falls back to `velesdb.toml` in the current directory if
 ///   present (still validated, so a malformed default file still fails
@@ -54,7 +69,7 @@ pub fn load_core_config(
         }
     };
 
-    velesdb_core::config::VelesConfig::load_from_path(&path).map_err(|e| {
+    velesdb_core::config::VelesConfig::load_from_path_engine_only(&path).map_err(|e| {
         anyhow::anyhow!(
             "failed to load VelesDB core config from {}: {e}",
             path.display()
@@ -570,6 +585,29 @@ mod tests {
         let config = load_core_config(&Some(config_path)).expect("test: load valid config");
         assert_eq!(config.limits.max_collections, 3);
         assert_eq!(config.hnsw.m, Some(24));
+    }
+
+    /// Regression test (Fable review finding on issue #1549): a legitimate
+    /// low HTTP bind port in this crate's own `[server]` section used to
+    /// also get parsed into `VelesConfig`'s own (unrelated) `server.port`
+    /// field and rejected by its `>= 1024` validation rule — a spurious
+    /// startup failure for a config file that was otherwise entirely
+    /// valid. `load_core_config` must ignore `[server]` (and any other
+    /// non-engine section) entirely, while still applying the real engine
+    /// sections from the same file.
+    #[test]
+    fn test_load_core_config_ignores_shell_owned_server_section_low_port() {
+        let dir = tempfile::tempdir().expect("test: temp dir");
+        let config_path = dir.path().join("velesdb.toml");
+        std::fs::write(
+            &config_path,
+            "[server]\nport = 443\n\n[limits]\nmax_collections = 5\n",
+        )
+        .expect("test: write config");
+
+        let config = load_core_config(&Some(config_path))
+            .expect("a shell-owned [server] port=443 must not fail core config loading");
+        assert_eq!(config.limits.max_collections, 5);
     }
 
     #[test]
