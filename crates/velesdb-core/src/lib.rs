@@ -250,7 +250,10 @@ pub use config::{
 };
 #[cfg(feature = "persistence")]
 pub use config::{LoggingConfig, ServerConfig, StorageConfig};
-pub use fusion::{FusionError, FusionStrategy};
+pub use fusion::{
+    FusionError, FusionStrategy, DEFAULT_WEIGHTED_AVG_WEIGHT, DEFAULT_WEIGHTED_HIT_WEIGHT,
+    DEFAULT_WEIGHTED_MAX_WEIGHT,
+};
 #[cfg(feature = "persistence")]
 pub use guardrails::QueryLimits;
 pub use metrics::{

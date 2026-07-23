@@ -46,6 +46,25 @@ impl std::fmt::Display for FusionError {
 
 impl std::error::Error for FusionError {}
 
+/// Canonical default weight for the average-score component of
+/// [`FusionStrategy::Weighted`] when a caller does not supply explicit
+/// weights.
+///
+/// This is the single source of truth for the "weighted" default: every
+/// surface that offers a default `weighted` fusion (WASM's `fuse_results`,
+/// the `velesdb_common` Python fusion builder, etc.) must derive its default
+/// from this constant rather than hardcoding its own value, so the three
+/// components never drift out of sync again.
+pub const DEFAULT_WEIGHTED_AVG_WEIGHT: f32 = 0.6;
+
+/// Canonical default weight for the maximum-score component of
+/// [`FusionStrategy::Weighted`]. See [`DEFAULT_WEIGHTED_AVG_WEIGHT`].
+pub const DEFAULT_WEIGHTED_MAX_WEIGHT: f32 = 0.3;
+
+/// Canonical default weight for the hit-ratio component of
+/// [`FusionStrategy::Weighted`]. See [`DEFAULT_WEIGHTED_AVG_WEIGHT`].
+pub const DEFAULT_WEIGHTED_HIT_WEIGHT: f32 = 0.1;
+
 /// Strategy for fusing results from multiple vector searches.
 ///
 /// Each strategy combines results differently, optimizing for various use cases:
@@ -178,6 +197,20 @@ impl FusionStrategy {
             max_weight,
             hit_weight,
         })
+    }
+
+    /// Creates a Weighted strategy using the canonical default weights
+    /// ([`DEFAULT_WEIGHTED_AVG_WEIGHT`], [`DEFAULT_WEIGHTED_MAX_WEIGHT`],
+    /// [`DEFAULT_WEIGHTED_HIT_WEIGHT`]).
+    ///
+    /// Infallible: the default weights are constructed to always sum to 1.0.
+    #[must_use]
+    pub fn weighted_default() -> Self {
+        Self::Weighted {
+            avg_weight: DEFAULT_WEIGHTED_AVG_WEIGHT,
+            max_weight: DEFAULT_WEIGHTED_MAX_WEIGHT,
+            hit_weight: DEFAULT_WEIGHTED_HIT_WEIGHT,
+        }
     }
 
     /// Fuses results from multiple queries into a single ranked list.
@@ -494,10 +527,18 @@ fn validate_weight_sum(sum: f32) -> Result<(), FusionError> {
     Ok(())
 }
 
-/// Min-max normalize a branch of `(id, score)` pairs.
+/// Min-max normalize a branch of `(id, score)` pairs to the `[0, 1]` range.
 ///
-/// If the score range is smaller than `f32::EPSILON`, all items receive 0.5.
-fn min_max_normalize(branch: &[(u64, f32)]) -> HashMap<u64, f32> {
+/// If the score range is smaller than `f32::EPSILON` (all scores effectively
+/// equal), every item receives `0.5` rather than dividing by (near) zero.
+///
+/// This is the single canonical implementation of min-max normalization for
+/// `VelesDB` fusion. It is `pub` specifically so other engines that need the
+/// same per-branch normalization semantics — e.g. `velesdb-wasm`'s N-branch
+/// relative-score fusion — can call it directly instead of maintaining a
+/// second copy of this math that could silently drift (see issue #1545).
+#[must_use]
+pub fn min_max_normalize(branch: &[(u64, f32)]) -> HashMap<u64, f32> {
     if branch.is_empty() {
         return HashMap::new();
     }
