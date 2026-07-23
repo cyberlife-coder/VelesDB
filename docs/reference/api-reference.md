@@ -2,9 +2,10 @@
 
 Complete REST API documentation for VelesDB.
 
-> **Last updated**: 2026-06-12 (VelesDB v2.0.0). The machine-readable source of
+> **Last updated**: 2026-07-23 (VelesDB v3.12.0). The machine-readable source of
 > truth is [`docs/openapi.yaml`](../openapi.yaml), regenerated from the server's
-> annotated handlers; this page is the human-readable companion.
+> annotated handlers and drift-checked in CI; this page is the human-readable
+> companion.
 
 ## Base URL
 

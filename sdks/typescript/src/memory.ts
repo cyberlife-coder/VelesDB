@@ -344,15 +344,15 @@ export class MemoryService {
         error instanceof Error ? error : undefined
       );
     }
-    // Capability floor, checked at runtime because the declared dependency
-    // range (^3.0.0) admits older builds: the memory wedge shipped in wasm
-    // 3.6.0, and an existing project's lockfile may still resolve an
-    // earlier version. Fail with the actionable cause, not a generic
-    // load error.
+    // Capability floor, checked at runtime because a stale lockfile can
+    // resolve a wasm build older than the declared range (^3.8.0, the
+    // floor this SDK's full memory surface — media fragments,
+    // retrieveContextSource — needs; the wedge itself first shipped in
+    // 3.6.0). Fail with the actionable cause, not a generic load error.
     if (typeof mod.MemoryService !== 'function') {
       throw new ConnectionError(
         'The resolved @wiscale/velesdb-wasm build does not ship MemoryService — ' +
-          'the memory wedge requires @wiscale/velesdb-wasm >= 3.6.0 ' +
+          'the memory wedge requires @wiscale/velesdb-wasm >= 3.8.0 ' +
           '(update the dependency in your lockfile)'
       );
     }

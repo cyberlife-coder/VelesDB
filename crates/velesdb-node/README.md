@@ -5,8 +5,10 @@ Node.js addon (napi-rs).** Same hardened Rust as the MCP server and the Python
 binding; no network service. Under the hood it fuses vector + graph + columnar,
 which is *how* it remembers, connects, and explains.
 
-`remember` / `recall` / `recallWhere` / `relate` / `forget` / `why` /
-`rememberExtracted` / `compileContext`. The differentiator is **`why()`**: it
+`remember` / `recall` / `recallWhere` / `recallFused` / `recallFusedDated` /
+`relate` / `forget` / `why` / `feedback` / `rememberExtracted` /
+`compileContext` / `contextSavings` / `explainCompilation` /
+`retrieveContextSource` / working contexts. The differentiator is **`why()`**: it
 answers a question with the best-matching memory *plus its connected subgraph*
 — related facts a plain vector recall is blind to. `compileContext` applies
 the same explainability to your token bill: deterministic context compression
@@ -110,12 +112,11 @@ binding-wide differences: id fields (`fragment_id`, `content_hash`,
 strings, and the *top-level* result keys follow the binding's camelCase
 (`out.retrievalHandles` — nested trees keep the wire's snake_case). `tokens_saved` is a local estimate, not billed tokens. The bundled
 [`velesdb-context-optimizer` skill](./skills/velesdb-context-optimizer/SKILL.md)
-teaches an agent the full workflow, including when *not* to compress —
-written against the MCP server's full tool set, so its `explain_compilation`
-and `context_savings` steps assume an MCP-connected agent: this Node binding
-does not expose those two methods itself (only `compileContext`,
-`retrieveContextSource`, save/load working context, and `feedback`). Install
-the skill into your agent's skills directory:
+teaches an agent the full workflow, including when *not* to compress. The
+binding exposes the compiler's read tools natively too: `explainCompilation`
+and `contextSavings` (alongside `compileContext`, `retrieveContextSource`,
+save/load working context, and `feedback`) — only `compileTranscript` remains
+MCP-only for now. Install the skill into your agent's skills directory:
 
 ```bash
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-context-optimizer ~/.claude/skills/
