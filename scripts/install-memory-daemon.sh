@@ -30,7 +30,7 @@
 #   --ollama-model=MODEL     Ollama embedding model (default: all-minilm)
 #   --ttl=SECONDS            Default TTL for new facts (default: prompted, empty = permanent)
 #   --yes                    Assume yes to interactive prompts (e.g. `ollama pull`)
-#   --skip-client=NAME       Skip wiring a client (repeatable): claude-code|claude-desktop|windsurf
+#   --skip-client=NAME       Skip wiring a client (repeatable): claude-code|claude-desktop|windsurf|devin
 #   --skip-ca-trust          Skip trusting the local CA in the login keychain
 #   --force-restart          Reload the daemon even if already running
 #   --uninstall              Remove the daemon and all client wiring (store and TLS material/CA
@@ -81,6 +81,7 @@ PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 BIN_PATH="$HOME/.cargo/bin/velesdb-memory"
 DESKTOP_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 WINDSURF_CONFIG="$HOME/.codeium/windsurf/mcp_config.json"
+DEVIN_CONFIG="$HOME/.config/devin/config.json"
 
 print_usage() {
   sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'
@@ -538,27 +539,43 @@ wire_json_client() {
   fi
 }
 
+# Claude Desktop is a DIFFERENT mechanism than every other client here:
+# claude_desktop_config.json (the file every other JSON client uses) never
+# reads a url/type:"http" entry — confirmed it does not even try to connect —
+# so writing one there (as this script used to) silently does nothing. The
+# only way to wire Desktop to the daemon is its own UI. This function prints
+# that instruction instead of touching the config file.
 wire_claude_desktop() {
-  wire_json_client "claude-desktop" "$DESKTOP_CONFIG" \
-    '.mcpServers["velesdb-memory"] = {"type":"http","url":"https://127.0.0.1:'"$PORT"'/mcp"}' \
-    1
-  if ! should_skip "claude-desktop"; then
-    echo -e "${YELLOW}⚠️  HTTP support is not confirmed for Claude Desktop. If it fails to connect after a restart, use this stdio fallback instead:${NC}"
-    cat <<EOF
-{ "mcpServers": { "velesdb-memory": {
-  "command": "$BIN_PATH",
-  "env": { "VELESDB_MEMORY_PATH": "<a-DIFFERENT-directory-than-$STORE>" }
-} } }
-EOF
-    echo -e "${YELLOW}   Use a DIFFERENT VELESDB_MEMORY_PATH than the daemon's store — pointed at the same one, the${NC}"
-    echo -e "${YELLOW}   fallback process and the daemon would fight over the same flock (DatabaseLocked).${NC}"
+  if should_skip "claude-desktop"; then
+    echo -e "${YELLOW}⏭  Skipping Claude Desktop (--skip-client).${NC}"
+    return 0
   fi
+  echo ""
+  echo -e "${BLUE}🖥  Claude Desktop — different mechanism than every other client here:${NC}"
+  echo -e "${YELLOW}   its config file does not support HTTP (a url/type:\"http\" entry there is silently${NC}"
+  echo -e "${YELLOW}   ignored). Add it yourself, once, via the UI instead:${NC}"
+  echo -e "${YELLOW}   Settings → Connectors → Add custom connector, then paste:${NC}"
+  echo "     https://127.0.0.1:$PORT/mcp"
+  echo -e "${YELLOW}   No API key needed (loopback only) — requires the CA-trust step above to have succeeded.${NC}"
+  echo -e "${YELLOW}   Prefer not to use the Connectors UI? A stdio fallback still works — see the README's${NC}"
+  echo -e "${YELLOW}   \"Configure your client\" section (use a DIFFERENT VELESDB_MEMORY_PATH than $STORE,${NC}"
+  echo -e "${YELLOW}   or the fallback process and the daemon will fight over the same flock).${NC}"
 }
 
 wire_windsurf() {
   wire_json_client "windsurf" "$WINDSURF_CONFIG" \
     '.mcpServers["velesdb-memory"] = {"serverUrl":"https://127.0.0.1:'"$PORT"'/mcp"}' \
     0
+}
+
+# Devin CLI's config wraps mcpServers in a top-level {"version": 1, ...}
+# envelope (unlike every other client here) — `.version //= 1` sets it only
+# if absent, so a re-run never clobbers a newer schema version Devin itself
+# might have written.
+wire_devin() {
+  wire_json_client "devin" "$DEVIN_CONFIG" \
+    '.version //= 1 | .mcpServers["velesdb-memory"] = {"url":"https://127.0.0.1:'"$PORT"'/mcp","transport":"http"}' \
+    1
 }
 
 # ---- 7. Uninstall -----------------------------------------------------
@@ -574,7 +591,7 @@ do_uninstall() {
   fi
 
   if command -v jq >/dev/null 2>&1; then
-    for cfg in "$DESKTOP_CONFIG" "$WINDSURF_CONFIG"; do
+    for cfg in "$DESKTOP_CONFIG" "$WINDSURF_CONFIG" "$DEVIN_CONFIG"; do
       if [ -f "$cfg" ] && jq -e . "$cfg" >/dev/null 2>&1; then
         local tmp
         tmp="$(mktemp)"
@@ -613,7 +630,7 @@ print_summary() {
   else
     echo -e "  Daemon:    ${YELLOW}not started (non-macOS)${NC}"
   fi
-  for client in claude-code claude-desktop windsurf; do
+  for client in claude-code claude-desktop windsurf devin; do
     if should_skip "$client"; then
       echo "  $client: skipped (--skip-client)"
     else
@@ -639,6 +656,7 @@ main() {
   wire_claude_code
   wire_claude_desktop
   wire_windsurf
+  wire_devin
   print_summary
 }
 

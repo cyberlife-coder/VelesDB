@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/install-memory-daemon.sh` now wires **Devin CLI**
+  (`~/.config/devin/config.json`) alongside Claude Code, Claude Desktop and
+  Windsurf; documented in the README's stdio and HTTP-transport client
+  sections.
+
+### Fixed
+
+- The installer no longer writes a `type:"http"` entry into
+  `claude_desktop_config.json` — confirmed Desktop's config file never reads
+  that shape (silently ignored). It now prints the Settings → Connectors →
+  Add custom connector instructions instead, matching what the README already
+  documented.
+
 ## [0.11.0] — 2026-07-23
 
 Minor, not patch: the metadata shape `remember`/`recall` return changes
