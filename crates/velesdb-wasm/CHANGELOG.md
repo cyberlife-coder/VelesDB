@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING (behavior) — `weighted` fusion default weights**: the default
+  weights used by `multi_query_search(..., strategy: "weighted")` when no
+  explicit weights are supplied changed from the WASM-local, non-overridable
+  `avg=0.5, max=0.3, hit=0.2` to `velesdb-core`'s canonical
+  `DEFAULT_WEIGHTED_*` constants, `avg=0.6, max=0.3, hit=0.1` — the same
+  defaults already used by the Python bindings and the `velesdb_common`
+  fusion builder. **This reorders `weighted`-fusion results** for existing
+  callers that relied on the old implicit 0.5/0.3/0.2 split and did not pass
+  explicit weights. `multi_query_search` now also accepts an optional 6th
+  argument, `weights: number[] | undefined` (`[avg_weight, max_weight,
+  hit_weight]`, must sum to 1.0), to opt back into the old split or any other
+  custom weighting — omitting it (as all existing callers do) keeps working
+  and simply picks up the new default. (Issue #1545.)
+- `relative_score` / `rsf` fusion's per-branch min-max normalization now
+  delegates to `velesdb_core::fusion::min_max_normalize` instead of a
+  WASM-local reimplementation of the same math. Purely internal
+  single-sourcing; output is unchanged. (Issue #1545.)
+
 ### Fixed
 - **SQ8 quantization parity with `velesdb-core` (#1543)**: the WASM SQ8
   encode/decode paths (`store_insert::encode_sq8`, `store_get::decode_sq8`,
