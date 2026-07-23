@@ -161,9 +161,21 @@ impl ScratchBuffer {
         sq8_scales: &[f32],
         dimension: usize,
     ) -> &[f32] {
-        let start = idx * dimension;
         let min = sq8_mins[idx];
         let scale = sq8_scales[idx];
+
+        // `scale == 0.0` is `store_insert::encode_sq8`'s sentinel for a
+        // degenerate (near-constant) range: mirrors core's
+        // `QuantizedVector::to_f32` fallback exactly — every dimension
+        // decodes to `min`. A genuine non-degenerate scale is always > 0.0
+        // (see `encode_sq8`), so the exact comparison is safe.
+        #[allow(clippy::float_cmp)]
+        if scale == 0.0 {
+            self.buf[..dimension].fill(min);
+            return &self.buf[..dimension];
+        }
+
+        let start = idx * dimension;
         for (i, &q) in data_sq8[start..start + dimension].iter().enumerate() {
             self.buf[i] = (f32::from(q) / scale) + min;
         }

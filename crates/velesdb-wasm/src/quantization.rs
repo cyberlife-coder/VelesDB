@@ -2,6 +2,19 @@
 //!
 //! Provides SQ8 (8-bit scalar quantization) and Binary (1-bit) quantization
 //! for memory-efficient vector storage.
+//!
+//! # Status (#1543)
+//!
+//! This module is **not currently wired into the crate** — there is no
+//! `mod quantization;` declaration in `lib.rs`, so `cargo build`/`test`
+//! never compiles this file and it has no effect on the shipped WASM
+//! binary. The production encode/decode paths live in
+//! `store_insert::encode_sq8`/`encode_binary`, `vector_ops::ScratchBuffer`
+//! and `store_get::decode_sq8` — those are what actually run in the
+//! browser and are what the #1543 core-parity fix targets. This file is
+//! kept aligned with the same core-parity fixes (same constants, same
+//! degenerate-range fallback) so it does not silently rot as a misleading
+//! reference if it is ever wired in or used as a refactor starting point.
 
 /// SQ8 quantization parameters for a single vector.
 #[derive(Debug, Clone, Copy)]
@@ -11,25 +24,37 @@ pub struct Sq8Params {
 }
 
 /// Computes SQ8 quantization parameters (min, scale) for a vector.
+///
+/// Mirrors `velesdb_core::QuantizedVector::from_f32` exactly (#1543): same
+/// min/max fold seeds (`f32::INFINITY`/`f32::NEG_INFINITY`) and the same
+/// degenerate-range threshold (`range < f32::EPSILON`, not the old ad hoc
+/// `1e-10` guess). `scale == 0.0` is used as an in-band sentinel for
+/// "degenerate range" — see `quantize_sq8`/`dequantize_sq8`.
 #[must_use]
 pub fn compute_sq8_params(vector: &[f32]) -> Sq8Params {
     let (min, max) = vector
         .iter()
-        .fold((f32::MAX, f32::MIN), |(min, max), &v| (min.min(v), max.max(v)));
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &v| (min.min(v), max.max(v)));
 
-    let scale = if (max - min).abs() < 1e-10 {
-        1.0
-    } else {
-        255.0 / (max - min)
-    };
+    let range = max - min;
+    let scale = if range < f32::EPSILON { 0.0 } else { 255.0 / range };
 
     Sq8Params { min, scale }
 }
 
 /// Quantizes a vector to SQ8 format using pre-computed parameters.
 ///
-/// Each f32 value is mapped to u8 range [0, 255].
+/// Each f32 value is mapped to u8 range [0, 255]. A degenerate range
+/// (`params.scale == 0.0`, see `compute_sq8_params`) fills every dimension
+/// with byte 128, matching core's `QuantizedVector::from_f32` fallback for
+/// constant/near-constant vectors exactly.
 pub fn quantize_sq8(vector: &[f32], params: Sq8Params, output: &mut Vec<u8>) {
+    #[allow(clippy::float_cmp)]
+    if params.scale == 0.0 {
+        let new_len = output.len() + vector.len();
+        output.resize(new_len, 128u8);
+        return;
+    }
     for &v in vector {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let quantized = ((v - params.min) * params.scale).round().clamp(0.0, 255.0) as u8;
@@ -38,8 +63,16 @@ pub fn quantize_sq8(vector: &[f32], params: Sq8Params, output: &mut Vec<u8>) {
 }
 
 /// Dequantizes SQ8 data back to f32.
+///
+/// Mirrors core's `QuantizedVector::to_f32` fallback: a degenerate range
+/// (`params.scale == 0.0`) decodes every dimension to `min` instead of
+/// dividing by zero.
 #[must_use]
 pub fn dequantize_sq8(data: &[u8], params: Sq8Params) -> Vec<f32> {
+    #[allow(clippy::float_cmp)]
+    if params.scale == 0.0 {
+        return vec![params.min; data.len()];
+    }
     data.iter()
         .map(|&q| (f32::from(q) / params.scale) + params.min)
         .collect()
@@ -106,7 +139,16 @@ mod tests {
     fn test_sq8_constant_vector() {
         let vector = vec![0.5, 0.5, 0.5, 0.5];
         let params = compute_sq8_params(&vector);
-        assert_eq!(params.scale, 1.0); // Fallback for constant vectors
+        // scale == 0.0 is the degenerate-range sentinel (matches core's
+        // QuantizedVector::from_f32 128-fill fallback exactly).
+        assert_eq!(params.scale, 0.0);
+
+        let mut quantized = Vec::new();
+        quantize_sq8(&vector, params, &mut quantized);
+        assert_eq!(quantized, vec![128u8; 4]);
+
+        let dequantized = dequantize_sq8(&quantized, params);
+        assert_eq!(dequantized, vec![0.5f32; 4]);
     }
 
     #[test]

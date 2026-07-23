@@ -29,17 +29,41 @@ fn encode_vector(store: &mut VectorStore, vector: &[f32]) {
 }
 
 /// SQ8 scalar quantization: maps f32 range to 0-255.
+///
+/// Mirrors `velesdb_core::QuantizedVector::from_f32` exactly (#1543):
+/// same min/max fold seeds (`f32::INFINITY`/`f32::NEG_INFINITY`, not
+/// `f32::MAX`/`f32::MIN` — matters for all-NaN input), same degenerate-range
+/// threshold (`range < f32::EPSILON`, replacing the old ad hoc `1e-10`
+/// guess that let near-constant vectors slip into the "normal" branch), and
+/// the same fallback for a degenerate (near-constant) range: every
+/// dimension quantizes to byte 128 (core's mid-point fill), not
+/// `round((v-min)*1.0)` (which collapsed to 0 and silently diverged from
+/// core for any constant/near-constant vector).
+///
+/// `scale == 0.0` is stored as an in-band sentinel recording "degenerate
+/// range" for the `decode_sq8` implementations (`vector_ops.rs`,
+/// `store_get.rs`) to mirror core's `to_f32` fallback (`vec![min; len]`).
+/// This is unambiguous: for finite min/max a genuine scale is always
+/// `255.0 / range` with `range >= f32::EPSILON`, which never rounds to
+/// exactly `0.0` in f32.
 fn encode_sq8(store: &mut VectorStore, vector: &[f32]) {
     let (min, max) = vector
         .iter()
-        .fold((f32::MAX, f32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
-    let scale = if (max - min).abs() < 1e-10 {
-        1.0
-    } else {
-        255.0 / (max - min)
-    };
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| {
+            (lo.min(v), hi.max(v))
+        });
+    let range = max - min;
 
     store.sq8_mins.push(min);
+
+    if range < f32::EPSILON {
+        store.sq8_scales.push(0.0);
+        let new_len = store.data_sq8.len() + vector.len();
+        store.data_sq8.resize(new_len, 128u8);
+        return;
+    }
+
+    let scale = 255.0 / range;
     store.sq8_scales.push(scale);
 
     for &v in vector {

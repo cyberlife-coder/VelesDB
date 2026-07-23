@@ -24,7 +24,16 @@ pub fn get_vector_at_index(store: &VectorStore, idx: usize) -> Vec<f32> {
 }
 
 /// Decodes a single SQ8-quantized vector back to f32.
+///
+/// `scale == 0.0` is `store_insert::encode_sq8`'s degenerate-range sentinel
+/// (see there): every dimension decodes to `min`, mirroring core's
+/// `QuantizedVector::to_f32` fallback. Without this branch a degenerate
+/// vector would divide by zero and return `+inf` for every dimension.
+#[allow(clippy::float_cmp)]
 fn decode_sq8(data_sq8: &[u8], min: f32, scale: f32, idx: usize, dimension: usize) -> Vec<f32> {
+    if scale == 0.0 {
+        return vec![min; dimension];
+    }
     let start = idx * dimension;
     data_sq8[start..start + dimension]
         .iter()
