@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Targets **0.11.0** (minor, not patch) on next release: the metadata shape
-`remember`/`recall` return changes observably for every consumer (MCP,
-Python, Node, WASM) — see "Changed" below.
+## [0.11.0] — 2026-07-23
+
+Minor, not patch: the metadata shape `remember`/`recall` return changes
+observably for every consumer (MCP, Python, Node, WASM) — see "Changed"
+below.
 
 ### Added
 
