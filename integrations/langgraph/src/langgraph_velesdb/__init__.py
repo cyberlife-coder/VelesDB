@@ -7,10 +7,12 @@ Drop VelesDB's local-first agent memory into any LangGraph agent:
     >>>
     >>> agent = create_react_agent(llm, make_memory_tools("./agent_memory"))
 
-The tools are ``remember``, ``recall``, ``relate``, and the differentiator
-``why`` — which answers with the best-matching memory *plus* the connected
-subgraph a vector recall is blind to. The store is on disk, so memory persists
-across agent runs.
+``make_memory_tools`` returns the full VelesDB memory tool set: ``remember``,
+``recall``, ``recall_where``, ``recall_fused``, ``relate``, ``forget``,
+``feedback``, and the differentiator ``why`` — which answers with the
+best-matching memory *plus* the connected subgraph a vector recall is blind
+to — plus ``save_working_context``/``load_working_context`` for cross-run
+resumption. The store is on disk, so memory persists across agent runs.
 """
 
 from langgraph_velesdb.tools import make_memory_tools

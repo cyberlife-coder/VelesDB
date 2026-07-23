@@ -25,7 +25,14 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "langchain-core>=0.3.0,<2.0.0",
-    "velesdb>=3.8.0",
+    # 3.12.0 is the highest velesdb release published to PyPI as of this
+    # writing. It ships forget/recall_where/recall_fused, but not yet
+    # MemoryService.feedback/save_working_context/load_working_context, nor
+    # the automatic `_veles_date` metadata stamp (velesdb-memory 0.11.0) —
+    # those tools will raise AttributeError, and recall_where/recall_fused's
+    # `metadata` stays empty for auto-dating, until velesdb publishes past
+    # 3.12.0. See README.md's "Compatibility" section.
+    "velesdb>=3.12.0",
 ]
 
 [project.optional-dependencies]
