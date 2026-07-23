@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import time
 from typing import List
 
 import pytest
@@ -136,6 +137,23 @@ def _store(tmp_path) -> VelesDBDocumentStore:
     )
 
 
+def _wait_until(predicate, timeout_s: float = 2.0, interval_s: float = 0.02):
+    """Poll *predicate* until it returns truthy or *timeout_s* elapses.
+
+    The real streaming ingestion channel flushes asynchronously on its own
+    background interval (engine default ~50ms), independent of
+    ``DocumentStore.flush()``. Tests that exercise ``stream_insert`` /
+    ``write_documents_streaming`` need to wait for that eventual visibility
+    instead of asserting immediately after the call returns.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval_s)
+    return predicate()
+
+
 def _docs() -> List[Document]:
     return [
         Document(
@@ -245,14 +263,95 @@ def test_duplicate_policy_skip_with_real_haystack(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Pipeline integration — exercises the @component decorator on VelesRetriever
+# Streaming ingestion — real velesdb Collection.stream_insert (issue #1548)
+#
+# The real binding requires ``Collection.enable_streaming()`` before
+# ``stream_insert`` will accept points (it raises "streaming is not
+# configured on this collection" otherwise) — same caller-managed contract
+# already documented for LangChain/LlamaIndex in ECOSYSTEM_PARITY.md.
+# ---------------------------------------------------------------------------
+
+
+def test_stream_insert_round_trips_via_real_velesdb(tmp_path) -> None:
+    """The real streaming channel is async (bounded queue, own background
+    flush interval, default ~50ms) — poll for eventual visibility instead of
+    asserting immediately after ``stream_insert`` returns."""
+    store = _store(tmp_path)
+    store._get_collection().enable_streaming()
+
+    count = store.stream_insert(_docs())
+    assert count == 3
+
+    assert _wait_until(lambda: store.count_documents() == 3)
+    assert {d.id for d in store.filter_documents()} == {
+        "doc-en-1", "doc-en-2", "doc-fr-1",
+    }
+
+
+def test_write_documents_streaming_round_trips_via_real_velesdb(tmp_path) -> None:
+    store = _store(tmp_path)
+    store._get_collection().enable_streaming()
+
+    written = store.write_documents_streaming(_docs(), batch_size=2)
+    assert written == 3
+
+    assert _wait_until(lambda: store.count_documents() == 3)
+    # count() and vector-searchability can land at slightly different times
+    # (HNSW indexing trails the raw point store) — poll the search itself.
+    results_holder: dict = {}
+
+    def _search_ready() -> bool:
+        found = store.embedding_retrieval(
+            query_embedding=[1.0, 0.0, 0.0, 0.0], top_k=1
+        )
+        if found:
+            results_holder["docs"] = found
+        return bool(found)
+
+    assert _wait_until(_search_ready)
+    assert results_holder["docs"][0].id == "doc-en-1"
+
+
+# ---------------------------------------------------------------------------
+# CollectionAdminMixin — real velesdb Database.train_pq / analyze_collection
+# (issue #1548)
+# ---------------------------------------------------------------------------
+
+
+def test_analyze_and_get_collection_stats_via_real_velesdb(tmp_path) -> None:
+    store = _store(tmp_path)
+    store.write_documents(_docs())
+
+    stats = store.analyze_collection()
+    assert stats["total_points"] == 3
+
+    cached = store.get_collection_stats()
+    assert cached is not None
+    assert cached["total_points"] == 3
+
+
+def test_is_metadata_only_false_for_vector_collection_via_real_velesdb(tmp_path) -> None:
+    store = _store(tmp_path)
+    store.write_documents(_docs())
+    assert store.is_metadata_only() is False
+
+
+# ---------------------------------------------------------------------------
+# Pipeline integration — exercises the @component decorator contract
 # ---------------------------------------------------------------------------
 
 
 @component
 class VelesRetriever:
-    """Mirror of the canonical pattern from the README. The decorator is
-    REQUIRED — without it, ``Pipeline.add_component`` raises.
+    """A hand-rolled ``@component`` wrapper around ``embedding_retrieval``.
+
+    The README and ``examples/rag_pipeline.py`` now use the shipped
+    ``VelesDBEmbeddingRetriever`` instead (see
+    ``test_shipped_embedding_retriever_component_runs`` below); this class
+    stays only to exercise the generic Haystack 2.x ``@component`` contract
+    for callers who need custom retrieval logic beyond what the shipped
+    component offers. The decorator is REQUIRED — without it,
+    ``Pipeline.add_component`` raises.
     """
 
     def __init__(self, document_store: VelesDBDocumentStore, top_k: int = 5) -> None:
@@ -269,11 +368,10 @@ class VelesRetriever:
 
 
 def test_pipeline_with_decorated_retriever(tmp_path) -> None:
-    """A real Haystack Pipeline accepts the decorated VelesRetriever and runs.
+    """A real Haystack Pipeline accepts a custom decorated component and runs.
 
     Without the @component decorator, ``add_component`` raises
-    ``PipelineError`` — this test would fail at construction. Acts as
-    the canary for the rag_pipeline.py example fix.
+    ``PipelineError`` — this test would fail at construction.
     """
     store = _store(tmp_path)
     store.write_documents(_docs())
