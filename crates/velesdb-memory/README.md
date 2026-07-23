@@ -302,10 +302,13 @@ claude mcp add velesdb-memory \
 That's it — jump straight to [teach your agent the flow](#teach-your-agent-the-flow-skill)
 below. Using a different client instead? Expand for its config:
 
-> **macOS, and want several clients sharing one memory?** Skip everything
-> below and run `./scripts/install-memory-daemon.sh` instead — it builds,
-> runs, and wires Claude Code / Claude Desktop / Windsurf / Devin CLI to a
-> single shared daemon in one command (see "HTTP transport" further down).
+> **Want several clients sharing one memory?** Skip everything below and run
+> `./scripts/install-memory-daemon.sh` (macOS — full daemon automation; on
+> Linux it still builds and wires clients but skips daemon setup, see the
+> script's own non-macOS notice) or `pwsh -File scripts/install-memory-daemon.ps1`
+> (Windows 10/11 — full daemon automation via a Scheduled Task) instead — it
+> builds, runs, and wires Claude Code / Claude Desktop / Windsurf / Devin CLI
+> to a single shared daemon in one command (see "HTTP transport" further down).
 
 <details>
 <summary><strong>Cursor, Cline, Zed, Codex CLI, opencode, Claude Desktop, Windsurf, Devin CLI</strong></summary>
@@ -465,9 +468,9 @@ cargo install velesdb-memory --features http,ollama
 velesdb-memory --http
 # [velesdb-memory] HTTPS server listening on https://127.0.0.1:18090/mcp
 # [velesdb-memory] Local CA: /home/you/.velesdb-memory-tls/ca-cert.pem — a client only needs to
-# trust this once (see ./scripts/install-memory-daemon.sh, which does this automatically on
-# macOS); every future leaf certificate this daemon issues is signed by the same CA and is
-# trusted automatically after that.
+# trust this once (see ./scripts/install-memory-daemon.sh — install-memory-daemon.ps1 on
+# Windows — which does this automatically); every future leaf certificate this daemon issues
+# is signed by the same CA and is trusted automatically after that.
 ```
 
 - `--http` / `VELESDB_MEMORY_HTTP=1` — serve over streamable-HTTP instead of stdio.
@@ -516,6 +519,15 @@ hand, it prints the exact command:
 security add-trusted-cert -r trustRoot -p ssl \
   -k ~/Library/Keychains/login.keychain-db \
   ~/.velesdb-memory-tls/ca-cert.pem
+```
+
+On Windows, `scripts/install-memory-daemon.ps1` does the equivalent into the
+**CurrentUser\Root** certificate store (no admin rights needed), checking the
+CA's thumbprint first so a re-run never re-imports it. If it times out or you'd
+rather do it by hand:
+
+```powershell
+certutil -addstore -user Root "$env:USERPROFILE\.velesdb-memory-tls\ca-cert.pem"
 ```
 
 Node-based tools (Claude Code's CLI, Electron apps like Claude Desktop) don't
@@ -605,12 +617,55 @@ This gives Desktop its own separate memory, not shared with the daemon.
 } } }
 ```
 
-`scripts/install-memory-daemon.sh` automates all of this end to end: building
-with the right features, running the daemon (as a macOS `launchd` agent),
-trusting the local CA in your login keychain, and wiring Claude Code / Claude
-Desktop / Windsurf / Devin CLI — see `--help` for flags (`--embedder`,
+`scripts/install-memory-daemon.sh` automates all of this end to end on
+macOS: building with the right features, running the daemon (as a `launchd`
+agent), trusting the local CA in your login keychain, and wiring Claude Code /
+Claude Desktop / Windsurf / Devin CLI — see `--help` for flags (`--embedder`,
 `--port`, `--store`, `--tls-dir`, `--ttl`, `--skip-client`, `--skip-ca-trust`,
-`--uninstall`, …).
+`--from-release`, `--uninstall`, …).
+
+### Windows
+
+`scripts/install-memory-daemon.ps1` (`pwsh -File scripts/install-memory-daemon.ps1`,
+PowerShell 7+ on Windows 10/11) is the same automation with the same flags
+(PowerShell-cased: `-Embedder`, `-Port`, `-Store`, `-TlsDir`, `-Ttl`,
+`-SkipClient`, `-SkipCaTrust`, `-FromRelease`, `-Uninstall`, …), adapted to
+Windows in three places:
+
+- **Daemon**: a per-user **Scheduled Task** (`\VelesDB\MemoryDaemon`,
+  triggered at logon) instead of a `launchd` agent — a Windows *service*
+  needs admin rights, which this installer never asks for. Since a Scheduled
+  Task action carries no environment block, the daemon's env vars are baked
+  into a small generated wrapper (`%LOCALAPPDATA%\velesdb-memory\run-daemon.cmd`)
+  that the task launches; daemon logs land in
+  `%LOCALAPPDATA%\velesdb-memory\logs\`.
+- **CA trust**: the **`Cert:\CurrentUser\Root`** certificate store instead of
+  the login keychain — also no admin rights needed (see "The local CA" above
+  for the exact command).
+- **Client config paths**: Claude Desktop
+  `%APPDATA%\Claude\claude_desktop_config.json` (still stdio-only — never
+  written by the installer, same as macOS), Windsurf
+  `%USERPROFILE%\.codeium\windsurf\mcp_config.json`, Devin CLI
+  `%APPDATA%\devin\config.json`.
+
+### Installing the daemon without a Rust toolchain
+
+Both installers default to `cargo install --features ollama,http`, which
+needs a Rust toolchain on the machine. Pass `--from-release[=TAG]` (`.sh`) or
+`-FromRelease` / `-FromReleaseTag <TAG>` (`.ps1`, which has no PowerShell
+equivalent of the shell flag's optional inline value) to instead download a
+prebuilt `velesdb-memory-daemon-<target>.{tar.gz,zip}` archive from a
+`velesdb-memory-vX.Y.Z` GitHub Release, verify its checksum, and install the
+binary straight to the expected path — no cargo, no local build. Defaults to
+the latest published `velesdb-memory-vX.Y.Z` release when no tag is given.
+**This path only becomes active from the first release published after this
+change** — `release-memory.yml`'s `build-daemon-archive` job produces these
+archives, but the `velesdb-memory-v0.11.0` release (and everything before it)
+predates it and carries no such asset, so `--from-release` against `v0.11.0`
+fails with a clear 404-explaining message rather than a bare curl/`Invoke-WebRequest`
+error. This is a **different artifact** than the `.mcpb` bundles on the same
+release: those are built with default features (stdio only) for MCP-registry
+clients and cannot run as this daemon.
 
 ## Teach your agent the flow (skill)
 

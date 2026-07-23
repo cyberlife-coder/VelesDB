@@ -17,6 +17,12 @@
 # step 5's "Trusting the local CA" output for what that step actually did on
 # THIS run (macOS may require you to approve a system prompt).
 #
+# Windows has no macOS-equivalent launchd/keychain, so it gets its own mirror
+# instead of a branch in this file: scripts/install-memory-daemon.ps1 (run as
+# `pwsh -File scripts/install-memory-daemon.ps1`) — a per-user Scheduled Task
+# instead of a launchd agent, CurrentUser\Root instead of the login keychain,
+# same daemon, same client wiring, same flags (PowerShell-cased).
+#
 # Usage:
 #   ./scripts/install-memory-daemon.sh [flags]
 #   ./scripts/install-memory-daemon.sh --uninstall
@@ -33,6 +39,11 @@
 #   --skip-client=NAME       Skip wiring a client (repeatable): claude-code|claude-desktop|windsurf|devin
 #   --skip-ca-trust          Skip trusting the local CA in the login keychain
 #   --force-restart          Reload the daemon even if already running
+#   --from-release[=TAG]     Install the prebuilt daemon binary (--features ollama,http) from a
+#                            GitHub Release archive instead of `cargo install` (default TAG: the
+#                            latest published velesdb-memory-vX.Y.Z release). Needs no Rust
+#                            toolchain. Only active from the first release that publishes the
+#                            archive onward — see the README's "HTTP transport" section.
 #   --uninstall              Remove the daemon and all client wiring (store and TLS material/CA
 #                            trust are NEVER touched — same "never delete local state" policy)
 #   -h, --help               Show this help
@@ -75,6 +86,8 @@ FORCE_RESTART=0
 UNINSTALL=0
 SKIP_CLIENTS=""
 SKIP_CA_TRUST=0
+FROM_RELEASE=0
+FROM_RELEASE_TAG=""
 
 PLIST_LABEL="com.velesdb.memory"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
@@ -82,9 +95,10 @@ BIN_PATH="$HOME/.cargo/bin/velesdb-memory"
 DESKTOP_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 WINDSURF_CONFIG="$HOME/.codeium/windsurf/mcp_config.json"
 DEVIN_CONFIG="$HOME/.config/devin/config.json"
+RELEASE_REPO="cyberlife-coder/VelesDB"
 
 print_usage() {
-  sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # ---- 0. Parse flags ---------------------------------------------------
@@ -101,6 +115,8 @@ for arg in "$@"; do
     --skip-client=*) SKIP_CLIENTS="$SKIP_CLIENTS ${arg#*=}" ;;
     --skip-ca-trust) SKIP_CA_TRUST=1 ;;
     --force-restart) FORCE_RESTART=1 ;;
+    --from-release) FROM_RELEASE=1 ;;
+    --from-release=*) FROM_RELEASE=1; FROM_RELEASE_TAG="${arg#*=}" ;;
     --uninstall) UNINSTALL=1 ;;
     -h|--help) print_usage; exit 0 ;;
     *)
@@ -120,8 +136,9 @@ should_skip() {
 
 # ---- 1. Preflight -------------------------------------------------------
 preflight() {
-  if ! command -v cargo >/dev/null 2>&1; then
+  if [ "$FROM_RELEASE" != "1" ] && ! command -v cargo >/dev/null 2>&1; then
     echo -e "${RED}❌ 'cargo' not found — install Rust via https://rustup.rs then relaunch this script${NC}"
+    echo -e "${RED}   (or pass --from-release to install a prebuilt binary instead — see --help)${NC}"
     exit 1
   fi
 
@@ -254,6 +271,121 @@ build_daemon() {
   # choice, so flipping it later is a restart, never a rebuild.
   cargo install --path "$REPO_ROOT/crates/velesdb-memory" --bin velesdb-memory \
     --features ollama,http --force
+}
+
+# ---- 4b. --from-release: install a prebuilt daemon binary, no cargo needed --
+# Mirrors build_daemon()'s guarantee (--features ollama,http) without a Rust
+# toolchain, by downloading the same binary release-memory.yml's
+# build-daemon-archive job produces. Only active from the first release that
+# ships the archive onward (added after 0.11.0) — an older/pinned tag simply
+# 404s, with a message saying so rather than a bare curl error.
+detect_release_target() {
+  local os arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "$os" in
+    Darwin)
+      case "$arch" in
+        arm64) echo "aarch64-apple-darwin" ;;
+        x86_64) echo "x86_64-apple-darwin" ;;
+        *) return 1 ;;
+      esac
+      ;;
+    Linux)
+      case "$arch" in
+        x86_64) echo "x86_64-unknown-linux-gnu" ;;
+        aarch64|arm64) echo "aarch64-unknown-linux-gnu" ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# GitHub returns releases newest-first; velesdb-memory-vX.Y.Z tags are
+# created with --latest=false (see release-memory.yml) so they never become
+# the repo's overall "Latest release" — a plain /releases/latest call would
+# miss them entirely, so this lists and filters instead.
+# HARDENING: only the first page (100 releases) is scanned; if velesdb-memory
+# ever accumulates more than 100 releases without pruning, pass
+# --from-release=<tag> explicitly instead of relying on this default.
+resolve_latest_release_tag() {
+  require_jq
+  local releases tag
+  releases="$(curl -fsS --max-time 10 "https://api.github.com/repos/$RELEASE_REPO/releases?per_page=100")" || {
+    echo -e "${RED}❌ could not list releases for $RELEASE_REPO${NC}" >&2
+    exit 1
+  }
+  tag="$(echo "$releases" | jq -r '
+    [.[] | select(.tag_name | test("^velesdb-memory-v[0-9]+\\.[0-9]+\\.[0-9]+$")) | select(.prerelease | not) | .tag_name]
+    | first // empty
+  ')"
+  if [ -z "$tag" ]; then
+    echo -e "${RED}❌ no published velesdb-memory-vX.Y.Z release found on $RELEASE_REPO — this path needs a release that carries the daemon archive (see the README's --from-release note)${NC}" >&2
+    exit 1
+  fi
+  echo "$tag"
+}
+
+install_from_release() {
+  local tag target asset base_url tmp_dir archive_path checksum_path expected actual
+
+  if [ -n "$FROM_RELEASE_TAG" ]; then
+    tag="$FROM_RELEASE_TAG"
+  else
+    tag="$(resolve_latest_release_tag)"
+  fi
+
+  target="$(detect_release_target)" || {
+    echo -e "${RED}❌ unsupported platform ($(uname -s) $(uname -m)) for --from-release — drop the flag to build from source with cargo instead${NC}"
+    exit 1
+  }
+
+  asset="velesdb-memory-daemon-${target}.tar.gz"
+  base_url="https://github.com/$RELEASE_REPO/releases/download/$tag"
+
+  echo -e "${YELLOW}📥 Installing velesdb-memory from release $tag ($asset)...${NC}"
+
+  tmp_dir="$(mktemp -d)"
+  archive_path="$tmp_dir/$asset"
+  checksum_path="$archive_path.sha256"
+
+  if ! curl -fsSL --max-time 60 -o "$archive_path" "$base_url/$asset"; then
+    echo -e "${RED}❌ failed to download $base_url/$asset — this tag may predate the daemon archive (added after 0.11.0)${NC}"
+    rm -rf "$tmp_dir"
+    exit 1
+  fi
+
+  if curl -fsSL --max-time 10 -o "$checksum_path" "$base_url/$asset.sha256" 2>/dev/null; then
+    expected="$(awk '{print $1}' "$checksum_path")"
+    if command -v sha256sum >/dev/null 2>&1; then
+      actual="$(sha256sum "$archive_path" | awk '{print $1}')"
+    else
+      actual="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
+    fi
+    if [ "$expected" != "$actual" ]; then
+      echo -e "${RED}❌ checksum mismatch for $asset — expected $expected, got $actual. Aborting (the archive may be corrupt or tampered).${NC}"
+      rm -rf "$tmp_dir"
+      exit 1
+    fi
+    echo -e "${GREEN}✅ Checksum verified.${NC}"
+  else
+    echo -e "${YELLOW}⚠️  No .sha256 sidecar found for $asset — installing without checksum verification.${NC}"
+  fi
+
+  tar -xzf "$archive_path" -C "$tmp_dir"
+  if [ ! -f "$tmp_dir/velesdb-memory" ]; then
+    echo -e "${RED}❌ velesdb-memory binary not found inside $asset — unexpected archive layout${NC}"
+    rm -rf "$tmp_dir"
+    exit 1
+  fi
+
+  mkdir -p "$(dirname "$BIN_PATH")"
+  cp "$tmp_dir/velesdb-memory" "$BIN_PATH"
+  chmod +x "$BIN_PATH"
+  rm -rf "$tmp_dir"
+
+  echo -e "${GREEN}✅ Installed $BIN_PATH from $tag${NC}"
 }
 
 # ---- 5. launchd daemon (macOS only) ----------------------------------------
@@ -651,7 +783,11 @@ main() {
   resolve_embedder
   resolve_ttl
   setup_ollama
-  build_daemon
+  if [ "$FROM_RELEASE" = "1" ]; then
+    install_from_release
+  else
+    build_daemon
+  fi
   setup_daemon
   wire_claude_code
   wire_claude_desktop
