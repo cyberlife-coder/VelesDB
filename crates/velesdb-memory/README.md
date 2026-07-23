@@ -302,8 +302,13 @@ claude mcp add velesdb-memory \
 That's it — jump straight to [teach your agent the flow](#teach-your-agent-the-flow-skill)
 below. Using a different client instead? Expand for its config:
 
+> **macOS, and want several clients sharing one memory?** Skip everything
+> below and run `./scripts/install-memory-daemon.sh` instead — it builds,
+> runs, and wires Claude Code / Claude Desktop / Windsurf / Devin CLI to a
+> single shared daemon in one command (see "HTTP transport" further down).
+
 <details>
-<summary><strong>Cursor, Cline, Zed, Codex CLI, opencode, Claude Desktop, Windsurf</strong></summary>
+<summary><strong>Cursor, Cline, Zed, Codex CLI, opencode, Claude Desktop, Windsurf, Devin CLI</strong></summary>
 
 **Cursor** — `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project)
 
@@ -366,6 +371,16 @@ env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
 
 ```json
 { "mcpServers": { "velesdb-memory": {
+  "command": "/home/you/.cargo/bin/velesdb-memory",
+  "env": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
+} } }
+```
+
+**Devin CLI** — `~/.config/devin/config.json` (its `mcpServers` block sits
+inside a top-level `{"version": 1, ...}` envelope, unlike the clients above)
+
+```json
+{ "version": 1, "mcpServers": { "velesdb-memory": {
   "command": "/home/you/.cargo/bin/velesdb-memory",
   "env": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
 } } }
@@ -581,11 +596,20 @@ This gives Desktop its own separate memory, not shared with the daemon.
 } } }
 ```
 
+**Devin CLI** — `~/.config/devin/config.json`
+
+```json
+{ "version": 1, "mcpServers": { "velesdb-memory": {
+  "url": "https://127.0.0.1:18090/mcp",
+  "transport": "http"
+} } }
+```
+
 `scripts/install-memory-daemon.sh` automates all of this end to end: building
 with the right features, running the daemon (as a macOS `launchd` agent),
 trusting the local CA in your login keychain, and wiring Claude Code / Claude
-Desktop / Windsurf — see `--help` for flags (`--embedder`, `--port`,
-`--store`, `--tls-dir`, `--ttl`, `--skip-client`, `--skip-ca-trust`,
+Desktop / Windsurf / Devin CLI — see `--help` for flags (`--embedder`,
+`--port`, `--store`, `--tls-dir`, `--ttl`, `--skip-client`, `--skip-ca-trust`,
 `--uninstall`, …).
 
 ## Teach your agent the flow (skill)
