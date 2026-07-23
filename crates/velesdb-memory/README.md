@@ -17,23 +17,28 @@ traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation
 meet** those data-residency and explainability expectations rather than claiming
 certified compliance.
 
-> **Release 0.10.1** — patch over the V2 wave: the `compile_context`
-> prompt-cache prefix is now query-independent (issue #1455), so a new
-> question no longer churns the cached prefix. 0.10.0 brought: `compile_transcript` (one call
-> turns a raw agent-session transcript into deterministically segmented,
-> budget-compiled context with a full segmentation audit report),
-> path-referenced fragments (opt-in, allowlisted via
-> `VELESDB_MEMORY_INGEST_ROOTS`, symlink-safe), binding parity for the
-> compiler's read tools (`explainCompilation`/`contextSavings` on Node,
-> `explain_compilation` on Python, `retrieveContextSource` on WASM/TS), and
-> a `--version` flag; published to the registries by the
-> `velesdb-memory-v0.10.1`
+> **Release 0.11.0** — multi-client memory: a single local `velesdb-memory
+> --http` daemon (see "HTTP transport (multi-client)" below) now lets Claude
+> Code, Claude Desktop, and Windsurf share the *same* memory instead of one
+> client at a time, and serves **HTTPS by default** with a natively-generated
+> local CA (no external `mkcert`/proxy) — some MCP clients refuse a
+> non-`https://` URL even for `127.0.0.1`. `scripts/install-memory-daemon.sh`
+> automates the whole setup, including trusting the CA. Every `remember` now
+> auto-stamps a `_veles_date` field (`YYYYMMDD`, never overwritten if you set
+> it yourself), so `recall_fused`'s `date_field` works with zero setup — this
+> is the metadata-shape change that makes this a **minor**, not patch,
+> release (a fact stored with no caller metadata no longer round-trips as
+> `metadata: None`). Also fixes two independent deadlocks under concurrent
+> `remember`/`recall` load found while building the daemon (rayon pool
+> exhaustion + a lock-ordering inversion) — real risk for any consumer, not
+> just the new HTTP transport, since both bugs lived in the shared storage
+> layer. Published to the registries by the `velesdb-memory-v0.11.0`
 > tag, so the links below may briefly lag right after merge. `velesdb-memory`
 > ships on [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
-> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.10.1**
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.11.0**
 > and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**
 > (memory API only — the context compiler is merged on `develop` but **the
 > published 3.12.0 wheel predates it**; it ships with the next PyPI release,
