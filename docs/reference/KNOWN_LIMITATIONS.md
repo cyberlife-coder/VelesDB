@@ -363,6 +363,62 @@ directions, the deterministic ascending-id tie-break, and bounded top-k
 (`ORDER BY ... LIMIT k`, both ASC and DESC). A result-shape divergence specific
 to the WASM or CLI surface now fails CI rather than going unnoticed.
 
+**Extended coverage (issue #1544, fixture v2.0.0)**: the original 10 cases were
+all scalar WHERE + ORDER BY + LIMIT — a thin slice next to the 134
+parser-conformance cases. The fixture now also carries, checked against
+**core and WASM** (the CLI layer is unchanged — it only reads `dataset` /
+`cases` / `known_bugs`, so it keeps validating the original cases plus the new
+scalar-expression ones below, which use the same single-collection dataset):
+
+- `cases` X011–X014: WHERE-expression evaluation (`BETWEEN`, parenthesized
+  `AND`/`OR`, `NOT`, `IN`) — safe for CLI's strict-order comparison, so these
+  run on all three executors.
+- `join_cases` J001–J004: `JOIN ... ON` (both condition-side orders on core;
+  WASM only accepts base-table-first — see D002 below) and `JOIN ... USING
+  (col)`.
+- `aggregate_cases` G001–G004: `GROUP BY` / `HAVING` / `COUNT` / `SUM`,
+  checked via `Database::execute_aggregate` on core (not `execute_query`,
+  which only groups when combined with vector `NEAR` search) and via the
+  default SELECT pipeline on WASM.
+- `setops_cases` S001–S004: `UNION` / `INTERSECT` / `EXCEPT`, compared as a
+  **sorted set of ids**, not an ordered list (see D003 below).
+- `match_cases` M001–M002: 1- and 2-hop `MATCH`, with per-executor query text
+  (see D004 below).
+
+`documented_divergences` (informational entries in the same JSON file, not
+pass/fail cases) record real, currently-existing core↔WASM behavioural gaps
+discovered while building this coverage, so they're visible instead of
+silently relied upon:
+
+- **D001** — unaliased aggregate output field names differ (`"count"` /
+  `"sum_year"` on core vs `"count(*)"` / `"sum(year)"` on WASM); sidestepped
+  in the fixture by always using an explicit `AS` alias.
+- **D002** — WASM's `JOIN ... ON` does not normalize condition side order the
+  way core does: `ON base.col = joined.col` matches, but the reversed
+  `ON joined.col = base.col` silently returns every row with NULL joined
+  columns instead of matching. Locked as a regression test
+  (`test_wasm_join_condition_side_order_gap_d002` in
+  `crates/velesdb-wasm/src/velesql_executor_conformance_tests.rs`) rather than
+  fixed — out of scope for #1544 (coverage of existing behaviour, not new
+  WASM support).
+- **D003** — `UNION`/`INTERSECT`/`EXCEPT` row order for non-ranked (score 0.0)
+  branches is implementation-defined on both sides (core re-sorts by score
+  with an unstable tie-break that was observed to differ between two runs of
+  the *same* binary; WASM preserves branch/`ORDER BY` order via
+  concatenate-then-dedup). Only membership and count are part of the golden
+  contract.
+- **D004** — core treats vector-collection points as graph nodes (MATCH is
+  `SELECT ... FROM <coll> WHERE MATCH (...)`); WASM keeps a separate
+  in-memory graph store addressed via `@collection` annotations and the
+  standalone `MATCH ... RETURN` form. An accepted architectural difference,
+  not a bug.
+- **D005** — cross-reference to the pre-existing `relative_score`/`rsf`
+  multi-query fusion ranking divergence, already tracked in
+  `docs/reference/ECOSYSTEM_PARITY.md`.
+- **D006** — `Database::execute_aggregate` never applies `LIMIT` to the group
+  array on core (every group comes back regardless); WASM's aggregate
+  pipeline does apply `LIMIT`. Tracked, not fixed — out of scope for #1544.
+
 ### Large production files vs the NLOC/complexity gate (audit F-5.13)
 
 **Status**: documented (governance clarification). Sources: [`QUALITY_BAR.md`](../../QUALITY_BAR.md) Gates 5–6, [`.codacy.yml`](../../.codacy.yml) `engines.lizard.exclude_paths`.

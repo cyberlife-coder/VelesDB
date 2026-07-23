@@ -1,6 +1,6 @@
 {
-  "version": "1.0.0",
-  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing.",
+  "version": "2.0.0",
+  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, membership/count only — see `documented_divergences` D003 for why ordering is NOT asserted), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison.",
   "dataset": {
     "collection": "docs",
     "dimension": 4,
@@ -73,6 +73,30 @@
       "query": "SELECT * FROM docs ORDER BY year ASC LIMIT 3",
       "expect_ids": [5, 1, 3],
       "note": "EPIC-081 bounded top-k, ASC direction (complements the DESC regression-lock B001): full year-ASC order [5,1,3,2,4] truncated to k=3"
+    },
+    {
+      "id": "X011",
+      "query": "SELECT * FROM docs WHERE year BETWEEN 2020 AND 2022 ORDER BY year ASC",
+      "expect_ids": [1, 3, 2],
+      "note": "issue #1544: BETWEEN range-expression evaluation in WHERE"
+    },
+    {
+      "id": "X012",
+      "query": "SELECT * FROM docs WHERE (category = 'tech' AND year >= 2022) OR category = 'other' ORDER BY year ASC",
+      "expect_ids": [5, 3, 2, 4],
+      "note": "issue #1544: parenthesized boolean expression evaluation, AND nested inside OR"
+    },
+    {
+      "id": "X013",
+      "query": "SELECT * FROM docs WHERE NOT (category = 'tech') ORDER BY year ASC",
+      "expect_ids": [5, 3],
+      "note": "issue #1544: NOT expression evaluation over a parenthesized predicate"
+    },
+    {
+      "id": "X014",
+      "query": "SELECT * FROM docs WHERE year IN (2020, 2023) ORDER BY year ASC",
+      "expect_ids": [1, 4],
+      "note": "issue #1544: IN-list expression evaluation"
     }
   ],
   "known_bugs": [
@@ -81,6 +105,202 @@
       "query": "SELECT * FROM docs WHERE year >= 2019 ORDER BY year DESC LIMIT 2",
       "expect_ids": [4, 2],
       "note": "REGRESSION LOCK (fixed): scalar ORDER BY <column> + LIMIT previously applied the LIMIT before the sort on the bounded top-k path (returned [2,1] instead of [4,2]); the bounded path now equals the unbounded path truncated to k, per KNOWN_LIMITATIONS.md #9. expect_ids is the correct, currently-asserted result."
+    }
+  ],
+  "extra_collections": [
+    {
+      "collection": "customers",
+      "dimension": 2,
+      "metric": "cosine",
+      "points": [
+        { "id": 10, "vector": [1.0, 0.0], "payload": { "name": "Alice" } },
+        { "id": 20, "vector": [0.0, 1.0], "payload": { "name": "Bob" } }
+      ]
+    },
+    {
+      "collection": "orders",
+      "dimension": 2,
+      "metric": "cosine",
+      "points": [
+        { "id": 1, "vector": [1.0, 0.0], "payload": { "customer_id": 10, "amount": 100 } },
+        { "id": 2, "vector": [0.0, 1.0], "payload": { "customer_id": 20, "amount": 200 } },
+        { "id": 3, "vector": [1.0, 0.0], "payload": { "customer_id": 10, "amount": 150 } },
+        { "id": 4, "vector": [0.0, 1.0], "payload": { "customer_id": 99, "amount": 300 } }
+      ]
+    },
+    {
+      "collection": "customers_u",
+      "dimension": 2,
+      "metric": "cosine",
+      "points": [
+        { "id": 10, "vector": [1.0, 0.0], "payload": { "name": "Alice" } },
+        { "id": 20, "vector": [0.0, 1.0], "payload": { "name": "Bob" } }
+      ]
+    },
+    {
+      "collection": "orders_u",
+      "dimension": 2,
+      "metric": "cosine",
+      "points": [
+        { "id": 10, "vector": [1.0, 0.0], "payload": { "amount": 100 } },
+        { "id": 20, "vector": [0.0, 1.0], "payload": { "amount": 200 } },
+        { "id": 99, "vector": [0.0, 1.0], "payload": { "amount": 300 } }
+      ]
+    }
+  ],
+  "join_cases": [
+    {
+      "id": "J001",
+      "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id ORDER BY orders.id ASC",
+      "expect_ids": [1, 2, 3],
+      "note": "issue #1544: INNER JOIN ON, base-table-first condition order; order id=4 (customer_id=99) has no matching customer and is dropped"
+    },
+    {
+      "id": "J002",
+      "query": "SELECT * FROM orders LEFT JOIN customers ON orders.customer_id = customers.id ORDER BY orders.id ASC",
+      "expect_ids": [1, 2, 3, 4],
+      "note": "issue #1544: LEFT JOIN keeps the unmatched left row (id=4) with NULL joined columns. Written base-table-first (orders.customer_id = customers.id) — see documented_divergences D002 for why the reversed condition order is deliberately NOT used here"
+    },
+    {
+      "id": "J003",
+      "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id WHERE customers.name = 'Alice' ORDER BY orders.id ASC",
+      "expect_ids": [1, 3],
+      "note": "issue #1544: JOIN combined with a WHERE predicate on a joined-table column"
+    },
+    {
+      "id": "J004",
+      "query": "SELECT * FROM orders_u JOIN customers_u USING (id) ORDER BY orders_u.id ASC",
+      "expect_ids": [10, 20],
+      "note": "issue #1544: JOIN USING (single column); both engines resolve USING(id) against each row's primary id, order_u id=99 has no matching customer and is dropped"
+    }
+  ],
+  "aggregate_cases": [
+    {
+      "id": "G001",
+      "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category ORDER BY category ASC",
+      "expect_groups": [
+        { "category": "other", "n": 2 },
+        { "category": "tech", "n": 3 }
+      ],
+      "note": "issue #1544: GROUP BY with COUNT(*), executed via Database::execute_aggregate (core) / the default WASM SELECT pipeline. Uses an explicit AS alias so both engines agree on the output field name — see documented_divergences D001 for the unaliased-name gap"
+    },
+    {
+      "id": "G002",
+      "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category HAVING COUNT(*) > 2 ORDER BY category ASC",
+      "expect_groups": [
+        { "category": "tech", "n": 3 }
+      ],
+      "note": "issue #1544: GROUP BY + HAVING filters out groups that don't satisfy the aggregate predicate"
+    },
+    {
+      "id": "G003",
+      "query": "SELECT category, SUM(year) AS total_year FROM docs GROUP BY category ORDER BY category ASC",
+      "expect_groups": [
+        { "category": "other", "total_year": 4040.0 },
+        { "category": "tech", "total_year": 6065.0 }
+      ],
+      "note": "issue #1544: SUM aggregate per group"
+    },
+    {
+      "id": "G004",
+      "query": "SELECT category, COUNT(*) AS n, SUM(year) AS total_year FROM docs GROUP BY category ORDER BY n DESC, category ASC",
+      "expect_groups": [
+        { "category": "tech", "n": 3, "total_year": 6065.0 },
+        { "category": "other", "n": 2, "total_year": 4040.0 }
+      ],
+      "note": "issue #1544: multiple aggregates per group and ORDER BY an aggregate column plus the group key. LIMIT is deliberately not exercised here — see documented_divergences D006"
+    }
+  ],
+  "setops_cases": [
+    {
+      "id": "S001",
+      "query": "SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC UNION SELECT * FROM docs WHERE category = 'other' ORDER BY year ASC",
+      "expect_ids": [1, 2, 3, 4, 5],
+      "note": "issue #1544: UNION of two disjoint partitions returns every id exactly once. Compared as a SET, not an ordered list — see documented_divergences D003"
+    },
+    {
+      "id": "S002",
+      "query": "SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC UNION SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC",
+      "expect_ids": [1, 2, 4],
+      "note": "issue #1544: UNION of a branch with itself proves de-duplication (3 ids, not 6). Compared as a SET — see documented_divergences D003"
+    },
+    {
+      "id": "S003",
+      "query": "SELECT * FROM docs WHERE year >= 2020 ORDER BY year ASC INTERSECT SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC",
+      "expect_ids": [1, 2, 4],
+      "note": "issue #1544: INTERSECT keeps only ids present in both branches. Compared as a SET — see documented_divergences D003"
+    },
+    {
+      "id": "S004",
+      "query": "SELECT * FROM docs ORDER BY year ASC EXCEPT SELECT * FROM docs WHERE category = 'other' ORDER BY year ASC",
+      "expect_ids": [1, 2, 4],
+      "note": "issue #1544: EXCEPT removes the right-hand branch's ids from the left-hand branch. Compared as a SET — see documented_divergences D003"
+    }
+  ],
+  "match_cases": [
+    {
+      "id": "M001",
+      "core_query": "SELECT * FROM people WHERE MATCH (a:Person)-[:KNOWS]->(b:Person) ORDER BY people.id ASC",
+      "wasm_query": "MATCH (a:Person@people)-[:KNOWS]->(b:Person@people) RETURN a ORDER BY a.id ASC",
+      "expect_ids": [1, 2, 3],
+      "note": "issue #1544: 1-hop MATCH. Query text differs per engine by design — see documented_divergences D004: core treats vector-collection points as graph nodes (SELECT ... WHERE MATCH over the 'people' vector collection); WASM keeps a separate in-memory graph store addressed via @collection annotations and the standalone MATCH ... RETURN form. Both graphs encode the SAME topology (chain 1->2->3->4, label KNOWS) and are asserted against the SAME golden ids"
+    },
+    {
+      "id": "M002",
+      "core_query": "SELECT * FROM people WHERE MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person) ORDER BY people.id ASC",
+      "wasm_query": "MATCH (a:Person@people)-[:KNOWS]->(b:Person@people)-[:KNOWS]->(c:Person@people) RETURN a ORDER BY a.id ASC",
+      "expect_ids": [1, 2],
+      "note": "issue #1544: 2-hop MATCH over the same chain topology as M001"
+    }
+  ],
+  "documented_divergences": [
+    {
+      "id": "D001",
+      "area": "aggregate default field naming",
+      "core_behavior": "unaliased aggregates use short names: COUNT(*) -> \"count\", SUM(year) -> \"sum_year\" (Collection::aggregation_result_key)",
+      "wasm_behavior": "unaliased aggregates use function-call-shaped names: COUNT(*) -> \"count(*)\", SUM(year) -> \"sum(year)\" (aggregate_default_name in velesql_aggregate.rs)",
+      "status": "accepted — not a bug; both are internally consistent, but a client selecting an unaliased aggregate across both executors sees a different JSON key. Fixture G001-G004 sidestep this by always using an explicit AS alias, which both engines honor identically",
+      "evidence": "SELECT category, COUNT(*) FROM docs GROUP BY category ORDER BY category ASC -> core: [{\"category\":\"other\",\"count\":2},...]; wasm: [{\"category\":\"other\",\"count(*)\":2},...]"
+    },
+    {
+      "id": "D002",
+      "area": "JOIN condition side order (WASM only)",
+      "core_behavior": "normalize_join_condition (query_join.rs) accepts ON in either order — `base.col = joined.col` and `joined.col = base.col` both resolve to the same match",
+      "wasm_behavior": "equality_keys/key_of (velesql_join.rs) does not normalize side order: `ON joined.col = base.col` looks up the joined-table-qualified key on the yet-unjoined base row (which never has it), so EVERY row silently comes back with NULL joined columns instead of matching — verified empirically with `LEFT JOIN customers ON customers.id = orders.customer_id` (all 4 rows got customers:null) vs the working `ON orders.customer_id = customers.id` (rows 1-3 matched, row 4 null)",
+      "status": "tracked as a real WASM gap, not fixed here (out of scope per issue #1544 — coverage of existing behaviour, not new WASM support). fixture J001/J002 are written in the working (base-table-first) order so the conformance suite stays green; the reversed order is intentionally not exercised as a passing case",
+      "evidence": "crates/velesdb-wasm/src/velesql_join.rs: equality_keys()/key_of()"
+    },
+    {
+      "id": "D003",
+      "area": "UNION/INTERSECT/EXCEPT row ordering for non-ranked branches",
+      "core_behavior": "apply_set_operation (set_operations.rs) always re-sorts the merged result by score descending, regardless of any per-branch ORDER BY; when every row has score 0.0 (no vector NEAR in either branch) the comparator sees only ties and Vec::sort_unstable_by's tie-break is not stable — order was observed to differ between two consecutive runs of the SAME core binary for the identical query",
+      "wasm_behavior": "velesql_setops.rs concatenates branches left-to-right and de-duplicates first-seen, so each branch's own ORDER BY is preserved in the final row sequence — deterministic, but not the same sequence as core's",
+      "status": "accepted — neither behaviour is wrong (SQL does not guarantee an order for UNION/INTERSECT/EXCEPT without an explicit outer ORDER BY, which this query engine does not yet apply to compound results). fixture setops_cases S001-S004 assert result MEMBERSHIP and COUNT only (ids compared as a sorted set), never exact order",
+      "evidence": "crates/velesdb-core/src/collection/search/query/set_operations.rs (score-sort); crates/velesdb-wasm/src/velesql_setops.rs (concat+dedup)"
+    },
+    {
+      "id": "D004",
+      "area": "MATCH data model (core unified vs WASM separate graph store)",
+      "core_behavior": "graph nodes ARE vector-collection points (payload `_labels` field); edges live on the same Collection via add_edge; MATCH is expressed as `SELECT ... FROM <collection> WHERE MATCH (...)`",
+      "wasm_behavior": "graph nodes/edges live in a separate in-memory graph store per name, populated via `INSERT NODE`/`INSERT EDGE`, addressed from pattern nodes via `@collection` annotations, and queried with the standalone `MATCH ... RETURN` form — there is no requirement for a same-named vector collection to exist",
+      "status": "accepted architectural difference (WASM has no persistence layer to unify with); fixture match_cases M001/M002 carry a `core_query`/`wasm_query` pair instead of one shared query string, both encoding the same graph topology, asserted against the same golden ids",
+      "evidence": "crates/velesdb-wasm/src/velesql_match.rs: inferred_graph_store(); crates/velesdb-core/src/database/query_engine.rs: execute_match_routed()"
+    },
+    {
+      "id": "D005",
+      "area": "multi-query fusion ranking (relative_score / rsf)",
+      "core_behavior": "documented in docs/reference/ECOSYSTEM_PARITY.md",
+      "wasm_behavior": "WASM-local relative_score/rsf multi-query fusion ranks differently from core",
+      "status": "pre-existing, out of scope for issue #1544 — cross-referenced here only because the issue's own description flagged it as related context",
+      "evidence": "crates/velesdb-wasm/src/fusion.rs:6-18,85-91 (per issue #1544 description); docs/reference/ECOSYSTEM_PARITY.md"
+    },
+    {
+      "id": "D006",
+      "area": "LIMIT on GROUP BY aggregate results",
+      "core_behavior": "Database::execute_aggregate / Collection::execute_grouped_aggregate never reads stmt.limit — every group is returned regardless of a trailing LIMIT clause, verified empirically with 'SELECT category, COUNT(*) AS n, SUM(year) AS total_year FROM docs GROUP BY category ORDER BY n DESC, category ASC LIMIT 1', which returned BOTH groups",
+      "wasm_behavior": "the WASM aggregate pipeline applies LIMIT to the grouped row set the same as a plain SELECT; the identical query returned only 1 row (the 'tech' group)",
+      "status": "tracked as a real core gap, not fixed here (out of scope for issue #1544 — coverage of existing behaviour, not a new feature). aggregate_cases G001-G004 deliberately do not exercise LIMIT so the fixture's shared expect_groups is correct for both engines",
+      "evidence": "crates/velesdb-core/src/collection/search/query/aggregation/grouped.rs: execute_grouped_aggregate/build_grouped_results (no limit/truncate call); crates/velesdb-wasm/src/velesql_aggregate.rs applies the standard SELECT finalize path which includes LIMIT"
     }
   ]
 }
