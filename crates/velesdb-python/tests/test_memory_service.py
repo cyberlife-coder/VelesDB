@@ -123,26 +123,40 @@ def test_recall_where_unknown_op_raises_value_error(mem):
 
 def test_recall_where_returns_stored_metadata(mem):
     # `recall_where` results carry the fact's caller-supplied metadata dict.
+    # `remember` also auto-stamps `_veles_date` (today's date, YYYYMMDD) onto
+    # every fact unless the caller already set it, so the metadata dict is
+    # no longer exactly `{"ts": ...}` — check the caller-supplied key plus
+    # the presence of the auto date, not exact dict equality.
     fid = mem.remember("we shipped the release", metadata={"ts": 20260701})
     hits = mem.recall_where("release", [("ts", "eq", 20260701)], k=5)
     hit = next(h for h in hits if h["id"] == fid)
-    assert hit["metadata"] == {"ts": 20260701}
+    assert hit["metadata"]["ts"] == 20260701
+    assert isinstance(hit["metadata"]["_veles_date"], int)
 
 
 def test_recall_also_returns_stored_metadata(mem):
     # `recall` round-trips caller metadata too (one extra by-id lookup per
     # hit), not just `recall_where` — enables dated/sorted context from any
-    # recall path.
+    # recall path. See the `_veles_date` note above.
     fid = mem.remember("paris is lovely in spring", metadata={"ts": 1})
     hits = mem.recall("paris", k=5)
     hit = next(h for h in hits if h["id"] == fid)
-    assert hit["metadata"] == {"ts": 1}
+    assert hit["metadata"]["ts"] == 1
+    assert isinstance(hit["metadata"]["_veles_date"], int)
 
 
-def test_recall_metadata_is_none_when_the_fact_carries_none(mem):
+def test_recall_metadata_holds_only_the_auto_date_when_the_fact_carries_no_caller_metadata(
+    mem,
+):
+    # `remember` now auto-stamps every fact with `_veles_date` (today's date,
+    # a YYYYMMDD integer) unless the caller already set it, so a fact given
+    # no caller metadata no longer round-trips as `metadata: None` — it
+    # round-trips as `{"_veles_date": <today>}` and nothing else.
     mem.remember("a fact with no metadata")
     hits = mem.recall("a fact with no metadata", k=5)
-    assert all(h["metadata"] is None for h in hits)
+    for h in hits:
+        assert set(h["metadata"].keys()) == {"_veles_date"}
+        assert isinstance(h["metadata"]["_veles_date"], int)
 
 
 def test_recall_fused_folds_in_a_graph_reached_fact(mem):
