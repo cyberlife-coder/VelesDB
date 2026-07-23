@@ -248,13 +248,19 @@ JSON/TOML configs spawn the binary without a shell, so `~` is **not**
 expanded there — use an absolute path (shown below as
 `/home/you/.cargo/bin/velesdb-memory`; adjust to your home directory).
 
-**Claude Code**
+**Claude Code** — the one command most people need:
 
 ```bash
 claude mcp add velesdb-memory \
   --env VELESDB_MEMORY_PATH="$HOME/.velesdb-memory" \
   -- ~/.cargo/bin/velesdb-memory
 ```
+
+That's it — jump straight to [teach your agent the flow](#teach-your-agent-the-flow-skill)
+below. Using a different client instead? Expand for its config:
+
+<details>
+<summary><strong>Cursor, Cline, Zed, Codex CLI, opencode, Claude Desktop, Windsurf</strong></summary>
 
 **Cursor** — `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project)
 
@@ -322,7 +328,60 @@ env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
 } } }
 ```
 
+</details>
+
+## Teach your agent the flow (skill)
+
+Wiring the MCP server gives your agent the *tools*; it doesn't tell it *when* to
+use them — and the differentiator (`why`) only pays off if the agent builds the
+graph as it works. Ship it the flow with the bundled **agent skill**:
+
+```bash
+# Claude Code / opencode: copy the skill into your skills directory
+cp -r crates/velesdb-memory/skill/velesdb-memory ~/.claude/skills/
+```
+
+[`skill/velesdb-memory/SKILL.md`](skill/velesdb-memory/SKILL.md) teaches the agent
+the loop — *recall before acting → remember decisions with metadata **and** links →
+`relate` facts as relationships appear → `why` to explain → `feedback` to reinforce* —
+with concrete scenarios (incident→decision→"why?", onboarding, cross-session
+continuity). Without it, an agent will call `recall` at best and never build the
+graph that makes `why` shine.
+
+A second bundled skill, **`velesdb-context-optimizer`**, teaches the compiler
+workflow below (when/what to compress, how to read `risk`). Install it the
+same way:
+
+```bash
+cp -r skills/velesdb-context-optimizer ~/.claude/skills/
+```
+
+[`skills/velesdb-context-optimizer/SKILL.md`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
+— see [The context compiler tools](#the-context-compiler-tools) below.
+
+**No repo clone needed:** every [GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
+attaches `velesdb-skills.tar.gz` — both skills, one folder per skill at the
+archive root — so a one-liner installs them straight from the release:
+
+```bash
+curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz \
+  | tar -xz -C ~/.claude/skills/
+```
+
+**Skills teach an agent what to do; they don't make it remember to do it.**
+[`integrations/agent-hooks/`](https://github.com/cyberlife-coder/VelesDB/tree/develop/integrations/agent-hooks)
+closes that gap for Claude Code with real `SessionStart`/`Stop`/`PreCompact`
+hooks that nudge `load_working_context`/`save_working_context` automatically
+— install once **globally** (`~/.claude/hooks/`) to get continuous memory
+across every project, or per-project if you'd rather vendor the scripts into
+one repo. Codex CLI has no hook mechanism yet; the same directory documents
+an `AGENTS.md`-based convention for it.
+
 ## HTTP transport (multi-client)
+
+**You don't need this to get started** — it's for later, once you're already
+using velesdb-memory and want more than one client (say, Claude Code *and*
+Claude Desktop) sharing the same memory at the same time instead of one at a time.
 
 Every config above spawns its own `velesdb-memory` process over stdio — and
 the store's single-writer `flock` means only ONE of those processes can hold
