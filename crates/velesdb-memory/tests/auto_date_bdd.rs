@@ -238,3 +238,65 @@ fn other_reserved_keys_are_still_rejected_alongside_the_auto_date_exception() {
         .expect_err("a true system key must stay rejected");
     assert!(matches!(err, velesdb_memory::MemoryError::ReservedKey(k) if k == "_veles_hub"));
 }
+
+#[test]
+fn malformed_auto_date_field_degrades_to_undated_instead_of_crashing() {
+    // `AUTO_DATE_FIELD` is a plain, unvalidated metadata value at write time
+    // (only its KEY is special-cased, never its value type/range) — a
+    // caller can set it to a string, an object, or an out-of-calendar-range
+    // integer. `dated_context::fact_date` must treat every one of these as
+    // "undated" (no timeline date, no `now` contribution), never panic.
+    let (_dir, svc) = service();
+
+    let string_valued = meta(&[(AUTO_DATE_FIELD, json!("2026-07-01"))]);
+    svc.remember(
+        "a date stored as a string, not an integer",
+        &[],
+        Some(&string_valued),
+    )
+    .expect("remember with a string-valued auto date must still be accepted");
+
+    let object_valued = meta(&[(AUTO_DATE_FIELD, json!({"year": 2026}))]);
+    svc.remember(
+        "a date stored as a nested object",
+        &[],
+        Some(&object_valued),
+    )
+    .expect("remember with an object-valued auto date must still be accepted");
+
+    // 20260231: February the 31st does not exist in any year.
+    let impossible_calendar_date = meta(&[(AUTO_DATE_FIELD, json!(20_260_231))]);
+    svc.remember(
+        "a real fact with an impossible calendar date",
+        &[],
+        Some(&impossible_calendar_date),
+    )
+    .expect("remember with an out-of-range calendar integer must still be accepted");
+
+    let (hits, ctx) = svc
+        .recall_fused_dated(
+            "date string object impossible calendar",
+            10,
+            None,
+            FusionOptions::default(),
+            AUTO_DATE_FIELD,
+        )
+        .expect("recall_fused_dated must never panic on malformed date values");
+
+    assert_eq!(hits.len(), 3, "every fact is still recalled, just undated");
+    assert_eq!(
+        ctx.now, None,
+        "no valid date exists across the batch, so `now` stays None"
+    );
+    assert!(
+        ctx.timeline
+            .contains("a real fact with an impossible calendar date"),
+        "the fact still renders in the timeline, just without a date prefix: {}",
+        ctx.timeline
+    );
+    assert!(
+        !ctx.timeline.contains('['),
+        "no `[YYYY-MM-DD]` prefix must appear when every date is malformed: {}",
+        ctx.timeline
+    );
+}
