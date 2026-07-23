@@ -388,3 +388,114 @@ fn retrieve_context_source_unknown_handle_rejects_with_not_found() {
         .unwrap();
     assert_eq!(code, "NOT_FOUND");
 }
+
+// --- saveWorkingContext / loadWorkingContext / listWorkingContexts (#1517) --
+//
+// Issue #1517's decision (Option 2): expose these three on WASM/TS with a
+// clearly documented INTRA-SESSION semantics — same caveat already pinned
+// above for `compile_context`/`retrieveContextSource`: this binding's
+// `WasmStore` is in-memory only, so a "saved" working context disappears on
+// page reload. Useful to carry state between two calls within the SAME
+// page load; not real cross-session persistence (no IndexedDB backend yet).
+
+/// Save then load within the same session round-trips byte-identical,
+/// including a `u64::MAX` id field (`decisions[].fragment_id`) — proves ids
+/// never pass through a JS number on this path either, matching
+/// `compile_context_round_trips_with_string_ids`.
+#[wasm_bindgen_test]
+fn save_then_load_working_context_round_trips_within_session() {
+    let svc = WasmMemoryService::new(16);
+    let working = js_sys::JSON::parse(
+        r#"{
+            "goal": "ship the canary fix",
+            "active_constraints": [],
+            "verified_facts": [],
+            "open_hypotheses": [],
+            "decisions": [
+                {"fragment_id": "18446744073709551615", "rule_id": "media.atomic"}
+            ],
+            "exact_evidence": [],
+            "pending_actions": ["roll back if error rate spikes"]
+        }"#,
+    )
+    .unwrap();
+
+    let id = svc
+        .save_working_context("veles", "session-a", working.clone())
+        .unwrap();
+    assert!(!id.is_empty(), "save resolves to a non-empty fact id");
+
+    let loaded = svc.load_working_context("veles", "session-a").unwrap();
+    assert!(
+        !loaded.is_instance_of::<js_sys::Map>(),
+        "loaded working context must be a plain object"
+    );
+    let goal = js_sys::Reflect::get(&loaded, &"goal".into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+    assert_eq!(goal, "ship the canary fix");
+
+    let decisions = js_sys::Reflect::get(&loaded, &"decisions".into()).unwrap();
+    let first = js_sys::Reflect::get(&decisions, &0.into()).unwrap();
+    let fragment_id = js_sys::Reflect::get(&first, &"fragment_id".into())
+        .unwrap()
+        .as_string()
+        .expect("fragment_id must cross back as a decimal string, not a number");
+    assert_eq!(fragment_id, "18446744073709551615", "u64::MAX round-trips");
+
+    let pending = js_sys::Reflect::get(&loaded, &"pending_actions".into()).unwrap();
+    let first_action = js_sys::Reflect::get(&pending, &0.into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+    assert_eq!(first_action, "roll back if error rate spikes");
+}
+
+/// Nothing saved under a project + session pair loads back as `null` in JS —
+/// mirroring the Node binding's `loadWorkingContext` contract — never an
+/// error, and never a forged/leaked value from an unrelated slot.
+#[wasm_bindgen_test]
+fn load_working_context_returns_null_when_nothing_saved() {
+    let svc = WasmMemoryService::new(16);
+    let loaded = svc
+        .load_working_context("veles", "never-saved-session")
+        .unwrap();
+    assert!(
+        loaded.is_null(),
+        "an unsaved project+session pair must load back as null"
+    );
+}
+
+/// `listWorkingContexts` surfaces every session saved under a project,
+/// most-recently-saved first, and stays empty (not an error) for a project
+/// that never saved anything.
+#[wasm_bindgen_test]
+fn list_working_contexts_lists_saved_sessions_for_a_project() {
+    let svc = WasmMemoryService::new(16);
+    let empty = js_sys::JSON::parse(r#"{}"#).unwrap();
+
+    svc.save_working_context("veles", "session-a", empty.clone())
+        .unwrap();
+    svc.save_working_context("veles", "session-b", empty)
+        .unwrap();
+
+    let listed = svc.list_working_contexts("veles").unwrap();
+    let sessions = js_sys::Reflect::get(&listed, &"sessions".into()).unwrap();
+    let length = js_sys::Reflect::get(&sessions, &"length".into())
+        .unwrap()
+        .as_f64()
+        .unwrap() as u32;
+    assert_eq!(length, 2, "both saved sessions must be listed");
+
+    let empty_project = svc.list_working_contexts("never-used-project").unwrap();
+    let empty_sessions = js_sys::Reflect::get(&empty_project, &"sessions".into()).unwrap();
+    let empty_length = js_sys::Reflect::get(&empty_sessions, &"length".into())
+        .unwrap()
+        .as_f64()
+        .unwrap() as u32;
+    assert_eq!(
+        empty_length, 0,
+        "a project that never saved anything lists no sessions"
+    );
+}

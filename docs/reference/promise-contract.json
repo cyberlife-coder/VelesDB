@@ -6,6 +6,7 @@
       "file": "README.md",
       "must_contain": "HNSW Search index-only (10K/768D, k=10)",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
+      "executable": false,
       "source": "benchmarks/results/pr363_365_comparison.md (47-56µs measured) — relabeled as 'index-only' for transparency vs the canonical 450µs end-to-end number. Corpus label corrected 5K→10K on 2026-07-20: hnsw_benchmark.rs inserts 10,000 vectors; re-measured quiet (Apple M5 Pro) at 53.2 µs.",
       "last_updated": "2026-04-27"
     },
@@ -14,31 +15,37 @@
       "file": "README.md",
       "must_contain": "SIMD Dot Product (768D, AVX2)",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
+      "executable": false,
       "source": "docs/guides/TUNING_GUIDE.md"
     },
     {
       "id": "root_readme_ci_quality_gate",
       "file": "README.md",
       "must_contain": "cargo test --workspace",
-      "validation_command": "cargo test --workspace"
+      "validation_command": "cargo test --workspace",
+      "executable": false,
+      "notes": "Documentary: running the full workspace test suite from inside this fast contract-check script would duplicate the dedicated CI test job and be far too slow/costly to run on every doc/registry change."
     },
     {
       "id": "core_readme_blazing_fast",
       "file": "crates/velesdb-core/README.md",
       "must_contain": "Blazing Fast",
-      "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark"
+      "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
+      "executable": false
     },
     {
       "id": "core_readme_columnstore_claim",
       "file": "crates/velesdb-core/README.md",
       "must_contain": "ColumnStore filtering",
-      "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark"
+      "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark",
+      "executable": false
     },
     {
       "id": "readme_simd_dot_product_latency",
       "file": "README.md",
       "must_contain": "**21.7 ns**",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
+      "executable": false,
       "source": "docs/guides/TUNING_GUIDE.md (measured on i9-14900KF, AVX2)",
       "last_updated": "2026-03-29"
     },
@@ -47,6 +54,7 @@
       "file": "README.md",
       "must_contain": "**450 us**",
       "validation_command": "python benchmarks/velesdb_benchmark.py --recall",
+      "executable": false,
       "source": "CHANGELOG.md v1.13.0 (measured 2026-03-27, i9-14900KF, Python SDK, WAL ON; baseline preserved through the pre-seed remediation phases)",
       "last_updated": "2026-04-23"
     },
@@ -55,6 +63,7 @@
       "file": "README.md",
       "must_contain": "**55 us**",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
+      "executable": false,
       "source": "benchmarks/results/pr363_365_comparison.md (47-56µs range)",
       "last_updated": "2026-03-29"
     },
@@ -63,6 +72,7 @@
       "file": "README.md",
       "must_contain": "**100%**",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
+      "executable": false,
       "source": "benchmarks/results/2026-02-20-phase-e-report.md",
       "last_updated": "2026-03-18"
     },
@@ -71,6 +81,7 @@
       "file": "README.md",
       "must_contain": "| Fast | 64 | 92.2% |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
+      "executable": false,
       "source": "benchmarks/results/2026-02-20-phase-e-report.md (Fast ef=64: 92.2%)",
       "last_updated": "2026-03-29"
     },
@@ -79,6 +90,7 @@
       "file": "README.md",
       "must_contain": "| Balanced (default) | 128 | 98.8% |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
+      "executable": false,
       "source": "benchmarks/results/2026-02-20-phase-e-report.md (Balanced ef=128: 98.8%)",
       "last_updated": "2026-03-29"
     },
@@ -87,6 +99,7 @@
       "file": "README.md",
       "must_contain": "| Accurate | 512 | 100% |",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
+      "executable": false,
       "source": "benchmarks/results/2026-02-20-phase-e-report.md (Accurate ef=256: 100%)",
       "last_updated": "2026-03-29"
     },
@@ -95,6 +108,7 @@
       "file": "README.md",
       "must_contain": "130x faster",
       "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark",
+      "executable": false,
       "source": "README.md: JSON scan 3.84ms vs ColumnStore 29.5us at 100K rows on the i9-14900KF reference. Hardware-dependent ratio, qualified in README since 2026-07-20: Apple M5 Pro quiet re-run measures ~50–105x (JSON scan itself ~2.8x faster there; ColumnStore absolute ~27.15 µs holds).",
       "last_updated": "2026-04-13"
     },
@@ -103,6 +117,7 @@
       "file": "docs/BENCHMARKS.md",
       "must_contain": "SIFT1M",
       "validation_command": "cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m",
+      "executable": false,
       "source": "docs/BENCHMARKS.md section 11 (SIFT1M — Standard ANN Benchmark)",
       "last_updated": "2026-04-18",
       "notes": "Gated by --features bench-sift1m + cached download or VELESDB_SIFT1M_DIR. CI skips (feature off); run locally or on a dedicated bench runner. The `must_contain` is intentionally loose (dataset name only) until numeric ranges are populated in section 11.3 from a first stable run on reference hardware — tightening it prematurely would lock the contract around literature reference points that are not VelesDB measurements."
@@ -112,6 +127,7 @@
       "file": "README.md",
       "must_contain": "BM25 Sparse Search index-only (10K docs, top-10)",
       "validation_command": "cargo bench -p velesdb-core --bench sparse_benchmark -- top10_10k_corpus",
+      "executable": false,
       "source": "PR #621 (commit f4999a74, Phase 4.2 pre-seed remediation): 956us baseline (v1.12) -> 57.6us after linear_scan_dense + k-way merge dedup for corpus <= 100K. Relabeled 'index-only' for transparency.",
       "last_updated": "2026-04-27"
     },
@@ -120,6 +136,7 @@
       "file": "README.md",
       "must_contain": "33 ns",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
+      "executable": false,
       "source": "README.md Distance Metrics table (Cosine, 768D SIMD perf). Footnote *² documents methodology (768D AVX2 hot cache, matches table column header).",
       "last_updated": "2026-05-01"
     },
@@ -128,6 +145,7 @@
       "file": "README.md",
       "must_contain": "20 ns",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
+      "executable": false,
       "source": "README.md Distance Metrics table (Euclidean, 768D SIMD perf). Footnote *² documents methodology (768D AVX2 hot cache, matches table column header).",
       "last_updated": "2026-05-01"
     },
@@ -136,6 +154,7 @@
       "file": "README.md",
       "must_contain": "22 ns",
       "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
+      "executable": false,
       "source": "README.md Distance Metrics table (Dot Product, 768D SIMD perf). Distinct from readme_simd_dot_product_latency (21.7 ns) which references the standalone Vector Engine summary.",
       "last_updated": "2026-05-01"
     },
@@ -144,6 +163,7 @@
       "file": "README.md",
       "must_contain": "100K rows",
       "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark",
+      "executable": false,
       "source": "README.md ColumnStore 130x speedup baseline. Footnote *¹ scopes the claim: filtering-API micro-benchmark, integer equality, 130x at 100K rows / 55x at 10K rows (docs/BENCHMARKS.md section 6); no 1M-row measurement exists. The filtering API serves SELECT WHERE via the adaptive payload mirror (collection/payload_mirror).",
       "last_updated": "2026-06-10"
     },
@@ -152,6 +172,7 @@
       "file": "README.md",
       "must_contain": "One ~9 MB binary",
       "validation_command": "cargo build --release -p velesdb-server && strip target/release/velesdb-server && du -h target/release/velesdb-server",
+      "executable": false,
       "source": "v1.18.0 stripped local builds on Apple Silicon: velesdb-server 9.1 MB, velesdb-cli 7.3 MB, velesdb-migrate 6.2 MB; v1.18.0 published release artifacts span 7.5-12.4 MB across platforms. README footnote [3] states the 7-13 MB provenance range.",
       "last_updated": "2026-06-12"
     },
@@ -160,6 +181,7 @@
       "file": "README.md",
       "must_contain": "~550 KB gzipped",
       "validation_command": "npm pack @wiscale/velesdb-wasm --dry-run  # published tarball (gzipped) ~536-550 KB",
+      "executable": false,
       "source": "@wiscale/velesdb-wasm v3.12.0 published npm package: velesdb_wasm_bg.wasm gzip -9 = 549,285 bytes (~536 KiB / ~549 kB), measured 2026-07-20. Replaces the stale ~430 KB v1.18.0 figure (+25-28% drift found by sequential re-verification).",
       "last_updated": "2026-06-12"
     },
@@ -167,7 +189,8 @@
       "id": "readme_rest_endpoint_count",
       "file": "README.md",
       "must_contain": "54 REST endpoints",
-      "validation_command": "grep -cE \"^  /\" docs/openapi.yaml  # 54 paths (61 operations counting per-verb)",
+      "validation_command": "test \"$(grep -cE '^  /' docs/openapi.yaml)\" -eq 54",
+      "executable": true,
       "source": "docs/openapi.yaml on this branch: 54 paths / 61 operations, including the relations + TTL endpoints and GET /metrics. Corroborated by crates/velesdb-server/src/routes.rs (54 .route() registrations). Endpoint count convention = OpenAPI paths.",
       "last_updated": "2026-07-10"
     },
@@ -176,6 +199,7 @@
       "file": "README.md",
       "must_contain": "**10.9 %**",
       "validation_command": "grep -qF '10.9 %' README.md && grep -qF '10.9%' examples/real-session-benchmark/README.md",
+      "executable": true,
       "source": "examples/real-session-benchmark/README.md:405 (billed campaign 2026-07-19, 19-turn cropped-screenshot session, cli runner: $0.4442 -> $0.3960 = 10.9% $ saved; raw logs examples/real-session-benchmark/results/2026-07-19-vibe-cli/) — consistency check only, no live billed re-run.",
       "last_updated": "2026-07-19"
     },
@@ -184,6 +208,7 @@
       "file": "README.md",
       "must_contain": "**21.9 %**",
       "validation_command": "grep -qF '21.9 %' README.md && grep -qF '21.9%' examples/real-session-benchmark/README.md && grep -qF '17.6%' examples/real-session-benchmark/README.md",
+      "executable": true,
       "source": "examples/real-session-benchmark/README.md:406 (billed campaign 2026-07-19, 19-turn real-Retina-screenshot session, cli runner: $0.5693 -> $0.4444 = 21.9% $ saved, 17.6% tokens saved; raw logs examples/real-session-benchmark/results/2026-07-19-day-scale/) — consistency check only, no live billed re-run.",
       "last_updated": "2026-07-19"
     },
@@ -192,6 +217,7 @@
       "file": "README.md",
       "must_contain": "**14.7 %**",
       "validation_command": "grep -qF '14.7 %' README.md && grep -qF '14.7%' examples/real-session-benchmark/README.md",
+      "executable": true,
       "source": "examples/real-session-benchmark/README.md:407 (billed campaign 2026-07-19, 36-turn day-scale session, cli runner: $1.8613 -> $1.5876 = 14.7% $ saved; raw log examples/real-session-benchmark/results/2026-07-19-day-scale/billed-long36-cli.log) — consistency check only, no live billed re-run.",
       "last_updated": "2026-07-19"
     },
@@ -200,6 +226,7 @@
       "file": "README.md",
       "must_contain": "**15.1 %**",
       "validation_command": "grep -qF '15.1 %' README.md && grep -qF '15.1%' examples/real-session-benchmark/README.md",
+      "executable": true,
       "source": "examples/real-session-benchmark/README.md:408 (billed campaign 2026-07-19, 19-turn session via direct Messages API runner: input_tokens 15.1% saved; raw log examples/real-session-benchmark/results/2026-07-19-day-scale/billed-vibe-api.log) — consistency check only, no live billed re-run.",
       "last_updated": "2026-07-19"
     },
@@ -208,6 +235,7 @@
       "file": "README.md",
       "must_contain": "**82.5 %**",
       "validation_command": "grep -qF '82.5 %' README.md && grep -qF '82.5% saved' crates/velesdb-memory/examples/context_savings/README.md && grep -qF '26533 raw -> 4647 compiled' crates/velesdb-memory/examples/context_savings/README.md",
+      "executable": true,
       "source": "crates/velesdb-memory/examples/context_savings/README.md:58 (committed 12-turn agent-session corpus, real cl100k BPE: 26533 raw -> 4647 compiled tokens = 82.5% saved) — consistency check only, no live re-run.",
       "last_updated": "2026-07-19"
     }

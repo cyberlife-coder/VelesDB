@@ -5,10 +5,11 @@ db-path = "~/.cargo/advisory-db"
 # (a) confirm the upstream constraint still holds (transitive still
 # present, no fix released), and bump the "Last reviewed" date in the
 # block-level comment below, or (b) remove the ignore if the transitive
-# is gone or the advisory has been patched. The current pass landed on
-# 2026-05-15 (see PR #811).
+# is gone or the advisory has been patched. The 2026-05-15 pass landed in
+# PR #811; the 2026-07-22 pass removed the quick-xml/plist entries below
+# (upstream fix released) and touched nothing else.
 #
-# Last reviewed: 2026-05-15
+# Last reviewed: 2026-07-22
 ignore = [
     # ── Tauri Linux GTK3 transitives ──────────────────────────────────
     # These travel with the GTK3 desktop backend that Tauri 2.x still
@@ -45,18 +46,10 @@ ignore = [
     { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version: tauri transitive, unmaintained" },
     { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident: tauri transitive, unmaintained" },
 
-    # ── quick-xml / plist transitive (tauri Info.plist tooling) ────────
-    # quick-xml 0.38.4 comes in via plist 1.8.0 (tauri's Info.plist reader/
-    # writer, tauri-codegen/tauri-utils/tauri-build all depend on it too).
-    # Both advisories are XML-parsing DoS only (quadratic attribute scan /
-    # unbounded namespace allocation) — not memory-unsafety, and only
-    # reachable if this stack parses untrusted XML, which it doesn't (local
-    # Info.plist files only). No fix yet: plist's latest release (1.9.0,
-    # 2026-04-26) still requires quick-xml ^0.39.2; the advisories need
-    # >=0.41.0. Revisit when plist ships a release depending on quick-xml
-    # >=0.41 (tracked upstream: https://github.com/ebarnard/rust-plist).
-    { id = "RUSTSEC-2026-0194", reason = "quick-xml: tauri/plist transitive, DoS-only, no fix yet (plist 1.9.0 caps at quick-xml 0.39)" },
-    { id = "RUSTSEC-2026-0195", reason = "quick-xml: tauri/plist transitive, DoS-only, no fix yet (plist 1.9.0 caps at quick-xml 0.39)" },
+    # RUSTSEC-2026-0194 / RUSTSEC-2026-0195 (quick-xml DoS via plist, tauri
+    # Info.plist tooling) resolved 2026-07-22: plist 1.10.0 now requires
+    # quick-xml >=0.41.0. `cargo update -p plist` in both lockfiles (root +
+    # demos/tauri-rag-app/src-tauri) picked up the fix; no ignore needed.
 
     # ── velesdb-cli transitive ────────────────────────────────────────
     { id = "RUSTSEC-2024-0384", reason = "instant: velesdb-cli transitive (clap/indicatif chain), unmaintained" },

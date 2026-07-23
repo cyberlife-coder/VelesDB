@@ -39,6 +39,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`scripts/check-promise-contract.py`**: the promise-contract guardrail
+  only ever checked that a claim's `must_contain` substring was still
+  present in the file it points at — it never executed
+  `validation_command`, so the contract could guarantee a number wasn't
+  *lost* from a doc without ever proving it was still *true*. Two real
+  drifts (a stale WASM bundle-size figure off by +25-28%, and a benchmark
+  corpus label reading 5K when the bench actually inserts 10K vectors)
+  slipped through and were only caught by a manual re-verification pass.
+  Claims in `docs/reference/promise-contract.json` now carry an explicit
+  `"executable"` flag: claims whose `validation_command` is a fast,
+  deterministic, local, no-network README-vs-committed-file comparison
+  (`grep`/file-content checks) are marked `true` and are now actually run
+  via subprocess, failing the script on a real mismatch; claims needing a
+  costly measurement (`cargo bench`, a release build, a published-package
+  download) stay `false` — documentary only — and are explicitly skipped
+  with a visible message naming the claim and the unverified command,
+  never silently ignored. 6 of 27 claims are now executed for real; 21
+  remain documentary. (issue #1518)
+- **`velesdb-memory`**: two `compile_transcript`/`segment_transcript`
+  adversarial-review follow-ups from #1500, deliberately deferred (issue
+  #1516). **(1) Error taxonomy — potentially breaking for a caller
+  matching on the error variant/message.** A forced
+  `segmentation.format: "jsonl"` that failed to parse used to surface as
+  `MemoryError::ContextOverLimit` with a misleading "over limit" prefix on
+  what is really a format/parsing failure, not a budget breach. It now
+  surfaces as a new, dedicated `MemoryError::SegmentationError` variant.
+  Both stay in the same `INVALID_PARAMS`-category MCP taxonomy (JSON-RPC
+  code unchanged), so an MCP client only sees the error message change;
+  a Rust caller of `velesdb-memory` directly that pattern-matched on
+  `MemoryError::ContextOverLimit` for this specific case must now match
+  `MemoryError::SegmentationError` instead. A genuine budget/cap breach
+  (transcript over the byte cap, an unsplittable oversized fence, too many
+  fragments after merging) is unaffected — still `ContextOverLimit`. **(2)
+  Duplicated ranges.** Re-splitting a `content_override` (a `jsonl` line
+  whose decoded `content` alone exceeded `MAX_FRAGMENT_BYTES`, over 1 MiB)
+  used to give every resulting child segment the SAME original line's byte
+  range, so `segmentation.segments` reported overlapping ranges —
+  contradicting the partition property `compile_transcript` advertises.
+  Each child now gets a distinct, non-overlapping sub-range of the
+  original line, proportional to its share of the decoded content (a
+  JSONL line's raw JSON-escaped bytes have no byte-exact mapping back to
+  the decoded text, so the split is proportional, not byte-precise) —
+  `segmentation.segments` now partitions the transcript exactly in every
+  case, including this one.
 - **`velesdb-memory`**: the `compile_context` prompt-cache prefix could
   churn when only the query changed. `selection_order`
   (`src/context/budget.rs`) used lexical relevance to the query as a

@@ -25,6 +25,11 @@
 //! Set" of the Software's features and breach the `VelesDB` Core License 1.0
 //! (§1, No Hosted or Managed Service). See `VISION.md` §5 and `PLAN.md` Phase 4A.
 
+/// Wall-clock "today" as a `YYYYMMDD` integer, read only by `remember`'s
+/// auto-date stamping (see [`storage::AUTO_DATE_FIELD`]) — never by the
+/// context compiler, which stays clock-free and deterministic. Internal:
+/// nothing outside the crate needs to read the clock directly.
+mod clock;
 /// The deterministic context compiler (EPIC-P-070): classify, dedup, and pack
 /// caller-supplied context fragments under a token budget — no LLM, no cloud,
 /// every decision auditable. Gated behind the default `context` feature.
@@ -41,6 +46,13 @@ pub mod extract;
 /// [`service::MemoryService::recall_fused`]. Internal: callers reach it only
 /// through that method.
 mod fusion;
+/// The streamable-HTTP transport (multi-client mode): lets several MCP
+/// clients share ONE `velesdb-memory` process instead of each spawning its
+/// own stdio process and fighting over the store's single-writer `flock`.
+/// Gated behind the (non-default) `http` feature — see the module docs and
+/// the crate README's "HTTP transport (multi-client)" section.
+#[cfg(feature = "http")]
+pub mod http;
 /// Content-addressed memory ids — internal; ids surface through the service API.
 pub(crate) mod id;
 /// Resource caps (DoS limits) shared by every adapter — the single source of
@@ -66,6 +78,12 @@ pub mod service;
 /// default, file-backed [`storage::NativeStore`]. Implement `MemoryStore` to
 /// run the wedge over a different backend (e.g. an in-memory one for WASM).
 pub mod storage;
+/// Locally-generated TLS material (a cached self-signed CA + short-lived
+/// leaf certs) for the streamable-HTTP transport's HTTPS-by-default
+/// listener — see the module docs for the full design rationale. Gated
+/// behind `http` since it exists only to serve that transport.
+#[cfg(feature = "http")]
+pub mod tls;
 
 /// Default embedding dimension — the single source of truth, taken from the
 /// SDK's own default so the server, library, and tests never restate the
@@ -107,6 +125,6 @@ pub use model::{
 };
 pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{MemoryService, Metadata};
-pub use storage::MemoryStore;
 #[cfg(feature = "persistence")]
 pub use storage::NativeStore;
+pub use storage::{MemoryStore, AUTO_DATE_FIELD};

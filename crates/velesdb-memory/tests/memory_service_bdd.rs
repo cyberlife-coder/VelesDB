@@ -7,7 +7,7 @@ mod common;
 
 use common::{meta, service};
 use serde_json::json;
-use velesdb_memory::{Link, MemoryError};
+use velesdb_memory::{Link, MemoryError, AUTO_DATE_FIELD};
 
 // --- Nominal ---------------------------------------------------------------
 
@@ -52,7 +52,11 @@ fn recall_round_trips_caller_metadata_for_dated_context() {
 }
 
 #[test]
-fn recall_metadata_is_none_when_the_fact_carries_none() {
+fn recall_metadata_holds_only_the_auto_date_when_the_fact_carries_no_caller_metadata() {
+    // Since `remember` now auto-stamps every fact with `AUTO_DATE_FIELD`
+    // (see `tests/auto_date_bdd.rs`), a fact given no caller metadata no
+    // longer round-trips as `metadata: None` — it round-trips as
+    // `Some({AUTO_DATE_FIELD: <today>})` and nothing else.
     let (_dir, svc) = service();
     svc.remember("a fact with no metadata", &[], None)
         .expect("remember");
@@ -61,7 +65,12 @@ fn recall_metadata_is_none_when_the_fact_carries_none() {
         .recall("a fact with no metadata", 5, None)
         .expect("recall");
 
-    assert_eq!(hits[0].metadata, None);
+    let metadata = hits[0].metadata.as_ref().expect("auto date stamped");
+    assert_eq!(
+        metadata.keys().collect::<Vec<_>>(),
+        vec![AUTO_DATE_FIELD],
+        "an unmetadata'd fact must carry the auto date and nothing else"
+    );
 }
 
 #[test]

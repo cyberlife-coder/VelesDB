@@ -64,8 +64,10 @@ impl Collection {
         let filter = Self::build_static_filter(where_clause, use_runtime, params)?;
         let (columns_vec, has_count_star) = Self::prepare_agg_columns(aggregations);
 
-        let payload_storage = self.storage.payload_storage.read();
+        // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
+        // reversed here. See .investigation/http-deadlock-2026-07-22/.
         let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
         let ids = vector_storage.ids();
         let mut graph_cache = GraphMatchEvalCache::default();
         let mut groups: HashMap<GroupKey, Aggregator> = HashMap::new();

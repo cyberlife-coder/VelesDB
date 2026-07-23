@@ -55,10 +55,10 @@ three engines behind its memory tools:
 
 | Tool       | What it does                                               | Engines |
 |------------|------------------------------------------------------------|---------|
-| `remember` | store a fact, optionally linked + tagged with metadata, with an optional expiry (`ttl_seconds`) | Vector + Graph + ColumnStore |
+| `remember` | store a fact, optionally linked + tagged with metadata, with an optional expiry (`ttl_seconds`); every fact is auto-stamped with today's date (`_veles_date`, a `YYYYMMDD` integer) unless you set it yourself, so temporal recall (`recall_fused`'s `date_field`) works with zero setup — see [Automatic dating](#automatic-dating-_veles_date) | Vector + Graph + ColumnStore |
 | `recall`   | semantic retrieval, optional exact-match metadata filter   | Vector + ColumnStore |
 | `relate`   | create a typed edge between two memories                   | Graph |
-| `recall_fused` | recall with graph-aware re-ranking (vector + typed links fused) | Vector + Graph |
+| `recall_fused` | recall with graph-aware re-ranking (vector + typed links fused); `date_field` (e.g. the automatic `_veles_date`) also returns a chronological `dated_context` timeline + `now` anchor | Vector + Graph |
 | `recall_where` | recall filtered by typed column predicates (ranges, comparisons) | Vector + ColumnStore |
 | `forget`   | delete a memory                                            | — |
 | `why`      | recall a decision **+ its connected subgraph** (multi-hop) | Vector + Graph + ColumnStore |
@@ -72,6 +72,44 @@ your question — exactly what a pure vector search is blind to.
 By design the server exposes **memory semantics only** — never raw database
 capabilities (`query`, `create_collection`, `upsert`, `traverse`). See
 [License](#license).
+
+### Automatic dating (`_veles_date`)
+
+Every `remember`/`remember_extracted` call auto-stamps the fact's metadata with
+`_veles_date` — today's date, read from the system clock, as a `YYYYMMDD`
+integer — **unless the caller already set that key**, in which case it is
+never overwritten. This used to be entirely the caller's job (write a numeric
+date field yourself, e.g. `ts`/`occurred_at`, remember to keep it numeric);
+now it's guaranteed by the server, with zero setup:
+
+```jsonc
+// no metadata at all — still gets a date
+remember({ fact: "we chose parking_lot to avoid lock poisoning" })
+// stored metadata: { "_veles_date": 20260723 }   (today, auto-stamped)
+
+// recall_fused's date_field needs no caller-managed date field anymore
+recall_fused({ query: "why parking_lot", date_field: "_veles_date" })
+// → dated_context: "- [2026-07-23] we chose parking_lot ..."
+//   now: "2026-07-23"
+```
+
+To date a fact **retroactively** (e.g. an incident that happened last month,
+not today), set `_veles_date` explicitly in `metadata` — an explicit value is
+always respected, never replaced:
+
+```jsonc
+remember({
+  fact: "payment provider timeout set to 8s",
+  metadata: { "_veles_date": 20260610 }   // when it actually happened
+})
+```
+
+`_veles_date` behaves like ordinary metadata for every other purpose too — it
+round-trips in `recall`/`recall_where`/`recall_fused` results and can be used
+as a `recall_where` range filter (`{ field: "_veles_date", op: "ge", value:
+20260101 }`) — it is the one metadata key namespaced under the internal
+`_veles_` prefix that a caller MAY still set and see; every other `_veles_*`
+key stays fully reserved (rejected on write, stripped from every read).
 
 ## See it (offline, one command)
 
@@ -248,13 +286,19 @@ JSON/TOML configs spawn the binary without a shell, so `~` is **not**
 expanded there — use an absolute path (shown below as
 `/home/you/.cargo/bin/velesdb-memory`; adjust to your home directory).
 
-**Claude Code**
+**Claude Code** — the one command most people need:
 
 ```bash
 claude mcp add velesdb-memory \
   --env VELESDB_MEMORY_PATH="$HOME/.velesdb-memory" \
   -- ~/.cargo/bin/velesdb-memory
 ```
+
+That's it — jump straight to [teach your agent the flow](#teach-your-agent-the-flow-skill)
+below. Using a different client instead? Expand for its config:
+
+<details>
+<summary><strong>Cursor, Cline, Zed, Codex CLI, opencode, Claude Desktop, Windsurf</strong></summary>
 
 **Cursor** — `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project)
 
@@ -302,6 +346,242 @@ env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
   "environment": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
 } } }
 ```
+
+**Claude Desktop** — `claude_desktop_config.json` (macOS:
+`~/Library/Application Support/Claude/claude_desktop_config.json`)
+
+```json
+{ "mcpServers": { "velesdb-memory": {
+  "command": "/home/you/.cargo/bin/velesdb-memory",
+  "env": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
+} } }
+```
+
+**Windsurf** — `~/.codeium/windsurf/mcp_config.json`
+
+```json
+{ "mcpServers": { "velesdb-memory": {
+  "command": "/home/you/.cargo/bin/velesdb-memory",
+  "env": { "VELESDB_MEMORY_PATH": "/home/you/.velesdb-memory" }
+} } }
+```
+
+</details>
+
+## Teach your agent the flow (skill)
+
+Wiring the MCP server gives your agent the *tools*; it doesn't tell it *when* to
+use them — and the differentiator (`why`) only pays off if the agent builds the
+graph as it works. Ship it the flow with the bundled **agent skill**:
+
+```bash
+# Claude Code / opencode: copy the skill into your skills directory
+cp -r crates/velesdb-memory/skill/velesdb-memory ~/.claude/skills/
+```
+
+[`skill/velesdb-memory/SKILL.md`](skill/velesdb-memory/SKILL.md) teaches the agent
+the loop — *recall before acting → remember decisions with metadata **and** links →
+`relate` facts as relationships appear → `why` to explain → `feedback` to reinforce* —
+with concrete scenarios (incident→decision→"why?", onboarding, cross-session
+continuity). Without it, an agent will call `recall` at best and never build the
+graph that makes `why` shine.
+
+A second bundled skill, **`velesdb-context-optimizer`**, teaches the compiler
+workflow below (when/what to compress, how to read `risk`). Install it the
+same way:
+
+```bash
+cp -r skills/velesdb-context-optimizer ~/.claude/skills/
+```
+
+[`skills/velesdb-context-optimizer/SKILL.md`](https://github.com/cyberlife-coder/VelesDB/blob/main/skills/velesdb-context-optimizer/SKILL.md)
+— see [The context compiler tools](#the-context-compiler-tools) below.
+
+**No repo clone needed:** every [GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
+attaches `velesdb-skills.tar.gz` — both skills, one folder per skill at the
+archive root — so a one-liner installs them straight from the release:
+
+```bash
+curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz \
+  | tar -xz -C ~/.claude/skills/
+```
+
+**Skills teach an agent what to do; they don't make it remember to do it.**
+[`integrations/agent-hooks/`](https://github.com/cyberlife-coder/VelesDB/tree/develop/integrations/agent-hooks)
+closes that gap for Claude Code with real `SessionStart`/`Stop`/`PreCompact`
+hooks that nudge `load_working_context`/`save_working_context` automatically
+— install once **globally** (`~/.claude/hooks/`) to get continuous memory
+across every project, or per-project if you'd rather vendor the scripts into
+one repo. Codex CLI has no hook mechanism yet; the same directory documents
+an `AGENTS.md`-based convention for it.
+
+## HTTP transport (multi-client)
+
+**You don't need this to get started** — it's for later, once you're already
+using velesdb-memory and want more than one client (say, Claude Code *and*
+Claude Desktop) sharing the same memory at the same time instead of one at a time.
+
+Every config above spawns its own `velesdb-memory` process over stdio — and
+the store's single-writer `flock` means only ONE of those processes can hold
+it open at a time, so only one client can actually use memory at once.
+Switching a client mid-session, or running two clients side by side, fails
+with an opaque `Storage(DatabaseLocked)`.
+
+The fix: build with `--features http` and run ONE `velesdb-memory --http`
+daemon that every client connects to instead of spawning its own process.
+The hash/ollama embedder choice stays a pure runtime switch either way — only
+the transport changes.
+
+The daemon serves **HTTPS by default**, terminated with a CA + leaf
+certificate it generates itself — no `mkcert`/`openssl`/reverse proxy to
+install. Some MCP clients (e.g. Claude Desktop's "Add custom connector" UI)
+refuse any URL that isn't `https://`, even for `127.0.0.1`, so plain HTTP is
+no longer viable as the default.
+
+```bash
+cargo install velesdb-memory --features http,ollama
+# → still opt into `ollama` at BUILD time only if you want that embedder available;
+#   VELESDB_MEMORY_EMBEDDER stays a runtime choice regardless (see "Embedding backend" below)
+velesdb-memory --http
+# [velesdb-memory] HTTPS server listening on https://127.0.0.1:18090/mcp
+# [velesdb-memory] Local CA: /home/you/.velesdb-memory-tls/ca-cert.pem — a client only needs to
+# trust this once (see ./scripts/install-memory-daemon.sh, which does this automatically on
+# macOS); every future leaf certificate this daemon issues is signed by the same CA and is
+# trusted automatically after that.
+```
+
+- `--http` / `VELESDB_MEMORY_HTTP=1` — serve over streamable-HTTP instead of stdio.
+- `--http-port <PORT>` / `VELESDB_MEMORY_HTTP_BIND=<host:port>` — override the
+  bind address (default `127.0.0.1:18090`; `--http-port` overrides just the
+  port on top of `VELESDB_MEMORY_HTTP_BIND`).
+- `--http-insecure` / `VELESDB_MEMORY_HTTP_INSECURE=1` — opt OUT of HTTPS and
+  serve plain HTTP instead, printing a loud warning at startup. For local
+  debugging, or when a trusted TLS-terminating proxy already sits in front —
+  not for normal use.
+- The transport has **no authentication** — anyone who can reach the socket
+  gets full `remember`/`recall`/`relate` access to the store. HTTPS-by-default
+  protects the bytes on the wire from anyone else on the same machine reading
+  them, but it is not access control: that's still the default loopback-only
+  bind (only processes on the same machine can reach it at all), so a
+  non-loopback `VELESDB_MEMORY_HTTP_BIND` host is refused at startup unless
+  you also set `VELESDB_MEMORY_HTTP_ALLOW_REMOTE=1`. Only set that if you're
+  putting an authenticating reverse proxy in front — never point the bare
+  daemon at a network-reachable address.
+
+### The local CA
+
+On first start, the daemon generates a self-signed root CA and caches it at
+`$VELESDB_MEMORY_TLS_DIR` (default `~/.velesdb-memory-tls`, a sibling of the
+default store — deliberately not nested inside it, since wiping the store to
+reset your memory shouldn't also invalidate a CA your OS has been told to
+trust). **The CA is never regenerated once it exists** — that's the entire
+point of caching it: trust it once, and every leaf certificate it signs
+afterwards (including ones re-issued across restarts) is automatically
+trusted with no further action. The leaf certificate itself (for
+`localhost`/`127.0.0.1`/`::1`) is short-lived (30 days) and silently re-issued
+— re-signed by the same CA, no new trust required — on every daemon start.
+
+The CA's private key is written with `0600` permissions (owner-read/write
+only) and its directory with `0700`; only the certificate itself
+(`ca-cert.pem`) is meant to be handed to a trust store or another machine.
+
+`scripts/install-memory-daemon.sh` adds the CA to your macOS **login**
+keychain (not the system one — no `sudo` needed) as a trusted root for SSL,
+so a strict HTTPS client (a browser, plain `curl`) connects with no warning.
+macOS may show a system prompt (Touch ID / password) to confirm this — the
+installer waits up to 60s for it; if it times out or you'd rather do it by
+hand, it prints the exact command:
+
+```bash
+security add-trusted-cert -r trustRoot -p ssl \
+  -k ~/Library/Keychains/login.keychain-db \
+  ~/.velesdb-memory-tls/ca-cert.pem
+```
+
+Node-based tools (Claude Code's CLI, Electron apps like Claude Desktop) don't
+always consult the OS keychain for TLS trust the way `curl`/Safari do. If one
+of them still reports a certificate error after the keychain step above,
+point it at the CA directly:
+
+```bash
+export NODE_EXTRA_CA_CERTS="$HOME/.velesdb-memory-tls/ca-cert.pem"
+```
+
+- `GET /health` — plain 200 OK liveness probe (no MCP handshake needed) —
+  what the installer script and CI use to confirm the daemon is up (over
+  HTTPS too, once TLS is the transport).
+- `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES` — max size of a single `/mcp` request
+  body, in bytes (default 16 MiB). A misbehaving or hostile client sending an
+  oversized request is rejected instead of having its body buffered into
+  memory unbounded.
+- `VELESDB_MEMORY_HTTP_MAX_SESSIONS` — max number of concurrent MCP sessions
+  (default 64). Each session holds a worker task and a couple of small
+  bounded channels — cheap individually, but with no ceiling on the *count* a
+  client that opens sessions without closing them (malicious, or just buggy)
+  could otherwise grow that without bound. 64 is generous headroom for this
+  daemon's actual shape: a handful of local, cooperating clients, not a
+  public service.
+- The store's `flock` is unchanged: a *second* `velesdb-memory --http` (or a
+  stray stdio process) against the same store still fails fast with the same
+  actionable lock message — the daemon is the ONE process that opens the
+  store; every client just connects to it over the network.
+
+Point each client's config at the daemon instead of a local binary:
+
+**Claude Code**
+
+```bash
+claude mcp add --transport http velesdb-memory https://127.0.0.1:18090/mcp
+```
+
+**Cursor** / **Cline** — same `mcpServers` files as above, `type: "http"` instead of `command`:
+
+```json
+{ "mcpServers": { "velesdb-memory": {
+  "type": "http",
+  "url": "https://127.0.0.1:18090/mcp"
+} } }
+```
+
+**Claude Desktop** — a different mechanism than every other client above.
+
+Desktop's local config file (`claude_desktop_config.json`) only recognizes
+stdio (`command`) entries — a `url`/`type: "http"` block there is silently
+ignored (confirmed: it does not even try to connect). Use Desktop's own UI
+instead: **Settings → Connectors → Add custom connector**, paste the daemon
+URL directly:
+
+```
+https://127.0.0.1:18090/mcp
+```
+
+No API key/OAuth secret needed — the daemon binds to loopback only. This
+requires HTTPS specifically (Desktop's connector dialog rejects a plain
+`http://` URL outright, even for `127.0.0.1`), which is exactly what this
+daemon serves by default — see "trusting the local CA" earlier in this
+section if the connection fails with a certificate warning.
+
+If you'd rather not use the Connectors UI, the stdio fallback still works —
+same block as every other client above, but point `VELESDB_MEMORY_PATH` at a
+**different** directory than the daemon's store: pointed at the same one, the
+fallback process and the daemon would fight over the same `flock`,
+reproducing the exact `DatabaseLocked` problem this section exists to avoid.
+This gives Desktop its own separate memory, not shared with the daemon.
+
+**Windsurf** — `~/.codeium/windsurf/mcp_config.json`
+
+```json
+{ "mcpServers": { "velesdb-memory": {
+  "serverUrl": "https://127.0.0.1:18090/mcp"
+} } }
+```
+
+`scripts/install-memory-daemon.sh` automates all of this end to end: building
+with the right features, running the daemon (as a macOS `launchd` agent),
+trusting the local CA in your login keychain, and wiring Claude Code / Claude
+Desktop / Windsurf — see `--help` for flags (`--embedder`, `--port`,
+`--store`, `--tls-dir`, `--ttl`, `--skip-client`, `--skip-ca-trust`,
+`--uninstall`, …).
 
 ## Teach your agent the flow (skill)
 
@@ -992,9 +1272,11 @@ score = fused_norm + confidence·(rl_confidence − 0.5)·2 + recency·recency_n
   by an adversarial test).
 - **Recency contract (strict).** `recency_field: null` disables the term —
   no implicit default key exists. When set, it must name a **numeric**
-  caller metadata field on one monotone scale per batch (e.g. `YYYYMMDD`
-  integers as in dated recall, or an epoch); the scale is documented, not
-  verified. Values are min-max normalised **within the pulled batch**: the
+  caller metadata field on one monotone scale per batch (e.g. the automatic
+  `_veles_date` `YYYYMMDD` field every `remember`-d fact already carries, per
+  [Automatic dating](#automatic-dating-_veles_date), another `YYYYMMDD`
+  field, or an epoch); the scale is documented, not verified. Values are
+  min-max normalised **within the pulled batch**: the
   newest reads `1.0`, the oldest `0.0`, a memory without the key contributes
   `0` (never penalised), and a degenerate batch (`max == min`) contributes
   `0` for all. The compile pipeline never reads a clock — recency is

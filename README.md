@@ -116,6 +116,8 @@ curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/vele
 
 Want the memory used *continuously*, not just available? [`integrations/agent-hooks/`](integrations/agent-hooks/README.md) wires `SessionStart`/`Stop`/`PreCompact` hooks that resume and save the working context automatically — one global install covers every project. No Rust toolchain? `npm i @wiscale/velesdb-memory-node`.
 
+Want Claude Code, Claude Desktop, and Windsurf sharing the *same* memory instead of one client at a time? [`scripts/install-memory-daemon.sh`](crates/velesdb-memory/README.md#http-transport-multi-client) runs `velesdb-memory` as a single local HTTP daemon and wires every client to it.
+
 <details>
 <summary><strong>Other install paths — Rust, Docker, WASM, REST server</strong></summary>
 
@@ -254,7 +256,7 @@ Agents burn most of their budget re-reading redundant context. The memory layer 
 | **MCP server** ([`velesdb-memory`](crates/velesdb-memory)) + **Rust** | Full set: `compile_context`, `compile_transcript`, `retrieve_context_source`, `context_savings`, `save/load/list_working_contexts`, `explain_compilation` — MCP covers any other client |
 | **Node** ([`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node)) | `compileContext`, `retrieveContextSource`, `save/loadWorkingContext`, `feedback` — parity for `contextSavings`/`explainCompilation` in progress |
 | **Python** (`pip install velesdb`) | Same set as Node plus `context_savings` merged on `develop`; the published wheel predates it — until the next release, Python agents reach the compiler through the MCP server |
-| **WASM / TypeScript SDK** | `compileContext` alone, in-memory — no working-context persistence on this surface |
+| **WASM / TypeScript SDK** | `compileContext`, `retrieveContextSource`, `save/loadWorkingContext`, `listWorkingContexts` — all in-memory, intra-session only: useful to carry state across two calls in the same page load, not to resume after a reload (no IndexedDB/disk backend yet, [#1517](https://github.com/cyberlife-coder/VelesDB/issues/1517)) |
 
 </details>
 
