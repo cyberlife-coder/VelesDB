@@ -18,7 +18,7 @@ A Tauri plugin for **VelesDB** — Vector search in desktop applications.
 - **Secondary Indexes** — Create/drop metadata indexes for faster filtered search
 - **Knowledge Graph** — Add edges, traverse (BFS/DFS), multi-source parallel BFS, node degrees
 - **VelesQL** — SQL-like query language for advanced searches
-- **Agent Memory** — Semantic memory store and query for AI agents
+- **Agent Memory** — Semantic, episodic, and procedural memory for AI agents (record/recall/learn + snapshots)
 - **Streaming Insert** — High-throughput bulk insert with persistence
 - **Quantization** — PQ training for memory-efficient storage
 - **Event System** — Real-time notifications for data changes
