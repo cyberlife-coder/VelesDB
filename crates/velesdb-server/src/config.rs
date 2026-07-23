@@ -7,6 +7,62 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 // ============================================================================
+// Core engine configuration (issue #1549)
+// ============================================================================
+
+/// Loads the core [`velesdb_core::config::VelesConfig`] (search/HNSW/storage/
+/// limits/WAL batching) from the same TOML file consumed by
+/// [`ServerConfig::load`] for the server-transport sections (`[server]`,
+/// `[auth]`, `[tls]`, `[cors]`).
+///
+/// The two structs deserialize independently from the same file — core's
+/// `#[serde(default)]` sections silently ignore keys they don't recognise
+/// (e.g. `[server].data_dir`), so one `velesdb.toml` can carry both the
+/// server-transport settings and the engine settings without conflict.
+///
+/// - `config_path: Some(path)` — the caller passed `--config`/`VELESDB_CONFIG`
+///   explicitly. The file **must** exist and pass
+///   [`velesdb_core::config::VelesConfig::load_from_path`] validation —
+///   never a silent fallback to defaults on a broken path.
+/// - `config_path: None` — mirrors [`load_toml_file`]'s default-file
+///   behaviour: falls back to `velesdb.toml` in the current directory if
+///   present (still validated, so a malformed default file still fails
+///   fast), otherwise core defaults apply.
+///
+/// # Errors
+///
+/// Returns an error if an explicit path is missing, or if the file fails to
+/// parse or validate. The underlying typed
+/// [`velesdb_core::config::ConfigError`] is preserved as the error source so
+/// callers can match on it if needed.
+pub fn load_core_config(
+    config_path: &Option<PathBuf>,
+) -> anyhow::Result<velesdb_core::config::VelesConfig> {
+    let path = match config_path {
+        Some(p) => {
+            if !p.exists() {
+                anyhow::bail!("config file not found: {}", p.display());
+            }
+            p.clone()
+        }
+        None => {
+            let default_path = PathBuf::from("velesdb.toml");
+            if !default_path.exists() {
+                return Ok(velesdb_core::config::VelesConfig::default());
+            }
+            default_path
+        }
+    };
+
+    velesdb_core::config::VelesConfig::load_from_path(&path).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to load VelesDB core config from {}: {e}",
+            path.display()
+        )
+    })
+}
+
+// ============================================================================
 // TOML file configuration (all fields optional)
 // ============================================================================
 
@@ -457,6 +513,64 @@ pub fn parse_api_keys_env() -> Option<Vec<String>> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    // ====================================================================
+    // `load_core_config` (issue #1549 — server `--config` wiring)
+    // ====================================================================
+
+    #[test]
+    fn test_load_core_config_none_returns_defaults_when_no_default_file() {
+        // No explicit path, and no `velesdb.toml` in cwd (the test binary's
+        // cwd is the crate root, which has no such file) — core defaults.
+        let config = load_core_config(&None).expect("test: default core config");
+        assert_eq!(
+            config.limits.max_collections,
+            velesdb_core::config::LimitsConfig::default().max_collections
+        );
+    }
+
+    #[test]
+    fn test_load_core_config_explicit_missing_path_fails_fast() {
+        let missing = PathBuf::from("/nonexistent/velesdb-issue-1549-server.toml");
+        let err = load_core_config(&Some(missing)).expect_err(
+            "test: an explicit but missing config path must error, not silently default",
+        );
+        assert!(
+            err.to_string().contains("config file not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_core_config_explicit_invalid_value_fails_fast_typed() {
+        let dir = tempfile::tempdir().expect("test: temp dir");
+        let config_path = dir.path().join("velesdb.toml");
+        // max_collections = 0 is out of range (validate_limits requires >= 1).
+        std::fs::write(&config_path, "[limits]\nmax_collections = 0\n")
+            .expect("test: write config");
+
+        let err = load_core_config(&Some(config_path))
+            .expect_err("test: invalid value must fail fast with a typed ConfigError");
+        assert!(
+            err.to_string().contains("limits.max_collections"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_core_config_explicit_valid_path_applies_sections() {
+        let dir = tempfile::tempdir().expect("test: temp dir");
+        let config_path = dir.path().join("velesdb.toml");
+        std::fs::write(
+            &config_path,
+            "[limits]\nmax_collections = 3\n\n[hnsw]\nm = 24\n",
+        )
+        .expect("test: write config");
+
+        let config = load_core_config(&Some(config_path)).expect("test: load valid config");
+        assert_eq!(config.limits.max_collections, 3);
+        assert_eq!(config.hnsw.m, Some(24));
+    }
 
     #[test]
     fn test_binds_publicly() {
