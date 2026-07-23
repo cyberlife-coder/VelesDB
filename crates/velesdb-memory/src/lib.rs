@@ -73,6 +73,12 @@ pub mod service;
 /// default, file-backed [`storage::NativeStore`]. Implement `MemoryStore` to
 /// run the wedge over a different backend (e.g. an in-memory one for WASM).
 pub mod storage;
+/// Locally-generated TLS material (a cached self-signed CA + short-lived
+/// leaf certs) for the streamable-HTTP transport's HTTPS-by-default
+/// listener — see the module docs for the full design rationale. Gated
+/// behind `http` since it exists only to serve that transport.
+#[cfg(feature = "http")]
+pub mod tls;
 
 /// Default embedding dimension — the single source of truth, taken from the
 /// SDK's own default so the server, library, and tests never restate the

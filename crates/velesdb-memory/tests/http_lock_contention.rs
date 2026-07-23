@@ -11,6 +11,13 @@
 //! proving `open_store_with_actionable_lock_error` runs identically ahead of
 //! either transport rather than being a stdio-only guard that regressed once
 //! HTTP was added.
+//!
+//! Both daemons pass `--http-insecure`: the store-lock contention this test
+//! proves is orthogonal to TLS (it fires before either daemon's transport,
+//! plain or TLS, ever starts accepting connections — see
+//! `open_store_with_actionable_lock_error` in `src/main.rs`, which runs
+//! ahead of `serve_http`), so there is no reason to also pay for generating
+//! TLS material twice here.
 
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
@@ -28,6 +35,7 @@ const CONTENDER_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 fn spawn_http_daemon(store_path: &std::path::Path) -> Child {
     Command::new(env!("CARGO_BIN_EXE_velesdb-memory"))
         .arg("--http")
+        .arg("--http-insecure")
         .arg("--http-port")
         .arg("0") // OS-assigned ephemeral port — this test only cares about
         // the STORE lock, never about a port collision between the two

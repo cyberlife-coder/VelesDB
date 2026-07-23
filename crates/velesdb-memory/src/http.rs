@@ -8,9 +8,17 @@
 //!
 //! This module is the fix: one process, reachable over HTTP, that several
 //! clients connect to concurrently. It only builds the [`Router`]; binding a
-//! [`tokio::net::TcpListener`] and driving `axum::serve` is the binary's job
-//! (`src/main.rs`), so the router can also be mounted directly in tests
-//! (`tests/http_transport.rs`) with no subprocess involved.
+//! [`tokio::net::TcpListener`] and actually serving connections — plain via
+//! `axum::serve`, or TLS via this module's own [`serve_tls`] — is the
+//! binary's job (`src/main.rs`), so the router can also be mounted directly
+//! in tests (`tests/http_transport.rs`) with no subprocess involved.
+//!
+//! Serving is HTTPS by default (see `crate::tls` for the locally-generated
+//! CA/leaf certificates this needs); plain HTTP remains available as an
+//! explicit opt-out (`--http-insecure` / `VELESDB_MEMORY_HTTP_INSECURE=1`,
+//! see `src/main.rs`) for local debugging or when a trusted TLS-terminating
+//! proxy already sits in front. This module's own [`Router`]/[`router`] are
+//! identical either way — only the transport wrapped around them differs.
 //!
 //! Concurrent requests need no *application*-level locking beyond what
 //! [`McpServer`] already has: `velesdb-core`'s `Database` protects its
@@ -151,4 +159,77 @@ pub fn router_with_limits(
 /// for here.
 async fn health() -> &'static str {
     "OK"
+}
+
+/// Serve `app` over TLS on `listener`, terminating each accepted connection
+/// with `acceptor` — the HTTPS-by-default path for the HTTP transport (see
+/// the crate's `src/tls.rs` for how `acceptor` is built, and its module
+/// docs for why this is a manual accept loop rather than `axum::serve` or
+/// `axum-server`).
+///
+/// Runs until `cancellation_token` is cancelled: new connections stop being
+/// accepted, and the loop returns once every already-in-flight connection's
+/// handler task has also observed the cancellation and finished (each
+/// handler is spawned but this function doesn't return until the accept
+/// loop itself exits, matching `router`'s cancellation-token contract —
+/// callers that also want to wait for in-flight requests to *drain* should
+/// track their own handle, as `main.rs`'s plain-HTTP path does via
+/// `axum::serve`'s `with_graceful_shutdown`).
+///
+/// A per-connection TLS handshake failure (e.g. a client that doesn't trust
+/// the CA — exactly what `tests/http_tls.rs`'s RED case exercises) is
+/// swallowed here rather than propagated: one bad client must not take down
+/// the daemon or any other in-flight session, mirroring how a rejected
+/// `accept()` on a healthy plain-HTTP listener doesn't either.
+pub async fn serve_tls(
+    app: Router,
+    listener: tokio::net::TcpListener,
+    acceptor: tokio_rustls::TlsAcceptor,
+    cancellation_token: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            result = listener.accept() => {
+                match result {
+                    Ok((stream, _peer_addr)) => {
+                        spawn_tls_connection(stream, acceptor.clone(), app.clone());
+                    }
+                    Err(_err) => {
+                        // Transient accept() failures (e.g. the process is
+                        // near its fd limit) shouldn't kill the daemon —
+                        // the next accept() attempt is the recovery path,
+                        // same posture as velesdb-server's tls_accept_loop.
+                    }
+                }
+            }
+            () = cancellation_token.cancelled() => break,
+        }
+    }
+}
+
+/// Complete one connection's TLS handshake and serve it via `hyper`'s auto
+/// (HTTP/1.1 or HTTP/2) connection builder, routing every request through
+/// `app`. A failed handshake (untrusted cert, protocol mismatch, ...) just
+/// drops the connection — see [`serve_tls`]'s docs for why that's
+/// deliberate.
+fn spawn_tls_connection(
+    stream: tokio::net::TcpStream,
+    acceptor: tokio_rustls::TlsAcceptor,
+    app: Router,
+) {
+    tokio::spawn(async move {
+        let Ok(tls_stream) = acceptor.accept(stream).await else {
+            return;
+        };
+
+        let io = hyper_util::rt::TokioIo::new(tls_stream);
+        let hyper_service = hyper::service::service_fn(move |request| {
+            let app = app.clone();
+            async move { tower::ServiceExt::oneshot(app, request).await }
+        });
+
+        let _ = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+            .serve_connection_with_upgrades(io, hyper_service)
+            .await;
+    });
 }
