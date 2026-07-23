@@ -658,6 +658,18 @@ prebuilt `velesdb-memory-daemon-<target>.{tar.gz,zip}` archive from a
 `velesdb-memory-vX.Y.Z` GitHub Release, verify its checksum, and install the
 binary straight to the expected path — no cargo, no local build. Defaults to
 the latest published `velesdb-memory-vX.Y.Z` release when no tag is given.
+
+Checksum verification is **blocking by default**: if the release's `.sha256`
+sidecar can't be fetched, or the downloaded archive doesn't match it, the
+install aborts rather than silently installing an unverified binary. Pass
+`--skip-checksum` (`.sh`) / `-SkipChecksum` (`.ps1`) to opt out. Be clear
+about what this checksum actually proves: it's a plain SHA-256 published
+alongside the archive on the same GitHub Release, so it verifies **transfer
+integrity** (the bytes weren't corrupted or truncated in flight) — it is
+**not** a cryptographic signature and does not by itself prove the archive's
+*authenticity* (anyone who could tamper with the archive could regenerate a
+matching checksum next to it).
+
 **This path only becomes active from the first release published after this
 change** — `release-memory.yml`'s `build-daemon-archive` job produces these
 archives, but the `velesdb-memory-v0.11.0` release (and everything before it)

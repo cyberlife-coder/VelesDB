@@ -58,6 +58,10 @@
 #                             separate parameter here.
 #   -FromReleaseTag <tag>     Pin the release tag to install from (default: latest
 #                             velesdb-memory-v* release). Implies -FromRelease.
+#   -SkipChecksum             Install a -FromRelease archive even if its .sha256 can't be
+#                             fetched/verified (default: this is a hard error — the checksum
+#                             only proves transfer integrity, not authenticity, but skipping it
+#                             silently is worse). No effect without -FromRelease.
 #   -Uninstall                Remove the scheduled task and all client wiring (store and TLS
 #                             material/CA trust are NEVER touched — same "never delete local
 #                             state" policy as the store)
@@ -96,6 +100,8 @@ param(
 
     [string]$FromReleaseTag = '',
 
+    [switch]$SkipChecksum,
+
     [switch]$Uninstall,
 
     [switch]$Help
@@ -103,6 +109,18 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Captured HERE, at true script scope, not inside `function Main` further
+# down: `$PSBoundParameters` is per-function-scope in PowerShell, so reading
+# it from inside a nested function (even one invoked directly from the
+# script's own top level, like Main) sees THAT function's own bound
+# parameters — Main takes none, so `$PSBoundParameters.ContainsKey('Ttl')`
+# there is unconditionally $false, no matter what the caller passed on the
+# command line. This bit an earlier version of this script: `-Ttl 3600`
+# would still get silently re-prompted-and-overwritten by Resolve-Ttl in an
+# interactive session, because the "was -Ttl explicitly passed" check was
+# reading the wrong scope's (always-empty) bound-parameters set.
+$script:ScriptBoundParameters = $PSBoundParameters
 
 # -FromReleaseTag implies -FromRelease (mirrors the shell script's `--from-release[=TAG]`
 # accepting an inline tag without a separate boolean flag).
@@ -213,8 +231,9 @@ function Resolve-Embedder {
 }
 
 # ---- 2b. TTL resolution -------------------------------------------------------
-# $script:TtlExplicitlySet is set once in Main (from $PSBoundParameters, before
-# any nested function call makes it awkward to re-probe) and read here.
+# $script:TtlExplicitlySet is set once in Main (from $script:ScriptBoundParameters,
+# captured at true script scope — see its own comment for why not
+# $PSBoundParameters here) and read below.
 function Resolve-Ttl {
     if (-not $script:TtlExplicitlySet -and (Test-Interactive)) {
         Write-Host ''
@@ -327,22 +346,35 @@ function Install-FromRelease {
         Invoke-WebRequest -Uri "$baseUrl/$asset" -OutFile $archivePath -ErrorAction Stop
     } catch {
         Write-ErrorMsg "Failed to download $baseUrl/$asset — this tag may predate the daemon archive (added in the release-memory.yml workflow after 0.11.0). $($_.Exception.Message)"
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
         exit 1
     }
 
-    $checksumOk = $true
-    try {
-        Invoke-WebRequest -Uri "$baseUrl/$asset.sha256" -OutFile $checksumPath -ErrorAction Stop
+    # Blocking by default: a checksum that can't be fetched/verified is
+    # treated the same as a mismatch (installing an unverified binary
+    # silently is worse than a loud failure). -SkipChecksum is the explicit
+    # opt-out. Note this only proves TRANSFER integrity (the bytes weren't
+    # corrupted/truncated in flight) — it is not a cryptographic signature,
+    # so it does not by itself prove the archive is authentic; the README's
+    # "Installing the daemon without a Rust toolchain" section says so too.
+    if ($SkipChecksum) {
+        Write-Warn "Skipping checksum verification (-SkipChecksum) — the downloaded archive's integrity will not be checked."
+    } else {
+        try {
+            Invoke-WebRequest -Uri "$baseUrl/$asset.sha256" -OutFile $checksumPath -ErrorAction Stop
+        } catch {
+            Write-ErrorMsg "Could not fetch the checksum for $asset ($baseUrl/$asset.sha256) — aborting rather than installing an unverified binary. Pass -SkipChecksum to install anyway (not recommended)."
+            Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            exit 1
+        }
         $expected = (Get-Content $checksumPath -Raw).Split(' ')[0].Trim().ToLowerInvariant()
         $actual = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($expected -ne $actual) {
             Write-ErrorMsg "Checksum mismatch for $asset — expected $expected, got $actual. Aborting (the archive may be corrupt or tampered)."
+            Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
             exit 1
         }
-        Write-Success 'Checksum verified.'
-    } catch {
-        $checksumOk = $false
-        Write-Warn "No .sha256 sidecar found for $asset — installing without checksum verification."
+        Write-Success 'Checksum verified (transfer integrity — not a signature of authenticity).'
     }
 
     $extractDir = Join-Path $tempDir 'extracted'
@@ -351,6 +383,7 @@ function Install-FromRelease {
     $exe = Get-ChildItem -Path $extractDir -Filter 'velesdb-memory.exe' -Recurse | Select-Object -First 1
     if (-not $exe) {
         Write-ErrorMsg "velesdb-memory.exe not found inside $asset — unexpected archive layout."
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
         exit 1
     }
 
@@ -358,7 +391,7 @@ function Install-FromRelease {
     Copy-Item -Path $exe.FullName -Destination $BinPath -Force
     Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 
-    Write-Success "Installed $BinPath from $tag$(if (-not $checksumOk) { ' (unverified — no checksum published for this tag)' })."
+    Write-Success "Installed $BinPath from $tag$(if ($SkipChecksum) { ' (unverified — -SkipChecksum)' })."
 }
 
 # ---- 5. Scheduled Task daemon -------------------------------------------------
@@ -368,8 +401,11 @@ function New-DaemonWrapper {
 
     # Empty TTL means "permanent" (VELESDB_MEMORY_DEFAULT_TTL unset) — matches
     # the server's own default, so the line is omitted entirely rather than
-    # set to an empty value.
-    $ttlLine = if ($script:Ttl -ne '') { "set VELESDB_MEMORY_DEFAULT_TTL=$script:Ttl" } else { '' }
+    # set to an empty value. Quoted (`set "VAR=value"`, not bare `set VAR=value`)
+    # so a value containing `&`, `|`, `<`, `>`, `^`, or trailing spaces — a
+    # store/TLS path or Ollama URL isn't guaranteed to avoid all of those —
+    # doesn't get parsed as a batch operator instead of literal text.
+    $ttlLine = if ($script:Ttl -ne '') { "set `"VELESDB_MEMORY_DEFAULT_TTL=$script:Ttl`"" } else { '' }
 
     # A Scheduled Task action carries no environment block of its own, so this
     # wrapper is how the daemon's env vars actually reach the process — the
@@ -378,15 +414,31 @@ function New-DaemonWrapper {
     # StandardOutPath/StandardErrorPath.
     $content = @"
 @echo off
-set VELESDB_MEMORY_PATH=$script:Store
-set VELESDB_MEMORY_TLS_DIR=$script:TlsDir
-set VELESDB_MEMORY_EMBEDDER=$script:Embedder
-set VELESDB_MEMORY_OLLAMA_URL=$OllamaUrl
-set VELESDB_MEMORY_OLLAMA_MODEL=$OllamaModel
+chcp 65001 >nul
+set "VELESDB_MEMORY_PATH=$script:Store"
+set "VELESDB_MEMORY_TLS_DIR=$script:TlsDir"
+set "VELESDB_MEMORY_EMBEDDER=$script:Embedder"
+set "VELESDB_MEMORY_OLLAMA_URL=$OllamaUrl"
+set "VELESDB_MEMORY_OLLAMA_MODEL=$OllamaModel"
 $ttlLine
 "$BinPath" --http --http-port $Port >> "$LogsDir\daemon.out.log" 2>> "$LogsDir\daemon.err.log"
 "@
-    Set-Content -Path $WrapperPath -Value $content -Encoding ASCII
+
+    # cmd.exe decodes a batch file using its active code page, which by
+    # default is NOT UTF-8 — a non-ASCII $env:USERPROFILE (an accented
+    # Windows username, e.g. a French "Céline") would otherwise get
+    # corrupted when this file's UTF-8 bytes are misread, breaking every
+    # `set` line that embeds $Store/$TlsDir/$BinPath. `chcp 65001` (above,
+    # first line after @echo off — that ordering matters) switches cmd.exe's
+    # active code page to UTF-8 for the rest of THIS script's execution
+    # before any non-ASCII line is parsed. That only works paired with an
+    # actual UTF-8-encoded file — hence -Encoding utf8NoBOM below (no BOM:
+    # a BOM before `@echo off` is a known way to corrupt a batch file's
+    # first line on some cmd.exe versions). cmd.exe also expects CRLF line
+    # endings, so normalize explicitly rather than relying on how this
+    # script's own here-string literal happens to be checked out.
+    $content = ($content -replace "`r`n", "`n") -replace "`n", "`r`n"
+    Set-Content -Path $WrapperPath -Value $content -Encoding utf8NoBOM -NoNewline
 }
 
 function Wait-DaemonHealth {
@@ -738,9 +790,11 @@ function Main {
         exit 0
     }
 
-    # Resolve the TTL "was it explicitly passed" flag before Set-StrictMode's
-    # automatic-variable checks make $PSBoundParameters awkward to probe twice.
-    $script:TtlExplicitlySet = $PSBoundParameters.ContainsKey('Ttl')
+    # Read from $script:ScriptBoundParameters (captured at true script scope,
+    # above the param() block) — NOT $PSBoundParameters here, which inside
+    # this function would be Main's own (always-empty) bound parameters. See
+    # the comment where $script:ScriptBoundParameters is assigned.
+    $script:TtlExplicitlySet = $script:ScriptBoundParameters.ContainsKey('Ttl')
 
     Invoke-Preflight
     Resolve-Embedder

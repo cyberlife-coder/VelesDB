@@ -44,6 +44,10 @@
 #                            latest published velesdb-memory-vX.Y.Z release). Needs no Rust
 #                            toolchain. Only active from the first release that publishes the
 #                            archive onward — see the README's "HTTP transport" section.
+#   --skip-checksum          Install a --from-release archive even if its .sha256 can't be
+#                            fetched/verified (default: this is a hard error — the checksum
+#                            only proves transfer integrity, not authenticity, but skipping it
+#                            silently is worse). No effect without --from-release.
 #   --uninstall              Remove the daemon and all client wiring (store and TLS material/CA
 #                            trust are NEVER touched — same "never delete local state" policy)
 #   -h, --help               Show this help
@@ -88,6 +92,7 @@ SKIP_CLIENTS=""
 SKIP_CA_TRUST=0
 FROM_RELEASE=0
 FROM_RELEASE_TAG=""
+SKIP_CHECKSUM=0
 
 PLIST_LABEL="com.velesdb.memory"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
@@ -98,7 +103,7 @@ DEVIN_CONFIG="$HOME/.config/devin/config.json"
 RELEASE_REPO="cyberlife-coder/VelesDB"
 
 print_usage() {
-  sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # ---- 0. Parse flags ---------------------------------------------------
@@ -117,6 +122,7 @@ for arg in "$@"; do
     --force-restart) FORCE_RESTART=1 ;;
     --from-release) FROM_RELEASE=1 ;;
     --from-release=*) FROM_RELEASE=1; FROM_RELEASE_TAG="${arg#*=}" ;;
+    --skip-checksum) SKIP_CHECKSUM=1 ;;
     --uninstall) UNINSTALL=1 ;;
     -h|--help) print_usage; exit 0 ;;
     *)
@@ -356,7 +362,21 @@ install_from_release() {
     exit 1
   fi
 
-  if curl -fsSL --max-time 10 -o "$checksum_path" "$base_url/$asset.sha256" 2>/dev/null; then
+  # Blocking by default: a checksum that can't be fetched/verified is
+  # treated the same as a mismatch (installing an unverified binary
+  # silently is worse than a loud failure). --skip-checksum is the explicit
+  # opt-out. This only proves TRANSFER integrity (the bytes weren't
+  # corrupted/truncated in flight) — it is not a cryptographic signature, so
+  # it does not by itself prove the archive is authentic; the README's
+  # "Installing the daemon without a Rust toolchain" section says so too.
+  if [ "$SKIP_CHECKSUM" = "1" ]; then
+    echo -e "${YELLOW}⚠️  Skipping checksum verification (--skip-checksum) — the downloaded archive's integrity will not be checked.${NC}"
+  else
+    if ! curl -fsSL --max-time 10 -o "$checksum_path" "$base_url/$asset.sha256" 2>/dev/null; then
+      echo -e "${RED}❌ could not fetch the checksum for $asset ($base_url/$asset.sha256) — aborting rather than installing an unverified binary. Pass --skip-checksum to install anyway (not recommended).${NC}"
+      rm -rf "$tmp_dir"
+      exit 1
+    fi
     expected="$(awk '{print $1}' "$checksum_path")"
     if command -v sha256sum >/dev/null 2>&1; then
       actual="$(sha256sum "$archive_path" | awk '{print $1}')"
@@ -368,9 +388,7 @@ install_from_release() {
       rm -rf "$tmp_dir"
       exit 1
     fi
-    echo -e "${GREEN}✅ Checksum verified.${NC}"
-  else
-    echo -e "${YELLOW}⚠️  No .sha256 sidecar found for $asset — installing without checksum verification.${NC}"
+    echo -e "${GREEN}✅ Checksum verified (transfer integrity — not a signature of authenticity).${NC}"
   fi
 
   tar -xzf "$archive_path" -C "$tmp_dir"
@@ -385,7 +403,7 @@ install_from_release() {
   chmod +x "$BIN_PATH"
   rm -rf "$tmp_dir"
 
-  echo -e "${GREEN}✅ Installed $BIN_PATH from $tag${NC}"
+  echo -e "${GREEN}✅ Installed $BIN_PATH from $tag$([ "$SKIP_CHECKSUM" = "1" ] && echo ' (unverified — --skip-checksum)')${NC}"
 }
 
 # ---- 5. launchd daemon (macOS only) ----------------------------------------
