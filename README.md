@@ -116,7 +116,7 @@ curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/vele
 
 Want the memory used *continuously*, not just available? [`integrations/agent-hooks/`](integrations/agent-hooks/README.md) wires `SessionStart`/`Stop`/`PreCompact` hooks that resume and save the working context automatically — one global install covers every project. No Rust toolchain? `npm i @wiscale/velesdb-memory-node`.
 
-Want Claude Code, Claude Desktop, and Windsurf sharing the *same* memory instead of one client at a time? [`scripts/install-memory-daemon.sh`](crates/velesdb-memory/README.md#http-transport-multi-client) runs `velesdb-memory` as a single local HTTP daemon and wires every client to it.
+Want Claude Code, Claude Desktop, Windsurf, and Devin CLI sharing the *same* memory instead of one client at a time? [`scripts/install-memory-daemon.sh`](crates/velesdb-memory/README.md#http-transport-multi-client) runs `velesdb-memory` as a single local daemon — HTTPS by default, with a natively generated local CA — and wires every client to it.
 
 <details>
 <summary><strong>Other install paths — Rust, Docker, WASM, REST server</strong></summary>
@@ -211,7 +211,7 @@ mem.why("why the aisle seat on Robert's flight?")   # walks booking → reason �
 
 ![recall() finds the booking but misses the reason; why() reaches it through typed links, across a session restart](examples/agent_memory/why_across_sessions.gif)
 
-Memories are permanent by default; `forget(id)` deletes one, `ttl_seconds` gives a fact a durable expiry. Same wedge in **Python**, **Node** (`@wiscale/velesdb-memory-node`), as a local **[MCP server](crates/velesdb-memory)**, and in-memory in the **[TypeScript SDK](sdks/typescript)** (browser, no server).
+Memories are permanent by default; `forget(id)` deletes one, `ttl_seconds` gives a fact a durable expiry. Every `remember` auto-stamps the day it was stored (`_veles_date`, a `YYYYMMDD` integer — never overwritten if you set it yourself), so dated, recency-weighted recall (`recall_fused`) works with zero setup. Same wedge in **Python**, **Node** (`@wiscale/velesdb-memory-node`), as a local **[MCP server](crates/velesdb-memory)**, and in-memory in the **[TypeScript SDK](sdks/typescript)** (browser, no server).
 
 <details>
 <summary><strong>Proof it's not a weak-embedder trick — 4 runnable demos + benchmark position</strong></summary>

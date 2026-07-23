@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-07-15 (v3.12.0; velesdb-memory 0.7.0)
+Last updated: 2026-07-23 (v3.12.0; velesdb-memory 0.11.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -54,15 +54,17 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 
 ### Notes
 
-- **Cross-Collection MATCH**: Core and Server support `@collection` annotation on MATCH node patterns. Python bindings support via `_collection` param. CLI supports via `\use`. WASM, Mobile, Tauri, and integrations do not yet expose this feature.
+- **Cross-Collection MATCH**: Core and Server support `@collection` annotation on MATCH node patterns. Python bindings support via `_collection` param. CLI supports via `\use`. Mobile reaches it through `execute_query` (full VelesQL pass-through, `crates/velesdb-mobile/src/lib.rs:342`). WASM, Tauri, and integrations do not yet expose this feature.
 - **Batch Operations**: WASM and Mobile use streaming chunked inserts instead of single-call bulk to stay within memory constraints. WASM additionally exposes a single-call raw-bulk path via `VectorStore.insertBatchRaw` (see the Raw-Bulk Insert note).
 - **Streaming Ingestion** (2026-06-14): Core, Server (`POST /collections/{name}/stream/enable` + `/stream/insert`), Python, Tauri, Mobile (`enableStreaming()` / `streamInsert()` on its own tokio streaming runtime), and the TS SDK (`enableStreaming()` / `streamInsert()`, REST backend) support the bounded ingestion channel. The CLI reaches it ⚠️ via the embedded core path with no dedicated REPL command. WASM throws `NOT_SUPPORTED` (no persistence layer). LangChain and LlamaIndex expose ⚠️ streaming via `stream_insert()`/`add_texts_streaming()`/`add_streaming()`, which forward to `collection.stream_insert` (caller is responsible for `enable_streaming`; covered by mock-collection unit tests). Only the Haystack integration does not yet expose it.
 - **Raw-Bulk Insert** (2026-06-14): the zero-copy raw-bulk path is now exposed by Core (`upsert_bulk_from_raw`), Server (`POST /collections/{name}/points/raw`, VRB1 binary), the TS SDK (`upsertBatchRaw`), WASM (`VectorStore.insertBatchRaw(ids, vectors, dim)`, writing into its in-memory buffer), and the CLI (`velesdb data import <file.bin>`, VRB1 binary). Mobile remains a follow-up. All surfaces share the one `velesdb_core::wire::vrb1` codec.
 - **Multi-Query Fusion (RSF/Weighted)** (2026-06-14): WASM's multi-query `fuse_results` now delegates **4 of its 5 strategies** (`average`, `maximum`, `weighted`, `rrf`) to the canonical `velesdb_core::FusionStrategy::fuse`, so the browser engine reproduces core's ranking 1:1 for those (`crates/velesdb-wasm/src/fusion.rs`; equivalence pinned by `test_fuse_results_matches_core_ordering`). The fifth strategy, `relative_score` / `rsf`, is **intentionally kept WASM-local**: core's `RelativeScore` is a two-branch (dense + sparse) weighted sum that zero-fills documents missing from a branch and discards branches beyond index 1, whereas WASM's is an N-branch equal-weight average that skips missing branches. The two semantics yield different rankings, so converging WASM onto core would silently change WASM search results — that convergence is a product decision deferred to a follow-up, and `relative_score` behaviour is unchanged. (This is the multi-query fusion entry point; the VelesQL `USING FUSION (...)` clause executor in `velesql_fusion.rs` already builds every strategy — including RSF — directly from `velesdb_core::fusion::FusionStrategy`.) LangChain and LlamaIndex expose RSF/Weighted through `multi_query_search(fusion=...)`, which delegates to the shared `velesdb_common.fusion.build_fusion_strategy` (builds `weighted()` and `relative_score()`). Haystack reaches RSF/Weighted/RRF/etc. fusion via its own `VelesDBDocumentStore.embedding_retrieval(fusion=..., fusion_params=...)`, which delegates to `velesdb_common.fusion.build_fusion_strategy` and `Collection.multi_query_search`.
 - **Sparse Vector Search (named indexes) — LangChain/LlamaIndex**: ⚠️ query-side only. Both integrations forward a `sparse_index_name` argument to the underlying `collection.search`/`hybrid_search`, so an existing named sparse index can be *queried*. Named sparse indexes are also created on the upsert/write path: passing a named mapping such as `{"bge_m3": {0: 1.5}}` to `add_texts`/`add`/`add_bulk` (LC/LI) or `write_documents` (Haystack) creates the named index, validated by `velesdb_common.security.validate_named_sparse_vector`.
+- **LangGraph integration** (2026-07-23): `integrations/langgraph` ships memory tools only (`remember`/`recall`/`relate`/`why` via `make_memory_tools`). It is deliberately narrow — no vector-store surface — and is not yet a column in the matrices above. Known gaps tracked as issues: no `forget`/`feedback` tools, plain `recall` only (no `recall_where`/`recall_fused(date_field=…)`, so the 0.11.0 auto `_veles_date` stamp never reaches the agent), no working-context tools.
+- **Auto `_veles_date` stamp (velesdb-memory 0.11.0)**: every `remember` now auto-stamps a reserved `_veles_date` metadata field (`YYYYMMDD`, caller-set value never overwritten), making `recall_fused(date_field=…)` work with zero setup. Surfaced by delegation in Python (`tests/test_memory_service.py` asserts the stamp), WASM, and Node (`recallFusedDated`); the TS SDK ships `recallFusedDated` but does not yet document or type `_veles_date`; LangGraph's plain `recall` tool drops metadata entirely (see above).
 - **Graph Operations (WASM)**: Basic node/edge CRUD is supported; multi-hop traversal and MATCH queries are limited.
 - **VelesQL (LangChain/LlamaIndex/Haystack)**: Pass-through to Python bindings works for simple queries; full parser integration is not surfaced in the integration API.
-- **Haystack DocumentStore protocol limits**: The Haystack 2.x `DocumentStore` ABC exposes `write_documents`, `filter_documents`, `embedding_retrieval`, `count_documents`, and `delete_documents`. BM25 / hybrid retrieval requires a separate `Retriever` component (planned follow-up). Graph collections, agent memory, and sparse-named indexes are intentionally `N/A` because they have no idiomatic mapping in Haystack's protocol and are reachable through the raw `velesdb` Python wrapper if needed.
+- **Haystack DocumentStore protocol limits**: The Haystack 2.x `DocumentStore` ABC exposes `write_documents`, `filter_documents`, `embedding_retrieval`, `count_documents`, and `delete_documents`. Dense retrieval in pipelines ships as the dedicated `VelesDBEmbeddingRetriever` component (`integrations/haystack/src/haystack_velesdb/retriever.py`); BM25/hybrid retriever components remain a follow-up. Graph collections, agent memory, and sparse-named indexes are intentionally `N/A` because they have no idiomatic mapping in Haystack's protocol and are reachable through the raw `velesdb` Python wrapper if needed.
 - **Collection Types (Metadata)**: WASM and integration SDKs expose metadata collections with reduced column-type support.
 - **Property Indexes (WASM)**: Disabled by design — no persistence layer means indexes cannot survive page reloads.
 - **Quantization (RaBitQ)**: Experimental across all surfaces; API is unstable.
@@ -186,7 +188,7 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 
 ### SearchQuality — 7/10
 
-4 HNSW presets (`Fast`, `Balanced`, `Accurate`, `Perfect`) plus `Custom(usize)` and `Adaptive`. WASM, Mobile, and Tauri use brute-force search (no HNSW), so `SearchQuality` is not applicable.
+4 HNSW presets (`Fast`, `Balanced`, `Accurate`, `Perfect`) plus `Custom(usize)` and `Adaptive`. WASM uses brute-force search (no HNSW), so `SearchQuality` is not applicable there; Mobile and Tauri are HNSW-backed via core defaults and expose the presets (`crates/velesdb-mobile/src/types.rs` `SearchQuality`, `crates/tauri-plugin-velesdb/src/helpers.rs` `parse_search_quality`).
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -194,10 +196,10 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 | Server | ✅ | |
 | Python | ✅ | |
 | WASM | N/A | Brute-force only, no HNSW index |
-| Mobile | N/A | Brute-force only, no HNSW index |
+| Mobile | ✅ | `SearchQuality` enum mapped to core (`search_with_quality`) |
 | CLI | ✅ | |
 | TS SDK | ✅ | |
-| Tauri | N/A | Brute-force only, no HNSW index |
+| Tauri | ✅ | `search_quality` param + `hnsw_m`/`hnsw_ef_construction` at creation |
 | LangChain | ✅ | |
 | LlamaIndex | ✅ | |
 | Haystack | ✅ | |
@@ -255,4 +257,4 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
    targeting already works).
 7. Propagate `@collection` cross-collection MATCH to WASM, Mobile, Tauri, LangChain, LlamaIndex, and Haystack.
 8. Add cross-collection vector search (`similarity()` on `@collection`-annotated nodes).
-9. **Read-path gate (observer) parity (audit F-5.4).** The 3.10.0 read-path gate — `velesdb_core::observer` + `database::gated_search` / `authorize_read` (scope AND-composed with the caller filter, fail-closed on non-filterable paths) — is wired into **`velesdb-server`** (search/match/graph handlers) and **`velesdb-python`** (`.search()` gating). `tauri-plugin-velesdb` ships a **notify-only** observer (no deny). **`velesdb-node`** (memory-only, out of scope by design), **`velesdb-mobile`**, and **`velesdb-wasm`** expose **no** observer, so the gate is inactive there. This is a **parity gap, not a vulnerability**: the core contract is fail-open *only when no observer is registered* (no policy ⇒ no denial to enforce), so an ungated binding simply has no governance layer to bypass. Governance-sensitive deployments must use the server or Python surface. Wiring an observer hook into mobile/wasm is a follow-up; node is intentionally excluded (it never touches the gated core `Collection`).
+9. **Read-path gate (observer) parity (audit F-5.4).** The 3.10.0 read-path gate — `velesdb_core::observer` + `database::gated_search` / `authorize_read` (scope AND-composed with the caller filter, fail-closed on non-filterable paths) — is wired into **`velesdb-server`** (search/match/graph handlers) and **`velesdb-python`** (`.search()` gating). `tauri-plugin-velesdb` ships a **notify-only** observer (no deny). **`velesdb-mobile`** now ships a deny-capable observer (`open_with_observer` + `MobileObserver`/`MobileAccessDecision`, `crates/velesdb-mobile/src/lib.rs:145`). **`velesdb-node`** (memory-only, out of scope by design) and **`velesdb-wasm`** expose **no** observer, so the gate is inactive there. This is a **parity gap, not a vulnerability**: the core contract is fail-open *only when no observer is registered* (no policy ⇒ no denial to enforce), so an ungated binding simply has no governance layer to bypass. Governance-sensitive deployments must use the server or Python surface. Wiring an observer hook into mobile/wasm is a follow-up; node is intentionally excluded (it never touches the gated core `Collection`).

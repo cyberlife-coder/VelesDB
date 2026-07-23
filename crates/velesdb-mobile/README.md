@@ -1,6 +1,6 @@
 # VelesDB Mobile
 
-_Last updated: 2026-06-14._
+_Last updated: 2026-07-23._
 
 Native bindings for **iOS** (Swift) and **Android** (Kotlin) via [UniFFI](https://mozilla.github.io/uniffi-rs/).
 
@@ -150,19 +150,25 @@ cargo run -p velesdb-mobile --bin uniffi-bindgen -- generate \
 | Method | Description |
 |--------|-------------|
 | `VelesDatabase.open(path)` | Opens or creates a database at the specified path (named constructor — use `.open(...)`) |
+| `VelesDatabase.openWithObserver(path, observer)` | Opens with a read-path `MobileObserver` attached — your Swift/Kotlin callback can audit **and deny** reads (`MobileAccessDecision`) |
+| `updateGuardrails(limits)` | Live-updates query guardrail limits (`MobileQueryLimits`) |
 | `createCollection(name, dimension, metric)` | Creates a new vector collection |
 | `createCollectionWithStorage(name, dimension, metric, storageMode)` | Creates collection with quantized storage |
 | `createMetadataCollection(name)` | Creates a metadata-only collection (no vectors) |
+| `createGraphCollection(name)` | Creates a graph collection (schemaless) |
+| `createGraphCollectionWithEmbeddings(name, dimension, metric)` | Creates a graph collection whose nodes carry embeddings |
 | `getCollection(name)` | Gets a collection by name (returns nil/null if not found) |
 | `listCollections()` | Lists all collection names |
 | `deleteCollection(name)` | Deletes a collection |
 | `trainPq(collectionName, config)` | Trains Product Quantization on a collection |
+| `executeQuery(query, params)` | Full VelesQL pass-through (SELECT/NEAR/MATCH incl. cross-collection `@collection`, aggregates) |
 
 ### VelesCollection
 
 | Method | Description |
 |--------|-------------|
 | `search(vector, limit)` | Finds k nearest neighbors |
+| `searchWithQuality(vector, limit, quality)` | Search with a `SearchQuality` preset (`Fast`/`Balanced`/`Accurate`/`Perfect`/`Custom`/`Adaptive`) |
 | `searchWithFilter(vector, limit, filterJson)` | Search with metadata filter |
 | `multiQuerySearch(vectors, limit, strategy)` | Multi-query fusion (MQG) |
 | `multiQuerySearchWithFilter(vectors, limit, strategy, filterJson)` | Multi-query fusion with metadata filter |
