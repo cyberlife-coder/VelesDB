@@ -505,21 +505,30 @@ claude mcp add --transport http velesdb-memory https://127.0.0.1:18090/mcp
 } } }
 ```
 
-**Claude Desktop**
+**Claude Desktop** — a different mechanism than every other client above.
 
-```json
-{ "mcpServers": { "velesdb-memory": {
-  "type": "http",
-  "url": "https://127.0.0.1:18090/mcp"
-} } }
+Desktop's local config file (`claude_desktop_config.json`) only recognizes
+stdio (`command`) entries — a `url`/`type: "http"` block there is silently
+ignored (confirmed: it does not even try to connect). Use Desktop's own UI
+instead: **Settings → Connectors → Add custom connector**, paste the daemon
+URL directly:
+
+```
+https://127.0.0.1:18090/mcp
 ```
 
-> HTTP support is not confirmed for this client — if it doesn't connect
-> after a restart, fall back to the stdio block above. Point the fallback's
-> `VELESDB_MEMORY_PATH` at a **different** directory than the daemon's store:
-> pointed at the same one, the fallback process and the daemon would fight
-> over the same `flock`, reproducing the exact `DatabaseLocked` problem this
-> section exists to avoid.
+No API key/OAuth secret needed — the daemon binds to loopback only. This
+requires HTTPS specifically (Desktop's connector dialog rejects a plain
+`http://` URL outright, even for `127.0.0.1`), which is exactly what this
+daemon serves by default — see "trusting the local CA" earlier in this
+section if the connection fails with a certificate warning.
+
+If you'd rather not use the Connectors UI, the stdio fallback still works —
+same block as every other client above, but point `VELESDB_MEMORY_PATH` at a
+**different** directory than the daemon's store: pointed at the same one, the
+fallback process and the daemon would fight over the same `flock`,
+reproducing the exact `DatabaseLocked` problem this section exists to avoid.
+This gives Desktop its own separate memory, not shared with the daemon.
 
 **Windsurf** — `~/.codeium/windsurf/mcp_config.json`
 
