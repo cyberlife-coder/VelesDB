@@ -36,6 +36,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   idempotent. (#1469)
 - **`velesdb-memory` (Python)**: `MemoryService.feedback` is now exposed,
   closing the RL feedback loop from the Python binding. (#1452)
+- **`velesdb-wasm`**: `compileTranscript`, `explainCompilation`,
+  `contextSavings`, and `suggestBudget` are now exposed on the browser
+  `MemoryService` (previously Node/MCP-only), closing most of the
+  context-compiler tool-surface gap in WASM. `feedback` stays
+  intentionally absent — it lives behind `velesdb-memory`'s
+  `persistence` feature, which the WASM build does not enable (a durable
+  learned confidence is meaningless for a store that disappears on page
+  reload). `rememberExtracted` also stays absent (needs a generative
+  model, which would pull a network dependency into the WASM bundle by
+  default). (#1547)
+- **`velesdb-node`**: `compileTranscript` and `listWorkingContexts` are
+  now exposed, closing the Node-side gap for both (`compileTranscript`
+  was MCP-only; `listWorkingContexts` had `save`/`load` but not `list`).
+  `index.d.ts` regenerated. (#1547)
+- **`@wiscale/velesdb-sdk`**: the browser `MemoryService` gains
+  `compileTranscript`, `explainCompilation`, `contextSavings`, and
+  `suggestBudget`, delegating to the new WASM exports above.
+  `MemoryMetadata._veles_date` is now a typed, documented field (was
+  untyped `Record<string, unknown>`), and `recallFusedDated`'s TSDoc now
+  explains the zero-setup `"_veles_date"` pairing. (#1547)
 
 ### Fixed
 
