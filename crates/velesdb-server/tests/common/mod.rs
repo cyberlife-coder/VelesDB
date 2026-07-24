@@ -5,6 +5,7 @@ use axum::{
     routing::{get, patch, post},
     Router,
 };
+use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -139,6 +140,27 @@ pub fn create_test_app_with_observer(
 ) -> Router {
     let db =
         Database::open_with_observer(temp_dir.path(), observer).expect("Failed to open database");
+    base_routes().with_state(app_state_from_db(db))
+}
+
+/// Helper to create a test app whose database is opened through the
+/// server's own [`velesdb_server::config::load_core_config`] +
+/// [`Database::open_with_config`] path — the exact same wiring
+/// `main::init_app_state` uses in production. Exercises the real
+/// `--config`/`VELESDB_CONFIG` code path (issue #1549) rather than a
+/// hand-rolled substitute, so tests built on this helper prove the TOML
+/// file's settings are actually applied to the running database.
+///
+/// # Panics
+///
+/// Panics if the config file fails to load/validate or the database fails
+/// to open — both are test setup failures, not part of the behaviour under
+/// test.
+pub fn create_test_app_with_core_config(temp_dir: &TempDir, config_path: &Path) -> Router {
+    let core_config = velesdb_server::config::load_core_config(&Some(config_path.to_path_buf()))
+        .expect("Failed to load core config");
+    let db = Database::open_with_config(temp_dir.path(), core_config)
+        .expect("Failed to open database with core config");
     base_routes().with_state(app_state_from_db(db))
 }
 

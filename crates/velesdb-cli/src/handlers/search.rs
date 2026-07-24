@@ -26,7 +26,7 @@ pub fn handle_multi_search(
 
 /// Opens a database and returns the named vector collection.
 fn open_vector_collection(path: &Path, collection: &str) -> Result<velesdb_core::VectorCollection> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     db.get_vector_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))
 }

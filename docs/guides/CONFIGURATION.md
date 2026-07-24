@@ -32,15 +32,65 @@ VelesDB supports 3 levels of configuration:
 
 ### File Search Paths
 
-VelesDB looks for `velesdb.toml` in the following order:
+`VelesConfig::load()` (used when no explicit path is given) only ever looks
+at `./velesdb.toml` in the current working directory. There is **no**
+`~/.config/velesdb/`, `%APPDATA%\velesdb\`, or `/etc/velesdb/` search — if
+you previously read that here, it described a search path that was never
+implemented. If no `./velesdb.toml` is found, core defaults are used.
 
-1. `./velesdb.toml` (current directory)
-2. `$VELESDB_CONFIG` (environment variable)
-3. `~/.config/velesdb/velesdb.toml` (Linux/macOS)
-4. `%APPDATA%\velesdb\velesdb.toml` (Windows)
-5. `/etc/velesdb/velesdb.toml` (system-wide)
+To point at a file anywhere else, pass it explicitly:
 
-If no file is found, default values are used.
+| Binary | Flag | Env var |
+|--------|------|---------|
+| `velesdb-server` | `--config <path>` | `VELESDB_CONFIG` |
+| `velesdb` (CLI) | `--config <path>` (global — REPL and every one-shot command) | `VELESDB_CONFIG` |
+
+Both binaries can load the **same** file, but only the *engine* sections —
+`[search]`, `[hnsw]`, `[storage]`, `[limits]`, `[quantization]`,
+`[wal_batch]` — reach `VelesConfig` and, via
+[`Database::open_with_config`](../../crates/velesdb-core/src/database/mod.rs),
+the running engine. Every other top-level table is silently dropped before
+`VelesConfig` ever sees it — most importantly `[server]`, `[auth]`,
+`[tls]`, `[cors]`, which stay exclusively `velesdb-server`'s own transport
+config. This matters because `VelesConfig` *also* has its own same-named
+`[server]`/`[logging]` fields (for standalone/embedded use), which don't
+mean the same thing: a perfectly legitimate `velesdb-server --config`
+value like `[server] port = 443` (its HTTP bind port, e.g. behind
+`setcap`) would otherwise land in `VelesConfig`'s own `server.port` too
+and get rejected by its `>= 1024` validation rule — a startup failure with
+nothing to do with the value you actually set. Both binaries filter the
+file down to the engine sections before parsing it as `VelesConfig`, so
+this can't happen.
+
+`VELESDB_*` environment variables still layer on top of the (filtered)
+file, same as `VelesConfig::load`/`load_from_path` — e.g.
+`VELESDB_LIMITS_MAX_COLLECTIONS=5` overrides a `[limits] max_collections`
+value from the file, and `velesdb-server`'s own `VELESDB_PORT`/
+`VELESDB_HOST`/... env vars (mapped to its transport `Args`, not to
+`VelesConfig`) keep working exactly as before.
+
+**Semantics are fail-fast**: an explicit `--config`/`VELESDB_CONFIG` path
+that is missing, malformed, or fails validation aborts startup (server) or
+the command (CLI) with the typed `ConfigError` — it never silently falls
+back to defaults. Omitting the flag entirely is unaffected: both binaries
+behave exactly as before this option was wired (core defaults, or
+`./velesdb.toml` if present).
+
+```bash
+# Server: engine + transport settings from one file
+velesdb-server --config /etc/velesdb/velesdb.toml
+VELESDB_CONFIG=/etc/velesdb/velesdb.toml velesdb-server
+
+# CLI: applies to the REPL...
+velesdb --config ./velesdb.toml repl ./my_database
+# ...and to one-shot commands (flag may come before or after the subcommand)
+velesdb collection create ./my_database docs --dimension 768 --config ./velesdb.toml
+```
+
+> Some other VelesDB surfaces (Tauri desktop shell, mobile bindings, the
+> Python SDK's `VelesConfigOptions`, and the LangChain/LlamaIndex
+> integrations) do not yet accept a `VelesConfig` at open time — tracked in
+> [issue #1549](https://github.com/cyberlife-coder/velesdb/issues/1549).
 
 ---
 
@@ -375,6 +425,10 @@ Configuration follows this priority order (from lowest to highest):
 5. Runtime override (REPL \set, VelesQL WITH, API params)
 ```
 
+> `--config`/`VELESDB_CONFIG` isn't a level in this chain — it *selects*
+> which file fills level 2, for both `velesdb-server` and the `velesdb` CLI.
+> See [File Search Paths](#file-search-paths) above for its exact semantics.
+
 ### Resolution Example
 
 ```toml
@@ -645,18 +699,24 @@ WARN: limits.max_perfect_mode_vectors=5000000 allows slow bruteforce on large da
 WARN: premium.hot_reload=true but no valid license key found
 ```
 
-### Validation Command
+### Validating a Config File
+
+There is no dedicated `velesdb config validate`/`show`/`init` subcommand.
+Instead, `--config` itself doubles as the validation entry point: pointing
+either binary at a file validates it fail-fast, before anything else runs.
 
 ```bash
-# Valider un fichier de configuration
-velesdb config validate ./velesdb.toml
+# CLI — fails immediately if the file is missing or invalid, before opening
+# any database (works with any subcommand, e.g. `info`):
+velesdb --config ./velesdb.toml info ./my_database
 
-# Afficher la configuration effective (avec env vars appliquées)
-velesdb config show
-
-# Générer un fichier de configuration par défaut
-velesdb config init > velesdb.toml
+# Server — fails immediately at startup, before binding a socket:
+velesdb-server --config ./velesdb.toml
 ```
+
+A missing path prints `config file not found: <path>`; an invalid value
+prints the typed `ConfigError` (e.g. `Invalid configuration value for
+'limits.max_collections': ...`) naming the offending key.
 
 ---
 

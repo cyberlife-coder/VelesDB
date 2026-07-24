@@ -19,7 +19,10 @@ use velesdb_core::Database;
 use velesdb_server::ApiDoc;
 use velesdb_server::{
     auth::{auth_middleware, AuthState},
-    config::{build_cors_layer, parse_api_keys_env, CliOverrides, CorsConfig, ServerConfig},
+    config::{
+        build_cors_layer, load_core_config, parse_api_keys_env, CliOverrides, CorsConfig,
+        ServerConfig,
+    },
     routes::api_routes,
     AppState, OnboardingMetrics,
 };
@@ -29,7 +32,14 @@ use velesdb_server::{
 #[command(name = "velesdb-server")]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Path to velesdb.toml configuration file
+    /// Path to velesdb.toml configuration file. Configures both the
+    /// server transport ([server]/[auth]/[tls]/[cors]) and the core engine
+    /// ([search]/[hnsw]/[storage]/[limits]/[quantization]/[wal_batch]) —
+    /// only these engine sections are read into the core config, so a
+    /// same-named [server]/[logging] table stays exclusively the
+    /// server's own. VELESDB_* env vars still override values from the
+    /// file. An invalid or missing explicit path fails fast at startup —
+    /// never a silent fallback to defaults.
     #[arg(short, long, env = "VELESDB_CONFIG")]
     config: Option<PathBuf>,
 
@@ -116,8 +126,11 @@ fn log_cors_config(cors: &CorsConfig) {
     }
 }
 
-fn init_app_state(data_dir: &str) -> anyhow::Result<Arc<AppState>> {
-    let db = Database::open(data_dir)?;
+fn init_app_state(
+    data_dir: &str,
+    core_config: velesdb_core::config::VelesConfig,
+) -> anyhow::Result<Arc<AppState>> {
+    let db = Database::open_with_config(data_dir, core_config)?;
     let state = Arc::new(AppState {
         db,
         onboarding_metrics: OnboardingMetrics::default(),
@@ -411,9 +424,15 @@ async fn main() -> anyhow::Result<()> {
     configure_tracing();
 
     let args = Args::parse();
+    let config_path = args.config.clone();
     let cli = build_cli_overrides(args);
     let cfg = ServerConfig::load(cli)?;
     cfg.validate()?;
+
+    // Fail-fast: an explicit `--config`/`VELESDB_CONFIG` path that is
+    // missing or fails validation aborts startup here with the typed core
+    // `ConfigError` — never a silent fallback to engine defaults.
+    let core_config = load_core_config(&config_path)?;
 
     log_startup(&cfg);
 
@@ -426,7 +445,7 @@ async fn main() -> anyhow::Result<()> {
         "core".to_string(),
     );
 
-    let state = init_app_state(&cfg.data_dir)?;
+    let state = init_app_state(&cfg.data_dir, core_config)?;
     let auth_state = AuthState::new(cfg.api_keys.clone());
     let app = build_router(state.clone(), auth_state, cfg.rate_limit, &cfg.cors)?;
 

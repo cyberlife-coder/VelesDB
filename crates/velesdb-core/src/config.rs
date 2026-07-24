@@ -375,6 +375,93 @@ impl VelesConfig {
         Ok(config)
     }
 
+    /// The top-level TOML tables that belong to the *engine* — as opposed
+    /// to `server` and `logging`, which are also fields on this struct but
+    /// exist for standalone/embedded consumers of `VelesConfig`. A hosting
+    /// shell (e.g. `velesdb-server`) that owns its own same-named
+    /// `[server]` table in the same file — different shape, different
+    /// meaning (HTTP bind port vs. this struct's own `server.port`) — would
+    /// otherwise have that table parsed into *this* struct too and
+    /// rejected by [`Self::validate`]'s rules for a value it was never
+    /// meant to apply to. See [`Self::load_from_path_engine_only`].
+    const ENGINE_SECTIONS: &'static [&'static str] = &[
+        "search",
+        "hnsw",
+        "storage",
+        "limits",
+        "quantization",
+        "wal_batch",
+    ];
+
+    /// Drops every top-level TOML table not in [`Self::ENGINE_SECTIONS`].
+    fn filter_to_engine_sections(raw: &str) -> Result<String, ConfigError> {
+        let mut doc: toml::Value =
+            toml::from_str(raw).map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        if let Some(table) = doc.as_table_mut() {
+            table.retain(|k, _| Self::ENGINE_SECTIONS.contains(&k));
+        }
+        toml::to_string(&doc).map_err(|e| ConfigError::ParseError(e.to_string()))
+    }
+
+    /// Loads configuration from a specific file path, considering **only**
+    /// the engine sections (`[search]`/`[hnsw]`/`[storage]`/`[limits]`/
+    /// `[quantization]`/`[wal_batch]`) and silently dropping any other
+    /// top-level table before parsing — notably `[server]` and `[logging]`.
+    ///
+    /// Use this instead of [`Self::load_from_path`] when the TOML file is
+    /// **shared** with a hosting shell that owns its own `[server]`/
+    /// `[auth]`/`[tls]`/`[cors]`/... sections under possibly-colliding
+    /// keys — e.g. `velesdb-server --config` reads the same file for its
+    /// own HTTP transport settings (`[server].port` = the bind port) *and*
+    /// for this engine config. Without filtering, `[server] port = 443`
+    /// (a perfectly legitimate low bind port, e.g. behind `setcap`/a
+    /// privileged process) would also land in *this* struct's
+    /// `server.port` and be rejected by [`Self::validate`]'s `port >=
+    /// 1024` rule — a spurious failure with nothing to do with the actual
+    /// value being configured.
+    ///
+    /// As with [`Self::load_from_path`], `VELESDB_*` environment variables
+    /// are layered on top of the (filtered) file and can still override an
+    /// engine value — e.g. `VELESDB_LIMITS_MAX_COLLECTIONS=5` overrides a
+    /// `[limits] max_collections` from the file. Env vars for non-engine
+    /// sections (`VELESDB_SERVER_*`, `VELESDB_LOGGING_*`, ...) are
+    /// harmless here: they don't match any field once those sections are
+    /// filtered out of the base document, so they're ignored the same way
+    /// an unrecognised key always is.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read, is not valid TOML, or
+    /// fails validation.
+    pub fn load_from_path_engine_only<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
+        let raw = std::fs::read_to_string(path.as_ref())?;
+        let filtered = Self::filter_to_engine_sections(&raw)?;
+
+        let figment = Figment::new()
+            .merge(Serialized::defaults(Self::default()))
+            .merge(Toml::string(&filtered))
+            .merge(Env::prefixed("VELESDB_").split("_").lowercase(false));
+
+        let config: Self = figment
+            .extract()
+            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Same as [`Self::load_from_path_engine_only`] but from an in-memory
+    /// TOML string, with no environment-variable layer — mirrors how
+    /// [`Self::from_toml`] relates to [`Self::load_from_path`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `toml_str` is not valid TOML or fails
+    /// validation.
+    pub fn from_toml_engine_only(toml_str: &str) -> Result<Self, ConfigError> {
+        let filtered = Self::filter_to_engine_sections(toml_str)?;
+        Self::from_toml(&filtered)
+    }
+
     // Validation is in config_validation.rs
 
     /// Returns the effective `ef_search` value.
@@ -392,5 +479,109 @@ impl VelesConfig {
     /// Returns an error if serialization fails.
     pub fn to_toml(&self) -> Result<String, ConfigError> {
         toml::to_string_pretty(self).map_err(|e| ConfigError::ParseError(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod shared_toml_tests {
+    use super::*;
+
+    /// Documents why `_engine_only` exists: `[server] port = 443` is a
+    /// legitimate low HTTP bind port for a hosting shell (e.g.
+    /// `velesdb-server` behind `setcap`), but fed through the
+    /// whole-struct loader it lands in *this* crate's own `server.port`
+    /// and trips `validate_server`'s `>= 1024` rule — a real, reproducible
+    /// bug when a shell shares its `velesdb.toml` with `VelesConfig`
+    /// as-is (not a regression test to "fix" — `load_from_path` is
+    /// correct for standalone/embedded use where `[server]` truly
+    /// belongs to `VelesConfig`).
+    #[test]
+    fn test_load_from_path_whole_struct_rejects_shell_owned_low_port() {
+        let dir = tempfile::tempdir().expect("test: temp dir");
+        let path = dir.path().join("velesdb.toml");
+        std::fs::write(
+            &path,
+            "[server]\nport = 443\n\n[limits]\nmax_collections = 5\n",
+        )
+        .expect("test: write toml");
+
+        let err = VelesConfig::load_from_path(&path).expect_err(
+            "whole-struct loader must still reject port=443 via its own server section",
+        );
+        assert!(
+            err.to_string().contains("server.port"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// The actual fix: a shell-owned `[server] port = 443` no longer
+    /// leaks into `VelesConfig`'s own `server` section, and the genuine
+    /// engine section (`[limits]`) is still applied.
+    #[test]
+    fn test_load_from_path_engine_only_ignores_shell_owned_server_section() {
+        let dir = tempfile::tempdir().expect("test: temp dir");
+        let path = dir.path().join("velesdb.toml");
+        std::fs::write(
+            &path,
+            "[server]\nport = 443\n\n[limits]\nmax_collections = 5\n",
+        )
+        .expect("test: write toml");
+
+        let config = VelesConfig::load_from_path_engine_only(&path)
+            .expect("engine-only loader must ignore the shell-owned [server] section");
+
+        // The engine section came through.
+        assert_eq!(config.limits.max_collections, 5);
+        // The shell-owned [server] section did NOT — the struct's own
+        // `server.port` stays at its default, proving the table was
+        // dropped rather than parsed-then-happening-to-pass-validation.
+        assert_eq!(config.server.port, ServerConfig::default().port);
+    }
+
+    #[test]
+    fn test_from_toml_engine_only_ignores_shell_owned_server_section() {
+        let config = VelesConfig::from_toml_engine_only(
+            "[server]\nport = 443\n\n[limits]\nmax_collections = 7\n",
+        )
+        .expect("engine-only parser must ignore the shell-owned [server] section");
+
+        assert_eq!(config.limits.max_collections, 7);
+        assert_eq!(config.server.port, ServerConfig::default().port);
+    }
+
+    #[test]
+    fn test_load_from_path_engine_only_still_applies_non_server_engine_sections() {
+        let dir = tempfile::tempdir().expect("test: temp dir");
+        let path = dir.path().join("velesdb.toml");
+        std::fs::write(
+            &path,
+            "[hnsw]\nm = 24\n\n[wal_batch]\nenabled = true\ncommit_delay_us = 250\n",
+        )
+        .expect("test: write toml");
+
+        let config = VelesConfig::load_from_path_engine_only(&path)
+            .expect("engine-only loader must still apply hnsw/wal_batch");
+
+        assert_eq!(config.hnsw.m, Some(24));
+        assert!(config.wal_batch.enabled);
+        assert_eq!(config.wal_batch.commit_delay_us, 250);
+    }
+
+    #[test]
+    fn test_load_from_path_engine_only_missing_file_errors() {
+        let missing = std::path::Path::new("/nonexistent/velesdb-issue-1549-engine-only.toml");
+        assert!(VelesConfig::load_from_path_engine_only(missing).is_err());
+    }
+
+    #[test]
+    fn test_from_toml_engine_only_invalid_value_still_fails_typed() {
+        // max_collections = 0 is out of range — the fix must not silently
+        // swallow real validation errors, only shell-owned sections.
+        let err = VelesConfig::from_toml_engine_only("[limits]\nmax_collections = 0\n")
+            .expect_err("out-of-range engine value must still fail");
+        assert!(
+            err.to_string().contains("limits.max_collections"),
+            "unexpected error: {err}"
+        );
     }
 }
