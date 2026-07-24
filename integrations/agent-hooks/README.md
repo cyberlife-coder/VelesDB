@@ -6,11 +6,13 @@ gives it the *tools*. It does not make the agent actually call
 `load_working_context` at the start of every session or
 `save_working_context` before every one ends — that only happens if the
 agent remembers to, which it won't reliably do on its own. This directory
-closes that gap for [Claude Code](claude-code/) (real, tested hooks) and
-[Codex CLI](codex/) (a documented instruction-file convention, since Codex
-has no equivalent hook mechanism yet).
+closes that gap for [Claude Code](claude-code/) (real, tested hooks),
+[Windsurf](windsurf/) (real, tested hook — a single event folding both
+halves of the loop, see below), and [Codex CLI](codex/) (a documented
+instruction-file convention, since Codex has no equivalent hook mechanism
+yet).
 
-## Install
+## Install — Claude Code
 
 Both variants need `bash` and `jq` on `PATH` — the hooks refuse to run
 without `jq` rather than silently emitting malformed JSON.
@@ -71,6 +73,38 @@ into `~/.claude/settings.json` does not give you a global install by
 itself — that path only resolves inside a project that also has its own
 vendored copy of the scripts. Use the global pattern above instead.
 
+## Install — Windsurf
+
+```bash
+mkdir -p ~/.codeium/windsurf/hooks/velesdb-memory
+cp /path/to/velesdb/integrations/agent-hooks/windsurf/hooks/pre-user-prompt.sh ~/.codeium/windsurf/hooks/velesdb-memory/
+cp -r /path/to/velesdb/integrations/agent-hooks/windsurf/hooks/lib ~/.codeium/windsurf/hooks/velesdb-memory/
+chmod +x ~/.codeium/windsurf/hooks/velesdb-memory/*.sh
+```
+
+Merge this into `~/.codeium/windsurf/hooks.json`'s `"hooks"` key:
+
+```json
+{
+  "hooks": {
+    "pre_user_prompt": [
+      { "command": "bash /Users/you/.codeium/windsurf/hooks/velesdb-memory/pre-user-prompt.sh", "show_output": true }
+    ]
+  }
+}
+```
+
+Same `.velesdb-hooks.json` config format as Claude Code (below) — the hook
+walks up from the payload's `cwd` looking for one.
+
+**Windsurf exposes only one lifecycle hook, `pre_user_prompt`** — no
+Claude-Code-style `Stop`/`PreCompact` equivalent. So `pre-user-prompt.sh`
+folds BOTH halves of the loop into its single first-of-session reminder:
+load working context now, **and** save it again before the session ends —
+because there is no separate event left to remind you a second time.
+`trajectory_id` from Windsurf's payload is the once-per-session sentinel key
+(falls back to the parent PID if ever absent).
+
 ## The structural constraint that shapes this whole design
 
 **velesdb-memory's store is mono-process, guarded by an flock.** While a
@@ -95,7 +129,10 @@ and hand it to the model directly (that would require opening the store
 from the hook) — it can only tell the model to call
 `load_working_context` itself.
 
-## The three hooks
+## The three Claude Code hooks
+
+(Windsurf's single `pre_user_prompt` hook is documented in its own install
+section above — it folds the same load/save loop into one event.)
 
 | Event | What it does | Mechanism |
 |---|---|---|
