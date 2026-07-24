@@ -32,6 +32,7 @@ from llamaindex_velesdb.security import (
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
+from llamaindex_velesdb._common import open_database as _open_database
 from llamaindex_velesdb.filter_ops import metadata_filters_to_core_filter
 from llamaindex_velesdb.node_builder import (
     validate_all_embeddings as _validate_all_embeddings,
@@ -121,6 +122,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
     _collection: Optional[velesdb.Collection] = PrivateAttr(default=None)
     _dimension: Optional[int] = PrivateAttr(default=None)
     _search_quality: Optional[str] = PrivateAttr(default=None)
+    _config: Optional[velesdb.VelesConfigOptions] = PrivateAttr(default=None)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -131,6 +133,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         metric: str = "cosine",
         storage_mode: str = "full",
         search_quality: Optional[str] = None,
+        config: Optional[velesdb.VelesConfigOptions] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize VelesDB vector store.
@@ -160,6 +163,10 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
                 ``"autotune"``, ``"custom:N"``, ``"adaptive:MIN:MAX"``.
                 ``None`` uses the built-in search. Per-call override:
                 pass ``search_quality=`` to :meth:`query`.
+            config: Optional :class:`velesdb.VelesConfigOptions` engine
+                configuration, forwarded verbatim to ``velesdb.Database``
+                when the connection is opened. ``None`` (default) keeps the
+                engine defaults — the database is opened exactly as before.
             **kwargs: Additional arguments.
 
         Raises:
@@ -191,6 +198,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
             **kwargs,
         )
         self._search_quality = validated_quality
+        self._config = config
 
     # ------------------------------------------------------------------
     # Static / class helpers
@@ -256,7 +264,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
     def _get_db(self) -> velesdb.Database:
         """Get or create the database connection."""
         if self._db is None:
-            self._db = velesdb.Database(self.path)
+            self._db = _open_database(self.path, self._config)
         return self._db
 
     def _get_collection(self, dimension: int) -> velesdb.Collection:

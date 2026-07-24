@@ -88,6 +88,39 @@ use velesdb_core::SearchQuality as CoreSearchQuality;
 // NOTE: VelesCollection moved to collection.rs (NLOC/CC resolution)
 
 // ============================================================================
+// Engine config loading (issue #1549, mobile surface)
+// ============================================================================
+
+/// Maps a [`velesdb_core::config::ConfigError`] to the FFI [`VelesError`].
+///
+/// UniFFI errors are flat records (no `#[source]` chain survives the FFI
+/// boundary), so the `ConfigError` is preserved the closest way the surface
+/// allows: routed through [`velesdb_core::Error::Config`] so the mobile error
+/// carries the canonical `VELES-009` taxonomy code, core's recoverability
+/// flag, and the full underlying `ConfigError` message.
+fn config_error(err: velesdb_core::config::ConfigError) -> VelesError {
+    velesdb_core::Error::Config(err.to_string()).into()
+}
+
+/// Loads a [`velesdb_core::config::VelesConfig`] from a TOML file, engine
+/// sections only. Fail-fast: a missing/unreadable/invalid file is an
+/// immediate typed error, never a silent fallback to defaults.
+fn load_engine_config_from_path(
+    config_path: &str,
+) -> Result<velesdb_core::config::VelesConfig, VelesError> {
+    velesdb_core::config::VelesConfig::load_from_path_engine_only(config_path).map_err(config_error)
+}
+
+/// Parses a [`velesdb_core::config::VelesConfig`] from an in-memory TOML
+/// string, engine sections only. Same fail-fast semantics as
+/// [`load_engine_config_from_path`].
+fn load_engine_config_from_toml(
+    config_toml: &str,
+) -> Result<velesdb_core::config::VelesConfig, VelesError> {
+    velesdb_core::config::VelesConfig::from_toml_engine_only(config_toml).map_err(config_error)
+}
+
+// ============================================================================
 // Database
 // ============================================================================
 
@@ -148,6 +181,136 @@ impl VelesDatabase {
     ) -> Result<Arc<Self>, VelesError> {
         let core_observer: Arc<dyn DatabaseObserver> = Arc::new(ForeignObserver::new(observer));
         let db = CoreDatabase::open_with_observer(&path, core_observer)?;
+        Ok(Arc::new(Self {
+            inner: Arc::new(db),
+        }))
+    }
+
+    /// Opens or creates a database configured from a TOML file on disk.
+    ///
+    /// The file is parsed with
+    /// [`VelesConfig::load_from_path_engine_only`](velesdb_core::config::VelesConfig::load_from_path_engine_only):
+    /// only the engine sections (`[search]`/`[hnsw]`/`[storage]`/`[limits]`/
+    /// `[quantization]`/`[wal_batch]`) are considered, any other top-level
+    /// table is dropped, and `VELESDB_*` environment variables still layer on
+    /// top of the filtered file. The database is then opened with
+    /// [`Database::open_with_config`](velesdb_core::Database::open_with_config),
+    /// so every subsystem honours the loaded values instead of core defaults.
+    ///
+    /// This is the mobile counterpart of the server/CLI `--config` wiring
+    /// (issue #1549). If the app ships its config as an in-memory string
+    /// (bundled asset, remote config), use
+    /// [`open_with_config_toml`](Self::open_with_config_toml) instead.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the database directory (will be created if needed)
+    /// * `config_path` - Path to an existing TOML configuration file
+    ///
+    /// # Errors
+    ///
+    /// Fails fast — never falls back to defaults silently — if the config
+    /// file is missing, unreadable, not valid TOML, or fails validation
+    /// (typed as a `VELES-009` configuration error), or if the database path
+    /// is invalid or cannot be accessed.
+    #[uniffi::constructor]
+    pub fn open_with_config(path: String, config_path: String) -> Result<Arc<Self>, VelesError> {
+        let config = load_engine_config_from_path(&config_path)?;
+        let db = CoreDatabase::open_with_config(&path, config)?;
+        Ok(Arc::new(Self {
+            inner: Arc::new(db),
+        }))
+    }
+
+    /// Opens or creates a database configured from an in-memory TOML string.
+    ///
+    /// Same semantics as [`open_with_config`](Self::open_with_config) but the
+    /// TOML is passed directly (parsed with
+    /// [`VelesConfig::from_toml_engine_only`](velesdb_core::config::VelesConfig::from_toml_engine_only),
+    /// no environment-variable layer) — the most portable option on mobile,
+    /// where config often lives in a bundled asset or remote-config payload
+    /// rather than a standalone file.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the database directory (will be created if needed)
+    /// * `config_toml` - TOML configuration string (engine sections only)
+    ///
+    /// # Errors
+    ///
+    /// Fails fast — never falls back to defaults silently — if `config_toml`
+    /// is not valid TOML or fails validation (typed as a `VELES-009`
+    /// configuration error), or if the database path is invalid or cannot be
+    /// accessed.
+    #[uniffi::constructor]
+    pub fn open_with_config_toml(
+        path: String,
+        config_toml: String,
+    ) -> Result<Arc<Self>, VelesError> {
+        let config = load_engine_config_from_toml(&config_toml)?;
+        let db = CoreDatabase::open_with_config(&path, config)?;
+        Ok(Arc::new(Self {
+            inner: Arc::new(db),
+        }))
+    }
+
+    /// Opens or creates a database with both a read-path [`MobileObserver`]
+    /// and a TOML configuration file.
+    ///
+    /// Combines [`open_with_observer`](Self::open_with_observer) (read gate)
+    /// and [`open_with_config`](Self::open_with_config) (engine config) on a
+    /// single handle via
+    /// [`Database::open_with_observer_and_config`](velesdb_core::Database::open_with_observer_and_config).
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the database directory (will be created if needed)
+    /// * `observer` - A Kotlin/Swift implementation of [`MobileObserver`]
+    /// * `config_path` - Path to an existing TOML configuration file
+    ///
+    /// # Errors
+    ///
+    /// Same fail-fast semantics as [`open_with_config`](Self::open_with_config).
+    #[uniffi::constructor]
+    pub fn open_with_observer_and_config(
+        path: String,
+        observer: Arc<dyn MobileObserver>,
+        config_path: String,
+    ) -> Result<Arc<Self>, VelesError> {
+        let config = load_engine_config_from_path(&config_path)?;
+        let core_observer: Arc<dyn DatabaseObserver> = Arc::new(ForeignObserver::new(observer));
+        let db = CoreDatabase::open_with_observer_and_config(&path, core_observer, config)?;
+        Ok(Arc::new(Self {
+            inner: Arc::new(db),
+        }))
+    }
+
+    /// Opens or creates a database with both a read-path [`MobileObserver`]
+    /// and an in-memory TOML configuration string.
+    ///
+    /// Combines [`open_with_observer`](Self::open_with_observer) (read gate)
+    /// and [`open_with_config_toml`](Self::open_with_config_toml) (engine
+    /// config) on a single handle.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the database directory (will be created if needed)
+    /// * `observer` - A Kotlin/Swift implementation of [`MobileObserver`]
+    /// * `config_toml` - TOML configuration string (engine sections only)
+    ///
+    /// # Errors
+    ///
+    /// Same fail-fast semantics as
+    /// [`open_with_config_toml`](Self::open_with_config_toml).
+    #[uniffi::constructor]
+    pub fn open_with_observer_and_config_toml(
+        path: String,
+        observer: Arc<dyn MobileObserver>,
+        config_toml: String,
+    ) -> Result<Arc<Self>, VelesError> {
+        let config = load_engine_config_from_toml(&config_toml)?;
+        let core_observer: Arc<dyn DatabaseObserver> = Arc::new(ForeignObserver::new(observer));
+        let db = CoreDatabase::open_with_observer_and_config(&path, core_observer, config)?;
         Ok(Arc::new(Self {
             inner: Arc::new(db),
         }))

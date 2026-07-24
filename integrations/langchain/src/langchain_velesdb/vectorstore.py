@@ -38,7 +38,10 @@ from langchain_velesdb.security import (
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
-from langchain_velesdb._common import payload_to_doc_parts
+from langchain_velesdb._common import (
+    open_database as _open_database,
+    payload_to_doc_parts,
+)
 from langchain_velesdb.point_builder import build_point as _build_point, flush_stream_batches as _flush_stream_batches
 from langchain_velesdb.search_ops import SearchOpsMixin
 from langchain_velesdb.graph_ops import GraphOpsMixin
@@ -86,6 +89,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         metric: str = "cosine",
         storage_mode: str = "full",
         search_quality: Optional[str] = None,
+        config: Optional[velesdb.VelesConfigOptions] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize VelesDB vector store.
@@ -117,6 +121,10 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
                 ``"adaptive:MIN:MAX"``. ``None`` uses the built-in search.
                 Per-call override: pass ``search_quality=`` to
                 :meth:`similarity_search_with_score`.
+            config: Optional :class:`velesdb.VelesConfigOptions` engine
+                configuration, forwarded verbatim to ``velesdb.Database``
+                when the connection is opened. ``None`` (default) keeps the
+                engine defaults — the database is opened exactly as before.
             **kwargs: Additional arguments passed to the database.
 
         Raises:
@@ -139,6 +147,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
             self._search_quality = validate_search_quality(search_quality)
 
         self._embedding = embedding
+        self._config = config
         self._db: Optional[velesdb.Database] = None
         self._collection: Optional[velesdb.Collection] = None
 
@@ -155,7 +164,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
     def _get_db(self) -> velesdb.Database:
         """Get or create the database connection."""
         if self._db is None:
-            self._db = velesdb.Database(self._path)
+            self._db = _open_database(self._path, self._config)
         return self._db
 
     def _get_collection(self, dimension: int) -> velesdb.Collection:
@@ -327,7 +336,9 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
             path: Path to database directory.
             collection_name: Name of the collection.
             metric: Distance metric.
-            **kwargs: Additional arguments.
+            **kwargs: Additional constructor arguments (e.g. ``config=``
+                for a :class:`velesdb.VelesConfigOptions` engine
+                configuration), forwarded to :meth:`__init__`.
 
         Returns:
             VelesDBVectorStore instance with texts added.

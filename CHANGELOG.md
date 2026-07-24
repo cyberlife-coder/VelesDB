@@ -41,6 +41,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`VelesConfig` on every remaining surface (issue #1549)** — after the
+  server/CLI wiring (#1565), the four surfaces that could still only open
+  the engine on core defaults now accept an explicit engine configuration,
+  all built on the same engine-only TOML loaders
+  (`load_from_path_engine_only` / `from_toml_engine_only`) with fail-fast
+  validation and the typed `ConfigError` preserved:
+  - **`tauri-plugin-velesdb`**: new plugin `Builder` with
+    `with_config(VelesConfig)` / `with_config_path(path)` (fail-fast at
+    build time), threading through the four observer×config open
+    combinations; `VelesConfig` re-exported for hosts; typed
+    `Error::ConfigLoad` variant.
+  - **`velesdb-mobile`**: `open_with_config(_toml)` and
+    `open_with_observer_and_config(_toml)` UniFFI constructors (TOML file
+    path or embedded TOML string — the string variant suits mobile asset
+    pipelines); `ConfigError` surfaced through the flat UniFFI error as
+    `VELES-009` with the full message.
+  - **`velesdb-python`**: `VelesConfigOptions` now covers the full engine
+    surface — new `SearchConfigOptions`, `HnswConfigOptions`,
+    `StorageOptions` and `QuantizationOptions` sections alongside the
+    existing `limits`, plus `VelesConfigOptions.from_toml(str)` /
+    `from_toml_path(path)`. Invalid values raise at construction or at
+    `Database(path, config=...)` open, never silently. `wal_batch` stays
+    intentionally unexposed (velesdb-premium Enterprise feature). Stubs,
+    pure-python adapter and README updated.
+  - **`langchain-velesdb` / `llamaindex-velesdb`**: every store/memory
+    entry point that creates a `Database` accepts an optional
+    `config: velesdb.VelesConfigOptions` pass-through (vector stores,
+    chat/semantic/episodic/procedural memories, native `GraphLoader`),
+    and the shared `velesdb_common.graph.open_native_graph` helper
+    forwards it too. Omitting `config` is bit-for-bit the previous
+    behaviour.
 - **`velesdb-cli`**: new `graph doctor <collection> [--purge|--stub]`
   subcommand to audit and repair legacy phantom edges -- edges present in
   a graph collection's edge store whose `source` or `target` node has no
