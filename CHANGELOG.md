@@ -20,6 +20,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returning a stored context, so a slot squatted by an unrelated fact
   yields `None` instead of being served back. (#1458)
 
+### Changed
+
+- **`velesdb-core` / `velesdb-wasm`**: single-sourced the fusion math that
+  had drifted across engines (parity-audit finding, issue #1545).
+  `velesdb-core::fusion::min_max_normalize` is now `pub`, and
+  `velesdb-wasm`'s `relative_score`/`rsf` per-branch normalization delegates
+  to it instead of maintaining its own copy of the same min-max math. Core
+  also now exposes canonical `DEFAULT_WEIGHTED_AVG_WEIGHT` /
+  `DEFAULT_WEIGHTED_MAX_WEIGHT` / `DEFAULT_WEIGHTED_HIT_WEIGHT` constants
+  (`0.6` / `0.3` / `0.1`, matching the Python bindings and the
+  `velesdb_common` fusion builder) and a `FusionStrategy::weighted_default()`
+  constructor. **Behavior change, `velesdb-wasm` only:**
+  `multi_query_search(..., strategy: "weighted")` previously hardcoded a
+  non-overridable `avg=0.5, max=0.3, hit=0.2` split; it now defaults to the
+  canonical `0.6/0.3/0.1` weights and accepts an optional `weights`
+  parameter to override them per call. This reorders `weighted`-fusion
+  results for existing WASM callers that didn't request explicit weights.
+  See `crates/velesdb-wasm/CHANGELOG.md` for the full migration note.
+
 ### Added
 
 - **`velesdb-cli`**: new `graph doctor <collection> [--purge|--stub]`

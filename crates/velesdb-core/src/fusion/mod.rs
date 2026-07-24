@@ -25,4 +25,7 @@ mod strategy;
 #[cfg(test)]
 mod strategy_tests;
 
-pub use strategy::{FusionError, FusionStrategy};
+pub use strategy::{
+    min_max_normalize, FusionError, FusionStrategy, DEFAULT_WEIGHTED_AVG_WEIGHT,
+    DEFAULT_WEIGHTED_HIT_WEIGHT, DEFAULT_WEIGHTED_MAX_WEIGHT,
+};
