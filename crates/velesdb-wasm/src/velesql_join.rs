@@ -191,7 +191,23 @@ fn reject_unsupported_join(join: &JoinClause) -> Result<(), String> {
 /// "alias.column on right side".
 fn equality_keys(join: &JoinClause, alias: &str) -> Result<(String, String), String> {
     if let Some(cond) = &join.condition {
-        return Ok((key_of(&cond.left, alias), key_of(&cond.right, alias)));
+        // Orient the condition by which side targets the joined table, the
+        // same way core's `normalize_join_condition` does (issue #1555):
+        // the base-side ref is looked up on the accumulated row, the
+        // join-side ref on the scanned right row — regardless of which side
+        // of `ON` named which table. The joined table is addressable by its
+        // alias or by its raw table name even when aliased.
+        let is_join_side = |r: &velesdb_core::velesql::ColumnRef| {
+            r.table
+                .as_deref()
+                .is_some_and(|t| t == alias || t == join.table)
+        };
+        let (base_ref, join_ref) = if !is_join_side(&cond.left) || is_join_side(&cond.right) {
+            (&cond.left, &cond.right)
+        } else {
+            (&cond.right, &cond.left)
+        };
+        return Ok((key_of(base_ref, alias), key_of(join_ref, alias)));
     }
     if let Some(cols) = &join.using_columns {
         if let Some(first) = cols.first() {

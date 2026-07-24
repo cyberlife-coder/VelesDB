@@ -419,9 +419,9 @@ scalar-expression ones below, which use the same single-collection dataset):
 - `cases` X011–X014: WHERE-expression evaluation (`BETWEEN`, parenthesized
   `AND`/`OR`, `NOT`, `IN`) — safe for CLI's strict-order comparison, so these
   run on all three executors.
-- `join_cases` J001–J004: `JOIN ... ON` (both condition-side orders on core;
-  WASM only accepts base-table-first — see D002 below) and `JOIN ... USING
-  (col)`.
+- `join_cases` J001–J005: `JOIN ... ON` (both condition-side orders on both
+  engines — J005 locks the joined-table-first order, issue #1555) and
+  `JOIN ... USING (col)`.
 - `aggregate_cases` G001–G005: `GROUP BY` / `HAVING` / `COUNT` / `SUM` /
   `LIMIT`, checked via `Database::execute_aggregate` on core (not
   `execute_query`, which only groups when combined with vector `NEAR`
@@ -441,14 +441,13 @@ silently relied upon:
 - **D001** — unaliased aggregate output field names differ (`"count"` /
   `"sum_year"` on core vs `"count(*)"` / `"sum(year)"` on WASM); sidestepped
   in the fixture by always using an explicit `AS` alias.
-- **D002** — WASM's `JOIN ... ON` does not normalize condition side order the
-  way core does: `ON base.col = joined.col` matches, but the reversed
-  `ON joined.col = base.col` silently returns every row with NULL joined
-  columns instead of matching. Locked as a regression test
-  (`test_wasm_join_condition_side_order_gap_d002` in
-  `crates/velesdb-wasm/src/velesql_executor_conformance_tests.rs`) rather than
-  fixed — out of scope for #1544 (coverage of existing behaviour, not new
-  WASM support).
+- ~~D002~~ — **fixed 2026-07-24** (issue #1555): WASM's `equality_keys` now
+  orients the `ON` condition by which side names the joined table (alias or
+  raw table name), mirroring core's `normalize_join_condition` — both
+  condition-side orders resolve identically. Locked by `join_cases` J005
+  above and the parity test
+  (`test_wasm_join_condition_side_order_parity_1555` in
+  `crates/velesdb-wasm/src/velesql_executor_conformance_tests.rs`).
 - **D003** — `UNION`/`INTERSECT`/`EXCEPT` row order for non-ranked (score 0.0)
   branches is implementation-defined on both sides (core re-sorts by score
   with an unstable tie-break that was observed to differ between two runs of

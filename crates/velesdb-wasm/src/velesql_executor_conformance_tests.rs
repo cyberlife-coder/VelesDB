@@ -342,22 +342,14 @@ fn test_wasm_velesql_executor_match_cases() {
     }
 }
 
-/// Documents a real, currently-existing WASM JOIN gap
-/// (`documented_divergences` D002 in the fixture): `ON <base>.<col> =
-/// <joined>.<col>` matches correctly, but the reversed condition order
-/// (`ON <joined>.<col> = <base>.<col>`) fails to match ANY row and every
-/// joined column comes back NULL, because `equality_keys`/`key_of`
-/// (`velesql_join.rs`) does not normalize which side names the base vs.
-/// joined table the way core's `normalize_join_condition` does.
-///
-/// This is a **regression-lock for the current (buggy) behaviour**, not a
-/// desired outcome: fixing the underlying normalization is out of scope for
-/// issue #1544 (coverage of existing behaviour, not new WASM support). If
-/// this test starts failing because someone *fixed* the normalization, that
-/// is good news — update this test and `documented_divergences` D002 in
-/// `conformance/velesql_executor_cases.json` to match.
+/// Parity lock for issue #1555 (formerly `documented_divergences` D002):
+/// the ON condition must match regardless of which side names the joined
+/// table. `equality_keys` (`velesql_join.rs`) now orients the condition by
+/// which `ColumnRef` targets the join alias, mirroring core's
+/// `normalize_join_condition`, so `ON <joined>.<col> = <base>.<col>`
+/// resolves identically to `ON <base>.<col> = <joined>.<col>`.
 #[test]
-fn test_wasm_join_condition_side_order_gap_d002() {
+fn test_wasm_join_condition_side_order_parity_1555() {
     let mut db = DatabaseInner::new();
     db.create_collection("customers", 2, "cosine")
         .expect("test: create customers");
@@ -391,7 +383,8 @@ fn test_wasm_join_condition_side_order_gap_d002() {
         "base-table-first ON order should match and enrich the row with the customer name"
     );
 
-    // Reversed order: joined-table-first. Currently fails to match (D002).
+    // Reversed order: joined-table-first. Must match exactly like the
+    // base-table-first form (issue #1555).
     let reversed = execute(
         &mut db,
         "SELECT * FROM orders LEFT JOIN customers ON customers.id = orders.customer_id",
@@ -400,10 +393,9 @@ fn test_wasm_join_condition_side_order_gap_d002() {
     .expect("test: reversed-order join");
     let reversed_row: Value =
         serde_json::from_str(&reversed.rows_ref()[0].data_json()).expect("test: parse row");
-    assert!(
-        reversed_row.get("name").is_none() || reversed_row.get("name") == Some(&Value::Null),
-        "documented WASM gap D002: joined-table-first ON order currently does NOT match \
-         (customer name should be absent/null); if this assertion now fails, the underlying \
-         bug was fixed — update documented_divergences D002 accordingly"
+    assert_eq!(
+        reversed_row.get("name").and_then(Value::as_str),
+        Some("Alice"),
+        "joined-table-first ON order must resolve identically to base-table-first (issue #1555)"
     );
 }
