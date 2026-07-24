@@ -243,6 +243,10 @@ Runs automatically before each `git commit`:
 
 Activate with: `git config core.hooksPath .githooks`
 
+When pushing over SSH, also configure an HTTPS push URL so the long pre-push
+validation cannot kill the connection before the transfer (see CONTRIBUTING.md,
+"Note (SSH pushes)").
+
 ---
 
 ## Relationship with VelesDB-Premium
