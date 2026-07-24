@@ -31,6 +31,21 @@ pub enum Error {
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
 
+    /// An explicit engine config file could not be loaded (issue #1549).
+    ///
+    /// Raised by `Builder::with_config_path` when the TOML file is missing,
+    /// unparsable, or fails engine validation. The typed core
+    /// [`velesdb_core::config::ConfigError`] is preserved as the source so
+    /// hosts can match on the exact failure.
+    #[error("Failed to load VelesDB config from {path}: {source}")]
+    ConfigLoad {
+        /// The config file path that failed to load.
+        path: String,
+        /// The typed core configuration error.
+        #[source]
+        source: velesdb_core::config::ConfigError,
+    },
+
     /// Serialization error.
     #[error("Serialization error: {0}")]
     Serialization(String),
@@ -56,7 +71,7 @@ impl From<Error> for CommandError {
             Error::CollectionNotFound(_) => "VELES-002",
             Error::NotFound(_) => "NOT_FOUND",
             Error::DimensionMismatch { .. } => "DIMENSION_MISMATCH",
-            Error::InvalidConfig(_) => "INVALID_CONFIG",
+            Error::InvalidConfig(_) | Error::ConfigLoad { .. } => "INVALID_CONFIG",
             Error::Serialization(_) => "SERIALIZATION_ERROR",
             Error::Io(_) => "VELES-011",
         };

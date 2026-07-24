@@ -58,10 +58,10 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tauri::{
-    plugin::{Builder, TauriPlugin},
+    plugin::{Builder as TauriPluginBuilder, TauriPlugin},
     Manager, Runtime,
 };
 
@@ -81,6 +81,7 @@ pub mod types_graph;
 
 pub use error::{CommandError, Error, Result};
 pub use state::VelesDbState;
+pub use velesdb_core::config::VelesConfig;
 
 /// Initializes the `VelesDB` plugin with the default settings.
 ///
@@ -137,102 +138,214 @@ macro_rules! velesdb_invoke_handler {
 ///     .expect("error while running tauri application");
 /// ```
 #[must_use]
-// The body is a flat command-registration list (trivial cyclomatic complexity);
-// the line count grows linearly with the number of exposed commands.
-#[allow(clippy::too_many_lines)]
 pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
-    let db_path = path.as_ref().to_path_buf();
+    Builder::new(path).build()
+}
 
-    let builder = Builder::new("velesdb").invoke_handler(velesdb_invoke_handler!(
-        common: [
-            commands::create_collection,
-            commands::create_metadata_collection,
-            commands::delete_collection,
-            commands::list_collections,
-            commands::get_collection,
-            commands::upsert,
-            commands::upsert_metadata,
-            commands::get_points,
-            commands::delete_points,
-            commands::search,
-            commands::search_ids,
-            commands::batch_search,
-            commands::text_search,
-            commands::hybrid_search,
-            commands::multi_query_search,
-            commands_query::query,
-            commands::is_empty,
-            commands::flush,
-            commands::compact_storage,
-            commands::update_guardrails,
-            commands::get_guardrails,
-            commands::scroll_collection,
-            // Sparse vector commands
-            commands_sparse::sparse_search,
-            commands_sparse::hybrid_sparse_search,
-            commands_sparse::sparse_upsert,
-            // PQ training command
-            commands::train_pq,
-            // AgentMemory commands (EPIC-016 US-003)
-            commands_memory::semantic_store,
-            commands_memory::semantic_store_with_ttl,
-            commands_memory::semantic_query,
-            commands_memory::semantic_delete,
-            commands_memory::semantic_dimension,
-            commands_memory::semantic_serialize,
-            commands_memory::semantic_deserialize,
-            commands_memory::episodic_record,
-            commands_memory::episodic_recent,
-            commands_memory::episodic_recall_similar,
-            commands_memory::episodic_older_than,
-            commands_memory::episodic_delete,
-            commands_memory::episodic_serialize,
-            commands_memory::episodic_deserialize,
-            commands_memory::procedural_learn,
-            commands_memory::procedural_recall,
-            commands_memory::procedural_reinforce,
-            commands_memory::procedural_list_all,
-            commands_memory::procedural_delete,
-            commands_memory::procedural_serialize,
-            commands_memory::procedural_deserialize,
-            // AgentMemory TTL / eviction / snapshot-versioning / VelesQL parity
-            commands_memory::memory_set_ttl,
-            commands_memory::memory_auto_expire,
-            commands_memory::memory_evict_low_confidence,
-            commands_memory::memory_snapshot,
-            commands_memory::memory_load_latest_snapshot,
-            commands_memory::memory_load_snapshot_version,
-            commands_memory::memory_list_snapshot_versions,
-            commands_memory::memory_query_semantic,
-            commands_memory::memory_query_episodic,
-            commands_memory::memory_query_procedural,
-            // Knowledge Graph commands (EPIC-015 US-001)
-            commands_graph::create_graph_collection,
-            commands_graph::add_edge,
-            commands_graph::add_edges_batch,
-            commands_graph::get_edges,
-            commands_graph::traverse_graph,
-            commands_graph::get_node_degree,
-            commands_graph::traverse_graph_parallel,
-            // Secondary Index commands
-            commands_index::create_index,
-            commands_index::drop_index,
-            commands_index::list_indexes,
-        ],
-        persistence_only: [
-            commands::stream_insert,
-            commands::enable_streaming,
-        ],
-    ));
-    builder
-        .setup(move |app, _api| {
-            let observer = std::sync::Arc::new(observer::TauriObserver::new(app.clone()));
-            let state = VelesDbState::new_with_observer(db_path.clone(), observer);
-            app.manage(state);
-            tracing::info!("VelesDB plugin initialized with path: {:?}", db_path);
-            Ok(())
-        })
-        .build()
+/// Builder for the `VelesDB` plugin (issue #1549).
+///
+/// Lets the host application supply an explicit engine
+/// [`VelesConfig`] — either as a value ([`Builder::with_config`]) or loaded
+/// from a TOML file ([`Builder::with_config_path`]) — before building the
+/// plugin. Without a config, the database opens with core defaults, exactly
+/// like [`init_with_path`] always did.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let plugin = tauri_plugin_velesdb::Builder::new("./my_data")
+///     .with_config_path("./velesdb.toml")?  // fail-fast if missing/invalid
+///     .build();
+/// tauri::Builder::default()
+///     .plugin(plugin)
+///     .run(tauri::generate_context!())
+///     .expect("error while running tauri application");
+/// ```
+#[derive(Debug)]
+pub struct Builder {
+    path: PathBuf,
+    config: Option<VelesConfig>,
+}
+
+impl Builder {
+    /// Creates a builder for a plugin persisting under `path`.
+    #[must_use]
+    pub fn new<P: AsRef<Path>>(path: P) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+            config: None,
+        }
+    }
+
+    /// Supplies an explicit engine [`VelesConfig`] value.
+    ///
+    /// The database is opened with
+    /// [`velesdb_core::Database::open_with_observer_and_config`], so every
+    /// config-honouring subsystem (HNSW defaults, WAL batching, runtime
+    /// limits, search quality) reads from this instance instead of core
+    /// defaults. Note that the core re-validates the config when the
+    /// database is opened, so an out-of-range value fails the first open.
+    #[must_use]
+    pub fn with_config(mut self, config: VelesConfig) -> Self {
+        self.config = Some(config);
+        self
+    }
+
+    /// Loads an engine [`VelesConfig`] from a TOML file, fail-fast.
+    ///
+    /// Only the engine sections (`[search]`/`[hnsw]`/`[storage]`/`[limits]`/
+    /// `[quantization]`/`[wal_batch]`) are read (via
+    /// [`VelesConfig::load_from_path_engine_only`]); any other top-level
+    /// table — e.g. a `[server]` section owned by `velesdb-server` in a
+    /// shared config file — is ignored rather than being parsed into
+    /// `VelesConfig`'s own unrelated same-named fields and spuriously
+    /// rejected. `VELESDB_*` environment variables still layer on top of
+    /// the filtered file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ConfigLoad`] immediately — never a silent fallback
+    /// to defaults — if the file is missing, is not valid TOML, or fails
+    /// engine validation. The typed
+    /// [`velesdb_core::config::ConfigError`] is preserved as the source.
+    pub fn with_config_path<P: AsRef<Path>>(mut self, config_path: P) -> Result<Self> {
+        let config_path = config_path.as_ref();
+        if !config_path.exists() {
+            return Err(Error::ConfigLoad {
+                path: config_path.display().to_string(),
+                source: velesdb_core::config::ConfigError::FileNotFound(
+                    config_path.display().to_string(),
+                ),
+            });
+        }
+        let config = VelesConfig::load_from_path_engine_only(config_path).map_err(|source| {
+            Error::ConfigLoad {
+                path: config_path.display().to_string(),
+                source,
+            }
+        })?;
+        self.config = Some(config);
+        Ok(self)
+    }
+
+    /// Returns the engine config recorded so far, if any.
+    #[must_use]
+    pub fn config(&self) -> Option<&VelesConfig> {
+        self.config.as_ref()
+    }
+
+    /// Builds the Tauri plugin, registering every `VelesDB` command and
+    /// managing a [`VelesDbState`] that opens the database with the
+    /// recorded config (or core defaults when none was supplied).
+    #[must_use]
+    // The body is a flat command-registration list (trivial cyclomatic
+    // complexity); the line count grows linearly with the number of
+    // exposed commands.
+    #[allow(clippy::too_many_lines)]
+    pub fn build<R: Runtime>(self) -> TauriPlugin<R> {
+        let Self {
+            path: db_path,
+            config,
+        } = self;
+
+        let builder = TauriPluginBuilder::new("velesdb").invoke_handler(velesdb_invoke_handler!(
+            common: [
+                commands::create_collection,
+                commands::create_metadata_collection,
+                commands::delete_collection,
+                commands::list_collections,
+                commands::get_collection,
+                commands::upsert,
+                commands::upsert_metadata,
+                commands::get_points,
+                commands::delete_points,
+                commands::search,
+                commands::search_ids,
+                commands::batch_search,
+                commands::text_search,
+                commands::hybrid_search,
+                commands::multi_query_search,
+                commands_query::query,
+                commands::is_empty,
+                commands::flush,
+                commands::compact_storage,
+                commands::update_guardrails,
+                commands::get_guardrails,
+                commands::scroll_collection,
+                // Sparse vector commands
+                commands_sparse::sparse_search,
+                commands_sparse::hybrid_sparse_search,
+                commands_sparse::sparse_upsert,
+                // PQ training command
+                commands::train_pq,
+                // AgentMemory commands (EPIC-016 US-003)
+                commands_memory::semantic_store,
+                commands_memory::semantic_store_with_ttl,
+                commands_memory::semantic_query,
+                commands_memory::semantic_delete,
+                commands_memory::semantic_dimension,
+                commands_memory::semantic_serialize,
+                commands_memory::semantic_deserialize,
+                commands_memory::episodic_record,
+                commands_memory::episodic_recent,
+                commands_memory::episodic_recall_similar,
+                commands_memory::episodic_older_than,
+                commands_memory::episodic_delete,
+                commands_memory::episodic_serialize,
+                commands_memory::episodic_deserialize,
+                commands_memory::procedural_learn,
+                commands_memory::procedural_recall,
+                commands_memory::procedural_reinforce,
+                commands_memory::procedural_list_all,
+                commands_memory::procedural_delete,
+                commands_memory::procedural_serialize,
+                commands_memory::procedural_deserialize,
+                // AgentMemory TTL / eviction / snapshot-versioning / VelesQL parity
+                commands_memory::memory_set_ttl,
+                commands_memory::memory_auto_expire,
+                commands_memory::memory_evict_low_confidence,
+                commands_memory::memory_snapshot,
+                commands_memory::memory_load_latest_snapshot,
+                commands_memory::memory_load_snapshot_version,
+                commands_memory::memory_list_snapshot_versions,
+                commands_memory::memory_query_semantic,
+                commands_memory::memory_query_episodic,
+                commands_memory::memory_query_procedural,
+                // Knowledge Graph commands (EPIC-015 US-001)
+                commands_graph::create_graph_collection,
+                commands_graph::add_edge,
+                commands_graph::add_edges_batch,
+                commands_graph::get_edges,
+                commands_graph::traverse_graph,
+                commands_graph::get_node_degree,
+                commands_graph::traverse_graph_parallel,
+                // Secondary Index commands
+                commands_index::create_index,
+                commands_index::drop_index,
+                commands_index::list_indexes,
+            ],
+            persistence_only: [
+                commands::stream_insert,
+                commands::enable_streaming,
+            ],
+        ));
+        builder
+            .setup(move |app, _api| {
+                let observer = std::sync::Arc::new(observer::TauriObserver::new(app.clone()));
+                let state = match config {
+                    Some(config) => VelesDbState::new_with_observer_and_config(
+                        db_path.clone(),
+                        observer,
+                        config,
+                    ),
+                    None => VelesDbState::new_with_observer(db_path.clone(), observer),
+                };
+                app.manage(state);
+                tracing::info!("VelesDB plugin initialized with path: {:?}", db_path);
+                Ok(())
+            })
+            .build()
+    }
 }
 
 /// Alias for `init()` for backward compatibility.
