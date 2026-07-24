@@ -7,8 +7,9 @@ which is *how* it remembers, connects, and explains.
 
 `remember` / `recall` / `recallWhere` / `recallFused` / `recallFusedDated` /
 `relate` / `forget` / `why` / `feedback` / `rememberExtracted` /
-`compileContext` / `contextSavings` / `explainCompilation` /
-`retrieveContextSource` / working contexts. The differentiator is **`why()`**: it
+`compileContext` / `compileTranscript` / `contextSavings` /
+`explainCompilation` / `retrieveContextSource` / working contexts
+(`save`/`load`/`list`). The differentiator is **`why()`**: it
 answers a question with the best-matching memory *plus its connected subgraph*
 — related facts a plain vector recall is blind to. `compileContext` applies
 the same explainability to your token bill: deterministic context compression
@@ -114,9 +115,9 @@ strings, and the *top-level* result keys follow the binding's camelCase
 [`velesdb-context-optimizer` skill](./skills/velesdb-context-optimizer/SKILL.md)
 teaches an agent the full workflow, including when *not* to compress. The
 binding exposes the compiler's read tools natively too: `explainCompilation`
-and `contextSavings` (alongside `compileContext`, `retrieveContextSource`,
-save/load working context, and `feedback`) — only `compileTranscript` remains
-MCP-only for now. Install the skill into your agent's skills directory:
+and `contextSavings` (alongside `compileContext`, `compileTranscript`,
+`retrieveContextSource`, save/load/list working context, and `feedback`).
+Install the skill into your agent's skills directory:
 
 ```bash
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-context-optimizer ~/.claude/skills/

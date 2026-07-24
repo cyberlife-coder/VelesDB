@@ -499,3 +499,139 @@ fn list_working_contexts_lists_saved_sessions_for_a_project() {
         "a project that never saved anything lists no sessions"
     );
 }
+
+// --- compileTranscript / explainCompilation / contextSavings / suggestBudget
+// (issue #1547) --------------------------------------------------------------
+
+/// `compileTranscript` marshalling across the wasm boundary: a plain
+/// marker-based transcript segments into turns, each becoming a compiled
+/// fragment — `context` mirrors `compile_context`'s own shape (a plain
+/// object, id fields as decimal strings) and `segmentation` reports the
+/// detected format plus one audit entry per segment.
+#[wasm_bindgen_test]
+fn compile_transcript_segments_and_compiles_a_plain_transcript() {
+    let svc = WasmMemoryService::new(16);
+    let request = js_sys::JSON::parse(
+        r#"{
+            "query": "what broke the deploy",
+            "transcript": "System: you are a helpful agent.\nUser: what broke the deploy?\nAssistant: ```rust\nlet x = 42;\n```\n",
+            "token_budget": 5000
+        }"#,
+    )
+    .unwrap();
+
+    let result = svc.compile_transcript(request).unwrap();
+    assert!(
+        !result.is_instance_of::<js_sys::Map>(),
+        "compile_transcript result must be a plain object"
+    );
+
+    let context = js_sys::Reflect::get(&result, &"context".into()).unwrap();
+    let content = js_sys::Reflect::get(&context, &"content".into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+    assert!(
+        content.contains("let x = 42;"),
+        "the fenced code segment must survive verbatim, got: {content}"
+    );
+
+    let segmentation = js_sys::Reflect::get(&result, &"segmentation".into()).unwrap();
+    let format_detected = js_sys::Reflect::get(&segmentation, &"format_detected".into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+    assert_eq!(format_detected, "plain");
+
+    let segments = js_sys::Reflect::get(&segmentation, &"segments".into()).unwrap();
+    let first_segment = js_sys::Reflect::get(&segments, &0.into()).unwrap();
+    let fragment_id = js_sys::Reflect::get(&first_segment, &"fragment_id".into())
+        .unwrap()
+        .as_string()
+        .expect("segment fragment_id must cross as a decimal string, not a number");
+    assert!(fragment_id.parse::<u64>().is_ok());
+}
+
+/// An empty `transcript` rejects with a structured `{code: "INVALID_INPUT"}`
+/// error rather than a silent, useless empty compile.
+#[wasm_bindgen_test]
+fn compile_transcript_rejects_an_empty_transcript() {
+    let svc = WasmMemoryService::new(16);
+    let request =
+        js_sys::JSON::parse(r#"{"query": "q", "transcript": "", "token_budget": 1000}"#).unwrap();
+    let err = svc.compile_transcript(request).unwrap_err();
+    let code = js_sys::Reflect::get(&err, &"code".into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+    assert_eq!(code, "INVALID_INPUT");
+}
+
+/// `contextSavings` aggregates a `compileTranscript` call exactly like a
+/// `compileContext` one — both go through the same memory-bridge event
+/// recording.
+#[wasm_bindgen_test]
+fn context_savings_aggregates_after_a_compile_transcript_call() {
+    let svc = WasmMemoryService::new(16);
+    let request = js_sys::JSON::parse(
+        r#"{"query": "q", "transcript": "User: hi\nAssistant: hello\n", "token_budget": 1000}"#,
+    )
+    .unwrap();
+    svc.compile_transcript(request).unwrap();
+
+    let savings = svc.context_savings(None).unwrap();
+    let events = js_sys::Reflect::get(&savings, &"events".into())
+        .unwrap()
+        .as_f64()
+        .unwrap();
+    assert_eq!(events, 1.0, "the compile_transcript call must be counted");
+}
+
+/// `explainCompilation` returns the decision for the fragment named by
+/// `compileContext`'s own output, with every id field as a decimal string.
+#[wasm_bindgen_test]
+fn explain_compilation_returns_the_matching_decision() {
+    let svc = WasmMemoryService::new(16);
+    let request = js_sys::JSON::parse(
+        r#"{"query": "q", "token_budget": 5000, "fragments": [{"content": "the deploy pipeline runs clippy before tests"}]}"#,
+    )
+    .unwrap();
+
+    let compiled = svc.compile_context(request.clone()).unwrap();
+    let decisions = js_sys::Reflect::get(&compiled, &"decisions".into()).unwrap();
+    let first = js_sys::Reflect::get(&decisions, &0.into()).unwrap();
+    let fragment_id = js_sys::Reflect::get(&first, &"fragment_id".into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+
+    let decision = svc
+        .explain_compilation(request, &fragment_id, None)
+        .unwrap();
+    let decided_fragment_id = js_sys::Reflect::get(&decision, &"fragment_id".into())
+        .unwrap()
+        .as_string()
+        .unwrap();
+    assert_eq!(decided_fragment_id, fragment_id);
+}
+
+/// `suggestBudget` looks up a known model in the static table and reports
+/// `null` for an unknown one — never a guess.
+#[wasm_bindgen_test]
+fn suggest_budget_looks_up_known_and_unknown_models() {
+    let svc = WasmMemoryService::new(16);
+
+    let known = svc.suggest_budget("claude-sonnet-4-5", None).unwrap();
+    let window = js_sys::Reflect::get(&known, &"window".into()).unwrap();
+    assert!(
+        window.as_f64().is_some(),
+        "a known model must report a numeric window"
+    );
+
+    let unknown = svc.suggest_budget("not-a-real-model-xyz", None).unwrap();
+    let window = js_sys::Reflect::get(&unknown, &"window".into()).unwrap();
+    assert!(
+        window.is_null(),
+        "an unknown model must report window: null, never a guess"
+    );
+}

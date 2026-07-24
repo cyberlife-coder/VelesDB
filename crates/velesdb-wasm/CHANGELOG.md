@@ -45,6 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-crate entries resume from this point rather than inventing history
   for the skipped range.
 
+### Added
+- **`MemoryService`**: `compileTranscript`, `explainCompilation`,
+  `contextSavings`, and `suggestBudget` — the context-compiler tools that
+  were previously Node/MCP-only are now reachable in the browser.
+  `compileTranscript` deterministically segments a raw agent-session
+  transcript into turns (plain marker-based or JSONL) and code/log/body
+  sub-segments, then compiles the result exactly like `compileContext`;
+  it accepts only an inline `transcript` (no `path` — there is no
+  filesystem in WASM). `feedback` and `rememberExtracted` remain
+  intentionally absent — see `memory_service.rs`'s module doc for why.
+  (#1547)
+
 ### Removed
 - **Retracted claim**: WASM SIMD128 distance kernels. The `simd.rs` module
   depending on the `wide` crate was not wired into the distance paths used
