@@ -38,6 +38,8 @@
 #   --yes                    Assume yes to interactive prompts (e.g. `ollama pull`)
 #   --skip-client=NAME       Skip wiring a client (repeatable): claude-code|claude-desktop|windsurf|devin
 #   --skip-ca-trust          Skip trusting the local CA in the login keychain
+#   --wire-only              Skip build/daemon setup: only (re-)verify CA trust and re-wire the
+#                            clients against an already-installed daemon (no prompts, fast)
 #   --force-restart          Reload the daemon even if already running
 #   --from-release[=TAG]     Install the prebuilt daemon binary (--features ollama,http) from a
 #                            GitHub Release archive instead of `cargo install` (default TAG: the
@@ -90,6 +92,7 @@ FORCE_RESTART=0
 UNINSTALL=0
 SKIP_CLIENTS=""
 SKIP_CA_TRUST=0
+WIRE_ONLY=0
 FROM_RELEASE=0
 FROM_RELEASE_TAG=""
 SKIP_CHECKSUM=0
@@ -103,7 +106,7 @@ DEVIN_CONFIG="$HOME/.config/devin/config.json"
 RELEASE_REPO="cyberlife-coder/VelesDB"
 
 print_usage() {
-  sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # ---- 0. Parse flags ---------------------------------------------------
@@ -119,6 +122,7 @@ for arg in "$@"; do
     --yes) ASSUME_YES=1 ;;
     --skip-client=*) SKIP_CLIENTS="$SKIP_CLIENTS ${arg#*=}" ;;
     --skip-ca-trust) SKIP_CA_TRUST=1 ;;
+    --wire-only) WIRE_ONLY=1 ;;
     --force-restart) FORCE_RESTART=1 ;;
     --from-release) FROM_RELEASE=1 ;;
     --from-release=*) FROM_RELEASE=1; FROM_RELEASE_TAG="${arg#*=}" ;;
@@ -613,7 +617,23 @@ trust_local_ca() {
   echo -e "${YELLOW}   here or by hand later.${NC}"
 
   if run_with_timeout 60 "${trust_cmd[@]}"; then
-    echo -e "${GREEN}✅ Local CA trusted in your login keychain.${NC}"
+    # VERIFY, don't assume: `add-trusted-cert` exiting 0 is not proof a
+    # strict TLS client will now accept the daemon's certificate (trust
+    # settings can land in an unexpected domain/keychain). Ground-truth it
+    # the same way the idempotency check above does — a curl WITHOUT
+    # --cacert, i.e. against the system trust store.
+    if curl -fsS --max-time 2 "https://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+      echo -e "${GREEN}✅ Local CA trusted AND verified: a strict HTTPS request to the daemon now succeeds.${NC}"
+    elif curl -fsS --max-time 2 --cacert "$ca_cert" "https://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+      # Daemon reachable with --cacert but not without it → the trust
+      # settings did NOT take effect, despite add-trusted-cert exiting 0.
+      echo -e "${YELLOW}⚠️  add-trusted-cert reported success, but a strict HTTPS request to the daemon still${NC}"
+      echo -e "${YELLOW}   fails certificate verification. Re-run this by hand and approve any system prompt:${NC}"
+      echo "     ${trust_cmd[*]}"
+    else
+      echo -e "${YELLOW}⚠️  CA trust was recorded, but the daemon is not answering /health right now, so the${NC}"
+      echo -e "${YELLOW}   end-to-end verification could not run — check $HOME/Library/Logs/velesdb-memory/daemon.err.log${NC}"
+    fi
   else
     echo -e "${YELLOW}⚠️  Could not confirm the CA trust automatically (no response to the system prompt within${NC}"
     echo -e "${YELLOW}   60s, or the command failed). The daemon is still up and serving HTTPS — this only${NC}"
@@ -645,12 +665,16 @@ wire_claude_code() {
   fi
 }
 
-# wire_json_client NAME CONFIG_PATH JQ_FILTER REQUIRE_EXISTING_DIR
+# wire_json_client NAME CONFIG_PATH JQ_FILTER REQUIRE_EXISTING_DIR [JQ_ARGS...]
 # REQUIRE_EXISTING_DIR=1 skips (rather than creating) the client's config
-# directory when absent — used for Claude Desktop, whose directory only
-# exists if the app itself is installed; Windsurf's is created if missing.
+# directory when absent — used for Claude Desktop and Devin, whose directories
+# only exist if the app itself is installed; Windsurf's is created if missing.
+# Any extra arguments are passed straight to jq (e.g. --argjson entry '...'),
+# so a caller can build a value safely with jq -n instead of string-splicing
+# shell variables into the filter.
 wire_json_client() {
   local name="$1" config_path="$2" jq_filter="$3" require_existing_dir="$4"
+  shift 4
   if should_skip "$name"; then
     echo -e "${YELLOW}⏭  Skipping $name (--skip-client).${NC}"
     return 0
@@ -680,7 +704,7 @@ wire_json_client() {
 
   local tmp
   tmp="$(mktemp)"
-  if jq "$jq_filter" "$config_path" > "$tmp"; then
+  if jq "$@" "$jq_filter" "$config_path" > "$tmp"; then
     mv "$tmp" "$config_path"
     echo -e "${GREEN}✅ $name wired → $config_path${NC}"
   else
@@ -690,26 +714,98 @@ wire_json_client() {
 }
 
 # Claude Desktop is a DIFFERENT mechanism than every other client here:
-# claude_desktop_config.json (the file every other JSON client uses) never
-# reads a url/type:"http" entry — confirmed it does not even try to connect —
-# so writing one there (as this script used to) silently does nothing. The
-# only way to wire Desktop to the daemon is its own UI. This function prints
-# that instruction instead of touching the config file.
+# claude_desktop_config.json never reads a url/type:"http" entry (confirmed:
+# it does not even try to connect), and Desktop's "Add custom connector" UI
+# verifies TLS through Chromium/Node — which does NOT reliably consult the
+# macOS keychain — so even a keychain-trusted local CA can leave the UI path
+# rejecting the daemon's certificate. The reliable, zero-UI-steps path is a
+# stdio→HTTPS bridge: an `mcp-remote` entry in the config file, with
+# NODE_EXTRA_CA_CERTS pointing at the daemon's CA so the bridge verifies TLS
+# strictly (never NODE_TLS_REJECT_UNAUTHORIZED=0 — that disables verification
+# entirely). The bridge is a plain HTTPS client of the daemon: it never opens
+# the store itself, so there is no flock conflict.
 wire_claude_desktop() {
   if should_skip "claude-desktop"; then
     echo -e "${YELLOW}⏭  Skipping Claude Desktop (--skip-client).${NC}"
     return 0
   fi
-  echo ""
-  echo -e "${BLUE}🖥  Claude Desktop — different mechanism than every other client here:${NC}"
-  echo -e "${YELLOW}   its config file does not support HTTP (a url/type:\"http\" entry there is silently${NC}"
-  echo -e "${YELLOW}   ignored). Add it yourself, once, via the UI instead:${NC}"
-  echo -e "${YELLOW}   Settings → Connectors → Add custom connector, then paste:${NC}"
-  echo "     https://127.0.0.1:$PORT/mcp"
-  echo -e "${YELLOW}   No API key needed (loopback only) — requires the CA-trust step above to have succeeded.${NC}"
-  echo -e "${YELLOW}   Prefer not to use the Connectors UI? A stdio fallback still works — see the README's${NC}"
-  echo -e "${YELLOW}   \"Configure your client\" section (use a DIFFERENT VELESDB_MEMORY_PATH than $STORE,${NC}"
-  echo -e "${YELLOW}   or the fallback process and the daemon will fight over the same flock).${NC}"
+
+  local config_dir
+  config_dir="$(dirname "$DESKTOP_CONFIG")"
+  if [ ! -d "$config_dir" ]; then
+    echo -e "${YELLOW}⏭  Claude Desktop not detected (no $config_dir) — skipping.${NC}"
+    return 0
+  fi
+
+  local ca_cert="$TLS_DIR/ca-cert.pem"
+  local url="https://127.0.0.1:$PORT/mcp"
+
+  # Resolve the bridge command. A globally-installed mcp-remote wins (no npx
+  # startup cost); otherwise npx fetches/caches it on first launch. Absolute
+  # paths on purpose: Desktop launched from Finder/Dock inherits launchd's
+  # minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin), which contains neither
+  # Homebrew nor nvm — a bare "npx" there fails with ENOENT. Same reason the
+  # entry's env carries an explicit PATH: both mcp-remote and npx are
+  # `#!/usr/bin/env node` scripts, so node's directory must be reachable too.
+  local bridge_cmd="" node_bin=""
+  local -a bridge_args=()
+  if command -v mcp-remote >/dev/null 2>&1; then
+    bridge_cmd="$(command -v mcp-remote)"
+    bridge_args=("$url")
+  elif command -v npx >/dev/null 2>&1; then
+    bridge_cmd="$(command -v npx)"
+    bridge_args=("-y" "mcp-remote" "$url")
+  fi
+  node_bin="$(command -v node 2>/dev/null || true)"
+
+  if [ -z "$bridge_cmd" ] || [ -z "$node_bin" ]; then
+    echo ""
+    echo -e "${YELLOW}⚠️  Claude Desktop needs a stdio→HTTPS bridge (mcp-remote), which needs Node.js —${NC}"
+    echo -e "${YELLOW}   'mcp-remote'/'npx'/'node' not found on PATH. Two ways to finish:${NC}"
+    echo -e "${YELLOW}   a) install Node.js (e.g. \`brew install node\`) and re-run: $0 --wire-only${NC}"
+    echo -e "${YELLOW}   b) or use Desktop's UI: Settings → Connectors → Add custom connector, paste:${NC}"
+    echo "        $url"
+    echo -e "${YELLOW}      (no API key needed — but this path requires the CA-trust step above to have${NC}"
+    echo -e "${YELLOW}      succeeded, and Desktop's own TLS stack may still refuse a local CA).${NC}"
+    return 0
+  fi
+
+  # VERIFY the exact TLS path the bridge will use BEFORE writing any config:
+  # Node does not consult the macOS keychain, so the keychain-trust step
+  # above proves nothing for the bridge — NODE_EXTRA_CA_CERTS is what makes
+  # Node accept this CA, and this probe exercises precisely that.
+  if [ -f "$ca_cert" ]; then
+    if run_with_timeout 10 env NODE_EXTRA_CA_CERTS="$ca_cert" "$node_bin" -e '
+        require("https").get(process.argv[1], (r) => process.exit(r.statusCode === 200 ? 0 : 1))
+          .on("error", () => process.exit(1));
+        setTimeout(() => process.exit(1), 8000);
+      ' "https://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+      echo -e "${GREEN}✅ Node accepts the daemon's certificate via NODE_EXTRA_CA_CERTS — the Desktop bridge will verify TLS strictly.${NC}"
+    else
+      echo -e "${YELLOW}⚠️  Node could not fetch https://127.0.0.1:$PORT/health with NODE_EXTRA_CA_CERTS=$ca_cert.${NC}"
+      echo -e "${YELLOW}   Writing the Claude Desktop entry anyway — if Desktop shows velesdb-memory as${NC}"
+      echo -e "${YELLOW}   disconnected, check $HOME/Library/Logs/velesdb-memory/daemon.err.log and re-run with --wire-only.${NC}"
+    fi
+  else
+    echo -e "${YELLOW}⚠️  No CA certificate at $ca_cert yet — the Desktop bridge entry is written but can only${NC}"
+    echo -e "${YELLOW}   be verified once the daemon has started and generated it (re-run with --wire-only).${NC}"
+  fi
+
+  require_jq
+  local entry
+  entry="$(jq -n \
+    --arg cmd "$bridge_cmd" \
+    --arg ca "$ca_cert" \
+    --arg path "$(dirname "$node_bin"):/usr/bin:/bin" \
+    --args \
+    '{command: $cmd, args: $ARGS.positional, env: {NODE_EXTRA_CA_CERTS: $ca, PATH: $path}}' \
+    "${bridge_args[@]}")"
+
+  wire_json_client "claude-desktop" "$DESKTOP_CONFIG" \
+    '.mcpServers["velesdb-memory"] = $entry' 1 \
+    --argjson entry "$entry"
+  echo -e "${YELLOW}   Restart Claude Desktop fully (menu bar → Quit, not just closing the window) — then${NC}"
+  echo -e "${YELLOW}   velesdb-memory appears in Settings → Developer as \"running\".${NC}"
 }
 
 wire_windsurf() {
@@ -794,6 +890,29 @@ print_summary() {
 main() {
   if [ "$UNINSTALL" = "1" ]; then
     do_uninstall
+    exit 0
+  fi
+
+  # --wire-only: (re-)verify CA trust and re-wire every client against an
+  # ALREADY-installed daemon — no cargo build, no daemon restart, no
+  # interactive prompts. This is both the "my client config broke / Node got
+  # installed later, fix the wiring" fast path for users and the testable
+  # entry point for this script's client-wiring logic (idempotent by
+  # construction: every wiring step backs up and merges, never overwrites).
+  if [ "$WIRE_ONLY" = "1" ]; then
+    if [ "$(uname -s)" = "Darwin" ]; then DAEMON_SUPPORTED=1; else DAEMON_SUPPORTED=0; fi
+    if ! curl -fsS --max-time 2 --cacert "$TLS_DIR/ca-cert.pem" "https://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+      echo -e "${YELLOW}⚠️  No daemon answering on https://127.0.0.1:$PORT/health — --wire-only only re-wires${NC}"
+      echo -e "${YELLOW}   clients; run the full installer (without --wire-only) if the daemon was never set up.${NC}"
+    fi
+    trust_local_ca "$TLS_DIR/ca-cert.pem"
+    wire_claude_code
+    wire_claude_desktop
+    wire_windsurf
+    wire_devin
+    EMBEDDER="(unchanged — --wire-only)"
+    TTL="(unchanged — --wire-only)"
+    print_summary
     exit 0
   fi
 

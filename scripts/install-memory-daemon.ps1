@@ -21,8 +21,11 @@
 #     thumbprint before importing, same spirit as the macOS strict-curl
 #     ground-truth check.
 #   - Client config paths follow Windows conventions: Claude Desktop
-#     `%APPDATA%\Claude\claude_desktop_config.json` (still stdio-only — never
-#     written here, same as macOS), Windsurf
+#     `%APPDATA%\Claude\claude_desktop_config.json` (stdio-only, so the
+#     installer writes an mcp-remote stdio→HTTPS bridge entry there with
+#     NODE_EXTRA_CA_CERTS — same mechanism as macOS; `.cmd` shims are
+#     resolved explicitly because Desktop spawns the command without a
+#     shell, and a bare/`.ps1` resolution would fail), Windsurf
 #     `%USERPROFILE%\.codeium\windsurf\mcp_config.json`, Devin CLI
 #     `%APPDATA%\devin\config.json` (documented at
 #     https://cli.devin.ai/docs/reference/configuration/config-file — Devin's
@@ -50,6 +53,8 @@
 #   -Yes                      Assume yes to interactive prompts (e.g. `ollama pull`)
 #   -SkipClient <name>        Skip wiring a client (repeatable): claude-code|claude-desktop|windsurf|devin
 #   -SkipCaTrust              Skip trusting the local CA in the CurrentUser\Root store
+#   -WireOnly                 Skip build/daemon setup: only (re-)verify CA trust and re-wire the
+#                             clients against an already-installed daemon (no prompts, fast)
 #   -ForceRestart             Re-register/restart the scheduled task even if already running
 #   -FromRelease              Install the prebuilt daemon binary from a GitHub Release archive
 #                             instead of building with cargo (see -FromReleaseTag). PowerShell
@@ -93,6 +98,8 @@ param(
     [string[]]$SkipClient = @(),
 
     [switch]$SkipCaTrust,
+
+    [switch]$WireOnly,
 
     [switch]$ForceRestart,
 
@@ -153,7 +160,7 @@ function Write-ErrorMsg { param([string]$Message) Write-Host $Message -Foregroun
 function Show-Usage {
     # Reprint the flag block from this file's own header — keeps `-Help`
     # honest (it can never drift from the comment a reader actually sees).
-    $lines = Get-Content -Path $PSCommandPath -TotalCount 70
+    $lines = Get-Content -Path $PSCommandPath -TotalCount 74
     ($lines | Select-Object -Skip 1) | ForEach-Object {
         if ($_ -match '^# ?(.*)$') { Write-Host $Matches[1] } else { Write-Host '' }
     }
@@ -570,7 +577,28 @@ function Enable-LocalCaTrust {
     # rights needed, and behaves consistently across PowerShell versions.
     $ok = Invoke-WithTimeout -Seconds 60 -FilePath 'certutil.exe' -ArgumentList @('-addstore', '-user', 'Root', "`"$CaCertPath`"")
     if ($ok) {
-        Write-Success 'Local CA trusted in Cert:\CurrentUser\Root.'
+        # VERIFY, don't assume: certutil exiting 0 is not proof a strict TLS
+        # client now accepts the daemon's certificate. Ground-truth it the
+        # same way the idempotency check above does — curl WITHOUT --cacert,
+        # i.e. against the user/system trust store.
+        if ($curl) {
+            & $curl.Source -fsS --max-time 2 "https://127.0.0.1:$Port/health" *> $null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Success 'Local CA trusted AND verified: a strict HTTPS request to the daemon now succeeds.'
+            } else {
+                & $curl.Source -fsS --max-time 2 --cacert $CaCertPath "https://127.0.0.1:$Port/health" *> $null
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Warn '   certutil reported success, but a strict HTTPS request to the daemon still fails'
+                    Write-Warn '   certificate verification. Re-run this by hand and approve any security dialog:'
+                    Write-Host "     certutil -addstore -user Root `"$CaCertPath`""
+                } else {
+                    Write-Warn "   CA imported, but the daemon is not answering /health right now, so the end-to-end"
+                    Write-Warn "   verification could not run — check $LogsDir\daemon.err.log"
+                }
+            }
+        } else {
+            Write-Success 'Local CA imported into Cert:\CurrentUser\Root (curl.exe not found — could not verify end-to-end).'
+        }
     } else {
         Write-Warn '   Could not confirm the CA trust automatically (no response within 60s, or the'
         Write-Warn '   command failed). The daemon is still up and serving HTTPS — this only affects'
@@ -605,24 +633,103 @@ function Set-ClaudeCodeClient {
 
 # Claude Desktop is a DIFFERENT mechanism than every other client here:
 # claude_desktop_config.json never reads a url/type:"http" entry (confirmed on
-# macOS, same binary/config format on Windows) — the only way to wire Desktop
-# to the daemon is its own UI. This prints that instruction instead of
-# touching the config file, same as the shell script.
+# macOS, same binary/config format on Windows), and Desktop's "Add custom
+# connector" UI verifies TLS through Chromium/Node — which does not reliably
+# consult the OS certificate store — so even a trusted local CA can leave the
+# UI path rejecting the daemon's certificate. The reliable, zero-UI-steps
+# path (same as the shell script) is a stdio→HTTPS bridge: an `mcp-remote`
+# entry in the config file, with NODE_EXTRA_CA_CERTS pointing at the daemon's
+# CA so the bridge verifies TLS strictly (never NODE_TLS_REJECT_UNAUTHORIZED=0
+# — that disables verification entirely). The bridge is a plain HTTPS client
+# of the daemon: it never opens the store itself, so no lock conflict.
+# `.cmd` shims are resolved explicitly (mcp-remote.cmd / npx.cmd, absolute
+# paths): Desktop spawns the command without a shell, so a bare name or a
+# `.ps1` shim would fail to launch.
 function Set-ClaudeDesktopClient {
     if (Test-ShouldSkip 'claude-desktop') {
         Write-Warn 'Skipping Claude Desktop (-SkipClient).'
         return
     }
-    Write-Host ''
-    Write-Info 'Claude Desktop — different mechanism than every other client here:'
-    Write-Warn "   its config file ($DesktopConfig) does not support HTTP (a url/type:`"http`" entry"
-    Write-Warn '   there is silently ignored). Add it yourself, once, via the UI instead:'
-    Write-Warn '   Settings -> Connectors -> Add custom connector, then paste:'
-    Write-Host "     https://127.0.0.1:$Port/mcp"
-    Write-Warn '   No API key needed (loopback only) — requires the CA-trust step above to have succeeded.'
-    Write-Warn '   Prefer not to use the Connectors UI? A stdio fallback still works — see the README''s'
-    Write-Warn "   `"Configure your client`" section (use a DIFFERENT VELESDB_MEMORY_PATH than $script:Store,"
-    Write-Warn '   or the fallback process and the daemon will fight over the same lock).'
+
+    $configDir = Split-Path -Path $DesktopConfig -Parent
+    if (-not (Test-Path $configDir)) {
+        Write-Warn "Claude Desktop not detected (no $configDir) — skipping."
+        return
+    }
+
+    $caCert = "$script:TlsDir\ca-cert.pem"
+    $url = "https://127.0.0.1:$Port/mcp"
+
+    # Resolve the bridge: a globally-installed mcp-remote wins (no npx
+    # startup cost); otherwise npx fetches/caches it on first launch.
+    $bridgeCmd = $null
+    $bridgeArgs = @()
+    $mcpRemote = Get-Command 'mcp-remote.cmd' -ErrorAction SilentlyContinue
+    $npx = Get-Command 'npx.cmd' -ErrorAction SilentlyContinue
+    $node = Get-Command 'node.exe' -ErrorAction SilentlyContinue
+    if ($mcpRemote) {
+        $bridgeCmd = $mcpRemote.Source
+        $bridgeArgs = @($url)
+    } elseif ($npx) {
+        $bridgeCmd = $npx.Source
+        $bridgeArgs = @('-y', 'mcp-remote', $url)
+    }
+
+    if (-not $bridgeCmd -or -not $node) {
+        Write-Host ''
+        Write-Warn 'Claude Desktop needs a stdio->HTTPS bridge (mcp-remote), which needs Node.js —'
+        Write-Warn "   'mcp-remote.cmd'/'npx.cmd'/'node.exe' not found on PATH. Two ways to finish:"
+        Write-Warn '   a) install Node.js (https://nodejs.org) and re-run: pwsh -File scripts/install-memory-daemon.ps1 -WireOnly'
+        Write-Warn '   b) or use Desktop''s UI: Settings -> Connectors -> Add custom connector, paste:'
+        Write-Host "        $url"
+        Write-Warn '      (no API key needed — but this path requires the CA-trust step above to have'
+        Write-Warn '      succeeded, and Desktop''s own TLS stack may still refuse a local CA).'
+        return
+    }
+
+    # VERIFY the exact TLS path the bridge will use BEFORE writing any
+    # config: Node does not consult the Windows certificate store by default,
+    # so the CA-trust step above proves nothing for the bridge —
+    # NODE_EXTRA_CA_CERTS is what makes Node accept this CA, and this probe
+    # exercises precisely that.
+    if (Test-Path $caCert) {
+        $previousCa = $env:NODE_EXTRA_CA_CERTS
+        $env:NODE_EXTRA_CA_CERTS = $caCert
+        & $node.Source -e 'require("https").get(process.argv[1],(r)=>process.exit(r.statusCode===200?0:1)).on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),8000);' "https://127.0.0.1:$Port/health" *> $null
+        $nodeOk = ($LASTEXITCODE -eq 0)
+        $env:NODE_EXTRA_CA_CERTS = $previousCa
+        if ($nodeOk) {
+            Write-Success 'Node accepts the daemon''s certificate via NODE_EXTRA_CA_CERTS — the Desktop bridge will verify TLS strictly.'
+        } else {
+            Write-Warn "Node could not fetch https://127.0.0.1:$Port/health with NODE_EXTRA_CA_CERTS=$caCert."
+            Write-Warn '   Writing the Claude Desktop entry anyway — if Desktop shows velesdb-memory as'
+            Write-Warn "   disconnected, check $LogsDir\daemon.err.log and re-run with -WireOnly."
+        }
+    } else {
+        Write-Warn "No CA certificate at $caCert yet — the Desktop bridge entry is written but can only"
+        Write-Warn '   be verified once the daemon has started and generated it (re-run with -WireOnly).'
+    }
+
+    $entry = [PSCustomObject]@{
+        command = $bridgeCmd
+        args    = [string[]]$bridgeArgs
+        env     = [PSCustomObject]@{ NODE_EXTRA_CA_CERTS = $caCert }
+    }
+
+    Set-JsonClient -Name 'claude-desktop' -ConfigPath $DesktopConfig -RequireExistingDir $true -Mutator {
+        param($json)
+        if (-not $json.PSObject.Properties['mcpServers']) {
+            $json | Add-Member -NotePropertyName 'mcpServers' -NotePropertyValue ([PSCustomObject]@{})
+        }
+        if ($json.mcpServers.PSObject.Properties['velesdb-memory']) {
+            $json.mcpServers.'velesdb-memory' = $entry
+        } else {
+            $json.mcpServers | Add-Member -NotePropertyName 'velesdb-memory' -NotePropertyValue $entry
+        }
+        $json
+    }.GetNewClosure()
+    Write-Warn '   Restart Claude Desktop fully (system tray -> Quit, not just closing the window) — then'
+    Write-Warn '   velesdb-memory appears in Settings -> Developer as "running".'
 }
 
 # Set-JsonClient NAME CONFIG_PATH MUTATOR REQUIRE_EXISTING_DIR
@@ -787,6 +894,38 @@ function Show-Summary {
 function Main {
     if ($Uninstall) {
         Invoke-Uninstall
+        exit 0
+    }
+
+    # -WireOnly: (re-)verify CA trust and re-wire every client against an
+    # ALREADY-installed daemon — no cargo build, no task re-registration, no
+    # interactive prompts. Both the "fix the wiring / Node got installed
+    # later" fast path for users and the testable entry point for this
+    # script's client-wiring logic (idempotent by construction: every wiring
+    # step backs up and merges, never overwrites).
+    if ($WireOnly) {
+        # Show-Summary reads this under Set-StrictMode; Set-Daemon (which
+        # normally sets it) is deliberately skipped on this path.
+        $script:DaemonAlreadyRunning = $true
+        $caCert = "$script:TlsDir\ca-cert.pem"
+        $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+        $daemonUp = $false
+        if ($curl -and (Test-Path $caCert)) {
+            & $curl.Source -fsS --max-time 2 --cacert $caCert "https://127.0.0.1:$Port/health" *> $null
+            $daemonUp = ($LASTEXITCODE -eq 0)
+        }
+        if (-not $daemonUp) {
+            Write-Warn "No daemon answering on https://127.0.0.1:$Port/health — -WireOnly only re-wires"
+            Write-Warn '   clients; run the full installer (without -WireOnly) if the daemon was never set up.'
+        }
+        Enable-LocalCaTrust -CaCertPath $caCert
+        Set-ClaudeCodeClient
+        Set-ClaudeDesktopClient
+        Set-WindsurfClient
+        Set-DevinClient
+        $script:Embedder = '(unchanged — -WireOnly)'
+        $script:Ttl = '(unchanged — -WireOnly)'
+        Show-Summary
         exit 0
     }
 

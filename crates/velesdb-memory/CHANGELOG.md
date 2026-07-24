@@ -15,14 +15,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`~/.config/devin/config.json`) alongside Claude Code, Claude Desktop and
   Windsurf; documented in the README's stdio and HTTP-transport client
   sections.
+- Both installers now wire **Claude Desktop** automatically (macOS and
+  Windows): an `mcp-remote` stdio→HTTPS bridge entry is written into
+  `claude_desktop_config.json` (non-destructive merge, timestamped backup)
+  with `NODE_EXTRA_CA_CERTS` pointing at the daemon's local CA, so the bridge
+  verifies TLS strictly — no manual proxy setup, no
+  `NODE_TLS_REJECT_UNAUTHORIZED=0`. The exact TLS path the bridge will use is
+  probed (Node HTTPS request to `/health` with `NODE_EXTRA_CA_CERTS`) before
+  the entry is written; absolute command paths are resolved so Desktop's
+  shell-less, minimal-`PATH` spawn works. Without Node.js the installers fall
+  back to printing the Settings → Connectors instructions. Documented in the
+  README's new "Claude Desktop (macOS / Windows)" section (happy path,
+  troubleshooting, CA-trust removal).
+- `--wire-only` (`.sh`) / `-WireOnly` (`.ps1`): re-verify CA trust and
+  re-wire all clients against an already-installed daemon — no build, no
+  daemon restart, no interactive prompts.
 
 ### Fixed
 
 - The installer no longer writes a `type:"http"` entry into
   `claude_desktop_config.json` — confirmed Desktop's config file never reads
-  that shape (silently ignored). It now prints the Settings → Connectors →
-  Add custom connector instructions instead, matching what the README already
-  documented.
+  that shape (silently ignored). Superseded in this same release by the
+  `mcp-remote` bridge entry above, which Desktop's config file *does* read.
+- The CA-trust step on both platforms now **verifies** after trusting instead
+  of assuming: a strict HTTPS request to the daemon (no `--cacert`, i.e.
+  against the OS trust store) must succeed, and a trust command that exits 0
+  without actually taking effect is reported with the exact command to re-run
+  by hand. (Follows up the idempotency ground-truth check from #1537.)
 
 ### Changed
 
