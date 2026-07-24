@@ -248,6 +248,11 @@ class GraphRetriever(BaseRetriever):
         except AttributeError:
             vs = None
         config = getattr(vs, "_config", None)
+        if config is None:
+            # Keep the pre-config call shape so a velesdb-common that
+            # predates open_native_graph's ``config`` parameter (floor
+            # 3.8.0) stays compatible when the feature is unused.
+            return open_native_graph(resolved_path, collection_name)
         return open_native_graph(resolved_path, collection_name, config=config)
 
     def _infer_collection_name(self) -> str:

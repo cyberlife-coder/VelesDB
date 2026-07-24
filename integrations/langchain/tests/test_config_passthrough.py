@@ -168,3 +168,26 @@ class TestProceduralMemoryConfigPassthrough:
     def test_no_config_call_unchanged(self, tmp_path, recording_db):
         VelesDBProceduralMemory(path=str(tmp_path))
         assert recording_db.calls == [((str(tmp_path),), {})]
+
+
+class TestGraphRetrieverOldCommonCompat:
+    """The path fallback must stay callable against a velesdb-common that
+    predates ``open_native_graph``'s ``config`` parameter (floor 3.8.0):
+    when the store carries no config, the kwarg must not be passed at all."""
+
+    def test_no_config_works_with_old_common_signature(self, tmp_path, monkeypatch):
+        import langchain_velesdb.graph_retriever as gr
+
+        calls = []
+
+        def old_signature(db_path, collection_name):
+            calls.append((db_path, collection_name))
+            return object()
+
+        monkeypatch.setattr(gr, "open_native_graph", old_signature)
+        GraphRetriever(
+            vector_store=_StoreWithoutGetDb(str(tmp_path)),
+            mode="native",
+            graph_collection_name="kg",
+        )
+        assert calls == [(str(tmp_path), "kg")]
