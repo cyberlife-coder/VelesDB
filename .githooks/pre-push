@@ -8,14 +8,16 @@
 # Pour activer: git config core.hooksPath .githooks
 #
 # NOTE SIGPIPE (exit 141): git ouvre la connexion au remote AVANT de lancer ce
-# hook et envoie le pack APRÈS sur la même connexion SSH. La validation
-# complète (~15 min) dépasse le timeout d'inactivité de la connexion, qui meurt
-# pendant les checks — git écrit alors dans un pipe fermé et sort en 141 sans
-# message, après "PASSED". Contre-mesures ici:
+# hook et envoie le pack APRÈS sur la même connexion. Si cette connexion SSH
+# meurt pendant la validation complète (~15 min), git écrit dans un pipe fermé
+# et sort en 141 sans message, après "PASSED" — le transfert n'a jamais lieu.
+# Contre-mesures ici:
 #   - stdin (liste des refs) est drainé AVANT les checks, et les sous-processus
 #     cargo reçoivent </dev/null pour ne pas consommer le pipe de git;
-#   - des keepalives SSH doivent maintenir la connexion pendant les checks:
-#     git config core.sshCommand "ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60"
+#   - pousser en HTTPS rend la coupure sans effet (advertisement et envoi du
+#     pack sont deux requêtes indépendantes, la connexion est rétablie):
+#     git config remote.origin.pushurl https://github.com/cyberlife-coder/VelesDB.git
+#     git config credential.helper '!gh auth git-credential'
 # =============================================================================
 
 set -e
