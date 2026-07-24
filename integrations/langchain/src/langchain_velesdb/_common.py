@@ -22,10 +22,32 @@ from velesdb_common.graph import (  # noqa: F401
 __all__ = [
     "make_initial_id_counter", "build_graph_rest_payload",
     "is_timeout_exception", "open_native_graph", "parse_graph_traverse_response",
-    "payload_to_doc_parts", "validate_queries_batch",
+    "payload_to_doc_parts", "validate_queries_batch", "open_database",
 ]
 
 logger = logging.getLogger(__name__)
+
+
+def open_database(path: str, config: Any = None) -> Any:
+    """Open a :class:`velesdb.Database`, forwarding ``config`` only when set.
+
+    ``config`` is an opaque pass-through of ``velesdb.VelesConfigOptions``:
+    whatever the caller provides is handed to the binding verbatim.  When
+    ``config`` is ``None`` the call is identical to the historical
+    ``velesdb.Database(path)`` so default behaviour never changes.
+
+    Args:
+        path: Filesystem path to the VelesDB database directory.
+        config: Optional ``velesdb.VelesConfigOptions`` applied at open time.
+
+    Returns:
+        An open ``velesdb.Database`` handle.
+    """
+    import velesdb
+
+    if config is not None:
+        return velesdb.Database(path, config=config)
+    return velesdb.Database(path)
 
 
 # ---------------------------------------------------------------------------

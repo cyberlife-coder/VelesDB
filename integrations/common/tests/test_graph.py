@@ -1,6 +1,9 @@
+import pytest
+
 from velesdb_common.graph import (
     build_graph_rest_payload,
     is_timeout_exception,
+    open_native_graph,
 )
 
 
@@ -36,3 +39,39 @@ def test_is_timeout_exception_with_timeout():
 def test_is_timeout_exception_with_other():
     exc = ValueError("Some error")
     assert is_timeout_exception(exc) is False
+
+
+class _RecordingDatabase:
+    """Recording fake for ``velesdb.Database`` capturing constructor calls."""
+
+    calls = []
+
+    def __init__(self, *args, **kwargs):
+        type(self).calls.append((args, kwargs))
+
+    def get_graph_collection(self, name):
+        return object()
+
+
+@pytest.fixture
+def recording_db(monkeypatch):
+    """Patch velesdb.Database with a recording fake and reset its call log."""
+    velesdb = pytest.importorskip("velesdb")
+    _RecordingDatabase.calls = []
+    monkeypatch.setattr(velesdb, "Database", _RecordingDatabase)
+    return _RecordingDatabase
+
+
+def test_open_native_graph_forwards_config(tmp_path, recording_db):
+    """Issue #1549: a provided config is forwarded verbatim to Database."""
+    config = object()  # opaque pass-through payload
+    graph = open_native_graph(str(tmp_path), "kg", config=config)
+    assert graph is not None
+    assert recording_db.calls == [((str(tmp_path),), {"config": config})]
+
+
+def test_open_native_graph_no_config_call_unchanged(tmp_path, recording_db):
+    """Without config the historical Database(path) call is preserved."""
+    graph = open_native_graph(str(tmp_path), "kg")
+    assert graph is not None
+    assert recording_db.calls == [((str(tmp_path),), {})]
