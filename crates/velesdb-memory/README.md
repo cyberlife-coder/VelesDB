@@ -429,6 +429,11 @@ curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/vele
   | tar -xz -C ~/.claude/skills/
 ```
 
+**Keep skills fresh:** the `cp`/`curl` above is a snapshot, not a live link — a
+skill installed once does not update itself when a new release changes it.
+Re-run the same command after every upgrade (safe to repeat: it just
+overwrites the local copy).
+
 **Skills teach an agent what to do; they don't make it remember to do it.**
 [`integrations/agent-hooks/`](https://github.com/cyberlife-coder/VelesDB/tree/develop/integrations/agent-hooks)
 closes that gap for Claude Code with real `SessionStart`/`Stop`/`PreCompact`
@@ -801,6 +806,11 @@ archive root — so a one-liner installs them straight from the release:
 curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz \
   | tar -xz -C ~/.claude/skills/
 ```
+
+**Keep skills fresh:** the `cp`/`curl` above is a snapshot, not a live link — a
+skill installed once does not update itself when a new release changes it.
+Re-run the same command after every upgrade (safe to repeat: it just
+overwrites the local copy).
 
 **Skills teach an agent what to do; they don't make it remember to do it.**
 [`integrations/agent-hooks/`](https://github.com/cyberlife-coder/VelesDB/tree/develop/integrations/agent-hooks)

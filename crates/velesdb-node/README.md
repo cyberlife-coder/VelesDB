@@ -72,6 +72,10 @@ reinforce). Install it the same way as the context-optimizer skill below:
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-memory ~/.claude/skills/
 ```
 
+**Keep it fresh:** this `cp` is a snapshot, not a live link — re-run it after
+every `npm update` so the installed skill picks up doc/behavior changes from
+the new package version (safe to repeat: it just overwrites the local copy).
+
 ### Auto-extraction (`rememberExtracted`)
 
 ```js
@@ -122,6 +126,9 @@ Install the skill into your agent's skills directory:
 ```bash
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-context-optimizer ~/.claude/skills/
 ```
+
+**Keep it fresh:** re-run this after every `npm update` for the same reason
+as the `velesdb-memory` skill above.
 
 #### Media fragments (`retrieveContextSource`)
 
