@@ -575,30 +575,112 @@ claude mcp add --transport http velesdb-memory https://127.0.0.1:18090/mcp
 } } }
 ```
 
-**Claude Desktop** — a different mechanism than every other client above.
+### Claude Desktop (macOS / Windows)
 
-Desktop's local config file (`claude_desktop_config.json`) only recognizes
-stdio (`command`) entries — a `url`/`type: "http"` block there is silently
-ignored (confirmed: it does not even try to connect). Use Desktop's own UI
-instead: **Settings → Connectors → Add custom connector**, paste the daemon
-URL directly:
+Claude Desktop is a different mechanism than every other client above, twice
+over:
 
+- its local config file (`claude_desktop_config.json`) only recognizes stdio
+  (`command`) entries — a `url`/`type: "http"` block there is silently
+  ignored (confirmed: it does not even try to connect);
+- its **Settings → Connectors → Add custom connector** UI accepts an
+  `https://` URL, but verifies TLS through its own Chromium/Node stack, which
+  does **not** reliably consult the OS keychain/certificate store — so even
+  after the CA-trust step above, the UI path can still refuse the daemon's
+  certificate.
+
+The installers therefore wire Desktop through a **stdio→HTTPS bridge**:
+[`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node.js),
+spawned by Desktop over stdio, connecting to the daemon over HTTPS with
+`NODE_EXTRA_CA_CERTS` pointed at the daemon's CA so TLS is verified
+*strictly* (never `NODE_TLS_REJECT_UNAUTHORIZED=0`, which disables
+verification entirely). The bridge is a plain HTTPS client of the daemon —
+it never opens the store itself, so there is no `flock` conflict.
+
+**Happy path** — run the installer, restart Desktop, done:
+
+```bash
+# macOS
+./scripts/install-memory-daemon.sh
 ```
-https://127.0.0.1:18090/mcp
+
+```powershell
+# Windows
+pwsh -File scripts/install-memory-daemon.ps1
 ```
 
-No API key/OAuth secret needed — the daemon binds to loopback only. This
-requires HTTPS specifically (Desktop's connector dialog rejects a plain
-`http://` URL outright, even for `127.0.0.1`), which is exactly what this
-daemon serves by default — see "trusting the local CA" earlier in this
-section if the connection fails with a certificate warning.
+then quit Claude Desktop **fully** (macOS: menu bar → Quit; Windows: system
+tray → Quit — closing the window is not enough) and relaunch it:
+**velesdb-memory** appears under **Settings → Developer** as "running". The
+installer verifies the whole TLS path before writing the entry (a Node probe
+against `/health` with `NODE_EXTRA_CA_CERTS` — exactly what the bridge will
+do) and merges into the existing config non-destructively, with a
+timestamped backup. Re-running is idempotent; to re-wire without rebuilding
+anything (e.g. after installing Node later), pass `--wire-only` / `-WireOnly`.
 
-If you'd rather not use the Connectors UI, the stdio fallback still works —
-same block as every other client above, but point `VELESDB_MEMORY_PATH` at a
-**different** directory than the daemon's store: pointed at the same one, the
-fallback process and the daemon would fight over the same `flock`,
-reproducing the exact `DatabaseLocked` problem this section exists to avoid.
-This gives Desktop its own separate memory, not shared with the daemon.
+The generated entry looks like this (macOS shown; Windows is the same shape
+with `mcp-remote.cmd`/`npx.cmd` and `%USERPROFILE%` paths — the installer
+resolves **absolute** paths because Desktop spawns the command without a
+shell and, on macOS, with launchd's minimal `PATH` that contains neither
+Homebrew nor nvm):
+
+```json
+{ "mcpServers": { "velesdb-memory": {
+  "command": "/opt/homebrew/bin/mcp-remote",
+  "args": ["https://127.0.0.1:18090/mcp"],
+  "env": {
+    "NODE_EXTRA_CA_CERTS": "/Users/you/.velesdb-memory-tls/ca-cert.pem",
+    "PATH": "/opt/homebrew/bin:/usr/bin:/bin"
+  }
+} } }
+```
+
+(without a global `mcp-remote`, the installer writes
+`npx -y mcp-remote <url>` instead — same result, fetched on first launch.)
+
+**Troubleshooting**
+
+- *Certificate refused / bridge disconnected*: check the daemon answers —
+  `curl --cacert ~/.velesdb-memory-tls/ca-cert.pem https://127.0.0.1:18090/health`
+  (Windows: `curl.exe --cacert "$env:USERPROFILE\.velesdb-memory-tls\ca-cert.pem" https://127.0.0.1:18090/health`)
+  — then confirm the config entry's `NODE_EXTRA_CA_CERTS` path exists.
+  Re-run the installer with `--wire-only` / `-WireOnly` to re-verify and
+  re-write the entry. Never "fix" a certificate error with
+  `NODE_TLS_REJECT_UNAUTHORIZED=0` — that turns TLS verification off.
+- *Port already in use*: the installer refuses to grab a port another process
+  holds — re-run everything with `--port=<other>` / `-Port <other>` (the
+  Desktop entry is rewritten to match).
+- *No Node.js on the machine*: the bridge can't run — install Node (macOS:
+  `brew install node`; Windows: https://nodejs.org) and re-run with
+  `--wire-only` / `-WireOnly`. Until then the installer prints the UI
+  alternative: **Settings → Connectors → Add custom connector**, paste
+  `https://127.0.0.1:18090/mcp` (no API key — loopback only; requires the
+  CA-trust step to have succeeded, and Desktop's own TLS stack may still
+  refuse a local CA — which is why the bridge is the default).
+- *`Storage(DatabaseLocked)`*: something is opening the store directly
+  alongside the daemon — the bridge never does this; look for a leftover
+  stdio entry pointing `VELESDB_MEMORY_PATH` at the daemon's store.
+
+**Removing the CA trust** (the uninstallers never touch it — "never delete
+local state"):
+
+```bash
+# macOS — remove the trust-settings record, then the certificate itself
+security remove-trusted-cert ~/.velesdb-memory-tls/ca-cert.pem
+security delete-certificate -c "VelesDB Memory Local CA" ~/Library/Keychains/login.keychain-db
+```
+
+```powershell
+# Windows — user store only, mirroring how it was added
+certutil -delstore -user Root "VelesDB Memory Local CA"
+```
+
+If you'd rather not share memory with the daemon at all, the plain stdio
+config still works — same block as every other client above, but point
+`VELESDB_MEMORY_PATH` at a **different** directory than the daemon's store:
+pointed at the same one, the stdio process and the daemon would fight over
+the same `flock`, reproducing the exact `DatabaseLocked` problem this
+section exists to avoid. This gives Desktop its own separate memory.
 
 **Windsurf** — `~/.codeium/windsurf/mcp_config.json`
 
@@ -622,6 +704,7 @@ macOS: building with the right features, running the daemon (as a `launchd`
 agent), trusting the local CA in your login keychain, and wiring Claude Code /
 Claude Desktop / Windsurf / Devin CLI — see `--help` for flags (`--embedder`,
 `--port`, `--store`, `--tls-dir`, `--ttl`, `--skip-client`, `--skip-ca-trust`,
+`--wire-only`,
 `--from-release`, `--uninstall`, …).
 
 ### Windows
@@ -629,7 +712,7 @@ Claude Desktop / Windsurf / Devin CLI — see `--help` for flags (`--embedder`,
 `scripts/install-memory-daemon.ps1` (`pwsh -File scripts/install-memory-daemon.ps1`,
 PowerShell 7+ on Windows 10/11) is the same automation with the same flags
 (PowerShell-cased: `-Embedder`, `-Port`, `-Store`, `-TlsDir`, `-Ttl`,
-`-SkipClient`, `-SkipCaTrust`, `-FromRelease`, `-Uninstall`, …), adapted to
+`-SkipClient`, `-SkipCaTrust`, `-WireOnly`, `-FromRelease`, `-Uninstall`, …), adapted to
 Windows in three places:
 
 - **Daemon**: a per-user **Scheduled Task** (`\VelesDB\MemoryDaemon`,
@@ -643,8 +726,10 @@ Windows in three places:
   the login keychain — also no admin rights needed (see "The local CA" above
   for the exact command).
 - **Client config paths**: Claude Desktop
-  `%APPDATA%\Claude\claude_desktop_config.json` (still stdio-only — never
-  written by the installer, same as macOS), Windsurf
+  `%APPDATA%\Claude\claude_desktop_config.json` (wired with the same
+  `mcp-remote` stdio→HTTPS bridge as macOS — see "Claude Desktop
+  (macOS / Windows)" above; `.cmd` shims resolved explicitly because Desktop
+  spawns the command without a shell), Windsurf
   `%USERPROFILE%\.codeium\windsurf\mcp_config.json`, Devin CLI
   `%APPDATA%\devin\config.json`.
 
