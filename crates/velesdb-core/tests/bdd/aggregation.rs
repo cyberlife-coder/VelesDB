@@ -666,3 +666,116 @@ fn test_group_by_without_limit_returns_all_groups() {
         groups.len()
     );
 }
+
+// =========================================================================
+// Scenario 19: OFFSET without LIMIT skips groups on GROUP BY results (#1556)
+// =========================================================================
+
+#[test]
+fn test_group_by_with_offset_only() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    let result = execute_aggregate_sql(
+        &db,
+        "SELECT category, COUNT(*) FROM orders GROUP BY category ORDER BY category ASC OFFSET 1",
+    )
+    .expect("test: GROUP BY OFFSET without LIMIT");
+
+    let groups = result
+        .as_array()
+        .expect("test: aggregation should return array");
+    let categories: Vec<&str> = groups
+        .iter()
+        .filter_map(|g| g.get("category")?.as_str())
+        .collect();
+    assert_eq!(
+        categories,
+        vec!["clothing", "electronics"],
+        "OFFSET 1 without LIMIT should skip the first group and return the rest"
+    );
+}
+
+// =========================================================================
+// Scenario 20: LIMIT combined with HAVING on GROUP BY results (#1556)
+// =========================================================================
+
+#[test]
+fn test_group_by_having_then_limit() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    // HAVING COUNT(*) >= 3 keeps all 3 categories (electronics=3, books=3,
+    // clothing=4); LIMIT 1 must then truncate what HAVING already filtered,
+    // never the other way around.
+    let result = execute_aggregate_sql(
+        &db,
+        "SELECT category, COUNT(*) FROM orders GROUP BY category HAVING COUNT(*) >= 3 ORDER BY category ASC LIMIT 1",
+    )
+    .expect("test: GROUP BY HAVING then LIMIT");
+
+    let groups = result
+        .as_array()
+        .expect("test: aggregation should return array");
+    assert_eq!(
+        groups.len(),
+        1,
+        "LIMIT 1 should apply after HAVING's 3-group result, got {}",
+        groups.len()
+    );
+    assert_eq!(
+        groups[0].get("category").and_then(|v| v.as_str()),
+        Some("books"),
+        "HAVING should keep all 3 categories, then LIMIT 1 (ORDER BY category ASC) keeps 'books'"
+    );
+}
+
+// =========================================================================
+// Scenario 21: LIMIT 0 on GROUP BY returns empty (#1556)
+// =========================================================================
+
+#[test]
+fn test_group_by_limit_zero_returns_empty() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    let result = execute_aggregate_sql(
+        &db,
+        "SELECT category, COUNT(*) FROM orders GROUP BY category LIMIT 0",
+    )
+    .expect("test: GROUP BY LIMIT 0");
+
+    let groups = result
+        .as_array()
+        .expect("test: aggregation should return array");
+    assert!(
+        groups.is_empty(),
+        "LIMIT 0 on GROUP BY should return 0 groups, got {}",
+        groups.len()
+    );
+}
+
+// =========================================================================
+// Scenario 22: OFFSET beyond group count returns empty (#1556)
+// =========================================================================
+
+#[test]
+fn test_group_by_offset_beyond_group_count_returns_empty() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    let result = execute_aggregate_sql(
+        &db,
+        "SELECT category, COUNT(*) FROM orders GROUP BY category OFFSET 100",
+    )
+    .expect("test: GROUP BY OFFSET beyond group count");
+
+    let groups = result
+        .as_array()
+        .expect("test: aggregation should return array");
+    assert!(
+        groups.is_empty(),
+        "OFFSET 100 on 3 groups should return empty, got {}",
+        groups.len()
+    );
+}

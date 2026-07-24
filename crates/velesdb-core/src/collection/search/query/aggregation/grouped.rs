@@ -38,15 +38,8 @@ impl Collection {
         let groups =
             self.scan_and_group(stmt, aggregations, group_by_columns, max_groups, params)?;
 
-        let results = Self::build_grouped_results(
-            groups,
-            aggregations,
-            group_by_columns,
-            having,
-            stmt.order_by.as_deref(),
-            stmt.offset,
-            stmt.limit,
-        );
+        let results =
+            Self::build_grouped_results(groups, aggregations, group_by_columns, having, stmt);
 
         Ok(serde_json::Value::Array(results))
     }
@@ -188,9 +181,7 @@ impl Collection {
         aggregations: &[AggregateFunction],
         group_by_columns: &[String],
         having: Option<&HavingClause>,
-        order_by: Option<&[crate::velesql::SelectOrderBy]>,
-        offset: Option<u64>,
-        limit: Option<u64>,
+        stmt: &crate::velesql::SelectStatement,
     ) -> Vec<serde_json::Value> {
         let mut results = Vec::new();
 
@@ -216,18 +207,19 @@ impl Collection {
             results.push(serde_json::Value::Object(row));
         }
 
-        if let Some(order_by) = order_by {
+        if let Some(order_by) = stmt.order_by.as_deref() {
             Self::sort_aggregation_results(&mut results, order_by);
         }
 
         // SQL-standard: OFFSET applied after ORDER BY, before LIMIT. A LIMIT-less
         // GROUP BY returns every group (no default cap), matching the WASM
-        // aggregate pipeline (see conformance/velesql_executor_cases.json D006).
-        if let Some(offset) = offset {
+        // aggregate pipeline (see conformance/velesql_executor_cases.json, resolved
+        // documented_divergences D006).
+        if let Some(offset) = stmt.offset {
             let skip = usize::try_from(offset).unwrap_or(usize::MAX);
             results = results.into_iter().skip(skip).collect();
         }
-        if let Some(limit) = limit {
+        if let Some(limit) = stmt.limit {
             results.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
         }
 
