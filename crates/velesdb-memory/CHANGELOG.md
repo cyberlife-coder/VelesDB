@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-07-24
+
+Patch: fixes the MCP wire-contract bug (harness-stringified parameters) plus
+the Claude Desktop onboarding automation — no new memory-shape/API change.
+
 ### Added
 
 - `scripts/install-memory-daemon.sh` now wires **Devin CLI**
@@ -33,6 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **MCP tool parameters are now harness-proof on both wire directions**
+  (issue #1575). Real MCP client harnesses were observed serializing
+  non-string arguments as JSON-encoded strings once their view of the
+  advertised schema degraded — `save_working_context`'s `working` object
+  arrived as `"{\"goal\": ...}"` and failed with `invalid type: string,
+  expected struct WorkingContext`, silently losing session handoffs;
+  `recall_fused` rejected `limit: "6"` and stringified `filter` objects
+  the same way. Same defensive-interop class as the #1468 string-id
+  contract. Two-sided fix: (1) `$ref`-only top-level parameter schemas
+  are now inlined so every parameter advertises a direct `type` keyword
+  (`working` exposes `type: object`); (2) a lenient deserializer on every
+  non-string tool parameter accepts the properly-typed value first and
+  falls back to parsing a JSON-encoded string, with a precise error when
+  neither form fits.
 - The installer no longer writes a `type:"http"` entry into
   `claude_desktop_config.json` — confirmed Desktop's config file never reads
   that shape (silently ignored). Superseded in this same release by the

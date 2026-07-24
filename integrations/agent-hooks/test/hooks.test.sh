@@ -8,6 +8,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOOKS_DIR="$ROOT/claude-code/hooks"
+WINDSURF_HOOKS_DIR="$ROOT/windsurf/hooks"
 
 FAILED=0
 
@@ -122,6 +123,12 @@ else
   fail "PreCompact: reason mentions save_working_context"
 fi
 
+if printf '%s' "$pre_compact_out_1" | jq -e '.reason | contains("compile_transcript")' >/dev/null; then
+  pass "PreCompact: reason mentions compile_transcript (V2b roadmap item, now shipped)"
+else
+  fail "PreCompact: reason mentions compile_transcript (V2b roadmap item, now shipped)"
+fi
+
 if printf '%s' "$pre_compact_out_1" | jq -e 'has("hookSpecificOutput") | not' >/dev/null; then
   pass "PreCompact: no hookSpecificOutput wrapper (unsupported for this event)"
 else
@@ -161,12 +168,49 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Windsurf pre_user_prompt — first call with a trajectory_id reminds, second
+# call with the SAME trajectory_id is silent (single-event fold of the
+# Claude Code load+save reminder, since Windsurf has no Stop/PreCompact).
+# ---------------------------------------------------------------------------
+WINDSURF_TRAJECTORY_ID="test-trajectory-$$"
+windsurf_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg tid "$WINDSURF_TRAJECTORY_ID" \
+  '{trajectory_id: $tid, cwd: $cwd, execution_id: "exec-1", model_name: "test-model"}')"
+
+windsurf_out_1="$(printf '%s' "$windsurf_payload" | bash "$WINDSURF_HOOKS_DIR/pre-user-prompt.sh")"
+
+if printf '%s' "$windsurf_out_1" | grep -q "load_working_context"; then
+  pass "Windsurf pre_user_prompt: first call mentions load_working_context"
+else
+  fail "Windsurf pre_user_prompt: first call mentions load_working_context"
+fi
+
+if printf '%s' "$windsurf_out_1" | grep -q "save_working_context"; then
+  pass "Windsurf pre_user_prompt: first call also mentions save_working_context (no separate Stop event)"
+else
+  fail "Windsurf pre_user_prompt: first call also mentions save_working_context (no separate Stop event)"
+fi
+
+if printf '%s' "$windsurf_out_1" | grep -q "test-project"; then
+  pass "Windsurf pre_user_prompt: uses project from .velesdb-hooks.json"
+else
+  fail "Windsurf pre_user_prompt: uses project from .velesdb-hooks.json"
+fi
+
+windsurf_out_2="$(printf '%s' "$windsurf_payload" | bash "$WINDSURF_HOOKS_DIR/pre-user-prompt.sh")"
+
+if [ -z "$windsurf_out_2" ]; then
+  pass "Windsurf pre_user_prompt: second call in same trajectory is silent"
+else
+  fail "Windsurf pre_user_prompt: second call in same trajectory is silent"
+fi
+
+# ---------------------------------------------------------------------------
 # No hardcoded absolute user paths in the scripts (everything must come from
 # the stdin payload or the .velesdb-hooks.json config).
 # ---------------------------------------------------------------------------
-if grep -rEn '/Users/[A-Za-z0-9_.-]+|/home/[A-Za-z0-9_.-]+' "$HOOKS_DIR" >/dev/null 2>&1; then
+if grep -rEn '/Users/[A-Za-z0-9_.-]+|/home/[A-Za-z0-9_.-]+' "$HOOKS_DIR" "$WINDSURF_HOOKS_DIR" >/dev/null 2>&1; then
   fail "no hardcoded user home paths in hook scripts"
-  grep -rEn '/Users/[A-Za-z0-9_.-]+|/home/[A-Za-z0-9_.-]+' "$HOOKS_DIR" >&2 || true
+  grep -rEn '/Users/[A-Za-z0-9_.-]+|/home/[A-Za-z0-9_.-]+' "$HOOKS_DIR" "$WINDSURF_HOOKS_DIR" >&2 || true
 else
   pass "no hardcoded user home paths in hook scripts"
 fi
@@ -176,7 +220,7 @@ fi
 # installed, don't fail the suite over its absence)
 # ---------------------------------------------------------------------------
 if command -v shellcheck >/dev/null 2>&1; then
-  if find "$HOOKS_DIR" -name '*.sh' -print0 | xargs -0 shellcheck; then
+  if find "$HOOKS_DIR" "$WINDSURF_HOOKS_DIR" -name '*.sh' -print0 | xargs -0 shellcheck; then
     pass "shellcheck: hook scripts are clean"
   else
     fail "shellcheck: hook scripts are clean"

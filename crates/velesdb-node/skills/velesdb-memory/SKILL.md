@@ -67,6 +67,21 @@ Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB
    - **links** (the graph facet): connect the new fact to the artifacts it concerns
      — the PR, the ticket, the file, the prior decision it supersedes. **The graph
      is what makes `why` work.** A fact with no edges is invisible to `why`.
+   - **Before storing a new incident/bug/anti-pattern, check for recurrence.**
+     `recall`/`recall_fused` using the *failure signature* — symptom + mechanism,
+     not the file name (`"write path deadlocks under concurrent compaction"`, not
+     `"bug in wal.rs"`) — a close semantic match (same trigger class: concurrency,
+     boundary, resource exhaustion) is a candidate recurrence even when the surface
+     symptom or file differs. If one turns up: say so explicitly rather than
+     storing a disconnected duplicate, `relate(new, prior, "same_root_cause_as")`,
+     and — if this is the second time the same *class* of mistake shows up under a
+     different name — `remember` one generalized `metadata: {"type":
+     "anti-pattern"}` fact describing the class itself (not just this instance),
+     linked to both incidents. A recall hit on the exact same bug is useful; a
+     recall hit on the *same class* of bug in a new file is what actually prevents
+     repeats, and that only works once the anti-pattern fact exists and is linked.
+     Skipping this check is how the same mistake gets "discovered" and fixed twice,
+     two names apart, with nothing connecting them.
 
 3. **Connect facts as relationships appear (`relate`).** Whenever a new fact
    relates to an existing memory, create a typed, directional edge. **Direction
@@ -77,12 +92,15 @@ Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB
    labels: `caused_by`, `decided_in`, `supersedes`, `references`, `depends_on`,
    `fixes`, `concerns`. This is the differentiator's fuel — build the graph
    incrementally, don't batch it up "later" (later never comes).
-   **Use `id_str`, not `id`, for `from`/`to`** (and for `feedback`/`forget`'s id
-   too): every id in a response also comes back as a decimal-string `id_str`
-   twin specifically because a raw JSON-number id can exceed 2^53 and get
-   rounded by a float-lossy client on the way back in, silently pointing
-   `relate` at the wrong memory — relay `id_str` verbatim instead of retyping
-   the numeric `id`.
+   **Pass the response's `id_str` STRING into the `id`/`from`/`to` parameter**
+   (same for `feedback`/`forget`) — the parameter is still named `id` (there is
+   no separate `id_str` *input* field anywhere; `id_str` only exists in
+   *responses*), but what you put in it matters: every id in a response also
+   comes back as a decimal-string `id_str` twin specifically because a raw
+   JSON-number id can exceed 2^53 and get rounded by a float-lossy client on
+   the way back in, silently pointing `relate` at the wrong memory — relay
+   the `id_str` value verbatim into `id` instead of retyping the numeric
+   `id`.
    **Harness caveat**: some MCP harnesses coerce any all-digit scalar (even a
    JSON string) back into a JSON number before it reaches the server, which
    defeats `id_str` and reintroduces the precision loss it exists to avoid. If
@@ -110,7 +128,8 @@ Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB
 An incident postmortem finds the payment provider's 30 s timeout let a stalled
 request pile up and take down checkout. The team drops it to 8 s.
 - `remember("Payment provider timeout set to 8s", metadata={type:"decision",
-  area:"payments", date:"2026-07-11"})` → returns id `D`.
+  area:"payments"})` → returns id `D`. No need to set a date — `_veles_date`
+  auto-stamps today's date as a numeric `YYYYMMDD`, as covered above.
 - `remember("Incident 2026-07-10: 30s payment timeout stalled checkout under load",
   metadata={type:"incident", area:"payments"})` → id `I`.
 - `relate(D, I, "caused_by")` and `relate(D, <config-PR fact>, "decided_in")`.

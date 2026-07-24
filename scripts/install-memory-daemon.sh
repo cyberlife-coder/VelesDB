@@ -33,7 +33,9 @@
 #   --store=PATH             Store directory (default: $HOME/.velesdb-memory)
 #   --tls-dir=PATH           TLS material (CA + leaf cert) directory (default: $HOME/.velesdb-memory-tls)
 #   --ollama-url=URL         Ollama endpoint (default: http://localhost:11434)
-#   --ollama-model=MODEL     Ollama embedding model (default: all-minilm)
+#   --ollama-model=MODEL     Ollama embedding model (default: all-minilm; when unset it is
+#                            auto-matched to an existing store's dimension, and any model whose
+#                            dimension differs from that store is rejected — see VELES-004)
 #   --ttl=SECONDS            Default TTL for new facts (default: prompted, empty = permanent)
 #   --yes                    Assume yes to interactive prompts (e.g. `ollama pull`)
 #   --skip-client=NAME       Skip wiring a client (repeatable): claude-code|claude-desktop|windsurf|devin
@@ -85,6 +87,7 @@ STORE="$HOME/.velesdb-memory"
 TLS_DIR="$HOME/.velesdb-memory-tls"
 OLLAMA_URL="http://localhost:11434"
 OLLAMA_MODEL="all-minilm"
+OLLAMA_MODEL_SET=0
 TTL=""
 TTL_SET=0
 ASSUME_YES=0
@@ -106,7 +109,7 @@ DEVIN_CONFIG="$HOME/.config/devin/config.json"
 RELEASE_REPO="cyberlife-coder/VelesDB"
 
 print_usage() {
-  sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,58p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # ---- 0. Parse flags ---------------------------------------------------
@@ -117,7 +120,7 @@ for arg in "$@"; do
     --store=*) STORE="${arg#*=}" ;;
     --tls-dir=*) TLS_DIR="${arg#*=}" ;;
     --ollama-url=*) OLLAMA_URL="${arg#*=}" ;;
-    --ollama-model=*) OLLAMA_MODEL="${arg#*=}" ;;
+    --ollama-model=*) OLLAMA_MODEL="${arg#*=}"; OLLAMA_MODEL_SET=1 ;;
     --ttl=*) TTL="${arg#*=}"; TTL_SET=1 ;;
     --yes) ASSUME_YES=1 ;;
     --skip-client=*) SKIP_CLIENTS="$SKIP_CLIENTS ${arg#*=}" ;;
@@ -221,6 +224,56 @@ normalize_model_tag() {
   esac
 }
 
+# ollama_has_model NAME: succeed iff NAME (normalized to :latest) is present in
+# the local Ollama tag list. Prefers the HTTP /api/tags endpoint so a custom
+# --ollama-url is honoured, and falls back to the `ollama` CLI if curl/jq can't
+# reach it.
+ollama_has_model() {
+  local want tags_file have
+  want="$(normalize_model_tag "$1")"
+  tags_file="$(mktemp)"
+  if curl -fsS --max-time 5 "$OLLAMA_URL/api/tags" >"$tags_file" 2>/dev/null; then
+    have="$(jq -r --arg want "$want" '[.models[]?.name | select(. == $want)] | length' "$tags_file" 2>/dev/null || echo 0)"
+    rm -f "$tags_file"
+    [ "${have:-0}" != "0" ]
+    return
+  fi
+  rm -f "$tags_file"
+  ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qxF "$want"
+}
+
+# detect_store_dim: echo the embedding dimension the store at $STORE was built
+# at, or nothing if there is no store yet. Reads the per-collection config.json
+# that velesdb-memory writes (a plain file — no flock needed, so it is safe to
+# read while the daemon holds the store). The semantic collection is
+# authoritative; the others are consistent fallbacks.
+detect_store_dim() {
+  local c cfg d
+  for c in _semantic_memory _episodic_memory _procedural_memory; do
+    cfg="$STORE/$c/config.json"
+    if [ -f "$cfg" ]; then
+      d="$(jq -r '.dimension // empty' "$cfg" 2>/dev/null)"
+      if [ -n "$d" ] && [ "$d" != "null" ]; then
+        printf '%s' "$d"
+        return 0
+      fi
+    fi
+  done
+}
+
+# probe_model_dim MODEL: echo the real output dimension of MODEL by asking the
+# local Ollama server for one embedding and counting it. Empty on any failure
+# (server down, model not pulled, cold-load timeout) — callers must treat empty
+# as "could not verify", never as a dimension. The `type=="array"` guard keeps
+# an error response ({"error":...}, whose .embedding is null) from being counted
+# as dimension 0.
+probe_model_dim() {
+  local model="$1"
+  curl -fsS --max-time 30 "$OLLAMA_URL/api/embeddings" \
+    -d "$(jq -n --arg m "$model" '{model:$m, prompt:"x"}')" 2>/dev/null \
+    | jq -r 'if (.embedding|type)=="array" then (.embedding|length) else empty end' 2>/dev/null
+}
+
 setup_ollama() {
   [ "$EMBEDDER" = "ollama" ] || return 0
 
@@ -246,13 +299,43 @@ setup_ollama() {
     exit 1
   fi
 
-  require_jq
-  local wanted have
-  wanted="$(normalize_model_tag "$OLLAMA_MODEL")"
-  have="$(jq -r --arg want "$wanted" '[.models[]?.name | select(. == $want)] | length' "$tags_file" 2>/dev/null || echo 0)"
   rm -f "$tags_file"
+  require_jq
 
-  if [ "${have:-0}" = "0" ]; then
+  # ---- Embedding-dimension reconciliation (VELES-004 guard) -------------
+  # A store is created at the embedding dimension of the model that first
+  # wrote to it and can NEVER be read back by a model of a different
+  # dimension (a 1024-dim bge-m3 store is unreadable by 384-dim all-minilm,
+  # and the daemon fails at query time, not at launch). So: detect the
+  # existing store's dimension, auto-pick a matching model when the user did
+  # not force one, and hard-fail on any mismatch BEFORE the daemon is
+  # (re)launched against an incompatible store.
+  local store_dim
+  store_dim="$(detect_store_dim)"
+
+  if [ -n "$store_dim" ] && [ "$OLLAMA_MODEL_SET" != "1" ]; then
+    # Model left at its default but a store already exists — prefer a
+    # locally-present model whose *real* output dimension matches the store,
+    # rather than the compiled default that may not.
+    local picked="" cand
+    for cand in bge-m3 mxbai-embed-large all-minilm "$OLLAMA_MODEL"; do
+      if ollama_has_model "$cand" && [ "$(probe_model_dim "$cand")" = "$store_dim" ]; then
+        picked="$cand"; break
+      fi
+    done
+    if [ -n "$picked" ] && [ "$picked" != "$OLLAMA_MODEL" ]; then
+      echo -e "${BLUE}ℹ️  Store at $STORE is ${store_dim}-dim; auto-selecting installed model '$picked' (dimension matches).${NC}"
+      OLLAMA_MODEL="$picked"
+    elif [ -z "$picked" ] && [ "$store_dim" = "1024" ]; then
+      # Nothing installed matches a 1024-dim store — steer to bge-m3, the
+      # reference 1024-dim model, and let the pull step below fetch it.
+      echo -e "${YELLOW}ℹ️  Store at $STORE is 1024-dim but no matching model is installed; using 'bge-m3'.${NC}"
+      OLLAMA_MODEL="bge-m3"
+    fi
+  fi
+
+  # ---- Ensure the chosen model is pulled --------------------------------
+  if ! ollama_has_model "$OLLAMA_MODEL"; then
     if [ "$ASSUME_YES" = "1" ]; then
       echo -e "${YELLOW}📥 Pulling Ollama model '$OLLAMA_MODEL'...${NC}"
       ollama pull "$OLLAMA_MODEL"
@@ -270,6 +353,23 @@ setup_ollama() {
       echo -e "${RED}❌ Model '$OLLAMA_MODEL' not found locally. Run: ollama pull $OLLAMA_MODEL${NC}"
       exit 1
     fi
+  fi
+
+  # ---- Verify the model's real dimension against the store --------------
+  local model_dim
+  model_dim="$(probe_model_dim "$OLLAMA_MODEL")"
+  if [ -z "$model_dim" ]; then
+    echo -e "${YELLOW}⚠️  Could not probe '$OLLAMA_MODEL' embedding dimension via $OLLAMA_URL (model may still be loading); skipping the dimension cross-check.${NC}"
+  elif [ -n "$store_dim" ] && [ "$model_dim" != "$store_dim" ]; then
+    echo -e "${RED}❌ Embedding-dimension mismatch (VELES-004): the store at $STORE was built at ${store_dim} dimensions, but '$OLLAMA_MODEL' produces ${model_dim}.${NC}"
+    echo -e "${RED}   A store can only be read by a same-dimension model. Fix one of:${NC}"
+    echo -e "${RED}     • use a ${store_dim}-dim model  (bge-m3 and mxbai-embed-large both give 1024):  --ollama-model=bge-m3${NC}"
+    echo -e "${RED}     • or start a fresh store at this model's dimension:  --store=\$HOME/.velesdb-memory-${model_dim}${NC}"
+    exit 1
+  elif [ -z "$store_dim" ]; then
+    echo -e "${BLUE}ℹ️  No existing store at $STORE; it will be created at ${model_dim} dimensions (model '$OLLAMA_MODEL').${NC}"
+  else
+    echo -e "${GREEN}✅ Embedding dimension OK: '$OLLAMA_MODEL' → ${model_dim}, matches the store at $STORE.${NC}"
   fi
 }
 
