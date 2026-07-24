@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] — 2026-07-24
+
 ### Security
 
 - **`velesdb-memory`**: metadata is now size-capped. Caller-supplied
@@ -6767,7 +6769,8 @@ still genuinely pending is:
 > product), not part of the open-source Community roadmap — see the
 > "Scope & boundaries" section of the README.
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.16.0...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v3.12.0...v4.0.0
 [1.16.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.16.0
 [1.15.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.15.0
 [1.14.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.4
