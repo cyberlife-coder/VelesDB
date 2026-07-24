@@ -122,6 +122,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`velesdb-memory` (MCP)**: tool parameters are now harness-proof on both
+  wire directions. Real MCP client harnesses were observed serializing
+  non-string arguments as JSON-encoded strings once their view of the
+  advertised schema degraded — `save_working_context`'s `working` object
+  arrived as `"{\"goal\": ...}"` and the call failed with `invalid type:
+  string, expected struct WorkingContext`, silently losing session
+  handoffs; `recall_fused` rejected `limit: "6"` and stringified `filter`
+  objects the same way. Two-sided fix, same defensive-interop class as the
+  #1468 string-id contract: (1) `$ref`-only top-level parameter schemas are
+  now inlined so every parameter advertises a direct `type` keyword
+  (`working` exposes `type: object`); (2) a lenient deserializer on every
+  non-string tool parameter accepts the properly-typed value first and
+  falls back to parsing a JSON-encoded string, with a precise error when
+  neither form fits.
 - **`velesdb-wasm`**: the VelesQL JOIN executor no longer depends on which
   side of the `ON` condition names the joined table. `ON joined.col =
   base.col` used to match nothing (NULL joined columns on every row);

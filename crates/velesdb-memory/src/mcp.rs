@@ -38,6 +38,7 @@ use crate::extract::DynExtractor;
 mod context_tools;
 
 mod dto;
+mod wire;
 use dto::{
     ExplanationDto, FeedbackParams, FeedbackResult, ForgetParams, ForgetResult, RecallFusedParams,
     RecallFusedResult, RecallParams, RecallResult, RecallWhereParams, RelateParams, RelateResult,

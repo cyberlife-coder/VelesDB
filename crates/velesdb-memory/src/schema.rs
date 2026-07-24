@@ -114,6 +114,72 @@ fn widen_id_schema(schema: &mut Value) {
     }
 }
 
+/// Inline every top-level property whose schema is a bare `$ref` (or a
+/// single-element `allOf` wrapping one) into the referenced `$defs` entry,
+/// so the property carries a DIRECT `type` keyword.
+///
+/// Real MCP client harnesses (observed 2026-07-24 with Claude Code) degrade
+/// a `$ref`-only parameter to "untyped" and then serialize the argument as a
+/// JSON-encoded string — `save_working_context`'s `working` object arrived
+/// as `"{\"goal\": ...}"` and failed with `invalid type: string, expected
+/// struct WorkingContext`. Same wire-contract class as the #1468 float-lossy
+/// id fix: the advertised schema must be harness-proof, not merely
+/// spec-correct. Sibling keywords on the property (e.g. `description`)
+/// override the inlined definition's; properties that already expose a
+/// `type` are left untouched. One level only — nested `$refs` inside the
+/// inlined definition are not chased (only top-level tool parameters are
+/// serialized one by one by a harness).
+///
+/// `mcp`-gated: the advertised tool schemas are its only consumer.
+#[cfg(feature = "mcp")]
+pub(crate) fn inline_ref_only_properties(map: &mut Map<String, Value>) {
+    let Some(Value::Object(defs)) = map.get("$defs").cloned() else {
+        return;
+    };
+    let Some(Value::Object(properties)) = map.get_mut("properties") else {
+        return;
+    };
+    for subschema in properties.values_mut() {
+        let Value::Object(prop) = subschema else {
+            continue;
+        };
+        if prop.contains_key("type") {
+            continue;
+        }
+        let Some(name) = ref_only_target(prop) else {
+            continue;
+        };
+        let Some(Value::Object(definition)) = defs.get(&name) else {
+            continue;
+        };
+        let mut merged = definition.clone();
+        for (key, value) in prop.iter() {
+            if key != "$ref" && key != "allOf" {
+                merged.insert(key.clone(), value.clone());
+            }
+        }
+        *prop = merged;
+    }
+}
+
+/// Resolves the `#/$defs/<Name>` target of a `$ref`-only property schema:
+/// either a direct `$ref` keyword or a single-element `allOf` wrapping one.
+#[cfg(feature = "mcp")]
+fn ref_only_target(prop: &Map<String, Value>) -> Option<String> {
+    let reference = match (prop.get("$ref"), prop.get("allOf")) {
+        (Some(Value::String(r)), _) => r.clone(),
+        (None, Some(Value::Array(items))) if items.len() == 1 => match &items[0] {
+            Value::Object(inner) => match inner.get("$ref") {
+                Some(Value::String(r)) => r.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        },
+        _ => return None,
+    };
+    reference.strip_prefix("#/$defs/").map(str::to_owned)
+}
+
 fn is_rust_int_format(format: &str) -> bool {
     matches!(
         format,
