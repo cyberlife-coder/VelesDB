@@ -1,6 +1,25 @@
 //! Point preparation helpers for the migration pipeline.
 //!
 //! Extracted from `pipeline.rs` to keep module size under 500 NLOC.
+//!
+//! # A third, deliberately distinct string→u64 ID semantics (issue #1542)
+//!
+//! [`stable_point_id`] is **not** a plain FNV-1a derivation like
+//! `velesdb_core::hash_id` (core's canonical string→u64 hash, which
+//! `velesdb-migrate`'s own non-numeric fallback now delegates to via
+//! `velesdb_core::hash_id_bytes`), nor `velesdb_common.stable_hash_id`'s
+//! SHA-256 default used by the Python integrations. It layers a **numeric
+//! fast-path** on top: a source ID that already parses as `u64` (e.g.
+//! `"12345"`, common when re-migrating from a store that already used
+//! integer point IDs) is preserved verbatim instead of being hashed, so
+//! round-tripping a numerically-keyed source through `velesdb-migrate`
+//! doesn't gratuitously re-key every point. Only non-numeric strings fall
+//! through to the FNV-1a hash.
+//!
+//! This is a legitimate, intentional migration feature — not a bug to
+//! unify away — documented as the third assumed semantics alongside core's
+//! FNV-1a and the Python integrations' SHA-256 in
+//! `docs/reference/KNOWN_LIMITATIONS.md` #12.
 
 use tracing::warn;
 
@@ -11,10 +30,17 @@ use crate::pipeline::MigrationStats;
 /// Maps string IDs to deterministic u64 point IDs.
 ///
 /// **Strategy:** Numeric strings (`"12345"`) are parsed directly to u64.
-/// Non-numeric strings (UUIDs, slugs, etc.) are hashed via FNV-1a to a
-/// deterministic u64. Hash collisions are statistically rare (< 0.0001% for
-/// 1 M IDs) but are non-zero; monitor debug logs for the hashed-ID messages
-/// to detect unusual ID patterns that could increase collision risk.
+/// Non-numeric strings (UUIDs, slugs, etc.) are hashed via FNV-1a
+/// (delegating to `velesdb_core::hash_id_bytes` — see
+/// [`fnv1a64`](super::pipeline::fnv1a64)) to a deterministic u64. Hash
+/// collisions are statistically rare (< 0.0001% for 1 M IDs) but are
+/// non-zero; monitor debug logs for the hashed-ID messages to detect unusual
+/// ID patterns that could increase collision risk.
+///
+/// This numeric-preserve + FNV-1a-fallback combination is a **third,
+/// deliberately distinct** string→u64 semantics — see the module docs above
+/// and `docs/reference/KNOWN_LIMITATIONS.md` #12. It is neither core's plain
+/// `hash_id` nor the Python integrations' SHA-256 `stable_hash_id` default.
 ///
 /// # Cross-version stability guarantee
 ///
