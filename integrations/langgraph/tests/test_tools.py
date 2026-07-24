@@ -97,9 +97,9 @@ def test_forget_removes_a_memory_and_reports_whether_it_existed():
 
     fid = tools["remember"].invoke({"fact": "The deploy key rotates every 90 days"})
 
-    assert tools["forget"].invoke({"id": fid}) is True
+    assert tools["forget"].invoke({"memory_id": fid}) is True
     # Second delete of the same id is a no-op, not an error.
-    assert tools["forget"].invoke({"id": fid}) is False
+    assert tools["forget"].invoke({"memory_id": fid}) is False
 
 
 def test_feedback_moves_confidence_after_use():
@@ -107,8 +107,8 @@ def test_feedback_moves_confidence_after_use():
 
     fid = tools["remember"].invoke({"fact": "Staging uses the blue database"})
 
-    reinforced = tools["feedback"].invoke({"id": fid, "success": True})
-    weakened = tools["feedback"].invoke({"id": fid, "success": False})
+    reinforced = tools["feedback"].invoke({"memory_id": fid, "success": True})
+    weakened = tools["feedback"].invoke({"memory_id": fid, "success": False})
 
     assert 0.0 <= weakened < reinforced <= 1.0
 
@@ -219,7 +219,7 @@ def test_make_memory_tools_construction_succeeds_even_without_new_binding_method
 def test_feedback_returns_actionable_error_instead_of_raising_when_unsupported():
     tools = _tools_on_pre_0_11_binding()
 
-    result = tools["feedback"].invoke({"id": 1, "success": True})
+    result = tools["feedback"].invoke({"memory_id": 1, "success": True})
 
     assert result == {
         "error": "feedback requires velesdb > 3.12.0 — upgrade with `pip install -U velesdb`"

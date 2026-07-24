@@ -1,8 +1,11 @@
 """LangGraph / LangChain tools backed by VelesDB's high-level ``MemoryService``.
 
-A thin adapter: each tool is a small closure over one ``MemoryService`` (the
-core). No state or logic lives here beyond shaping inputs/outputs for the tool
-layer — the engine does the work.
+A thin adapter: each tool is a small method on ``_MemoryToolkit``, bound to one
+``MemoryService`` (the core). No state or logic lives here beyond shaping
+inputs/outputs for the tool layer — the engine does the work. Methods live on
+a class (rather than as closures inside ``make_memory_tools``) so each tool's
+own cyclomatic complexity is what a linter measures, instead of all ten
+rolling up into one function.
 """
 
 from __future__ import annotations
@@ -34,9 +37,33 @@ def make_memory_tools(
     pre-configured ``service`` (e.g. an Ollama-backed ``MemoryService``) to reuse
     it. The store is on disk, so memory persists across agent runs.
     """
-    mem = _resolve_service(path, service)
+    toolkit = _MemoryToolkit(_resolve_service(path, service))
+    return [
+        StructuredTool.from_function(fn)
+        for fn in (
+            toolkit.remember,
+            toolkit.recall,
+            toolkit.recall_where,
+            toolkit.recall_fused,
+            toolkit.relate,
+            toolkit.forget,
+            toolkit.feedback,
+            toolkit.why,
+            toolkit.save_working_context,
+            toolkit.load_working_context,
+        )
+    ]
+
+
+class _MemoryToolkit:
+    """Binds one ``MemoryService`` to the ten tool methods ``make_memory_tools``
+    wraps into ``StructuredTool``\\ s. Not part of the public API."""
+
+    def __init__(self, mem: "MemoryService") -> None:
+        self._mem = mem
 
     def remember(
+        self,
         fact: str,
         links: Optional[list[list[Any]]] = None,
         metadata: Optional[dict[str, Any]] = None,
@@ -54,19 +81,24 @@ def make_memory_tools(
         seconds. All three are optional; a bare ``remember(fact)`` behaves
         exactly as before.
         """
-        edge_links = [tuple(link) for link in links] if links else None
-        return mem.remember(fact, links=edge_links, metadata=metadata, ttl_seconds=ttl_seconds)
+        return self._mem.remember(
+            fact,
+            links=_as_tuples(links),
+            metadata=metadata,
+            ttl_seconds=ttl_seconds,
+        )
 
-    def recall(query: str, k: int = 5) -> list[dict[str, Any]]:
+    def recall(self, query: str, k: int = 5) -> list[dict[str, Any]]:
         """Recall memories semantically similar to the query (vector search).
 
         Each hit's ``metadata`` is always ``None`` on this path — use
         ``recall_where`` (or ``recall_fused``) when you need each memory's
         metadata, including the automatic ``_veles_date`` stamp.
         """
-        return mem.recall(query, k)
+        return self._mem.recall(query, k)
 
     def recall_where(
+        self,
         query: str,
         filters: Optional[list[list[Any]]] = None,
         k: int = 5,
@@ -82,41 +114,41 @@ def make_memory_tools(
         including the automatic ``_veles_date`` stamp every fact gets at
         write time.
         """
-        parsed = [tuple(f) for f in filters] if filters else []
-        return mem.recall_where(query, parsed, k)
+        return self._mem.recall_where(query, _as_tuples(filters) or [], k)
 
     def recall_fused(
+        self,
         query: str,
         k: int = 5,
-        filter: Optional[dict[str, Any]] = None,
+        metadata_filter: Optional[dict[str, Any]] = None,
         date_field: Optional[str] = None,
     ) -> Any:
         """Fused vector + graph recall: walks the graph from the top hit and
         folds in any connected fact a plain ``recall`` would miss.
 
-        ``filter`` is an optional exact-match metadata filter. Pass
+        ``metadata_filter`` is an optional exact-match metadata filter. Pass
         ``date_field="_veles_date"`` (the automatic stamp every fact gets) to
         get back a dict with a chronological, date-prefixed timeline
         (``dated_context``) instead of a plain list — useful for "what
         happened, in order" questions. Omit ``date_field`` for the plain-list
         form.
         """
-        return mem.recall_fused(query, k, filter, date_field=date_field)
+        return self._mem.recall_fused(query, k, metadata_filter, date_field=date_field)
 
-    def relate(from_id: int, to_id: int, relation: str) -> int:
+    def relate(self, from_id: int, to_id: int, relation: str) -> int:
         """Link two memories with a typed edge (``from_id`` -> ``to_id``)."""
-        return mem.relate(from_id, to_id, relation)
+        return self._mem.relate(from_id, to_id, relation)
 
-    def forget(id: int) -> bool:
+    def forget(self, memory_id: int) -> bool:
         """Delete a memory by id.
 
-        Returns ``True`` if a memory actually existed under ``id`` and was
-        removed, ``False`` if there was nothing stored there (a stale id or a
-        typo) — a no-op, not an error.
+        Returns ``True`` if a memory actually existed under ``memory_id`` and
+        was removed, ``False`` if there was nothing stored there (a stale id
+        or a typo) — a no-op, not an error.
         """
-        return mem.forget(id)
+        return self._mem.forget(memory_id)
 
-    def feedback(id: int, success: bool) -> Any:
+    def feedback(self, memory_id: int, success: bool) -> Any:
         """Reinforce or weaken a memory after using it, and return its
         updated confidence in ``[0.0, 1.0]``.
 
@@ -129,16 +161,17 @@ def make_memory_tools(
         If the installed ``velesdb`` predates this method, returns
         ``{"error": "..."}`` instead of raising, telling you to upgrade.
         """
-        if not hasattr(mem, "feedback"):
+        if not hasattr(self._mem, "feedback"):
             return _unsupported("feedback")
-        return mem.feedback(id, success)
+        return self._mem.feedback(memory_id, success)
 
-    def why(question: str, max_hops: int = 2) -> dict[str, Any]:
+    def why(self, question: str, max_hops: int = 2) -> dict[str, Any]:
         """Explain something: the best-matching memory plus the connected
         subgraph reachable through typed links — context a plain recall misses."""
-        return mem.why(question, max_hops)
+        return self._mem.why(question, max_hops)
 
     def save_working_context(
+        self,
         project: str,
         session: str,
         working: dict[str, Any],
@@ -156,11 +189,11 @@ def make_memory_tools(
         If the installed ``velesdb`` predates this method, returns
         ``{"error": "..."}`` instead of raising, telling you to upgrade.
         """
-        if not hasattr(mem, "save_working_context"):
+        if not hasattr(self._mem, "save_working_context"):
             return _unsupported("save_working_context")
-        return mem.save_working_context(project, session, working)
+        return self._mem.save_working_context(project, session, working)
 
-    def load_working_context(project: str, session: str) -> Any:
+    def load_working_context(self, project: str, session: str) -> Any:
         """Load the working context previously saved under ``project`` +
         ``session`` by ``save_working_context``.
 
@@ -172,25 +205,9 @@ def make_memory_tools(
         If the installed ``velesdb`` predates this method, returns
         ``{"error": "..."}`` instead of raising, telling you to upgrade.
         """
-        if not hasattr(mem, "load_working_context"):
+        if not hasattr(self._mem, "load_working_context"):
             return _unsupported("load_working_context")
-        return mem.load_working_context(project, session)
-
-    return [
-        StructuredTool.from_function(fn)
-        for fn in (
-            remember,
-            recall,
-            recall_where,
-            recall_fused,
-            relate,
-            forget,
-            feedback,
-            why,
-            save_working_context,
-            load_working_context,
-        )
-    ]
+        return self._mem.load_working_context(project, session)
 
 
 def _resolve_service(
@@ -201,6 +218,18 @@ def _resolve_service(
     if path is None:
         raise ValueError("make_memory_tools requires either `path` or `service`")
     return MemoryService(path)
+
+
+def _as_tuples(pairs: Optional[list[list[Any]]]) -> Optional[list[tuple[Any, ...]]]:
+    """``[[a, b, ...], ...]`` -> ``[(a, b, ...), ...]``, or ``None`` if falsy.
+
+    Shared by ``remember``'s ``links`` and ``recall_where``'s ``filters``: both
+    accept plain JSON-friendly lists of lists from the LLM and forward tuples
+    to the binding, which expects ``List[Tuple[...]]``.
+    """
+    if not pairs:
+        return None
+    return [tuple(p) for p in pairs]
 
 
 def _unsupported(method: str) -> dict[str, str]:
