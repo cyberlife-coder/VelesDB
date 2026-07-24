@@ -17,31 +17,30 @@ traceability the [EU AI Act](https://artificialintelligenceact.eu/implementation
 meet** those data-residency and explainability expectations rather than claiming
 certified compliance.
 
-> **Release 0.11.0** — multi-client memory: a single local `velesdb-memory
-> --http` daemon (see "HTTP transport (multi-client)" below) now lets Claude
-> Code, Claude Desktop, and Windsurf share the *same* memory instead of one
-> client at a time, and serves **HTTPS by default** with a natively-generated
-> local CA (no external `mkcert`/proxy) — some MCP clients refuse a
-> non-`https://` URL even for `127.0.0.1`. `scripts/install-memory-daemon.sh`
-> automates the whole setup, including trusting the CA. Every `remember` now
-> auto-stamps a `_veles_date` field (`YYYYMMDD`, never overwritten if you set
-> it yourself), so `recall_fused`'s `date_field` works with zero setup — this
-> is the metadata-shape change that makes this a **minor**, not patch,
-> release (a fact stored with no caller metadata no longer round-trips as
-> `metadata: None`). Also fixes two independent deadlocks under concurrent
-> `remember`/`recall` load found while building the daemon (rayon pool
-> exhaustion + a lock-ordering inversion) — real risk for any consumer, not
-> just the new HTTP transport, since both bugs lived in the shared storage
-> layer. Published to the registries by the `velesdb-memory-v0.11.0`
-> tag, so the links below may briefly lag right after merge. `velesdb-memory`
-> ships on [crates.io](https://crates.io/crates/velesdb-memory) and on the
+> **Release 0.11.1** (patch) — **MCP tool parameters are now harness-proof on
+> both wire directions.** Real MCP client harnesses were observed serializing
+> non-string arguments as JSON-encoded strings once their view of the
+> advertised schema degraded — `save_working_context`'s `working` object
+> arrived as an escaped JSON string and failed outright, silently losing
+> session handoffs; `recall_fused` rejected a stringified `limit`/`filter`
+> the same way. Fixed on both sides: every top-level parameter now
+> advertises a direct `type` in its schema, and a lenient deserializer
+> accepts a JSON-encoded string fallback on every non-string parameter. Also
+> in this release: Claude Desktop wiring is now fully automated on both
+> installers (an `mcp-remote` stdio→HTTPS bridge entry written into
+> `claude_desktop_config.json`, TLS verified strictly via
+> `NODE_EXTRA_CA_CERTS` — no manual proxy, no `NODE_TLS_REJECT_UNAUTHORIZED=0`)
+> and CA-trust is verified after trusting instead of assumed. Published to
+> the registries by the `velesdb-memory-v0.11.1` tag, so the links below may
+> briefly lag right after merge. `velesdb-memory` ships on
+> [crates.io](https://crates.io/crates/velesdb-memory) and on the
 > [official MCP registry](https://registry.modelcontextprotocol.io)
 > (`io.github.cyberlife-coder/velesdb-memory`, with **5 prebuilt `.mcpb` bundles**:
 > macOS arm64/x64, Linux arm64/x64, Windows x64). Bindings: Node
-> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.11.0**
-> and Python in [`velesdb`](https://pypi.org/project/velesdb/) **3.12.0**
+> [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) **0.11.1**
+> and Python in [`velesdb`](https://pypi.org/project/velesdb/) **4.0.0**
 > (memory API only — the context compiler is merged on `develop` but **the
-> published 3.12.0 wheel predates it**; it ships with the next PyPI release,
+> published 4.0.0 wheel predates it**; it ships with a future PyPI release,
 > until then Python agents reach it through the MCP server).
 > **`cargo install velesdb-memory` installs the latest published release.**
 
