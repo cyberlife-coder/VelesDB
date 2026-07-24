@@ -210,6 +210,25 @@ pub fn hybrid_search_impl(
     scored_triples_to_js(results)
 }
 
+/// Converts an optional flat `[avg_weight, max_weight, hit_weight]` slice
+/// from the JS boundary into the `(f32, f32, f32)` tuple `fuse_results`
+/// expects for the `"weighted"` strategy.
+///
+/// `None` means "use core's canonical default weights". A slice whose length
+/// isn't exactly 3 is a caller error, not a silent fallback.
+fn weighted_weights_from_slice(
+    weights: Option<&[f32]>,
+) -> Result<Option<(f32, f32, f32)>, JsValue> {
+    match weights {
+        None => Ok(None),
+        Some([avg, max, hit]) => Ok(Some((*avg, *max, *hit))),
+        Some(other) => Err(JsValue::from_str(&format!(
+            "weighted fusion expects exactly 3 weights [avg_weight, max_weight, hit_weight], got {}",
+            other.len()
+        ))),
+    }
+}
+
 /// Multi-query search with fusion.
 #[allow(clippy::too_many_arguments)]
 pub fn multi_query_search_impl(
@@ -227,9 +246,11 @@ pub fn multi_query_search_impl(
     k: usize,
     strategy: &str,
     rrf_k: Option<u32>,
+    weights: Option<&[f32]>,
 ) -> Result<JsValue, JsValue> {
     validate_multi_vector_len(vectors.len(), num_vectors, dimension)
         .map_err(|e| JsValue::from_str(&e))?;
+    let weights = weighted_weights_from_slice(weights)?;
 
     let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
 
@@ -252,7 +273,7 @@ pub fn multi_query_search_impl(
         all_results.push(results);
     }
 
-    let fused = fusion::fuse_results(&all_results, strategy, rrf_k.unwrap_or(60))
+    let fused = fusion::fuse_results(&all_results, strategy, rrf_k.unwrap_or(60), weights)
         .map_err(|e| JsValue::from_str(&e))?;
     let fused: Vec<(u64, f32)> = fused.into_iter().take(k).collect();
 

@@ -20,6 +20,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returning a stored context, so a slot squatted by an unrelated fact
   yields `None` instead of being served back. (#1458)
 
+### Changed
+
+- **`velesdb-core` / `velesdb-wasm`**: single-sourced the fusion math that
+  had drifted across engines (parity-audit finding, issue #1545).
+  `velesdb-core::fusion::min_max_normalize` is now `pub`, and
+  `velesdb-wasm`'s `relative_score`/`rsf` per-branch normalization delegates
+  to it instead of maintaining its own copy of the same min-max math. Core
+  also now exposes canonical `DEFAULT_WEIGHTED_AVG_WEIGHT` /
+  `DEFAULT_WEIGHTED_MAX_WEIGHT` / `DEFAULT_WEIGHTED_HIT_WEIGHT` constants
+  (`0.6` / `0.3` / `0.1`, matching the Python bindings and the
+  `velesdb_common` fusion builder) and a `FusionStrategy::weighted_default()`
+  constructor. **Behavior change, `velesdb-wasm` only:**
+  `multi_query_search(..., strategy: "weighted")` previously hardcoded a
+  non-overridable `avg=0.5, max=0.3, hit=0.2` split; it now defaults to the
+  canonical `0.6/0.3/0.1` weights and accepts an optional `weights`
+  parameter to override them per call. This reorders `weighted`-fusion
+  results for existing WASM callers that didn't request explicit weights.
+  See `crates/velesdb-wasm/CHANGELOG.md` for the full migration note.
+
 ### Added
 
 - **`velesdb-cli`**: new `graph doctor <collection> [--purge|--stub]`
@@ -36,6 +55,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   idempotent. (#1469)
 - **`velesdb-memory` (Python)**: `MemoryService.feedback` is now exposed,
   closing the RL feedback loop from the Python binding. (#1452)
+- **`velesdb-wasm`**: `compileTranscript`, `explainCompilation`,
+  `contextSavings`, and `suggestBudget` are now exposed on the browser
+  `MemoryService` (previously Node/MCP-only), closing most of the
+  context-compiler tool-surface gap in WASM. `feedback` stays
+  intentionally absent — it lives behind `velesdb-memory`'s
+  `persistence` feature, which the WASM build does not enable (a durable
+  learned confidence is meaningless for a store that disappears on page
+  reload). `rememberExtracted` also stays absent (needs a generative
+  model, which would pull a network dependency into the WASM bundle by
+  default). (#1547)
+- **`velesdb-node`**: `compileTranscript` and `listWorkingContexts` are
+  now exposed, closing the Node-side gap for both (`compileTranscript`
+  was MCP-only; `listWorkingContexts` had `save`/`load` but not `list`).
+  `index.d.ts` regenerated. (#1547)
+- **`@wiscale/velesdb-sdk`**: the browser `MemoryService` gains
+  `compileTranscript`, `explainCompilation`, `contextSavings`, and
+  `suggestBudget`, delegating to the new WASM exports above.
+  `MemoryMetadata._veles_date` is now a typed, documented field (was
+  untyped `Record<string, unknown>`), and `recallFusedDated`'s TSDoc now
+  explains the zero-setup `"_veles_date"` pairing. (#1547)
+- **`velesdb_common`**: `stable_hash_id` gains an opt-in
+  `algorithm="fnv1a"` keyword parameter (default stays `"sha256"`,
+  unchanged) so a Python-derived point ID can agree byte-for-byte with
+  `velesdb_core::hash_id`/`velesdb-migrate`'s FNV-1a derivation for the same
+  string when interop across ingestion paths is needed. Separately,
+  `velesdb-core` now exports a public `hash_id_bytes`, and
+  `velesdb-memory`/`velesdb-migrate` delegate their own FNV-1a derivations to
+  it instead of each re-declaring the FNV-1a constants — a pure internal
+  dedup within the Rust crates, byte-identical output (see the golden-vector
+  regression tests added alongside); it does not by itself change the
+  Rust-vs-Python divergence, which the new opt-in addresses. See
+  `docs/reference/KNOWN_LIMITATIONS.md` #12 for the full contract, including
+  why the SHA-256 default is intentionally preserved. (#1542)
 
 ### Fixed
 

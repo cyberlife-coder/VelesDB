@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Add custom connector instructions instead, matching what the README already
   documented.
 
+### Changed
+
+- `id::stable_id`/`id::stable_id_bytes` now delegate to
+  `velesdb_core::hash_id`/`hash_id_bytes` instead of re-declaring their own
+  FNV-1a offset/prime constants — internal dedup only, byte-identical output
+  (pinned by a golden-vector regression test). (#1542)
+
 ## [0.11.0] — 2026-07-23
 
 Minor, not patch: the metadata shape `remember`/`recall` return changes

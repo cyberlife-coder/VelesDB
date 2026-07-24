@@ -4,7 +4,7 @@
 //! to keep file sizes under 500 NLOC per code-quality rules.
 
 use colored::Colorize;
-use std::path::PathBuf;
+use std::path::Path;
 use velesdb_core::collection::graph::TraversalConfig;
 use velesdb_core::GraphEdge;
 
@@ -15,10 +15,10 @@ use crate::helpers;
 
 /// Open a graph collection from a database path.
 pub(crate) fn open_graph(
-    path: &PathBuf,
+    path: &Path,
     collection: &str,
 ) -> anyhow::Result<velesdb_core::GraphCollection> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     db.get_graph_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Graph collection '{}' not found", collection))
 }
@@ -30,7 +30,7 @@ fn edges_to_json_value(edges: &[GraphEdge]) -> serde_json::Value {
 }
 
 pub(crate) fn handle_add_edge(
-    path: &PathBuf,
+    path: &Path,
     collection: &str,
     id: u64,
     source: u64,
@@ -54,7 +54,7 @@ pub(crate) fn handle_add_edge(
 }
 
 pub(crate) fn handle_get_edges(
-    path: &PathBuf,
+    path: &Path,
     collection: &str,
     label: Option<&str>,
     format: &str,
@@ -72,7 +72,7 @@ pub(crate) fn handle_get_edges(
 }
 
 pub(crate) fn handle_degree(
-    path: &PathBuf,
+    path: &Path,
     collection: &str,
     node_id: u64,
     format: &str,
@@ -92,7 +92,7 @@ pub(crate) fn handle_degree(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_traverse(
-    path: &PathBuf,
+    path: &Path,
     collection: &str,
     source: u64,
     algorithm: TraverseAlgo,
@@ -135,7 +135,7 @@ pub(crate) fn handle_traverse(
 }
 
 pub(crate) fn handle_neighbors(
-    path: &PathBuf,
+    path: &Path,
     collection: &str,
     node_id: u64,
     direction: Direction,
@@ -171,7 +171,7 @@ pub(crate) fn handle_neighbors(
 }
 
 pub(crate) fn handle_store_payload(
-    path: &PathBuf,
+    path: &Path,
     collection: &str,
     node_id: u64,
     payload_str: &str,
@@ -192,7 +192,7 @@ pub(crate) fn handle_store_payload(
 }
 
 pub(crate) fn handle_get_payload(
-    path: &PathBuf,
+    path: &Path,
     collection: &str,
     node_id: u64,
 ) -> anyhow::Result<()> {
@@ -208,7 +208,7 @@ pub(crate) fn handle_get_payload(
 }
 
 pub(crate) fn handle_remove_edge(
-    path: &PathBuf,
+    path: &Path,
     collection: &str,
     edge_id: u64,
 ) -> anyhow::Result<()> {
@@ -231,7 +231,7 @@ pub(crate) fn handle_remove_edge(
     Ok(())
 }
 
-pub(crate) fn handle_count(path: &PathBuf, collection: &str, format: &str) -> anyhow::Result<()> {
+pub(crate) fn handle_count(path: &Path, collection: &str, format: &str) -> anyhow::Result<()> {
     let col = open_graph(path, collection)?;
     let count = col.edge_count();
     let node_count = col.all_node_ids().len();
@@ -251,7 +251,7 @@ pub(crate) fn handle_count(path: &PathBuf, collection: &str, format: &str) -> an
 }
 
 pub(crate) fn handle_graph_search(
-    path: &PathBuf,
+    path: &Path,
     collection: &str,
     vector_json: &str,
     top_k: usize,
@@ -295,7 +295,7 @@ pub(crate) fn handle_graph_search(
 }
 
 pub(crate) fn handle_graph_nodes(
-    path: &PathBuf,
+    path: &Path,
     collection: &str,
     page: usize,
     format: &str,
@@ -327,7 +327,7 @@ pub(crate) fn handle_graph_nodes(
 /// Scans a graph collection for legacy phantom edges and reports them, or
 /// repairs them when `--purge`/`--stub` is passed. Read-only by default.
 pub(crate) fn handle_graph_doctor(
-    path: &PathBuf,
+    path: &Path,
     collection: &str,
     purge: bool,
     stub: bool,

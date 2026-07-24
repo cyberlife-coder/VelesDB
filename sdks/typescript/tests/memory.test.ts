@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryService } from '../src/memory';
-import type { CompileContextFragment } from '../src/memory';
+import type { CompileContextFragment, MemoryMetadata } from '../src/memory';
 import { ConnectionError, NotFoundError, ValidationError } from '../src/types';
 
 // Captures the most recently constructed mock instance so a test can
@@ -44,6 +44,54 @@ class MockWasmMemoryService {
     retrieval_handles: [],
     insights: { tokens_saved: 0 },
     risk: 'low',
+  }));
+  compileTranscript = vi.fn(() => ({
+    context: {
+      content: 'compiled from transcript',
+      sections: [],
+      decisions: [{ fragment_id: '18446744073709551615', rule_id: 'preserve.default' }],
+      sources: [],
+      retrieval_handles: [],
+      insights: { tokens_saved: 0 },
+      risk: 'low',
+    },
+    segmentation: {
+      format_detected: 'plain',
+      segments: [
+        {
+          index: 0,
+          turn: 0,
+          role: 'User',
+          kind: 'body',
+          byte_start: 0,
+          byte_end: 12,
+          fragment_id: '18446744073709551615',
+        },
+      ],
+      merged_segments: 0,
+    },
+  }));
+  explainCompilation = vi.fn(() => ({
+    fragment_id: '18446744073709551615',
+    content_hash: '18446744073709551615',
+    action: 'preserve',
+    rule_id: 'preserve.default',
+    relevance: 0.9,
+    risk: 'low',
+    reason: 'high relevance to query',
+  }));
+  contextSavings = vi.fn(() => ({
+    events: 1,
+    tokens_in: 100,
+    tokens_out: 0,
+    tokens_saved: 20,
+    cost_saved_micros_by_currency: {},
+    truncated: false,
+  }));
+  suggestBudget = vi.fn(() => ({
+    window: 200000,
+    suggested_budget: 199000,
+    source: 'static table as of 2026-01-01',
   }));
   retrieveContextSource = vi.fn(() => ({
     handle: 'ctx://source/123',
@@ -127,19 +175,19 @@ describe('MemoryService', () => {
     });
 
     it('init() names the wasm version floor when the resolved build lacks MemoryService', async () => {
-      // Simulates a stale lockfile resolving a pre-3.6.0 @wiscale/velesdb-wasm
-      // (the declared range ^3.0.0 admits builds without the memory wedge).
+      // Simulates a stale lockfile resolving a @wiscale/velesdb-wasm build
+      // older than the ^3.8.0 floor the SDK's full memory surface needs.
       const saved = mockWasmModule.MemoryService;
       (mockWasmModule as { MemoryService?: unknown }).MemoryService = undefined;
       try {
         const stale = new MemoryService();
         const rejection = stale.init();
         await expect(rejection).rejects.toBeInstanceOf(ConnectionError);
-        await expect(rejection).rejects.toThrow(/>= 3\.6\.0/);
+        await expect(rejection).rejects.toThrow(/>= 3\.8\.0/);
         // A retry after the failed init runs a fresh load (the memoized
         // in-flight promise is cleared on settle) and must fail the same
         // way — never spuriously resolve with a null inner store.
-        await expect(stale.init()).rejects.toThrow(/>= 3\.6\.0/);
+        await expect(stale.init()).rejects.toThrow(/>= 3\.8\.0/);
         expect(stale.isInitialized()).toBe(false);
       } finally {
         mockWasmModule.MemoryService = saved;
@@ -272,6 +320,122 @@ describe('MemoryService', () => {
       // ever removed from the interface.
       const fragment: CompileContextFragment = request.fragments[0];
       expect(fragment.media?.bytes_b64).toBe('aGVsbG8=');
+    });
+
+    it('compileTranscript() delegates the request and returns context + segmentation', async () => {
+      const request = {
+        query: 'what broke the deploy',
+        transcript: 'User: what broke the deploy?\nAssistant: clippy failed on main.\n',
+        token_budget: 5000,
+      };
+      const result = await memory.compileTranscript(request);
+      expect(lastMockInstance!.compileTranscript).toHaveBeenCalledWith(request);
+      expect(result.context.content).toBe('compiled from transcript');
+      expect(result.segmentation.format_detected).toBe('plain');
+      expect(result.segmentation.segments).toHaveLength(1);
+      expect(result.segmentation.segments[0].fragment_id).toBe('18446744073709551615');
+    });
+
+    it('explainCompilation() delegates request/fragmentId/fragmentIndex and returns the decision', async () => {
+      const request = {
+        query: 'deploy',
+        token_budget: 5000,
+        fragments: [{ content: 'a fact' }],
+      };
+      const decision = await memory.explainCompilation(request, '18446744073709551615', 0);
+      expect(lastMockInstance!.explainCompilation).toHaveBeenCalledWith(
+        request,
+        '18446744073709551615',
+        0
+      );
+      expect(decision.action).toBe('preserve');
+      expect(decision.fragment_id).toBe('18446744073709551615');
+    });
+
+    it('explainCompilation() omits fragmentIndex when not provided', async () => {
+      const request = { query: 'q', token_budget: 1000, fragments: [{ content: 'x' }] };
+      await memory.explainCompilation(request, '1');
+      expect(lastMockInstance!.explainCompilation).toHaveBeenCalledWith(request, '1', undefined);
+    });
+
+    it('contextSavings() delegates the project and returns the aggregate', async () => {
+      const savings = await memory.contextSavings('veles');
+      expect(lastMockInstance!.contextSavings).toHaveBeenCalledWith('veles');
+      expect(savings.events).toBe(1);
+      expect(savings.tokens_saved).toBe(20);
+      expect(savings.truncated).toBe(false);
+    });
+
+    it('contextSavings() works with no project filter', async () => {
+      await memory.contextSavings();
+      expect(lastMockInstance!.contextSavings).toHaveBeenCalledWith(undefined);
+    });
+
+    it('suggestBudget() passes reserveTokens as a BigInt and returns the suggestion', async () => {
+      const budget = await memory.suggestBudget('claude-sonnet-4-5', 500);
+      expect(lastMockInstance!.suggestBudget).toHaveBeenCalledWith('claude-sonnet-4-5', 500n);
+      expect(budget.window).toBe(200000);
+      expect(budget.suggested_budget).toBe(199000);
+    });
+
+    it('suggestBudget() passes undefined reserveTokens when omitted', async () => {
+      await memory.suggestBudget('claude-sonnet-4-5');
+      expect(lastMockInstance!.suggestBudget).toHaveBeenCalledWith(
+        'claude-sonnet-4-5',
+        undefined
+      );
+    });
+
+    it.each([1.5, -1, Number.NaN, 2 ** 64, Number.POSITIVE_INFINITY])(
+      'suggestBudget() rejects reserveTokens %p with ValidationError, not a raw RangeError',
+      async (reserveTokens) => {
+        await expect(
+          memory.suggestBudget('claude-sonnet-4-5', reserveTokens)
+        ).rejects.toBeInstanceOf(ValidationError);
+        expect(lastMockInstance!.suggestBudget).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each([
+      [
+        'compileTranscript',
+        () => memory.compileTranscript({ query: 'q', transcript: 't', token_budget: 100 }),
+      ],
+      [
+        'explainCompilation',
+        () =>
+          memory.explainCompilation(
+            { query: 'q', token_budget: 100, fragments: [{ content: 'x' }] },
+            '1'
+          ),
+      ],
+      ['contextSavings', () => memory.contextSavings()],
+      ['suggestBudget', () => memory.suggestBudget('claude-sonnet-4-5')],
+    ] as const)(
+      '%s() throws an actionable ConnectionError when the resolved wasm build lacks it',
+      async (method, call) => {
+        // Simulates a resolved @wiscale/velesdb-wasm build that HAS the
+        // MemoryService class (so init() already succeeded, per the outer
+        // beforeEach) but predates this specific method — e.g. a lockfile
+        // pinned between the 3.8.0 base floor and whichever release this
+        // method first ships in. Without ensureCapability's guard this call
+        // would fail with a raw, unhelpful `TypeError: x is not a function`
+        // from deep inside wrapWasmCall instead of a typed, actionable error.
+        delete (lastMockInstance as unknown as Record<string, unknown>)[method];
+        await expect(call()).rejects.toSatisfy((e: unknown) => {
+          expect(e).toBeInstanceOf(ConnectionError);
+          expect((e as Error).message).toContain(method);
+          expect((e as Error).message).toMatch(/3\.12\.0/);
+          return true;
+        });
+      }
+    );
+
+    it('MemoryMetadata types _veles_date as an optional YYYYMMDD number', () => {
+      // Type-level check: this must accept `_veles_date` without a cast —
+      // fails to *compile* (not just run) if the field is ever removed.
+      const metadata: MemoryMetadata = { _veles_date: 20260723, project: 'veles' };
+      expect(metadata._veles_date).toBe(20260723);
     });
 
     it('retrieveContextSource() delegates the handle and returns the resolved source', async () => {

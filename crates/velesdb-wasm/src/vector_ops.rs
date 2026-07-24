@@ -161,9 +161,33 @@ impl ScratchBuffer {
         sq8_scales: &[f32],
         dimension: usize,
     ) -> &[f32] {
-        let start = idx * dimension;
         let min = sq8_mins[idx];
         let scale = sq8_scales[idx];
+
+        // `scale.is_nan()` is `store_insert::encode_sq8`'s sentinel for a
+        // non-finite range (`+Infinity` or `NaN` — see there): core's
+        // `to_f32` decode is `NaN` for every dimension in that case, so we
+        // mirror that instead of falling through to the degenerate
+        // (min-fill) or normal (division) branches below.
+        if scale.is_nan() {
+            self.buf[..dimension].fill(f32::NAN);
+            return &self.buf[..dimension];
+        }
+
+        // `scale == 0.0` is `store_insert::encode_sq8`'s sentinel for a
+        // degenerate (near-constant, *finite* range) case: mirrors core's
+        // `QuantizedVector::to_f32` fallback exactly — every dimension
+        // decodes to `min`. A genuine non-degenerate scale is always > 0.0
+        // and finite (see `encode_sq8`), so the exact comparison is safe
+        // now that the non-finite-range case above no longer collides with
+        // this sentinel via underflow to exactly `0.0`.
+        #[allow(clippy::float_cmp)]
+        if scale == 0.0 {
+            self.buf[..dimension].fill(min);
+            return &self.buf[..dimension];
+        }
+
+        let start = idx * dimension;
         for (i, &q) in data_sq8[start..start + dimension].iter().enumerate() {
             self.buf[i] = (f32::from(q) / scale) + min;
         }

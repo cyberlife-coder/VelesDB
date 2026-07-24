@@ -14,4 +14,4 @@ mod stable_hash_tests;
 
 // Canonical cross-engine ID hashing now lives in `wire::stable_hash`. Re-exported
 // here so the historical `wire::hash_edge_id` path keeps working unchanged.
-pub use stable_hash::{hash_edge_id, hash_id};
+pub use stable_hash::{hash_edge_id, hash_id, hash_id_bytes};

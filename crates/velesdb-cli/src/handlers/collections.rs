@@ -16,7 +16,7 @@ pub fn handle_create_vector_collection(
     metric: MetricArg,
     storage: StorageModeArg,
 ) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     db.create_vector_collection_with_options(name, dimension, metric.into(), storage.into())?;
 
     println!(
@@ -32,7 +32,7 @@ pub fn handle_create_vector_collection(
 
 /// Handles the `create-graph-collection` subcommand.
 pub fn handle_create_graph_collection(path: &Path, name: &str) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let schema = velesdb_core::GraphSchema::schemaless();
     db.create_graph_collection(name, schema)?;
 
@@ -46,7 +46,7 @@ pub fn handle_create_graph_collection(path: &Path, name: &str) -> Result<()> {
 
 /// Handles the `create-metadata-collection` subcommand.
 pub fn handle_create_metadata_collection(path: &Path, name: &str) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     db.create_metadata_collection(name)?;
 
     println!(
@@ -59,7 +59,7 @@ pub fn handle_create_metadata_collection(path: &Path, name: &str) -> Result<()> 
 
 /// Handles the `delete-collection` subcommand with optional confirmation.
 pub fn handle_delete_collection(path: &Path, name: &str, force: bool) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
 
     if !force {
         if !confirm_deletion(name)? {

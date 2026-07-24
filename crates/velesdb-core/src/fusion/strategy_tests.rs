@@ -1,6 +1,76 @@
 //! Tests for `FusionStrategy` implementations.
 
-use super::strategy::{FusionError, FusionStrategy};
+use super::strategy::{
+    min_max_normalize, FusionError, FusionStrategy, DEFAULT_WEIGHTED_AVG_WEIGHT,
+    DEFAULT_WEIGHTED_HIT_WEIGHT, DEFAULT_WEIGHTED_MAX_WEIGHT,
+};
+
+// =============================================================================
+// Canonical `Weighted` default constants (issue #1545: single-source the
+// default weights so WASM and velesdb_common cannot drift from core).
+// =============================================================================
+
+#[test]
+fn test_default_weighted_constants_sum_to_one() {
+    let sum =
+        DEFAULT_WEIGHTED_AVG_WEIGHT + DEFAULT_WEIGHTED_MAX_WEIGHT + DEFAULT_WEIGHTED_HIT_WEIGHT;
+    assert!(
+        (sum - 1.0).abs() < 0.001,
+        "canonical default weights must sum to 1.0, got {sum}"
+    );
+}
+
+#[test]
+fn test_default_weighted_constants_values() {
+    // Pin the canonical values so an accidental edit is caught immediately.
+    // These match the values already documented/used across the Python
+    // bindings (`FusionStrategy.weighted` doctest/README) and the
+    // `velesdb_common` fusion builder default.
+    assert!((DEFAULT_WEIGHTED_AVG_WEIGHT - 0.6).abs() < f32::EPSILON);
+    assert!((DEFAULT_WEIGHTED_MAX_WEIGHT - 0.3).abs() < f32::EPSILON);
+    assert!((DEFAULT_WEIGHTED_HIT_WEIGHT - 0.1).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_weighted_default_constructor_matches_constants() {
+    let strategy = FusionStrategy::weighted_default();
+    assert_eq!(
+        strategy,
+        FusionStrategy::Weighted {
+            avg_weight: DEFAULT_WEIGHTED_AVG_WEIGHT,
+            max_weight: DEFAULT_WEIGHTED_MAX_WEIGHT,
+            hit_weight: DEFAULT_WEIGHTED_HIT_WEIGHT,
+        }
+    );
+}
+
+// =============================================================================
+// `min_max_normalize` public API (issue #1545: exported so velesdb-wasm's
+// relative-score fusion can delegate instead of duplicating the math).
+// =============================================================================
+
+#[test]
+fn test_min_max_normalize_is_publicly_reusable() {
+    let branch = vec![(1u64, 0.9), (2u64, 0.1), (3u64, 0.5)];
+    let normalized = min_max_normalize(&branch);
+    assert!((normalized[&1] - 1.0).abs() < 1e-6);
+    assert!((normalized[&2] - 0.0).abs() < 1e-6);
+    assert!((normalized[&3] - 0.5).abs() < 1e-6);
+}
+
+#[test]
+fn test_min_max_normalize_equal_scores_default_half() {
+    let branch = vec![(1u64, 0.7), (2u64, 0.7)];
+    let normalized = min_max_normalize(&branch);
+    assert!((normalized[&1] - 0.5).abs() < 1e-6);
+    assert!((normalized[&2] - 0.5).abs() < 1e-6);
+}
+
+#[test]
+fn test_min_max_normalize_empty_branch() {
+    let branch: Vec<(u64, f32)> = vec![];
+    assert!(min_max_normalize(&branch).is_empty());
+}
 
 // =============================================================================
 // Test helpers

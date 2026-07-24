@@ -10,7 +10,41 @@
 //! published FNV-1a 64-bit test vectors, so a change to any of these constants
 //! signals a break in cross-engine ID compatibility.
 
-use super::stable_hash::{hash_edge_id, hash_id, FNV_OFFSET_BASIS};
+use super::stable_hash::{hash_edge_id, hash_id, hash_id_bytes, FNV_OFFSET_BASIS};
+
+// --- hash_id_bytes reference vectors (issue #1542) ---
+//
+// `hash_id_bytes` is the exported bytes-level fold that `velesdb-memory` and
+// `velesdb-migrate` now delegate to instead of re-declaring their own
+// FNV-1a constants. It must agree with `hash_id` on every `&str`'s UTF-8
+// bytes, and must hash multi-byte UTF-8 sequences over raw bytes (not code
+// points).
+
+#[test]
+fn test_hash_id_bytes_agrees_with_hash_id_on_ascii() {
+    assert_eq!(hash_id_bytes(b""), hash_id(""));
+    assert_eq!(hash_id_bytes(b"a"), hash_id("a"));
+    assert_eq!(hash_id_bytes(b"tenant:acme"), hash_id("tenant:acme"));
+}
+
+#[test]
+fn test_hash_id_bytes_agrees_with_hash_id_on_multi_byte_utf8() {
+    // 2-byte (é), 3-byte (CJK), and 4-byte (emoji) UTF-8 sequences.
+    for input in ["café", "日本語", "emoji:🚀", "mixed-Ünïcödé-42"] {
+        assert_eq!(
+            hash_id_bytes(input.as_bytes()),
+            hash_id(input),
+            "hash_id_bytes/hash_id disagree for {input:?}"
+        );
+    }
+}
+
+#[test]
+fn test_hash_id_bytes_hashes_non_utf8_bytes() {
+    let bytes = [0xFFu8, 0x00, 0x89, 0x50, 0x4E, 0x47];
+    assert_eq!(hash_id_bytes(&bytes), hash_id_bytes(&bytes));
+    assert_ne!(hash_id_bytes(&bytes), hash_id_bytes(&bytes[1..]));
+}
 
 // --- hash_id reference vectors (Requirement 4.2) ---
 

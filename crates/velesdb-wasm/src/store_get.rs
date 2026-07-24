@@ -24,7 +24,25 @@ pub fn get_vector_at_index(store: &VectorStore, idx: usize) -> Vec<f32> {
 }
 
 /// Decodes a single SQ8-quantized vector back to f32.
+///
+/// `scale.is_nan()` is `store_insert::encode_sq8`'s sentinel for a
+/// non-finite range (`+Infinity` or `NaN`): core's `to_f32` decode is `NaN`
+/// for every dimension in that case, so we return that instead of falling
+/// through.
+///
+/// `scale == 0.0` is `store_insert::encode_sq8`'s degenerate (*finite*
+/// range) sentinel (see there): every dimension decodes to `min`, mirroring
+/// core's `QuantizedVector::to_f32` fallback. Without either branch a
+/// degenerate/non-finite-range vector would divide by zero and return
+/// `+inf`/`NaN` mixed with `min` rather than the pure `NaN` core produces.
+#[allow(clippy::float_cmp)]
 fn decode_sq8(data_sq8: &[u8], min: f32, scale: f32, idx: usize, dimension: usize) -> Vec<f32> {
+    if scale.is_nan() {
+        return vec![f32::NAN; dimension];
+    }
+    if scale == 0.0 {
+        return vec![min; dimension];
+    }
     let start = idx * dimension;
     data_sq8[start..start + dimension]
         .iter()
