@@ -1,5 +1,5 @@
 //! Integration tests for the server's `--config`/`VELESDB_CONFIG` wiring
-//! (issue #1549: "VelesConfig (TOML) cannot be passed at `Database::open`").
+//! (issue #1549: "`VelesConfig` (TOML) cannot be passed at `Database::open`").
 //!
 //! Before this fix, `main::init_app_state` always called `Database::open`,
 //! so the `--config` flag only ever reached the server-transport settings
