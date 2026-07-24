@@ -1197,3 +1197,34 @@ async fn test_compile_transcript_rejects_empty_file_same_as_empty_inline_transcr
     assert_eq!(inline_err.code, ErrorCode::INVALID_PARAMS);
     assert_eq!(path_err.message, inline_err.message);
 }
+
+/// Harness-proof schema contract for `save_working_context` (observed
+/// 2026-07-24: a real MCP harness sent `working` as a JSON-encoded string —
+/// `invalid type: string, expected struct WorkingContext` — after degrading
+/// a `$ref`-only property to "untyped"). The `working` property must carry
+/// a DIRECT `type: object` keyword, not only a `$ref`.
+#[test]
+fn test_save_working_context_input_schema_declares_object_working_directly() {
+    let tool = McpServer::save_working_context_tool_attr();
+    let schema = serde_json::to_value(&tool.input_schema).expect("schema serializes");
+    let working = &schema["properties"]["working"];
+    assert_eq!(
+        working["type"],
+        serde_json::json!("object"),
+        "`working` must advertise a direct `type: object` (a $ref-only \
+         schema gets stringified by real MCP harnesses); got: {working}"
+    );
+}
+
+/// Server-side tolerance half (same wire-contract class as issue #1468):
+/// a harness that DID stringify the `working` object must still be served.
+#[test]
+fn test_save_working_context_params_accept_stringified_working() {
+    let params: SaveWorkingContextParams = serde_json::from_value(serde_json::json!({
+        "project": "veles",
+        "session": "s1",
+        "working": "{\"goal\": \"resume the campaign\"}"
+    }))
+    .expect("a JSON-encoded `working` string must deserialize");
+    assert_eq!(params.working.goal.as_deref(), Some("resume the campaign"));
+}

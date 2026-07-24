@@ -81,6 +81,7 @@ fn wire_safe_input_schema<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     });
     let mut map = (*schema).clone();
     crate::schema::widen_id_properties(&mut map, &["id"]);
+    crate::schema::inline_ref_only_properties(&mut map);
     Arc::new(map)
 }
 
@@ -99,6 +100,7 @@ pub(super) struct ContextSavingsParams {
 pub(super) struct ExplainCompilationParams {
     /// The compile request to explain (compilation is deterministic, so
     /// re-submitting the request reproduces the exact decisions).
+    #[serde(deserialize_with = "super::wire::lenient")]
     pub request: CompileRequest,
     /// The fragment whose decision to return. Looked up by matching
     /// `ContextDecision::fragment_id`, UNLESS `fragment_index` is also
@@ -114,7 +116,11 @@ pub(super) struct ExplainCompilationParams {
     /// lookup always returns the FIRST such decision (the deduplication
     /// survivor), never a dropped twin's. Absent (the default): behavior is
     /// unchanged, the decision is found by `fragment_id` alone.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::wire::lenient"
+    )]
     pub fragment_index: Option<usize>,
 }
 
@@ -151,6 +157,7 @@ pub(super) struct SaveWorkingContextParams {
     /// The distilled state to persist: goal, active constraints, verified
     /// facts, open hypotheses, decisions taken, exact evidence, and pending
     /// actions.
+    #[serde(deserialize_with = "super::wire::lenient")]
     pub working: WorkingContext,
 }
 
@@ -231,6 +238,7 @@ pub(super) struct CompileTranscriptParams {
     pub path: Option<String>,
     /// Hard token ceiling for the assembled content, same as
     /// `compile_context`'s `token_budget`.
+    #[serde(deserialize_with = "super::wire::lenient")]
     pub token_budget: u64,
     /// Project facet, recorded in provenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,7 +253,11 @@ pub(super) struct CompileTranscriptParams {
     /// Tuning knobs for the transcript segmentation step itself (format,
     /// merge threshold, system-turn caching). `None` uses
     /// [`SegmentationPolicy::default`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::wire::lenient"
+    )]
     pub segmentation: Option<SegmentationPolicy>,
 }
 
@@ -328,7 +340,11 @@ pub(super) struct SuggestBudgetParams {
     /// Tokens to reserve for the response, subtracted from the model's
     /// window (default `0`) — mirrors
     /// [`CompilePolicy::response_reserve_tokens`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::wire::lenient"
+    )]
     pub reserve_tokens: Option<u64>,
 }
 
@@ -587,7 +603,8 @@ impl McpServer {
 
     #[tool(
         name = "save_working_context",
-        description = "Persist this session's distilled working state (goal, active constraints, verified facts, open hypotheses, decisions, exact evidence, pending actions) under a project + session id — so a LATER session (a fresh agent run, a new conversation, a resumed process) can pick up exactly where this one left off instead of re-deriving context from scratch. Call this near the end of a session, or whenever the working state changes meaningfully. Saving again under the same project+session replaces the previous state (idempotent upsert). Serialized size is capped at 1 MiB. Returns the stored fact's id."
+        description = "Persist this session's distilled working state (goal, active constraints, verified facts, open hypotheses, decisions, exact evidence, pending actions) under a project + session id — so a LATER session (a fresh agent run, a new conversation, a resumed process) can pick up exactly where this one left off instead of re-deriving context from scratch. Call this near the end of a session, or whenever the working state changes meaningfully. Saving again under the same project+session replaces the previous state (idempotent upsert). Serialized size is capped at 1 MiB. Returns the stored fact's id.",
+        input_schema = wire_safe_input_schema::<SaveWorkingContextParams>()
     )]
     async fn save_working_context(
         &self,

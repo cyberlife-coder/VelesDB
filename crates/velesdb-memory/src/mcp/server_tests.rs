@@ -1126,3 +1126,56 @@ fn test_recall_where_description_documents_type_strict_comparisons() {
          (e.g. dates) numerically: {description}"
     );
 }
+
+/// Issue: real MCP client harnesses (observed 2026-07-24 with Claude Code)
+/// degrade a parameter whose advertised schema carries no DIRECT `type`
+/// keyword — `anyOf`-wrapped optionals and `$ref`-only structs both come out
+/// untyped on the client side, and the harness then serializes the argument
+/// as a JSON-encoded STRING (`limit: "6"`, `filter: "{\"project\":...}"`),
+/// which the server rejects. Same wire-contract class as issue #1468
+/// (u64 ids vs float-lossy clients): the schema must be harness-proof, not
+/// merely spec-correct.
+///
+/// This test locks the contract for every optional scalar/object parameter
+/// of the recall family: each property's schema must expose a direct
+/// `type` keyword.
+#[test]
+fn test_recall_fused_input_schema_types_every_parameter_directly() {
+    let tool = McpServer::recall_fused_tool_attr();
+    let schema = serde_json::to_value(&tool.input_schema).expect("schema serializes");
+    let properties = schema["properties"]
+        .as_object()
+        .expect("recall_fused input schema must have properties");
+    for (name, subschema) in properties {
+        assert!(
+            subschema.get("type").is_some(),
+            "recall_fused parameter `{name}` must advertise a direct `type` \
+             keyword (anyOf/$ref-only schemas get stringified by real MCP \
+             harnesses); got: {subschema}"
+        );
+    }
+}
+
+/// Server-side tolerance half of the harness-proof contract: a client that
+/// DID stringify a scalar or object argument (today's Claude Code harness
+/// does exactly that for schema-degraded parameters) must still be served.
+/// Mirrors the #1468 string-id acceptance.
+#[test]
+fn test_recall_fused_params_accept_stringified_scalars_and_objects() {
+    let params: RecallFusedParams = serde_json::from_value(serde_json::json!({
+        "query": "q",
+        "limit": "6",
+        "hops": "2",
+        "graph_boost": "0.15",
+        "filter": "{\"project\": \"velesdb\"}"
+    }))
+    .expect("stringified scalar/object arguments must deserialize");
+    assert_eq!(params.limit, Some(6));
+    assert_eq!(params.hops, Some(2));
+    assert!((params.graph_boost.unwrap() - 0.15).abs() < f64::EPSILON);
+    let filter = params.filter.expect("filter must parse from a JSON string");
+    assert_eq!(
+        filter.get("project").and_then(|v| v.as_str()),
+        Some("velesdb")
+    );
+}
