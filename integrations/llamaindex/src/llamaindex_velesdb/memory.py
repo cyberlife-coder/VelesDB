@@ -19,7 +19,10 @@ from typing import Any, Dict, List, Optional, Union
 
 import velesdb
 
-from llamaindex_velesdb._common import make_initial_id_counter
+from llamaindex_velesdb._common import (
+    make_initial_id_counter,
+    open_database as _open_database,
+)
 from velesdb_common.memory import (
     chronological,
     format_procedural_results,
@@ -38,10 +41,15 @@ class _VelesDBMemoryBase:
     ``db_path`` validation and ``agent_memory`` setup in every ``__init__``.
     """
 
-    def __init__(self, db_path: str, dimension: int = 384) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        dimension: int = 384,
+        config: Optional[velesdb.VelesConfigOptions] = None,
+    ) -> None:
         if not db_path:
             raise ValueError("db_path must not be empty")
-        self._db = velesdb.Database(db_path)
+        self._db = _open_database(db_path, config)
         self._dimension = dimension
         self._memory = self._db.agent_memory(dimension=dimension)
 
@@ -55,6 +63,9 @@ class VelesDBSemanticMemory(_VelesDBMemoryBase):
     Args:
         db_path: Path to VelesDB database directory.
         dimension: Embedding dimension (default: 384).
+        config: Optional :class:`velesdb.VelesConfigOptions` engine
+            configuration, forwarded verbatim to ``velesdb.Database``.
+            ``None`` (default) opens the database exactly as before.
 
     Example:
         >>> memory = VelesDBSemanticMemory(db_path="./data", dimension=768)
@@ -127,6 +138,9 @@ class VelesDBEpisodicMemory(_VelesDBMemoryBase):
     Args:
         db_path: Path to VelesDB database directory.
         dimension: Embedding dimension (default: 384).
+        config: Optional :class:`velesdb.VelesConfigOptions` engine
+            configuration, forwarded verbatim to ``velesdb.Database``.
+            ``None`` (default) opens the database exactly as before.
 
     Example:
         >>> memory = VelesDBEpisodicMemory(db_path="./data")
@@ -134,8 +148,13 @@ class VelesDBEpisodicMemory(_VelesDBMemoryBase):
         >>> recent = memory.recall(query_embedding, top_k=5)
     """
 
-    def __init__(self, db_path: str, dimension: int = 384) -> None:
-        super().__init__(db_path, dimension)
+    def __init__(
+        self,
+        db_path: str,
+        dimension: int = 384,
+        config: Optional[velesdb.VelesConfigOptions] = None,
+    ) -> None:
+        super().__init__(db_path, dimension, config)
         self._event_counter = make_initial_id_counter()
 
     def record_event(
@@ -252,6 +271,9 @@ class VelesDBChatMemory(_VelesDBMemoryBase):
         dimension: Embedding dimension of the underlying store (default: 384).
         human_prefix: Prefix used for human turns in the string view.
         ai_prefix: Prefix used for AI turns in the string view.
+        config: Optional :class:`velesdb.VelesConfigOptions` engine
+            configuration, forwarded verbatim to ``velesdb.Database``.
+            ``None`` (default) opens the database exactly as before.
 
     Example:
         >>> memory = VelesDBChatMemory(db_path="./chat")
@@ -266,8 +288,9 @@ class VelesDBChatMemory(_VelesDBMemoryBase):
         dimension: int = 384,
         human_prefix: str = "Human",
         ai_prefix: str = "AI",
+        config: Optional[velesdb.VelesConfigOptions] = None,
     ) -> None:
-        super().__init__(db_path, dimension)
+        super().__init__(db_path, dimension, config)
         self._human_prefix = human_prefix
         self._ai_prefix = ai_prefix
         self._message_counter = make_initial_id_counter()
@@ -372,6 +395,9 @@ class VelesDBProceduralMemory(_VelesDBMemoryBase):
     Args:
         db_path: Path to VelesDB database directory.
         dimension: Embedding dimension (default: 384).
+        config: Optional :class:`velesdb.VelesConfigOptions` engine
+            configuration, forwarded verbatim to ``velesdb.Database``.
+            ``None`` (default) opens the database exactly as before.
 
     Example:
         >>> memory = VelesDBProceduralMemory(db_path="./data", dimension=384)
@@ -381,8 +407,13 @@ class VelesDBProceduralMemory(_VelesDBMemoryBase):
         >>> memory.reinforce("deploy_app", success=True)
     """
 
-    def __init__(self, db_path: str, dimension: int = 384) -> None:
-        super().__init__(db_path, dimension)
+    def __init__(
+        self,
+        db_path: str,
+        dimension: int = 384,
+        config: Optional[velesdb.VelesConfigOptions] = None,
+    ) -> None:
+        super().__init__(db_path, dimension, config)
         self._name_to_id: Dict[str, int] = {}
         self._id_counter = make_initial_id_counter()
 
