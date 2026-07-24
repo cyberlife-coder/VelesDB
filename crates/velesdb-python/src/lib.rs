@@ -53,7 +53,10 @@ pub use fusion::FusionStrategy;
 pub use graph::{dict_to_edge, dict_to_node, edge_to_dict, node_to_dict, traversal_to_dict};
 pub use graph_collection::{PyGraphCollection, PyGraphSchema};
 pub use graph_store::{GraphStore, StreamingConfig, TraversalResult};
-pub use options::{AutoReindexOptions, HnswOptions, LimitsOptions, VelesConfigOptions};
+pub use options::{
+    AutoReindexOptions, HnswConfigOptions, HnswOptions, LimitsOptions, QuantizationOptions,
+    SearchConfigOptions, StorageOptions, VelesConfigOptions,
+};
 pub use streaming_config::StreamingIngestConfig;
 
 use pyo3::prelude::*;
