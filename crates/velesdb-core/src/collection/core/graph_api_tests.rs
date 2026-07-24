@@ -906,11 +906,27 @@ mod tests {
         }
     }
 
+    /// Asserts the error is `NodeNotFound(expected_id)` — the unified
+    /// missing-endpoint contract (issue #1470): a genuinely missing endpoint
+    /// is `NodeNotFound` in both schema modes, `SchemaValidation` being
+    /// reserved for actual schema-shape violations (undeclared type, edge
+    /// type / endpoint type mismatch).
+    fn assert_node_not_found(result: crate::error::Result<()>, expected_id: u64) {
+        match result {
+            Err(crate::error::Error::NodeNotFound(id)) => assert_eq!(id, expected_id),
+            other => panic!("expected NodeNotFound({expected_id}), got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_strict_mode_rejects_dangling_edge() {
+        // Issue #1470: a genuinely missing endpoint is NodeNotFound in
+        // strict mode too, not SchemaValidation — that variant is reserved
+        // for actual schema-shape violations (see the other
+        // test_strict_mode_rejects_* below, which are unaffected).
         let (collection, _temp) = create_strict_graph_collection();
         // No node payloads stored: endpoints do not exist.
-        assert_schema_violation(collection.add_edge(make_edge(1, 100, 200, "KNOWS")));
+        assert_node_not_found(collection.add_edge(make_edge(1, 100, 200, "KNOWS")), 100);
         assert_eq!(collection.edge_count(), 0, "no partial write on rejection");
     }
 
@@ -1016,6 +1032,8 @@ mod tests {
 
     #[test]
     fn test_strict_mode_batch_rejects_dangling_edge() {
+        // Issue #1470: same unification as test_strict_mode_rejects_dangling_edge,
+        // for the batch path.
         let (collection, _temp) = create_strict_graph_collection();
         store_typed_node(&collection, 100, "Person");
         store_typed_node(&collection, 200, "Person");
@@ -1024,7 +1042,7 @@ mod tests {
             make_edge(1, 100, 200, "KNOWS"),
             make_edge(2, 300, 400, "KNOWS"),
         ];
-        assert_schema_violation(collection.add_edges_batch(batch).map(|_| ()));
+        assert_node_not_found(collection.add_edges_batch(batch).map(|_| ()), 300);
         // Whole batch rejected before any mutation — no partial write.
         assert_eq!(
             collection.edge_count(),
