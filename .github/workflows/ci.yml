@@ -345,6 +345,18 @@ jobs:
       - name: Check WASM build (no default features)
         run: cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
 
+      # Host-run (native target, no wasm32/Node involved) cross-implementation
+      # parity gate: asserts the WASM SQ8/Binary quantization paths
+      # (store_insert::encode_sq8/encode_binary, vector_ops/store_get decode)
+      # produce byte-for-byte identical quantized data to
+      # velesdb_core::{QuantizedVector, BinaryQuantizedVector} on a fixed
+      # dataset covering the degenerate/extreme edges from the #1543
+      # core-parity audit. Already covered transitively by `cargo test
+      # --workspace` in the Tests job; named explicitly here for a dedicated,
+      # visible signal on the WASM-specific job.
+      - name: Run WASM↔core quantization parity tests (host)
+        run: cargo test -p velesdb-wasm --lib quantization_parity_tests
+
       # The wasm-bindgen suites (tests/*.rs gated on target_arch = "wasm32",
       # e.g. memory_wedge_web.rs's JS-marshalling regression tests) compile
       # to empty binaries under the native test job and are invisible to the
