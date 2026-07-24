@@ -91,6 +91,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`velesdb-core`**: `Collection::execute_grouped_aggregate` (GROUP BY)
+  ignored `LIMIT`/`OFFSET` entirely — every group was returned regardless of
+  a trailing `LIMIT` clause, diverging from the WASM aggregate pipeline and
+  from core's own non-aggregate SELECT path, both of which already apply
+  `OFFSET`-then-`LIMIT`. Found while extending the executor conformance
+  fixture (documented as `documented_divergences` D006 in
+  `conformance/velesql_executor_cases.json`). `build_grouped_results` now
+  applies `OFFSET`/`LIMIT` after `ORDER BY` (SQL-standard order: WHERE →
+  GROUP BY → HAVING → ORDER BY → OFFSET → LIMIT); a `LIMIT`-less `GROUP BY`
+  still returns every group, matching prior behavior and WASM's semantics.
+  Locked by fixture case G005 and new `velesdb-core` BDD tests. (issue
+  #1556)
 - **`scripts/check-promise-contract.py`**: the promise-contract guardrail
   only ever checked that a claim's `must_contain` substring was still
   present in the file it points at — it never executed

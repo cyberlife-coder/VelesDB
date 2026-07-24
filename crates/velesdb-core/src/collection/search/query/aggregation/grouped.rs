@@ -44,6 +44,8 @@ impl Collection {
             group_by_columns,
             having,
             stmt.order_by.as_deref(),
+            stmt.offset,
+            stmt.limit,
         );
 
         Ok(serde_json::Value::Array(results))
@@ -179,13 +181,16 @@ impl Collection {
         Ok(())
     }
 
-    /// Builds the result array from grouped aggregators, applying HAVING and ORDER BY.
+    /// Builds the result array from grouped aggregators, applying HAVING, ORDER BY,
+    /// and OFFSET/LIMIT (in that SQL-standard order — see `select_dispatch.rs`).
     fn build_grouped_results(
         groups: HashMap<GroupKey, Aggregator>,
         aggregations: &[AggregateFunction],
         group_by_columns: &[String],
         having: Option<&HavingClause>,
         order_by: Option<&[crate::velesql::SelectOrderBy]>,
+        offset: Option<u64>,
+        limit: Option<u64>,
     ) -> Vec<serde_json::Value> {
         let mut results = Vec::new();
 
@@ -213,6 +218,17 @@ impl Collection {
 
         if let Some(order_by) = order_by {
             Self::sort_aggregation_results(&mut results, order_by);
+        }
+
+        // SQL-standard: OFFSET applied after ORDER BY, before LIMIT. A LIMIT-less
+        // GROUP BY returns every group (no default cap), matching the WASM
+        // aggregate pipeline (see conformance/velesql_executor_cases.json D006).
+        if let Some(offset) = offset {
+            let skip = usize::try_from(offset).unwrap_or(usize::MAX);
+            results = results.into_iter().skip(skip).collect();
+        }
+        if let Some(limit) = limit {
+            results.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
         }
 
         results

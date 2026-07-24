@@ -573,3 +573,96 @@ fn test_having_with_gte_operator() {
         groups.len()
     );
 }
+
+// =========================================================================
+// Scenario 16: LIMIT truncates GROUP BY results (issue #1556)
+// =========================================================================
+
+#[test]
+fn test_group_by_with_limit_truncates_groups() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    let result = execute_aggregate_sql(
+        &db,
+        "SELECT category, COUNT(*) FROM orders GROUP BY category ORDER BY category ASC LIMIT 2",
+    )
+    .expect("test: GROUP BY LIMIT");
+
+    let groups = result
+        .as_array()
+        .expect("test: aggregation should return array");
+    assert_eq!(
+        groups.len(),
+        2,
+        "LIMIT 2 should truncate 3 groups down to 2, got {}",
+        groups.len()
+    );
+
+    let categories: Vec<&str> = groups
+        .iter()
+        .filter_map(|g| g.get("category")?.as_str())
+        .collect();
+    assert_eq!(
+        categories,
+        vec!["books", "clothing"],
+        "LIMIT should keep the first 2 groups in ORDER BY category ASC order"
+    );
+}
+
+// =========================================================================
+// Scenario 17: OFFSET skips groups before LIMIT on GROUP BY results (#1556)
+// =========================================================================
+
+#[test]
+fn test_group_by_with_offset_and_limit() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    let result = execute_aggregate_sql(
+        &db,
+        "SELECT category, COUNT(*) FROM orders GROUP BY category ORDER BY category ASC LIMIT 1 OFFSET 1",
+    )
+    .expect("test: GROUP BY OFFSET LIMIT");
+
+    let groups = result
+        .as_array()
+        .expect("test: aggregation should return array");
+    assert_eq!(
+        groups.len(),
+        1,
+        "OFFSET 1 LIMIT 1 should return exactly 1 group, got {}",
+        groups.len()
+    );
+    assert_eq!(
+        groups[0].get("category").and_then(|v| v.as_str()),
+        Some("clothing"),
+        "OFFSET 1 should skip 'books' and return the second group 'clothing'"
+    );
+}
+
+// =========================================================================
+// Scenario 18: GROUP BY without LIMIT still returns every group (#1556)
+// =========================================================================
+
+#[test]
+fn test_group_by_without_limit_returns_all_groups() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    let result = execute_aggregate_sql(
+        &db,
+        "SELECT category, COUNT(*) FROM orders GROUP BY category",
+    )
+    .expect("test: GROUP BY without LIMIT");
+
+    let groups = result
+        .as_array()
+        .expect("test: aggregation should return array");
+    assert_eq!(
+        groups.len(),
+        3,
+        "A LIMIT-less GROUP BY must return every group (no default cap), got {}",
+        groups.len()
+    );
+}

@@ -208,7 +208,15 @@
         { "category": "tech", "n": 3, "total_year": 6065.0 },
         { "category": "other", "n": 2, "total_year": 4040.0 }
       ],
-      "note": "issue #1544: multiple aggregates per group and ORDER BY an aggregate column plus the group key. LIMIT is deliberately not exercised here — see documented_divergences D006"
+      "note": "issue #1544: multiple aggregates per group and ORDER BY an aggregate column plus the group key"
+    },
+    {
+      "id": "G005",
+      "query": "SELECT category, COUNT(*) AS n, SUM(year) AS total_year FROM docs GROUP BY category ORDER BY n DESC, category ASC LIMIT 1",
+      "expect_groups": [
+        { "category": "tech", "n": 3, "total_year": 6065.0 }
+      ],
+      "note": "issue #1556: LIMIT truncates GROUP BY results — regression lock for the fix to Collection::build_grouped_results (previously core ignored stmt.limit and returned both groups; was documented_divergences D006, now resolved on both engines)"
     }
   ],
   "setops_cases": [
@@ -293,14 +301,6 @@
       "wasm_behavior": "WASM-local relative_score/rsf multi-query fusion ranks differently from core",
       "status": "pre-existing, out of scope for issue #1544 — cross-referenced here only because the issue's own description flagged it as related context",
       "evidence": "crates/velesdb-wasm/src/fusion.rs:6-18,85-91 (per issue #1544 description); docs/reference/ECOSYSTEM_PARITY.md"
-    },
-    {
-      "id": "D006",
-      "area": "LIMIT on GROUP BY aggregate results",
-      "core_behavior": "Database::execute_aggregate / Collection::execute_grouped_aggregate never reads stmt.limit — every group is returned regardless of a trailing LIMIT clause, verified empirically with 'SELECT category, COUNT(*) AS n, SUM(year) AS total_year FROM docs GROUP BY category ORDER BY n DESC, category ASC LIMIT 1', which returned BOTH groups",
-      "wasm_behavior": "the WASM aggregate pipeline applies LIMIT to the grouped row set the same as a plain SELECT; the identical query returned only 1 row (the 'tech' group)",
-      "status": "tracked as a real core gap, not fixed here (out of scope for issue #1544 — coverage of existing behaviour, not a new feature). aggregate_cases G001-G004 deliberately do not exercise LIMIT so the fixture's shared expect_groups is correct for both engines",
-      "evidence": "crates/velesdb-core/src/collection/search/query/aggregation/grouped.rs: execute_grouped_aggregate/build_grouped_results (no limit/truncate call); crates/velesdb-wasm/src/velesql_aggregate.rs applies the standard SELECT finalize path which includes LIMIT"
     }
   ]
 }
