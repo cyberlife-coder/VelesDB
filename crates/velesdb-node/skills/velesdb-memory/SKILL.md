@@ -110,7 +110,8 @@ Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB
 An incident postmortem finds the payment provider's 30 s timeout let a stalled
 request pile up and take down checkout. The team drops it to 8 s.
 - `remember("Payment provider timeout set to 8s", metadata={type:"decision",
-  area:"payments", date:"2026-07-11"})` → returns id `D`.
+  area:"payments"})` → returns id `D`. No need to set a date — `_veles_date`
+  auto-stamps today's date as a numeric `YYYYMMDD`, as covered above.
 - `remember("Incident 2026-07-10: 30s payment timeout stalled checkout under load",
   metadata={type:"incident", area:"payments"})` → id `I`.
 - `relate(D, I, "caused_by")` and `relate(D, <config-PR fact>, "decided_in")`.
