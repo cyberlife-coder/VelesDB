@@ -38,7 +38,7 @@ fn handle_index_create(
     index_type: IndexTypeArg,
     label: Option<&str>,
 ) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let col = db
         .get_vector_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
@@ -89,7 +89,7 @@ fn handle_index_drop(
     label: &str,
     property: &str,
 ) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let col = db
         .get_vector_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
@@ -120,7 +120,7 @@ fn handle_index_drop(
 
 /// Lists all indexes on a collection.
 fn handle_index_list(path: &std::path::Path, collection: &str, format: &str) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let col = db
         .get_vector_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;

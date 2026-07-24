@@ -37,7 +37,7 @@ pub fn handle_simd(action: SimdAction) {
 
 /// Handles the `explain` subcommand: query execution plan.
 pub fn handle_explain(path: &Path, query: &str, format: &str) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let parsed = velesdb_core::velesql::Parser::parse(query)
         .map_err(|e| anyhow::anyhow!("Parse error: {e}"))?;
 

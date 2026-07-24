@@ -48,6 +48,9 @@ pub enum MemoryError {
 
     /// Caller metadata or a recall filter named a reserved key (`content` or a
     /// `_veles_`-prefixed system key), which callers may not set or filter on.
+    /// [`crate::storage::AUTO_DATE_FIELD`] is the one documented exception:
+    /// a caller MAY set it (e.g. to date a fact retroactively), so it never
+    /// raises this error.
     #[error("metadata key '{0}' is reserved")]
     ReservedKey(String),
 
@@ -106,6 +109,21 @@ pub enum MemoryError {
     #[cfg(feature = "context")]
     #[error("context request over limit: {0}")]
     ContextOverLimit(String),
+
+    /// A transcript segmentation request failed because of the transcript's
+    /// FORMAT, not its size — e.g. `segmentation.format: "jsonl"` forced on
+    /// a line that does not parse as a `{role, content}` JSON object (see
+    /// [`crate::context::segment::segment_transcript`]). Deliberately
+    /// distinct from [`Self::ContextOverLimit`] (issue #1516, m2): a parsing
+    /// failure is not a budget/cap breach, so a caller filtering on the
+    /// error message no longer sees the misleading "over limit" wording for
+    /// what is really a malformed-input error. Same
+    /// [`ErrorCategory::InvalidInput`] classification as `ContextOverLimit`
+    /// (both map to `INVALID_PARAMS` over MCP) — only the variant, and the
+    /// message, differ.
+    #[cfg(feature = "context")]
+    #[error("transcript segmentation error: {0}")]
+    SegmentationError(String),
 
     /// A `ctx://source/<hash>` handle was malformed or nothing is stored
     /// under it (the source was never stored, expired, or was forgotten).
@@ -206,7 +224,9 @@ impl MemoryError {
             | Self::InvalidRelation(_)
             | Self::MetadataTooLarge { .. } => ErrorCategory::InvalidInput,
             #[cfg(feature = "context")]
-            Self::ContextBudget { .. } | Self::ContextOverLimit(_) => ErrorCategory::InvalidInput,
+            Self::ContextBudget { .. } | Self::ContextOverLimit(_) | Self::SegmentationError(_) => {
+                ErrorCategory::InvalidInput
+            }
             #[cfg(feature = "context")]
             Self::IngestDisabled | Self::IngestOutsideRoots(_) | Self::IngestPath(_) => {
                 ErrorCategory::InvalidInput

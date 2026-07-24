@@ -484,16 +484,16 @@ fn fnv1a64_hex(bytes: &[u8]) -> String {
 }
 
 /// Maps string IDs to deterministic u64 point IDs (see `pipeline_points`).
+///
+/// Delegates to `velesdb_core::hash_id_bytes` (issue #1542) instead of
+/// re-declaring the FNV-1a offset/prime constants locally, so this crate's
+/// derivation cannot drift from core's canonical implementation. Byte-for-byte
+/// output is unchanged from the historical local implementation — see the
+/// golden-vector regression test in `tests` below; checkpoint-resumed
+/// migrations depend on this staying stable (see `stable_point_id`'s
+/// cross-version stability guarantee in `pipeline_points.rs`).
 pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
-
-    let mut hash = OFFSET_BASIS;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    hash
+    velesdb_core::hash_id_bytes(bytes)
 }
 
 /// Normalises a source-reported metric label into its canonical lowercase
@@ -611,8 +611,39 @@ mod tests {
     use crate::config::DistanceMetric;
 
     // ─────────────────────────────────────────────────────────────
-    // M-P0-3: metric fidelity check
+    // Issue #1542: golden vectors for `fnv1a64`, captured against the
+    // pre-refactor private implementation. `fnv1a64` is about to start
+    // delegating to `velesdb_core::hash_id_bytes` instead of re-declaring
+    // its own FNV-1a constants; these values must stay byte-identical
+    // after that change (checkpoint-resumed migrations depend on it — see
+    // `stable_point_id`'s cross-version stability guarantee).
     // ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_fnv1a64_golden_vectors_unchanged_by_delegation() {
+        let vectors: &[(&str, u64)] = &[
+            ("", 0xcbf2_9ce4_8422_2325),
+            ("a", 0xaf63_dc4c_8601_ec8c),
+            ("hello", 0xa430_d846_80aa_bd0b),
+            ("world", 0x4f59_ff5e_730c_8af3),
+            ("tenant:acme", 0x434a_088f_8b77_5207),
+            // Multi-byte UTF-8: 2-byte (é), 3-byte (CJK), and 4-byte (emoji)
+            // sequences must hash over raw bytes, not code points.
+            ("café", 0x48e8_823a_cfa4_0d89),
+            ("日本語", 0xee9e_e2b5_c854_ef87),
+            ("emoji:🚀", 0x5063_383e_8fb5_57fa),
+            ("mixed-Ünïcödé-42", 0x3019_47e7_0a3d_8809),
+            ("fact:the sky is blue", 0x5ff1_6ac5_c3bf_e13b),
+        ];
+
+        for (input, expected) in vectors {
+            assert_eq!(
+                fnv1a64(input.as_bytes()),
+                *expected,
+                "fnv1a64({input:?}) drifted from its pre-refactor golden vector"
+            );
+        }
+    }
 
     #[test]
     fn test_check_metric_fidelity_passes_when_source_is_none() {

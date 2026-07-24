@@ -201,3 +201,249 @@ fn test_inner_recall_fused_dated_builds_a_chronological_timeline() {
     );
     assert_eq!(ctx.now.as_deref(), Some("2026-07-01"));
 }
+
+// --- compileTranscript (issue #1547) ----------------------------------------
+//
+// `build_transcript_compile_request` is the pure-Rust half of
+// `WasmMemoryService::compile_transcript` — the `#[wasm_bindgen]` method
+// itself takes/returns `JsValue` and is therefore untestable natively (see
+// this module's docs), but the segmentation + `CompileRequest` assembly it
+// delegates to takes and returns plain Rust types, so it is fully provable
+// here without a JS host.
+
+#[test]
+fn test_build_transcript_compile_request_rejects_an_empty_transcript() {
+    let input = CompileTranscriptInput {
+        query: "q".to_owned(),
+        transcript: String::new(),
+        token_budget: 1000,
+        project: None,
+        target_model: None,
+        policy: None,
+        segmentation: None,
+    };
+    let err =
+        build_transcript_compile_request(input).expect_err("an empty transcript must be rejected");
+    assert!(
+        matches!(err, MemoryError::SegmentationError(ref msg) if msg.contains("empty")),
+        "expected a SegmentationError naming the transcript as empty, got {err:?}"
+    );
+}
+
+#[test]
+fn test_build_transcript_compile_request_segments_a_plain_transcript_and_wires_the_request() {
+    let input = CompileTranscriptInput {
+        query: "deploy pipeline".to_owned(),
+        transcript: "System: you are a helpful agent.\nUser: what broke the deploy?\nAssistant: clippy failed on main.\n".to_owned(),
+        token_budget: 5000,
+        project: Some("veles".to_owned()),
+        target_model: None,
+        policy: None,
+        segmentation: None,
+    };
+    let (request, segmentation) =
+        build_transcript_compile_request(input).expect("a well-formed plain transcript compiles");
+
+    assert_eq!(request.query, "deploy pipeline");
+    assert_eq!(request.token_budget, 5000);
+    assert_eq!(request.project.as_deref(), Some("veles"));
+    assert!(
+        !request.fragments.is_empty(),
+        "the transcript must segment into at least one fragment"
+    );
+    assert!(
+        matches!(segmentation.format_detected, SegmentFormat::Plain),
+        "a marker-based transcript must detect as plain, got {:?}",
+        segmentation.format_detected
+    );
+    assert_eq!(
+        segmentation.segments.len(),
+        request.fragments.len(),
+        "one segmentation audit entry per compiled fragment"
+    );
+    // The system turn is tagged cache-eligible by default
+    // (`SegmentationPolicy::cache_system_turn`) — role must survive onto the
+    // audit entry so a caller can see why.
+    assert_eq!(segmentation.segments[0].role.as_deref(), Some("System"));
+    for segment in &segmentation.segments {
+        assert!(
+            segment.fragment_id.parse::<u64>().is_ok(),
+            "fragment_id must cross as a decimal string, got {}",
+            segment.fragment_id
+        );
+    }
+}
+
+#[test]
+fn test_build_transcript_compile_request_honours_a_forced_jsonl_segmentation_policy() {
+    let transcript = r#"{"role": "user", "content": "what broke the deploy?"}
+{"role": "assistant", "content": "clippy failed on main"}
+"#;
+    let input = CompileTranscriptInput {
+        query: "deploy pipeline".to_owned(),
+        transcript: transcript.to_owned(),
+        token_budget: 5000,
+        project: None,
+        target_model: None,
+        policy: None,
+        segmentation: Some(SegmentationPolicy {
+            format: SegmentFormat::Jsonl,
+            ..SegmentationPolicy::default()
+        }),
+    };
+    let (_request, segmentation) =
+        build_transcript_compile_request(input).expect("a well-formed jsonl transcript compiles");
+    assert!(
+        matches!(segmentation.format_detected, SegmentFormat::Jsonl),
+        "a forced jsonl policy must report jsonl as detected, got {:?}",
+        segmentation.format_detected
+    );
+}
+
+#[test]
+fn test_build_transcript_compile_request_propagates_a_forced_jsonl_parse_failure() {
+    let input = CompileTranscriptInput {
+        query: "q".to_owned(),
+        transcript: "not jsonl at all".to_owned(),
+        token_budget: 1000,
+        project: None,
+        target_model: None,
+        policy: None,
+        segmentation: Some(SegmentationPolicy {
+            format: SegmentFormat::Jsonl,
+            ..SegmentationPolicy::default()
+        }),
+    };
+    let err = build_transcript_compile_request(input)
+        .expect_err("a forced jsonl format that fails to parse must be a hard error");
+    assert!(
+        matches!(err, MemoryError::SegmentationError(_)),
+        "a FORMAT failure must surface as SegmentationError, not a generic error, got {err:?}"
+    );
+}
+
+#[test]
+fn test_compile_transcript_end_to_end_through_inner_compiles_the_segmented_fragments() {
+    // Proves the full pipeline `build_transcript_compile_request` feeds into
+    // `MemoryService::compile_context` on `WasmStore` — the same wiring
+    // `WasmMemoryService::compile_transcript` performs, minus the JsValue
+    // marshalling at the boundary (see this module's docs).
+    let svc = WasmMemoryService::new(16);
+    let input = CompileTranscriptInput {
+        query: "deploy pipeline".to_owned(),
+        transcript: "User: what broke the deploy?\nAssistant: ```rust\nlet x = 42;\n```\n"
+            .to_owned(),
+        token_budget: 5000,
+        project: None,
+        target_model: None,
+        policy: None,
+        segmentation: None,
+    };
+    let (request, segmentation) =
+        build_transcript_compile_request(input).expect("segmentation must succeed");
+    let compiled = svc
+        .inner
+        .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+        .expect("compiling the segmented fragments must succeed");
+    assert!(
+        compiled.content.contains("let x = 42;"),
+        "the fenced code segment must survive verbatim into the compiled content"
+    );
+    assert_eq!(compiled.decisions.len(), segmentation.segments.len());
+}
+
+// --- contextSavings / explainCompilation (issue #1547) ---------------------
+//
+// Both wasm-bindgen methods are pure delegation to `MemoryService`'s own
+// bridge (id-stringification aside), already covered end-to-end by
+// `velesdb-memory`'s own test suite — what is specifically worth proving
+// here is that the delegation target behaves the same way on `WasmStore`,
+// the wasm-only `MemoryStore` impl, not just the native file-backed one.
+
+/// A bare content-only fragment — `ContextFragment` derives neither
+/// `Default` nor a constructor, so every other field is spelled out once
+/// here rather than at each call site (mirrors `classify_tests.rs`'s own
+/// `fragment` helper).
+fn plain_fragment(content: &str) -> velesdb_memory::context::ContextFragment {
+    velesdb_memory::context::ContextFragment {
+        id: None,
+        content: content.to_owned(),
+        path: None,
+        kind: None,
+        priority: None,
+        metadata: None,
+        media: None,
+    }
+}
+
+#[test]
+fn test_inner_context_savings_aggregates_after_a_compile() {
+    let svc = WasmMemoryService::new(16);
+    let request = CompileRequest {
+        query: "q".to_owned(),
+        fragments: vec![plain_fragment(
+            "the deploy pipeline runs clippy before tests",
+        )],
+        project: Some("veles".to_owned()),
+        target_model: None,
+        token_budget: 5000,
+        memory_scope: None,
+        policy: None,
+    };
+    svc.inner
+        .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+        .expect("compile must succeed");
+
+    let savings = svc
+        .inner
+        .context_savings(Some("veles"))
+        .expect("context_savings must succeed on WasmStore");
+    assert_eq!(savings.events, 1, "the one compile above must be counted");
+
+    let other_project = svc
+        .inner
+        .context_savings(Some("unrelated-project"))
+        .expect("context_savings must succeed for an unrelated project too");
+    assert_eq!(
+        other_project.events, 0,
+        "a project filter must exclude events recorded under a different project"
+    );
+}
+
+#[test]
+fn test_inner_explain_compilation_returns_the_matching_decision() {
+    let svc = WasmMemoryService::new(16);
+    let request = CompileRequest {
+        query: "q".to_owned(),
+        fragments: vec![plain_fragment(
+            "the deploy pipeline runs clippy before tests",
+        )],
+        project: None,
+        target_model: None,
+        token_budget: 5000,
+        memory_scope: None,
+        policy: None,
+    };
+    let compiled = svc
+        .inner
+        .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+        .expect("compile must succeed");
+    let fragment_id = compiled.decisions[0].fragment_id;
+
+    let decision = svc
+        .inner
+        .explain_compilation(&request, fragment_id, None)
+        .expect("explain_compilation must succeed on WasmStore");
+    assert_eq!(decision.fragment_id, fragment_id);
+
+    // explain_compilation is read-only: it must not record a second
+    // compilation event.
+    let savings = svc
+        .inner
+        .context_savings(None)
+        .expect("context_savings must succeed");
+    assert_eq!(
+        savings.events, 1,
+        "explain_compilation must not itself count as a new compile event"
+    );
+}

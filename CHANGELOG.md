@@ -20,6 +20,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returning a stored context, so a slot squatted by an unrelated fact
   yields `None` instead of being served back. (#1458)
 
+### Changed
+
+- **`velesdb-core` / `velesdb-wasm`**: single-sourced the fusion math that
+  had drifted across engines (parity-audit finding, issue #1545).
+  `velesdb-core::fusion::min_max_normalize` is now `pub`, and
+  `velesdb-wasm`'s `relative_score`/`rsf` per-branch normalization delegates
+  to it instead of maintaining its own copy of the same min-max math. Core
+  also now exposes canonical `DEFAULT_WEIGHTED_AVG_WEIGHT` /
+  `DEFAULT_WEIGHTED_MAX_WEIGHT` / `DEFAULT_WEIGHTED_HIT_WEIGHT` constants
+  (`0.6` / `0.3` / `0.1`, matching the Python bindings and the
+  `velesdb_common` fusion builder) and a `FusionStrategy::weighted_default()`
+  constructor. **Behavior change, `velesdb-wasm` only:**
+  `multi_query_search(..., strategy: "weighted")` previously hardcoded a
+  non-overridable `avg=0.5, max=0.3, hit=0.2` split; it now defaults to the
+  canonical `0.6/0.3/0.1` weights and accepts an optional `weights`
+  parameter to override them per call. This reorders `weighted`-fusion
+  results for existing WASM callers that didn't request explicit weights.
+  See `crates/velesdb-wasm/CHANGELOG.md` for the full migration note.
+
 ### Added
 
 - **`velesdb-cli`**: new `graph doctor <collection> [--purge|--stub]`
@@ -36,9 +55,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   idempotent. (#1469)
 - **`velesdb-memory` (Python)**: `MemoryService.feedback` is now exposed,
   closing the RL feedback loop from the Python binding. (#1452)
+- **`velesdb-wasm`**: `compileTranscript`, `explainCompilation`,
+  `contextSavings`, and `suggestBudget` are now exposed on the browser
+  `MemoryService` (previously Node/MCP-only), closing most of the
+  context-compiler tool-surface gap in WASM. `feedback` stays
+  intentionally absent — it lives behind `velesdb-memory`'s
+  `persistence` feature, which the WASM build does not enable (a durable
+  learned confidence is meaningless for a store that disappears on page
+  reload). `rememberExtracted` also stays absent (needs a generative
+  model, which would pull a network dependency into the WASM bundle by
+  default). (#1547)
+- **`velesdb-node`**: `compileTranscript` and `listWorkingContexts` are
+  now exposed, closing the Node-side gap for both (`compileTranscript`
+  was MCP-only; `listWorkingContexts` had `save`/`load` but not `list`).
+  `index.d.ts` regenerated. (#1547)
+- **`@wiscale/velesdb-sdk`**: the browser `MemoryService` gains
+  `compileTranscript`, `explainCompilation`, `contextSavings`, and
+  `suggestBudget`, delegating to the new WASM exports above.
+  `MemoryMetadata._veles_date` is now a typed, documented field (was
+  untyped `Record<string, unknown>`), and `recallFusedDated`'s TSDoc now
+  explains the zero-setup `"_veles_date"` pairing. (#1547)
+- **`velesdb_common`**: `stable_hash_id` gains an opt-in
+  `algorithm="fnv1a"` keyword parameter (default stays `"sha256"`,
+  unchanged) so a Python-derived point ID can agree byte-for-byte with
+  `velesdb_core::hash_id`/`velesdb-migrate`'s FNV-1a derivation for the same
+  string when interop across ingestion paths is needed. Separately,
+  `velesdb-core` now exports a public `hash_id_bytes`, and
+  `velesdb-memory`/`velesdb-migrate` delegate their own FNV-1a derivations to
+  it instead of each re-declaring the FNV-1a constants — a pure internal
+  dedup within the Rust crates, byte-identical output (see the golden-vector
+  regression tests added alongside); it does not by itself change the
+  Rust-vs-Python divergence, which the new opt-in addresses. See
+  `docs/reference/KNOWN_LIMITATIONS.md` #12 for the full contract, including
+  why the SHA-256 default is intentionally preserved. (#1542)
 
 ### Fixed
 
+- **`scripts/check-promise-contract.py`**: the promise-contract guardrail
+  only ever checked that a claim's `must_contain` substring was still
+  present in the file it points at — it never executed
+  `validation_command`, so the contract could guarantee a number wasn't
+  *lost* from a doc without ever proving it was still *true*. Two real
+  drifts (a stale WASM bundle-size figure off by +25-28%, and a benchmark
+  corpus label reading 5K when the bench actually inserts 10K vectors)
+  slipped through and were only caught by a manual re-verification pass.
+  Claims in `docs/reference/promise-contract.json` now carry an explicit
+  `"executable"` flag: claims whose `validation_command` is a fast,
+  deterministic, local, no-network README-vs-committed-file comparison
+  (`grep`/file-content checks) are marked `true` and are now actually run
+  via subprocess, failing the script on a real mismatch; claims needing a
+  costly measurement (`cargo bench`, a release build, a published-package
+  download) stay `false` — documentary only — and are explicitly skipped
+  with a visible message naming the claim and the unverified command,
+  never silently ignored. 6 of 27 claims are now executed for real; 21
+  remain documentary. (issue #1518)
+- **`velesdb-memory`**: two `compile_transcript`/`segment_transcript`
+  adversarial-review follow-ups from #1500, deliberately deferred (issue
+  #1516). **(1) Error taxonomy — potentially breaking for a caller
+  matching on the error variant/message.** A forced
+  `segmentation.format: "jsonl"` that failed to parse used to surface as
+  `MemoryError::ContextOverLimit` with a misleading "over limit" prefix on
+  what is really a format/parsing failure, not a budget breach. It now
+  surfaces as a new, dedicated `MemoryError::SegmentationError` variant.
+  Both stay in the same `INVALID_PARAMS`-category MCP taxonomy (JSON-RPC
+  code unchanged), so an MCP client only sees the error message change;
+  a Rust caller of `velesdb-memory` directly that pattern-matched on
+  `MemoryError::ContextOverLimit` for this specific case must now match
+  `MemoryError::SegmentationError` instead. A genuine budget/cap breach
+  (transcript over the byte cap, an unsplittable oversized fence, too many
+  fragments after merging) is unaffected — still `ContextOverLimit`. **(2)
+  Duplicated ranges.** Re-splitting a `content_override` (a `jsonl` line
+  whose decoded `content` alone exceeded `MAX_FRAGMENT_BYTES`, over 1 MiB)
+  used to give every resulting child segment the SAME original line's byte
+  range, so `segmentation.segments` reported overlapping ranges —
+  contradicting the partition property `compile_transcript` advertises.
+  Each child now gets a distinct, non-overlapping sub-range of the
+  original line, proportional to its share of the decoded content (a
+  JSONL line's raw JSON-escaped bytes have no byte-exact mapping back to
+  the decoded text, so the split is proportional, not byte-precise) —
+  `segmentation.segments` now partitions the transcript exactly in every
+  case, including this one.
 - **`velesdb-memory`**: the `compile_context` prompt-cache prefix could
   churn when only the query changed. `selection_order`
   (`src/context/budget.rs`) used lexical relevance to the query as a

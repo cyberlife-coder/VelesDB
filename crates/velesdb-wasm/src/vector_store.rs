@@ -439,8 +439,14 @@ impl VectorStore {
             .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
     }
 
-    /// Multi-query search with fusion. Strategies: average, maximum, rrf.
+    /// Multi-query search with fusion. Strategies: average, maximum, weighted, rrf, relative_score/rsf.
+    ///
+    /// `weights` is an optional `[avg_weight, max_weight, hit_weight]` triple
+    /// used only by the `"weighted"` strategy. When omitted, core's canonical
+    /// default weights are used (`avg=0.6, max=0.3, hit=0.1`) — see issue
+    /// #1545. Passing a slice of any length other than 3 is an error.
     #[wasm_bindgen]
+    #[allow(clippy::too_many_arguments)]
     pub fn multi_query_search(
         &mut self,
         vectors: &[f32],
@@ -448,6 +454,7 @@ impl VectorStore {
         k: usize,
         strategy: &str,
         rrf_k: Option<u32>,
+        weights: Option<Vec<f32>>,
     ) -> Result<JsValue, JsValue> {
         if num_vectors == 0 {
             return Err(JsValue::from_str(
@@ -469,6 +476,7 @@ impl VectorStore {
             k,
             strategy,
             rrf_k,
+            weights.as_deref(),
         )
     }
 

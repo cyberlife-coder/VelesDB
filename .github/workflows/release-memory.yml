@@ -11,6 +11,16 @@
 # crate depends on velesdb-core ^3.3.0, which is already on crates.io, so the
 # package is dry-run validated up front (unlike workspace dependents, which
 # cannot be dry-run before core is published).
+#
+# This pipeline also builds and attaches per-platform "daemon archives"
+# (build-daemon-archive / publish-daemon-archive below): the .mcpb bundles
+# published separately by release-mcpb.yml are built with DEFAULT features
+# (stdio only — no `http`/`ollama`), so they can't run as the shared
+# multi-client daemon scripts/install-memory-daemon.{sh,ps1} set up. The
+# daemon archives are the SAME crate built with `--features ollama,http`
+# instead, letting `--from-release` / `-FromRelease` in those install
+# scripts install a working daemon binary with no Rust toolchain on the
+# target machine.
 name: Release velesdb-memory
 
 on:
@@ -30,6 +40,10 @@ on:
         default: true
       publish_npm:
         description: 'Publish @wiscale/velesdb-memory-node to npm'
+        type: boolean
+        default: true
+      publish_daemon_archive:
+        description: 'Build and attach the --features ollama,http daemon archives to the GitHub Release'
         type: boolean
         default: true
 
@@ -355,3 +369,157 @@ jobs:
             echo "❌ npm publish FAILED for @wiscale/velesdb-memory-node@$VERSION (auth/registry error, NOT already-published)"
             exit 1
           fi
+
+  # ===========================================================================
+  # 5. Build the daemon binary for each platform (--features ollama,http)
+  # ===========================================================================
+  #
+  # Same crate/bin as the default-feature .mcpb bundles in release-mcpb.yml,
+  # built with the daemon's actual feature set instead. `ollama` stays a
+  # compile-time opt-in only because the runtime VELESDB_MEMORY_EMBEDDER=ollama
+  # switch needs the code present to select at all — the embedder choice
+  # itself is still a pure runtime decision either way (see build_daemon /
+  # Build-Daemon in the install scripts, which always request both features
+  # regardless of which embedder the user picks).
+  build-daemon-archive:
+    name: Build daemon archive (${{ matrix.target }})
+    needs: validate
+    if: github.event_name == 'push' || inputs.publish_daemon_archive
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin,      host: macos-latest,   archive: tar.gz }
+          - { target: x86_64-apple-darwin,       host: macos-latest,   archive: tar.gz }
+          - { target: x86_64-unknown-linux-gnu,  host: ubuntu-latest,  archive: tar.gz }
+          - { target: aarch64-unknown-linux-gnu, host: ubuntu-latest,  archive: tar.gz, cross: true }
+          - { target: x86_64-pc-windows-msvc,    host: windows-latest, archive: zip }
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.target }}
+
+      # rust-toolchain.toml pins the build to its own toolchain, which rustup
+      # auto-installs WITHOUT the cross-compilation target added above (the
+      # action only adds it to `stable`) — same fix as release-mcpb.yml's
+      # equivalent step, needed for the same reason (E0463 otherwise).
+      - name: Add target to the pinned toolchain
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install aarch64 linux cross linker
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: "release-memory-daemon-${{ matrix.target }}"
+
+      - name: Build velesdb-memory (--features ollama,http)
+        run: cargo build --release --locked -p velesdb-memory --bin velesdb-memory --target ${{ matrix.target }} --features ollama,http
+
+      - name: Package archive + checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="daemon-stage"
+          rm -rf "$STAGE" && mkdir -p "$STAGE"
+
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            EXE="velesdb-memory.exe"
+            cp "target/${{ matrix.target }}/release/${EXE}" "$STAGE/${EXE}"
+            ASSET="velesdb-memory-daemon-${{ matrix.target }}.zip"
+            # Portable zip (no `zip` binary on Windows runners) — same
+            # technique as release-mcpb.yml's bundle step.
+            python3 - "$STAGE" "$ASSET" <<'PYZIP'
+          import os, sys, zipfile
+          stage, asset = sys.argv[1], sys.argv[2]
+          with zipfile.ZipFile(asset, "w", zipfile.ZIP_DEFLATED) as z:
+              for root, _, files in os.walk(stage):
+                  for f in files:
+                      full = os.path.join(root, f)
+                      arc = os.path.relpath(full, stage).replace(os.sep, "/")
+                      z.write(full, arc)
+          print("zipped", asset)
+          PYZIP
+          else
+            EXE="velesdb-memory"
+            cp "target/${{ matrix.target }}/release/${EXE}" "$STAGE/${EXE}"
+            chmod +x "$STAGE/${EXE}"
+            ASSET="velesdb-memory-daemon-${{ matrix.target }}.tar.gz"
+            tar -C "$STAGE" -czf "$ASSET" "${EXE}"
+          fi
+
+          # sha256sum isn't guaranteed on every runner (macOS ships `shasum`
+          # instead) — python3's hashlib is on all three, so use that for one
+          # consistent "<hex>  <filename>" line the install scripts can parse
+          # the same way on every platform.
+          python3 -c "
+          import hashlib, sys
+          h = hashlib.sha256()
+          with open(sys.argv[1], 'rb') as f:
+              for chunk in iter(lambda: f.read(1 << 20), b''):
+                  h.update(chunk)
+          print(f'{h.hexdigest()}  {sys.argv[1]}')
+          " "$ASSET" > "${ASSET}.sha256"
+
+          echo "ASSET=${ASSET}" >> "$GITHUB_ENV"
+          echo "Built ${ASSET} ($(cat "${ASSET}.sha256"))"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: daemon-archive-${{ matrix.target }}
+          path: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET }}.sha256
+          if-no-files-found: error
+
+  # ===========================================================================
+  # 6. Attach the daemon archives to the GitHub Release
+  # ===========================================================================
+  #
+  # release-mcpb.yml separately creates/updates the SAME velesdb-memory-vX.Y.Z
+  # release for its .mcpb bundles, triggered by the same tag push — so this
+  # job's "create if missing, `|| true` on the race" is not optional
+  # defensiveness, it is load-bearing: both workflows can hit `gh release
+  # create` for the same tag within moments of each other. Whichever loses
+  # that race gets a harmless "already exists" failure (swallowed by
+  # `|| true`) and both proceed straight to `gh release upload`, which is
+  # idempotent per file (`--clobber`).
+  publish-daemon-archive:
+    name: Attach daemon archives to release
+    needs: [validate, build-daemon-archive]
+    if: github.event_name == 'push' || inputs.publish_daemon_archive
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download all daemon archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: daemon-archives
+          pattern: daemon-archive-*
+          merge-multiple: true
+
+      - name: Attach archives to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: velesdb-memory-v${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          # --latest=false: same reasoning as release-mcpb.yml — the
+          # velesdb-memory release must never become the repo's "Latest
+          # release" (that belongs to the workspace vX.Y.Z release).
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --latest=false --notes "velesdb-memory $TAG — daemon archives (--features ollama,http) for install-memory-daemon.sh/.ps1 --from-release." || true
+          fi
+          ls -la daemon-archives/
+          gh release upload "$TAG" daemon-archives/* --clobber

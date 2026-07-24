@@ -97,6 +97,11 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// "recall then format" pairing lives in exactly one place and can't drift
     /// between surfaces.
     ///
+    /// `date_field` can name any caller metadata key, but passing
+    /// [`crate::storage::AUTO_DATE_FIELD`] needs zero setup: `remember`
+    /// auto-stamps that key on every fact already, so a caller gets a correct
+    /// `dated_context` without ever having managed a date field itself.
+    ///
     /// # Errors
     /// Returns [`MemoryError`] if the underlying [`Self::recall_fused`] fails.
     pub fn recall_fused_dated(

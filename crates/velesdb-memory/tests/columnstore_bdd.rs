@@ -9,7 +9,9 @@ mod common;
 use common::{meta, service};
 use serde_json::json;
 use tempfile::TempDir;
-use velesdb_memory::{ColumnFilter, ColumnOp, HashEmbedder, MemoryError, MemoryService};
+use velesdb_memory::{
+    ColumnFilter, ColumnOp, HashEmbedder, MemoryError, MemoryService, AUTO_DATE_FIELD,
+};
 
 /// Seed one `veles`-project and one `acme`-project "auth bug" fact; returns the
 /// service plus the two ids.
@@ -347,7 +349,10 @@ fn recall_where_surfaces_the_matching_facts_metadata() {
 }
 
 #[test]
-fn recall_where_metadata_is_none_when_the_fact_has_no_metadata() {
+fn recall_where_metadata_holds_only_the_auto_date_when_the_fact_has_no_caller_metadata() {
+    // `remember` now auto-stamps every fact with `AUTO_DATE_FIELD` (see
+    // `tests/auto_date_bdd.rs`), so a caller-metadata-free fact no longer
+    // round-trips as `metadata: None` here either.
     let (_dir, svc) = service();
     let bare = svc
         .remember("a bare fact with no metadata", &[], None)
@@ -361,9 +366,11 @@ fn recall_where_metadata_is_none_when_the_fact_has_no_metadata() {
         .iter()
         .find(|h| h.id == bare)
         .expect("bare fact present");
-    assert!(
-        hit.metadata.is_none(),
-        "a fact stored without metadata must round-trip as None"
+    let metadata = hit.metadata.as_ref().expect("auto date stamped");
+    assert_eq!(
+        metadata.keys().collect::<Vec<_>>(),
+        vec![AUTO_DATE_FIELD],
+        "a fact stored without caller metadata must round-trip with only the auto date"
     );
 }
 
@@ -384,17 +391,26 @@ fn recall_where_never_leaks_reserved_keys_in_metadata() {
         .expect("recall_where unfiltered");
 
     let hit = hits.iter().find(|h| h.id == id).expect("fact present");
-    if let Some(metadata) = &hit.metadata {
-        assert!(
-            metadata.keys().all(|k| !k.starts_with("_veles_")),
-            "no `_veles_`-namespaced system key ever leaks through metadata"
-        );
-        assert_eq!(
-            metadata.get("project"),
-            Some(&json!("veles")),
-            "caller metadata still round-trips alongside the ttl"
-        );
-    }
+    let metadata = hit
+        .metadata
+        .as_ref()
+        .expect("caller metadata + auto date present");
+    assert!(
+        metadata
+            .keys()
+            .all(|k| k == AUTO_DATE_FIELD || !k.starts_with("_veles_")),
+        "no `_veles_`-namespaced system key other than the documented \
+         AUTO_DATE_FIELD exception ever leaks through metadata"
+    );
+    assert!(
+        !metadata.contains_key("_veles_expires_at"),
+        "the durable TTL's reserved key must never leak, unlike AUTO_DATE_FIELD"
+    );
+    assert_eq!(
+        metadata.get("project"),
+        Some(&json!("veles")),
+        "caller metadata still round-trips alongside the ttl"
+    );
 }
 
 #[test]

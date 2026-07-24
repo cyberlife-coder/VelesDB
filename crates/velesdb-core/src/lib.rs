@@ -231,7 +231,11 @@ pub use validation::{
 // so persistence-free targets (WASM) can delegate to it. Consumers deriving a
 // numeric ID from a string for persisted or interoperable use MUST call
 // `hash_id` (never a std `DefaultHasher`, which is not stable across runs).
-pub use wire::stable_hash::{hash_edge_id, hash_id};
+// `hash_id_bytes` is the bytes-level counterpart, exported so other
+// `VelesDB` crates (velesdb-memory, velesdb-migrate) can delegate their own
+// FNV-1a derivations to this single implementation instead of re-declaring
+// the constants (issue #1542).
+pub use wire::stable_hash::{hash_edge_id, hash_id, hash_id_bytes};
 
 #[cfg(feature = "persistence")]
 pub use column_store::{
@@ -250,7 +254,10 @@ pub use config::{
 };
 #[cfg(feature = "persistence")]
 pub use config::{LoggingConfig, ServerConfig, StorageConfig};
-pub use fusion::{FusionError, FusionStrategy};
+pub use fusion::{
+    FusionError, FusionStrategy, DEFAULT_WEIGHTED_AVG_WEIGHT, DEFAULT_WEIGHTED_HIT_WEIGHT,
+    DEFAULT_WEIGHTED_MAX_WEIGHT,
+};
 #[cfg(feature = "persistence")]
 pub use guardrails::QueryLimits;
 pub use metrics::{

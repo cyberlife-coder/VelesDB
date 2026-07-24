@@ -14,6 +14,7 @@ from haystack.document_stores.errors import DuplicateDocumentError
 from haystack.document_stores.types import DuplicatePolicy
 
 import velesdb
+from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.fusion import build_fusion_strategy
 from velesdb_common.ids import stable_hash_id
 from velesdb_common.security import (
@@ -381,7 +382,48 @@ def _documents_to_points(
     return points
 
 
-class VelesDBDocumentStore:
+def _resolve_survivors_for_policy(
+    col: Any,
+    documents: List[Document],
+    int_id_map: Dict[int, str],
+    policy: DuplicatePolicy,
+) -> Optional[List[Document]]:
+    """Apply *policy* to *documents* against the collection's existing points.
+
+    Shared by :meth:`VelesDBDocumentStore.write_documents` and
+    :meth:`VelesDBDocumentStore.write_documents_streaming` — both need the
+    exact same FAIL/SKIP/NONE·OVERWRITE resolution before choosing how to
+    send the surviving points (single ``upsert`` vs. batched
+    ``stream_insert``).
+
+    Returns:
+        The list of documents to write, or ``None`` when ``policy`` is
+        ``SKIP`` and every incoming document already exists (caller should
+        return 0 without touching the collection).
+    """
+    if policy == DuplicatePolicy.FAIL:
+        _enforce_fail_policy(col, int_id_map)
+        return documents
+    if policy == DuplicatePolicy.SKIP:
+        survivors = _filter_skip_policy(col, int_id_map, documents)
+        return survivors or None
+    return documents
+
+
+def _flush_stream_batches(collection: Any, points: List[dict], batch_size: int) -> None:
+    """Send *points* to *collection* in batches via the streaming channel.
+
+    Mirrors ``langchain_velesdb.point_builder.flush_stream_batches`` and
+    ``llamaindex_velesdb.node_builder.flush_in_batches`` — kept local (rather
+    than imported cross-package) so this MIT-licensed integration does not
+    take on a dependency on the sibling LangChain/LlamaIndex distributions.
+    Only calls the ``velesdb`` binding's ``stream_insert``; no core logic.
+    """
+    for start in range(0, len(points), batch_size):
+        collection.stream_insert(points[start : start + batch_size])
+
+
+class VelesDBDocumentStore(CollectionAdminMixin):
     """Haystack 2.x DocumentStore backed by a local VelesDB collection.
 
     Stores documents (with optional embeddings) in VelesDB and exposes the
@@ -418,18 +460,32 @@ class VelesDBDocumentStore:
     # Internal connection management
     # ------------------------------------------------------------------
 
-    def _get_collection(self) -> Any:
-        """Return the VelesDB collection, opening or creating it as needed."""
+    @property
+    def collection_name(self) -> str:
+        """Return the collection name (satisfies the CollectionAdminMixin contract)."""
+        return self._collection_name
+
+    def _get_db(self) -> Any:
+        """Return the VelesDB database handle, opening it as needed.
+
+        Required by ``CollectionAdminMixin`` (``get_stats``/``analyze``/
+        ``train_pq``/``create_metadata_collection`` all go through this).
+        """
         if self._db is None:
             self._db = velesdb.Database(self._path)
+        return self._db
+
+    def _get_collection(self) -> Any:
+        """Return the VelesDB collection, opening or creating it as needed."""
+        db = self._get_db()
         if self._collection is None:
             col: Optional[Any] = None
             try:
-                col = self._db.get_collection(self._collection_name)
+                col = db.get_collection(self._collection_name)
             except KeyError:
                 pass
             if col is None:
-                col = self._db.create_collection(
+                col = db.create_collection(
                     self._collection_name,
                     dimension=self._embedding_dim,
                     metric=self._metric,
@@ -522,18 +578,89 @@ class VelesDBDocumentStore:
         sparse_by_id = _build_sparse_by_id(documents, sparse_vectors)
         int_id_map = _build_int_id_map(documents)
         col = self._get_collection()
-        if policy == DuplicatePolicy.FAIL:
-            _enforce_fail_policy(col, int_id_map)
-            survivors = documents
-        elif policy == DuplicatePolicy.SKIP:
-            survivors = _filter_skip_policy(col, int_id_map, documents)
-            if not survivors:
-                return 0
-        else:
-            survivors = documents
+        survivors = _resolve_survivors_for_policy(col, documents, int_id_map, policy)
+        if survivors is None:
+            return 0
         points = _documents_to_points(survivors, sparse_by_id)
         result = col.upsert(points)
         return result if isinstance(result, int) else len(points)
+
+    def stream_insert(
+        self,
+        documents: List[Document],
+        sparse_vectors: Optional[List[dict]] = None,
+    ) -> int:
+        """Insert *documents* via VelesDB's streaming ingestion channel.
+
+        Sends every point through ``Collection.stream_insert`` in a single
+        call. Unlike :meth:`write_documents`, this bypasses the
+        ``DuplicatePolicy`` checks (streaming is an append-only bulk-loading
+        path) — pre-dedupe on the caller side if that matters. For very
+        large batches where the bounded streaming channel's backpressure
+        should be respected across multiple sends, use
+        :meth:`write_documents_streaming` instead.
+
+        Mirrors ``langchain_velesdb.VelesDBVectorStore.stream_insert`` and
+        ``llamaindex_velesdb.VelesDBVectorStore.stream_insert``, which
+        forward the same way to ``collection.stream_insert``.
+
+        Args:
+            documents: Documents to insert.
+            sparse_vectors: Optional list aligned with *documents*; see
+                :meth:`write_documents` for the accepted shapes.
+
+        Returns:
+            Number of points inserted.
+        """
+        if not documents:
+            return 0
+        sparse_by_id = _build_sparse_by_id(documents, sparse_vectors)
+        points = _documents_to_points(documents, sparse_by_id)
+        self._get_collection().stream_insert(points)
+        return len(points)
+
+    def write_documents_streaming(
+        self,
+        documents: List[Document],
+        policy: DuplicatePolicy = DuplicatePolicy.NONE,
+        sparse_vectors: Optional[List[dict]] = None,
+        batch_size: int = 100,
+    ) -> int:
+        """Write *documents* using the streaming ingestion channel, batched.
+
+        Same ``DuplicatePolicy`` semantics as :meth:`write_documents`, but
+        points are sent through ``Collection.stream_insert`` in
+        ``batch_size``-sized chunks instead of one ``upsert`` call — better
+        throughput for large bulk loads, with built-in backpressure. Mirrors
+        the ``add_texts_streaming`` (LangChain) / ``add_streaming``
+        (LlamaIndex) pattern.
+
+        Args:
+            documents: Documents to write.
+            policy: Duplicate-handling policy (see :meth:`write_documents`).
+            sparse_vectors: Optional list aligned with *documents*; see
+                :meth:`write_documents` for the accepted shapes.
+            batch_size: Number of points per streaming batch. Defaults to 100.
+
+        Returns:
+            Number of points written.
+
+        Raises:
+            DuplicateDocumentError: When *policy* is ``FAIL`` and at least
+                one document already exists in the store.
+            ValueError: When a SHA-256 hash collision is detected.
+        """
+        if not documents:
+            return 0
+        sparse_by_id = _build_sparse_by_id(documents, sparse_vectors)
+        int_id_map = _build_int_id_map(documents)
+        col = self._get_collection()
+        survivors = _resolve_survivors_for_policy(col, documents, int_id_map, policy)
+        if survivors is None:
+            return 0
+        points = _documents_to_points(survivors, sparse_by_id)
+        _flush_stream_batches(col, points, batch_size)
+        return len(points)
 
     def delete_documents(
         self,
@@ -544,6 +671,21 @@ class VelesDBDocumentStore:
             return
         int_ids = [stable_hash_id(did) for did in document_ids]
         self._get_collection().delete(int_ids)
+
+    def flush(self) -> None:
+        """Flush pending changes to disk.
+
+        Mirrors ``VelesDBVectorStore.flush()`` in the LangChain and
+        LlamaIndex integrations. Note this does **not** guarantee
+        read-your-writes visibility for :meth:`stream_insert` /
+        :meth:`write_documents_streaming`: those go through a bounded async
+        channel with its own background flush interval (engine default
+        ~50ms) that is independent of this disk flush. A point inserted via
+        the streaming channel may only become visible to reads after that
+        interval elapses.
+        """
+        if self._collection is not None:
+            self._collection.flush()
 
     def embedding_retrieval(
         self,

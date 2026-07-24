@@ -9,6 +9,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/install-memory-daemon.sh` now wires **Devin CLI**
+  (`~/.config/devin/config.json`) alongside Claude Code, Claude Desktop and
+  Windsurf; documented in the README's stdio and HTTP-transport client
+  sections.
+
+### Fixed
+
+- The installer no longer writes a `type:"http"` entry into
+  `claude_desktop_config.json` — confirmed Desktop's config file never reads
+  that shape (silently ignored). It now prints the Settings → Connectors →
+  Add custom connector instructions instead, matching what the README already
+  documented.
+
+### Changed
+
+- `id::stable_id`/`id::stable_id_bytes` now delegate to
+  `velesdb_core::hash_id`/`hash_id_bytes` instead of re-declaring their own
+  FNV-1a offset/prime constants — internal dedup only, byte-identical output
+  (pinned by a golden-vector regression test). (#1542)
+
+## [0.11.0] — 2026-07-23
+
+Minor, not patch: the metadata shape `remember`/`recall` return changes
+observably for every consumer (MCP, Python, Node, WASM) — see "Changed"
+below.
+
+### Added
+
+- **HTTPS by default for the HTTP transport.** `--http`/`VELESDB_MEMORY_HTTP=1`
+  now serves TLS by default, terminated with a self-signed local CA + a
+  short-lived `localhost`/`127.0.0.1`/`::1` leaf certificate, both generated
+  natively (`rcgen`, no shelled-out `mkcert`/`openssl`) and cached at
+  `$VELESDB_MEMORY_TLS_DIR` (default `~/.velesdb-memory-tls`, a sibling of
+  the store). The CA is generated once and never regenerated once present —
+  a client only needs to trust it once, and every future leaf cert (even
+  across restarts) is trusted automatically after that. Some MCP clients
+  (Claude Desktop's "Add custom connector" UI) refuse a non-`https://` URL
+  even for `127.0.0.1`, which this closes. `--http-insecure` /
+  `VELESDB_MEMORY_HTTP_INSECURE=1` opts back into plain HTTP (loud warning
+  at startup) for local debugging or when a trusted TLS-terminating proxy
+  already sits in front. `scripts/install-memory-daemon.sh` adds the CA to
+  the macOS login keychain (`security add-trusted-cert`, no `sudo`) and
+  gained `--tls-dir` and `--skip-ca-trust` flags. See the README's "HTTP
+  transport (multi-client)" section.
+- **Automatic `_veles_date` stamp.** `remember`/`remember_with_ttl` (and
+  `remember_extracted`, which delegates to `remember` per extracted fact)
+  now auto-stamp every fact's metadata with `_veles_date` — today's date as
+  a `YYYYMMDD` integer, read from the system clock at write time — unless
+  the caller already set that key explicitly (an explicit value, e.g. for
+  retroactive dating, is never overwritten). `recall_fused`'s `date_field`
+  can now be pointed at `_veles_date` to get a correct `dated_context`
+  timeline with zero caller setup — previously every temporal capability
+  depended entirely on the caller managing a numeric date field itself,
+  documented but never guaranteed. The new `AUTO_DATE_FIELD` constant is
+  exported at the crate root as the single source of truth for the key
+  name. The context compiler (`compile_context` and friends) reads no
+  clock and is unaffected — the auto-stamp lives exclusively on the
+  `remember` write path.
+
+### Changed
+
+- **Breaking (observable shape, not a compile break): `metadata` is no
+  longer `None`/`null` for a fact stored with no caller metadata.** Because
+  of the `_veles_date` auto-stamp above, `recall`/`recall_where`/
+  `recall_fused` now return `metadata: {"_veles_date": <today>}` instead of
+  `metadata: None`/`null` for such a fact, on every binding (MCP JSON-RPC,
+  Python, Node, WASM). Callers that previously branched on "metadata is
+  `None`" to mean "nothing was ever stored" should check for the
+  caller-specific key(s) they care about instead.
+
+## [0.10.1] — 2026-07-21
+
 ### Fixed
 
 - The `compile_context` prompt-cache prefix could churn when only the query

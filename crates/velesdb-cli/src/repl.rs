@@ -85,7 +85,7 @@ pub fn run(path: PathBuf) -> Result<()> {
         ".quit".yellow()
     );
 
-    let db = Database::open(&path).context("Failed to open database")?;
+    let db = crate::helpers::open_database(&path).context("Failed to open database")?;
 
     let mut rl: Editor<ReplHelper, DefaultHistory> = Editor::new()?;
     rl.set_helper(Some(ReplHelper));

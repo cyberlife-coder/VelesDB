@@ -305,31 +305,77 @@ scale-mixing caveat in [`VELESQL_SPEC.md` → USING FUSION](../VELESQL_SPEC.md#u
 
 ### 12. String → u64 point-ID hashing differs across components
 
-**Status**: documented trade-off (intentional). Sources: `integrations/common/src/velesdb_common/ids.py` (`stable_hash_id`, the single source shared by LangChain, LlamaIndex, **and** Haystack since 2026-06-14); `integrations/haystack/src/haystack_velesdb/document_store.py` (now imports `stable_hash_id` — the previous forked `_str_id_to_int` copy was removed); `crates/velesdb-migrate/src/pipeline_points.rs` (`stable_point_id`).
+**Status**: documented trade-off (intentional; re-audited for issue #1542,
+2026-07-23). Sources: `crates/velesdb-core/src/wire/stable_hash.rs`
+(`hash_id`/`hash_id_bytes`, the canonical FNV-1a derivation — "the single
+authoritative source for VelesDB's stable string→u64 derivation");
+`crates/velesdb-memory/src/id.rs` (`stable_id`/`stable_id_bytes`, delegates to
+core); `crates/velesdb-migrate/src/pipeline.rs` (`fnv1a64`, delegates to core)
+and `crates/velesdb-migrate/src/pipeline_points.rs` (`stable_point_id`);
+`integrations/common/src/velesdb_common/ids.py` (`stable_hash_id`, the single
+source shared by LangChain, LlamaIndex, **and** Haystack since 2026-06-14);
+`integrations/haystack/src/haystack_velesdb/document_store.py` (imports
+`stable_hash_id` — no forked copy).
 
 VelesDB point IDs are `u64`. Components that ingest documents keyed by an
-arbitrary string derive the numeric ID with **two intentionally different**
-hash strategies — every Python integration now shares one, and `velesdb-migrate`
-keeps its deliberately distinct one:
+arbitrary string derive the numeric ID with **three intentionally different**
+semantics:
 
 | Component | Function | Strategy |
 |-----------|----------|----------|
-| LangChain / LlamaIndex / Haystack | `velesdb_common.ids.stable_hash_id` (shared) | SHA-256 of the UTF-8 string, top 8 bytes, sign bit cleared → positive 63-bit ID |
-| `velesdb-migrate` | `stable_point_id` | numeric strings parsed directly to `u64`; non-numeric strings hashed via FNV-1a |
+| Core / `velesdb-memory` / `velesdb-migrate`'s non-numeric fallback | `velesdb_core::hash_id` (canonical); `velesdb-memory::id::stable_id`, `velesdb-migrate::pipeline::fnv1a64` delegate to it | FNV-1a 64-bit over the UTF-8 (or raw) bytes — full unsigned 64-bit output |
+| `velesdb-migrate` (`stable_point_id`) | numeric-preserve fast-path over the FNV-1a fallback above | numeric strings (`"12345"`) parsed **directly** to `u64`; only non-numeric strings fall through to FNV-1a |
+| LangChain / LlamaIndex / Haystack | `velesdb_common.ids.stable_hash_id` (shared, default) | SHA-256 of the UTF-8 string, top 8 bytes, sign bit cleared → positive 63-bit ID |
 
-These do not agree. The `velesdb-migrate` strategy is deliberately distinct: it
-parses numeric IDs verbatim so a source row keyed `"12345"` maps to point
-`12345`, and its FNV-1a fallback is frozen for **checkpoint-resumable**
-migrations (changing it would re-key already-inserted points and corrupt a
-resumed run — see the stability note in the source).
+**Since issue #1542**, `velesdb-memory` and `velesdb-migrate` no longer
+re-declare their own FNV-1a constants: both delegate to the single exported
+`velesdb_core::hash_id_bytes` fold, so core/memory/migrate's FNV-1a output is
+now provably one implementation, not three independently-maintained copies
+that could silently drift from each other. This changed **nothing** about
+the derived `u64` values (see the golden-vector regression tests added
+alongside the delegation in each crate) — it only removed the duplication
+risk. It did **not** change the ecosystem-level divergence described below.
+
+`velesdb-migrate`'s numeric-preserve fast-path is a deliberate **third**
+semantics layered on top of FNV-1a, not a bug: it parses numeric IDs
+verbatim so a source row keyed `"12345"` maps to point `12345`, and its
+FNV-1a fallback for non-numeric IDs is frozen for **checkpoint-resumable**
+migrations (changing either would re-key already-inserted points and corrupt
+a resumed run — see the stability notes in `pipeline_points.rs`).
+
+The Python integrations' SHA-256 default is a **separate divergence**,
+distinct from the FNV-1a-vs-numeric-fast-path split above: it does not agree
+with core's FNV-1a for the same string, by design — see the rationale below.
+Callers who need a Python-derived ID to agree with core/`velesdb-migrate`'s
+FNV-1a output for the same string can opt in with
+`stable_hash_id(value, algorithm="fnv1a")` (added in #1542;
+`velesdb_common.ids` module docstring has the full contract). This is
+**opt-in only** — the SHA-256 default is unchanged and MUST stay unchanged:
+aligning the default to FNV-1a would change the `u64` derived from every
+string ID already stored through these integrations, silently orphaning
+existing LangChain/LlamaIndex/Haystack collections. `algorithm="fnv1a"` does
+not change point-ID collisions with `velesdb-migrate`'s numeric fast-path
+either — it only aligns with FNV-1a for non-numeric-looking strings.
 
 **User impact**: the *same* logical document can land under **different point
 IDs** depending on the ingestion path. A corpus loaded via `velesdb-migrate`
 and the same corpus loaded via the LangChain/LlamaIndex/Haystack vector store
-will not share point IDs, so cross-referencing or de-duplicating across the two
-paths by point ID is not reliable. Pick a single ingestion path per collection,
-or map on a payload field (e.g. a stored `source_id`) rather than on the
-numeric point ID.
+(with the SHA-256 default) will not share point IDs, so cross-referencing or
+de-duplicating across the two paths by point ID is not reliable. Pick a
+single ingestion path per collection, use `algorithm="fnv1a"` on the Python
+side when the interop case calls for it (understanding it changes the IDs
+the integration derives), or map on a payload field (e.g. a stored
+`source_id`) rather than on the numeric point ID.
+
+**Possible future alignment path** (not implemented, tracked as a follow-up
+in issue #1542's discussion): a major-version release of the Python
+integrations could flip `stable_hash_id`'s default to `"fnv1a"` behind an
+explicit migration story — e.g. a one-time re-key utility that re-derives
+every stored point's ID from its original string under the new algorithm and
+rewrites the collection, shipped alongside a deprecation window where both
+algorithms' old-ID lookups are supported. This is a breaking, opt-in,
+explicitly-versioned change for users with existing data — never a silent
+default flip — so it is deliberately out of scope for this fix.
 
 ---
 
@@ -362,6 +408,62 @@ filters, conjunctive (AND) filters, single- and multi-column ORDER BY in mixed
 directions, the deterministic ascending-id tie-break, and bounded top-k
 (`ORDER BY ... LIMIT k`, both ASC and DESC). A result-shape divergence specific
 to the WASM or CLI surface now fails CI rather than going unnoticed.
+
+**Extended coverage (issue #1544, fixture v2.0.0)**: the original 10 cases were
+all scalar WHERE + ORDER BY + LIMIT — a thin slice next to the 134
+parser-conformance cases. The fixture now also carries, checked against
+**core and WASM** (the CLI layer is unchanged — it only reads `dataset` /
+`cases` / `known_bugs`, so it keeps validating the original cases plus the new
+scalar-expression ones below, which use the same single-collection dataset):
+
+- `cases` X011–X014: WHERE-expression evaluation (`BETWEEN`, parenthesized
+  `AND`/`OR`, `NOT`, `IN`) — safe for CLI's strict-order comparison, so these
+  run on all three executors.
+- `join_cases` J001–J004: `JOIN ... ON` (both condition-side orders on core;
+  WASM only accepts base-table-first — see D002 below) and `JOIN ... USING
+  (col)`.
+- `aggregate_cases` G001–G004: `GROUP BY` / `HAVING` / `COUNT` / `SUM`,
+  checked via `Database::execute_aggregate` on core (not `execute_query`,
+  which only groups when combined with vector `NEAR` search) and via the
+  default SELECT pipeline on WASM.
+- `setops_cases` S001–S004: `UNION` / `INTERSECT` / `EXCEPT`, compared as a
+  **sorted set of ids**, not an ordered list (see D003 below).
+- `match_cases` M001–M002: 1- and 2-hop `MATCH`, with per-executor query text
+  (see D004 below).
+
+`documented_divergences` (informational entries in the same JSON file, not
+pass/fail cases) record real, currently-existing core↔WASM behavioural gaps
+discovered while building this coverage, so they're visible instead of
+silently relied upon:
+
+- **D001** — unaliased aggregate output field names differ (`"count"` /
+  `"sum_year"` on core vs `"count(*)"` / `"sum(year)"` on WASM); sidestepped
+  in the fixture by always using an explicit `AS` alias.
+- **D002** — WASM's `JOIN ... ON` does not normalize condition side order the
+  way core does: `ON base.col = joined.col` matches, but the reversed
+  `ON joined.col = base.col` silently returns every row with NULL joined
+  columns instead of matching. Locked as a regression test
+  (`test_wasm_join_condition_side_order_gap_d002` in
+  `crates/velesdb-wasm/src/velesql_executor_conformance_tests.rs`) rather than
+  fixed — out of scope for #1544 (coverage of existing behaviour, not new
+  WASM support).
+- **D003** — `UNION`/`INTERSECT`/`EXCEPT` row order for non-ranked (score 0.0)
+  branches is implementation-defined on both sides (core re-sorts by score
+  with an unstable tie-break that was observed to differ between two runs of
+  the *same* binary; WASM preserves branch/`ORDER BY` order via
+  concatenate-then-dedup). Only membership and count are part of the golden
+  contract.
+- **D004** — core treats vector-collection points as graph nodes (MATCH is
+  `SELECT ... FROM <coll> WHERE MATCH (...)`); WASM keeps a separate
+  in-memory graph store addressed via `@collection` annotations and the
+  standalone `MATCH ... RETURN` form. An accepted architectural difference,
+  not a bug.
+- **D005** — cross-reference to the pre-existing `relative_score`/`rsf`
+  multi-query fusion ranking divergence, already tracked in
+  `docs/reference/ECOSYSTEM_PARITY.md`.
+- **D006** — `Database::execute_aggregate` never applies `LIMIT` to the group
+  array on core (every group comes back regardless); WASM's aggregate
+  pipeline does apply `LIMIT`. Tracked, not fixed — out of scope for #1544.
 
 ### Large production files vs the NLOC/complexity gate (audit F-5.13)
 

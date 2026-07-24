@@ -1,20 +1,30 @@
 # Temporal Memory: Dated Recall + a Reasoning Scaffold
 
 Teaches you to build "temporal memory" — recalling and reasoning about *when*
-things happened — entirely on top of existing `velesdb-memory` capabilities.
-There is no new API here: `remember` already accepts arbitrary metadata, and
-`recall_where` now returns that metadata (including a stored date) alongside
-each fact. Turning a dated timeline into a temporal *answer* ("how long ago
-was X?", "what happened before Y?") is your own LLM's job — this guide gives
-you a copy-paste prompt recipe for that part, not a library function.
+things happened — on top of `velesdb-memory`'s capabilities. Since 0.11.0,
+every `remember` **auto-stamps** a reserved `_veles_date` metadata field
+(`YYYYMMDD` integer, the day the fact was stored) — so a dated timeline works
+with zero setup, and `recall_fused(date_field="_veles_date")` recency-weights
+it out of the box. Storing your own *domain* date (when the event happened,
+not when it was stored) still works exactly as below. Turning a dated
+timeline into a temporal *answer* ("how long ago was X?", "what happened
+before Y?") is your own LLM's job — this guide gives you a copy-paste prompt
+recipe for that part, not a library function.
 
 ## Store dated facts
 
-Store a fact with a metadata key that holds a date. The key name and the date
-format are entirely your choice — `velesdb-memory` treats metadata as opaque,
-caller-defined key/value pairs (it imposes nothing beyond rejecting reserved
-`_veles_*` keys and the `content` key). A `YYYYMMDD` integer is a convenient
-convention because it sorts and range-filters correctly as a plain number:
+Two dates matter, and they are different things:
+
+- **`_veles_date`** (automatic since 0.11.0) — when the fact was *stored*.
+  Written by `remember` unless you set it yourself (a caller-supplied value
+  is never overwritten). This is the one `_veles_*` key that round-trips out
+  of recall — every other `_veles_*` key stays reserved and rejected.
+- **Your own key** (e.g. `occurred_at`) — when the event *happened*. The key
+  name and format are your choice; `velesdb-memory` treats metadata as
+  opaque, caller-defined key/value pairs (it imposes nothing beyond rejecting
+  the other reserved `_veles_*` keys and the `content` key). A `YYYYMMDD`
+  integer is a convenient convention because it sorts and range-filters
+  correctly as a plain number:
 
 ```python
 from velesdb import MemoryService

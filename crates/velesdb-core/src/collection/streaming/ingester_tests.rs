@@ -467,6 +467,25 @@ async fn test_stream_delta_rebuild_no_data_loss() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
+    // Poll until all 5 delta entries are recorded (max 5s), avoiding a
+    // point-in-time check right after the HNSW-search poll above: index
+    // visibility and delta-buffer recording are two independently-timed
+    // side effects of the same flush, not both guaranteed complete at the
+    // exact same instant — under heavy system load this observably raced
+    // (delta had 4 entries, not 5, in isolated reproduction).
+    let delta_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let len = coll_clone.streaming.delta_buffer.len();
+        if len >= 5 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < delta_deadline,
+            "timed out waiting for all 5 delta entries to be recorded (found {len}/5)"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
     let drained = coll_clone.streaming.delta_buffer.deactivate_and_drain();
     assert!(!coll_clone.streaming.delta_buffer.is_active());
     assert_eq!(drained.len(), 5, "delta should have had 5 entries");

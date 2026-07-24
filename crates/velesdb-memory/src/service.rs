@@ -8,9 +8,12 @@ use serde_json::{Map, Value};
 
 /// Structured metadata attached to a memory (the `ColumnStore` facet): exact-match
 /// fields like `project`, `author`, `type`, `status`, `date`. `content` and
-/// `_veles_expires_at` are reserved keys.
+/// `_veles_expires_at` are reserved keys. [`crate::storage::AUTO_DATE_FIELD`]
+/// (`_veles_date`) is auto-populated by [`MemoryService::remember_with_ttl`]
+/// with today's date unless already present — see that method's docs.
 pub type Metadata = Map<String, Value>;
 
+use crate::clock;
 use crate::embedder::Embedder;
 use crate::error::MemoryError;
 use crate::extract::Extractor;
@@ -18,7 +21,7 @@ use crate::id;
 use crate::model::{ColumnFilter, Explanation, Link, MemoryNode, Recollection};
 #[cfg(feature = "persistence")]
 use crate::storage::NativeStore;
-use crate::storage::{is_reserved_key, strip_reserved_keys, MemoryStore};
+use crate::storage::{is_reserved_key, strip_reserved_keys, MemoryStore, AUTO_DATE_FIELD};
 
 /// [`MemoryService::recall_fused`] and its helpers — split out to keep this
 /// file under the crate's 500-NLOC-per-file budget, same pattern as
@@ -113,6 +116,11 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// (`ColumnStore` facet) and linking it to existing memories (graph facet).
     /// Returns the stable id of the fact (idempotent on identical content).
     ///
+    /// The stored metadata is auto-stamped with today's date under
+    /// [`crate::storage::AUTO_DATE_FIELD`] unless `metadata` already carries
+    /// that key — see [`Self::remember_with_ttl`] (this method's only caller)
+    /// for the full contract.
+    ///
     /// Every link is validated — target existence AND relation label —
     /// *before* the fact is stored, so bad link input never leaves the fact
     /// half-written. If an edge write itself fails afterwards (e.g. a target
@@ -125,7 +133,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// # Errors
     /// Returns [`MemoryError::EmptyFact`] for empty/whitespace facts,
     /// [`MemoryError::ReservedKey`] if `metadata` names a reserved key
-    /// (`content` or any `_veles_`-prefixed system key),
+    /// (`content` or any `_veles_`-prefixed system key, [`crate::storage::AUTO_DATE_FIELD`]
+    /// excepted),
     /// [`MemoryError::MetadataTooLarge`] if `metadata` exceeds
     /// [`crate::limits::MAX_METADATA_BYTES`],
     /// [`MemoryError::UnknownMemory`] if a link points at a missing memory,
@@ -149,6 +158,25 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// expired facts stop being recalled. `None` (or `Some(0)`) stores the fact
     /// permanently, exactly like [`Self::remember`]. Metadata and a TTL combine:
     /// the metadata is written and the expiry preserved.
+    ///
+    /// The stored metadata is **auto-stamped with today's date** under
+    /// [`crate::storage::AUTO_DATE_FIELD`] (`_veles_date`, a `YYYYMMDD`
+    /// integer read from the system clock at write time — see
+    /// [`crate::clock::today_ymd`]) whenever `metadata` doesn't already carry
+    /// that key; an explicit value in `metadata` (e.g. to date a fact
+    /// retroactively) is never overwritten. No clock is available on
+    /// `wasm32-unknown-unknown`, so that target stamps nothing and `metadata`
+    /// passes through unchanged. This is the ONE place in the crate that
+    /// reads wall-clock time on the write path — the context compiler
+    /// (`compile_context` and friends) stays clock-free and deterministic,
+    /// unaffected by this stamp (it never re-derives a date from `now()`,
+    /// only ever reads whatever a fact already carries).
+    ///
+    /// Because [`Self::remember_extracted`] stores each extracted fact via
+    /// [`Self::remember`] (which delegates here), it gets the same auto-stamp
+    /// for free — entity hubs it also creates go through [`Self::store_fact`]
+    /// directly and are never stamped, since they are internal graph
+    /// scaffolding, not caller facts.
     ///
     /// # Errors
     /// Same as [`Self::remember`].
@@ -175,11 +203,12 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let fact_id = id::stable_id(fact);
         let embedding = self.embedder.embed(fact)?;
         let existed_before = !links.is_empty() && self.store.get(fact_id)?.is_some();
+        let stamped = stamp_with_today(metadata);
         self.store_fact(
             fact_id,
             fact,
             &embedding,
-            metadata,
+            stamped.as_ref(),
             positive_ttl(ttl_seconds),
         )?;
         // Links are fully pre-validated above, so an edge write can only
@@ -711,6 +740,24 @@ fn reject_oversized_metadata(metadata: Option<&Metadata>) -> Result<(), MemoryEr
 /// is stored permanently. Any positive value is kept as-is.
 fn positive_ttl(ttl_seconds: Option<u64>) -> Option<u64> {
     ttl_seconds.filter(|&seconds| seconds > 0)
+}
+
+/// [`MemoryService::remember_with_ttl`]'s auto-date stamp: `metadata` with
+/// today's date added under [`AUTO_DATE_FIELD`], unless `metadata` already
+/// names that key (an explicit, possibly retroactive, caller value is never
+/// overwritten) or no clock is available ([`clock::today_ymd`] returns `None`
+/// on `wasm32-unknown-unknown`). Returns an owned map either way, `None` only
+/// when there is nothing to store at all (no caller metadata AND no clock).
+fn stamp_with_today(metadata: Option<&Metadata>) -> Option<Metadata> {
+    if metadata.is_some_and(|meta| meta.contains_key(AUTO_DATE_FIELD)) {
+        return metadata.cloned();
+    }
+    let Some(today) = clock::today_ymd() else {
+        return metadata.cloned();
+    };
+    let mut stamped = metadata.cloned().unwrap_or_default();
+    stamped.insert(AUTO_DATE_FIELD.to_owned(), Value::from(today));
+    Some(stamped)
 }
 
 /// Maximum byte length for a relation label (prevents oversized graph edge labels

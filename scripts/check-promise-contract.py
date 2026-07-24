@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate docs promise contract registry against repository content.
 
-Two independent gates run here:
+Three independent gates run here:
 
 1. Registry gate — every claim in ``docs/reference/promise-contract.json`` must
    still be present in the file it points at, so benchmark/headline promises
@@ -10,6 +10,21 @@ Two independent gates run here:
    associate a search-throughput claim with those Capacity Modes. Their
    collection search path stays full-precision f32, so promising throughput
    there would be false. This keeps 10.4 machine-checked alongside the registry.
+3. Executable-claim gate (issue #1518) — gate 1 only ever checked that a
+   claim's ``must_contain`` substring was still present in ``claim["file"]``.
+   It never ran ``validation_command``, so the contract could guarantee a
+   number wasn't *lost* from a doc without ever proving the number was still
+   *true* (two real drifts — a stale WASM bundle-size figure and a mislabeled
+   benchmark corpus size — slipped past it and were only caught by a manual
+   re-verification pass). Claims whose ``validation_command`` is a fast,
+   deterministic, local, no-network comparison (``grep``/file-content checks
+   between the README and a committed source file) are now marked
+   ``"executable": true`` in the registry and actually executed via
+   subprocess; a real failure fails this script. Claims that require a costly
+   measurement (``cargo bench``, a release build, a published-package
+   download) stay ``"executable": false`` — documentary only — and are
+   explicitly skipped with a visible message naming the claim and the
+   unverified command, rather than being silently ignored.
 """
 
 from __future__ import annotations
@@ -17,6 +32,7 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 REGISTRY = ROOT / "docs/reference/promise-contract.json"
@@ -47,6 +63,11 @@ NEGATION_RE = re.compile(r"\b(?:no|not|never|without|zero)\b|n't", re.IGNORECASE
 
 # Window of characters before a claim word searched for a negation cue.
 NEGATION_WINDOW = 40
+
+# Wall-clock budget for one executable validation_command. These are meant to
+# be fast local grep/file-comparison checks only — anything needing longer
+# than this has no business being marked "executable": true.
+EXECUTABLE_CLAIM_TIMEOUT_SECONDS = 30
 
 
 def _doc_lines(rel_path: str, text: str) -> list[tuple[int, str]]:
@@ -129,9 +150,77 @@ def check_capacity_mode_overclaim() -> list[str]:
     return failed
 
 
+def run_validation_commands(
+    claims: list[dict],
+) -> tuple[list[str], list[str], list[str]]:
+    """Execute ``validation_command`` for every claim marked executable.
+
+    Claims without ``"executable": true`` (including claims that omit the
+    field entirely — fail-safe default) are never executed; they are
+    reported as skipped with an explicit, visible reason instead of being
+    silently ignored.
+
+    Returns ``(executed_ids, skipped_messages, failure_messages)``.
+    """
+    executed: list[str] = []
+    skipped: list[str] = []
+    failures: list[str] = []
+
+    for claim in claims:
+        claim_id = claim.get("id", "<unknown>")
+        command = claim.get("validation_command")
+
+        if not claim.get("executable", False):
+            skipped.append(
+                f"[{claim_id}] SKIPPED (documentary — requires a costly "
+                f"measurement: benchmark run / release build / published "
+                f"artifact, not auto-verified): {command!r}"
+            )
+            continue
+
+        if not command:
+            failures.append(
+                f"[{claim_id}] marked executable but has no validation_command"
+            )
+            continue
+
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=EXECUTABLE_CLAIM_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            failures.append(
+                f"[{claim_id}] validation_command timed out after "
+                f"{EXECUTABLE_CLAIM_TIMEOUT_SECONDS}s: {command!r}"
+            )
+            continue
+
+        executed.append(claim_id)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            message = (
+                f"[{claim_id}] validation_command failed (exit "
+                f"{result.returncode}): {command!r}"
+            )
+            if detail:
+                message += f" — {detail}"
+            failures.append(message)
+
+    return executed, skipped, failures
+
+
 def main() -> int:
     registry_failures = check_registry()
     overclaim_failures = check_capacity_mode_overclaim()
+
+    data = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    claims = data.get("claims", [])
+    executed, skipped, execution_failures = run_validation_commands(claims)
 
     if registry_failures:
         print("Promise contract check failed:")
@@ -143,13 +232,23 @@ def main() -> int:
         for msg in overclaim_failures:
             print(f"  - {msg}")
 
-    if registry_failures or overclaim_failures:
+    if execution_failures:
+        print("Executable validation_command check failed:")
+        for msg in execution_failures:
+            print(f"  - {msg}")
+
+    if skipped:
+        print("Documentary claims not auto-verified:")
+        for msg in skipped:
+            print(f"  - {msg}")
+
+    if registry_failures or overclaim_failures or execution_failures:
         return 1
 
-    data = json.loads(REGISTRY.read_text(encoding="utf-8"))
-    claim_count = len(data.get("claims", []))
+    claim_count = len(claims)
     print(
         f"Promise contract check passed ({claim_count} claims; "
+        f"{len(executed)} executed, {len(skipped)} documentary; "
         f"{len(CAPACITY_MODE_DOCS)} capacity-mode docs clean)."
     )
     return 0

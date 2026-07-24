@@ -2,9 +2,16 @@
 
 Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB) -- the local-first vector database for AI and RAG. Sub-millisecond semantic search in Browser and Node.js.
 
-> The TypeScript engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It ships the `MemoryService` memory wedge (`remember`/`recall`/`relate`/`forget`/[`why()`](../../crates/velesdb-memory/README.md)) in the browser or Node.js — `why()` returns the evidence path behind every recall. The deterministic context compiler (`compileContext`) runs here too — fully in the browser (WASM), media fragments included — and in the native Node binding, [`@wiscale/velesdb-memory-node`](../../crates/velesdb-node/README.md) (which additionally exposes `retrieveContextSource` for externalized-source retrieval).
+> The TypeScript engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It ships the `MemoryService` memory wedge (`remember`/`recall`/`recallFused`/`recallFusedDated`/`relate`/`forget`/[`why()`](../../crates/velesdb-memory/README.md)) in the browser or Node.js — `why()` returns the evidence path behind every recall. The deterministic context compiler (`compileContext`) runs here too — fully in the browser (WASM), media fragments included, with `retrieveContextSource` for externalized-source retrieval — and in the native Node binding, [`@wiscale/velesdb-memory-node`](../../crates/velesdb-node/README.md).
 
 **v3.12.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
+
+## What's New in v3.12.0
+
+- **Dated recall**: `recallFusedDated(query, …, dateField)` returns fused recall plus a chronological `dated_context` timeline with a `now` anchor. Pairs with `velesdb-memory` 0.11.0's automatic `_veles_date` stamp (every `remember` stores today's date as a `YYYYMMDD` integer under the reserved `_veles_date` metadata key unless you set it yourself) — pass `"_veles_date"` as the date field and a zero-setup timeline comes back. `_veles_date` is now typed (`MemoryMetadata`) and documented directly on `recallFusedDated`.
+- **Full context-compiler tool surface in the browser**: `compileTranscript` (segment a raw agent-session transcript into turns, then compile it in one call), `explainCompilation` (why one fragment was preserved/dropped/…), `contextSavings` (aggregated token/cost savings), and `suggestBudget` (a starting `token_budget` for a named model) now all run in WASM, matching the Node binding's surface. `feedback` (RL Memory) and `rememberExtracted` stay Node/Python-only by design — see the `MemoryService` class doc comment for why.
+- **Compiler read tools in the browser**: `retrieveContextSource` retrieves the exact original content behind a compiled fragment (externalized sources included), directly from the WASM engine.
+- **Since 3.6.0 (3.7–3.11 recap)**: `compileContext` on the `MemoryService` (deterministic context compression, media fragments included), working-context `save`/`load`/`list` for cross-session resumption, `bulkDelete` over `POST points/delete`, and automatic retry with exponential backoff on 429/503 (idempotent methods only, capped `Retry-After`).
 
 ## What's New in v3.6.0
 

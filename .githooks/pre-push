@@ -6,6 +6,16 @@
 # Ce hook s'exécute AVANT chaque git push.
 #
 # Pour activer: git config core.hooksPath .githooks
+#
+# NOTE SIGPIPE (exit 141): git ouvre la connexion au remote AVANT de lancer ce
+# hook et envoie le pack APRÈS sur la même connexion SSH. La validation
+# complète (~15 min) dépasse le timeout d'inactivité de la connexion, qui meurt
+# pendant les checks — git écrit alors dans un pipe fermé et sort en 141 sans
+# message, après "PASSED". Contre-mesures ici:
+#   - stdin (liste des refs) est drainé AVANT les checks, et les sous-processus
+#     cargo reçoivent </dev/null pour ne pas consommer le pipe de git;
+#   - des keepalives SSH doivent maintenir la connexion pendant les checks:
+#     git config core.sshCommand "ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=60"
 # =============================================================================
 
 set -e
@@ -23,42 +33,52 @@ echo "  VelesDB-Core Pre-push Validation"
 echo "═══════════════════════════════════════════════════════════════════"
 echo -e "${NC}"
 
-# Détection de la branche cible
-while read local_ref local_sha remote_ref remote_sha; do
-    if [[ "$remote_ref" == *"main"* ]] || [[ "$remote_ref" == *"develop"* ]]; then
-        echo -e "${YELLOW}⚠️  Pushing to protected branch: ${remote_ref}${NC}"
-        echo -e "${YELLOW}   Running full CI validation...${NC}"
-        
-        # 1. Formatting
-        echo -e "\n${YELLOW}📐 Check 1/4: Formatting...${NC}"
-        if ! cargo fmt --all -- --check; then
-            echo -e "${RED}❌ Formatting failed. Run 'cargo fmt --all'${NC}"
-            exit 1
-        fi
-        echo -e "${GREEN}✅ Formatting OK${NC}"
-        
-        # 2. Clippy (exclude velesdb-python due to PyO3 env issues)
-        echo -e "\n${YELLOW}📎 Check 2/4: Clippy...${NC}"
-        if ! cargo clippy --workspace --exclude velesdb-python --all-targets -- -D warnings; then
-            echo -e "${RED}❌ Clippy found issues${NC}"
-            exit 1
-        fi
-        echo -e "${GREEN}✅ Clippy OK${NC}"
-        
-        # 3. Tests (exclude velesdb-python due to PyO3 env issues)
-        echo -e "\n${YELLOW}🧪 Check 3/4: Tests...${NC}"
-        if ! cargo test --workspace --exclude velesdb-python; then
-            echo -e "${RED}❌ Tests failed${NC}"
-            exit 1
-        fi
-        echo -e "${GREEN}✅ Tests OK${NC}"
-        
-        # 4. Security (non-blocking)
-        echo -e "\n${YELLOW}🛡️ Check 4/4: Security audit...${NC}"
-        cargo deny check 2>/dev/null || echo -e "${YELLOW}⚠️  Security audit warnings (non-blocking)${NC}"
-        
-        echo -e "\n${GREEN}🎉 Pre-push validation PASSED!${NC}\n"
-    fi
+# Drainer TOUT stdin d'abord: git écrit "local_ref local_sha remote_ref
+# remote_sha" par ref poussée. Lire avant les checks garantit que le pipe est
+# consommé même si un check échoue (set -e) ou lit stdin.
+protected_push=false
+# shellcheck disable=SC2034 # local_ref/local_sha/remote_sha documentent le format
+while read -r local_ref local_sha remote_ref remote_sha; do
+    case "$remote_ref" in
+        refs/heads/main|refs/heads/develop)
+            protected_push=true
+            echo -e "${YELLOW}⚠️  Pushing to protected branch: ${remote_ref}${NC}"
+            ;;
+    esac
 done
+
+if [[ "$protected_push" == true ]]; then
+    echo -e "${YELLOW}   Running full CI validation...${NC}"
+
+    # 1. Formatting
+    echo -e "\n${YELLOW}📐 Check 1/4: Formatting...${NC}"
+    if ! cargo fmt --all -- --check </dev/null; then
+        echo -e "${RED}❌ Formatting failed. Run 'cargo fmt --all'${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✅ Formatting OK${NC}"
+
+    # 2. Clippy (exclude velesdb-python due to PyO3 env issues)
+    echo -e "\n${YELLOW}📎 Check 2/4: Clippy...${NC}"
+    if ! cargo clippy --workspace --exclude velesdb-python --all-targets -- -D warnings </dev/null; then
+        echo -e "${RED}❌ Clippy found issues${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✅ Clippy OK${NC}"
+
+    # 3. Tests (exclude velesdb-python due to PyO3 env issues)
+    echo -e "\n${YELLOW}🧪 Check 3/4: Tests...${NC}"
+    if ! cargo test --workspace --exclude velesdb-python </dev/null; then
+        echo -e "${RED}❌ Tests failed${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✅ Tests OK${NC}"
+
+    # 4. Security (non-blocking)
+    echo -e "\n${YELLOW}🛡️ Check 4/4: Security audit...${NC}"
+    cargo deny check </dev/null 2>/dev/null || echo -e "${YELLOW}⚠️  Security audit warnings (non-blocking)${NC}"
+
+    echo -e "\n${GREEN}🎉 Pre-push validation PASSED!${NC}\n"
+fi
 
 exit 0

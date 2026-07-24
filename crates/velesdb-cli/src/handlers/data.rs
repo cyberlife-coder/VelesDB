@@ -16,7 +16,7 @@ pub fn handle_export(
     output: Option<PathBuf>,
     include_vectors: bool,
 ) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let col = db.get_vector_collection(collection).ok_or_else(|| {
         anyhow::anyhow!(
             "Vector collection '{}' not found. Export requires a vector collection.",
@@ -90,7 +90,7 @@ pub fn handle_import(
     batch_size: usize,
     progress: bool,
 ) -> Result<()> {
-    let db = velesdb_core::Database::open(database)?;
+    let db = crate::helpers::open_database(database)?;
     let config = import::ImportConfig {
         collection,
         dimension,
@@ -137,7 +137,7 @@ fn print_import_summary(stats: &import::ImportStats) {
 
 /// Handles the `get` subcommand: retrieves a single point by ID.
 pub fn handle_get(path: &Path, collection: &str, id: u64, format: &str) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let col = db
         .get_vector_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
@@ -191,7 +191,7 @@ pub fn handle_upsert(
     vector: Option<String>,
     payload: Option<String>,
 ) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let col = db
         .get_vector_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
@@ -236,7 +236,7 @@ fn parse_payload_json(raw: Option<String>) -> Result<Option<serde_json::Value>> 
 
 /// Handles the `delete-points` subcommand: removes points by ID.
 pub fn handle_delete_points(path: &Path, collection: &str, ids: &[u64]) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let col = db
         .get_vector_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
@@ -261,7 +261,7 @@ pub fn handle_scroll(
     cursor: Option<u64>,
     format: &str,
 ) -> Result<()> {
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let col = db
         .get_vector_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
@@ -332,7 +332,7 @@ fn print_scroll_table(batch: &velesdb_core::ScrollBatch, collection: &str) {
 pub fn handle_stream_insert(path: &Path, collection: &str, batch_size: usize) -> Result<()> {
     use std::io::BufRead;
 
-    let db = velesdb_core::Database::open(path)?;
+    let db = crate::helpers::open_database(path)?;
     let col = db
         .get_vector_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;

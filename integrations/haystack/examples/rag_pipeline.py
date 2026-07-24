@@ -10,9 +10,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from typing import List
 
-from haystack import Pipeline, component
+from haystack import Pipeline
 from haystack.components.embedders import (
     SentenceTransformersDocumentEmbedder,
     SentenceTransformersTextEmbedder,
@@ -20,34 +19,10 @@ from haystack.components.embedders import (
 from haystack.components.preprocessors import DocumentSplitter
 from haystack.components.writers import DocumentWriter
 from haystack.dataclasses import Document
-from haystack_velesdb import VelesDBDocumentStore
+from haystack_velesdb import VelesDBDocumentStore, VelesDBEmbeddingRetriever
 
 MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 STORE_PATH = "./rag_demo_store"
-
-
-@component
-class VelesRetriever:
-    """Haystack 2.x component wrapping ``VelesDBDocumentStore.embedding_retrieval``.
-
-    Required because the built-in ``InMemoryEmbeddingRetriever`` is bound to
-    ``InMemoryDocumentStore`` and would refuse a custom store. This wrapper
-    is the canonical pattern for plugging any custom DocumentStore into a
-    Haystack 2.x query pipeline.
-
-    The ``@component`` decorator and ``@component.output_types`` are
-    mandatory — without them, ``Pipeline.add_component`` raises
-    ``PipelineError: ... is not a Haystack component``.
-    """
-
-    def __init__(self, document_store: VelesDBDocumentStore, top_k: int = 5) -> None:
-        self._store = document_store
-        self._top_k = top_k
-
-    @component.output_types(documents=List[Document])
-    def run(self, query_embedding: List[float]) -> dict:
-        docs = self._store.embedding_retrieval(query_embedding, top_k=self._top_k)
-        return {"documents": docs}
 
 
 def build_index_pipeline(store: VelesDBDocumentStore) -> Pipeline:
@@ -62,10 +37,16 @@ def build_index_pipeline(store: VelesDBDocumentStore) -> Pipeline:
 
 
 def build_query_pipeline(store: VelesDBDocumentStore) -> Pipeline:
-    """Return a pipeline that embeds a query and retrieves from *store*."""
+    """Return a pipeline that embeds a query and retrieves from *store*.
+
+    ``VelesDBEmbeddingRetriever`` ships with the package (like
+    ``QdrantEmbeddingRetriever`` in the Qdrant integration) — no hand-rolled
+    ``@component`` wrapper needed to plug ``VelesDBDocumentStore`` into a
+    Haystack 2.x query pipeline.
+    """
     pipeline = Pipeline()
     pipeline.add_component("embedder", SentenceTransformersTextEmbedder(model=MODEL))
-    pipeline.add_component("retriever", VelesRetriever(store))
+    pipeline.add_component("retriever", VelesDBEmbeddingRetriever(document_store=store))
     pipeline.connect("embedder.embedding", "retriever.query_embedding")
     return pipeline
 

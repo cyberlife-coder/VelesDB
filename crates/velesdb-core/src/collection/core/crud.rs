@@ -132,23 +132,50 @@ impl Collection {
     /// A crash before Phase 3 (HNSW insertion) is recovered by gap detection
     /// on the next `Collection::open()`.
     ///
-    /// # Parallel I/O (Issue #424)
+    /// # Sequential I/O (was Parallel I/O via `rayon::join`, Issue #424 — reverted)
     ///
-    /// With the `persistence` feature (which enables `rayon`), payload and
-    /// vector writes run concurrently via `rayon::join` after old-payload
-    /// collection completes. This is safe because:
+    /// Payload and vector writes run **sequentially**. They previously ran
+    /// concurrently via `rayon::join` (Issue #424); that was reverted because
+    /// it deadlocked the whole process under concurrent multi-caller load —
+    /// see the deadlock investigation archived at
+    /// `.investigation/http-deadlock-2026-07-22/` for the full evidence trail
+    /// (stack samples, isolated reproduction, mechanism).
+    ///
+    /// `rayon::join`, called here from a foreign thread (i.e. a
+    /// `tokio::task::spawn_blocking` worker, not a rayon pool thread —
+    /// exactly how every `velesdb-memory` MCP tool call reaches this code:
+    /// `crates/velesdb-memory/src/mcp.rs:172,199`), dispatches the second
+    /// closure onto rayon's small **global** thread pool (sized to
+    /// `num_cpus`), a pool shared process-wide with unrelated parallel work
+    /// (HNSW bulk indexing, quantization). `parking_lot::RwLock::write()` is
+    /// a genuine OS-level blocking wait — not cooperative with rayon's
+    /// scheduler — so once enough concurrent callers (e.g. 20+ concurrent
+    /// `remember`s hitting the same collection) each occupy a rayon worker
+    /// blocked on this method's `RwLock`, the global pool can be fully
+    /// exhausted by jobs that are themselves waiting on each other's
+    /// progress, wedging not just this collection but every consumer of the
+    /// shared rayon pool in the process — severely enough in the
+    /// investigation's reproduction to also stall `tokio`'s own timer wheel,
+    /// defeating an external `tokio::time::timeout` guard.
+    ///
+    /// The two writes are independent (payload and vector storage use
+    /// separate `RwLock`s — positions 3 and 2 in the lock order, per the
+    /// original design note below) and each is a single small write + fsync,
+    /// so the parallelism this bought was marginal against the deadlock risk
+    /// it introduced. Sequential execution removes the shared-pool
+    /// interaction entirely and cannot deadlock this way.
+    ///
+    /// Design notes preserved from the original parallel-I/O rationale
+    /// (still true, just no longer exploited for concurrency):
     ///
     /// - Payload and vector storage use independent `RwLock`s (positions 3
-    ///   and 2 in the lock order). Neither closure acquires both locks.
+    ///   and 2 in the lock order). Neither write acquires both locks.
     /// - Crash recovery only requires that both are durable before Phase 3
     ///   (HNSW insertion). There is no ordering dependency between payload
     ///   and vector WAL writes — gap detection on `Collection::open()` handles
     ///   any partial write scenario.
     /// - `old_payloads` collection is completed and the payload lock is
-    ///   released before the fork, so both closures start from clean state.
-    /// - The TOCTOU gap between old-payload collection and the parallel
-    ///   write is acceptable: `old_payloads` feeds Phase 2 secondary-index
-    ///   updates, and each concurrent batch tracks its own `seen_payloads`.
+    ///   released before these writes, so both start from clean state.
     ///
     /// Returns the old payloads for Phase 2.
     fn batch_store_all(&self, points: &[Point]) -> Result<Vec<Option<serde_json::Value>>> {
@@ -165,32 +192,19 @@ impl Collection {
         // write paths, avoiding redundant HashMap construction.
         let dedup_map = Self::build_dedup_map(points);
 
-        // Issue #424: Parallel I/O — payload and vector writes are independent
-        // after old_payloads collection. Run them concurrently via rayon::join.
-        // rayon is gated on the persistence feature.
-        #[cfg(feature = "persistence")]
-        {
-            let (payload_result, vector_result) = rayon::join(
-                || self.write_and_flush_payloads(points, &dedup_map),
-                || self.write_deduped_vectors(points, &dedup_map),
-            );
-            payload_result?;
-            vector_result?;
-        }
-
-        #[cfg(not(feature = "persistence"))]
-        {
-            self.write_and_flush_payloads(points, &dedup_map)?;
-            self.write_deduped_vectors(points, &dedup_map)?;
-        }
+        // Sequential: see the "Sequential I/O" doc section above for why this
+        // is no longer `rayon::join` (deadlock under concurrent load).
+        self.write_and_flush_payloads(points, &dedup_map)?;
+        self.write_deduped_vectors(points, &dedup_map)?;
 
         Ok(old_payloads)
     }
 
     /// Writes deduped payloads and flushes the storage.
     ///
-    /// Issue #424: Extracted so it can be called from `rayon::join` in the
-    /// parallel I/O path. Acquires the `payload_storage` write lock internally.
+    /// Called sequentially from [`Self::batch_store_all`] (previously via
+    /// `rayon::join`, reverted — see that method's doc comment). Acquires the
+    /// `payload_storage` write lock internally.
     ///
     /// Issue #425: Accepts a pre-computed `dedup_map` to avoid rebuilding
     /// the last-writer-wins map redundantly.
