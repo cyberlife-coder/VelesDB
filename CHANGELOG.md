@@ -497,6 +497,25 @@ account).
   the result needs a touch.
   [EPIC-P-071/US-004]
 
+- **BREAKING (Rust core API) — missing graph-edge endpoint is now
+  `Error::NodeNotFound` in strict-schema mode too**, unifying it with the
+  existing schemaless behavior. The #1442 fix (`add_edge`/`add_edges_batch`
+  reject an edge whose `source` or `target` has no stored node payload)
+  intentionally kept two variants depending on schema mode: schemaless
+  returned `Error::NodeNotFound` (`VELES-022`, REST `404`), while strict
+  mode overloaded the pre-existing `Error::SchemaValidation` (`VELES-017`,
+  REST `400`) to also mean "endpoint doesn't exist at all". Both modes now
+  return `NodeNotFound` for a genuinely missing endpoint;
+  `SchemaValidation` in strict mode is reserved for actual schema-shape
+  violations (undeclared node type, undeclared edge type, endpoint type
+  mismatch, or a node with no `_labels`). *Migration*: code in strict-schema
+  collections matching on `Error::SchemaValidation`/`VELES-017`/HTTP `400`
+  to detect a missing edge endpoint must match on `Error::NodeNotFound`/
+  `VELES-022`/HTTP `404` instead — REST, the Python/Node/WASM/TS bindings,
+  and the `velesdb-memory` wedge already map both variants generically by
+  error code, so no adapter code changed, only which variant strict mode
+  now returns for this one case. (#1470)
+
 ### Fixed
 
 - **Benchmark online mode**: the CLI runner now uses the CLI-enforced
