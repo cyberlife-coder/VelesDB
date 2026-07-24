@@ -422,10 +422,12 @@ scalar-expression ones below, which use the same single-collection dataset):
 - `join_cases` J001–J004: `JOIN ... ON` (both condition-side orders on core;
   WASM only accepts base-table-first — see D002 below) and `JOIN ... USING
   (col)`.
-- `aggregate_cases` G001–G004: `GROUP BY` / `HAVING` / `COUNT` / `SUM`,
-  checked via `Database::execute_aggregate` on core (not `execute_query`,
-  which only groups when combined with vector `NEAR` search) and via the
-  default SELECT pipeline on WASM.
+- `aggregate_cases` G001–G005: `GROUP BY` / `HAVING` / `COUNT` / `SUM` /
+  `LIMIT`, checked via `Database::execute_aggregate` on core (not
+  `execute_query`, which only groups when combined with vector `NEAR`
+  search) and via the default SELECT pipeline on WASM. G005 (issue #1556)
+  locks `LIMIT` truncation on grouped results — formerly D006 below, now
+  resolved on both engines.
 - `setops_cases` S001–S004: `UNION` / `INTERSECT` / `EXCEPT`, compared as a
   **sorted set of ids**, not an ordered list (see D003 below).
 - `match_cases` M001–M002: 1- and 2-hop `MATCH`, with per-executor query text
@@ -461,9 +463,12 @@ silently relied upon:
 - **D005** — cross-reference to the pre-existing `relative_score`/`rsf`
   multi-query fusion ranking divergence, already tracked in
   `docs/reference/ECOSYSTEM_PARITY.md`.
-- **D006** — `Database::execute_aggregate` never applies `LIMIT` to the group
-  array on core (every group comes back regardless); WASM's aggregate
-  pipeline does apply `LIMIT`. Tracked, not fixed — out of scope for #1544.
+- ~~D006~~ — **fixed 2026-07-24** (issue #1556):
+  `Collection::build_grouped_results` now applies `OFFSET`/`LIMIT` to grouped
+  results after `ORDER BY`, matching the WASM aggregate pipeline (no default
+  cap — a LIMIT-less `GROUP BY` still returns every group). Locked by
+  `aggregate_cases` G005 above and
+  `crates/velesdb-core/tests/velesql_group_by_limit.rs`.
 
 ### Large production files vs the NLOC/complexity gate (audit F-5.13)
 
