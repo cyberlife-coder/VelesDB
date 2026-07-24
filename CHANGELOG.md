@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`velesdb-core`**: `Database::execute_aggregate` now applies the
+  statement's `OFFSET`/`LIMIT` to GROUP BY results after ORDER BY, matching
+  the WASM aggregate pipeline (executor-conformance divergence D006). As in
+  WASM, there is no default cap: a LIMIT-less GROUP BY still returns every
+  group. Conformance fixture gains case G005 locking the behaviour on both
+  engines. (issue #1556)
 - **`scripts/check-promise-contract.py`**: the promise-contract guardrail
   only ever checked that a claim's `must_contain` substring was still
   present in the file it points at — it never executed
