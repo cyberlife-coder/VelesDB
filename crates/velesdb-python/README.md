@@ -217,6 +217,35 @@ for result in results:
 > `sparse_index_name` and `include_vectors`, plus a fluent builder
 > (`SearchOptions().with_vector(v).with_top_k(10)`).
 
+### Engine configuration (`VelesConfigOptions`)
+
+`Database(path, config=...)` accepts a typed `VelesConfigOptions` covering
+every engine section of the core `VelesConfig`: `limits`, `search`, `hnsw`,
+`storage` and `quantization`. Build it in code or load it from a
+`velesdb.toml` (engine-only semantics: a shell-owned `[server]`/`[logging]`
+table in a shared file is ignored):
+
+```python
+from velesdb import (
+    Database, VelesConfigOptions, LimitsOptions, SearchConfigOptions,
+)
+
+# In code:
+cfg = VelesConfigOptions(
+    limits=LimitsOptions(max_collections=50),
+    search=SearchConfigOptions(default_mode="accurate", max_results=100),
+)
+db = Database("./tenant1", config=cfg)
+
+# Or from TOML (fail-fast: invalid TOML/values raise ValueError,
+# a missing file raises FileNotFoundError):
+cfg = VelesConfigOptions.from_toml_path("./velesdb.toml")
+db = Database("./tenant1", config=cfg)
+```
+
+`wal_batch` is intentionally not exposed — the concurrent WAL writer is a
+VelesDB Enterprise feature (see `docs/guides/WRITE_CONCURRENCY.md`).
+
 ### End-to-End: Text to Search Results (RAG Pipeline)
 
 VelesDB stores and searches vectors — it does not generate embeddings. Use any embedding model to convert text to vectors first.

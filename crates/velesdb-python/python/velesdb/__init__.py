@@ -27,6 +27,7 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     EdgeExistsError,
     FusionStrategy,
     GraphStore as _RawGraphStore,
+    HnswConfigOptions,
     HnswOptions,
     LimitsOptions,
     MemoryService,
@@ -36,9 +37,12 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     GraphSchema as PyGraphSchema,
     PyProceduralMemory,
     PySemanticMemory,
+    QuantizationOptions,
+    SearchConfigOptions,
     SearchOptions,
     SearchResult,
     STORAGE_MODES,
+    StorageOptions,
     StreamingConfig,
     StreamingIngestConfig,
     TraversalResult,
@@ -918,6 +922,16 @@ __all__ = [
     "LimitsOptions",
     "AutoReindexOptions",
     "VelesConfigOptions",
+    # Engine config sections (issue #1549). Each maps 1:1 to a `[section]`
+    # of the core `VelesConfig` TOML; attach them to `VelesConfigOptions`
+    # or load a whole file via `VelesConfigOptions.from_toml_path`.
+    # `wal_batch` is intentionally absent (velesdb-premium Enterprise —
+    # docs/guides/WRITE_CONCURRENCY.md); `server`/`logging` configure
+    # hosting shells, not the embedded engine.
+    "SearchConfigOptions",
+    "HnswConfigOptions",
+    "StorageOptions",
+    "QuantizationOptions",
     # Canonical enum name sets, single-sourced from velesdb-core (tuples of str).
     "CONDITION_TYPES",
     "DISTANCE_METRICS",
