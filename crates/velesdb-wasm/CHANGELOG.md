@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-sourcing; output is unchanged. (Issue #1545.)
 
 ### Fixed
+- **JOIN `ON` condition side order (#1555)**: `ON joined.col = base.col`
+  silently matched nothing (every row came back with NULL joined columns)
+  because the join key resolution read the two sides of the condition
+  positionally. `equality_keys` now orients the condition by which side
+  names the joined table (alias or raw table name), mirroring
+  `velesdb-core`'s `normalize_join_condition` — both `ON` orders resolve
+  identically. Conformance case J005 locks the parity on both engines.
 - **SQ8 quantization parity with `velesdb-core` (#1543)**: the WASM SQ8
   encode/decode paths (`store_insert::encode_sq8`, `store_get::decode_sq8`,
   `vector_ops::ScratchBuffer::decode_sq8`) used an ad hoc `1e-10`

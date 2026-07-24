@@ -159,13 +159,19 @@
       "id": "J002",
       "query": "SELECT * FROM orders LEFT JOIN customers ON orders.customer_id = customers.id ORDER BY orders.id ASC",
       "expect_ids": [1, 2, 3, 4],
-      "note": "issue #1544: LEFT JOIN keeps the unmatched left row (id=4) with NULL joined columns. Written base-table-first (orders.customer_id = customers.id) — see documented_divergences D002 for why the reversed condition order is deliberately NOT used here"
+      "note": "issue #1544: LEFT JOIN keeps the unmatched left row (id=4) with NULL joined columns. Written base-table-first (orders.customer_id = customers.id); the reversed order is exercised by J005 (issue #1555)"
     },
     {
       "id": "J003",
       "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id WHERE customers.name = 'Alice' ORDER BY orders.id ASC",
       "expect_ids": [1, 3],
       "note": "issue #1544: JOIN combined with a WHERE predicate on a joined-table column"
+    },
+    {
+      "id": "J005",
+      "query": "SELECT * FROM orders JOIN customers ON customers.id = orders.customer_id ORDER BY orders.id ASC",
+      "expect_ids": [1, 2, 3],
+      "note": "issue #1555: identical to J001 but with the ON condition written joined-table-first — both engines must orient the condition by which side names the joined table (was documented_divergences D002)"
     },
     {
       "id": "J004",
@@ -273,10 +279,10 @@
     {
       "id": "D002",
       "area": "JOIN condition side order (WASM only)",
-      "core_behavior": "normalize_join_condition (query_join.rs) accepts ON in either order — `base.col = joined.col` and `joined.col = base.col` both resolve to the same match",
-      "wasm_behavior": "equality_keys/key_of (velesql_join.rs) does not normalize side order: `ON joined.col = base.col` looks up the joined-table-qualified key on the yet-unjoined base row (which never has it), so EVERY row silently comes back with NULL joined columns instead of matching — verified empirically with `LEFT JOIN customers ON customers.id = orders.customer_id` (all 4 rows got customers:null) vs the working `ON orders.customer_id = customers.id` (rows 1-3 matched, row 4 null)",
-      "status": "tracked as a real WASM gap, not fixed here (out of scope per issue #1544 — coverage of existing behaviour, not new WASM support). fixture J001/J002 are written in the working (base-table-first) order so the conformance suite stays green; the reversed order is intentionally not exercised as a passing case",
-      "evidence": "crates/velesdb-wasm/src/velesql_join.rs: equality_keys()/key_of()"
+      "core_behavior": "normalize_join_condition (search/query/join.rs) accepts ON in either order — `base.col = joined.col` and `joined.col = base.col` both resolve to the same match",
+      "wasm_behavior": "RESOLVED (issue #1555): equality_keys (velesql_join.rs) now orients the condition by which side targets the join alias (or raw table name), mirroring core; both orders resolve identically",
+      "status": "resolved by issue #1555 — join case J005 exercises the joined-table-first order on both engines; the former regression-lock canary test is now a parity lock (test_wasm_join_condition_side_order_parity_1555)",
+      "evidence": "crates/velesdb-wasm/src/velesql_join.rs: equality_keys() orientation; crates/velesdb-core/src/collection/search/query/join.rs: normalize_join_condition()"
     },
     {
       "id": "D003",

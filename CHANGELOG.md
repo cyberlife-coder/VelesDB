@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`velesdb-wasm`**: the VelesQL JOIN executor no longer depends on which
+  side of the `ON` condition names the joined table. `ON joined.col =
+  base.col` used to match nothing (NULL joined columns on every row);
+  `equality_keys` now orients the condition like core's
+  `normalize_join_condition`. Conformance join case J005 locks both engines
+  (was executor-conformance divergence D002). (issue #1555)
 - **`velesdb-core`**: `Database::execute_aggregate` now applies the
   statement's `OFFSET`/`LIMIT` to GROUP BY results after ORDER BY, matching
   the WASM aggregate pipeline (executor-conformance divergence D006). As in
