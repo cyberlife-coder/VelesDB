@@ -226,7 +226,7 @@ impl Database {
         // `'static` open closure; building the `PyObserver` stays off-GIL.
         let path_buf = PathBuf::from(path);
         let path_clone = path_buf.clone();
-        let core_config = config.map(|cfg| cfg.to_core());
+        let core_config = config.map(|cfg| cfg.to_core()).transpose()?;
         let core_observer: Option<Arc<dyn DatabaseObserver>> = observer
             .map(|cb| Arc::new(PyObserver::new(cb, observer_strict)) as Arc<dyn DatabaseObserver>);
         let db = py

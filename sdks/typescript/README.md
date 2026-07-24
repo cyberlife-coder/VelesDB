@@ -4,7 +4,7 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 
 > The TypeScript engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It ships the `MemoryService` memory wedge (`remember`/`recall`/`recallFused`/`recallFusedDated`/`relate`/`forget`/[`why()`](../../crates/velesdb-memory/README.md)) in the browser or Node.js — `why()` returns the evidence path behind every recall. The deterministic context compiler (`compileContext`) runs here too — fully in the browser (WASM), media fragments included, with `retrieveContextSource` for externalized-source retrieval — and in the native Node binding, [`@wiscale/velesdb-memory-node`](../../crates/velesdb-node/README.md).
 
-**v3.12.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
+**v4.0.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
 
 ## What's New in v3.12.0
 

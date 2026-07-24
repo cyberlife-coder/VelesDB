@@ -1391,3 +1391,217 @@ fn test_open_without_observer_reads_unchanged() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].id, 7);
 }
+
+// =========================================================================
+// Config-aware constructor tests (issue #1549, mobile surface)
+// =========================================================================
+//
+// Before these constructors existed, `VelesDatabase` could only be opened
+// through `open` / `open_with_observer`, which always run the core engine on
+// default `VelesConfig` values — a TOML engine config (`[search]`/`[hnsw]`/
+// `[storage]`/`[limits]`/`[quantization]`/`[wal_batch]`) had no way in.
+// These tests prove the config is *enforced* by the engine (not merely
+// parsed), that invalid input fails fast with a typed error, and that the
+// pre-existing constructors keep their default behaviour.
+
+/// The core proof required by issue #1549: a `limits.max_collections` cap in
+/// the TOML string must be enforced by the opened database. First collection
+/// succeeds (within the cap), second is refused by the engine.
+#[test]
+fn test_open_with_config_toml_limit_is_enforced() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db =
+        VelesDatabase::open_with_config_toml(path, "[limits]\nmax_collections = 1\n".to_string())
+            .unwrap();
+
+    db.create_collection("first".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let err = db
+        .create_collection("second".to_string(), 4, DistanceMetric::Cosine)
+        .expect_err("second collection must be refused by the configured limit");
+    assert!(
+        err.to_string().contains("max_collections"),
+        "expected the limit error to mention max_collections, got: {err}"
+    );
+}
+
+/// Same proof through the file-path variant (`load_from_path_engine_only`).
+#[test]
+fn test_open_with_config_path_limit_is_enforced() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = TempDir::new().unwrap();
+    let config_path = config_dir.path().join("velesdb.toml");
+    std::fs::write(&config_path, "[limits]\nmax_collections = 1\n").unwrap();
+
+    let db = VelesDatabase::open_with_config(
+        tmp.path().to_str().unwrap().to_string(),
+        config_path.to_str().unwrap().to_string(),
+    )
+    .unwrap();
+
+    db.create_collection("first".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let err = db
+        .create_collection("second".to_string(), 4, DistanceMetric::Cosine)
+        .expect_err("second collection must be refused by the configured limit");
+    assert!(
+        err.to_string().contains("max_collections"),
+        "expected the limit error to mention max_collections, got: {err}"
+    );
+}
+
+/// Fail-fast: a syntactically invalid TOML string must abort the open with a
+/// typed config error (core taxonomy code VELES-009), never fall back to
+/// defaults silently.
+#[test]
+fn test_open_with_config_toml_invalid_toml_fails_fast() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let Err(err) = VelesDatabase::open_with_config_toml(path, "not [[[ toml".to_string()) else {
+        panic!("invalid TOML must fail fast");
+    };
+    let VelesError::Database { code, message, .. } = &err else {
+        panic!("expected VelesError::Database, got {err:?}");
+    };
+    assert_eq!(
+        code, "VELES-009",
+        "config errors carry the core config code"
+    );
+    assert!(
+        message.contains("parse") || message.contains("Parse"),
+        "message should surface the underlying ConfigError, got: {message}"
+    );
+}
+
+/// Fail-fast: a TOML value rejected by `VelesConfig::validate` (here
+/// `limits.max_collections = 0`, outside `[1, cap]`) must abort the open.
+#[test]
+fn test_open_with_config_toml_invalid_value_fails_fast() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let Err(err) =
+        VelesDatabase::open_with_config_toml(path, "[limits]\nmax_collections = 0\n".to_string())
+    else {
+        panic!("out-of-range value must fail validation");
+    };
+    let VelesError::Database { code, message, .. } = &err else {
+        panic!("expected VelesError::Database, got {err:?}");
+    };
+    assert_eq!(code, "VELES-009");
+    assert!(
+        message.contains("max_collections"),
+        "message should name the offending key, got: {message}"
+    );
+}
+
+/// Fail-fast: a config path that does not exist must abort the open with a
+/// typed config error — never open on silent defaults.
+#[test]
+fn test_open_with_config_path_missing_file_fails_fast() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+    let missing = tmp.path().join("does-not-exist.toml");
+
+    let Err(err) = VelesDatabase::open_with_config(path, missing.to_str().unwrap().to_string())
+    else {
+        panic!("missing config file must fail fast");
+    };
+    let VelesError::Database { code, .. } = &err else {
+        panic!("expected VelesError::Database, got {err:?}");
+    };
+    assert_eq!(code, "VELES-009");
+}
+
+/// Observer + config: the TOML limit must be enforced AND the observer read
+/// gate must be active on the same handle.
+#[test]
+fn test_open_with_observer_and_config_toml_wires_both() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open_with_observer_and_config_toml(
+        path,
+        std::sync::Arc::new(DenyAllObserver),
+        "[limits]\nmax_collections = 1\n".to_string(),
+    )
+    .unwrap();
+
+    // Config wired: cap of 1 enforced.
+    db.create_collection("first".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let err = db
+        .create_collection("second".to_string(), 4, DistanceMetric::Cosine)
+        .expect_err("second collection must be refused by the configured limit");
+    assert!(err.to_string().contains("max_collections"));
+
+    // Observer wired: reads are denied by the gate (writes are not gated).
+    let col = db.get_collection("first".to_string()).unwrap().unwrap();
+    col.upsert(VelesPoint {
+        id: 1,
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+        payload: None,
+    })
+    .unwrap();
+    let err = col
+        .search(vec![1.0, 0.0, 0.0, 0.0], 1)
+        .expect_err("deny-all observer must block the read");
+    assert!(
+        err.to_string().contains("test policy"),
+        "expected the observer's deny reason, got: {err}"
+    );
+}
+
+/// Observer + config through the file-path variant.
+#[test]
+fn test_open_with_observer_and_config_path_wires_both() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = TempDir::new().unwrap();
+    let config_path = config_dir.path().join("velesdb.toml");
+    std::fs::write(&config_path, "[limits]\nmax_collections = 1\n").unwrap();
+
+    let db = VelesDatabase::open_with_observer_and_config(
+        tmp.path().to_str().unwrap().to_string(),
+        std::sync::Arc::new(DenyAllObserver),
+        config_path.to_str().unwrap().to_string(),
+    )
+    .unwrap();
+
+    db.create_collection("first".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    assert!(
+        db.create_collection("second".to_string(), 4, DistanceMetric::Cosine)
+            .is_err(),
+        "cap of 1 must be enforced"
+    );
+}
+
+/// Regression guard: the pre-existing constructors keep running on core
+/// defaults (`limits.max_collections = 1000`) — adding the config-aware
+/// constructors must not change `open` / `open_with_observer` behaviour.
+#[test]
+fn test_open_without_config_keeps_default_limits() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    // Well above a cap of 1: proves no stray config is applied.
+    db.create_collection("first".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    db.create_collection("second".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+
+    let tmp2 = TempDir::new().unwrap();
+    let db2 = VelesDatabase::open_with_observer(
+        tmp2.path().to_str().unwrap().to_string(),
+        std::sync::Arc::new(RecordingObserver::default()),
+    )
+    .unwrap();
+    db2.create_collection("first".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    db2.create_collection("second".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+}

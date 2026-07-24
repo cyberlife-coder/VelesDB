@@ -44,6 +44,8 @@ impl Collection {
             group_by_columns,
             having,
             stmt.order_by.as_deref(),
+            stmt.limit,
+            stmt.offset,
         );
 
         Ok(serde_json::Value::Array(results))
@@ -179,13 +181,19 @@ impl Collection {
         Ok(())
     }
 
-    /// Builds the result array from grouped aggregators, applying HAVING and ORDER BY.
+    /// Builds the result array from grouped aggregators, applying HAVING,
+    /// ORDER BY, then OFFSET/LIMIT (issue #1556). Unlike plain SELECT there is
+    /// no default cap: a LIMIT-less GROUP BY returns every group, matching the
+    /// WASM aggregate pipeline.
+    #[allow(clippy::too_many_arguments)]
     fn build_grouped_results(
         groups: HashMap<GroupKey, Aggregator>,
         aggregations: &[AggregateFunction],
         group_by_columns: &[String],
         having: Option<&HavingClause>,
         order_by: Option<&[crate::velesql::SelectOrderBy]>,
+        limit: Option<u64>,
+        offset: Option<u64>,
     ) -> Vec<serde_json::Value> {
         let mut results = Vec::new();
 
@@ -213,6 +221,12 @@ impl Collection {
 
         if let Some(order_by) = order_by {
             Self::sort_aggregation_results(&mut results, order_by);
+        }
+
+        let skip = usize::try_from(offset.unwrap_or(0)).unwrap_or(usize::MAX);
+        let take = limit.map_or(usize::MAX, |l| usize::try_from(l).unwrap_or(usize::MAX));
+        if skip > 0 || take < results.len() {
+            results = results.into_iter().skip(skip).take(take).collect();
         }
 
         results

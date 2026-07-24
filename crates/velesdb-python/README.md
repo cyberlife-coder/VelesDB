@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/velesdb)](https://pypi.org/project/velesdb/)
 [![Python](https://img.shields.io/pypi/pyversions/velesdb)](https://pypi.org/project/velesdb/)
 [![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-3.12.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
+[![Version](https://img.shields.io/badge/version-4.0.0-blue)](https://github.com/cyberlife-coder/VelesDB/releases)
 
 Python bindings for [VelesDB](https://github.com/cyberlife-coder/VelesDB) — a high-performance vector database for AI applications. `numpy>=1.20` ships as a hard runtime dependency since v1.13.8, so a single `pip install velesdb` is sufficient.
 
@@ -216,6 +216,35 @@ for result in results:
 > `SearchOptions` accepts `vector`, `sparse_vector`, `top_k`, `filter`,
 > `sparse_index_name` and `include_vectors`, plus a fluent builder
 > (`SearchOptions().with_vector(v).with_top_k(10)`).
+
+### Engine configuration (`VelesConfigOptions`)
+
+`Database(path, config=...)` accepts a typed `VelesConfigOptions` covering
+every engine section of the core `VelesConfig`: `limits`, `search`, `hnsw`,
+`storage` and `quantization`. Build it in code or load it from a
+`velesdb.toml` (engine-only semantics: a shell-owned `[server]`/`[logging]`
+table in a shared file is ignored):
+
+```python
+from velesdb import (
+    Database, VelesConfigOptions, LimitsOptions, SearchConfigOptions,
+)
+
+# In code:
+cfg = VelesConfigOptions(
+    limits=LimitsOptions(max_collections=50),
+    search=SearchConfigOptions(default_mode="accurate", max_results=100),
+)
+db = Database("./tenant1", config=cfg)
+
+# Or from TOML (fail-fast: invalid TOML/values raise ValueError,
+# a missing file raises FileNotFoundError):
+cfg = VelesConfigOptions.from_toml_path("./velesdb.toml")
+db = Database("./tenant1", config=cfg)
+```
+
+`wal_batch` is intentionally not exposed — the concurrent WAL writer is a
+VelesDB Enterprise feature (see `docs/guides/WRITE_CONCURRENCY.md`).
 
 ### End-to-End: Text to Search Results (RAG Pipeline)
 

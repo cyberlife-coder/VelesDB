@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] — 2026-07-24
+
 ### Security
 
 - **`velesdb-memory`**: metadata is now size-capped. Caller-supplied
@@ -41,6 +43,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`VelesConfig` on every remaining surface (issue #1549)** — after the
+  server/CLI wiring (#1565), the four surfaces that could still only open
+  the engine on core defaults now accept an explicit engine configuration,
+  all built on the same engine-only TOML loaders
+  (`load_from_path_engine_only` / `from_toml_engine_only`) with fail-fast
+  validation and the typed `ConfigError` preserved:
+  - **`tauri-plugin-velesdb`**: new plugin `Builder` with
+    `with_config(VelesConfig)` / `with_config_path(path)` (fail-fast at
+    build time), threading through the four observer×config open
+    combinations; `VelesConfig` re-exported for hosts; typed
+    `Error::ConfigLoad` variant.
+  - **`velesdb-mobile`**: `open_with_config(_toml)` and
+    `open_with_observer_and_config(_toml)` UniFFI constructors (TOML file
+    path or embedded TOML string — the string variant suits mobile asset
+    pipelines); `ConfigError` surfaced through the flat UniFFI error as
+    `VELES-009` with the full message.
+  - **`velesdb-python`**: `VelesConfigOptions` now covers the full engine
+    surface — new `SearchConfigOptions`, `HnswConfigOptions`,
+    `StorageOptions` and `QuantizationOptions` sections alongside the
+    existing `limits`, plus `VelesConfigOptions.from_toml(str)` /
+    `from_toml_path(path)`. Invalid values raise at construction or at
+    `Database(path, config=...)` open, never silently. `wal_batch` stays
+    intentionally unexposed (velesdb-premium Enterprise feature). Stubs,
+    pure-python adapter and README updated.
+  - **`langchain-velesdb` / `llamaindex-velesdb`**: every store/memory
+    entry point that creates a `Database` accepts an optional
+    `config: velesdb.VelesConfigOptions` pass-through (vector stores,
+    chat/semantic/episodic/procedural memories, native `GraphLoader`),
+    and the shared `velesdb_common.graph.open_native_graph` helper
+    forwards it too. Omitting `config` is bit-for-bit the previous
+    behaviour.
 - **`velesdb-cli`**: new `graph doctor <collection> [--purge|--stub]`
   subcommand to audit and repair legacy phantom edges -- edges present in
   a graph collection's edge store whose `source` or `target` node has no
@@ -91,6 +124,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`velesdb-memory` (MCP)**: tool parameters are now harness-proof on both
+  wire directions. Real MCP client harnesses were observed serializing
+  non-string arguments as JSON-encoded strings once their view of the
+  advertised schema degraded — `save_working_context`'s `working` object
+  arrived as `"{\"goal\": ...}"` and the call failed with `invalid type:
+  string, expected struct WorkingContext`, silently losing session
+  handoffs; `recall_fused` rejected `limit: "6"` and stringified `filter`
+  objects the same way. Two-sided fix, same defensive-interop class as the
+  #1468 string-id contract: (1) `$ref`-only top-level parameter schemas are
+  now inlined so every parameter advertises a direct `type` keyword
+  (`working` exposes `type: object`); (2) a lenient deserializer on every
+  non-string tool parameter accepts the properly-typed value first and
+  falls back to parsing a JSON-encoded string, with a precise error when
+  neither form fits.
+- **`velesdb-wasm`**: the VelesQL JOIN executor no longer depends on which
+  side of the `ON` condition names the joined table. `ON joined.col =
+  base.col` used to match nothing (NULL joined columns on every row);
+  `equality_keys` now orients the condition like core's
+  `normalize_join_condition`. Conformance join case J005 locks both engines
+  (was executor-conformance divergence D002). (issue #1555)
+- **`velesdb-core`**: `Database::execute_aggregate` now applies the
+  statement's `OFFSET`/`LIMIT` to GROUP BY results after ORDER BY, matching
+  the WASM aggregate pipeline (executor-conformance divergence D006). As in
+  WASM, there is no default cap: a LIMIT-less GROUP BY still returns every
+  group. Conformance fixture gains case G005 locking the behaviour on both
+  engines. (issue #1556)
 - **`scripts/check-promise-contract.py`**: the promise-contract guardrail
   only ever checked that a claim's `must_contain` substring was still
   present in the file it points at — it never executed
@@ -490,6 +549,25 @@ account).
   — only a caller with an explicit `: Promise<void>`/`: void` annotation on
   the result needs a touch.
   [EPIC-P-071/US-004]
+
+- **BREAKING (Rust core API) — missing graph-edge endpoint is now
+  `Error::NodeNotFound` in strict-schema mode too**, unifying it with the
+  existing schemaless behavior. The #1442 fix (`add_edge`/`add_edges_batch`
+  reject an edge whose `source` or `target` has no stored node payload)
+  intentionally kept two variants depending on schema mode: schemaless
+  returned `Error::NodeNotFound` (`VELES-022`, REST `404`), while strict
+  mode overloaded the pre-existing `Error::SchemaValidation` (`VELES-017`,
+  REST `400`) to also mean "endpoint doesn't exist at all". Both modes now
+  return `NodeNotFound` for a genuinely missing endpoint;
+  `SchemaValidation` in strict mode is reserved for actual schema-shape
+  violations (undeclared node type, undeclared edge type, endpoint type
+  mismatch, or a node with no `_labels`). *Migration*: code in strict-schema
+  collections matching on `Error::SchemaValidation`/`VELES-017`/HTTP `400`
+  to detect a missing edge endpoint must match on `Error::NodeNotFound`/
+  `VELES-022`/HTTP `404` instead — REST, the Python/Node/WASM/TS bindings,
+  and the `velesdb-memory` wedge already map both variants generically by
+  error code, so no adapter code changed, only which variant strict mode
+  now returns for this one case. (#1470)
 
 ### Fixed
 
@@ -6691,7 +6769,8 @@ still genuinely pending is:
 > product), not part of the open-source Community roadmap — see the
 > "Scope & boundaries" section of the README.
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v1.16.0...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v3.12.0...v4.0.0
 [1.16.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.16.0
 [1.15.0]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.15.0
 [1.14.4]: https://github.com/cyberlife-coder/VelesDB/releases/tag/v1.14.4

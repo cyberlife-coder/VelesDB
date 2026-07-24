@@ -18,7 +18,10 @@ import json
 from typing import Any, Dict, List, Optional, Union
 import time
 
-from langchain_velesdb._common import make_initial_id_counter
+from langchain_velesdb._common import (
+    make_initial_id_counter,
+    open_database as _open_database,
+)
 from velesdb_common.memory import (
     chronological,
     format_procedural_results,
@@ -90,6 +93,9 @@ class VelesDBChatMemory(BaseChatMemory):
         human_prefix: Prefix for human messages (default: "Human")
         ai_prefix: Prefix for AI messages (default: "AI")
         return_messages: Return messages as objects vs string (default: False)
+        config: Optional :class:`velesdb.VelesConfigOptions` engine
+            configuration, forwarded verbatim to ``velesdb.Database``.
+            ``None`` (default) opens the database exactly as before.
 
     Example:
         >>> memory = VelesDBChatMemory(path="./chat_data")
@@ -126,10 +132,11 @@ class VelesDBChatMemory(BaseChatMemory):
         dimension: int = 384,
         window: int = 20,
         embedding: Optional[Any] = None,
+        config: Optional["velesdb.VelesConfigOptions"] = None,
         **kwargs,
     ):
         super().__init__(path=path, dimension=dimension, window=window, **kwargs)
-        self._db = velesdb.Database(path)
+        self._db = _open_database(path, config)
         self._memory = self._db.agent_memory(dimension=dimension)
         self._embedding = embedding
         self._message_counter = make_initial_id_counter()
@@ -234,6 +241,9 @@ class VelesDBSemanticMemory:
         path: Path to VelesDB database directory
         dimension: Embedding dimension (must match your embeddings)
         embedding: LangChain Embeddings instance for encoding
+        config: Optional :class:`velesdb.VelesConfigOptions` engine
+            configuration, forwarded verbatim to ``velesdb.Database``.
+            ``None`` (default) opens the database exactly as before.
 
     Example:
         >>> from langchain_openai import OpenAIEmbeddings
@@ -245,7 +255,13 @@ class VelesDBSemanticMemory:
         >>> facts = memory.query("What is the capital of France?", k=3)
     """
 
-    def __init__(self, path: str, embedding: Any, dimension: Optional[int] = None):
+    def __init__(
+        self,
+        path: str,
+        embedding: Any,
+        dimension: Optional[int] = None,
+        config: Optional["velesdb.VelesConfigOptions"] = None,
+    ):
         self.path = path
         self.embedding = embedding
 
@@ -255,7 +271,7 @@ class VelesDBSemanticMemory:
             dimension = len(sample)
 
         self.dimension = dimension
-        self._db = velesdb.Database(path)
+        self._db = _open_database(path, config)
         self._memory = self._db.agent_memory(dimension=dimension)
         self._fact_counter = make_initial_id_counter()
 
@@ -331,6 +347,9 @@ class VelesDBProceduralMemory:
             ``pattern`` string passed to :meth:`recall`.  Required for
             text-based recall; omit if you will always supply a raw
             embedding vector directly.
+        config: Optional :class:`velesdb.VelesConfigOptions` engine
+            configuration, forwarded verbatim to ``velesdb.Database``.
+            ``None`` (default) opens the database exactly as before.
 
     Example:
         >>> from langchain_velesdb import VelesDBProceduralMemory
@@ -350,9 +369,10 @@ class VelesDBProceduralMemory:
         path: str,
         dimension: int = 384,
         embeddings: Optional[Any] = None,
+        config: Optional["velesdb.VelesConfigOptions"] = None,
     ) -> None:
         self.path = path
-        self._db = velesdb.Database(path)
+        self._db = _open_database(path, config)
         self._memory = self._db.agent_memory(dimension=dimension)
         self._procedural = self._memory.procedural
         self._embeddings = embeddings

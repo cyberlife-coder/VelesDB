@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 use velesdb_core::agent::AgentMemory;
+use velesdb_core::config::VelesConfig;
 use velesdb_core::{Database, DatabaseObserver};
 
 use crate::error::{Error, Result};
@@ -40,6 +41,12 @@ pub struct VelesDbState {
     /// Set by the plugin at setup so collection create/delete events reach the
     /// frontend regardless of the entry path. `None` falls back to a plain open.
     observer: Option<Arc<dyn DatabaseObserver>>,
+    /// Optional explicit engine [`VelesConfig`] applied when the database is
+    /// opened (issue #1549).
+    ///
+    /// `None` preserves the historical behaviour: the database opens with
+    /// core defaults, exactly as before config wiring existed.
+    config: Option<VelesConfig>,
 }
 
 impl VelesDbState {
@@ -54,22 +61,49 @@ impl VelesDbState {
     /// A new `VelesDbState` instance (database not yet opened).
     #[must_use]
     pub fn new(path: PathBuf) -> Self {
-        Self::with_observer(path, None)
+        Self::with_parts(path, None, None)
     }
 
     /// Creates a new plugin state that injects `observer` into the database when
     /// it is opened, so collection lifecycle events are forwarded to Tauri.
     #[must_use]
     pub fn new_with_observer(path: PathBuf, observer: Arc<dyn DatabaseObserver>) -> Self {
-        Self::with_observer(path, Some(observer))
+        Self::with_parts(path, Some(observer), None)
     }
 
-    fn with_observer(path: PathBuf, observer: Option<Arc<dyn DatabaseObserver>>) -> Self {
+    /// Creates a new plugin state that opens the database with an explicit
+    /// engine [`VelesConfig`] instead of core defaults (issue #1549).
+    #[must_use]
+    pub fn new_with_config(path: PathBuf, config: VelesConfig) -> Self {
+        Self::with_parts(path, None, Some(config))
+    }
+
+    /// Creates a new plugin state with both a lifecycle `observer` and an
+    /// explicit engine [`VelesConfig`] (issue #1549).
+    ///
+    /// The database is opened via
+    /// [`Database::open_with_observer_and_config`], so lifecycle events reach
+    /// Tauri *and* the engine honours the supplied config.
+    #[must_use]
+    pub fn new_with_observer_and_config(
+        path: PathBuf,
+        observer: Arc<dyn DatabaseObserver>,
+        config: VelesConfig,
+    ) -> Self {
+        Self::with_parts(path, Some(observer), Some(config))
+    }
+
+    fn with_parts(
+        path: PathBuf,
+        observer: Option<Arc<dyn DatabaseObserver>>,
+        config: Option<VelesConfig>,
+    ) -> Self {
         Self {
             db: Arc::new(RwLock::new(None)),
             memory: Arc::new(RwLock::new(None)),
             path,
             observer,
+            config,
         }
     }
 
@@ -81,9 +115,17 @@ impl VelesDbState {
     pub fn open(&self) -> Result<()> {
         let mut db_guard = self.db.write();
         if db_guard.is_none() {
-            let db = match &self.observer {
-                Some(observer) => Database::open_with_observer(&self.path, Arc::clone(observer))?,
-                None => Database::open(&self.path)?,
+            let db = match (&self.observer, &self.config) {
+                (Some(observer), Some(config)) => Database::open_with_observer_and_config(
+                    &self.path,
+                    Arc::clone(observer),
+                    config.clone(),
+                )?,
+                (Some(observer), None) => {
+                    Database::open_with_observer(&self.path, Arc::clone(observer))?
+                }
+                (None, Some(config)) => Database::open_with_config(&self.path, config.clone())?,
+                (None, None) => Database::open(&self.path)?,
             };
             *db_guard = Some(Arc::new(db));
             tracing::info!("VelesDB opened at {:?}", self.path);

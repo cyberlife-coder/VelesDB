@@ -142,6 +142,17 @@ Or use the local CI script: `.\scripts\local-ci.ps1` (Full) or `.\scripts\local-
 
 Git hooks are provided in `.githooks/` — activate with: `git config core.hooksPath .githooks`
 
+> **Note (SSH pushes):** the pre-push hook runs the full validation (~15 min) while
+> git already holds the connection to GitHub open; if that SSH connection dies in
+> the meantime, `git push` exits 141 (SIGPIPE) with no error message right after
+> the validation passes. Pushing over HTTPS is immune (the ref advertisement and
+> the pack upload are independent requests):
+>
+> ```
+> git config remote.origin.pushurl https://github.com/cyberlife-coder/VelesDB.git
+> git config credential.helper '!gh auth git-credential'
+> ```
+
 ## Development Setup
 
 ### Prerequisites

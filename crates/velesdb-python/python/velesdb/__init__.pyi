@@ -2803,14 +2803,144 @@ class AutoReindexOptions:
         ...
 
 
+class SearchConfigOptions:
+    """Global search defaults mapped to core `SearchConfig` (`[search]`).
+
+    Distinct from the per-query :class:`SearchOptions`. Unspecified
+    fields fall back to the engine defaults (default_mode="balanced",
+    max_results=1000, query_timeout_ms=30000).
+    """
+
+    default_mode: Optional[str]
+    ef_search: Optional[int]
+    max_results: Optional[int]
+    query_timeout_ms: Optional[int]
+
+    def __init__(
+        self,
+        default_mode: Optional[str] = None,
+        ef_search: Optional[int] = None,
+        max_results: Optional[int] = None,
+        query_timeout_ms: Optional[int] = None,
+    ) -> None: ...
+
+
+class HnswConfigOptions:
+    """Database-wide HNSW defaults mapped to core `HnswConfig` (`[hnsw]`).
+
+    Distinct from the per-collection :class:`HnswOptions`. `None` fields
+    fall back to the engine defaults (m/ef_construction auto by
+    dimension, max_layers=0 = auto).
+    """
+
+    m: Optional[int]
+    ef_construction: Optional[int]
+    max_layers: Optional[int]
+
+    def __init__(
+        self,
+        m: Optional[int] = None,
+        ef_construction: Optional[int] = None,
+        max_layers: Optional[int] = None,
+    ) -> None: ...
+
+
+class StorageOptions:
+    """Storage engine settings mapped to core `StorageConfig` (`[storage]`).
+
+    Unspecified fields fall back to the engine defaults
+    (data_dir="./velesdb_data", storage_mode="mmap", mmap_cache_mb=1024,
+    vector_alignment=64).
+    """
+
+    data_dir: Optional[str]
+    storage_mode: Optional[str]
+    mmap_cache_mb: Optional[int]
+    vector_alignment: Optional[int]
+
+    def __init__(
+        self,
+        data_dir: Optional[str] = None,
+        storage_mode: Optional[str] = None,
+        mmap_cache_mb: Optional[int] = None,
+        vector_alignment: Optional[int] = None,
+    ) -> None: ...
+
+
+class QuantizationOptions:
+    """Quantization settings mapped to core `QuantizationConfig`
+    (`[quantization]`).
+
+    `mode` is one of "none", "sq8", "binary", "pq", "rabitq". The `pq_*`
+    fields are only valid with mode="pq" (where `pq_m` is required);
+    combining them with any other mode raises `ValueError`.
+    """
+
+    mode: Optional[str]
+    pq_m: Optional[int]
+    pq_k: Optional[int]
+    pq_opq_enabled: Optional[bool]
+    pq_oversampling: Optional[int]
+    rerank_enabled: Optional[bool]
+    rerank_multiplier: Optional[int]
+    auto_quantization: Optional[bool]
+    auto_quantization_threshold: Optional[int]
+
+    def __init__(
+        self,
+        mode: Optional[str] = None,
+        pq_m: Optional[int] = None,
+        pq_k: Optional[int] = None,
+        pq_opq_enabled: Optional[bool] = None,
+        pq_oversampling: Optional[int] = None,
+        rerank_enabled: Optional[bool] = None,
+        rerank_multiplier: Optional[int] = None,
+        auto_quantization: Optional[bool] = None,
+        auto_quantization_threshold: Optional[int] = None,
+    ) -> None: ...
+
+
 class VelesConfigOptions:
     """Global database-level configuration mapped to core `VelesConfig`.
 
-    Currently exposes the `limits` sub-section only. Other sub-sections
-    (search, hnsw, storage) are left at their engine defaults — user
-    tuning is done per-collection via :class:`HnswOptions`.
+    Exposes every engine section: `limits`, `search`, `hnsw`, `storage`
+    and `quantization`. Unset sections stay at their engine defaults.
+    Load a TOML file with :meth:`from_toml_path` / :meth:`from_toml`
+    (engine-only semantics: a shell-owned `[server]`/`[logging]` table
+    is ignored). `wal_batch` is intentionally not exposed — the
+    concurrent WAL writer is a velesdb-premium Enterprise feature
+    (docs/guides/WRITE_CONCURRENCY.md).
     """
 
     limits: Optional[LimitsOptions]
+    search: Optional[SearchConfigOptions]
+    hnsw: Optional[HnswConfigOptions]
+    storage: Optional[StorageOptions]
+    quantization: Optional[QuantizationOptions]
 
-    def __init__(self, limits: Optional[LimitsOptions] = None) -> None: ...
+    def __init__(
+        self,
+        limits: Optional[LimitsOptions] = None,
+        search: Optional[SearchConfigOptions] = None,
+        hnsw: Optional[HnswConfigOptions] = None,
+        storage: Optional[StorageOptions] = None,
+        quantization: Optional[QuantizationOptions] = None,
+    ) -> None: ...
+
+    @staticmethod
+    def from_toml(toml_str: str) -> "VelesConfigOptions":
+        """Load engine configuration from an in-memory TOML string.
+
+        Fail-fast: invalid TOML or an out-of-range value raises
+        `ValueError` with the typed core message.
+        """
+        ...
+
+    @staticmethod
+    def from_toml_path(path: str) -> "VelesConfigOptions":
+        """Load engine configuration from a TOML file path.
+
+        Fail-fast: a missing file raises `FileNotFoundError`; invalid
+        TOML or an out-of-range value raises `ValueError`.
+        """
+        ...

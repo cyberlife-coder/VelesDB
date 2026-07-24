@@ -209,14 +209,27 @@ class GraphRetriever(BaseRetriever):
         return graph
 
     def _open_graph_from_path(self) -> Any:
-        """Open graph collection by resolving db_path (fallback path)."""
+        """Open graph collection by resolving db_path (fallback path).
+
+        Reuses the vector store's ``_config`` (``velesdb.VelesConfigOptions``)
+        when present — the same source ``_get_db()`` uses — so the graph
+        database is opened with the same engine configuration.
+        """
         resolved_path = self.db_path or _infer_db_path(self.vector_store)
         if resolved_path is None:
             raise ValueError(
                 "Native mode requires 'db_path' or a vector store with a "
                 "'_db_path' / '_path' attribute."
             )
-        return open_native_graph(resolved_path, self.graph_collection_name)
+        config = getattr(self.vector_store, "_config", None)
+        if config is None:
+            # Keep the pre-config call shape so a velesdb-common that
+            # predates open_native_graph's ``config`` parameter (floor
+            # 3.8.0) stays compatible when the feature is unused.
+            return open_native_graph(resolved_path, self.graph_collection_name)
+        return open_native_graph(
+            resolved_path, self.graph_collection_name, config=config
+        )
 
     def _get_relevant_documents(
         self,

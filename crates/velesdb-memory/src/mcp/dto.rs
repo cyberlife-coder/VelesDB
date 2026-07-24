@@ -30,16 +30,17 @@ pub(super) struct RememberParams {
     /// The fact to store in memory.
     pub(super) fact: String,
     /// Optional typed links from this fact to existing memories.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) links: Vec<Link>,
     /// Optional structured metadata for later filtering (e.g.
     /// `{"project": "veles", "author": "julien", "status": "open"}`).
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) metadata: Option<Metadata>,
     /// Optional time-to-live in seconds. When set, the fact expires (and stops
     /// being recalled) after this many seconds — a durable TTL that survives a
     /// restart. Omit for a permanent memory. Falls back to the server's
     /// `VELESDB_MEMORY_DEFAULT_TTL` when unset.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) ttl_seconds: Option<u64>,
 }
 
@@ -63,9 +64,11 @@ pub(super) struct RecallParams {
     /// Natural-language query to match semantically.
     pub(super) query: String,
     /// Maximum number of memories to return (default 10).
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) limit: Option<usize>,
     /// Optional exact-match metadata filter (e.g.
     /// `{"project": "veles", "status": "resolved"}`).
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) filter: Option<Metadata>,
 }
 
@@ -128,6 +131,7 @@ pub(super) struct RecallWhereParams {
     /// Natural-language query to match semantically.
     pub(super) query: String,
     /// Maximum number of memories to return (default 10).
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) limit: Option<usize>,
     /// Structured `ColumnStore` predicates (ranges/comparisons) combined with AND,
     /// e.g. a date window `[{"field":"ts","op":"ge","value":20230101},
@@ -137,7 +141,7 @@ pub(super) struct RecallWhereParams {
     /// as-is — a numeric `20230101` never matches a fact stored with
     /// `{"ts": "20230101"}` (a string). Store comparable values (dates,
     /// counters) NUMERICALLY at `remember` time so these filters match them.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) filters: Vec<ColumnFilter>,
 }
 
@@ -150,16 +154,20 @@ pub(super) struct RecallFusedParams {
     /// Maximum number of memories to return (default 10). Multi-hop reasoning
     /// benefits from a larger budget (~32-64); simple and temporal recall
     /// saturate early, where a larger budget only adds tokens.
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) limit: Option<usize>,
     /// Optional exact-match metadata filter (e.g.
     /// `{"project": "veles", "status": "resolved"}`).
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) filter: Option<Metadata>,
     /// Graph hops walked from the top vector hit (default 2). Higher reaches
     /// further but adds noise; capped at the `why` hop ceiling.
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) hops: Option<usize>,
     /// Weight added to a graph-reached fact's normalised vector score
     /// (default 0.15). Raise to trust the graph more, lower to trust vector
     /// similarity more.
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) graph_boost: Option<f64>,
     /// Name of the metadata field holding each fact's date as a `YYYYMMDD`
     /// integer (e.g. `"ts"`, `"occurred_at"`). When set, the result adds a
@@ -270,6 +278,7 @@ pub(super) struct FeedbackParams {
     pub(super) id: u64,
     /// `true` if the memory was useful (reinforce it), `false` if it was noise
     /// (weaken it).
+    #[serde(deserialize_with = "super::wire::lenient")]
     pub(super) success: bool,
 }
 
@@ -293,9 +302,11 @@ pub(super) struct WhyParams {
     /// The decision (or fact) to explain.
     pub(super) decision: String,
     /// How many hops of typed links to follow (default 2).
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) max_hops: Option<usize>,
     /// Optional exact-match metadata filter to scope the seed (e.g.
     /// `{"project": "veles"}`).
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) filter: Option<Metadata>,
 }
 
@@ -390,6 +401,7 @@ pub(super) struct RememberExtractedParams {
     /// Raw text to extract atomic facts from and store as a connected graph.
     pub(super) text: String,
     /// Optional structured metadata applied to every extracted fact.
+    #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) metadata: Option<Metadata>,
 }
 

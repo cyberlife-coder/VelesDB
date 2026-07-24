@@ -24,6 +24,8 @@ import logging
 
 from velesdb_common.ids import stable_hash_id
 
+from llamaindex_velesdb._common import open_database as _open_database
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -42,6 +44,10 @@ def _generate_id(name: str, entity_type: str) -> int:
 def _open_native_graph(vector_store: Any, collection_name: str) -> Optional[Any]:
     """Open a native graph collection from the vector store's database path.
 
+    Reuses the vector store's ``_config`` (``velesdb.VelesConfigOptions``)
+    when present, so the graph database is opened with the same engine
+    configuration as the vector store.
+
     Args:
         vector_store: VelesDBVectorStore instance.
         collection_name: Name of the graph collection.
@@ -50,7 +56,7 @@ def _open_native_graph(vector_store: Any, collection_name: str) -> Optional[Any]
         PyGraphCollection instance, or None if unavailable.
     """
     db_path: Optional[str] = None
-    for attr in ("_db_path", "_path", "_data_path"):
+    for attr in ("_db_path", "_path", "path", "_data_path"):
         candidate = getattr(vector_store, attr, None)
         if candidate is not None:
             db_path = str(candidate)
@@ -59,13 +65,14 @@ def _open_native_graph(vector_store: Any, collection_name: str) -> Optional[Any]
     if db_path is None:
         logger.debug(
             "Cannot open native graph collection: vector store has no "
-            "_db_path / _path attribute."
+            "_db_path / _path / path attribute."
         )
         return None
 
+    config = getattr(vector_store, "_config", None)
+
     try:
-        import velesdb  # type: ignore[import]
-        db = velesdb.Database(db_path)
+        db = _open_database(db_path, config)
         graph = db.get_graph_collection(collection_name)
         if graph is None:
             logger.debug(
