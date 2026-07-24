@@ -122,6 +122,12 @@ else
   fail "PreCompact: reason mentions save_working_context"
 fi
 
+if printf '%s' "$pre_compact_out_1" | jq -e '.reason | contains("compile_transcript")' >/dev/null; then
+  pass "PreCompact: reason mentions compile_transcript (V2b roadmap item, now shipped)"
+else
+  fail "PreCompact: reason mentions compile_transcript (V2b roadmap item, now shipped)"
+fi
+
 if printf '%s' "$pre_compact_out_1" | jq -e 'has("hookSpecificOutput") | not' >/dev/null; then
   pass "PreCompact: no hookSpecificOutput wrapper (unsupported for this event)"
 else

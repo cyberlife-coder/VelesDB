@@ -13,8 +13,10 @@
 # be unsafe (auto-compaction can fire repeatedly as a long session grows;
 # refusing it every time risks the transcript never compacting).
 #
-# TODO(V2b): once compile_transcript ships, this hook can compile the
-# transcript directly instead of only nudging the model to save by hand.
+# V2b (compile_transcript shipped): the hook still cannot touch the store
+# itself (mono-process flock constraint above), so it cannot compile the
+# transcript directly either — it nudges the model to call compile_transcript
+# itself, same mechanism as the save_working_context nudge below.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,6 +48,6 @@ fi
 
 : > "$sentinel"
 
-reason="Before compaction: call save_working_context(project=\"$PROJECT\", session=\"$SESSION\") via velesdb-memory with the distilled state so nothing is lost, then retry — compaction will proceed on the next attempt."
+reason="Before compaction: the transcript about to be compacted is exactly what compile_transcript exists for — call it (velesdb-memory) with a token_budget to deterministically compress it (duplicates dropped, logs collapsed, code/negative-constraints preserved verbatim) instead of losing detail to lossy compaction. Also call save_working_context(project=\"$PROJECT\", session=\"$SESSION\") with the distilled state (goal, decisions, pending actions) so nothing is lost even for content compile_transcript can't recover. Then retry — compaction will proceed on the next attempt."
 
 jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
