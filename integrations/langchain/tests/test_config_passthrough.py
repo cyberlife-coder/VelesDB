@@ -15,6 +15,7 @@ import pytest
 try:
     import velesdb
     from langchain_velesdb import VelesDBVectorStore
+    from langchain_velesdb.graph_retriever import GraphRetriever
     from langchain_velesdb.memory import (
         VelesDBChatMemory,
         VelesDBProceduralMemory,
@@ -54,6 +55,9 @@ class _RecordingDatabase:
 
     def agent_memory(self, dimension: int = 384) -> _FakeAgentMemory:
         return _FakeAgentMemory()
+
+    def get_graph_collection(self, name: str) -> Any:
+        return object()
 
 
 @pytest.fixture
@@ -120,6 +124,36 @@ class TestSemanticMemoryConfigPassthrough:
             path=str(tmp_path),
             embedding=FakeEmbeddings(),
             dimension=4,
+        )
+        assert recording_db.calls == [((str(tmp_path),), {})]
+
+
+class _StoreWithoutGetDb:
+    """Fake vector store lacking _get_db, forcing the open_native_graph path."""
+
+    def __init__(self, path: str, config: Any = None) -> None:
+        self._path = path
+        self._config = config
+
+
+class TestGraphRetrieverConfigPassthrough:
+    """GraphRetriever's path fallback forwards the store's config."""
+
+    def test_config_forwarded_to_database(self, tmp_path, recording_db, config):
+        store = _StoreWithoutGetDb(str(tmp_path), config=config)
+        GraphRetriever(
+            vector_store=store,
+            mode="native",
+            graph_collection_name="kg",
+        )
+        assert recording_db.calls == [((str(tmp_path),), {"config": config})]
+
+    def test_no_config_call_unchanged(self, tmp_path, recording_db):
+        store = _StoreWithoutGetDb(str(tmp_path))
+        GraphRetriever(
+            vector_store=store,
+            mode="native",
+            graph_collection_name="kg",
         )
         assert recording_db.calls == [((str(tmp_path),), {})]
 

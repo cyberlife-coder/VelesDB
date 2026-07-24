@@ -76,7 +76,9 @@ def is_timeout_exception(exc: Exception) -> bool:
     return isinstance(exc, TimeoutError)
 
 
-def open_native_graph(db_path: str, collection_name: str) -> Any:
+def open_native_graph(
+    db_path: str, collection_name: str, config: Any = None
+) -> Any:
     """Open a native VelesDB graph collection.
 
     Shared implementation for both integrations.
@@ -91,6 +93,10 @@ def open_native_graph(db_path: str, collection_name: str) -> Any:
     Args:
         db_path: Filesystem path to the VelesDB database directory.
         collection_name: Name of the graph collection to open.
+        config: Optional ``velesdb.VelesConfigOptions`` engine
+            configuration, forwarded verbatim to ``velesdb.Database`` at
+            open time.  ``None`` (default) opens the database exactly as
+            before.
 
     Returns:
         PyGraphCollection instance.
@@ -107,7 +113,10 @@ def open_native_graph(db_path: str, collection_name: str) -> Any:
             "Install it with: pip install velesdb"
         ) from exc
 
-    db = velesdb.Database(db_path)
+    if config is not None:
+        db = velesdb.Database(db_path, config=config)
+    else:
+        db = velesdb.Database(db_path)
     graph = db.get_graph_collection(collection_name)
     if graph is None:
         raise ValueError(

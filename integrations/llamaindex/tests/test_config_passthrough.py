@@ -16,6 +16,7 @@ try:
     import velesdb
     from llamaindex_velesdb import VelesDBVectorStore
     from llamaindex_velesdb.graph_loader import GraphLoader
+    from llamaindex_velesdb.graph_retriever import GraphRetriever
     from llamaindex_velesdb.memory import (
         VelesDBChatMemory,
         VelesDBEpisodicMemory,
@@ -107,6 +108,43 @@ class TestMemoryConfigPassthrough:
     )
     def test_no_config_call_unchanged(self, tmp_path, recording_db, memory_cls):
         memory_cls(db_path=str(tmp_path))
+        assert recording_db.calls == [((str(tmp_path),), {})]
+
+
+class _StoreWithoutGetDb:
+    """Fake vector store lacking _get_db, forcing the open_native_graph path."""
+
+    def __init__(self, path: str, config: Any = None) -> None:
+        self._path = path
+        self._config = config
+
+
+class _FakeIndex:
+    """Fake VectorStoreIndex exposing only a vector store."""
+
+    def __init__(self, vector_store: Any) -> None:
+        self._vector_store = vector_store
+
+
+class TestGraphRetrieverConfigPassthrough:
+    """GraphRetriever's path fallback forwards the store's config."""
+
+    def test_config_forwarded_to_database(self, tmp_path, recording_db, config):
+        store = _StoreWithoutGetDb(str(tmp_path), config=config)
+        GraphRetriever(
+            index=_FakeIndex(store),
+            mode="native",
+            graph_collection_name="kg",
+        )
+        assert recording_db.calls == [((str(tmp_path),), {"config": config})]
+
+    def test_no_config_call_unchanged(self, tmp_path, recording_db):
+        store = _StoreWithoutGetDb(str(tmp_path))
+        GraphRetriever(
+            index=_FakeIndex(store),
+            mode="native",
+            graph_collection_name="kg",
+        )
         assert recording_db.calls == [((str(tmp_path),), {})]
 
 
