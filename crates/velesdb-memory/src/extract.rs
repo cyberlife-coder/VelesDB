@@ -132,6 +132,11 @@ impl OllamaExtractor {
             "prompt": prompt,
             "stream": false,
             "think": false,
+            // Extraction models are large — the one this crate documents as an
+            // example is 21.9 GB — so an unload between calls is the dominant
+            // cost, not the generation. Shares the embedder's knob so one
+            // setting governs every Ollama call the daemon makes.
+            "keep_alive": crate::embedder::keep_alive(),
             "options": { "temperature": 0 },
         })
         .to_string();
