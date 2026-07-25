@@ -48,6 +48,10 @@
 #   -Store <path>             Store directory (default: $env:USERPROFILE\.velesdb-memory)
 #   -TlsDir <path>            TLS material (CA + leaf cert) directory (default: $env:USERPROFILE\.velesdb-memory-tls)
 #   -OllamaUrl <url>          Ollama endpoint (default: http://localhost:11434)
+#   -ExtractorModel <model>   Ollama chat model powering `remember_extracted` (fact extraction
+#                             + auto-built fact<->topic graph). Unset by default: the tool then
+#                             reports extraction as unconfigured. The daemon is always BUILT with
+#                             the backend, so enabling it later is a config edit, not a rebuild.
 #   -OllamaModel <model>      Ollama embedding model (default: all-minilm)
 #   -Ttl <seconds>            Default TTL for new facts (default: prompted, empty = permanent)
 #   -Yes                      Assume yes to interactive prompts (e.g. `ollama pull`)
@@ -90,6 +94,11 @@ param(
     [string]$OllamaUrl = 'http://localhost:11434',
 
     [string]$OllamaModel = 'all-minilm',
+    # Empty means "no extraction backend". Deliberately NOT defaulted to a
+    # model: setting VELESDB_MEMORY_EXTRACTOR without
+    # VELESDB_MEMORY_EXTRACTOR_MODEL makes the daemon refuse to start, so a
+    # default would break every install whose machine lacks that model.
+    [string]$ExtractorModel = '',
 
     [string]$Ttl = '',
 
@@ -298,12 +307,12 @@ function Initialize-Ollama {
 
 # ---- 4. Build (cargo) or install a prebuilt release archive -----------------
 function Build-Daemon {
-    Write-Warn 'Building velesdb-memory (--features ollama,http)...'
+    Write-Warn 'Building velesdb-memory (--features ollama,http,extract)...'
     # Always both features regardless of the runtime embedder choice above:
     # the hash/ollama switch stays a pure VELESDB_MEMORY_EMBEDDER runtime
     # choice, so flipping it later is a restart, never a rebuild.
     cargo install --path "$script:RepoRoot/crates/velesdb-memory" --bin velesdb-memory `
-        --features ollama,http --force
+        --features ollama,http,extract --force
     if ($LASTEXITCODE -ne 0) {
         Write-ErrorMsg 'cargo install failed.'
         exit 1
@@ -413,6 +422,11 @@ function New-DaemonWrapper {
     # store/TLS path or Ollama URL isn't guaranteed to avoid all of those —
     # doesn't get parsed as a batch operator instead of literal text.
     $ttlLine = if ($script:Ttl -ne '') { "set `"VELESDB_MEMORY_DEFAULT_TTL=$script:Ttl`"" } else { '' }
+    # Both variables or neither: VELESDB_MEMORY_EXTRACTOR alone is a startup
+    # failure (see $ExtractorModel's declaration).
+    $extractorLines = if ($ExtractorModel -ne '') {
+        "set `"VELESDB_MEMORY_EXTRACTOR=ollama`"`r`nset `"VELESDB_MEMORY_EXTRACTOR_MODEL=$ExtractorModel`""
+    } else { '' }
 
     # A Scheduled Task action carries no environment block of its own, so this
     # wrapper is how the daemon's env vars actually reach the process — the
@@ -427,6 +441,7 @@ set "VELESDB_MEMORY_TLS_DIR=$script:TlsDir"
 set "VELESDB_MEMORY_EMBEDDER=$script:Embedder"
 set "VELESDB_MEMORY_OLLAMA_URL=$OllamaUrl"
 set "VELESDB_MEMORY_OLLAMA_MODEL=$OllamaModel"
+$extractorLines
 $ttlLine
 "$BinPath" --http --http-port $Port >> "$LogsDir\daemon.out.log" 2>> "$LogsDir\daemon.err.log"
 "@
