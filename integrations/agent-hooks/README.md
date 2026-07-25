@@ -42,10 +42,18 @@ be relative to for a global install):
     ],
     "PreCompact": [
       { "hooks": [{ "type": "command", "command": "bash /Users/you/.claude/hooks/velesdb-memory/pre-compact.sh" }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "bash /Users/you/.claude/hooks/velesdb-memory/post-tool-use.sh" }] }
     ]
   }
 }
 ```
+
+`PostToolUse` additionally needs a `velesdb-memory` binary on `PATH` that
+knows the `compile-stdin` subcommand. Until you have one, the hook is
+inert — it detects the missing capability and passes every tool result
+through untouched, so installing it early costs nothing.
 
 Works with zero further setup (each project defaults to
 `project = basename(cwd)`, `session = "rolling"`) — drop a
@@ -129,7 +137,18 @@ and hand it to the model directly (that would require opening the store
 from the hook) — it can only tell the model to call
 `load_working_context` itself.
 
-## The three Claude Code hooks
+**The one thing the constraint does *not* forbid.** The lock guards the
+*store*, and it is taken at store-open time only (`Database::open`, keyed by
+the data directory). The deterministic context compiler is a different
+animal: `ContextCompiler::compile` is pure — no store, no index, no
+embeddings, no clock — and velesdb-memory's `context` feature is
+`persistence`-free by design. So a hook *can* compile text in a separate
+process, as long as that process never opens a store. That is precisely what
+`velesdb-memory compile-stdin` does: it short-circuits in `main` before the
+store open, the same way `--version` does. `PostToolUse` below is the one
+hook that uses it; the other three still only ever drive the model.
+
+## The four Claude Code hooks
 
 (Windsurf's single `pre_user_prompt` hook is documented in its own install
 section above — it folds the same load/save loop into one event.)
@@ -139,6 +158,41 @@ section above — it folds the same load/save loop into one event.)
 | `SessionStart` | Fires on every session start (new, resume, clear, or post-compact). Emits `additionalContext` telling the model to call `load_working_context(project, session)` as its first action if it hasn't already. | `hookSpecificOutput.additionalContext` — supported by `SessionStart`. |
 | `Stop` | Fires when Claude is about to stop responding. The **first** `Stop` per session is blocked with a reason telling the model to call `save_working_context(project, session)` with the distilled state before stopping; every later `Stop` in the same session passes through untouched. | `{"decision":"block","reason":"..."}`, gated by a sentinel file in `$TMPDIR` (or `/tmp`) keyed by the payload's `session_id`, so the reminder fires once, not on every turn. |
 | `PreCompact` | Fires before the transcript is compacted (manual or auto-triggered). The **first** `PreCompact` per session is blocked with a reason telling the model to `compile_transcript` the about-to-be-compacted transcript (deterministic compression, not lossy compaction) and `save_working_context` first; later ones pass through. | Same block-once-then-pass pattern as `Stop`, separate sentinel key. |
+| `PostToolUse` | Fires after every tool call. When an **allowlisted** tool returns more than the size threshold, the result is compiled through `velesdb-memory compile-stdin` and the compiled view replaces it. Everything else passes through untouched. | `hookSpecificOutput.updatedToolOutput` — the only hook output that replaces what the model sees, rather than advising it. |
+
+**Design note — the only hook that reduces the payload itself.** The other
+three can only ask the model to call a tool; whether the context actually
+shrinks is the model's decision. `PostToolUse` is different: its output
+schema replaces the tool result before it ever enters the transcript. A
+300 KB `Bash` result compiled here is 300 KB that never gets re-sent on
+every later turn — the compression is structural, not advisory.
+
+Because it runs on *every* tool call and *replaces* content, its safety
+rules are strict, and each is covered by `test/hooks.test.sh`:
+
+- **Nothing is deleted.** The untouched original is written under
+  `$TMPDIR/velesdb-agent-hooks/tool-output/` and its path is quoted in the
+  replacement, so the agent can `Read` it back — the out-of-store equivalent
+  of a retrieval handle.
+- **Identity fallback everywhere.** Missing `jq`, missing binary, a binary
+  too old to know `compile-stdin`, a compilation error, an empty compiled
+  result — each emits `{}` and leaves the tool result exactly as it was.
+- **Bounded.** A velesdb-memory released *before* `compile-stdin` ignores
+  the subcommand and starts the MCP server on the piped stdin. A pure-bash
+  watchdog (no `timeout`, absent from stock macOS) bounds the call, and a
+  cached capability probe tells old binaries from new ones without guessing
+  versions.
+- **Allowlist, not denylist.** Default `Bash,Grep,WebFetch`. `Read` and
+  `Edit` are deliberately excluded and must stay excluded: their value *is*
+  the exact bytes.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `VELESDB_HOOK_COMPRESS_TOOLS` | `Bash,Grep,WebFetch` | Comma-separated tool allowlist. |
+| `VELESDB_HOOK_MIN_BYTES` | `12000` | Below this, pass through — compiling would cost more than it saves. |
+| `VELESDB_HOOK_TOKEN_BUDGET` | `2000` | Token budget handed to `compile-stdin`. |
+| `VELESDB_MEMORY_BIN` | `velesdb-memory` on `PATH` | Binary to invoke. |
+| `VELESDB_HOOK_PROBE_TIMEOUT` | `10` | Seconds the capability probe may take. |
 
 **Design note — why `PreCompact` blocks instead of using
 `additionalContext`:** the original plan for this feature assumed
