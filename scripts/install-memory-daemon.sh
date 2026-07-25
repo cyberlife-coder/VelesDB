@@ -47,7 +47,7 @@
 #   --wire-only              Skip build/daemon setup: only (re-)verify CA trust and re-wire the
 #                            clients against an already-installed daemon (no prompts, fast)
 #   --force-restart          Reload the daemon even if already running
-#   --from-release[=TAG]     Install the prebuilt daemon binary (--features ollama,http) from a
+#   --from-release[=TAG]     Install the prebuilt daemon binary (--features ollama,http,extract) from a
 #                            GitHub Release archive instead of `cargo install` (default TAG: the
 #                            latest published velesdb-memory-vX.Y.Z release). Needs no Rust
 #                            toolchain. Only active from the first release that publishes the
@@ -395,7 +395,7 @@ build_daemon() {
 }
 
 # ---- 4b. --from-release: install a prebuilt daemon binary, no cargo needed --
-# Mirrors build_daemon()'s guarantee (--features ollama,http) without a Rust
+# Mirrors build_daemon()'s guarantee (--features ollama,http,extract) without a Rust
 # toolchain, by downloading the same binary release-memory.yml's
 # build-daemon-archive job produces. Only active from the first release that
 # ships the archive onward (added after 0.11.0) — an older/pinned tag simply
