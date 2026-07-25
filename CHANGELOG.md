@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`velesdb-core`**: the allocation backstop (#899) is no longer disturbed by
+  concurrent index loads. `with_min_alloc_byte_limit` — used by the persisted
+  HNSW load path to admit a file-backed vector payload — raised the
+  *process-global* ceiling for the duration of the load, which had two
+  consequences: while any load was in flight the backstop was effectively lifted
+  for every other thread, and two overlapping loads clobbered each other's saved
+  ceiling (the inner scope saved the outer scope's temporary value and
+  republished it on exit), leaving the process-wide ceiling permanently wrong
+  after both loads had finished. Scoped adjustments are now thread-local via the
+  new `alloc_guard::with_alloc_byte_limit`, so a ceiling installed for one
+  operation is invisible to unrelated threads and overlapping scopes nest
+  correctly. `set_alloc_byte_limit` is unchanged: it remains the process-wide
+  operator policy and still bounds allocations on worker threads.
 - **`velesdb-memory`**: the Ollama embedder issued its HTTP request through a
   bare `ureq::post` with **no timeout at all**, so an Ollama that accepted the
   connection and never answered (a stalled cold model load, a wedged server)
@@ -22,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`velesdb-core`**: `alloc_guard::with_alloc_byte_limit(limit, f)` — runs `f`
+  with the per-allocation ceiling pinned on the current thread only, restoring
+  the previous value on exit (including on panic). Scoped counterpart to
+  `set_alloc_byte_limit` for hardening or relaxing a single operation.
 - **`velesdb-memory`**: `velesdb-memory compile-stdin --budget N [--query …]`
   — compile text read on stdin with the deterministic context compiler and
   print `{content, tokens_in, tokens_out, tokens_saved, risk}` as JSON. It
@@ -42,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a stock macOS) bounding the call, and an identity fallback on every
   failure path — including a `velesdb-memory` too old to know the
   subcommand, which would otherwise treat the piped stdin as MCP traffic.
+
 
 ## [4.0.0] — 2026-07-24
 
