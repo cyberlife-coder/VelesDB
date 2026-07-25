@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`velesdb-memory`**: `velesdb-memory compile-stdin --budget N [--query …]`
+  — compile text read on stdin with the deterministic context compiler and
+  print `{content, tokens_in, tokens_out, tokens_saved, risk}` as JSON. It
+  short-circuits in `main` *before* the store is opened, exactly like
+  `--version`, so it takes no `flock` and can run in a second process while
+  a session's own MCP server holds the store. A budget too small to fit any
+  fragment is a hard error rather than an empty success: an empty
+  compilation is worse than none for a caller that substitutes the result.
+- **agent-hooks**: a fourth Claude Code hook, `PostToolUse`
+  (`integrations/agent-hooks/claude-code/hooks/post-tool-use.sh`). It is the
+  only hook whose output can *replace* what the model sees
+  (`hookSpecificOutput.updatedToolOutput`), so it compresses oversized tool
+  results before they enter the transcript — where the other three hooks can
+  only nudge the model to call a tool itself. Allowlisted tools only
+  (`Bash,Grep,WebFetch` by default; `Read`/`Edit` are excluded by design),
+  above a size threshold, with the untouched original archived and its path
+  quoted in the replacement, a pure-bash watchdog (`timeout` is absent from
+  a stock macOS) bounding the call, and an identity fallback on every
+  failure path — including a `velesdb-memory` too old to know the
+  subcommand, which would otherwise treat the piped stdin as MCP traffic.
+
 ## [4.0.0] — 2026-07-24
 
 ### Security

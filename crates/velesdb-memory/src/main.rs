@@ -50,6 +50,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    // Short-circuits for the same reason as `--version`: `compile-stdin` is
+    // the hook-facing surface (see `integrations/agent-hooks`). A PostToolUse
+    // hook runs SYNCHRONOUSLY after every tool call, in a process of its own,
+    // while the agent's own MCP server already holds the store's
+    // single-writer `flock` — so this path must never open the store. It
+    // doesn't have to: the compiler
+    // (`velesdb_memory::context::ContextCompiler::compile`) is pure — no
+    // store, no index, no clock — and the `context` feature is
+    // `persistence`-free by design.
+    if args.get(1).is_some_and(|arg| arg == "compile-stdin") {
+        return run_compile_stdin(&args[2..]);
+    }
+
     // Captured FIRST — before the (possibly seconds-long) embedder probe and
     // store open — so a client that exits during our own startup still
     // reparents us AFTER the baseline, and the watchdog sees the change. A
@@ -554,6 +567,291 @@ fn build_ollama_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
 #[cfg(not(feature = "ollama"))]
 fn build_ollama_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
     Err("the 'ollama' embedder requires building with `--features ollama`".into())
+}
+
+/// Default token budget of `compile-stdin` when `--budget` is omitted.
+///
+/// Sized for the job the hook does: a tool result big enough to be worth
+/// compiling, compressed to something an agent can still read in full.
+const DEFAULT_COMPILE_STDIN_BUDGET: u64 = 2_000;
+
+/// Parsed `compile-stdin` invocation.
+#[cfg(feature = "context")]
+#[derive(Debug, PartialEq, Eq)]
+struct CompileStdinOptions {
+    token_budget: u64,
+    query: String,
+}
+
+#[cfg(feature = "context")]
+impl Default for CompileStdinOptions {
+    fn default() -> Self {
+        Self {
+            token_budget: DEFAULT_COMPILE_STDIN_BUDGET,
+            query: String::new(),
+        }
+    }
+}
+
+/// What `compile-stdin` writes to stdout: one JSON object, so a shell hook
+/// gets the compiled text AND the accounting from a single stream (`jq` is
+/// already a hard requirement of the hooks).
+#[cfg(feature = "context")]
+#[derive(serde::Serialize)]
+struct CompileStdinOutput {
+    content: String,
+    tokens_in: u64,
+    tokens_out: u64,
+    tokens_saved: u64,
+    risk: String,
+}
+
+/// Parse `compile-stdin`'s flags. Hand-rolled for the same reason as
+/// `--version`/`--http` above: two flags do not justify a `clap` dependency
+/// in the shipped binary.
+///
+/// # Errors
+/// A message naming the offending flag when it is unknown, when its value is
+/// missing, or when `--budget` is not a positive integer.
+#[cfg(feature = "context")]
+fn parse_compile_stdin_args(args: &[String]) -> Result<CompileStdinOptions, String> {
+    let mut options = CompileStdinOptions::default();
+    let mut index = 0;
+    while index < args.len() {
+        let flag = args[index].as_str();
+        let value = args.get(index + 1);
+        match flag {
+            "--budget" => {
+                let raw = value.ok_or_else(|| "--budget requires a value".to_owned())?;
+                let parsed: u64 = raw
+                    .parse()
+                    .map_err(|_| format!("--budget expects a positive integer, got {raw:?}"))?;
+                if parsed == 0 {
+                    return Err("--budget must be greater than 0".to_owned());
+                }
+                options.token_budget = parsed;
+                index += 2;
+            }
+            "--query" => {
+                options
+                    .query
+                    .clone_from(value.ok_or_else(|| "--query requires a value".to_owned())?);
+                index += 2;
+            }
+            other => return Err(format!("unknown compile-stdin flag {other:?}")),
+        }
+    }
+    Ok(options)
+}
+
+/// Compile `text` under `options` and render the JSON payload.
+///
+/// # Errors
+/// When `text` is empty, when segmentation hits a [`velesdb_memory::limits`]
+/// cap, or when the budget leaves no room for any context.
+#[cfg(feature = "context")]
+fn compile_stdin_json(
+    text: &str,
+    options: &CompileStdinOptions,
+) -> Result<String, Box<dyn std::error::Error>> {
+    use velesdb_memory::context::{
+        segment_transcript, CompilePolicy, CompileRequest, ContextCompiler, SegmentationPolicy,
+    };
+
+    if text.trim().is_empty() {
+        return Err("compile-stdin received empty input on stdin".into());
+    }
+
+    let outcome = segment_transcript(text, &SegmentationPolicy::default())?;
+    let request = CompileRequest {
+        query: options.query.clone(),
+        fragments: outcome
+            .segments
+            .into_iter()
+            .map(|segment| segment.fragment)
+            .collect(),
+        project: None,
+        target_model: None,
+        token_budget: options.token_budget,
+        memory_scope: None,
+        policy: None,
+    };
+    let compiled = ContextCompiler::new(CompilePolicy::default()).compile(&request)?;
+
+    // The compiler externalizes rather than truncates: when no single
+    // fragment fits, everything moves behind a retrieval handle and the
+    // assembled content is empty. That is a legitimate compilation, but a
+    // useless one to return as a *replacement* for real content — surface it
+    // as an error so the caller keeps the original instead of shipping an
+    // empty string.
+    if compiled.content.is_empty() {
+        return Err(format!(
+            "a budget of {} tokens fits none of the {} input tokens — every fragment was \
+             externalized and the compiled context is empty; raise --budget",
+            options.token_budget, compiled.insights.tokens_in
+        )
+        .into());
+    }
+
+    let output = CompileStdinOutput {
+        content: compiled.content,
+        tokens_in: compiled.insights.tokens_in,
+        tokens_out: compiled.insights.tokens_out,
+        tokens_saved: compiled.insights.tokens_saved,
+        risk: format!("{:?}", compiled.risk).to_lowercase(),
+    };
+    Ok(serde_json::to_string(&output)?)
+}
+
+/// Read stdin, compile it, print the JSON payload.
+///
+/// # Errors
+/// Propagates flag-parsing, stdin-read, and compilation failures.
+#[cfg(feature = "context")]
+fn run_compile_stdin(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Read as _;
+
+    let options = parse_compile_stdin_args(args)?;
+    let mut text = String::new();
+    std::io::stdin().read_to_string(&mut text)?;
+    println!("{}", compile_stdin_json(&text, &options)?);
+    Ok(())
+}
+
+#[cfg(not(feature = "context"))]
+fn run_compile_stdin(_args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    Err("`compile-stdin` requires building with `--features context`".into())
+}
+
+#[cfg(all(test, feature = "context"))]
+mod compile_stdin_tests {
+    use super::{
+        compile_stdin_json, parse_compile_stdin_args, CompileStdinOptions,
+        DEFAULT_COMPILE_STDIN_BUDGET,
+    };
+
+    /// A tool-output-shaped corpus: repetitive log lines, the exact case a
+    /// PostToolUse hook has to shrink.
+    fn noisy_tool_output() -> String {
+        let mut text = String::new();
+        for i in 0..120 {
+            text.push_str(&format!(
+                "[2026-07-25T01:0{}:00Z] INFO  worker: processing batch {} of 120 — retry=0 status=ok\n",
+                i % 10,
+                i
+            ));
+        }
+        text
+    }
+
+    fn parse(value: &str) -> serde_json::Value {
+        serde_json::from_str(value).expect("compile-stdin must emit valid JSON")
+    }
+
+    #[test]
+    fn tight_budget_actually_shrinks_the_payload() {
+        let options = CompileStdinOptions {
+            token_budget: 1_500,
+            query: "what did the worker do".to_owned(),
+        };
+        let compiled = parse(&compile_stdin_json(&noisy_tool_output(), &options).unwrap());
+
+        let tokens_in = compiled["tokens_in"].as_u64().unwrap();
+        let tokens_out = compiled["tokens_out"].as_u64().unwrap();
+        assert!(tokens_in > 0, "tokens_in must be measured, got {tokens_in}");
+        assert!(
+            tokens_out < tokens_in,
+            "a 200-token budget over {tokens_in} tokens of logs must compress: got {tokens_out}"
+        );
+        assert_eq!(
+            compiled["tokens_saved"].as_u64().unwrap(),
+            tokens_in - tokens_out
+        );
+        let content = compiled["content"].as_str().unwrap();
+        assert!(
+            !content.is_empty(),
+            "an empty compilation is worse than no compilation — the caller would replace a \
+             real tool result with nothing"
+        );
+        assert!(
+            content.len() < noisy_tool_output().len(),
+            "the compiled content must be shorter than the raw tool output"
+        );
+    }
+
+    /// A budget too small to fit even one fragment makes the compiler
+    /// externalize everything and emit an EMPTY context. Returning that as a
+    /// success is a trap: `compile-stdin`'s caller (a PostToolUse hook) would
+    /// swap a real tool result for an empty string. Fail loudly instead, so
+    /// the caller falls back to the untouched output.
+    #[test]
+    fn budget_too_small_for_any_fragment_is_an_error() {
+        let options = CompileStdinOptions {
+            token_budget: 50,
+            query: String::new(),
+        };
+        let error = compile_stdin_json(&noisy_tool_output(), &options).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("budget"),
+            "the error must point at the budget, got {message}"
+        );
+    }
+
+    #[test]
+    fn compilation_is_byte_identical_across_runs() {
+        let options = CompileStdinOptions {
+            token_budget: 1_500,
+            query: "worker batches".to_owned(),
+        };
+        let first = compile_stdin_json(&noisy_tool_output(), &options).unwrap();
+        let second = compile_stdin_json(&noisy_tool_output(), &options).unwrap();
+        assert_eq!(first, second, "the compiler must be deterministic");
+    }
+
+    #[test]
+    fn empty_stdin_is_rejected() {
+        let error = compile_stdin_json("   \n\t ", &CompileStdinOptions::default()).unwrap_err();
+        assert!(
+            error.to_string().contains("empty"),
+            "the error must name the cause, got {error}"
+        );
+    }
+
+    #[test]
+    fn flags_default_and_override() {
+        assert_eq!(
+            parse_compile_stdin_args(&[]).unwrap(),
+            CompileStdinOptions {
+                token_budget: DEFAULT_COMPILE_STDIN_BUDGET,
+                query: String::new(),
+            }
+        );
+        let parsed = parse_compile_stdin_args(&[
+            "--budget".to_owned(),
+            "512".to_owned(),
+            "--query".to_owned(),
+            "why did it fail".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(parsed.token_budget, 512);
+        assert_eq!(parsed.query, "why did it fail");
+    }
+
+    #[test]
+    fn malformed_flags_are_rejected() {
+        for bad in [
+            vec!["--budget".to_owned()],
+            vec!["--budget".to_owned(), "zero".to_owned()],
+            vec!["--budget".to_owned(), "0".to_owned()],
+            vec!["--nope".to_owned()],
+        ] {
+            assert!(
+                parse_compile_stdin_args(&bad).is_err(),
+                "must reject {bad:?}"
+            );
+        }
+    }
 }
 
 #[cfg(all(test, feature = "http"))]

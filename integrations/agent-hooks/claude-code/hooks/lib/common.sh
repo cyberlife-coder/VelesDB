@@ -55,6 +55,40 @@ read_stdin_payload() {
   cat
 }
 
+# run_with_watchdog SECONDS OUTFILE CMD...
+# Run CMD with stdout captured into OUTFILE, killing it after SECONDS.
+# Returns CMD's exit status, or 124 if it had to be killed.
+#
+# Why not `timeout`: it is GNU coreutils, absent from a stock macOS (where it
+# is `gtimeout`, if installed at all). A hook runs on every tool call and must
+# never hang the agent, so the watchdog is pure bash and always available.
+#
+# This matters most for post-tool-use.sh: a velesdb-memory binary predating
+# `compile-stdin` ignores the subcommand and starts the MCP *server* on the
+# stdin we just piped it. Without this bound, that is a hung hook.
+run_with_watchdog() {
+  local secs="$1"
+  local outfile="$2"
+  shift 2
+
+  "$@" >"$outfile" 2>/dev/null &
+  local pid=$!
+  local waited=0
+  local limit=$((secs * 10))
+
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$limit" ]; then
+      kill -9 "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+
+  wait "$pid"
+}
+
 # sentinel_path KIND SESSION_ID: path to the once-per-session marker file
 # used by the Stop and PreCompact hooks to fire their reminder exactly once.
 # Uses $TMPDIR (falling back to /tmp) rather than a hardcoded path so it
