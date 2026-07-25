@@ -613,6 +613,25 @@ struct CompileStdinOutput {
 /// # Errors
 /// A message naming the offending flag when it is unknown, when its value is
 /// missing, or when `--budget` is not a positive integer.
+/// Validate `--budget`'s value. Split out of [`parse_compile_stdin_args`] to
+/// keep that loop's branching within the repo's complexity ceiling.
+///
+/// # Errors
+/// When the value is absent, not an integer, or zero — a zero budget fits no
+/// fragment at all, so it can only ever produce the empty-compilation failure
+/// [`compile_stdin_json`] rejects anyway.
+#[cfg(feature = "context")]
+fn parse_compile_stdin_budget(value: Option<&String>) -> Result<u64, String> {
+    let raw = value.ok_or_else(|| "--budget requires a value".to_owned())?;
+    let parsed: u64 = raw
+        .parse()
+        .map_err(|_| format!("--budget expects a positive integer, got {raw:?}"))?;
+    if parsed == 0 {
+        return Err("--budget must be greater than 0".to_owned());
+    }
+    Ok(parsed)
+}
+
 #[cfg(feature = "context")]
 fn parse_compile_stdin_args(args: &[String]) -> Result<CompileStdinOptions, String> {
     let mut options = CompileStdinOptions::default();
@@ -622,14 +641,7 @@ fn parse_compile_stdin_args(args: &[String]) -> Result<CompileStdinOptions, Stri
         let value = args.get(index + 1);
         match flag {
             "--budget" => {
-                let raw = value.ok_or_else(|| "--budget requires a value".to_owned())?;
-                let parsed: u64 = raw
-                    .parse()
-                    .map_err(|_| format!("--budget expects a positive integer, got {raw:?}"))?;
-                if parsed == 0 {
-                    return Err("--budget must be greater than 0".to_owned());
-                }
-                options.token_budget = parsed;
+                options.token_budget = parse_compile_stdin_budget(value)?;
                 index += 2;
             }
             "--query" => {
