@@ -731,15 +731,18 @@ mod compile_stdin_tests {
     };
 
     /// A tool-output-shaped corpus: repetitive log lines, the exact case a
-    /// PostToolUse hook has to shrink.
+    /// `PostToolUse` hook has to shrink.
     fn noisy_tool_output() -> String {
+        use std::fmt::Write as _;
+
         let mut text = String::new();
         for i in 0..120 {
-            text.push_str(&format!(
-                "[2026-07-25T01:0{}:00Z] INFO  worker: processing batch {} of 120 — retry=0 status=ok\n",
+            let _ = writeln!(
+                text,
+                "[2026-07-25T01:0{}:00Z] INFO  worker: processing batch {} of 120 — retry=0 status=ok",
                 i % 10,
                 i
-            ));
+            );
         }
         text
     }
@@ -781,7 +784,7 @@ mod compile_stdin_tests {
 
     /// A budget too small to fit even one fragment makes the compiler
     /// externalize everything and emit an EMPTY context. Returning that as a
-    /// success is a trap: `compile-stdin`'s caller (a PostToolUse hook) would
+    /// success is a trap: `compile-stdin`'s caller (a `PostToolUse` hook) would
     /// swap a real tool result for an empty string. Fail loudly instead, so
     /// the caller falls back to the untouched output.
     #[test]
