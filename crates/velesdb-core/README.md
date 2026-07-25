@@ -1,36 +1,51 @@
 # velesdb-core
 
-[![Crates.io](https://img.shields.io/crates/v/velesdb-core.svg)](https://crates.io/crates/velesdb-core)
-[![Documentation](https://docs.rs/velesdb-core/badge.svg)](https://docs.rs/velesdb-core)
-[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE)
+> The embedded tri-engine of VelesDB: vector, graph and columnar metadata in one Rust database.
+
+[![crates.io](https://img.shields.io/crates/v/velesdb-core.svg)](https://crates.io/crates/velesdb-core)
+[![docs.rs](https://docs.rs/velesdb-core/badge.svg)](https://docs.rs/velesdb-core)
+[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue.svg)](./LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/cyberlife-coder/VelesDB/ci.yml?branch=main)](https://github.com/cyberlife-coder/VelesDB/actions)
 
-High-performance vector database engine written in Rust.
+## Objective
 
-> Looking for agent memory or the deterministic context compiler
-> (`compile_context`)? Those live one level up, in
-> [`velesdb-memory`](../velesdb-memory/README.md) — this core engine is
-> unchanged by them and never depends on them.
+Semantic retrieval usually means running a vector store, a graph database and a
+relational store side by side, then stitching their results together in
+application code — three deployments, three consistency stories, three query
+languages.
 
-> The engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It fuses vector + graph + columnar under VelesQL; the high-level [`MemoryService` / `why()`](../velesdb-memory/README.md) returns the evidence path behind every recall.
+`velesdb-core` is the embedded engine that collapses those three into one
+process and one language. Vectors (HNSW + SIMD), typed graph edges and typed
+columnar metadata live in the same collection and are queried together with
+**VelesQL**. No server, no network hop, no external dependency: it is a Rust
+library that reads and writes a directory on your disk.
 
-## Features
+If you do not need retrieval over your own data, you do not need this crate.
 
-- **Blazing Fast**: Native HNSW with AVX-512/AVX2/NEON SIMD — 450µs p50 end-to-end (10K/384D, WAL ON, recall>=96%); 55µs HNSW index-only micro-benchmark (10K/768D, k=10); 21.7ns dot product (768D AVX2). See `docs/BENCHMARKS.md` for measurement context.
-- **Adaptive Search**: Two-phase ef_search that auto-escalates only for hard queries (2-4x faster median)
-- **Hybrid Search**: Combine vector similarity + BM25 full-text search with RRF fusion
-- **Sparse Vectors**: Named sparse vector indexes with DAAT MaxScore search and RRF/RSF fusion
-- **Streaming Inserts**: Bounded-channel ingestion with backpressure and insert-and-search via delta buffer
-- **Agent Memory SDK**: Semantic, Episodic, and Procedural memory with TTL, snapshots, and reinforcement
-- **Query Plan Cache**: Two-tier LRU cache with write-generation invalidation for repeated queries
-- **Persistent Storage**: Memory-mapped files for efficient disk access
-- **Multiple Distance Metrics**: Cosine, Euclidean, Dot Product, Hamming, Jaccard
-- **ColumnStore Filtering**: Up to 130x faster than JSON filtering at scale (integer equality, 100K rows; string equality up to 75x)
-- **VelesQL**: SQL-like query language with MATCH support for graph pattern queries
-- **Bulk Operations**: Optimized batch insert with turbo/fast modes, parallel HNSW indexing, graduated ef_construction (VAMANA 3-phase), and lock-free CAS entry-point promotion
-- **Graph Traversal**: CSR snapshot for zero-copy BFS/DFS, FxHashSet visited sets, parent-pointer path reconstruction
-- **Quantization**: SQ8 (4x), Binary (32x), Product Quantization (8-32x), RaBitQ compression
-- **GPU Acceleration** *(optional, `gpu` feature)*: wgpu-backed compute pipeline for batch distance kernels; falls back transparently to SIMD on hosts without a usable GPU
+## Use cases
+
+- A desktop or CLI application that must search its own documents offline, with
+  no service to install and no data leaving the machine.
+- A RAG pipeline that filters candidates on structured metadata (`tenant`,
+  `date`, `status`) in the *same* query as the vector search, instead of
+  post-filtering results and losing recall.
+- A recommendation feature where "similar to this item" must be combined with
+  "and connected to the user by at most 2 hops" — vector plus graph traversal
+  in one statement.
+- An AI agent that needs durable memory (facts, events, learned procedures)
+  with TTL and snapshots, embedded in the agent process itself.
+- An embedded/edge deployment where a 32x-compressed index must fit in RAM on
+  constrained hardware.
+
+## Prerequisites
+
+| Requirement | Minimum version | Note |
+|---|---|---|
+| Rust | 1.90 | Workspace MSRV, pinned in `rust-toolchain.toml` |
+| Cargo | shipped with Rust | No other build tool required |
+| Disk | writable directory | The `persistence` feature (on by default) memory-maps files there |
+| Embeddings | any source | This crate does **not** compute embeddings — you supply the vectors |
+| GPU | optional | Only for the `gpu` feature; falls back to SIMD when absent |
 
 ## Installation
 
@@ -38,807 +53,177 @@ High-performance vector database engine written in Rust.
 cargo add velesdb-core
 ```
 
-## Quick Start
+For WASM or any target without a filesystem, disable the default feature:
 
-```rust
-use velesdb_core::{Database, DistanceMetric, Point};
+```bash
+cargo add velesdb-core --no-default-features
+```
+
+## First success in 60 seconds
+
+Create a project, add the two dependencies, paste this into `src/main.rs`, run
+it.
+
+```bash
+cargo new veles-hello && cd veles-hello
+cargo add velesdb-core serde_json
+```
+
+```rust,no_run
 use serde_json::json;
+use velesdb_core::{Database, DistanceMetric, Point};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a new database
-    let db = Database::open("./my_vectors")?;
+    // 1. Open (or create) a local database directory.
+    let db = Database::open("./veles-quickstart")?;
 
-    // Create a collection with 384-dimensional vectors (Cosine similarity)
-    db.create_collection("documents", 384, DistanceMetric::Cosine)?;
+    // 2. One collection = one vector dimension + one distance metric (both immutable).
+    db.create_collection("documents", 4, DistanceMetric::Cosine)?;
+    let documents = db
+        .get_vector_collection("documents")
+        .ok_or("collection not found")?;
 
-    // Get the collection handle
-    let collection = db.get_vector_collection("documents")
-        .ok_or("Collection not found")?;
+    // 3. Insert points: id, vector, optional JSON payload.
+    documents.upsert(vec![
+        Point::new(1, vec![1.0, 0.0, 0.0, 0.0], Some(json!({"title": "rust"}))),
+        Point::new(2, vec![0.0, 1.0, 0.0, 0.0], Some(json!({"title": "python"}))),
+        Point::new(3, vec![0.9, 0.1, 0.0, 0.0], Some(json!({"title": "cargo"}))),
+    ])?;
 
-    // Insert vectors with metadata (upsert takes ownership)
-    let points = vec![
-        Point::new(1, vec![0.1; 384], Some(json!({"title": "Hello World", "category": "greeting"}))),
-        Point::new(2, vec![0.2; 384], Some(json!({"title": "Rust Programming", "category": "tech"}))),
-    ];
-    collection.upsert(points)?;
+    // 4. flush() is the explicit durability barrier.
+    documents.flush()?;
 
-    // Vector similarity search
-    let query = vec![0.15; 384];
-    let results = collection.search(&query, 5)?;
-
-    for result in results {
-        println!("ID: {}, Score: {:.4}", result.point.id, result.score);
-    }
-
-    // Hybrid search (vector + full-text with RRF fusion)
-    let hybrid_results = collection.hybrid_search(
-        &query,
-        "rust programming",
-        5,
-        Some(0.7), // alpha: 70% vector, 30% text (None = balanced default)
-    )?;
-
-    // BM25 full-text search only
-    let text_results = collection.text_search("rust programming", 10)?;
-
-    // Fast search (IDs + scores only, no payload retrieval)
-    let fast_results = collection.search_ids(&query, 10)?;
-    for result in fast_results {
-        println!("ID: {}, Score: {:.4}", result.id, result.score);
+    // 5. Search: top-2 nearest neighbours of [1, 0, 0, 0].
+    for hit in documents.search(&[1.0, 0.0, 0.0, 0.0], 2)? {
+        let title = hit
+            .point
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("title"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("<none>");
+        println!("id={} title={title} score={:.4}", hit.point.id, hit.score);
     }
 
     Ok(())
 }
 ```
 
-## Distance Metrics
-
-All 5 metrics are available via `DistanceMetric` enum:
-
-```rust
-use velesdb_core::DistanceMetric;
-
-// Text embeddings (normalized vectors)
-let cosine = DistanceMetric::Cosine;
-
-// Image features, spatial data
-let euclidean = DistanceMetric::Euclidean;
-
-// Pre-normalized vectors, MIPS
-let dot = DistanceMetric::DotProduct;
-
-// Binary vectors, fingerprints, LSH
-let hamming = DistanceMetric::Hamming;
-
-// Set similarity, sparse vectors, tags
-let jaccard = DistanceMetric::Jaccard;
+```console
+$ cargo run
+id=1 title=rust score=1.0000
+id=3 title=cargo score=0.9939
 ```
 
-| Metric | Use Case | Score Interpretation |
-|--------|----------|---------------------|
-| `Cosine` | Text embeddings | Higher = more similar |
-| `Euclidean` | Spatial data | Lower = more similar |
-| `DotProduct` | MIPS, pre-normalized | Higher = more similar |
-| `Hamming` | Binary vectors | Lower = more similar |
-| `Jaccard` | Set similarity | Higher = more similar |
-
-### Common Embedding Dimensions
-
-| Model | Dimension | Metric |
-|-------|-----------|--------|
-| OpenAI `text-embedding-3-small` | 1536 | Cosine |
-| OpenAI `text-embedding-3-large` | 3072 | Cosine |
-| Sentence-Transformers `all-MiniLM-L6-v2` | 384 | Cosine |
-| Cohere `embed-english-v3.0` | 1024 | Cosine |
-| BAAI `bge-large-en-v1.5` | 1024 | Cosine |
-| CLIP (image+text) | 512 or 768 | Cosine |
-
-The `dimension` parameter must match your embedding model's output size exactly.
-
-## Bulk Operations
-
-For high-throughput import (3.8K-6.4K vectors/sec at Collection level with persistence, 768D):
-
-```rust
-use velesdb_core::{Database, DistanceMetric, Point};
-
-let db = Database::open("./data")?;
-db.create_collection("bulk_test", 768, DistanceMetric::Cosine)?;
-let collection = db.get_vector_collection("bulk_test")
-    .ok_or("Collection not found")?;
-
-// Generate 10,000 vectors
-let points: Vec<Point> = (0..10_000)
-    .map(|i| Point::without_payload(i, vec![0.1; 768]))
-    .collect();
-
-// Bulk insert with parallel HNSW indexing
-let inserted = collection.upsert_bulk(&points)?;
-println!("Inserted {} vectors", inserted);
-
-// Explicit flush for durability (optional)
-collection.flush()?;
-```
-
-### Durability semantics
-
-- `store`/`upsert` update in-memory/WAL state for performance.
-- `flush()` is the explicit durability barrier for crash-consistent persistence.
-- Destructor-based cleanup is best-effort and should not be used as a commit boundary.
-
-## Memory-Efficient Storage (Quantization)
-
-```rust
-use velesdb_core::{Database, DistanceMetric, StorageMode};
-
-let db = Database::open("./data")?;
-
-// SQ8: 4x memory reduction, ~1% recall loss
-db.create_collection_with_options(
-    "sq8_collection",
-    768,
-    DistanceMetric::Cosine,
-    StorageMode::SQ8
-)?;
-
-// Binary: 32x memory reduction, ~10-15% recall loss (IoT/Edge)
-db.create_collection_with_options(
-    "binary_collection",
-    768,
-    DistanceMetric::Hamming,
-    StorageMode::Binary
-)?;
-
-// Product Quantization: variable compression
-db.create_collection_with_options(
-    "pq_collection",
-    768,
-    DistanceMetric::Cosine,
-    StorageMode::ProductQuantization
-)?;
-
-// RaBitQ: randomized binary quantization
-db.create_collection_with_options(
-    "rabitq_collection",
-    768,
-    DistanceMetric::Cosine,
-    StorageMode::RaBitQ
-)?;
-```
-
-## Performance
-
-### Vector Operations (768D)
-
-| Operation | Time | Throughput |
-|-----------|------|------------|
-| Dot Product | **21.7 ns** | ~35 Gelem/s |
-| Euclidean Distance | **26.0 ns** | 34.1 Gelem/s |
-| Cosine Similarity | **33.1 ns** | 23.2 Gelem/s |
-| Hamming Distance | **35.8 ns** | — |
-| Jaccard Similarity | **35.1 ns** | — |
-
-*Aligned with root README canonical numbers. See `docs/BENCHMARKS.md` for full methodology (i9-14900KF, 64GB DDR5, Rust 1.94.1, AVX2, `--release`, `target-cpu=native`, sequential on idle machine).*
-
-### Headline number (canonical, full path)
-
-**450 µs p50** end-to-end vector search (10K/384D, WAL ON, recall>=96%). See root README and `benchmarks/velesdb_benchmark.py --recall`.
-
-### Index-only micro-benchmarks (10K vectors, 768D)
-
-> These measure individual components in isolation (no WAL, no metadata fetch, hot cache). They are not directly comparable to end-to-end latency above.
-
-| Component micro-benchmark | Result |
-|-----------|--------|
-| **HNSW Search index-only** | **55 µs** (k=10, Balanced mode) |
-| **VelesQL Cache Hit** | **1.08 µs** (~926K QPS) |
-| **Sparse Search index-only (top-10)** | **57.6 µs** (v1.13.0, PR #621 — 16x speedup from v1.12) |
-| **Recall@10 (Accurate)** | **100%** |
-
-*Measured on Intel Core i9-14900KF, 64GB DDR5, Rust 1.94.1, AVX2, `--release`, `target-cpu=native`, sequential on idle machine. See `docs/BENCHMARKS.md` for full methodology.*
-
-### Key Performance Features
-
-- End-to-end search latency: **450 µs p50** (10K/384D, WAL ON, recall>=96%) — canonical full-path number
-- HNSW index-only micro-benchmark: **~55 µs** (10K/768D, k=10, Balanced mode)
-- Insert throughput: **3.8-7x faster** than pgvector (10K-100K vectors, Docker benchmark v0.7.3, [benchmark](../../benchmarks/README.md))
-- ColumnStore filtering: up to 130x faster than JSON scanning at scale (integer equality, 100K rows)
-
-### Recall by Configuration (Native Rust, Criterion)
-
-| Config | Mode | ef_search | Recall@10 | Latency P50 | Status |
-|--------|------|-----------|-----------|-------------|--------|
-| **10K/128D** | Balanced | 128 | **98.8%** | 57µs | ✅ |
-| **10K/128D** | Accurate (ef=512) | 512 | **99.9%** | 130µs | ✅ |
-| **10K/128D** | Perfect (ef=4096) | 4096 | **100%** | 200µs | ✅ |
-| **10K/128D** | Adaptive | 32-512 | **95%+** | ~40µs (easy) | ✅ |
-
-> *Latency P50 = median over 100 queries. The "55 µs" index-only micro-benchmark is for 10K/768D Balanced — higher dimensions use SIMD more efficiently. 128D benchmarks above are worst-case for recall measurement. The canonical end-to-end latency is **450 µs p50** (see headline above).*
-
-> 📊 **Benchmark kit:** See [benchmarks/](../../benchmarks/) for reproducible tests.
-
-## Understanding Collections & Metrics
-
-### Metric is Set at Collection Level
-
-VelesDB is **not** a relational database. Each collection has:
-- **ONE vector column** with a fixed dimension
-- **ONE distance metric** (immutable after creation)
-- **JSON metadata** (payload) for each point
-
-```rust
-// Create collection with Cosine metric (for text embeddings)
-db.create_collection("documents", 768, DistanceMetric::Cosine)?;
-
-// Create collection with Hamming metric (for binary vectors)
-db.create_collection("fingerprints", 256, DistanceMetric::Hamming)?;
-
-// The metric is fixed - you cannot change it after creation
-// To use a different metric, create a new collection
-```
-
-### Metadata (Payload) Format
-
-Metadata is stored as **JSON** (`serde_json::Value`). Any valid JSON structure is supported:
-
-```rust
-use serde_json::json;
-
-// Simple flat metadata
-let point1 = Point::new(1, vector, Some(json!({
-    "title": "Hello World",
-    "category": "greeting",
-    "views": 1500,
-    "published": true
-})));
-
-// Nested metadata
-let point2 = Point::new(2, vector, Some(json!({
-    "title": "Rust Guide",
-    "author": {
-        "name": "Alice",
-        "email": "alice@example.com"
-    },
-    "tags": ["rust", "programming", "tutorial"],
-    "stats": {
-        "views": 5000,
-        "likes": 120
-    }
-})));
-
-// No metadata
-let point3 = Point::without_payload(3, vector);
-```
-
-### Querying with VelesQL
-
-VelesQL is a SQL-like query language. The distance metric is **always** the one defined at collection creation.
-
-> **JOIN runtime limit:** `JOIN ... USING (...)` currently supports **one column only**.  
-> Multi-column `USING (a, b, ...)` is parsed but rejected at execution time.
-
-```sql
--- Vector similarity search
-SELECT * FROM docs WHERE VECTOR NEAR [0.1, 0.2, ...] LIMIT 5;
-
--- With parameter (for API)
-SELECT * FROM docs WHERE VECTOR NEAR $query LIMIT 10;
-
--- Full-text search (BM25)
-SELECT * FROM docs WHERE content MATCH 'rust programming' LIMIT 10;
-
--- Hybrid (vector + text)
-SELECT * FROM docs 
-WHERE VECTOR NEAR $query AND content MATCH 'rust'
-LIMIT 5;
-```
-
-### Querying Metadata
-
-Metadata fields can be filtered with standard SQL operators:
-
-```sql
--- Equality
-SELECT * FROM docs WHERE category = 'tech' LIMIT 10;
-
--- Comparison operators
-SELECT * FROM docs WHERE views > 1000 LIMIT 10;
-SELECT * FROM docs WHERE price >= 50 AND price <= 200 LIMIT 10;
-
--- String patterns
-SELECT * FROM docs WHERE title LIKE '%rust%' LIMIT 10;
-
--- IN list
-SELECT * FROM docs WHERE category IN ('tech', 'science', 'ai') LIMIT 10;
-
--- BETWEEN (inclusive)
-SELECT * FROM docs WHERE score BETWEEN 0.5 AND 1.0 LIMIT 10;
-
--- NULL checks
-SELECT * FROM docs WHERE author IS NOT NULL LIMIT 10;
-
--- Combine vector + metadata filters
-SELECT * FROM docs 
-WHERE VECTOR NEAR [0.1, 0.2, ...] 
-AND category = 'tech' 
-AND views > 100
-LIMIT 5;
-```
-
-### WITH Clause (Query Options)
-
-Override search parameters on a per-query basis:
-
-```sql
--- Set search mode
-SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10
-WITH (mode = 'accurate');
-
--- Set ef_search and timeout
-SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10
-WITH (ef_search = 512, timeout_ms = 5000);
-```
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `mode` | string | fast, balanced, accurate, perfect, adaptive |
-| `ef_search` | integer | HNSW ef_search (higher = better recall) |
-| `timeout_ms` | integer | Query timeout in milliseconds |
-| `rerank` | boolean | Enable result reranking |
-
-### Available Filter Operators
-
-| Operator | SQL Syntax | Example |
-|----------|------------|---------|
-| Equal | `=` | `category = 'tech'` |
-| Not Equal | `!=` or `<>` | `status != 'draft'` |
-| Greater Than | `>` | `views > 1000` |
-| Greater or Equal | `>=` | `price >= 50` |
-| Less Than | `<` | `score < 0.5` |
-| Less or Equal | `<=` | `rating <= 3` |
-| IN | `IN (...)` | `tag IN ('a', 'b')` |
-| BETWEEN | `BETWEEN ... AND` | `age BETWEEN 18 AND 65` |
-| LIKE | `LIKE` | `name LIKE '%john%'` |
-| IS NULL | `IS NULL` | `email IS NULL` |
-| IS NOT NULL | `IS NOT NULL` | `phone IS NOT NULL` |
-| Full-text | `MATCH` | `content MATCH 'rust'` |
-
-## Sparse Vector Search
-
-VelesDB supports sparse vectors (e.g., SPLADE, BM25 term weights) alongside dense embeddings.
-You can store named sparse vectors per point, search them independently, or combine dense+sparse
-results using Reciprocal Rank Fusion (RRF).
-
-### Upserting points with sparse vectors
-
-```rust
-use std::collections::BTreeMap;
-use velesdb_core::{Database, DistanceMetric, Point};
-use velesdb_core::sparse_index::SparseVector;
-
-let db = Database::open("./data")?;
-db.create_collection("docs", 768, DistanceMetric::Cosine)?;
-let collection = db.get_vector_collection("docs")
-    .ok_or("Collection not found")?;
-
-// Build a sparse vector from (term_index, weight) pairs
-let sparse = SparseVector::new(vec![
-    (42, 1.2),   // term 42, weight 1.2
-    (187, 0.8),  // term 187, weight 0.8
-    (1024, 0.3),
-]);
-
-// Attach named sparse vectors to a point
-let mut sparse_map = BTreeMap::new();
-sparse_map.insert("".to_string(), sparse); // "" = default sparse index
-
-let point = Point::with_sparse(
-    1,
-    vec![0.1; 768],                          // dense embedding
-    Some(serde_json::json!({"title": "My doc"})),
-    Some(sparse_map),
-);
-collection.upsert(vec![point])?;
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
-
-### Sparse-only search (DAAT MaxScore)
-
-The sparse search engine uses a DAAT (Document-At-A-Time) MaxScore algorithm for fast
-top-k retrieval by inner product. It automatically falls back to linear scan for
-high-coverage queries.
-
-```rust
-# use velesdb_core::sparse_index::SparseVector;
-// Build a query with term weights
-let query = SparseVector::new(vec![(42, 1.0), (187, 0.5)]);
-
-// Search the default sparse index for top-5 results
-let results = collection.sparse_search(&query, 5, "")?;
-for result in &results {
-    println!("ID: {}, Score: {:.4}", result.point.id, result.score);
-}
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
-
-### Hybrid dense+sparse with RRF fusion
-
-Combine dense vector search (HNSW) with sparse term matching. Both branches run
-in parallel via rayon, then results are fused using Reciprocal Rank Fusion (RRF) or
-Relative Score Fusion (RSF).
-
-```rust
-# use velesdb_core::sparse_index::SparseVector;
-# use velesdb_core::FusionStrategy;
-let dense_query = vec![0.15; 768];
-let sparse_query = SparseVector::new(vec![(42, 1.0), (187, 0.5)]);
-
-// RRF fusion with default k=60
-let strategy = FusionStrategy::rrf_default();
-let results = collection.hybrid_sparse_search(
-    &dense_query,
-    &sparse_query,
-    10,         // top-k
-    "",         // default sparse index
-    &strategy,
-)?;
-
-for result in &results {
-    println!("ID: {}, Fused score: {:.4}", result.point.id, result.score);
-}
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
-
-You can also use `RelativeScore` fusion for explicit weight control:
-
-```rust
-# use velesdb_core::FusionStrategy;
-// 70% dense, 30% sparse (validated constructor)
-let strategy = FusionStrategy::relative_score(0.7, 0.3)?;
-```
-
-### Fusion types and parameters
-
-| Type | Path | Description |
-|------|------|-------------|
-| `SparseVector` | `velesdb_core::sparse_index` | Sorted `(u32 index, f32 weight)` pairs; deduplicates and filters zeros on construction |
-| `FusionStrategy` | `velesdb_core` | `RRF { k }`, `RelativeScore { dense_weight, sparse_weight }` |
-| `ScoredDoc` | `velesdb_core::sparse_index` | Raw sparse search result: `doc_id: u64`, `score: f32` |
-
-| Method | On | Description |
-|--------|-----|-------------|
-| `sparse_search(query, k, index_name)` | `VectorCollection` | Sparse search on the given index (`""` for default) |
-| `hybrid_sparse_search(dense, sparse, k, index_name, strategy)` | `VectorCollection` | Dense + sparse with fusion |
-
-## Streaming Inserts
-
-For high-throughput, continuously arriving data (IoT sensors, live embeddings, log streams),
-`StreamIngester` provides a bounded-channel ingestion pipeline with automatic micro-batch
-flushing and backpressure signaling.
-
-### Basic usage
-
-```rust,no_run
-use velesdb_core::collection::streaming::StreamingConfig;
-use velesdb_core::Point;
-
-// Configure the pipeline
-let config = StreamingConfig {
-    buffer_size: 10_000,     // channel capacity (backpressure threshold)
-    batch_size: 128,         // flush every 128 points
-    flush_interval_ms: 50,   // or every 50ms, whichever comes first
-};
-
-// `collection` is a `VectorCollection` obtained from
-// `db.get_vector_collection(name).expect("collection exists")` — the handle
-// is cheap to clone (Arc-backed inside). Activate the streaming pipeline:
-collection.enable_streaming(config);
-
-// Send points — returns immediately. `BackpressureError::BufferFull` signals
-// the bounded channel is saturated; retry or drop.
-let point = Point::new(1, vec![0.1; 384], None);
-match collection.stream_insert(point) {
-    Ok(()) => { /* accepted */ }
-    Err(e) => eprintln!("Backpressure: {e}"),
-}
-```
-
-### Backpressure
-
-`try_send` is non-blocking. When the bounded channel is at capacity, it returns
-`BackpressureError::BufferFull` -- the caller should retry after a short delay or
-drop the point. If the background drain task exits unexpectedly, `DrainTaskDead` is
-returned.
-
-### Delta buffer (insert-and-search)
-
-During an HNSW rebuild, newly inserted vectors are not yet in the index. The delta buffer
-accumulates these vectors and merges them into search results via brute-force scan, so
-freshly inserted data is searchable immediately without waiting for the rebuild to complete.
-
-```rust,ignore
-// The delta buffer is managed automatically by the streaming pipeline.
-// When active, search results transparently include delta-buffered vectors.
-let results = collection.search(&query, 10)?;
-// ^ includes both HNSW-indexed and delta-buffered vectors
-```
-
-## Agent Memory Patterns
-
-The Agent Memory SDK provides three memory subsystems designed for AI agent workloads:
-chatbots, RAG pipelines, and autonomous learning agents. Each memory type is backed by
-VelesDB collections with vector similarity search, TTL-based expiration, and snapshot
-persistence.
-
-### Initialization
-
-```rust,no_run
-use std::sync::Arc;
-use velesdb_core::Database;
-use velesdb_core::agent::AgentMemory;
-
-let db = Arc::new(Database::open("./agent_data")?);
-let memory = AgentMemory::new(Arc::clone(&db))?;
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
-
-### Semantic Memory (long-term knowledge)
-
-Stores facts as vector embeddings for similarity-based retrieval. Use this for RAG
-knowledge bases, persistent world knowledge, or any data your agent should "know" long-term.
-
-```rust,ignore
-// Store a fact
-let embedding = vec![0.1; 384]; // from your embedding model
-memory.semantic().store(1, "Paris is the capital of France", &embedding)?;
-
-// Query by similarity
-let query_embedding = vec![0.12; 384];
-let results = memory.semantic().query(&query_embedding, 5)?;
-for (id, score, content) in &results {
-    println!("[{score:.3}] {content}");
-}
-```
-
-### Episodic Memory (event timeline)
-
-Records events with timestamps for temporal and similarity-based retrieval. Use this
-for conversation history, user interaction logs, or any time-sequenced data.
-
-```rust,ignore
-// Record an event
-let timestamp = 1710000000_i64; // Unix timestamp
-let embedding = vec![0.2; 384];
-memory.episodic().record(1, "User asked about French geography", timestamp, Some(&embedding))?;
-
-// Retrieve recent events
-let recent = memory.episodic().recent(10, None)?;
-for (id, description, ts) in &recent {
-    println!("[{ts}] {description}");
-}
-
-// Recall similar events
-let results = memory.episodic().recall_similar(&query_embedding, 5)?;
-```
-
-### Procedural Memory (learned patterns)
-
-Stores action sequences with confidence scoring and reinforcement learning. Use this
-for agents that learn from experience -- task automation, decision-making, or any
-workflow where past success/failure should influence future behavior.
-
-```rust,ignore
-// Learn a procedure
-let steps = vec!["parse query".into(), "search index".into(), "format results".into()];
-let embedding = vec![0.3; 384];
-memory.procedural().learn(1, "answer_question", &steps, Some(&embedding), 0.8)?;
-
-// Recall matching procedures (min confidence 0.5)
-let matches = memory.procedural().recall(&query_embedding, 5, 0.5)?;
-for m in &matches {
-    println!("{} (confidence: {:.2}): {:?}", m.name, m.confidence, m.steps);
-}
-
-// Reinforce after success/failure
-memory.procedural().reinforce(1, true)?;  // increases confidence
-memory.procedural().reinforce(1, false)?; // decreases confidence
-```
-
-### TTL, eviction, and snapshots
-
-```rust,ignore
-// Set TTL on individual entries
-memory.set_semantic_ttl(1, 3600);  // expires in 1 hour
-memory.set_episodic_ttl(2, 86400); // expires in 24 hours
-
-// Run periodic expiration
-let stats = memory.auto_expire()?;
-println!("Expired: {} semantic, {} episodic", stats.semantic_expired, stats.episodic_expired);
-
-// Evict low-confidence procedures
-let evicted = memory.evict_low_confidence_procedures(0.3)?;
-
-// Snapshot and restore
-let memory = memory
-    .with_snapshots("./snapshots", 5)  // keep last 5 snapshots
-    .with_eviction_config(EvictionConfig::default());
-
-let version = memory.snapshot()?;
-memory.load_snapshot_version(version)?;
-```
-
-### When to use each memory type
-
-| Memory Type | Use Case | Example |
-|-------------|----------|---------|
-| **Semantic** | Persistent knowledge that rarely changes | RAG knowledge base, world facts, documentation |
-| **Episodic** | Time-sequenced events and interactions | Chat history, user sessions, audit logs |
-| **Procedural** | Learned behaviors that improve over time | Task automation, decision trees, API call patterns |
-
-### Agent Memory types
-
-| Type | Description |
-|------|-------------|
-| `AgentMemory` | Unified interface; holds `SemanticMemory`, `EpisodicMemory`, `ProceduralMemory` |
-| `SemanticMemory` | `store(id, content, embedding)`, `query(embedding, k)` returns `Vec<(id, score, content)>` |
-| `EpisodicMemory` | `record(id, description, timestamp, embedding)`, `recent(limit, since)`, `recall_similar(embedding, k)` |
-| `ProceduralMemory` | `learn(id, name, steps, embedding, confidence)`, `recall(embedding, k, min_confidence)`, `reinforce(id, success)` |
-| `ProcedureMatch` | Result struct: `id`, `name`, `steps: Vec<String>`, `confidence: f32`, `score: f32` |
-
-
-| `EvictionConfig` | `consolidation_age_threshold: u64`, `min_confidence_threshold: f32`, `max_entries_per_cycle: usize` |
-| `SnapshotManager` | `new(dir, max_snapshots)` -- versioned state persistence with automatic rotation |
-| `ExpireResult` | Returned by `auto_expire()`: `semantic_expired`, `episodic_expired`, `episodic_consolidated` counts |
-
-Default embedding dimension is **384** (configurable via `AgentMemory::with_dimension(db, dim)`).
-
-## Query Plan Cache
-
-VelesDB automatically caches compiled query plans in a two-tier LRU cache (L1 lock-free +
-L2 LRU). Repeated queries skip parsing and planning entirely when the cache key matches.
-
-### How it works
-
-- **Automatic**: The cache is enabled by default on every `Database` instance. No configuration
-  required.
-- **Write-generation invalidation**: Each collection tracks a monotonic write generation counter.
-  When data is inserted, updated, or deleted, the generation increments. Cached plans whose
-  key includes a stale generation are automatically bypassed -- no explicit invalidation needed.
-- **LRU eviction**: The cache has bounded capacity. Least-recently-used plans are evicted when
-  the cache is full.
-
-### Inspecting cache behavior with EXPLAIN
-
-The `EXPLAIN` output includes `cache_hit` and `plan_reuse_count` fields that show whether
-a query plan was served from the cache:
-
-```sql
-EXPLAIN SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10;
-```
-
-```json
-{
-  "query": "SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10",
-  "query_type": "SELECT",
-  "collection": "docs",
-  "plan": [
-    { "step": 1, "operation": "VectorSearch", "description": "HNSW search k=10 ef=100", "estimated_rows": 10 }
-  ],
-  "estimated_cost": {
-    "uses_index": true,
-    "index_name": "Hnsw",
-    "selectivity": 0.001,
-    "complexity": "O(log N)"
-  },
-  "features": {
-    "has_vector_search": true,
-    "has_filter": false,
-    "has_order_by": false,
-    "has_group_by": false,
-    "has_aggregation": false,
-    "has_join": false,
-    "has_fusion": false,
-    "limit": 10,
-    "offset": null
-  },
-  "cache_hit": true,
-  "plan_reuse_count": 42
-}
-```
-
-- `cache_hit: true` -- the plan was found in cache (parsing and planning were skipped).
-- `cache_hit: false` -- cache miss; a fresh plan was compiled and inserted into the cache.
-- `plan_reuse_count` -- how many times this cached plan has been reused across all callers.
-
-### Cache metrics
-
-```rust,ignore
-let metrics = db.plan_cache().metrics();
-println!("Hit rate: {:.1}%", metrics.hit_rate() * 100.0);
-println!("Hits: {}, Misses: {}", metrics.hits(), metrics.misses());
-```
-
-### Cache types and parameters
-
-| Type | Path | Description |
-|------|------|-------------|
-| `CompiledPlanCache` | `velesdb_core::cache` | Two-tier cache (L1 lock-free DashMap + L2 LRU). Default: 1K L1 / 10K L2 entries |
-| `PlanKey` | `velesdb_core::cache` | Cache key: `query_hash: u64`, `schema_version: u64`, `collection_generations: SmallVec<[u64; 4]>` |
-| `CompiledPlan` | `velesdb_core::cache` | Cached plan: `plan: QueryPlan`, `referenced_collections: Vec<String>`, `reuse_count: AtomicU64` |
-| `PlanCacheMetrics` | `velesdb_core::cache` | `hits()`, `misses()`, `hit_rate() -> f64` (ratio 0.0--1.0) |
-
-| Method | On | Description |
-|--------|-----|-------------|
-| `plan_cache()` | `Database` | Returns `&CompiledPlanCache` |
-| `plan_cache().metrics()` | `CompiledPlanCache` | Returns `&PlanCacheMetrics` |
-| `plan_cache().stats()` | `CompiledPlanCache` | Returns `LockFreeCacheStats` (L1/L2 sizes, hit counts) |
-
-## Public API Reference
-
-```rust
-// Core types — v1.13: typed collection split (Collection is `pub(crate)`,
-// use one of VectorCollection / GraphCollection / MetadataCollection instead)
-use velesdb_core::{
-    Database,            // Database instance
-    VectorCollection,    // Vector collection (typed handle)
-    GraphCollection,     // Graph collection (typed handle)
-    MetadataCollection,  // Metadata-only collection (typed handle)
-    AnyCollection,       // Type-erased handle returned by Database::get_any_collection
-    Point,               // Vector with metadata
-    DistanceMetric,      // Cosine, Euclidean, DotProduct, Hamming, Jaccard
-    StorageMode,         // Full, SQ8, Binary, ProductQuantization, RaBitQ
-    Error, Result,       // Error types
-};
-
-// Sparse vectors and fusion
-use velesdb_core::sparse_index::SparseVector; // Sparse vector (indices + weights)
-use velesdb_core::FusionStrategy;             // RRF, RelativeScore, Average, Maximum, Weighted
-
-// Streaming ingestion
-use velesdb_core::collection::streaming::{
-    StreamIngester,     // Bounded-channel ingestion pipeline
-    StreamingConfig,    // Buffer size, batch size, flush interval
-    BackpressureError,  // BufferFull, NotConfigured, DrainTaskDead
-};
-
-// Agent memory
-use velesdb_core::agent::{
-    AgentMemory,        // Unified memory interface (semantic + episodic + procedural)
-    SemanticMemory,     // Long-term knowledge storage
-    EpisodicMemory,     // Event timeline with temporal queries
-    ProceduralMemory,   // Learned patterns with reinforcement
-    ProcedureMatch,     // Recall result with confidence and steps
-    EvictionConfig,     // TTL and eviction policies
-    SnapshotManager,    // Versioned snapshot persistence
-    TemporalIndex,      // B-tree temporal index for O(log N) time queries
-};
-
-// Index types
-use velesdb_core::{
-    HnswIndex,          // HNSW index
-    HnswParams,         // Index parameters
-    SearchQuality,      // Fast, Balanced, Accurate, Perfect, Custom, Adaptive
-};
-
-// Query plan cache
-use velesdb_core::cache::{
-    CompiledPlanCache,  // Two-tier LRU cache for compiled query plans
-    PlanCacheMetrics,   // Hit/miss counters with hit_rate()
-    PlanKey,            // Deterministic cache key (query hash + write generation)
-};
-
-// Filtering
-use velesdb_core::{Filter, Condition};
-
-// Quantization
-use velesdb_core::{QuantizedVector, BinaryQuantizedVector, QuantizationConfig};
-
-// Metrics
-use velesdb_core::{recall_at_k, precision_at_k, mrr, ndcg_at_k};
-```
+Success looks exactly like that: two lines, `id=1` first with a cosine score of
+`1.0000` (the query vector is identical to point 1), `id=3` second. Point 2 is
+orthogonal to the query and is correctly excluded from the top 2.
+
+Anything else is a failure — in particular, a second `cargo run` prints
+`Error: CollectionExists("documents")` because the collection is already
+persisted in `./veles-quickstart`. Delete that directory to start over, or skip
+`create_collection` when the collection already exists.
+
+## Configuration
+
+Compile-time features (`Cargo.toml`):
+
+| Feature | Default | Effect |
+|---|---|---|
+| `persistence` | **on** | mmap storage, WAL, rayon parallelism, tokio. Turn off for WASM. |
+| `gpu` | off | wgpu compute pipeline for batch distance kernels; falls back to SIMD |
+| `openapi` | off | `utoipa::ToSchema` derives on the `api_types` DTOs |
+| `update-check` | off | HTTP client for automatic version checking |
+| `internal-bench` | off | Exposes internal hooks used by some benches |
+| `bench-sift1m` | off | SIFT1M benchmark. Links `ureq`/TLS as a **regular** dependency — never enable in a shipping build |
+| `loom` | off | Loom concurrency testing (nightly only) |
+| `test-fault-injection` | off | RAII guards forcing internal failures in tests. Never enable in production |
+
+Runtime settings (HNSW parameters, limits, storage, logging) are read from
+`velesdb.toml` — see the [configuration guide](../../docs/guides/CONFIGURATION.md).
+
+## Examples
+
+- [`examples/`](./examples) — `crash_driver` (crash-recovery test driver),
+  `profile_batch_insert` (flamegraph target for HNSW batch insert),
+  `simd_precision_check` (SIMD vs scalar validation). These are engine tooling,
+  not tutorials.
+- [`examples/rust/`](../../examples/rust) — `multimodel_search.rs`, a runnable
+  vector + graph + metadata query.
+- [`examples/mini_recommender/`](../../examples/mini_recommender) and
+  [`examples/ecommerce_recommendation/`](../../examples/ecommerce_recommendation)
+  — complete standalone applications.
+
+## API / commands
+
+Generated reference: [docs.rs/velesdb-core](https://docs.rs/velesdb-core).
+Import map (where each type lives): [Core API map](../../docs/guides/CORE_API_MAP.md).
+
+Task guides, all moved out of this README so it stays readable:
+
+| Guide | What it covers |
+|---|---|
+| [Collections, metrics, storage](../../docs/guides/CORE_COLLECTIONS_AND_METRICS.md) | Collection model, the 5 distance metrics, embedding dimensions, payload format, quantized storage modes, bulk ingestion, durability |
+| [VelesQL reference](../../docs/guides/CORE_VELESQL_REFERENCE.md) | Vector/text/hybrid queries, metadata filters, `WITH` options, operator table, `JOIN` limit, `EXPLAIN` |
+| [Sparse vectors and fusion](../../docs/guides/CORE_SPARSE_AND_FUSION.md) | Named sparse indexes, DAAT MaxScore, RRF and Relative Score fusion |
+| [Streaming inserts](../../docs/guides/CORE_STREAMING_INSERTS.md) | `StreamIngester`, backpressure, delta buffer (insert-and-search) |
+| [Query plan cache](../../docs/guides/CORE_QUERY_PLAN_CACHE.md) | Two-tier LRU cache, write-generation invalidation, `EXPLAIN` cache fields, metrics |
+| [Agent Memory SDK (Rust)](../../docs/guides/CORE_AGENT_MEMORY_RUST.md) | Semantic, episodic and procedural memory, TTL, eviction, snapshots |
+| [Core performance](../../docs/guides/CORE_PERFORMANCE.md) | Every published number, its measurement context, and how to reproduce it |
+| [Graph patterns](../../docs/guides/GRAPH_PATTERNS.md) · [Multi-model queries](../../docs/guides/MULTIMODEL_QUERIES.md) | Graph modelling and cross-engine statements |
+| [Search modes](../../docs/guides/SEARCH_MODES.md) · [Tuning guide](../../docs/guides/TUNING_GUIDE.md) · [Quantization](../../docs/guides/QUANTIZATION.md) | Recall/latency trade-offs |
+| [Write concurrency](../../docs/guides/WRITE_CONCURRENCY.md) · [Concurrency and locking](../../docs/guides/CONCURRENCY_LOCKING.md) | The write model and file locking |
+
+## Known limits
+
+- **No embedding generation.** You bring the vectors; the crate never calls a
+  model or the network to produce them.
+- **No clustering, sharding or replication.** `velesdb-core` is a single-process
+  embedded engine. One process at a time may open a database directory: a second
+  one fails with `DatabaseLocked`.
+- **One writer per collection.** Concurrent readers are fine; concurrent writers
+  to the same collection serialize — see
+  [Write concurrency](../../docs/guides/WRITE_CONCURRENCY.md).
+- **Metric and dimension are immutable.** Changing either means creating a new
+  collection and reindexing.
+- **`JOIN ... USING (...)` supports one column only.** Multi-column `USING`
+  parses but does not execute; use `JOIN ... ON left = right` instead.
+- **No agent-memory service layer here.** The explainable `MemoryService`,
+  `why()` and the deterministic context compiler (`compile_context`) live one
+  level up in [`velesdb-memory`](../velesdb-memory/README.md), which depends on
+  this crate — never the reverse.
+- **WASM builds are read/compute only.** `--no-default-features` removes mmap
+  storage, WAL, rayon and tokio along with the `persistence` feature.
+
+## Compatibility
+
+`velesdb-core` is a library, not an agent or MCP surface, so this table lists
+the platforms and toolchains the project builds and tests on.
+
+| Environment | Status | Note |
+|---|---|---|
+| Rust 1.90 (pinned) | Supported | `rust-toolchain.toml`; CI uses the same version |
+| Linux x86_64 | Supported | CI: `cargo check --workspace --all-targets --all-features` |
+| Linux aarch64 | Supported | CI: dedicated ARM64 benchmark runner (`ubuntu-24.04-arm`) |
+| Windows x86_64 (MSVC) | Supported | CI: `--all-features` check on `windows-latest` |
+| macOS aarch64 / x86_64 | Supported | Release pipeline builds both Darwin targets |
+| `wasm32-unknown-unknown` | Supported, restricted | CI checks `--no-default-features` only; no filesystem persistence |
+| Rust nightly | Build-checked | Only for the `loom` concurrency feature |
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Error: CollectionExists("documents")` | `create_collection` re-run against an existing on-disk collection | Delete the database directory, or call `get_vector_collection` first and only create when it returns `None` |
+| `[VELES-004] Vector dimension mismatch: expected 4, got 3` | The vector (on insert or query) does not match the dimension fixed at creation | Use your embedding model's exact output size; the dimension cannot be changed after creation |
+| `[VELES-031] Database is already opened by another process: <path>` | A second process tried to open the same directory | Close the first process, or point the second one at another directory — one writer process per database |
+| `get_vector_collection` returns `None` for a name you created | The name belongs to a graph or metadata-only collection | Use `get_graph_collection` / `get_metadata_collection`, or `get_any_collection` for the type-erased handle |
+| Data missing after a crash or `kill -9` | `upsert` updates in-memory/WAL state; destructors are best-effort | Call `flush()` as your explicit commit boundary |
 
 ## License
 
-VelesDB Core License 1.0
+VelesDB Core License 1.0 — see [LICENSE](./LICENSE).
 
-See [LICENSE](https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE) for details.
+---
+
+Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)

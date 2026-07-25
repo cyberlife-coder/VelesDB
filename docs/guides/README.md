@@ -10,6 +10,9 @@ the [docs index](../README.md) for the full documentation map.
 | [Configuration](./CONFIGURATION.md) | `velesdb.toml` configuration reference |
 | [Search Modes](./SEARCH_MODES.md) | Understanding Fast/Balanced/Accurate/Perfect modes |
 | [CLI & REPL](./CLI_REPL.md) | Command-line interface and interactive shell |
+| [CLI command reference](./CLI_COMMAND_REFERENCE.md) | `velesdb`: every subcommand and flag, import/export formats, packaging, error reference |
+| [REPL reference](./CLI_REPL_REFERENCE.md) | `velesdb repl`: dot-commands, session commands and settings, output formats |
+| [VelesQL cookbook (CLI & REPL)](./CLI_VELESQL_COOKBOOK.md) | Runnable VelesQL snippets: vector, hybrid, sparse, temporal, graph, aggregation, JOIN |
 | [Quantization](./QUANTIZATION.md) | Vector compression (SQ8, PQ, Binary, RaBitQ) |
 | [Tuning Guide](./TUNING_GUIDE.md) | HNSW parameter tuning and performance optimization |
 | [Agent Memory](./AGENT_MEMORY.md) | AI agent memory: semantic, episodic, procedural, TTL, snapshots |
@@ -18,7 +21,11 @@ the [docs index](../README.md) for the full documentation map.
 | [Temporal Memory](./TEMPORAL_MEMORY.md) | Dated recall and reasoning about *when* things happened, on top of velesdb-memory |
 | [Graph Patterns](./GRAPH_PATTERNS.md) | Graph modeling and `MATCH` pattern recipes |
 | [Multi-Model Queries](./MULTIMODEL_QUERIES.md) | Combining vector, graph, and structured data in one VelesQL query |
+| [Tauri plugin reference](./TAURI_PLUGIN_REFERENCE.md) | `tauri-plugin-velesdb`: every IPC command, events, permissions, storage modes, error codes |
+| [Tauri plugin recipes](./TAURI_PLUGIN_RECIPES.md) | `tauri-plugin-velesdb`: runnable snippets for graph, sparse, indexes, VelesQL, events |
 | [Server Security](./SERVER_SECURITY.md) | API keys, TLS, CORS, and operations hardening |
+| [Server REST tour](./SERVER_REST_TOUR.md) | `velesdb-server`: runnable `curl` recipes for collections, search modes, VelesQL, graph, `MATCH`, errors |
+| [Server deployment](./SERVER_DEPLOYMENT.md) | `velesdb-server`: Docker, Kubernetes probes, rate limiting, CORS, startup update check |
 | [Business Scenarios](./BUSINESS_SCENARIOS.md) | End-to-end business problems solved with single queries |
 | [Python Performance](./PYTHON_PERFORMANCE.md) | Throughput tuning for the Python binding |
 | [Concurrency & Locking](./CONCURRENCY_LOCKING.md) | Concurrent access and file-locking behavior |

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VelesDB WASM — quickstart</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 48rem; }
+    pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 4px; }
+    .expected { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>VelesDB WASM — quickstart</h1>
+  <p>Three vectors in, the two nearest out. Everything runs in this tab; no
+     network call leaves the page after the module is fetched.</p>
+
+  <h2>Output</h2>
+  <pre id="out">loading…</pre>
+
+  <h2 class="expected">Expected</h2>
+  <pre class="expected">3 vectors, dimension 3, storage_mode full
+#1  score 1.000
+#3  score 0.994</pre>
+
+  <p class="expected">Vector 1 is identical to the query, so its cosine
+     similarity is <code>1.000</code>; vector 3 is close, at <code>0.994</code>;
+     vector 2 is orthogonal and is cut by <code>k = 2</code>. Anything else — an
+     empty box, a <code>loading…</code> that never changes, a console error — is
+     a failure, not a slow start.</p>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

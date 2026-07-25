@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Test harness for the Claude Code agent hooks (session-start.sh, stop.sh,
-# pre-compact.sh). Simulates the stdin JSON payloads Claude Code sends for
-# each event and asserts the exact JSON shape each script prints back.
+# Test harness for every agent hook shipped here: Claude Code
+# (session-start.sh, stop.sh, pre-compact.sh, post-tool-use.sh), Windsurf
+# (pre-user-prompt.sh) and Codex CLI (session-start.sh, stop.sh). Simulates
+# the stdin JSON payload each harness documents for each event and asserts
+# the exact JSON shape the script prints back.
 #
 # Run: bash test/hooks.test.sh   (exit 0 = all good, exit 1 = a check failed)
 set -euo pipefail
@@ -205,6 +207,99 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Codex CLI SessionStart / Stop.
+#
+# The payloads below are built from the documented Codex stdin contract
+# (learn.chatgpt.com/docs/hooks, checked 2026-07-25): the common fields
+# session_id / transcript_path / cwd / hook_event_name / model /
+# permission_mode, plus `source` on SessionStart and `stop_hook_active` +
+# `last_assistant_message` on Stop. As with every other harness here, this
+# asserts the scripts' decision logic against that contract — it does not and
+# cannot prove that a real Codex build sends exactly these fields.
+# ---------------------------------------------------------------------------
+CODEX_HOOKS_DIR="$ROOT/codex/hooks"
+CODEX_SESSION_ID="test-codex-session-$$"
+
+codex_session_start_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$CODEX_SESSION_ID" \
+  '{session_id: $sid, transcript_path: null, cwd: $cwd, hook_event_name: "SessionStart", model: "test-model", permission_mode: "default", source: "startup"}')"
+
+codex_session_start_out="$(printf '%s' "$codex_session_start_payload" | bash "$CODEX_HOOKS_DIR/session-start.sh")"
+
+if printf '%s' "$codex_session_start_out" | jq -e '.hookSpecificOutput.hookEventName == "SessionStart"' >/dev/null; then
+  pass "Codex SessionStart: hookSpecificOutput.hookEventName is SessionStart"
+else
+  fail "Codex SessionStart: hookSpecificOutput.hookEventName is SessionStart"
+fi
+
+if printf '%s' "$codex_session_start_out" | jq -e '.hookSpecificOutput.additionalContext | contains("load_working_context") and contains("test-project")' >/dev/null; then
+  pass "Codex SessionStart: additionalContext asks for load_working_context on the configured project"
+else
+  fail "Codex SessionStart: additionalContext asks for load_working_context on the configured project"
+fi
+
+if printf '%s' "$codex_session_start_out" | jq -e '.hookSpecificOutput.additionalContext | contains("COMPACTION") | not' >/dev/null; then
+  pass "Codex SessionStart: source=startup does not mention compaction"
+else
+  fail "Codex SessionStart: source=startup does not mention compaction"
+fi
+
+# source="compact" is the ONLY documented channel through which anything about
+# a Codex compaction can reach the model — PreCompact/PostCompact support
+# neither additionalContext nor a decision/reason. If this check ever goes
+# missing, the compaction step silently drops off the Codex integration.
+codex_compact_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$CODEX_SESSION_ID" \
+  '{session_id: $sid, cwd: $cwd, hook_event_name: "SessionStart", source: "compact"}')"
+
+codex_compact_out="$(printf '%s' "$codex_compact_payload" | bash "$CODEX_HOOKS_DIR/session-start.sh")"
+
+if printf '%s' "$codex_compact_out" | jq -e '.hookSpecificOutput.additionalContext | contains("COMPACTION") and contains("save_working_context")' >/dev/null; then
+  pass "Codex SessionStart: source=compact adds the post-compaction save reminder"
+else
+  fail "Codex SessionStart: source=compact adds the post-compaction save reminder"
+fi
+
+codex_stop_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$CODEX_SESSION_ID" \
+  '{session_id: $sid, cwd: $cwd, hook_event_name: "Stop", stop_hook_active: false, last_assistant_message: "done"}')"
+
+codex_stop_out_1="$(printf '%s' "$codex_stop_payload" | bash "$CODEX_HOOKS_DIR/stop.sh")"
+
+if printf '%s' "$codex_stop_out_1" | jq -e '.decision == "block" and (.reason | contains("save_working_context"))' >/dev/null; then
+  pass "Codex Stop: first call blocks and asks for save_working_context"
+else
+  fail "Codex Stop: first call blocks and asks for save_working_context"
+fi
+
+codex_stop_out_2="$(printf '%s' "$codex_stop_payload" | bash "$CODEX_HOOKS_DIR/stop.sh")"
+
+if printf '%s' "$codex_stop_out_2" | jq -e '. == {}' >/dev/null; then
+  pass "Codex Stop: second call in same session passes through ({})"
+else
+  fail "Codex Stop: second call in same session passes through ({})"
+fi
+
+# The Codex sentinel must not collide with the Claude Code one: both harnesses
+# key on `session_id`, and a user running both would otherwise silence one.
+codex_shared_id_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID" \
+  '{session_id: $sid, cwd: $cwd, hook_event_name: "Stop"}')"
+codex_shared_id_out="$(printf '%s' "$codex_shared_id_payload" | bash "$CODEX_HOOKS_DIR/stop.sh")"
+
+if printf '%s' "$codex_shared_id_out" | jq -e '.decision == "block"' >/dev/null; then
+  pass "Codex Stop: sentinel is namespaced apart from the Claude Code Stop sentinel"
+else
+  fail "Codex Stop: sentinel is namespaced apart from the Claude Code Stop sentinel"
+fi
+
+codex_no_config_payload="$(jq -n --arg cwd "$NO_CONFIG_DIR" \
+  '{session_id: "codex-nocfg", cwd: $cwd, hook_event_name: "SessionStart", source: "resume"}')"
+codex_no_config_out="$(printf '%s' "$codex_no_config_payload" | bash "$CODEX_HOOKS_DIR/session-start.sh")"
+
+if printf '%s' "$codex_no_config_out" | jq -e '.hookSpecificOutput.additionalContext | contains("no-config-project") and contains("rolling")' >/dev/null; then
+  pass "Codex SessionStart: falls back to basename(cwd) + \"rolling\" with no config file"
+else
+  fail "Codex SessionStart: falls back to basename(cwd) + \"rolling\" with no config file"
+fi
+
+# ---------------------------------------------------------------------------
 # PostToolUse — the only hook that REPLACES what the model sees, so every
 # check below is really a data-loss check. Driven against fake
 # `velesdb-memory` binaries rather than a built one: the harness must stay
@@ -346,9 +441,9 @@ fi
 # No hardcoded absolute user paths in the scripts (everything must come from
 # the stdin payload or the .velesdb-hooks.json config).
 # ---------------------------------------------------------------------------
-if grep -rEn '/Users/[A-Za-z0-9_.-]+|/home/[A-Za-z0-9_.-]+' "$HOOKS_DIR" "$WINDSURF_HOOKS_DIR" >/dev/null 2>&1; then
+if grep -rEn '/Users/[A-Za-z0-9_.-]+|/home/[A-Za-z0-9_.-]+' "$HOOKS_DIR" "$WINDSURF_HOOKS_DIR" "$CODEX_HOOKS_DIR" >/dev/null 2>&1; then
   fail "no hardcoded user home paths in hook scripts"
-  grep -rEn '/Users/[A-Za-z0-9_.-]+|/home/[A-Za-z0-9_.-]+' "$HOOKS_DIR" "$WINDSURF_HOOKS_DIR" >&2 || true
+  grep -rEn '/Users/[A-Za-z0-9_.-]+|/home/[A-Za-z0-9_.-]+' "$HOOKS_DIR" "$WINDSURF_HOOKS_DIR" "$CODEX_HOOKS_DIR" >&2 || true
 else
   pass "no hardcoded user home paths in hook scripts"
 fi
@@ -358,7 +453,7 @@ fi
 # installed, don't fail the suite over its absence)
 # ---------------------------------------------------------------------------
 if command -v shellcheck >/dev/null 2>&1; then
-  if find "$HOOKS_DIR" "$WINDSURF_HOOKS_DIR" -name '*.sh' -print0 | xargs -0 shellcheck; then
+  if find "$HOOKS_DIR" "$WINDSURF_HOOKS_DIR" "$CODEX_HOOKS_DIR" -name '*.sh' -print0 | xargs -0 shellcheck; then
     pass "shellcheck: hook scripts are clean"
   else
     fail "shellcheck: hook scripts are clean"

@@ -128,8 +128,12 @@ Content-Type: application/json
 
 These endpoints **bypass authentication**, even when API keys are configured:
 
-- `GET /health` — Liveness probe
-- `GET /ready` — Readiness probe
+- `GET /health` and `GET /v1/health` — Liveness probe
+- `GET /ready` and `GET /v1/ready` — Readiness probe
+
+Everything else requires the key, **including `GET /metrics`**: the Prometheus
+exposition leaks collection names and write rates, so it is deliberately not
+public (`crates/velesdb-server/src/auth.rs::is_public_path`).
 
 ### Key rotation best practices
 
@@ -224,6 +228,22 @@ The server validates TLS configuration at startup and will refuse to start if:
 - The files contain invalid PEM data.
 
 Error messages are clear and specific — check the server logs if startup fails.
+For example, setting only one half of the pair aborts startup with
+`tls_cert is set but tls_key is missing`.
+
+### Making requests over HTTPS
+
+With a self-signed certificate, point the client at the certificate:
+
+```bash
+curl --cacert cert.pem https://localhost:8080/health
+```
+
+Or skip verification during development only (never in production):
+
+```bash
+curl -k https://localhost:8080/health
+```
 
 ### Complete example: Auth + TLS
 
@@ -243,7 +263,7 @@ key = "./certs/key.pem"
 
 ```bash
 curl -H "Authorization: Bearer my-secure-key" \
-     https://localhost:8443/api/v1/collections
+     https://localhost:8443/v1/collections
 ```
 
 ---

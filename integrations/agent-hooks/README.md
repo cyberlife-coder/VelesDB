@@ -13,11 +13,11 @@ gives it the *tools*. It does not make the agent actually call
 `save_working_context` before every one ends — that only happens if the
 agent remembers to, which it won't reliably do on its own. This directory
 closes that gap **completely** for [Claude Code](claude-code/) (four tested
-hooks), **partially** for [Windsurf](windsurf/) (one tested hook, with a
-delivery caveat), and **not at all** for [Codex CLI](codex/) (a documented
-`AGENTS.md` convention only — even though Codex now ships real lifecycle
-hooks). The parity table below says exactly what exists where, and why each
-gap is a gap.
+hooks), **for the load/save loop** on [Codex CLI](codex/) (two tested hooks;
+the compaction and tool-result steps are blocked by the Codex hook API, not
+by unwritten work), and **partially** for [Windsurf](windsurf/) (one tested
+hook, with a delivery caveat). The parity table below says exactly what
+exists where, and why each gap is a gap.
 
 ## Parity across harnesses
 
@@ -27,10 +27,10 @@ Claude Code equivalent · ❌ = not shipped, with the reason spelled out.
 
 | Loop step | Claude Code | Windsurf | Codex CLI |
 |---|---|---|---|
-| Load working context at session start | ✅ `session-start.sh` on `SessionStart` | ⚠️ `pre-user-prompt.sh` on `pre_user_prompt`, once per `trajectory_id` — advisory text, see the delivery caveat below | ❌ not written yet — `SessionStart` **does** exist in Codex |
-| Save working context before the session ends | ✅ `stop.sh` on `Stop`, blocking the first stop per session | ⚠️ no end-of-session event is used: the *same* first-prompt reminder also asks for the save, hours in advance | ❌ not written yet — `Stop` / `SessionEnd` **do** exist in Codex |
-| Compile the transcript before compaction | ✅ `pre-compact.sh` on `PreCompact` | ❌ Windsurf documents no compaction event. A VERIFIER: whether Cascade compacts at all in a way any hook can observe | ❌ not written yet — `PreCompact` exists in Codex, but is documented as *not* carrying `additionalContext`. A VERIFIER: whether an exit-2 `stderr` reason reaches the model there |
-| Replace an oversized tool result | ✅ `post-tool-use.sh` via `hookSpecificOutput.updatedToolOutput` | ❌ **API gap.** Windsurf post-hooks cannot alter or block a result — "post-hooks cannot block since the action has already occurred" — and no documented field replaces one | ❌ **API gap as documented.** Codex `PostToolUse` can add `additionalContext` or block, but documents no equivalent of `updatedToolOutput`. A VERIFIER |
+| Load working context at session start | ✅ `session-start.sh` on `SessionStart` | ⚠️ `pre-user-prompt.sh` on `pre_user_prompt`, once per `trajectory_id` — advisory text, see the delivery caveat below | ✅ `codex/hooks/session-start.sh` on `SessionStart`, via `additionalContext` |
+| Save working context before the session ends | ✅ `stop.sh` on `Stop`, blocking the first stop per session | ⚠️ no end-of-session event is used: the *same* first-prompt reminder also asks for the save, hours in advance | ✅ `codex/hooks/stop.sh` on `Stop`, blocking the first stop per session |
+| Compile the transcript before compaction | ✅ `pre-compact.sh` on `PreCompact` | ❌ Windsurf documents no compaction event. A VERIFIER: whether Cascade compacts at all in a way any hook can observe | ⚠️ **no pre-compaction hook is possible.** `PreCompact`/`PostCompact` support neither `additionalContext` nor a documented `decision`/`reason`, so nothing a hook prints there reaches the model. `codex/hooks/session-start.sh` compensates *after the fact* on `source == "compact"` |
+| Replace an oversized tool result | ✅ `post-tool-use.sh` via `hookSpecificOutput.updatedToolOutput` | ❌ **API gap.** Windsurf post-hooks cannot alter or block a result — "post-hooks cannot block since the action has already occurred" — and no documented field replaces one | ❌ **API gap as documented.** Codex `PostToolUse` can add `additionalContext`, or `decision: "block"` to substitute feedback for the result, but documents no equivalent of `updatedToolOutput` — it cannot hand back a *compiled* version of the real output |
 
 ### Why the Windsurf gap is smaller than it looks — and the caveat that matters more
 
@@ -59,24 +59,38 @@ a real Windsurf install: whether `pre_user_prompt` stdout is additionally
 prepended to the model's context. Until someone checks, treat the Windsurf
 integration as a user-facing nudge, not an enforced loop.
 
-### Why Codex has nothing here — and why the old reason is stale
+### What Codex can and cannot do
 
-[`codex/README.md`](codex/README.md) was written when Codex CLI had no
-lifecycle hooks. **That is no longer true.** The Codex hooks reference
-(checked 2026-07-25) lists `SessionStart`, `SessionEnd`, `PreToolUse`,
-`PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`,
-`UserPromptSubmit`, `SubagentStart`, `SubagentStop` and `Stop`, configured
-from `~/.codex/hooks.json`, `<repo>/.codex/hooks.json` or a `[hooks]` table
-in `config.toml`, with a Claude-Code-shaped `event → matcher → handler`
-structure and a `hookSpecificOutput.additionalContext` output field.
+The Codex hooks reference (checked 2026-07-25) lists `SessionStart`,
+`SessionEnd`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`,
+`PostCompact`, `UserPromptSubmit`, `SubagentStart`, `SubagentStop` and `Stop`,
+configured from `~/.codex/hooks.json`, `<repo>/.codex/hooks.json` or a
+`[hooks]` table in `config.toml`, with a Claude-Code-shaped
+`event → matcher → handler` structure. The stdin payload carries
+`session_id`, `transcript_path`, `cwd`, `hook_event_name`, `model` and
+`permission_mode`, plus `source` on `SessionStart` and `stop_hook_active` /
+`last_assistant_message` on `Stop` — the same field names Claude Code uses,
+which is why [`codex/hooks/`](codex/hooks/) can share the sentinel and
+config-resolution logic verbatim.
 
-So the three advisory Claude Code hooks here are *close* to portable to
-Codex. They are not shipped because nobody has run them against a real Codex
-build: the payload field names, the once-per-session sentinel key (Claude's
-`session_id`), and whether `PreCompact` can deliver a reason at all are
-unverified here. A hook that silently never fires is worse than no hook, so
-`codex/` stays a documented convention until someone tests real scripts.
-A VERIFIER: the minimum Codex CLI version that ships hooks.
+Two limits shape what is shipped there, and both are documented, not guessed:
+
+- **`hookSpecificOutput.additionalContext` is injected for `SessionStart`,
+  `SubagentStart`, `PreToolUse`, `PostToolUse`, `UserPromptSubmit`,
+  `SubagentStop` and `Stop` — but *not* for `SessionEnd`, `PreCompact`,
+  `PostCompact` or `PermissionRequest`.** Since `PreCompact` also has no
+  documented `decision`/`reason` output, a Codex pre-compaction hook has no
+  channel that reaches the model at all. Nothing is shipped for it; the
+  `SessionStart` hook compensates after the fact via `source == "compact"`.
+- **`PostToolUse` cannot replace the tool output.** It can add context, or
+  `decision: "block"` to substitute *feedback* for the result — which
+  discards the result rather than compressing it. So the one hook that makes
+  Claude Code sessions structurally cheaper has no Codex counterpart.
+
+A VERIFIER, on a real Codex build: that the payload fields arrive as
+documented, whether the hook `command` string is shell-expanded (the install
+instructions assume it is not), and the minimum Codex CLI version that ships
+hooks — the reference states none.
 
 **Sources checked 2026-07-25** (living documents — re-check before relying on
 any ❌ above): Cascade hooks reference,
@@ -192,6 +206,26 @@ for `pre_user_prompt`, so in practice the fallback is what resolves
 ⚠️ On Windsurf's documented contract this reminder is shown to **you**, not
 injected into the model's context — see the delivery caveat in the parity
 section before relying on it.
+
+## Install — Codex CLI
+
+```bash
+mkdir -p ~/.codex/hooks/velesdb-memory
+cp /path/to/velesdb/integrations/agent-hooks/codex/hooks/*.sh ~/.codex/hooks/velesdb-memory/
+cp -r /path/to/velesdb/integrations/agent-hooks/codex/hooks/lib ~/.codex/hooks/velesdb-memory/
+chmod +x ~/.codex/hooks/velesdb-memory/*.sh
+```
+
+Merge [`codex/hooks-snippet.json`](codex/hooks-snippet.json) into
+`~/.codex/hooks.json` (or `<repo>/.codex/hooks.json`), replacing `/home/you`
+with your real home directory — write absolute paths, since Codex spawns the
+command directly. The equivalent `config.toml` form, the MCP server wiring,
+and the full rationale for what is *not* shipped are in
+[`codex/README.md`](codex/README.md).
+
+Same `.velesdb-hooks.json` config format as Claude Code (below); the Codex
+payload documents `cwd` as a common field, so the walk-up lookup works from
+the payload rather than from a `$PWD` fallback.
 
 ## The structural constraint that shapes this whole design
 
@@ -317,10 +351,16 @@ work (defaulting `project` to the directory name and `session` to
 bash test/hooks.test.sh
 ```
 
-Simulates the stdin payloads Claude Code sends for each event and asserts
-the exact JSON each script prints back (including the block-once/pass-
-after behavior of `Stop` and `PreCompact`). Run it after touching any
-script in `claude-code/hooks/`.
+Simulates the stdin payload each harness documents for each event and asserts
+the exact JSON the script prints back (including the block-once/pass-after
+behaviour of `Stop` and `PreCompact`, and the Codex `source == "compact"`
+branch). It also shellchecks every script and rejects hardcoded home paths.
+Run it after touching any script in `claude-code/hooks/`, `windsurf/hooks/`
+or `codex/hooks/`.
+
+What it cannot do: prove that a harness really sends those fields. The
+Claude Code assertions are backed by hooks that have been run for real; the
+Windsurf and Codex ones are backed only by the vendors' published contracts.
 
 ## Why `PreCompact` only nudges `compile_transcript`, never calls it directly
 

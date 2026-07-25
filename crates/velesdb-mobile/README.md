@@ -1,365 +1,223 @@
-# VelesDB Mobile
+# velesdb-mobile
 
-_Last updated: 2026-07-23._
+> Native iOS (Swift) and Android (Kotlin) bindings to the VelesDB engine, generated with UniFFI.
 
-Native bindings for **iOS** (Swift) and **Android** (Kotlin) via [UniFFI](https://mozilla.github.io/uniffi-rs/).
+[![crates.io](https://img.shields.io/crates/v/velesdb-mobile.svg)](https://crates.io/crates/velesdb-mobile)
+[![docs.rs](https://docs.rs/velesdb-mobile/badge.svg)](https://docs.rs/velesdb-mobile)
+[![License](https://img.shields.io/badge/license-VelesDB%20Core%20License%201.0-blue.svg)](./LICENSE)
 
-VelesDB Mobile brings microsecond vector search to edge devices - perfect for on-device AI, semantic search, and RAG applications.
+> **Maturity — read before shipping.** The Rust binding layer is production-grade:
+> 135 tests pass on the host (`cargo test -p velesdb-mobile`), CI re-runs them on every
+> pull request via `cargo test --workspace`, a parity test fails the build when
+> `velesdb-core` grows an enum variant the binding has not mirrored, and the crate is
+> published to crates.io by the release workflow.
+> The **device toolchain is not**: no CI job cross-compiles for an iOS or Android
+> target, no job compiles the generated Swift/Kotlin, no XCFramework or AAR is
+> published, and the repository contains no Swift/Kotlin test suite. Treat the
+> packaging steps in [Mobile build guide](../../docs/guides/MOBILE_BUILD.md) as
+> "documented and manual", not "verified per release", and validate them on your own
+> device matrix before you depend on them.
 
-> The mobile engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It fuses vector + graph + columnar under VelesQL; the [`why()`](../velesdb-memory/README.md) recall trail returns the evidence path behind every answer.
+## Objective
 
-## Features
+An on-device AI feature needs its embeddings *on the device*: no network hop for a
+semantic search, no user data leaving the phone, and a working app in airplane mode.
+Reimplementing a vector index in Swift and again in Kotlin is expensive and the two
+copies drift. This crate exposes the single Rust engine (`velesdb-core`) to both
+platforms through one UniFFI interface, so search semantics, distance metrics, and
+quantization behave identically on iOS, Android, and the server.
 
-- **Native Performance**: Direct Rust bindings, minimal FFI overhead
-- **Multi-Query Fusion**: Native MQG with RRF/Weighted strategies
-- **Binary Quantization**: 32x memory reduction for constrained devices
-- **ARM NEON SIMD**: Optimized for mobile processors (Apple A-series, Snapdragon)
-- **Offline-First**: Full functionality without network connectivity
-- **Thread-Safe**: Safe to use from multiple threads/queues
+It is the mobile face of **VelesDB, the explainable, local-first memory engine for AI
+agents** — vector, graph, and columnar data fused under VelesQL. The explainability
+layer itself (`why()` recall trails) lives in
+[velesdb-memory](../velesdb-memory/README.md); this crate exposes the engine.
 
-## Quick Start
+## Use cases
 
-### Swift (iOS)
+- An iOS notes app that answers "what did I write about X?" offline, over locally
+  computed embeddings.
+- An Android field-service app that ships a pre-built knowledge base and does
+  semantic + BM25 hybrid retrieval with no connectivity.
+- An on-device agent that keeps a semantic memory of past interactions
+  (`VelesSemanticMemory`) and a small knowledge graph (`MobileGraphStore`).
+- An IoT/edge build where binary quantization trades ~5–10% recall for 32x less
+  memory per vector.
+- A read-audited app: a Swift/Kotlin `MobileObserver` sees every read and can **deny**
+  it (`MobileAccessDecision`), for consent gating or per-tenant isolation.
 
-```swift
-import VelesDB
+## Prerequisites
 
-// Open database (UniFFI named constructor — Rust `#[uniffi::constructor] open` becomes a Swift static method, not a default init)
-let db = try VelesDatabase.open(path: documentsPath + "/velesdb")
+| Requirement | Minimum version | Note |
+|---|---|---|
+| Rust | 1.90 | `rust-version` of the workspace (`Cargo.toml`) |
+| UniFFI | 0.32 | pinned by this crate; the bindgen binary ships with it |
+| Xcode + `xcodebuild`, `lipo` | — | iOS only, macOS host required |
+| Android NDK + `cargo-ndk` | — | Android only (`cargo install cargo-ndk`) |
+| JNA | — | Android only: the generated Kotlin imports `com.sun.jna.*` |
 
-// Create collection (768D for MiniLM, 384D for all-MiniLM-L6-v2)
-try db.createCollection(name: "documents", dimension: 384, metric: .cosine)
-
-// Get collection
-guard let collection = try db.getCollection(name: "documents") else {
-    fatalError("Collection not found")
-}
-
-// Insert vectors
-let point = VelesPoint(
-    id: 1,
-    vector: embedding,  // [Float] from your embedding model
-    payload: "{\"title\": \"Hello World\"}"
-)
-try collection.upsert(point: point)
-
-// Search
-let results = try collection.search(vector: queryEmbedding, limit: 10)
-for result in results {
-    print("ID: \(result.id), Score: \(result.score)")
-}
-```
-
-### Kotlin (Android)
-
-```kotlin
-import com.velesdb.mobile.*
-
-// Open database (UniFFI named constructor — Rust `#[uniffi::constructor] open` becomes a Kotlin companion-object factory, not a default constructor)
-val db = VelesDatabase.open("${context.filesDir}/velesdb")
-
-// Create collection
-db.createCollection("documents", 384u, DistanceMetric.COSINE)
-
-// Get collection
-val collection = db.getCollection("documents")
-    ?: throw Exception("Collection not found")
-
-// Insert vectors
-val point = VelesPoint(
-    id = 1uL,
-    vector = embedding,  // List<Float> from your embedding model
-    payload = """{"title": "Hello World"}"""
-)
-collection.upsert(point)
-
-// Search (use Dispatchers.IO for async)
-val results = withContext(Dispatchers.IO) {
-    collection.search(queryEmbedding, 10u)
-}
-results.forEach { result ->
-    println("ID: ${result.id}, Score: ${result.score}")
-}
-```
-
-## Build Instructions
-
-### Prerequisites
+Rust targets are not installed by default:
 
 ```bash
-# Install Rust targets
-rustup target add aarch64-apple-ios        # iOS device
-rustup target add aarch64-apple-ios-sim    # iOS simulator (ARM)
-rustup target add x86_64-apple-ios         # iOS simulator (Intel)
-
-rustup target add aarch64-linux-android    # Android ARM64
-rustup target add armv7-linux-androideabi  # Android ARMv7
-rustup target add x86_64-linux-android     # Android x86_64
-
-# For Android: Install cargo-ndk
-cargo install cargo-ndk
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 ```
 
-### iOS Build
+## Installation
+
+There is no published XCFramework or AAR — you build the library and generate the
+bindings from source:
 
 ```bash
-# Build for device
-cargo build --release --target aarch64-apple-ios -p velesdb-mobile
+git clone https://github.com/cyberlife-coder/velesdb.git
+cd velesdb
+cargo build --release -p velesdb-mobile
+```
 
-# Build for simulator
-cargo build --release --target aarch64-apple-ios-sim -p velesdb-mobile
+A Rust application (including a Tauri or desktop host) can depend on the crate
+directly instead:
 
-# Generate Swift bindings
+```bash
+cargo add velesdb-mobile
+```
+
+Per-platform packaging: [Mobile build guide](../../docs/guides/MOBILE_BUILD.md).
+
+## First success in 60 seconds
+
+Generate the Swift bindings from a **host** build — no device, no simulator, no
+Xcode project. Run from the repository root:
+
+```bash
+cargo build -p velesdb-mobile
 cargo run -p velesdb-mobile --bin uniffi-bindgen -- generate \
-    --library target/aarch64-apple-ios/release/libvelesdb_mobile.a \
+    --library target/debug/libvelesdb_mobile.dylib \
     --language swift \
     --out-dir bindings/swift
-
-# Create XCFramework (requires macOS)
-xcodebuild -create-xcframework \
-    -library target/aarch64-apple-ios/release/libvelesdb_mobile.a \
-    -headers bindings/swift \
-    -library target/aarch64-apple-ios-sim/release/libvelesdb_mobile.a \
-    -headers bindings/swift \
-    -output VelesDB.xcframework
+ls -1 bindings/swift
 ```
 
-### Android Build
+Expected output of the final `ls -1` — three files, nothing else:
+
+```text
+velesdb_mobile.swift
+velesdb_mobileFFI.h
+velesdb_mobileFFI.modulemap
+```
+
+Any other outcome — a bindgen error about the library, or an empty directory — means
+the `--library` path is wrong for your host: on Linux the file is
+`target/debug/libvelesdb_mobile.so`, on Windows `target/debug/velesdb_mobile.dll`
+(and `target/release/...` after a `--release` build). The first `cargo build` compiles
+`velesdb-core` and takes several minutes on a cold cache; every step after that is
+seconds.
+
+The same command with `--language kotlin` writes one file,
+`bindings/kotlin/uniffi/velesdb_mobile/velesdb_mobile.kt` — note the package,
+`uniffi.velesdb_mobile`.
+
+Sanity-check the engine itself without any mobile toolchain:
 
 ```bash
-# Build for all Android ABIs
-cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
-    build --release -p velesdb-mobile
-
-# Generate Kotlin bindings
-cargo run -p velesdb-mobile --bin uniffi-bindgen -- generate \
-    --library target/aarch64-linux-android/release/libvelesdb_mobile.so \
-    --language kotlin \
-    --out-dir bindings/kotlin
-
-# Libraries are in:
-# - target/aarch64-linux-android/release/libvelesdb_mobile.so
-# - target/armv7-linux-androideabi/release/libvelesdb_mobile.so
-# - target/x86_64-linux-android/release/libvelesdb_mobile.so
+cargo test -p velesdb-mobile
 ```
 
-## API Reference
+Expected on a host with default features: `test result: ok. 123 passed` for the lib
+target, then `8 passed` (`tests/coverage_native.rs`) and `4 passed`
+(`tests/feature_parity.rs`).
 
-### VelesDatabase
+## Configuration
 
-| Method | Description |
-|--------|-------------|
-| `VelesDatabase.open(path)` | Opens or creates a database at the specified path (named constructor — use `.open(...)`) |
-| `VelesDatabase.openWithObserver(path, observer)` | Opens with a read-path `MobileObserver` attached — your Swift/Kotlin callback can audit **and deny** reads (`MobileAccessDecision`) |
-| `updateGuardrails(limits)` | Live-updates query guardrail limits (`MobileQueryLimits`) |
-| `createCollection(name, dimension, metric)` | Creates a new vector collection |
-| `createCollectionWithStorage(name, dimension, metric, storageMode)` | Creates collection with quantized storage |
-| `createMetadataCollection(name)` | Creates a metadata-only collection (no vectors) |
-| `createGraphCollection(name)` | Creates a graph collection (schemaless) |
-| `createGraphCollectionWithEmbeddings(name, dimension, metric)` | Creates a graph collection whose nodes carry embeddings |
-| `getCollection(name)` | Gets a collection by name (returns nil/null if not found) |
-| `listCollections()` | Lists all collection names |
-| `deleteCollection(name)` | Deletes a collection |
-| `trainPq(collectionName, config)` | Trains Product Quantization on a collection |
-| `executeQuery(query, params)` | Full VelesQL pass-through (SELECT/NEAR/MATCH incl. cross-collection `@collection`, aggregates) |
+The engine is configured at open time; there is no mobile-specific config file
+format. Environment variables (`VELESDB_*`) still layer on top of a loaded file.
 
-### VelesCollection
+| Entry point | Effect |
+|---|---|
+| `VelesDatabase.open(path)` | Core defaults |
+| `VelesDatabase.openWithConfig(path, configPath)` | Loads a TOML file, **engine sections only** (`[search]`, `[hnsw]`, `[storage]`, `[limits]`, `[quantization]`, `[wal_batch]`); fails fast, never falls back to defaults |
+| `VelesDatabase.openWithConfigToml(path, configToml)` | Same, from an in-memory string (bundled asset, remote config) |
+| `updateGuardrails(limits)` | Live-updates depth / cardinality / memory / timeout / rate-limit / circuit-breaker caps (`MobileQueryLimits`) |
+| `enableStreaming(config)` | Bounded ingestion channel; defaults `bufferSize=10000`, `batchSize=128`, `flushIntervalMs=50` |
 
-| Method | Description |
-|--------|-------------|
-| `search(vector, limit)` | Finds k nearest neighbors |
-| `searchWithQuality(vector, limit, quality)` | Search with a `SearchQuality` preset (`Fast`/`Balanced`/`Accurate`/`Perfect`/`Custom`/`Adaptive`) |
-| `searchWithFilter(vector, limit, filterJson)` | Search with metadata filter |
-| `multiQuerySearch(vectors, limit, strategy)` | Multi-query fusion (MQG) |
-| `multiQuerySearchWithFilter(vectors, limit, strategy, filterJson)` | Multi-query fusion with metadata filter |
-| `textSearch(query, limit)` | BM25 full-text search |
-| `textSearchWithFilter(query, limit, filterJson)` | Text search with filter |
-| `hybridSearch(vector, textQuery, limit, vectorWeight)` | Combined vector + text search |
-| `hybridSearchWithFilter(vector, textQuery, limit, vectorWeight, filterJson)` | Hybrid search with metadata filter |
-| `batchSearch(searches)` | Batch search with individual filters per query |
-| `sparseSearch(sparseVector, limit, indexName)` | Sparse-only search using inverted index |
-| `hybridSparseSearch(vector, sparseVector, limit, indexName)` | Hybrid dense + sparse search with RRF fusion |
-| `query(queryStr, paramsJson)` | Execute VelesQL query |
-| `upsert(point)` | Inserts or updates a single point |
-| `upsertBatch(points)` | Batch insert/update (faster for bulk operations) |
-| `upsertWithSparse(point, sparseVector)` | Inserts a point with an associated sparse vector |
-| `enableStreaming(config)` | Enables streaming ingestion (config optional; defaults bufferSize=10000, batchSize=128, flushIntervalMs=50) |
-| `streamInsert(points)` | Queues a batch of points for streaming ingestion; returns the count queued |
-| `delete(id)` | Deletes a point by ID |
-| `get(ids)` | Gets points by their IDs (missing IDs silently skipped) |
-| `getById(id)` | Gets a single point by ID (returns nil/null if not found) |
-| `count()` | Returns the number of points |
-| `dimension()` | Returns the vector dimension |
-| `isMetadataOnly()` | Checks if this is a metadata-only collection |
-| `allIds()` | Returns all point IDs in the collection |
-| `flush()` | Flushes data to durable storage |
-| `createIndex(fieldName)` | Creates a secondary metadata index |
-| `hasSecondaryIndex(fieldName)` | Checks if a secondary index exists |
-| `createPropertyIndex(label, property)` | Creates a graph/property index |
-| `createRangeIndex(label, property)` | Creates a graph/range index |
-| `hasPropertyIndex(label, property)` | Checks if a property index exists |
-| `hasRangeIndex(label, property)` | Checks if a range index exists |
-| `listIndexes()` | Lists all index definitions |
-| `dropIndex(label, property)` | Drops an index |
-| `indexesMemoryUsage()` | Returns memory used by indexes (bytes) |
-| `analyze()` | Runs ANALYZE and returns fresh statistics |
-| `getStats()` | Returns the latest statistics snapshot |
+Field-by-field reference: [`velesdb.toml` guide](../../docs/guides/CONFIGURATION.md).
 
-#### The `filterJson` shape
+## Examples
 
-The `filterJson` argument on `searchWithFilter`, `textSearchWithFilter`,
-`hybridSearchWithFilter`, and `multiQuerySearchWithFilter` is a JSON string using the
-same canonical filter shape as the core engine and REST API:
-`{"condition": {"type": <op>, "field": ..., "value"/"values"/"pattern"/"conditions": ...}}`.
-Operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `like`, `ilike`,
-`is_null`, `is_not_null`, `array_contains`, `array_contains_any`, `array_contains_all`,
-`geo_distance`, `geo_bbox`, and `and`/`or`/`not` for composition.
+This crate ships no `examples/` directory. The runnable, always-compiled references are
+its own tests — `crates/velesdb-mobile/tests/coverage_native.rs` drives the real
+binding types (`VelesDatabase`, `VelesCollection`, `MobileGraphStore`) as plain Rust.
 
-Swift:
+Swift and Kotlin snippets for every API group live in the
+[Mobile API guide](../../docs/guides/MOBILE_API.md).
 
-```swift
-let results = try collection.searchWithFilter(
-    vector: queryVector,
-    limit: 5,
-    filterJson: #"{"condition": {"type": "eq", "field": "category", "value": "tech"}}"#
-)
-```
+## API / commands
 
-Kotlin:
+Full method tables, the `filterJson` shape, storage modes, fusion strategies, and the
+record types: [Mobile API guide](../../docs/guides/MOBILE_API.md).
 
-```kotlin
-val results = collection.searchWithFilter(
-    queryVector,
-    5,
-    """{"condition": {"type": "eq", "field": "category", "value": "tech"}}"""
-)
-```
+Rust-side signatures are generated: [docs.rs/velesdb-mobile](https://docs.rs/velesdb-mobile).
+Every Swift/Kotlin name is the camelCase form of the Rust name.
 
-### VelesSemanticMemory
+Two naming traps worth knowing before your first build:
 
-Agent memory for on-device AI. Stores knowledge facts as vectors with similarity search.
+- `open` is a **named constructor**. UniFFI emits it as a Swift static method
+  (`VelesDatabase.open(path:)`) and a Kotlin companion factory
+  (`VelesDatabase.open(path)`) — not a default initializer.
+- The Kotlin package is `uniffi.velesdb_mobile`, and the Swift module name is
+  whatever you call the framework you package the sources into.
 
-| Method | Description |
-|--------|-------------|
-| `VelesSemanticMemory(db, dimension)` | Creates semantic memory with the given embedding dimension (constructor) |
-| `store(id, content, embedding)` | Stores a knowledge fact with its embedding |
-| `query(embedding, topK)` | Queries by similarity, returns `SemanticResult` list |
-| `delete(id)` | Deletes a knowledge fact by ID |
-| `remove(id)` | Deprecated alias for `delete(id)` |
-| `clear()` | Clears all knowledge facts |
-| `len()` | Returns the number of stored facts |
-| `isEmpty()` | Returns true if no facts are stored |
-| `dimension()` | Returns the embedding dimension |
+## Known limits
 
-### MobileGraphStore
+- **Every call is blocking.** No method in the binding is `async`, and the generated
+  Swift contains no `async` function. Call from a background queue/dispatcher; a
+  search on the main thread blocks the UI.
+- **No prebuilt artifacts.** No XCFramework, no AAR, no Maven/SwiftPM package.
+- **No device CI.** iOS/Android cross-compilation and the generated Swift/Kotlin are
+  not built by any workflow in this repository.
+- **Agent memory is semantic-only.** `VelesSemanticMemory` covers store/query/delete;
+  episodic and procedural memory, TTL setters, and snapshots are not exposed
+  (see [ecosystem parity](../../docs/reference/ECOSYSTEM_PARITY.md)).
+- **`MobileGraphStore` is a deliberate in-memory fork** of core's graph engine, not a
+  delegate: RAM-only, no WAL, no on-disk payloads (it has explicit `save`/`load`).
+  Rationale in [known limitations §14](../../docs/reference/KNOWN_LIMITATIONS.md).
+- **Bulk paths are chunked, not raw.** The zero-copy raw-bulk insert available on
+  core, server, CLI, WASM, and the TS SDK is not exposed here; use `upsertBatch` or
+  streaming ingestion.
 
-In-memory graph store for mobile knowledge graphs.
+## Compatibility
 
-| Method | Description |
-|--------|-------------|
-| `MobileGraphStore()` | Creates a new empty graph store (constructor) |
-| `addNode(node)` | Adds a node to the graph |
-| `addEdge(edge)` | Adds an edge (returns error if duplicate ID) |
-| `getNode(id)` | Gets a node by ID |
-| `getEdge(id)` | Gets an edge by ID |
-| `hasNode(id)` | Checks if a node exists |
-| `hasEdge(id)` | Checks if an edge exists |
-| `nodeCount()` | Returns the number of nodes |
-| `edgeCount()` | Returns the number of edges |
-| `getOutgoing(nodeId)` | Gets outgoing edges from a node |
-| `getIncoming(nodeId)` | Gets incoming edges to a node |
-| `getOutgoingByLabel(nodeId, label)` | Gets outgoing edges filtered by label |
-| `getNeighbors(nodeId)` | Gets neighbor node IDs (1-hop) |
-| `getNodesByLabel(label)` | Gets all nodes with a specific label |
-| `getEdgesByLabel(label)` | Gets all edges with a specific label |
-| `outDegree(nodeId)` | Returns the out-degree of a node |
-| `inDegree(nodeId)` | Returns the in-degree of a node |
-| `bfsTraverse(sourceId, maxDepth, limit)` | Breadth-first traversal |
-| `bfsTraverseParallel(sourceIds, maxDepth, limit)` | Multi-source parallel BFS with deduplication |
-| `dfsTraverse(sourceId, maxDepth, limit)` | Depth-first traversal |
-| `removeNode(nodeId)` | Removes a node and all connected edges |
-| `removeEdge(edgeId)` | Removes an edge by ID |
-| `clear()` | Clears all nodes and edges |
+Cross-compilation targets, as declared in `crates/velesdb-mobile/Cargo.toml`.
+"CI-built" means a workflow in this repository compiles that target.
 
-### Distance Metrics
+| Environment | Status | Note |
+|---|---|---|
+| Host Linux (x86_64) | CI-built and tested | `cargo test --workspace` on `ubuntu-latest` (`ci.yml`) |
+| Host macOS / Windows | Supported for local builds | Used for binding generation; not covered by a CI job for this crate |
+| `aarch64-apple-ios` | Supported, build from source | iOS device; not CI-built |
+| `aarch64-apple-ios-sim` | Supported, build from source | Apple-silicon simulator; not CI-built |
+| `x86_64-apple-ios` | Supported, build from source | Intel simulator; not CI-built |
+| `aarch64-linux-android` | Supported, build from source | ARM64 devices; not CI-built |
+| `armv7-linux-androideabi` | Supported, build from source | ARMv7 devices; not CI-built |
+| `x86_64-linux-android` | Supported, build from source | x86_64 emulator; not CI-built |
+| `i686-linux-android` | Declared in `Cargo.toml` | x86 emulator; never exercised in this repository |
 
-| Metric | Description | Use Case |
-|--------|-------------|----------|
-| `Cosine` | Cosine similarity (1 - cosine_distance) | Text embeddings, normalized vectors |
-| `Euclidean` | L2 distance | Image features, unnormalized vectors |
-| `DotProduct` | Dot product | Pre-normalized vectors, MaxSim |
-| `Hamming` | Hamming distance for binary vectors | Binary embeddings, LSH |
-| `Jaccard` | Jaccard similarity for sets | Sparse vectors, tags |
+ARM64 devices get core's NEON paths (`velesdb_core::simd_neon`,
+`simd_neon_prefetch`) for distance computation and prefetching.
 
-### Storage Modes (IoT/Edge)
+## Troubleshooting
 
-| Mode | Compression | Memory/dim | Recall Loss | Use Case |
-|------|-------------|------------|-------------|----------|
-| `Full` | 1x | 4 bytes | 0% | Best quality |
-| `Sq8` | 4x | 1 byte | ~1% | **Recommended for mobile** |
-| `Binary` | 32x | 1 bit | ~5-10% | Extreme constraints (IoT) |
-
-```swift
-// iOS - Create collection with SQ8 compression (4x memory reduction)
-try db.createCollectionWithStorage(
-    name: "embeddings",
-    dimension: 384,
-    metric: .cosine,
-    storageMode: .sq8  // 4x less memory, ~1% recall loss
-)
-```
-
-```kotlin
-// Android - Binary quantization for IoT devices (32x compression)
-db.createCollectionWithStorage(
-    "embeddings", 384u, DistanceMetric.COSINE, StorageMode.BINARY
-)
-```
-
-### Fusion Strategies
-
-Used with `multiQuerySearch()` for combining results from multiple query vectors.
-
-| Strategy | Description |
-|----------|-------------|
-| `Average` | Average scores across all queries |
-| `Maximum` | Take the maximum score per document |
-| `Rrf(k)` | Reciprocal Rank Fusion (default k=60) |
-| `Weighted(avgWeight, maxWeight, hitWeight)` | Weighted combination of avg, max, and hit ratio |
-
-### Data Types
-
-| Type | Fields | Description |
-|------|--------|-------------|
-| `VelesPoint` | `id: UInt64`, `vector: [Float]`, `payload: String?` | A point to insert |
-| `SearchResult` | `id: UInt64`, `score: Float` | A search result |
-| `SemanticResult` | `id: UInt64`, `score: Float`, `content: String` | Semantic memory result |
-| `VelesSparseVector` | `indices: [UInt32]`, `values: [Float]` | Sparse vector (parallel arrays) |
-| `IndividualSearchRequest` | `vector: [Float]`, `topK: UInt32`, `filter: String?` | Batch search request |
-| `PqTrainConfig` | `m: UInt32`, `k: UInt32`, `opq: Bool` | PQ training configuration |
-| `MobileGraphNode` | `id: UInt64`, `label: String`, `propertiesJson: String?`, `vector: [Float]?` | Graph node |
-| `MobileGraphEdge` | `id: UInt64`, `source: UInt64`, `target: UInt64`, `label: String`, `propertiesJson: String?` | Graph edge |
-| `TraversalResult` | `nodeId: UInt64`, `path: [UInt64]`, `depth: UInt32` | BFS/DFS traversal result (`path` = edge IDs taken from the source; mirrors core's `TraversalResult`) |
-| `MobileCollectionStats` | `totalPoints`, `payloadSizeBytes`, `rowCount`, ... | Collection statistics |
-| `MobileIndexInfo` | `label`, `property`, `indexType`, `cardinality`, `memoryBytes` | Index metadata |
-
-## Performance Tips
-
-1. **Use SQ8 or Binary Quantization** for memory-constrained devices
-2. **Batch inserts** with `upsertBatch()` for 10x faster bulk loading
-3. **Use `search()` on background thread** to avoid blocking UI
-4. **Pre-allocate** embedding arrays to reduce allocations
-
-## Memory Footprint
-
-| Vectors | Dimension | Storage Mode | Memory |
-|---------|-----------|--------------|--------|
-| 10,000 | 384 | Full (f32) | ~15 MB |
-| 10,000 | 384 | SQ8 | ~4 MB |
-| 10,000 | 384 | Binary | ~0.5 MB |
-| 100,000 | 768 | Full (f32) | ~300 MB |
-| 100,000 | 768 | Binary | ~10 MB |
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Database` error, message `Invalid JSON payload: ...` | `VelesPoint.payload` is a JSON *string*, not free text | Serialize the payload: `"{\"title\":\"Hello\"}"`. Nothing is committed when this fires |
+| `Database` error, message `Stream insert failed (buffer full or not configured): ...` | `streamInsert` called before `enableStreaming`, or the bounded channel is saturated | Call `enableStreaming(config)` first; on saturation slow the producer or raise `bufferSize` |
+| `DimensionMismatch { expected, actual }` | The vector length differs from the collection's `dimension` | Create the collection with your embedding model's dimension (384 for all-MiniLM-L6-v2, 768 for MiniLM base) |
+| Compile error: no initializer for `VelesDatabase` | Looking for a default constructor | `open` is a named constructor: `VelesDatabase.open(path:)` (Swift), `VelesDatabase.open(path)` (Kotlin) |
+| `UnsatisfiedLinkError` on Android | JNA cannot find `libvelesdb_mobile.so` for the running ABI | Ship the `.so` for that ABI under `jniLibs/<abi>/`; see [Mobile build guide](../../docs/guides/MOBILE_BUILD.md) |
 
 ## License
 
-Licensed under the [VelesDB Core License 1.0](./LICENSE) (source-available). The compiled mobile bindings embed the VelesDB engine and are governed by the Core License.
+[VelesDB Core License 1.0](./LICENSE) (source-available). The compiled bindings embed
+the VelesDB engine and are governed by that license.
+
+---
+
+`velesdb-mobile v4.0.0` · Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)

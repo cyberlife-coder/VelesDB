@@ -1,211 +1,268 @@
-# @wiscale/velesdb-memory-node
+# velesdb-node — `@wiscale/velesdb-memory-node`
 
-**The explainable, local-first memory engine for AI agents — as an in-process
-Node.js addon (napi-rs).** Same hardened Rust as the MCP server and the Python
-binding; no network service. Under the hood it fuses vector + graph + columnar,
-which is *how* it remembers, connects, and explains.
+> Local-first agent memory for Node.js: remember, recall, and explain *why* — in-process, no server.
 
-`remember` / `recall` / `recallWhere` / `recallFused` / `recallFusedDated` /
-`relate` / `forget` / `why` / `feedback` / `rememberExtracted` /
-`compileContext` / `compileTranscript` / `contextSavings` /
-`explainCompilation` / `retrieveContextSource` / working contexts
-(`save`/`load`/`list`). The differentiator is **`why()`**: it
-answers a question with the best-matching memory *plus its connected subgraph*
-— related facts a plain vector recall is blind to. `compileContext` applies
-the same explainability to your token bill: deterministic context compression
-with an auditable decision per fragment.
+[![npm](https://img.shields.io/npm/v/%40wiscale%2Fvelesdb-memory-node?logo=npm&label=npm)](https://www.npmjs.com/package/@wiscale/velesdb-memory-node)
+[![Node](https://img.shields.io/node/v/%40wiscale%2Fvelesdb-memory-node?logo=nodedotjs&label=node)](https://www.npmjs.com/package/@wiscale/velesdb-memory-node)
+[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0_(source--available)-e8702a)](./LICENSE)
+
+> **Portability**: ✅ a plain npm dependency — no MCP client, no server, no
+> daemon, no API key · ✅ prebuilt binaries for macOS, Linux (glibc) and
+> Windows · ⚠️ no musl prebuild, so Alpine-based images need a
+> [local build](../../docs/guides/NODE_ADDON_BUILD.md).
+
+This crate is never published to crates.io. It compiles to a napi-rs `cdylib`
+that ships to npm as `@wiscale/velesdb-memory-node`, wrapping the exact same
+hardened Rust as the [velesdb-memory](../velesdb-memory/README.md) MCP server
+and the Python binding — no logic is reimplemented here.
+
+## Objective
+
+An agent that runs in Node forgets everything between processes, and a vector
+store only hands back text that *looks like* the question. Neither can answer
+"why is this value 7?", because the answer is usually a fact that shares no
+words with the question — the customer constraint behind the constant, the
+incident behind the config.
+
+This addon gives a Node agent durable memory that never leaves the machine.
+It remembers facts, recalls them semantically, **connects** them with typed
+links, and walks those links to return the evidence trail behind an answer.
+It also carries the deterministic context compiler, which shrinks a prompt
+under a hard token budget with no model call at all.
 
 ![recall() finds the booking but misses the reason; why() reaches it through typed links, across a session restart](https://raw.githubusercontent.com/cyberlife-coder/VelesDB/develop/examples/agent_memory/why_across_sessions.gif)
 
-> The store is on disk, so memory survives process restarts — a new session
+> The store is on disk, so memory survives process restarts: a new session
 > reopens it and `why()` still walks the graph to context that shares no words
 > with the question.
 
-## Install
+## Use cases
+
+- A Node or TypeScript coding agent that must still know, three weeks and
+  several processes later, *why* a timeout is 7 seconds — and can show the
+  constraint it came from.
+- An Electron or CLI tool that needs memory without asking the user to
+  install, run and secure a database service.
+- Regulated or air-gapped work where context cannot transit a third-party LLM
+  API, and "show why it recalled that" has to be answerable.
+- A long agent session about to blow its context window: compile the prompt
+  under a budget instead of summarizing and restarting.
+
+## Prerequisites
+
+| Requirement | Minimum version | Note |
+|---|---|---|
+| Node.js | 18.17 | The package `engines.node` floor. CI builds and tests on Node 20. |
+| A supported platform | — | macOS (arm64/x64), Linux glibc (x64/arm64), Windows x64 — see [Compatibility](#compatibility). |
+| Rust | 1.90 | **Not needed to install.** Only to build the addon yourself: [building from source](../../docs/guides/NODE_ADDON_BUILD.md). |
+| Ollama | any | **Optional.** Only for `embedder: "ollama"` and `rememberExtracted`. The default embedder is offline and dependency-free. |
+
+## Installation
 
 ```bash
 npm install @wiscale/velesdb-memory-node
 ```
 
-Prebuilt binaries ship for macOS (arm64/x64), Linux (x64/arm64 gnu), and Windows
-(x64). Node >= 18.17.
+That downloads a prebuilt binary; nothing is compiled on your machine, and no
+Rust toolchain is involved. Unsupported platform, or working on the binding
+itself? See [building the Node addon from
+source](../../docs/guides/NODE_ADDON_BUILD.md).
 
-## Usage
+## First success in 60 seconds
+
+Save this as `first.mjs` in a project with `"type": "module"`, then run
+`node first.mjs`:
 
 ```js
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { MemoryService } from '@wiscale/velesdb-memory-node'
 
-// Offline "hash" embedder by default; pass "ollama" for real semantic recall.
-const mem = MemoryService.open('./agent_mem')
+// Offline "hash" embedder by default: no model, no network, no API key.
+const store = MemoryService.open(mkdtempSync(join(tmpdir(), 'velesdb-')))
 
-const pr = await mem.remember('PR #42 swaps the mutex for parking_lot')
-const decision = await mem.remember(
-  'we chose parking_lot to avoid lock poisoning',
-  [{ target: pr, relation: 'decided_in' }],
+// An earlier session recorded a decision and the human reason behind it.
+const reason = await store.remember(
+  'field crews work from remote mining sites over satellite links',
 )
-
-// recall: vector similarity.
-const hits = await mem.recall('lock poisoning', 5)
-
-// recallWhere: fused vector + structured filters (ranges/comparisons).
-const recent = await mem.recallWhere('release notes', [
-  { field: 'ts', op: 'ge', value: 20260101 },
+await store.remember('the default HTTP request timeout is 7 seconds', [
+  { target: reason, relation: 'because' },
 ])
+await store.remember('the vector index uses HNSW with M=16')
 
-// why: the wedge — seed memory + its reachable subgraph.
-const { nodes, edges } = await mem.why('why parking_lot')
+const question = 'why is the request timeout 7 seconds?'
+
+console.log('recall — vector similarity only:')
+for (const hit of await store.recall(question, 2)) {
+  console.log(`  ${hit.content}`)
+}
+
+console.log('why  — vector seed + graph of typed links:')
+const { nodes, edges } = await store.why(question)
+for (const node of nodes) console.log(`  hop ${node.hop}  ${node.content}`)
+console.log(`  ${edges.length} typed edge(s) walked`)
 ```
 
-Every method returns a `Promise` and runs off the event-loop thread. Memory ids
-cross the boundary as **decimal strings** (a JS `number` loses precision above
-2^53). Errors are `Error`s whose message is prefixed with a stable code:
-`[INVALID_INPUT]`, `[NOT_FOUND]`, or `[INTERNAL]`.
+Expected output, exactly:
 
-Wiring the API gives your agent the *methods*; it doesn't tell it *when* to use
-them — the bundled
-[`velesdb-memory` skill](./skills/velesdb-memory/SKILL.md) teaches the loop
-(recall before acting → remember decisions with metadata **and** links →
-`relate` facts as relationships appear → `why` to explain → `feedback` to
-reinforce). Install it the same way as the context-optimizer skill below:
+```text
+recall — vector similarity only:
+  the default HTTP request timeout is 7 seconds
+  the vector index uses HNSW with M=16
+why  — vector seed + graph of typed links:
+  hop 0  the default HTTP request timeout is 7 seconds
+  hop 1  field crews work from remote mining sites over satellite links
+  1 typed edge(s) walked
+```
+
+That is the whole product in eight lines of output. **`recall` never surfaces
+the satellite-link constraint** — it shares no words with the question, so
+vector similarity ranks an unrelated HNSW note above it. `why()` follows the
+`because` edge and reaches it at hop 1, so your agent warns you *before* you
+"round 7 down" and cut off the customer.
+
+Failure looks unmistakable: `Failed to load native binding` means no prebuilt
+binary matched your platform ([Troubleshooting](#troubleshooting)), and a
+`why` section with only `hop 0` means the typed link was not stored — check
+that `reason` was passed as `{ target, relation }`.
+
+## Configuration
+
+There are no environment variables. Everything is an argument to the factory:
+
+| Argument | Default | Effect |
+|---|---|---|
+| `path` | — | Directory of the on-disk store. Created if missing; reopened on the next run. |
+| `embedder` | `"hash"` | `"hash"` is offline and deterministic; `"ollama"` gives real semantic recall. |
+| `ollamaUrl` | `"http://localhost:11434"` | Only with `embedder: "ollama"`. |
+| `ollamaModel` | `"all-minilm"` | Only with `embedder: "ollama"`. |
+
+```js
+const store = MemoryService.open('./agent_mem', 'ollama')
+```
+
+A store is fixed to one embedder — the vector dimension is decided when the
+store is created — so use a separate directory when you switch.
+
+## Examples
+
+[`examples/why_magic_constant.mjs`](examples/why_magic_constant.mjs) is the
+runnable version of the demo above, scaled to 14 memories so the blindness of
+plain recall is unmistakable. From this directory, after a build:
+
+```bash
+node examples/why_magic_constant.mjs
+```
+
+The same wedge in the other bindings is listed in the
+[velesdb-memory README](../velesdb-memory/README.md#see-the-wedge-offline-one-command).
+
+## API
+
+18 methods on one class, in three families:
+
+| Family | Methods |
+|---|---|
+| Durable memory | `remember`, `recall`, `recallWhere`, `recallFused`, `recallFusedDated`, `relate`, `forget`, `why`, `feedback`, `rememberExtracted` |
+| Context compiler | `compileContext`, `compileTranscript`, `explainCompilation`, `contextSavings`, `retrieveContextSource` |
+| Session resumption | `saveWorkingContext`, `loadWorkingContext`, `listWorkingContexts` |
+
+Three contracts hold across all of them: every method returns a `Promise` and
+runs off the event-loop thread; every id crosses as a **decimal string** (a JS
+`number` loses precision above 2^53); every rejection is an `Error` whose
+message starts with `[INVALID_INPUT]`, `[NOT_FOUND]` or `[INTERNAL]`.
+
+Parameter types are generated into `index.d.ts` and shipped with the package —
+read them from your editor. Everything else (per-method semantics, the
+compiler surface, media fragments, working contexts, resource caps) is in the
+**[Node addon guide](../../docs/guides/NODE_ADDON.md)**.
+
+## Bundled agent skills
+
+Wiring the API gives your agent the *methods*; it does not tell it *when* to
+use them. Two skills ship inside the package for that — `velesdb-memory` (the
+recall → remember → relate → why → feedback loop) and
+`velesdb-context-optimizer` (the compression workflow, including when *not* to
+compress):
 
 ```bash
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-memory ~/.claude/skills/
-```
-
-**Keep it fresh:** this `cp` is a snapshot, not a live link — re-run it after
-every `npm update` so the installed skill picks up doc/behavior changes from
-the new package version (safe to repeat: it just overwrites the local copy).
-
-### Auto-extraction (`rememberExtracted`)
-
-```js
-// Extract atomic facts from raw text with a local Ollama model and auto-build
-// the fact↔topic graph that powers why().
-const ids = await mem.rememberExtracted(longText, 'qwen3', 'http://localhost:11434')
-```
-
-### Context compilation (`compileContext`)
-
-Your agent burns most of its tokens re-reading redundant context.
-`compileContext` compresses it **deterministically** (no LLM, no cloud): the
-same request always compiles to the same bytes, duplicates drop, repeated log
-lines collapse with counts, code / URLs / numbers / negative constraints
-survive verbatim, and over-budget content becomes a recoverable
-`ctx://source/` handle — never a silent loss.
-
-```js
-const out = await mem.compileContext({
-  query: 'state of the canary deploy',
-  token_budget: 4000,
-  memory_scope: { k: 5 }, // optional: pull relevant stored memories in
-  fragments: [
-    { content: 'You are the deploy assistant.', metadata: { cache: true } },
-    { content: ciLogs, kind: 'log' },
-    { content: 'Never restart the primary during a rebalance.' },
-  ],
-})
-
-out.content            // the compiled prompt context (fits the budget)
-out.risk               // 'low' | 'medium' | 'high' — 'high' means critical content did not fit
-out.decisions          // one auditable decision per fragment (rule_id, reason, risk)
-out.insights           // { tokens_in, tokens_out, tokens_saved, ... } — local estimates
-```
-
-The request/result JSON matches the MCP `compile_context` tool, with two
-binding-wide differences: id fields (`fragment_id`, `content_hash`,
-`memory_id`, `fragment_ids`, input `fragments[].id`) cross as decimal
-strings, and the *top-level* result keys follow the binding's camelCase
-(`out.retrievalHandles` — nested trees keep the wire's snake_case). `tokens_saved` is a local estimate, not billed tokens. The bundled
-[`velesdb-context-optimizer` skill](./skills/velesdb-context-optimizer/SKILL.md)
-teaches an agent the full workflow, including when *not* to compress. The
-binding exposes the compiler's read tools natively too: `explainCompilation`
-and `contextSavings` (alongside `compileContext`, `compileTranscript`,
-`retrieveContextSource`, save/load/list working context, and `feedback`).
-Install the skill into your agent's skills directory:
-
-```bash
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-context-optimizer ~/.claude/skills/
 ```
 
-**Keep it fresh:** re-run this after every `npm update` for the same reason
-as the `velesdb-memory` skill above.
-
-#### Media fragments (`retrieveContextSource`)
-
-A fragment may carry an inline screenshot alongside its caption — set
-`media: {mime, bytes_b64}` on a fragment:
-
-```js
-const out = await mem.compileContext({
-  query: 'a screenshot of the failing build',
-  token_budget: 4000,
-  fragments: [
-    { content: 'the failing build, before the fix', media: { mime: 'image/png', bytes_b64: pngB64 } },
-  ],
-})
-```
-
-The image packs atomically (never chunked) and costs tokens from its actual
-pixels, not its base64 text — see the crate README's "Media fragments"
-section for the full model. `out.sources[i].handle` is a pointer only
-(`fragment_id` + `handle`); fetch the image itself back — inline or
-externalized by budget, it makes no difference — with `retrieveContextSource`:
-
-```js
-const source = await mem.retrieveContextSource(out.sources[0].handle)
-source.content   // the caption, byte for byte
-source.media     // { mime, bytes_b64 } when the fragment carried one, else undefined
-```
-
-Same JSON shape as the MCP `retrieve_context_source` tool
-(`{handle, content, media?}`); an unknown or expired handle rejects with
-`NOT_FOUND`.
+That `cp` is a snapshot, not a live link: re-run it after every `npm update`.
+Details in the [Node addon guide](../../docs/guides/NODE_ADDON.md#bundled-agent-skills).
 
 ## Need the full engine?
 
-This addon is the **memory wedge**: `remember` / `recall` / `relate` /
-`forget` / `why` / `compileContext` — memory semantics only, by design (see
-[License](#license) below). It does not expose raw VelesQL, deep graph
-`MATCH`, collection administration, or any other database-shaped capability —
-that would cross the
-[`VelesDB Core License 1.0`](https://github.com/cyberlife-coder/VelesDB/blob/develop/LICENSE)
-§1 "Substantial Set" line.
+This addon is the **memory wedge**, by design and by license: memory
+semantics only. It exposes no raw VelesQL, no deep graph `MATCH`, no
+collection administration — a test pins the prototype allowlist and asserts
+`query`, `upsert`, `createCollection` and `traverse` are absent.
 
-For the full engine (VelesQL, multi-hop `MATCH`, collection/index
-administration) from Node/TypeScript, run the REST server and talk to it with
-[`@wiscale/velesdb-sdk`](https://www.npmjs.com/package/@wiscale/velesdb-sdk)
-instead:
+For the full engine from Node, run the REST server and talk to it with
+[`@wiscale/velesdb-sdk`](https://www.npmjs.com/package/@wiscale/velesdb-sdk);
+the runnable two-step recipe is in the
+[Node addon guide](../../docs/guides/NODE_ADDON.md#need-the-full-engine).
 
-```bash
-# 1. Start the server (from source, or `cargo install velesdb-server`)
-velesdb-server --port 8080
-```
+## Known limits
 
-```typescript
-// 2. Point the TypeScript SDK's REST backend at it.
-import { VelesDB } from '@wiscale/velesdb-sdk';
+- **Memory semantics only.** No database-shaped API, ever — see above.
+- **One process per store.** The store takes a single-writer lock, so a second
+  `MemoryService.open` on the same directory fails while the first is alive.
+- **A store is fixed to one embedder.** The dimension is set at creation.
+- **No `path` fragment ingestion.** The MCP server can read a file by
+  reference under an allowlist; this binding has no such configuration
+  surface. Read the file yourself and pass its content.
+- **Bring-your-own-links by default.** The graph comes from `relate` and
+  `links`; automatic extraction needs `rememberExtracted` and a local model.
+- **No musl prebuild**, so Alpine images must build the addon themselves.
+- **Not on crates.io.** `publish = false`: the artifact is the npm package.
 
-const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
-await db.init();
+## Compatibility
 
-await db.createCollection('docs', { dimension: 4, metric: 'cosine' });
-await db.upsert('docs', { id: 1, vector: [0.1, 0.2, 0.3, 0.4], payload: { title: 'Hello' } });
+Prebuilt binaries, one per target declared in `package.json` `napi.targets`:
 
-// Raw VelesQL — not available through this wedge.
-const result = await db.query(
-  'docs',
-  'SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 5',
-  { v: [0.1, 0.2, 0.3, 0.4] },
-);
-```
+| Platform | Target triple | Status |
+|---|---|---|
+| macOS, Apple silicon | `aarch64-apple-darwin` | Prebuilt, load-smoke-tested in CI |
+| macOS, Intel | `x86_64-apple-darwin` | Prebuilt, cross-built (no native runner to smoke-test on) |
+| Linux x64, glibc | `x86_64-unknown-linux-gnu` | Prebuilt, load-smoke-tested in CI |
+| Linux arm64, glibc | `aarch64-unknown-linux-gnu` | Prebuilt, cross-built |
+| Windows x64 | `x86_64-pc-windows-msvc` | Prebuilt, load-smoke-tested in CI |
+| Linux musl (Alpine) | `*-unknown-linux-musl` | **Not shipped** — [build from source](../../docs/guides/NODE_ADDON_BUILD.md) |
 
-See the
-[server README](https://github.com/cyberlife-coder/VelesDB/blob/develop/crates/velesdb-server/README.md)
-for the full REST API (VelesQL, graph `MATCH`, auth, TLS) and the
-[TypeScript SDK README](https://github.com/cyberlife-coder/VelesDB/blob/develop/sdks/typescript/README.md)
-for the REST-backend client surface.
+| Runtime | Status |
+|---|---|
+| Node.js 18.17+ | Supported (`engines.node`) |
+| Node.js 20 | The version CI builds and tests on |
+| Bun / Deno | Untested — Node-API support exists in both, but nothing here verifies it |
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Failed to load native binding` | No prebuilt binary matches this platform — most often Alpine/musl. There is no source fallback. | [Build the addon from source](../../docs/guides/NODE_ADDON_BUILD.md), or use a glibc base image. |
+| `[INTERNAL] storage error: [VELES-031] Database is already opened by another process: <path>` | The single-writer lock is held — a second `MemoryService` on the same directory. | Keep one instance per store, or give the second one its own path. |
+| `[NOT_FOUND] memory 999999999 does not exist` on `relate` / `feedback` | The id was rounded by JS number arithmetic, or came from a different store. | Never convert an id with `Number()`; pass the decimal string through verbatim. |
+| `[INVALID_INPUT] invalid id 'not-an-id' (expected a decimal u64 string)` | A non-numeric value reached an id argument (often an object or `undefined`). | Pass the exact string `remember` resolved to. |
+| `[INTERNAL] extraction error: ... ollama request failed: ... Connection refused` | `rememberExtracted` needs a running Ollama, whatever embedder the store uses. | Start Ollama and pull the model, or use `remember` with explicit `links`. |
+| `EPERM` / `EBUSY` deleting a store directory on Windows | The `velesdb.lock` file is still held; the release finalizer is not deterministic. | Retry the delete, or drop the directory on the next run. |
 
 ## License
 
-VelesDB Core License 1.0 (based on ELv2). See [LICENSE](./LICENSE). This addon
-exposes memory semantics only; it is not a hosted or managed service.
+VelesDB Core License 1.0 (source-available, based on ELv2). See
+[LICENSE](./LICENSE) — a local copy, so npm bundles it into the published
+package and each per-platform sub-package.
+
+Running this addon inside your own application, where your users only ever
+receive results, is the license's expressly-permitted **embedded, local-first
+use**. What it forbids is re-hosting VelesDB as a multi-tenant service where
+third parties drive the database — which this package makes impossible by
+construction: memory semantics only, and it is a library, not a service.
+Questions: contact@wiscale.fr.
+
+---
+
+`velesdb-node v0.11.1` (npm `@wiscale/velesdb-memory-node@0.11.1`) · Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

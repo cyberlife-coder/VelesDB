@@ -1,448 +1,258 @@
 # tauri-plugin-velesdb
 
-[![Crates.io](https://img.shields.io/crates/v/tauri-plugin-velesdb.svg)](https://crates.io/crates/tauri-plugin-velesdb)
-[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](LICENSE)
+> Embeds the VelesDB engine in a Tauri desktop app: vector, text, graph and agent memory, fully offline.
 
-A Tauri plugin for **VelesDB** — Vector search in desktop applications.
+[![crates.io](https://img.shields.io/crates/v/tauri-plugin-velesdb.svg)](https://crates.io/crates/tauri-plugin-velesdb)
+[![docs.rs](https://docs.rs/tauri-plugin-velesdb/badge.svg)](https://docs.rs/tauri-plugin-velesdb)
+[![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue.svg)](./LICENSE)
 
-> The desktop engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It fuses vector + graph + columnar under VelesQL; the [`why()`](../velesdb-memory/README.md) recall trail returns the evidence path behind every answer.
+## Objective
 
-## Features
+A desktop app that needs semantic search has an awkward choice: ship a cloud
+dependency (latency, cost, and user data leaving the machine), or bolt an
+embedded vector store onto the frontend and hand-roll the IPC, the permissions,
+and the persistence path.
 
-- **Fast Vector Search** — Microsecond latency similarity search (HNSW + AVX2/AVX-512)
-- **Text Search** — BM25 full-text search across payloads
-- **Hybrid Search** — Combined vector + text with RRF fusion
-- **Sparse Vectors** — Sparse-only and hybrid dense+sparse search
-- **Multi-Query Fusion** — MQG support with RRF / Weighted / Average strategies
-- **Collection Management** — Create, list, and delete vector and metadata collections
-- **Secondary Indexes** — Create/drop metadata indexes for faster filtered search
-- **Knowledge Graph** — Add edges, traverse (BFS/DFS), multi-source parallel BFS, node degrees
-- **VelesQL** — SQL-like query language for advanced searches
-- **Agent Memory** — Semantic, episodic, and procedural memory for AI agents (record/recall/learn + snapshots)
-- **Streaming Insert** — High-throughput bulk insert with persistence
-- **Quantization** — PQ training for memory-efficient storage
-- **Event System** — Real-time notifications for data changes
-- **Local-First** — All data stays on the user's device
+This plugin removes that choice. Registering it in your `tauri::Builder` opens a
+VelesDB database inside the app process and exposes 69 typed commands to the
+webview — vector search, BM25, hybrid fusion, VelesQL, knowledge graph, agent
+memory — under Tauri's own capability model. Nothing leaves the device.
+
+It is the desktop face of **VelesDB, the explainable, local-first memory engine
+for AI agents**: one engine fusing vector, graph and columnar data under
+VelesQL, where [`why()`](../velesdb-memory/README.md) returns the evidence path
+behind every recall.
+
+## Use cases
+
+- A note-taking or documentation app that searches the user's own corpus
+  semantically, with no account and no network call.
+- A desktop AI assistant that keeps semantic, episodic and procedural memory
+  between sessions, on disk, in the platform's app-data directory.
+- An offline field tool (inspection, maintenance, medical) where the dataset
+  ships with the binary and connectivity is not guaranteed.
+- A local RAG workbench where embeddings are computed in Rust and the frontend
+  only renders results — see [`demos/tauri-rag-app`](../../demos/tauri-rag-app).
+
+## Prerequisites
+
+| Requirement | Minimum version | Note |
+|---|---|---|
+| Rust | 1.90 | `rust-version` of the workspace |
+| Tauri | 2.11 | the plugin builds against `tauri = "2.11"` |
+| Node.js | 18 | only for the frontend toolchain / TypeScript SDK |
+| A Tauri 2 project | — | starting from zero? Follow the [Tauri RAG tutorial](../../docs/tutorials/tauri-rag-app/README.md) |
+| Platform toolchain | — | Xcode CLT on macOS, `libwebkit2gtk-4.1-dev` and friends on Linux, nothing extra on Windows |
 
 ## Installation
 
-### Rust (Cargo.toml)
-
-```toml
-[dependencies]
-tauri-plugin-velesdb = "3"
+```bash
+# from your Tauri app's src-tauri/ directory
+cargo add tauri-plugin-velesdb
 ```
 
-### TypeScript SDK (package.json)
-
-A typed JS/TS wrapper ships in `guest-js/index.ts`. Build it with your bundler or import directly:
+Optional typed frontend wrapper (the raw `invoke` API below needs no extra
+dependency):
 
 ```bash
 npm install @wiscale/tauri-plugin-velesdb
-# pnpm add @wiscale/tauri-plugin-velesdb
-# yarn add @wiscale/tauri-plugin-velesdb
 ```
 
-## Usage
+## First success in 60 seconds
 
-### Rust — Plugin Registration
+**1. Register the plugin** in `src-tauri/src/main.rs`:
 
 ```rust
 fn main() {
     tauri::Builder::default()
-        // Default data directory: ./velesdb_data
         .plugin(tauri_plugin_velesdb::init())
-        // Or specify a custom path:
-        // .plugin(tauri_plugin_velesdb::init_with_path("./my_data"))
-        // Or use the platform-specific app-data directory:
-        // .plugin(tauri_plugin_velesdb::init_with_app_data("MyApp"))
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 ```
 
-### TypeScript SDK (recommended)
+**2. Grant the commands** — Tauri 2 denies plugin commands until a capability
+allows them. Create `src-tauri/capabilities/velesdb.json`:
 
-```typescript
-import {
-  createCollection, upsert, search,
-  hybridSearch, textSearch, multiQuerySearch,
-  listCollections, deleteCollection,
-  createMetadataCollection, upsertMetadata,
-  addEdge, traverseGraph, getNodeDegree,
-  isEmpty, flush
-} from '@wiscale/tauri-plugin-velesdb';
-
-// Create a collection
-await createCollection({ name: 'documents', dimension: 768, metric: 'cosine' });
-
-// Insert vectors
-await upsert({
-  collection: 'documents',
-  points: [
-    { id: 1, vector: [0.1, 0.2, /* ... 768 dims */], payload: { title: 'Intro to AI' } },
-    { id: 2, vector: [0.4, 0.5, /* ... */],          payload: { title: 'ML Guide' } }
-  ]
-});
-
-// Vector similarity search
-const results = await search({
-  collection: 'documents',
-  vector: [0.15, 0.25, /* ... */],
-  topK: 5
-});
-// { results: [{ id: 1, score: 0.98, payload: {...} }], timingMs: 0.5 }
+```json
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "velesdb",
+  "description": "Lets the frontend call VelesDB plugin commands",
+  "windows": ["main"],
+  "permissions": ["velesdb:default"]
+}
 ```
 
-### JavaScript (raw `invoke`)
+**3. Call it from the frontend** — paste this into your app's entry module and
+run `npm run tauri dev`:
 
 ```javascript
 import { invoke } from '@tauri-apps/api/core';
 
-// Create a collection
-await invoke('plugin:velesdb|create_collection', {
-  request: {
-    name: 'documents',
-    dimension: 768,
-    metric: 'cosine',    // cosine | euclidean | dot | hamming | jaccard
-    storageMode: 'full'  // full | sq8 | binary | pq
-  }
-});
+async function velesdbSmokeTest() {
+  await invoke('plugin:velesdb|create_collection', {
+    request: { name: 'demo', dimension: 4, metric: 'cosine' }
+  });
 
-// Insert vectors
-await invoke('plugin:velesdb|upsert', {
-  request: {
-    collection: 'documents',
-    points: [
-      { id: 1, vector: [0.1, 0.2, /* ... */], payload: { title: 'Intro to AI' } }
-    ]
-  }
-});
+  const inserted = await invoke('plugin:velesdb|upsert', {
+    request: {
+      collection: 'demo',
+      points: [
+        { id: 1, vector: [1, 0, 0, 0], payload: { title: 'north' } },
+        { id: 2, vector: [0, 1, 0, 0], payload: { title: 'east' } }
+      ]
+    }
+  });
+  console.log('inserted:', inserted);
 
-// Vector similarity search
-const results = await invoke('plugin:velesdb|search', {
-  request: { collection: 'documents', vector: [0.15, 0.25, /* ... */], topK: 5 }
-});
+  const hits = await invoke('plugin:velesdb|search', {
+    request: { collection: 'demo', vector: [1, 0, 0, 0], topK: 2 }
+  });
+  console.log(JSON.stringify(hits, null, 2));
+}
 
-// Text search (BM25)
-const textResults = await invoke('plugin:velesdb|text_search', {
-  request: { collection: 'documents', query: 'machine learning guide', topK: 10 }
-});
-
-// Hybrid search (vector + text with RRF)
-const hybridResults = await invoke('plugin:velesdb|hybrid_search', {
-  request: {
-    collection: 'documents',
-    vector: [0.1, 0.2, /* ... */],
-    query: 'AI introduction',
-    topK: 10,
-    vectorWeight: 0.7  // 0.0–1.0, higher = more vector influence
-  }
-});
-
-// Multi-query fusion search (MQG)
-const mqResults = await invoke('plugin:velesdb|multi_query_search', {
-  request: {
-    collection: 'documents',
-    vectors: [
-      [0.1, 0.2, /* query 1 */],
-      [0.3, 0.4, /* query 2 */]
-    ],
-    topK: 10,
-    fusion: 'rrf',          // rrf | average | maximum | weighted
-    fusionParams: { k: 60 } // RRF k parameter
-  }
-});
-
-// VelesQL query
-const queryResults = await invoke('plugin:velesdb|query', {
-  request: {
-    query: "SELECT * FROM documents WHERE content MATCH 'rust' LIMIT 10",
-    params: {}
-  }
-});
-
-// Delete collection
-await invoke('plugin:velesdb|delete_collection', { name: 'documents' });
+velesdbSmokeTest().catch((e) => console.error('velesdb failed:', e));
 ```
 
-### Knowledge Graph
+Expected output in the webview console:
 
-```javascript
-// Add a directed edge
-await invoke('plugin:velesdb|add_edge', {
-  request: {
-    collection: 'documents',
-    id: 1,
-    source: 100,
-    target: 200,
-    label: 'REFERENCES',
-    properties: { weight: 0.8, created: '2026-01-01' }
-  }
-});
-
-// Query edges by label / source / target
-const edges = await invoke('plugin:velesdb|get_edges', {
-  request: { collection: 'documents', label: 'REFERENCES' }
-});
-
-// Graph traversal (BFS or DFS)
-const traversal = await invoke('plugin:velesdb|traverse_graph', {
-  request: {
-    collection: 'documents',
-    source: 100,
-    maxDepth: 3,
-    relTypes: ['REFERENCES', 'CITES'],
-    limit: 50,
-    algorithm: 'bfs'  // bfs | dfs
-  }
-});
-
-// Node degree
-const degree = await invoke('plugin:velesdb|get_node_degree', {
-  request: { collection: 'documents', nodeId: 100 }
-});
-// { nodeId: 100, inDegree: 5, outDegree: 3 }
-
-// Multi-source parallel BFS traversal
-const parallel = await invoke('plugin:velesdb|traverse_graph_parallel', {
-  request: {
-    collection: 'documents',
-    sources: [100, 200, 300],
-    maxDepth: 3,
-    limit: 50
-  }
-});
-
-// Cross-collection MATCH: enrich nodes with data from other collections.
-// Nodes annotated with @collection in the MATCH pattern have their payloads
-// looked up from the named collection after traversal.
-const crossColl = await invoke('plugin:velesdb|query', {
-  request: {
-    query: "MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory) RETURN p.name, inv.price, inv.stock LIMIT 20",
-    collection: "catalog_graph",
-    params: {}
-  }
-});
+```text
+inserted: 2
+{
+  "results": [
+    { "id": 1, "score": 1.0, "payload": { "title": "north" } },
+    { "id": 2, "score": 0.0, "payload": { "title": "east" } }
+  ],
+  "timingMs": 0.42
+}
 ```
 
-### Secondary Indexes
+**How to read it.** With the `cosine` metric the score is a similarity: `1.0`
+means identical, `0.0` means orthogonal. Success is *`id: 1` ranked first with a
+score close to `1.0`*. The last decimals and `timingMs` will differ on your
+machine — that is normal. A directory `./velesdb_data` now exists next to the
+running binary.
 
-```javascript
-// Create a secondary index for faster filtered search
-await invoke('plugin:velesdb|create_index', {
-  request: { collection: 'documents', fieldName: 'category' }
-});
+**If it failed instead**, the rejection is a `{ message, code }` object:
+`code: "VELES-002"` means the collection was not found (step 3 ran before
+step 1 succeeded), and a permission error means step 2 is missing or the window
+label is not `main`. See [Troubleshooting](#troubleshooting).
 
-// List all indexes
-const indexes = await invoke('plugin:velesdb|list_indexes', {
-  request: { collection: 'documents' }
-});
-// [{ label: "secondary", property: "category", indexType: "hash", cardinality: 42, memoryBytes: 1024 }]
+## Configuration
 
-// Drop an index
-await invoke('plugin:velesdb|drop_index', {
-  request: { collection: 'documents', fieldName: 'category' }
-});
-```
+Three entry points, from simplest to most explicit:
 
-### Sparse Vectors
+| Entry point | Data directory | Use it when |
+|---|---|---|
+| `init()` | `./velesdb_data`, relative to the working directory | prototyping |
+| `init_with_path("./my_data")` | whatever you pass | you own the layout |
+| `init_with_app_data("MyApp")?` | `%APPDATA%\MyApp\velesdb\` · `~/Library/Application Support/MyApp/velesdb/` · `~/.local/share/MyApp/velesdb/` | **production** |
 
-```javascript
-// Insert with sparse vector
-await invoke('plugin:velesdb|sparse_upsert', {
-  request: {
-    collection: 'documents',
-    points: [{
-      id: 1,
-      vector: [0.1, 0.2, /* ... */],
-      payload: { title: 'Doc' },
-      sparseVector: { "42": 0.8, "7": 1.2, "100": 0.5 }
-    }]
-  }
-});
-
-// Sparse-only search
-const sparseResults = await invoke('plugin:velesdb|sparse_search', {
-  request: {
-    collection: 'documents',
-    sparseVector: { "42": 1.0, "7": 0.5 },
-    topK: 10
-  }
-});
-
-// Hybrid dense + sparse search
-const hybridSparse = await invoke('plugin:velesdb|hybrid_sparse_search', {
-  request: {
-    collection: 'documents',
-    vector: [0.1, 0.2, /* ... */],
-    sparseVector: { "42": 1.0, "7": 0.5 },
-    topK: 10
-  }
-});
-```
-
-### Event System
-
-```javascript
-import { listen } from '@tauri-apps/api/event';
-
-await listen('velesdb://collection-created', (event) => {
-  console.log('New collection:', event.payload.collection);
-});
-
-await listen('velesdb://collection-updated', (event) => {
-  console.log(`${event.payload.operation}: ${event.payload.count} items`);
-});
-
-await listen('velesdb://collection-deleted', (event) => {
-  console.log('Deleted:', event.payload.collection);
-});
-
-await listen('velesdb://operation-progress', (event) => {
-  console.log(`Progress: ${event.payload.progress}%`);
-});
-
-await listen('velesdb://operation-complete', (event) => {
-  console.log(`Done in ${event.payload.durationMs}ms`);
-});
-```
-
-### Accessing `VelesDbState` from custom Tauri commands
+To tune the engine itself (HNSW, WAL batching, runtime limits, search quality),
+use the builder — it fails fast rather than silently falling back to defaults:
 
 ```rust
-use tauri::{AppHandle, Manager};
-use tauri_plugin_velesdb::VelesDbState;
-use velesdb_core::{DistanceMetric, Point};
-use std::sync::Arc;
+fn main() {
+    let plugin = tauri_plugin_velesdb::Builder::new("./my_data")
+        .with_config_path("./velesdb.toml")
+        .expect("velesdb.toml missing or invalid")
+        .build();
 
-#[tauri::command]
-async fn my_command(app: AppHandle) -> Result<usize, String> {
-    let state = app.state::<VelesDbState>();
-    state
-        .with_db(|db: Arc<velesdb_core::Database>| {
-            let coll = db
-                .get_vector_collection("my-collection")
-                .ok_or_else(|| tauri_plugin_velesdb::Error::CollectionNotFound(
-                    "my-collection".to_string()
-                ))?;
-            coll.search(&[0.1_f32; 384], 5)
-                .map(|r| r.len())
-                .map_err(tauri_plugin_velesdb::Error::Database)
-        })
-        .map_err(|e| format!("{e}"))
+    tauri::Builder::default()
+        .plugin(plugin)
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }
 ```
 
-## API Reference
+Only the engine sections of the file are read (`[search]`, `[hnsw]`,
+`[storage]`, `[limits]`, `[quantization]`, `[wal_batch]`); a `[server]` table
+belonging to another VelesDB component in a shared file is ignored, not
+rejected. Field reference: [configuration guide](../../docs/guides/CONFIGURATION.md).
 
-### Commands
+### Cargo features
 
-| Command | Description |
-|---------|-------------|
-| `create_collection` | Create a vector collection |
-| `create_metadata_collection` | Create a metadata-only collection (no vectors) |
-| `delete_collection` | Delete a collection and all its data |
-| `list_collections` | List all collections with metadata |
-| `get_collection` | Get info about a specific collection |
-| `upsert` | Insert or update vectors with payloads |
-| `upsert_metadata` | Insert or update metadata-only points |
-| `get_points` | Retrieve points by IDs |
-| `delete_points` | Delete points by IDs |
-| `search` | Vector similarity search |
-| `batch_search` | Parallel batch vector search (multiple queries) |
-| `multi_query_search` | Multi-query fusion search (RRF / Weighted / Average) |
-| `text_search` | BM25 full-text search |
-| `hybrid_search` | Combined vector + text search with RRF fusion |
-| `query` | Execute a VelesQL query |
-| `is_empty` | Check if a collection has no points |
-| `flush` | Flush pending writes to disk |
-| `add_edge` | Add a directed edge to the knowledge graph |
-| `get_edges` | Query edges by label / source / target |
-| `traverse_graph` | BFS / DFS graph traversal from a node |
-| `traverse_graph_parallel` | Multi-source parallel BFS with deduplication |
-| `get_node_degree` | Get in-degree and out-degree of a node |
-| `sparse_search` | Sparse-only search (inverted index) |
-| `hybrid_sparse_search` | Hybrid dense + sparse search with RRF fusion |
-| `sparse_upsert` | Insert vectors with sparse vectors |
-| `train_pq` | Train product quantization on a collection |
-| `stream_insert` | Streaming bulk insert (persistence only) |
-| `create_index` | Create a secondary metadata index for faster filtered search |
-| `drop_index` | Drop a secondary metadata index |
-| `list_indexes` | List all indexes on a collection |
-| `semantic_store` | Store a knowledge fact (Agent Memory SDK) |
-| `semantic_query` | Retrieve semantically similar facts |
+`default` pulls in `velesdb-core/default`, which includes `persistence` — mmap
+storage, WAL, and the streaming-insert commands. The other features
+(`gpu`, `openapi`, `update-check`, `loom`, `internal-bench`, `bench-sift1m`,
+`test-fault-injection`) forward to the matching `velesdb-core` feature; the last
+two must never be enabled in a shipping bundle.
 
-### Events
+## Examples
 
-| Event | Payload | Description |
-|-------|---------|-------------|
-| `velesdb://collection-created` | `{ collection, operation }` | Collection created |
-| `velesdb://collection-deleted` | `{ collection, operation }` | Collection deleted |
-| `velesdb://collection-updated` | `{ collection, operation, count }` | Data modified |
-| `velesdb://operation-progress` | `{ operationId, progress, total, processed }` | Progress update |
-| `velesdb://operation-complete` | `{ operationId, success, error?, durationMs? }` | Operation done |
+- [`demos/tauri-rag-app`](../../demos/tauri-rag-app) — a complete offline RAG
+  desktop app: `fastembed` (AllMiniLML6V2, 384D) embeddings computed in Rust,
+  chunk ingestion, vector search, and a statistics UI.
+- [Tauri RAG tutorial](../../docs/tutorials/tauri-rag-app/README.md) — the same
+  app built step by step from an empty directory, in about 30 minutes.
 
-### Storage Modes
+## API / commands
 
-| Mode | Compression | Best For |
-|------|-------------|----------|
-| `full` | 1× (f32) | Maximum accuracy |
-| `sq8` | 4× | Good accuracy / memory balance |
-| `binary` | 32× | Edge / IoT, massive scale |
-| `pq` | Variable | Product quantization, ultra-compact |
+- Rust API (`init`, `init_with_path`, `init_with_app_data`, `Builder`,
+  `VelesDbState`, `Error`): [docs.rs/tauri-plugin-velesdb](https://docs.rs/tauri-plugin-velesdb).
+- The 69 IPC commands, the event payloads, the permission model, the storage
+  modes, the distance metrics and the error codes:
+  [plugin reference](../../docs/guides/TAURI_PLUGIN_REFERENCE.md).
+- Runnable snippets for graph, sparse vectors, secondary indexes, VelesQL,
+  events, and calling the engine from your own Tauri commands:
+  [plugin recipes](../../docs/guides/TAURI_PLUGIN_RECIPES.md).
+- Generated permission list: [`permissions/autogenerated/reference.md`](./permissions/autogenerated/reference.md).
+- TypeScript definitions: [`guest-js/index.ts`](./guest-js/index.ts).
 
-### Distance Metrics
+## Known limits
 
-| Metric | Best For |
-|--------|----------|
-| `cosine` | Text embeddings (default) |
-| `euclidean` | Spatial / geographic data |
-| `dot` | Pre-normalized vectors, max inner product |
-| `hamming` | Binary vectors |
-| `jaccard` | Set similarity |
+- **No progress events yet.** `velesdb://operation-progress` and
+  `velesdb://operation-complete` are defined in `src/events.rs`, but no command
+  emits them today. Only `collection-created`, `collection-deleted` and
+  `collection-updated` actually fire.
+- **Graph nodes cannot be created from the frontend.** `add_edge` requires a
+  collection created by `create_graph_collection`, and refuses an edge whose
+  endpoints have no stored node payload (#1442). No IPC command upserts a node
+  payload — do it from Rust through `VelesDbState::with_db`
+  ([recipe](../../docs/guides/TAURI_PLUGIN_RECIPES.md#knowledge-graph)).
+- **`quality` is ignored when a `filter` is supplied** on `search` /
+  `search_ids` (known limitation #457): the filtered path takes precedence.
+- **`query` has no `collection` field.** The target collection comes from the
+  `FROM` clause or the `MATCH` pattern inside the VelesQL string; any extra
+  field in the request is silently dropped.
+- **No embedding model.** The plugin stores and searches vectors; producing
+  them is your app's job (the demo uses `fastembed`).
+- **Desktop only.** The plugin ships no Android/iOS bindings, and the
+  app-data directory resolution only documents Windows, macOS and Linux.
 
-## Permissions
+## Compatibility
 
-Add to your `capabilities/default.json`:
+Not an agent-facing crate — this table lists the platforms and toolchains the
+plugin targets.
 
-```json
-{
-  "permissions": [
-    "velesdb:default"
-  ]
-}
-```
+| Environment | Status | Note |
+|---|---|---|
+| Windows (x86_64) | Supported | app data under `%APPDATA%\<app>\velesdb\` |
+| macOS (x86_64, aarch64) | Supported | app data under `~/Library/Application Support/<app>/velesdb/` |
+| Linux (x86_64, aarch64) | Supported | app data under `~/.local/share/<app>/velesdb/`; CI runs the test suite here |
+| Android / iOS | Not supported | no mobile bindings, no mobile target in CI |
+| Tauri | 2.11+ | `tauri = { version = "2.11", default-features = false }` |
+| Rust | 1.90+ | workspace `rust-version` |
+| `@tauri-apps/api` | 2.0+ | peer dependency of the TypeScript SDK |
+| WebAssembly | Not applicable | a Tauri plugin runs in the Rust host process |
 
-Or for granular control:
+## Troubleshooting
 
-```json
-{
-  "permissions": [
-    "velesdb:allow-create-collection",
-    "velesdb:allow-search",
-    "velesdb:allow-upsert"
-  ]
-}
-```
-
-## Example App
-
-See [`demos/tauri-rag-app`](../../../demos/tauri-rag-app) for a complete desktop RAG application using this plugin with:
-
-- `fastembed` (AllMiniLML6V2, 384D) for local ML embeddings
-- Full persistent `VectorCollection` (text stored in Point payload)
-- Chunk ingestion, vector search, and statistics UI
-
-## Performance
-
-| Operation | Latency |
-|-----------|---------|
-| Vector search (10k vectors) | < 1ms |
-| Text search (BM25) | < 5ms |
-| Hybrid search | < 10ms |
-| Insert (batch 100) | < 10ms |
+| Symptom | Cause | Fix |
+|---|---|---|
+| `{ code: "VELES-002", message: "Collection 'x' not found" }` | the collection was never created, or the name differs | call `create_collection` first; names are case-sensitive |
+| `{ code: "VELES-001" }` on `create_collection` | the collection already exists | reuse it, or `delete_collection` first |
+| `{ code: "INVALID_CONFIG", message: "Collection 'x' is not a vector collection" }` | `upsert` / `search` aimed at a graph or metadata-only collection | use the matching family: graph commands for graph collections, `upsert_metadata` for metadata ones |
+| `invoke` rejects with a permission error before reaching the plugin | the capability from step 2 is missing, or `windows` does not list the calling window's label | add `"velesdb:default"` to a capability that covers that window |
+| Panic at startup: `velesdb.toml missing or invalid` | `Builder::with_config_path` fails fast on a missing, unparsable or out-of-range config | fix the path or the values; `Error::ConfigLoad` carries the typed core error |
+| `{ code: "INVALID_CONFIG", message: "VelesQL parse error: ..." }` | malformed query string sent to `query` | check the syntax against the [VelesQL guides](../../docs/guides/MULTIMODEL_QUERIES.md) |
 
 ## License
 
-Licensed under the [VelesDB Core License 1.0](LICENSE) (source-available). The plugin embeds the VelesDB engine and is governed by the Core License.
+[VelesDB Core License 1.0](./LICENSE) (source-available). The plugin embeds the
+VelesDB engine and is governed by the Core License.
+
+---
+
+`tauri-plugin-velesdb v4.0.0` · Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

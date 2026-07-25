@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VelesDB WASM — VelesQL</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 48rem; }
+    pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 4px; }
+    .expected { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>VelesDB WASM — VelesQL in the browser</h1>
+  <p><code>WasmDatabase</code> manages named collections and runs VelesQL
+     statements against them: DDL, insert, projected select, vector
+     <code>NEAR</code> search, introspection. Same grammar as the REST server,
+     smaller supported surface.</p>
+
+  <h2>Output</h2>
+  <pre id="out">loading…</pre>
+
+  <h2 class="expected">Contract worth memorising</h2>
+  <ul class="expected">
+    <li><code>executeQuery(sql, paramsJson)</code> — the second argument is a
+        JSON <strong>string</strong> (or <code>null</code>), not an object.
+        Parameters are written <code>$name</code> in the statement and supplied
+        under the bare key <code>name</code>.</li>
+    <li>The result exposes <code>kind</code> (<code>"rows"</code>,
+        <code>"mutation"</code>, <code>"deletion"</code>, <code>"ddl"</code>,
+        <code>"admin"</code>, <code>"train"</code>), <code>rowCount</code>,
+        <code>message</code> and <code>rowsJson</code> — one
+        <code>JSON.parse</code> per query.</li>
+    <li>For mutations, <code>rowsJson</code> is <code>"[]"</code> and
+        <code>rowCount</code> is the affected-row count; no placeholder rows are
+        allocated.</li>
+  </ul>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

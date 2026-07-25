@@ -404,3 +404,9 @@ consistency-cleanup PR. Each binding glue must pass that crate's CI line
   verify no user-facing docs reference the config struct.
 - **Cross-references** to `.planning/` or `velesdb-premium` backlogs are
   welcomed — the audit trail matters more than keeping this file short.
+
+---
+
+*Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0 (this stamp tracks
+the document revision; the inventory itself was last re-verified against the
+code on 2026-06-14, as stated at the top of this page)*
