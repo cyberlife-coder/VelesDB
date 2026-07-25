@@ -170,8 +170,8 @@
     {
       "id": "readme_binary_size_9mb",
       "file": "README.md",
-      "must_contain": "One ~9 MB binary",
-      "validation_command": "cargo build --release -p velesdb-server && strip target/release/velesdb-server && du -h target/release/velesdb-server",
+      "must_contain": "~10 MB binary",
+      "validation_command": "cargo build --release -p velesdb-server && strip target/release/velesdb-server && du -h target/release/velesdb-server  # measured 2026-07-25 on aarch64-apple-darwin: 10433384 bytes = 10M",
       "executable": false,
       "source": "v1.18.0 stripped local builds on Apple Silicon: velesdb-server 9.1 MB, velesdb-cli 7.3 MB, velesdb-migrate 6.2 MB; v1.18.0 published release artifacts span 7.5-12.4 MB across platforms. README footnote [3] states the 7-13 MB provenance range.",
       "last_updated": "2026-06-12"
@@ -179,8 +179,8 @@
     {
       "id": "readme_wasm_bundle_gzipped",
       "file": "README.md",
-      "must_contain": "~550 KB gzipped",
-      "validation_command": "npm pack @wiscale/velesdb-wasm --dry-run  # published tarball (gzipped) ~536-550 KB",
+      "must_contain": "~674 KB gzipped",
+      "validation_command": "npm pack @wiscale/velesdb-wasm && gzip -c package/velesdb_wasm_bg.wasm | wc -c  # measured 2026-07-25: 689752 bytes = 674 KB",
       "executable": false,
       "source": "@wiscale/velesdb-wasm v3.12.0 published npm package: velesdb_wasm_bg.wasm gzip -9 = 549,285 bytes (~536 KiB / ~549 kB), measured 2026-07-20. Replaces the stale ~430 KB v1.18.0 figure (+25-28% drift found by sequential re-verification).",
       "last_updated": "2026-06-12"
