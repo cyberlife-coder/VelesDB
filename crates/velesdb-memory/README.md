@@ -439,8 +439,8 @@ closes that gap for Claude Code with real `SessionStart`/`Stop`/`PreCompact`
 hooks that nudge `load_working_context`/`save_working_context` automatically
 — install once **globally** (`~/.claude/hooks/`) to get continuous memory
 across every project, or per-project if you'd rather vendor the scripts into
-one repo. Codex CLI has no hook mechanism yet; the same directory documents
-an `AGENTS.md`-based convention for it.
+one repo. Codex CLI ships two of the same hooks (`SessionStart`, `Stop`) in
+the same directory, wired through its `[[hooks.*]]` TOML tables.
 
 ## HTTP transport (multi-client)
 
@@ -817,8 +817,8 @@ closes that gap for Claude Code with real `SessionStart`/`Stop`/`PreCompact`
 hooks that nudge `load_working_context`/`save_working_context` automatically
 — install once **globally** (`~/.claude/hooks/`) to get continuous memory
 across every project, or per-project if you'd rather vendor the scripts into
-one repo. Codex CLI has no hook mechanism yet; the same directory documents
-an `AGENTS.md`-based convention for it.
+one repo. Codex CLI ships two of the same hooks (`SessionStart`, `Stop`) in
+the same directory, wired through its `[[hooks.*]]` TOML tables.
 
 ## Using the tools
 
