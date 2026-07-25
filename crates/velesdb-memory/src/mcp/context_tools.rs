@@ -636,8 +636,9 @@ impl McpServer {
         let LoadWorkingContextParams { project, session } = params;
         let service = Arc::clone(&self.service);
         let lookup_project = project.clone();
+        let lookup_session = session.clone();
         let working = tokio::task::spawn_blocking(move || {
-            service.load_working_context(&lookup_project, &session)
+            service.load_working_context(&lookup_project, &lookup_session)
         })
         .await
         .map_err(join_error)?
@@ -653,6 +654,11 @@ impl McpServer {
                 .map_err(to_error)?
                 .into_iter()
                 .map(|s| s.session)
+                // Never propose the session just reported missing: the field
+                // is named `other_sessions` and exists to catch a typo, so
+                // echoing the requested id back is a contradiction the caller
+                // cannot act on.
+                .filter(|candidate| candidate != &session)
                 .collect()
         };
         Ok(Json(LoadWorkingContextResult {
