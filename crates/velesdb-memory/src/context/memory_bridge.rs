@@ -738,15 +738,13 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             self.prune_working_index(project, session)?;
             return Ok(None);
         }
-        match self.store.get(slot)? {
-            Some((content, _)) => serde_json::from_str(&content)
-                .map(Some)
-                .map_err(|err| MemoryError::WorkingContextCodec(err.to_string())),
-            None => {
-                self.prune_working_index(project, session)?;
-                Ok(None)
-            }
-        }
+        let Some((content, _)) = self.store.get(slot)? else {
+            self.prune_working_index(project, session)?;
+            return Ok(None);
+        };
+        serde_json::from_str(&content)
+            .map(Some)
+            .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))
     }
 
     /// Drop `session` from `project`'s index once its context is gone — a
