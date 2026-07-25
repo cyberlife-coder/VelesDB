@@ -68,10 +68,27 @@ case ",${allowed}," in
 esac
 
 # `tool_response` is a string for some tools and an object for others (Bash
-# reports `{stdout, stderr, ...}`). Compile the text either way; the
-# replacement field is a string in both cases.
+# reports `{stdout, stderr, …}`). Either way the compiler must receive TEXT
+# WITH ITS LINE BREAKS.
+#
+# This used to be `tojson` for the object case, and that silently destroyed
+# the result it was meant to shrink. A JSON encoding is a SINGLE line with
+# `\n` escaped inside a string, so the segmenter had nothing to split on: it
+# could neither deduplicate nor rank, and fell back to truncating from the
+# head — keeping repeated build noise and dropping the error underneath it.
+# Measured on a 55 KB `cargo` log: the compiled view retained 2048 characters
+# of identical "Compiling …" lines and lost the `error[E0463]`, the
+# `file.rs:412` location, a `do NOT run cargo clean` warning and the failing
+# test name. Same log passed as raw text compiles to 121 characters WITH the
+# error kept. It hit `Bash` hardest — the highest-volume tool of the three.
+#
+# So: collect every string leaf and join them with real newlines. Recursive
+# rather than top-level, since a tool may nest its output one level down.
 text="$(printf '%s' "$payload" \
-  | jq -r 'if (.tool_response | type) == "string" then .tool_response else (.tool_response | tojson) end')"
+  | jq -r '
+      if (.tool_response | type) == "string" then .tool_response
+      else [.tool_response | .. | strings] | join("\n")
+      end')"
 [ -n "$text" ] || passthrough
 
 # Below the threshold, compiling costs more (a process spawn on every tool
