@@ -116,8 +116,11 @@ if [ -n "$STAGED_PY_FILES" ]; then
 fi
 
 # 7. Check for secrets (basic check)
+# Added lines only: the scan stops a secret from entering the repository, so a
+# commit that deletes one -- or merely touches a file that already contains one
+# -- must go through. '+++' is the file header, not content.
 echo -e "\n${YELLOW}🔐 Checking for potential secrets...${NC}"
-if git diff --cached --diff-filter=ACM | grep -iE '(api_key|secret|password|token)\s*=\s*["\x27][^"\x27]+["\x27]' | grep -v '#' | grep -v '//'; then
+if git diff --cached --diff-filter=ACM | grep '^+' | grep -v '^+++' | grep -iE '(api_key|secret|password|token)\s*=\s*["\x27][^"\x27]+["\x27]' | grep -v '#' | grep -v '//'; then
     echo -e "${RED}❌ Potential secret detected in staged changes!${NC}"
     echo -e "${RED}   Please remove secrets before committing.${NC}"
     exit 1
