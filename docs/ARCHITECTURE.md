@@ -183,3 +183,6 @@ because edge/graph state, `label_index`, and the query engine
 across all three kinds. The distinct public surfaces (`VectorCollection` /
 `GraphCollection` / `MetadataCollection`) already provide kind-scoped APIs; the
 shared backing store is a deliberate, honest design choice, not residual debt.
+
+---
+Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0

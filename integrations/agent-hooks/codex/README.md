@@ -1,19 +1,31 @@
 # Codex CLI — continuous velesdb-memory usage
 
-Codex CLI (as of this writing) has no shell-hook lifecycle equivalent to
-Claude Code's `SessionStart` / `Stop` / `PreCompact` — there is no
-documented mechanism to run a command when a Codex session starts, stops,
-or is about to compact its transcript. So there is nothing here to
-automate at the harness level (unlike `../claude-code/`, which has a
-tested `test/hooks.test.sh`).
+⚠️ **Codex CLI now has real lifecycle hooks; this directory has not caught
+up.** An earlier version of this page said Codex had no hook mechanism at
+all. The Codex hooks reference (<https://learn.chatgpt.com/docs/hooks>,
+checked 2026-07-25) documents `SessionStart`, `SessionEnd`, `PreToolUse`,
+`PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`,
+`UserPromptSubmit`, `SubagentStart`, `SubagentStop` and `Stop`, configured
+from `~/.codex/hooks.json`, `<repo>/.codex/hooks.json` or a `[hooks]` table
+in `config.toml` — a Claude-Code-shaped `event → matcher → handler`
+structure whose handlers print
+`{"hookSpecificOutput": {"hookEventName": …, "additionalContext": …}}`.
 
-What Codex *does* support is `AGENTS.md`: an instructions file it reads
-automatically from the project root. That gives us a soft equivalent —
-the model is told the same load → work → save loop the Claude Code hooks
-enforce mechanically, but here it's the model following written
+So the gap below is **unwritten work, not a platform limitation**. No scripts
+are shipped here because none has been run against a real Codex build: the
+exact payload field names, the once-per-session sentinel key (the Claude Code
+hooks use `session_id`), and whether `PreCompact` can deliver a reason to the
+model at all (it is documented as *not* carrying `additionalContext`) are all
+unverified. A hook that silently never fires is worse than the convention
+below, so nothing is shipped until someone tests it.
+A VERIFIER: the minimum Codex CLI version that ships hooks.
+
+In the meantime, the mechanism below is what this directory supports. Codex
+reads `AGENTS.md` automatically from the project root, which gives a soft
+equivalent — the model is told the same load → work → save loop the Claude
+Code hooks enforce mechanically, but here it's the model following written
 instructions rather than a script driving it. It is strictly weaker (no
-guarantee it fires, no once-per-session sentinel) — treat it as
-best-effort until Codex ships real lifecycle hooks.
+guarantee it fires, no once-per-session sentinel) — treat it as best-effort.
 
 ## 1. Wire the velesdb-memory MCP server
 
@@ -70,7 +82,12 @@ real process runs on `SessionStart`/`Stop`/`PreCompact`, reads the JSON
 payload, and returns a JSON decision the harness acts on — verified by
 `../test/hooks.test.sh`. Nothing here is enforced the same way: it is
 prose in a file Codex happens to load, and the model can forget to act on
-it. If/when Codex ships an equivalent lifecycle-hook mechanism, this
-directory should grow real scripts mirroring `../claude-code/hooks/`,
-and the "soft hook via AGENTS.md" section above should be trimmed down to
-a fallback note.
+it.
+
+Because Codex now documents the lifecycle events (see the warning at the top
+of this page), the fix is no longer "wait for the platform": this directory
+should grow real scripts mirroring `../claude-code/hooks/`, tested against a
+real Codex build and added to `../test/hooks.test.sh`, after which the "soft
+hook via AGENTS.md" section above becomes a fallback note. `PostToolUse`
+result *replacement* is the one piece that may not port — Codex documents no
+equivalent of Claude Code's `updatedToolOutput` (A VERIFIER).

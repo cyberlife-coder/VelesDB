@@ -114,3 +114,6 @@ This design ensures:
 | Community | Single-node, self-hosted | VelesDB Core License 1.0 |
 | Professional | Multi-node, managed | Commercial |
 | Enterprise | On-premise cluster with SLA | Commercial |
+
+---
+Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0

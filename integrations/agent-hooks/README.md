@@ -1,16 +1,88 @@
 # Agent hooks — continuous velesdb-memory usage
 
+> **Portability**: ✅ the `velesdb-memory` MCP server and its tools work in
+> any MCP client — nothing on this page is needed to use them · ⚠️ hooks are
+> a *harness* feature, not part of MCP, so everything here is per-harness and
+> non-portable by construction · ⚠️ replacing a tool result
+> (`updatedToolOutput`) is Claude Code only.
+
 Wiring the `velesdb-memory` MCP server into an agent (see
 [`crates/velesdb-memory/README.md`](../../crates/velesdb-memory/README.md))
 gives it the *tools*. It does not make the agent actually call
 `load_working_context` at the start of every session or
 `save_working_context` before every one ends — that only happens if the
 agent remembers to, which it won't reliably do on its own. This directory
-closes that gap for [Claude Code](claude-code/) (real, tested hooks),
-[Windsurf](windsurf/) (real, tested hook — a single event folding both
-halves of the loop, see below), and [Codex CLI](codex/) (a documented
-instruction-file convention, since Codex has no equivalent hook mechanism
-yet).
+closes that gap **completely** for [Claude Code](claude-code/) (four tested
+hooks), **partially** for [Windsurf](windsurf/) (one tested hook, with a
+delivery caveat), and **not at all** for [Codex CLI](codex/) (a documented
+`AGENTS.md` convention only — even though Codex now ships real lifecycle
+hooks). The parity table below says exactly what exists where, and why each
+gap is a gap.
+
+## Parity across harnesses
+
+Status, not aspiration. ✅ = shipped here and asserted by
+[`test/hooks.test.sh`](test/hooks.test.sh) · ⚠️ = shipped but weaker than the
+Claude Code equivalent · ❌ = not shipped, with the reason spelled out.
+
+| Loop step | Claude Code | Windsurf | Codex CLI |
+|---|---|---|---|
+| Load working context at session start | ✅ `session-start.sh` on `SessionStart` | ⚠️ `pre-user-prompt.sh` on `pre_user_prompt`, once per `trajectory_id` — advisory text, see the delivery caveat below | ❌ not written yet — `SessionStart` **does** exist in Codex |
+| Save working context before the session ends | ✅ `stop.sh` on `Stop`, blocking the first stop per session | ⚠️ no end-of-session event is used: the *same* first-prompt reminder also asks for the save, hours in advance | ❌ not written yet — `Stop` / `SessionEnd` **do** exist in Codex |
+| Compile the transcript before compaction | ✅ `pre-compact.sh` on `PreCompact` | ❌ Windsurf documents no compaction event. A VERIFIER: whether Cascade compacts at all in a way any hook can observe | ❌ not written yet — `PreCompact` exists in Codex, but is documented as *not* carrying `additionalContext`. A VERIFIER: whether an exit-2 `stderr` reason reaches the model there |
+| Replace an oversized tool result | ✅ `post-tool-use.sh` via `hookSpecificOutput.updatedToolOutput` | ❌ **API gap.** Windsurf post-hooks cannot alter or block a result — "post-hooks cannot block since the action has already occurred" — and no documented field replaces one | ❌ **API gap as documented.** Codex `PostToolUse` can add `additionalContext` or block, but documents no equivalent of `updatedToolOutput`. A VERIFIER |
+
+### Why the Windsurf gap is smaller than it looks — and the caveat that matters more
+
+Earlier revisions of this page asserted that Windsurf exposes a single
+lifecycle hook. **That is wrong.** The Cascade hooks reference (checked
+2026-07-25) documents twelve events: `pre_read_code`, `post_read_code`,
+`pre_write_code`, `post_write_code`, `pre_run_command`, `post_run_command`,
+`pre_mcp_tool_use`, `post_mcp_tool_use`, `pre_user_prompt`,
+`post_cascade_response`, `post_cascade_response_with_transcript`, and
+`post_setup_worktree`. So the missing end-of-session reminder is **unwritten
+work, not a platform limit** — though the fit is imperfect:
+`post_cascade_response` fires after *every* response rather than once at the
+end, and `post_cascade_response_with_transcript` hands over a JSONL
+transcript path, which is exactly the input `compile_transcript` wants.
+Neither is implemented here, and neither should be shipped until someone has
+run it against a real install.
+
+⚠️ **Delivery caveat — read this before trusting the Windsurf hook.** Windsurf's
+documented contract sends a hook's stdout/stderr to the *Cascade UI* when
+`show_output` is true, and states that the **agent** sees a message only when
+a *pre*-hook exits with code **2** — which also blocks the action.
+`pre-user-prompt.sh` prints to stdout and exits 0, so on the documented
+contract its reminder reaches the **human**, not the model. It was not
+switched to exit 2 because that would block the user's prompt. A VERIFIER, on
+a real Windsurf install: whether `pre_user_prompt` stdout is additionally
+prepended to the model's context. Until someone checks, treat the Windsurf
+integration as a user-facing nudge, not an enforced loop.
+
+### Why Codex has nothing here — and why the old reason is stale
+
+[`codex/README.md`](codex/README.md) was written when Codex CLI had no
+lifecycle hooks. **That is no longer true.** The Codex hooks reference
+(checked 2026-07-25) lists `SessionStart`, `SessionEnd`, `PreToolUse`,
+`PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`,
+`UserPromptSubmit`, `SubagentStart`, `SubagentStop` and `Stop`, configured
+from `~/.codex/hooks.json`, `<repo>/.codex/hooks.json` or a `[hooks]` table
+in `config.toml`, with a Claude-Code-shaped `event → matcher → handler`
+structure and a `hookSpecificOutput.additionalContext` output field.
+
+So the three advisory Claude Code hooks here are *close* to portable to
+Codex. They are not shipped because nobody has run them against a real Codex
+build: the payload field names, the once-per-session sentinel key (Claude's
+`session_id`), and whether `PreCompact` can deliver a reason at all are
+unverified here. A hook that silently never fires is worse than no hook, so
+`codex/` stays a documented convention until someone tests real scripts.
+A VERIFIER: the minimum Codex CLI version that ships hooks.
+
+**Sources checked 2026-07-25** (living documents — re-check before relying on
+any ❌ above): Cascade hooks reference,
+<https://docs.devin.ai/desktop/cascade/hooks> (`docs.windsurf.com` redirects
+there); Codex hooks reference, <https://learn.chatgpt.com/docs/hooks>
+(`developers.openai.com/codex/hooks` redirects there).
 
 ## Install — Claude Code
 
@@ -105,13 +177,21 @@ Merge this into `~/.codeium/windsurf/hooks.json`'s `"hooks"` key:
 Same `.velesdb-hooks.json` config format as Claude Code (below) — the hook
 walks up from the payload's `cwd` looking for one.
 
-**Windsurf exposes only one lifecycle hook, `pre_user_prompt`** — no
-Claude-Code-style `Stop`/`PreCompact` equivalent. So `pre-user-prompt.sh`
-folds BOTH halves of the loop into its single first-of-session reminder:
-load working context now, **and** save it again before the session ends —
-because there is no separate event left to remind you a second time.
+**Only `pre_user_prompt` is wired here** — Windsurf documents eleven other
+events (see [Parity across harnesses](#parity-across-harnesses)), but none is
+a `Stop`/`PreCompact` equivalent and none is implemented yet. So
+`pre-user-prompt.sh` folds BOTH halves of the loop into its single
+first-of-session reminder: load working context now, **and** save it again
+before the session ends — because no second reminder is wired.
 `trajectory_id` from Windsurf's payload is the once-per-session sentinel key
-(falls back to the parent PID if ever absent).
+(falls back to the parent PID if ever absent). The hook also reads `cwd` from
+the payload and falls back to `$PWD`; `cwd` is not a documented common field
+for `pre_user_prompt`, so in practice the fallback is what resolves
+`.velesdb-hooks.json`.
+
+⚠️ On Windsurf's documented contract this reminder is shown to **you**, not
+injected into the model's context — see the delivery caveat in the parity
+section before relying on it.
 
 ## The structural constraint that shapes this whole design
 
@@ -150,8 +230,8 @@ hook that uses it; the other three still only ever drive the model.
 
 ## The four Claude Code hooks
 
-(Windsurf's single `pre_user_prompt` hook is documented in its own install
-section above — it folds the same load/save loop into one event.)
+(Windsurf's one wired hook, `pre_user_prompt`, is documented in its own
+install section above — it folds the same load/save loop into one event.)
 
 | Event | What it does | Mechanism |
 |---|---|---|

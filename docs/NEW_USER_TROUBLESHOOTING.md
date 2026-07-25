@@ -104,3 +104,6 @@ Normal : dépend du CPU, de `ef_search`, des filtres/payloads et du dataset.
 - [API Reference](reference/api-reference.md) — All 54 REST endpoints with request/response examples
 - [Installation Guide](guides/INSTALLATION.md) — All platforms: Linux, macOS, Windows, Docker, WASM, Mobile
 - [E-commerce Example](../examples/ecommerce_recommendation/) — Full Vector + Graph + Filter demo in Rust
+
+---
+Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0

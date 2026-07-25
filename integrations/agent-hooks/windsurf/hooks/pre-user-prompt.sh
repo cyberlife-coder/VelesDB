@@ -2,10 +2,18 @@
 # Windsurf pre_user_prompt hook: on the first prompt of a session, remind the
 # model to load its working context from velesdb-memory.
 #
-# Windsurf only exposes one lifecycle hook event (pre_user_prompt) — no
-# separate Stop/PreCompact equivalent — so this single reminder folds in
+# pre_user_prompt is the only Windsurf event wired here. Windsurf documents
+# eleven others (pre/post read_code, write_code, run_command, mcp_tool_use,
+# post_cascade_response[_with_transcript], post_setup_worktree), but none is
+# a Stop/PreCompact equivalent and none is implemented yet — see
+# ../../README.md#parity-across-harnesses. So this single reminder folds in
 # BOTH halves of the loop the Claude Code hooks split across three events:
 # load working context now, and save it again before the session ends.
+#
+# Caveat: per Windsurf's documented contract, a hook's stdout is shown in the
+# Cascade UI (show_output), and the agent itself only sees stderr from a
+# pre-hook that exits 2 — which would also block the user's prompt. So this
+# reminder is addressed to the user, not injected into the model context.
 #
 # Windsurf sends a JSON payload on stdin with fields like trajectory_id,
 # execution_id, timestamp, model_name, tool_info. There is no stable
