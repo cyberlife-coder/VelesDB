@@ -160,15 +160,52 @@ fn test_core_acquisition_path_is_strictly_ascending() {
 #[cfg(debug_assertions)]
 #[test]
 fn test_descending_acquisition_is_detected() {
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let outcome = std::panic::catch_unwind(|| {
-        assert_lock_order(LockRank::NEIGHBORS, LockRank::GPU_VECTORS_SNAPSHOT);
+    let outcome = with_panic_output_silenced(|| {
+        std::panic::catch_unwind(|| {
+            assert_lock_order(LockRank::NEIGHBORS, LockRank::GPU_VECTORS_SNAPSHOT);
+        })
     });
-    std::panic::set_hook(prev_hook);
 
     assert!(
         outcome.is_err(),
         "descending acquisition must trip the lock-order assertion in debug builds"
     );
+}
+
+/// Runs `f` with panic output from **this thread** suppressed.
+///
+/// `std::panic::set_hook` is process-global, so installing a no-op hook for the
+/// duration of a `catch_unwind` also mutes the other tests running in parallel
+/// in this binary. Installing it once and filtering on a thread-local flag hides
+/// only the panic this test deliberately provokes.
+#[cfg(debug_assertions)]
+fn with_panic_output_silenced<T>(f: impl FnOnce() -> T) -> T {
+    use std::cell::Cell;
+    use std::sync::Once;
+
+    thread_local! {
+        static SILENCED: Cell<bool> = const { Cell::new(false) };
+    }
+    static INSTALL_HOOK: Once = Once::new();
+
+    /// Clears the flag on drop so an unwind cannot leave this thread muted.
+    struct Unsilence;
+    impl Drop for Unsilence {
+        fn drop(&mut self) {
+            SILENCED.with(|silenced| silenced.set(false));
+        }
+    }
+
+    INSTALL_HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !SILENCED.with(Cell::get) {
+                previous(info);
+            }
+        }));
+    });
+
+    SILENCED.with(|silenced| silenced.set(true));
+    let _unsilence = Unsilence;
+    f()
 }
