@@ -174,6 +174,23 @@ Task guides, all moved out of this README so it stays readable:
 | [Search modes](../../docs/guides/SEARCH_MODES.md) · [Tuning guide](../../docs/guides/TUNING_GUIDE.md) · [Quantization](../../docs/guides/QUANTIZATION.md) | Recall/latency trade-offs |
 | [Write concurrency](../../docs/guides/WRITE_CONCURRENCY.md) · [Concurrency and locking](../../docs/guides/CONCURRENCY_LOCKING.md) | The write model and file locking |
 
+## Performance
+
+Two headline numbers, both measured rather than estimated. Every figure, its
+hardware and its reproduction command live in
+[Core performance](../../docs/guides/CORE_PERFORMANCE.md).
+
+| Claim | Measured | Context |
+|-------|----------|---------|
+| Native HNSW search with AVX-512/AVX2/NEON SIMD | **450µs p50** end-to-end | 10K points, 384D, WAL on, recall ≥ 96% |
+| ColumnStore filtering vs. scanning JSON payloads | up to **130x** faster | integer equality, 100K rows |
+
+Reproduce with `cargo bench -p velesdb-core --bench hnsw_benchmark` and
+`cargo bench -p velesdb-core --bench column_filter_benchmark`.
+
+Numbers move with hardware and dataset. Treat them as the shape of the
+engine's cost, not a guarantee for your workload — measure on yours.
+
 ## Known limits
 
 - **No embedding generation.** You bring the vectors; the crate never calls a
