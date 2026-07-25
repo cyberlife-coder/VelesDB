@@ -131,9 +131,21 @@ fn test_alloc_guard_panic_safety() {
 // =========================================================================
 // #899 — Allocation-bound regression tests
 //
-// Tests that read or mutate the process-global `ALLOC_BYTE_LIMIT` are marked
-// `#[serial]` so they cannot observe or corrupt each other's view of the
-// global; each one also saves and restores the limit it changes.
+// Tests here may only ever *raise* the process-global `ALLOC_BYTE_LIMIT` back
+// to its default (`set_alloc_byte_limit(0)`); they must NEVER pin it to a low
+// value.
+//
+// `#[serial]` is not sufficient protection: it only excludes other `#[serial]`
+// tests, while the thousands of unannotated tests in this binary keep running
+// in parallel against whatever ceiling is installed. A low global ceiling
+// therefore fails unrelated tests at random with an `AllocationFailed` naming a
+// limit they never configured (observed 2026-07-25). `#[serial]` is kept below
+// only so these tests do not race each other's *reads* of the global.
+//
+// - Need a low ceiling for one operation? Use `with_alloc_byte_limit`
+//   (thread-local, scoped, invisible to other threads).
+// - Need to verify the process-global setter itself? It lives in its own test
+//   binary: `tests/alloc_guard_global_limit.rs`.
 // =========================================================================
 
 /// The default ceiling is the high 1 TiB backstop — not a 16 GiB workload cap.
@@ -183,24 +195,9 @@ fn test_check_alloc_bound() {
     set_alloc_byte_limit(saved);
 }
 
-/// The ceiling is configurable; `0` restores the default.
-#[test]
-#[serial]
-fn test_set_alloc_byte_limit_roundtrip() {
-    let original = alloc_byte_limit();
-
-    set_alloc_byte_limit(8192);
-    assert_eq!(alloc_byte_limit(), 8192);
-    assert!(AllocGuard::new(Layout::from_size_align(16384, 8).unwrap()).is_none());
-    assert!(AllocGuard::new(Layout::from_size_align(4096, 8).unwrap()).is_some());
-
-    // `0` means "no override" → back to default.
-    set_alloc_byte_limit(0);
-    assert_eq!(alloc_byte_limit(), DEFAULT_ALLOC_BYTE_LIMIT);
-
-    // Restore whatever the harness started with.
-    set_alloc_byte_limit(original);
-}
+// `test_set_alloc_byte_limit_roundtrip` moved to
+// `tests/alloc_guard_global_limit.rs`: it must pin the process-global ceiling to
+// 8192, which is unsafe in this binary (see the module note above).
 
 /// REGRESSION (#899 follow-up): a large-but-legitimate single-buffer size that
 /// the old 16 GiB cap would have falsely rejected is now accepted by the
@@ -228,26 +225,30 @@ fn test_large_legit_buffer_not_falsely_rejected() {
 /// the file-backed payload, so a realistic large `count` (above the old cap)
 /// reloads. `with_min_alloc_byte_limit` raises the ceiling to the file-backed
 /// size for the load scope, then restores it.
+///
+/// The low starting ceiling is pinned with `with_alloc_byte_limit` (thread-local)
+/// rather than `set_alloc_byte_limit` (process-global): pinning 4096 globally
+/// made every *other* test in this binary fail at random with an unrelated
+/// `AllocationFailed` while the window was open. `#[serial]` does not prevent
+/// that — it only excludes other `#[serial]` tests, and the thousands of
+/// unannotated tests keep running in parallel.
 #[test]
-#[serial]
 fn test_load_path_bound_allows_realistic_large_count() {
-    let saved = alloc_byte_limit();
     // Pin a deliberately low limit to prove the load path raises past it.
-    set_alloc_byte_limit(4096);
+    with_alloc_byte_limit(4096, || {
+        // ~30 GiB file-backed payload (8M vectors @768D *4 ≈ 24 GiB) — a legit
+        // persisted index. The load path must accept its own file-backed size.
+        let file_backed_bytes = 30usize * 1024 * 1024 * 1024;
+        let inner = with_min_alloc_byte_limit(file_backed_bytes, || {
+            // Inside the scope the ceiling covers the file-backed size.
+            assert!(check_alloc_bound(file_backed_bytes).is_ok());
+            alloc_byte_limit()
+        });
+        assert_eq!(inner, file_backed_bytes, "ceiling raised within load scope");
 
-    // ~30 GiB file-backed payload (8M vectors @768D *4 ≈ 24 GiB) — a legit
-    // persisted index. The load path must accept its own file-backed size.
-    let file_backed_bytes = 30usize * 1024 * 1024 * 1024;
-    let inner = with_min_alloc_byte_limit(file_backed_bytes, || {
-        // Inside the scope the ceiling covers the file-backed size.
-        assert!(check_alloc_bound(file_backed_bytes).is_ok());
-        alloc_byte_limit()
+        // Restored after the scope (no leak of the raised limit).
+        assert_eq!(alloc_byte_limit(), 4096);
     });
-    assert_eq!(inner, file_backed_bytes, "ceiling raised within load scope");
-
-    // Restored after the scope (no leak of the raised limit).
-    assert_eq!(alloc_byte_limit(), 4096);
-    set_alloc_byte_limit(saved);
 }
 
 /// `with_min_alloc_byte_limit` is a transparent pass-through when the current
@@ -267,22 +268,165 @@ fn test_with_min_alloc_byte_limit_passthrough() {
     set_alloc_byte_limit(saved);
 }
 
+// =========================================================================
+// Scoped-ceiling isolation — regression tests
+//
+// A scoped ceiling adjustment used to be written to the process-global
+// `ALLOC_BYTE_LIMIT`. Two independent defects followed, both reproduced
+// deterministically below with barriers rather than left to scheduling luck.
+// =========================================================================
+
+/// REGRESSION: a scoped raise must not lift the backstop for allocations
+/// happening concurrently on unrelated threads.
+///
+/// While a global raise was in flight, every other thread was judged against the
+/// raised ceiling — precisely the pathological sizes the #899 backstop exists to
+/// reject were admitted for the duration of any index load.
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn test_scoped_raise_is_not_visible_to_other_threads() {
+    const TWO_TIB: usize = 2 * 1024 * 1024 * 1024 * 1024;
+
+    let expected = alloc_byte_limit();
+    let observed = with_min_alloc_byte_limit(TWO_TIB, || {
+        // A raise on THIS thread is in force here...
+        assert_eq!(alloc_byte_limit(), TWO_TIB, "raise applies to this thread");
+        // ...but a concurrent thread must still see the unraised ceiling.
+        std::thread::spawn(|| (alloc_byte_limit(), check_alloc_bound(TWO_TIB).is_err()))
+            .join()
+            .expect("observer thread panicked")
+    });
+
+    assert_eq!(
+        observed.0, expected,
+        "scoped raise leaked to another thread: the allocation backstop was \
+         silently lifted process-wide for the duration of the scope"
+    );
+    assert!(
+        observed.1,
+        "an oversized allocation must still be rejected on threads outside the scope"
+    );
+}
+
+/// REGRESSION: overlapping scoped adjustments must not clobber each other.
+///
+/// With a single global cell, each scope saves the ceiling it happens to observe
+/// on entry and restores it on exit. When two scopes overlap, the inner one saves
+/// the outer one's temporary value and republishes it after the outer has already
+/// restored — a lost update that leaves the process-wide backstop permanently
+/// wrong (here: pinned at 2 TiB forever, long after both loads finished).
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn test_overlapping_scoped_raises_do_not_clobber() {
+    use std::sync::{Arc, Barrier};
+
+    const TWO_TIB: usize = 2 * 1024 * 1024 * 1024 * 1024;
+    const THREE_TIB: usize = 3 * 1024 * 1024 * 1024 * 1024;
+
+    let before = alloc_byte_limit();
+
+    // Force the exact interleaving: A enters, B enters, A exits, B exits.
+    let (entered_a, entered_b, exited_a) = (
+        Arc::new(Barrier::new(2)),
+        Arc::new(Barrier::new(2)),
+        Arc::new(Barrier::new(2)),
+    );
+
+    let (a1, b1, x1) = (
+        Arc::clone(&entered_a),
+        Arc::clone(&entered_b),
+        Arc::clone(&exited_a),
+    );
+    let thread_a = std::thread::spawn(move || {
+        with_min_alloc_byte_limit(TWO_TIB, || {
+            a1.wait(); // A is inside its scope
+            b1.wait(); // wait until B is inside its scope too
+        });
+        x1.wait(); // A has left its scope
+    });
+
+    let thread_b = std::thread::spawn(move || {
+        entered_a.wait(); // enter only once A is inside
+        with_min_alloc_byte_limit(THREE_TIB, || {
+            entered_b.wait(); // B is inside its scope
+            exited_a.wait(); // hold the scope open until A has left
+        });
+    });
+
+    thread_a.join().expect("thread A panicked");
+    thread_b.join().expect("thread B panicked");
+
+    assert_eq!(
+        alloc_byte_limit(),
+        before,
+        "overlapping scopes corrupted the ceiling: it must be exactly as it was \
+         before both scopes ran, not a value republished by a lost update"
+    );
+}
+
+/// REGRESSION (2026-07-25 flake): pinning a *low* ceiling for one operation must
+/// not make a legitimate allocation fail on another thread.
+///
+/// A low ceiling pinned globally by the `alloc_guard` tests made unrelated tests
+/// in the same binary fail at random with an `AllocationFailed` naming a limit
+/// they never configured (observed: a 1.6 MB agent-memory buffer rejected
+/// against a 4096-byte ceiling).
+#[test]
+fn test_low_scoped_ceiling_does_not_break_other_threads() {
+    // The exact allocation from the reported failure: a 4-dim collection with
+    // 100_000 capacity = 1_600_000 bytes.
+    const LEGITIMATE_BYTES: usize = 4 * 100_000 * std::mem::size_of::<f32>();
+
+    let admitted = with_alloc_byte_limit(4096, || {
+        assert!(
+            check_alloc_bound(LEGITIMATE_BYTES).is_err(),
+            "the pinned ceiling must still be enforced on the pinning thread"
+        );
+        std::thread::spawn(|| check_alloc_bound(LEGITIMATE_BYTES).is_ok())
+            .join()
+            .expect("observer thread panicked")
+    });
+
+    assert!(
+        admitted,
+        "a ceiling pinned low for one operation must not reject legitimate \
+         allocations on unrelated threads"
+    );
+}
+
+/// A scoped ceiling nests: the inner scope restores the outer scope's value, not
+/// the process-global one.
+#[test]
+fn test_scoped_alloc_byte_limit_nests() {
+    with_alloc_byte_limit(8192, || {
+        assert_eq!(alloc_byte_limit(), 8192);
+        with_alloc_byte_limit(4096, || {
+            assert_eq!(alloc_byte_limit(), 4096);
+        });
+        assert_eq!(
+            alloc_byte_limit(),
+            8192,
+            "inner scope restored the outer one"
+        );
+    });
+}
+
 /// `with_min_alloc_byte_limit` restores the previous ceiling even if the closure
 /// panics (RAII restore), so a panicking load cannot leak a raised limit.
 #[test]
-#[serial]
 fn test_with_min_alloc_byte_limit_restores_on_panic() {
     use std::panic;
-    let saved = alloc_byte_limit();
-    set_alloc_byte_limit(4096);
 
-    let huge = 30usize * 1024 * 1024 * 1024;
-    let result = panic::catch_unwind(|| {
-        with_min_alloc_byte_limit(huge, || {
-            panic!("simulated load failure");
+    // Thread-local pin (see `test_load_path_bound_allows_realistic_large_count`
+    // for why this must not be a global `set_alloc_byte_limit`).
+    with_alloc_byte_limit(4096, || {
+        let huge = 30usize * 1024 * 1024 * 1024;
+        let result = panic::catch_unwind(|| {
+            with_min_alloc_byte_limit(huge, || {
+                panic!("simulated load failure");
+            });
         });
+        assert!(result.is_err());
+        assert_eq!(alloc_byte_limit(), 4096, "ceiling restored after panic");
     });
-    assert!(result.is_err());
-    assert_eq!(alloc_byte_limit(), 4096, "ceiling restored after panic");
-    set_alloc_byte_limit(saved);
 }
