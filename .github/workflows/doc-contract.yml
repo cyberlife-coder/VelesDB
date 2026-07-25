@@ -67,12 +67,8 @@ jobs:
       - name: Every root doc linked from docs/README.md (warning)
         run: python3 scripts/check-doc-freshness.py --guard index --mode warn
 
-      # WARNING ONLY for now. 5 pre-existing stale version claims:
-      #   docs/GPU_ACCELERATION.md:33            velesdb-core = "1.18"  (is 4.0.0)
-      #   docs/guides/INSTALLATION.md:139        velesdb-core = "3.2"   (is 4.0.0)
-      #   docs/guides/tutorials/MINI_RECOMMENDER.md:40  velesdb-core = "3.2"
-      #   docs/reference/NATIVE_HNSW.md:25       velesdb-core = "3.2"
-      #   docs/guides/MCP_SERVER_SETUP.md:510    velesdb-memory-v0.11.0 (is 0.11.1)
-      # Flip to `--mode strict` in the same commit that fixes those five.
-      - name: Hardcoded doc versions vs Cargo manifests (warning)
-        run: python3 scripts/check-doc-freshness.py --guard versions --mode warn
+      # The five stale claims this guard was warning about are fixed, so it
+      # blocks from here on: a doc pin that contradicts the Cargo manifests is
+      # a broken copy-paste for whoever follows it.
+      - name: Hardcoded doc versions vs Cargo manifests
+        run: python3 scripts/check-doc-freshness.py --guard versions --mode strict

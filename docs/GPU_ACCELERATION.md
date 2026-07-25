@@ -30,7 +30,7 @@ Enable the `gpu` feature in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-velesdb-core = { version = "1.18", features = ["gpu"] }
+velesdb-core = { version = "4.0.0", features = ["gpu"] }
 ```
 
 ## Usage
