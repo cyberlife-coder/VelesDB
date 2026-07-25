@@ -513,6 +513,28 @@ curl http://localhost:8080/api-docs/openapi.json
 # then open http://localhost:8080/swagger-ui in a browser
 ```
 
+Both probes are also served unprefixed (`/health`, `/ready`), and both stay
+public when API keys are configured.
+
+`/v1/health` always answers `200` while the process is up:
+
+```json
+{"status": "ok", "version": "4.0.0"}
+```
+
+`/v1/ready` answers `200` once every collection is loaded from disk:
+
+```json
+{"status": "ready", "version": "4.0.0"}
+```
+
+…and `503` until then, which is what makes it usable as a Kubernetes
+readiness probe:
+
+```json
+{"status": "not_ready", "version": "4.0.0"}
+```
+
 ---
 
 ## 8. Errors

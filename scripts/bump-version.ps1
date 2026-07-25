@@ -115,10 +115,10 @@ $FilesToUpdate = @(
     # Discovered as drift in Devin review on PR #723: server README health JSON
     # and Python README badge stayed at 1.14.0 while workspace bumped to 1.14.1.
     @{
-        Path = "crates/velesdb-server/README.md"
+        Path = "docs/guides/SERVER_REST_TOUR.md"
         Pattern = '"version": "\d+\.\d+\.\d+"'
         Replacement = "`"version`": `"$Version`""
-        Description = "velesdb-server README health JSON"
+        Description = "Server REST tour health JSON"
     },
     @{
         Path = "crates/velesdb-python/README.md"
@@ -285,15 +285,6 @@ $FilesToUpdate = @(
         Pattern = 'covers v\d+\.\d+\.\d+ \(current\)'
         Replacement = "covers v$Version (current)"
         Description = "ROADMAP.md `covers vX.Y.Z (current)` marker"
-    },
-    @{
-        Path = "docs/guides/CLI_REPL.md"
-        # Two occurrences in this guide: header banner + `velesdb X.Y.Z`
-        # in the --version sample output + table cell. Replace-all is safe
-        # because every X.Y.Z in CLI_REPL.md refers to the workspace version.
-        Pattern = '\d+\.\d+\.\d+'
-        Replacement = "$Version"
-        Description = "docs/guides/CLI_REPL.md (banner + sample outputs)"
     },
     @{
         Path = "docs/guides/CONFIGURATION.md"

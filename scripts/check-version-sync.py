@@ -33,13 +33,14 @@ TARGETS: "list[tuple[str, str]]" = [
     # CONFIGURATION.md TOML example header carries a hardcoded "# Version:" line.
     # Found drifting at 1.13.0 while the doc body banner was already 1.14.0.
     ("docs/guides/CONFIGURATION.md", "doc_toml_header"),
-    # Server README ships /health JSON examples that echo the workspace version;
-    # bump-version.ps1 already rewrites them, this entry mirrors that policing
-    # in the verifier (Devin found the 1-sided drift gap on PR #726/#727).
-    ("crates/velesdb-server/README.md", "doc_health_snippet"),
-    # Python wheel README carries a shields.io static badge `version-X.Y.Z-blue`
-    # that bump-version.ps1 rewrites; mirrored here so drift can't sneak in.
-    ("crates/velesdb-python/README.md", "doc_version_badge"),
+    # The /health, /ready and /not_ready response bodies echo the workspace
+    # version. They lived in the server README until the documentation refactor
+    # moved the REST surface into this guide -- and dropped them on the way,
+    # which is how this entry started raising "no snippet" instead of drift.
+    ("docs/guides/SERVER_REST_TOUR.md", "doc_health_snippet"),
+    # Was a shields.io `version-X.Y.Z-blue` badge; the refactor replaced it with
+    # the canonical `Applies to: velesdb-core X.Y.Z` footer, as in 60 other docs.
+    ("crates/velesdb-python/README.md", "applies_to_stamp"),
     ("demos/rag-pdf-demo/pyproject.toml", "toml"),
     ("sdks/typescript/package.json", "json"),
     # The TS SDK's npm lockfile carries its own root "version" string that
@@ -98,14 +99,14 @@ TARGETS: "list[tuple[str, str]]" = [
     # them all so the same gap cannot recur on any future release.
     # NOTE: CONFIGURATION.md has TWO entries (TOML header + markdown banner)
     # — both readers run independently against the same file.
-    ("docs/guides/CLI_REPL.md", "doc_guide_version_header"),
     ("docs/guides/CONFIGURATION.md", "doc_guide_version_header"),
     ("docs/guides/GRAPH_PATTERNS.md", "doc_guide_version_header"),
     ("docs/guides/SEARCH_MODES.md", "doc_guide_version_header"),
-    # `Last updated: <date> (vX.Y.Z ...)` stamps in reference docs. Each was
-    # found drifting at v1.14.0 during the v1.14.2 audit even though the
-    # underlying content had been patched since.
-    ("docs/BENCHMARKS.md", "doc_last_updated_version"),
+    # Version stamps in reference docs. Each was found drifting at v1.14.0
+    # during the v1.14.2 audit even though the content had been patched since.
+    # BENCHMARKS and VELESQL_SPEC now carry the canonical `Applies to:` footer;
+    # the two below still use the older `Last updated: ... (vX.Y.Z)` form.
+    ("docs/BENCHMARKS.md", "applies_to_stamp"),
     ("docs/reference/ECOSYSTEM_PARITY.md", "doc_last_updated_version"),
     ("docs/reference/VELESQL_CONFORMANCE_MATRIX.md", "doc_last_updated_version"),
     # `# VelesDB Architecture Diagrams — vX.Y.Z` h1 title. Was at 1.14.0.
@@ -149,10 +150,9 @@ TARGETS: "list[tuple[str, str]]" = [
     # Current-version markers found stale at 1.16.0 in the 1.17.0 review, each
     # unpoliced (the first-match doc_health/guide readers never saw them):
     # VELESQL_SPEC `**Last Updated**: ... (VelesDB vX.Y.Z)`, the cheat-sheet
-    # `**VelesDB version:** X.Y.Z` label, and CLI_REPL's four example outputs.
-    ("docs/VELESQL_SPEC.md", "doc_last_updated_version"),
+    # `**VelesDB version:** X.Y.Z` label.
+    ("docs/VELESQL_SPEC.md", "applies_to_stamp"),
     ("docs/reference/VELESQL_CHEATSHEET.md", "md_version_label"),
-    ("docs/guides/CLI_REPL.md", "cli_repl_version"),
 ]
 
 # velesdb-memory is versioned independently of the workspace (it ships its own
@@ -261,24 +261,6 @@ def _read_md_version_label(path: Path) -> str:
     return match.group(1)
 
 
-def _read_cli_repl_version(path: Path) -> str:
-    """Pull the version out of the four CLI-output example strings in
-    `CLI_REPL.md` (the `--version` line, the `\\info` table row, the REPL
-    banner, and the doc footer) and verify they agree."""
-    text = path.read_text(encoding="utf-8")
-    pats = (
-        r"(?m)^# velesdb (\d+\.\d+\.\d+)",
-        r"│ Version\s+│ (\d+\.\d+\.\d+)",
-        r"VelesDB v(\d+\.\d+\.\d+) - Interactive REPL",
-        r"Documentation VelesDB v(\d+\.\d+\.\d+)",
-    )
-    found = [m.group(1) for p in pats if (m := re.search(p, text))]
-    if not found:
-        raise RuntimeError(f"No CLI version-output strings in {path}")
-    uniq = set(found)
-    return found[0] if len(uniq) == 1 else "/".join(found)
-
-
 def _read_py_init_version(path: Path) -> str:
     """Pull the version out of a `__version__ = "X.Y.Z"` line in a Python
     `__init__.py`. These constants are the ones users see at runtime via
@@ -311,6 +293,28 @@ def _read_doc_toml_header(path: Path) -> str:
     if not match:
         raise RuntimeError(f'No `# Version: X.Y.Z` line in {path}')
     return match.group(1)
+
+
+def _read_applies_to_stamp(path: Path) -> str:
+    """Pull the version out of the canonical documentation footer,
+    `Applies to: velesdb-core X.Y.Z`.
+
+    The documentation refactor standardised every doc on this stamp, replacing
+    the shields.io badge and the `(VelesDB vX.Y.Z)` parenthetical that the
+    readers above were written for. Reading the stamp keeps the gate pointed at
+    the form docs actually carry -- 60 files and counting -- instead of forcing
+    three of them back to a format nothing else uses.
+
+    Deliberately anchored on `velesdb-core`: a doc may name a second, unrelated
+    version on the same line (VELESQL_SPEC carries the VelesQL grammar version),
+    and only the workspace one must track the manifests.
+    """
+    text = path.read_text(encoding="utf-8")
+    matches = re.findall(r"Applies to:\s*velesdb-core\s+(\d+\.\d+\.\d+)", text)
+    if not matches:
+        raise RuntimeError(f"No `Applies to: velesdb-core X.Y.Z` stamp in {path}")
+    uniq = set(matches)
+    return matches[0] if len(uniq) == 1 else "/".join(matches)
 
 
 def _read_doc_version_badge(path: Path) -> str:
@@ -501,6 +505,7 @@ _READERS = {
     "json_openapi": _read_openapi_version,
     "yaml_openapi": _read_yaml_openapi_version,
     "doc_health_snippet": _read_doc_health_snippet,
+    "applies_to_stamp": _read_applies_to_stamp,
     "dockerfile_label": _read_dockerfile_label,
     "py_init_version": _read_py_init_version,
     "wasm_cdn_url": _read_wasm_cdn_url,
@@ -519,7 +524,6 @@ _READERS = {
     "cargo_dep_pin": _read_cargo_dep_pin,
     "deb_download_path": _read_deb_download_path,
     "md_version_label": _read_md_version_label,
-    "cli_repl_version": _read_cli_repl_version,
     "mcp_server_json": _read_mcp_server_json_versions,
 }
 
