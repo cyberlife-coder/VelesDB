@@ -7,7 +7,7 @@
 //! every thread in the process.
 //!
 //! Inside `--lib`, that is unsafe at any level of annotation. `#[serial]`
-//! (serial_test) only excludes other `#[serial]` tests; the thousands of
+//! (`serial_test`) only excludes other `#[serial]` tests; the thousands of
 //! unannotated tests in the same binary keep running in parallel and are judged
 //! against whatever ceiling happens to be installed. On 2026-07-25 this
 //! surfaced as a reproducible flake: with a 4096-byte ceiling pinned by
