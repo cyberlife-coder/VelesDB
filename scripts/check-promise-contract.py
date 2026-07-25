@@ -131,6 +131,101 @@ def check_registry() -> list[str]:
     return failed
 
 
+# Every claim must carry these. A number without them cannot be audited: you
+# cannot tell a figure that still holds from one that rotted three releases
+# ago, nor re-measure it without first guessing the hardware it came from.
+PROVENANCE_FIELDS = ("measured_on", "measured_machine", "measured_version")
+
+
+def check_provenance(claims: list[dict]) -> list[str]:
+    """Every claim must record WHEN it was measured and ON WHAT.
+
+    A pinned number with no provenance cannot be audited or refuted: you
+    cannot tell a figure that still holds from one that rotted three
+    releases ago, and re-measuring it means first guessing the hardware it
+    came from. Two claims drifted exactly this way — the WASM bundle was
+    22% understated and the server binary had grown a megabyte — and both
+    had sat green because the registry only ever checked that the sentence
+    was still written.
+
+    ``measured_machine`` matters as much as the date: a latency measured on
+    the AVX2 reference machine is not refuted by a run on Apple Silicon, and
+    silently replacing one with the other manufactures a false claim rather
+    than fixing one. Size claims that no hardware can change say so with
+    ``platform-independent``.
+
+    ``unknown`` is accepted, deliberately: it is honest debt, visible in the
+    registry and reported below, rather than a fabricated date. What is NOT
+    accepted is omitting the field.
+    """
+    failed = []
+    for claim in claims:
+        claim_id = claim.get("id", "<unknown>")
+        for field in PROVENANCE_FIELDS:
+            value = claim.get(field)
+            if value is None:
+                failed.append(
+                    f"[{claim_id}] missing '{field}' — a pinned number without "
+                    f"its provenance cannot be re-measured or refuted"
+                )
+            elif not str(value).strip():
+                failed.append(f"[{claim_id}] '{field}' is empty")
+    return failed
+
+
+def stale_claims(claims: list[dict], workspace_version: str) -> list[str]:
+    """Claims last measured on a release older than the one being shipped.
+
+    This is the field that would have caught both drifts on the day they
+    happened. The WASM bundle figure was *correct* when taken — 549285 bytes
+    on v3.12.0, measured 2026-07-20 — and the package then grew 23% at the
+    4.0.0 bump with nobody re-running the command. A date alone does not say
+    that: 2026-07-20 looks recent. What betrays it is that the measurement
+    belongs to a version the project no longer ships.
+
+    Reported, not fatal: re-measuring every figure at every bump is a
+    deliberate release-time decision, and failing the build here would only
+    teach people to copy the version string across without measuring.
+    """
+    stale = []
+    for claim in claims:
+        # An executable claim re-derives itself on every run, so it cannot be
+        # stale by construction — the version it was first taken on is history,
+        # not a liability.
+        if claim.get("executable", False):
+            continue
+        measured = str(claim.get("measured_version", "")).strip()
+        if not measured or measured.lower() in {"unknown", "n/a"}:
+            continue
+        if measured != workspace_version:
+            stale.append(
+                f"[{claim.get('id', '<unknown>')}] measured on {measured}, "
+                f"workspace ships {workspace_version} — re-run: "
+                f"{claim.get('validation_command')!r}"
+            )
+    return stale
+
+
+def workspace_version() -> str:
+    """The `[workspace.package]` version, the single source of truth."""
+    manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    match = re.search(
+        r'(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"', manifest
+    )
+    return match.group(1) if match else "unknown"
+
+
+def unsourced_claims(claims: list[dict]) -> list[str]:
+    """Claims whose provenance is recorded as ``unknown`` — visible debt."""
+    return [
+        f"[{claim.get('id', '<unknown>')}] measured_on={claim.get('measured_on')!r} "
+        f"machine={claim.get('measured_machine')!r}"
+        for claim in claims
+        if str(claim.get("measured_on")).lower() == "unknown"
+        or str(claim.get("measured_machine")).lower() == "unknown"
+    ]
+
+
 def check_capacity_mode_overclaim() -> list[str]:
     """Requirement 10.4: sq8/binary docs must not promise search throughput."""
     failed = []
@@ -220,7 +315,13 @@ def main() -> int:
 
     data = json.loads(REGISTRY.read_text(encoding="utf-8"))
     claims = data.get("claims", [])
+    provenance_failures = check_provenance(claims)
     executed, skipped, execution_failures = run_validation_commands(claims)
+
+    if provenance_failures:
+        print("Provenance check failed — every claim must record its measurement:")
+        for msg in provenance_failures:
+            print(f"  - {msg}")
 
     if registry_failures:
         print("Promise contract check failed:")
@@ -242,13 +343,32 @@ def main() -> int:
         for msg in skipped:
             print(f"  - {msg}")
 
-    if registry_failures or overclaim_failures or execution_failures:
+    unsourced = unsourced_claims(claims)
+    if unsourced:
+        print("Claims with no sourced measurement (honest debt, not a failure):")
+        for msg in unsourced:
+            print(f"  - {msg}")
+
+    version = workspace_version()
+    stale = stale_claims(claims, version)
+    if stale:
+        print(f"Claims measured on an older release than {version} (re-measure):")
+        for msg in stale:
+            print(f"  - {msg}")
+
+    if (
+        registry_failures
+        or overclaim_failures
+        or execution_failures
+        or provenance_failures
+    ):
         return 1
 
     claim_count = len(claims)
     print(
         f"Promise contract check passed ({claim_count} claims; "
         f"{len(executed)} executed, {len(skipped)} documentary; "
+        f"{len(unsourced)} unsourced; "
         f"{len(CAPACITY_MODE_DOCS)} capacity-mode docs clean)."
     )
     return 0
