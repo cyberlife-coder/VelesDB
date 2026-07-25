@@ -136,12 +136,56 @@ proptest! {
         let (lo, hi) = (x.min(y), x.max(y));
         let (low, high) = (rank(lo), rank(hi));
 
-        // Silence the panic hook so the expected violation is not noisy.
-        let prev_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let outcome = std::panic::catch_unwind(|| assert_lock_order(high, low));
-        std::panic::set_hook(prev_hook);
+        // Silence the expected violation without muting the rest of the binary.
+        let outcome = with_panic_output_silenced(|| {
+            std::panic::catch_unwind(|| assert_lock_order(high, low))
+        });
 
         prop_assert!(outcome.is_err());
     }
+}
+
+/// Runs `f` with panic output from **this thread** suppressed.
+///
+/// `std::panic::set_hook` is process-global. The previous pattern here —
+/// install a no-op hook, run, restore — therefore swallowed the panic output of
+/// every test running concurrently in this binary for the duration of the
+/// window, and since it sits inside a proptest the window was reopened once per
+/// generated case. It never failed a test, but it could hide the diagnostics of
+/// an unrelated failure, which is exactly what one wants to read when a suite
+/// goes red.
+///
+/// The hook is instead installed once for the process and filters on a
+/// thread-local flag, so only the panic this test deliberately provokes is
+/// hidden and other threads keep printing normally.
+#[cfg(debug_assertions)]
+fn with_panic_output_silenced<T>(f: impl FnOnce() -> T) -> T {
+    use std::cell::Cell;
+    use std::sync::Once;
+
+    thread_local! {
+        static SILENCED: Cell<bool> = const { Cell::new(false) };
+    }
+    static INSTALL_HOOK: Once = Once::new();
+
+    /// Clears the flag on drop so an unwind cannot leave this thread muted.
+    struct Unsilence;
+    impl Drop for Unsilence {
+        fn drop(&mut self) {
+            SILENCED.with(|silenced| silenced.set(false));
+        }
+    }
+
+    INSTALL_HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !SILENCED.with(Cell::get) {
+                previous(info);
+            }
+        }));
+    });
+
+    SILENCED.with(|silenced| silenced.set(true));
+    let _unsilence = Unsilence;
+    f()
 }
