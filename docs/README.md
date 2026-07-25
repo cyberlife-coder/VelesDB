@@ -42,6 +42,22 @@ Detailed guides for using VelesDB features. **[Full guides index →](./guides/R
 | [Migration v1.6](./guides/MIGRATION_v1.6.md) / [v1.7](./guides/MIGRATION_v1.7.md) | Version migration guides |
 | [Troubleshooting](./NEW_USER_TROUBLESHOOTING.md) | Solutions for common issues new users encounter |
 
+### API reference, per binding
+
+Each binding has its own reference guide; the
+[full guides index](./guides/README.md) groups every guide by surface.
+
+| Binding | Reference |
+|---------|-----------|
+| Rust (`velesdb-core`) | [Public API map](./guides/CORE_API_MAP.md) · [VelesQL](./guides/CORE_VELESQL_REFERENCE.md) |
+| Python | [API reference](./guides/PYTHON_API_REFERENCE.md) |
+| WASM (browser) | [JavaScript API](./guides/WASM_API.md) |
+| Node.js | [Addon reference](./guides/NODE_ADDON.md) |
+| Mobile (Swift / Kotlin) | [Mobile API](./guides/MOBILE_API.md) |
+| Server (REST) | [REST tour](./guides/SERVER_REST_TOUR.md) |
+| Tauri plugin | [Plugin reference](./guides/TAURI_PLUGIN_REFERENCE.md) |
+| Data migration | [`velesdb-migrate` CLI](./guides/MIGRATE_CLI.md) |
+
 ---
 
 ## 📐 Technical Reference
