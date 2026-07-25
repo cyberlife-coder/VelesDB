@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /home/you/.codex/hooks/velesdb-memory/session-start.sh",
+            "timeout": 10,
+            "statusMessage": "velesdb-memory: resume working context"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /home/you/.codex/hooks/velesdb-memory/stop.sh",
+            "timeout": 10,
+            "statusMessage": "velesdb-memory: save working context"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -6,11 +6,11 @@ gives it the *tools*. It does not make the agent actually call
 `load_working_context` at the start of every session or
 `save_working_context` before every one ends — that only happens if the
 agent remembers to, which it won't reliably do on its own. This directory
-closes that gap for [Claude Code](claude-code/) (real, tested hooks),
-[Windsurf](windsurf/) (real, tested hook — a single event folding both
-halves of the loop, see below), and [Codex CLI](codex/) (a documented
-instruction-file convention, since Codex has no equivalent hook mechanism
-yet).
+closes that gap for [Claude Code](claude-code/) (four real, tested hooks),
+[Codex CLI](codex/) (two — `SessionStart` and `Stop`; `PreCompact`/`PostCompact`
+stay unwired because neither documents an output channel that reaches the
+model) and [Windsurf](windsurf/) (one — a single event folding both halves of
+the loop, see below).
 
 ## Install — Claude Code
 
