@@ -112,6 +112,7 @@ pub struct OllamaEmbedder {
     base_url: String,
     model: String,
     dimension: usize,
+    agent: ureq::Agent,
 }
 
 #[cfg(feature = "ollama")]
@@ -125,7 +126,8 @@ impl OllamaEmbedder {
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Result<Self, EmbedError> {
         let base_url = base_url.into();
         let model = model.into();
-        let dimension = request_embedding(&base_url, &model, "dimension probe")?.len();
+        let agent = embed_agent(std::time::Duration::from_secs(EMBED_TIMEOUT_SECS));
+        let dimension = request_embedding(&agent, &base_url, &model, "dimension probe")?.len();
         if dimension == 0 {
             return Err(EmbedError::Empty);
         }
@@ -133,6 +135,7 @@ impl OllamaEmbedder {
             base_url,
             model,
             dimension,
+            agent,
         })
     }
 }
@@ -144,7 +147,7 @@ impl Embedder for OllamaEmbedder {
     }
 
     fn embed(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
-        request_embedding(&self.base_url, &self.model, text)
+        request_embedding(&self.agent, &self.base_url, &self.model, text)
     }
 }
 
@@ -172,12 +175,41 @@ fn parse_embedding_response(body: &str) -> Result<Vec<f32>, EmbedError> {
     Ok(parsed.embedding)
 }
 
+/// Wall-clock ceiling for one embeddings request.
+///
+/// Generous enough for a COLD Ollama that has to load the model into memory
+/// on the first call (seconds, occasionally tens of seconds), but bounded —
+/// which the bare `ureq::post` used before was not. An unbounded wait here is
+/// not a slow call, it is a **hung caller**: `remember`/`save_working_context`
+/// embed before writing, so an Ollama that accepts the connection and never
+/// answers blocks the MCP tool call until the *client* gives up, surfacing as
+/// an opaque transport timeout with nothing in the server's own error path.
+/// Deliberately far below `extract.rs`'s 300 s: that ceiling covers text
+/// GENERATION, while an embedding that has not returned in a minute is not
+/// going to.
+#[cfg(feature = "ollama")]
+const EMBED_TIMEOUT_SECS: u64 = 60;
+
+/// Agent used for every embeddings request, with [`EMBED_TIMEOUT_SECS`]
+/// applied. Same pattern as [`crate::extract::OllamaExtractor`], which has
+/// bounded its own Ollama calls since it was written.
+#[cfg(feature = "ollama")]
+fn embed_agent(timeout: std::time::Duration) -> ureq::Agent {
+    ureq::AgentBuilder::new().timeout(timeout).build()
+}
+
 /// Perform one blocking embeddings request against a local Ollama.
 #[cfg(feature = "ollama")]
-fn request_embedding(base_url: &str, model: &str, text: &str) -> Result<Vec<f32>, EmbedError> {
+fn request_embedding(
+    agent: &ureq::Agent,
+    base_url: &str,
+    model: &str,
+    text: &str,
+) -> Result<Vec<f32>, EmbedError> {
     let url = format!("{base_url}/api/embeddings");
     let body = build_request_body(model, text);
-    let response = ureq::post(&url)
+    let response = agent
+        .post(&url)
         .set("Content-Type", "application/json")
         .send_string(&body)
         .map_err(|err| EmbedError::Backend(format!("ollama request failed: {err}")))?;
@@ -216,6 +248,54 @@ mod ollama_tests {
     fn rejects_a_malformed_response() {
         let parsed = parse_embedding_response(r#"{"oops":true}"#);
         assert!(matches!(parsed, Err(EmbedError::Backend(_))));
+    }
+
+    /// An Ollama that accepts the TCP connection and then never answers is
+    /// the failure this bound exists for: without it the embed call blocks
+    /// forever, and since `remember`/`save_working_context` embed before
+    /// writing, the MCP tool call hangs until the CLIENT times out — an
+    /// opaque transport error with nothing in the server's own error path.
+    /// Uses a 1 s agent so the test stays fast; the shipped ceiling is
+    /// `EMBED_TIMEOUT_SECS`.
+    #[test]
+    fn a_silent_ollama_is_bounded_instead_of_hanging_forever() {
+        use std::io::Read as _;
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        // Accept, read the request, then hold the socket open and answer
+        // nothing at all — the exact shape of a stalled model load.
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut socket, _)) = listener.accept() {
+                let mut scratch = [0_u8; 1024];
+                let _ = socket.read(&mut scratch);
+                std::thread::sleep(Duration::from_secs(30));
+            }
+        });
+
+        let agent = embed_agent(Duration::from_secs(1));
+        let started = Instant::now();
+        let outcome = request_embedding(&agent, &format!("http://{addr}"), "all-minilm", "hello");
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(outcome, Err(EmbedError::Backend(_))),
+            "a silent backend must surface as a Backend error, got {outcome:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "the request must be bounded by the agent timeout, took {elapsed:?}"
+        );
+        drop(handle);
+    }
+
+    #[test]
+    fn the_shipped_timeout_stays_bounded_and_usable() {
+        // Low enough that an MCP client is still waiting when it fires,
+        // high enough to survive a cold model load.
+        assert!((5..=120).contains(&EMBED_TIMEOUT_SECS));
     }
 
     #[test]

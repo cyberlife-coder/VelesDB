@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operation is invisible to unrelated threads and overlapping scopes nest
   correctly. `set_alloc_byte_limit` is unchanged: it remains the process-wide
   operator policy and still bounds allocations on worker threads.
+- **`velesdb-memory`**: the Ollama embedder issued its HTTP request through a
+  bare `ureq::post` with **no timeout at all**, so an Ollama that accepted the
+  connection and never answered (a stalled cold model load, a wedged server)
+  blocked the caller indefinitely. Because `remember` / `save_working_context`
+  embed *before* writing, that surfaced as an opaque MCP transport timeout on
+  the client with nothing in the server's own error path — observed live as
+  `MCP error -32001: Request timed out`. Requests now go through a
+  `ureq::Agent` bounded at 60 s, the same pattern `extract.rs` has used for its
+  own Ollama calls since it was written. Proven by a test that stands up a
+  socket which accepts and never replies: 30.0 s before, bounded after.
 
 ### Added
 
