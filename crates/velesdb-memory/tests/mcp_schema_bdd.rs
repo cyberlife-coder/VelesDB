@@ -319,3 +319,68 @@ fn assert_payload_survived_the_round_trip(round_tripped: &serde_json::Value) {
     );
     assert_eq!(round_tripped["pending_actions"], json!(["re-run the gate"]));
 }
+
+/// Pruning unreferenced `$defs` must never orphan a surviving `$ref`.
+///
+/// Inlining copies definitions to their use sites, leaving most `$defs`
+/// entries dead — 55 % of the published bytes, measured. Dropping them is
+/// worth 40 KB across the 18 tools, but a definition still reachable through
+/// a cycle guard's leftover `$ref`, or through another definition, MUST
+/// survive. This walks every advertised schema and resolves every `$ref`
+/// against what actually shipped.
+#[tokio::test]
+async fn no_advertised_ref_points_at_a_pruned_definition() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    let mut dangling: BTreeSet<String> = BTreeSet::new();
+    for tool in &tools {
+        for (kind, schema) in [
+            ("input", Some(Value::Object((*tool.input_schema).clone()))),
+            (
+                "output",
+                tool.output_schema
+                    .as_ref()
+                    .map(|s| Value::Object((**s).clone())),
+            ),
+        ] {
+            let Some(schema) = schema else { continue };
+            let available: BTreeSet<String> = schema
+                .get("$defs")
+                .and_then(Value::as_object)
+                .map(|defs| defs.keys().cloned().collect())
+                .unwrap_or_default();
+            let mut wanted = BTreeSet::new();
+            collect_ref_targets(&schema, &mut wanted);
+            for name in wanted.difference(&available) {
+                dangling.insert(format!("{} ({kind}): #/$defs/{name}", tool.name));
+            }
+        }
+    }
+    assert!(
+        dangling.is_empty(),
+        "{} `$ref`(s) point at a definition that was pruned away: {dangling:#?}",
+        dangling.len()
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
+fn collect_ref_targets(value: &Value, out: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(target)) = map.get("$ref") {
+                if let Some(name) = target.strip_prefix("#/$defs/") {
+                    out.insert(name.to_owned());
+                }
+            }
+            for sub in map.values() {
+                collect_ref_targets(sub, out);
+            }
+        }
+        Value::Array(entries) => {
+            for sub in entries {
+                collect_ref_targets(sub, out);
+            }
+        }
+        _ => {}
+    }
+}
