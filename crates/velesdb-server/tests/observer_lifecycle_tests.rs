@@ -275,6 +275,25 @@ async fn read_gate_denies_rest_search_end_to_end() {
     );
 }
 
+async fn put(app: &axum::Router, uri: &str, body: Value) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(uri)
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("test: build PUT request"),
+        )
+        .await
+        .expect("test: PUT request")
+        .status()
+}
+
+fn assert_denied(status: StatusCode, what: &str) {
+    assert!(!status.is_success(), "{what} denied read, got {status}");
+}
+
 /// End-to-end proof that the CORE-2 read gate also covers the plain REST
 /// graph endpoints, not just `/search*`, `MATCH`, and the embedding
 /// `/graph/search` — see `graph_read_preamble` in `handlers/graph/handlers.rs`.
@@ -301,22 +320,10 @@ async fn read_gate_denies_rest_graph_reads_end_to_end() {
     // add_edge requires both endpoints to already have a stored payload
     // (VELES-022 NodeNotFound otherwise) — seed nodes 1 and 2 first.
     for node_id in [1, 2] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!(
-                        "/collections/{GRAPH}/graph/nodes/{node_id}/payload"
-                    ))
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(json!({"payload": {}}).to_string()))
-                    .expect("test: build PUT request"),
-            )
-            .await
-            .expect("test: PUT request");
+        let uri = format!("/collections/{GRAPH}/graph/nodes/{node_id}/payload");
+        let status = put(&app, &uri, json!({"payload": {}})).await;
         assert_eq!(
-            response.status(),
+            status,
             StatusCode::NO_CONTENT,
             "seed node {node_id} payload must not be read-gated"
         );
@@ -335,59 +342,50 @@ async fn read_gate_denies_rest_graph_reads_end_to_end() {
     );
 
     // Every plain REST graph read must be refused end-to-end.
-    let status = get(
-        &app,
-        &format!("/collections/{GRAPH}/graph/edges?label=KNOWS"),
-    )
-    .await;
-    assert!(!status.is_success(), "get_edges denied read, got {status}");
-
-    let status = post(
-        &app,
-        &format!("/collections/{GRAPH}/graph/traverse"),
-        json!({"source": 1, "strategy": "bfs"}),
-    )
-    .await;
-    assert!(
-        !status.is_success(),
-        "traverse_graph denied read, got {status}"
+    assert_denied(
+        get(
+            &app,
+            &format!("/collections/{GRAPH}/graph/edges?label=KNOWS"),
+        )
+        .await,
+        "get_edges",
     );
-
-    let status = get(&app, &format!("/collections/{GRAPH}/graph/nodes/1/degree")).await;
-    assert!(
-        !status.is_success(),
-        "get_node_degree denied read, got {status}"
+    assert_denied(
+        post(
+            &app,
+            &format!("/collections/{GRAPH}/graph/traverse"),
+            json!({"source": 1, "strategy": "bfs"}),
+        )
+        .await,
+        "traverse_graph",
     );
-
-    let status = get(&app, &format!("/collections/{GRAPH}/graph/edges/count")).await;
-    assert!(
-        !status.is_success(),
-        "get_edge_count denied read, got {status}"
+    assert_denied(
+        get(&app, &format!("/collections/{GRAPH}/graph/nodes/1/degree")).await,
+        "get_node_degree",
     );
-
-    let status = get(&app, &format!("/collections/{GRAPH}/graph/nodes")).await;
-    assert!(!status.is_success(), "list_nodes denied read, got {status}");
-
-    let status = get(&app, &format!("/collections/{GRAPH}/graph/nodes/1/edges")).await;
-    assert!(
-        !status.is_success(),
-        "get_node_edges denied read, got {status}"
+    assert_denied(
+        get(&app, &format!("/collections/{GRAPH}/graph/edges/count")).await,
+        "get_edge_count",
     );
-
-    let status = get(&app, &format!("/collections/{GRAPH}/graph/nodes/1/payload")).await;
-    assert!(
-        !status.is_success(),
-        "get_node_payload denied read, got {status}"
+    assert_denied(
+        get(&app, &format!("/collections/{GRAPH}/graph/nodes")).await,
+        "list_nodes",
     );
-
-    let status = post(
-        &app,
-        &format!("/collections/{GRAPH}/graph/traverse/parallel"),
-        json!({"sources": [1]}),
-    )
-    .await;
-    assert!(
-        !status.is_success(),
-        "traverse_parallel denied read, got {status}"
+    assert_denied(
+        get(&app, &format!("/collections/{GRAPH}/graph/nodes/1/edges")).await,
+        "get_node_edges",
+    );
+    assert_denied(
+        get(&app, &format!("/collections/{GRAPH}/graph/nodes/1/payload")).await,
+        "get_node_payload",
+    );
+    assert_denied(
+        post(
+            &app,
+            &format!("/collections/{GRAPH}/graph/traverse/parallel"),
+            json!({"sources": [1]}),
+        )
+        .await,
+        "traverse_parallel",
     );
 }
