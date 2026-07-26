@@ -103,33 +103,47 @@ fn a_silent_ollama_is_bounded_instead_of_hanging_forever() {
 /// The server here accepts, never reads, and closes: the kernel answers
 /// unread bytes in the receive queue with an RST — the portable stand-in for
 /// `SO_LINGER=0`, which would need a dependency this crate does not carry.
-#[test]
-fn an_ollama_that_resets_the_connection_is_retried_then_reported_actionably() {
+/// 1 initial attempt + the 2 replays of `OLLAMA_RETRIES`.
+const EXPECTED_ATTEMPTS: usize = 3;
+
+/// A listener that accepts `EXPECTED_ATTEMPTS` connections and closes each one
+/// without reading it, so the kernel answers the unread request bytes with an
+/// RST. Returns the address, a counter of accepted connections, and the thread
+/// handle. The loop is bounded, so the thread ends on its own — no join needed
+/// and no orphan left behind.
+fn resetting_listener() -> (
+    std::net::SocketAddr,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    std::thread::JoinHandle<()>,
+) {
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
-
-    // 1 initial attempt + the 2 replays of `OLLAMA_RETRIES`.
-    const EXPECTED_ATTEMPTS: usize = 3;
+    use std::time::Duration;
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("addr");
     let attempts = Arc::new(AtomicUsize::new(0));
     let seen = Arc::clone(&attempts);
-    // Bounded loop: the thread ends on its own, no join, no orphan.
     let handle = std::thread::spawn(move || {
         for _ in 0..EXPECTED_ATTEMPTS {
             let Ok((socket, _)) = listener.accept() else {
                 break;
             };
             seen.fetch_add(1, Ordering::SeqCst);
-            // Let the request land in the receive queue unread, so the
-            // close below emits a reset rather than a clean shutdown.
             std::thread::sleep(Duration::from_millis(50));
             drop(socket);
         }
     });
+    (addr, attempts, handle)
+}
+
+#[test]
+fn an_ollama_that_resets_the_connection_is_retried_then_reported_actionably() {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    let (addr, attempts, handle) = resetting_listener();
 
     let agent = embed_agent(Duration::from_secs(2));
     let url = format!("http://{addr}");
