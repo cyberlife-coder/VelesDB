@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.0] — 2026-07-26
+
+Mineure : 38 commits depuis la 4.0.0. Le verrou de gouvernance CORE-2 couvre
+desormais les lectures graphe REST, l'audit des capacites honore les
+denegations, et velesdb-memory corrige quatre defauts constates en usage reel.
+
 ### Fixed
 
 - **`velesdb-core`**: the allocation backstop (#899) is no longer disturbed by
