@@ -17,7 +17,7 @@
 # published separately by release-mcpb.yml are built with DEFAULT features
 # (stdio only — no `http`/`ollama`), so they can't run as the shared
 # multi-client daemon scripts/install-memory-daemon.{sh,ps1} set up. The
-# daemon archives are the SAME crate built with `--features ollama,http`
+# daemon archives are the SAME crate built with `--features ollama,http,extract`
 # instead, letting `--from-release` / `-FromRelease` in those install
 # scripts install a working daemon binary with no Rust toolchain on the
 # target machine.
@@ -43,7 +43,7 @@ on:
         type: boolean
         default: true
       publish_daemon_archive:
-        description: 'Build and attach the --features ollama,http daemon archives to the GitHub Release'
+        description: 'Build and attach the --features ollama,http,extract daemon archives to the GitHub Release'
         type: boolean
         default: true
 
@@ -371,7 +371,7 @@ jobs:
           fi
 
   # ===========================================================================
-  # 5. Build the daemon binary for each platform (--features ollama,http)
+  # 5. Build the daemon binary for each platform (--features ollama,http,extract)
   # ===========================================================================
   #
   # Same crate/bin as the default-feature .mcpb bundles in release-mcpb.yml,
@@ -421,8 +421,8 @@ jobs:
         with:
           shared-key: "release-memory-daemon-${{ matrix.target }}"
 
-      - name: Build velesdb-memory (--features ollama,http)
-        run: cargo build --release --locked -p velesdb-memory --bin velesdb-memory --target ${{ matrix.target }} --features ollama,http
+      - name: Build velesdb-memory (--features ollama,http,extract)
+        run: cargo build --release --locked -p velesdb-memory --bin velesdb-memory --target ${{ matrix.target }} --features ollama,http,extract
 
       - name: Package archive + checksum
         shell: bash
@@ -519,7 +519,7 @@ jobs:
           # velesdb-memory release must never become the repo's "Latest
           # release" (that belongs to the workspace vX.Y.Z release).
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --latest=false --notes "velesdb-memory $TAG — daemon archives (--features ollama,http) for install-memory-daemon.sh/.ps1 --from-release." || true
+            gh release create "$TAG" --title "$TAG" --latest=false --notes "velesdb-memory $TAG — daemon archives (--features ollama,http,extract) for install-memory-daemon.sh/.ps1 --from-release." || true
           fi
           ls -la daemon-archives/
           gh release upload "$TAG" daemon-archives/* --clobber

@@ -739,7 +739,7 @@ Windows in three places:
 
 ### Installing the daemon without a Rust toolchain
 
-Both installers default to `cargo install --features ollama,http`, which
+Both installers default to `cargo install --features ollama,http,extract`, which
 needs a Rust toolchain on the machine. Pass `--from-release[=TAG]` (`.sh`) or
 `-FromRelease` / `-FromReleaseTag <TAG>` (`.ps1`, which has no PowerShell
 equivalent of the shell flag's optional inline value) to instead download a
