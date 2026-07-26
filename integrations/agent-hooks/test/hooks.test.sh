@@ -354,6 +354,52 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# --- The compiler must receive TEXT, with its line breaks -------------------
+#
+# `tool_response` is a STRING for some tools and an OBJECT for others — Bash,
+# the highest-volume one, reports `{stdout, stderr, …}`. Every check above
+# uses the string form, which is why this shipped broken: the object branch
+# used to JSON-encode the response, handing the segmenter a SINGLE line with
+# `\n` escaped inside it. With nothing to split on it could neither
+# deduplicate nor rank, and truncated from the head — keeping repeated build
+# noise and dropping the error underneath. On a real 55 KB cargo log that
+# meant losing `error[E0463]`, the `file.rs:412` location, a `do NOT` warning
+# and the failing test name, while emitting 2048 characters of identical
+# "Compiling …" lines.
+#
+# So the guard asserts what the hook HANDS THE BINARY, not what comes back:
+# multiple lines, and the unique line still present.
+cat > "$FAKE_BIN_DIR/fake-record" <<FAKE
+#!/usr/bin/env bash
+cat > "$TMP_TEST_DIR/received.txt"
+printf '{"content":"COMPILED","tokens_in":4000,"tokens_out":300,"tokens_saved":3700}\n'
+FAKE
+chmod +x "$FAKE_BIN_DIR/fake-record"
+
+noisy_lines="$(for _ in $(seq 1 900); do echo "   Compiling velesdb-core v4.0.0"; done)"
+buried="$noisy_lines
+error[E0463]: can't find crate for \`core\`
+$noisy_lines"
+
+jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-obj" --arg body "$buried" \
+  '{session_id: $sid, cwd: $cwd, hook_event_name: "PostToolUse", tool_name: "Bash",
+    tool_input: {command: "cargo build"}, tool_use_id: "toolu_obj",
+    tool_response: {stdout: $body, stderr: ""}}' \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-record" bash "$HOOKS_DIR/post-tool-use.sh" >/dev/null
+
+received_lines="$(wc -l < "$TMP_TEST_DIR/received.txt" | tr -d ' ')"
+if [ "$received_lines" -gt 1 ]; then
+  pass "PostToolUse: an object tool_response reaches the compiler as real lines"
+else
+  fail "PostToolUse: an object tool_response reaches the compiler as real lines (got $received_lines line(s) — JSON-encoded?)"
+fi
+
+if grep -q "E0463" "$TMP_TEST_DIR/received.txt"; then
+  pass "PostToolUse: the buried error line survives extraction"
+else
+  fail "PostToolUse: the buried error line survives extraction"
+fi
+
 # Static analysis via shellcheck, if available (gate says: note if not
 # installed, don't fail the suite over its absence)
 # ---------------------------------------------------------------------------
