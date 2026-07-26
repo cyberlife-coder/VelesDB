@@ -166,10 +166,11 @@ async fn every_tool_input_schema_types_every_reachable_items() {
 /// `exact_evidence` (a `SourceReference`, `handle` required). `fragment_id`
 /// is sent as a decimal STRING past 2^53, the form a float-lossy client must
 /// use to relay an id without rounding it.
-#[tokio::test]
-async fn save_working_context_round_trips_external_payload_with_decisions_and_evidence() {
-    let (_store, client) = connected().await;
-    let working = json!({
+/// The payload an external client sends: every array field populated, so the
+/// round-trip actually exercises `ContextDecisionRef` and `SourceReference`
+/// rather than skipping them the way the in-crate fixtures do.
+fn external_working_payload() -> serde_json::Value {
+    json!({
         "goal": "ship the schema fix",
         "active_constraints": [
             { "text": "never break the published wire shape" }
@@ -194,7 +195,13 @@ async fn save_working_context_round_trips_external_payload_with_decisions_and_ev
             { "fragment_id": BIG_FRAGMENT_ID, "handle": "ctx://source/evidence" }
         ],
         "pending_actions": ["re-run the gate"]
-    });
+    })
+}
+
+#[tokio::test]
+async fn save_working_context_round_trips_external_payload_with_decisions_and_evidence() {
+    let (_store, client) = connected().await;
+    let working = external_working_payload();
     let saved = client
         .call_tool(
             CallToolRequestParams::new("save_working_context").with_arguments(as_args(json!({
