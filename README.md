@@ -76,6 +76,35 @@ The leading agent-memory products ([Mem0, Zep, Letta — detailed comparison, as
 
 ---
 
+## How it works, in plain terms
+
+Four things happen, and none of them calls an AI provider.
+
+**1 · It stores facts, not conversations.** You give it one statement — *"the
+API port is 6333 because 3000 collided with the web UI"* — and it lands in a
+local file store. No model call, nothing sent anywhere.
+
+**2 · It finds them by meaning.** Asking *"which port did we settle on"* reaches
+that fact even though none of the words match. A local embedding model turns
+text into coordinates; close meaning means close coordinates.
+
+**3 · It connects them, and that is the part a search engine cannot do.** Each
+fact is linked to the topics it mentions. `why()` starts from the best match and
+then **walks those links**, so it returns the answer *plus the facts that
+explain it* — including ones sharing no vocabulary with your question.
+
+> The links have to exist. Store facts one by one and the graph stays flat, so
+> `why()` behaves like a search. Hand a paragraph to `remember_extracted` and it
+> splits it into facts and wires the links for you.
+
+**4 · It compresses what is too big, before you pay for it.** Give the compiler
+your accumulated context and a token budget; it returns a smaller version with
+**one recorded decision per fragment** — kept, abstracted, or dropped — and a
+handle to fetch any original back verbatim. Same input, same bytes out, every
+time. That is what the [82.5 % below](#the-numbers--every-one-from-a-committed-harness) measures.
+
+---
+
 ## Get started in 60 seconds
 
 **Fastest path — Python, under 5 seconds median, [measured](docs/quickstart/timing-results.md):**
