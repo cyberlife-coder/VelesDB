@@ -133,7 +133,7 @@ jobs:
       - name: Check each velesdb-memory feature in isolation
         run: |
           set -eu
-          for feat in ollama extract context persistence; do
+          for feat in mcp http context persistence ollama extract; do
             echo "::group::--features $feat"
             cargo check -p velesdb-memory --no-default-features --features "$feat"
             echo "::endgroup::"

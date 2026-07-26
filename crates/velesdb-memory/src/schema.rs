@@ -369,3 +369,33 @@ fn is_rust_int_format(format: &str) -> bool {
 #[cfg(test)]
 #[path = "schema_tests.rs"]
 mod tests;
+
+/// Les champs d'id qui traversent le fil sous forme entiere OU chaine
+/// decimale. Definis ici et non dans `context::wire` : `schema.rs` est gate
+/// sur `mcp`, alors que `context::wire` l'est sur `context` — et les outils
+/// de `mcp.rs` en ont besoin meme quand `context` est absente, ce qui est le
+/// cas de `--features http`.
+#[cfg(feature = "mcp")]
+pub(crate) const WIRE_ID_KEYS: &[&str] =
+    &["fragment_id", "content_hash", "memory_id", "fragment_ids"];
+
+/// Le schema de sortie ANNONCE d'un outil : ids elargis, puis `$ref` inlines
+/// et `$defs` inatteignables elagues.
+///
+/// Vit ici plutot que dans `mcp/context_tools.rs` parce que les outils de
+/// `mcp.rs` l'appellent aussi : le laisser dans un module gate sur `context`
+/// cassait `--features http`, qui active `mcp` sans `context`.
+#[cfg(feature = "mcp")]
+pub(crate) fn wire_safe_output_schema<T: schemars::JsonSchema + std::any::Any>(
+) -> std::sync::Arc<rmcp::model::JsonObject> {
+    let schema = rmcp::handler::server::tool::schema_for_output::<T>().unwrap_or_else(|e| {
+        panic!(
+            "Invalid output schema for {}: {e}",
+            std::any::type_name::<T>()
+        )
+    });
+    let mut map = (*schema).clone();
+    widen_id_properties(&mut map, WIRE_ID_KEYS);
+    inline_ref_only_properties(&mut map);
+    std::sync::Arc::new(map)
+}
