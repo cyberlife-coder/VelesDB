@@ -19,6 +19,8 @@ use super::*;
 use crate::context::model::CompilePolicy;
 use crate::context::{fragment_id, ContextAction};
 use crate::embedder::HashEmbedder;
+use crate::model::MemoryEdge;
+use crate::storage::NativeStore;
 
 const DIM: usize = 384;
 
@@ -510,5 +512,360 @@ fn test_explain_compilation_never_records_an_event_or_stores_a_source() {
     assert_eq!(
         savings.events, 0,
         "explain_compilation must not record a compile event"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Working-context index: concurrency (B3)
+// ---------------------------------------------------------------------------
+
+/// A [`NativeStore`] decorator that forces the exact interleaving the shared
+/// working-context index is vulnerable to, instead of hoping a thread race
+/// reproduces it: the FIRST two readers of `project`'s index slot are held at
+/// a rendezvous until both have read, so both observe the same pre-state and
+/// the second writer overwrites the first.
+///
+/// Deliberately a bounded `Condvar::wait_timeout` and not a `Barrier`: once
+/// the read-modify-write is serialized the second thread never reaches the
+/// rendezvous at all (it waits on the write lock instead), and a `Barrier`
+/// would deadlock the green run forever. The timeout makes the red instant
+/// and the green bounded (~0.3 s).
+struct IndexRaceStore {
+    inner: NativeStore,
+    index_slot: u64,
+    arrived: std::sync::Mutex<usize>,
+    gate: std::sync::Condvar,
+}
+
+impl IndexRaceStore {
+    fn new(inner: NativeStore, index_slot: u64) -> Self {
+        Self {
+            inner,
+            index_slot,
+            arrived: std::sync::Mutex::new(0),
+            gate: std::sync::Condvar::new(),
+        }
+    }
+
+    /// Hold the caller until a second reader of the index slot shows up, or
+    /// 300 ms elapse — whichever comes first.
+    fn rendezvous(&self) {
+        let mut arrived = self
+            .arrived
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *arrived >= 2 {
+            return;
+        }
+        *arrived += 1;
+        self.gate.notify_all();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
+        while *arrived < 2 {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let (guard, outcome) = self
+                .gate
+                .wait_timeout(arrived, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            arrived = guard;
+            if outcome.timed_out() {
+                break;
+            }
+        }
+    }
+}
+
+/// The `MemoryStore` surface the fault decorators below never intercept.
+/// Emitted once: two decorators copy-pasting ~90 lines of pure delegation
+/// trips the repo's duplication gate, which is blocking on this repo.
+macro_rules! delegate_untouched_store_methods {
+    () => {
+        fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), MemoryError> {
+            self.inner.store(id, content, embedding)
+        }
+
+        fn store_with_metadata(
+            &self,
+            id: u64,
+            content: &str,
+            embedding: &[f32],
+            metadata: &Metadata,
+        ) -> Result<(), MemoryError> {
+            self.inner
+                .store_with_metadata(id, content, embedding, metadata)
+        }
+
+        fn store_with_ttl(
+            &self,
+            id: u64,
+            content: &str,
+            embedding: &[f32],
+            ttl_seconds: u64,
+        ) -> Result<(), MemoryError> {
+            self.inner
+                .store_with_ttl(id, content, embedding, ttl_seconds)
+        }
+
+        fn update_metadata(&self, id: u64, metadata: &Metadata) -> Result<(), MemoryError> {
+            self.inner.update_metadata(id, metadata)
+        }
+
+        fn get_metadata(&self, id: u64) -> Result<Option<Metadata>, MemoryError> {
+            self.inner.get_metadata(id)
+        }
+
+        fn delete(&self, id: u64) -> Result<(), MemoryError> {
+            self.inner.delete(id)
+        }
+
+        fn query_filtered(
+            &self,
+            embedding: &[f32],
+            k: usize,
+            filter: &Metadata,
+            offset: usize,
+        ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
+            self.inner.query_filtered(embedding, k, filter, offset)
+        }
+
+        fn query_excluding(
+            &self,
+            embedding: &[f32],
+            k: usize,
+            exclude: &Metadata,
+        ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
+            self.inner.query_excluding(embedding, k, exclude)
+        }
+
+        fn query_columnar(
+            &self,
+            embedding: &[f32],
+            k: usize,
+            filters: &[crate::model::ColumnFilter],
+        ) -> Result<Vec<crate::model::Recollection>, MemoryError> {
+            self.inner.query_columnar(embedding, k, filters)
+        }
+
+        fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
+            self.inner.relate(from, to, relation)
+        }
+
+        fn relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
+            self.inner.relations(id)
+        }
+
+        fn count(&self) -> usize {
+            self.inner.count()
+        }
+    };
+}
+
+impl MemoryStore for IndexRaceStore {
+    delegate_untouched_store_methods!();
+
+    fn get(&self, id: u64) -> Result<Option<(String, Vec<f32>)>, MemoryError> {
+        self.inner.get(id)
+    }
+
+    fn get_metadata_batch(&self, ids: &[u64]) -> Result<Vec<Option<Metadata>>, MemoryError> {
+        if ids == [self.index_slot] {
+            self.rendezvous();
+        }
+        self.inner.get_metadata_batch(ids)
+    }
+}
+
+#[test]
+fn test_concurrent_saves_on_one_project_keep_both_sessions_in_the_index() {
+    // Given one service over a store that pins the two index readers together
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let native = NativeStore::open(dir.path(), DIM).expect("open native store");
+    let svc = MemoryService::with_store(
+        IndexRaceStore::new(native, working_index_id("veles")),
+        HashEmbedder::new(DIM),
+    );
+
+    // When two sessions of the SAME project are saved concurrently
+    std::thread::scope(|scope| {
+        for session in ["alpha", "beta"] {
+            let svc = &svc;
+            scope.spawn(move || {
+                svc.save_working_context("veles", session, &WorkingContext::default())
+                    .expect("save_working_context");
+            });
+        }
+    });
+
+    // Then the index still knows about BOTH.
+    let names: Vec<String> = svc
+        .list_working_contexts("veles")
+        .expect("list_working_contexts")
+        .into_iter()
+        .map(|entry| entry.session)
+        .collect();
+    assert!(
+        names.contains(&"alpha".to_owned()) && names.contains(&"beta".to_owned()),
+        "the per-project index is a single fact updated read-modify-write: two \
+         concurrent saves both read the pre-state and the second write erases \
+         the first session's entry; got {names:?}"
+    );
+
+    // And the loss is silent, which is what makes it dangerous: BOTH working
+    // contexts are still on disk and loadable by exact id — only the index
+    // that lets an agent discover them lost an entry, with no error anywhere.
+    for session in ["alpha", "beta"] {
+        assert!(
+            svc.load_working_context("veles", session)
+                .expect("load_working_context")
+                .is_some(),
+            "{session}'s working context fact itself must still exist"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Working-context index: silent degradations (B4)
+// ---------------------------------------------------------------------------
+
+/// A [`NativeStore`] decorator that reports one slot's metadata normally but
+/// serves no body for it — the "torn fact" state: the index marker says an
+/// index is there, its content is gone.
+///
+/// Reached through the decorator rather than forged on `NativeStore`, because
+/// on `NativeStore` it is *unforgeable*: `delete` removes metadata and body
+/// together (verified), and no store primitive drops a body alone. The state
+/// is nonetheless part of the [`MemoryStore`] CONTRACT — any backend whose
+/// metadata and content live in separate maps, or any write torn by a crash,
+/// can produce it — and the contract under test is what the bridge must do
+/// when it sees it: report corruption, not emptiness.
+struct TornBodyStore {
+    inner: NativeStore,
+    torn: u64,
+}
+
+impl MemoryStore for TornBodyStore {
+    delegate_untouched_store_methods!();
+
+    fn get(&self, id: u64) -> Result<Option<(String, Vec<f32>)>, MemoryError> {
+        if id == self.torn {
+            return Ok(None);
+        }
+        self.inner.get(id)
+    }
+
+    fn get_metadata_batch(&self, ids: &[u64]) -> Result<Vec<Option<Metadata>>, MemoryError> {
+        self.inner.get_metadata_batch(ids)
+    }
+}
+
+#[test]
+fn test_working_index_with_marker_but_no_body_is_an_error_not_an_empty_list() {
+    // Given a project whose index fact is marked but whose body is gone
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let native = NativeStore::open(dir.path(), DIM).expect("open native store");
+    let svc = MemoryService::with_store(
+        TornBodyStore {
+            inner: native,
+            torn: working_index_id("veles"),
+        },
+        HashEmbedder::new(DIM),
+    );
+    svc.save_working_context("veles", "alpha", &WorkingContext::default())
+        .expect("save_working_context");
+
+    // When listing the project's sessions
+    let listed = svc.list_working_contexts("veles");
+
+    // Then it is an ERROR, not an empty list. Reporting `Ok([])` here tells
+    // the caller "this project never saved anything" — the one answer that is
+    // certainly false, since the marker proves an index was written. An agent
+    // told that starts over from scratch and silently abandons every saved
+    // session instead of surfacing a store problem a human could fix.
+    assert!(
+        listed.is_err(),
+        "a marked-but-bodyless index is corruption and must surface as an \
+         error; got {listed:?}"
+    );
+}
+
+#[test]
+fn test_load_working_context_does_not_mutate_the_index() {
+    // Given a project with two saved sessions, one of whose facts is gone
+    let (_dir, svc) = open_service();
+    let alpha = svc
+        .save_working_context("veles", "alpha", &WorkingContext::default())
+        .expect("save alpha");
+    svc.save_working_context("veles", "beta", &WorkingContext::default())
+        .expect("save beta");
+    svc.forget(alpha).expect("forget alpha");
+
+    // When a READ misses on the dead session
+    assert!(svc
+        .load_working_context("veles", "alpha")
+        .expect("load_working_context")
+        .is_none());
+
+    // Then the persisted index is untouched: a lookup must not rewrite shared
+    // state. Healing from the read path means every transient miss (a store
+    // hiccup, a racing writer, a probe for a session that does not exist yet)
+    // permanently deletes an index entry for a session that may be perfectly
+    // alive — a read that destroys data is a read that cannot be retried.
+    let (raw, _) = svc
+        .store
+        .get(working_index_id("veles"))
+        .expect("read index slot")
+        .expect("index fact exists");
+    let index: WorkingContextIndex = serde_json::from_str(&raw).expect("index parses");
+    let persisted: Vec<&str> = index
+        .sessions
+        .iter()
+        .map(|entry| entry.session.as_str())
+        .collect();
+    assert_eq!(
+        persisted,
+        vec!["alpha", "beta"],
+        "load_working_context must not rewrite the shared index"
+    );
+
+    // And the caller still gets the truth: the dead session is filtered out
+    // of the listing at read time, without persisting that decision.
+    let listed: Vec<String> = svc
+        .list_working_contexts("veles")
+        .expect("list_working_contexts")
+        .into_iter()
+        .map(|entry| entry.session)
+        .collect();
+    assert_eq!(listed, vec!["beta".to_owned()]);
+}
+
+#[test]
+fn test_load_working_context_with_marker_but_no_body_is_an_error_not_a_fresh_start() {
+    // Given a session whose working-context fact is marked but bodyless
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let native = NativeStore::open(dir.path(), DIM).expect("open native store");
+    let svc = MemoryService::with_store(
+        TornBodyStore {
+            inner: native,
+            torn: working_id("veles", "alpha"),
+        },
+        HashEmbedder::new(DIM),
+    );
+    svc.save_working_context("veles", "alpha", &WorkingContext::default())
+        .expect("save_working_context");
+
+    // When resuming it
+    let loaded = svc.load_working_context("veles", "alpha");
+
+    // Then it is an ERROR, not `None`. `None` means "fresh start, nothing was
+    // ever saved here" and an agent acts on it by discarding the session and
+    // redoing the work; the marker proves that is false. Only the UNMARKED
+    // slot stays silently `None` — that one is the deliberate squatter guard,
+    // and it is also where an ordinary `forget` lands.
+    assert!(
+        loaded.is_err(),
+        "a marked-but-bodyless working context is corruption, not a fresh \
+         start; got {loaded:?}"
     );
 }

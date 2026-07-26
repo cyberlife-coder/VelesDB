@@ -128,6 +128,30 @@ const CTX_AT_FIELD: &str = "_veles_ctx_at";
 /// the same clock tick (coarse timers, concurrent calls) never collide.
 static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// Serializes the read-modify-write of the per-project working-context index.
+///
+/// The index is ONE fact per project, rewritten wholesale on every
+/// `save_working_context`. Without this, two saves racing on the same project
+/// both read the same pre-state and the second write erases the first
+/// session's entry — a silent loss: the erased session's own fact is still on
+/// disk and still loadable by exact id, but `list_working_contexts` (and
+/// therefore `load_working_context`'s `other_sessions` recovery hint) no
+/// longer knows it exists, and nothing anywhere returns an error.
+///
+/// **Scope, honestly: this is an INTRA-PROCESS lock only.** Two processes
+/// opening the same store still race, because nothing below this layer offers
+/// a compare-and-swap. The durable fix is a CAS or a transaction on the
+/// [`MemoryStore`] trait itself; until then, the single-process case (the MCP
+/// server, whose `spawn_blocking` handlers are exactly what made this
+/// reachable) is covered and the multi-process case is not.
+///
+/// One global lock rather than one per project: index writes are rare (one
+/// per `save_working_context`), so the contention is negligible, whereas a
+/// `HashMap<String, _>` keyed by caller-supplied project names is an unbounded
+/// slow leak for no measurable gain. Per-project striping is the obvious
+/// upgrade if index writes ever become hot.
+static WORKING_INDEX_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// [`ContextCompiler::compile`] with this service's memory folded in:
     /// when the request carries a [`MemoryScope`], relevant memories are
@@ -719,9 +743,17 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// a squatted slot from a genuinely empty one, which is the point — it
     /// must never learn that *something* occupies this id).
     ///
+    /// A pure read: it never writes, never prunes, never heals. Index
+    /// convergence happens on the WRITE path
+    /// ([`Self::update_working_index`]) — a lookup that rewrites shared state
+    /// turns every transient miss into permanent data loss and cannot safely
+    /// be retried.
+    ///
     /// # Errors
     /// Returns [`MemoryError::WorkingContextCodec`] if the stored payload
-    /// does not parse, or a storage error.
+    /// does not parse, or if the slot is marked but its body is gone (a torn
+    /// fact is corruption — reporting it as "nothing saved" would tell the
+    /// caller the one thing that is certainly false), or a storage error.
     pub fn load_working_context(
         &self,
         project: &str,
@@ -735,33 +767,87 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             .flatten()
             .is_some_and(|meta| meta.get(CTX_WORKING_FIELD) == Some(&Value::Bool(true)));
         if !marked {
+            // The squatter/never-saved guard documented above: silent by
+            // design, and the branch a `forget` lands on (deleting a fact
+            // removes its metadata with it).
             return Ok(None);
         }
-        match self.store.get(slot)? {
-            Some((content, _)) => serde_json::from_str(&content)
-                .map(Some)
-                .map_err(|err| MemoryError::WorkingContextCodec(err.to_string())),
-            None => Ok(None),
-        }
+        let Some((content, _)) = self.store.get(slot)? else {
+            return Err(MemoryError::WorkingContextCodec(format!(
+                "working context for project '{project}', session '{session}' is corrupt: \
+                 the reserved marker is present but the stored body is gone"
+            )));
+        };
+        serde_json::from_str(&content)
+            .map(Some)
+            .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))
     }
 
-    /// Every session ever saved under `project`'s working-context index
-    /// (V2a-1 quick win), most-recently-saved first. Empty (never an error)
-    /// when the project never saved anything — reading the index is O(1),
-    /// never a store scan.
+    /// The sessions of `sessions` whose working-context fact is still there,
+    /// in the same order. One batched metadata lookup for the whole set — not
+    /// a store scan, but not free either (see
+    /// [`Self::list_working_contexts`]'s cost note).
+    ///
+    /// Shared by the read path (filter, persist nothing) and the write path
+    /// (filter, and persist the result), so both agree on what "alive" means.
+    fn live_sessions(
+        &self,
+        project: &str,
+        sessions: Vec<WorkingContextSession>,
+    ) -> Result<Vec<WorkingContextSession>, MemoryError> {
+        if sessions.is_empty() {
+            return Ok(sessions);
+        }
+        let ids: Vec<u64> = sessions
+            .iter()
+            .map(|entry| working_id(project, &entry.session))
+            .collect();
+        let payloads = self.store.get_metadata_batch(&ids)?;
+        if payloads.len() != ids.len() {
+            // The trait promises one result per id. A backend that breaks
+            // that promise must not be silently read as "these sessions are
+            // dead" — that would delete real entries on the write path.
+            return Err(MemoryError::WorkingContextCodec(format!(
+                "storage returned {} metadata rows for {} working-context ids",
+                payloads.len(),
+                ids.len()
+            )));
+        }
+        Ok(sessions
+            .into_iter()
+            .zip(payloads)
+            .filter(|(_, meta)| {
+                meta.as_ref()
+                    .is_some_and(|meta| meta.get(CTX_WORKING_FIELD) == Some(&Value::Bool(true)))
+            })
+            .map(|(entry, _)| entry)
+            .collect())
+    }
+
+    /// Every session still resumable under `project`'s working-context index
+    /// (V2a-1 quick win), most-recently-saved first. Empty when the project
+    /// never saved anything — that, and only that, is the empty case.
+    ///
+    /// Cost: one O(1) index read plus ONE batched metadata lookup of the
+    /// listed ids — never a store scan, but no longer a single read either.
+    /// The lookup is what drops sessions whose fact was forgotten since;
+    /// unlike the previous read-path prune it persists nothing, so a listing
+    /// can be retried and a transient miss costs nothing durable.
     ///
     /// # Errors
     /// Returns a storage error if the index fact cannot be read, or
-    /// [`MemoryError::WorkingContextCodec`] if it does not parse (should
-    /// never happen for a payload this bridge wrote itself).
+    /// [`MemoryError::WorkingContextCodec`] if it does not parse or is
+    /// corrupt (marked, but with no body).
     pub fn list_working_contexts(
         &self,
         project: &str,
     ) -> Result<Vec<WorkingContextSession>, MemoryError> {
-        let mut sessions = self
-            .working_index(project)?
-            .map(|index| index.sessions)
-            .unwrap_or_default();
+        let Some(index) = self.working_index(project)? else {
+            // The genuine "this project never saved anything" case — the only
+            // one that reaches here now that a corrupt index is an `Err`.
+            return Ok(Vec::new());
+        };
+        let mut sessions = self.live_sessions(project, index.sessions)?;
         sessions.sort_by(|a, b| {
             b.saved_at
                 .cmp(&a.saved_at)
@@ -775,6 +861,11 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// [`Self::load_working_context`]: a slot occupied without the reserved
     /// [`CTX_WORKING_INDEX_FIELD`] marker is treated as empty, never as a
     /// forged index.
+    ///
+    /// `None` means "absent". "Corrupt" is an `Err` — collapsing the two
+    /// would report a store that lost the index body as a project that never
+    /// saved anything, and an agent told that starts over instead of raising
+    /// a problem a human could fix.
     fn working_index(&self, project: &str) -> Result<Option<WorkingContextIndex>, MemoryError> {
         let slot = working_index_id(project);
         let payloads = self.store.get_metadata_batch(&[slot])?;
@@ -790,7 +881,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             Some((content, _)) => serde_json::from_str(&content)
                 .map(Some)
                 .map_err(|err| MemoryError::WorkingContextCodec(err.to_string())),
-            None => Ok(None),
+            None => Err(MemoryError::WorkingContextCodec(format!(
+                "working-context index for project '{project}' is corrupt: the index \
+                 marker is present but the stored body is gone"
+            ))),
         }
     }
 
@@ -799,8 +893,29 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// is always current without a separate maintenance step. A resave of
     /// the same project+session updates `saved_at` in place rather than
     /// duplicating the entry.
+    ///
+    /// This is also where the index CONVERGES: entries whose working-context
+    /// fact was forgotten since are dropped here, on the write path, under
+    /// the same lock and in the same read-modify-write that was already
+    /// paid for. Reads never mutate it.
     fn update_working_index(&self, project: &str, session: &str) -> Result<(), MemoryError> {
-        let mut index = self.working_index(project)?.unwrap_or_default();
+        // Read-modify-write of a single shared fact: held for the whole
+        // sequence, otherwise a concurrent save silently erases this entry.
+        // The guarded data is `()`, so a poisoned lock carries no broken
+        // invariant — recover rather than propagate someone else's panic.
+        let _guard = WORKING_INDEX_WRITE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A corrupt index must not brick saving for the whole project. The
+        // read path surfaces the error — that is where a human can act on it
+        // — but propagating it here would make every future save of every
+        // session under this project fail forever, with no way back: the
+        // only writer of the index is this function. Rebuild instead.
+        let mut index = match self.working_index(project) {
+            Ok(index) => index.unwrap_or_default(),
+            Err(MemoryError::WorkingContextCodec(_)) => WorkingContextIndex::default(),
+            Err(err) => return Err(err),
+        };
         let now = now_unix_secs();
         if let Some(entry) = index.sessions.iter_mut().find(|s| s.session == session) {
             entry.saved_at = now;
@@ -810,8 +925,21 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 saved_at: now,
             });
         }
+        // The entry just appended is alive by construction (its fact was
+        // stored moments ago, before this call); this only sheds the ones a
+        // `forget` orphaned.
+        index.sessions = self.live_sessions(project, index.sessions)?;
         let content = serde_json::to_string(&index)
             .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))?;
+        self.write_working_index(project, &content)
+    }
+
+    /// Persist a serialized index into `project`'s reserved index slot —
+    /// always with the [`CTX_WORKING_INDEX_FIELD`] marker, since an index
+    /// written without it would be treated as a squatter and read back as
+    /// empty. Only [`Self::update_working_index`] (which holds
+    /// [`WORKING_INDEX_WRITE`]) calls this.
+    fn write_working_index(&self, project: &str, content: &str) -> Result<(), MemoryError> {
         let slot = working_index_id(project);
         let embedding = self
             .embedder
@@ -820,7 +948,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             (CTX_WORKING_INDEX_FIELD, Value::Bool(true)),
             (CTX_PROJECT_FIELD, Value::String(project.to_owned())),
         ]);
-        self.store_fact(slot, &content, &embedding, Some(&meta), None)?;
+        self.store_fact(slot, content, &embedding, Some(&meta), None)?;
         Ok(())
     }
 }

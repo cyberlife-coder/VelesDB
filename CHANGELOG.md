@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.0] — 2026-07-26
+
+Mineure : 38 commits depuis la 4.0.0. Le verrou de gouvernance CORE-2 couvre
+desormais les lectures graphe REST, l'audit des capacites honore les
+denegations, et velesdb-memory corrige quatre defauts constates en usage reel.
+
+### Fixed
+
+- **`velesdb-core`**: the allocation backstop (#899) is no longer disturbed by
+  concurrent index loads. `with_min_alloc_byte_limit` — used by the persisted
+  HNSW load path to admit a file-backed vector payload — raised the
+  *process-global* ceiling for the duration of the load, which had two
+  consequences: while any load was in flight the backstop was effectively lifted
+  for every other thread, and two overlapping loads clobbered each other's saved
+  ceiling (the inner scope saved the outer scope's temporary value and
+  republished it on exit), leaving the process-wide ceiling permanently wrong
+  after both loads had finished. Scoped adjustments are now thread-local via the
+  new `alloc_guard::with_alloc_byte_limit`, so a ceiling installed for one
+  operation is invisible to unrelated threads and overlapping scopes nest
+  correctly. `set_alloc_byte_limit` is unchanged: it remains the process-wide
+  operator policy and still bounds allocations on worker threads.
+- **`velesdb-memory`**: the Ollama embedder issued its HTTP request through a
+  bare `ureq::post` with **no timeout at all**, so an Ollama that accepted the
+  connection and never answered (a stalled cold model load, a wedged server)
+  blocked the caller indefinitely. Because `remember` / `save_working_context`
+  embed *before* writing, that surfaced as an opaque MCP transport timeout on
+  the client with nothing in the server's own error path — observed live as
+  `MCP error -32001: Request timed out`. Requests now go through a
+  `ureq::Agent` bounded at 60 s, the same pattern `extract.rs` has used for its
+  own Ollama calls since it was written. Proven by a test that stands up a
+  socket which accepts and never replies: 30.0 s before, bounded after.
+- **`velesdb-server`**: eight plain REST graph read endpoints — `get_edges`,
+  `traverse_graph`, `get_node_degree`, `get_edge_count`, `list_nodes`,
+  `get_node_edges`, `get_node_payload` and `traverse_parallel` — resolved their
+  collection through `graph_preamble()`, which recorded a metric and looked the
+  collection up but **never consulted `Database::authorize_read()`**. Every
+  sibling read path (VelesQL `MATCH`, `/graph/search`, `/search*`) already routed
+  through that gate, so a registered observer could deny a principal on all of
+  them while these eight still returned nodes, edges and payloads unfiltered.
+  They now go through `graph_read_preamble()`, which fails closed with `403` on a
+  `Deny` **and** on a scope-narrowing decision, since a graph read has no
+  metadata-filter channel to apply a narrowed scope to — the same choice already
+  made by `MATCH` and `/graph/search`. Write endpoints are untouched:
+  `authorize_read` is a read-only gate. With no observer registered (the default
+  single-tenant deployment) this is unobservable, `authorize_read` being a single
+  `Option` check returning `Ok(None)`. Note for operators running a
+  scope-narrowing observer: such a read previously returned data **unfiltered**
+  and now returns `403`.
+
+### Added
+
+- **`velesdb-core`**: `alloc_guard::with_alloc_byte_limit(limit, f)` — runs `f`
+  with the per-allocation ceiling pinned on the current thread only, restoring
+  the previous value on exit (including on panic). Scoped counterpart to
+  `set_alloc_byte_limit` for hardening or relaxing a single operation.
+- **`velesdb-memory`**: `velesdb-memory compile-stdin --budget N [--query …]`
+  — compile text read on stdin with the deterministic context compiler and
+  print `{content, tokens_in, tokens_out, tokens_saved, risk}` as JSON. It
+  short-circuits in `main` *before* the store is opened, exactly like
+  `--version`, so it takes no `flock` and can run in a second process while
+  a session's own MCP server holds the store. A budget too small to fit any
+  fragment is a hard error rather than an empty success: an empty
+  compilation is worse than none for a caller that substitutes the result.
+- **agent-hooks**: a fourth Claude Code hook, `PostToolUse`
+  (`integrations/agent-hooks/claude-code/hooks/post-tool-use.sh`). It is the
+  only hook whose output can *replace* what the model sees
+  (`hookSpecificOutput.updatedToolOutput`), so it compresses oversized tool
+  results before they enter the transcript — where the other three hooks can
+  only nudge the model to call a tool itself. Allowlisted tools only
+  (`Bash,Grep,WebFetch` by default; `Read`/`Edit` are excluded by design),
+  above a size threshold, with the untouched original archived and its path
+  quoted in the replacement, a pure-bash watchdog (`timeout` is absent from
+  a stock macOS) bounding the call, and an identity fallback on every
+  failure path — including a `velesdb-memory` too old to know the
+  subcommand, which would otherwise treat the piped stdin as MCP traffic.
+
+
 ## [4.0.0] — 2026-07-24
 
 ### Security

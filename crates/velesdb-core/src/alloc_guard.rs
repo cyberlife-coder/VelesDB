@@ -22,6 +22,7 @@
 //! ```
 
 use std::alloc::{alloc, alloc_zeroed, dealloc, Layout};
+use std::cell::Cell;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -69,15 +70,42 @@ pub const DEFAULT_ALLOC_BYTE_LIMIT: usize = usize::MAX;
 
 /// Process-wide per-allocation byte ceiling, initialized to
 /// [`DEFAULT_ALLOC_BYTE_LIMIT`]. See [`set_alloc_byte_limit`].
+///
+/// This is the *operator policy* layer: it is deliberately global so a limit
+/// configured once at startup also governs allocations made on worker threads
+/// (rayon index builds, tokio blocking pool). Short-lived, operation-scoped
+/// adjustments must NOT be made here — see [`with_alloc_byte_limit`].
 static ALLOC_BYTE_LIMIT: AtomicUsize = AtomicUsize::new(DEFAULT_ALLOC_BYTE_LIMIT);
 
-/// Overrides the per-allocation byte ceiling enforced by [`AllocGuard`].
+thread_local! {
+    /// Per-thread override of [`ALLOC_BYTE_LIMIT`], set only for the dynamic
+    /// extent of [`with_alloc_byte_limit`] / [`with_min_alloc_byte_limit`].
+    ///
+    /// Scoped adjustments live here rather than in the global so that a ceiling
+    /// raised (or pinned low) for *one* operation is invisible to every other
+    /// thread. Mutating the global for a scoped adjustment is unsound under
+    /// concurrency: two overlapping scopes each save the ceiling they happen to
+    /// observe and restore it on exit, so the inner scope saves the outer
+    /// scope's temporary value and republishes it after the outer scope has
+    /// already restored — a lost update that leaves the process-wide backstop
+    /// permanently wrong. It also leaves a window in which unrelated threads are
+    /// judged against another operation's ceiling.
+    static THREAD_ALLOC_BYTE_LIMIT: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// Overrides the **process-wide** per-allocation byte ceiling enforced by
+/// [`AllocGuard`].
 ///
 /// Use to raise the limit for genuinely huge single-buffer workloads, or lower
 /// it to harden against pathological sizes. Affects all subsequent allocations
 /// through [`AllocGuard::new`] / [`AllocGuard::new_zeroed`] and
-/// [`check_alloc_bound`]. Passing `0` is treated as "no override" and restores
-/// the default ceiling.
+/// [`check_alloc_bound`], **on every thread**. Passing `0` is treated as "no
+/// override" and restores the default ceiling.
+///
+/// This is intended for process-level configuration (startup / operator
+/// policy). For a ceiling that applies only to one operation, use
+/// [`with_alloc_byte_limit`] — a scoped, thread-local override that takes
+/// precedence over this value on the thread that installs it.
 pub fn set_alloc_byte_limit(limit_bytes: usize) {
     let effective = if limit_bytes == 0 {
         DEFAULT_ALLOC_BYTE_LIMIT
@@ -87,10 +115,40 @@ pub fn set_alloc_byte_limit(limit_bytes: usize) {
     ALLOC_BYTE_LIMIT.store(effective, Ordering::Relaxed);
 }
 
-/// Returns the current per-allocation byte ceiling.
+/// Returns the per-allocation byte ceiling in force **on the current thread**:
+/// the innermost [`with_alloc_byte_limit`] scope if one is active, otherwise the
+/// process-wide value set by [`set_alloc_byte_limit`].
 #[must_use]
 pub fn alloc_byte_limit() -> usize {
-    ALLOC_BYTE_LIMIT.load(Ordering::Relaxed)
+    THREAD_ALLOC_BYTE_LIMIT
+        .try_with(Cell::get)
+        .unwrap_or(None)
+        .unwrap_or_else(|| ALLOC_BYTE_LIMIT.load(Ordering::Relaxed))
+}
+
+/// Runs `f` with the per-allocation ceiling pinned to `limit_bytes` **on the
+/// current thread only**, restoring the previous state afterward (even on
+/// panic).
+///
+/// Scoped counterpart to [`set_alloc_byte_limit`]: use it to harden (or relax) a
+/// single operation without publishing that ceiling to unrelated threads. Nests
+/// correctly — an inner scope restores the outer scope's ceiling, not the global
+/// one. Passing `0` pins the scope to [`DEFAULT_ALLOC_BYTE_LIMIT`], matching
+/// [`set_alloc_byte_limit`]'s "no override" convention.
+pub fn with_alloc_byte_limit<T>(limit_bytes: usize, f: impl FnOnce() -> T) -> T {
+    let effective = if limit_bytes == 0 {
+        DEFAULT_ALLOC_BYTE_LIMIT
+    } else {
+        limit_bytes
+    };
+    // RAII restore so a panic inside `f` cannot leak the scoped ceiling.
+    // `try_with` so an override installed during thread-local teardown degrades
+    // to "no scope" rather than panicking.
+    let previous = THREAD_ALLOC_BYTE_LIMIT
+        .try_with(|scoped| scoped.replace(Some(effective)))
+        .unwrap_or(None);
+    let _restore = ScopedLimitRestore(previous);
+    f()
 }
 
 /// Runs `f` with the per-allocation ceiling raised to **at least** `min_bytes`,
@@ -107,24 +165,28 @@ pub fn alloc_byte_limit() -> usize {
 ///
 /// If the current ceiling already covers `min_bytes`, this is a transparent
 /// pass-through with no mutation.
+///
+/// The raise is **thread-local** (see [`with_alloc_byte_limit`]): a load in
+/// flight must not lift the backstop for allocations happening concurrently on
+/// unrelated threads, and two concurrent loads must not clobber each other's
+/// saved ceiling. The allocations this scope exists to admit are performed
+/// synchronously by `f` on the calling thread.
 pub fn with_min_alloc_byte_limit<T>(min_bytes: usize, f: impl FnOnce() -> T) -> T {
-    let previous = alloc_byte_limit();
-    if min_bytes <= previous {
+    if min_bytes <= alloc_byte_limit() {
         return f();
     }
-    // RAII restore so a panic inside `f` cannot leave the ceiling raised.
-    let _restore = LimitRestore(previous);
-    ALLOC_BYTE_LIMIT.store(min_bytes, Ordering::Relaxed);
-    f()
+    with_alloc_byte_limit(min_bytes, f)
 }
 
-/// RAII helper that restores [`ALLOC_BYTE_LIMIT`] to a saved value on drop,
-/// including during unwinding. Used by [`with_min_alloc_byte_limit`].
-struct LimitRestore(usize);
+/// RAII helper that restores [`THREAD_ALLOC_BYTE_LIMIT`] to a saved value on
+/// drop, including during unwinding. Used by [`with_alloc_byte_limit`].
+struct ScopedLimitRestore(Option<usize>);
 
-impl Drop for LimitRestore {
+impl Drop for ScopedLimitRestore {
     fn drop(&mut self) {
-        ALLOC_BYTE_LIMIT.store(self.0, Ordering::Relaxed);
+        // `try_with` (not `set`) so a drop running during thread-local teardown
+        // degrades to a no-op instead of panicking.
+        let _ = THREAD_ALLOC_BYTE_LIMIT.try_with(|scoped| scoped.set(self.0));
     }
 }
 

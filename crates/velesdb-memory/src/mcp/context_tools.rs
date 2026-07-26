@@ -191,11 +191,12 @@ pub(super) struct LoadWorkingContextResult {
     /// The previously saved working context, or `null` when nothing was ever
     /// saved under that project + session (a fresh start, not an error).
     pub working: Option<WorkingContext>,
-    /// Other sessions saved under this SAME project, populated only when
-    /// `found` is `false` — helps recover from a typo in `session` instead
-    /// of silently starting fresh (e.g. `"task-1234"` saved,
-    /// `"task-1235"` requested by mistake). Always empty when `found` is
-    /// `true`.
+    /// The OTHER sessions saved under this SAME project (never the requested
+    /// one) — helps recover from a typo in `session` instead of silently
+    /// starting fresh (e.g. `"task-1234"` saved, `"task-1235"` requested by
+    /// mistake). Populated on a hit as well as on a miss: a typo that lands
+    /// on another real session is the case the caller can least detect on its
+    /// own. Empty only when the project has no other session.
     #[serde(default)]
     pub other_sessions: Vec<String>,
 }
@@ -627,7 +628,7 @@ impl McpServer {
 
     #[tool(
         name = "load_working_context",
-        description = "Resume a session: load back the working context previously saved by save_working_context under the same project + session id — the goal, constraints, verified facts, open hypotheses, decisions, exact evidence, and pending actions a PRIOR session left off with. Call this at the START of a new session before doing anything else, so work continues instead of restarting. `found: false` (with `working: null`) means nothing was ever saved under that exact project + session — not an error, but check `other_sessions`: if it lists a similarly-named session, `session` was likely a typo, not a genuinely fresh start. Use `list_working_contexts` to browse a project's sessions up front."
+        description = "Resume a session: load back the working context previously saved by save_working_context under the same project + session id — the goal, constraints, verified facts, open hypotheses, decisions, exact evidence, and pending actions a PRIOR session left off with. Call this at the START of a new session before doing anything else, so work continues instead of restarting. `found: false` (with `working: null`) means nothing was ever saved under that exact project + session — not an error, but check `other_sessions`: if it lists a similarly-named session, `session` was likely a typo, not a genuinely fresh start. `other_sessions` is always filled in, on a hit too: if it lists a session that looks more like the one you meant, you may have just resumed the WRONG session. Use `list_working_contexts` to browse a project's sessions up front."
     )]
     async fn load_working_context(
         &self,
@@ -636,16 +637,19 @@ impl McpServer {
         let LoadWorkingContextParams { project, session } = params;
         let service = Arc::clone(&self.service);
         let lookup_project = project.clone();
+        let lookup_session = session.clone();
         let working = tokio::task::spawn_blocking(move || {
-            service.load_working_context(&lookup_project, &session)
+            service.load_working_context(&lookup_project, &lookup_session)
         })
         .await
         .map_err(join_error)?
         .map_err(to_error)?;
         let found = working.is_some();
-        let other_sessions = if found {
-            Vec::new()
-        } else {
+        // Listed on a HIT too, not just on a miss: a typo that lands on
+        // another REAL session returns `found: true`, and the caller has no
+        // other way to notice it resumed the wrong work. Costs one extra
+        // O(1) index read per successful load.
+        let other_sessions: Vec<String> = {
             let service = Arc::clone(&self.service);
             tokio::task::spawn_blocking(move || service.list_working_contexts(&project))
                 .await
@@ -653,6 +657,10 @@ impl McpServer {
                 .map_err(to_error)?
                 .into_iter()
                 .map(|s| s.session)
+                // Never propose the session just requested: the field is
+                // named `other_sessions`, so echoing the requested id back is
+                // a contradiction the caller cannot act on.
+                .filter(|candidate| candidate != &session)
                 .collect()
         };
         Ok(Json(LoadWorkingContextResult {

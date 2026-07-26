@@ -238,12 +238,52 @@ def _parse_typescript_exports(entry_path: Path) -> set[str]:
     return _capabilities_from_text(export_lines + " " + backend_names, CAPABILITIES)
 
 
+# A README that DISCLAIMS a capability must not be read as claiming it. Without
+# this, the honest sentence "No GPU in the published wheels — the `gpu` feature
+# is not enabled" registered `gpu` as documented, the audit failed to find it in
+# the API, and the crate was reported as MISSING a feature its README had
+# explicitly said it does not ship. That penalises precisely the disclosure this
+# audit exists to encourage.
+#
+# Scoped to a window BEFORE the keyword, not the whole line — the same shape as
+# `check-promise-contract.py`'s `_is_negated`. A line-wide test is too blunt:
+# "GPU acceleration is enabled by default and needs no extra build step" is a
+# real claim, and the trailing "no" must not erase it.
+DISCLAIMER_RE = re.compile(
+    r"\b(?:no|not|never|without|unsupported|unavailable|absent|excluded|"
+    r"disabled|missing|lacks?|cannot)\b|n't",
+    re.IGNORECASE,
+)
+
+# Characters before a keyword searched for a disclaimer.
+DISCLAIMER_WINDOW = 40
+
+
+def _claims_capability(text: str, keyword: str) -> bool:
+    """True when at least one mention of *keyword* is not disclaimed."""
+    for match in re.finditer(keyword, text, re.IGNORECASE):
+        line_start = text.rfind("\n", 0, match.start()) + 1
+        window_start = max(line_start, match.start() - DISCLAIMER_WINDOW)
+        if not DISCLAIMER_RE.search(text[window_start : match.start()]):
+            return True
+    return False
+
+
 def _parse_readme(readme_path: Path) -> set[str]:
-    """Extract claimed capabilities from a README file."""
+    """Extract claimed capabilities from a README file.
+
+    A capability counts only when at least ONE mention is not disclaimed, so
+    "GPU acceleration is enabled by default" is a claim while "No GPU in the
+    published wheels" is not.
+    """
     text = _read_text(readme_path)
     if not text:
         return set()
-    return _capabilities_from_text(text, DOC_CLAIM_KEYWORDS)
+    return {
+        cap
+        for cap, keywords in DOC_CLAIM_KEYWORDS.items()
+        if any(_claims_capability(text, kw) for kw in keywords)
+    }
 
 
 def _parse_integration_src(src_dir: Path) -> set[str]:

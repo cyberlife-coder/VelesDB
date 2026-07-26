@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] — 2026-07-26
+
+Patch. Four defects found in real usage, each reproduced by a test that failed
+before its fix.
+
+### Fixed
+
+- **`other_sessions` was hard-coded empty on a hit.** `load_working_context`
+  returned `Vec::new()` whenever the requested session was found, so the field
+  the tool advertises as its typo-recovery aid never helped the one case where
+  an agent needs it — a session name off by a character. It is now populated
+  from the project index on a hit as well as on a miss.
+- **Concurrent saves silently erased each other's index entry.**
+  `update_working_index` was an unsynchronised read-modify-write of a single
+  shared fact per project, so two overlapping `save_working_context` calls left
+  the last writer's view: the other session's record still existed but had
+  vanished from `list_working_contexts`, with no error anywhere. Writes are now
+  serialised. The lock is intra-process — two processes on the same store still
+  race, which needs a CAS on the `MemoryStore` trait and is not in this patch.
+- **A lost index body read back as "nothing was ever saved".** The index
+  lookup collapsed "absent" and "corrupt" into `None`, so an agent told the
+  project was empty started over instead of surfacing a problem a human could
+  fix. Corruption is now an error on the read path. The write path deliberately
+  rebuilds instead of propagating: the only writer of the index is
+  `update_working_index`, so failing there would have bricked every future save
+  for that project with no way back.
+- **The Ollama embedder never retried a dropped connection.** The client keeps
+  a keep-alive pool; Ollama closes an idle connection, `ureq` takes it from the
+  pool and gets an `ECONNRESET` — and refuses to replay it, since a POST with a
+  body is neither idempotent nor empty. That surfaced as
+  `Connection reset by peer (os error 54)` while `/api/tags` answered in 7 ms.
+  Transport failures are now replayed on a fresh connection, classified on
+  `ureq::Error` variants rather than by matching error text. Timeouts are
+  deliberately *not* replayed: `remember_extracted` issues one embed per fact
+  plus one per entity hub, so replaying a 60 s timeout would have tripled a
+  worst case already measured in minutes. Connect timeout drops from 30 s to
+  2 s for a localhost daemon. The error now names the URL, the model, the
+  attempts made and the environment variables that change them — and the
+  extractor's message names *its* variables, which are not the embedder's.
+
+### Changed
+
+- **MCP input schemas no longer publish untyped `items`.** The schema inliner
+  descended only one level and skipped any slot that already carried a `type`,
+  so every array-of-struct parameter reached clients as `items: {}` —
+  `save_working_context`, `compile_context`, `explain_compilation`, `remember`
+  and `recall_where`. Callers had to discover `ContextFact`, `ContextDecisionRef`
+  and `SourceReference` by trial and error. Inlining is now recursive, bounded
+  by depth and a visited-`$ref` set. `fragment_id` also accepts a decimal
+  string, since ids exceed 2^53 and float-lossy clients cannot send them as
+  numbers.
+
 ## [0.11.1] — 2026-07-24
 
 Patch: fixes the MCP wire-contract bug (harness-stringified parameters) plus

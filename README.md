@@ -8,7 +8,7 @@
   Three engines. One language. A memory your agents can explain.
 </h3>
 <p align="center">
-  <strong>One ~9 MB binary fuses vector + graph + columnar under <a href="docs/VELESQL_SPEC.md">VelesQL</a> —
+  <strong>One ~10 MB binary fuses vector + graph + columnar under <a href="docs/VELESQL_SPEC.md">VelesQL</a> —
   persistent agent memory with an evidence trail (<code>why()</code>) and a deterministic
   context optimizer that cuts your <em>real, billed</em> token spend.</strong><br/>
   Zero cloud, zero LLM, zero API key in the memory path. Every number on this page links to a
@@ -52,7 +52,7 @@ Every AI agent today has the same two problems:
 
 | | What it is | How you use it |
 |---|---|---|
-| **1 · The tri-engine agentic database** | Vector + graph + columnar fused in one ~9 MB Rust binary, queried in **[VelesQL](docs/VELESQL_SPEC.md)** — one language across all three. | Embedded (Rust/Python), REST server, WASM in the browser, mobile. |
+| **1 · The tri-engine agentic database** | Vector + graph + columnar fused in one ~10 MB Rust binary, queried in **[VelesQL](docs/VELESQL_SPEC.md)** — one language across all three. | Embedded (Rust/Python), REST server, WASM in the browser, mobile. |
 | **2 · The agent memory model** | Built *on* that database: `remember` / `relate` / `why()` with typed links and an evidence trail, resumable working contexts, and the deterministic **context token optimizer** — measured against **real provider bills**. | A local **MCP server** for any agentic CLI (Claude Code, Codex, …) + **Python and Node bindings**. |
 
 The database stands on its own. The memory model is why agents pick it.
@@ -60,7 +60,7 @@ The database stands on its own. The memory model is why agents pick it.
 | If you are… | What you get |
 |---|---|
 | **A developer living in an agentic CLI** (Claude Code, Codex, …) | Your agent remembers across sessions, answers `why()` with an evidence trail, and burns measurably fewer tokens — [installed in 3 commands](#give-your-agent-a-memory-3-commands). |
-| **A CTO** | One auditable ~9 MB binary instead of 3 databases + glue. Deterministic writes, an audit trail per decision — the kind of explainability the [EU AI Act (enforceable Aug 2026)](https://artificialintelligenceact.eu/implementation-timeline/) asks of AI systems — running in your jurisdiction, air-gapped if needed. |
+| **A CTO** | One auditable ~10 MB binary instead of 3 databases + glue. Deterministic writes, an audit trail per decision — the kind of explainability the [EU AI Act (enforceable Aug 2026)](https://artificialintelligenceact.eu/implementation-timeline/) asks of AI systems — running in your jurisdiction, air-gapped if needed. |
 | **A company running agents at scale** | The same engine with an enterprise control plane on top: RBAC, audit trail, multi-tenancy — see [VelesDB Premium](#velesdb-premium--the-enterprise-control-plane). |
 
 ## The differentiator no one else combines
@@ -72,7 +72,36 @@ The leading agent-memory products ([Mem0, Zep, Letta — detailed comparison, as
 | 🎯 **Deterministic** | The same input always compiles to the **same bytes** — asserted twice per turn in every committed benchmark. No model in the loop: no drift, no surprise rewrites, and a [byte-stable cache prefix](crates/velesdb-memory/examples/context_savings/real_measures/cache_prefix.mjs) provider prompt-caching can actually hit. |
 | 🔍 **Explainable** | `why()` returns the **evidence trail** behind every recall; `explain_compilation` gives every kept/dropped fragment a stable rule id, a reason, and a risk level. A built-in audit trail, not a slide-deck promise. |
 | ♻️ **Reversible** | Nothing is silently lost. Over-budget content becomes a recoverable `ctx://source/` handle — `retrieve_context_source` brings the original bytes back on demand, always. |
-| 🏠 **Local-first** | One ~9 MB binary on your machine: vector + graph + columnar in-process, **zero AI calls and zero API keys** to store a memory. Works offline, air-gapped, in your jurisdiction. |
+| 🏠 **Local-first** | One ~10 MB binary on your machine: vector + graph + columnar in-process, **zero AI calls and zero API keys** to store a memory. Works offline, air-gapped, in your jurisdiction. |
+
+---
+
+## How it works, in plain terms
+
+Four things happen, and none of them calls an AI provider.
+
+**1 · It stores facts, not conversations.** You give it one statement — *"the
+API port is 6333 because 3000 collided with the web UI"* — and it lands in a
+local file store. No model call, nothing sent anywhere.
+
+**2 · It finds them by meaning.** Asking *"which port did we settle on"* reaches
+that fact even though none of the words match. A local embedding model turns
+text into coordinates; close meaning means close coordinates.
+
+**3 · It connects them, and that is the part a search engine cannot do.** Each
+fact is linked to the topics it mentions. `why()` starts from the best match and
+then **walks those links**, so it returns the answer *plus the facts that
+explain it* — including ones sharing no vocabulary with your question.
+
+> The links have to exist. Store facts one by one and the graph stays flat, so
+> `why()` behaves like a search. Hand a paragraph to `remember_extracted` and it
+> splits it into facts and wires the links for you.
+
+**4 · It compresses what is too big, before you pay for it.** Give the compiler
+your accumulated context and a token budget; it returns a smaller version with
+**one recorded decision per fragment** — kept, abstracted, or dropped — and a
+handle to fetch any original back verbatim. Same input, same bytes out, every
+time. That is what the [82.5 % below](#the-numbers--every-one-from-a-committed-harness) measures.
 
 ---
 
@@ -133,7 +162,7 @@ docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb \
 curl http://localhost:8080/health
 ```
 
-**Browser / edge:** the WASM build is ~550 KB gzipped — the engine runs entirely client-side ([TypeScript SDK](sdks/typescript)).
+**Browser / edge:** the WASM build is ~674 KB gzipped — the engine runs entirely client-side ([TypeScript SDK](sdks/typescript)).
 
 **REST:** the server exposes 54 REST endpoints ([OpenAPI spec](docs/openapi.yaml)).
 
@@ -183,7 +212,7 @@ ORDER BY similarity() DESC LIMIT 5
 | Neo4j for knowledge graphs | **Graph Engine** — MATCH clause, BFS/DFS |
 | PostgreSQL/DuckDB for metadata | **Typed ColumnStore + secondary indexes** — 130x faster than JSON scanning at 100K rows [2] |
 | Custom glue code + 3 query languages | **VelesQL** — one language for everything |
-| 3 deployments, 3 configs, 3 backups | **~9 MB binary** — works offline, air-gapped |
+| 3 deployments, 3 configs, 3 backups | **~10 MB binary** — works offline, air-gapped |
 
 > [1] Reproduce: `python benchmarks/velesdb_benchmark.py --recall` (10K/384D, WAL fsync on, i9-14900KF reference machine; Apple-Silicon cross-check in [docs/BENCHMARKS.md](docs/BENCHMARKS.md)).
 > [2] Reproduce: `cargo bench -p velesdb-core --bench column_filter_benchmark` — at 100K rows on the i9-14900KF reference machine: ColumnStore 29.5 us vs JSON scan 3.84 ms. The ratio is hardware-dependent: on Apple Silicon (M5 Pro, 2026-07-20) the JSON scan itself runs ~2.8× faster, so the same bench measures ~50–105x — the ColumnStore's absolute time holds (~27 µs). Full spec: [VelesQL](docs/VELESQL_SPEC.md) · [Architecture](ARCHITECTURE.md)
@@ -320,7 +349,7 @@ Agents burn most of their budget re-reading redundant context. The memory layer 
 | **Architecture** | Unified vector + graph + columnar | Vector only | Vector + payload | Vector extension for PostgreSQL |
 | **Metadata filtering** | **Typed ColumnStore + secondary indexes** | JSON scan | JSON payload | SQL (PostgreSQL) |
 | **Deployment** | Embedded / Server / WASM / Mobile | Server (Python) | Server (Rust) | Requires PostgreSQL |
-| **Binary size** | ~9 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
+| **Binary size** | ~10 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
 | **Graph support** | Native (MATCH clause) | No | No | No |
 | **Query language** | VelesQL (SQL + NEAR + MATCH) | Python API | JSON API / gRPC | SQL + operators |
 | **Browser (WASM) / Mobile** | Yes / Yes | No | No | No |
@@ -353,7 +382,7 @@ Pricing on quote — **contact@wiscale.fr** · [velesdb.com](https://velesdb.com
 | Rust | [`velesdb-core`](https://crates.io/crates/velesdb-core) | The engine — embed it directly |
 | Python | [`velesdb`](https://pypi.org/project/velesdb/) (3.9+) | Fastest onboarding path |
 | Node | [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) | Memory wedge ([full engine via server + TS SDK](crates/velesdb-node/README.md#need-the-full-engine)) |
-| TypeScript / Browser | [`@wiscale/velesdb-sdk`](https://www.npmjs.com/package/@wiscale/velesdb-sdk) | WASM module ~550 KB gzipped, runs fully client-side |
+| TypeScript / Browser | [`@wiscale/velesdb-sdk`](https://www.npmjs.com/package/@wiscale/velesdb-sdk) | WASM module ~674 KB gzipped, runs fully client-side |
 | MCP server | [`velesdb-memory`](crates/velesdb-memory) | Agent memory + context compiler for any MCP client; prebuilt `.mcpb` bundles on the [MCP registry](https://registry.modelcontextprotocol.io) |
 | REST server | [`velesdb-server`](https://crates.io/crates/velesdb-server) | 54 REST endpoints, [OpenAPI](docs/openapi.yaml), Docker multi-arch |
 | Mobile / Desktop | [`velesdb-mobile`](crates/velesdb-mobile) · [Tauri plugin](crates/tauri-plugin-velesdb) | iOS / Android / desktop |

@@ -205,6 +205,144 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# PostToolUse — the only hook that REPLACES what the model sees, so every
+# check below is really a data-loss check. Driven against fake
+# `velesdb-memory` binaries rather than a built one: the harness must stay
+# hermetic, and what is under test is the hook's decision logic, not the
+# compiler (that has its own Rust tests).
+# ---------------------------------------------------------------------------
+FAKE_BIN_DIR="$TMP_TEST_DIR/bin"
+mkdir -p "$FAKE_BIN_DIR"
+
+# Behaves like a compile-stdin-capable binary: consumes stdin, prints the
+# result JSON.
+cat > "$FAKE_BIN_DIR/fake-ok" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '{"content":"COMPILED SUMMARY","tokens_in":4000,"tokens_out":300,"tokens_saved":3700,"risk":"medium"}\n'
+FAKE
+
+# Behaves like a binary whose compilation failed (budget too small, bad input…).
+cat > "$FAKE_BIN_DIR/fake-fail" <<'FAKE'
+#!/usr/bin/env bash
+cat >/dev/null
+echo "compile-stdin: boom" >&2
+exit 1
+FAKE
+
+# Behaves like a velesdb-memory RELEASED BEFORE compile-stdin: it ignores the
+# subcommand and starts the MCP server, which sits on stdin forever. Without
+# the watchdog this is a hung agent, so this is the most important case here.
+cat > "$FAKE_BIN_DIR/fake-old" <<'FAKE'
+#!/usr/bin/env bash
+sleep 30
+FAKE
+
+chmod +x "$FAKE_BIN_DIR/fake-ok" "$FAKE_BIN_DIR/fake-fail" "$FAKE_BIN_DIR/fake-old"
+
+big_output="$(head -c 40000 < /dev/zero | tr '\0' 'x')"
+
+post_tool_payload() {
+  # $1 tool_name, $2 session suffix, $3 response text
+  jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-$2" --arg tool "$1" --arg body "$3" \
+    '{session_id: $sid, cwd: $cwd, hook_event_name: "PostToolUse", tool_name: $tool,
+      tool_input: {command: "echo"}, tool_use_id: "toolu_test", tool_response: $body}'
+}
+
+# A tool NOT on the allowlist must be left strictly alone, however big it is.
+# Read is the case that matters: the model needs file bytes verbatim.
+read_out="$(post_tool_payload "Read" "read" "$big_output" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh")"
+if [ "$(printf '%s' "$read_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: Read is never compressed, whatever its size"
+else
+  fail "PostToolUse: Read is never compressed, whatever its size"
+fi
+
+# Below the size threshold, compiling costs more than it saves.
+small_out="$(post_tool_payload "Bash" "small" "tiny output" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh")"
+if [ "$(printf '%s' "$small_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: output below the threshold is passed through untouched"
+else
+  fail "PostToolUse: output below the threshold is passed through untouched"
+fi
+
+# The nominal case: an allowlisted tool, over the threshold, capable binary.
+big_out="$(post_tool_payload "Bash" "big" "$big_output" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-ok" bash "$HOOKS_DIR/post-tool-use.sh")"
+
+if printf '%s' "$big_out" | jq -e '.hookSpecificOutput.hookEventName == "PostToolUse"' >/dev/null; then
+  pass "PostToolUse: replaces the result with hookEventName PostToolUse"
+else
+  fail "PostToolUse: replaces the result with hookEventName PostToolUse"
+fi
+
+if printf '%s' "$big_out" | jq -e '.hookSpecificOutput.updatedToolOutput | contains("COMPILED SUMMARY")' >/dev/null; then
+  pass "PostToolUse: updatedToolOutput carries the compiled content"
+else
+  fail "PostToolUse: updatedToolOutput carries the compiled content"
+fi
+
+# Rule 1 — nothing is deleted: the replacement must point at the untouched
+# original, and that file must actually hold it.
+archive_path="$(printf '%s' "$big_out" \
+  | jq -r '.hookSpecificOutput.updatedToolOutput' \
+  | sed -n 's/.*original is at \(.*\); Read it.*/\1/p')"
+if [ -n "$archive_path" ] && [ -f "$archive_path" ]; then
+  pass "PostToolUse: the replacement quotes a real path to the original"
+else
+  fail "PostToolUse: the replacement quotes a real path to the original"
+fi
+
+if [ -n "$archive_path" ] && [ -f "$archive_path" ] \
+  && [ "$(wc -c < "$archive_path" | tr -d ' ')" = "$(printf '%s' "$big_output" | wc -c | tr -d ' ')" ]; then
+  pass "PostToolUse: the archived original is byte-complete"
+else
+  fail "PostToolUse: the archived original is byte-complete"
+fi
+
+# A failing compilation must never cost the agent its tool result.
+fail_out="$(post_tool_payload "Bash" "failbin" "$big_output" \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-fail" bash "$HOOKS_DIR/post-tool-use.sh")"
+if [ "$(printf '%s' "$fail_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: a failed compilation falls back to the untouched output"
+else
+  fail "PostToolUse: a failed compilation falls back to the untouched output"
+fi
+
+# No binary at all — the overwhelmingly common case before the release that
+# ships compile-stdin.
+missing_out="$(post_tool_payload "Bash" "nobin" "$big_output" \
+  | VELESDB_MEMORY_BIN="$TMP_TEST_DIR/definitely-not-installed" bash "$HOOKS_DIR/post-tool-use.sh")"
+if [ "$(printf '%s' "$missing_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: a missing velesdb-memory binary falls back cleanly"
+else
+  fail "PostToolUse: a missing velesdb-memory binary falls back cleanly"
+fi
+
+# The hang case: an older binary treats our piped stdin as MCP traffic. The
+# watchdog must bound it AND the hook must still answer.
+old_started="$(date +%s)"
+old_out="$(post_tool_payload "Bash" "oldbin" "$big_output" \
+  | VELESDB_HOOK_PROBE_TIMEOUT=2 VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-old" bash "$HOOKS_DIR/post-tool-use.sh")"
+old_elapsed=$(( $(date +%s) - old_started ))
+if [ "$(printf '%s' "$old_out" | jq -c .)" = "{}" ]; then
+  pass "PostToolUse: a pre-compile-stdin binary falls back instead of hanging"
+else
+  fail "PostToolUse: a pre-compile-stdin binary falls back instead of hanging"
+fi
+# Bound checked against the fake binary's own 30s sleep, NOT against the 2s
+# probe timeout: what is under test is "the watchdog cut it short", and a
+# tight wall-clock budget would just make this assertion fail on a loaded CI
+# runner (observed once, with a full cargo test suite running alongside).
+if [ "$old_elapsed" -lt 25 ]; then
+  pass "PostToolUse: the watchdog bounds the probe (${old_elapsed}s < the fake binary's 30s)"
+else
+  fail "PostToolUse: the watchdog bounds the probe (${old_elapsed}s < the fake binary's 30s)"
+fi
+
+# ---------------------------------------------------------------------------
 # No hardcoded absolute user paths in the scripts (everything must come from
 # the stdin payload or the .velesdb-hooks.json config).
 # ---------------------------------------------------------------------------
@@ -216,6 +354,52 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# --- The compiler must receive TEXT, with its line breaks -------------------
+#
+# `tool_response` is a STRING for some tools and an OBJECT for others — Bash,
+# the highest-volume one, reports `{stdout, stderr, …}`. Every check above
+# uses the string form, which is why this shipped broken: the object branch
+# used to JSON-encode the response, handing the segmenter a SINGLE line with
+# `\n` escaped inside it. With nothing to split on it could neither
+# deduplicate nor rank, and truncated from the head — keeping repeated build
+# noise and dropping the error underneath. On a real 55 KB cargo log that
+# meant losing `error[E0463]`, the `file.rs:412` location, a `do NOT` warning
+# and the failing test name, while emitting 2048 characters of identical
+# "Compiling …" lines.
+#
+# So the guard asserts what the hook HANDS THE BINARY, not what comes back:
+# multiple lines, and the unique line still present.
+cat > "$FAKE_BIN_DIR/fake-record" <<FAKE
+#!/usr/bin/env bash
+cat > "$TMP_TEST_DIR/received.txt"
+printf '{"content":"COMPILED","tokens_in":4000,"tokens_out":300,"tokens_saved":3700}\n'
+FAKE
+chmod +x "$FAKE_BIN_DIR/fake-record"
+
+noisy_lines="$(for _ in $(seq 1 900); do echo "   Compiling velesdb-core v4.0.0"; done)"
+buried="$noisy_lines
+error[E0463]: can't find crate for \`core\`
+$noisy_lines"
+
+jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-obj" --arg body "$buried" \
+  '{session_id: $sid, cwd: $cwd, hook_event_name: "PostToolUse", tool_name: "Bash",
+    tool_input: {command: "cargo build"}, tool_use_id: "toolu_obj",
+    tool_response: {stdout: $body, stderr: ""}}' \
+  | VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-record" bash "$HOOKS_DIR/post-tool-use.sh" >/dev/null
+
+received_lines="$(wc -l < "$TMP_TEST_DIR/received.txt" | tr -d ' ')"
+if [ "$received_lines" -gt 1 ]; then
+  pass "PostToolUse: an object tool_response reaches the compiler as real lines"
+else
+  fail "PostToolUse: an object tool_response reaches the compiler as real lines (got $received_lines line(s) — JSON-encoded?)"
+fi
+
+if grep -q "E0463" "$TMP_TEST_DIR/received.txt"; then
+  pass "PostToolUse: the buried error line survives extraction"
+else
+  fail "PostToolUse: the buried error line survives extraction"
+fi
+
 # Static analysis via shellcheck, if available (gate says: note if not
 # installed, don't fail the suite over its absence)
 # ---------------------------------------------------------------------------

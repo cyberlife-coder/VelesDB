@@ -1,0 +1,59 @@
+name: Gate Contracts
+
+# The suites under scripts/tests/ assert that the repository's own guards
+# behave: the pre-commit secret scan, the promise-contract checker, the
+# production-unwrap checker, the feature-claim checker. Until this workflow
+# existed none of them was run by anything, so a guard could rot -- or be
+# plain wrong -- without a single job turning red.
+#
+# Deliberately not path-filtered. A filter is how a gate quietly stops
+# running: these suites cost seconds, so they run on every change.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  script-gates:
+    name: Repository guard contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run the guard contract suites
+        run: python -m unittest discover -s scripts/tests -p "test_*.py" -t . -v
+
+  npm-audit:
+    name: npm advisories
+    runs-on: ubuntu-latest
+    # Dependabot opens alerts but blocks nothing, so a known-vulnerable
+    # lockfile could sit in the tree indefinitely -- and one did: an
+    # `overrides` entry narrowed to `minimatch: ^9.0.7` pinned the major and
+    # kept brace-expansion on a branch that has no patch for its DoS advisory.
+    #
+    # --omit=dev is NOT used: the advisory above was dev-only, and the point
+    # is to see it. Lockfile-only, so no install and no network beyond the
+    # registry metadata.
+    strategy:
+      fail-fast: false
+      matrix:
+        path:
+          - sdks/typescript
+          - demos/tauri-rag-app
+          - examples/react-wasm-search
+          - examples/node-express-rag
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Audit ${{ matrix.path }}
+        working-directory: ${{ matrix.path }}
+        run: npm audit --package-lock-only --audit-level=high

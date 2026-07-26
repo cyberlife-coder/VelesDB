@@ -33,6 +33,10 @@
 #   --store=PATH             Store directory (default: $HOME/.velesdb-memory)
 #   --tls-dir=PATH           TLS material (CA + leaf cert) directory (default: $HOME/.velesdb-memory-tls)
 #   --ollama-url=URL         Ollama endpoint (default: http://localhost:11434)
+#   --extractor-model=MODEL  Ollama chat model powering `remember_extracted` (fact extraction
+#                            + auto-built fact<->topic graph). Unset by default: the tool then
+#                            reports extraction as unconfigured. The daemon is always BUILT with
+#                            the backend, so enabling it later is a plist edit, not a rebuild.
 #   --ollama-model=MODEL     Ollama embedding model (default: all-minilm; when unset it is
 #                            auto-matched to an existing store's dimension, and any model whose
 #                            dimension differs from that store is rejected — see VELES-004)
@@ -43,7 +47,7 @@
 #   --wire-only              Skip build/daemon setup: only (re-)verify CA trust and re-wire the
 #                            clients against an already-installed daemon (no prompts, fast)
 #   --force-restart          Reload the daemon even if already running
-#   --from-release[=TAG]     Install the prebuilt daemon binary (--features ollama,http) from a
+#   --from-release[=TAG]     Install the prebuilt daemon binary (--features ollama,http,extract) from a
 #                            GitHub Release archive instead of `cargo install` (default TAG: the
 #                            latest published velesdb-memory-vX.Y.Z release). Needs no Rust
 #                            toolchain. Only active from the first release that publishes the
@@ -87,6 +91,12 @@ STORE="$HOME/.velesdb-memory"
 TLS_DIR="$HOME/.velesdb-memory-tls"
 OLLAMA_URL="http://localhost:11434"
 OLLAMA_MODEL="all-minilm"
+# Empty means "no extraction backend": `remember_extracted` stays advertised and
+# reports itself unconfigured. Deliberately NOT defaulted to a model — setting
+# VELESDB_MEMORY_EXTRACTOR without VELESDB_MEMORY_EXTRACTOR_MODEL makes the
+# daemon refuse to start, so a default here would break every install whose
+# machine has not pulled that model.
+EXTRACTOR_MODEL=""
 OLLAMA_MODEL_SET=0
 TTL=""
 TTL_SET=0
@@ -121,6 +131,7 @@ for arg in "$@"; do
     --tls-dir=*) TLS_DIR="${arg#*=}" ;;
     --ollama-url=*) OLLAMA_URL="${arg#*=}" ;;
     --ollama-model=*) OLLAMA_MODEL="${arg#*=}"; OLLAMA_MODEL_SET=1 ;;
+    --extractor-model=*) EXTRACTOR_MODEL="${arg#*=}" ;;
     --ttl=*) TTL="${arg#*=}"; TTL_SET=1 ;;
     --yes) ASSUME_YES=1 ;;
     --skip-client=*) SKIP_CLIENTS="$SKIP_CLIENTS ${arg#*=}" ;;
@@ -375,16 +386,16 @@ setup_ollama() {
 
 # ---- 4. Build --------------------------------------------------------------
 build_daemon() {
-  echo -e "${YELLOW}🔨 Building velesdb-memory (--features ollama,http)...${NC}"
+  echo -e "${YELLOW}🔨 Building velesdb-memory (--features ollama,http,extract)...${NC}"
   # Always both features regardless of the runtime embedder choice above:
   # the hash/ollama switch stays a pure VELESDB_MEMORY_EMBEDDER runtime
   # choice, so flipping it later is a restart, never a rebuild.
   cargo install --path "$REPO_ROOT/crates/velesdb-memory" --bin velesdb-memory \
-    --features ollama,http --force
+    --features ollama,http,extract --force
 }
 
 # ---- 4b. --from-release: install a prebuilt daemon binary, no cargo needed --
-# Mirrors build_daemon()'s guarantee (--features ollama,http) without a Rust
+# Mirrors build_daemon()'s guarantee (--features ollama,http,extract) without a Rust
 # toolchain, by downloading the same binary release-memory.yml's
 # build-daemon-archive job produces. Only active from the first release that
 # ships the archive onward (added after 0.11.0) — an older/pinned tag simply
@@ -556,6 +567,13 @@ setup_daemon() {
   # Empty TTL means "permanent" (VELESDB_MEMORY_DEFAULT_TTL unset) — matches
   # the server's own default, so omit the key entirely rather than setting it
   # to an empty string.
+  # Wired only when a model was given: see EXTRACTOR_MODEL's declaration for
+  # why an unconditional VELESDB_MEMORY_EXTRACTOR would be a startup failure.
+  EXTRACTOR_PLIST_ENTRY=""
+  if [ -n "$EXTRACTOR_MODEL" ]; then
+    EXTRACTOR_PLIST_ENTRY="    <key>VELESDB_MEMORY_EXTRACTOR</key><string>ollama</string>
+    <key>VELESDB_MEMORY_EXTRACTOR_MODEL</key><string>$EXTRACTOR_MODEL</string>"
+  fi
   TTL_PLIST_ENTRY=""
   if [ -n "$TTL" ]; then
     TTL_PLIST_ENTRY="    <key>VELESDB_MEMORY_DEFAULT_TTL</key><string>$TTL</string>"
@@ -581,6 +599,7 @@ setup_daemon() {
     <key>VELESDB_MEMORY_EMBEDDER</key><string>$EMBEDDER</string>
     <key>VELESDB_MEMORY_OLLAMA_URL</key><string>$OLLAMA_URL</string>
     <key>VELESDB_MEMORY_OLLAMA_MODEL</key><string>$OLLAMA_MODEL</string>
+$EXTRACTOR_PLIST_ENTRY
 $TTL_PLIST_ENTRY
   </dict>
   <key>RunAtLoad</key><true/>
