@@ -577,43 +577,96 @@ impl IndexRaceStore {
     }
 }
 
+/// The `MemoryStore` surface the fault decorators below never intercept.
+/// Emitted once: two decorators copy-pasting ~90 lines of pure delegation
+/// trips the repo's duplication gate, which is blocking on this repo.
+macro_rules! delegate_untouched_store_methods {
+    () => {
+        fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), MemoryError> {
+            self.inner.store(id, content, embedding)
+        }
+
+        fn store_with_metadata(
+            &self,
+            id: u64,
+            content: &str,
+            embedding: &[f32],
+            metadata: &Metadata,
+        ) -> Result<(), MemoryError> {
+            self.inner
+                .store_with_metadata(id, content, embedding, metadata)
+        }
+
+        fn store_with_ttl(
+            &self,
+            id: u64,
+            content: &str,
+            embedding: &[f32],
+            ttl_seconds: u64,
+        ) -> Result<(), MemoryError> {
+            self.inner
+                .store_with_ttl(id, content, embedding, ttl_seconds)
+        }
+
+        fn update_metadata(&self, id: u64, metadata: &Metadata) -> Result<(), MemoryError> {
+            self.inner.update_metadata(id, metadata)
+        }
+
+        fn get_metadata(&self, id: u64) -> Result<Option<Metadata>, MemoryError> {
+            self.inner.get_metadata(id)
+        }
+
+        fn delete(&self, id: u64) -> Result<(), MemoryError> {
+            self.inner.delete(id)
+        }
+
+        fn query_filtered(
+            &self,
+            embedding: &[f32],
+            k: usize,
+            filter: &Metadata,
+            offset: usize,
+        ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
+            self.inner.query_filtered(embedding, k, filter, offset)
+        }
+
+        fn query_excluding(
+            &self,
+            embedding: &[f32],
+            k: usize,
+            exclude: &Metadata,
+        ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
+            self.inner.query_excluding(embedding, k, exclude)
+        }
+
+        fn query_columnar(
+            &self,
+            embedding: &[f32],
+            k: usize,
+            filters: &[crate::model::ColumnFilter],
+        ) -> Result<Vec<crate::model::Recollection>, MemoryError> {
+            self.inner.query_columnar(embedding, k, filters)
+        }
+
+        fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
+            self.inner.relate(from, to, relation)
+        }
+
+        fn relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
+            self.inner.relations(id)
+        }
+
+        fn count(&self) -> usize {
+            self.inner.count()
+        }
+    };
+}
+
 impl MemoryStore for IndexRaceStore {
-    fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), MemoryError> {
-        self.inner.store(id, content, embedding)
-    }
-
-    fn store_with_metadata(
-        &self,
-        id: u64,
-        content: &str,
-        embedding: &[f32],
-        metadata: &Metadata,
-    ) -> Result<(), MemoryError> {
-        self.inner
-            .store_with_metadata(id, content, embedding, metadata)
-    }
-
-    fn store_with_ttl(
-        &self,
-        id: u64,
-        content: &str,
-        embedding: &[f32],
-        ttl_seconds: u64,
-    ) -> Result<(), MemoryError> {
-        self.inner
-            .store_with_ttl(id, content, embedding, ttl_seconds)
-    }
-
-    fn update_metadata(&self, id: u64, metadata: &Metadata) -> Result<(), MemoryError> {
-        self.inner.update_metadata(id, metadata)
-    }
+    delegate_untouched_store_methods!();
 
     fn get(&self, id: u64) -> Result<Option<(String, Vec<f32>)>, MemoryError> {
         self.inner.get(id)
-    }
-
-    fn get_metadata(&self, id: u64) -> Result<Option<Metadata>, MemoryError> {
-        self.inner.get_metadata(id)
     }
 
     fn get_metadata_batch(&self, ids: &[u64]) -> Result<Vec<Option<Metadata>>, MemoryError> {
@@ -621,50 +674,6 @@ impl MemoryStore for IndexRaceStore {
             self.rendezvous();
         }
         self.inner.get_metadata_batch(ids)
-    }
-
-    fn delete(&self, id: u64) -> Result<(), MemoryError> {
-        self.inner.delete(id)
-    }
-
-    fn query_filtered(
-        &self,
-        embedding: &[f32],
-        k: usize,
-        filter: &Metadata,
-        offset: usize,
-    ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
-        self.inner.query_filtered(embedding, k, filter, offset)
-    }
-
-    fn query_excluding(
-        &self,
-        embedding: &[f32],
-        k: usize,
-        exclude: &Metadata,
-    ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
-        self.inner.query_excluding(embedding, k, exclude)
-    }
-
-    fn query_columnar(
-        &self,
-        embedding: &[f32],
-        k: usize,
-        filters: &[crate::model::ColumnFilter],
-    ) -> Result<Vec<crate::model::Recollection>, MemoryError> {
-        self.inner.query_columnar(embedding, k, filters)
-    }
-
-    fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
-        self.inner.relate(from, to, relation)
-    }
-
-    fn relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
-        self.inner.relations(id)
-    }
-
-    fn count(&self) -> usize {
-        self.inner.count()
     }
 }
 
@@ -737,35 +746,7 @@ struct TornBodyStore {
 }
 
 impl MemoryStore for TornBodyStore {
-    fn store(&self, id: u64, content: &str, embedding: &[f32]) -> Result<(), MemoryError> {
-        self.inner.store(id, content, embedding)
-    }
-
-    fn store_with_metadata(
-        &self,
-        id: u64,
-        content: &str,
-        embedding: &[f32],
-        metadata: &Metadata,
-    ) -> Result<(), MemoryError> {
-        self.inner
-            .store_with_metadata(id, content, embedding, metadata)
-    }
-
-    fn store_with_ttl(
-        &self,
-        id: u64,
-        content: &str,
-        embedding: &[f32],
-        ttl_seconds: u64,
-    ) -> Result<(), MemoryError> {
-        self.inner
-            .store_with_ttl(id, content, embedding, ttl_seconds)
-    }
-
-    fn update_metadata(&self, id: u64, metadata: &Metadata) -> Result<(), MemoryError> {
-        self.inner.update_metadata(id, metadata)
-    }
+    delegate_untouched_store_methods!();
 
     fn get(&self, id: u64) -> Result<Option<(String, Vec<f32>)>, MemoryError> {
         if id == self.torn {
@@ -774,56 +755,8 @@ impl MemoryStore for TornBodyStore {
         self.inner.get(id)
     }
 
-    fn get_metadata(&self, id: u64) -> Result<Option<Metadata>, MemoryError> {
-        self.inner.get_metadata(id)
-    }
-
     fn get_metadata_batch(&self, ids: &[u64]) -> Result<Vec<Option<Metadata>>, MemoryError> {
         self.inner.get_metadata_batch(ids)
-    }
-
-    fn delete(&self, id: u64) -> Result<(), MemoryError> {
-        self.inner.delete(id)
-    }
-
-    fn query_filtered(
-        &self,
-        embedding: &[f32],
-        k: usize,
-        filter: &Metadata,
-        offset: usize,
-    ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
-        self.inner.query_filtered(embedding, k, filter, offset)
-    }
-
-    fn query_excluding(
-        &self,
-        embedding: &[f32],
-        k: usize,
-        exclude: &Metadata,
-    ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
-        self.inner.query_excluding(embedding, k, exclude)
-    }
-
-    fn query_columnar(
-        &self,
-        embedding: &[f32],
-        k: usize,
-        filters: &[crate::model::ColumnFilter],
-    ) -> Result<Vec<crate::model::Recollection>, MemoryError> {
-        self.inner.query_columnar(embedding, k, filters)
-    }
-
-    fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
-        self.inner.relate(from, to, relation)
-    }
-
-    fn relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
-        self.inner.relations(id)
-    }
-
-    fn count(&self) -> usize {
-        self.inner.count()
     }
 }
 
