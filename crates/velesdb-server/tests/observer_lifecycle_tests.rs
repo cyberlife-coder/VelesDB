@@ -68,6 +68,20 @@ async fn post(app: &axum::Router, uri: &str, body: Value) -> StatusCode {
         .status()
 }
 
+async fn get(app: &axum::Router, uri: &str) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .expect("test: build GET request"),
+        )
+        .await
+        .expect("test: GET request")
+        .status()
+}
+
 async fn delete(app: &axum::Router, uri: &str) -> StatusCode {
     app.clone()
         .oneshot(
@@ -258,5 +272,120 @@ async fn read_gate_denies_rest_search_end_to_end() {
     assert!(
         !status.is_success(),
         "denied hybrid read must not return success, got {status}"
+    );
+}
+
+async fn put(app: &axum::Router, uri: &str, body: Value) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(uri)
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("test: build PUT request"),
+        )
+        .await
+        .expect("test: PUT request")
+        .status()
+}
+
+fn assert_denied(status: StatusCode, what: &str) {
+    assert!(!status.is_success(), "{what} denied read, got {status}");
+}
+
+/// End-to-end proof that the CORE-2 read gate also covers the plain REST
+/// graph endpoints, not just `/search*`, `MATCH`, and the embedding
+/// `/graph/search` — see `graph_read_preamble` in `handlers/graph/handlers.rs`.
+/// Before the fix this test guards, `graph_preamble` never consulted the
+/// observer at all, so a denied principal could still list nodes, dump edges,
+/// read node payloads, and traverse the graph through these endpoints while
+/// `/search` correctly refused them.
+#[tokio::test]
+async fn read_gate_denies_rest_graph_reads_end_to_end() {
+    const GRAPH: &str = "observed_graph";
+    let dir = TempDir::new().expect("test: dir");
+    let app = create_test_app_with_observer(&dir, Arc::new(DenyingReadObserver));
+
+    // Writes are not read-gated: collection creation and seeding an edge must
+    // still succeed under a deny-all observer.
+    let status = post(
+        &app,
+        "/collections",
+        json!({"name": GRAPH, "collection_type": "graph"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "create graph collection");
+
+    // add_edge requires both endpoints to already have a stored payload
+    // (VELES-022 NodeNotFound otherwise) — seed nodes 1 and 2 first.
+    for node_id in [1, 2] {
+        let uri = format!("/collections/{GRAPH}/graph/nodes/{node_id}/payload");
+        let status = put(&app, &uri, json!({"payload": {}})).await;
+        assert_eq!(
+            status,
+            StatusCode::NO_CONTENT,
+            "seed node {node_id} payload must not be read-gated"
+        );
+    }
+
+    let status = post(
+        &app,
+        &format!("/collections/{GRAPH}/graph/edges"),
+        json!({"id": 1, "source": 1, "target": 2, "label": "KNOWS"}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "add_edge must not be read-gated"
+    );
+
+    // Every plain REST graph read must be refused end-to-end.
+    assert_denied(
+        get(
+            &app,
+            &format!("/collections/{GRAPH}/graph/edges?label=KNOWS"),
+        )
+        .await,
+        "get_edges",
+    );
+    assert_denied(
+        post(
+            &app,
+            &format!("/collections/{GRAPH}/graph/traverse"),
+            json!({"source": 1, "strategy": "bfs"}),
+        )
+        .await,
+        "traverse_graph",
+    );
+    assert_denied(
+        get(&app, &format!("/collections/{GRAPH}/graph/nodes/1/degree")).await,
+        "get_node_degree",
+    );
+    assert_denied(
+        get(&app, &format!("/collections/{GRAPH}/graph/edges/count")).await,
+        "get_edge_count",
+    );
+    assert_denied(
+        get(&app, &format!("/collections/{GRAPH}/graph/nodes")).await,
+        "list_nodes",
+    );
+    assert_denied(
+        get(&app, &format!("/collections/{GRAPH}/graph/nodes/1/edges")).await,
+        "get_node_edges",
+    );
+    assert_denied(
+        get(&app, &format!("/collections/{GRAPH}/graph/nodes/1/payload")).await,
+        "get_node_payload",
+    );
+    assert_denied(
+        post(
+            &app,
+            &format!("/collections/{GRAPH}/graph/traverse/parallel"),
+            json!({"sources": [1]}),
+        )
+        .await,
+        "traverse_parallel",
     );
 }
