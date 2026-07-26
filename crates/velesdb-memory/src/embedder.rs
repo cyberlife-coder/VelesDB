@@ -164,7 +164,7 @@ impl Embedder for OllamaEmbedder {
 /// Override with `VELESDB_MEMORY_OLLAMA_KEEP_ALIVE` (any value Ollama accepts,
 /// e.g. `30m`, or `0` to unload immediately) when pinning the weights costs
 /// more RAM than the latency is worth.
-#[cfg(feature = "ollama")]
+#[cfg(any(feature = "ollama", feature = "extract"))]
 pub(crate) const DEFAULT_KEEP_ALIVE: i64 = -1;
 
 /// The configured keep-alive as Ollama expects it on the wire.
@@ -177,7 +177,10 @@ pub(crate) const DEFAULT_KEEP_ALIVE: i64 = -1;
 /// five minutes. Duration forms like `30m` are strings and must stay strings.
 ///
 /// So: parse as a number when it is one, pass through as a string otherwise.
-#[cfg(feature = "ollama")]
+// Also reachable from `extract.rs`, whose Ollama client sends the same
+// field. Gating this on `ollama` alone broke `--features extract` on its
+// own: `extract` pulls `dep:ureq`, not `ollama`.
+#[cfg(any(feature = "ollama", feature = "extract"))]
 pub(crate) fn keep_alive() -> serde_json::Value {
     let raw = std::env::var("VELESDB_MEMORY_OLLAMA_KEEP_ALIVE")
         .ok()
