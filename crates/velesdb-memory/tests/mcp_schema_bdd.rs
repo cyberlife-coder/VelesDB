@@ -14,10 +14,14 @@
 //!
 //! The schemas are read exactly as published: an in-memory MCP client over
 //! `tokio::io::duplex` (the idiom of rmcp's own upstream tests) drives the
-//! real `McpServer`, so these tests see the same `inputSchema` bytes a
-//! Claude Code / Windsurf harness receives. Scope is deliberately the INPUT
-//! schemas: the reported bug is an *argument* deserialization failure.
-//! Output schemas keep their `$ref`-only items — a separate concern.
+//! real `McpServer`, so these tests see the same schema bytes a Claude Code /
+//! Windsurf harness receives.
+//!
+//! Output schemas are covered too, since the same defect turned out to be
+//! there and to bite harder: the official MCP SDKs validate a tool's
+//! `structuredContent` against its advertised `outputSchema`, so an
+//! unresolvable `$ref` is a RESULT the client may reject — worse than an
+//! unparseable argument, where the server at least got to answer.
 
 #![cfg(all(feature = "mcp", feature = "context", feature = "persistence"))]
 
