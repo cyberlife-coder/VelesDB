@@ -890,10 +890,56 @@ async fn test_load_working_context_tool_reports_found_true_on_hit() {
         .await
         .expect("load_working_context");
 
-    // Then `found` is true and there is nothing to recover from.
+    // Then `found` is true, and `other_sessions` is empty because this
+    // project genuinely has no OTHER session — not because a hit suppresses
+    // the field (see the two-session test right below, which is the one that
+    // pins that behaviour).
     assert!(loaded.found);
     assert!(loaded.working.is_some());
     assert!(loaded.other_sessions.is_empty());
+}
+
+#[tokio::test]
+async fn test_load_working_context_tool_surfaces_other_sessions_on_a_hit_too() {
+    // Given a project with TWO saved sessions
+    let (_dir, srv) = server();
+    for session in ["rolling", "probe"] {
+        srv.save_working_context(Parameters(SaveWorkingContextParams {
+            project: "veles".to_owned(),
+            session: session.to_owned(),
+            working: working(),
+        }))
+        .await
+        .expect("save_working_context");
+    }
+
+    // When loading one of them successfully
+    let Json(loaded) = srv
+        .load_working_context(Parameters(LoadWorkingContextParams {
+            project: "veles".to_owned(),
+            session: "probe".to_owned(),
+        }))
+        .await
+        .expect("load_working_context");
+
+    // Then the OTHER session is still surfaced. An agent that mistypes a
+    // session id into another REAL session gets `found: true` and resumes
+    // the wrong work with no signal at all; withholding `other_sessions`
+    // exactly on a hit removes the recovery hint in the one case where the
+    // caller cannot detect the mistake by itself.
+    assert!(loaded.found);
+    assert!(
+        loaded.other_sessions.contains(&"rolling".to_owned()),
+        "a hit must still list the project's other sessions so a caller that \
+         resumed the WRONG (but existing) session can notice and recover; got {:?}",
+        loaded.other_sessions
+    );
+    assert!(
+        !loaded.other_sessions.contains(&"probe".to_owned()),
+        "the field is `other_sessions`: the session just loaded is not an \
+         alternative to itself; got {:?}",
+        loaded.other_sessions
+    );
 }
 
 #[tokio::test]
@@ -1280,17 +1326,13 @@ async fn test_list_working_contexts_drops_a_session_whose_context_is_gone() {
             .await
             .expect("save_working_context");
         if session == "dropped" {
+            // Nothing else needed: listing checks liveness itself. The test
+            // no longer has to trigger a side effect from a read path to
+            // pass, which is the point — the guarantee holds on a cold
+            // process that never loaded this session.
             srv.forget(Parameters(super::super::dto::ForgetParams { id: saved.id }))
                 .await
                 .expect("forget");
-            // The read path is what prunes: loading the dead entry lets the
-            // index converge back to the truth without a scan.
-            srv.load_working_context(Parameters(LoadWorkingContextParams {
-                project: "veles".to_owned(),
-                session: session.to_owned(),
-            }))
-            .await
-            .expect("load_working_context");
         }
     }
 

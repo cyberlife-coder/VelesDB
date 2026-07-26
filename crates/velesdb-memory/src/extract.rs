@@ -81,6 +81,71 @@ pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 #[cfg(feature = "extract")]
 const REQUEST_TIMEOUT_SECS: u64 = 300;
 
+/// Ceiling on establishing the TCP connection to Ollama. Short on purpose: a
+/// local daemon accepts at once or is not running, and `ureq`'s 30 s default
+/// would be paid once per replay.
+#[cfg(feature = "extract")]
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Ceiling on writing the request (prompt upload). Unlike the read bound, this
+/// one is applied to the socket at connect time and is genuinely in force.
+#[cfg(feature = "extract")]
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The knobs that actually configure the extractor, named in its failures.
+///
+/// **Not** the embedder's variables. `main.rs`'s `build_ollama_extractor` reads
+/// `VELESDB_MEMORY_EXTRACTOR_URL`/`_MODEL`; telling a user to set
+/// `VELESDB_MEMORY_OLLAMA_URL` here would send them to edit a setting this code
+/// path never consults — an "actionable" message that is actively wrong. There
+/// is no offline fallback to offer either: extraction is opt-in, and running
+/// without it is simply not passing an extractor.
+#[cfg(feature = "extract")]
+const EXTRACT_LEVERS: crate::ollama_retry::OllamaLevers<'static> =
+    crate::ollama_retry::OllamaLevers {
+        url_var: "VELESDB_MEMORY_EXTRACTOR_URL",
+        model_var: "VELESDB_MEMORY_EXTRACTOR_MODEL",
+        fallback: None,
+    };
+
+/// How one generation attempt failed — transport and body failures may be
+/// replayed, a complete response is the server's final word.
+#[cfg(feature = "extract")]
+enum GenerateCall {
+    /// The request never completed. Boxed: `ureq::Error::Status` carries a
+    /// whole `Response`.
+    Transport(Box<ureq::Error>),
+    /// Headers arrived but the body did not read back in full.
+    Body(std::io::Error),
+}
+
+/// Replay policy for one generation attempt.
+#[cfg(feature = "extract")]
+fn generate_is_retryable(err: &GenerateCall) -> bool {
+    match err {
+        GenerateCall::Transport(inner) => crate::ollama_retry::is_retryable(inner),
+        GenerateCall::Body(inner) => crate::ollama_retry::io_is_retryable(inner),
+    }
+}
+
+/// Turn a failed generation into a message that names the endpoint, the model,
+/// how many attempts were spent, and the variables that change the outcome.
+#[cfg(feature = "extract")]
+fn describe_generate_failure(url: &str, model: &str, err: &GenerateCall, attempts: u32) -> String {
+    let cause = match err {
+        GenerateCall::Transport(inner) => inner.to_string(),
+        GenerateCall::Body(inner) => format!("reading the response failed: {inner}"),
+    };
+    crate::ollama_retry::actionable_failure(
+        "generate",
+        url,
+        model,
+        attempts,
+        &cause,
+        &EXTRACT_LEVERS,
+    )
+}
+
 /// Extracts facts through a local Ollama `/api/generate` endpoint, keeping the
 /// model — and therefore the source text — on the user's own machine.
 ///
@@ -99,10 +164,22 @@ pub struct OllamaExtractor {
 impl OllamaExtractor {
     /// Build an extractor targeting `model` on the Ollama server at `base_url`
     /// (e.g. [`DEFAULT_OLLAMA_URL`]).
+    ///
+    /// The agent is bounded on four axes, not one. See
+    /// [`crate::embedder`]'s `embed_agent` for why `timeout_read` is
+    /// subordinate to the global `timeout` in `ureq` and must not be read as a
+    /// per-read guarantee; `timeout_connect` and `timeout_write` are the two
+    /// that actually bite. The connect bound matters most here: `ureq`'s own
+    /// default is 30 s, which for a `localhost` daemon is 15x too long — and
+    /// with replays, that idle wait would be paid three times over.
     #[must_use]
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
+        let timeout = std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS);
         let agent = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .timeout_connect(CONNECT_TIMEOUT)
+            .timeout_write(WRITE_TIMEOUT)
+            .timeout_read(timeout)
+            .timeout(timeout)
             .build();
         Self {
             base_url: base_url.into(),
@@ -124,7 +201,14 @@ impl Extractor for OllamaExtractor {
 
 #[cfg(feature = "extract")]
 impl OllamaExtractor {
-    /// POST one prompt to Ollama's `/api/generate` and return the trimmed reply.
+    /// POST one prompt to Ollama's `/api/generate` and return the trimmed reply,
+    /// replaying the call when the failure is transient.
+    ///
+    /// Same defect, same repair as the embedder: this extractor also holds one
+    /// `ureq::Agent`, so it also hands out pooled keep-alive connections that
+    /// Ollama may have closed, and `ureq` will not replay a POST with a body.
+    /// The whole attempt — POST and body read — is inside the closure so a
+    /// truncated response is replayed rather than surfacing as a parse error.
     fn generate(&self, prompt: &str) -> Result<String, ExtractError> {
         let url = format!("{}/api/generate", self.base_url);
         let body = serde_json::json!({
@@ -140,14 +224,23 @@ impl OllamaExtractor {
             "options": { "temperature": 0 },
         })
         .to_string();
-        let response = self
-            .agent
-            .post(&url)
-            .set("Content-Type", "application/json")
-            .send_string(&body)
-            .map_err(|err| ExtractError::Backend(format!("ollama request failed: {err}")))?;
-        let payload = response.into_string().map_err(|err| {
-            ExtractError::Backend(format!("reading ollama response failed: {err}"))
+        let attempt = || {
+            let response = self
+                .agent
+                .post(&url)
+                .set("Content-Type", "application/json")
+                .send_string(&body)
+                .map_err(|err| GenerateCall::Transport(Box::new(err)))?;
+            response.into_string().map_err(GenerateCall::Body)
+        };
+
+        let payload = crate::ollama_retry::with_retry(
+            &crate::ollama_retry::OLLAMA_RETRIES,
+            generate_is_retryable,
+            attempt,
+        )
+        .map_err(|(err, attempts)| {
+            ExtractError::Backend(describe_generate_failure(&url, &self.model, &err, attempts))
         })?;
         parse_generate_response(&payload)
     }

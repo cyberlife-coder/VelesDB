@@ -235,15 +235,93 @@ fn parse_embedding_response(body: &str) -> Result<Vec<f32>, EmbedError> {
 #[cfg(feature = "ollama")]
 const EMBED_TIMEOUT_SECS: u64 = 60;
 
+/// Ceiling on establishing the TCP connection.
+///
+/// The one setting here that genuinely changes behavior. `ureq` already applies
+/// a connect timeout, but its default is 30 s (`agent.rs`) — a sane figure for
+/// the open internet and an absurd one for a daemon on `localhost`, which either
+/// accepts immediately or is not running. Since retries multiply this wait, 30 s
+/// would turn a dead Ollama into a 90 s stall.
+#[cfg(feature = "ollama")]
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Ceiling on writing the request. Applied to the socket at connect time, so —
+/// unlike the read timeout below — it is in force independently of the global
+/// deadline.
+#[cfg(feature = "ollama")]
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Agent used for every embeddings request, with [`EMBED_TIMEOUT_SECS`]
 /// applied. Same pattern as [`crate::extract::OllamaExtractor`], which has
 /// bounded its own Ollama calls since it was written.
+///
+/// # Precedence, stated plainly
+///
+/// `ureq` documents that `.timeout()` "takes precedence over `.timeout_read()`
+/// and `.timeout_write()`, but not `.timeout_connect()`", and its
+/// `DeadlineStream` rewrites the socket read deadline to the remaining global
+/// budget before every read. So `.timeout_read()` below is **subordinate**: it
+/// is declared for the day the global bound is lifted, and must not be read as
+/// a per-read ceiling today. `.timeout_connect()` and `.timeout_write()` are the
+/// two that bite. Saying otherwise in a doc — or writing a test that claimed to
+/// prove a per-read bound — would be a reassurance with nothing behind it.
 #[cfg(feature = "ollama")]
 fn embed_agent(timeout: std::time::Duration) -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout(timeout).build()
+    ureq::AgentBuilder::new()
+        .timeout_connect(CONNECT_TIMEOUT)
+        .timeout_write(WRITE_TIMEOUT)
+        .timeout_read(timeout)
+        .timeout(timeout)
+        .build()
 }
 
-/// Perform one blocking embeddings request against a local Ollama.
+/// How one embeddings attempt failed, kept apart just long enough to classify
+/// it: transport and body failures may be replayed, a payload the server
+/// answered in full is the server's final word.
+#[cfg(feature = "ollama")]
+enum OllamaCall {
+    /// The request never completed (reset, refusal, timeout, HTTP error status).
+    /// Boxed: `ureq::Error::Status` carries a whole `Response`.
+    Transport(Box<ureq::Error>),
+    /// The response headers arrived but the body did not read back in full.
+    Body(std::io::Error),
+    /// A complete response that is not a usable embedding — deterministic.
+    Payload(EmbedError),
+}
+
+/// Replay policy for one embeddings attempt.
+#[cfg(feature = "ollama")]
+fn call_is_retryable(err: &OllamaCall) -> bool {
+    match err {
+        OllamaCall::Transport(inner) => crate::ollama_retry::is_retryable(inner),
+        OllamaCall::Body(inner) => crate::ollama_retry::io_is_retryable(inner),
+        OllamaCall::Payload(_) => false,
+    }
+}
+
+/// The knobs that actually configure this backend, named in its failures.
+#[cfg(feature = "ollama")]
+const EMBED_LEVERS: crate::ollama_retry::OllamaLevers<'static> =
+    crate::ollama_retry::OllamaLevers {
+        url_var: "VELESDB_MEMORY_OLLAMA_URL",
+        model_var: "VELESDB_MEMORY_OLLAMA_MODEL",
+        fallback: Some("fall back to the fully-offline embedder with VELESDB_MEMORY_EMBEDDER=hash"),
+    };
+
+/// Perform one embeddings request against a local Ollama, replaying it when the
+/// failure is transient.
+///
+/// The retry is not belt-and-braces. `OllamaEmbedder` holds a single
+/// `ureq::Agent`, hence a keep-alive connection pool; Ollama closes idle
+/// connections, `ureq` hands the dead one back out, and the POST dies with
+/// `Connection reset by peer` — instantly, so the generous `EMBED_TIMEOUT_SECS`
+/// never applies. `ureq` will not replay it either: its internal retry demands
+/// an idempotent method and an empty body, and this is a POST with a body. The
+/// second attempt here dials a fresh connection, which is exactly the repair.
+///
+/// The whole attempt — POST *and* body read — sits inside the closure, so a
+/// truncated response is classified and replayed like any other transport
+/// failure instead of surfacing later as an unexplained parse error.
 #[cfg(feature = "ollama")]
 fn request_embedding(
     agent: &ureq::Agent,
@@ -253,126 +331,46 @@ fn request_embedding(
 ) -> Result<Vec<f32>, EmbedError> {
     let url = format!("{base_url}/api/embeddings");
     let body = build_request_body(model, text);
-    let response = agent
-        .post(&url)
-        .set("Content-Type", "application/json")
-        .send_string(&body)
-        .map_err(|err| EmbedError::Backend(format!("ollama request failed: {err}")))?;
-    let payload = response
-        .into_string()
-        .map_err(|err| EmbedError::Backend(format!("reading ollama response failed: {err}")))?;
-    parse_embedding_response(&payload)
+    let attempt = || {
+        let response = agent
+            .post(&url)
+            .set("Content-Type", "application/json")
+            .send_string(&body)
+            .map_err(|err| OllamaCall::Transport(Box::new(err)))?;
+        let payload = response.into_string().map_err(OllamaCall::Body)?;
+        parse_embedding_response(&payload).map_err(OllamaCall::Payload)
+    };
+
+    match crate::ollama_retry::with_retry(
+        &crate::ollama_retry::OLLAMA_RETRIES,
+        call_is_retryable,
+        attempt,
+    ) {
+        Ok(vector) => Ok(vector),
+        Err((OllamaCall::Payload(err), _)) => Err(err),
+        Err((OllamaCall::Transport(err), attempts)) => Err(EmbedError::Backend(
+            crate::ollama_retry::actionable_failure(
+                "embeddings",
+                &url,
+                model,
+                attempts,
+                &err.to_string(),
+                &EMBED_LEVERS,
+            ),
+        )),
+        Err((OllamaCall::Body(err), attempts)) => Err(EmbedError::Backend(
+            crate::ollama_retry::actionable_failure(
+                "embeddings",
+                &url,
+                model,
+                attempts,
+                &format!("reading the response failed: {err}"),
+                &EMBED_LEVERS,
+            ),
+        )),
+    }
 }
 
 #[cfg(all(test, feature = "ollama"))]
-mod ollama_tests {
-    use super::*;
-
-    #[test]
-    fn request_body_carries_model_and_prompt() {
-        let body = build_request_body("all-minilm", "hello world");
-        let json: serde_json::Value = serde_json::from_str(&body).expect("valid json");
-        assert_eq!(json["model"], "all-minilm");
-        assert_eq!(json["prompt"], "hello world");
-    }
-
-    #[test]
-    fn request_body_pins_the_model_in_memory() {
-        // Without `keep_alive` Ollama applies its own default and unloads the
-        // model after a few idle minutes, so a call that follows a quiet spell
-        // pays a full reload. Measured on this repo's own extraction model:
-        // 14.19 s cold against 0.22 s warm — a 64x cliff an agent hits every
-        // time it pauses to think.
-        let body = build_request_body("all-minilm", "hello world");
-        let json: serde_json::Value = serde_json::from_str(&body).expect("valid json");
-        assert_eq!(
-            json["keep_alive"], DEFAULT_KEEP_ALIVE,
-            "request must pin the model for the daemon's lifetime"
-        );
-        assert!(
-            json["keep_alive"].is_number(),
-            "Ollama ignores a STRING \"-1\" and unloads after 5 minutes anyway"
-        );
-    }
-
-    #[test]
-    fn parses_a_well_formed_embedding() {
-        let vector = parse_embedding_response(r#"{"embedding":[0.1,0.2,0.3]}"#).expect("parse");
-        assert_eq!(vector.len(), 3);
-        assert!((vector[0] - 0.1_f32).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn rejects_an_empty_embedding() {
-        let parsed = parse_embedding_response(r#"{"embedding":[]}"#);
-        assert!(matches!(parsed, Err(EmbedError::Empty)));
-    }
-
-    #[test]
-    fn rejects_a_malformed_response() {
-        let parsed = parse_embedding_response(r#"{"oops":true}"#);
-        assert!(matches!(parsed, Err(EmbedError::Backend(_))));
-    }
-
-    /// An Ollama that accepts the TCP connection and then never answers is
-    /// the failure this bound exists for: without it the embed call blocks
-    /// forever, and since `remember`/`save_working_context` embed before
-    /// writing, the MCP tool call hangs until the CLIENT times out — an
-    /// opaque transport error with nothing in the server's own error path.
-    /// Uses a 1 s agent so the test stays fast; the shipped ceiling is
-    /// `EMBED_TIMEOUT_SECS`.
-    #[test]
-    fn a_silent_ollama_is_bounded_instead_of_hanging_forever() {
-        use std::io::Read as _;
-        use std::net::TcpListener;
-        use std::time::{Duration, Instant};
-
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        // Accept, read the request, then hold the socket open and answer
-        // nothing at all — the exact shape of a stalled model load.
-        let handle = std::thread::spawn(move || {
-            if let Ok((mut socket, _)) = listener.accept() {
-                let mut scratch = [0_u8; 1024];
-                let _ = socket.read(&mut scratch);
-                std::thread::sleep(Duration::from_secs(30));
-            }
-        });
-
-        let agent = embed_agent(Duration::from_secs(1));
-        let started = Instant::now();
-        let outcome = request_embedding(&agent, &format!("http://{addr}"), "all-minilm", "hello");
-        let elapsed = started.elapsed();
-
-        assert!(
-            matches!(outcome, Err(EmbedError::Backend(_))),
-            "a silent backend must surface as a Backend error, got {outcome:?}"
-        );
-        assert!(
-            elapsed < Duration::from_secs(10),
-            "the request must be bounded by the agent timeout, took {elapsed:?}"
-        );
-        drop(handle);
-    }
-
-    #[test]
-    fn the_shipped_timeout_stays_bounded_and_usable() {
-        // Low enough that an MCP client is still waiting when it fires,
-        // high enough to survive a cold model load.
-        assert!((5..=120).contains(&EMBED_TIMEOUT_SECS));
-    }
-
-    #[test]
-    #[ignore = "requires a local Ollama with an embedding model (ollama pull all-minilm)"]
-    fn embeds_through_a_running_ollama() {
-        let embedder = OllamaEmbedder::new(DEFAULT_OLLAMA_URL, DEFAULT_OLLAMA_MODEL)
-            .expect("connect to ollama");
-        let vector = embedder
-            .embed("parking_lot avoids lock poisoning")
-            .expect("embed");
-        assert_eq!(vector.len(), embedder.dimension());
-        assert!(vector
-            .iter()
-            .any(|&component| component.abs() > f32::EPSILON));
-    }
-}
+#[path = "embedder_tests.rs"]
+mod ollama_tests;
