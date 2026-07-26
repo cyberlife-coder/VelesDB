@@ -14,10 +14,14 @@
 //!
 //! The schemas are read exactly as published: an in-memory MCP client over
 //! `tokio::io::duplex` (the idiom of rmcp's own upstream tests) drives the
-//! real `McpServer`, so these tests see the same `inputSchema` bytes a
-//! Claude Code / Windsurf harness receives. Scope is deliberately the INPUT
-//! schemas: the reported bug is an *argument* deserialization failure.
-//! Output schemas keep their `$ref`-only items — a separate concern.
+//! real `McpServer`, so these tests see the same schema bytes a Claude Code /
+//! Windsurf harness receives.
+//!
+//! Output schemas are covered too, since the same defect turned out to be
+//! there and to bite harder: the official MCP SDKs validate a tool's
+//! `structuredContent` against its advertised `outputSchema`, so an
+//! unresolvable `$ref` is a RESULT the client may reject — worse than an
+//! unparseable argument, where the server at least got to answer.
 
 #![cfg(all(feature = "mcp", feature = "context", feature = "persistence"))]
 
@@ -155,6 +159,37 @@ async fn every_tool_input_schema_types_every_reachable_items() {
     assert!(
         offenders.is_empty(),
         "{} untyped `items` across the advertised input schemas: {offenders:#?}",
+        offenders.len()
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
+/// Same rule on the OUTPUT side, which the input fix left behind.
+///
+/// It is not cosmetic: the official MCP SDKs validate a tool's
+/// `structuredContent` against its advertised `outputSchema`. A `$ref` a
+/// client cannot resolve is a result it may reject outright — a harsher
+/// failure than the input case, where the server at least got to answer.
+#[tokio::test]
+async fn every_tool_output_schema_types_every_reachable_items() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    let mut checked = 0usize;
+    let mut offenders: BTreeSet<String> = BTreeSet::new();
+    for tool in &tools {
+        let Some(output) = tool.output_schema.as_ref() else {
+            continue;
+        };
+        checked += 1;
+        let schema = Value::Object((**output).clone());
+        for finding in untyped_items(&schema) {
+            offenders.insert(format!("{}: {finding}", tool.name));
+        }
+    }
+    assert!(checked > 0, "at least one tool advertises an output schema");
+    assert!(
+        offenders.is_empty(),
+        "{} untyped `items` across {checked} advertised output schemas: {offenders:#?}",
         offenders.len()
     );
     client.cancel().await.expect("close the MCP session");

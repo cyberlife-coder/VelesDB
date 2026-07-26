@@ -54,7 +54,7 @@ fn to_wire_value<T: serde::Serialize>(
 /// fields must be typed `["integer", "string"]`, or every opted-in response
 /// would fail client-side validation for exactly the clients the option
 /// exists for.
-fn wire_safe_output_schema<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
+pub(super) fn wire_safe_output_schema<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     let schema = schema_for_output::<T>().unwrap_or_else(|e| {
         panic!(
             "Invalid output schema for {}: {e}",
@@ -63,6 +63,11 @@ fn wire_safe_output_schema<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     });
     let mut map = (*schema).clone();
     crate::schema::widen_id_properties(&mut map, ID_KEYS);
+    // Same treatment as the input side. The official MCP SDKs validate a
+    // tool's `structuredContent` against this schema, so a `$ref` the client
+    // cannot resolve is a result it may reject outright — a harsher failure
+    // than an unparseable argument, where the server at least got to answer.
+    crate::schema::inline_ref_only_properties(&mut map);
     Arc::new(map)
 }
 
@@ -672,6 +677,9 @@ impl McpServer {
 
     #[tool(
         name = "list_working_contexts",
+        // Same reason as the four tools wired in `mcp.rs`: an rmcp-derived
+        // output schema keeps `$ref`s a `$defs`-blind client cannot resolve.
+        output_schema = wire_safe_output_schema::<ListWorkingContextsResult>(),
         description = "List every session saved under a project via save_working_context, most-recently-saved first — so an agent can discover what is resumable before guessing a session id at load_working_context, or recover from a typo. Empty (not an error) when the project never saved anything."
     )]
     async fn list_working_contexts(

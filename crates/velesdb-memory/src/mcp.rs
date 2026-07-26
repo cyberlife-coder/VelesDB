@@ -194,6 +194,9 @@ impl McpServer {
 
     #[tool(
         name = "recall",
+        // rmcp derives an output schema when none is given, and that
+        // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
+        output_schema = context_tools::wire_safe_output_schema::<RecallResult>(),
         description = "Recall memories semantically similar to a query (vector), most similar first. Optionally narrow to exact-match metadata via `filter` (ColumnStore), e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients."
     )]
     async fn recall(
@@ -216,6 +219,9 @@ impl McpServer {
 
     #[tool(
         name = "recall_where",
+        // rmcp derives an output schema when none is given, and that
+        // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
+        output_schema = context_tools::wire_safe_output_schema::<RecallResult>(),
         description = "Fused recall: semantically similar memories (vector) constrained by structured ColumnStore predicates over metadata — ranges and comparisons, not just equality. Each filter is {field, op (eq/ne/lt/le/gt/ge), value}, ANDed. Use for time-windowed or numeric-scoped recall, e.g. facts about a topic with `ts` in a date range. Comparisons are TYPE-STRICT, with no runtime coercion: a filter value of 20230601 (a JSON number) never matches a fact stored with metadata {\"ts\": \"20230601\"} (a JSON string) — same value, different JSON type, no match, no error. Store comparable values like dates NUMERICALLY at `remember` time (e.g. 20230601, not \"20230601\") so `recall_where` filters actually match them. Most similar first.",
         // No id-named parameter here (hence the empty `keys`) — this goes
         // through the shared helper purely for its `$ref` inlining, so
@@ -243,6 +249,9 @@ impl McpServer {
 
     #[tool(
         name = "recall_fused",
+        // rmcp derives an output schema when none is given, and that
+        // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
+        output_schema = context_tools::wire_safe_output_schema::<RecallFusedResult>(),
         description = "Fused vector + graph recall: like `recall`, but also walks the graph from the top vector hit and folds any connected fact into the ranking — the tri-engine ranking (vector similarity + ColumnStore filter + graph reach) measured on multi-hop and temporal benchmarks. Reach for this when an answer needs a fact the query doesn't mention directly but a stored `relate`/extracted link connects (multi-hop reasoning, temporal chains). `hops`/`graph_boost` tune the graph reach; omit them for the proven defaults. Optionally narrow with an exact-match `filter`. Set `date_field` (the metadata key holding a YYYYMMDD date) to also get a `dated_context` timeline and a `now` anchor for temporal questions. Most relevant first."
     )]
     async fn recall_fused(
@@ -351,6 +360,9 @@ impl McpServer {
 
     #[tool(
         name = "why",
+        // rmcp derives an output schema when none is given, and that
+        // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
+        output_schema = context_tools::wire_safe_output_schema::<ExplanationDto>(),
         description = "Explain a decision: find the best-matching memory (optionally scoped by a metadata `filter`, e.g. the current project) and return the connected subgraph of related memories reachable through typed links — fusing vector, ColumnStore, and graph to surface context a plain similarity search misses."
     )]
     async fn why(
