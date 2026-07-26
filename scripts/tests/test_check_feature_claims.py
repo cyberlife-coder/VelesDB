@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -371,3 +372,47 @@ class AuditPythonOnRealRepoTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReadmeDisclaimerTests(unittest.TestCase):
+    """A README that says a capability is ABSENT must not be read as claiming it.
+
+    The scanner matched capability keywords anywhere in the prose, so the
+    honest sentence "No GPU in the published wheels — the `gpu` feature is not
+    enabled" registered `gpu` as a documented capability. The audit then looked
+    for it in the API, did not find it, and reported the crate as MISSING a
+    feature its README had explicitly disclaimed.
+
+    That penalises exactly the behaviour the audit exists to encourage. The
+    promise-contract checker already carries this distinction (`NEGATION_RE`);
+    this one did not.
+    """
+
+    def test_disclaimed_capability_is_not_a_claim(self) -> None:
+        readme = (
+            "# velesdb-python\n\n"
+            "## Known limits\n\n"
+            "- **No GPU in the published wheels.** The `gpu` Cargo feature "
+            "exists but is not enabled by `[tool.maturin]`; it requires "
+            "building from source.\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "README.md"
+            path.write_text(readme, encoding="utf-8")
+            self.assertNotIn(
+                "gpu",
+                cfc._parse_readme(path),
+                "a documented ABSENCE was counted as a documented capability",
+            )
+
+    def test_a_real_claim_is_still_detected(self) -> None:
+        """The guard must not become a way to hide an unbacked claim."""
+        readme = (
+            "# velesdb-python\n\n"
+            "GPU acceleration is enabled by default and needs no extra build "
+            "step.\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "README.md"
+            path.write_text(readme, encoding="utf-8")
+            self.assertIn("gpu", cfc._parse_readme(path))
