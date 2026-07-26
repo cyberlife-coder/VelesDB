@@ -14,6 +14,7 @@ use axum::{
     Json,
 };
 use velesdb_core::collection::graph::{GraphEdge, TraversalConfig};
+use velesdb_core::observer::QueryOperationKind;
 
 use crate::handlers::helpers::auto_core_error_response;
 use crate::types::ErrorResponse;
@@ -95,6 +96,35 @@ pub(super) fn get_graph_collection_or_404(
     ))
 }
 
+/// Shared graph preamble for **read** operations: resolves the collection via
+/// [`graph_preamble`], then routes the read through the control-plane gate
+/// (CORE-2). Graph reads have no metadata-filter channel to narrow, so a
+/// denied or scope-narrowed decision refuses the request (fail closed)
+/// rather than running it unfiltered.
+///
+/// Mirrors the gate `MATCH` (`handlers::match_query`) and embedding
+/// [`super::handlers_extended::graph_search`] already apply — centralized
+/// here so every plain REST graph read is governed the same way instead of
+/// each handler wiring the check individually.
+#[allow(clippy::result_large_err)]
+pub(super) fn graph_read_preamble(
+    state: &AppState,
+    name: &str,
+    operation: QueryOperationKind,
+) -> Result<velesdb_core::GraphCollection, (StatusCode, Json<ErrorResponse>)> {
+    let coll = graph_preamble(state, name)?;
+    match state.db.authorize_read(name, operation, None, None) {
+        Ok(None) => Ok(coll),
+        Ok(Some(_)) | Err(_) => Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "Read denied by governance policy".to_string(),
+                code: None,
+            }),
+        )),
+    }
+}
+
 /// Get edges from a collection's graph filtered by label.
 #[utoipa::path(
     get,
@@ -123,7 +153,7 @@ pub async fn get_edges(
         )
     })?;
 
-    let coll = graph_preamble(&state, &name)?;
+    let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
 
     let edges: Vec<EdgeResponse> = coll
         .get_edges(Some(&label))
@@ -270,7 +300,7 @@ pub async fn traverse_graph(
     State(state): State<Arc<AppState>>,
     Json(request): Json<TraverseRequest>,
 ) -> Result<Json<TraverseResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let coll = graph_preamble(&state, &name)?;
+    let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
 
     let config = TraversalConfig::with_range(1, request.max_depth)
         .with_limit(request.limit)
@@ -335,7 +365,7 @@ pub async fn get_node_degree(
     Path((name, node_id)): Path<(String, u64)>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<DegreeResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let coll = graph_preamble(&state, &name)?;
+    let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
     let (in_degree, out_degree) = coll.node_degree(node_id);
     Ok(Json(DegreeResponse {
         in_degree,
