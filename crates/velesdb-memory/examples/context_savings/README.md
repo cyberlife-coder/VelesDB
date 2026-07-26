@@ -56,8 +56,8 @@ turn | fragments | raw_tokens | compiled_tokens | saved% | latency_ms
   12 |        18 |       2776 |             534 |  80.8% |       23.8
 
 session totals: 26533 raw -> 4647 compiled real tokens = 82.5% saved
-compile latency (with source/event persistence, default): mean 27.3 ms, max 36.4 ms
-compile latency (stateless: store_sources/record_events off): mean 0.5 ms, max 0.7 ms
+compile latency (with source/event persistence, default): mean 24.5 ms, max 37.2 ms
+compile latency (stateless: store_sources/record_events off): mean 0.7 ms, max 0.9 ms
 cache-marked prefix: byte-stable across all 12 turns (45 real tokens reusable by provider prompt caching)
 reproducibility: OK (every turn compiled twice, byte-identical)
 ```

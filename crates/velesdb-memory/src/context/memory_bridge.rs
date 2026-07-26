@@ -735,14 +735,40 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             .flatten()
             .is_some_and(|meta| meta.get(CTX_WORKING_FIELD) == Some(&Value::Bool(true)));
         if !marked {
+            self.prune_working_index(project, session)?;
             return Ok(None);
         }
-        match self.store.get(slot)? {
-            Some((content, _)) => serde_json::from_str(&content)
-                .map(Some)
-                .map_err(|err| MemoryError::WorkingContextCodec(err.to_string())),
-            None => Ok(None),
+        let Some((content, _)) = self.store.get(slot)? else {
+            self.prune_working_index(project, session)?;
+            return Ok(None);
+        };
+        serde_json::from_str(&content)
+            .map(Some)
+            .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))
+    }
+
+    /// Drop `session` from `project`'s index once its context is gone — a
+    /// `forget` on the underlying fact leaves the index entry behind, and
+    /// nothing else ever removes one.
+    ///
+    /// Self-healing on the READ path deliberately: it keeps
+    /// [`Self::list_working_contexts`] O(1) (no scan, no per-entry lookup)
+    /// while still letting the index converge back to the truth, because
+    /// this is the one place that already paid for the store lookup and
+    /// learned the entry is dead. A no-op when the session was not listed,
+    /// so the common "never saved anything" miss costs one index read.
+    fn prune_working_index(&self, project: &str, session: &str) -> Result<(), MemoryError> {
+        let Some(mut index) = self.working_index(project)? else {
+            return Ok(());
+        };
+        let before = index.sessions.len();
+        index.sessions.retain(|entry| entry.session != session);
+        if index.sessions.len() == before {
+            return Ok(());
         }
+        let content = serde_json::to_string(&index)
+            .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))?;
+        self.write_working_index(project, &content)
     }
 
     /// Every session ever saved under `project`'s working-context index
@@ -812,6 +838,16 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         }
         let content = serde_json::to_string(&index)
             .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))?;
+        self.write_working_index(project, &content)
+    }
+
+    /// Persist a serialized index into `project`'s reserved index slot.
+    /// Shared by the append path ([`Self::update_working_index`]) and the
+    /// prune path ([`Self::prune_working_index`]) so both write the same
+    /// marker metadata — an index written without
+    /// [`CTX_WORKING_INDEX_FIELD`] would be treated as a squatter and read
+    /// back as empty.
+    fn write_working_index(&self, project: &str, content: &str) -> Result<(), MemoryError> {
         let slot = working_index_id(project);
         let embedding = self
             .embedder
@@ -820,7 +856,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             (CTX_WORKING_INDEX_FIELD, Value::Bool(true)),
             (CTX_PROJECT_FIELD, Value::String(project.to_owned())),
         ]);
-        self.store_fact(slot, &content, &embedding, Some(&meta), None)?;
+        self.store_fact(slot, content, &embedding, Some(&meta), None)?;
         Ok(())
     }
 }

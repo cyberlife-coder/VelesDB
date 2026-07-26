@@ -152,9 +152,54 @@ impl Embedder for OllamaEmbedder {
 }
 
 /// Build the JSON request body for the embeddings endpoint.
+/// How long Ollama keeps a model resident after a request. `-1` means "for as
+/// long as the server runs", which is what a daemon wants: the model loads once
+/// and every later call is warm.
+///
+/// Ollama's own default unloads after a few idle minutes, and the reload is not
+/// a rounding error — measured on this repo's extraction model, 14.19 s cold
+/// against 0.22 s warm. An agent that pauses between calls pays that cliff
+/// almost every time, which is precisely the usage pattern here.
+///
+/// Override with `VELESDB_MEMORY_OLLAMA_KEEP_ALIVE` (any value Ollama accepts,
+/// e.g. `30m`, or `0` to unload immediately) when pinning the weights costs
+/// more RAM than the latency is worth.
+#[cfg(feature = "ollama")]
+pub(crate) const DEFAULT_KEEP_ALIVE: i64 = -1;
+
+/// The configured keep-alive as Ollama expects it on the wire.
+///
+/// The TYPE matters, and getting it wrong fails silently. Ollama reads `-1`
+/// (a JSON **number**) as "never unload", but a JSON **string** `"-1"` is not
+/// a duration it can parse, so it is dropped and the default 5-minute unload
+/// applies — the call looks accepted and the model still disappears. Measured:
+/// numeric `-1` yields `expires_at` in year 2318, the string `"-1"` yields
+/// five minutes. Duration forms like `30m` are strings and must stay strings.
+///
+/// So: parse as a number when it is one, pass through as a string otherwise.
+#[cfg(feature = "ollama")]
+pub(crate) fn keep_alive() -> serde_json::Value {
+    let raw = std::env::var("VELESDB_MEMORY_OLLAMA_KEEP_ALIVE")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    match raw {
+        None => serde_json::Value::from(DEFAULT_KEEP_ALIVE),
+        Some(value) => value.parse::<i64>().map_or_else(
+            |_| serde_json::Value::String(value.clone()),
+            serde_json::Value::from,
+        ),
+    }
+}
+
 #[cfg(feature = "ollama")]
 fn build_request_body(model: &str, text: &str) -> String {
-    serde_json::json!({ "model": model, "prompt": text }).to_string()
+    serde_json::json!({
+        "model": model,
+        "prompt": text,
+        "keep_alive": keep_alive(),
+    })
+    .to_string()
 }
 
 /// Ollama `/api/embeddings` response shape.
@@ -229,6 +274,25 @@ mod ollama_tests {
         let json: serde_json::Value = serde_json::from_str(&body).expect("valid json");
         assert_eq!(json["model"], "all-minilm");
         assert_eq!(json["prompt"], "hello world");
+    }
+
+    #[test]
+    fn request_body_pins_the_model_in_memory() {
+        // Without `keep_alive` Ollama applies its own default and unloads the
+        // model after a few idle minutes, so a call that follows a quiet spell
+        // pays a full reload. Measured on this repo's own extraction model:
+        // 14.19 s cold against 0.22 s warm — a 64x cliff an agent hits every
+        // time it pauses to think.
+        let body = build_request_body("all-minilm", "hello world");
+        let json: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+        assert_eq!(
+            json["keep_alive"], DEFAULT_KEEP_ALIVE,
+            "request must pin the model for the daemon's lifetime"
+        );
+        assert!(
+            json["keep_alive"].is_number(),
+            "Ollama ignores a STRING \"-1\" and unloads after 5 minutes anyway"
+        );
     }
 
     #[test]

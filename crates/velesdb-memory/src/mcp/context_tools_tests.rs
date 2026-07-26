@@ -1228,3 +1228,85 @@ fn test_save_working_context_params_accept_stringified_working() {
     .expect("a JSON-encoded `working` string must deserialize");
     assert_eq!(params.working.goal.as_deref(), Some("resume the campaign"));
 }
+
+#[tokio::test]
+async fn test_load_working_context_never_suggests_the_session_it_just_denied() {
+    // Given a saved session whose backing fact is then deleted, so the
+    // project index still carries the entry while the context is gone.
+    let (_dir, srv) = server();
+    let Json(saved) = srv
+        .save_working_context(Parameters(SaveWorkingContextParams {
+            project: "veles".to_owned(),
+            session: "session-gone".to_owned(),
+            working: working(),
+        }))
+        .await
+        .expect("save_working_context");
+    srv.forget(Parameters(super::super::dto::ForgetParams { id: saved.id }))
+        .await
+        .expect("forget");
+
+    // When loading that same session back
+    let Json(loaded) = srv
+        .load_working_context(Parameters(LoadWorkingContextParams {
+            project: "veles".to_owned(),
+            session: "session-gone".to_owned(),
+        }))
+        .await
+        .expect("load_working_context");
+
+    // Then the answer must not contradict itself: the field is named
+    // `other_sessions` and documented as OTHER sessions, so proposing the
+    // very session just reported missing is nonsense to act on.
+    assert!(!loaded.found);
+    assert!(
+        !loaded.other_sessions.contains(&"session-gone".to_owned()),
+        "other_sessions suggests the session it just denied: {:?}",
+        loaded.other_sessions
+    );
+}
+
+#[tokio::test]
+async fn test_list_working_contexts_drops_a_session_whose_context_is_gone() {
+    // Given two saved sessions, one of which is then deleted
+    let (_dir, srv) = server();
+    for session in ["kept", "dropped"] {
+        let Json(saved) = srv
+            .save_working_context(Parameters(SaveWorkingContextParams {
+                project: "veles".to_owned(),
+                session: session.to_owned(),
+                working: working(),
+            }))
+            .await
+            .expect("save_working_context");
+        if session == "dropped" {
+            srv.forget(Parameters(super::super::dto::ForgetParams { id: saved.id }))
+                .await
+                .expect("forget");
+            // The read path is what prunes: loading the dead entry lets the
+            // index converge back to the truth without a scan.
+            srv.load_working_context(Parameters(LoadWorkingContextParams {
+                project: "veles".to_owned(),
+                session: session.to_owned(),
+            }))
+            .await
+            .expect("load_working_context");
+        }
+    }
+
+    // When listing what is resumable
+    let Json(listed) = srv
+        .list_working_contexts(Parameters(ListWorkingContextsParams {
+            project: "veles".to_owned(),
+        }))
+        .await
+        .expect("list_working_contexts");
+    let names: Vec<&str> = listed.sessions.iter().map(|s| s.session.as_str()).collect();
+
+    // Then only the session that can actually be resumed is offered.
+    assert!(names.contains(&"kept"), "kept session missing: {names:?}");
+    assert!(
+        !names.contains(&"dropped"),
+        "list offers a session load cannot return: {names:?}"
+    );
+}

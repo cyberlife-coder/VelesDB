@@ -36,6 +36,57 @@ under a hard token budget with no model call at all.
 > reopens it and `why()` still walks the graph to context that shares no words
 > with the question.
 
+## What you actually gain
+
+Two problems cost you real money and real quality every day, and this addon
+fixes both — in your own Node process, with no service to run.
+
+**Your agent forgets.** Close the process and everything it learned is gone.
+The store is a directory on disk, so a new process reopens it and the facts are
+still there.
+
+**Every turn re-sends the whole conversation.** That is what you are billed for,
+and a context padded with repeated logs is also one where the model attends less
+to what matters. `compileContext` shrinks that payload before you send it —
+deterministically, and without calling any model itself.
+
+| What improves | Measured | How it was measured |
+|---|---|---|
+| Context sent to the model | **82.5 % smaller** over a 12-turn coding session (80.8–87.4 % per turn as it grows) | [committed corpus, real cl100k tokenizer](../velesdb-memory/examples/context_savings) — every turn compiled twice, byte-identical |
+| Compile cost | **0.7 ms** stateless, 24.5 ms with source/event persistence on | same run |
+| Storing a memory | **zero AI calls** — nothing leaves the process | the write path never calls a model |
+| Prompt-cache prefix | **byte-stable across all 12 turns** (45 tokens reusable) | same run |
+
+Those percentages come from *our* corpus. Every figure is pinned to its
+committed source by a [contract the CI enforces](../../docs/reference/promise-contract.json):
+if one drifts from what the code produces, the build goes red.
+
+## How it works, in four steps
+
+Everything below runs in-process. No server, no network, no API key.
+
+**1. It stores facts, not transcripts.** `remember` takes one fact — *"the API
+port is 6333 because 3000 collided with the web UI"* — and writes it to a local
+directory. No model call.
+
+**2. It finds them by meaning.** `recall` matches on sense, so *"which port did
+we settle on"* reaches that fact although the words differ.
+
+**3. It connects them — the part a search engine cannot do.** Facts are linked
+to the topics they mention, and `why` walks those links: it returns the best
+match **plus the facts that explain it**, including ones sharing no words with
+your question. That is what the GIF above shows across a restart.
+
+> Those links have to exist. If you only ever call `remember`, the graph stays
+> flat and `why` degrades to a search. `rememberExtracted` takes a paragraph,
+> splits it into facts and wires the links for you.
+
+**4. It compresses what is too big.** `compileContext` takes your accumulated
+context and a token budget, and returns a compiled view with **one auditable
+decision per fragment** — kept, abstracted, or dropped — plus a handle to fetch
+any original back. Nothing is destroyed; `retrieveContextSource` returns the
+exact bytes.
+
 ## Use cases
 
 - A Node or TypeScript coding agent that must still know, three weeks and

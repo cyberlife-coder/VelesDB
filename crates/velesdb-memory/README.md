@@ -31,6 +31,62 @@ and walks those links to return the evidence trail behind an answer. It also
 ships a deterministic context compiler that shrinks an agent's prompt under a
 hard token budget with no model call at all.
 
+## What you actually gain
+
+Two problems cost you real money and real quality every day, and this fixes both.
+
+**Your agent forgets.** Close the session, and everything it learned about your
+codebase is gone. Tomorrow you explain it again. velesdb-memory keeps those
+facts on your disk and hands them back at the start of the next session.
+
+**Every turn re-sends the whole conversation.** That is what you are billed for,
+and a context stuffed with repeated logs is also a context where the model pays
+less attention to what matters. The compiler shrinks that payload before it is
+sent — deterministically, with no AI call of its own.
+
+| What improves | Measured | How it was measured |
+|---|---|---|
+| Context sent to the model | **82.5 % smaller** on a 12-turn coding session (80–87 % per turn as it grows) | [committed corpus, real cl100k tokenizer](examples/context_savings) — recompiled twice per run, byte-identical |
+| Your actual bill | **10.9 % to 21.9 %** saved on the same session, A/B, real billing | [billed campaign](../../examples/real-session-benchmark#billed-campaign-results-2026-07-19-cli-runner-claude-sonnet-5) |
+| Cost of storing a memory | **zero AI calls** — nothing is sent anywhere | the write path never calls a model |
+| A 55 KB build log entering context | **767 characters**, error and file:line kept | the [`PostToolUse` hook](../../integrations/agent-hooks/README.md) |
+
+The honest part: those percentages come from *our* corpus on *our* sessions.
+The spread is published as prominently as the best figure, and every number
+above is pinned to its source by a [contract the CI
+enforces](../../docs/reference/promise-contract.json) — if a figure drifts from
+what the code produces, the build goes red.
+
+## How it works, in four steps
+
+Nothing here needs an AI provider. Everything runs on your machine.
+
+**1. It stores facts, not transcripts.** You (or your agent) call `remember`
+with one fact: *"the API port is 6333 because 3000 collided with the web UI"*.
+It is written to a local file store. No model call, no network.
+
+**2. It finds them by meaning, not keywords.** `recall` matches on sense, so
+asking about *"which port did we settle on"* finds that fact even though the
+words differ. This uses a local embedding model of your choosing.
+
+**3. It connects them, which is the part that matters.** Facts are linked to
+the topics they mention. `why` starts from the best match and then *walks those
+links*, so it returns the answer **plus the facts that explain it** — including
+ones sharing no words with your question. A plain search cannot do that.
+
+> Those links have to exist. If you only ever call `remember`, the graph stays
+> flat and `why` behaves like a search. Point `remember_extracted` at a
+> paragraph and it splits it into facts and wires the links for you.
+
+**4. It compresses what is too big, at the right moment.** Four [agent
+hooks](../../integrations/agent-hooks/README.md) fire automatically in Claude
+Code: two remind it to save and reload its state around a session, one does the
+same before a compaction, and `PostToolUse` is the one that *replaces* an
+oversized tool result with a compiled view — so the payload
+never enters the conversation at all. Nothing is deleted: the untouched
+original is written to a file and its path is quoted in the replacement, so the
+agent can read the full thing whenever the summary is not enough.
+
 ## Use cases
 
 - A coding agent that must still know, three weeks later, *why* a timeout is

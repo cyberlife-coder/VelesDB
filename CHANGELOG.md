@@ -32,6 +32,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ureq::Agent` bounded at 60 s, the same pattern `extract.rs` has used for its
   own Ollama calls since it was written. Proven by a test that stands up a
   socket which accepts and never replies: 30.0 s before, bounded after.
+- **`velesdb-server`**: eight plain REST graph read endpoints — `get_edges`,
+  `traverse_graph`, `get_node_degree`, `get_edge_count`, `list_nodes`,
+  `get_node_edges`, `get_node_payload` and `traverse_parallel` — resolved their
+  collection through `graph_preamble()`, which recorded a metric and looked the
+  collection up but **never consulted `Database::authorize_read()`**. Every
+  sibling read path (VelesQL `MATCH`, `/graph/search`, `/search*`) already routed
+  through that gate, so a registered observer could deny a principal on all of
+  them while these eight still returned nodes, edges and payloads unfiltered.
+  They now go through `graph_read_preamble()`, which fails closed with `403` on a
+  `Deny` **and** on a scope-narrowing decision, since a graph read has no
+  metadata-filter channel to apply a narrowed scope to — the same choice already
+  made by `MATCH` and `/graph/search`. Write endpoints are untouched:
+  `authorize_read` is a read-only gate. With no observer registered (the default
+  single-tenant deployment) this is unobservable, `authorize_read` being a single
+  `Option` check returning `Ok(None)`. Note for operators running a
+  scope-narrowing observer: such a read previously returned data **unfiltered**
+  and now returns `403`.
 
 ### Added
 

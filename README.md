@@ -8,7 +8,7 @@
 </p>
 <h1 align="center">VelesDB</h1>
 <p align="center">
-  <strong>One ~9 MB binary fuses vector + graph + columnar under a single query language — with an agent memory that shows its evidence and a deterministic context compiler that cuts your real, billed token spend.</strong><br/>
+  <strong>One ~10 MB binary fuses vector + graph + columnar under a single query language — with an agent memory that shows its evidence and a deterministic context compiler that cuts your real, billed token spend.</strong><br/>
   Local-first: nothing leaves the machine, no LLM and no API key in the memory path. Every number below links to a committed harness you can rerun.
 </p>
 <p align="center">
@@ -61,7 +61,7 @@ No Rust toolchain? `npm i @wiscale/velesdb-memory-node`, or grab a prebuilt `.mc
 
 **Cargo (Rust + REST server):** `cargo install velesdb-server velesdb-cli` — **Docker** (multi-arch linux/amd64 + linux/arm64): `docker run -d -p 8080:8080 -v velesdb_data:/data --name velesdb ghcr.io/cyberlife-coder/velesdb:latest`, then `curl http://localhost:8080/health`.
 
-**Browser / edge:** the WASM build is ~550 KB gzipped and runs entirely client-side ([TypeScript SDK](sdks/typescript)). **REST:** 54 REST endpoints ([OpenAPI spec](docs/openapi.yaml)). Full matrix: [installation guide](docs/guides/INSTALLATION.md).
+**Browser / edge:** the WASM build is ~674 KB gzipped and runs entirely client-side ([TypeScript SDK](sdks/typescript)). **REST:** 54 REST endpoints ([OpenAPI spec](docs/openapi.yaml)). Full matrix: [installation guide](docs/guides/INSTALLATION.md).
 
 </details>
 
@@ -72,6 +72,35 @@ No Rust toolchain? `npm i @wiscale/velesdb-memory-node`, or grab a prebuilt `.mc
 - **One database instead of three.** Vectors for *"what feels similar"*, a graph for *"what is connected"*, typed columns for *"what I know for sure"* — normally three deployments, three query languages, and glue code. Here it is one binary and [one language](docs/VELESQL_SPEC.md).
 - **A memory that can be audited, not just queried.** Every recall can show the evidence behind it; every compression decision carries a rule id, a reason, and a risk level. Deterministic by construction — no model in the write path, so no drift and nothing to re-litigate.
 - **Local-first is a sovereignty decision, not a latency one.** No cloud, no API key, no data processor: air-gapped if you want it, in your jurisdiction by default. [Why that matters](https://dev.to/wiscale-fr/i-built-a-database-in-france-because-the-cloud-act-makes-eu-data-sovereignty-impossible-5325) · [positioning in depth](docs/WHY_VELESDB.md).
+
+## How it works, in plain terms
+
+Four things happen, and none of them calls an AI provider.
+
+**1 · It stores facts, not conversations.** You give it one statement — *"the
+API port is 6333 because 3000 collided with the web UI"* — and it lands in a
+local file store. No model call, nothing sent anywhere.
+
+**2 · It finds them by meaning.** Asking *"which port did we settle on"* reaches
+that fact even though none of the words match. A local embedding model turns
+text into coordinates; close meaning means close coordinates.
+
+**3 · It connects them, and that is the part a search engine cannot do.** Each
+fact is linked to the topics it mentions. `why()` starts from the best match and
+then **walks those links**, so it returns the answer *plus the facts that
+explain it* — including ones sharing no vocabulary with your question.
+
+> The links have to exist. Store facts one by one and the graph stays flat, so
+> `why()` behaves like a search. Hand a paragraph to `remember_extracted` and it
+> splits it into facts and wires the links for you.
+
+**4 · It compresses what is too big, before you pay for it.** Give the compiler
+your accumulated context and a token budget; it returns a smaller version with
+**one recorded decision per fragment** — kept, abstracted, or dropped — and a
+handle to fetch any original back verbatim. Same input, same bytes out, every
+time. That is what the [82.5 % below](#proof--three-numbers-each-tied-to-its-harness) measures.
+
+---
 
 ## What no one else combines
 
@@ -183,7 +212,7 @@ No figure here is an estimate from a slide; each links to the log or script in t
 | Embed the engine | [`velesdb-core`](https://crates.io/crates/velesdb-core) (Rust) | The engine itself |
 | Give my agent memory | [`velesdb-memory`](crates/velesdb-memory) | MCP server + context compiler, any MCP client; `.mcpb` bundles on the [MCP registry](https://registry.modelcontextprotocol.io) |
 | Call it from Node | [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) | Memory wedge ([full engine via server + TS SDK](crates/velesdb-node/README.md#need-the-full-engine)) |
-| Run it in a browser | [`@wiscale/velesdb-sdk`](https://www.npmjs.com/package/@wiscale/velesdb-sdk) | WASM, ~550 KB gzipped, fully client-side |
+| Run it in a browser | [`@wiscale/velesdb-sdk`](https://www.npmjs.com/package/@wiscale/velesdb-sdk) | WASM, ~674 KB gzipped, fully client-side |
 | Serve it over HTTP | [`velesdb-server`](https://crates.io/crates/velesdb-server) | 54 REST endpoints — [API reference](docs/reference/api-reference.md) · [OpenAPI](docs/openapi.yaml) · [server security](docs/guides/SERVER_SECURITY.md) |
 | Ship on mobile/desktop | [`velesdb-mobile`](crates/velesdb-mobile) · [Tauri plugin](crates/tauri-plugin-velesdb) | iOS / Android / desktop |
 
@@ -215,7 +244,7 @@ Tool parity per surface is published honestly — including where a surface is s
 | **Graph support** | Native (`MATCH` clause) | No | No | No |
 | **Query language** | VelesQL (SQL + NEAR + MATCH) | Python API | JSON API / gRPC | SQL + operators |
 | **Deployment** | Embedded / Server / WASM / Mobile | Server (Python) | Server (Rust) | Requires PostgreSQL |
-| **Binary size** | ~9 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
+| **Binary size** | ~10 MB | ~500 MB (with deps) | ~50 MB | N/A (PG extension) |
 | **Browser / Mobile** | Yes / Yes | No | No | No |
 | **Offline / Local-first** | Yes | Partial | No | No |
 
