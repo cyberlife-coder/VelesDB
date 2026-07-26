@@ -234,6 +234,15 @@ async fn save_working_context_round_trips_external_payload_with_decisions_and_ev
     assert_eq!(structured["found"], json!(true));
     let round_tripped = &structured["working"];
 
+    assert_payload_survived_the_round_trip(round_tripped);
+
+    client.cancel().await.expect("close the MCP session");
+}
+
+/// Every field of [`external_working_payload`] must come back byte-identical.
+/// The `fragment_id` assertions are the point of the test: sent as a decimal
+/// string past 2^53, they must return as the exact integer, not rounded.
+fn assert_payload_survived_the_round_trip(round_tripped: &serde_json::Value) {
     let expected_id: u64 = BIG_FRAGMENT_ID.parse().expect("the fixture id parses");
     assert_eq!(round_tripped["goal"], json!("ship the schema fix"));
     assert_eq!(
@@ -274,6 +283,4 @@ async fn save_working_context_round_trips_external_payload_with_decisions_and_ev
         json!("output schemas have the same latent hole")
     );
     assert_eq!(round_tripped["pending_actions"], json!(["re-run the gate"]));
-
-    client.cancel().await.expect("close the MCP session");
 }
