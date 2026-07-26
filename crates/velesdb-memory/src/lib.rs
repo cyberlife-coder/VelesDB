@@ -67,6 +67,11 @@ pub mod mcp;
 /// (`Link`, `Recollection`, `ColumnFilter`, `Explanation`, …), separate from the
 /// service that computes them.
 pub mod model;
+/// Synchronous retry + actionable failure reporting shared by the two blocking
+/// Ollama call sites ([`embedder`] and [`extract`]). Internal: it exists to make
+/// those two backends resilient, not to be a general-purpose retry API.
+#[cfg(any(feature = "ollama", feature = "extract"))]
+mod ollama_retry;
 /// Optional second-stage re-scoring of a fused recall pool (bring your own
 /// cross-encoder/LLM). Never wired in by default — see [`rerank::Reranker`].
 pub mod rerank;

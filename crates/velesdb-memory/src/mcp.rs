@@ -54,6 +54,15 @@ use dto::{
 /// the context compiler's `wire_safe_input_schema` (single hardcoded `"id"`
 /// key, `context`-feature-gated). Both reuse the same underlying
 /// [`crate::schema::widen_id_properties`] tree walk.
+///
+/// It then applies [`crate::schema::inline_ref_only_properties`], for the
+/// same reason `wire_safe_input_schema` does: `schemars` emits a nested
+/// object or array-of-objects as a bare `$ref` into `$defs`, and a harness
+/// that does not dereference `$defs` degrades that to "untyped" — so
+/// `remember`'s `links[]` (a `Vec<Link>`) and `recall_where`'s `filters[]`
+/// (a `Vec<ColumnFilter>`) advertised an array of anything, hiding both
+/// their required fields. Order matters: widen FIRST so the copies the
+/// inliner makes inherit the widened id types.
 fn id_wire_input_schema<T: JsonSchema + std::any::Any>(keys: &[&str]) -> Arc<JsonObject> {
     let schema = schema_for_input::<Parameters<T>>().unwrap_or_else(|e| {
         panic!(
@@ -63,6 +72,7 @@ fn id_wire_input_schema<T: JsonSchema + std::any::Any>(keys: &[&str]) -> Arc<Jso
     });
     let mut map = (*schema).clone();
     crate::schema::widen_id_properties(&mut map, keys);
+    crate::schema::inline_ref_only_properties(&mut map);
     Arc::new(map)
 }
 
@@ -206,7 +216,12 @@ impl McpServer {
 
     #[tool(
         name = "recall_where",
-        description = "Fused recall: semantically similar memories (vector) constrained by structured ColumnStore predicates over metadata — ranges and comparisons, not just equality. Each filter is {field, op (eq/ne/lt/le/gt/ge), value}, ANDed. Use for time-windowed or numeric-scoped recall, e.g. facts about a topic with `ts` in a date range. Comparisons are TYPE-STRICT, with no runtime coercion: a filter value of 20230601 (a JSON number) never matches a fact stored with metadata {\"ts\": \"20230601\"} (a JSON string) — same value, different JSON type, no match, no error. Store comparable values like dates NUMERICALLY at `remember` time (e.g. 20230601, not \"20230601\") so `recall_where` filters actually match them. Most similar first."
+        description = "Fused recall: semantically similar memories (vector) constrained by structured ColumnStore predicates over metadata — ranges and comparisons, not just equality. Each filter is {field, op (eq/ne/lt/le/gt/ge), value}, ANDed. Use for time-windowed or numeric-scoped recall, e.g. facts about a topic with `ts` in a date range. Comparisons are TYPE-STRICT, with no runtime coercion: a filter value of 20230601 (a JSON number) never matches a fact stored with metadata {\"ts\": \"20230601\"} (a JSON string) — same value, different JSON type, no match, no error. Store comparable values like dates NUMERICALLY at `remember` time (e.g. 20230601, not \"20230601\") so `recall_where` filters actually match them. Most similar first.",
+        // No id-named parameter here (hence the empty `keys`) — this goes
+        // through the shared helper purely for its `$ref` inlining, so
+        // `filters[]` advertises `ColumnFilter`'s own fields instead of a
+        // `$ref` a `$defs`-blind harness reads as "array of anything".
+        input_schema = id_wire_input_schema::<RecallWhereParams>(&[])
     )]
     async fn recall_where(
         &self,
