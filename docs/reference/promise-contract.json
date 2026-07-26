@@ -316,9 +316,9 @@
       "executable": true,
       "source": "crates/velesdb-memory/examples/context_savings/README.md:58 (committed 12-turn agent-session corpus, real cl100k BPE: 26533 raw -> 4647 compiled tokens = 82.5% saved) — consistency check only, no live re-run.",
       "last_updated": "2026-07-19",
-      "measured_on": "2026-07-19",
+      "measured_on": "2026-07-26",
       "measured_machine": "platform-independent (committed corpus, deterministic tokenizer)",
-      "measured_version": "unknown"
+      "measured_version": "4.0.0"
     }
   ]
 }
