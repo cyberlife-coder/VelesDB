@@ -160,6 +160,37 @@ async fn every_tool_input_schema_types_every_reachable_items() {
     client.cancel().await.expect("close the MCP session");
 }
 
+/// Same rule on the OUTPUT side, which the input fix left behind.
+///
+/// It is not cosmetic: the official MCP SDKs validate a tool's
+/// `structuredContent` against its advertised `outputSchema`. A `$ref` a
+/// client cannot resolve is a result it may reject outright — a harsher
+/// failure than the input case, where the server at least got to answer.
+#[tokio::test]
+async fn every_tool_output_schema_types_every_reachable_items() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    let mut checked = 0usize;
+    let mut offenders: BTreeSet<String> = BTreeSet::new();
+    for tool in &tools {
+        let Some(output) = tool.output_schema.as_ref() else {
+            continue;
+        };
+        checked += 1;
+        let schema = Value::Object((**output).clone());
+        for finding in untyped_items(&schema) {
+            offenders.insert(format!("{}: {finding}", tool.name));
+        }
+    }
+    assert!(checked > 0, "at least one tool advertises an output schema");
+    assert!(
+        offenders.is_empty(),
+        "{} untyped `items` across {checked} advertised output schemas: {offenders:#?}",
+        offenders.len()
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
 /// A full external payload — the shape a client would build from the schema
 /// alone — including the two collections no existing fixture ever fills:
 /// `decisions` (a `ContextDecisionRef`, `rule_id` required) and
