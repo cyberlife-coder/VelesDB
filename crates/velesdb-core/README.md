@@ -164,8 +164,8 @@ Task guides, all moved out of this README so it stays readable:
 | Guide | What it covers |
 |---|---|
 | [Collections, metrics, storage](../../docs/guides/CORE_COLLECTIONS_AND_METRICS.md) | Collection model, the 5 distance metrics, embedding dimensions, payload format, quantized storage modes, bulk ingestion, durability |
-| [VelesQL reference](../../docs/guides/CORE_VELESQL_REFERENCE.md) | Vector/text/hybrid queries, metadata filters, `WITH` options, operator table, `JOIN` limit, `EXPLAIN` |
-| [Sparse vectors and fusion](../../docs/guides/CORE_SPARSE_AND_FUSION.md) | Named sparse indexes, DAAT MaxScore, RRF and Relative Score fusion |
+| [`VelesQL` reference](../../docs/guides/CORE_VELESQL_REFERENCE.md) | Vector/text/hybrid queries, metadata filters, `WITH` options, operator table, `JOIN` limit, `EXPLAIN` |
+| [Sparse vectors and fusion](../../docs/guides/CORE_SPARSE_AND_FUSION.md) | Named sparse indexes, DAAT `MaxScore`, RRF and Relative Score fusion |
 | [Streaming inserts](../../docs/guides/CORE_STREAMING_INSERTS.md) | `StreamIngester`, backpressure, delta buffer (insert-and-search) |
 | [Query plan cache](../../docs/guides/CORE_QUERY_PLAN_CACHE.md) | Two-tier LRU cache, write-generation invalidation, `EXPLAIN` cache fields, metrics |
 | [Agent Memory SDK (Rust)](../../docs/guides/CORE_AGENT_MEMORY_RUST.md) | Semantic, episodic and procedural memory, TTL, eviction, snapshots |
@@ -183,7 +183,7 @@ hardware and its reproduction command live in
 | Claim | Measured | Context |
 |-------|----------|---------|
 | Native HNSW search with AVX-512/AVX2/NEON SIMD | **450µs p50** end-to-end | 10K points, 384D, WAL on, recall ≥ 96% |
-| ColumnStore filtering vs. scanning JSON payloads | up to **130x** faster | integer equality, 100K rows |
+| `ColumnStore` filtering vs. scanning JSON payloads | up to **130x** faster | integer equality, 100K rows |
 
 Reproduce with `cargo bench -p velesdb-core --bench hnsw_benchmark` and
 `cargo bench -p velesdb-core --bench column_filter_benchmark`.
@@ -220,10 +220,10 @@ the platforms and toolchains the project builds and tests on.
 | Environment | Status | Note |
 |---|---|---|
 | Rust 1.90 (pinned) | Supported | `rust-toolchain.toml`; CI uses the same version |
-| Linux x86_64 | Supported | CI: `cargo check --workspace --all-targets --all-features` |
+| Linux `x86_64` | Supported | CI: `cargo check --workspace --all-targets --all-features` |
 | Linux aarch64 | Supported | CI: dedicated ARM64 benchmark runner (`ubuntu-24.04-arm`) |
-| Windows x86_64 (MSVC) | Supported | CI: `--all-features` check on `windows-latest` |
-| macOS aarch64 / x86_64 | Supported | Release pipeline builds both Darwin targets |
+| Windows `x86_64` (MSVC) | Supported | CI: `--all-features` check on `windows-latest` |
+| macOS aarch64 / `x86_64` | Supported | Release pipeline builds both Darwin targets |
 | `wasm32-unknown-unknown` | Supported, restricted | CI checks `--no-default-features` only; no filesystem persistence |
 | Rust nightly | Build-checked | Only for the `loom` concurrency feature |
 
@@ -239,7 +239,7 @@ the platforms and toolchains the project builds and tests on.
 
 ## License
 
-VelesDB Core License 1.0 — see [LICENSE](./LICENSE).
+`VelesDB` Core License 1.0 — see [LICENSE](./LICENSE).
 
 ---
 
