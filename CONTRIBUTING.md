@@ -157,7 +157,12 @@ Git hooks are provided in `.githooks/` — activate with: `git config core.hooks
 
 ### Prerequisites
 
-- Rust 1.89+ (stable) — enforced as MSRV (required for `avx512vpopcntdq` `target_feature` stabilized in 1.89; see `crates/velesdb-core/src/simd_native/x86_avx512.rs`)
+- Rust 1.90+ (stable) — the workspace MSRV, declared in `Cargo.toml`
+  (`rust-version`) and pinned in `rust-toolchain.toml` so local matches CI.
+  Two things force it: `avx512vpopcntdq` `target_feature`, stabilized in 1.89
+  (see `crates/velesdb-core/src/simd_native/x86_avx512.rs`), and `roaring
+  0.11.4`, which declares `rust-version = 1.90.0` — on 1.89 the workspace only
+  builds when that dependency is already cached.
 - Docker (optional, for integration tests)
 
 ### Building from Source
