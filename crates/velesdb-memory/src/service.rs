@@ -16,9 +16,11 @@ pub type Metadata = Map<String, Value>;
 use crate::clock;
 use crate::embedder::Embedder;
 use crate::error::MemoryError;
-use crate::extract::Extractor;
+use crate::extract::{ExtractedAttribute, ExtractedRelation, Extractor};
 use crate::id;
-use crate::model::{ColumnFilter, Explanation, Link, MemoryNode, Recollection};
+use crate::model::{
+    ColumnFilter, EntityProfile, EntityRelation, Explanation, Link, MemoryNode, Recollection,
+};
 #[cfg(feature = "persistence")]
 use crate::storage::NativeStore;
 use crate::storage::{is_reserved_key, strip_reserved_keys, MemoryStore, AUTO_DATE_FIELD};
@@ -277,12 +279,12 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         if text.is_empty() {
             return Err(MemoryError::EmptyFact);
         }
-        let facts = extractor.extract(text)?;
-        let mut fact_ids = Vec::with_capacity(facts.len());
+        let extraction = extractor.extract_graph(text)?;
+        let mut fact_ids = Vec::with_capacity(extraction.facts.len());
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64)> = HashSet::new();
         let mut seeded: HashSet<u64> = HashSet::new();
-        for fact in &facts {
+        for fact in &extraction.facts {
             let content = fact.text.trim();
             if content.is_empty() {
                 continue;
@@ -297,7 +299,148 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 &mut seeded,
             )?;
         }
+        self.wire_relations(
+            &extraction.relations,
+            &mut entity_ids,
+            &mut edges,
+            &mut seeded,
+        )?;
+        self.wire_attributes(&extraction.attributes, &mut entity_ids)?;
         Ok(fact_ids)
+    }
+
+    /// Look up everything known about a named entity: the attributes merged
+    /// onto its hub, and the typed edges leaving it.
+    ///
+    /// This is the *read* side of the auto-built graph, and it exists because
+    /// entity hubs are deliberately invisible to [`Self::recall`] and
+    /// [`Self::recall_where`] — a hub ranking for its own topic would evict a
+    /// real fact from the caller's results. Without this accessor an attribute
+    /// merged onto a hub would be stored correctly and yet be unreachable
+    /// through every public read path: the worst kind of feature, one that
+    /// looks done and silently returns nothing.
+    ///
+    /// `name` is canonicalized exactly like an extracted entity (trimmed,
+    /// lowercased), so the caller may pass `"Axel Lange"` and reach the node
+    /// built from `"axel lange"`. Returns `None` when no hub exists for the
+    /// name — nothing has ever mentioned that entity.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if the store lookup fails.
+    pub fn entity_profile(&self, name: &str) -> Result<Option<EntityProfile>, MemoryError> {
+        let key = name.trim().to_lowercase();
+        if key.is_empty() {
+            return Ok(None);
+        }
+        let id = id::stable_id(&format!("{HUB_ID_SALT}{key}"));
+        if self.store.get(id)?.is_none() {
+            return Ok(None);
+        }
+        // Reserved system keys (the hub flag itself) are scaffolding, not
+        // attributes the caller ever wrote — strip them exactly as every other
+        // caller-facing read path does.
+        let attributes = strip_reserved_keys(self.store.get_metadata(id)?).unwrap_or_default();
+        let mut relations = Vec::new();
+        for edge in self.store.relations(id)? {
+            // `mentions` edges point at the facts that tagged this entity; they
+            // are the bipartite scaffolding, not statements *about* the entity.
+            if edge.relation == MENTIONS_RELATION {
+                continue;
+            }
+            let target = self.store.get(edge.to)?.map(|(content, _)| content);
+            relations.push(EntityRelation {
+                predicate: edge.relation,
+                target_id: edge.to,
+                target: target.unwrap_or_default(),
+            });
+        }
+        Ok(Some(EntityProfile {
+            id,
+            name: key,
+            attributes,
+            relations,
+        }))
+    }
+
+    /// Wire each extracted `subject -[predicate]-> object` triple as a typed
+    /// edge between the two entity hubs.
+    ///
+    /// This is the step that turns the bipartite fact↔topic graph into a real
+    /// knowledge graph. The hubs are resolved through [`Self::entity_hub`], so
+    /// an endpoint naming an entity some earlier passage already introduced
+    /// reuses that entity's existing node rather than forking a parallel one —
+    /// hub ids are content-addressed, so this holds across calls and sessions.
+    ///
+    /// Only the stated direction is written. Inferring the converse
+    /// (`father of` ⇒ `child of`) would mean inventing a label the passage
+    /// never used, and an inverted vocabulary nobody can predict is worse than
+    /// an absent edge: `why()` walks outgoing edges, so a wrong direction
+    /// silently misroutes every later traversal.
+    ///
+    /// A malformed triple is skipped, not fatal — one unusable predicate must
+    /// not cost the caller the facts stored alongside it.
+    fn wire_relations(
+        &self,
+        relations: &[ExtractedRelation],
+        entity_ids: &mut HashMap<String, u64>,
+        edges: &mut HashSet<(u64, u64)>,
+        seeded: &mut HashSet<u64>,
+    ) -> Result<(), MemoryError> {
+        for relation in relations {
+            if validate_relation(&relation.predicate).is_err() {
+                continue;
+            }
+            let subject_id = self.entity_hub(&relation.subject, entity_ids)?;
+            let object_id = self.entity_hub(&relation.object, entity_ids)?;
+            if subject_id == object_id {
+                continue;
+            }
+            self.seed_existing_edges(subject_id, edges, seeded)?;
+            self.add_edge(subject_id, object_id, &relation.predicate, edges)?;
+        }
+        Ok(())
+    }
+
+    /// Merge each extracted attribute into its entity hub's `ColumnStore`
+    /// metadata, so `recall_where` can filter on it (`age >= 15`).
+    ///
+    /// The write goes through `update_metadata`, which **merges** rather than
+    /// replaces. That is the whole point: learning "Axel has a sister" after
+    /// "Axel is 15" must not erase the age. Re-storing the hub payload wholesale
+    /// would silently drop every attribute learned in an earlier session.
+    ///
+    /// Values keep the JSON type the extractor produced. `recall_where`
+    /// compares type-strictly with no coercion, so an age stored as `"15"`
+    /// would never match a numeric filter — no error, just a permanent silent
+    /// miss.
+    ///
+    /// Reserved keys are skipped: a model emitting `content` or a `_veles_`
+    /// key must never be able to overwrite the hub's own content or its
+    /// system flags.
+    fn wire_attributes(
+        &self,
+        attributes: &[ExtractedAttribute],
+        entity_ids: &mut HashMap<String, u64>,
+    ) -> Result<(), MemoryError> {
+        let mut per_entity: HashMap<String, Metadata> = HashMap::new();
+        for attribute in attributes {
+            if is_reserved_key(&attribute.key) {
+                continue;
+            }
+            per_entity
+                .entry(attribute.entity.clone())
+                .or_default()
+                .insert(attribute.key.clone(), attribute.value.clone());
+        }
+        for (entity, meta) in per_entity {
+            if meta.is_empty() {
+                continue;
+            }
+            reject_oversized_metadata(Some(&meta))?;
+            let hub_id = self.entity_hub(&entity, entity_ids)?;
+            self.store.update_metadata(hub_id, &meta)?;
+        }
+        Ok(())
     }
 
     /// Link `fact_id` to each of its topics with a deduplicated edge in *both*
@@ -404,6 +547,15 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// reserved-key rejection in [`Self::remember`].
     fn remember_hub(&self, key: &str) -> Result<u64, MemoryError> {
         let id = id::stable_id(&format!("{HUB_ID_SALT}{key}"));
+        // An existing hub is left exactly as it is. Re-storing it would rewrite
+        // the payload to the bare hub marker and destroy every attribute merged
+        // onto it by an earlier call — learning "Axel has a sister" would erase
+        // "Axel is 15", because a later sentence re-resolves the same hub. The
+        // content is a pure function of `key`, so there is nothing to refresh;
+        // skipping also avoids re-embedding a hub on every single mention.
+        if self.store.get(id)?.is_some() {
+            return Ok(id);
+        }
         let content = format!("Entity: {key}");
         let embedding = self.embedder.embed(&content)?;
         let mut meta = Map::new();
