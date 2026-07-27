@@ -122,11 +122,15 @@ pub use embedder::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
 pub use error::{ErrorCategory, MemoryError};
 #[cfg(feature = "extract")]
 pub use extract::OllamaExtractor;
-pub use extract::{DynExtractor, ExtractError, ExtractedFact, Extractor};
+pub use extract::{
+    DynExtractor, ExtractError, ExtractedAttribute, ExtractedFact, ExtractedRelation, Extraction,
+    Extractor,
+};
 #[cfg(feature = "mcp")]
 pub use mcp::McpServer;
 pub use model::{
-    ColumnFilter, ColumnOp, Explanation, FusionOptions, Link, MemoryEdge, MemoryNode, Recollection,
+    ColumnFilter, ColumnOp, EntityProfile, EntityRelation, Explanation, FusionOptions, Link,
+    MemoryEdge, MemoryNode, Recollection,
 };
 pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{MemoryService, Metadata};
