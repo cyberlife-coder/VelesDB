@@ -47,7 +47,12 @@ DOC_CLAIM_KEYWORDS: dict[str, list[str]] = {
     "velesql": ["velesql", "sql", "query language"],
     "agent_memory": ["agent memory", "episodic", "semantic memory", "procedural"],
     "sparse": ["sparse", "bm25", "bm42", "splade", "inverted index"],
-    "streaming": ["streaming", "stream insert"],
+    # "streaming" alone is too loose: WebAssembly *streaming compilation* and
+    # HTTP streaming both match it, so the wasm README scored a capability it
+    # does not expose. Every crate that genuinely ships streaming ingestion
+    # (core, python, typescript) also names it specifically — measured — so
+    # requiring the specific form loses no real claim.
+    "streaming": ["streaming insert", "stream insert", "streaming ingest", "stream_insert"],
     "quantization": ["quantization", "pq", "sq8", "binary", "product quantization"],
     "gpu": ["gpu", "acceleration", "wgpu"],
     "persistence": ["persistent", "persistence", "disk", "mmap", "indexeddb"],

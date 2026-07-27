@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VelesDB WASM — agent memory</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 48rem; }
+    pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 4px; }
+    .expected { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>VelesDB WASM — agent memory in the tab</h1>
+  <p><code>MemoryService</code> is the agent-memory wedge: store a fact, recall
+     it by meaning, link facts to each other, then ask <code>why</code> a
+     decision was reached and get the evidence subgraph back. No backend, no
+     embedding endpoint — the offline <code>HashEmbedder</code> ships inside the
+     module.</p>
+
+  <h2>Output</h2>
+  <pre id="out">loading…</pre>
+
+  <h2 class="expected">Two things to know before you build on this</h2>
+  <ul class="expected">
+    <li><strong>It is in-memory only.</strong> There is no filesystem in WASM;
+        a reload starts from an empty store. Persist what matters yourself.</li>
+    <li><strong>Ids cross the boundary as decimal strings</strong>
+        (<code>"1"</code>, not <code>1</code> or <code>1n</code>) — a plain
+        number would lose precision above 2<sup>53</sup>.</li>
+  </ul>
+  <p class="expected">This is also the supported path in 4.0.0:
+     <code>SemanticMemory.query()</code> throws
+     <code>Invalid search results</code> on every call and must not be used.</p>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

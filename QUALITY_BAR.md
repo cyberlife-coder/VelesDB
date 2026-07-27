@@ -220,7 +220,7 @@ Before tagging any release (patch, minor, major), all of the following must be *
 - [ ] If perf optimization: `python scripts/perf_phase_gate.py gate --phase <ID>` exit code 0
 - [ ] CHANGELOG.md updated with conventional commit subject groups
 - [ ] All numeric claims in CHANGELOG/README updated in `promise-contract.json`
-- [ ] Devin Review on the release PR: clean
+- [ ] Automated code review on the release PR: clean
 - [ ] Codacy Cloud on the release PR: 0 blocking findings
 
 The full checklist is automated in `.github/workflows/release.yml` after merge to `main` triggers tag publishing.

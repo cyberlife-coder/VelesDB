@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VelesDB WASM — payloads and filters</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 48rem; }
+    pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 4px; }
+    .expected { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>VelesDB WASM — payloads and metadata filters</h1>
+  <p>Each vector carries a JSON payload. A filter narrows the search to the
+     points whose payload matches, <em>before</em> the top-k cut — so filtering
+     never silently drops results that should have ranked.</p>
+
+  <h2>Output</h2>
+  <pre id="out">loading…</pre>
+
+  <h2 class="expected">What to look for</h2>
+  <ul class="expected">
+    <li>The unfiltered search returns the two nearest vectors regardless of category.</li>
+    <li>The filtered search returns only <code>category = "docs"</code> points,
+        and it can surface a point the unfiltered top-2 had cut.</li>
+    <li>A range filter (<code>gte</code>) and a compound one (<code>and</code>)
+        use the same condition grammar as the REST server.</li>
+    <li>The dimension-mismatch call at the end is <em>supposed</em> to fail —
+        it shows the <code>VELES-004</code> error shape.</li>
+  </ul>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

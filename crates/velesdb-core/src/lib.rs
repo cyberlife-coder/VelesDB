@@ -1,4 +1,16 @@
-//! # `VelesDB` Core
+// The crate README is pulled into the crate documentation verbatim. This is not
+// cosmetic: it makes `cargo test --doc --package velesdb-core` (CI step "Check
+// doctests compile") type-check every ```rust block in `README.md`. A README
+// snippet that stops matching the API therefore fails the build instead of
+// rotting silently. Blocks that must not be compiled or executed have to carry
+// an explicit rustdoc attribute in the README (`rust,no_run`, `rust,ignore`),
+// and blocks in another language keep their own tag (`bash`, `console`, `toml`,
+// `json`, `text`), which rustdoc never compiles.
+#![doc = include_str!("../README.md")]
+//!
+//! ---
+//!
+//! # Crate-level notes
 //!
 //! Local-first **tri-engine** database for AI agents, written in Rust:
 //! **vector** (HNSW + SIMD) + **graph** (typed edges, traversal, `MATCH`) +

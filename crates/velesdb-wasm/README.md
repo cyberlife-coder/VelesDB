@@ -1,23 +1,47 @@
-# VelesDB WASM
+# velesdb-wasm
+
+> Vector search, knowledge graph and agent memory running entirely inside the browser — no server, no network call.
 
 [![npm](https://img.shields.io/npm/v/@wiscale/velesdb-wasm)](https://www.npmjs.com/package/@wiscale/velesdb-wasm)
 [![License](https://img.shields.io/badge/license-VelesDB_Core_1.0-blue)](LICENSE)
 
-WebAssembly build of [VelesDB](https://github.com/cyberlife-coder/VelesDB) - vector search in the browser.
+## Objective
 
-> The browser engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It ships the full `remember`/`recall`/`relate`/`forget`/[`why()`](../velesdb-memory/README.md)/`compileContext` memory wedge in-memory, client-side — `why()` returns the evidence path behind every recall.
+Semantic search normally means shipping user data to a server: an embedding
+endpoint, a vector database, a round-trip per keystroke. That is a latency
+budget, an infrastructure bill, and a privacy exposure — three costs for one
+feature.
 
-## Features
+`velesdb-wasm` compiles the VelesDB engine to WebAssembly so the index lives in
+the tab. Vectors are inserted, filtered, fused and ranked locally, persisted to
+IndexedDB, and never leave the device. If your data can leave the device and
+you have a backend anyway, use the REST server instead — this crate exists for
+the cases where it cannot.
 
-- **In-browser vector search** - No server required
-- **Multiple metrics** - Cosine, Euclidean, Dot Product, Hamming, Jaccard
-- **Memory optimization** - SQ8 (4x) and Binary (32x) quantization
-- **Knowledge Graph** - In-memory graph store with BFS/DFS traversal
-- **Agent Memory** - Semantic memory for AI agents (store/query knowledge facts)
-- **Memory Wedge** - The full `remember`/`recall`/`recallFused`/`relate`/`forget`/`why`/`compileContext` agent memory wedge, in-memory only
-- **VelesQL parser** - Parse and validate VelesQL queries client-side
-- **Sparse search** - Inverted index with RRF hybrid fusion
-- **Lightweight** - Minimal bundle size
+## Use cases
+
+- A documentation site whose search box ranks pages semantically with no search
+  backend to operate.
+- An offline-first PWA that keeps working in a plane and reloads its index from
+  IndexedDB on startup.
+- A health or legal app whose regulator forbids the corpus from reaching a
+  server, even transiently.
+- An Electron or Tauri desktop app that wants retrieval without bundling and
+  supervising a database process.
+- An AI agent running in the browser that needs durable, explainable memory —
+  `remember` / `recall` / `relate` / `why` — with no backend.
+
+## Prerequisites
+
+| Requirement | Minimum version | Note |
+|---|---|---|
+| Browser | Any with WebAssembly + ES modules + `BigInt` | IndexedDB is additionally required for `save()` / `load()`. |
+| Node.js | 20+ | Only to install the package and serve files. Verified on Node 26.3.0. |
+| Rust | 1.90 | Only to build from source (`rust-toolchain.toml`). |
+| wasm-pack | 0.12+ | Only to build from source. |
+
+Nothing else: no embedding model, no server, no build step if you use the
+published package.
 
 ## Installation
 
@@ -25,501 +49,170 @@ WebAssembly build of [VelesDB](https://github.com/cyberlife-coder/VelesDB) - vec
 npm install @wiscale/velesdb-wasm
 ```
 
-## Usage
+The published package is an ES module (`wasm-pack --target web` build)
+containing `velesdb_wasm.js`, `velesdb_wasm.d.ts` and `velesdb_wasm_bg.wasm`.
 
-```javascript
-import init, { VectorStore } from '@wiscale/velesdb-wasm';
+This crate is **not published on crates.io** (`publish = false` in
+`Cargo.toml`) — npm is the only distribution channel. To build it yourself:
 
-async function main() {
-  // Initialize WASM module
+```bash
+cargo install wasm-pack
+wasm-pack build crates/velesdb-wasm --target web --release   # browser
+wasm-pack build crates/velesdb-wasm --target nodejs --release # Node
+```
+
+## First success in 60 seconds
+
+Three files, no bundler, no config.
+
+```bash
+mkdir velesdb-hello && cd velesdb-hello
+npm install @wiscale/velesdb-wasm@4.0.0
+```
+
+Create `index.html`:
+
+```html
+<!doctype html>
+<meta charset="utf-8">
+<title>VelesDB WASM</title>
+<pre id="out">loading…</pre>
+<script type="module">
+  import init, { VectorStore } from './node_modules/@wiscale/velesdb-wasm/velesdb_wasm.js';
+
   await init();
 
-  // Create a vector store (768 dimensions, cosine similarity)
-  const store = new VectorStore(768, 'cosine');
+  const store = new VectorStore(3, 'cosine');
+  store.insert(1n, new Float32Array([1.0, 0.0, 0.0]));
+  store.insert(2n, new Float32Array([0.0, 1.0, 0.0]));
+  store.insert(3n, new Float32Array([0.9, 0.1, 0.0]));
 
-  // Insert vectors (use BigInt for IDs)
-  store.insert(1n, new Float32Array([0.1, 0.2, ...]));
-  store.insert(2n, new Float32Array([0.3, 0.4, ...]));
-
-  // Search for similar vectors
-  const query = new Float32Array([0.15, 0.25, ...]);
-  const results = store.search(query, 5); // Top 5 results
-
-  // Results: [[id, score], [id, score], ...]
-  console.log(results);
-}
-
-main();
+  const lines = [
+    `${store.len} vectors, dimension ${store.dimension}, storage_mode ${store.storage_mode}`,
+  ];
+  for (const [id, score] of store.search(new Float32Array([1.0, 0.0, 0.0]), 2)) {
+    lines.push(`#${id}  score ${score.toFixed(3)}`);
+  }
+  document.getElementById('out').textContent = lines.join('\n');
+</script>
 ```
 
-### High-Performance Bulk Insert
+Serve it (WebAssembly cannot be loaded from a `file://` page):
 
-For optimal performance when inserting many vectors:
-
-```javascript
-// Pre-allocate capacity (avoids repeated memory allocations)
-const store = VectorStore.with_capacity(768, 'cosine', 100000);
-
-// Batch insert (much faster than individual inserts)
-const batch = [
-  [1n, [0.1, 0.2, ...]],
-  [2n, [0.3, 0.4, ...]],
-  // ... more vectors
-];
-store.insert_batch(batch);
-
-// Or reserve capacity on existing store
-store.reserve(50000);
+```bash
+python3 -m http.server 8080
 ```
+
+Open <http://localhost:8080>. The page must show exactly:
+
+```
+3 vectors, dimension 3, storage_mode full
+#1  score 1.000
+#3  score 0.994
+```
+
+Vector 1 is identical to the query, so its cosine similarity is `1.000`;
+vector 3 is close, at `0.994`; vector 2 is orthogonal and is cut by `k = 2`.
+Anything else — an empty `<pre>`, a `loading…` that never changes, a console
+error — is a failure, not a slow start; see [Troubleshooting](#troubleshooting).
+
+## Examples
+
+- [`examples/wasm-browser-demo`](../../examples/wasm-browser-demo) — interactive
+  single-page demo, insert and search random vectors, latency shown live.
+- [`examples/react-wasm-search`](../../examples/react-wasm-search) — React +
+  Vite app, 100 products, search on every keystroke.
 
 ## API
 
-### VectorStore
-
-```typescript
-class VectorStore {
-  // Create a new store
-  constructor(dimension: number, metric: 'cosine' | 'euclidean' | 'dot' | 'hamming' | 'jaccard');
-  
-  // Create with storage mode (sq8/binary for memory optimization)
-  static new_with_mode(dimension: number, metric: string, mode: 'full' | 'sq8' | 'binary'): VectorStore;
-  
-  // Create with pre-allocated capacity (performance optimization)
-  static with_capacity(dimension: number, metric: string, capacity: number): VectorStore;
-
-  // Properties
-  readonly len: number;
-  readonly is_empty: boolean;
-  readonly dimension: number;
-  readonly storage_mode: string;  // "full", "sq8", or "binary"
-
-  // Methods
-  insert(id: bigint, vector: Float32Array): void;
-  insert_with_payload(id: bigint, vector: Float32Array, payload: object): void;
-  insert_batch(batch: Array<[bigint, number[]]>): void;  // Bulk insert
-  insertBatchRaw(ids: BigUint64Array, vectors: Float32Array, dimension: number): void;  // Flat raw-bulk insert (since 2026-06-14)
-  search(query: Float32Array, k: number): Array<[bigint, number]>;
-  search_with_filter(query: Float32Array, k: number, filter: object): Array<{id, score, payload}>;
-  text_search(query: string, k: number, field?: string): Array<{id, score, payload}>;
-  get(id: bigint): {id, vector, payload} | null;
-  remove(id: bigint): boolean;
-  clear(): void;
-  reserve(additional: number): void;  // Pre-allocate memory
-  memory_usage(): number;  // Accurate for each storage mode
-  
-  //
-  multi_query_search(vectors: Float32Array, num_vectors: number, k: number, strategy?: string, rrf_k?: number): Array<[bigint, number]>;
-  hybrid_search(vector: Float32Array, text_query: string, k: number, vector_weight?: number): Array<{id, score, payload}>;
-  batch_search(vectors: Float32Array, num_vectors: number, k: number): Array<Array<[bigint, number]>>;
-  similarity_search(query: Float32Array, threshold: number, operator: string, k: number): Array<[bigint, number]>;
-  query(query_vector: Float32Array, k: number): Array<{nodeId, vectorScore, graphScore, fusedScore, bindings, columnData}>;
-
-  // Sparse search (inverted index, on VectorStore)
-  sparse_insert(doc_id: bigint, indices: Uint32Array, values: Float32Array): void;
-  sparse_search(indices: Uint32Array, values: Float32Array, k: number): Array<{doc_id, score}>;
-
-  // Persistence
-  save(db_name: string): Promise<void>;
-  static load(db_name: string): Promise<VectorStore>;
-  static delete_database(db_name: string): Promise<void>;
-  export_to_bytes(): Uint8Array;
-  static import_from_bytes(bytes: Uint8Array): VectorStore;
-
-  // Metadata-only store
-  static new_metadata_only(): VectorStore;
-  readonly is_metadata_only: boolean;
-}
-```
-
-### Filter Format
-
-```javascript
-// Equality filter
-const filter = {
-  condition: { type: "eq", field: "category", value: "tech" }
-};
-
-// Comparison filters
-const filter = {
-  condition: { type: "gt", field: "price", value: 100 }
-};  // Also: gte, lt, lte, neq
-
-// Logical operators
-const filter = {
-  condition: {
-    type: "and",
-    conditions: [
-      { type: "eq", field: "category", value: "tech" },
-      { type: "gt", field: "views", value: 1000 }
-    ]
-  }
-};  // Also: or, not
-```
-
-## Distance Metrics
-
-| Metric | Description | Best For |
-|--------|-------------|----------|
-| `cosine` | Cosine similarity | Text embeddings (BERT, GPT) |
-| `euclidean` | L2 distance | Image features, spatial data |
-| `dot` | Dot product | Pre-normalized vectors |
-| `hamming` | Hamming distance | Binary vectors, fingerprints |
-| `jaccard` | Jaccard similarity | Set similarity, sparse vectors |
-
-## Storage Modes (Memory Optimization)
-
-Reduce memory usage with quantization:
-
-```javascript
-// Full precision (default) - best recall
-const full = new VectorStore(768, 'cosine');
-
-// SQ8: 4x memory reduction (~1% recall loss)
-const sq8 = VectorStore.new_with_mode(768, 'cosine', 'sq8');
-
-// Binary: 32x memory reduction (~5-10% recall loss)
-const binary = VectorStore.new_with_mode(768, 'hamming', 'binary');
-
-console.log(sq8.storage_mode);  // "sq8"
-```
-
-| Mode | Memory (768D) | Compression | Use Case |
-|------|---------------|-------------|----------|
-| `full` | 3080 bytes | 1x | Default, max precision |
-| `sq8` | 784 bytes | **4x** | Scale, RAM-constrained |
-| `binary` | 104 bytes | **32x** | Edge, IoT, mobile PWA |
-
-## IndexedDB Persistence
-
-Save and restore your vector store for offline-first applications with built-in async methods:
-
-```javascript
-import init, { VectorStore } from '@wiscale/velesdb-wasm';
-
-async function main() {
-  await init();
-
-  // Create and populate a store
-  const store = new VectorStore(768, 'cosine');
-  store.insert(1n, new Float32Array(768).fill(0.1));
-  store.insert(2n, new Float32Array(768).fill(0.2));
-
-  // Save to IndexedDB (single async call)
-  await store.save('my-vectors-db');
-  console.log('Saved!', store.len, 'vectors');
-
-  // Later: Load from IndexedDB
-  const restored = await VectorStore.load('my-vectors-db');
-  console.log('Restored!', restored.len, 'vectors');
-
-  // Clean up: Delete database
-  await VectorStore.delete_database('my-vectors-db');
-}
-
-main();
-```
-
-### Persistence API
-
-```typescript
-class VectorStore {
-  // Save to IndexedDB (async)
-  save(db_name: string): Promise<void>;
-  
-  // Load from IndexedDB (async, static)
-  static load(db_name: string): Promise<VectorStore>;
-  
-  // Delete IndexedDB database (async, static)
-  static delete_database(db_name: string): Promise<void>;
-  
-  // Manual binary export/import (for localStorage, file download, etc.)
-  export_to_bytes(): Uint8Array;
-  static import_from_bytes(bytes: Uint8Array): VectorStore;
-}
-```
-
-### Binary Format
-
-| Field | Size | Description |
-|-------|------|-------------|
-| Magic | 4 bytes | `"VELS"` |
-| Version | 1 byte | Format version (1) |
-| Dimension | 4 bytes | Vector dimension (u32 LE) |
-| Metric | 1 byte | 0=cosine, 1=euclidean, 2=dot |
-| Count | 8 bytes | Number of vectors (u64 LE) |
-| Vectors | variable | id (8B) + data (dim × 4B) each |
-
-### Performance
-
-Ultra-fast serialization thanks to contiguous memory layout:
-
-| Operation | 10k vectors (768D) | Throughput |
-|-----------|-------------------|------------|
-| Export | ~7 ms | **4479 MB/s** |
-| Import | ~10 ms | **2943 MB/s** |
-
-## Use Cases
-
-- **Browser-based RAG** - 100% client-side semantic search
-- **Offline-first apps** - Works without internet, persists to IndexedDB
-- **Privacy-preserving AI** - Data never leaves the browser
-- **Electron/Tauri apps** - Desktop AI without a server
-- **PWA applications** - Full offline support with service workers
-
-## ⚠️ Limitations vs REST Backend
-
-The WASM build is optimized for client-side use cases but has some limitations compared to the full REST server.
-
-### Feature Comparison
-
-| Feature | WASM | REST Server |
-|---------|------|-------------|
-| Vector search (NEAR) | ✅ | ✅ |
-| Metadata filtering | ✅ | ✅ |
-| Hybrid search (vector + text) | ✅ | ✅ |
-| Full-text search | ✅ | ✅ |
-| Multi-query fusion (MQG) | ✅ | ✅ |
-| Batch search | ✅ | ✅ |
-| Sparse search | ✅ | ✅ |
-| Knowledge Graph (nodes, edges, traversal) | ✅ | ✅ |
-| Agent Memory (SemanticMemory) | ✅ | ✅ |
-| VelesQL parsing and validation | ✅ | ✅ |
-| VelesQL query execution | ✅ (see carve-outs below) | ✅ |
-| Column projection / aliases / window functions | ✅ | ✅ |
-| Aggregate `ORDER BY` (over a GROUP BY) | ✅ | ✅ |
-| Machine-readable error codes (`VELES-*`) | ✅ | ✅ |
-| `EXPLAIN` (core plan vocabulary) | ✅ | ✅ |
-| JOIN operations | ✅ (INNER, LEFT) | ✅ |
-| Aggregations (GROUP BY / HAVING) | ✅ | ✅ |
-| Set operations (UNION / INTERSECT / EXCEPT) | ✅ | ✅ |
-| MATCH (graph traversal) | ✅ (1–2 hop) | ✅ |
-| Cross-collection MATCH (`@collection`) | ❌ | ✅ |
-| Persistence | IndexedDB | Disk (mmap) |
-| Max vectors | ~100K (browser RAM) | Millions |
-
-### VelesQL (Parser + Execution)
-
-VelesQL parsing, validation, **and execution** are all available in WASM. You can
-parse queries and inspect their AST client-side, and you can run queries against
-a `WasmDatabase` via `executeQuery()`. The single-collection executor supports
-`SELECT` (with `WHERE`, `NEAR`, `similarity()`), **column projection / aliases /
-window functions** (`ROW_NUMBER`/`RANK`/`DENSE_RANK`), `GROUP BY`/`HAVING`,
-aggregations, `ORDER BY` (payload columns, `similarity()`, arithmetic
-expressions, and aggregate ORDER BY over a GROUP BY), a default `LIMIT 10`,
-`UNION`/`INTERSECT`/`EXCEPT`, `INNER`/`LEFT JOIN`,
-`INSERT`/`UPSERT`/`UPDATE`/`DELETE`, DDL, and 1–2 hop `MATCH` graph traversal.
-`EXPLAIN` uses the same plan vocabulary as the REST server (core
-`QueryPlan::to_plan_steps()`), and execution errors carry machine-readable
-`VELES-*` codes.
-
-#### Features that require the REST server (rejected with a descriptive error)
-
-These are **loud rejections**, not silent no-ops — WASM never returns a
-wrong-but-quiet result for an unsupported shape:
-
-- **Cross-collection `MATCH` (`@collection`)** — needs Database-level routing.
-- **`MATCH` traversals beyond 2 hops.**
-- **`RIGHT` / `FULL JOIN`** and **`TRAIN QUANTIZER`.**
-- **`LET` score bindings** — `LET x = ... SELECT ...` is rejected (`LET bindings
-  are not supported in WASM`).
-- **Scalar subqueries** — `WHERE x = (SELECT ...)` is rejected (`Subqueries are
-  not supported in WASM`).
-- **`USING FUSION(strategy='weighted'|'rsf')` on a single-vector `NEAR`** — WASM
-  has no BM25/graph branch to fuse against, so these weight-sensitive strategies
-  are rejected (use `rrf`/`maximum`/`average`, or a metadata filter without
-  `FUSION`). On a multi-vector `NEAR_FUSED` query the strategy is **not**
-  rejected, but only `rrf` / `average` / `maximum` are honored — `weighted` /
-  `rsf` silently fall back to RRF (matching core's `fused_config_to_strategy`).
-- **`ORDER BY similarity(field, $v)`** (a named/secondary vector) — WASM stores
-  only the primary vector, so the named-vector form is rejected on both the
-  `SELECT` and `MATCH` paths. Use `ORDER BY similarity()` (the search score) or a
-  payload column. The `MATCH` path performs no vector scoring, so it additionally
-  rejects bare `similarity()` and arithmetic `ORDER BY` (order by `depth` or
-  `alias.property` instead).
-
-```javascript
-import { VelesQL } from '@wiscale/velesdb-wasm';
-
-// Parse and inspect a query
-const parsed = VelesQL.parse("SELECT * FROM docs WHERE vector NEAR $v LIMIT 10");
-console.log(parsed.tableName);       // "docs"
-console.log(parsed.hasVectorSearch); // true
-console.log(parsed.limit);          // 10
-
-// Validate syntax
-VelesQL.isValid("SELECT * FROM docs");        // true
-VelesQL.isValid("SELEC * FROM docs");         // false
-
-// Parse MATCH (graph) queries
-const match = VelesQL.parse("MATCH (p:Person)-[:KNOWS]->(f:Person) RETURN f.name");
-console.log(match.isMatch);              // true
-console.log(match.matchNodeCount);       // 2
-console.log(match.matchRelationshipCount); // 1
-```
-
-### Knowledge Graph (GraphStore)
-
-Build and traverse in-memory knowledge graphs entirely in the browser:
-
-```javascript
-import { GraphStore, GraphNode, GraphEdge } from '@wiscale/velesdb-wasm';
-
-const graph = new GraphStore();
-
-// Create nodes
-const alice = new GraphNode(1n, "Person");
-alice.set_string_property("name", "Alice");
-const bob = new GraphNode(2n, "Person");
-bob.set_string_property("name", "Bob");
-
-graph.add_node(alice);
-graph.add_node(bob);
-
-// Create edges
-const edge = new GraphEdge(1n, 1n, 2n, "KNOWS");
-graph.add_edge(edge);
-
-// Traverse
-const neighbors = graph.get_neighbors(1n);   // [2n]
-const outgoing = graph.get_outgoing(1n);      // [GraphEdge]
-const bfsResults = graph.bfs_traverse(1n, 3, 100); // BFS up to depth 3
-```
-
-### Agent Memory (SemanticMemory)
-
-Store and retrieve knowledge facts by semantic similarity for AI agent workloads:
-
-```javascript
-import { SemanticMemory } from '@wiscale/velesdb-wasm';
-
-const memory = new SemanticMemory(384);
-
-// Store knowledge with embedding vectors
-memory.store(1n, "Paris is the capital of France", embedding1);
-memory.store(2n, "Berlin is the capital of Germany", embedding2);
-
-// Query by similarity
-const results = memory.query(queryEmbedding, 5);
-// [{id, score, content}, ...]
-
-console.log(memory.len());       // 2
-console.log(memory.dimension()); // 384
-```
-
-### Memory Wedge (MemoryService)
-
-The full local-first agent memory wedge — `remember`/`recall`/`recallWhere`/
-`recallFused`/`relate`/`forget`/`why`/`compileContext` — built on top of
-`SemanticMemory` (above) plus an in-memory graph store, so a fact reached
-only through a typed link (not vector similarity) still surfaces. Unlike
-`@wiscale/velesdb-memory-node` and the Python binding, this wedge's
-compiler surface is `compileContext` alone (no `retrieveContextSource`,
-`contextSavings`, `explainCompilation`, or working-context save/load yet);
-**in-memory only** here (no filesystem access under WASM). Most consumers should use the higher-
-level `MemoryService` re-exported from
-[`@wiscale/velesdb-sdk`](../../sdks/typescript) instead, which wraps this
-class with Promise-returning methods and the SDK's typed error hierarchy.
-
-```javascript
-import init, { MemoryService } from '@wiscale/velesdb-wasm';
-
-await init();
-const memory = new MemoryService(384);
-
-const pr = memory.remember('PR #42 swaps the mutex for parking_lot', [], null);
-const decision = memory.remember(
-  'we chose parking_lot to avoid lock poisoning',
-  [{ target: pr, relation: 'decided_in' }],
-  null
-);
-
-const hits = memory.recall('lock poisoning', 5, null);          // vector recall
-const fused = memory.recallFused('lock poisoning', 5, null, null); // + graph promotion
-const { nodes, edges } = memory.why('why parking_lot', 2, null);   // seed + connected subgraph
-```
-
-Ids are decimal strings; every method is synchronous (no `Promise`) and
-throws a `JsValue` `Error` carrying a `.code` (`INVALID_INPUT` / `NOT_FOUND` /
-`INTERNAL`) on failure.
-
-### Sparse Search (SparseIndex)
-
-Inverted-index search with sparse vectors and RRF hybrid fusion:
-
-```javascript
-import { SparseIndex, hybrid_search_fuse } from '@wiscale/velesdb-wasm';
-
-const index = new SparseIndex();
-
-// Insert sparse vectors (term indices + weights)
-index.insert(1n, new Uint32Array([10, 20, 30]), new Float32Array([1.0, 0.5, 0.3]));
-index.insert(2n, new Uint32Array([10, 40]),     new Float32Array([0.8, 1.2]));
-
-// Search
-const results = index.search(new Uint32Array([10, 20]), new Float32Array([1.0, 1.0]), 5);
-
-// Fuse dense + sparse results with RRF
-const fused = hybrid_search_fuse(denseResults, sparseResults, 60, 10);
-```
-
-### When to Use REST Backend
-
-Consider using the [REST server](https://github.com/cyberlife-coder/VelesDB) if you need:
-
-- **Cross-collection MATCH** - The `@collection` annotation requires Database-level query routing, which is only available on the server (WASM operates on a single collection)
-- **Multi-hop MATCH** - Graph traversals beyond 2 hops (WASM supports 1–2 hop MATCH)
-- **Large datasets** - More than 100K vectors
-- **Server-side processing** - Centralized vector database
-
-### Migration from WASM to REST
-
-```javascript
-// WASM (client-side)
-import { VectorStore } from '@wiscale/velesdb-wasm';
-const store = new VectorStore(768, 'cosine');
-const results = store.search(query, 10);
-
-// REST (server-side) - using fetch
-const response = await fetch('http://localhost:8080/collections/docs/search', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ vector: query, top_k: 10 })
-});
-const results = await response.json();
-
-// REST with VelesQL
-const response = await fetch('http://localhost:8080/query', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    query: "SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10",
-    params: { v: query }
-  })
-});
-```
-
-## Building from Source
-
-```bash
-# Install wasm-pack
-cargo install wasm-pack
-
-# Build for browser
-wasm-pack build --target web
-
-# Build for Node.js
-wasm-pack build --target nodejs
-```
-
-## Performance
-
-Typical latencies on modern browsers:
-
-| Operation | 768D vectors | 10K vectors |
-|-----------|--------------|-------------|
-| Insert | ~1 µs | ~10 ms |
-| Search | ~50 µs | ~5 ms |
+The published package ships its own TypeScript declarations
+(`node_modules/@wiscale/velesdb-wasm/velesdb_wasm.d.ts`); that file is the
+authoritative signature list and your editor will use it automatically. This
+crate is not on docs.rs, so the narrative documentation lives here:
+
+| Guide | Contents |
+|---|---|
+| [JavaScript API](../../docs/guides/WASM_API.md) | `VectorStore` (construction, metrics, insert paths, the search family, payload filters, storage modes), `GraphStore`, `MemoryService`, `SparseIndex`, `WasmDatabase`, and the BigInt/number marshalling rules. |
+| [Persistence and binary format](../../docs/guides/WASM_PERSISTENCE.md) | IndexedDB `save`/`load`/`delete_database`, byte-level export/import, the `VELS` v2 format, graph persistence, performance figures and how to reproduce them. |
+| [VelesQL in the browser](../../docs/guides/WASM_VELESQL.md) | Parsing, `executeQuery`, `EXPLAIN`, the full WASM-vs-REST feature matrix, every rejected shape with its exact error message, and how to migrate a query to the REST server. |
+| [Bundle size optimization](../../docs/wasm/bundle-optimization.md) | Keeping the `.wasm` payload small. |
+
+Hybrid (dense + sparse) search runs in the browser too: `hybrid_search()` on
+`VectorStore` combines a dense vector query with a sparse one and fuses the
+two result sets with RRF, and `search_sparse()` runs the sparse side alone.
+Signatures and the fusion parameters are in
+[JavaScript API](../../docs/guides/WASM_API.md).
+
+One rule to internalize before writing any code: **ids go in as `BigInt`
+(`1n`) and come back from `search()` as plain numbers**. The input side is a
+`wasm-bindgen` `u64` parameter; the output side goes through
+`serde-wasm-bindgen`, which emits `u64` as a JS number by default. Keep ids
+below `Number.MAX_SAFE_INTEGER`.
+
+## Known limits
+
+- **Brute-force search only.** There is no HNSW graph in the WASM build; search
+  is O(n) over every vector. `search_with_quality()` accepts the same quality
+  strings as the Python and Server SDKs, but all modes return identical
+  results — the parameter exists for API parity.
+- **~100 K vectors is the practical ceiling**, set by browser RAM. Beyond that,
+  move to the REST server.
+- **Single collection per query.** Cross-collection `MATCH` (`@collection`)
+  needs Database-level routing and is server-only. `MATCH` is limited to 1–2
+  hops.
+- **No filesystem.** The agent-memory wedge (`MemoryService`) is in-memory
+  only; nothing persists unless you persist it yourself.
+- **No quantizer training.** `TRAIN QUANTIZER`, Product Quantization and RaBitQ
+  need `rayon`/`ndarray`/`persistence`, which are compiled out for
+  `wasm32-unknown-unknown`. `sq8` and `binary` storage modes still work.
+- **`SemanticMemory.query()` is broken in 4.0.0** — it throws
+  `Invalid search results` on every call (`src/agent.rs` calls `as_string()` on
+  an array-valued `JsValue`). Use `MemoryService`, or a `VectorStore` with
+  `insert_with_payload` + `search_with_filter`.
+- **Errors are not uniformly structured.** Some paths throw a real `Error` with
+  a machine-readable `code` (`VELES-004` on a dimension mismatch); others still
+  throw a bare string. Always coerce with `String(e)` before displaying.
+
+The full list of rejected VelesQL shapes, with their exact messages, is in the
+[VelesQL guide](../../docs/guides/WASM_VELESQL.md#what-is-rejected-and-how).
+
+## Compatibility
+
+| Environment | Status | Note |
+|---|---|---|
+| Chromium browsers (Chrome, Edge, Brave, Arc) | Supported | Primary target. |
+| Firefox | Supported | |
+| Safari / iOS WebKit | Supported | Needs a version with WebAssembly SIMD; older WebKit may reject the binary. |
+| Electron / Tauri | Supported | Same engine as the browser target. |
+| Node.js 20+ | Supported with one adjustment | The `--target web` build resolves the `.wasm` via `fetch`, which has no `file://` support. Pass the bytes yourself — see [Loading the module](../../docs/guides/WASM_API.md#loading-the-module) — or build with `--target nodejs`. Verified on Node 26.3.0. |
+| Vite / webpack / Rollup | Supported | The React example uses `vite-plugin-wasm` + top-level-await; see [`examples/react-wasm-search/vite.config.ts`](../../examples/react-wasm-search/vite.config.ts). |
+| Web Worker | Supported | Import and `init()` inside the worker; a `VectorStore` cannot be transferred across the worker boundary. |
+| Deno / Bun | Untested | No CI coverage. |
+
+The release profile runs `wasm-opt` with `--enable-simd`,
+`--enable-bulk-memory` and `--enable-nontrapping-float-to-int`
+(`Cargo.toml`, `[package.metadata.wasm-pack.profile.release]`), so the emitted
+binary can use those WebAssembly features. Any engine predating them will fail
+to instantiate the module.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `TypeError: Failed to fetch` / CORS error on `init()` | The page was opened as `file://`. | Serve over HTTP: `python3 -m http.server 8080`. |
+| `null pointer passed to rust` or `undefined is not a function` on the first call | A class was constructed before `await init()` resolved. | Await `init()` first; in a bundler, enable top-level await or wrap the app entry in an async bootstrap. |
+| `Error: [VELES-004] Vector dimension mismatch: expected N, got M` | The query length differs from `store.dimension`. | Embed the query with the same model and dimension used at index time. |
+| `Unknown metric. Use: cosine, euclidean, l2, dot, dotproduct, inner, ip, hamming, jaccard` | Unsupported metric string in the constructor. | Use one of the listed names; they are case-insensitive. |
+| `Invalid data: wrong magic number` on `import_from_bytes` | The buffer is not a `VELS` export (truncated, or another format). | Re-export from a `VectorStore`; see the [binary format](../../docs/guides/WASM_PERSISTENCE.md#binary-format-vels-v2). |
+| `Invalid search results` | `SemanticMemory.query()` — a known 4.0.0 defect. | Use `MemoryService` instead. |
+| Console warning about `application/wasm` MIME type | The static server does not label `.wasm`. | Harmless: the loader falls back to `WebAssembly.instantiate`. Configure the MIME type to keep `WebAssembly.instantiateStreaming` on the fast path. |
 
 ## License
 
-Licensed under the [VelesDB Core License 1.0](LICENSE) (source-available). `velesdb-wasm` compiles the VelesDB engine to WebAssembly, so the published artifact embeds the engine and is governed by the Core License.
+Licensed under the [VelesDB Core License 1.0](LICENSE) (source-available).
+`velesdb-wasm` compiles the VelesDB engine to WebAssembly, so the published
+artifact embeds the engine and is governed by the Core License.
+
+---
+
+`velesdb-wasm v4.1.0` · Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)

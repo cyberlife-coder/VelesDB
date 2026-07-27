@@ -1,0 +1,94 @@
+# velesdb.toml — engine configuration for velesdb-mobile.
+#
+# There is no mobile-specific config format: this is the same file the server
+# and the CLI read, minus the sections that belong to them. Only the ENGINE
+# sections below are considered — [search], [hnsw], [storage], [limits],
+# [quantization], [wal_batch]. A [server] or [logging] table sitting in the
+# same shared file is dropped, not rejected.
+#
+# Two ways to load it:
+#
+#   Swift
+#     let db = try VelesDatabase.openWithConfig(path: dbPath, configPath: tomlPath)
+#     let db = try VelesDatabase.openWithConfigToml(path: dbPath, configToml: tomlString)
+#
+#   Kotlin
+#     val db = VelesDatabase.openWithConfig(dbPath, tomlPath)
+#     val db = VelesDatabase.openWithConfigToml(dbPath, tomlString)
+#
+# On mobile, prefer `openWithConfigToml`: shipping the file as a bundled asset
+# or fetching it from remote config avoids having to materialise a real path on
+# a sandboxed filesystem.
+#
+# Both fail fast — a missing, unreadable, unparsable or out-of-range file makes
+# the open call throw (`VELES-009`). Neither ever falls back to defaults
+# silently. `openWithConfig` additionally layers VELESDB_* environment
+# variables on top of the file; `openWithConfigToml` does not.
+#
+# Every value below is the engine default unless commented otherwise, so this
+# file is safe to start from and trim.
+
+[search]
+# fast | balanced | accurate | perfect
+#   fast      ef_search 96,   ~95% recall
+#   balanced  ef_search 160,  ~99.5% recall — the default
+#   accurate  ef_search 512,  ~100% recall
+#   perfect   exhaustive brute force, 100% by construction, O(n)
+default_mode = "balanced"
+
+# Hard cap on results per query.
+max_results = 1000
+
+# Query timeout in milliseconds. Lower this on mobile: a 30 s blocking call on
+# a background dispatcher still holds a thread for 30 s.
+query_timeout_ms = 30000
+
+[hnsw]
+# Maximum number of layers; 0 means "derive it from the collection".
+max_layers = 0
+# m and ef_construction are auto-tuned from the collection dimension when
+# omitted. Uncomment to pin them:
+#   m = 32
+#   ef_construction = 400
+
+[storage]
+# "mmap" or "memory". mmap keeps the resident set small, which is what you
+# want on a phone; "memory" trades RAM for latency.
+storage_mode = "mmap"
+
+# Mmap cache in megabytes. 1024 is the desktop default and is far too generous
+# for a phone — 128 or 256 is a more realistic starting point.
+mmap_cache_mb = 256
+
+# Vector alignment in bytes; 64 matches the cache line on ARM64 and x86_64.
+vector_alignment = 64
+
+[limits]
+# Guard rails. The mobile binding can also raise or lower the per-query limits
+# at runtime through `updateGuardrails(limits:)` with a MobileQueryLimits
+# record — that is the knob to reach for when the values need to follow
+# device class or battery state.
+max_dimensions = 4096
+max_vectors_per_collection = 100000000
+max_collections = 1000
+max_payload_size = 1048576
+max_perfect_mode_vectors = 500000
+
+[quantization]
+# Quantization is chosen per collection at creation time through
+# `createCollectionWithStorage(name:dimension:metric:storageMode:)`:
+#   .full   4 bytes/dimension, best recall
+#   .sq8    4x compression, ~1% recall loss — the mobile sweet spot
+#   .binary 32x compression, ~5-10% recall loss, for IoT/edge
+# This section tunes what happens around that choice.
+rerank_enabled = true
+rerank_multiplier = 2
+auto_quantization = true
+auto_quantization_threshold = 10000
+
+[wal_batch]
+# Group commit. Off by default: it trades durability latency for throughput,
+# which rarely pays on a device that can be killed by the OS at any moment.
+enabled = false
+commit_delay_us = 100
+max_batch_size = 128

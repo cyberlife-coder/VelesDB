@@ -1,6 +1,6 @@
 # VelesDB Frequently Asked Questions
 
-**Last Updated**: 2026-06-12
+Last updated: 2026-06-12 · Applies to: velesdb-core 4.1.0
 
 ---
 

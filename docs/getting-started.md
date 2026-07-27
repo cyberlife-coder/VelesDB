@@ -299,3 +299,6 @@ curl -X POST http://localhost:8080/query \
 - **Discord**: Join our community for real-time support
 - **GitHub Issues**: Report bugs or request features
 - **GitHub Discussions**: Ask questions and share ideas
+
+---
+Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0

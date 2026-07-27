@@ -235,9 +235,15 @@ jobs:
       - name: Audit performance claims consistency
         run: python3 scripts/check-perf-claims.py --no-criterion
 
+      # Both crates pull their own README into the crate docs with
+      # `#![doc = include_str!("../README.md")]`, so this step also type-checks
+      # every ```rust block in crates/velesdb-core/README.md and
+      # crates/velesdb-server/README.md. A README snippet that stops matching
+      # the API fails here instead of rotting unnoticed.
       - name: Check doctests compile
         run: |
           cargo test --doc --package velesdb-core
+          cargo test --doc --package velesdb-server
         continue-on-error: false  # EPIC-080: Doctests fixes completed
 
   # ===========================================================================

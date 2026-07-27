@@ -1,0 +1,13 @@
+{
+  "name": "velesdb-wasm-examples",
+  "version": "4.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable browser and Node examples for @wiscale/velesdb-wasm",
+  "scripts": {
+    "serve": "python3 -m http.server 8080"
+  },
+  "dependencies": {
+    "@wiscale/velesdb-wasm": "4.0.0"
+  }
+}

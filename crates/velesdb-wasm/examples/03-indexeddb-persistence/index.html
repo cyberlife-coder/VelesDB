@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VelesDB WASM — IndexedDB persistence</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 48rem; }
+    pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 4px; }
+    button { font: inherit; padding: 0.4rem 0.8rem; margin-right: 0.5rem; }
+    .expected { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>VelesDB WASM — surviving a reload</h1>
+  <p>An index built in the tab is gone on refresh unless you persist it.
+     <code>save()</code> writes it to IndexedDB, <code>VectorStore.load()</code>
+     reads it back. The same bytes are available synchronously through
+     <code>export_to_bytes()</code> if you would rather store them yourself
+     (a file, an <code>&lt;input type="file"&gt;</code>, your own backend).</p>
+
+  <p>
+    <button id="run">Build and save</button>
+    <button id="reload">Reload the page</button>
+    <button id="wipe">Delete the IndexedDB database</button>
+  </p>
+
+  <h2>Output</h2>
+  <pre id="out">loading…</pre>
+
+  <h2 class="expected">How to actually test persistence</h2>
+  <ol class="expected">
+    <li>Load the page: it reports <em>no saved index</em> and builds one.</li>
+    <li>Press <strong>Reload the page</strong>: it now loads 4 vectors back from
+        IndexedDB without re-inserting anything.</li>
+    <li>Press <strong>Delete the IndexedDB database</strong>, then reload: you
+        are back to step 1.</li>
+  </ol>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

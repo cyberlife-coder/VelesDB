@@ -22,7 +22,21 @@
 #![allow(clippy::needless_pass_by_value)] // Axum extractors consume by value
 #![allow(clippy::redundant_closure_for_method_calls)] // readability in map chains
 #![allow(clippy::single_match_else)] // pattern matching in handlers is clearer
-#![allow(clippy::assigning_clones)] // minor optimisation, not performance-critical
+#![allow(clippy::assigning_clones)]
+// minor optimisation, not performance-critical
+// The crate README is pulled into the crate documentation verbatim, so that
+// `cargo test --doc --package velesdb-server` type-checks every ```rust block it
+// contains. Today `README.md` only holds `bash`, `json` and `toml` blocks, which
+// rustdoc never compiles; the include is what makes any future Rust snippet
+// checked by the compiler instead of drifting away from the API unnoticed.
+// Blocks that must not be compiled or executed have to carry an explicit
+// rustdoc attribute in the README (`rust,no_run`, `rust,ignore`).
+#![doc = include_str!("../README.md")]
+//!
+//! ---
+//!
+//! # Crate-level notes
+//!
 //! `VelesDB` Server - REST API library for the `VelesDB` vector database.
 //!
 //! This module provides the HTTP handlers and types for the `VelesDB` REST API.

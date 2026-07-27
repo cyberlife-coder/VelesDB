@@ -70,7 +70,7 @@ for MATCH" above), then add the edge (#1442).
 > read-only by default and only mutates the database when you pass
 > `--purge` (remove the phantom edges) or `--stub` (seed a minimal `{}`
 > payload for each missing endpoint). See the
-> [CLI reference](../../crates/velesdb-cli/README.md#graph) and
+> [CLI reference](CLI_COMMAND_REFERENCE.md#graph) and
 > [issue #1469](https://github.com/cyberlife-coder/VelesDB/issues/1469).
 
 ```bash
