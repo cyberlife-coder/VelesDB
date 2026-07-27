@@ -40,9 +40,10 @@ mod context_tools;
 mod dto;
 mod wire;
 use dto::{
-    ExplanationDto, FeedbackParams, FeedbackResult, ForgetParams, ForgetResult, RecallFusedParams,
-    RecallFusedResult, RecallParams, RecallResult, RecallWhereParams, RelateParams, RelateResult,
-    RememberExtractedParams, RememberExtractedResult, RememberParams, RememberResult, WhyParams,
+    EntityParams, EntityProfileDto, ExplanationDto, FeedbackParams, FeedbackResult, ForgetParams,
+    ForgetResult, RecallFusedParams, RecallFusedResult, RecallParams, RecallResult,
+    RecallWhereParams, RelateParams, RelateResult, RememberExtractedParams,
+    RememberExtractedResult, RememberParams, RememberResult, WhyParams,
 };
 
 /// Advertised-schema counterpart of [`crate::model::deserialize_id`]: `keys`
@@ -372,6 +373,27 @@ impl McpServer {
             id_str: id.to_string(),
             found,
         }))
+    }
+
+    #[tool(
+        name = "entity",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = crate::schema::wire_safe_output_schema::<EntityProfileDto>(),
+        description = "Look up everything the memory graph knows about a NAMED ENTITY (a person, a place, an organisation): the attributes it carries and the typed edges leaving it. Use this for questions ABOUT a thing rather than about a sentence — \"how old is Axel\", \"who is Axel's father\", \"where does he live\" — where `recall` would only return sentences that happen to mention the name. Entities and their edges are built automatically by `remember_extracted`, which reads relationships (`X is the father of Y`) and properties (`Y is 15`) out of plain text; attributes land in ColumnStore metadata with their JSON type preserved, so a number stays a number. The name is matched case-insensitively, so `\"Axel Lange\"` and `\"axel lange\"` are the same entity — the id is content-addressed, so it is stable across sessions. Returns `found: false` when nothing has ever mentioned that name. Ids exceed 2^53 — always relay them as strings (`id_str`)."
+    )]
+    async fn entity(
+        &self,
+        Parameters(params): Parameters<EntityParams>,
+    ) -> Result<Json<EntityProfileDto>, ErrorData> {
+        let service = Arc::clone(&self.service);
+        let EntityParams { name } = params;
+        let profile = tokio::task::spawn_blocking(move || service.entity_profile(&name))
+            .await
+            .map_err(join_error)?
+            .map_err(to_error)?;
+        Ok(Json(EntityProfileDto::from(profile)))
     }
 
     #[tool(

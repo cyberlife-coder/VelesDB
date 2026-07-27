@@ -239,6 +239,34 @@ pub struct MemoryEdge {
     pub relation: String,
 }
 
+/// One typed edge leaving an entity, as reported by
+/// [`MemoryService::entity_profile`](crate::service::MemoryService::entity_profile).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub struct EntityRelation {
+    /// The edge label the passage stated (e.g. `"pere de"`, `"soeur de"`).
+    pub predicate: String,
+    /// Stable id of the entity (or fact) on the far end.
+    pub target_id: u64,
+    /// Stored content of the far end — for an entity hub, `Entity: <name>`.
+    pub target: String,
+}
+
+/// Everything the auto-built graph knows about one named entity: the
+/// attributes merged onto its hub and the typed edges leaving it.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub struct EntityProfile {
+    /// Stable, content-addressed id of the entity hub.
+    pub id: u64,
+    /// Canonical (trimmed, lowercased) entity name.
+    pub name: String,
+    /// Attributes learned about this entity, reserved keys stripped.
+    pub attributes: crate::service::Metadata,
+    /// Typed edges leaving this entity (bipartite `mentions` edges excluded).
+    pub relations: Vec<EntityRelation>,
+}
+
 /// The connected answer to a `why` question: the best-matching seed memory plus
 /// everything reachable from it within a hop budget. This connected subgraph is
 /// the differentiator — it surfaces related memories a purely vector recall is
