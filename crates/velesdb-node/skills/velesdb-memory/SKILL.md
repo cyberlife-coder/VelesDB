@@ -3,11 +3,15 @@ name: velesdb-memory
 description: >
   Use durable, explainable, self-improving memory across a coding session via the
   velesdb-memory MCP server. Trigger whenever the velesdb-memory MCP tools
-  (remember/recall/recall_fused/relate/why/feedback/forget) are available and the
+  (remember/recall/recall_fused/relate/why/feedback/forget/remember_extracted/entity)
+  are available and the
   work would benefit from remembering decisions, recalling prior context, or
   answering "why did we do X". Use it at the START of a task (recall what's known),
   when a decision or durable fact emerges (remember + relate it), when asked why
   something is the way it is (why), and after using a recalled memory (feedback).
+  Use remember_extracted when a passage states relationships or properties of
+  named people/places/things, and entity(name) to answer a question ABOUT such a
+  thing rather than about the sentences that mention it.
   Especially relevant for: multi-session projects, architecture/config decisions,
   incident postmortems, "why is this value/setting like this", onboarding to an
   unfamiliar codebase, and any place a fact learned now must survive to a later
@@ -122,6 +126,50 @@ Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB
    improves without any retraining. Give feedback on the memory you actually
    used, not on everything.
 
+## Entities: let the graph build itself
+
+Steps 2 and 3 build the graph by hand, one `relate` at a time. That is the right
+tool for a *decision* graph, where you choose the edges deliberately. It is the
+wrong tool for facts about **people, places, organisations and things**, where
+the edges are simply what the sentence already says.
+
+`remember_extracted(text)` reads a passage and stores three things at once: the
+atomic facts, the typed edges **between named entities**, and the **attributes**
+those entities carry. Say it in plain language and the graph assembles itself:
+
+> "Julien Lange est le père d'Axel Lange. Axel Lange a 15 ans.
+>  Axel Lange a une sœur, Léa Lange."
+
+produces `julien lange -[père de]-> axel lange`, an `age: 15` attribute on Axel,
+and a brand-new `léa lange` node wired by `sœur de`. No `relate` calls.
+
+**Entity names resolve across calls and across sessions.** An entity's id is
+content-addressed from its (lowercased) name, so "Axel Lange" in today's
+sentence and "axel lange" in next month's land on the *same* node. Attributes
+accumulate onto it — learning the sister does not erase the age.
+
+**Read entities with `entity(name)`, not `recall`.** This matters and is easy to
+get wrong. Entity nodes are deliberately invisible to `recall` and
+`recall_where`: a node called `Entity: axel lange` would rank for its own name
+and evict a real fact from your results. So:
+
+- *"What does the memory say about Axel?"* → `entity("Axel Lange")` — returns his
+  attributes and every typed edge leaving him.
+- *"Which notes mention Axel?"* → `recall("Axel Lange")` — returns sentences.
+
+Use `entity` for questions **about a thing**, `recall` for questions **about what
+was written**. `found: false` means nothing has ever mentioned that name.
+
+**Numbers must stay numbers.** Attributes keep the JSON type the extractor
+produced, and `recall_where`'s comparisons are type-strict with no coercion. An
+age stored as `"15"` will never match `age >= 15` — no error, just silence. This
+is the same trap as the date field in step 2, and it is the single most common
+way a memory system looks like it is working while returning nothing.
+
+`remember_extracted` needs an extraction backend
+(`[extractor] backend = "ollama"`); without one the tool reports itself as
+unconfigured rather than silently storing less.
+
 ## Concrete scenarios
 
 **Incident → decision → later "why?"** — the flagship case.
@@ -172,8 +220,32 @@ launched with:
   `--features ollama`, a running Ollama, and `ollama pull all-minilm`; set
   `VELESDB_MEMORY_EMBEDDER=ollama`.
 
-Set a stable store location with `VELESDB_MEMORY_PATH` (e.g. `~/.velesdb-memory`) so
-memory persists in one place across sessions. Optionally set
-`VELESDB_MEMORY_DEFAULT_TTL` (seconds) to auto-expire facts you only want short-term.
+### Configure it in a file, not in a plist
+
+Every setting can live in **`velesdb-memory.toml`**, looked for next to the store
+(`~/.velesdb-memory/velesdb-memory.toml`), or named explicitly with `--config` /
+`VELESDB_MEMORY_CONFIG`:
+
+```toml
+path = "~/.velesdb-memory"     # where memory lives; keep it stable across sessions
+default_ttl = 0                # seconds; 0 = permanent
+
+[embedder]
+backend = "ollama"             # `hash` is lexical, not semantic — see above
+model = "bge-m3"
+
+[extractor]
+backend = "ollama"             # required for remember_extracted / entities
+model = "qwen3.6:35b-mlx"
+```
+
+Precedence is **command line > environment > file > default**, so a value pinned
+in the file can still be overridden for one run
+(`VELESDB_MEMORY_EMBEDDER=hash velesdb-memory`). Every setting also remains
+available as a `VELESDB_MEMORY_*` variable — the file changes nothing about how
+they are read.
+
+An unknown key is a startup error, not a warning: a typo that was silently
+ignored would leave you convinced you had configured something you had not.
 
 The store never leaves the machine — memory is local by design.
