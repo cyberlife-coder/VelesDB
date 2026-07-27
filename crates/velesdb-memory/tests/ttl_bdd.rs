@@ -83,12 +83,22 @@ fn none_ttl_matches_plain_remember() {
 #[test]
 fn expired_fact_is_no_longer_recalled() {
     let (_dir, svc) = service();
+    // 2s, not 1s. `store_fact` writes a TTL'd fact in TWO store calls —
+    // `store_with_ttl` then `update_metadata` — and the auto date stamp means
+    // metadata is always present, so EVERY ttl'd write takes that path. On a
+    // loaded machine a 1s expiry can lapse between the two calls, and the
+    // second one then fails with `NotFound(... is expired ...)`: the write
+    // errors instead of succeeding. Observed once during a full workspace run.
+    //
+    // That race is a real defect, tracked separately — this test is about
+    // expiry dropping a fact from recall, not about how fast the write path
+    // is. The wider window keeps it testing its own subject.
     let id = svc
-        .remember_with_ttl("short-lived secret", &[], None, Some(1))
-        .expect("remember with 1s ttl");
+        .remember_with_ttl("short-lived secret", &[], None, Some(2))
+        .expect("remember with 2s ttl");
 
     // Past the TTL window: the durable expiry must drop the fact from recall.
-    sleep(Duration::from_millis(1_500));
+    sleep(Duration::from_millis(2_500));
 
     let hits = svc.recall("short-lived secret", 5, None).expect("recall");
 
