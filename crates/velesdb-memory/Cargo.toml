@@ -234,6 +234,11 @@ name = "http_insecure_process"
 path = "tests/http_insecure_process.rs"
 required-features = ["http"]
 
+[[test]]
+name = "config_store_path_process"
+path = "tests/config_store_path_process.rs"
+required-features = ["http"]
+
 [[example]]
 name = "multihop"
 path = "examples/multihop/main.rs"
