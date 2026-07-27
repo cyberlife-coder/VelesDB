@@ -137,6 +137,12 @@ crate is not on docs.rs, so the narrative documentation lives here:
 | [VelesQL in the browser](../../docs/guides/WASM_VELESQL.md) | Parsing, `executeQuery`, `EXPLAIN`, the full WASM-vs-REST feature matrix, every rejected shape with its exact error message, and how to migrate a query to the REST server. |
 | [Bundle size optimization](../../docs/wasm/bundle-optimization.md) | Keeping the `.wasm` payload small. |
 
+Hybrid (dense + sparse) search runs in the browser too: `hybrid_search()` on
+`VectorStore` combines a dense vector query with a sparse one and fuses the
+two result sets with RRF, and `search_sparse()` runs the sparse side alone.
+Signatures and the fusion parameters are in
+[JavaScript API](../../docs/guides/WASM_API.md).
+
 One rule to internalize before writing any code: **ids go in as `BigInt`
 (`1n`) and come back from `search()` as plain numbers**. The input side is a
 `wasm-bindgen` `u64` parameter; the output side goes through
@@ -199,7 +205,7 @@ to instantiate the module.
 | `Unknown metric. Use: cosine, euclidean, l2, dot, dotproduct, inner, ip, hamming, jaccard` | Unsupported metric string in the constructor. | Use one of the listed names; they are case-insensitive. |
 | `Invalid data: wrong magic number` on `import_from_bytes` | The buffer is not a `VELS` export (truncated, or another format). | Re-export from a `VectorStore`; see the [binary format](../../docs/guides/WASM_PERSISTENCE.md#binary-format-vels-v2). |
 | `Invalid search results` | `SemanticMemory.query()` — a known 4.0.0 defect. | Use `MemoryService` instead. |
-| Console warning about `application/wasm` MIME type | The static server does not label `.wasm`. | Harmless: the loader falls back to `WebAssembly.instantiate`. Configure the MIME type to keep streaming compilation. |
+| Console warning about `application/wasm` MIME type | The static server does not label `.wasm`. | Harmless: the loader falls back to `WebAssembly.instantiate`. Configure the MIME type to keep `WebAssembly.instantiateStreaming` on the fast path. |
 
 ## License
 
