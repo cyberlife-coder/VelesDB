@@ -72,6 +72,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let original_parent = std::os::unix::process::parent_id();
     #[cfg(not(unix))]
     let original_parent = 0_u32;
+    // Loaded BEFORE the first variable is read, because the file can set any
+    // of them — including the store path just below. Everything downstream
+    // keeps reading the environment exactly as it always did; the file only
+    // fills in what the environment left unset, which is what makes the
+    // precedence `command line > environment > file > default`.
+    apply_config_file(&args)?;
+
     let store_path = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
 
     // Decided here, ahead of the (possibly seconds-long) embedder probe and
@@ -417,6 +424,39 @@ fn open_store_with_actionable_lock_error(
 /// is launched by its client with an unpredictable working directory, so a
 /// cwd-relative default would scatter (or lose) the store between sessions. Falls
 /// back to a cwd-relative path only when no home directory can be resolved.
+/// Locate and apply the optional `velesdb-memory.toml`.
+///
+/// The lookup uses the DEFAULT store directory, never the configured one:
+/// the store path is itself one of the settings the file may carry, so
+/// resolving the file through it would be circular.
+///
+/// A missing file is normal and silent. A file that exists but does not parse
+/// aborts startup — a daemon quietly running on defaults the operator believes
+/// they overrode is a worse outcome than a loud failure at boot.
+fn apply_config_file(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let explicit = args
+        .iter()
+        .position(|arg| arg == "--config")
+        .and_then(|at| args.get(at + 1))
+        .map(String::as_str);
+    let default_dir = default_store_path();
+    let Some(path) =
+        velesdb_memory::config::resolve_path(explicit, Some(std::path::Path::new(&default_dir)))
+    else {
+        return Ok(());
+    };
+    let loaded = velesdb_memory::config::load(&path)?;
+    let applied = velesdb_memory::config::apply(&loaded.values);
+    if !applied.is_empty() && std::env::var_os("VELESDB_MEMORY_QUIET").is_none() {
+        eprintln!(
+            "velesdb-memory: {} setting(s) from {}",
+            applied.len(),
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 fn default_store_path() -> String {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))

@@ -30,6 +30,11 @@
 /// context compiler, which stays clock-free and deterministic. Internal:
 /// nothing outside the crate needs to read the clock directly.
 mod clock;
+/// The optional TOML configuration file: one place to set every knob, with
+/// `command line > environment > file > default` precedence. Native-only —
+/// it reads the filesystem.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod config;
 /// The deterministic context compiler (EPIC-P-070): classify, dedup, and pack
 /// caller-supplied context fragments under a token budget — no LLM, no cloud,
 /// every decision auditable. Gated behind the default `context` feature.
