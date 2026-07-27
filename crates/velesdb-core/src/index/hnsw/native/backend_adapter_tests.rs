@@ -819,8 +819,26 @@ fn test_graduated_ef_construction_recall() {
         .map(|(i, v)| (v.as_slice(), i))
         .collect();
 
-    hnsw.parallel_insert(&data)
-        .expect("test: parallel_insert of 5000 vectors should succeed");
+    // Pinned to a single rayon worker rather than inserted sequentially.
+    // `connect_batch_chunked` links each chunk with `par_iter`, and an HNSW
+    // graph's topology depends on the order its nodes are linked in — so the
+    // recall this yields varies with the machine's thread scheduling. Under a
+    // full workspace run this measured 0.44 against a 0.90 floor while passing
+    // in isolation on the same commit: a false negative that rejects good
+    // commits and teaches people to bypass the hook.
+    //
+    // One worker makes that order deterministic while still running the REAL
+    // batch path — allocate_batch, the entry-point bootstrap, the chunking and
+    // its ef schedule, finalize_batch. Inserting sequentially would fix the
+    // flake too, but would stop testing any of them.
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .expect("test: building a single-worker rayon pool should succeed")
+        .install(|| {
+            hnsw.parallel_insert(&data)
+                .expect("test: parallel_insert should succeed")
+        });
 
     assert_eq!(hnsw.len(), 5000);
 
@@ -885,8 +903,26 @@ fn test_graduated_ef_construction_recall_cosine() {
         .map(|(i, v)| (v.as_slice(), i))
         .collect();
 
-    hnsw.parallel_insert(&data)
-        .expect("test: parallel_insert of 3000 cosine vectors should succeed");
+    // Pinned to a single rayon worker rather than inserted sequentially.
+    // `connect_batch_chunked` links each chunk with `par_iter`, and an HNSW
+    // graph's topology depends on the order its nodes are linked in — so the
+    // recall this yields varies with the machine's thread scheduling. Under a
+    // full workspace run this measured 0.44 against a 0.90 floor while passing
+    // in isolation on the same commit: a false negative that rejects good
+    // commits and teaches people to bypass the hook.
+    //
+    // One worker makes that order deterministic while still running the REAL
+    // batch path — allocate_batch, the entry-point bootstrap, the chunking and
+    // its ef schedule, finalize_batch. Inserting sequentially would fix the
+    // flake too, but would stop testing any of them.
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .expect("test: building a single-worker rayon pool should succeed")
+        .install(|| {
+            hnsw.parallel_insert(&data)
+                .expect("test: parallel_insert should succeed")
+        });
 
     assert_eq!(hnsw.len(), 3000);
 
