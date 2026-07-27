@@ -507,7 +507,7 @@ matching checksum next to it.
 
 **This path only becomes active from the first release published after the
 change.** `release-memory.yml`'s `build-daemon-archive` job produces these
-archives, but the `velesdb-memory-v0.11.1` release (and everything before it)
+archives, but the `velesdb-memory-v0.11.2` release (and everything before it)
 predates it and carries no such asset, so `--from-release` against `v0.11.0`
 fails with a clear 404-explaining message rather than a bare `curl` /
 `Invoke-WebRequest` error. This is a **different artifact** than the `.mcpb`
@@ -568,4 +568,4 @@ pass it to `MemoryService::remember_extracted` from Rust.
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-memory 0.11.1
+Last updated: 2026-07-25 · Applies to: velesdb-memory 0.11.2

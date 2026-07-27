@@ -136,7 +136,7 @@ results = collection.search_request(velesdb.SearchOptions(vector=query_vector, t
 ```toml
 # Cargo.toml
 [dependencies]
-velesdb-core = "4.0.0"
+velesdb-core = "4.1.0"
 ```
 
 ### As CLI Tools

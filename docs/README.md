@@ -139,6 +139,34 @@ Each crate has its own README with specific documentation:
 
 ---
 
+## 🔬 Design, Internals & Reference
+
+Background documents: how the engine is built, what it guarantees, and where
+the remaining debt is. Read these when you need the *why* behind a behaviour.
+
+| Document | Description |
+|----------|-------------|
+| [Architecture](./ARCHITECTURE.md) | How the engine is put together, layer by layer. |
+| [Concurrency model](./CONCURRENCY_MODEL.md) | Which operations run in parallel, and the locks that make that safe. |
+| [Storage format](./STORAGE_FORMAT.md) | The on-disk layout and its compatibility rules. |
+| [Soundness](./SOUNDNESS.md) | The invariants the engine relies on, and why they hold. |
+| [Fuzzing](./FUZZING.md) | The fuzz targets and how to run them locally. |
+| [GPU acceleration](./GPU_ACCELERATION.md) | What the `gpu` feature accelerates, and what it does not. |
+| [ANN state-of-the-art audit](./ANN_SOTA_AUDIT.md) | How the index compares to published ANN work. |
+| [Core wiring debt](./CORE_WIRING_DEBT.md) | Known gaps between what core exposes and what the surfaces use. |
+
+---
+
+## 📄 Project & Licensing
+
+| Document | Description |
+|----------|-------------|
+| [FAQ](./FAQ.md) | The questions newcomers actually ask. |
+| [Licensing](./LICENSING.md) | The VelesDB Core License, in practical terms. |
+| [Business model](./BUSINESS_MODEL.md) | What is open, what is premium, and why the line sits there. |
+
+---
+
 ## 🔗 External Resources
 
 - [GitHub Repository](https://github.com/cyberlife-coder/VelesDB)
