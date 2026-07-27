@@ -379,3 +379,32 @@ async fn session_beyond_the_configured_cap_is_refused() {
     drop(first_client);
     shutdown(server).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn audit_shared_session_concurrent_calls_are_bounded() {
+    let server = spawn_http_server().await;
+    let client = std::sync::Arc::new(connect(server.addr).await);
+    let mut tasks = tokio::task::JoinSet::new();
+    for i in 0..20 {
+        let client = std::sync::Arc::clone(&client);
+        tasks.spawn(
+            async move { remember(&client, &format!("shared-session audit fact {i}")).await },
+        );
+    }
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut ids = std::collections::HashSet::new();
+        while let Some(result) = tasks.join_next().await {
+            let id = result.expect("shared-session task must not panic");
+            assert!(ids.insert(id), "shared-session ids must be unique");
+        }
+        assert_eq!(ids.len(), 20);
+    })
+    .await
+    .expect("shared-session concurrent calls exceeded five seconds");
+
+    drop(client);
+    tokio::time::timeout(std::time::Duration::from_secs(5), shutdown(server))
+        .await
+        .expect("shared-session server shutdown exceeded five seconds");
+}
