@@ -51,7 +51,7 @@ jobs:
           - examples/node-express-rag
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
       - name: Audit ${{ matrix.path }}
