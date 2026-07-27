@@ -59,4 +59,4 @@ already-published exposure (and any yank/deprecation of affected versions) is
 tracked in the licensing issues and should be reviewed by IP counsel.
 
 ---
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0

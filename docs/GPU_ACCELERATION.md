@@ -1,6 +1,6 @@
 # GPU Acceleration Guide
 
-> Last updated: 2026-06-12 · Applies to: velesdb-core 4.0.0 (feature introduced: VelesDB v2.0.0)
+> Last updated: 2026-06-12 · Applies to: velesdb-core 4.1.0 (feature introduced: VelesDB v2.0.0)
 
 VelesDB supports optional GPU acceleration for batch vector operations via the `gpu` feature.
 

@@ -209,4 +209,4 @@ artifact embeds the engine and is governed by the Core License.
 
 ---
 
-`velesdb-wasm v4.0.0` · Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)
+`velesdb-wasm v4.1.0` · Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)

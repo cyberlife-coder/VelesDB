@@ -150,4 +150,4 @@ Each crate has its own README with specific documentation:
 *VelesDB — the explainable, local-first memory engine for AI agents. (Microsecond vector search is the proof, not the pitch.)*
 
 ---
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0

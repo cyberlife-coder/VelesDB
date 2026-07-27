@@ -33,4 +33,4 @@ VelesDB is built in Rust with explicit SIMD optimizations:
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0

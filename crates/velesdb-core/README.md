@@ -243,4 +243,4 @@ VelesDB Core License 1.0 — see [LICENSE](./LICENSE).
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)
+Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)

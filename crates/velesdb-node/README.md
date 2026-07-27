@@ -316,4 +316,4 @@ Questions: contact@wiscale.fr.
 
 ---
 
-`velesdb-node v0.11.1` (npm `@wiscale/velesdb-memory-node@0.11.1`) · Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-node v0.11.2` (npm `@wiscale/velesdb-memory-node@0.11.1`) · Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
