@@ -354,3 +354,152 @@ fn a_stored_age_matches_a_numeric_comparison() {
     let as_i64 = age.as_i64().expect("age reads back as an integer");
     assert_eq!(as_i64, 15, "a numeric filter compares against this value");
 }
+
+// --- Autograph: the same wiring, triggered by a plain `remember` -------------
+
+/// Counts how many times the extractor was actually invoked, so the tests can
+/// prove `remember_extracted` does NOT double-extract when autograph is on.
+#[derive(Default)]
+struct CountingExtractor {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl Extractor for CountingExtractor {
+    fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        Ok(self.extract_graph(text)?.facts)
+    }
+
+    fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        FamilyExtractor.extract_graph(text)
+    }
+}
+
+/// A backend that is always down — the availability case autograph must
+/// survive without losing the caller's fact.
+struct OfflineExtractor;
+
+impl Extractor for OfflineExtractor {
+    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        Err(ExtractError::Backend("model offline".to_string()))
+    }
+}
+
+fn autograph_service(
+    extractor: std::sync::Arc<dyn Extractor + Send + Sync>,
+) -> (TempDir, MemoryService<HashEmbedder>) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let svc = MemoryService::open(dir.path(), HashEmbedder::new(DEFAULT_DIMENSION))
+        .expect("open service")
+        .with_autograph(extractor);
+    (dir, svc)
+}
+
+#[test]
+fn a_plain_remember_builds_the_graph_when_autograph_is_on() {
+    let (_dir, svc) = autograph_service(std::sync::Arc::new(FamilyExtractor));
+    svc.remember("Julien Lange est le pere d'Axel Lange", &[], None)
+        .expect("remember");
+
+    let julien = svc
+        .entity_profile("julien lange")
+        .expect("lookup")
+        .expect("julien exists");
+    assert!(
+        julien.relations.iter().any(|r| r.predicate == "pere de"),
+        "a plain remember wired the typed edge: {:?}",
+        julien.relations
+    );
+}
+
+#[test]
+fn autograph_is_off_unless_asked_for() {
+    let (_dir, svc) = service();
+    svc.remember("Julien Lange est le pere d'Axel Lange", &[], None)
+        .expect("remember");
+    assert!(
+        svc.entity_profile("julien lange")
+            .expect("lookup")
+            .is_none(),
+        "no extractor was attached, so nothing may be wired"
+    );
+}
+
+#[test]
+fn the_callers_fact_is_stored_verbatim_and_is_the_only_memory() {
+    let (_dir, svc) = autograph_service(std::sync::Arc::new(FamilyExtractor));
+    let id = svc
+        .remember("Julien Lange est le pere d'Axel Lange", &[], None)
+        .expect("remember");
+
+    let hits = svc.recall("Julien Lange", 10, None).expect("recall");
+    let mine: Vec<_> = hits.iter().filter(|h| h.id == id).collect();
+    assert_eq!(mine.len(), 1, "exactly one caller-visible memory");
+    assert_eq!(
+        mine[0].content, "Julien Lange est le pere d'Axel Lange",
+        "stored verbatim — autograph adds structure, it never rewrites the fact"
+    );
+    assert_eq!(
+        hits.len(),
+        1,
+        "the extracted sentences are NOT stored as extra memories: {:?}",
+        hits.iter().map(|h| &h.content).collect::<Vec<_>>()
+    );
+}
+
+/// The availability contract: the fact is already durable when extraction
+/// runs, so a model that is down must cost the enrichment and nothing else.
+#[test]
+fn a_dead_extractor_never_costs_the_caller_their_fact() {
+    let (_dir, svc) = autograph_service(std::sync::Arc::new(OfflineExtractor));
+    let id = svc
+        .remember("Julien Lange est le pere d'Axel Lange", &[], None)
+        .expect("remember must succeed even though the extractor is down");
+
+    let hits = svc.recall("Julien Lange", 5, None).expect("recall");
+    assert!(
+        hits.iter().any(|h| h.id == id),
+        "the fact is stored and recallable"
+    );
+    assert!(
+        svc.entity_profile("julien lange")
+            .expect("lookup")
+            .is_none(),
+        "degrades to a plain remember — no half-built graph"
+    );
+}
+
+/// `remember_extracted` already extracted the passage; running autograph on
+/// each stored fact would re-derive what was just computed, once per fact.
+#[test]
+fn remember_extracted_does_not_extract_twice_under_autograph() {
+    let counting = std::sync::Arc::new(CountingExtractor::default());
+    let (_dir, svc) = autograph_service(counting.clone());
+
+    svc.remember_extracted("Julien Lange est le pere d'Axel Lange", &counting, None)
+        .expect("extract and remember");
+
+    assert_eq!(
+        counting.calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "exactly one generation for the passage, not one more per stored fact"
+    );
+}
+
+#[test]
+fn autograph_accumulates_across_separate_remembers() {
+    let (_dir, svc) = autograph_service(std::sync::Arc::new(FamilyExtractor));
+    for sentence in [
+        "Julien Lange est le pere d'Axel Lange",
+        "Axel Lange a 15 ans",
+        "Axel Lange a une soeur, Lea Lange",
+    ] {
+        svc.remember(sentence, &[], None).expect("remember");
+    }
+    let axel = svc
+        .entity_profile("axel lange")
+        .expect("lookup")
+        .expect("axel exists");
+    assert_eq!(axel.attributes.get("age"), Some(&json!(15)));
+    assert!(axel.relations.iter().any(|r| r.predicate == "soeur de"));
+}

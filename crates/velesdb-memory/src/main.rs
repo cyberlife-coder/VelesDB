@@ -92,7 +92,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // runs here, before the async runtime starts, so we never block a tokio
     // worker thread on a synchronous operation.
     let embedder = build_embedder()?;
-    let service = open_store_with_actionable_lock_error(&store_path, embedder)?;
+    let service = apply_autograph(open_store_with_actionable_lock_error(
+        &store_path,
+        embedder,
+    )?)?;
     let server = apply_ingest_roots(apply_default_ttl(build_server(service)?)?)?;
 
     tokio::runtime::Runtime::new()?.block_on(async move {
@@ -424,6 +427,54 @@ fn open_store_with_actionable_lock_error(
 /// is launched by its client with an unpredictable working directory, so a
 /// cwd-relative default would scatter (or lose) the store between sessions. Falls
 /// back to a cwd-relative path only when no home directory can be resolved.
+/// Attach the extraction backend to the SERVICE when
+/// `VELESDB_MEMORY_AUTOGRAPH=1` (`[graph] autograph = true`), so every
+/// `remember` also wires the entities, typed edges and attributes its text
+/// states.
+///
+/// Distinct from [`build_server`]'s extractor, which powers the explicit
+/// `remember_extracted` tool. Both can be on; they share one backend and one
+/// setting pair, and `remember_extracted` deliberately does not re-extract.
+///
+/// Asking for autograph without an extraction backend is a startup error, not
+/// a silent no-op: the operator turned on a feature, and a daemon that
+/// answers by doing nothing is how you spend a week wondering why the graph
+/// is empty.
+#[cfg(feature = "extract")]
+fn apply_autograph(
+    service: MemoryService<DynEmbedder>,
+) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
+    if std::env::var("VELESDB_MEMORY_AUTOGRAPH").as_deref() != Ok("1") {
+        return Ok(service);
+    }
+    if std::env::var("VELESDB_MEMORY_EXTRACTOR").as_deref() != Ok("ollama") {
+        return Err(
+            "autograph is on ([graph] autograph = true / VELESDB_MEMORY_AUTOGRAPH=1) but no \
+             extraction backend is configured — set [extractor] backend = \"ollama\" (and a \
+             model), or turn autograph off"
+                .into(),
+        );
+    }
+    Ok(service.with_autograph(build_ollama_extractor()?))
+}
+
+/// Without the `extract` feature there is no backend to attach. A request for
+/// autograph still fails loudly rather than being ignored — the binary was
+/// built without the code to honour it, exactly like `--http` without `http`.
+#[cfg(not(feature = "extract"))]
+fn apply_autograph(
+    service: MemoryService<DynEmbedder>,
+) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
+    if std::env::var("VELESDB_MEMORY_AUTOGRAPH").as_deref() == Ok("1") {
+        return Err(
+            "autograph is on but this binary was built without --features extract, so no \
+             extraction backend exists"
+                .into(),
+        );
+    }
+    Ok(service)
+}
+
 /// Locate and apply the optional `velesdb-memory.toml`.
 ///
 /// The lookup uses the DEFAULT store directory, never the configured one:
