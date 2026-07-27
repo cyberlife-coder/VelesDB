@@ -285,7 +285,7 @@ impl Extractor for OllamaExtractor {
 
     fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
         let reply = self.generate(&build_graph_prompt(text))?;
-        let raw = json_slice::<RawExtraction>(&reply)
+        let raw = json_slice_object::<RawExtraction>(&reply)
             .ok_or_else(|| ExtractError::Parse(truncate(&reply)))?;
         Ok(raw.into_extraction())
     }
@@ -560,18 +560,40 @@ fn json_slice<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
     serde_json::from_str::<T>(slice).ok()
 }
 
+/// [`json_slice`] for a reply whose top level is a JSON **object**.
+///
+/// The array-preferring form cannot be reused: the graph reply is
+/// `{"facts": [...], ...}`, whose first `[` belongs to a *nested* field, so
+/// preferring arrays slices out the inner facts list and then fails to read it
+/// as the whole extraction. That failure is invisible to a stub-backed test —
+/// only a real model reply goes through this path.
+#[cfg(feature = "extract")]
+fn json_slice_object<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
+    let slice = balanced_slice_preferring(text, b'{')?;
+    serde_json::from_str::<T>(slice).ok()
+}
+
 /// Return the substring spanning the first balanced `[..]` or `{..}`, honouring
 /// string literals and escapes so brackets inside quotes don't miscount.
+///
+/// Prefers an array: the fact-only reply is a JSON list, and prose before it
+/// ("Result {ok}: [...]") may carry a stray `{` that would mis-slice the
+/// object span instead of the array.
 #[cfg(feature = "extract")]
 fn balanced_slice(text: &str) -> Option<&str> {
+    balanced_slice_preferring(text, b'[')
+}
+
+/// [`balanced_slice`] with the caller choosing which delimiter wins when both
+/// appear — the shape the caller actually expects at the top level.
+#[cfg(feature = "extract")]
+fn balanced_slice_preferring(text: &str, preferred: u8) -> Option<&str> {
     let bytes = text.as_bytes();
-    // Prefer an array: the expected reply is a JSON list, and prose before it
-    // ("Result {ok}: [...]") may carry a stray `{` that would mis-slice the
-    // object span instead of the array. Fall back to the first `{` if no `[`.
+    let fallback = if preferred == b'[' { b'{' } else { b'[' };
     let start = bytes
         .iter()
-        .position(|&b| b == b'[')
-        .or_else(|| bytes.iter().position(|&b| b == b'{'))?;
+        .position(|&b| b == preferred)
+        .or_else(|| bytes.iter().position(|&b| b == fallback))?;
     let open = bytes[start];
     let close = if open == b'[' { b']' } else { b'}' };
     let mut depth = 0u32;
@@ -623,6 +645,48 @@ fn step_string(escaped: &mut bool, byte: u8) -> bool {
 #[cfg(all(test, feature = "extract"))]
 mod tests {
     use super::*;
+
+    /// Regression: the graph reply is an OBJECT whose first `[` belongs to the
+    /// nested `facts` field. Slicing with the array preference grabbed that
+    /// inner list and failed to read it as the whole extraction — a real model
+    /// reply was rejected wholesale while every stub-backed test stayed green.
+    #[test]
+    fn parses_a_graph_reply_whose_first_bracket_is_nested() {
+        let reply = r#"{ "facts": [ { "fact": "Zephyrin is the father of Kaltar.", "entities": ["zephyrin", "kaltar"] } ], "relations": [ { "subject": "zephyrin", "predicate": "pere de", "object": "kaltar" } ], "attributes": [ { "entity": "kaltar", "key": "age", "value": 15 } ] }"#;
+        let raw: RawExtraction = json_slice_object(reply).expect("the object is sliced whole");
+        let extraction = raw.into_extraction();
+        assert_eq!(extraction.facts.len(), 1);
+        assert_eq!(extraction.relations.len(), 1);
+        assert_eq!(extraction.relations[0].predicate, "pere de");
+        assert_eq!(extraction.attributes.len(), 1);
+        assert_eq!(extraction.attributes[0].value, serde_json::json!(15));
+    }
+
+    /// Prose (and a fenced block) around the object must not defeat slicing.
+    #[test]
+    fn parses_a_graph_reply_wrapped_in_prose_and_fences() {
+        let reply = "Here you go:\n```json\n{\"facts\": [], \"relations\": [{\"subject\": \"a\", \"predicate\": \"knows\", \"object\": \"b\"}], \"attributes\": []}\n```";
+        let raw: RawExtraction = json_slice_object(reply).expect("sliced past the fence");
+        assert_eq!(raw.into_extraction().relations.len(), 1);
+    }
+
+    /// The fact-only path must keep preferring an array: prose carrying a stray
+    /// `{` before the list is exactly what that preference exists to survive.
+    #[test]
+    fn fact_only_slicing_still_prefers_the_array() {
+        let reply = "Result {ok}: [{\"fact\": \"A ships B.\", \"entities\": [\"b\"]}]";
+        let raw: Vec<RawFact> = json_slice(reply).expect("array sliced despite the stray brace");
+        assert_eq!(raw.len(), 1);
+    }
+
+    #[test]
+    fn graph_prompt_demands_numeric_values_and_the_three_sections() {
+        let prompt = build_graph_prompt("Kaltar a 15 ans.");
+        assert!(prompt.contains("Kaltar a 15 ans."));
+        assert!(prompt.contains("\"relations\""));
+        assert!(prompt.contains("\"attributes\""));
+        assert!(prompt.contains("15, not \"15\""));
+    }
 
     #[test]
     fn prompt_carries_the_passage_and_json_contract() {
