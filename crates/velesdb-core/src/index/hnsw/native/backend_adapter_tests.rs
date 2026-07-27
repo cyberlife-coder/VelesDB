@@ -819,25 +819,26 @@ fn test_graduated_ef_construction_recall() {
         .map(|(i, v)| (v.as_slice(), i))
         .collect();
 
-    // Sequential insert on purpose. `parallel_insert` hands the vectors to the
-    // backend's thread pool, and an HNSW graph's topology depends on the order
-    // its nodes are linked in — so the resulting recall depends on the thread
-    // scheduling of the machine that happened to run the test. Under the load
-    // of a full workspace run this measured 0.44 against a 0.90 floor, while
-    // passing in isolation on the same commit: a false negative that rejects
-    // good commits and teaches people to bypass the hook. Inserting in a fixed
-    // order makes the graph, and therefore the recall, reproducible.
-    // `parallel_insert` keeps its own coverage in the tests that exercise it
-    // for completeness rather than for recall.
-    for &(vector, expected_id) in &data {
-        let id = hnsw
-            .insert(vector)
-            .expect("test: insert of a 64-D vector should succeed");
-        // Ids are assigned in insertion order; the ground truth below indexes
-        // `vectors` by that id, so a drift here would silently invalidate the
-        // recall measurement rather than fail it.
-        assert_eq!(id, expected_id, "insertion order must define the node id");
-    }
+    // Pinned to a single rayon worker rather than inserted sequentially.
+    // `connect_batch_chunked` links each chunk with `par_iter`, and an HNSW
+    // graph's topology depends on the order its nodes are linked in — so the
+    // recall this yields varies with the machine's thread scheduling. Under a
+    // full workspace run this measured 0.44 against a 0.90 floor while passing
+    // in isolation on the same commit: a false negative that rejects good
+    // commits and teaches people to bypass the hook.
+    //
+    // One worker makes that order deterministic while still running the REAL
+    // batch path — allocate_batch, the entry-point bootstrap, the chunking and
+    // its ef schedule, finalize_batch. Inserting sequentially would fix the
+    // flake too, but would stop testing any of them.
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .expect("test: building a single-worker rayon pool should succeed")
+        .install(|| {
+            hnsw.parallel_insert(&data)
+                .expect("test: parallel_insert should succeed")
+        });
 
     assert_eq!(hnsw.len(), 5000);
 
@@ -902,15 +903,26 @@ fn test_graduated_ef_construction_recall_cosine() {
         .map(|(i, v)| (v.as_slice(), i))
         .collect();
 
-    // Sequential for the same reason as the euclidean case above: parallel
-    // insertion order decides the graph topology, so the recall it yields
-    // varies with the machine's thread scheduling.
-    for &(vector, expected_id) in &data {
-        let id = hnsw
-            .insert(vector)
-            .expect("test: insert of a cosine vector should succeed");
-        assert_eq!(id, expected_id, "insertion order must define the node id");
-    }
+    // Pinned to a single rayon worker rather than inserted sequentially.
+    // `connect_batch_chunked` links each chunk with `par_iter`, and an HNSW
+    // graph's topology depends on the order its nodes are linked in — so the
+    // recall this yields varies with the machine's thread scheduling. Under a
+    // full workspace run this measured 0.44 against a 0.90 floor while passing
+    // in isolation on the same commit: a false negative that rejects good
+    // commits and teaches people to bypass the hook.
+    //
+    // One worker makes that order deterministic while still running the REAL
+    // batch path — allocate_batch, the entry-point bootstrap, the chunking and
+    // its ef schedule, finalize_batch. Inserting sequentially would fix the
+    // flake too, but would stop testing any of them.
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .expect("test: building a single-worker rayon pool should succeed")
+        .install(|| {
+            hnsw.parallel_insert(&data)
+                .expect("test: parallel_insert should succeed")
+        });
 
     assert_eq!(hnsw.len(), 3000);
 
