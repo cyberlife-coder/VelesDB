@@ -40,6 +40,8 @@ Detailed guides for using VelesDB features. **[Full guides index →](./guides/R
 | [Write Concurrency](./guides/WRITE_CONCURRENCY.md) | Single-writer-per-collection model, batching patterns, Enterprise tier |
 | [Use Cases](./guides/USE_CASES.md) | Common use cases and recommended configurations |
 | [Migration v1.6](./guides/MIGRATION_v1.6.md) / [v1.7](./guides/MIGRATION_v1.7.md) | Version migration guides |
+| [Migration v3.3.0](./guides/MIGRATION_v3.3.0.md) | Error codes, REST statuses and query results that changed in 3.3.0. |
+| [Migration v4.0.0](./guides/MIGRATION_v4.0.0.md) | The 4.0.0 breaking changes — start with the WASM `weighted` reordering, which is silent. |
 | [Troubleshooting](./NEW_USER_TROUBLESHOOTING.md) | Solutions for common issues new users encounter |
 
 ### API reference, per binding
@@ -154,6 +156,7 @@ the remaining debt is. Read these when you need the *why* behind a behaviour.
 | [GPU acceleration](./GPU_ACCELERATION.md) | What the `gpu` feature accelerates, and what it does not. |
 | [ANN state-of-the-art audit](./ANN_SOTA_AUDIT.md) | How the index compares to published ANN work. |
 | [Core wiring debt](./CORE_WIRING_DEBT.md) | Known gaps between what core exposes and what the surfaces use. |
+| [Core / Premium split](./CORE_PREMIUM_SPLIT.md) | Where the open-core boundary sits, and the contract both repos read identically. |
 
 ---
 
