@@ -753,10 +753,16 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     ) -> Result<(), MemoryError> {
         match (metadata, ttl_seconds) {
             (Some(meta), Some(ttl)) => {
-                // store_with_ttl writes the fact + the durable expiry; update_metadata
-                // then merges the metadata while preserving `_veles_expires_at`.
-                self.store.store_with_ttl(id, fact, embedding, ttl)?;
-                self.store.update_metadata(id, meta)?;
+                // ONE write, not two. The previous `store_with_ttl` then
+                // `update_metadata` pair left the fact live and expiring
+                // between the calls: a short TTL could lapse in the gap and
+                // the metadata write then failed with `NotFound(... is
+                // expired ...)` — the caller got an error on a fact that was
+                // valid when they asked for it. Observed with a 1 s TTL on a
+                // loaded machine. Every TTL'd write takes this arm, since the
+                // auto date stamp means `metadata` is always `Some`.
+                self.store
+                    .store_with_metadata_and_ttl(id, fact, embedding, meta, ttl)?;
             }
             (Some(meta), None) => self.store.store_with_metadata(id, fact, embedding, meta)?,
             (None, Some(ttl)) => self.store.store_with_ttl(id, fact, embedding, ttl)?,
