@@ -496,9 +496,15 @@ fn apply_config_file(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         .position(|arg| arg == "--config")
         .and_then(|at| args.get(at + 1))
         .map(String::as_str);
-    let default_dir = default_store_path();
+    // The EFFECTIVE store, not the default one. `VELESDB_MEMORY_PATH` moves the
+    // store, and the config file lives beside it — looking it up in the default
+    // directory instead means a caller who moved the store silently reads a
+    // config from a store they are not using. That is how a test spawning this
+    // binary with its own scratch store picked up the developer's personal
+    // `~/.velesdb-memory/velesdb-memory.toml`.
+    let store_dir = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
     let Some(path) =
-        velesdb_memory::config::resolve_path(explicit, Some(std::path::Path::new(&default_dir)))
+        velesdb_memory::config::resolve_path(explicit, Some(std::path::Path::new(&store_dir)))
     else {
         return Ok(());
     };
