@@ -72,30 +72,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let original_parent = std::os::unix::process::parent_id();
     #[cfg(not(unix))]
     let original_parent = 0_u32;
-    // Loaded BEFORE the first variable is read, because the file can set any
-    // of them — including the store path just below. Everything downstream
-    // keeps reading the environment exactly as it always did; the file only
-    // fills in what the environment left unset, which is what makes the
-    // precedence `command line > environment > file > default`.
-    apply_config_file(&args)?;
+    // All synchronous setup (config file, env probing, blocking HTTP to
+    // Ollama, disk open) happens in here, before the async runtime starts, so
+    // we never block a tokio worker thread on a synchronous operation.
+    let service = build_configured_service(&args)?;
 
-    let store_path = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
-
-    // Decided here, ahead of the (possibly seconds-long) embedder probe and
-    // store open, same manual-parsing style as `--version` above (no `clap`
-    // for a two-flag CLI) — but the transport choice itself only affects how
+    // Read AFTER the config file has been applied, since the file can set
+    // `VELESDB_MEMORY_HTTP`. Same manual-parsing style as `--version` above
+    // (no `clap` for a two-flag CLI) — the transport choice only affects how
     // the server is *served*, further down, since store opening (and its
     // `flock`) is identical either way.
     let http_bind = requested_http_bind(&args);
-
-    // All synchronous setup (env probing, blocking HTTP to Ollama, disk open)
-    // runs here, before the async runtime starts, so we never block a tokio
-    // worker thread on a synchronous operation.
-    let embedder = build_embedder()?;
-    let service = apply_autograph(open_store_with_actionable_lock_error(
-        &store_path,
-        embedder,
-    )?)?;
     let server = apply_ingest_roots(apply_default_ttl(build_server(service)?)?)?;
 
     tokio::runtime::Runtime::new()?.block_on(async move {
@@ -427,6 +414,25 @@ fn open_store_with_actionable_lock_error(
 /// is launched by its client with an unpredictable working directory, so a
 /// cwd-relative default would scatter (or lose) the store between sessions. Falls
 /// back to a cwd-relative path only when no home directory can be resolved.
+/// Load the config file, then build the store-backed service it describes.
+///
+/// The config file is read BEFORE the first variable is consulted, because it
+/// can set any of them — including the store path. Everything downstream keeps
+/// reading the environment exactly as it always did; the file only fills in
+/// what the environment left unset, which is what makes the precedence
+/// `command line > environment > file > default`.
+fn build_configured_service(
+    args: &[String],
+) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
+    apply_config_file(args)?;
+    let store_path = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
+    let embedder = build_embedder()?;
+    apply_autograph(open_store_with_actionable_lock_error(
+        &store_path,
+        embedder,
+    )?)
+}
+
 /// Attach the extraction backend to the SERVICE when
 /// `VELESDB_MEMORY_AUTOGRAPH=1` (`[graph] autograph = true`), so every
 /// `remember` also wires the entities, typed edges and attributes its text

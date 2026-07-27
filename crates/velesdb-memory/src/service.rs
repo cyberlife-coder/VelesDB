@@ -239,13 +239,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         }
         reject_reserved_keys(metadata)?;
         reject_oversized_metadata(metadata)?;
-        // EVERY link property — relation label and target existence — is
-        // validated before any write, so all deterministic link failures
-        // happen while nothing has been stored or overwritten yet.
-        for link in links {
-            validate_relation(&link.relation)?;
-        }
-        self.ensure_link_targets_exist(links)?;
+        self.validate_links(links)?;
         let fact_id = id::stable_id(fact);
         let embedding = self.embedder.embed(fact)?;
         let existed_before = !links.is_empty() && self.store.get(fact_id)?.is_some();
@@ -257,30 +251,58 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             stamped.as_ref(),
             positive_ttl(ttl_seconds),
         )?;
-        // Links are fully pre-validated above, so an edge write can only
-        // fail here on a race (e.g. a target's TTL lapsing since the
-        // pre-check). Roll a FRESH fact back (delete cascades any edges
-        // already created); a fact that existed before this call is kept —
-        // deleting it would destroy prior state, and its updated payload
-        // stands per re-remember's update semantics. The existence probe
-        // and the delete are not one atomic unit: a concurrent remember of
-        // identical content between them is last-writer-wins (documented
-        // on [`Self::remember`]).
-        if let Err(e) = self.relate_links(fact_id, links) {
-            if !existed_before {
-                if let Err(rollback) = self.store.delete(fact_id) {
-                    return Err(MemoryError::RollbackFailed {
-                        cause: Box::new(e),
-                        rollback: Box::new(rollback),
-                    });
-                }
-            }
-            return Err(e);
+        self.link_or_rollback(fact_id, links, existed_before)?;
+        self.autograph_if(run_autograph, fact_id, fact);
+        Ok(fact_id)
+    }
+
+    /// Validate EVERY link property — relation label and target existence —
+    /// before any write, so all deterministic link failures happen while
+    /// nothing has been stored or overwritten yet.
+    fn validate_links(&self, links: &[Link]) -> Result<(), MemoryError> {
+        for link in links {
+            validate_relation(&link.relation)?;
         }
-        if run_autograph {
+        self.ensure_link_targets_exist(links)
+    }
+
+    /// Write the edges, undoing a freshly-created fact if one of them fails.
+    ///
+    /// Links are fully pre-validated by [`Self::validate_links`], so an edge
+    /// write can only fail here on a race (e.g. a target's TTL lapsing since
+    /// the pre-check). Roll a FRESH fact back (delete cascades any edges
+    /// already created); a fact that existed before the call is kept —
+    /// deleting it would destroy prior state, and its updated payload stands
+    /// per re-remember's update semantics. The existence probe and the delete
+    /// are not one atomic unit: a concurrent remember of identical content
+    /// between them is last-writer-wins (documented on [`Self::remember`]).
+    fn link_or_rollback(
+        &self,
+        fact_id: u64,
+        links: &[Link],
+        existed_before: bool,
+    ) -> Result<(), MemoryError> {
+        let Err(cause) = self.relate_links(fact_id, links) else {
+            return Ok(());
+        };
+        if existed_before {
+            return Err(cause);
+        }
+        match self.store.delete(fact_id) {
+            Ok(()) => Err(cause),
+            Err(rollback) => Err(MemoryError::RollbackFailed {
+                cause: Box::new(cause),
+                rollback: Box::new(rollback),
+            }),
+        }
+    }
+
+    /// Run [`Self::autograph`] only when this write path asked for it — the
+    /// branch lives here rather than in the write path itself.
+    fn autograph_if(&self, run: bool, fact_id: u64, fact: &str) {
+        if run {
             self.autograph(fact_id, fact);
         }
-        Ok(fact_id)
     }
 
     /// Autograph one just-stored fact: read the entities, entity→entity edges
@@ -374,25 +396,16 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             return Err(MemoryError::EmptyFact);
         }
         let extraction = extractor.extract_graph(text)?;
-        let mut fact_ids = Vec::with_capacity(extraction.facts.len());
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64)> = HashSet::new();
         let mut seeded: HashSet<u64> = HashSet::new();
-        for fact in &extraction.facts {
-            let content = fact.text.trim();
-            if content.is_empty() {
-                continue;
-            }
-            let fact_id = self.remember_inner(content, &[], metadata, None, false)?;
-            fact_ids.push(fact_id);
-            self.wire_entities(
-                fact_id,
-                &fact.entities,
-                &mut entity_ids,
-                &mut edges,
-                &mut seeded,
-            )?;
-        }
+        let fact_ids = self.store_extracted_facts(
+            &extraction.facts,
+            metadata,
+            &mut entity_ids,
+            &mut edges,
+            &mut seeded,
+        )?;
         self.wire_relations(
             &extraction.relations,
             &mut entity_ids,
@@ -433,11 +446,21 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         // Reserved system keys (the hub flag itself) are scaffolding, not
         // attributes the caller ever wrote — strip them exactly as every other
         // caller-facing read path does.
-        let attributes = strip_reserved_keys(self.store.get_metadata(id)?).unwrap_or_default();
+        Ok(Some(EntityProfile {
+            id,
+            name: key,
+            attributes: strip_reserved_keys(self.store.get_metadata(id)?).unwrap_or_default(),
+            relations: self.outgoing_entity_relations(id)?,
+        }))
+    }
+
+    /// The typed edges leaving `id`, resolved to their target's content.
+    ///
+    /// `mentions` edges are dropped: they point at the facts that tagged this
+    /// entity, which is the bipartite scaffolding, not a statement *about* it.
+    fn outgoing_entity_relations(&self, id: u64) -> Result<Vec<EntityRelation>, MemoryError> {
         let mut relations = Vec::new();
         for edge in self.store.relations(id)? {
-            // `mentions` edges point at the facts that tagged this entity; they
-            // are the bipartite scaffolding, not statements *about* the entity.
             if edge.relation == MENTIONS_RELATION {
                 continue;
             }
@@ -448,12 +471,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
                 target: target.unwrap_or_default(),
             });
         }
-        Ok(Some(EntityProfile {
-            id,
-            name: key,
-            attributes,
-            relations,
-        }))
+        Ok(relations)
     }
 
     /// Wire each extracted `subject -[predicate]-> object` triple as a typed
@@ -535,6 +553,32 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             self.store.update_metadata(hub_id, &meta)?;
         }
         Ok(())
+    }
+
+    /// Store each extracted fact and wire it to its topics, returning their ids.
+    ///
+    /// Goes through the no-autograph path: the passage was ALREADY extracted by
+    /// the caller, so re-running a generation per stored fact would re-derive
+    /// what was just computed.
+    fn store_extracted_facts(
+        &self,
+        facts: &[crate::extract::ExtractedFact],
+        metadata: Option<&Metadata>,
+        entity_ids: &mut HashMap<String, u64>,
+        edges: &mut HashSet<(u64, u64)>,
+        seeded: &mut HashSet<u64>,
+    ) -> Result<Vec<u64>, MemoryError> {
+        let mut fact_ids = Vec::with_capacity(facts.len());
+        for fact in facts {
+            let content = fact.text.trim();
+            if content.is_empty() {
+                continue;
+            }
+            let fact_id = self.remember_inner(content, &[], metadata, None, false)?;
+            fact_ids.push(fact_id);
+            self.wire_entities(fact_id, &fact.entities, entity_ids, edges, seeded)?;
+        }
+        Ok(fact_ids)
     }
 
     /// Link `fact_id` to each of its topics with a deduplicated edge in *both*
