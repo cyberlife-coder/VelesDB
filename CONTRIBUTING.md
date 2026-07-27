@@ -140,7 +140,17 @@ codacy-cli analyze
 
 Or use the local CI script: `.\scripts\local-ci.ps1` (Full) or `.\scripts\local-ci.ps1 -Quick` (fmt + clippy only).
 
-Git hooks are provided in `.githooks/` — activate with: `git config core.hooksPath .githooks`
+Git hooks are provided in `.githooks/` — activate them with the setup script for
+your platform, `./scripts/setup-hooks.sh` (Linux/macOS) or
+`.\scripts\setup-hooks.ps1` (Windows). Both set `core.hooksPath`; the shell one
+also restores the executable bit, which a fresh clone can lose and which git
+ignores silently — an un-executable hook does not fail, it simply never runs.
+
+The bare equivalent is `git config core.hooksPath .githooks`.
+
+Three hooks then apply: `commit-msg` rejects AI-attributed authors and AI
+attribution trailers, `pre-commit` validates the change, and `pre-push` runs the
+full local gate.
 
 > **Note (SSH pushes):** the pre-push hook runs the full validation (~15 min) while
 > git already holds the connection to GitHub open; if that SSH connection dies in
