@@ -131,7 +131,7 @@ test-fault-injection = []
 criterion = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }
-serial_test = "3.5"
+serial_test = "4.0"
 clap = { version = "4.6", features = ["derive"] }
 rand_distr = "0.6"
 
