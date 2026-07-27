@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::model::{
-    deserialize_id, ColumnFilter, Explanation, Link, MemoryEdge, MemoryNode, Recollection,
+    deserialize_id, ColumnFilter, EntityProfile, EntityRelation, Explanation, Link, MemoryEdge,
+    MemoryNode, Recollection,
 };
 use crate::service::Metadata;
 
@@ -364,6 +365,86 @@ impl From<MemoryEdge> for MemoryEdgeDto {
             to: edge.to,
             to_str: edge.to.to_string(),
             relation: edge.relation,
+        }
+    }
+}
+
+/// Input of the `entity` tool.
+#[derive(Deserialize, JsonSchema)]
+pub(super) struct EntityParams {
+    /// Entity name to look up. Matched case-insensitively.
+    pub(super) name: String,
+}
+
+/// Wire shape of one typed edge leaving an entity, with the `target_id_str`
+/// twin (issue #1468).
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct EntityRelationDto {
+    /// The edge label the passage stated (e.g. `"pere de"`, `"soeur de"`).
+    pub(super) predicate: String,
+    /// Stable id of the entity (or fact) on the far end.
+    pub(super) target_id: u64,
+    /// Decimal-string twin of `target_id` (issue #1468).
+    pub(super) target_id_str: String,
+    /// Stored content of the far end — for an entity, `Entity: <name>`.
+    pub(super) target: String,
+}
+
+impl From<EntityRelation> for EntityRelationDto {
+    fn from(relation: EntityRelation) -> Self {
+        Self {
+            predicate: relation.predicate,
+            target_id: relation.target_id,
+            target_id_str: relation.target_id.to_string(),
+            target: relation.target,
+        }
+    }
+}
+
+/// Result of the `entity` tool: everything the auto-built graph knows about
+/// one named entity. `found` distinguishes "this entity is known but has no
+/// attributes yet" from "nothing has ever mentioned it".
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct EntityProfileDto {
+    /// Whether an entity is known under that name at all.
+    pub(super) found: bool,
+    /// Stable, content-addressed id of the entity (`0` when not found).
+    pub(super) id: u64,
+    /// Decimal-string twin of `id` (issue #1468).
+    pub(super) id_str: String,
+    /// Canonical (trimmed, lowercased) entity name.
+    pub(super) name: String,
+    /// Attributes learned about this entity, reserved keys stripped.
+    pub(super) attributes: Metadata,
+    /// Typed edges leaving this entity.
+    pub(super) relations: Vec<EntityRelationDto>,
+}
+
+impl From<Option<EntityProfile>> for EntityProfileDto {
+    fn from(profile: Option<EntityProfile>) -> Self {
+        let Some(profile) = profile else {
+            return Self {
+                found: false,
+                id: 0,
+                id_str: "0".to_string(),
+                name: String::new(),
+                attributes: Metadata::new(),
+                relations: Vec::new(),
+            };
+        };
+        Self {
+            found: true,
+            id: profile.id,
+            id_str: profile.id.to_string(),
+            name: profile.name,
+            attributes: profile.attributes,
+            relations: profile
+                .relations
+                .into_iter()
+                .map(EntityRelationDto::from)
+                .collect(),
         }
     }
 }

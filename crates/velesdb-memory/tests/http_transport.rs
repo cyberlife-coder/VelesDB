@@ -299,7 +299,7 @@ async fn concurrent_remember_and_recall_do_not_deadlock_and_all_facts_recallable
     shutdown(server).await;
 }
 
-/// Adversarial: the two DoS guards `router()` wraps `/mcp` in (2026-07-22
+/// Adversarial: the two `DoS` guards `router()` wraps `/mcp` in (2026-07-22
 /// OOM audit) must actually reject what they claim to bound, not just exist
 /// as unused configuration. `RequestBodyLimit` rejects a request whose
 /// `Content-Length` already exceeds the configured limit before reading any
