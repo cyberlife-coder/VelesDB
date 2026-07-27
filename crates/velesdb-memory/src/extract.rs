@@ -487,10 +487,17 @@ For each, list 1-4 key TOPICS it concerns, as short canonical lowercase noun \
 phrases, so the same topic recurs as the SAME tag across passages.\n\n\
 2. \"relations\": every explicit relationship BETWEEN TWO NAMED ENTITIES, as \
 subject/predicate/object triples. Use the entity's full name, lowercase \
-(e.g. \"julien lange\"). Give the predicate in the passage's own language, as a \
-short lowercase label (e.g. \"pere de\", \"soeur de\", \"works at\"). State the \
-triple in the direction the passage states it, and add the converse ONLY if the \
-passage states it too.\n\n\
+(e.g. \"julien lange\").\n\
+The predicate is a LABEL, not a sentence: **at most 3 words**, lowercase, in \
+the passage's own language (e.g. \"pere de\", \"soeur de\", \"works at\", \
+\"moteur de recherche\"). NEVER restate the sentence — write \"surveille les \
+fuites\", not \"est utilise pour la surveillance de fuites de donnees\". If you \
+cannot say it in 3 words, pick the closest short label.\n\
+State the triple in the direction the passage states it, and add the converse \
+ONLY if the passage states it too.\n\
+Every named entity the passage RELATES to another must appear in at least one \
+triple — an entity that only receives attributes and no edge is a dead end in \
+the graph.\n\n\
 3. \"attributes\": every property a named entity HAS, as entity/key/value. Use \
 short lowercase keys (\"age\", \"ville\", \"employeur\"). Emit numbers as JSON \
 NUMBERS, never strings: 15, not \"15\". Omit anything the passage does not state.\n\n\
@@ -693,6 +700,29 @@ mod tests {
         let prompt = build_prompt("Alice adopted a dog in 2021.");
         assert!(prompt.contains("Alice adopted a dog in 2021."));
         assert!(prompt.contains("\"fact\": string"));
+    }
+
+    /// The graph prompt has to bound the predicate explicitly. Asking for "a
+    /// short label" was not enough: on real content the model answered
+    /// "est utilise pour la surveillance de fuites de donnees" — a restated
+    /// sentence, which makes the edge unreadable in `entity()`.
+    #[test]
+    fn graph_prompt_bounds_the_predicate_and_demands_edges() {
+        let prompt = build_graph_prompt("Ahmia is an onion search engine.");
+        assert!(prompt.contains("Ahmia is an onion search engine."));
+        assert!(
+            prompt.contains("at most 3 words"),
+            "the predicate length must be a hard bound, not a suggestion"
+        );
+        assert!(
+            prompt.contains("NEVER restate the sentence"),
+            "the counter-example is what stops a restated sentence"
+        );
+        assert!(
+            prompt.contains("at least one triple"),
+            "an entity with attributes but no edge is a dead end — the prompt \
+             must ask for the edge"
+        );
     }
 
     #[test]
