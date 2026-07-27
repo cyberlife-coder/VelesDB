@@ -921,8 +921,60 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Returns [`MemoryError`] if the existence check or the deletion fails.
     pub fn forget(&self, fact_id: u64) -> Result<bool, MemoryError> {
         let found = self.store.get(fact_id)?.is_some();
+        // Read the fact's hubs BEFORE the delete: afterwards its edges are gone
+        // and there is no way back to the entities it created.
+        let hubs = self.hubs_linked_from(fact_id)?;
         self.store.delete(fact_id)?;
+        self.collect_orphan_hubs(&hubs)?;
         Ok(found)
+    }
+
+    /// The entity hubs `fact_id` points at.
+    ///
+    /// Hubs are recognised by the reserved [`HUB_FIELD`] marker rather than by
+    /// the edge label, so a caller's own `relate` to a hub is seen too.
+    fn hubs_linked_from(&self, fact_id: u64) -> Result<Vec<u64>, MemoryError> {
+        let mut hubs = Vec::new();
+        for edge in self.store.relations(fact_id)? {
+            if self.is_hub(edge.to)? {
+                hubs.push(edge.to);
+            }
+        }
+        Ok(hubs)
+    }
+
+    /// Delete every hub in `hubs` that no surviving fact mentions any more.
+    ///
+    /// An entity outlives the fact that introduced it as long as another fact
+    /// still refers to it — forgetting "Axel is 15" must not erase Axel while
+    /// "Axel has a sister" is still stored. Only a hub whose every `mentions`
+    /// target is gone is itself removed, so entities do not accumulate as
+    /// unreachable scaffolding once the facts behind them are retracted.
+    fn collect_orphan_hubs(&self, hubs: &[u64]) -> Result<(), MemoryError> {
+        for &hub in hubs {
+            if !self.hub_still_mentioned(hub)? {
+                self.store.delete(hub)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `hub` still points at a fact that exists.
+    fn hub_still_mentioned(&self, hub: u64) -> Result<bool, MemoryError> {
+        for edge in self.store.relations(hub)? {
+            if edge.relation == MENTIONS_RELATION && self.store.get(edge.to)?.is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Whether `id` is an entity hub (carries the reserved [`HUB_FIELD`]).
+    fn is_hub(&self, id: u64) -> Result<bool, MemoryError> {
+        Ok(self
+            .store
+            .get_metadata(id)?
+            .is_some_and(|meta| meta.contains_key(HUB_FIELD)))
     }
 
     /// Explain a `decision`: find the best-matching memory (optionally scoped to

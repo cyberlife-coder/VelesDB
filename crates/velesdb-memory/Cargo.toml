@@ -234,6 +234,11 @@ name = "http_insecure_process"
 path = "tests/http_insecure_process.rs"
 required-features = ["http"]
 
+[[test]]
+name = "graceful_shutdown_process"
+path = "tests/graceful_shutdown_process.rs"
+required-features = ["http"]
+
 [[example]]
 name = "multihop"
 path = "examples/multihop/main.rs"
