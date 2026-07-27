@@ -124,6 +124,21 @@ jobs:
       - name: Check --no-default-features (workspace matrix gap, #1472)
         run: cargo check --workspace --no-default-features
 
+      # The workspace check above unifies features across crates, so a feature
+      # that only compiles because a SIBLING feature happens to be on still
+      # passes it. `--features extract` alone did not compile: it pulls
+      # `dep:ureq` but not `ollama`, while extract.rs calls a helper gated on
+      # `ollama`. Each optional feature of velesdb-memory is therefore checked
+      # in isolation.
+      - name: Check each velesdb-memory feature in isolation
+        run: |
+          set -eu
+          for feat in mcp http context persistence ollama extract; do
+            echo "::group::--features $feat"
+            cargo check -p velesdb-memory --no-default-features --features "$feat"
+            echo "::endgroup::"
+          done
+
       - name: Run Clippy (strict)
         run: |
           cargo clippy --workspace --all-targets --features persistence,gpu,update-check \

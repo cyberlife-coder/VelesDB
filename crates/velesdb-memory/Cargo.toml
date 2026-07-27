@@ -2,7 +2,7 @@
 name = "velesdb-memory"
 # Independent of the workspace version: velesdb-memory is a young MCP wrapper
 # with its own release cadence, decoupled from the core engine's 3.x line.
-version = "0.11.1"
+version = "0.11.2"
 edition.workspace = true
 rust-version.workspace = true
 license-file = "../../LICENSE"
@@ -26,6 +26,10 @@ exclude = ["media/"]
 velesdb-core = { workspace = true, default-features = false }
 thiserror = { workspace = true }
 serde = { workspace = true }
+# The optional `velesdb-memory.toml` config file (see `src/config.rs`).
+# Native-only by `cfg` rather than by feature: a config file is not an opt-in
+# capability, it is how the daemon is operated.
+toml = { workspace = true }
 serde_json = { workspace = true }
 # Pinned to rmcp's schemars (1.2.x) so domain types and MCP DTOs share one
 # JsonSchema derive — no duplicate wire/domain structs.

@@ -114,9 +114,26 @@ fn widen_id_schema(schema: &mut Value) {
     }
 }
 
-/// Inline every top-level property whose schema is a bare `$ref` (or a
-/// single-element `allOf` wrapping one) into the referenced `$defs` entry,
-/// so the property carries a DIRECT `type` keyword.
+/// Cap on how deep [`inline_ref_only_properties`] chases nested `$ref`s.
+/// The deepest real input schema needs 3 (`working` → `items` of
+/// `ContextFact` → its `source`); 8 leaves headroom while keeping a
+/// mutually-recursive type from expanding without bound even if the
+/// [`InlineChain`] guard were ever bypassed.
+#[cfg(feature = "mcp")]
+const MAX_INLINE_DEPTH: usize = 8;
+
+/// The `$defs` names currently being inlined, as a PATH stack (pushed on
+/// descent, popped on the way out) — not a global visited-set: a global set
+/// would leave the second and third `Vec<ContextFact>` of a
+/// [`WorkingContext`](crate::context::WorkingContext) un-inlined just
+/// because a sibling got there first. A name already on the stack means a
+/// reference cycle, and its `$ref` is left intact.
+#[cfg(feature = "mcp")]
+type InlineChain = Vec<String>;
+
+/// Inline every schema slot that is a bare `$ref` (or a single-element
+/// `allOf` wrapping one) into the referenced `$defs` entry, RECURSIVELY and
+/// through `items`, so each slot carries a DIRECT `type` keyword.
 ///
 /// Real MCP client harnesses (observed 2026-07-24 with Claude Code) degrade
 /// a `$ref`-only parameter to "untyped" and then serialize the argument as a
@@ -124,11 +141,24 @@ fn widen_id_schema(schema: &mut Value) {
 /// as `"{\"goal\": ...}"` and failed with `invalid type: string, expected
 /// struct WorkingContext`. Same wire-contract class as the #1468 float-lossy
 /// id fix: the advertised schema must be harness-proof, not merely
-/// spec-correct. Sibling keywords on the property (e.g. `description`)
-/// override the inlined definition's; properties that already expose a
-/// `type` are left untouched. One level only — nested `$refs` inside the
-/// inlined definition are not chased (only top-level tool parameters are
-/// serialized one by one by a harness).
+/// spec-correct.
+///
+/// Chasing only ONE level (the 2026-07-24 shape) left the identical hole one
+/// step deeper, and it cost four round trips of deserialization errors on
+/// 2026-07-26: `working.decisions` advertised `items: {"$ref":
+/// "#/$defs/ContextDecisionRef"}`, so a `$defs`-blind harness saw "array of
+/// anything" and never learned that `rule_id` (or `SourceReference`'s
+/// `handle`) is required. Hence the same tree walk as
+/// [`widen_id_properties`] — `properties`, `items`, then a generic descent —
+/// bounded by [`MAX_INLINE_DEPTH`] and an [`InlineChain`] cycle guard.
+///
+/// Sibling keywords on the slot (e.g. `description`) override the inlined
+/// definition's; a slot that already exposes a `type` is not inlined, but is
+/// still descended into — that is exactly the `{"type": "array", "items":
+/// {"$ref": …}}` case. `$defs` is left in place and is NOT expanded on the
+/// spot: spec-correct clients still resolve through it, it stays a
+/// resolvable target for any `$ref` a bound leaves behind, and expanding it
+/// would only inflate the advertised schema.
 ///
 /// `mcp`-gated: the advertised tool schemas are its only consumer.
 #[cfg(feature = "mcp")]
@@ -136,30 +166,168 @@ pub(crate) fn inline_ref_only_properties(map: &mut Map<String, Value>) {
     let Some(Value::Object(defs)) = map.get("$defs").cloned() else {
         return;
     };
-    let Some(Value::Object(properties)) = map.get_mut("properties") else {
+    let mut chain = InlineChain::new();
+    inline_in_map(map, &defs, &mut chain, 0);
+    prune_unreferenced_defs(map);
+}
+
+/// Drop every `$defs` entry no `$ref` can still reach.
+///
+/// Inlining copies a definition to each site that referenced it, so its
+/// `$defs` entry usually becomes dead weight — measured at **55 % of the
+/// published schema bytes** (83 KB of 148 KB across the 18 tools) once both
+/// the input and output sides were inlined. Keeping it costs every client
+/// that reads `tools/list`, and the whole point of inlining was that a
+/// `$defs`-blind client never looks there.
+///
+/// Only *unreachable* entries go: 65 `$ref`s legitimately survive (a bound a
+/// cycle guard stopped, an `anyOf` arm), and a definition still reachable —
+/// directly or through another definition — is kept. The fixpoint below is
+/// what makes that transitive: dropping one entry can orphan another.
+#[cfg(feature = "mcp")]
+fn prune_unreferenced_defs(map: &mut Map<String, Value>) {
+    let Some(Value::Object(defs)) = map.get("$defs") else {
         return;
     };
-    for subschema in properties.values_mut() {
-        let Value::Object(prop) = subschema else {
-            continue;
-        };
-        if prop.contains_key("type") {
-            continue;
-        }
-        let Some(name) = ref_only_target(prop) else {
-            continue;
-        };
-        let Some(Value::Object(definition)) = defs.get(&name) else {
-            continue;
-        };
-        let mut merged = definition.clone();
-        for (key, value) in prop.iter() {
-            if key != "$ref" && key != "allOf" {
-                merged.insert(key.clone(), value.clone());
+    let names: Vec<String> = defs.keys().cloned().collect();
+    let defs = defs.clone();
+
+    let mut live: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // Seed with everything referenced outside `$defs` itself.
+    let mut outside = map.clone();
+    outside.remove("$defs");
+    collect_refs(&Value::Object(outside), &mut live);
+
+    // Fixpoint: a live definition's own `$ref`s keep their targets alive.
+    loop {
+        let mut grown = false;
+        for name in &names {
+            if !live.contains(name) {
+                continue;
+            }
+            if let Some(def) = defs.get(name) {
+                let before = live.len();
+                collect_refs(def, &mut live);
+                grown |= live.len() != before;
             }
         }
-        *prop = merged;
+        if !grown {
+            break;
+        }
     }
+
+    if let Some(Value::Object(defs)) = map.get_mut("$defs") {
+        defs.retain(|name, _| live.contains(name));
+        if defs.is_empty() {
+            map.remove("$defs");
+        }
+    }
+}
+
+/// Every `#/$defs/<name>` target reachable from `value`.
+#[cfg(feature = "mcp")]
+fn collect_refs(value: &Value, out: &mut std::collections::BTreeSet<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(target)) = map.get("$ref") {
+                if let Some(name) = target.strip_prefix("#/$defs/") {
+                    out.insert(name.to_owned());
+                }
+            }
+            for sub in map.values() {
+                collect_refs(sub, out);
+            }
+        }
+        Value::Array(entries) => {
+            for sub in entries {
+                collect_refs(sub, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// One schema node: inline its `properties` and `items` slots, then descend
+/// generically into every other keyword — `$defs` excepted (see
+/// [`inline_ref_only_properties`]).
+#[cfg(feature = "mcp")]
+fn inline_in_map(
+    map: &mut Map<String, Value>,
+    defs: &Map<String, Value>,
+    chain: &mut InlineChain,
+    depth: usize,
+) {
+    if depth >= MAX_INLINE_DEPTH {
+        return;
+    }
+    if let Some(Value::Object(properties)) = map.get_mut("properties") {
+        for slot in properties.values_mut() {
+            inline_slot(slot, defs, chain, depth);
+        }
+    }
+    if let Some(items) = map.get_mut("items") {
+        match items {
+            // Tuple form: `items` is an array of per-position schemas.
+            Value::Array(entries) => {
+                for entry in entries {
+                    inline_slot(entry, defs, chain, depth);
+                }
+            }
+            single => inline_slot(single, defs, chain, depth),
+        }
+    }
+    for (key, value) in map.iter_mut() {
+        if key == "$defs" || key == "properties" || key == "items" {
+            continue;
+        }
+        inline_in_value(value, defs, chain, depth);
+    }
+}
+
+#[cfg(feature = "mcp")]
+fn inline_in_value(
+    value: &mut Value,
+    defs: &Map<String, Value>,
+    chain: &mut InlineChain,
+    depth: usize,
+) {
+    match value {
+        Value::Object(map) => inline_in_map(map, defs, chain, depth),
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| inline_in_value(item, defs, chain, depth)),
+        _ => {}
+    }
+}
+
+/// Inline one slot when it is `$ref`-only and its target is not already
+/// being inlined higher up the path, then recurse into the resulting node
+/// either way.
+#[cfg(feature = "mcp")]
+fn inline_slot(slot: &mut Value, defs: &Map<String, Value>, chain: &mut InlineChain, depth: usize) {
+    let Value::Object(prop) = slot else {
+        return;
+    };
+    if !prop.contains_key("type") {
+        if let Some(name) = ref_only_target(prop) {
+            if !chain.contains(&name) {
+                if let Some(Value::Object(definition)) = defs.get(&name) {
+                    let mut merged = definition.clone();
+                    for (key, value) in prop.iter() {
+                        if key != "$ref" && key != "allOf" {
+                            merged.insert(key.clone(), value.clone());
+                        }
+                    }
+                    *prop = merged;
+                    chain.push(name);
+                    inline_in_map(prop, defs, chain, depth + 1);
+                    chain.pop();
+                    return;
+                }
+            }
+        }
+    }
+    inline_in_map(prop, defs, chain, depth + 1);
 }
 
 /// Resolves the `#/$defs/<Name>` target of a `$ref`-only property schema:
@@ -201,3 +369,33 @@ fn is_rust_int_format(format: &str) -> bool {
 #[cfg(test)]
 #[path = "schema_tests.rs"]
 mod tests;
+
+/// Les champs d'id qui traversent le fil sous forme entiere OU chaine
+/// decimale. Definis ici et non dans `context::wire` : `schema.rs` est gate
+/// sur `mcp`, alors que `context::wire` l'est sur `context` — et les outils
+/// de `mcp.rs` en ont besoin meme quand `context` est absente, ce qui est le
+/// cas de `--features http`.
+#[cfg(feature = "mcp")]
+pub(crate) const WIRE_ID_KEYS: &[&str] =
+    &["fragment_id", "content_hash", "memory_id", "fragment_ids"];
+
+/// Le schema de sortie ANNONCE d'un outil : ids elargis, puis `$ref` inlines
+/// et `$defs` inatteignables elagues.
+///
+/// Vit ici plutot que dans `mcp/context_tools.rs` parce que les outils de
+/// `mcp.rs` l'appellent aussi : le laisser dans un module gate sur `context`
+/// cassait `--features http`, qui active `mcp` sans `context`.
+#[cfg(feature = "mcp")]
+pub(crate) fn wire_safe_output_schema<T: schemars::JsonSchema + std::any::Any>(
+) -> std::sync::Arc<rmcp::model::JsonObject> {
+    let schema = rmcp::handler::server::tool::schema_for_output::<T>().unwrap_or_else(|e| {
+        panic!(
+            "Invalid output schema for {}: {e}",
+            std::any::type_name::<T>()
+        )
+    });
+    let mut map = (*schema).clone();
+    widen_id_properties(&mut map, WIRE_ID_KEYS);
+    inline_ref_only_properties(&mut map);
+    std::sync::Arc::new(map)
+}

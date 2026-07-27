@@ -90,40 +90,228 @@ Expected output — three JSON lines, in this order:
 {"results":[{"id":"1","score":1.0,"payload":{"title":"first"}},{"id":"2","score":0.91381156,"payload":{"title":"second"}}]}
 ```
 
-How to read it: point `1` is the exact match (cosine score `1.0`), point `2` is
-the nearest neighbour (`0.9138…`, the last decimals depend on the CPU), and
-point `3` is correctly excluded by `top_k: 2`. Anything else is a failure:
-`curl: (7) Failed to connect` means the server never started (look at its log),
-and a body carrying an `error` message plus a `VELES-NNN` code means the
-request was rejected — see [Troubleshooting](#troubleshooting).
+The `code` field is optional and omitted when no structured code applies. Use it for
+programmatic error handling (e.g., retry on `VELES-006`, display user hint on `VELES-004`).
+See [ERROR_CODES.md](../../docs/reference/ERROR_CODES.md) for the full list.
 
-Stop the server with `kill %1` (or Ctrl+C in the foreground). It drains
-in-flight requests, then flushes every write-ahead log before exiting, so the
-data directory is reusable as-is on the next start.
+## Authentication
 
-## Configuration
+VelesDB supports optional API key authentication. When no keys are configured, the server runs in **local dev mode** (all requests are accepted). When one or more keys are configured, every request must include a valid `Authorization: Bearer <key>` header.
 
-Resolution order, highest priority first:
-**CLI flags → environment variables → `velesdb.toml` → built-in defaults.**
+### Enabling Authentication
 
-| Variable | CLI flag | Default | Effect |
-|---|---|---|---|
-| `VELESDB_HOST` | `--host` | `127.0.0.1` | Bind address. `0.0.0.0` exposes the server to the network. |
-| `VELESDB_PORT` | `--port` / `-p` | `8080` | Listening port. |
-| `VELESDB_DATA_DIR` | `--data-dir` / `-d` | `./velesdb_data` | Data directory; created on first start. |
-| `VELESDB_CONFIG` | `--config` / `-c` | `./velesdb.toml` | TOML config file. An explicit path that does not exist fails fast. |
-| `VELESDB_API_KEYS` | — | *(empty)* | Comma-separated Bearer keys. Empty means local dev mode: no authentication. |
-| `VELESDB_TLS_CERT` | `--tls-cert` | *(none)* | PEM certificate. Must be set together with the key. |
-| `VELESDB_TLS_KEY` | `--tls-key` | *(none)* | PEM private key. Must be set together with the certificate. |
-| `VELESDB_RATE_LIMIT` | `--rate-limit` | `100` | Max requests/second per IP. `0` disables the limiter. |
-| `RUST_LOG` | — | `info` | Log filter (`warn`, `info`, `debug`, `trace`). |
-| `VELESDB_NO_UPDATE_CHECK` | — | *(unset)* | `1` disables the startup version check. |
+**Via environment variable** (comma-separated list):
 
-Every option, every TOML key, and the engine sections (`[search]`, `[hnsw]`,
-`[storage]`, `[limits]`, …) are documented in
-[docs/guides/CONFIGURATION.md](../../docs/guides/CONFIGURATION.md).
+```bash
+VELESDB_API_KEYS="sk-prod-abc123,sk-prod-def456" velesdb-server
+```
 
-A minimal `velesdb.toml`:
+**Via `velesdb.toml`**:
+
+```toml
+[auth]
+api_keys = ["sk-prod-abc123", "sk-prod-def456"]
+```
+
+You can configure as many keys as you need. This is useful for rotating keys without downtime: add the new key, deploy, then remove the old key.
+
+### Making Authenticated Requests
+
+```bash
+curl -X GET http://localhost:8080/collections \
+  -H "Authorization: Bearer sk-prod-abc123"
+```
+
+If authentication is enabled and the header is missing or invalid, the server returns `401 Unauthorized`:
+
+```json
+{"error": "Unauthorized", "message": "missing Authorization header"}
+```
+
+### Public Endpoints (No Auth Required)
+
+The following endpoints bypass authentication even when API keys are configured:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /health`, `GET /v1/health` | Liveness probe |
+| `GET /ready`, `GET /v1/ready` | Readiness probe |
+
+This allows load balancers and orchestrators to probe the server without
+credentials. `GET /metrics` (Prometheus) is **gated by the API key** when
+auth is enabled — see `src/auth.rs::is_public_path` and finding F-02 in
+the auth audit; the metrics endpoint can leak collection names and
+write rates, so it is intentionally not in the public list.
+
+## TLS / HTTPS
+
+VelesDB supports native TLS via rustls (no OpenSSL dependency). When both a certificate and private key are provided, the server binds with HTTPS instead of HTTP.
+
+### Generating Self-Signed Certificates (Development)
+
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem \
+  -days 365 -nodes -subj "/CN=localhost"
+```
+
+### Configuring TLS
+
+**Via environment variables**:
+
+```bash
+VELESDB_TLS_CERT=./cert.pem VELESDB_TLS_KEY=./key.pem velesdb-server
+```
+
+**Via CLI flags**:
+
+```bash
+velesdb-server --tls-cert ./cert.pem --tls-key ./key.pem
+```
+
+**Via `velesdb.toml`**:
+
+```toml
+[tls]
+cert = "/etc/velesdb/cert.pem"
+key  = "/etc/velesdb/key.pem"
+```
+
+Both `cert` and `key` must be provided together. The server will refuse to start if only one is set or if the files do not exist.
+
+### Making Requests Over HTTPS
+
+With a self-signed certificate:
+
+```bash
+curl --cacert cert.pem https://localhost:8080/health
+```
+
+Or skip verification during development (not for production):
+
+```bash
+curl -k https://localhost:8080/health
+```
+
+## Graceful Shutdown
+
+VelesDB performs a clean shutdown when it receives **SIGINT** (Ctrl+C) or **SIGTERM** (on Unix). The shutdown sequence:
+
+1. **Stop accepting new connections** -- the listening socket is closed immediately.
+2. **Drain in-flight requests** -- the server waits up to `shutdown_timeout_secs` (default: 30 seconds) for active connections to complete.
+3. **Flush all WALs** -- every collection's Write-Ahead Log is flushed to disk, ensuring no acknowledged writes are lost.
+4. **Exit** -- the process terminates cleanly.
+
+If the drain timeout expires with connections still active, the server logs a warning and proceeds to the WAL flush.
+
+### Configuring the Drain Timeout
+
+**Via `velesdb.toml`**:
+
+```toml
+[server]
+shutdown_timeout_secs = 60
+```
+
+The default is 30 seconds, which is sufficient for most workloads.
+
+## Health & Readiness Probes
+
+### `GET /health` -- Liveness Probe
+
+Always returns `200 OK` as long as the process is running. Use this for container liveness checks.
+
+```bash
+curl http://localhost:8080/health
+```
+
+Response:
+
+```json
+{"status": "ok", "version": "4.1.0"}
+```
+
+### `GET /ready` -- Readiness Probe
+
+Returns `200 OK` once the database has finished loading all collections from disk. Returns `503 Service Unavailable` while loading.
+
+```bash
+curl http://localhost:8080/ready
+```
+
+Response (ready):
+
+```json
+{"status": "ready", "version": "4.1.0"}
+```
+
+Response (not ready):
+
+```json
+{"status": "not_ready", "version": "4.1.0"}
+```
+
+### Kubernetes Example
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  initialDelaySeconds: 2
+  periodSeconds: 5
+```
+
+## Distance Metrics
+
+| Metric | API Value | Aliases | Use Case |
+|--------|-----------|---------|----------|
+| Cosine | `cosine` | | Text embeddings |
+| Euclidean | `euclidean` | | Spatial data |
+| Dot Product | `dot` | `dotproduct`, `inner`, `ip` | Pre-normalized vectors |
+| Hamming | `hamming` | | Binary vectors |
+| Jaccard | `jaccard` | | Set similarity |
+
+## Performance
+
+Numbers match the canonical contract in
+[`docs/reference/promise-contract.json`](../../docs/reference/promise-contract.json)
+(i9-14900KF, AVX2, `--release`, `target-cpu=native`):
+
+- **Cosine similarity**: ~33 ns per operation (768D)
+- **Dot product**: ~21.7 ns per operation (768D), ~35 Gelem/s
+- **HNSW search (index-only)**: ~55 µs (10K vectors, 768D, Balanced mode, k=10)
+- **End-to-end search p50**: ~450 µs (10K/384D, WAL ON, recall ≥ 96%)
+
+## Configuration Reference
+
+VelesDB loads configuration with the following priority (highest wins):
+
+**CLI flags > Environment variables > `velesdb.toml` file > Built-in defaults**
+
+A custom config file path can be specified with `--config /path/to/velesdb.toml` or `VELESDB_CONFIG`.
+
+### Environment Variables and CLI Flags
+
+| Environment Variable | CLI Flag | Default | Description |
+|---------------------|----------|---------|-------------|
+| `VELESDB_HOST` | `--host` | `127.0.0.1` | Bind address. Use `0.0.0.0` for network access. |
+| `VELESDB_PORT` | `--port` / `-p` | `8080` | Server port. |
+| `VELESDB_DATA_DIR` | `--data-dir` / `-d` | `./velesdb_data` | Data directory for persistent storage. |
+| `VELESDB_CONFIG` | `--config` / `-c` | `./velesdb.toml` | Path to TOML configuration file (optional). |
+| `VELESDB_API_KEYS` | -- | *(empty)* | Comma-separated API keys. When set, enables Bearer token auth. |
+| `VELESDB_TLS_CERT` | `--tls-cert` | *(none)* | Path to TLS certificate file (PEM). Requires `VELESDB_TLS_KEY`. |
+| `VELESDB_TLS_KEY` | `--tls-key` | *(none)* | Path to TLS private key file (PEM). Requires `VELESDB_TLS_CERT`. |
+| `RUST_LOG` | -- | `info` | Log level filter (e.g. `warn`, `info`, `debug`, `trace`). |
+| `VELESDB_NO_UPDATE_CHECK` | -- | *(unset)* | Set to `1` to disable startup update check. |
+
+### TOML Configuration File
 
 ```toml
 [server]

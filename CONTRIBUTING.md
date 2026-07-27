@@ -101,7 +101,7 @@ All new/modified code must satisfy these limits (enforced by Codacy and CI):
 | File NLOC | **<= 500** lines | Code review |
 | Code duplication | **< 2%** | jscpd |
 | Unsafe blocks | Must have `// SAFETY:` comment | CI (`verify_unsafe_safety_template.py`) |
-| TODO format | `// TODO(EPIC-XXX):` only | CI (`check-todo-annotations.py`) |
+| TODO format | Must carry an issue tag: `[EPIC-XXX/US-YYY]`, `(PREFIX-NNN)`, `#123`, or `#issue` | CI (`check-todo-annotations.py`) |
 | `.unwrap()` | Forbidden in production code | Code review |
 | Recall@10 | **>= 0.95** (if search path modified) | CI + local validation |
 

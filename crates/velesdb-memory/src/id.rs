@@ -32,6 +32,11 @@ pub fn stable_id(text: &str) -> u64 {
 ///
 /// Delegates to [`velesdb_core::hash_id_bytes`], the exported bytes-level
 /// counterpart of [`velesdb_core::hash_id`].
+// Only `context/media.rs` content-addresses raw bytes, so outside that
+// feature this is genuinely unreachable — and `id` is a `pub(crate)`
+// module, so `pub` does not make it live. Gating it on its actual
+// consumer keeps `-D warnings` honest instead of silencing dead_code.
+#[cfg(feature = "context")]
 #[must_use]
 pub fn stable_id_bytes(bytes: &[u8]) -> u64 {
     velesdb_core::hash_id_bytes(bytes)
@@ -59,11 +64,13 @@ mod tests {
         assert_eq!(stable_id(""), 0xcbf2_9ce4_8422_2325);
     }
 
+    #[cfg(feature = "context")]
     #[test]
     fn stable_id_bytes_agrees_with_stable_id_on_valid_utf8() {
         assert_eq!(stable_id_bytes("hello".as_bytes()), stable_id("hello"));
     }
 
+    #[cfg(feature = "context")]
     #[test]
     fn stable_id_bytes_hashes_non_utf8_bytes() {
         let bytes = [0xFFu8, 0x00, 0x89, 0x50, 0x4E, 0x47];

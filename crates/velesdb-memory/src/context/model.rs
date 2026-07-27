@@ -416,7 +416,14 @@ pub struct CompiledSection {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct SourceReference {
-    /// The fragment this source refers to.
+    /// The fragment this source refers to. Accepts a JSON number OR a
+    /// decimal string on input: a `fragment_id` is an FNV-1a 64 content hash
+    /// (see [`ContextDecision::content_hash`]), so it is almost always above
+    /// 2^53 — a float-lossy JSON client that reads one back from a compiled
+    /// context and resubmits it inside a working context would otherwise
+    /// corrupt it silently. Same accepted-forms rule as issue #1468's ids;
+    /// the serialized (output) shape is unchanged.
+    #[serde(deserialize_with = "crate::model::deserialize_id")]
     pub fragment_id: u64,
     /// Recoverable address of the original content (`ctx://source/<id>`).
     pub handle: String,
@@ -530,7 +537,10 @@ pub struct ContextFact {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct ContextDecisionRef {
-    /// The fragment the decision was about.
+    /// The fragment the decision was about. Accepts a JSON number OR a
+    /// decimal string on input, for the same reason as
+    /// [`SourceReference::fragment_id`].
+    #[serde(deserialize_with = "crate::model::deserialize_id")]
     pub fragment_id: u64,
     /// The rule that decided.
     pub rule_id: String,

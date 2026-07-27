@@ -30,6 +30,11 @@
 /// context compiler, which stays clock-free and deterministic. Internal:
 /// nothing outside the crate needs to read the clock directly.
 mod clock;
+/// The optional TOML configuration file: one place to set every knob, with
+/// `command line > environment > file > default` precedence. Native-only —
+/// it reads the filesystem.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod config;
 /// The deterministic context compiler (EPIC-P-070): classify, dedup, and pack
 /// caller-supplied context fragments under a token budget — no LLM, no cloud,
 /// every decision auditable. Gated behind the default `context` feature.
@@ -67,6 +72,11 @@ pub mod mcp;
 /// (`Link`, `Recollection`, `ColumnFilter`, `Explanation`, …), separate from the
 /// service that computes them.
 pub mod model;
+/// Synchronous retry + actionable failure reporting shared by the two blocking
+/// Ollama call sites ([`embedder`] and [`extract`]). Internal: it exists to make
+/// those two backends resilient, not to be a general-purpose retry API.
+#[cfg(any(feature = "ollama", feature = "extract"))]
+mod ollama_retry;
 /// Optional second-stage re-scoring of a fused recall pool (bring your own
 /// cross-encoder/LLM). Never wired in by default — see [`rerank::Reranker`].
 pub mod rerank;
@@ -117,11 +127,15 @@ pub use embedder::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
 pub use error::{ErrorCategory, MemoryError};
 #[cfg(feature = "extract")]
 pub use extract::OllamaExtractor;
-pub use extract::{DynExtractor, ExtractError, ExtractedFact, Extractor};
+pub use extract::{
+    DynExtractor, ExtractError, ExtractedAttribute, ExtractedFact, ExtractedRelation, Extraction,
+    Extractor,
+};
 #[cfg(feature = "mcp")]
 pub use mcp::McpServer;
 pub use model::{
-    ColumnFilter, ColumnOp, Explanation, FusionOptions, Link, MemoryEdge, MemoryNode, Recollection,
+    ColumnFilter, ColumnOp, EntityProfile, EntityRelation, Explanation, FusionOptions, Link,
+    MemoryEdge, MemoryNode, Recollection,
 };
 pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{MemoryService, Metadata};

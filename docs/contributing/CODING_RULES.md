@@ -126,7 +126,7 @@ cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
 - **Error handling** with `thiserror` only (not `anyhow`)
 - **Documentation** required on all public API items (`///`)
 - **Unsafe code** must include a `// SAFETY:` comment explaining the invariant
-- **TODO comments** must follow the format `// TODO(EPIC-XXX): ...` or `// TODO(US-XXX): ...` -- bare `TODO`/`FIXME`/`HACK` are rejected by CI
+- **TODO comments** must carry an issue tag -- `// TODO(EPIC-XXX): ...`, `// TODO(US-XXX): ...`, `// TODO: ... #123`, or `// TODO: ... #issue` -- bare `TODO`/`FIXME`/`HACK` are rejected by CI (`scripts/check-todo-annotations.py`)
 - **Numeric casts**: Use `try_from` for `u64`-to-`usize` casts, never `as usize` (clippy::pedantic)
 
 ---

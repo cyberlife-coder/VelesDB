@@ -38,7 +38,7 @@ impl Drop for ChildGuard {
 /// `stderr.read_to_string(..)` call would block until EOF — i.e. forever,
 /// for as long as the daemon stays up. Draining continuously on a
 /// background thread instead means (a) the child's stderr pipe never fills
-/// up and makes IT block on a write(), and (b) this test can inspect
+/// up and makes IT block on a `write()`, and (b) this test can inspect
 /// whatever has been captured so far without ever blocking on the child's
 /// lifetime.
 fn drain_stderr(child: &mut Child) -> Arc<Mutex<String>> {
