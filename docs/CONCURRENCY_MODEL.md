@@ -888,4 +888,4 @@ invariants, see [SOUNDNESS.md: HNSW Batch Insertion Ordering](SOUNDNESS.md#hnsw-
 
 ---
 
-*Last updated: 2026-07-25 · Applies to: velesdb-core 4.0.0 (previous revision noted: HNSW persisted-graph reload at open; storage compaction concurrency)*
+*Last updated: 2026-06-12 · Applies to: velesdb-core 4.0.0 (previous revision noted: HNSW persisted-graph reload at open; storage compaction concurrency)*
