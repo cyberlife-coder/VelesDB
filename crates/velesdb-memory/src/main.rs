@@ -573,6 +573,9 @@ fn build_ollama_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
 ///
 /// Sized for the job the hook does: a tool result big enough to be worth
 /// compiling, compressed to something an agent can still read in full.
+// Tous ses consommateurs sont gates sur `context` : sans cette feature la
+// constante est reellement morte, et -D warnings en fait une erreur.
+#[cfg(feature = "context")]
 const DEFAULT_COMPILE_STDIN_BUDGET: u64 = 2_000;
 
 /// Parsed `compile-stdin` invocation.
