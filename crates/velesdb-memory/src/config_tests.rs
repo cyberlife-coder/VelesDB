@@ -90,6 +90,8 @@ model = "m"
 url = "u"
 [context]
 ingest_roots = ["/tmp"]
+[graph]
+autograph = true
 "#,
     );
     let loaded = load(&path).expect("valid config");
@@ -112,6 +114,7 @@ ingest_roots = ["/tmp"]
         "VELESDB_MEMORY_EXTRACTOR_MODEL",
         "VELESDB_MEMORY_EXTRACTOR_URL",
         "VELESDB_MEMORY_INGEST_ROOTS",
+        "VELESDB_MEMORY_AUTOGRAPH",
     ];
     for key in expected {
         assert!(

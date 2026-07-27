@@ -85,11 +85,13 @@ const MENTIONS_RELATION: &str = "mentions";
 pub struct MemoryService<E: Embedder, S: MemoryStore = NativeStore> {
     store: S,
     embedder: E,
+    autograph: Option<crate::extract::DynExtractor>,
 }
 #[cfg(not(feature = "persistence"))]
 pub struct MemoryService<E: Embedder, S: MemoryStore> {
     store: S,
     embedder: E,
+    autograph: Option<crate::extract::DynExtractor>,
 }
 
 #[cfg(feature = "persistence")]
@@ -102,7 +104,11 @@ impl<E: Embedder> MemoryService<E, NativeStore> {
     /// memory cannot be initialized for the embedder's dimension.
     pub fn open<P: AsRef<Path>>(path: P, embedder: E) -> Result<Self, MemoryError> {
         let store = NativeStore::open(path, embedder.dimension())?;
-        Ok(Self { store, embedder })
+        Ok(Self {
+            store,
+            embedder,
+            autograph: None,
+        })
     }
 }
 
@@ -111,7 +117,30 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// [`Self::open`]'s filesystem-specific setup — the constructor a
     /// non-native backend (e.g. `velesdb-wasm`'s in-memory store) uses.
     pub fn with_store(store: S, embedder: E) -> Self {
-        Self { store, embedder }
+        Self {
+            store,
+            embedder,
+            autograph: None,
+        }
+    }
+
+    /// Turn on **autograph**: every [`Self::remember`] additionally reads the
+    /// stored fact for entities, entity→entity edges and entity attributes,
+    /// and wires them — so the knowledge graph builds itself from ordinary
+    /// `remember` calls, with no separate [`Self::remember_extracted`].
+    ///
+    /// Opt-in, and off unless this is called. It costs one generation per
+    /// `remember`, which is a real latency and availability change: a memory
+    /// write that silently depends on a local model being up is not a default
+    /// anyone should inherit.
+    ///
+    /// The caller's fact is stored **verbatim and first**. Autograph only
+    /// *adds* structure around it; it never rewrites or replaces what the
+    /// caller asked to remember.
+    #[must_use]
+    pub fn with_autograph(mut self, extractor: crate::extract::DynExtractor) -> Self {
+        self.autograph = Some(extractor);
+        self
     }
 
     /// Remember a `fact`, optionally tagging it with structured `metadata`
@@ -189,6 +218,21 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         metadata: Option<&Metadata>,
         ttl_seconds: Option<u64>,
     ) -> Result<u64, MemoryError> {
+        self.remember_inner(fact, links, metadata, ttl_seconds, true)
+    }
+
+    /// The shared write path. `run_autograph` is false for the one caller that
+    /// has ALREADY extracted the passage — [`Self::remember_extracted`] — so a
+    /// service with autograph on does not run a second generation per stored
+    /// fact, re-deriving what it just computed.
+    fn remember_inner(
+        &self,
+        fact: &str,
+        links: &[Link],
+        metadata: Option<&Metadata>,
+        ttl_seconds: Option<u64>,
+        run_autograph: bool,
+    ) -> Result<u64, MemoryError> {
         let fact = fact.trim();
         if fact.is_empty() {
             return Err(MemoryError::EmptyFact);
@@ -233,7 +277,57 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             }
             return Err(e);
         }
+        if run_autograph {
+            self.autograph(fact_id, fact);
+        }
         Ok(fact_id)
+    }
+
+    /// Autograph one just-stored fact: read the entities, entity→entity edges
+    /// and attributes it states, and wire them around it.
+    ///
+    /// **Deliberately infallible.** The caller's fact is already durably
+    /// stored by the time this runs, and the caller asked to remember a fact —
+    /// not to run a model. Propagating an extraction failure would turn a
+    /// successful write into a reported error, and an agent that sees
+    /// `remember` fail will sensibly retry it, re-running the generation and
+    /// failing again. So a model that is down, slow, or talking nonsense costs
+    /// the *graph enrichment* and nothing else: the memory is kept, the id is
+    /// returned, and the next `remember` tries again.
+    ///
+    /// The trade-off is that a persistently broken extractor degrades silently
+    /// to plain `remember`. That is the right way round — losing structure is
+    /// recoverable by re-remembering, losing the fact is not.
+    fn autograph(&self, fact_id: u64, fact: &str) {
+        let Some(extractor) = self.autograph.as_ref() else {
+            return;
+        };
+        let Ok(extraction) = extractor.extract_graph(fact) else {
+            return;
+        };
+        let mut entity_ids: HashMap<String, u64> = HashMap::new();
+        let mut edges: HashSet<(u64, u64)> = HashSet::new();
+        let mut seeded: HashSet<u64> = HashSet::new();
+        // The caller's fact is the node the topics attach to — the extracted
+        // facts are NOT stored as separate memories here, which is what
+        // separates autograph from `remember_extracted`: one `remember` call
+        // must still produce exactly one caller-visible memory.
+        for extracted in &extraction.facts {
+            let _ = self.wire_entities(
+                fact_id,
+                &extracted.entities,
+                &mut entity_ids,
+                &mut edges,
+                &mut seeded,
+            );
+        }
+        let _ = self.wire_relations(
+            &extraction.relations,
+            &mut entity_ids,
+            &mut edges,
+            &mut seeded,
+        );
+        let _ = self.wire_attributes(&extraction.attributes, &mut entity_ids);
     }
 
     /// Create each outgoing link from `fact_id`.
@@ -289,7 +383,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             if content.is_empty() {
                 continue;
             }
-            let fact_id = self.remember(content, &[], metadata)?;
+            let fact_id = self.remember_inner(content, &[], metadata, None, false)?;
             fact_ids.push(fact_id);
             self.wire_entities(
                 fact_id,

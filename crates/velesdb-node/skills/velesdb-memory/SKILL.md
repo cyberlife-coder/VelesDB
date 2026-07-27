@@ -237,7 +237,16 @@ model = "bge-m3"
 [extractor]
 backend = "ollama"             # required for remember_extracted / entities
 model = "qwen3.6:35b-mlx"
+
+[graph]
+autograph = false              # true = every `remember` also wires entities
 ```
+
+With `autograph = true` you stop having to choose the right tool: a plain
+`remember("Julien Lange est le père d'Axel Lange")` stores the fact verbatim
+**and** wires the graph around it. It costs one generation per `remember`, so
+it is opt-in — and if the model is down the write still succeeds, losing only
+the enrichment, never the fact.
 
 Precedence is **command line > environment > file > default**, so a value pinned
 in the file can still be overridden for one run

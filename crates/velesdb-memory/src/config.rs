@@ -92,6 +92,22 @@ pub struct ConfigFile {
     /// Context-compiler settings.
     #[serde(default)]
     pub context: ContextConfig,
+    /// Knowledge-graph settings.
+    #[serde(default)]
+    pub graph: GraphConfig,
+}
+
+/// `[graph]` — how much structure the memory builds on its own.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphConfig {
+    /// Let every `remember` also wire the entities, typed edges and attributes
+    /// its text states (`VELESDB_MEMORY_AUTOGRAPH`).
+    ///
+    /// Off by default. It costs one generation per `remember`, so it is a
+    /// deliberate choice, not something to inherit silently — and it needs an
+    /// `[extractor]` backend to have anything to do.
+    pub autograph: Option<bool>,
 }
 
 /// `[http]` — the streamable-HTTP transport (multi-client daemon mode).
@@ -269,6 +285,8 @@ impl ConfigFile {
         set("VELESDB_MEMORY_EXTRACTOR", self.extractor.backend);
         set("VELESDB_MEMORY_EXTRACTOR_MODEL", self.extractor.model);
         set("VELESDB_MEMORY_EXTRACTOR_URL", self.extractor.url);
+
+        set("VELESDB_MEMORY_AUTOGRAPH", self.graph.autograph.map(flag));
 
         if let Some(roots) = self.context.ingest_roots {
             let joined = std::env::join_paths(roots).map_err(|_| ConfigError::PathList {
