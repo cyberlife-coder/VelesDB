@@ -54,6 +54,21 @@ fn request(content: &str, policy: CompilePolicy) -> CompileRequest {
     }
 }
 
+fn explain_request(
+    fragments: Vec<ContextFragment>,
+    policy: Option<CompilePolicy>,
+) -> CompileRequest {
+    CompileRequest {
+        query: "deploy".to_owned(),
+        fragments,
+        project: None,
+        target_model: None,
+        token_budget: 10_000,
+        memory_scope: None,
+        policy,
+    }
+}
+
 /// The slot a compiled source's handle resolves to.
 fn slot_of(handle: &str) -> u64 {
     let hash = provenance::parse_handle(handle).expect("well-formed ctx://source handle");
@@ -390,15 +405,7 @@ fn test_should_store_source_never_rewrites_an_unmarked_occupied_slot() {
 fn test_explain_compilation_returns_the_decision_for_a_matching_fragment_id() {
     let (_dir, svc) = open_service();
     let wanted = fragment_id("a fact");
-    let req = CompileRequest {
-        query: "deploy".to_owned(),
-        fragments: vec![fragment("a fact"), fragment("other")],
-        project: None,
-        target_model: None,
-        token_budget: 10_000,
-        memory_scope: None,
-        policy: None,
-    };
+    let req = explain_request(vec![fragment("a fact"), fragment("other")], None);
 
     let decision = svc
         .explain_compilation(&req, wanted, None)
@@ -412,15 +419,7 @@ fn test_explain_compilation_returns_the_decision_for_a_matching_fragment_id() {
 #[test]
 fn test_explain_compilation_unknown_fragment_id_is_fragment_not_found() {
     let (_dir, svc) = open_service();
-    let req = CompileRequest {
-        query: "deploy".to_owned(),
-        fragments: vec![fragment("a fact")],
-        project: None,
-        target_model: None,
-        token_budget: 10_000,
-        memory_scope: None,
-        policy: None,
-    };
+    let req = explain_request(vec![fragment("a fact")], None);
 
     let err = svc
         .explain_compilation(&req, 424_242, None)
@@ -433,15 +432,7 @@ fn test_explain_compilation_unknown_fragment_id_is_fragment_not_found() {
 fn test_explain_compilation_fragment_index_out_of_bounds_is_rejected() {
     let (_dir, svc) = open_service();
     let wanted = fragment_id("a fact");
-    let req = CompileRequest {
-        query: "deploy".to_owned(),
-        fragments: vec![fragment("a fact")],
-        project: None,
-        target_model: None,
-        token_budget: 10_000,
-        memory_scope: None,
-        policy: None,
-    };
+    let req = explain_request(vec![fragment("a fact")], None);
 
     let err = svc
         .explain_compilation(&req, wanted, Some(5))
@@ -461,15 +452,10 @@ fn test_explain_compilation_fragment_index_disambiguates_byte_identical_twins() 
     // decision. `fragment_index` picks the SECOND fragment's decision.
     let (_dir, svc) = open_service();
     let shared_id = fragment_id("duplicate payload");
-    let req = CompileRequest {
-        query: "deploy".to_owned(),
-        fragments: vec![fragment("duplicate payload"), fragment("duplicate payload")],
-        project: None,
-        target_model: None,
-        token_budget: 10_000,
-        memory_scope: None,
-        policy: None,
-    };
+    let req = explain_request(
+        vec![fragment("duplicate payload"), fragment("duplicate payload")],
+        None,
+    );
 
     let survivor = svc
         .explain_compilation(&req, shared_id, None)
