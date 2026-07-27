@@ -234,15 +234,41 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         run_autograph: bool,
     ) -> Result<u64, MemoryError> {
         let fact = fact.trim();
+        self.validate_write(fact, links, metadata)?;
+        let fact_id = id::stable_id(fact);
+        let existed_before = !links.is_empty() && self.store.get(fact_id)?.is_some();
+        self.write_fact(fact_id, fact, metadata, ttl_seconds)?;
+        self.link_or_rollback(fact_id, links, existed_before)?;
+        self.autograph_if(run_autograph, fact_id, fact);
+        Ok(fact_id)
+    }
+
+    /// Every deterministic rejection, before anything is written: a blank fact,
+    /// reserved or oversized metadata, and each link's label and target. Run as
+    /// one pass so a bad input never leaves a half-written fact behind.
+    fn validate_write(
+        &self,
+        fact: &str,
+        links: &[Link],
+        metadata: Option<&Metadata>,
+    ) -> Result<(), MemoryError> {
         if fact.is_empty() {
             return Err(MemoryError::EmptyFact);
         }
         reject_reserved_keys(metadata)?;
         reject_oversized_metadata(metadata)?;
-        self.validate_links(links)?;
-        let fact_id = id::stable_id(fact);
+        self.validate_links(links)
+    }
+
+    /// Embed the fact and persist it with its date-stamped metadata and TTL.
+    fn write_fact(
+        &self,
+        fact_id: u64,
+        fact: &str,
+        metadata: Option<&Metadata>,
+        ttl_seconds: Option<u64>,
+    ) -> Result<(), MemoryError> {
         let embedding = self.embedder.embed(fact)?;
-        let existed_before = !links.is_empty() && self.store.get(fact_id)?.is_some();
         let stamped = stamp_with_today(metadata);
         self.store_fact(
             fact_id,
@@ -250,10 +276,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             &embedding,
             stamped.as_ref(),
             positive_ttl(ttl_seconds),
-        )?;
-        self.link_or_rollback(fact_id, links, existed_before)?;
-        self.autograph_if(run_autograph, fact_id, fact);
-        Ok(fact_id)
+        )
     }
 
     /// Validate EVERY link property — relation label and target existence —
