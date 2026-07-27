@@ -14,10 +14,14 @@
 //!
 //! The schemas are read exactly as published: an in-memory MCP client over
 //! `tokio::io::duplex` (the idiom of rmcp's own upstream tests) drives the
-//! real `McpServer`, so these tests see the same `inputSchema` bytes a
-//! Claude Code / Windsurf harness receives. Scope is deliberately the INPUT
-//! schemas: the reported bug is an *argument* deserialization failure.
-//! Output schemas keep their `$ref`-only items — a separate concern.
+//! real `McpServer`, so these tests see the same schema bytes a Claude Code /
+//! Windsurf harness receives.
+//!
+//! Output schemas are covered too, since the same defect turned out to be
+//! there and to bite harder: the official MCP SDKs validate a tool's
+//! `structuredContent` against its advertised `outputSchema`, so an
+//! unresolvable `$ref` is a RESULT the client may reject — worse than an
+//! unparseable argument, where the server at least got to answer.
 
 #![cfg(all(feature = "mcp", feature = "context", feature = "persistence"))]
 
@@ -160,6 +164,37 @@ async fn every_tool_input_schema_types_every_reachable_items() {
     client.cancel().await.expect("close the MCP session");
 }
 
+/// Same rule on the OUTPUT side, which the input fix left behind.
+///
+/// It is not cosmetic: the official MCP SDKs validate a tool's
+/// `structuredContent` against its advertised `outputSchema`. A `$ref` a
+/// client cannot resolve is a result it may reject outright — a harsher
+/// failure than the input case, where the server at least got to answer.
+#[tokio::test]
+async fn every_tool_output_schema_types_every_reachable_items() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    let mut checked = 0usize;
+    let mut offenders: BTreeSet<String> = BTreeSet::new();
+    for tool in &tools {
+        let Some(output) = tool.output_schema.as_ref() else {
+            continue;
+        };
+        checked += 1;
+        let schema = Value::Object((**output).clone());
+        for finding in untyped_items(&schema) {
+            offenders.insert(format!("{}: {finding}", tool.name));
+        }
+    }
+    assert!(checked > 0, "at least one tool advertises an output schema");
+    assert!(
+        offenders.is_empty(),
+        "{} untyped `items` across {checked} advertised output schemas: {offenders:#?}",
+        offenders.len()
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
 /// A full external payload — the shape a client would build from the schema
 /// alone — including the two collections no existing fixture ever fills:
 /// `decisions` (a `ContextDecisionRef`, `rule_id` required) and
@@ -283,4 +318,69 @@ fn assert_payload_survived_the_round_trip(round_tripped: &serde_json::Value) {
         json!("output schemas have the same latent hole")
     );
     assert_eq!(round_tripped["pending_actions"], json!(["re-run the gate"]));
+}
+
+/// Pruning unreferenced `$defs` must never orphan a surviving `$ref`.
+///
+/// Inlining copies definitions to their use sites, leaving most `$defs`
+/// entries dead — 55 % of the published bytes, measured. Dropping them is
+/// worth 40 KB across the 18 tools, but a definition still reachable through
+/// a cycle guard's leftover `$ref`, or through another definition, MUST
+/// survive. This walks every advertised schema and resolves every `$ref`
+/// against what actually shipped.
+#[tokio::test]
+async fn no_advertised_ref_points_at_a_pruned_definition() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    let mut dangling: BTreeSet<String> = BTreeSet::new();
+    for tool in &tools {
+        for (kind, schema) in [
+            ("input", Some(Value::Object((*tool.input_schema).clone()))),
+            (
+                "output",
+                tool.output_schema
+                    .as_ref()
+                    .map(|s| Value::Object((**s).clone())),
+            ),
+        ] {
+            let Some(schema) = schema else { continue };
+            let available: BTreeSet<String> = schema
+                .get("$defs")
+                .and_then(Value::as_object)
+                .map(|defs| defs.keys().cloned().collect())
+                .unwrap_or_default();
+            let mut wanted = BTreeSet::new();
+            collect_ref_targets(&schema, &mut wanted);
+            for name in wanted.difference(&available) {
+                dangling.insert(format!("{} ({kind}): #/$defs/{name}", tool.name));
+            }
+        }
+    }
+    assert!(
+        dangling.is_empty(),
+        "{} `$ref`(s) point at a definition that was pruned away: {dangling:#?}",
+        dangling.len()
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
+fn collect_ref_targets(value: &Value, out: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(target)) = map.get("$ref") {
+                if let Some(name) = target.strip_prefix("#/$defs/") {
+                    out.insert(name.to_owned());
+                }
+            }
+            for sub in map.values() {
+                collect_ref_targets(sub, out);
+            }
+        }
+        Value::Array(entries) => {
+            for sub in entries {
+                collect_ref_targets(sub, out);
+            }
+        }
+        _ => {}
+    }
 }

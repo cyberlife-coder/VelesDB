@@ -168,6 +168,83 @@ pub(crate) fn inline_ref_only_properties(map: &mut Map<String, Value>) {
     };
     let mut chain = InlineChain::new();
     inline_in_map(map, &defs, &mut chain, 0);
+    prune_unreferenced_defs(map);
+}
+
+/// Drop every `$defs` entry no `$ref` can still reach.
+///
+/// Inlining copies a definition to each site that referenced it, so its
+/// `$defs` entry usually becomes dead weight — measured at **55 % of the
+/// published schema bytes** (83 KB of 148 KB across the 18 tools) once both
+/// the input and output sides were inlined. Keeping it costs every client
+/// that reads `tools/list`, and the whole point of inlining was that a
+/// `$defs`-blind client never looks there.
+///
+/// Only *unreachable* entries go: 65 `$ref`s legitimately survive (a bound a
+/// cycle guard stopped, an `anyOf` arm), and a definition still reachable —
+/// directly or through another definition — is kept. The fixpoint below is
+/// what makes that transitive: dropping one entry can orphan another.
+#[cfg(feature = "mcp")]
+fn prune_unreferenced_defs(map: &mut Map<String, Value>) {
+    let Some(Value::Object(defs)) = map.get("$defs") else {
+        return;
+    };
+    let names: Vec<String> = defs.keys().cloned().collect();
+    let defs = defs.clone();
+
+    let mut live: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // Seed with everything referenced outside `$defs` itself.
+    let mut outside = map.clone();
+    outside.remove("$defs");
+    collect_refs(&Value::Object(outside), &mut live);
+
+    // Fixpoint: a live definition's own `$ref`s keep their targets alive.
+    loop {
+        let mut grown = false;
+        for name in &names {
+            if !live.contains(name) {
+                continue;
+            }
+            if let Some(def) = defs.get(name) {
+                let before = live.len();
+                collect_refs(def, &mut live);
+                grown |= live.len() != before;
+            }
+        }
+        if !grown {
+            break;
+        }
+    }
+
+    if let Some(Value::Object(defs)) = map.get_mut("$defs") {
+        defs.retain(|name, _| live.contains(name));
+        if defs.is_empty() {
+            map.remove("$defs");
+        }
+    }
+}
+
+/// Every `#/$defs/<name>` target reachable from `value`.
+#[cfg(feature = "mcp")]
+fn collect_refs(value: &Value, out: &mut std::collections::BTreeSet<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(target)) = map.get("$ref") {
+                if let Some(name) = target.strip_prefix("#/$defs/") {
+                    out.insert(name.to_owned());
+                }
+            }
+            for sub in map.values() {
+                collect_refs(sub, out);
+            }
+        }
+        Value::Array(entries) => {
+            for sub in entries {
+                collect_refs(sub, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// One schema node: inline its `properties` and `items` slots, then descend
