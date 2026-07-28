@@ -276,6 +276,23 @@ pub struct EntityRelation {
     pub target: String,
 }
 
+/// What [`crate::MemoryService::remember_extracted`] actually did with a
+/// passage: the stored fact ids, and how many extracted facts it had to drop.
+///
+/// A separate struct rather than a bare `Vec<u64>` because the drop count is
+/// part of the contract: an extracted fact past the embeddable cap is
+/// *skipped* — one unusable element must not cost the others — and a skip the
+/// caller cannot see is indistinguishable from the model simply extracting
+/// fewer facts.
+#[derive(Debug, Clone)]
+pub struct RememberedExtraction {
+    /// Stable ids of the stored facts, in extraction order.
+    pub ids: Vec<u64>,
+    /// Extracted facts dropped for exceeding
+    /// [`crate::limits::MAX_EMBEDDABLE_TEXT_BYTES`].
+    pub skipped_over_cap: usize,
+}
+
 /// Everything the auto-built graph knows about one named entity: the
 /// attributes merged onto its hub and the typed edges leaving it.
 #[derive(Debug, Clone, Serialize, JsonSchema)]

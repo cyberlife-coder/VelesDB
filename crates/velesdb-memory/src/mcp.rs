@@ -453,14 +453,18 @@ impl McpServer {
         // responsive to other tool calls and cancellations.
         let service = Arc::clone(&self.service);
         let RememberExtractedParams { text, metadata } = params;
-        let ids = tokio::task::spawn_blocking(move || {
+        let outcome = tokio::task::spawn_blocking(move || {
             service.remember_extracted(&text, &extractor, metadata.as_ref())
         })
         .await
         .map_err(join_error)?
         .map_err(to_error)?;
-        let ids_str = ids.iter().map(u64::to_string).collect();
-        Ok(Json(RememberExtractedResult { ids, ids_str }))
+        let ids_str = outcome.ids.iter().map(u64::to_string).collect();
+        Ok(Json(RememberExtractedResult {
+            ids: outcome.ids,
+            ids_str,
+            skipped_over_cap: outcome.skipped_over_cap,
+        }))
     }
 }
 

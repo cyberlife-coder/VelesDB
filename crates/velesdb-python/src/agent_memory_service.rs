@@ -412,9 +412,14 @@ impl PyMemoryService {
         let metadata = to_metadata(py, metadata)?;
         let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
         let extractor = OllamaExtractor::new(url, model);
+        // The binding's return stays a plain id list (its published Python
+        // signature); the skip count the service now reports has no slot
+        // here — an over-cap fact is simply absent from the ids, exactly as
+        // before, when it aborted the whole call instead.
         py.detach(|| {
             self.svc
                 .remember_extracted(text, &extractor, metadata.as_ref())
+                .map(|outcome| outcome.ids)
                 .map_err(to_py_err)
         })
     }

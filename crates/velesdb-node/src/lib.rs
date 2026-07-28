@@ -567,9 +567,14 @@ impl MemoryStore {
             let metadata = convert::to_metadata(metadata)?;
             let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
             let extractor = OllamaExtractor::new(url, model);
+            // The binding's return stays an id array (its published N-API
+            // shape); the skip count the service now reports has no slot
+            // here yet — an over-cap fact is simply absent from the ids,
+            // exactly as before this call could distinguish the two.
             let ids = svc
                 .remember_extracted(&text, &extractor, metadata.as_ref())
-                .map_err(to_napi_err)?;
+                .map_err(to_napi_err)?
+                .ids;
             Ok(ids.into_iter().map(convert::id_to_string).collect())
         }))
     }
