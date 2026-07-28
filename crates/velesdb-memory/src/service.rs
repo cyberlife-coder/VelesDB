@@ -347,9 +347,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let Some(extractor) = self.autograph.as_ref() else {
             return;
         };
-        let Ok(extraction) = extractor.extract_graph(fact) else {
+        let Ok(mut extraction) = extractor.extract_graph(fact) else {
             return;
         };
+        crate::extract::orient_possessive_kinship(fact, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64)> = HashSet::new();
         let mut seeded: HashSet<u64> = HashSet::new();
@@ -418,7 +419,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         if text.is_empty() {
             return Err(MemoryError::EmptyFact);
         }
-        let extraction = extractor.extract_graph(text)?;
+        let mut extraction = extractor.extract_graph(text)?;
+        crate::extract::orient_possessive_kinship(text, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64)> = HashSet::new();
         let mut seeded: HashSet<u64> = HashSet::new();

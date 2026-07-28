@@ -66,7 +66,12 @@ impl Extractor for FamilyExtractor {
                     "Axel Lange a une soeur, Lea Lange.",
                     &["axel lange", "lea lange"],
                 )],
-                relations: vec![relation("axel lange", "soeur de", "lea lange")],
+                // Both triples, mirrored, exactly as a real model returns them
+                // for a possessive — see the orientation tests further down.
+                relations: vec![
+                    relation("axel lange", "soeur de", "lea lange"),
+                    relation("lea lange", "frere de", "axel lange"),
+                ],
                 attributes: vec![],
             });
         }
@@ -173,8 +178,8 @@ fn an_entity_is_the_same_node_across_separate_sentences() {
         .expect("axel exists");
     assert_eq!(axel.attributes.get("age"), Some(&json!(15)));
     assert!(
-        axel.relations.iter().any(|r| r.predicate == "soeur de"),
-        "the same Axel node carries both the age and the sister edge: {:?}",
+        axel.relations.iter().any(|r| r.predicate == "frere de"),
+        "the same Axel node carries both the age and the sibling edge: {:?}",
         axel.relations
     );
 }
@@ -194,12 +199,12 @@ fn a_newly_mentioned_person_becomes_its_own_entity() {
         .expect("axel exists");
     assert_ne!(lea.id, axel.id, "Lea is a distinct node");
 
-    let edge = axel
+    let edge = lea
         .relations
         .iter()
         .find(|r| r.predicate == "soeur de")
-        .expect("axel -[soeur de]-> someone");
-    assert_eq!(edge.target_id, lea.id);
+        .expect("lea -[soeur de]-> someone");
+    assert_eq!(edge.target_id, axel.id);
 }
 
 #[test]
@@ -355,6 +360,149 @@ fn a_stored_age_matches_a_numeric_comparison() {
     assert_eq!(as_i64, 15, "a numeric filter compares against this value");
 }
 
+// --- Direction of a kinship triple (issue #1653) -----------------------------
+//
+// A copule ("X est le pere de Y") states the relation on its own grammatical
+// subject, so subject-of-sentence and subject-of-triple coincide. A possessive
+// ("X a une soeur, Y") states it on the OTHER one: it is Y who is X's sister.
+// The daemon took the grammatical subject either way, which does not merely
+// lose an edge — it makes `entity("Lea Lange")` answer, confidently, that Lea
+// is Axel's *brother*.
+
+/// The triples the 0.11.4 daemon actually returned for the three constructions,
+/// verbatim — accents, ligature and all. The copule is right; both possessive
+/// sentences come back mirrored.
+struct MeasuredExtractor;
+
+impl MeasuredExtractor {
+    const COPULE: &'static str = "Julien Lange est le père d'Axel Lange.";
+    const SISTER: &'static str = "Axel Lange a une sœur, Léa Lange.";
+    const BROTHER: &'static str = "Marie Dupont a un frère, Paul Dupont.";
+}
+
+impl Extractor for MeasuredExtractor {
+    fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        Ok(self.extract_graph(text)?.facts)
+    }
+
+    fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
+        let relation = |subject: &str, predicate: &str, object: &str| ExtractedRelation {
+            subject: subject.to_string(),
+            predicate: predicate.to_string(),
+            object: object.to_string(),
+        };
+        let relations = match text {
+            Self::COPULE => vec![relation("julien lange", "pere de", "axel lange")],
+            Self::SISTER => vec![
+                relation("axel lange", "soeur de", "léa lange"),
+                relation("léa lange", "frere de", "axel lange"),
+            ],
+            Self::BROTHER => vec![relation("marie dupont", "frere de", "paul dupont")],
+            _ => vec![],
+        };
+        Ok(Extraction {
+            facts: vec![ExtractedFact {
+                text: text.to_string(),
+                entities: vec![],
+            }],
+            relations,
+            attributes: vec![],
+        })
+    }
+}
+
+/// The predicates leaving `name`'s hub, so a direction can be asserted as the
+/// pair (who states it, about whom) rather than "an edge exists somewhere".
+fn outgoing(svc: &MemoryService<HashEmbedder>, name: &str) -> Vec<(String, u64)> {
+    svc.entity_profile(name)
+        .expect("profile lookup")
+        .map(|profile| {
+            profile
+                .relations
+                .into_iter()
+                .map(|r| (r.predicate, r.target_id))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The hub id of `name`, which must already exist.
+fn hub_id(svc: &MemoryService<HashEmbedder>, name: &str) -> u64 {
+    svc.entity_profile(name)
+        .expect("profile lookup")
+        .unwrap_or_else(|| panic!("{name} has a hub"))
+        .id
+}
+
+/// The nominal case, and the only guard against a "fix" that flips everything:
+/// a copule already binds the relation to the grammatical subject.
+#[test]
+fn a_copule_keeps_the_relation_on_the_grammatical_subject() {
+    let (_dir, svc) = service();
+    svc.remember_extracted(MeasuredExtractor::COPULE, &MeasuredExtractor, None)
+        .expect("extract and remember");
+
+    let axel = hub_id(&svc, "axel lange");
+    assert!(
+        outgoing(&svc, "julien lange").contains(&("pere de".to_string(), axel)),
+        "julien -[pere de]-> axel must survive untouched, got {:?}",
+        outgoing(&svc, "julien lange")
+    );
+    assert!(
+        outgoing(&svc, "axel lange").is_empty(),
+        "the child states nothing about the father here: {:?}",
+        outgoing(&svc, "axel lange")
+    );
+}
+
+#[test]
+fn a_possessive_binds_the_relation_to_the_person_it_introduces() {
+    let (_dir, svc) = service();
+    svc.remember_extracted(MeasuredExtractor::SISTER, &MeasuredExtractor, None)
+        .expect("extract and remember");
+
+    let axel = hub_id(&svc, "axel lange");
+    let lea = hub_id(&svc, "léa lange");
+    assert!(
+        outgoing(&svc, "léa lange").contains(&("soeur de".to_string(), axel)),
+        "Lea is the one introduced as the sister: lea -[soeur de]-> axel, got {:?}",
+        outgoing(&svc, "léa lange")
+    );
+    assert!(
+        outgoing(&svc, "axel lange").contains(&("frere de".to_string(), lea)),
+        "and Axel is her brother: axel -[frere de]-> lea, got {:?}",
+        outgoing(&svc, "axel lange")
+    );
+    assert!(
+        !outgoing(&svc, "léa lange")
+            .iter()
+            .any(|(predicate, _)| predicate == "frere de"),
+        "Lea must never be reported as anyone's brother: {:?}",
+        outgoing(&svc, "léa lange")
+    );
+}
+
+/// The same construction with a single triple and the masculine noun: the
+/// converse edge is not what carries the fix.
+#[test]
+fn a_possessive_with_one_triple_is_oriented_too() {
+    let (_dir, svc) = service();
+    svc.remember_extracted(MeasuredExtractor::BROTHER, &MeasuredExtractor, None)
+        .expect("extract and remember");
+
+    let marie = hub_id(&svc, "marie dupont");
+    assert!(
+        outgoing(&svc, "paul dupont").contains(&("frere de".to_string(), marie)),
+        "Paul is the brother: paul -[frere de]-> marie, got {:?}",
+        outgoing(&svc, "paul dupont")
+    );
+    assert!(
+        outgoing(&svc, "marie dupont").is_empty(),
+        "Marie is not her own brother's brother: {:?}",
+        outgoing(&svc, "marie dupont")
+    );
+}
+
 // --- Autograph: the same wiring, triggered by a plain `remember` -------------
 
 /// Counts how many times the extractor was actually invoked, so the tests can
@@ -501,5 +649,22 @@ fn autograph_accumulates_across_separate_remembers() {
         .expect("lookup")
         .expect("axel exists");
     assert_eq!(axel.attributes.get("age"), Some(&json!(15)));
-    assert!(axel.relations.iter().any(|r| r.predicate == "soeur de"));
+    assert!(axel.relations.iter().any(|r| r.predicate == "frere de"));
+}
+
+/// The plain-`remember` path is where the defect was measured, so it gets the
+/// same orientation guarantee as `remember_extracted` — the correction cannot
+/// live in one write path only.
+#[test]
+fn autograph_orients_a_possessive_the_same_way() {
+    let (_dir, svc) = autograph_service(std::sync::Arc::new(MeasuredExtractor));
+    svc.remember(MeasuredExtractor::SISTER, &[], None)
+        .expect("remember");
+
+    let axel = hub_id(&svc, "axel lange");
+    assert!(
+        outgoing(&svc, "léa lange").contains(&("soeur de".to_string(), axel)),
+        "autograph orients it too: lea -[soeur de]-> axel, got {:?}",
+        outgoing(&svc, "léa lange")
+    );
 }
