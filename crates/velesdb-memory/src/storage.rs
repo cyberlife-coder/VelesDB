@@ -62,6 +62,29 @@ pub trait MemoryStore {
         ttl_seconds: u64,
     ) -> Result<(), MemoryError>;
 
+    /// Store a fact with BOTH metadata and a durable TTL, in ONE write.
+    ///
+    /// Default: the historical two-call sequence, so a backend written before
+    /// this method keeps compiling and behaving as it did. Backends that can
+    /// write both at once should override it — the two-call form leaves the
+    /// fact live and expiring between the calls, so a short TTL can lapse in
+    /// the gap and the metadata write then fails on a fact that was perfectly
+    /// valid when the caller asked for it.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if persistence fails.
+    fn store_with_metadata_and_ttl(
+        &self,
+        id: u64,
+        content: &str,
+        embedding: &[f32],
+        metadata: &Metadata,
+        ttl_seconds: u64,
+    ) -> Result<(), MemoryError> {
+        self.store_with_ttl(id, content, embedding, ttl_seconds)?;
+        self.update_metadata(id, metadata)
+    }
+
     /// Merge `metadata` into an already-stored fact's payload, preserving any
     /// durable TTL. Used to combine metadata with an expiry (store both in
     /// two calls rather than needing every metadata×TTL combination as a
@@ -218,6 +241,20 @@ impl MemoryStore for NativeStore {
         self.memory
             .semantic()
             .update_metadata(id, metadata)
+            .map_err(MemoryError::from)
+    }
+
+    fn store_with_metadata_and_ttl(
+        &self,
+        id: u64,
+        content: &str,
+        embedding: &[f32],
+        metadata: &Metadata,
+        ttl_seconds: u64,
+    ) -> Result<(), MemoryError> {
+        self.memory
+            .semantic()
+            .store_with_metadata_and_ttl(id, content, embedding, metadata, ttl_seconds)
             .map_err(MemoryError::from)
     }
 

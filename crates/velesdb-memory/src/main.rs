@@ -254,12 +254,7 @@ async fn serve_http(
     let app = velesdb_memory::http::router(server, ct.child_token());
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
 
-    let ctrl_c_ct = ct.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            ctrl_c_ct.cancel();
-        }
-    });
+    spawn_shutdown_signals(ct.clone());
 
     if insecure {
         eprintln!(
@@ -431,6 +426,40 @@ fn build_configured_service(
         &store_path,
         embedder,
     )?)
+}
+
+/// Cancel `ct` on the signals a supervisor actually sends.
+///
+/// SIGINT alone is not enough. `launchctl kickstart -k`, `systemctl restart`
+/// and `docker stop` all send **SIGTERM**, and an unhandled SIGTERM kills the
+/// process outright: the streamable-HTTP sessions clients hold are dropped
+/// mid-flight, so the next call on a live session hangs until the client's own
+/// timeout instead of reconnecting. Handling it lets `with_graceful_shutdown`
+/// close those sessions, which is what turns a restart into a reconnect.
+#[cfg(feature = "http")]
+fn spawn_shutdown_signals(ct: tokio_util::sync::CancellationToken) {
+    let interrupt = ct.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            interrupt.cancel();
+        }
+    });
+
+    #[cfg(unix)]
+    tokio::spawn(async move {
+        // `signal()` only fails if the handler cannot be registered at all; a
+        // daemon that cannot listen for SIGTERM still serves, it just loses the
+        // graceful path, so this is not worth aborting startup for.
+        if let Ok(mut term) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            term.recv().await;
+            ct.cancel();
+        }
+    });
+    // On Windows there is no SIGTERM; Ctrl-C above is the whole contract.
+    #[cfg(not(unix))]
+    drop(ct);
 }
 
 /// Attach the extraction backend to the SERVICE when

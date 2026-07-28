@@ -235,6 +235,11 @@ path = "tests/http_insecure_process.rs"
 required-features = ["http"]
 
 [[test]]
+name = "graceful_shutdown_process"
+path = "tests/graceful_shutdown_process.rs"
+required-features = ["http"]
+
+[[test]]
 name = "config_store_path_process"
 path = "tests/config_store_path_process.rs"
 required-features = ["http"]
