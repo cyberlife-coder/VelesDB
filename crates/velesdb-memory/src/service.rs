@@ -163,6 +163,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     ///
     /// # Errors
     /// Returns [`MemoryError::EmptyFact`] for empty/whitespace facts,
+    /// [`MemoryError::FactTooLarge`] if the fact exceeds
+    /// [`crate::limits::MAX_EMBEDDABLE_TEXT_BYTES`],
+    /// [`MemoryError::SelfRelation`] if a link points the fact at itself,
     /// [`MemoryError::ReservedKey`] if `metadata` names a reserved key
     /// (`content` or any `_veles_`-prefixed system key, [`crate::storage::AUTO_DATE_FIELD`]
     /// excepted),
@@ -186,9 +189,12 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     ///
     /// The expiry is a durable TTL — persisted with the fact (reserved
     /// `_veles_expires_at` payload field), so it survives a process restart, and
-    /// expired facts stop being recalled. `None` (or `Some(0)`) stores the fact
-    /// permanently, exactly like [`Self::remember`]. Metadata and a TTL combine:
-    /// the metadata is written and the expiry preserved.
+    /// expired facts stop being recalled. `None` stores the fact permanently,
+    /// exactly like [`Self::remember`]; an explicit `Some(0)` is **refused**
+    /// ([`MemoryError::ZeroTtl`]) rather than silently normalised to
+    /// "permanent", which is the opposite of what a caller writing `0` means.
+    /// Metadata and a TTL combine: the metadata is written and the expiry
+    /// preserved.
     ///
     /// The stored metadata is **auto-stamped with today's date** under
     /// [`crate::storage::AUTO_DATE_FIELD`] (`_veles_date`, a `YYYYMMDD`
@@ -234,8 +240,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         run_autograph: bool,
     ) -> Result<u64, MemoryError> {
         let fact = fact.trim();
-        self.validate_write(fact, links, metadata)?;
+        self.validate_write(fact, links, metadata, ttl_seconds)?;
         let fact_id = id::stable_id(fact);
+        reject_self_links(fact_id, links)?;
         let existed_before = !links.is_empty() && self.store.get(fact_id)?.is_some();
         self.write_fact(fact_id, fact, metadata, ttl_seconds)?;
         self.link_or_rollback(fact_id, links, existed_before)?;
@@ -243,18 +250,19 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         Ok(fact_id)
     }
 
-    /// Every deterministic rejection, before anything is written: a blank fact,
-    /// reserved or oversized metadata, and each link's label and target. Run as
-    /// one pass so a bad input never leaves a half-written fact behind.
+    /// Every deterministic rejection, before anything is written: a blank or
+    /// over-long fact, an explicit zero TTL, reserved or oversized metadata,
+    /// and each link's label and target. Run as one pass so a bad input never
+    /// leaves a half-written fact behind.
     fn validate_write(
         &self,
         fact: &str,
         links: &[Link],
         metadata: Option<&Metadata>,
+        ttl_seconds: Option<u64>,
     ) -> Result<(), MemoryError> {
-        if fact.is_empty() {
-            return Err(MemoryError::EmptyFact);
-        }
+        validate_fact(fact)?;
+        reject_zero_ttl(ttl_seconds)?;
         reject_reserved_keys(metadata)?;
         reject_oversized_metadata(metadata)?;
         self.validate_links(links)
@@ -270,13 +278,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     ) -> Result<(), MemoryError> {
         let embedding = self.embedder.embed(fact)?;
         let stamped = stamp_with_today(metadata);
-        self.store_fact(
-            fact_id,
-            fact,
-            &embedding,
-            stamped.as_ref(),
-            positive_ttl(ttl_seconds),
-        )
+        // `ttl_seconds` is already known positive-or-absent: `validate_write`
+        // refuses an explicit `Some(0)` before any of this runs.
+        self.store_fact(fact_id, fact, &embedding, stamped.as_ref(), ttl_seconds)
     }
 
     /// Validate EVERY link property — relation label and target existence —
@@ -892,11 +896,20 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// storage fault — and the graph never gains an edge dangling off a memory
     /// that was never stored.
     ///
+    /// A self-loop (`from == to`) is refused: it states nothing, and `why`
+    /// traverses it like any other edge, so it only adds noise to the
+    /// evidence trail. The same rule covers [`Self::remember`]'s `links`.
+    ///
     /// # Errors
-    /// Returns [`MemoryError::UnknownMemory`] if either endpoint is missing, or
+    /// Returns [`MemoryError::InvalidRelation`] for a bad label,
+    /// [`MemoryError::SelfRelation`] if both endpoints are the same memory,
+    /// [`MemoryError::UnknownMemory`] if either endpoint is missing, or
     /// a storage error if the edge cannot be created.
     pub fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
         validate_relation(relation)?;
+        if from == to {
+            return Err(MemoryError::SelfRelation(from));
+        }
         self.ensure_exists(from)?;
         self.ensure_exists(to)?;
         self.store.relate(from, to, relation)

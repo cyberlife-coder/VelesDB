@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use common::{meta, service};
 use serde_json::Value;
+use velesdb_memory::{ErrorCategory, MemoryError};
 
 // --- Nominal ---------------------------------------------------------------
 
@@ -49,18 +50,35 @@ fn remember_with_ttl_combines_with_metadata() {
 // --- Edge ------------------------------------------------------------------
 
 #[test]
-fn zero_ttl_stores_permanently() {
+fn zero_ttl_is_refused_instead_of_silently_storing_a_permanent_fact() {
+    // Regression (#1654-3): `Some(0)` used to be normalised to "no TTL", so a
+    // caller who wrote 0 meaning "expire immediately" got a PERMANENT fact —
+    // the exact opposite of the intent, with no signal at all. An explicit
+    // per-call 0 is now a refusal; 0 as *configuration* (`with_default_ttl`,
+    // a compile policy's `source_ttl_seconds`) still means "no TTL policy",
+    // which is a default and not an intent about one fact.
     let (_dir, svc) = service();
-    // Some(0) is normalised to "no TTL" (permanent) — it must NOT delete the fact.
-    let id = svc
-        .remember_with_ttl("permanent fact", &[], None, Some(0))
-        .expect("remember with zero ttl");
 
-    let hits = svc.recall("permanent fact", 5, None).expect("recall");
+    let err = svc
+        .remember_with_ttl("permanent fact", &[], None, Some(0))
+        .expect_err("an explicit ttl_seconds of 0 must be refused");
 
     assert!(
-        hits.iter().any(|h| h.id == id),
-        "ttl_seconds = 0 must store permanently, not expire immediately"
+        matches!(err, MemoryError::ZeroTtl),
+        "expected ZeroTtl, got {err:?}"
+    );
+    assert_eq!(err.category(), ErrorCategory::InvalidInput);
+    let message = err.to_string();
+    assert!(
+        message.contains("omit it to store the fact permanently"),
+        "the message must say what to do instead, got {message}"
+    );
+
+    // And nothing was written under either intent.
+    let hits = svc.recall("permanent fact", 5, None).expect("recall");
+    assert!(
+        hits.is_empty(),
+        "a refused TTL must not leave the fact stored"
     );
 }
 

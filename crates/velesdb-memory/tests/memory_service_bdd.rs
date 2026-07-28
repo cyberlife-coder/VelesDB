@@ -7,7 +7,8 @@ mod common;
 
 use common::{meta, service};
 use serde_json::json;
-use velesdb_memory::{Link, MemoryError, AUTO_DATE_FIELD};
+use velesdb_memory::limits::MAX_EMBEDDABLE_TEXT_BYTES;
+use velesdb_memory::{ErrorCategory, Link, MemoryError, AUTO_DATE_FIELD};
 
 // --- Nominal ---------------------------------------------------------------
 
@@ -335,6 +336,73 @@ fn recall_with_empty_query_returns_empty() {
     let hits = svc.recall("   ", 5, None).expect("recall with blank query");
 
     assert!(hits.is_empty(), "a blank query recalls nothing");
+}
+
+#[test]
+fn remember_refuses_a_fact_past_the_embeddable_cap_and_names_the_limit() {
+    // Regression (#1654-2): an over-long fact used to reach the embedder and
+    // come back as `embedding error: embedding backend error: ollama
+    // embeddings call failed` — a raw backend fault naming neither a limit nor
+    // the size that broke it. The cap must be enforced BEFORE the embedder, so
+    // the message is actionable whatever the backend is.
+    let (_dir, svc) = service();
+    let too_long = "c".repeat(MAX_EMBEDDABLE_TEXT_BYTES + 1);
+
+    let err = svc
+        .remember(&too_long, &[], None)
+        .expect_err("a fact past the embeddable cap must be refused");
+
+    assert!(
+        matches!(err, MemoryError::FactTooLarge { bytes, max }
+            if bytes == MAX_EMBEDDABLE_TEXT_BYTES + 1 && max == MAX_EMBEDDABLE_TEXT_BYTES),
+        "expected FactTooLarge carrying both sizes, got {err:?}"
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains(&MAX_EMBEDDABLE_TEXT_BYTES.to_string())
+            && message.contains(&(MAX_EMBEDDABLE_TEXT_BYTES + 1).to_string()),
+        "the message must name the limit AND the received size, got {message}"
+    );
+    assert_eq!(err.category(), ErrorCategory::InvalidInput);
+
+    // Nothing was stored: the refusal happens before any write.
+    let hits = svc.recall(&too_long, 5, None).expect("recall");
+    assert!(hits.is_empty(), "a refused fact must not be persisted");
+}
+
+#[test]
+fn remember_accepts_a_fact_exactly_at_the_embeddable_cap() {
+    let (_dir, svc) = service();
+    let at_cap = "c".repeat(MAX_EMBEDDABLE_TEXT_BYTES);
+
+    svc.remember(&at_cap, &[], None)
+        .expect("a fact exactly at the cap must still be accepted");
+}
+
+#[test]
+fn relate_refuses_a_self_loop() {
+    // Regression (#1654-5): `relate(X, X, "soi")` used to create an edge. A
+    // self-loop states nothing and `why` traverses it like any other edge, so
+    // it only adds noise to the evidence trail.
+    let (_dir, svc) = service();
+    let id = svc
+        .remember("a fact that points at itself", &[], None)
+        .expect("remember");
+
+    let err = svc
+        .relate(id, id, "soi")
+        .expect_err("a self-loop must be refused");
+
+    assert!(
+        matches!(err, MemoryError::SelfRelation(endpoint) if endpoint == id),
+        "expected SelfRelation naming the endpoint, got {err:?}"
+    );
+    assert_eq!(err.category(), ErrorCategory::InvalidInput);
+    let message = err.to_string();
+    assert!(
+        message.contains("two different ids"),
+        "the message must say what to do instead, got {message}"
+    );
 }
 
 #[test]

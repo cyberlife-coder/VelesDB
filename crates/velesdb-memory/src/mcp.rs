@@ -163,20 +163,17 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = crate::schema::wire_safe_output_schema::<RememberResult>(),
-        description = "Store a fact in durable local memory. Optionally link it to existing memories (graph) and tag it with structured metadata like project/author/type/status/date (ColumnStore) for later filtering — metadata is capped at 64 KiB serialized. Set `ttl_seconds` to make the fact expire after a delay (a durable TTL that survives restarts); omit it for a permanent memory. Returns the fact's stable id. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
+        description = "Store a fact in durable local memory. Optionally link it to existing memories (graph) and tag it with structured metadata like project/author/type/status/date (ColumnStore) for later filtering — metadata is capped at 64 KiB serialized. A fact is capped at 2048 bytes: that is roughly what the embedding model's context window holds, and a longer one is REFUSED with its size, not silently mangled — split a long passage into several atomic facts, or compile it with `compile_context` and remember a summary. Set `ttl_seconds` to make the fact expire after a delay (a durable TTL that survives restarts); omit it for a permanent memory — `ttl_seconds: 0` is refused, not read as \"never\". Returns the fact's stable id. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
         input_schema = id_wire_input_schema::<RememberParams>(&["target"])
     )]
     async fn remember(
         &self,
         Parameters(params): Parameters<RememberParams>,
     ) -> Result<Json<RememberResult>, ErrorData> {
-        if params.fact.len() > MAX_FACT_BYTES {
-            return Err(ErrorData::new(
-                ErrorCode::INVALID_PARAMS,
-                format!("fact exceeds maximum size of {MAX_FACT_BYTES} bytes"),
-                None,
-            ));
-        }
+        // No size pre-check here: `MemoryService::remember_with_ttl` refuses an
+        // over-long fact itself (`MAX_EMBEDDABLE_TEXT_BYTES`, far below
+        // `MAX_FACT_BYTES`), with a message naming the cap AND the received
+        // size — so every adapter reports the same thing, from one place.
         let service = Arc::clone(&self.service);
         let RememberParams {
             fact,
@@ -330,7 +327,7 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = crate::schema::wire_safe_output_schema::<RelateResult>(),
-        description = "Create a typed, directional link between two memories (`from` → `to`) labeled by `relation`. These links are the graph edges that `why` and `recall_fused` later traverse to surface connected facts that share no words with the query — build the graph with `relate` so multi-hop reasoning works (e.g. link a decision to its cause, a fact to its source, a task to the person it concerns). Direction matters: traversal follows OUTGOING edges only, so point `from` at the memory you will later ask `why` about and `to` at its evidence (decision → cause, fact → source) — an edge pointing INTO a memory is invisible to `why(that memory)`. Idempotent per (from, relation, to). Returns the new edge id. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
+        description = "Create a typed, directional link between two memories (`from` → `to`) labeled by `relation`. These links are the graph edges that `why` and `recall_fused` later traverse to surface connected facts that share no words with the query — build the graph with `relate` so multi-hop reasoning works (e.g. link a decision to its cause, a fact to its source, a task to the person it concerns). Direction matters: traversal follows OUTGOING edges only, so point `from` at the memory you will later ask `why` about and `to` at its evidence (decision → cause, fact → source) — an edge pointing INTO a memory is invisible to `why(that memory)`. Idempotent per (from, relation, to); `from` and `to` must be DIFFERENT memories — a self-loop states nothing and only adds noise to `why`'s evidence trail, so it is refused. Returns the new edge id. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
         input_schema = id_wire_input_schema::<RelateParams>(&["from", "to"])
     )]
     async fn relate(
