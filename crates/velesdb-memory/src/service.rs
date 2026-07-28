@@ -458,7 +458,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// # Errors
     /// Returns [`MemoryError`] if the store lookup fails.
     pub fn entity_profile(&self, name: &str) -> Result<Option<EntityProfile>, MemoryError> {
-        let key = name.trim().to_lowercase();
+        let key = canonical_entity_name(name);
         if key.is_empty() {
             return Ok(None);
         }
@@ -1107,10 +1107,78 @@ fn reject_oversized_metadata(metadata: Option<&Metadata>) -> Result<(), MemoryEr
     Ok(())
 }
 
-/// Normalise a requested TTL: `Some(0)` (and `None`) mean "no expiry" — the fact
-/// is stored permanently. Any positive value is kept as-is.
-fn positive_ttl(ttl_seconds: Option<u64>) -> Option<u64> {
+/// Normalise a TTL supplied as *configuration*: `Some(0)` (and `None`) mean
+/// "no TTL policy" — the fact is stored permanently. Any positive value is
+/// kept as-is.
+///
+/// Deliberately NOT applied to `remember`'s own `ttl_seconds` any more: an
+/// explicit per-call `0` is an intent about one fact ("expire it"), and
+/// silently turning that into "permanent" is the opposite (see
+/// [`reject_zero_ttl`]). A compile policy's `source_ttl_seconds`, on the
+/// other hand, is a knob about a whole server, where `0` reading as "no
+/// policy" is the ordinary, unsurprising meaning.
+pub(crate) fn positive_ttl(ttl_seconds: Option<u64>) -> Option<u64> {
     ttl_seconds.filter(|&seconds| seconds > 0)
+}
+
+/// The canonical form of an entity name: trimmed and lowercased, exactly as
+/// an extracted entity is keyed.
+///
+/// Public because a lookup MISS has to echo it too: an adapter that answered
+/// `name: ""` when nothing matched left a caller running several lookups
+/// unable to pair a response with its question (issue #1654). Hit and miss go
+/// through this one function, so the two can never drift.
+#[must_use]
+pub fn canonical_entity_name(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// Refuse a fact that cannot be stored as written: blank, or past the size an
+/// embedding model still accepts.
+///
+/// The size check runs BEFORE [`MemoryService::write_fact`] calls the
+/// embedder, so an over-long fact is reported with its own size and the cap
+/// instead of whatever the backend says — issue #1654 saw `ollama embeddings
+/// call failed`, which names neither.
+fn validate_fact(fact: &str) -> Result<(), MemoryError> {
+    if fact.is_empty() {
+        return Err(MemoryError::EmptyFact);
+    }
+    if fact.len() > crate::limits::MAX_EMBEDDABLE_TEXT_BYTES {
+        return Err(MemoryError::FactTooLarge {
+            bytes: fact.len(),
+            max: crate::limits::MAX_EMBEDDABLE_TEXT_BYTES,
+        });
+    }
+    Ok(())
+}
+
+/// Refuse an explicit per-call TTL of `0`.
+///
+/// `0` used to be normalised to "no expiry", so a caller who meant "expire
+/// immediately" silently got a **permanent** fact — the opposite intent, with
+/// no signal (issue #1654). A TTL supplied as *configuration*
+/// (`McpServer::with_default_ttl`, a compile policy's `source_ttl_seconds`)
+/// still reads `0` as "no TTL policy": that is a default about a whole
+/// server, not an intent about one fact, and it is deliberately untouched.
+fn reject_zero_ttl(ttl_seconds: Option<u64>) -> Result<(), MemoryError> {
+    if ttl_seconds == Some(0) {
+        return Err(MemoryError::ZeroTtl);
+    }
+    Ok(())
+}
+
+/// Refuse a `remember` link that points the fact at itself.
+///
+/// The same rule [`MemoryService::relate`] enforces, applied to the other way
+/// a self-loop can be created: re-remembering existing content yields its
+/// existing id, so a caller CAN name that id as a link target. Without this
+/// the `relate` guard would only close half the door.
+fn reject_self_links(fact_id: u64, links: &[Link]) -> Result<(), MemoryError> {
+    if links.iter().any(|link| link.target == fact_id) {
+        return Err(MemoryError::SelfRelation(fact_id));
+    }
+    Ok(())
 }
 
 /// [`MemoryService::remember_with_ttl`]'s auto-date stamp: `metadata` with

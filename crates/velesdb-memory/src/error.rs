@@ -46,6 +46,43 @@ pub enum MemoryError {
     #[error("memory {0} does not exist")]
     UnknownMemory(u64),
 
+    /// A fact was longer than [`crate::limits::MAX_EMBEDDABLE_TEXT_BYTES`],
+    /// the size an embedding model still accepts. Refused BEFORE the embedder
+    /// is called, so the caller learns the limit and its own size instead of
+    /// an opaque backend fault (`ollama embeddings call failed`).
+    #[error(
+        "fact of {bytes} bytes exceeds the embeddable cap of {max} bytes: split it into several \
+         shorter facts, or compile the long text with `compile_context` and remember a summary"
+    )]
+    FactTooLarge {
+        /// The size of the rejected fact, in bytes.
+        bytes: usize,
+        /// The cap that was exceeded ([`crate::limits::MAX_EMBEDDABLE_TEXT_BYTES`]).
+        max: usize,
+    },
+
+    /// [`crate::service::MemoryService::remember_with_ttl`] was given
+    /// `Some(0)`. An explicit per-call `0` used to be normalised to "no
+    /// expiry", i.e. a caller who meant "expire immediately" silently got a
+    /// **permanent** fact — the exact opposite intent, with no signal. A TTL
+    /// supplied as *configuration* (`with_default_ttl`, a compile policy's
+    /// `source_ttl_seconds`) still reads `0` as "no TTL policy": that is a
+    /// default, not an intent about one fact.
+    #[error(
+        "ttl_seconds must be greater than 0: omit it to store the fact permanently, or pass the \
+         number of seconds the fact should live"
+    )]
+    ZeroTtl,
+
+    /// [`crate::service::MemoryService::relate`] was asked to link a memory to
+    /// itself. A self-loop states nothing and is traversed by `why` like any
+    /// other edge, so it only adds noise to the evidence trail.
+    #[error(
+        "a memory cannot relate to itself (both endpoints are {0}): pass two different ids, or \
+         record the property in the fact's own metadata"
+    )]
+    SelfRelation(u64),
+
     /// Caller metadata or a recall filter named a reserved key (`content` or a
     /// `_veles_`-prefixed system key), which callers may not set or filter on.
     /// [`crate::storage::AUTO_DATE_FIELD`] is the one documented exception:
@@ -149,6 +186,20 @@ pub enum MemoryError {
     #[error("the request contains no fragment with id {0}")]
     FragmentNotFound(u64),
 
+    /// [`crate::service::MemoryService::save_working_context`] was given a
+    /// `WorkingContext` with nothing in it. The write is an idempotent upsert,
+    /// so an empty save would *replace* — that is, destroy — the rich state
+    /// already stored under this project and session. The one tool whose whole
+    /// job is surviving a context loss must not be able to cause one on a call
+    /// that carries nothing.
+    #[cfg(feature = "context")]
+    #[error(
+        "working context is empty: fill at least one of goal, active_constraints, verified_facts, \
+         open_hypotheses, decisions, exact_evidence or pending_actions — saving an empty state \
+         would replace whatever is already stored under this project and session"
+    )]
+    EmptyWorkingContext,
+
     /// A persisted working context could not be (de)serialized — the stored
     /// payload predates or postdates this crate's schema.
     #[cfg(feature = "context")]
@@ -222,7 +273,12 @@ impl MemoryError {
             | Self::ReservedKey(_)
             | Self::InvalidFilter(_)
             | Self::InvalidRelation(_)
+            | Self::FactTooLarge { .. }
+            | Self::ZeroTtl
+            | Self::SelfRelation(_)
             | Self::MetadataTooLarge { .. } => ErrorCategory::InvalidInput,
+            #[cfg(feature = "context")]
+            Self::EmptyWorkingContext => ErrorCategory::InvalidInput,
             #[cfg(feature = "context")]
             Self::ContextBudget { .. } | Self::ContextOverLimit(_) | Self::SegmentationError(_) => {
                 ErrorCategory::InvalidInput
