@@ -537,4 +537,10 @@ pub(super) struct RememberExtractedResult {
     /// Decimal-string twins of `ids`, same order (issue #1468) — see
     /// [`RememberResult::id_str`].
     pub(super) ids_str: Vec<String>,
+    /// Extracted facts DROPPED for exceeding the embeddable text cap
+    /// (2048 bytes). Additive and always present: a skip the caller cannot
+    /// see is indistinguishable from the model extracting fewer facts, and
+    /// this tool exists precisely so the caller does not have to verify what
+    /// it stored.
+    pub(super) skipped_over_cap: usize,
 }

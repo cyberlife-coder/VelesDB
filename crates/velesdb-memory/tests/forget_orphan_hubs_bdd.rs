@@ -11,33 +11,16 @@
 mod common;
 
 use common::service;
-use velesdb_memory::extract::{ExtractError, ExtractedFact, Extractor};
 
-/// Two facts sharing the topic `rust`; only the first mentions `parser`.
-/// Forgetting the first must therefore collect `parser` and keep `rust`.
-struct SharedTopicExtractor;
-
-impl Extractor for SharedTopicExtractor {
-    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
-        Ok(vec![
-            ExtractedFact {
-                text: "Alice ships the parser in Rust.".to_string(),
-                entities: vec!["rust".to_string(), "parser".to_string()],
-            },
-            ExtractedFact {
-                text: "Bob maintains the Rust toolchain.".to_string(),
-                entities: vec!["rust".to_string()],
-            },
-        ])
-    }
-}
+use common::SharedTopicExtractor;
 
 #[test]
 fn forget_collects_a_hub_no_surviving_fact_mentions() {
     let (_dir, svc) = service();
     let ids = svc
         .remember_extracted("seed", &SharedTopicExtractor, None)
-        .expect("remember_extracted");
+        .expect("remember_extracted")
+        .ids;
 
     assert!(
         svc.entity_profile("parser")
@@ -62,7 +45,8 @@ fn forget_keeps_a_hub_another_fact_still_mentions() {
     let (_dir, svc) = service();
     let ids = svc
         .remember_extracted("seed", &SharedTopicExtractor, None)
-        .expect("remember_extracted");
+        .expect("remember_extracted")
+        .ids;
 
     svc.forget(ids[0]).expect("forget the first fact");
 
@@ -80,7 +64,8 @@ fn forgetting_every_fact_leaves_no_hub_behind() {
     let (_dir, svc) = service();
     let ids = svc
         .remember_extracted("seed", &SharedTopicExtractor, None)
-        .expect("remember_extracted");
+        .expect("remember_extracted")
+        .ids;
 
     for id in ids {
         svc.forget(id).expect("forget");
