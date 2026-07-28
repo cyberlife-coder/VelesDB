@@ -98,6 +98,16 @@ fn matches_all(payload: &Map<String, Value>, filter: &Metadata) -> bool {
     filter.iter().all(|(k, v)| payload.get(k) == Some(v))
 }
 
+/// Map one stored [`WasmEdge`](crate::graph_store::WasmEdge) to the
+/// wire-facing [`MemoryEdge`] shape — shared by both edge directions.
+fn to_memory_edge(e: &crate::graph_store::WasmEdge) -> MemoryEdge {
+    MemoryEdge {
+        from: e.source,
+        to: e.target,
+        relation: e.label.clone(),
+    }
+}
+
 struct Inner {
     dimension: usize,
     facts: HashMap<u64, Fact>,
@@ -302,11 +312,20 @@ impl MemoryStore for WasmStore {
             // degree — counting dead edges would under-weight every
             // graph-reached fact relative to the native ranking.
             .filter(|e| e.source == id && inner.live_fact(e.target).is_some())
-            .map(|e| MemoryEdge {
-                from: e.source,
-                to: e.target,
-                relation: e.label.clone(),
-            })
+            .map(to_memory_edge)
+            .collect())
+    }
+
+    fn incoming_relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
+        let inner = self.inner.borrow();
+        Ok(inner
+            .graph
+            .edges()
+            .iter()
+            // Mirror of `relations`: the far end is the SOURCE here, and an
+            // edge from a TTL-expired fact is just as dead as one into it.
+            .filter(|e| e.target == id && inner.live_fact(e.source).is_some())
+            .map(to_memory_edge)
             .collect())
     }
 

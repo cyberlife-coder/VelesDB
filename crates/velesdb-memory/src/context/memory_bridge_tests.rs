@@ -653,6 +653,10 @@ macro_rules! delegate_untouched_store_methods {
             self.inner.relations(id)
         }
 
+        fn incoming_relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
+            self.inner.incoming_relations(id)
+        }
+
         fn count(&self) -> usize {
             self.inner.count()
         }

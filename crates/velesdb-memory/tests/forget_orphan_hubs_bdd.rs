@@ -111,3 +111,55 @@ fn forget_on_a_plain_fact_without_hubs_still_reports_found() {
          never created a hub"
     );
 }
+
+/// Issue #1662. The collector decided a hub was orphaned by reading only its
+/// OUTGOING `mentions` edges — the pairs `remember_extracted` writes in both
+/// directions. A `relate` posed by hand writes one direction only, and
+/// relating a fact TO a hub is reachable: `entity()` hands out the hub id and
+/// `relate` accepts any live target.
+///
+/// So a live fact could point at a hub the collector could not see, and the
+/// hub was swept from under it — the caller's own edge silently lost, with
+/// no error anywhere.
+#[test]
+fn forget_keeps_a_hub_a_live_fact_still_points_at() {
+    let (_dir, svc) = service();
+    let ids = svc
+        .remember_extracted("seed", &SharedTopicExtractor, None)
+        .expect("remember_extracted");
+    let hub = svc
+        .entity_profile("parser")
+        .expect("entity_profile")
+        .expect("precondition: the hub exists")
+        .id;
+
+    // A caller's own edge, one direction only — exactly what `relate` writes.
+    let anchor = svc
+        .remember(
+            "An unrelated note that cites the parser hub by hand.",
+            &[],
+            None,
+        )
+        .expect("remember the anchor fact");
+    svc.relate(anchor, hub, "cites").expect("relate by hand");
+
+    // The only fact whose extraction created `parser` goes away.
+    svc.forget(ids[0]).expect("forget the extracted fact");
+
+    assert!(
+        svc.entity_profile("parser")
+            .expect("entity_profile after forget")
+            .is_some(),
+        "a hub a live fact still points at must survive the loss of its last \
+         `mentions` edge — the caller's edge is the reference the collector missed"
+    );
+
+    // And once that anchor goes too, nothing references the hub any more.
+    svc.forget(anchor).expect("forget the anchor");
+    assert!(
+        svc.entity_profile("parser")
+            .expect("entity_profile after the anchor is gone")
+            .is_none(),
+        "with its last referent gone the hub is collected as before"
+    );
+}

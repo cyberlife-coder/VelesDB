@@ -175,6 +175,13 @@ pub trait MemoryStore {
     /// Returns [`MemoryError`] if storage access fails.
     fn relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError>;
 
+    /// The incoming edges of `id` — the mirror of [`Self::relations`], with
+    /// the same liveness rule applied to the far end (here the *source*).
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if storage access fails.
+    fn incoming_relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError>;
+
     /// The total number of live (non-expired) tracked facts, including
     /// internal entity hubs — used as a corpus-size proxy for idf weighting.
     fn count(&self) -> usize;
@@ -345,22 +352,32 @@ impl MemoryStore for NativeStore {
     }
 
     fn relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
-        Ok(self
-            .memory
-            .semantic()
-            .relations(id)?
-            .into_iter()
-            .map(|edge| MemoryEdge {
-                from: edge.source(),
-                to: edge.target(),
-                relation: edge.label().to_owned(),
-            })
-            .collect())
+        Ok(to_memory_edges(self.memory.semantic().relations(id)?))
+    }
+
+    fn incoming_relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
+        Ok(to_memory_edges(
+            self.memory.semantic().incoming_relations(id)?,
+        ))
     }
 
     fn count(&self) -> usize {
         self.memory.semantic().count()
     }
+}
+
+/// Map core [`GraphEdge`](velesdb_core::collection::graph::GraphEdge)s to the
+/// wire-facing [`MemoryEdge`] shape — shared by both edge directions.
+#[cfg(feature = "persistence")]
+fn to_memory_edges(edges: Vec<velesdb_core::collection::graph::GraphEdge>) -> Vec<MemoryEdge> {
+    edges
+        .into_iter()
+        .map(|edge| MemoryEdge {
+            from: edge.source(),
+            to: edge.target(),
+            relation: edge.label().to_owned(),
+        })
+        .collect()
 }
 
 #[cfg(feature = "persistence")]
