@@ -163,6 +163,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     ///
     /// # Errors
     /// Returns [`MemoryError::EmptyFact`] for empty/whitespace facts,
+    /// [`MemoryError::FactTooLarge`] if the fact exceeds
+    /// [`crate::limits::MAX_EMBEDDABLE_TEXT_BYTES`],
+    /// [`MemoryError::SelfRelation`] if a link points the fact at itself,
     /// [`MemoryError::ReservedKey`] if `metadata` names a reserved key
     /// (`content` or any `_veles_`-prefixed system key, [`crate::storage::AUTO_DATE_FIELD`]
     /// excepted),
@@ -186,9 +189,12 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     ///
     /// The expiry is a durable TTL — persisted with the fact (reserved
     /// `_veles_expires_at` payload field), so it survives a process restart, and
-    /// expired facts stop being recalled. `None` (or `Some(0)`) stores the fact
-    /// permanently, exactly like [`Self::remember`]. Metadata and a TTL combine:
-    /// the metadata is written and the expiry preserved.
+    /// expired facts stop being recalled. `None` stores the fact permanently,
+    /// exactly like [`Self::remember`]; an explicit `Some(0)` is **refused**
+    /// ([`MemoryError::ZeroTtl`]) rather than silently normalised to
+    /// "permanent", which is the opposite of what a caller writing `0` means.
+    /// Metadata and a TTL combine: the metadata is written and the expiry
+    /// preserved.
     ///
     /// The stored metadata is **auto-stamped with today's date** under
     /// [`crate::storage::AUTO_DATE_FIELD`] (`_veles_date`, a `YYYYMMDD`
@@ -234,8 +240,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         run_autograph: bool,
     ) -> Result<u64, MemoryError> {
         let fact = fact.trim();
-        self.validate_write(fact, links, metadata)?;
+        self.validate_write(fact, links, metadata, ttl_seconds)?;
         let fact_id = id::stable_id(fact);
+        reject_self_links(fact_id, links)?;
         let existed_before = !links.is_empty() && self.store.get(fact_id)?.is_some();
         self.write_fact(fact_id, fact, metadata, ttl_seconds)?;
         self.link_or_rollback(fact_id, links, existed_before)?;
@@ -243,18 +250,19 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         Ok(fact_id)
     }
 
-    /// Every deterministic rejection, before anything is written: a blank fact,
-    /// reserved or oversized metadata, and each link's label and target. Run as
-    /// one pass so a bad input never leaves a half-written fact behind.
+    /// Every deterministic rejection, before anything is written: a blank or
+    /// over-long fact, an explicit zero TTL, reserved or oversized metadata,
+    /// and each link's label and target. Run as one pass so a bad input never
+    /// leaves a half-written fact behind.
     fn validate_write(
         &self,
         fact: &str,
         links: &[Link],
         metadata: Option<&Metadata>,
+        ttl_seconds: Option<u64>,
     ) -> Result<(), MemoryError> {
-        if fact.is_empty() {
-            return Err(MemoryError::EmptyFact);
-        }
+        validate_fact(fact)?;
+        reject_zero_ttl(ttl_seconds)?;
         reject_reserved_keys(metadata)?;
         reject_oversized_metadata(metadata)?;
         self.validate_links(links)
@@ -270,13 +278,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     ) -> Result<(), MemoryError> {
         let embedding = self.embedder.embed(fact)?;
         let stamped = stamp_with_today(metadata);
-        self.store_fact(
-            fact_id,
-            fact,
-            &embedding,
-            stamped.as_ref(),
-            positive_ttl(ttl_seconds),
-        )
+        // `ttl_seconds` is already known positive-or-absent: `validate_write`
+        // refuses an explicit `Some(0)` before any of this runs.
+        self.store_fact(fact_id, fact, &embedding, stamped.as_ref(), ttl_seconds)
     }
 
     /// Validate EVERY link property — relation label and target existence —
@@ -347,9 +351,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let Some(extractor) = self.autograph.as_ref() else {
             return;
         };
-        let Ok(extraction) = extractor.extract_graph(fact) else {
+        let Ok(mut extraction) = extractor.extract_graph(fact) else {
             return;
         };
+        crate::extract::orient_possessive_kinship(fact, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64)> = HashSet::new();
         let mut seeded: HashSet<u64> = HashSet::new();
@@ -418,7 +423,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         if text.is_empty() {
             return Err(MemoryError::EmptyFact);
         }
-        let extraction = extractor.extract_graph(text)?;
+        let mut extraction = extractor.extract_graph(text)?;
+        crate::extract::orient_possessive_kinship(text, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64)> = HashSet::new();
         let mut seeded: HashSet<u64> = HashSet::new();
@@ -451,14 +457,14 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// looks done and silently returns nothing.
     ///
     /// `name` is canonicalized exactly like an extracted entity (trimmed,
-    /// lowercased), so the caller may pass `"Axel Lange"` and reach the node
-    /// built from `"axel lange"`. Returns `None` when no hub exists for the
+    /// lowercased), so the caller may pass `"Theo Durand"` and reach the node
+    /// built from `"theo durand"`. Returns `None` when no hub exists for the
     /// name — nothing has ever mentioned that entity.
     ///
     /// # Errors
     /// Returns [`MemoryError`] if the store lookup fails.
     pub fn entity_profile(&self, name: &str) -> Result<Option<EntityProfile>, MemoryError> {
-        let key = name.trim().to_lowercase();
+        let key = canonical_entity_name(name);
         if key.is_empty() {
             return Ok(None);
         }
@@ -540,8 +546,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// metadata, so `recall_where` can filter on it (`age >= 15`).
     ///
     /// The write goes through `update_metadata`, which **merges** rather than
-    /// replaces. That is the whole point: learning "Axel has a sister" after
-    /// "Axel is 15" must not erase the age. Re-storing the hub payload wholesale
+    /// replaces. That is the whole point: learning "Theo has a sister" after
+    /// "Theo is 15" must not erase the age. Re-storing the hub payload wholesale
     /// would silently drop every attribute learned in an earlier session.
     ///
     /// Values keep the JSON type the extractor produced. `recall_where`
@@ -710,8 +716,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let id = id::stable_id(&format!("{HUB_ID_SALT}{key}"));
         // An existing hub is left exactly as it is. Re-storing it would rewrite
         // the payload to the bare hub marker and destroy every attribute merged
-        // onto it by an earlier call — learning "Axel has a sister" would erase
-        // "Axel is 15", because a later sentence re-resolves the same hub. The
+        // onto it by an earlier call — learning "Theo has a sister" would erase
+        // "Theo is 15", because a later sentence re-resolves the same hub. The
         // content is a pure function of `key`, so there is nothing to refresh;
         // skipping also avoids re-embedding a hub on every single mention.
         if self.store.get(id)?.is_some() {
@@ -892,11 +898,20 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// storage fault — and the graph never gains an edge dangling off a memory
     /// that was never stored.
     ///
+    /// A self-loop (`from == to`) is refused: it states nothing, and `why`
+    /// traverses it like any other edge, so it only adds noise to the
+    /// evidence trail. The same rule covers [`Self::remember`]'s `links`.
+    ///
     /// # Errors
-    /// Returns [`MemoryError::UnknownMemory`] if either endpoint is missing, or
+    /// Returns [`MemoryError::InvalidRelation`] for a bad label,
+    /// [`MemoryError::SelfRelation`] if both endpoints are the same memory,
+    /// [`MemoryError::UnknownMemory`] if either endpoint is missing, or
     /// a storage error if the edge cannot be created.
     pub fn relate(&self, from: u64, to: u64, relation: &str) -> Result<u64, MemoryError> {
         validate_relation(relation)?;
+        if from == to {
+            return Err(MemoryError::SelfRelation(from));
+        }
         self.ensure_exists(from)?;
         self.ensure_exists(to)?;
         self.store.relate(from, to, relation)
@@ -946,8 +961,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Delete every hub in `hubs` that no surviving fact mentions any more.
     ///
     /// An entity outlives the fact that introduced it as long as another fact
-    /// still refers to it — forgetting "Axel is 15" must not erase Axel while
-    /// "Axel has a sister" is still stored. Only a hub whose every `mentions`
+    /// still refers to it — forgetting "Theo is 15" must not erase Theo while
+    /// "Theo has a sister" is still stored. Only a hub whose every `mentions`
     /// target is gone is itself removed, so entities do not accumulate as
     /// unreachable scaffolding once the facts behind them are retracted.
     fn collect_orphan_hubs(&self, hubs: &[u64]) -> Result<(), MemoryError> {
@@ -1107,10 +1122,84 @@ fn reject_oversized_metadata(metadata: Option<&Metadata>) -> Result<(), MemoryEr
     Ok(())
 }
 
-/// Normalise a requested TTL: `Some(0)` (and `None`) mean "no expiry" — the fact
-/// is stored permanently. Any positive value is kept as-is.
-fn positive_ttl(ttl_seconds: Option<u64>) -> Option<u64> {
+/// Normalise a TTL supplied as *configuration*: `Some(0)` (and `None`) mean
+/// "no TTL policy" — the fact is stored permanently. Any positive value is
+/// kept as-is.
+///
+/// Deliberately NOT applied to `remember`'s own `ttl_seconds` any more: an
+/// explicit per-call `0` is an intent about one fact ("expire it"), and
+/// silently turning that into "permanent" is the opposite (see
+/// [`reject_zero_ttl`]). A compile policy's `source_ttl_seconds`, on the
+/// other hand, is a knob about a whole server, where `0` reading as "no
+/// policy" is the ordinary, unsurprising meaning.
+///
+/// Gated on `context`: since `remember` stopped calling it, the compile
+/// policy in `context::memory_bridge` is its only caller, and a build
+/// without that feature saw dead code — which `-D warnings` turns into a
+/// failed build, not a warning.
+#[cfg(feature = "context")]
+pub(crate) fn positive_ttl(ttl_seconds: Option<u64>) -> Option<u64> {
     ttl_seconds.filter(|&seconds| seconds > 0)
+}
+
+/// The canonical form of an entity name: trimmed and lowercased, exactly as
+/// an extracted entity is keyed.
+///
+/// Public because a lookup MISS has to echo it too: an adapter that answered
+/// `name: ""` when nothing matched left a caller running several lookups
+/// unable to pair a response with its question (issue #1654). Hit and miss go
+/// through this one function, so the two can never drift.
+#[must_use]
+pub fn canonical_entity_name(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// Refuse a fact that cannot be stored as written: blank, or past the size an
+/// embedding model still accepts.
+///
+/// The size check runs BEFORE [`MemoryService::write_fact`] calls the
+/// embedder, so an over-long fact is reported with its own size and the cap
+/// instead of whatever the backend says — issue #1654 saw `ollama embeddings
+/// call failed`, which names neither.
+fn validate_fact(fact: &str) -> Result<(), MemoryError> {
+    if fact.is_empty() {
+        return Err(MemoryError::EmptyFact);
+    }
+    if fact.len() > crate::limits::MAX_EMBEDDABLE_TEXT_BYTES {
+        return Err(MemoryError::FactTooLarge {
+            bytes: fact.len(),
+            max: crate::limits::MAX_EMBEDDABLE_TEXT_BYTES,
+        });
+    }
+    Ok(())
+}
+
+/// Refuse an explicit per-call TTL of `0`.
+///
+/// `0` used to be normalised to "no expiry", so a caller who meant "expire
+/// immediately" silently got a **permanent** fact — the opposite intent, with
+/// no signal (issue #1654). A TTL supplied as *configuration*
+/// (`McpServer::with_default_ttl`, a compile policy's `source_ttl_seconds`)
+/// still reads `0` as "no TTL policy": that is a default about a whole
+/// server, not an intent about one fact, and it is deliberately untouched.
+fn reject_zero_ttl(ttl_seconds: Option<u64>) -> Result<(), MemoryError> {
+    if ttl_seconds == Some(0) {
+        return Err(MemoryError::ZeroTtl);
+    }
+    Ok(())
+}
+
+/// Refuse a `remember` link that points the fact at itself.
+///
+/// The same rule [`MemoryService::relate`] enforces, applied to the other way
+/// a self-loop can be created: re-remembering existing content yields its
+/// existing id, so a caller CAN name that id as a link target. Without this
+/// the `relate` guard would only close half the door.
+fn reject_self_links(fact_id: u64, links: &[Link]) -> Result<(), MemoryError> {
+    if links.iter().any(|link| link.target == fact_id) {
+        return Err(MemoryError::SelfRelation(fact_id));
+    }
+    Ok(())
 }
 
 /// [`MemoryService::remember_with_ttl`]'s auto-date stamp: `metadata` with

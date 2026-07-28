@@ -120,6 +120,106 @@ fn check_items(items: &Value, path: &str, found: &mut Vec<String>) {
     walk_schema(items, path, found);
 }
 
+/// Every reachable **property** slot, not just every `items` slot.
+///
+/// The `items` rule above was written after the 2026-07-26 field report and
+/// it holds — but it is narrower than the defect it was meant to close.
+/// On 2026-07-28 a real call was rejected again, this time on properties:
+/// `save_working_context`'s `source`, `goal` and `memory_id` were advertised
+/// as `{}` — the empty schema, which says "anything". The caller sent a
+/// string, the server wanted a `SourceReference`, and the schema had said
+/// nothing to prevent it. Third occurrence of one family, third shape.
+///
+/// So the invariant here is deliberately shape-agnostic: it does not look
+/// for `$ref`, `allOf`, `anyOf` or any other construct the next regression
+/// might use. It asks the only question that matters to a caller — *can I
+/// tell what may go in this slot?* — and a slot answers yes when it carries
+/// a direct `type`, or an `anyOf`/`oneOf` whose branches each do, or an
+/// `enum`/`const` that enumerates its own values.
+fn untyped_properties(schema: &Value) -> Vec<String> {
+    let mut found = Vec::new();
+    walk_properties(schema, "$", &mut found);
+    found
+}
+
+fn walk_properties(node: &Value, path: &str, found: &mut Vec<String>) {
+    let Value::Object(map) = node else {
+        return;
+    };
+    if let Some(Value::Object(properties)) = map.get("properties") {
+        for (name, slot) in properties {
+            let slot_path = format!("{path}.{name}");
+            if !describes_its_own_type(slot) {
+                found.push(format!("{slot_path} = {slot}"));
+            }
+            walk_properties(slot, &slot_path, found);
+        }
+    }
+    if let Some(items) = map.get("items") {
+        match items {
+            Value::Array(entries) => {
+                for (index, entry) in entries.iter().enumerate() {
+                    walk_properties(entry, &format!("{path}.items[{index}]"), found);
+                }
+            }
+            single => walk_properties(single, &format!("{path}.items"), found),
+        }
+    }
+    for keyword in ["anyOf", "oneOf", "allOf", "prefixItems"] {
+        if let Some(Value::Array(entries)) = map.get(keyword) {
+            for (index, entry) in entries.iter().enumerate() {
+                walk_properties(entry, &format!("{path}.{keyword}[{index}]"), found);
+            }
+        }
+    }
+    if let Some(extra @ Value::Object(_)) = map.get("additionalProperties") {
+        walk_properties(extra, &format!("{path}.additionalProperties"), found);
+    }
+}
+
+/// A slot is self-describing when a `$defs`-blind caller can name what goes
+/// in it: a direct `type`, a union whose every branch has one, or a closed
+/// set of literal values.
+fn describes_its_own_type(slot: &Value) -> bool {
+    let Value::Object(map) = slot else {
+        return false;
+    };
+    if map.contains_key("type") || map.contains_key("enum") || map.contains_key("const") {
+        return true;
+    }
+    for keyword in ["anyOf", "oneOf"] {
+        if let Some(Value::Array(branches)) = map.get(keyword) {
+            if !branches.is_empty() && branches.iter().all(describes_its_own_type) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The 2026-07-28 regression: an advertised `{}` is a promise that anything
+/// fits, and the server keeps none of it.
+#[tokio::test]
+async fn every_tool_input_schema_types_every_reachable_property() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    assert!(!tools.is_empty(), "the server advertises at least one tool");
+    let mut offenders: BTreeSet<String> = BTreeSet::new();
+    for tool in &tools {
+        let schema = Value::Object((*tool.input_schema).clone());
+        for finding in untyped_properties(&schema) {
+            offenders.insert(format!("{}: {finding}", tool.name));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "{} property slot(s) advertise no type at all — a caller reading the schema cannot \
+         know what to send, and the server rejects what it guesses: {offenders:#?}",
+        offenders.len()
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
 /// The regression that cost four round trips: `save_working_context`'s
 /// nested arrays must be self-describing.
 #[tokio::test]
@@ -404,6 +504,124 @@ async fn every_tool_advertises_an_output_schema() {
         missing.is_empty(),
         "{} tool(s) advertise no output schema: {missing:#?}",
         missing.len()
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
+/// `required` must be the WHOLE truth about what a call needs.
+///
+/// The two rules above make each slot self-describing; this one makes the
+/// *set* of slots honest — a distinct property, and one nothing checked.
+///
+/// It is a guard, not a repair. It was written on 2026-07-28 after a
+/// scenario campaign appeared to show four tools rejecting a call that
+/// carried exactly their declared-required fields. They do not: the server's
+/// `required` was right all along — `compile_context` does advertise
+/// `query`. The truncated `required` came from the client rendering the
+/// schema, and the campaign trusted that rendering instead of the wire. The
+/// finding was retracted; this test is what proved it wrong.
+///
+/// It earns its place anyway, because the property it pins had no coverage
+/// and the two sibling rules cannot express it: they describe individual
+/// slots, never which ones a call must carry. It does what a first-time
+/// caller does — build the minimal call the schema describes, send it, and
+/// require that the answer is not a complaint about a field the schema never
+/// asked for. Business-rule rejections ("fact text must not be empty",
+/// "memory 1 does not exist") are expected and fine; the dummy values are
+/// deliberately trivial. Only `missing field` means the schema lied.
+fn minimal_arguments(schema: &Value) -> Value {
+    let Value::Object(map) = schema else {
+        return Value::Null;
+    };
+    let mut out = Map::new();
+    let (Some(Value::Array(required)), Some(Value::Object(properties))) =
+        (map.get("required"), map.get("properties"))
+    else {
+        return Value::Object(out);
+    };
+    for name in required.iter().filter_map(Value::as_str) {
+        let slot = properties.get(name).unwrap_or(&Value::Null);
+        out.insert(name.to_string(), dummy_for(slot));
+    }
+    Value::Object(out)
+}
+
+/// The cheapest value the slot's advertised type admits. Nested objects are
+/// built from their own `required`, so a lie one level down is caught too —
+/// `explain_compilation`'s `request` is exactly that case.
+fn dummy_for(slot: &Value) -> Value {
+    let Value::Object(map) = slot else {
+        return Value::Null;
+    };
+    let primary = match map.get("type") {
+        Some(Value::String(name)) => name.clone(),
+        Some(Value::Array(names)) => names
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|name| *name != "null")
+            .unwrap_or("null")
+            .to_string(),
+        _ => {
+            // A union slot: take the first branch that names a type.
+            for keyword in ["anyOf", "oneOf"] {
+                if let Some(Value::Array(branches)) = map.get(keyword) {
+                    if let Some(branch) = branches
+                        .iter()
+                        .find(|b| matches!(b, Value::Object(m) if m.get("type").is_some_and(|t| t != "null")))
+                    {
+                        return dummy_for(branch);
+                    }
+                }
+            }
+            return Value::Null;
+        }
+    };
+    match primary.as_str() {
+        "string" => Value::String(String::new()),
+        "number" | "integer" => json!(1),
+        "boolean" => Value::Bool(true),
+        "array" => json!([]),
+        "object" => minimal_arguments(slot),
+        _ => Value::Null,
+    }
+}
+
+#[tokio::test]
+async fn every_tool_accepts_a_call_carrying_exactly_its_required_fields() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    assert!(!tools.is_empty(), "the server advertises at least one tool");
+    let mut liars: BTreeSet<String> = BTreeSet::new();
+    for tool in &tools {
+        let schema = Value::Object((*tool.input_schema).clone());
+        let arguments = as_args(minimal_arguments(&schema));
+        let outcome = client
+            .call_tool(
+                CallToolRequestParams::new(tool.name.clone()).with_arguments(arguments.clone()),
+            )
+            .await;
+        let complaint = match &outcome {
+            Err(error) => error.to_string(),
+            Ok(result) => result
+                .content
+                .iter()
+                .filter_map(|item| item.as_text().map(|text| text.text.clone()))
+                .collect::<String>(),
+        };
+        if complaint.contains("missing field") {
+            liars.insert(format!(
+                "{}: sent {} -> {}",
+                tool.name,
+                Value::Object(arguments),
+                complaint.trim()
+            ));
+        }
+    }
+    assert!(
+        liars.is_empty(),
+        "{} tool(s) reject a call carrying exactly the fields their schema declares required \
+         — `required` understates the real contract: {liars:#?}",
+        liars.len()
     );
     client.cancel().await.expect("close the MCP session");
 }

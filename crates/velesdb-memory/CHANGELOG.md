@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+Five input defects found by a systematic scenario campaign against the 0.11.4
+daemon (#1654). All five shared one shape: an input the tools **accepted**,
+then did something other than what the caller asked — a silent wrong answer
+rather than a refusal.
+
+- **An over-long `remember` came back as a backend fault.** A fact past what
+  the embedding model accepts surfaced as
+  `embedding error: embedding backend error: ollama embeddings call failed`,
+  naming neither a limit nor the offending size. Facts are now capped at
+  `limits::MAX_EMBEDDABLE_TEXT_BYTES` (2 KiB — the default `all-minilm`
+  backend's 512-token window at this crate's own prose rate), checked *before*
+  the embedder, and refused with both numbers and what to do instead
+  (`MemoryError::FactTooLarge`). The cap is stated in the tool description.
+
+- **`ttl_seconds: 0` meant "never", silently.** An explicit per-call `0` was
+  normalised to "no expiry", so a caller who meant "expire immediately" got a
+  **permanent** fact with no signal. It is now refused
+  (`MemoryError::ZeroTtl`). A TTL supplied as *configuration*
+  (`with_default_ttl`, a compile policy's `source_ttl_seconds`) still reads `0`
+  as "no TTL policy" — that is a default about a server, not an intent about
+  one fact.
+
+- **`entity` returned an empty name on a miss.** `found: false` came back with
+  `name: ""`, so several lookups could not be told apart. A miss now echoes the
+  queried name in its canonical (trimmed, lowercased) form — through the same
+  `service::canonical_entity_name` a hit goes through, so the two cannot drift.
+
+- **`relate` accepted a self-loop.** `relate(X, X, …)` created an edge that
+  states nothing and that `why` then traverses like any other, adding noise to
+  the evidence trail. Refused (`MemoryError::SelfRelation`), on `remember`'s
+  `links` as well as on `relate` itself.
+
+- **`save_working_context` accepted an entirely empty state.** The write is an
+  idempotent upsert, so an empty `working` **replaced** — destroyed — the rich
+  state saved under the same project and session: the one tool whose job is
+  surviving a context loss could cause one. Refused
+  (`MemoryError::EmptyWorkingContext`) unless at least one field carries
+  something.
+
 ## [0.11.4] — 2026-07-28
 
 ### Fixed

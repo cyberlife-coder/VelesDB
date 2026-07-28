@@ -30,9 +30,9 @@ pub struct ExtractedFact {
 /// Where [`ExtractedFact::entities`] only says "this fact concerns these
 /// topics", a relation says *how two topics relate*. It is what turns the
 /// bipartite fact↔topic graph into a genuine knowledge graph: from
-/// "Julien Lange is Axel Lange's father" the wiring produces the edge
-/// `julien lange -[father of]-> axel lange`, so a later walk can answer
-/// "who is Axel's father" without any fact mentioning both names again.
+/// "Bruno Durand is Theo Durand's father" the wiring produces the edge
+/// `bruno durand -[father of]-> theo durand`, so a later walk can answer
+/// "who is Theo's father" without any fact mentioning both names again.
 ///
 /// `subject` and `object` are canonicalized exactly like
 /// [`ExtractedFact::entities`] (trimmed, lowercased), so they resolve to the
@@ -50,7 +50,7 @@ pub struct ExtractedRelation {
 
 /// One extracted entity attribute: `entity.key = value`.
 ///
-/// Attributes are what make "Axel Lange is 15" answerable by a *filter*
+/// Attributes are what make "Theo Durand is 15" answerable by a *filter*
 /// rather than a similarity search: the pair is merged into the entity hub's
 /// `ColumnStore` metadata, so `recall_where` can select on `age >= 15`.
 ///
@@ -81,6 +81,227 @@ pub struct Extraction {
     pub relations: Vec<ExtractedRelation>,
     /// Attributes attached to entities mentioned in the passage.
     pub attributes: Vec<ExtractedAttribute>,
+}
+
+// --- Orienting a kinship triple stated possessively ---------------------------
+//
+// A copule ("X est le pere de Y") hangs the relation on its own grammatical
+// subject, so subject-of-sentence and subject-of-triple coincide. A possessive
+// ("X a une soeur, Y") hangs it on the OTHER one: it is Y who is X's sister.
+// Models reliably read the first and reliably mirror the second, and a mirrored
+// kinship triple is worse than a missing edge — `entity("Camille Durand")` then
+// answers, with the same confidence as any true edge, that Camille is Theo's
+// *brother*. The prompt asks for the right direction; this pass guarantees it
+// for the construction that gets it wrong, whatever backend produced the triple.
+
+/// Kinship nouns a possessive can introduce, folded (no accents, no ligature)
+/// and singular, since the markers below are singular too. Doubling as the
+/// predicate whitelist: a triple is only ever re-pointed when its label is one
+/// of these, so a non-kinship edge between the same two people is left alone.
+const KINSHIP_NOUNS: &[&str] = &[
+    "pere",
+    "mere",
+    "frere",
+    "soeur",
+    "fils",
+    "fille",
+    "oncle",
+    "tante",
+    "cousin",
+    "cousine",
+    "neveu",
+    "niece",
+    "grand-pere",
+    "grand-mere",
+    "beau-pere",
+    "belle-mere",
+    "demi-frere",
+    "demi-soeur",
+    "epoux",
+    "epouse",
+    "mari",
+    "femme",
+    "father",
+    "mother",
+    "brother",
+    "sister",
+    "son",
+    "daughter",
+    "uncle",
+    "aunt",
+    "husband",
+    "wife",
+];
+
+/// What precedes the kinship noun when the sentence hangs the relation on the
+/// person it introduces rather than on its own subject. The trailing space is
+/// load-bearing: without it `" a un "` would also fire on `"a une"`.
+const POSSESSIVE_MARKERS: &[&str] = &[" a un ", " a une ", " a pour ", " has a ", " has an "];
+
+/// Diacritics and ligatures folded to ASCII, so `"sœur"`, `"soeur"` and
+/// `"Sœur"` are one token — the passage and the model's label rarely agree on
+/// accents, and the whole pass hinges on matching one against the other.
+const FOLDINGS: &[(char, &str)] = &[
+    ('à', "a"),
+    ('â', "a"),
+    ('ä', "a"),
+    ('é', "e"),
+    ('è', "e"),
+    ('ê', "e"),
+    ('ë', "e"),
+    ('î', "i"),
+    ('ï', "i"),
+    ('ô', "o"),
+    ('ö', "o"),
+    ('ù', "u"),
+    ('û', "u"),
+    ('ü', "u"),
+    ('ç', "c"),
+    ('œ', "oe"),
+    ('æ', "ae"),
+];
+
+/// Lowercase `text` and fold its diacritics away. Every offset produced from
+/// the result indexes the *folded* string, never the original.
+fn fold(text: &str) -> String {
+    let mut folded = String::with_capacity(text.len());
+    for ch in text.chars().flat_map(char::to_lowercase) {
+        match FOLDINGS.iter().find(|(from, _)| *from == ch) {
+            Some((_, to)) => folded.push_str(to),
+            None => folded.push(ch),
+        }
+    }
+    folded
+}
+
+/// A possessive construction located in a folded passage. `start`/`end` bracket
+/// the kinship noun itself: the person who *has* the relative is named before
+/// it, the one it introduces after it.
+struct Possessive {
+    noun: &'static str,
+    start: usize,
+    end: usize,
+}
+
+/// The earliest possessive construction in `folded`, if any.
+fn find_possessive(folded: &str) -> Option<Possessive> {
+    POSSESSIVE_MARKERS
+        .iter()
+        .filter_map(|marker| folded.find(marker).map(|at| at + marker.len()))
+        .filter_map(|start| noun_at(folded, start))
+        .min_by_key(|possessive| possessive.start)
+}
+
+/// The kinship noun sitting at `start`, if the marker introduces one.
+fn noun_at(folded: &str, start: usize) -> Option<Possessive> {
+    let rest = folded.get(start..)?;
+    let noun = KINSHIP_NOUNS
+        .iter()
+        .find(|noun| starts_with_word(rest, noun))?;
+    Some(Possessive {
+        noun,
+        start,
+        end: start + noun.len(),
+    })
+}
+
+/// `rest` begins with `word` as a whole word, so `"soeurette"` never reads as
+/// `"soeur"`.
+fn starts_with_word(rest: &str, word: &str) -> bool {
+    match rest.strip_prefix(word) {
+        Some(tail) => !tail.starts_with(char::is_alphanumeric),
+        None => false,
+    }
+}
+
+/// Every distinct entity the triples name, deduplicated.
+fn endpoint_names(relations: &[ExtractedRelation]) -> Vec<String> {
+    let mut names: Vec<String> = relations
+        .iter()
+        .flat_map(|relation| [relation.subject.clone(), relation.object.clone()])
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// The endpoint named closest to the left of the noun: the person who HAS the
+/// relative.
+fn holder_of(before: &str, names: &[String]) -> Option<String> {
+    names
+        .iter()
+        .filter_map(|name| before.rfind(&fold(name)).map(|at| (at, name)))
+        .max_by_key(|(at, _)| *at)
+        .map(|(_, name)| name.clone())
+}
+
+/// The endpoint the noun introduces: the first one named after it.
+fn bearer_of(after: &str, names: &[String]) -> Option<String> {
+    names
+        .iter()
+        .filter_map(|name| after.find(&fold(name)).map(|at| (at, name)))
+        .min_by_key(|(at, _)| *at)
+        .map(|(_, name)| name.clone())
+}
+
+/// The head word of a predicate label, folded: `"sœur de"` → `"soeur"`.
+fn predicate_stem(predicate: &str) -> String {
+    fold(predicate)
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Whether the triple runs between exactly these two entities, either way round.
+fn joins(relation: &ExtractedRelation, one: &str, other: &str) -> bool {
+    (relation.subject == one && relation.object == other)
+        || (relation.subject == other && relation.object == one)
+}
+
+/// Point one triple the way the passage states it.
+///
+/// The triple built on the noun the passage used belongs to the person that
+/// noun introduced; any *other* kinship label over the same pair is its
+/// converse and therefore runs the other way. Anything else is untouched.
+fn reorient(relation: &mut ExtractedRelation, noun: &str, holder: &str, bearer: &str) {
+    let stem = predicate_stem(&relation.predicate);
+    if !KINSHIP_NOUNS.contains(&stem.as_str()) || !joins(relation, holder, bearer) {
+        return;
+    }
+    let (subject, object) = if stem == noun {
+        (bearer, holder)
+    } else {
+        (holder, bearer)
+    };
+    relation.subject = subject.to_string();
+    relation.object = object.to_string();
+}
+
+/// Re-point the kinship triples a possessive construction states, so the label
+/// sits on the person who actually carries it.
+///
+/// A no-op unless the passage contains a possessive naming a kinship noun AND
+/// both sides of it resolve to entities the triples already mention — the pass
+/// never invents an edge, never drops one, and never touches a copule.
+pub(crate) fn orient_possessive_kinship(passage: &str, relations: &mut [ExtractedRelation]) {
+    let folded = fold(passage);
+    let Some(possessive) = find_possessive(&folded) else {
+        return;
+    };
+    let names = endpoint_names(relations);
+    let Some(holder) = holder_of(&folded[..possessive.start], &names) else {
+        return;
+    };
+    let Some(bearer) = bearer_of(&folded[possessive.end..], &names) else {
+        return;
+    };
+    if holder == bearer {
+        return;
+    }
+    for relation in relations.iter_mut() {
+        reorient(relation, possessive.noun, &holder, &bearer);
+    }
 }
 
 /// Failure produced by an [`Extractor`] backend (e.g. a network-backed model
@@ -487,7 +708,7 @@ For each, list 1-4 key TOPICS it concerns, as short canonical lowercase noun \
 phrases, so the same topic recurs as the SAME tag across passages.\n\n\
 2. \"relations\": every explicit relationship BETWEEN TWO NAMED ENTITIES, as \
 subject/predicate/object triples. Use the entity's full name, lowercase \
-(e.g. \"julien lange\").\n\
+(e.g. \"bruno durand\").\n\
 The predicate is a LABEL, not a sentence: **at most 3 words**, lowercase, in \
 the passage's own language (e.g. \"pere de\", \"soeur de\", \"works at\", \
 \"moteur de recherche\"). NEVER restate the sentence — write \"surveille les \
@@ -495,6 +716,10 @@ fuites\", not \"est utilise pour la surveillance de fuites de donnees\". If you 
 cannot say it in 3 words, pick the closest short label.\n\
 State the triple in the direction the passage states it, and add the converse \
 ONLY if the passage states it too.\n\
+DIRECTION: the subject is whoever CARRIES the relation, not the subject of the \
+sentence. \"A a une soeur, B\" means B is A's sister, so the triple is \
+B/\"soeur de\"/A — never A/\"soeur de\"/B. Same for every possessive \
+(\"a un frere\", \"a une fille\", \"has a brother\").\n\
 Every named entity the passage RELATES to another must appear in at least one \
 triple — an entity that only receives attributes and no edge is a dead end in \
 the graph.\n\n\
@@ -722,6 +947,23 @@ mod tests {
             prompt.contains("at least one triple"),
             "an entity with attributes but no edge is a dead end — the prompt \
              must ask for the edge"
+        );
+    }
+
+    /// The prompt must state the possessive rule explicitly: asked only to
+    /// "state the triple in the direction the passage states it", the model
+    /// read the grammatical subject as the subject of the triple and mirrored
+    /// every possessive.
+    #[test]
+    fn graph_prompt_states_which_side_carries_the_relation() {
+        let prompt = build_graph_prompt("Theo Durand a une soeur, Camille Durand.");
+        assert!(
+            prompt.contains("whoever CARRIES the relation"),
+            "the rule must name the carrier, not just \"the direction\""
+        );
+        assert!(
+            prompt.contains("never A/\"soeur de\"/B"),
+            "the counter-example is what makes the rule unambiguous"
         );
     }
 
