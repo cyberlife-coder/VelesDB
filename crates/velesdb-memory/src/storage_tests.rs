@@ -139,15 +139,20 @@ fn test_count_reflects_live_facts() {
     assert_eq!(store.count(), 2);
 }
 
-/// One write must carry BOTH the metadata and the durable expiry.
+/// A TTL'd write must carry BOTH the metadata and the durable expiry, and
+/// must not be able to expire while it is being written.
 ///
-/// The composed form — `store_with_ttl` then `update_metadata` — looks
-/// equivalent but leaves the fact live and expiring between the two calls: a
-/// short TTL can lapse in the gap, and the metadata write then fails with
+/// The historical order — `store_with_ttl` then `update_metadata` — left the
+/// fact live and already expiring between the two calls: a short TTL could
+/// lapse in the gap, and the metadata write then failed with
 /// `NotFound(... is expired ...)` on a fact that was valid when the caller
 /// asked for it. Observed in the wild with a 1 s TTL under load.
+///
+/// The order is now reversed — the fact is stored with its metadata and NO
+/// expiry, then the expiry is applied — so there is no window in which it can
+/// expire mid-write.
 #[test]
-fn test_store_with_metadata_and_ttl_writes_both_in_one_call() {
+fn test_store_with_metadata_and_ttl_survives_a_short_expiry() {
     let (_dir, store) = store();
     let mut meta = Metadata::new();
     meta.insert("project".to_string(), Value::from("veles"));
