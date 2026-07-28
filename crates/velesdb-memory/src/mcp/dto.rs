@@ -22,7 +22,7 @@ use crate::model::{
     deserialize_id, ColumnFilter, EntityProfile, EntityRelation, Explanation, Link, MemoryEdge,
     MemoryNode, Recollection,
 };
-use crate::service::Metadata;
+use crate::service::{canonical_entity_name, Metadata};
 
 /// Parameters for the `remember` tool.
 #[derive(Deserialize, JsonSchema)]
@@ -414,7 +414,10 @@ pub(super) struct EntityProfileDto {
     pub(super) id: u64,
     /// Decimal-string twin of `id` (issue #1468).
     pub(super) id_str: String,
-    /// Canonical (trimmed, lowercased) entity name.
+    /// Canonical (trimmed, lowercased) entity name. Always filled in — on a
+    /// MISS it echoes the *queried* name, canonicalized exactly as a hit's
+    /// would be, so a caller running several lookups can pair each response
+    /// with its question (issue #1654).
     pub(super) name: String,
     /// Attributes learned about this entity, reserved keys stripped.
     pub(super) attributes: Metadata,
@@ -422,14 +425,22 @@ pub(super) struct EntityProfileDto {
     pub(super) relations: Vec<EntityRelationDto>,
 }
 
-impl From<Option<EntityProfile>> for EntityProfileDto {
-    fn from(profile: Option<EntityProfile>) -> Self {
+impl EntityProfileDto {
+    /// Wire form of a lookup for `queried`, hit or miss.
+    ///
+    /// Takes the queried name — not just the outcome — because a miss carries
+    /// no name of its own, and a response that cannot be traced back to its
+    /// question is unusable to a caller running several lookups. The echo
+    /// goes through [`canonical_entity_name`], the very function
+    /// [`crate::service::MemoryService::entity_profile`] keys hubs by, so hit
+    /// and miss report the same string for the same query.
+    pub(super) fn from_lookup(queried: &str, profile: Option<EntityProfile>) -> Self {
         let Some(profile) = profile else {
             return Self {
                 found: false,
                 id: 0,
                 id_str: "0".to_string(),
-                name: String::new(),
+                name: canonical_entity_name(queried),
                 attributes: Metadata::new(),
                 relations: Vec::new(),
             };

@@ -378,7 +378,7 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = crate::schema::wire_safe_output_schema::<EntityProfileDto>(),
-        description = "Look up everything the memory graph knows about a NAMED ENTITY (a person, a place, an organisation): the attributes it carries and the typed edges leaving it. Use this for questions ABOUT a thing rather than about a sentence — \"how old is Axel\", \"who is Axel's father\", \"where does he live\" — where `recall` would only return sentences that happen to mention the name. Entities and their edges are built automatically by `remember_extracted`, which reads relationships (`X is the father of Y`) and properties (`Y is 15`) out of plain text; attributes land in ColumnStore metadata with their JSON type preserved, so a number stays a number. The name is matched case-insensitively, so `\"Axel Lange\"` and `\"axel lange\"` are the same entity — the id is content-addressed, so it is stable across sessions. Returns `found: false` when nothing has ever mentioned that name. Ids exceed 2^53 — always relay them as strings (`id_str`)."
+        description = "Look up everything the memory graph knows about a NAMED ENTITY (a person, a place, an organisation): the attributes it carries and the typed edges leaving it. Use this for questions ABOUT a thing rather than about a sentence — \"how old is Axel\", \"who is Axel's father\", \"where does he live\" — where `recall` would only return sentences that happen to mention the name. Entities and their edges are built automatically by `remember_extracted`, which reads relationships (`X is the father of Y`) and properties (`Y is 15`) out of plain text; attributes land in ColumnStore metadata with their JSON type preserved, so a number stays a number. The name is matched case-insensitively, so `\"Axel Lange\"` and `\"axel lange\"` are the same entity — the id is content-addressed, so it is stable across sessions. Returns `found: false` when nothing has ever mentioned that name; `name` is echoed back in its canonical (trimmed, lowercased) form either way, so several lookups can be told apart. Ids exceed 2^53 — always relay them as strings (`id_str`)."
     )]
     async fn entity(
         &self,
@@ -386,11 +386,12 @@ impl McpServer {
     ) -> Result<Json<EntityProfileDto>, ErrorData> {
         let service = Arc::clone(&self.service);
         let EntityParams { name } = params;
-        let profile = tokio::task::spawn_blocking(move || service.entity_profile(&name))
+        let looked_up = name.clone();
+        let profile = tokio::task::spawn_blocking(move || service.entity_profile(&looked_up))
             .await
             .map_err(join_error)?
             .map_err(to_error)?;
-        Ok(Json(EntityProfileDto::from(profile)))
+        Ok(Json(EntityProfileDto::from_lookup(&name, profile)))
     }
 
     #[tool(
