@@ -20,24 +20,8 @@ fn meta(key: &str, value: Value) -> Metadata {
     m
 }
 
-/// A canned extractor: two facts that share the topic `rust` (and nothing else),
-/// so the only path from one to the other is through the shared hub.
-struct StubExtractor;
-
-impl Extractor for StubExtractor {
-    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
-        Ok(vec![
-            ExtractedFact {
-                text: "Alice ships the parser in Rust.".to_string(),
-                entities: vec!["rust".to_string(), "parser".to_string()],
-            },
-            ExtractedFact {
-                text: "Bob maintains the Rust toolchain.".to_string(),
-                entities: vec!["rust".to_string()],
-            },
-        ])
-    }
-}
+mod common;
+use common::SharedTopicExtractor as StubExtractor;
 
 /// An extractor that always fails, to check the error path is surfaced.
 struct FailingExtractor;
@@ -62,7 +46,8 @@ fn remember_extracted_stores_every_fact() {
     let (_dir, svc) = service();
     let ids = svc
         .remember_extracted("Alice and Bob both work in Rust.", &StubExtractor, None)
-        .expect("extract and remember");
+        .expect("extract and remember")
+        .ids;
     assert_eq!(ids.len(), 2, "both extracted facts are stored");
     assert_ne!(ids[0], ids[1]);
 }
@@ -104,10 +89,12 @@ fn shared_topic_collapses_onto_one_hub() {
     // entity hubs are content-addressed, so the second call reuses the first.
     let first = svc
         .remember_extracted("x", &StubExtractor, None)
-        .expect("first");
+        .expect("first")
+        .ids;
     let second = svc
         .remember_extracted("y", &StubExtractor, None)
-        .expect("second");
+        .expect("second")
+        .ids;
     // Same canned facts → same stable fact ids → idempotent.
     assert_eq!(first, second, "identical facts are idempotent across calls");
 }
@@ -255,5 +242,54 @@ fn reingesting_the_same_text_does_not_duplicate_edges() {
         after_first.edges.len(),
         after_second.edges.len(),
         "re-ingestion must be idempotent: no duplicate edges"
+    );
+}
+
+/// One fact past the embeddable cap among sound ones. The old behaviour
+/// failed the WHOLE call at that fact — everything already written stayed
+/// (no rollback), the graph wiring never ran, and the caller did not even
+/// get the ids of what had been persisted. Inconsistent with the rest of
+/// the pipeline, where a malformed triple or a blank entity is skipped
+/// without being fatal: one unusable element must not cost the others.
+struct OneOversizedExtractor;
+
+impl Extractor for OneOversizedExtractor {
+    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        Ok(vec![
+            ExtractedFact {
+                text: "Alice ships the parser in Rust.".to_string(),
+                entities: vec!["rust".to_string()],
+            },
+            ExtractedFact {
+                // 4x the embeddable cap: would previously abort the call.
+                text: "x".repeat(8192),
+                entities: vec!["rust".to_string()],
+            },
+            ExtractedFact {
+                text: "Bob maintains the Rust toolchain.".to_string(),
+                entities: vec!["rust".to_string()],
+            },
+        ])
+    }
+}
+
+#[test]
+fn an_oversized_fact_is_skipped_not_fatal() {
+    let (_dir, svc) = service();
+    let outcome = svc
+        .remember_extracted(
+            "passage with one oversized fact",
+            &OneOversizedExtractor,
+            None,
+        )
+        .expect("one oversized fact must not fail the whole call");
+    assert_eq!(
+        outcome.ids.len(),
+        2,
+        "the two sound facts are stored; the oversized one is skipped"
+    );
+    assert_eq!(
+        outcome.skipped_over_cap, 1,
+        "the caller is told exactly how many facts were dropped, and why"
     );
 }

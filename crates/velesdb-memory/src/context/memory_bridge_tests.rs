@@ -866,3 +866,86 @@ fn test_load_working_context_with_marker_but_no_body_is_an_error_not_a_fresh_sta
          start; got {loaded:?}"
     );
 }
+
+/// Records the byte length of every text it is asked to embed, so a test can
+/// pin what actually reaches the embedding backend — the store keeps the
+/// whole content either way, so only this spy can tell the difference.
+struct LengthSpyEmbedder {
+    inner: HashEmbedder,
+    seen: std::sync::Mutex<Vec<usize>>,
+}
+
+impl LengthSpyEmbedder {
+    fn new() -> Self {
+        Self {
+            inner: HashEmbedder::new(DIM),
+            seen: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl crate::embedder::Embedder for &LengthSpyEmbedder {
+    fn dimension(&self) -> usize {
+        self.inner.dimension()
+    }
+    fn embed(&self, text: &str) -> Result<Vec<f32>, crate::embedder::EmbedError> {
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(text.len());
+        self.inner.embed(text)
+    }
+}
+
+/// Issue #1654, the residue: `compile_context` stores every non-duplicate
+/// fragment as a source (`store_sources` defaults to true) and embedded the
+/// FULL content, bypassing the `MAX_EMBEDDABLE_TEXT_BYTES` gate `remember`
+/// gets — an 8 KiB fragment reached the real backend whole and came back as
+/// a raw `ollama embeddings call failed`, naming neither size nor cap. The
+/// compile itself was fine; the write-back killed it.
+///
+/// Contract pinned here: the compile SUCCEEDS, the source text sent to the
+/// embedder is capped, and the STORED content stays whole — retrieval is
+/// hash-addressed, so truncating the embedded text must not cost a byte of
+/// the retrievable source.
+#[test]
+fn oversized_fragment_compiles_and_embeds_a_capped_text() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let spy = LengthSpyEmbedder::new();
+    let svc = MemoryService::open(dir.path(), &spy).expect("open memory store");
+
+    let big = "mot ".repeat(2048); // 8192 bytes, 4x the embeddable cap
+    let compiler = ContextCompiler::new(CompilePolicy::default());
+    let out = svc
+        .compile_context(&compiler, &request(&big, CompilePolicy::default()))
+        .expect("an oversized fragment must compile; the cap applies to the embedded text");
+
+    let worst = spy
+        .seen
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .copied()
+        .max()
+        .expect("the compile embedded at least the source");
+    assert!(
+        worst <= crate::limits::MAX_EMBEDDABLE_TEXT_BYTES,
+        "the embedder must never see more than the embeddable cap \
+         ({} bytes), got {worst}",
+        crate::limits::MAX_EMBEDDABLE_TEXT_BYTES,
+    );
+
+    let handle = out
+        .sources
+        .first()
+        .expect("the fragment was stored as a source")
+        .handle
+        .clone();
+    let source = svc
+        .retrieve_context_source(&handle)
+        .expect("the stored source resolves");
+    assert_eq!(
+        source.content, big,
+        "the STORED content must stay whole — only the embedded text is capped"
+    );
+}

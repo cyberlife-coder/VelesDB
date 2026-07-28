@@ -126,7 +126,8 @@ fn remember_extracted_facts_are_also_auto_stamped() {
     let (_dir, svc) = service();
     let ids = svc
         .remember_extracted("Alice ships the parser.", &SingleFactExtractor, None)
-        .expect("remember_extracted");
+        .expect("remember_extracted")
+        .ids;
     assert_eq!(ids.len(), 1);
 
     let hits = svc
