@@ -30,9 +30,9 @@ pub struct ExtractedFact {
 /// Where [`ExtractedFact::entities`] only says "this fact concerns these
 /// topics", a relation says *how two topics relate*. It is what turns the
 /// bipartite fact↔topic graph into a genuine knowledge graph: from
-/// "Julien Lange is Axel Lange's father" the wiring produces the edge
-/// `julien lange -[father of]-> axel lange`, so a later walk can answer
-/// "who is Axel's father" without any fact mentioning both names again.
+/// "Bruno Durand is Theo Durand's father" the wiring produces the edge
+/// `bruno durand -[father of]-> theo durand`, so a later walk can answer
+/// "who is Theo's father" without any fact mentioning both names again.
 ///
 /// `subject` and `object` are canonicalized exactly like
 /// [`ExtractedFact::entities`] (trimmed, lowercased), so they resolve to the
@@ -50,7 +50,7 @@ pub struct ExtractedRelation {
 
 /// One extracted entity attribute: `entity.key = value`.
 ///
-/// Attributes are what make "Axel Lange is 15" answerable by a *filter*
+/// Attributes are what make "Theo Durand is 15" answerable by a *filter*
 /// rather than a similarity search: the pair is merged into the entity hub's
 /// `ColumnStore` metadata, so `recall_where` can select on `age >= 15`.
 ///
@@ -89,8 +89,8 @@ pub struct Extraction {
 // subject, so subject-of-sentence and subject-of-triple coincide. A possessive
 // ("X a une soeur, Y") hangs it on the OTHER one: it is Y who is X's sister.
 // Models reliably read the first and reliably mirror the second, and a mirrored
-// kinship triple is worse than a missing edge — `entity("Lea Lange")` then
-// answers, with the same confidence as any true edge, that Lea is Axel's
+// kinship triple is worse than a missing edge — `entity("Camille Durand")` then
+// answers, with the same confidence as any true edge, that Camille is Theo's
 // *brother*. The prompt asks for the right direction; this pass guarantees it
 // for the construction that gets it wrong, whatever backend produced the triple.
 
@@ -708,7 +708,7 @@ For each, list 1-4 key TOPICS it concerns, as short canonical lowercase noun \
 phrases, so the same topic recurs as the SAME tag across passages.\n\n\
 2. \"relations\": every explicit relationship BETWEEN TWO NAMED ENTITIES, as \
 subject/predicate/object triples. Use the entity's full name, lowercase \
-(e.g. \"julien lange\").\n\
+(e.g. \"bruno durand\").\n\
 The predicate is a LABEL, not a sentence: **at most 3 words**, lowercase, in \
 the passage's own language (e.g. \"pere de\", \"soeur de\", \"works at\", \
 \"moteur de recherche\"). NEVER restate the sentence — write \"surveille les \
@@ -956,7 +956,7 @@ mod tests {
     /// every possessive.
     #[test]
     fn graph_prompt_states_which_side_carries_the_relation() {
-        let prompt = build_graph_prompt("Axel Lange a une soeur, Lea Lange.");
+        let prompt = build_graph_prompt("Theo Durand a une soeur, Camille Durand.");
         assert!(
             prompt.contains("whoever CARRIES the relation"),
             "the rule must name the carrier, not just \"the direction\""
