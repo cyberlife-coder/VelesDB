@@ -408,77 +408,107 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         out: &CompiledContext,
         ttl_seconds: Option<u64>,
     ) -> Result<(), MemoryError> {
-        let mut by_hash: BTreeMap<u64, &ContextFragment> = BTreeMap::new();
-        for fragment in &augmented.fragments {
-            // First occurrence wins (see the identity note above): `entry`
-            // + `or_insert`, never a blind overwrite.
-            by_hash
-                .entry(fragment_handle_hash(fragment))
-                .or_insert(fragment);
-        }
+        let by_hash = index_fragments_by_handle_hash(&augmented.fragments);
         let ttl_seconds = positive_ttl(ttl_seconds);
         for source in &out.sources {
-            let Some(hash) = provenance::parse_handle(&source.handle) else {
-                continue;
-            };
-            let Some(fragment) = by_hash.get(&hash) else {
-                continue;
-            };
-            let slot = source_id(hash);
-            // A slot never marked as ours is never rewritten: it is a caller
-            // fact squatting the salt preimage, and clobbering it would
-            // destroy user data. A slot already marked as ours holds these
-            // exact bytes — sources are content-addressed — so content and
-            // embedding never change; only durability can, and only upward
-            // (never-downgrade TTL upgrade, `should_store_source`) so a
-            // handle sold as permanent never silently expires just because
-            // an earlier compile first wrote it under a TTL.
-            if !self.should_store_source(slot, ttl_seconds)? {
-                continue;
-            }
-            // Upgrading to permanent needs the old point gone, not merely
-            // overwritten: velesdb-core's store path preserves every
-            // `_veles_*` key from a prior version of a re-stored id unless
-            // the new write explicitly sets it (semantic_memory.rs's
-            // `store_internal` carry-forward, so plain `remember` doesn't
-            // silently wipe learned state), and a permanent write has no
-            // expiry to explicitly set (`attach_expiry` is a no-op without
-            // one) — so without this delete, `_veles_expires_at` would
-            // survive the "upgrade" untouched. A TTL-to-TTL extension needs
-            // no delete: its new expiry always overwrites the old one.
-            if ttl_seconds.is_none() && self.store.get(slot)?.is_some() {
-                self.store.delete(slot)?;
-            }
-            let content = fragment.content.as_str();
-            let mut extra: Vec<(&str, Value)> = vec![(CTX_SOURCE_FIELD, Value::Bool(true))];
-            let embedding = if let Some(media_ref) = &fragment.media {
-                extra.push((
-                    CTX_SOURCE_MEDIA_FIELD,
-                    serde_json::to_value(media_ref).unwrap_or(Value::Null),
-                ));
-                // Deterministic, derived from the DECODED bytes — never the
-                // text embedder over `content` (often blank) or over the
-                // base64 payload itself (opaque, not language). Correct
-                // because `retrieve_context_source` resolves a media source
-                // EXCLUSIVELY by its content-addressed hash/slot, never by
-                // vector search — this vector only needs to be well-formed
-                // and non-degenerate for the underlying index, never
-                // semantically meaningful. For a media fragment `hash` IS
-                // the raw-bytes hash (see `fragment_handle_hash`), so no
-                // re-decode is needed here.
-                self.media_placeholder_embedding(hash)
-            } else {
-                self.embedder.embed(content)?
-            };
-            self.store_fact(
-                slot,
-                content,
-                &embedding,
-                Some(&system_meta(&extra)),
-                ttl_seconds,
-            )?;
+            self.store_one_source(&source.handle, &by_hash, ttl_seconds)?;
         }
         Ok(())
+    }
+
+    /// Write the one slot behind `handle`, if this compile owns it.
+    ///
+    /// A handle whose fragment is no longer in the request (or that does not
+    /// parse) is skipped, not an error: `out.sources` is derived from the
+    /// same request, so a miss can only mean the source was externalized
+    /// under a shape this write path has nothing to store.
+    fn store_one_source(
+        &self,
+        handle: &str,
+        by_hash: &BTreeMap<u64, &ContextFragment>,
+        ttl_seconds: Option<u64>,
+    ) -> Result<(), MemoryError> {
+        let Some(hash) = provenance::parse_handle(handle) else {
+            return Ok(());
+        };
+        let Some(fragment) = by_hash.get(&hash) else {
+            return Ok(());
+        };
+        let slot = source_id(hash);
+        if !self.prepare_source_slot(slot, ttl_seconds)? {
+            return Ok(());
+        }
+        let (embedding, media_meta) = self.source_vector(fragment, hash)?;
+        let mut extra: Vec<(&str, Value)> = vec![(CTX_SOURCE_FIELD, Value::Bool(true))];
+        if let Some(media) = media_meta {
+            extra.push((CTX_SOURCE_MEDIA_FIELD, media));
+        }
+        self.store_fact(
+            slot,
+            fragment.content.as_str(),
+            &embedding,
+            Some(&system_meta(&extra)),
+            ttl_seconds,
+        )
+    }
+
+    /// Whether `slot` may be written for this compile, clearing a stale point
+    /// first when the write upgrades it to permanent.
+    ///
+    /// A slot never marked as ours is never rewritten: it is a caller fact
+    /// squatting the salt preimage, and clobbering it would destroy user
+    /// data. A slot already marked as ours holds these exact bytes — sources
+    /// are content-addressed — so content and embedding never change; only
+    /// durability can, and only upward (never-downgrade TTL upgrade, see
+    /// [`Self::should_store_source`]), so a handle sold as permanent never
+    /// silently expires just because an earlier compile first wrote it under
+    /// a TTL.
+    ///
+    /// Upgrading to permanent needs the old point *gone*, not merely
+    /// overwritten: velesdb-core's store path preserves every `_veles_*` key
+    /// from a prior version of a re-stored id unless the new write explicitly
+    /// sets it (`semantic_memory.rs`'s `store_internal` carry-forward, so
+    /// plain `remember` doesn't silently wipe learned state), and a permanent
+    /// write has no expiry to set (`attach_expiry` is a no-op without one) —
+    /// so without this delete, `_veles_expires_at` would survive the
+    /// "upgrade" untouched. A TTL-to-TTL extension needs no delete: its new
+    /// expiry always overwrites the old one.
+    fn prepare_source_slot(
+        &self,
+        slot: u64,
+        ttl_seconds: Option<u64>,
+    ) -> Result<bool, MemoryError> {
+        if !self.should_store_source(slot, ttl_seconds)? {
+            return Ok(false);
+        }
+        if ttl_seconds.is_none() && self.store.get(slot)?.is_some() {
+            self.store.delete(slot)?;
+        }
+        Ok(true)
+    }
+
+    /// The vector a source slot is indexed by, plus the media descriptor to
+    /// stamp on it when the fragment carries one.
+    ///
+    /// A media fragment's vector is deterministic and derived from the
+    /// DECODED bytes — never the text embedder over `content` (often blank)
+    /// nor over the base64 payload itself (opaque, not language). Correct
+    /// because `retrieve_context_source` resolves a media source EXCLUSIVELY
+    /// by its content-addressed hash/slot, never by vector search: the vector
+    /// only has to be well-formed and non-degenerate for the underlying
+    /// index, never semantically meaningful. For a media fragment `hash` IS
+    /// the raw-bytes hash (see `fragment_handle_hash`), so nothing is
+    /// re-decoded here.
+    fn source_vector(
+        &self,
+        fragment: &ContextFragment,
+        hash: u64,
+    ) -> Result<(Vec<f32>, Option<Value>), MemoryError> {
+        let Some(media_ref) = &fragment.media else {
+            return Ok((self.embedder.embed(fragment.content.as_str())?, None));
+        };
+        let descriptor = serde_json::to_value(media_ref).unwrap_or(Value::Null);
+        Ok((self.media_placeholder_embedding(hash), Some(descriptor)))
     }
 
     /// Whether [`Self::store_context_sources`] should (re-)write `slot` for
@@ -1268,6 +1298,22 @@ fn fragment_handle_hash(fragment: &ContextFragment) -> u64 {
         || stable_id(&fragment.content),
         |media_ref| media::analyze(media_ref).raw_hash,
     )
+}
+
+/// Index a request's fragments by the hash their `ctx://source/` handle is
+/// built from, so a handle can be resolved back to the fragment that produced
+/// it. First occurrence wins (see the identity note on
+/// `store_context_sources`): `entry` + `or_insert`, never a blind overwrite.
+fn index_fragments_by_handle_hash(
+    fragments: &[ContextFragment],
+) -> BTreeMap<u64, &ContextFragment> {
+    let mut by_hash: BTreeMap<u64, &ContextFragment> = BTreeMap::new();
+    for fragment in fragments {
+        by_hash
+            .entry(fragment_handle_hash(fragment))
+            .or_insert(fragment);
+    }
+    by_hash
 }
 
 /// A stored source's media payload (US-009, PR2), when its metadata carries

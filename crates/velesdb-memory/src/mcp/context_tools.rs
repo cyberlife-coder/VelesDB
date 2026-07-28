@@ -391,6 +391,42 @@ impl McpServer {
         Err(to_error(crate::error::MemoryError::IngestDisabled))
     }
 
+    /// The text `compile_transcript` will segment: exactly one of `transcript`
+    /// (inline) or `path` (ingested through the allowlist), and never empty.
+    ///
+    /// The emptiness check runs AFTER `path` is resolved, rather than being
+    /// folded into the match, so an inline empty string and a `path` that
+    /// resolves to an empty file are rejected identically — the ingest
+    /// pipeline itself happily reads a zero-byte file, so this is the one
+    /// place that catches "nothing to compile" whatever the source.
+    fn resolve_transcript_text(
+        &self,
+        transcript: Option<String>,
+        path: Option<String>,
+    ) -> Result<String, ErrorData> {
+        let text = match (transcript, path) {
+            (Some(text), None) => text,
+            (None, Some(path)) => self.resolve_transcript_path(&path)?,
+            _ => {
+                return Err(ErrorData::new(
+                    ErrorCode::INVALID_PARAMS,
+                    "exactly one of `transcript` or `path` must be set".to_owned(),
+                    None,
+                ));
+            }
+        };
+        if text.is_empty() {
+            return Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                "the transcript is empty — `transcript` must be non-empty text, or `path` must \
+                 point to a non-empty file"
+                    .to_owned(),
+                None,
+            ));
+        }
+        Ok(text)
+    }
+
     #[tool(
         name = "compile_context",
         description = "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministically, with no LLM call. Duplicates are dropped, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles instead of silently vanishing, and `memory_scope` pulls relevant stored memories into the result. Each fragment's own `metadata` is capped at 64 KiB serialized. A fragment may set `path` (an absolute filesystem path) instead of inline `content` to ingest a file by reference — exactly one of `path`, `content`, or `media` per fragment; requires the server to be started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories, and the resolved file must be plain UTF-8 text under 1 MiB. Returns the assembled content plus one auditable decision per fragment (rule id, reason, risk), the sources, the retrieval handles, token-savings insights, and `warnings` — a mechanical shortlist of externalized fragments relevant enough to the query that they are worth a second look, so checking `decisions` by hand is only needed when `warnings` is non-empty and still ambiguous. `policy.slim_response` (default false) empties `sections`/`decisions` from the response — keep it off when you need the audit trail, or re-compile without it later (compilation is deterministic). `policy.ids_as_strings` (default false) rewrites every id field of the response into a decimal string, for MCP clients without u64-safe JSON number parsing.",
@@ -447,31 +483,7 @@ impl McpServer {
             policy,
             segmentation,
         } = params;
-        let transcript_text = match (transcript, path) {
-            (Some(text), None) => text,
-            (None, Some(path)) => self.resolve_transcript_path(&path)?,
-            _ => {
-                return Err(ErrorData::new(
-                    ErrorCode::INVALID_PARAMS,
-                    "exactly one of `transcript` or `path` must be set".to_owned(),
-                    None,
-                ));
-            }
-        };
-        // Checked AFTER resolving `path` (not folded into the match guard
-        // above) so an inline empty string and a `path` that resolves to an
-        // empty file are rejected identically — the ingest pipeline itself
-        // happily reads a zero-byte file, so this is the one place that
-        // catches "nothing to compile" regardless of source.
-        if transcript_text.is_empty() {
-            return Err(ErrorData::new(
-                ErrorCode::INVALID_PARAMS,
-                "the transcript is empty — `transcript` must be non-empty text, or `path` must \
-                 point to a non-empty file"
-                    .to_owned(),
-                None,
-            ));
-        }
+        let transcript_text = self.resolve_transcript_text(transcript, path)?;
         let segmentation_policy = segmentation.unwrap_or_default();
         let outcome =
             segment_transcript(&transcript_text, &segmentation_policy).map_err(to_error)?;
