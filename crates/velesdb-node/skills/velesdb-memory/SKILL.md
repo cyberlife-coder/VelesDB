@@ -137,25 +137,25 @@ the edges are simply what the sentence already says.
 atomic facts, the typed edges **between named entities**, and the **attributes**
 those entities carry. Say it in plain language and the graph assembles itself:
 
-> "Julien Lange est le père d'Axel Lange. Axel Lange a 15 ans.
->  Axel Lange a une sœur, Léa Lange."
+> "Bruno Durand est le père d'Theo Durand. Theo Durand a 15 ans.
+>  Theo Durand a une sœur, Camille Durand."
 
-produces `julien lange -[père de]-> axel lange`, an `age: 15` attribute on Axel,
-and a brand-new `léa lange` node wired by `sœur de`. No `relate` calls.
+produces `bruno durand -[père de]-> theo durand`, an `age: 15` attribute on Theo,
+and a brand-new `camille durand` node wired by `sœur de`. No `relate` calls.
 
 **Entity names resolve across calls and across sessions.** An entity's id is
-content-addressed from its (lowercased) name, so "Axel Lange" in today's
-sentence and "axel lange" in next month's land on the *same* node. Attributes
+content-addressed from its (lowercased) name, so "Theo Durand" in today's
+sentence and "theo durand" in next month's land on the *same* node. Attributes
 accumulate onto it — learning the sister does not erase the age.
 
 **Read entities with `entity(name)`, not `recall`.** This matters and is easy to
 get wrong. Entity nodes are deliberately invisible to `recall` and
-`recall_where`: a node called `Entity: axel lange` would rank for its own name
+`recall_where`: a node called `Entity: theo durand` would rank for its own name
 and evict a real fact from your results. So:
 
-- *"What does the memory say about Axel?"* → `entity("Axel Lange")` — returns his
+- *"What does the memory say about Theo?"* → `entity("Theo Durand")` — returns his
   attributes and every typed edge leaving him.
-- *"Which notes mention Axel?"* → `recall("Axel Lange")` — returns sentences.
+- *"Which notes mention Theo?"* → `recall("Theo Durand")` — returns sentences.
 
 Use `entity` for questions **about a thing**, `recall` for questions **about what
 was written**. `found: false` means nothing has ever mentioned that name.
@@ -243,7 +243,7 @@ autograph = false              # true = every `remember` also wires entities
 ```
 
 With `autograph = true` you stop having to choose the right tool: a plain
-`remember("Julien Lange est le père d'Axel Lange")` stores the fact verbatim
+`remember("Bruno Durand est le père d'Theo Durand")` stores the fact verbatim
 **and** wires the graph around it. It costs one generation per `remember`, so
 it is opt-in — and if the model is down the write still succeeds, losing only
 the enrichment, never the fact.

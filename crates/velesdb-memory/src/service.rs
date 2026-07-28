@@ -453,8 +453,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// looks done and silently returns nothing.
     ///
     /// `name` is canonicalized exactly like an extracted entity (trimmed,
-    /// lowercased), so the caller may pass `"Axel Lange"` and reach the node
-    /// built from `"axel lange"`. Returns `None` when no hub exists for the
+    /// lowercased), so the caller may pass `"Theo Durand"` and reach the node
+    /// built from `"theo durand"`. Returns `None` when no hub exists for the
     /// name — nothing has ever mentioned that entity.
     ///
     /// # Errors
@@ -542,8 +542,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// metadata, so `recall_where` can filter on it (`age >= 15`).
     ///
     /// The write goes through `update_metadata`, which **merges** rather than
-    /// replaces. That is the whole point: learning "Axel has a sister" after
-    /// "Axel is 15" must not erase the age. Re-storing the hub payload wholesale
+    /// replaces. That is the whole point: learning "Theo has a sister" after
+    /// "Theo is 15" must not erase the age. Re-storing the hub payload wholesale
     /// would silently drop every attribute learned in an earlier session.
     ///
     /// Values keep the JSON type the extractor produced. `recall_where`
@@ -712,8 +712,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let id = id::stable_id(&format!("{HUB_ID_SALT}{key}"));
         // An existing hub is left exactly as it is. Re-storing it would rewrite
         // the payload to the bare hub marker and destroy every attribute merged
-        // onto it by an earlier call — learning "Axel has a sister" would erase
-        // "Axel is 15", because a later sentence re-resolves the same hub. The
+        // onto it by an earlier call — learning "Theo has a sister" would erase
+        // "Theo is 15", because a later sentence re-resolves the same hub. The
         // content is a pure function of `key`, so there is nothing to refresh;
         // skipping also avoids re-embedding a hub on every single mention.
         if self.store.get(id)?.is_some() {
@@ -948,8 +948,8 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Delete every hub in `hubs` that no surviving fact mentions any more.
     ///
     /// An entity outlives the fact that introduced it as long as another fact
-    /// still refers to it — forgetting "Axel is 15" must not erase Axel while
-    /// "Axel has a sister" is still stored. Only a hub whose every `mentions`
+    /// still refers to it — forgetting "Theo is 15" must not erase Theo while
+    /// "Theo has a sister" is still stored. Only a hub whose every `mentions`
     /// target is gone is itself removed, so entities do not accumulate as
     /// unreachable scaffolding once the facts behind them are retracted.
     fn collect_orphan_hubs(&self, hubs: &[u64]) -> Result<(), MemoryError> {
