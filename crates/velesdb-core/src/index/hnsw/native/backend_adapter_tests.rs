@@ -527,8 +527,22 @@ fn test_parallel_insert_chunked_count() {
         .map(|(i, v)| (v.as_slice(), i))
         .collect();
 
-    hnsw.parallel_insert(&data)
-        .expect("parallel_insert of 2000 vectors should succeed");
+    // Pinned to a single rayon worker. `connect_batch_chunked` links each
+    // chunk with `par_iter`, and an HNSW graph's topology depends on the order
+    // its nodes are linked in — so on a busy machine the recall this yields
+    // varies with the thread scheduling, and a 0.90 floor becomes a coin toss.
+    // One worker makes that order deterministic while still running the REAL
+    // batch path: allocate_batch, the entry-point bootstrap, the chunking and
+    // its ef schedule, and finalize_batch all execute exactly as in production.
+    // Sequential insertion would test none of them.
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .expect("test: building a single-worker rayon pool should succeed")
+        .install(|| {
+            hnsw.parallel_insert(&data)
+                .expect("parallel_insert of 2000 vectors should succeed")
+        });
 
     assert_eq!(hnsw.len(), 2000);
 }
