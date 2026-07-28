@@ -5,6 +5,11 @@ use crate::error::Result;
 use crate::index::{JsonValue, SecondaryIndex};
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Shared secondary-index map, matching [`QueryState::secondary_indexes`](crate::collection::types::QueryState::secondary_indexes).
+type SecondaryIndexMap = Arc<RwLock<HashMap<String, SecondaryIndex>>>;
 
 /// Index information response for API.
 #[derive(Debug, Clone)]
@@ -350,9 +355,7 @@ impl Collection {
     ///
     /// Returns `None` for `Not` wrapping non-`In` conditions and unsupported conditions.
     fn bitmap_from_condition(
-        indexes: &std::sync::Arc<
-            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
-        >,
+        indexes: &SecondaryIndexMap,
         cond: &crate::filter::Condition,
     ) -> Option<roaring::RoaringBitmap> {
         match cond {
@@ -395,9 +398,7 @@ impl Collection {
 
     /// Looks up a single equality field in the secondary indexes.
     fn bitmap_for_eq_field(
-        indexes: &std::sync::Arc<
-            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
-        >,
+        indexes: &SecondaryIndexMap,
         field: &str,
         value: &serde_json::Value,
     ) -> Option<roaring::RoaringBitmap> {
@@ -419,9 +420,7 @@ impl Collection {
     /// Time complexity: O(N × log K) where N = `values.len()`, K = index keys.
     /// Space: O(|result|) — single accumulator bitmap, no intermediate allocations.
     fn bitmap_for_in_field(
-        indexes: &std::sync::Arc<
-            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
-        >,
+        indexes: &SecondaryIndexMap,
         field: &str,
         values: &[serde_json::Value],
     ) -> Option<roaring::RoaringBitmap> {
@@ -449,9 +448,7 @@ impl Collection {
     /// Always return `None` to force a correct full-scan + post-filter.
     #[allow(clippy::unnecessary_wraps)] // Reason: uniform Option return for bitmap_from_condition dispatch
     fn bitmap_for_not_in(
-        _indexes: &std::sync::Arc<
-            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
-        >,
+        _indexes: &SecondaryIndexMap,
         _inner: &crate::filter::Condition,
     ) -> Option<roaring::RoaringBitmap> {
         None
@@ -459,9 +456,7 @@ impl Collection {
 
     /// Builds a range bitmap for Gt/Gte/Lt/Lte using `SecondaryIndex::range_bitmap`.
     fn bitmap_for_range_field(
-        indexes: &std::sync::Arc<
-            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
-        >,
+        indexes: &SecondaryIndexMap,
         field: &str,
         value: &serde_json::Value,
         cond: &crate::filter::Condition,
@@ -483,9 +478,7 @@ impl Collection {
 
     /// Intersects bitmaps from AND-ed conditions.
     fn bitmap_from_and(
-        indexes: &std::sync::Arc<
-            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
-        >,
+        indexes: &SecondaryIndexMap,
         conditions: &[crate::filter::Condition],
     ) -> Option<roaring::RoaringBitmap> {
         let mut result: Option<roaring::RoaringBitmap> = None;
@@ -506,9 +499,7 @@ impl Collection {
     /// must return `None` because the union would be incomplete -- the
     /// post-filter must evaluate the full OR instead.
     fn bitmap_from_or(
-        indexes: &std::sync::Arc<
-            parking_lot::RwLock<std::collections::HashMap<String, SecondaryIndex>>,
-        >,
+        indexes: &SecondaryIndexMap,
         conditions: &[crate::filter::Condition],
     ) -> Option<roaring::RoaringBitmap> {
         let mut result = roaring::RoaringBitmap::new();

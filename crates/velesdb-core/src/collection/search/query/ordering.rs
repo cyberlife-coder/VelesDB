@@ -343,18 +343,7 @@ impl Collection {
         results: &[SearchResult],
         per_result_let: &[Vec<(String, f32)>],
     ) -> Ordering {
-        let ctx_i = ScoreContext::with_let_bindings(
-            results[i].score,
-            results[i].point.payload.as_ref(),
-            results[i].component_scores.as_deref(),
-            per_result_let.get(i).map(Vec::as_slice),
-        );
-        let ctx_j = ScoreContext::with_let_bindings(
-            results[j].score,
-            results[j].point.payload.as_ref(),
-            results[j].component_scores.as_deref(),
-            per_result_let.get(j).map(Vec::as_slice),
-        );
+        let (ctx_i, ctx_j) = Self::score_context_pair(i, j, results, per_result_let);
         ctx_i
             .resolve_variable(name)
             .total_cmp(&ctx_j.resolve_variable(name))
@@ -368,6 +357,20 @@ impl Collection {
         results: &[SearchResult],
         per_result_let: &[Vec<(String, f32)>],
     ) -> Ordering {
+        let (ctx_i, ctx_j) = Self::score_context_pair(i, j, results, per_result_let);
+        let val_i = evaluate_arithmetic(expr, &ctx_i);
+        let val_j = evaluate_arithmetic(expr, &ctx_j);
+        val_i.total_cmp(&val_j)
+    }
+
+    /// Builds the `ScoreContext` pair for comparing results `i` and `j`, each
+    /// with its own LET bindings, score, payload, and component breakdown.
+    fn score_context_pair<'a>(
+        i: usize,
+        j: usize,
+        results: &'a [SearchResult],
+        per_result_let: &'a [Vec<(String, f32)>],
+    ) -> (ScoreContext<'a>, ScoreContext<'a>) {
         let ctx_i = ScoreContext::with_let_bindings(
             results[i].score,
             results[i].point.payload.as_ref(),
@@ -380,9 +383,7 @@ impl Collection {
             results[j].component_scores.as_deref(),
             per_result_let.get(j).map(Vec::as_slice),
         );
-        let val_i = evaluate_arithmetic(expr, &ctx_i);
-        let val_j = evaluate_arithmetic(expr, &ctx_j);
-        val_i.total_cmp(&val_j)
+        (ctx_i, ctx_j)
     }
 
     /// Applies ASC/DESC direction, accounting for distance metric inversion.
