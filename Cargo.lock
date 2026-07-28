@@ -6911,7 +6911,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-memory"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "axum",
  "criterion",
@@ -6983,7 +6983,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-node"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "napi",
  "napi-build",
