@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -35,6 +35,30 @@ function freshStore() {
   const store = MemoryService.open(dir, 'hash')
   return { store, cleanup: () => rmStoreDir(dir) }
 }
+
+/** Absolute path of the built addon entry, for `require` in a child process. */
+const ADDON_ENTRY = fileURLToPath(new URL('../index.js', import.meta.url))
+
+/**
+ * Run `body` (a JS snippet) in a CHILD process holding its own MemoryService
+ * on `dir`, and return its stdout. The store's single-writer lock is released
+ * deterministically when the child exits, so the parent can then reopen the
+ * same directory — a block-scoped handle in this process would keep the lock
+ * until GC.
+ */
+function inChildProcess(dir, body) {
+  const script = `
+    const { MemoryService } = require(${JSON.stringify(ADDON_ENTRY)})
+    const store = MemoryService.open(${JSON.stringify(dir)}, 'hash')
+    ${body}
+  `
+  const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' })
+  assert.equal(child.status, 0, `child process failed: ${child.stderr}`)
+  return child.stdout.trim()
+}
+
+/** Sleep, to cross a real one-second boundary (saved_at has second granularity). */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 test('surface allowlist — exactly the supported methods, no engine leak', () => {
   const instanceMethods = Object.getOwnPropertyNames(MemoryService.prototype)
@@ -125,6 +149,92 @@ test('generated index.d.ts declares the full 18-method surface (guards against a
     /Promise<boolean>/,
     `forget() must return Promise<boolean> in index.d.ts, got: ${forgetMatch[1].trim()}`,
   )
+})
+
+// --- open (the factory) ------------------------------------------------------
+// `open` is the one entry point of the surface that is SYNCHRONOUS: every other
+// method reports through a rejected Promise, so a caller that only wires
+// `.catch()` would sail past a bad `open`. Its contract is pinned here.
+
+test('open throws synchronously on an unknown embedder — not a rejected Promise', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    let returned = 'not-called'
+    assert.throws(
+      () => {
+        returned = MemoryService.open(dir, 'bogus')
+      },
+      (err) =>
+        err instanceof Error &&
+        err.message.includes('INVALID_INPUT') &&
+        /'hash'/.test(err.message) &&
+        /'ollama'/.test(err.message),
+      'the error must name the accepted embedders, not just fail',
+    )
+    assert.equal(returned, 'not-called', 'a rejected open must not hand back a half-built store')
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
+test('open defaults to the offline hash embedder when none is named', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    // No embedder argument at all: the store must still be fully usable with
+    // no Ollama running (this is what makes the default offline-safe).
+    const store = MemoryService.open(dir)
+    const id = await store.remember('the default embedder needs no network')
+    const hits = await store.recall('default embedder network', 5)
+    assert.ok(
+      hits.some((h) => h.id === id),
+      'the default store must recall what it stored, offline',
+    )
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
+test('open on an existing directory reopens the store — it never starts empty', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const writtenId = inChildProcess(
+      dir,
+      `store.remember('the first process wrote this before exiting').then((id) => process.stdout.write(id))`,
+    )
+    assert.match(writtenId, /^\d+$/)
+
+    const reopened = MemoryService.open(dir, 'hash')
+    const hits = await reopened.recall('the first process wrote this', 5)
+    assert.ok(
+      hits.some((h) => h.id === writtenId),
+      'open() on a populated directory must attach to it, not create a fresh store beside it',
+    )
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
+test('open on a path that is a regular file fails cleanly and leaves the addon usable', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const notADirectory = join(dir, 'regular-file')
+    writeFileSync(notADirectory, 'not a store')
+    assert.throws(
+      () => MemoryService.open(notADirectory, 'hash'),
+      (err) => err instanceof Error && err.message.includes('INTERNAL'),
+      'a non-directory path is a storage error, never a crash',
+    )
+    // A failed open must not poison the process: a nested path that does not
+    // exist yet is still created and opened normally afterwards.
+    const store = MemoryService.open(join(dir, 'nested', 'store'), 'hash')
+    assert.match(
+      await store.remember('the addon survived a bad open'),
+      /^\d+$/,
+      'the addon still works after a rejected open',
+    )
+  } finally {
+    rmStoreDir(dir)
+  }
 })
 
 test('remember → recall round-trips, ids are decimal strings', async () => {
@@ -251,6 +361,31 @@ test('recallFusedDated returns a chronological timeline and a now anchor', async
       'timeline is oldest-first',
     )
     assert.equal(res.now, '2026-07-01', 'now anchors on the latest date')
+  } finally {
+    cleanup()
+  }
+})
+
+test('recallFusedDated leaves now unset and the timeline undated when no fact carries the date field', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await store.remember('an undated note about the deploy pipeline')
+
+    const res = await store.recallFusedDated('deploy pipeline', 'ts', 5)
+    assert.ok(res.memories.length >= 1, 'the recall half still returns the memories')
+    assert.equal(
+      res.now,
+      undefined,
+      'with nothing dated there is no anchor — an agent must not date-reason on a fabricated one',
+    )
+    assert.ok(
+      !/\[\d{4}-\d{2}-\d{2}\]/.test(res.datedContext),
+      `the timeline must carry no invented date prefix, got: ${res.datedContext}`,
+    )
+    assert.ok(
+      res.datedContext.includes('an undated note about the deploy pipeline'),
+      'the fact itself is still listed, just without a date',
+    )
   } finally {
     cleanup()
   }
@@ -518,6 +653,36 @@ test('retrieveContextSource unknown handle rejects with NOT_FOUND', async () => 
   }
 })
 
+test('retrieveContextSource resolves a handle minted by an earlier process', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    // "Recoverable, not lost" only means something if it outlives the process
+    // that compiled: mint the handle in a child, resolve it here.
+    const handle = inChildProcess(
+      dir,
+      `store
+         .compileContext({
+           query: 'q',
+           fragments: [{ content: 'a source body written by the first process' }],
+           token_budget: 5000,
+         })
+         .then((out) => process.stdout.write(out.sources[0].handle))`,
+    )
+    assert.match(handle, /^ctx:\/\/source\/\d+$/)
+
+    const reopened = MemoryService.open(dir, 'hash')
+    const resolved = await reopened.retrieveContextSource(handle)
+    assert.equal(resolved.handle, handle)
+    assert.equal(
+      resolved.content,
+      'a source body written by the first process',
+      'an externalised source must survive the process that created it',
+    )
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
 // --- contextSavings (V2d-2) --------------------------------------------------
 
 test('contextSavings aggregates token/cost savings after a compile, optionally by project', async () => {
@@ -569,6 +734,48 @@ test('contextSavings on a fresh store with no compiles reports zero events', asy
   }
 })
 
+test('contextSavings attributes each compile to its own project, with no cross-project leak', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    // alpha deduplicates a fragment (it saves tokens); beta has nothing to save.
+    await store.compileContext({
+      query: 'a',
+      project: 'alpha',
+      fragments: [{ content: 'the same fact twice' }, { content: 'the same fact twice' }],
+      token_budget: 5000,
+    })
+    await store.compileContext({
+      query: 'b',
+      project: 'beta',
+      fragments: [{ content: 'a lone beta fact' }],
+      token_budget: 5000,
+    })
+
+    const alpha = await store.contextSavings('alpha')
+    const beta = await store.contextSavings('beta')
+    const everything = await store.contextSavings()
+    const unknown = await store.contextSavings('gamma')
+
+    assert.equal(alpha.events, 1, 'each project sees only its own compile')
+    assert.equal(beta.events, 1)
+    assert.equal(everything.events, 2, 'no filter aggregates every project')
+    assert.equal(
+      unknown.events,
+      0,
+      'a project that never compiled reports zero — an unknown filter must not fall back to the global total',
+    )
+    assert.ok(alpha.tokens_saved > 0, 'alpha deduplicated a fragment')
+    assert.equal(beta.tokens_saved, 0, "alpha's savings must not bleed into beta")
+    assert.equal(
+      everything.tokens_saved,
+      alpha.tokens_saved,
+      'the global total is the sum of the parts, counted once',
+    )
+  } finally {
+    cleanup()
+  }
+})
+
 // --- explainCompilation (V2d-2) ----------------------------------------------
 
 test('explainCompilation returns the decision for a matching fragment id', async () => {
@@ -608,6 +815,32 @@ test('explainCompilation fragment_index disambiguates byte-identical twins', asy
     assert.equal(survivor.action, 'preserve')
     assert.equal(twin.action, 'drop')
     assert.equal(twin.rule_id, 'drop.duplicate')
+  } finally {
+    cleanup()
+  }
+})
+
+test('explainCompilation fragmentIndex takes priority over a fragment id pointing elsewhere', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    // The twins test above cannot show the priority rule: byte-identical
+    // fragments SHARE an id, so index and id always agree. Two distinct
+    // fragments make the two disagree, which is the documented case.
+    const request = {
+      query: 'deploy',
+      fragments: [{ content: 'alpha fragment content' }, { content: 'beta fragment content' }],
+      token_budget: 5000,
+    }
+    const compiled = await store.compileContext(request)
+    const [alpha, beta] = compiled.decisions
+    assert.notEqual(alpha.fragment_id, beta.fragment_id, 'distinct content must yield distinct ids')
+
+    const decision = await store.explainCompilation(request, alpha.fragment_id, 1)
+    assert.equal(
+      decision.fragment_id,
+      beta.fragment_id,
+      'the 0-based fragmentIndex wins over the id it contradicts',
+    )
   } finally {
     cleanup()
   }
@@ -750,6 +983,33 @@ test('listWorkingContexts lists saved sessions for a project, most-recent first'
   }
 })
 
+test('listWorkingContexts really orders most-recently-saved first', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    // The test above sorts the names before comparing, so it proves nothing
+    // about order. saved_at has one-second granularity, so the saves have to
+    // straddle real second boundaries for the ordering to be observable at all.
+    await store.saveWorkingContext('veles', 'oldest', { goal: 'oldest' })
+    await sleep(1100)
+    await store.saveWorkingContext('veles', 'middle', { goal: 'middle' })
+    await sleep(1100)
+    await store.saveWorkingContext('veles', 'newest', { goal: 'newest' })
+
+    const { sessions } = await store.listWorkingContexts('veles')
+    assert.deepEqual(
+      sessions.map((s) => s.session),
+      ['newest', 'middle', 'oldest'],
+      'an agent discovering what is resumable must see the freshest session first',
+    )
+    assert.ok(
+      sessions[0].saved_at > sessions[1].saved_at && sessions[1].saved_at > sessions[2].saved_at,
+      `saved_at must strictly decrease, got ${sessions.map((s) => s.saved_at).join(', ')}`,
+    )
+  } finally {
+    cleanup()
+  }
+})
+
 test('listWorkingContexts on a project that never saved anything returns an empty list, not an error', async () => {
   const { store, cleanup } = freshStore()
   try {
@@ -800,6 +1060,49 @@ test('compileTranscript honours a forced jsonl segmentation policy', async () =>
       segmentation: { format: 'jsonl' },
     })
     assert.equal(result.segmentation.format_detected, 'jsonl')
+  } finally {
+    cleanup()
+  }
+})
+
+test('compileTranscript byte ranges index back into the exact transcript bytes', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    // The audit trail exists so a caller can see exactly how the transcript was
+    // cut. That claim is only worth something if the offsets resolve: slice the
+    // original transcript with them and check what comes back.
+    const transcript = 'User: what broke the déploiement?\nAssistant: clippy failed on main\n'
+    const bytes = Buffer.from(transcript, 'utf8')
+    const result = await store.compileTranscript({ query: 'deploy', transcript, token_budget: 5000 })
+
+    const segments = result.segmentation.segments
+    assert.ok(segments.length >= 2, 'both turns must be audited')
+    assert.equal(segments[0].byte_start, 0, 'the audit trail starts at the first byte')
+    assert.equal(segments.at(-1).byte_end, bytes.length, 'and accounts for the last one')
+
+    let cursor = 0
+    for (const segment of segments) {
+      assert.ok(
+        segment.byte_start >= cursor && segment.byte_end > segment.byte_start,
+        `segment ${segment.index} must be a forward, non-overlapping range`,
+      )
+      assert.ok(segment.byte_end <= bytes.length, 'a range never points past the transcript')
+      const slice = bytes.subarray(segment.byte_start, segment.byte_end).toString('utf8')
+      if (segment.role) {
+        assert.ok(
+          slice.startsWith(`${segment.role}:`),
+          `segment ${segment.index} claims role ${segment.role} but its bytes read ${JSON.stringify(slice)}`,
+        )
+      }
+      cursor = segment.byte_end
+    }
+    // Byte offsets, not char offsets: a multi-byte character in the first turn
+    // would shift every later range if these were counted in UTF-16 units.
+    assert.equal(
+      bytes.subarray(segments[1].byte_start, segments[1].byte_end).toString('utf8'),
+      'Assistant: clippy failed on main\n',
+      'the second turn resolves exactly, past the multi-byte character in the first',
+    )
   } finally {
     cleanup()
   }
