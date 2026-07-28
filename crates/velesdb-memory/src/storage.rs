@@ -252,9 +252,18 @@ impl MemoryStore for NativeStore {
         metadata: &Metadata,
         ttl_seconds: u64,
     ) -> Result<(), MemoryError> {
+        // Ordre delibere : le fait est ecrit avec sa metadata et SANS
+        // expiration, donc il ne peut pas expirer entre les deux appels.
+        // L'expiration est posee ensuite. C'est l'inverse de la sequence
+        // historique (store_with_ttl puis update_metadata), ou le fait etait
+        // deja vivant et deja en train d'expirer pendant la seconde ecriture.
         self.memory
             .semantic()
-            .store_with_metadata_and_ttl(id, content, embedding, metadata, ttl_seconds)
+            .store_with_metadata(id, content, embedding, metadata)
+            .map_err(MemoryError::from)?;
+        self.memory
+            .semantic()
+            .set_ttl_durable(id, ttl_seconds)
             .map_err(MemoryError::from)
     }
 
