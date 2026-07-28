@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "velesdb",
+  "description": "Lets the frontend call VelesDB plugin commands",
+  "windows": ["main"],
+  "permissions": ["velesdb:default"]
+}

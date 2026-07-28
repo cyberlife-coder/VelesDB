@@ -2,6 +2,13 @@
 
 *Stable since v1.9.1*
 
+> **Portability**: ✅ this path is an in-process library (Python / Rust) — no
+> MCP client, no server, no agent harness required · ✅ the sibling MCP-server
+> path works in any MCP client · ⚠️ only the
+> [harness hooks](#agent-harness-hooks-mcp-server-path) at the end of this
+> guide are environment-specific, and tool-result replacement
+> (`updatedToolOutput`) is Claude Code only.
+
 > **Two different paths, same underlying engine.** If you followed the root
 > README's `why()` / MCP / skills narrative here, this guide is the *other*
 > one: a low-level, language-native API (`AgentMemory` with explicit
@@ -36,7 +43,8 @@ Complete guide for using VelesDB's Agent Memory SDK. Covers the three memory sub
 12. [Thread Safety & Concurrency](#thread-safety--concurrency)
 13. [Rust API](#rust-api)
 14. [TypeScript / JavaScript (REST)](#typescript--javascript-rest)
-15. [FAQ](#faq)
+15. [Agent harness hooks (MCP-server path)](#agent-harness-hooks-mcp-server-path)
+16. [FAQ](#faq)
 
 ---
 
@@ -1029,6 +1037,64 @@ Each recall returns `SearchResult[]` = `{ id, score, payload?, vector? }`:
   persisted as `_veles_expires_at`). The subsystem-namespaced TTL helpers
   (`set_*_ttl`, `store_with_ttl`, `auto_expire`) and **snapshots** remain
   embedded-only (Python and Rust).
+
+---
+
+## Agent harness hooks (MCP-server path)
+
+> **Scope note.** Hooks belong to the *other* path: they drive the
+> [`velesdb-memory` MCP server](../../crates/velesdb-memory/README.md), not the
+> embedded `AgentMemory` API this guide documents. They are cross-referenced
+> here because both paths run on the same engine, and because a Claude Code
+> user reading this guide will want them.
+
+Wiring an MCP server gives an agent the *tools*; it does not make the agent
+call them. [`integrations/agent-hooks/`](../../integrations/agent-hooks/README.md)
+closes that gap with four real Claude Code hooks:
+
+| Hook | What it does | Mechanism |
+|---|---|---|
+| `SessionStart` | tells the model to call `load_working_context` as its first action | `hookSpecificOutput.additionalContext` — advisory |
+| `Stop` | blocks the **first** stop per session with a reason: call `save_working_context` before stopping | `{"decision":"block","reason":…}` — advisory |
+| `PreCompact` | blocks the **first** compaction per session with a reason: `compile_transcript` + `save_working_context` first | `decision` + `reason` — advisory |
+| `PostToolUse` | compiles an oversized tool result and **replaces** it | `hookSpecificOutput.updatedToolOutput` |
+
+### `PostToolUse` — the only hook that replaces content
+
+The first three can only *nudge*: they hand the model a reason string and hope
+it calls the right tool, so whether the context actually shrinks stays the
+model's decision. `PostToolUse` is different — its output schema carries
+replacement content, so an oversized tool result is compiled **once**, before
+it ever enters the transcript, and the bulky original is therefore never
+re-sent on any later turn. In one measured run a 10,331-byte tool result was
+replaced by 4,374 bytes — 4,872 → 1,928 tokens.
+
+Compilation runs in a separate, store-free process (`velesdb-memory
+compile-stdin`), because the session's own MCP server already holds the
+store's single-writer `flock`. Its safety rules, each covered by
+[`integrations/agent-hooks/test/hooks.test.sh`](../../integrations/agent-hooks/test/hooks.test.sh):
+
+- **Nothing is deleted.** The untouched original is archived under
+  `$TMPDIR/velesdb-agent-hooks/tool-output/` and its path is quoted in the
+  replacement, so the agent can `Read` it back whenever the compiled view is
+  not enough.
+- **Strict allowlist.** `Bash`, `Grep`, `WebFetch` by default. `Read` and
+  `Edit` are deliberately excluded and must stay excluded — their value *is*
+  the exact bytes.
+- **Identity fallback everywhere.** Missing `jq`, a missing or too-old binary,
+  a compilation error, an empty compiled result — each one leaves the tool
+  result exactly as it was.
+
+> **`updatedToolOutput` is Claude-Code-specific.** No other agent harness is
+> known to expose an equivalent field, so treat this hook as a Claude Code
+> *bonus* rather than the portable core of velesdb-memory. What the other
+> harnesses actually have: Windsurf wires one advisory `pre_user_prompt` hook
+> (and its post-hooks cannot alter a result at all); Codex CLI *does* have
+> lifecycle hooks, but none is implemented in this repo yet — only an
+> `AGENTS.md` convention. The honest per-harness status, with the reason for
+> every gap, is tabulated in
+> [`integrations/agent-hooks/README.md`](../../integrations/agent-hooks/README.md#parity-across-harnesses).
+> The portable value stays the MCP tool surface itself.
 
 ---
 

@@ -40,8 +40,8 @@ TARGETS: "list[tuple[str, str]]" = [
     ("integrations/haystack/src/haystack_velesdb/__init__.py", "py_init_version"),
     ("examples/wasm-browser-demo/index.html", "wasm_cdn_url"),
     ("docs/guides/CONFIGURATION.md", "doc_toml_header"),
-    ("crates/velesdb-server/README.md", "doc_health_snippet"),
-    ("crates/velesdb-python/README.md", "doc_version_badge"),
+    ("docs/guides/SERVER_REST_TOUR.md", "doc_health_snippet"),
+    ("crates/velesdb-python/README.md", "applies_to_stamp"),
     ("demos/rag-pdf-demo/pyproject.toml", "toml"),
     ("sdks/typescript/package.json", "json"),
     ("sdks/typescript/package-lock.json", "npm_lock"),
@@ -57,11 +57,10 @@ TARGETS: "list[tuple[str, str]]" = [
     ("integrations/langgraph/src/langgraph_velesdb/__init__.py", "py_init_version"),
     ("sdks/typescript/README.md", "ts_sdk_banner"),
     ("ROADMAP.md", "roadmap_current"),
-    ("docs/guides/CLI_REPL.md", "doc_guide_version_header"),
     ("docs/guides/CONFIGURATION.md", "doc_guide_version_header"),
     ("docs/guides/GRAPH_PATTERNS.md", "doc_guide_version_header"),
     ("docs/guides/SEARCH_MODES.md", "doc_guide_version_header"),
-    ("docs/BENCHMARKS.md", "doc_last_updated_version"),
+    ("docs/BENCHMARKS.md", "applies_to_stamp"),
     ("docs/reference/ECOSYSTEM_PARITY.md", "doc_last_updated_version"),
     ("docs/reference/VELESQL_CONFORMANCE_MATRIX.md", "doc_last_updated_version"),
     ("docs/reference/ARCHITECTURE_DIAGRAMS.md", "md_title_version"),
@@ -73,12 +72,11 @@ TARGETS: "list[tuple[str, str]]" = [
     ("examples/wasm-browser-demo/README.md", "wasm_cdn_url"),
     ("docs/guides/INSTALLATION.md", "deb_release_tag"),
     # Found stale at 1.16.0 in the 1.17.0 review (unpoliced current-version
-    # markers). The VELESQL_SPEC stamp uses a `**Last Updated**: ... (VelesDB
-    # vX.Y.Z)` form; CHEATSHEET a `**VelesDB version:** X.Y.Z` label; CLI_REPL
-    # echoes the version in four example-output strings.
-    ("docs/VELESQL_SPEC.md", "doc_last_updated_version"),
+    # markers). VELESQL_SPEC now carries the canonical `Applies to:` footer --
+    # note its `**Version**: 3.10.0` is the VelesQL grammar, not the workspace;
+    # CHEATSHEET keeps a `**VelesDB version:** X.Y.Z` label.
+    ("docs/VELESQL_SPEC.md", "applies_to_stamp"),
     ("docs/reference/VELESQL_CHEATSHEET.md", "md_version_label"),
-    ("docs/guides/CLI_REPL.md", "cli_repl_version"),
 ]
 
 
@@ -200,6 +198,16 @@ def bump_file(path: Path, fmt: str, ver: str, date: "datetime.date") -> int:
         text, a = _sub_all(text, r"(releases/download/v)" + VERSION_RE + r"(/)", r"\g<1>" + ver + r"\g<2>")
         text, b = _sub_all(text, r"(velesdb-)" + VERSION_RE + r"(-amd64\.deb)", r"\g<1>" + ver + r"\g<2>")
         n = a + b
+    elif fmt == "applies_to_stamp":
+        # Canonical documentation footer: `Applies to: velesdb-core X.Y.Z`.
+        # Replace-all, since a long doc may repeat the stamp per part. Only the
+        # version moves: `Last updated:` records when the prose was revised, and
+        # a release does not revise the prose.
+        text, n = _sub_all(
+            text,
+            r"(Applies to:\s*velesdb-core\s+)" + VERSION_RE,
+            r"\g<1>" + ver,
+        )
     elif fmt == "doc_last_updated_version":
         text, n = _bump_last_updated(text, ver, date)
     else:

@@ -36,9 +36,9 @@
       "measured_version": "n/a"
     },
     {
-      "id": "core_readme_blazing_fast",
+      "id": "core_readme_hnsw_latency",
       "file": "crates/velesdb-core/README.md",
-      "must_contain": "Blazing Fast",
+      "must_contain": "450µs p50",
       "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
       "executable": false,
       "measured_on": "unknown",
@@ -48,11 +48,22 @@
     {
       "id": "core_readme_columnstore_claim",
       "file": "crates/velesdb-core/README.md",
-      "must_contain": "ColumnStore filtering",
+      "must_contain": "`ColumnStore` filtering",
       "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark",
       "executable": false,
       "measured_on": "unknown",
       "measured_machine": "unknown",
+      "measured_version": "unknown"
+    },
+    {
+      "id": "core_readme_columnstore_speedup",
+      "file": "crates/velesdb-core/README.md",
+      "must_contain": "130x",
+      "validation_command": "cargo bench -p velesdb-core --bench column_filter_benchmark",
+      "executable": false,
+      "source": "crates/velesdb-core/README.md: 'ColumnStore filtering vs. scanning JSON payloads — up to 130x faster (integer equality, 100K rows)'. Same benchmark, same figure and same conditions as the root-README claim readme_columnstore_130x_claim; provenance mirrored from it rather than re-derived.",
+      "measured_on": "2026-07-20",
+      "measured_machine": "Intel Core i9-14900KF (x86_64, AVX2) — docs/BENCHMARKS.md reference machine; cross-checked on Apple M5 Pro (~50-105x there)",
       "measured_version": "unknown"
     },
     {

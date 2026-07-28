@@ -1,0 +1,83 @@
+# velesdb.toml — engine configuration for tauri-plugin-velesdb.
+#
+# Loaded by:
+#     tauri_plugin_velesdb::Builder::new(data_dir)
+#         .with_config_path("velesdb.toml")?
+#         .build()
+#
+# Fails fast. A missing file, a TOML syntax error, or a value outside its
+# allowed range makes `with_config_path` return `Error::ConfigLoad` with the
+# typed core error attached — the plugin never silently falls back to defaults.
+#
+# Only the ENGINE sections below are read: [search], [hnsw], [storage],
+# [limits], [quantization], [wal_batch]. A [server] table belonging to another
+# VelesDB component in a shared file is ignored, not rejected — which is what
+# lets a desktop app and a velesdb-server deployment share one config file.
+#
+# VELESDB_* environment variables still layer on top of the file.
+#
+# Every value below is the engine default unless commented otherwise, so this
+# file is safe to start from and trim.
+
+[search]
+# fast | balanced | accurate | perfect
+#   fast      ef_search 96,   ~95% recall
+#   balanced  ef_search 160,  ~99.5% recall — the default
+#   accurate  ef_search 512,  ~100% recall
+#   perfect   exhaustive brute force, 100% by construction, O(n)
+default_mode = "balanced"
+
+# Hard cap on results per query. Allowed range: 1..=10000.
+max_results = 1000
+
+# Query timeout in milliseconds; 0 disables it. Allowed range: 0..=86400000.
+query_timeout_ms = 30000
+
+# Uncomment to override the mode's ef_search outright. Range: 16..=4096.
+#   ef_search = 200
+
+[hnsw]
+# Maximum number of layers; 0 means "derive it from the collection".
+# Range when non-zero: 1..=64.
+max_layers = 0
+
+# m and ef_construction are auto-tuned from the collection dimension when
+# omitted. Uncomment to pin them:
+#   m = 32                  # range 4..=128
+#   ef_construction = 400   # range 100..=2000
+
+[storage]
+# "mmap" or "memory". mmap keeps the resident set small — the right default for
+# a desktop app that may sit in the background for hours.
+storage_mode = "mmap"
+
+# Mmap cache in megabytes. Range: 1..=1048576.
+mmap_cache_mb = 1024
+
+# Vector alignment in bytes; 64 matches the cache line on x86_64 and ARM64.
+vector_alignment = 64
+
+[limits]
+# Guard rails. The frontend can also read and adjust the per-query limits at
+# runtime through the `get_guardrails` / `update_guardrails` IPC commands.
+max_dimensions = 4096
+max_vectors_per_collection = 100000000
+max_collections = 1000
+max_payload_size = 1048576
+max_perfect_mode_vectors = 500000
+
+[quantization]
+# Quantization is chosen per collection at creation time, through the
+# `storageMode` field of `create_collection` ("full", "sq8", "binary").
+# This section tunes what happens around that choice.
+rerank_enabled = true
+rerank_multiplier = 2
+auto_quantization = true
+auto_quantization_threshold = 10000
+
+[wal_batch]
+# WAL group commit: trades durability latency for write throughput. Off by
+# default. Worth enabling for bulk ingestion, less so for interactive writes.
+enabled = false
+commit_delay_us = 100
+max_batch_size = 128

@@ -1,793 +1,247 @@
 # velesdb-migrate
 
-Migration tool for importing vectors from other databases into VelesDB.
+> Bulk-loads vectors from Pinecone, Qdrant, Milvus and seven other sources into a local VelesDB database.
 
-## 🎯 Purpose
+[![crates.io](https://img.shields.io/crates/v/velesdb-migrate.svg)](https://crates.io/crates/velesdb-migrate)
+[![docs.rs](https://docs.rs/velesdb-migrate/badge.svg)](https://docs.rs/velesdb-migrate)
+[![License](https://img.shields.io/badge/license-VelesDB%20Core%201.0-blue.svg)](./LICENSE)
 
-Switch to VelesDB in minutes, not days. `velesdb-migrate` handles the heavy lifting of extracting vectors from your current database and loading them into VelesDB with minimal configuration.
+## Objective
 
-## 🚀 Try VelesDB Today!
+Moving an embedding corpus between vector databases normally means writing a
+throwaway ETL script: paginate the source API, reshape ids and payloads, batch
+the writes, and restart from scratch whenever the run dies halfway through.
+`velesdb-migrate` replaces that script with a YAML file. It handles pagination,
+id normalisation, payload mapping, dimension checks, retries and
+checkpoint/resume, and writes into a VelesDB collection it creates for you.
 
-> **Why migrate to VelesDB?**
-> 
-> - ⚡ **Microsecond latency** — ~55 µs HNSW search index-only (10K/768D Balanced k=10) and ~450 µs end-to-end p50 (10K/384D, WAL ON, recall ≥ 96%) — no network round-trip; see [`docs/reference/promise-contract.json`](../../docs/reference/promise-contract.json)
-> - 🎯 **SQL-native queries** — Use familiar VelesQL syntax, no new APIs to learn
-> - 💾 **4-32x compression** — SQ8 and Binary quantization built-in
-> - 🔒 **Self-hosted** — Your data stays on your infrastructure
-> - 📦 **Self-contained** — No external services, single binary, zero configuration
->
-> ```bash
-> # Quick test after migration
-> velesdb query ./velesdb_data "SELECT * FROM my_collection WHERE VECTOR NEAR [0.1, 0.2, ...] LIMIT 10"
-> ```
+If you are not moving data *into* VelesDB, this crate has nothing for you.
 
----
+## Use cases
 
-## ✅ Supported Sources
+- Evaluating VelesDB on a copy of a production Pinecone index before committing.
+- Leaving a managed vector database for a self-hosted, single-binary deployment.
+- Loading an embedding batch produced by an offline pipeline from JSON or CSV.
+- Re-importing an export after an incident, resuming an interrupted run.
+- Consolidating several Qdrant or Weaviate collections into one VelesDB database.
 
-| Source | Status | Protocol | Notes |
-|--------|--------|----------|-------|
-| **Supabase** | ✅ Ready | PostgREST | pgvector-enabled Supabase projects |
-| **Qdrant** | ✅ Ready | REST API | Scroll pagination |
-| **Pinecone** | ✅ Ready | REST API | Serverless & pod indexes |
-| **Weaviate** | ✅ Ready | GraphQL | All classes & properties |
-| **Milvus** | ✅ Ready | REST API v2 | Zilliz Cloud compatible |
-| **ChromaDB** | ✅ Ready | REST API | Tenant/database support |
-| **JSON File** | ✅ Ready | Local file | Universal import from exports |
-| **CSV File** | ✅ Ready | Local file | Spreadsheet/ML pipeline import |
-| **Elasticsearch** | ✅ Ready | REST API | OpenSearch compatible, `search_after` pagination |
-| **Redis** | ✅ Ready | REST API | Redis Stack with RediSearch, FT.SEARCH |
+## Supported sources
 
-### Sparse vector migration
+| Source | Protocol | Notes |
+|---|---|---|
+| Supabase | PostgREST | pgvector-enabled projects |
+| Qdrant | REST | Scroll pagination, named + sparse vectors |
+| Pinecone | REST | Serverless and pod indexes, `sparseValues` |
+| Weaviate | GraphQL | Cursor pagination; list the properties to keep |
+| Milvus / Zilliz Cloud | REST v2 | |
+| ChromaDB | REST | Tenant / database isolation |
+| Elasticsearch / OpenSearch | REST | `search_after` pagination |
+| Redis Stack | RESP + RediSearch | Requires the default `redis-source` feature |
+| JSON file | local file | `.json` array, universal fallback for exports |
+| CSV file | local file | one JSON column or one column per dimension |
 
-Sparse vectors (e.g. SPLADE / learned-sparse, BM25-style indexes) are extracted
-and carried through to the destination **only** for sources that expose them in
-their API:
+PostgreSQL/pgvector (direct SQL) and MongoDB Atlas were removed in v1.13; both
+have documented workarounds in the
+[source reference](../../docs/guides/MIGRATE_SOURCES.md#removed-sources), which
+also covers the per-source YAML fields and sparse-vector support.
 
-| Source | Sparse extraction |
-|--------|-------------------|
-| **Qdrant** (named sparse vectors) | ✅ |
-| **Pinecone** (`sparseValues`) | ✅ |
-| Supabase, Weaviate, Milvus, ChromaDB, Elasticsearch, Redis, JSON, CSV | ❌ (none extracted) |
+## Prerequisites
 
-> ⚠️ If your source stores sparse vectors but is **not** in the ✅ list, those
-> sparse vectors are silently dropped during migration (dense vectors and
-> payloads still migrate normally). Export the sparse vectors separately and
-> re-ingest them, or open an issue if you need a connector to add sparse support.
+| Requirement | Minimum version | Note |
+|---|---|---|
+| Rust | 1.90 | Workspace MSRV; only needed to build from source |
+| VelesDB destination | — | A writable local directory; created if absent |
+| Source database | — | Reachable over the network, with read credentials |
+| Disk space | — | Roughly the source corpus size at `storage_mode: full` |
 
-### Previously supported (removed)
+The destination is always a **local** VelesDB data directory. Migrating into a
+remote `velesdb-server` over HTTP is not supported.
 
-| Source | Removed | Reason | Workaround |
-|--------|---------|--------|------------|
-| **PostgreSQL/pgvector** (direct SQL) | v1.13 | Connector was a stub: `get_schema()` and `extract_batch()` returned `UnsupportedSource` at runtime. Use Supabase for pgvector-enabled projects, or export with `pg_dump` + `--source json_file`. | Use `supabase` for Supabase projects; for self-hosted pgvector export rows to JSONL and use `--source json_file`. |
-| **MongoDB Atlas** | v1.13 | The connector relied on the MongoDB Atlas Data API, which MongoDB Inc. deprecated on 2025-09-30. | Export to JSONL with `mongoexport --collection <c> --out data.jsonl` and migrate with `--source json_file`. |
-
----
-
-## 🚀 Quick Start
-
-### Installation
+## Installation
 
 ```bash
-# From source
+cargo install velesdb-migrate
+```
+
+From a clone of the repository:
+
+```bash
 cargo install --path crates/velesdb-migrate
 ```
 
-### Basic Usage
+Prebuilt binaries for `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`,
+`aarch64-apple-darwin` and `x86_64-apple-darwin` ship in the `velesdb-*` archives
+attached to each [GitHub release](https://github.com/cyberlife-coder/VelesDB/releases).
 
-#### Option A: Interactive Wizard (Recommended) ⚡
+## First success in 60 seconds
 
-**Zero configuration needed!** The wizard guides you through the entire migration:
-
-```bash
-velesdb-migrate wizard
-```
-
-```
-╔═══════════════════════════════════════════════════════════════╗
-║         🚀 VELESDB MIGRATION WIZARD                           ║
-║         Migrate your vectors in under 60 seconds              ║
-╚═══════════════════════════════════════════════════════════════╝
-
-? Where are your vectors stored?
-  ❯ Supabase (PostgreSQL + pgvector)
-    Qdrant
-    Pinecone
-    ...
-
-? Supabase Project URL: https://xyz.supabase.co
-? API Key: ****
-
-🔍 Connecting...
-✅ Found: documents (14,053 vectors, 1536D)
-
-? Start migration? [Y/n]
-
-✅ Migration Complete! (4.9s, 2,867 vec/s)
-```
-
-#### Option B: Config File (Advanced)
+No external database needed: migrate three vectors from a JSON file.
 
 ```bash
-# 1. Generate config template for your source
-velesdb-migrate init --source supabase --output migration.yaml
+mkdir -p /tmp/veles-migrate-demo && cd /tmp/veles-migrate-demo
 
-# 2. Edit configuration with your credentials
-code migration.yaml
+cat > vectors.json <<'EOF'
+[
+  {"id": "doc-1", "vector": [0.10, 0.20, 0.30, 0.40], "title": "Onboarding guide"},
+  {"id": "doc-2", "vector": [0.90, 0.10, 0.05, 0.00], "title": "Billing FAQ"},
+  {"id": "doc-3", "vector": [0.25, 0.25, 0.25, 0.25], "title": "Release notes"}
+]
+EOF
 
-# 3. Validate configuration
-velesdb-migrate validate --config migration.yaml
-
-# 4. Preview source schema
-velesdb-migrate schema --config migration.yaml
-
-# 5. Run migration (dry run first!)
-velesdb-migrate run --config migration.yaml --dry-run
-
-# 6. Run actual migration
-velesdb-migrate run --config migration.yaml
-```
-
-### 🔍 NEW: Auto-Detect Schema (Recommended)
-
-**Skip manual configuration!** The `detect` command automatically:
-- Connects to your source database
-- Detects vector dimension (e.g., 1536 for OpenAI, 768 for sentence-transformers)
-- Identifies vector and metadata columns
-- Generates a ready-to-use YAML config
-
-```bash
-# Auto-detect from Supabase
-velesdb-migrate detect \
-  --source supabase \
-  --url https://YOUR_PROJECT.supabase.co \
-  --collection your_table \
-  --api-key $SUPABASE_SERVICE_KEY \
-  --output migration.yaml
-
-# Auto-detect from Qdrant
-velesdb-migrate detect \
-  --source qdrant \
-  --url http://localhost:6333 \
-  --collection my_vectors \
-  --output migration.yaml
-
-# Auto-detect from ChromaDB
-velesdb-migrate detect \
-  --source chromadb \
-  --url http://localhost:8000 \
-  --collection embeddings \
-  --output migration.yaml
-```
-
-**Example output:**
-```
-✅ Schema Detected!
-┌─────────────────────────────────────────────
-│ Source Type:  supabase
-│ Collection:   documents
-│ Dimension:    1536                    ← Auto-detected!
-│ Total Count:  14053 vectors
-├─────────────────────────────────────────────
-│ Detected Metadata Fields:
-│   • title (string)
-│   • content (string)
-│   • created_at (string)
-└─────────────────────────────────────────────
-
-📝 Configuration generated: "migration.yaml"
-```
-
----
-
-## 📚 Migration Guides by Source
-
-### 🟢 Supabase (PostgREST API)
-
-Supabase uses pgvector under the hood. Migration is done via the PostgREST API.
-
-**Prerequisites:**
-- Supabase project URL
-- Service role key (for full access) or anon key (if RLS allows)
-- Table with a vector column
-
-**Configuration:**
-
-```yaml
+cat > migration.yaml <<'EOF'
 source:
-  type: supabase
-  url: https://YOUR_PROJECT_ID.supabase.co
-  api_key: ${SUPABASE_SERVICE_KEY}  # Use env var for security
-  table: documents
-  vector_column: embedding          # Column containing the vector
-  id_column: id                     # Primary key column
-  payload_columns:                  # Additional columns to migrate
-    - title
-    - content
-    - metadata
-    - created_at
+  type: json_file
+  path: ./vectors.json
+  id_field: id
+  vector_field: vector
 
 destination:
   path: ./velesdb_data
-  collection: documents
-  dimension: 1536                   # Must match your embedding model
-  metric: cosine                    # cosine, euclidean, or dot
-  storage_mode: full                # full, sq8 (4x compression), or binary (32x)
-
-options:
-  batch_size: 500                   # Supabase has row limits
-  workers: 2
-  continue_on_error: false
-```
-
-**Example Supabase Table Structure:**
-
-```sql
-CREATE TABLE documents (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  title TEXT,
-  content TEXT,
-  embedding VECTOR(1536),  -- OpenAI ada-002
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
----
-
-### 🔵 Qdrant
-
-Full support for Qdrant Cloud and self-hosted instances.
-
-**Prerequisites:**
-- Qdrant URL (default: `http://localhost:6333`)
-- API key (for Qdrant Cloud)
-- Collection name
-
-**Configuration:**
-
-```yaml
-source:
-  type: qdrant
-  url: http://localhost:6333
-  # url: https://xxx-xxx.aws.cloud.qdrant.io  # For Qdrant Cloud
-  collection: my_collection
-  api_key: ${QDRANT_API_KEY}        # Optional, for cloud
-  payload_fields: []                 # Empty = all fields
-
-destination:
-  path: ./velesdb_data
-  collection: qdrant_docs
-  dimension: 768
+  collection: imported_docs
+  dimension: 4
   metric: cosine
+  storage_mode: full
 
 options:
   batch_size: 1000
-  workers: 4
-```
+EOF
 
-**Features Supported:**
-- ✅ Numeric and UUID point IDs
-- ✅ Single and named vectors
-- ✅ All payload types
-- ✅ Scroll pagination (efficient for large collections)
-
----
-
-### 🌲 Pinecone
-
-Supports both serverless and pod-based Pinecone indexes.
-
-**Prerequisites:**
-- Pinecone API key
-- Index name
-- Optional: namespace
-
-**Configuration:**
-
-```yaml
-source:
-  type: pinecone
-  api_key: ${PINECONE_API_KEY}
-  environment: us-east-1-aws        # Your Pinecone environment
-  index: my-index
-  namespace: production             # Optional
-
-destination:
-  path: ./velesdb_data
-  collection: pinecone_vectors
-  dimension: 1536
-  metric: cosine
-
-options:
-  batch_size: 100                   # Pinecone has lower limits
-  workers: 2
-```
-
-**Notes:**
-- Pinecone API has rate limits, use smaller batch sizes
-- Namespaces are optional but recommended for organization
-
----
-
-### 🟠 Weaviate
-
-GraphQL-based extraction from Weaviate instances.
-
-**Prerequisites:**
-- Weaviate URL
-- Class name
-- Optional: API key (for Weaviate Cloud)
-
-**Configuration:**
-
-```yaml
-source:
-  type: weaviate
-  url: http://localhost:8080
-  # url: https://xxx.weaviate.network  # For Weaviate Cloud
-  class_name: Document
-  api_key: ${WEAVIATE_API_KEY}      # Optional
-  properties:                        # Properties to include
-    - title
-    - content
-    - author
-
-destination:
-  path: ./velesdb_data
-  collection: weaviate_docs
-  dimension: 768
-  metric: cosine
-
-options:
-  batch_size: 1000
-```
-
-**Features Supported:**
-- ✅ All property types
-- ✅ Cursor-based pagination
-- ✅ GraphQL query optimization
-
----
-
-### 🔷 Milvus / Zilliz Cloud
-
-REST API v2 support for Milvus and Zilliz Cloud.
-
-**Prerequisites:**
-- Milvus URL (default: `http://localhost:19530`)
-- Collection name
-- Optional: username/password
-
-**Configuration:**
-
-```yaml
-source:
-  type: milvus
-  url: http://localhost:19530
-  # url: https://xxx.zillizcloud.com  # For Zilliz Cloud
-  collection: my_collection
-  username: root                     # Optional
-  password: ${MILVUS_PASSWORD}       # Optional
-
-destination:
-  path: ./velesdb_data
-  collection: milvus_docs
-  dimension: 768
-  metric: cosine
-
-options:
-  batch_size: 1000
-```
-
----
-
-### 🟡 ChromaDB
-
-Full support for ChromaDB instances with tenant/database isolation.
-
-**Prerequisites:**
-- ChromaDB URL (default: `http://localhost:8000`)
-- Collection name
-
-**Configuration:**
-
-```yaml
-source:
-  type: chromadb
-  url: http://localhost:8000
-  collection: my_collection
-  tenant: default_tenant             # Optional
-  database: default_database         # Optional
-
-destination:
-  path: ./velesdb_data
-  collection: chroma_docs
-  dimension: 768
-  metric: cosine
-
-options:
-  batch_size: 1000
-```
-
-**Features Supported:**
-- ✅ Embeddings extraction
-- ✅ Metadata migration
-- ✅ Document content
-- ✅ Multi-tenant support
-
----
-
-## 🔧 CLI Reference
-
-```
-velesdb-migrate 3.12.0
-Migrate vectors from other databases to VelesDB
-
-USAGE:
-    velesdb-migrate [OPTIONS] [COMMAND]
-
-COMMANDS:
-    wizard    Interactive migration wizard (recommended)
-    run       Run migration from config file
-    validate  Validate configuration file
-    schema    Show schema from source database
-    init      Generate example configuration
-    detect    Auto-detect schema and generate config
-
-OPTIONS:
-    -c, --config <FILE>     Configuration file path
-        --dry-run           Preview migration without writing
-    -v, --verbose           Verbose output (debug logs)
-        --batch-size <N>    Override batch size from config
-    -h, --help              Print help
-    -V, --version           Print version
-```
-
-### Detect Command Options
-
-```
-velesdb-migrate detect [OPTIONS]
-
-OPTIONS:
-    -s, --source <TYPE>      Source type: supabase, qdrant, chromadb, pinecone, weaviate, milvus
-    -u, --url <URL>          Source database URL
-    -n, --collection <NAME>  Collection/table/index name
-    -a, --api-key <KEY>      API key (required for some sources)
-    -o, --output <FILE>      Output config file [default: migration.yaml]
-        --dest-path <PATH>   VelesDB destination path [default: ./velesdb_data]
-```
-
-### Command Examples
-
-```bash
-# Generate config for each source type
-velesdb-migrate init --source supabase --output supabase.yaml
-velesdb-migrate init --source qdrant --output qdrant.yaml
-velesdb-migrate init --source pinecone --output pinecone.yaml
-velesdb-migrate init --source weaviate --output weaviate.yaml
-velesdb-migrate init --source milvus --output milvus.yaml
-velesdb-migrate init --source chromadb --output chromadb.yaml
-
-# Check source schema before migration
-velesdb-migrate schema --config migration.yaml
-
-# Dry run (recommended before actual migration)
-velesdb-migrate run --config migration.yaml --dry-run
-
-# Full migration with verbose output
-velesdb-migrate run --config migration.yaml --verbose
-
-# Override batch size for testing
-velesdb-migrate run --config migration.yaml --batch-size 100
-```
-
----
-
-## ⚙️ Configuration Options
-
-### Destination Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `path` | string | required | Path to VelesDB data directory |
-| `collection` | string | required | Collection name (created if not exists) |
-| `dimension` | integer | required | Vector dimension (must match source) |
-| `metric` | string | `cosine` | Distance metric: `cosine`, `euclidean`, `dot` |
-| `storage_mode` | string | `full` | Storage: `full`, `sq8` (4x compression), `binary` (32x) |
-
-### Migration Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `batch_size` | integer | `1000` | Points extracted per batch |
-| `workers` | integer | `4` | Parallel point preparation workers before batch write |
-| `checkpoint_enabled` | boolean | `true` | Enable checkpoint/resume between successful batches |
-| `checkpoint_path` | string | auto | Custom checkpoint file path for resume state |
-| `dry_run` | boolean | `false` | Preview only, don't write |
-| `continue_on_error` | boolean | `false` | Skip failed points |
-| `field_mappings` | map | `{}` | Rename fields during migration |
-
-### Field Mappings Example
-
-Rename fields during migration:
-
-```yaml
-options:
-  field_mappings:
-    old_field_name: new_field_name
-    legacy_title: title
-    doc_content: content
-    created: created_at
-```
-
----
-
-## 📊 Performance Guidelines
-
-### Expected Throughput
-
-| Source | Typical Speed | Recommended Batch Size |
-|--------|--------------|------------------------|
-| Local Qdrant | 10,000+ pts/sec | 1000 |
-| Cloud Qdrant | 1,000-5,000 pts/sec | 500-1000 |
-| Supabase | 1,000-3,000 pts/sec | 500 |
-| Pinecone | 500-2,000 pts/sec | 100 |
-| Weaviate | 2,000-5,000 pts/sec | 1000 |
-| Milvus | 3,000-8,000 pts/sec | 1000 |
-| ChromaDB | 2,000-5,000 pts/sec | 1000 |
-
-### Optimization Tips
-
-1. **Start with dry run**: Always preview first
-2. **Use smaller batches for cloud sources**: API rate limits apply
-3. **Monitor memory usage**: Large batches use more RAM
-4. **Use SQ8 storage**: 4x memory reduction with ~99% recall
-5. **Enable checkpoints**: For large migrations, allows resume
-
----
-
-## 🔐 Security Best Practices
-
-### Environment Variables
-
-Never hardcode secrets in config files:
-
-```yaml
-source:
-  api_key: ${MY_API_KEY}  # Reads from environment
-```
-
-```bash
-export MY_API_KEY="your-secret-key"
 velesdb-migrate run --config migration.yaml
 ```
 
-### Recommended Permissions
+Expected output (timestamps, duration, throughput and the SIMD line vary with
+the machine):
 
-| Source | Recommended Permission |
-|--------|----------------------|
-| Supabase | Service role key (read-only if possible) |
-| Qdrant | Read-only API key |
-| Pinecone | Read-only API key |
-| Weaviate | Read-only auth token |
+```text
+2026-07-25T16:30:04.286105Z  INFO Loading configuration from "migration.yaml"
+2026-07-25T16:30:04.287762Z  INFO Starting migration...
+2026-07-25T16:30:04.288537Z  INFO Starting migration pipeline
+2026-07-25T16:30:04.289081Z  INFO Source schema: 4 dimension, Some(3) total vectors
+2026-07-25T16:30:04.289713Z  INFO SIMD features detected - direct dispatch enabled avx512=false avx2=false
+2026-07-25T16:30:04.411457Z  INFO Migration complete: 3 extracted, 3 loaded, 0 failed in 0.12s (24 pts/sec)
 
-### .gitignore
-
-```
-# Never commit migration configs with secrets
-migration.yaml
-*.migration.yaml
-.env
-```
-
----
-
-## 🐛 Troubleshooting
-
-### Connection Errors
-
-```
-Error: Source connection error: ...
+✅ Migration Complete!
+   Extracted: 3
+   Loaded:    3
+   Failed:    0
+   Duration:  0.12s
+   Throughput: 24 vectors/sec
 ```
 
-**Solutions:**
-- Verify URL format (include protocol: `http://` or `https://`)
-- Check network connectivity
-- Verify credentials
-- Ensure collection/table exists
+Success is `Loaded: 3` with `Failed: 0` and exit code 0. Anything else — a
+non-zero `Failed`, or an `Error:` line instead of the summary — means the
+migration did not complete; see [Troubleshooting](#troubleshooting).
 
-### Dimension Mismatch
-
-```
-Error: Schema mismatch: Source dimension 768 != destination dimension 1536
-```
-
-**Solutions:**
-- Check your embedding model's dimension
-- Update `dimension` in destination config
-- Run `velesdb-migrate schema` to see source dimension
-
-### Rate Limit Errors
-
-```
-Error: Rate limit exceeded, retry after 60 seconds
-```
-
-**Solutions:**
-- Reduce `batch_size` (try 100 or 50)
-- Add delays between batches (coming soon)
-- Check source API quotas
-
-### Memory Issues
-
-```
-Error: Out of memory
-```
-
-**Solutions:**
-- Reduce `batch_size`
-- Use `storage_mode: sq8` for 4x memory reduction
-- Process in smaller chunks
-
-### Resume Failed Migration
-
-If migration fails midway:
+Verify the result with the VelesDB CLI (`cargo install velesdb-cli`):
 
 ```bash
-# The checkpoint file stores the last successful batch offset
-# Just re-run the same command to resume from that point
-velesdb-migrate run --config migration.yaml
-
-# Or start fresh by removing the checkpoint file
-rm ./velesdb_data/.velesdb_migrate_checkpoint_<source>_<collection>.json
-velesdb-migrate run --config migration.yaml
+velesdb collection show ./velesdb_data imported_docs
 ```
 
----
-
-## 📁 Example Configuration Files
-
-See the `examples/` directory for complete configuration templates:
-
-- `examples/qdrant-migration.yaml`
-- `examples/pinecone-migration.yaml`
-- `examples/weaviate-migration.yaml`
-- `examples/milvus-migration.yaml`
-- `examples/chromadb-migration.yaml`
-- `examples/supabase-migration.yaml`
-
----
-
-## 🔄 Migration Workflow
-
-### Option A: Auto-Detect (Recommended) ⚡
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│              FAST WORKFLOW (Auto-Detect)                     │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  1. DETECT                                                   │
-│     velesdb-migrate detect --source supabase --url ...       │
-│     → Auto-detects dimension, columns, count                 │
-│     → Generates migration.yaml                               │
-│                          │                                   │
-│                          ▼                                   │
-│  2. REVIEW                                                   │
-│     Verify generated config (optional adjustments)           │
-│                          │                                   │
-│                          ▼                                   │
-│  3. MIGRATE                                                  │
-│     velesdb-migrate run --config migration.yaml              │
-│                          │                                   │
-│                          ▼                                   │
-│  4. DONE! ✅                                                  │
-│     velesdb query ./velesdb_data "SELECT COUNT(*) FROM collection" │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
+```text
+Collection Details
+  Name: imported_docs
+  Type: Vector
+  Dimension: 4
+  Metric: Cosine
+  Point Count: 3
+  Storage Mode: Full
+  Est. Memory: 0.00 MB
 ```
 
-### Option B: Manual Configuration
+## Configuration
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                 MANUAL WORKFLOW                              │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  1. INIT                                                     │
-│     velesdb-migrate init --source <type> --output config.yaml│
-│                          │                                   │
-│                          ▼                                   │
-│  2. CONFIGURE                                                │
-│     Edit config.yaml with credentials                        │
-│                          │                                   │
-│                          ▼                                   │
-│  3. VALIDATE                                                 │
-│     velesdb-migrate validate --config config.yaml            │
-│                          │                                   │
-│                          ▼                                   │
-│  4. SCHEMA                                                   │
-│     velesdb-migrate schema --config config.yaml              │
-│     → Shows dimension, count, fields                         │
-│                          │                                   │
-│                          ▼                                   │
-│  5. DRY RUN                                                  │
-│     velesdb-migrate run --config config.yaml --dry-run       │
-│     → Validates without writing                              │
-│                          │                                   │
-│                          ▼                                   │
-│  6. MIGRATE                                                  │
-│     velesdb-migrate run --config config.yaml                 │
-│     → Extracts → Transforms → Loads                          │
-│                          │                                   │
-│                          ▼                                   │
-│  7. VERIFY                                                   │
-│     velesdb query ./velesdb_data "SELECT COUNT(*) FROM collection" │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
+The YAML file has four top-level keys — `source`, `destination`, `options` and
+the optional `relations`. Full schema, defaults and accepted enum values are in
+the [CLI and configuration reference](../../docs/guides/MIGRATE_CLI.md#configuration-schema).
 
----
+Environment variables read by the tool:
 
-## 📐 Dimension Detection by Source
+| Variable | Default | Effect |
+|---|---|---|
+| `VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS` | unset | `1` or `true` lets the six URL-validating connectors reach loopback, RFC 1918 and reserved hostnames. Required for any `http://localhost:...` source. |
 
-All connectors automatically detect vector dimensions:
+Values are **not** interpolated into the YAML: `api_key: ${MY_KEY}` is sent
+verbatim as the API key. See
+[Secrets](../../docs/guides/MIGRATE_OPERATIONS.md#secrets) for the patterns that
+do work.
 
-| Source | Detection Method | Reliability |
-|--------|------------------|-------------|
-| **Supabase** | Fetch 1 row, parse pgvector wire format | ✅ 100% |
-| **Qdrant** | Collection info API | ✅ 100% |
-| **Pinecone** | Index stats API | ✅ 100% |
-| **Weaviate** | GraphQL fetch 1 vector | ✅ 100% |
-| **Milvus** | Schema field type | ✅ 100% |
-| **ChromaDB** | Fetch 1 embedding | ✅ 100% |
+## Examples
 
-**Common dimensions:**
-- `1536` — OpenAI text-embedding-ada-002, text-embedding-3-small/large
-- `768` — Sentence-transformers all-mpnet-base-v2
-- `384` — Sentence-transformers all-MiniLM-L6-v2
-- `1024` — Cohere embed-english-v3.0
-- `3072` — OpenAI text-embedding-3-large (full)
+Ten starter configurations live in [`examples/`](./examples), one per source.
+Six of them (`chromadb`, `milvus`, `pinecone`, `qdrant`, `supabase`, `weaviate`)
+pass `velesdb-migrate validate` unchanged; the `csv`, `elasticsearch`, `json`
+and `redis` files omit the required `destination.dimension` and need it added
+before use.
 
----
+`velesdb-migrate init --source <type>` generates a validated config, but only
+for `qdrant`, `pinecone`, `weaviate`, `milvus`, `chromadb` and `supabase`.
 
-## 🇫🇷 About
+## API / commands
 
-Developed by **Julien Lange** (WiScale France).
+Six subcommands: `wizard`, `run`, `validate`, `schema`, `init`, `detect`.
+`--dry-run`, `--verbose` and `--batch-size` are **global** flags and must come
+before the subcommand (`velesdb-migrate --dry-run run --config file.yaml`).
+Full command surface: [CLI reference](../../docs/guides/MIGRATE_CLI.md).
 
-Part of the VelesDB project — **Vector Search in Microseconds**.
+Library API (`Pipeline`, `MigrationConfig`, `SourceConnector`, `Transformer`):
+[docs.rs/velesdb-migrate](https://docs.rs/velesdb-migrate).
 
----
+## Known limits
 
-## 🚀 Ready to Try VelesDB?
+- **Local destination only.** No migration into a remote `velesdb-server`.
+- **One-shot copy, not replication.** There is no change-data-capture, no
+  incremental sync and no delta detection; a second run re-imports everything
+  from offset zero.
+- **Dense vectors are mandatory.** Sparse-only points are rejected, and sparse
+  vectors are extracted from Qdrant and Pinecone only.
+- **No dimension conversion.** Source and destination dimensions must match
+  exactly; the run aborts on mismatch.
+- **Unknown YAML keys are ignored, not rejected.** A misspelled field silently
+  falls back to its default.
+- **Retry policy is fixed** (3 attempts, exponential backoff) and cannot be
+  tuned from the config file.
 
-```bash
-# 1. Install VelesDB
-cargo install velesdb
+## Compatibility
 
-# 2. Migrate your data
-velesdb-migrate detect --source qdrant --url http://localhost:6333 --collection my_data
-velesdb-migrate run --config migration.yaml
+`velesdb-migrate` is a standalone CLI, not an MCP server; there is no agent
+client to be compatible with. Supported platforms:
 
-# 3. Query with VelesQL (SQL-native!)
-velesdb query ./velesdb_data "SELECT * FROM my_data WHERE VECTOR NEAR [0.1, 0.2, ...] LIMIT 10"
+| Platform | Status | Note |
+|---|---|---|
+| Linux x86_64 (`x86_64-unknown-linux-gnu`) | Supported | Release binary; CI `cargo check --all-features` |
+| Windows x86_64 (`x86_64-pc-windows-msvc`) | Supported | Release binary; CI `cargo check --all-features` |
+| macOS Apple Silicon (`aarch64-apple-darwin`) | Supported | Release binary; the `native-tls` HTTP backend is chosen for this target |
+| macOS Intel (`x86_64-apple-darwin`) | Supported | Release binary |
+| Linux ARM64, other targets | Build from source | Not covered by the release matrix |
+| Rust toolchain | 1.90+ | Workspace MSRV |
+| VelesDB destination format | 4.0.0 | Written through `velesdb-core` 4.0.0 |
 
-# 4. Start the REST API server
-velesdb-server --port 8080
-```
+## Troubleshooting
 
-### Why developers choose VelesDB:
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Configuration error: URL 'http://localhost:6333' targets reserved hostname 'localhost' ...` | Anti-SSRF policy refuses local hosts | `export VELESDB_MIGRATE_ALLOW_PRIVATE_NETWORKS=1` |
+| `Schema mismatch: Source dimension 4 != destination dimension 8` | `destination.dimension` differs from the source | Run `velesdb-migrate schema --config <file>` and use the reported dimension |
+| `destination: missing field 'dimension' at line N` | `dimension` has no default value | Add `dimension: <N>` under `destination` |
+| `error: unexpected argument '--dry-run' found` | Global flag placed after the subcommand | `velesdb-migrate --dry-run run --config <file>` |
+| `Unknown source type: json_file` | `init` ships templates for six sources only | Copy a config from the [source reference](../../docs/guides/MIGRATE_SOURCES.md) |
 
-- ✅ **~55 µs HNSW search (index-only)** / **~450 µs end-to-end p50** — no network overhead (see promise-contract)
-- ✅ **SQL syntax** you already know  
-- ✅ **Self-contained** — a single small binary (~9 MB server; 6–13 MB across platforms and binaries), no external services
-- ✅ **Self-hosted**, your data stays private
-- ✅ **4-32x compression** with SQ8/Binary quantization
+More symptoms, retry behaviour and resume instructions:
+[operations guide](../../docs/guides/MIGRATE_OPERATIONS.md#troubleshooting).
 
-📚 **Learn more:** [github.com/cyberlife-coder/VelesDB](https://github.com/cyberlife-coder/VelesDB)
+## More documentation
 
----
+- [Source reference](../../docs/guides/MIGRATE_SOURCES.md) — per-source YAML, sparse support, dimension detection, removed connectors.
+- [CLI and configuration reference](../../docs/guides/MIGRATE_CLI.md) — commands, flags, full config schema, graph relations, checkpoints.
+- [Operations guide](../../docs/guides/MIGRATE_OPERATIONS.md) — throughput tuning, secret handling, network policy, troubleshooting.
+- [VelesDB project README](../../README.md) — what you get once the data has landed.
 
-## 📄 License
+## License
 
 Licensed under the [VelesDB Core License 1.0](./LICENSE) (source-available).
+Developed by Julien Lange, WiScale France.
+
+---
+
+`velesdb-migrate v4.1.0` · Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

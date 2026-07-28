@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use rmcp::handler::server::tool::{schema_for_input, schema_for_output};
+use rmcp::handler::server::tool::schema_for_input;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{ErrorCode, JsonObject};
 use rmcp::{tool, tool_router, ErrorData};
@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{join_error, to_error, McpServer};
-use crate::context::wire::{stringify_id_fields, ID_KEYS};
+use crate::context::wire::stringify_id_fields;
 use crate::context::{
     fragment_id, segment_transcript, suggest_token_budget, CompilePolicy, CompileRequest,
     CompiledContext, ContextCompiler, ContextDecision, ContextFragment, ContextSavings, MediaRef,
@@ -54,22 +54,7 @@ fn to_wire_value<T: serde::Serialize>(
 /// fields must be typed `["integer", "string"]`, or every opted-in response
 /// would fail client-side validation for exactly the clients the option
 /// exists for.
-pub(super) fn wire_safe_output_schema<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
-    let schema = schema_for_output::<T>().unwrap_or_else(|e| {
-        panic!(
-            "Invalid output schema for {}: {e}",
-            std::any::type_name::<T>()
-        )
-    });
-    let mut map = (*schema).clone();
-    crate::schema::widen_id_properties(&mut map, ID_KEYS);
-    // Same treatment as the input side. The official MCP SDKs validate a
-    // tool's `structuredContent` against this schema, so a `$ref` the client
-    // cannot resolve is a result it may reject outright — a harsher failure
-    // than an unparseable argument, where the server at least got to answer.
-    crate::schema::inline_ref_only_properties(&mut map);
-    Arc::new(map)
-}
+pub(super) use crate::schema::wire_safe_output_schema;
 
 /// Input-side counterpart: `fragments[].id` accepts an integer or a decimal
 /// string ([`crate::context::wire::deserialize_optional_id`]), so the
@@ -539,6 +524,10 @@ impl McpServer {
 
     #[tool(
         name = "context_savings",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = wire_safe_output_schema::<ContextSavings>(),
         description = "Aggregate the token (and cost) savings of past compile_context calls, optionally per project. Figures are local estimates recorded per compilation (metadata only, never content); `truncated` reports when the sweep hit the recall cap."
     )]
     async fn context_savings(
@@ -587,6 +576,10 @@ impl McpServer {
 
     #[tool(
         name = "retrieve_context_source",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = wire_safe_output_schema::<RetrieveContextSourceResult>(),
         description = "Fetch back the exact original content behind a ctx://source/<hash> handle from a compiled context — what compile_context externalized or partially packed is recoverable, not lost."
     )]
     async fn retrieve_context_source(
@@ -609,6 +602,10 @@ impl McpServer {
 
     #[tool(
         name = "save_working_context",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = wire_safe_output_schema::<SaveWorkingContextResult>(),
         description = "Persist this session's distilled working state (goal, active constraints, verified facts, open hypotheses, decisions, exact evidence, pending actions) under a project + session id — so a LATER session (a fresh agent run, a new conversation, a resumed process) can pick up exactly where this one left off instead of re-deriving context from scratch. Call this near the end of a session, or whenever the working state changes meaningfully. Saving again under the same project+session replaces the previous state (idempotent upsert). Serialized size is capped at 1 MiB. Returns the stored fact's id.",
         input_schema = wire_safe_input_schema::<SaveWorkingContextParams>()
     )]
@@ -633,6 +630,10 @@ impl McpServer {
 
     #[tool(
         name = "load_working_context",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = wire_safe_output_schema::<LoadWorkingContextResult>(),
         description = "Resume a session: load back the working context previously saved by save_working_context under the same project + session id — the goal, constraints, verified facts, open hypotheses, decisions, exact evidence, and pending actions a PRIOR session left off with. Call this at the START of a new session before doing anything else, so work continues instead of restarting. `found: false` (with `working: null`) means nothing was ever saved under that exact project + session — not an error, but check `other_sessions`: if it lists a similarly-named session, `session` was likely a typo, not a genuinely fresh start. `other_sessions` is always filled in, on a hit too: if it lists a session that looks more like the one you meant, you may have just resumed the WRONG session. Use `list_working_contexts` to browse a project's sessions up front."
     )]
     async fn load_working_context(
@@ -697,6 +698,10 @@ impl McpServer {
 
     #[tool(
         name = "suggest_budget",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = wire_safe_output_schema::<SuggestedBudget>(),
         description = "Suggest a starting token_budget for compile_context, for a named target model — looked up in a static, committed model-name to context-window table (dated \"as of\", NEVER a network call). Pass `reserve_tokens` (default 0) to reserve room for the response, mirroring compile_context's own `policy.response_reserve_tokens`. `window`/`suggested_budget` come back null when the model is not in the table — an honest \"unknown\", never a guess; extend the table in a new release instead of relying on this for an unlisted model."
     )]
     async fn suggest_budget(

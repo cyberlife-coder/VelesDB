@@ -23,8 +23,8 @@ jobs:
     name: Repository guard contracts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Run the guard contract suites
@@ -50,8 +50,8 @@ jobs:
           - examples/react-wasm-search
           - examples/node-express-rag
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
       - name: Audit ${{ matrix.path }}

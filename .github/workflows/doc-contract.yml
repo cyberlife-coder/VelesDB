@@ -5,15 +5,25 @@ on:
     branches: [main, develop]
     paths:
       - 'README.md'
-      - 'crates/velesdb-server/src/main.rs'
+      - 'docs/**'
+      - 'Cargo.toml'
+      - 'crates/velesdb-memory/Cargo.toml'
+      - 'crates/velesdb-server/src/**'
       - 'scripts/check-doc-contract.sh'
+      - 'scripts/check-doc-freshness.py'
+      - 'scripts/tests/test_check_doc_freshness.py'
       - '.github/workflows/doc-contract.yml'
   pull_request:
     branches: [main, develop]
     paths:
       - 'README.md'
-      - 'crates/velesdb-server/src/main.rs'
+      - 'docs/**'
+      - 'Cargo.toml'
+      - 'crates/velesdb-memory/Cargo.toml'
+      - 'crates/velesdb-server/src/**'
       - 'scripts/check-doc-contract.sh'
+      - 'scripts/check-doc-freshness.py'
+      - 'scripts/tests/test_check_doc_freshness.py'
       - '.github/workflows/doc-contract.yml'
 
 permissions:
@@ -24,6 +34,41 @@ jobs:
     name: README Runtime Contract
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Blocking on the pinned endpoints (/query/explain, /aggregate); the
+      # full 34-route sweep reports as warnings until the four routes named in
+      # the script header are documented, then set DOC_CONTRACT_MODE=strict.
       - name: Check README/runtime contract
         run: bash scripts/check-doc-contract.sh
+
+  freshness:
+    name: Docs Freshness Guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Self-test first: a guard that cannot be shown failing protects nothing.
+      # Each guard is pinned RED-then-GREEN on a synthetic repository.
+      - name: Self-test the freshness guards
+        run: python3 -m unittest scripts.tests.test_check_doc_freshness
+
+      # BLOCKING. Verified green on the whole tree (16 root docs) at the time
+      # this job was added; a new root doc without a stamp fails the build.
+      - name: Date stamp on every root doc (blocking)
+        run: python3 scripts/check-doc-freshness.py --guard stamp --mode strict
+
+      # WARNING ONLY for now. 11 root docs are not reachable from
+      # docs/README.md (ANN_SOTA_AUDIT, ARCHITECTURE, BUSINESS_MODEL,
+      # CONCURRENCY_MODEL, CORE_WIRING_DEBT, FAQ, FUZZING, GPU_ACCELERATION,
+      # LICENSING, SOUNDNESS, STORAGE_FORMAT). Flip `--mode warn` to
+      # `--mode strict` in the same commit that finishes the docs/README.md
+      # index — do NOT flip it before, or every PR turns red on debt it did
+      # not create.
+      - name: Every root doc linked from docs/README.md (warning)
+        run: python3 scripts/check-doc-freshness.py --guard index --mode warn
+
+      # The five stale claims this guard was warning about are fixed, so it
+      # blocks from here on: a doc pin that contradicts the Cargo manifests is
+      # a broken copy-paste for whoever follows it.
+      - name: Hardcoded doc versions vs Cargo manifests
+        run: python3 scripts/check-doc-freshness.py --guard versions --mode strict

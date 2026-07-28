@@ -384,3 +384,26 @@ fn collect_ref_targets(value: &Value, out: &mut BTreeSet<String>) {
         _ => {}
     }
 }
+
+/// Every tool must ADVERTISE an output schema, not merely have a typed one.
+///
+/// Ten of the nineteen tools declared none at all, so rmcp derived one that
+/// escaped every post-processing pass — the inliner included. A client
+/// validating `structuredContent` against a `$ref` it cannot resolve may
+/// reject a perfectly good result.
+#[tokio::test]
+async fn every_tool_advertises_an_output_schema() {
+    let (_store, client) = connected().await;
+    let tools = client.list_all_tools().await.expect("list tools");
+    let missing: BTreeSet<String> = tools
+        .iter()
+        .filter(|tool| tool.output_schema.is_none())
+        .map(|tool| tool.name.to_string())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{} tool(s) advertise no output schema: {missing:#?}",
+        missing.len()
+    );
+    client.cancel().await.expect("close the MCP session");
+}

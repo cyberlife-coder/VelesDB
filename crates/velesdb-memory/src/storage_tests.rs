@@ -138,3 +138,55 @@ fn test_count_reflects_live_facts() {
     store.store(2, "b", &[0.0, 1.0, 0.0, 0.0]).unwrap();
     assert_eq!(store.count(), 2);
 }
+
+/// One write must carry BOTH the metadata and the durable expiry.
+///
+/// The composed form — `store_with_ttl` then `update_metadata` — looks
+/// equivalent but leaves the fact live and expiring between the two calls: a
+/// short TTL can lapse in the gap, and the metadata write then fails with
+/// `NotFound(... is expired ...)` on a fact that was valid when the caller
+/// asked for it. Observed in the wild with a 1 s TTL under load.
+#[test]
+fn test_store_with_metadata_and_ttl_writes_both_in_one_call() {
+    let (_dir, store) = store();
+    let mut meta = Metadata::new();
+    meta.insert("project".to_string(), Value::from("veles"));
+
+    store
+        .store_with_metadata_and_ttl(1, "short-lived", &[1.0, 0.0, 0.0, 0.0], &meta, 60)
+        .expect("a metadata+ttl write must succeed");
+
+    let stored = store
+        .get_metadata(1)
+        .expect("get_metadata")
+        .expect("the fact must exist");
+
+    assert_eq!(
+        stored.get("project"),
+        Some(&Value::from("veles")),
+        "the caller metadata must survive the write that also set the expiry"
+    );
+    assert!(
+        stored.keys().any(|k| k.contains("expires")),
+        "the durable expiry must be persisted by the same write; keys: {:?}",
+        stored.keys().collect::<Vec<_>>()
+    );
+}
+
+/// A zero TTL deletes, exactly like the TTL-only path — the combined write
+/// must not quietly turn "expire now" into "store forever with metadata".
+#[test]
+fn test_store_with_metadata_and_ttl_zero_deletes() {
+    let (_dir, store) = store();
+    let meta = Metadata::new();
+    store.store(1, "doomed", &[1.0, 0.0, 0.0, 0.0]).unwrap();
+
+    store
+        .store_with_metadata_and_ttl(1, "doomed", &[1.0, 0.0, 0.0, 0.0], &meta, 0)
+        .expect("a zero ttl must not error");
+
+    assert!(
+        store.get(1).expect("get").is_none(),
+        "ttl_seconds == 0 must delete, matching store_with_ttl"
+    );
+}

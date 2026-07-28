@@ -21,6 +21,15 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
+    ignore:
+      # MSRV-bound: serial_test 4.x requires rustc 1.93.1, the workspace is on
+      # 1.90 (roaring 0.11.4 floors it there). Every 4.x PR therefore fails
+      # eight CI jobs on the same message and has to be closed by hand — #1624
+      # was. Merging one would mean raising a promise made to users: a product
+      # decision tracked in #1638, not a side effect of a test-only bump.
+      # REMOVE this entry when the MSRV rises to 1.93.1 or above.
+      - dependency-name: "serial_test"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "npm"
     directory: "/sdks/typescript"

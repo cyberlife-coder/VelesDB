@@ -72,20 +72,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let original_parent = std::os::unix::process::parent_id();
     #[cfg(not(unix))]
     let original_parent = 0_u32;
-    let store_path = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
+    // All synchronous setup (config file, env probing, blocking HTTP to
+    // Ollama, disk open) happens in here, before the async runtime starts, so
+    // we never block a tokio worker thread on a synchronous operation.
+    let service = build_configured_service(&args)?;
 
-    // Decided here, ahead of the (possibly seconds-long) embedder probe and
-    // store open, same manual-parsing style as `--version` above (no `clap`
-    // for a two-flag CLI) — but the transport choice itself only affects how
+    // Read AFTER the config file has been applied, since the file can set
+    // `VELESDB_MEMORY_HTTP`. Same manual-parsing style as `--version` above
+    // (no `clap` for a two-flag CLI) — the transport choice only affects how
     // the server is *served*, further down, since store opening (and its
     // `flock`) is identical either way.
     let http_bind = requested_http_bind(&args);
-
-    // All synchronous setup (env probing, blocking HTTP to Ollama, disk open)
-    // runs here, before the async runtime starts, so we never block a tokio
-    // worker thread on a synchronous operation.
-    let embedder = build_embedder()?;
-    let service = open_store_with_actionable_lock_error(&store_path, embedder)?;
     let server = apply_ingest_roots(apply_default_ttl(build_server(service)?)?)?;
 
     tokio::runtime::Runtime::new()?.block_on(async move {
@@ -257,12 +254,7 @@ async fn serve_http(
     let app = velesdb_memory::http::router(server, ct.child_token());
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
 
-    let ctrl_c_ct = ct.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            ctrl_c_ct.cancel();
-        }
-    });
+    spawn_shutdown_signals(ct.clone());
 
     if insecure {
         eprintln!(
@@ -417,6 +409,146 @@ fn open_store_with_actionable_lock_error(
 /// is launched by its client with an unpredictable working directory, so a
 /// cwd-relative default would scatter (or lose) the store between sessions. Falls
 /// back to a cwd-relative path only when no home directory can be resolved.
+/// Load the config file, then build the store-backed service it describes.
+///
+/// The config file is read BEFORE the first variable is consulted, because it
+/// can set any of them — including the store path. Everything downstream keeps
+/// reading the environment exactly as it always did; the file only fills in
+/// what the environment left unset, which is what makes the precedence
+/// `command line > environment > file > default`.
+fn build_configured_service(
+    args: &[String],
+) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
+    apply_config_file(args)?;
+    let store_path = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
+    let embedder = build_embedder()?;
+    apply_autograph(open_store_with_actionable_lock_error(
+        &store_path,
+        embedder,
+    )?)
+}
+
+/// Cancel `ct` on the signals a supervisor actually sends.
+///
+/// SIGINT alone is not enough. `launchctl kickstart -k`, `systemctl restart`
+/// and `docker stop` all send **SIGTERM**, and an unhandled SIGTERM kills the
+/// process outright: the streamable-HTTP sessions clients hold are dropped
+/// mid-flight, so the next call on a live session hangs until the client's own
+/// timeout instead of reconnecting. Handling it lets `with_graceful_shutdown`
+/// close those sessions, which is what turns a restart into a reconnect.
+#[cfg(feature = "http")]
+fn spawn_shutdown_signals(ct: tokio_util::sync::CancellationToken) {
+    let interrupt = ct.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            interrupt.cancel();
+        }
+    });
+
+    #[cfg(unix)]
+    tokio::spawn(async move {
+        // `signal()` only fails if the handler cannot be registered at all; a
+        // daemon that cannot listen for SIGTERM still serves, it just loses the
+        // graceful path, so this is not worth aborting startup for.
+        if let Ok(mut term) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            term.recv().await;
+            ct.cancel();
+        }
+    });
+    // On Windows there is no SIGTERM; Ctrl-C above is the whole contract.
+    #[cfg(not(unix))]
+    drop(ct);
+}
+
+/// Attach the extraction backend to the SERVICE when
+/// `VELESDB_MEMORY_AUTOGRAPH=1` (`[graph] autograph = true`), so every
+/// `remember` also wires the entities, typed edges and attributes its text
+/// states.
+///
+/// Distinct from [`build_server`]'s extractor, which powers the explicit
+/// `remember_extracted` tool. Both can be on; they share one backend and one
+/// setting pair, and `remember_extracted` deliberately does not re-extract.
+///
+/// Asking for autograph without an extraction backend is a startup error, not
+/// a silent no-op: the operator turned on a feature, and a daemon that
+/// answers by doing nothing is how you spend a week wondering why the graph
+/// is empty.
+#[cfg(feature = "extract")]
+fn apply_autograph(
+    service: MemoryService<DynEmbedder>,
+) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
+    if std::env::var("VELESDB_MEMORY_AUTOGRAPH").as_deref() != Ok("1") {
+        return Ok(service);
+    }
+    if std::env::var("VELESDB_MEMORY_EXTRACTOR").as_deref() != Ok("ollama") {
+        return Err(
+            "autograph is on ([graph] autograph = true / VELESDB_MEMORY_AUTOGRAPH=1) but no \
+             extraction backend is configured — set [extractor] backend = \"ollama\" (and a \
+             model), or turn autograph off"
+                .into(),
+        );
+    }
+    Ok(service.with_autograph(build_ollama_extractor()?))
+}
+
+/// Without the `extract` feature there is no backend to attach. A request for
+/// autograph still fails loudly rather than being ignored — the binary was
+/// built without the code to honour it, exactly like `--http` without `http`.
+#[cfg(not(feature = "extract"))]
+fn apply_autograph(
+    service: MemoryService<DynEmbedder>,
+) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
+    if std::env::var("VELESDB_MEMORY_AUTOGRAPH").as_deref() == Ok("1") {
+        return Err(
+            "autograph is on but this binary was built without --features extract, so no \
+             extraction backend exists"
+                .into(),
+        );
+    }
+    Ok(service)
+}
+
+/// Locate and apply the optional `velesdb-memory.toml`.
+///
+/// The lookup uses the DEFAULT store directory, never the configured one:
+/// the store path is itself one of the settings the file may carry, so
+/// resolving the file through it would be circular.
+///
+/// A missing file is normal and silent. A file that exists but does not parse
+/// aborts startup — a daemon quietly running on defaults the operator believes
+/// they overrode is a worse outcome than a loud failure at boot.
+fn apply_config_file(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let explicit = args
+        .iter()
+        .position(|arg| arg == "--config")
+        .and_then(|at| args.get(at + 1))
+        .map(String::as_str);
+    // The EFFECTIVE store, not the default one. `VELESDB_MEMORY_PATH` moves the
+    // store, and the config file lives beside it — looking it up in the default
+    // directory instead means a caller who moved the store silently reads a
+    // config from a store they are not using. That is how a test spawning this
+    // binary with its own scratch store picked up the developer's personal
+    // `~/.velesdb-memory/velesdb-memory.toml`.
+    let store_dir = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
+    let Some(path) =
+        velesdb_memory::config::resolve_path(explicit, Some(std::path::Path::new(&store_dir)))
+    else {
+        return Ok(());
+    };
+    let loaded = velesdb_memory::config::load(&path)?;
+    let applied = velesdb_memory::config::apply(&loaded.values);
+    if !applied.is_empty() && std::env::var_os("VELESDB_MEMORY_QUIET").is_none() {
+        eprintln!(
+            "velesdb-memory: {} setting(s) from {}",
+            applied.len(),
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 fn default_store_path() -> String {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -573,6 +705,9 @@ fn build_ollama_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
 ///
 /// Sized for the job the hook does: a tool result big enough to be worth
 /// compiling, compressed to something an agent can still read in full.
+// Tous ses consommateurs sont gates sur `context` : sans cette feature la
+// constante est reellement morte, et -D warnings en fait une erreur.
+#[cfg(feature = "context")]
 const DEFAULT_COMPILE_STDIN_BUDGET: u64 = 2_000;
 
 /// Parsed `compile-stdin` invocation.

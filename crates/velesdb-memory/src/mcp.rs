@@ -40,9 +40,10 @@ mod context_tools;
 mod dto;
 mod wire;
 use dto::{
-    ExplanationDto, FeedbackParams, FeedbackResult, ForgetParams, ForgetResult, RecallFusedParams,
-    RecallFusedResult, RecallParams, RecallResult, RecallWhereParams, RelateParams, RelateResult,
-    RememberExtractedParams, RememberExtractedResult, RememberParams, RememberResult, WhyParams,
+    EntityParams, EntityProfileDto, ExplanationDto, FeedbackParams, FeedbackResult, ForgetParams,
+    ForgetResult, RecallFusedParams, RecallFusedResult, RecallParams, RecallResult,
+    RecallWhereParams, RelateParams, RelateResult, RememberExtractedParams,
+    RememberExtractedResult, RememberParams, RememberResult, WhyParams,
 };
 
 /// Advertised-schema counterpart of [`crate::model::deserialize_id`]: `keys`
@@ -158,6 +159,10 @@ impl McpServer {
 
     #[tool(
         name = "remember",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = crate::schema::wire_safe_output_schema::<RememberResult>(),
         description = "Store a fact in durable local memory. Optionally link it to existing memories (graph) and tag it with structured metadata like project/author/type/status/date (ColumnStore) for later filtering — metadata is capped at 64 KiB serialized. Set `ttl_seconds` to make the fact expire after a delay (a durable TTL that survives restarts); omit it for a permanent memory. Returns the fact's stable id. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
         input_schema = id_wire_input_schema::<RememberParams>(&["target"])
     )]
@@ -196,7 +201,7 @@ impl McpServer {
         name = "recall",
         // rmcp derives an output schema when none is given, and that
         // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
-        output_schema = context_tools::wire_safe_output_schema::<RecallResult>(),
+        output_schema = crate::schema::wire_safe_output_schema::<RecallResult>(),
         description = "Recall memories semantically similar to a query (vector), most similar first. Optionally narrow to exact-match metadata via `filter` (ColumnStore), e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients."
     )]
     async fn recall(
@@ -221,7 +226,7 @@ impl McpServer {
         name = "recall_where",
         // rmcp derives an output schema when none is given, and that
         // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
-        output_schema = context_tools::wire_safe_output_schema::<RecallResult>(),
+        output_schema = crate::schema::wire_safe_output_schema::<RecallResult>(),
         description = "Fused recall: semantically similar memories (vector) constrained by structured ColumnStore predicates over metadata — ranges and comparisons, not just equality. Each filter is {field, op (eq/ne/lt/le/gt/ge), value}, ANDed. Use for time-windowed or numeric-scoped recall, e.g. facts about a topic with `ts` in a date range. Comparisons are TYPE-STRICT, with no runtime coercion: a filter value of 20230601 (a JSON number) never matches a fact stored with metadata {\"ts\": \"20230601\"} (a JSON string) — same value, different JSON type, no match, no error. Store comparable values like dates NUMERICALLY at `remember` time (e.g. 20230601, not \"20230601\") so `recall_where` filters actually match them. Most similar first.",
         // No id-named parameter here (hence the empty `keys`) — this goes
         // through the shared helper purely for its `$ref` inlining, so
@@ -251,7 +256,7 @@ impl McpServer {
         name = "recall_fused",
         // rmcp derives an output schema when none is given, and that
         // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
-        output_schema = context_tools::wire_safe_output_schema::<RecallFusedResult>(),
+        output_schema = crate::schema::wire_safe_output_schema::<RecallFusedResult>(),
         description = "Fused vector + graph recall: like `recall`, but also walks the graph from the top vector hit and folds any connected fact into the ranking — the tri-engine ranking (vector similarity + ColumnStore filter + graph reach) measured on multi-hop and temporal benchmarks. Reach for this when an answer needs a fact the query doesn't mention directly but a stored `relate`/extracted link connects (multi-hop reasoning, temporal chains). `hops`/`graph_boost` tune the graph reach; omit them for the proven defaults. Optionally narrow with an exact-match `filter`. Set `date_field` (the metadata key holding a YYYYMMDD date) to also get a `dated_context` timeline and a `now` anchor for temporal questions. Most relevant first."
     )]
     async fn recall_fused(
@@ -295,6 +300,10 @@ impl McpServer {
 
     #[tool(
         name = "feedback",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = crate::schema::wire_safe_output_schema::<FeedbackResult>(),
         description = "Reinforce a recalled memory with an outcome: `success=true` if the fact was useful, `false` if it was noise. This durably updates the fact's learned confidence, which `recall` uses to re-rank future results — over repeated feedback, useful facts drift up and noise drifts down, so the memory improves with use without retraining the model. Returns the fact's new confidence in [0,1].",
         input_schema = id_wire_input_schema::<FeedbackParams>(&["id"])
     )]
@@ -317,6 +326,10 @@ impl McpServer {
 
     #[tool(
         name = "relate",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = crate::schema::wire_safe_output_schema::<RelateResult>(),
         description = "Create a typed, directional link between two memories (`from` → `to`) labeled by `relation`. These links are the graph edges that `why` and `recall_fused` later traverse to surface connected facts that share no words with the query — build the graph with `relate` so multi-hop reasoning works (e.g. link a decision to its cause, a fact to its source, a task to the person it concerns). Direction matters: traversal follows OUTGOING edges only, so point `from` at the memory you will later ask `why` about and `to` at its evidence (decision → cause, fact → source) — an edge pointing INTO a memory is invisible to `why(that memory)`. Idempotent per (from, relation, to). Returns the new edge id. Ids exceed 2^53 — always relay them as strings (`id_str`); passing a JSON-number id read from a previous response will fail on float-lossy clients.",
         input_schema = id_wire_input_schema::<RelateParams>(&["from", "to"])
     )]
@@ -338,6 +351,10 @@ impl McpServer {
 
     #[tool(
         name = "forget",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = crate::schema::wire_safe_output_schema::<ForgetResult>(),
         description = "Permanently delete a memory by its `id` (as returned by `remember` or `recall`), removing the fact and its graph links. The deletion is durable and cannot be undone — use it to retract or correct stored knowledge. For automatic time-based expiry instead, set a TTL when calling `remember`. Returns the requested id plus `found`: `true` if a memory actually existed and was deleted, `false` if nothing was stored under that id (a stale id or a typo) — a no-op, not an error, but distinguishable from a real deletion.",
         input_schema = id_wire_input_schema::<ForgetParams>(&["id"])
     )]
@@ -359,10 +376,31 @@ impl McpServer {
     }
 
     #[tool(
+        name = "entity",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = crate::schema::wire_safe_output_schema::<EntityProfileDto>(),
+        description = "Look up everything the memory graph knows about a NAMED ENTITY (a person, a place, an organisation): the attributes it carries and the typed edges leaving it. Use this for questions ABOUT a thing rather than about a sentence — \"how old is Axel\", \"who is Axel's father\", \"where does he live\" — where `recall` would only return sentences that happen to mention the name. Entities and their edges are built automatically by `remember_extracted`, which reads relationships (`X is the father of Y`) and properties (`Y is 15`) out of plain text; attributes land in ColumnStore metadata with their JSON type preserved, so a number stays a number. The name is matched case-insensitively, so `\"Axel Lange\"` and `\"axel lange\"` are the same entity — the id is content-addressed, so it is stable across sessions. Returns `found: false` when nothing has ever mentioned that name. Ids exceed 2^53 — always relay them as strings (`id_str`)."
+    )]
+    async fn entity(
+        &self,
+        Parameters(params): Parameters<EntityParams>,
+    ) -> Result<Json<EntityProfileDto>, ErrorData> {
+        let service = Arc::clone(&self.service);
+        let EntityParams { name } = params;
+        let profile = tokio::task::spawn_blocking(move || service.entity_profile(&name))
+            .await
+            .map_err(join_error)?
+            .map_err(to_error)?;
+        Ok(Json(EntityProfileDto::from(profile)))
+    }
+
+    #[tool(
         name = "why",
         // rmcp derives an output schema when none is given, and that
         // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
-        output_schema = context_tools::wire_safe_output_schema::<ExplanationDto>(),
+        output_schema = crate::schema::wire_safe_output_schema::<ExplanationDto>(),
         description = "Explain a decision: find the best-matching memory (optionally scoped by a metadata `filter`, e.g. the current project) and return the connected subgraph of related memories reachable through typed links — fusing vector, ColumnStore, and graph to surface context a plain similarity search misses."
     )]
     async fn why(
@@ -387,6 +425,10 @@ impl McpServer {
 
     #[tool(
         name = "remember_extracted",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = crate::schema::wire_safe_output_schema::<RememberExtractedResult>(),
         description = "Store a passage of raw text by extracting its atomic facts and auto-building the fact↔topic graph, so `why` can later connect them with no manual links. Requires the server to be started with an extraction backend (set VELESDB_MEMORY_EXTRACTOR; build with --features extract). Returns the stored facts' ids."
     )]
     async fn remember_extracted(

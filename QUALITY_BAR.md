@@ -199,7 +199,7 @@ These signals are tracked but do not block release individually:
 | Doctest compilation | All `pub fn` doctests compile | `cargo test --doc` in CI |
 | Promise contract sync | All numeric claims in README backed by benchmark commands | `scripts/check-promise-contract.py` in CI |
 | Binary size | `velesdb-server` ≤ 12 MiB, `velesdb` (CLI) ≤ 10 MiB, `velesdb-migrate` ≤ 9 MiB (stripped release) | `scripts/check_binary_size.py` in CI (Binary Size Gate job) |
-| TODO governance | All TODOs in format `// TODO(EPIC-XXX):` | `scripts/check-todo-annotations.py` |
+| TODO governance | Every TODO/FIXME/HACK carries an issue tag: `[EPIC-XXX/US-YYY]`, `(PREFIX-NNN)` (e.g. `(EPIC-001)`, `(US-GRAPH-01)`), `#123`, or `#issue` | `scripts/check-todo-annotations.py` |
 | RUSTSEC | All advisories tracked or justified in `deny.toml` | `cargo deny check` in CI (Security Audit job) |
 | Untrusted-input hardening | Corrupt/oversized persisted artifacts (HNSW graph, PQ codebook, sparse, BM25, WAL) are rejected at load, not used to size allocations; WAL `Fsync` is durable before ack; config limits validated in loaders + on open | Regression suites: `storage/storage_reliability_tests.rs`, `index/hnsw/persistence_atomicity_tests.rs`, `quantization/pq_tests.rs`, `quantization/rabitq_tests.rs`, `index/sparse/persistence_tests.rs`, `index/bm25_tests.rs`, `config_tests.rs`, `velesql/parser/robustness_tests.rs` (gated by `cargo test`) |
 
@@ -220,7 +220,7 @@ Before tagging any release (patch, minor, major), all of the following must be *
 - [ ] If perf optimization: `python scripts/perf_phase_gate.py gate --phase <ID>` exit code 0
 - [ ] CHANGELOG.md updated with conventional commit subject groups
 - [ ] All numeric claims in CHANGELOG/README updated in `promise-contract.json`
-- [ ] Devin Review on the release PR: clean
+- [ ] Automated code review on the release PR: clean
 - [ ] Codacy Cloud on the release PR: 0 blocking findings
 
 The full checklist is automated in `.github/workflows/release.yml` after merge to `main` triggers tag publishing.

@@ -1046,3 +1046,9 @@ let data_as_bytes: &mut [u8] = unsafe {
 
 - [Rustonomicon](https://doc.rust-lang.org/nomicon/)
 - [Rust Unsafe Code Guidelines](https://rust-lang.github.io/unsafe-code-guidelines/)
+
+---
+
+*Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0 (this stamp tracks
+the document revision; the underlying unsafe audit was last run in full on
+2026-06-12, as stated at the top of this page)*

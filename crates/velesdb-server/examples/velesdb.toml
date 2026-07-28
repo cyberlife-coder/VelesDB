@@ -1,0 +1,67 @@
+# velesdb.toml — reference configuration for velesdb-server.
+#
+# Point the server at this file with:
+#     velesdb-server --config ./velesdb.toml
+# or:
+#     VELESDB_CONFIG=./velesdb.toml velesdb-server
+#
+# An explicit path that does not exist fails fast at startup — the server never
+# falls back to defaults silently.
+#
+# Resolution order, highest priority first:
+#     CLI flags -> environment variables -> this file -> built-in defaults.
+#
+# Every section below is optional; declare only what you override. The four
+# sections in this file ([server], [auth], [tls], [cors]) belong to the HTTP
+# shell. The engine sections ([search], [hnsw], [storage], [limits],
+# [quantization], [wal_batch]) can live in the same file and are documented in
+# docs/guides/CONFIGURATION.md.
+
+[server]
+# Bind address. 127.0.0.1 (the default) is loopback only and is NOT reachable
+# from another machine; 0.0.0.0 exposes the server to the network.
+host = "0.0.0.0"
+
+# Listening port. CLI override: --port / -p. Env: VELESDB_PORT.
+port = 8080
+
+# Data directory (WAL + mmap). Created on first start, reusable as-is across
+# restarts. CLI override: --data-dir / -d. Env: VELESDB_DATA_DIR.
+data_dir = "/var/lib/velesdb"
+
+# How long a SIGTERM shutdown waits for in-flight requests before forcing the
+# exit. Write-ahead logs are flushed either way.
+shutdown_timeout_secs = 30
+
+# Max requests per second per client IP. 0 disables the limiter entirely.
+# CLI override: --rate-limit. Env: VELESDB_RATE_LIMIT.
+rate_limit = 100
+
+[auth]
+# Bearer API keys. An empty list (or an absent [auth] section) means local dev
+# mode: no authentication at all. Keys are read once at startup, so rotation
+# means keeping both the old and the new key here during the transition, then
+# restarting again once every client has moved.
+#
+# Env equivalent: VELESDB_API_KEYS="sk-prod-abc123,sk-prod-def456"
+#
+# /health and /ready stay public even when keys are set — orchestrator probes
+# cannot carry an Authorization header. Everything else, /metrics included,
+# requires `Authorization: Bearer <key>`.
+api_keys = ["sk-prod-abc123", "sk-prod-def456"]
+
+[tls]
+# Both entries are required together: a certificate without its key (or the
+# reverse) makes the process exit at startup rather than silently downgrade to
+# plain HTTP. CLI overrides: --tls-cert / --tls-key.
+cert = "/etc/velesdb/cert.pem"
+key  = "/etc/velesdb/key.pem"
+
+[cors]
+# CORS is permissive by default (allowed_origins = ["*"]) and the server warns
+# about it at startup. Restrict it before exposing a browser-facing deployment.
+allowed_origins = ["https://app.example.com"]
+allowed_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+allowed_headers = ["authorization", "content-type"]
+allow_credentials = false
+max_age_secs = 3600

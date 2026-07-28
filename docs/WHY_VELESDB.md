@@ -126,3 +126,6 @@ See [BENCHMARKS.md](./BENCHMARKS.md) for detailed numbers and methodology.
 - You need a managed cloud service with zero operational burden (Pinecone)
 - You need distributed multi-node clustering for billion-scale datasets (Qdrant, Weaviate)
 - You only need simple vector search without graph or column queries (ChromaDB)
+
+---
+Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0

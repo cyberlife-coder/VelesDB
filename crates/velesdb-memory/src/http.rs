@@ -109,7 +109,7 @@ pub fn http_max_sessions_from_env() -> usize {
 /// its own shutdown token; tests derive it from a token they cancel at the
 /// end of the test to stop the server cleanly.
 ///
-/// Two DoS guards wrap the `/mcp` service, both absent from rmcp's own
+/// Two `DoS` guards wrap the `/mcp` service, both absent from rmcp's own
 /// defaults (see each item's doc comment for why they matter and why the
 /// obvious axum-level fix does not apply to a raw `nest_service`):
 /// - [`RequestBodyLimit`] bounds a single request body
@@ -125,7 +125,7 @@ pub fn router(server: McpServer, cancellation_token: CancellationToken) -> Route
     )
 }
 
-/// [`router`], but with the two DoS guards' limits passed explicitly instead
+/// [`router`], but with the two `DoS` guards' limits passed explicitly instead
 /// of read from the environment. `router` itself is the thin, env-reading
 /// wrapper adversarial tests (`tests/http_transport.rs`) skip in favor of
 /// this — process-wide env vars are shared, mutable global state, and

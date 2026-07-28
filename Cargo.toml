@@ -74,7 +74,7 @@ rand = "0.10"
 
 # Cryptography (for license validation)
 ed25519-dalek = "3.0"
-base64 = "0.22"
+base64 = "0.23"
 
 # Small-vector optimization
 smallvec = { version = "1", features = ["serde"] }
