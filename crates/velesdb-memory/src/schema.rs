@@ -260,27 +260,97 @@ fn inline_in_map(
     if depth >= MAX_INLINE_DEPTH {
         return;
     }
+    inline_property_slots(map, defs, chain, depth);
+    inline_item_slots(map, defs, chain, depth);
+    inline_union_branches(map, defs, chain, depth);
+    inline_remaining_keywords(map, defs, chain, depth);
+}
+
+/// The keywords `inline_in_map` walks as argument paths, each with its own
+/// pass — listed once here so the generic descent cannot walk them twice.
+#[cfg(feature = "mcp")]
+const SLOT_KEYWORDS: [&str; 6] = [
+    "$defs",
+    "properties",
+    "items",
+    "anyOf",
+    "oneOf",
+    "prefixItems",
+];
+
+#[cfg(feature = "mcp")]
+fn inline_property_slots(
+    map: &mut Map<String, Value>,
+    defs: &Map<String, Value>,
+    chain: &mut InlineChain,
+    depth: usize,
+) {
     if let Some(Value::Object(properties)) = map.get_mut("properties") {
         for slot in properties.values_mut() {
             inline_slot(slot, defs, chain, depth);
         }
     }
-    if let Some(items) = map.get_mut("items") {
-        match items {
-            // Tuple form: `items` is an array of per-position schemas.
-            Value::Array(entries) => {
-                for entry in entries {
-                    inline_slot(entry, defs, chain, depth);
-                }
+}
+
+#[cfg(feature = "mcp")]
+fn inline_item_slots(
+    map: &mut Map<String, Value>,
+    defs: &Map<String, Value>,
+    chain: &mut InlineChain,
+    depth: usize,
+) {
+    match map.get_mut("items") {
+        // Tuple form: `items` is an array of per-position schemas.
+        Some(Value::Array(entries)) => {
+            for entry in entries {
+                inline_slot(entry, defs, chain, depth);
             }
-            single => inline_slot(single, defs, chain, depth),
+        }
+        Some(single) => inline_slot(single, defs, chain, depth),
+        None => {}
+    }
+}
+
+/// Union branches are argument paths too.
+///
+/// `Option<T>` is the common case: schemars renders it
+/// `anyOf: [{"$ref": …}, {"type": "null"}]`, and a `$defs`-blind harness that
+/// cannot resolve the first branch degrades the WHOLE slot to "anything" —
+/// which is how `source`, `goal` and `memory_id` reached callers as a bare
+/// `{}` (2026-07-28). Treating each branch as a slot is what makes an
+/// optional field as self-describing as a required one.
+///
+/// `allOf` stays out on purpose: [`ref_only_target`] already reads its
+/// single-element form as a wrapper around the slot itself, and inlining it
+/// here as a branch would fight that.
+#[cfg(feature = "mcp")]
+fn inline_union_branches(
+    map: &mut Map<String, Value>,
+    defs: &Map<String, Value>,
+    chain: &mut InlineChain,
+    depth: usize,
+) {
+    for keyword in ["anyOf", "oneOf", "prefixItems"] {
+        if let Some(Value::Array(branches)) = map.get_mut(keyword) {
+            for branch in branches {
+                inline_slot(branch, defs, chain, depth);
+            }
         }
     }
+}
+
+/// Generic descent for everything the dedicated passes did not claim.
+#[cfg(feature = "mcp")]
+fn inline_remaining_keywords(
+    map: &mut Map<String, Value>,
+    defs: &Map<String, Value>,
+    chain: &mut InlineChain,
+    depth: usize,
+) {
     for (key, value) in map.iter_mut() {
-        if key == "$defs" || key == "properties" || key == "items" {
-            continue;
+        if !SLOT_KEYWORDS.contains(&key.as_str()) {
+            inline_in_value(value, defs, chain, depth);
         }
-        inline_in_value(value, defs, chain, depth);
     }
 }
 

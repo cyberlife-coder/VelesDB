@@ -132,8 +132,32 @@ pub struct ColumnFilter {
     pub field: String,
     /// Comparison operator.
     pub op: ColumnOp,
-    /// Value to compare against (numbers, strings, booleans).
+    /// Value to compare against.
+    ///
+    /// The comparison is TYPE-STRICT with no coercion, so the JSON type sent
+    /// here is part of the query: `20260601` (number) never matches a fact
+    /// stored as `"20260601"` (string) — same value, no match, and **no
+    /// error**. A wrong type here is therefore the one mistake this API
+    /// cannot report; it just returns nothing.
+    ///
+    /// Which is why the advertised type is spelled out rather than left as
+    /// the empty schema `serde_json::Value` would produce. `{}` says "send
+    /// anything", on the single field where sending the wrong thing fails
+    /// silently.
+    #[schemars(schema_with = "comparable_json_value")]
     pub value: Value,
+}
+
+/// The JSON types a `ColumnFilter` can actually compare: number, string,
+/// boolean. Objects and arrays are not orderable and never match; `null` is
+/// not a value to compare against.
+fn comparable_json_value(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": ["number", "string", "boolean"],
+        "description": "Value to compare against. TYPE-STRICT: the JSON type must match \
+                        how the fact was stored (a number never matches a string), and a \
+                        mismatch returns no results rather than an error.",
+    })
 }
 
 /// Tuning knobs for

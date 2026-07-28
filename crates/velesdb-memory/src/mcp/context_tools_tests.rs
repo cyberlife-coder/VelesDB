@@ -713,14 +713,28 @@ fn test_compile_context_input_schema_advertises_fragment_media_field() {
         .get("anyOf")
         .or_else(|| media_property.get("oneOf"))
     {
-        // Optional fields sometimes wrap the ref in anyOf: [{$ref}, {type: null}]
+        // An optional field is `anyOf: [<MediaRef>, {type: "null"}]`. The
+        // first branch used to be a bare `$ref`; since the union branches are
+        // inlined too (a `$defs`-blind caller could not resolve it, so the
+        // whole slot read as "anything"), it now carries the definition
+        // directly. Accept both: follow a `$ref` when there is still one,
+        // otherwise take the branch as-is. Picking "the non-null branch"
+        // rather than "the branch with a `$ref`" is what makes this
+        // independent of whether inlining happened.
         one_of
             .as_array()
-            .and_then(|variants| variants.iter().find(|v| v.get("$ref").is_some()))
-            .and_then(|v| v.get("$ref"))
-            .and_then(serde_json::Value::as_str)
-            .map(|r| r.trim_start_matches("#/$defs/"))
-            .map_or(media_property, |name| &schema["$defs"][name])
+            .and_then(|variants| {
+                variants
+                    .iter()
+                    .find(|variant| variant.get("type").is_none_or(|ty| ty != "null"))
+            })
+            .map_or(media_property, |branch| {
+                branch
+                    .get("$ref")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|name| name.trim_start_matches("#/$defs/"))
+                    .map_or(branch, |name| &schema["$defs"][name])
+            })
     } else {
         media_property
     };
