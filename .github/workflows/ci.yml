@@ -139,6 +139,17 @@ jobs:
             echo "::endgroup::"
           done
 
+      # `extract` was CHECKED above but never TESTED: no `cargo test` in this
+      # workflow passes the feature, so its nineteen unit tests — the graph
+      # prompt contract and the reply parser among them — have never run on
+      # CI. A test that cannot fail the build is documentation, not a gate.
+      #
+      # Paired with `ollama` because `extract` alone does not compile (see the
+      # comment above). The tests reached this way are pure parsing and
+      # prompt-building: none opens a socket, so no service is needed.
+      - name: Test the velesdb-memory extract feature
+        run: cargo test -p velesdb-memory --features extract,ollama,persistence
+
       - name: Run Clippy (strict)
         run: |
           cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
