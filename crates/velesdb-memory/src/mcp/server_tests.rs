@@ -457,6 +457,29 @@ async fn oversized_fact_returns_invalid_params() {
 }
 
 #[tokio::test]
+async fn entity_miss_echoes_the_canonical_queried_name() {
+    // Regression (#1654-4): a miss returned `name: ""`, so a caller running
+    // several lookups in parallel could not tell which question a response
+    // answered. The echo is canonicalized exactly as a hit's name would be
+    // (trimmed, lowercased), so a hit and a miss stay comparable.
+    let (_dir, srv) = server();
+
+    let Json(profile) = srv
+        .entity(Parameters(EntityParams {
+            name: "  Zzz Personne Inexistante  ".to_owned(),
+        }))
+        .await
+        .expect("entity lookup");
+
+    assert!(!profile.found, "nothing was ever stored under that name");
+    assert_eq!(
+        profile.name, "zzz personne inexistante",
+        "a miss must echo the queried name, canonicalized like a hit's"
+    );
+    assert_eq!(profile.id, 0, "a miss still reports no id");
+}
+
+#[tokio::test]
 async fn recall_fused_folds_in_a_graph_reached_fact() {
     let (_dir, srv) = server();
     // Anchor: an exact vector hit for the query.

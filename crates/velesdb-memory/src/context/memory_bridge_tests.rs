@@ -30,6 +30,17 @@ fn open_service() -> (tempfile::TempDir, MemoryService<HashEmbedder>) {
     (dir, svc)
 }
 
+/// The smallest working context a save accepts. An entirely empty one is
+/// refused (it would wipe whatever the same project+session already holds),
+/// and these tests are about the index and the slot, not the payload — so
+/// they carry the least content that gets past that guard.
+fn minimal_working() -> WorkingContext {
+    WorkingContext {
+        goal: Some("resume this session".to_owned()),
+        ..WorkingContext::default()
+    }
+}
+
 fn fragment(content: &str) -> ContextFragment {
     ContextFragment {
         id: None,
@@ -299,9 +310,9 @@ fn test_load_working_context_never_serves_an_unmarked_squatter() {
 fn test_list_working_contexts_returns_sessions_saved_under_a_project() {
     // Given two sessions saved under the same project
     let (_dir, svc) = open_service();
-    svc.save_working_context("veles", "session-a", &WorkingContext::default())
+    svc.save_working_context("veles", "session-a", &minimal_working())
         .expect("save session-a");
-    svc.save_working_context("veles", "session-b", &WorkingContext::default())
+    svc.save_working_context("veles", "session-b", &minimal_working())
         .expect("save session-b");
 
     // When listing the project's working contexts
@@ -333,7 +344,7 @@ fn test_list_working_contexts_empty_for_unknown_project() {
 fn test_list_working_contexts_resaving_same_session_updates_saved_at_not_duplicates() {
     // Given a session saved twice under the same project+session
     let (_dir, svc) = open_service();
-    svc.save_working_context("veles", "session-a", &WorkingContext::default())
+    svc.save_working_context("veles", "session-a", &minimal_working())
         .expect("save first");
     let first_at = svc
         .list_working_contexts("veles")
@@ -344,7 +355,7 @@ fn test_list_working_contexts_resaving_same_session_updates_saved_at_not_duplica
         .saved_at;
 
     std::thread::sleep(std::time::Duration::from_millis(1100));
-    svc.save_working_context("veles", "session-a", &WorkingContext::default())
+    svc.save_working_context("veles", "session-a", &minimal_working())
         .expect("save again");
 
     // When listing again
@@ -678,7 +689,7 @@ fn test_concurrent_saves_on_one_project_keep_both_sessions_in_the_index() {
         for session in ["alpha", "beta"] {
             let svc = &svc;
             scope.spawn(move || {
-                svc.save_working_context("veles", session, &WorkingContext::default())
+                svc.save_working_context("veles", session, &minimal_working())
                     .expect("save_working_context");
             });
         }
@@ -758,7 +769,7 @@ fn test_working_index_with_marker_but_no_body_is_an_error_not_an_empty_list() {
         },
         HashEmbedder::new(DIM),
     );
-    svc.save_working_context("veles", "alpha", &WorkingContext::default())
+    svc.save_working_context("veles", "alpha", &minimal_working())
         .expect("save_working_context");
 
     // When listing the project's sessions
@@ -781,9 +792,9 @@ fn test_load_working_context_does_not_mutate_the_index() {
     // Given a project with two saved sessions, one of whose facts is gone
     let (_dir, svc) = open_service();
     let alpha = svc
-        .save_working_context("veles", "alpha", &WorkingContext::default())
+        .save_working_context("veles", "alpha", &minimal_working())
         .expect("save alpha");
-    svc.save_working_context("veles", "beta", &WorkingContext::default())
+    svc.save_working_context("veles", "beta", &minimal_working())
         .expect("save beta");
     svc.forget(alpha).expect("forget alpha");
 
@@ -838,7 +849,7 @@ fn test_load_working_context_with_marker_but_no_body_is_an_error_not_a_fresh_sta
         },
         HashEmbedder::new(DIM),
     );
-    svc.save_working_context("veles", "alpha", &WorkingContext::default())
+    svc.save_working_context("veles", "alpha", &minimal_working())
         .expect("save_working_context");
 
     // When resuming it

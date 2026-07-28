@@ -574,6 +574,26 @@ pub struct WorkingContext {
     pub pending_actions: Vec<String>,
 }
 
+impl WorkingContext {
+    /// Whether this working state records nothing at all: no goal (or a blank
+    /// one, which says no more than an absent one) and every list empty.
+    ///
+    /// Saving is an idempotent upsert, so an empty state would *replace* —
+    /// that is, destroy — whatever a previous save stored under the same
+    /// project and session. [`crate::MemoryService::save_working_context`]
+    /// refuses one for exactly that reason (issue #1654).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.goal.as_ref().is_none_or(|goal| goal.trim().is_empty())
+            && self.active_constraints.is_empty()
+            && self.verified_facts.is_empty()
+            && self.open_hypotheses.is_empty()
+            && self.decisions.is_empty()
+            && self.exact_evidence.is_empty()
+            && self.pending_actions.is_empty()
+    }
+}
+
 /// One session recorded in a project's working-context index (V2a-1's
 /// `list_working_contexts` quick win).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

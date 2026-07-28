@@ -202,6 +202,59 @@ fn test_working_context_round_trips_across_reopen() {
 }
 
 #[test]
+fn test_save_working_context_refuses_an_entirely_empty_state() {
+    // Regression (#1654-6): the write is an idempotent upsert, so an empty
+    // `working` used to REPLACE — that is, destroy — a rich state already
+    // saved under the same project + session. The one tool whose job is
+    // surviving a context loss must not be able to cause one on a call that
+    // carries nothing.
+    let (_dir, svc) = service();
+    let rich = WorkingContext {
+        goal: Some("ship the validation pass".to_owned()),
+        pending_actions: vec!["open the PR".to_owned()],
+        ..WorkingContext::default()
+    };
+    svc.save_working_context("veles", "s1", &rich)
+        .expect("the rich state saves");
+
+    let err = svc
+        .save_working_context("veles", "s1", &WorkingContext::default())
+        .expect_err("an entirely empty working context must be refused");
+
+    assert_eq!(err.category(), ErrorCategory::InvalidInput);
+    let message = err.to_string();
+    assert!(
+        message.contains("goal") && message.contains("pending_actions"),
+        "the message must name the fields to fill, got {message}"
+    );
+
+    // And the previously saved state is intact — the refusal happened before
+    // anything was overwritten.
+    let loaded = svc
+        .load_working_context("veles", "s1")
+        .expect("load")
+        .expect("the rich state must survive the refused save");
+    assert_eq!(loaded.goal.as_deref(), Some("ship the validation pass"));
+    assert_eq!(loaded.pending_actions, vec!["open the PR".to_owned()]);
+}
+
+#[test]
+fn test_save_working_context_refuses_a_blank_goal_with_no_other_field() {
+    // A `goal` of whitespace carries no more than an absent one.
+    let (_dir, svc) = service();
+    let blank = WorkingContext {
+        goal: Some("   ".to_owned()),
+        ..WorkingContext::default()
+    };
+
+    let err = svc
+        .save_working_context("veles", "blank", &blank)
+        .expect_err("a whitespace-only goal is not a working context");
+
+    assert_eq!(err.category(), ErrorCategory::InvalidInput);
+}
+
+#[test]
 fn test_compile_context_records_aggregatable_events() {
     // Given two compilations under one project and one under another
     let (_dir, svc) = service();
@@ -359,8 +412,15 @@ fn test_system_facts_never_pollute_filtered_recall_or_memory_scope() {
     );
     req.project = Some("acme".to_owned());
     svc.compile_context(&compiler, &req).expect("compile");
-    svc.save_working_context("acme", "s1", &WorkingContext::default())
-        .expect("save");
+    svc.save_working_context(
+        "acme",
+        "s1",
+        &WorkingContext {
+            goal: Some("close the incident".to_owned()),
+            ..WorkingContext::default()
+        },
+    )
+    .expect("save");
 
     // When recalling with a caller-style project filter
     let mut filter = serde_json::Map::new();

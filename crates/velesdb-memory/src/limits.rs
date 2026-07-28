@@ -15,6 +15,25 @@ pub const DEFAULT_WHY_HOPS: usize = 2;
 /// Maximum accepted fact size (1 MiB) — prevents allocating huge embeddings.
 pub const MAX_FACT_BYTES: usize = 1_048_576;
 
+/// Maximum accepted size of a fact that has to be **embedded** (2 KiB).
+///
+/// Much tighter than [`MAX_FACT_BYTES`], and for a different reason: that cap
+/// bounds an *allocation*, this one bounds what an embedding model actually
+/// accepts. The default backend (`all-minilm`, see
+/// [`crate::embedder::DEFAULT_OLLAMA_MODEL`]) has a 512-token context window;
+/// at this crate's own prose rate of roughly 3–4 bytes per token (see
+/// `context::estimator::TokenEstimator::bytes_per_token_hint`) that is about
+/// 2 KiB. Measured against the 0.11.4 daemon: a 2 000-byte fact embeds, an
+/// 8 000-byte one fails with `ollama embeddings call failed` — a raw backend
+/// error naming neither a limit nor the offending size.
+///
+/// A guard rail, not a claim of exactness: a caller running a different
+/// embedding model may have a wider or narrower real window. It turns the
+/// *common* failure into an actionable message instead of an opaque backend
+/// fault, and it sits at the largest size measured to work rather than at a
+/// value that would reject facts the backend accepts today.
+pub const MAX_EMBEDDABLE_TEXT_BYTES: usize = 2048;
+
 /// Maximum accepted size of caller-supplied `metadata` (64 KiB), measured as
 /// its serialized JSON form. Metadata is a keyed lookup facet (project,
 /// author, status, …) — a porte-clés, not a payload — so it gets a much

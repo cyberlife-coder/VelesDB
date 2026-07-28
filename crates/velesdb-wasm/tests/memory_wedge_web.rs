@@ -473,11 +473,13 @@ fn load_working_context_returns_null_when_nothing_saved() {
 #[wasm_bindgen_test]
 fn list_working_contexts_lists_saved_sessions_for_a_project() {
     let svc = WasmMemoryService::new(16);
-    let empty = js_sys::JSON::parse(r#"{}"#).unwrap();
+    // Minimal but NON-empty: an entirely empty working context is refused,
+    // since saving one would wipe whatever the same project+session holds.
+    let minimal = js_sys::JSON::parse(r#"{"goal":"list the sessions"}"#).unwrap();
 
-    svc.save_working_context("veles", "session-a", empty.clone())
+    svc.save_working_context("veles", "session-a", minimal.clone())
         .unwrap();
-    svc.save_working_context("veles", "session-b", empty)
+    svc.save_working_context("veles", "session-b", minimal)
         .unwrap();
 
     let listed = svc.list_working_contexts("veles").unwrap();
