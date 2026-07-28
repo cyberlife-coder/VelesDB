@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3] — 2026-07-28
+
+### Fixed
+
+- **`remember_with_ttl` could fail on a perfectly valid fact.** A TTL'd write
+  was two store calls — `store_with_ttl` then `update_metadata` — and the fact
+  was already live and expiring between them, so a short TTL could lapse in the
+  gap and the metadata write then failed with
+  `NotFound(... is expired ...)`. Not a narrow edge case: the automatic date
+  stamp means metadata is always present, so *every* TTL'd write took that
+  path. Core now exposes `store_with_metadata_and_ttl` (its `store_internal`
+  always accepted both) and the service issues ONE write. The storage trait
+  method carries a default implementation reproducing the old sequence, so a
+  backend written before this keeps working. (#1641)
+- **The config file was looked up beside the DEFAULT store, not the effective
+  one.** `VELESDB_MEMORY_PATH` moves the store and `velesdb-memory.toml` lives
+  beside it, so moving the store silently read the config of a store you were
+  not using — including a developer's personal `~/.velesdb-memory` in the
+  middle of a test run. (#1633)
+- **SIGTERM killed the daemon instead of draining it.** Only `ctrl_c` (SIGINT)
+  was handled, while `launchctl kickstart`, `systemctl restart` and
+  `docker stop` all send SIGTERM. Unhandled, it dropped the streamable-HTTP
+  sessions clients hold mid-flight, so the next call on a live session hung
+  until the client's own timeout instead of reconnecting — a daemon upgrade
+  looked like a broken memory. (#1636)
+- **`forget` left the entities its fact had created behind.** Entity hubs
+  outlived every fact that created them, so a retraction was silently
+  incomplete and the graph accumulated unreachable nodes. `forget` now collects
+  the hubs no surviving fact mentions — an entity another fact still refers to
+  is kept. (#1634)
+
+### Changed
+
+- **Autograph predicates are bounded and entities must be linked.** On real
+  content the extractor answered with restated sentences
+  (`est utilisé pour la surveillance de fuites de données`) where a label was
+  asked for, and an entity could receive attributes without a single edge — a
+  dead end in the graph. The prompt now carries a hard three-word bound, a
+  counter-example, and the rule that a related entity appears in at least one
+  triple. Measured on the same content: 9 words → 3, and an entity that had no
+  edge now has one. (#1635)
+
 ## [0.11.2] — 2026-07-26
 
 Patch. Four defects found in real usage, each reproduced by a test that failed
