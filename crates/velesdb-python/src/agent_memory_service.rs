@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use velesdb_memory::context::{
     suggest_token_budget, CompilePolicy, CompileRequest, CompiledContext, ContextCompiler,
-    ContextDecision, ContextSavings, ContextSource, WorkingContext,
+    ContextDecision, ContextSavings, ContextSource, WorkingContext, WorkingContextSession,
 };
 use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
@@ -166,6 +166,7 @@ fn explanation_to_dict(py: Python<'_>, e: &Explanation) -> PyResult<Py<PyAny>> {
 /// [`canonical_entity_name`] — the very function the service keys hubs by —
 /// lets a caller running several lookups pair each answer with its question
 /// (mirrors the MCP `entity` tool's `from_lookup`).
+///
 /// Built as a `serde_json::Value` and converted once by [`json_to_python`],
 /// rather than field-by-field: that converter already renders a `u64` past
 /// `i64::MAX` as an exact Python int (an entity id is a content hash, so it
@@ -644,5 +645,25 @@ impl PyMemoryService {
             None => Ok(py.None()),
             Some(working) => Ok(serde_to_python!(py, &working, "working context")),
         }
+    }
+
+    /// Every session ever saved under `project`'s working-context index,
+    /// most-recently-saved first — so an agent can discover what is
+    /// resumable before guessing a session id at
+    /// [`load_working_context`](Self::load_working_context), or recover from
+    /// a typo.
+    ///
+    /// Returns:
+    ///     ``{"sessions": [{"session": str, "saved_at": int}, ...]}`` — the
+    ///     same wire shape as the MCP `list_working_contexts` tool and the
+    ///     Node/WASM bindings. Empty (never an error) when the project never
+    ///     saved anything.
+    fn list_working_contexts(&self, py: Python<'_>, project: &str) -> PyResult<Py<PyAny>> {
+        let sessions: Vec<WorkingContextSession> =
+            py.detach(|| self.svc.list_working_contexts(project).map_err(to_py_err))?;
+        let listed = serde_to_python!(py, &sessions, "working context sessions");
+        let out = PyDict::new(py);
+        out.set_item(PyString::intern(py, "sessions"), listed)?;
+        Ok(out.into())
     }
 }

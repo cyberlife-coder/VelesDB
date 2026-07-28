@@ -2595,6 +2595,23 @@ class MemoryService:
         """
         ...
 
+    def list_working_contexts(self, project: str) -> Dict[str, Any]:
+        """Every session saved under ``project``, most-recently-saved first.
+
+        Lets an agent discover what is resumable before guessing a session id
+        at ``load_working_context``, or recover from a typo.
+
+        Args:
+            project: Project key the sessions were saved under.
+
+        Returns:
+            ``{"sessions": [{"session": str, "saved_at": int}, ...]}`` — the
+            same wire shape as the MCP ``list_working_contexts`` tool and the
+            Node/WASM bindings. Empty (never an error) when the project never
+            saved anything.
+        """
+        ...
+
     def suggest_budget(
         self,
         target_model: str,

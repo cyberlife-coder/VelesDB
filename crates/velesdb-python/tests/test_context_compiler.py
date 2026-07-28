@@ -212,6 +212,19 @@ def test_load_working_context_returns_none_when_absent(mem):
     assert mem.load_working_context("veles", "no-such-session") is None
 
 
+def test_list_working_contexts_lists_saved_sessions_most_recent_first(mem):
+    mem.save_working_context("veles", "session-a", {"goal": "first"})
+    mem.save_working_context("veles", "session-b", {"goal": "second"})
+    listed = mem.list_working_contexts("veles")
+    names = [s["session"] for s in listed["sessions"]]
+    assert set(names) == {"session-a", "session-b"}
+    assert all("saved_at" in s for s in listed["sessions"])
+
+
+def test_list_working_contexts_on_an_unused_project_is_empty_not_an_error(mem):
+    assert mem.list_working_contexts("never-used-project") == {"sessions": []}
+
+
 # --- suggest_budget -----------------------------------------------------------
 # A pure lookup in the committed model→window table: never a network call, and
 # an unknown model reports None rather than guessing.
