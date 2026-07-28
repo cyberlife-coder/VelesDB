@@ -3,10 +3,7 @@
 //! both worlds, so the dependency boundary is auditable by inspection.
 
 use serde_json::Value;
-use velesdb_memory::context::{
-    fragment_id as ctx_fragment_id, segment_transcript, CompilePolicy, CompileRequest,
-    SegmentFormat, SegmentKind, SegmentationPolicy,
-};
+use velesdb_memory::context::CompileRequest;
 use velesdb_memory::limits;
 use velesdb_memory::{ColumnFilter, ColumnOp, FusionOptions, Link, Metadata};
 
@@ -144,108 +141,30 @@ pub fn to_retrieve_source_js(
     Ok(Value::Object(map))
 }
 
-/// Input of `compileTranscript` — the same fields as the MCP
-/// `compile_transcript` tool's request MINUS `path`: this binding has no
-/// ingest-roots configuration surface (unlike the MCP server), so only an
-/// inline `transcript` is accepted. Mirrors the WASM binding's own
-/// `CompileTranscriptInput`.
-#[derive(serde::Deserialize)]
-pub struct CompileTranscriptInput {
-    pub query: String,
-    pub transcript: String,
-    pub token_budget: u64,
-    #[serde(default)]
-    pub project: Option<String>,
-    #[serde(default)]
-    pub target_model: Option<String>,
-    #[serde(default)]
-    pub policy: Option<CompilePolicy>,
-    #[serde(default)]
-    pub segmentation: Option<SegmentationPolicy>,
-}
+/// Input of `compileTranscript` — the shared
+/// [`TranscriptCompileInput`](velesdb_memory::context::TranscriptCompileInput),
+/// re-exported so the napi method keeps naming a local type.
+pub use velesdb_memory::context::TranscriptCompileInput as CompileTranscriptInput;
 
-/// One entry of the `segmentation.segments` array `compileTranscript`
-/// returns — same shape as the MCP `compile_transcript` tool's own (private)
-/// `SegmentInfo`. `fragment_id` is already a decimal string, so no separate
-/// [`stringify_id_fields`] pass is needed for the segmentation half of the
-/// response.
-#[derive(serde::Serialize)]
-struct SegmentInfoJs {
-    index: usize,
-    turn: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    role: Option<String>,
-    kind: SegmentKind,
-    byte_start: usize,
-    byte_end: usize,
-    fragment_id: String,
-}
-
-/// The segmentation audit trail `compileTranscript` returns alongside
-/// `context`.
-#[derive(serde::Serialize)]
-struct SegmentationReportJs {
-    format_detected: SegmentFormat,
-    segments: Vec<SegmentInfoJs>,
-    merged_segments: usize,
-}
-
-/// The pure-Rust half of `compileTranscript`: segments `input.transcript`
-/// and assembles the [`CompileRequest`] `compile_context` then compiles,
-/// plus the JSON-ready segmentation audit trail. Split out from the napi
-/// method into a plain function — synchronously testable with no napi/JS
-/// runtime needed (unlike the WASM binding, `napi::Error` is an ordinary
-/// Rust value off any target, so this needs no further split for
-/// testability). Mirrors the WASM binding's own
-/// `build_transcript_compile_request`.
+/// The pure-Rust half of `compileTranscript`: segments `input.transcript`,
+/// assembles the [`CompileRequest`] `compile_context` then compiles, and
+/// serializes the segmentation audit trail.
+///
+/// The segmentation glue itself lives in `velesdb_memory`'s
+/// [`transcript_bridge`](velesdb_memory::context::transcript_bridge) — it
+/// used to be duplicated here and in the WASM binding, each doc comment
+/// pointing at the other. What is left here is the napi-specific part: the
+/// error translation and the JSON envelope.
 ///
 /// # Errors
-/// An `INVALID_INPUT` error for an empty transcript (mirrors the MCP
-/// `compile_transcript` tool's own guard — `segment_transcript` has no such
-/// check itself, since an empty string is a valid, if useless, zero-turn
-/// input to it); otherwise whatever `segment_transcript` itself returns (a
-/// genuine budget/cap breach, or a forced-format parse failure), translated
-/// by [`to_napi_err`].
+/// An `INVALID_INPUT` error for an empty transcript, a genuine budget/cap
+/// breach, or a forced-format parse failure — all translated from
+/// [`velesdb_memory::MemoryError`] by [`to_napi_err`].
 pub fn build_transcript_compile_request(
     input: CompileTranscriptInput,
 ) -> napi::Result<(CompileRequest, Value)> {
-    if input.transcript.is_empty() {
-        return Err(invalid_input(
-            "the transcript is empty — `transcript` must be non-empty text",
-        ));
-    }
-    let segmentation_policy = input.segmentation.unwrap_or_default();
-    let outcome =
-        segment_transcript(&input.transcript, &segmentation_policy).map_err(to_napi_err)?;
-    let segments_info: Vec<SegmentInfoJs> = outcome
-        .segments
-        .iter()
-        .enumerate()
-        .map(|(index, segment)| SegmentInfoJs {
-            index,
-            turn: segment.turn,
-            role: segment.role.clone(),
-            kind: segment.kind,
-            byte_start: segment.byte_start,
-            byte_end: segment.byte_end,
-            fragment_id: id_to_string(ctx_fragment_id(&segment.fragment.content)),
-        })
-        .collect();
-    let report = SegmentationReportJs {
-        format_detected: outcome.format_detected,
-        segments: segments_info,
-        merged_segments: outcome.merged_segments,
-    };
-    let fragments = outcome.segments.into_iter().map(|s| s.fragment).collect();
-    let request = CompileRequest {
-        query: input.query,
-        fragments,
-        project: input.project,
-        target_model: input.target_model,
-        token_budget: input.token_budget,
-        memory_scope: None,
-        policy: input.policy,
-    };
+    let (request, report) =
+        velesdb_memory::context::build_transcript_compile_request(input).map_err(to_napi_err)?;
     let segmentation_value = serde_json::to_value(&report)
         .map_err(|err| invalid_input(format!("segmentation report serialization: {err}")))?;
     Ok((request, segmentation_value))

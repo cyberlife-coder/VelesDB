@@ -46,8 +46,7 @@ use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
 use velesdb_memory::context::{
-    fragment_id as ctx_fragment_id, segment_transcript, suggest_token_budget, CompilePolicy,
-    CompileRequest, ContextCompiler, SegmentFormat, SegmentKind, SegmentationPolicy,
+    suggest_token_budget, CompilePolicy, CompileRequest, ContextCompiler, SegmentationReport,
     WorkingContext, WorkingContextSession,
 };
 use velesdb_memory::service::canonical_entity_name;
@@ -371,50 +370,22 @@ impl From<Explanation> for ExplanationOut {
     }
 }
 
-/// Input of [`WasmMemoryService::compile_transcript`] — the same fields as
-/// the MCP `compile_transcript` tool's request MINUS `path`: this binding
-/// has no filesystem (see the module docs), so only an inline `transcript`
-/// is accepted.
-#[derive(serde::Deserialize)]
-struct CompileTranscriptInput {
-    query: String,
-    transcript: String,
-    token_budget: u64,
-    #[serde(default)]
-    project: Option<String>,
-    #[serde(default)]
-    target_model: Option<String>,
-    #[serde(default)]
-    policy: Option<CompilePolicy>,
-    #[serde(default)]
-    segmentation: Option<SegmentationPolicy>,
-}
+/// Input of [`WasmMemoryService::compile_transcript`] — the shared
+/// [`TranscriptCompileInput`](velesdb_memory::context::TranscriptCompileInput),
+/// aliased so this module keeps naming a local type. Same fields as the MCP
+/// `compile_transcript` tool's request MINUS `path`: this binding has no
+/// filesystem (see the module docs), so only an inline `transcript` is
+/// accepted.
+use velesdb_memory::context::TranscriptCompileInput as CompileTranscriptInput;
 
-/// One entry of [`SegmentationReportOut::segments`] — same shape as the MCP
-/// `compile_transcript` tool's own (private) `SegmentInfo`, rebuilt here
-/// rather than reused since that type is `pub(super)` to `velesdb_memory`'s
-/// `mcp` module. `fragment_id` is already a decimal string, so no separate
-/// stringify pass is needed for the segmentation half of the response.
-#[derive(Debug, Serialize)]
-struct SegmentInfoOut {
-    index: usize,
-    turn: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    role: Option<String>,
-    kind: SegmentKind,
-    byte_start: usize,
-    byte_end: usize,
-    fragment_id: String,
-}
-
-/// The segmentation audit trail returned alongside `context` by
-/// [`WasmMemoryService::compile_transcript`].
-#[derive(Debug, Serialize)]
-struct SegmentationReportOut {
-    format_detected: SegmentFormat,
-    segments: Vec<SegmentInfoOut>,
-    merged_segments: usize,
-}
+/// The segmentation glue this binding used to carry itself, now relayed from
+/// `velesdb_memory`'s
+/// [`transcript_bridge`](velesdb_memory::context::transcript_bridge) — the
+/// Node binding carried a byte-for-byte twin of it, each doc comment pointing
+/// at the other. Re-exported under the historical name so the tests, which
+/// exercise it directly (a `JsValue` cannot be constructed off `wasm32`; see
+/// `memory_service_tests.rs`'s module docs), keep naming it.
+use velesdb_memory::context::build_transcript_compile_request;
 
 /// Output of [`WasmMemoryService::compile_transcript`]: the compiled context
 /// (already id-stringified, byte-compatible with [`WasmMemoryService::compile_context`]'s
@@ -422,66 +393,7 @@ struct SegmentationReportOut {
 #[derive(Serialize)]
 struct CompileTranscriptOut {
     context: Value,
-    segmentation: SegmentationReportOut,
-}
-
-/// The pure-Rust half of [`WasmMemoryService::compile_transcript`]: segments
-/// `input.transcript` and assembles the [`CompileRequest`] /
-/// [`SegmentationReportOut`] pair `compile_context` then compiles — split
-/// out from the `#[wasm_bindgen]` method (which only marshals `JsValue` in
-/// and out) specifically so this glue is testable from a native `cargo test`
-/// (a `JsValue` cannot be constructed off `wasm32`; see
-/// `memory_service_tests.rs`'s module docs). Returns
-/// [`MemoryError::SegmentationError`] for an empty transcript — mirroring
-/// the MCP `compile_transcript` tool's own empty-transcript guard, since
-/// `segment_transcript` has no such check itself (an empty string is a
-/// valid, if useless, zero-turn input to it) — or whatever error
-/// `segment_transcript` itself returns (a genuine budget/cap breach, or a
-/// forced-format parse failure).
-fn build_transcript_compile_request(
-    input: CompileTranscriptInput,
-) -> Result<(CompileRequest, SegmentationReportOut), MemoryError> {
-    if input.transcript.is_empty() {
-        return Err(MemoryError::SegmentationError(
-            "the transcript is empty — `transcript` must be non-empty text".to_owned(),
-        ));
-    }
-    let segmentation_policy = input.segmentation.unwrap_or_default();
-    let outcome = segment_transcript(&input.transcript, &segmentation_policy)?;
-    let segments_info: Vec<SegmentInfoOut> = outcome
-        .segments
-        .iter()
-        .enumerate()
-        .map(|(index, segment)| SegmentInfoOut {
-            index,
-            turn: segment.turn,
-            role: segment.role.clone(),
-            kind: segment.kind,
-            byte_start: segment.byte_start,
-            byte_end: segment.byte_end,
-            fragment_id: id_to_string(ctx_fragment_id(&segment.fragment.content)),
-        })
-        .collect();
-    let format_detected = outcome.format_detected;
-    let merged_segments = outcome.merged_segments;
-    let fragments = outcome.segments.into_iter().map(|s| s.fragment).collect();
-    let request = CompileRequest {
-        query: input.query,
-        fragments,
-        project: input.project,
-        target_model: input.target_model,
-        token_budget: input.token_budget,
-        memory_scope: None,
-        policy: input.policy,
-    };
-    Ok((
-        request,
-        SegmentationReportOut {
-            format_detected,
-            segments: segments_info,
-            merged_segments,
-        },
-    ))
+    segmentation: SegmentationReport,
 }
 
 fn to_js(value: &impl Serialize) -> Result<JsValue, JsValue> {

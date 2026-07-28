@@ -20,6 +20,10 @@
 
 use super::*;
 
+// The segmentation glue moved to `velesdb_memory::context::transcript_bridge`;
+// these two policy/format types are still named directly by the tests below.
+use velesdb_memory::context::{SegmentFormat, SegmentationPolicy};
+
 #[test]
 fn test_inner_remember_with_oversized_metadata_errors() {
     // metadata is capped at 64 KiB serialized (DoS guard: metadata is a
