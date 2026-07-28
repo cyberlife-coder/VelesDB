@@ -1218,6 +1218,12 @@ pub(crate) fn validate_embeddable(text: &str) -> Result<(), MemoryError> {
 /// vector is a ranking aid), truncating the *embedded* text is the correct
 /// trade — refusing would fail a legitimate compile, and a placeholder
 /// vector would remove the source from semantic recall entirely.
+///
+/// Gated on `context`: the compiler's source writer is its only caller, so a
+/// build without that feature sees dead code, which CI's `-D warnings`
+/// turns into a failed build. Same shape as `positive_ttl` — and only the
+/// per-feature ISOLATION loop catches it, never a feature combination.
+#[cfg(feature = "context")]
 pub(crate) fn embeddable_prefix(text: &str) -> &str {
     let cap = crate::limits::MAX_EMBEDDABLE_TEXT_BYTES;
     if text.len() <= cap {
