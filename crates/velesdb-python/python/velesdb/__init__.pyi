@@ -2595,6 +2595,29 @@ class MemoryService:
         """
         ...
 
+    def suggest_budget(
+        self,
+        target_model: str,
+        reserve_tokens: int = 0,
+    ) -> Dict[str, Any]:
+        """Suggest a starting ``token_budget`` for ``compile_context``.
+
+        Looked up in a static, committed model-name to context-window table
+        (dated "as of"), NEVER a network call.
+
+        Args:
+            target_model: Model name, matched case-insensitively.
+            reserve_tokens: Room to reserve for the response (default 0),
+                mirroring ``compile_context``'s own
+                ``policy.response_reserve_tokens``.
+
+        Returns:
+            ``{"window": Optional[int], "suggested_budget": Optional[int],
+               "source": str}``. Both figures are ``None`` for a model absent
+            from the table — an honest "unknown", never a guess.
+        """
+        ...
+
     def retrieve_context_source(self, handle: str) -> Dict[str, Any]:
         """Fetch back the exact original content behind a
         ``ctx://source/<hash>`` handle from a :meth:`compile_context` result.

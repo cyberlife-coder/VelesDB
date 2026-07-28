@@ -212,6 +212,29 @@ def test_load_working_context_returns_none_when_absent(mem):
     assert mem.load_working_context("veles", "no-such-session") is None
 
 
+# --- suggest_budget -----------------------------------------------------------
+# A pure lookup in the committed model→window table: never a network call, and
+# an unknown model reports None rather than guessing.
+
+
+def test_suggest_budget_derives_a_budget_and_reserves_room(mem):
+    budget = mem.suggest_budget("gpt-4o", 8000)
+    assert budget["window"] == 128_000
+    assert budget["suggested_budget"] == 120_000  # window minus the reserve
+    # Provenance is dated, never "measured" or "fetched".
+    assert budget["source"].startswith("static table as of ")
+
+
+def test_suggest_budget_is_case_insensitive_and_defaults_the_reserve_to_zero(mem):
+    assert mem.suggest_budget("GPT-4O")["suggested_budget"] == 128_000
+
+
+def test_suggest_budget_reports_none_for_an_unknown_model_never_a_guess(mem):
+    budget = mem.suggest_budget("some-model-that-does-not-exist")
+    assert budget["window"] is None
+    assert budget["suggested_budget"] is None
+
+
 # --- typed errors -------------------------------------------------------------
 
 

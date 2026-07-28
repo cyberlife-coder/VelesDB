@@ -13,8 +13,8 @@ use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 
 use velesdb_memory::context::{
-    CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextDecision,
-    ContextSavings, ContextSource, WorkingContext,
+    suggest_token_budget, CompilePolicy, CompileRequest, CompiledContext, ContextCompiler,
+    ContextDecision, ContextSavings, ContextSource, WorkingContext,
 };
 use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
@@ -507,6 +507,33 @@ impl PyMemoryService {
                 .map_err(to_py_err)
         })?;
         Ok(serde_to_python!(py, &compiled, "compiled context"))
+    }
+
+    /// Suggest a starting `token_budget` for
+    /// [`compile_context`](Self::compile_context), for a named target model
+    /// — looked up in a static, committed model-name to context-window table
+    /// (dated "as of", NEVER a network call).
+    ///
+    /// Args:
+    ///     target_model: Model name, matched case-insensitively.
+    ///     reserve_tokens: Room to reserve for the response (default 0),
+    ///         mirroring `compile_context`'s own
+    ///         `policy.response_reserve_tokens`.
+    ///
+    /// Returns:
+    ///     ``{"window": Optional[int], "suggested_budget": Optional[int],
+    ///        "source": str}``. Both figures are ``None`` for a model absent
+    ///     from the table — an honest "unknown", never a guess; the table is
+    ///     extended in a new release rather than worked around here.
+    #[pyo3(signature = (target_model, reserve_tokens = 0))]
+    fn suggest_budget(
+        &self,
+        py: Python<'_>,
+        target_model: &str,
+        reserve_tokens: u64,
+    ) -> PyResult<Py<PyAny>> {
+        let budget = suggest_token_budget(target_model, reserve_tokens);
+        Ok(serde_to_python!(py, &budget, "suggested budget"))
     }
 
     /// Fetch back the exact original content — and media, when the fragment

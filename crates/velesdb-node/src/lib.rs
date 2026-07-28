@@ -3,7 +3,7 @@
 //! `forget` / `why` / `entity` / `feedback` / `rememberExtracted` / `compileContext` /
 //! `compileTranscript` / `contextSavings` / `explainCompilation` /
 //! `retrieveContextSource` / `saveWorkingContext` / `loadWorkingContext` /
-//! `listWorkingContexts`.
+//! `listWorkingContexts` / `suggestBudget`.
 //!
 //! It wraps the exact same hardened Rust the MCP server and the `PyO3` binding use
 //! (no logic is reimplemented), mirroring `crates/velesdb-python/src/agent_memory_service.rs`
@@ -47,7 +47,9 @@ use std::sync::Arc;
 use napi::bindgen_prelude::AsyncTask;
 use napi_derive::napi;
 use serde_json::Value;
-use velesdb_memory::context::{CompilePolicy, CompileRequest, ContextCompiler, WorkingContext};
+use velesdb_memory::context::{
+    suggest_token_budget, CompilePolicy, CompileRequest, ContextCompiler, WorkingContext,
+};
 use velesdb_memory::{
     DynEmbedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor, DEFAULT_DIMENSION,
     DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
@@ -566,6 +568,38 @@ impl MemoryStore {
             map.insert("context".to_owned(), context_value);
             map.insert("segmentation".to_owned(), segmentation);
             Ok(JsonOut(Value::Object(map)))
+        }))
+    }
+
+    /// Suggest a starting `tokenBudget` for [`Self::compile_context`], for a
+    /// named target model — looked up in a static, committed model-name to
+    /// context-window table (dated "as of", NEVER a network call).
+    /// `reserveTokens` (default 0) reserves room for the response, mirroring
+    /// `compileContext`'s own `policy.response_reserve_tokens`.
+    ///
+    /// `window`/`suggested_budget` come back `null` for a model that is not
+    /// in the table — an honest "unknown", never a guess; the table is
+    /// extended in a new release rather than worked around here.
+    ///
+    /// `reserveTokens` is a `u32` for the same reason `ttlSeconds` is: napi
+    /// marshals a `u64` as a `BigInt`, and 4 billion reserved tokens is
+    /// already three orders of magnitude past the largest window in the
+    /// table.
+    #[napi(
+        js_name = "suggestBudget",
+        ts_return_type = "Promise<{ window: number | null; suggested_budget: number | null; source: string }>"
+    )]
+    pub fn suggest_budget(
+        &self,
+        target_model: String,
+        reserve_tokens: Option<u32>,
+    ) -> AsyncTask<Job<JsonOut>> {
+        AsyncTask::new(Job::new(move || {
+            let budget =
+                suggest_token_budget(&target_model, u64::from(reserve_tokens.unwrap_or(0)));
+            let value = serde_json::to_value(&budget)
+                .map_err(|err| invalid_input(format!("suggested budget serialization: {err}")))?;
+            Ok(JsonOut(value))
         }))
     }
 
