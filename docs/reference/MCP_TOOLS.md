@@ -21,12 +21,12 @@ The tool surface is feature-gated at build time:
 
 | Feature | Default? | Tools it adds |
 |---|---|---|
-| `mcp` | yes | `remember`, `recall`, `recall_where`, `recall_fused`, `feedback`, `relate`, `forget`, `why`, `remember_extracted` |
+| `mcp` | yes | `remember`, `recall`, `recall_where`, `recall_fused`, `feedback`, `relate`, `unrelate`, `forget`, `entity`, `why`, `remember_extracted` |
 | `context` | yes | `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `save_working_context`, `load_working_context`, `list_working_contexts`, `suggest_budget` |
 | `extract` | no | none — it enables the *backend* `remember_extracted` needs (see that tool) |
 
 `default = ["mcp", "persistence", "context"]`, so a plain
-`cargo install velesdb-memory` advertises all **18** tools. They are served by
+`cargo install velesdb-memory` advertises all **20** tools. They are served by
 one MCP server: the context router is combined into the memory router in
 `McpServer::new`, never a second server.
 
@@ -43,8 +43,9 @@ number silently loses precision in any JavaScript-based client.
 - Every memory tool that returns an id also returns a decimal-string twin:
   `id_str`, `edge_id_str`, `ids_str`, `from_str`/`to_str`. **Relay the string
   form**, not the number.
-- Every memory tool that accepts an id (`relate`'s `from`/`to`, `forget`'s and
-  `feedback`'s `id`, `remember`'s `links[].target`) accepts a JSON number *or*
+- Every memory tool that accepts an id (`relate`/`unrelate`'s `from`/`to`,
+  `forget`'s and `feedback`'s `id`, `remember`'s `links[].target`) accepts a
+  JSON number *or*
   a decimal string, and advertises both in its input schema.
 - The compiler tools instead take a per-request switch:
   `policy.ids_as_strings: true` rewrites every id field of that response
@@ -193,6 +194,34 @@ relate { "from": "9876543210", "to": "1234", "relation": "depends_on" }
 → { "edge_id": 42, "edge_id_str": "42" }
 ```
 
+## `unrelate`
+
+Remove a typed edge — `relate`'s exact undo, so a mistaken edge no longer
+costs the facts at its endpoints.
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `from` | integer or decimal string | yes | The side the link points **from**, exactly as given to `relate`. |
+| `to` | integer or decimal string | yes | The side the link points **to**. |
+| `relation` | string | yes | The label of the link to remove. |
+
+Returns `{ found, removed }`. Idempotent: removing an absent edge answers
+`found: false` instead of erroring, so a cleanup can be replayed safely.
+Only the edge is removed — the two memories, and any entity, are untouched
+(collecting an orphaned entity stays `forget`'s job). It refuses exactly what
+`relate` refuses: an empty `relation`, and `from` equal to `to`.
+
+**Scope.** The store does not distinguish a link created with `relate` from
+one auto-derived from a passage (`remember_extracted`, autograph), so
+`unrelate` removes both alike. To correct an auto-derived link, prefer
+`forget` + `remember` of the source fact — otherwise remembering the same
+passage again can rebuild the edge removed here.
+
+```jsonc
+unrelate { "from": "9876543210", "to": "1234", "relation": "depends_on" }
+→ { "found": true, "removed": 1 }
+```
+
 ## `forget`
 
 Permanently delete a memory by id, removing the fact and its graph links.
@@ -205,6 +234,27 @@ Returns `{ id, id_str, found }`. `found: false` means nothing was stored under
 that id — a stale id or a typo. That is a no-op, not an error, but it is
 reported distinctly from a real deletion. The deletion itself cannot be
 undone; for time-based expiry use `remember`'s `ttl_seconds` instead.
+
+## `entity`
+
+Look up everything the auto-built graph knows about one named entity: the
+attributes merged onto its node and the typed edges leaving it.
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | yes | Matched case-insensitively (trimmed, lowercased). |
+
+Returns `{ found, id, id_str, name, attributes, relations }`. `found: false`
+means nothing has ever mentioned that entity; `name` always echoes the
+canonicalized queried name so parallel lookups stay pairable. `relations` are
+the typed edges **leaving** the entity, with the bipartite `mentions`
+scaffolding excluded.
+
+```jsonc
+entity { "name": "Theo Durand" }
+→ { "found": true, "name": "theo durand", "attributes": { "age": 15 },
+    "relations": [ { "predicate": "frere de", … } ] }
+```
 
 ## `why`
 

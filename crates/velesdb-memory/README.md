@@ -221,7 +221,7 @@ end-to-end *extraction* comparison on the real
 
 | Family | Tools |
 |---|---|
-| Durable memory | `remember`, `recall`, `recall_where`, `recall_fused`, `relate`, `forget`, `why`, `feedback`, `remember_extracted` |
+| Durable memory | `remember`, `recall`, `recall_where`, `recall_fused`, `relate`, `unrelate`, `forget`, `entity`, `why`, `feedback`, `remember_extracted` |
 | Context compiler | `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `suggest_budget` |
 | Session resumption | `save_working_context`, `load_working_context`, `list_working_contexts` |
 

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`unrelate` — `relate`'s exact undo (#1661).** The graph was the only
+  facet whose writes were one-way: a mistaken edge could only be removed by
+  destroying the facts at its endpoints. `unrelate(from, to, relation)`
+  removes exactly the named edge(s), touches neither the facts nor any
+  entity, refuses exactly what `relate` refuses (empty label, self-loop),
+  and is idempotent — an absent edge answers `{ found: false }`, not an
+  error, so a cleanup is replayable. Exposed as an MCP tool, on
+  `MemoryService`, and on the `MemoryStore` trait (native + WASM backends).
+  Scope: the store does not distinguish an explicit edge from an
+  autograph-derived one, so both are removable — correcting an autograph
+  edge is better done by `forget` + `remember` of the source fact.
+
 ### Fixed
 
 Five input defects found by a systematic scenario campaign against the 0.11.4
