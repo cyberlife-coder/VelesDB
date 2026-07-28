@@ -2595,6 +2595,35 @@ class MemoryService:
         """
         ...
 
+    def compile_transcript(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """One-call shortcut over ``compile_context`` for a raw transcript.
+
+        Deterministically segments an agent-session transcript into turns
+        (plain marker-based or JSONL) and, within each turn, into code/log/body
+        sub-segments, then compiles the result exactly like
+        ``compile_context``. Pure delegation to the same ``velesdb_memory``
+        bridge the Node and WASM bindings relay.
+
+        Args:
+            request: Same JSON shape as the MCP ``compile_transcript`` tool's
+                input MINUS ``path`` — ``{query, transcript, token_budget,
+                project?, target_model?, policy?, segmentation?}``. Resolving
+                a ``path`` needs the MCP server's ingest-roots allowlist,
+                which this binding has no configuration surface for: read the
+                file yourself and pass its content as ``transcript``.
+
+        Returns:
+            ``{"context": ..., "segmentation": ...}`` — ``context`` is the
+            same shape as ``compile_context``'s output; ``segmentation`` is
+            the detected format plus one audit entry per segment (index, turn,
+            role, kind, byte range, ``fragment_id``).
+
+        Raises:
+            ValueError: If the transcript is empty, the request is malformed,
+                or a forced segmentation format fails to parse.
+        """
+        ...
+
     def list_working_contexts(self, project: str) -> Dict[str, Any]:
         """Every session saved under ``project``, most-recently-saved first.
 

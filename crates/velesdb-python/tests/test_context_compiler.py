@@ -225,6 +225,51 @@ def test_list_working_contexts_on_an_unused_project_is_empty_not_an_error(mem):
     assert mem.list_working_contexts("never-used-project") == {"sessions": []}
 
 
+# --- compile_transcript -------------------------------------------------------
+
+
+def test_compile_transcript_segments_a_plain_transcript_and_compiles_it(mem):
+    out = mem.compile_transcript(
+        {
+            "query": "what broke the deploy",
+            "transcript": (
+                "System: you are a helpful agent.\n"
+                "User: what broke the deploy?\n"
+                "Assistant: clippy failed on main.\n"
+            ),
+            "token_budget": 5000,
+        }
+    )
+    assert out["context"]["content"]
+    seg = out["segmentation"]
+    assert seg["format_detected"] == "plain"
+    assert len(seg["segments"]) >= 1
+    assert seg["segments"][0]["role"] == "System"
+    # fragment_id is a 64-bit content hash: it crosses as a decimal STRING on
+    # every binding, so a float-lossy consumer downstream cannot round it.
+    assert all(s["fragment_id"].isdigit() for s in seg["segments"])
+
+
+def test_compile_transcript_honours_a_forced_jsonl_segmentation_policy(mem):
+    out = mem.compile_transcript(
+        {
+            "query": "deploy",
+            "transcript": (
+                '{"role": "user", "content": "what broke the deploy?"}\n'
+                '{"role": "assistant", "content": "clippy failed on main"}\n'
+            ),
+            "token_budget": 5000,
+            "segmentation": {"format": "jsonl"},
+        }
+    )
+    assert out["segmentation"]["format_detected"] == "jsonl"
+
+
+def test_compile_transcript_rejects_an_empty_transcript(mem):
+    with pytest.raises(ValueError):
+        mem.compile_transcript({"query": "q", "transcript": "", "token_budget": 1000})
+
+
 # --- suggest_budget -----------------------------------------------------------
 # A pure lookup in the committed model→window table: never a network call, and
 # an unknown model reports None rather than guessing.

@@ -13,8 +13,9 @@ use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 
 use velesdb_memory::context::{
-    suggest_token_budget, CompilePolicy, CompileRequest, CompiledContext, ContextCompiler,
-    ContextDecision, ContextSavings, ContextSource, WorkingContext, WorkingContextSession,
+    build_transcript_compile_request, suggest_token_budget, CompilePolicy, CompileRequest,
+    CompiledContext, ContextCompiler, ContextDecision, ContextSavings, ContextSource,
+    TranscriptCompileInput, WorkingContext, WorkingContextSession,
 };
 use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
@@ -508,6 +509,50 @@ impl PyMemoryService {
                 .map_err(to_py_err)
         })?;
         Ok(serde_to_python!(py, &compiled, "compiled context"))
+    }
+
+    /// One-call shortcut over [`compile_context`](Self::compile_context) for
+    /// a raw agent-session transcript: deterministically segments it into
+    /// turns (plain marker-based — `System:`/`User:`/`Human:`/`Assistant:`/
+    /// `AI:`/`Tool:`/`### User`/`### Assistant` — or JSONL, one line per
+    /// turn) and, within each turn, into code/log/body sub-segments, then
+    /// compiles the result exactly like `compile_context`. Pure delegation to
+    /// the same `velesdb_memory` bridge the Node and WASM bindings relay, so
+    /// the same transcript segments identically on all three.
+    ///
+    /// Args:
+    ///     request: Same JSON shape as the MCP `compile_transcript` tool's
+    ///         input MINUS `path` — `{query, transcript, token_budget,
+    ///         project?, target_model?, policy?, segmentation?}`. Resolving a
+    ///         `path` needs the MCP server's ingest-roots allowlist, which
+    ///         this binding has no configuration surface for: read the file
+    ///         yourself and pass its content as `transcript`.
+    ///
+    /// Returns:
+    ///     ``{"context": ..., "segmentation": ...}`` — `context` is the same
+    ///     shape as `compile_context`'s output; `segmentation` is the
+    ///     detected format plus one audit entry per segment (index, turn,
+    ///     role, kind, byte range, `fragment_id`) so a caller can see exactly
+    ///     how the transcript was cut before trusting the compiled result.
+    ///
+    /// Raises:
+    ///     ValueError: If the transcript is empty, the request is malformed,
+    ///         or a forced segmentation format fails to parse.
+    fn compile_transcript(&self, py: Python<'_>, request: Py<PyAny>) -> PyResult<Py<PyAny>> {
+        let input: TranscriptCompileInput =
+            python_to_serde!(py, &request, "compile_transcript request");
+        let (request, segmentation) = build_transcript_compile_request(input).map_err(to_py_err)?;
+        let compiled: CompiledContext = py.detach(|| {
+            self.svc
+                .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+                .map_err(to_py_err)
+        })?;
+        let out = PyDict::new(py);
+        let context = serde_to_python!(py, &compiled, "compiled context");
+        let report = serde_to_python!(py, &segmentation, "segmentation report");
+        out.set_item(PyString::intern(py, "context"), context)?;
+        out.set_item(PyString::intern(py, "segmentation"), report)?;
+        Ok(out.into())
     }
 
     /// Suggest a starting `token_budget` for
