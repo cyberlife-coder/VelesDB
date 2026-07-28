@@ -49,6 +49,32 @@ def test_why_returns_the_connected_subgraph(mem):
     assert any(e["relation"] == "decided_in" for e in why["edges"])
 
 
+# --- entity -----------------------------------------------------------------
+# The read path for questions ABOUT a named thing. Entity hubs are only ever
+# created by extraction (remember_extracted), which needs a running Ollama, so
+# what is exercised offline is the miss contract — the first one a caller hits,
+# and the one that must never raise.
+
+
+def test_entity_unknown_name_reports_a_miss_and_echoes_the_canonical_query(mem):
+    profile = mem.entity("  Alex Martin  ")
+    assert profile["found"] is False
+    assert profile["id"] == 0
+    # A miss carries no name of its own: the query is echoed canonicalized so
+    # several lookups can be paired with their question.
+    assert profile["name"] == "alex martin"
+    assert profile["attributes"] == {}
+    assert profile["relations"] == []
+
+
+def test_entity_does_not_surface_a_mentioning_sentence(mem):
+    # A remembered sentence mentioning a name creates NO entity hub — that is
+    # the whole distinction between recall (sentences) and entity (things).
+    mem.remember("Alex Martin shipped the parking_lot migration")
+    assert mem.recall("Alex Martin", k=5), "recall does find the sentence"
+    assert mem.entity("Alex Martin")["found"] is False
+
+
 def test_forget_removes_a_memory(mem):
     fid = mem.remember("ephemeral note about France")
     assert mem.forget(fid) is True

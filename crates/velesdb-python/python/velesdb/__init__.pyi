@@ -2515,6 +2515,30 @@ class MemoryService:
         """
         ...
 
+    def entity(self, name: str) -> Dict[str, Any]:
+        """Everything the memory graph knows about a NAMED ENTITY.
+
+        Answers a question *about* a thing ("how old is X", "who is X's
+        father") rather than about the sentences mentioning it, which is all
+        ``recall`` can return: entity hubs are deliberately invisible to
+        ``recall``, so without this the attributes ``remember_extracted``
+        builds would be unreachable.
+
+        Args:
+            name: Entity name, matched case-insensitively (the id is
+                content-addressed, so it is stable across sessions).
+
+        Returns:
+            ``{"found": bool, "id": int, "name": str,
+               "attributes": Dict[str, Any],
+               "relations": [{"predicate": str, "target_id": int,
+                              "target": str}, ...]}``.
+            ``found`` is ``False`` when nothing has ever mentioned that name;
+            ``name`` still echoes the query in its canonical (trimmed,
+            lowercased) form, so several lookups can be told apart.
+        """
+        ...
+
     def remember_extracted(
         self,
         text: str,

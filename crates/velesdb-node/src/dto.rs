@@ -6,7 +6,9 @@
 
 use napi_derive::napi;
 use serde_json::Value;
-use velesdb_memory::{Explanation, MemoryEdge, MemoryNode, Recollection};
+use velesdb_memory::{
+    EntityProfile, EntityRelation, Explanation, MemoryEdge, MemoryNode, Recollection,
+};
 
 use crate::convert::id_to_string;
 
@@ -144,6 +146,74 @@ impl From<Explanation> for ExplanationJs {
         Self {
             nodes: e.nodes.into_iter().map(MemoryNodeJs::from).collect(),
             edges: e.edges.into_iter().map(MemoryEdgeJs::from).collect(),
+        }
+    }
+}
+
+/// One typed edge leaving an entity (output of `entity`).
+#[napi(object)]
+pub struct EntityRelationJs {
+    /// The edge label the passage stated, e.g. `"father_of"`.
+    pub predicate: String,
+    /// Decimal-string id of the entity (or fact) on the far end.
+    pub target_id: String,
+    /// Stored content of the far end — for an entity hub, `Entity: <name>`.
+    pub target: String,
+}
+
+impl From<EntityRelation> for EntityRelationJs {
+    fn from(r: EntityRelation) -> Self {
+        Self {
+            predicate: r.predicate,
+            target_id: id_to_string(r.target_id),
+            target: r.target,
+        }
+    }
+}
+
+/// Everything the auto-built graph knows about one named entity (output of
+/// `entity`). `found` separates "known entity, no attributes yet" from
+/// "nothing has ever mentioned this name" — on a miss the other fields carry
+/// their empty values and `name` still echoes the canonicalized query, so a
+/// caller running several lookups can pair each answer with its question.
+#[napi(object)]
+pub struct EntityProfileJs {
+    /// Whether an entity is known under that name at all.
+    pub found: bool,
+    /// Decimal-string, content-addressed id of the entity (`"0"` on a miss).
+    pub id: String,
+    /// Canonical (trimmed, lowercased) entity name — filled in hit or miss.
+    pub name: String,
+    /// Attributes learned about this entity, reserved keys stripped.
+    pub attributes: Value,
+    /// Typed edges leaving this entity (`mentions` scaffolding excluded).
+    pub relations: Vec<EntityRelationJs>,
+}
+
+impl EntityProfileJs {
+    /// Wire form of a lookup for `queried`, hit or miss — mirroring the MCP
+    /// `entity` tool's own `EntityProfileDto::from_lookup`, including the
+    /// canonicalized name echoed back on a miss.
+    pub fn from_lookup(queried: &str, profile: Option<EntityProfile>) -> Self {
+        let Some(profile) = profile else {
+            return Self {
+                found: false,
+                id: id_to_string(0),
+                name: velesdb_memory::service::canonical_entity_name(queried),
+                attributes: Value::Object(serde_json::Map::new()),
+                relations: Vec::new(),
+            };
+        };
+        Self {
+            found: true,
+            id: id_to_string(profile.id),
+            name: profile.name,
+            attributes: Value::Object(profile.attributes),
+            relations: profile
+                .relations
+                .into_iter()
+                .map(EntityRelationJs::from)
+                .collect(),
         }
     }
 }

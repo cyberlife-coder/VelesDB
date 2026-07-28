@@ -447,3 +447,150 @@ fn test_inner_explain_compilation_returns_the_matching_decision() {
         "explain_compilation must not itself count as a new compile event"
     );
 }
+
+// --- entity (binding parity, issue: `entity` was missing from all three
+// bindings) -----------------------------------------------------------------
+//
+// `entity()` itself returns a `JsValue` and cannot be called natively (see
+// the module docs), so what is provable here is everything up to that last
+// marshalling step: the `svc.inner.entity_profile` read and the pure-Rust
+// `EntityProfileOut::from_lookup` that shapes the response.
+
+/// A hand-written [`Extractor`] standing in for the generative backend this
+/// binding does not ship — exactly the shape the documented JS-provided
+/// extractor callback would take. It is what lets the *hit* path be tested
+/// at all: entity hubs are only ever created by extraction.
+struct StubExtractor {
+    extraction: velesdb_memory::Extraction,
+}
+
+impl velesdb_memory::Extractor for StubExtractor {
+    fn extract(
+        &self,
+        _text: &str,
+    ) -> Result<Vec<velesdb_memory::ExtractedFact>, velesdb_memory::ExtractError> {
+        Ok(self.extraction.facts.clone())
+    }
+
+    fn extract_graph(
+        &self,
+        _text: &str,
+    ) -> Result<velesdb_memory::Extraction, velesdb_memory::ExtractError> {
+        Ok(self.extraction.clone())
+    }
+}
+
+#[test]
+fn test_entity_lookup_shapes_a_hit_with_attributes_and_relations() {
+    let svc = WasmMemoryService::new(4);
+    let extractor = StubExtractor {
+        extraction: velesdb_memory::Extraction {
+            facts: vec![velesdb_memory::ExtractedFact {
+                text: "Alex Martin is 15".to_owned(),
+                entities: vec!["alex martin".to_owned()],
+            }],
+            relations: vec![velesdb_memory::ExtractedRelation {
+                subject: "alex martin".to_owned(),
+                predicate: "child of".to_owned(),
+                object: "robin martin".to_owned(),
+            }],
+            attributes: vec![velesdb_memory::ExtractedAttribute {
+                entity: "alex martin".to_owned(),
+                key: "age".to_owned(),
+                value: serde_json::json!(15),
+            }],
+        },
+    };
+    svc.inner
+        .remember_extracted("Alex Martin is 15", &extractor, None)
+        .expect("stub extraction must store the passage");
+
+    // Mixed case on purpose: the lookup is canonicalized, like the MCP tool's.
+    let profile = svc
+        .inner
+        .entity_profile("Alex Martin")
+        .expect("entity_profile must succeed");
+    let out = EntityProfileOut::from_lookup("Alex Martin", profile);
+
+    assert!(out.found, "the entity was just extracted");
+    assert_eq!(out.name, "alex martin", "the name comes back canonicalized");
+    assert!(
+        out.id.parse::<u64>().is_ok_and(|id| id != 0),
+        "a hit carries a real, decimal-string id, got {:?}",
+        out.id
+    );
+    assert_eq!(
+        out.attributes.get("age"),
+        Some(&serde_json::json!(15)),
+        "an attribute keeps its JSON type — a number stays a number"
+    );
+    assert!(
+        out.relations
+            .iter()
+            .any(|r| r.predicate == "child of" && r.target.contains("robin martin")),
+        "the typed edge leaving the entity must be reported, got {:?}",
+        out.relations
+            .iter()
+            .map(|r| (&r.predicate, &r.target))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        out.relations
+            .iter()
+            .all(|r| r.target_id.parse::<u64>().is_ok()),
+        "every target id crosses as a decimal string (ids exceed 2^53)"
+    );
+}
+
+#[test]
+fn test_entity_lookup_on_an_unknown_name_reports_a_miss_and_echoes_the_query() {
+    let svc = WasmMemoryService::new(4);
+    let profile = svc
+        .inner
+        .entity_profile("  Nobody Here  ")
+        .expect("a miss is not an error");
+    let out = EntityProfileOut::from_lookup("  Nobody Here  ", profile);
+
+    assert!(!out.found);
+    assert_eq!(out.id, "0", "a miss carries the sentinel id as a string");
+    assert_eq!(
+        out.name, "nobody here",
+        "a miss still echoes the queried name canonicalized, so several \
+         lookups can be paired with their question"
+    );
+    assert!(out.relations.is_empty());
+    assert_eq!(out.attributes, serde_json::json!({}));
+}
+
+#[test]
+fn test_entity_serializes_to_the_documented_camel_case_wire_shape() {
+    // The JsValue step is untestable natively, but the `Serialize` impl the
+    // wrapper feeds to `to_js` is not — and it is what fixes the published
+    // field names (`targetId`, not `target_id`).
+    let out = EntityProfileOut {
+        found: true,
+        id: "12297829382473034410".to_owned(),
+        name: "alex martin".to_owned(),
+        attributes: serde_json::json!({ "age": 15 }),
+        relations: vec![EntityRelationOut {
+            predicate: "child of".to_owned(),
+            target_id: "42".to_owned(),
+            target: "Entity: robin martin".to_owned(),
+        }],
+    };
+    let wire = serde_json::to_value(&out).expect("EntityProfileOut is serializable");
+    assert_eq!(
+        wire,
+        serde_json::json!({
+            "found": true,
+            "id": "12297829382473034410",
+            "name": "alex martin",
+            "attributes": { "age": 15 },
+            "relations": [{
+                "predicate": "child of",
+                "targetId": "42",
+                "target": "Entity: robin martin"
+            }]
+        })
+    );
+}

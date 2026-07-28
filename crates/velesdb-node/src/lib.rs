@@ -1,6 +1,6 @@
 //! Node.js (napi-rs) binding for the `velesdb-memory` `MemoryService` — the
 //! agent-memory wedge: `remember` / `recall` / `recallWhere` / `relate` /
-//! `forget` / `why` / `feedback` / `rememberExtracted` / `compileContext` /
+//! `forget` / `why` / `entity` / `feedback` / `rememberExtracted` / `compileContext` /
 //! `compileTranscript` / `contextSavings` / `explainCompilation` /
 //! `retrieveContextSource` / `saveWorkingContext` / `loadWorkingContext` /
 //! `listWorkingContexts`.
@@ -54,8 +54,8 @@ use velesdb_memory::{
 };
 
 use crate::dto::{
-    ColumnFilterJs, CompiledContextJs, DatedRecallJs, ExplanationJs, FusionOptionsJs, LinkJs,
-    RecollectionJs,
+    ColumnFilterJs, CompiledContextJs, DatedRecallJs, EntityProfileJs, ExplanationJs,
+    FusionOptionsJs, LinkJs, RecollectionJs,
 };
 use crate::error::{invalid_input, to_napi_err, CODE_INTERNAL};
 use crate::tasks::{Job, JsonOut};
@@ -311,6 +311,27 @@ impl MemoryStore {
             svc.why(&decision, max_hops, filter.as_ref())
                 .map(ExplanationJs::from)
                 .map_err(to_napi_err)
+        }))
+    }
+
+    /// Look up everything the memory graph knows about a NAMED ENTITY (a
+    /// person, a place, an organisation): the attributes merged onto its hub
+    /// and the typed edges leaving it. Use it for a question ABOUT a thing
+    /// ("how old is X", "who is X's father") rather than about the sentences
+    /// mentioning it, which is all [`recall`](Self::recall) can return —
+    /// entity hubs are deliberately invisible to recall, so without this the
+    /// attributes `rememberExtracted` builds are unreachable.
+    ///
+    /// `name` is matched case-insensitively (the id is content-addressed, so
+    /// it is stable across sessions). Resolves to `{found, id, name,
+    /// attributes, relations}`; `found: false` means nothing has ever
+    /// mentioned that name, and `name` still echoes the canonicalized query.
+    #[napi(ts_return_type = "Promise<EntityProfileJs>")]
+    pub fn entity(&self, name: String) -> AsyncTask<Job<EntityProfileJs>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let profile = svc.entity_profile(&name).map_err(to_napi_err)?;
+            Ok(EntityProfileJs::from_lookup(&name, profile))
         }))
     }
 

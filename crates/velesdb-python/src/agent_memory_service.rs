@@ -16,10 +16,12 @@ use velesdb_memory::context::{
     CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextDecision,
     ContextSavings, ContextSource, WorkingContext,
 };
+use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
-    format_dated_context, limits, ColumnFilter, ColumnOp, DynEmbedder, ErrorCategory, Explanation,
-    FusionOptions, HashEmbedder, Link, MemoryError, MemoryService, Metadata, OllamaEmbedder,
-    OllamaExtractor, Recollection, DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    format_dated_context, limits, ColumnFilter, ColumnOp, DynEmbedder, EntityProfile,
+    ErrorCategory, Explanation, FusionOptions, HashEmbedder, Link, MemoryError, MemoryService,
+    Metadata, OllamaEmbedder, OllamaExtractor, Recollection, DEFAULT_DIMENSION,
+    DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::collection::query::convert_params;
@@ -154,6 +156,49 @@ fn explanation_to_dict(py: Python<'_>, e: &Explanation) -> PyResult<Py<PyAny>> {
     out.set_item(PyString::intern(py, "nodes"), nodes)?;
     out.set_item(PyString::intern(py, "edges"), edges)?;
     Ok(out.into())
+}
+
+/// An [`EntityProfile`] lookup as `{found, id, name, attributes, relations}`,
+/// where each relation is `{predicate, target_id, target}`.
+///
+/// Takes the *queried* name, not just the outcome, because a miss carries no
+/// name of its own: echoing the query back through
+/// [`canonical_entity_name`] — the very function the service keys hubs by —
+/// lets a caller running several lookups pair each answer with its question
+/// (mirrors the MCP `entity` tool's `from_lookup`).
+/// Built as a `serde_json::Value` and converted once by [`json_to_python`],
+/// rather than field-by-field: that converter already renders a `u64` past
+/// `i64::MAX` as an exact Python int (an entity id is a content hash, so it
+/// routinely is one), and going through it keeps this shaping free of the
+/// per-field fallible calls the graph-shaped helpers above still carry.
+fn entity_profile_to_value(queried: &str, profile: Option<EntityProfile>) -> serde_json::Value {
+    let Some(profile) = profile else {
+        return serde_json::json!({
+            "found": false,
+            "id": 0,
+            "name": canonical_entity_name(queried),
+            "attributes": {},
+            "relations": [],
+        });
+    };
+    let relations: Vec<serde_json::Value> = profile
+        .relations
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "predicate": r.predicate,
+                "target_id": r.target_id,
+                "target": r.target,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "found": true,
+        "id": profile.id,
+        "name": profile.name,
+        "attributes": serde_json::Value::Object(profile.attributes),
+        "relations": relations,
+    })
 }
 
 /// Build [`FusionOptions`] from an optional Python `{hops?, graph_boost?, pool?}`
@@ -396,6 +441,29 @@ impl PyMemoryService {
                 .map_err(to_py_err)
         })?;
         explanation_to_dict(py, &explanation)
+    }
+
+    /// Look up everything the memory graph knows about a NAMED ENTITY (a
+    /// person, a place, an organisation): the attributes merged onto its hub
+    /// and the typed edges leaving it. Answers a question ABOUT a thing
+    /// ("how old is X", "who is X's father") rather than about the sentences
+    /// mentioning it, which is all `recall` can return — entity hubs are
+    /// deliberately invisible to `recall`, so without this the attributes
+    /// `remember_extracted` builds would be unreachable.
+    ///
+    /// Args:
+    ///     name: matched case-insensitively (the id is content-addressed, so
+    ///         it is stable across sessions).
+    ///
+    /// Returns:
+    ///     `{found, id, name, attributes, relations}`, each relation being
+    ///     `{predicate, target_id, target}`. `found` is `False` when nothing
+    ///     has ever mentioned that name; `name` still echoes the query in its
+    ///     canonical (trimmed, lowercased) form, so several lookups can be
+    ///     told apart.
+    fn entity(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
+        let profile = py.detach(|| self.svc.entity_profile(name).map_err(to_py_err))?;
+        Ok(json_to_python(py, &entity_profile_to_value(name, profile)))
     }
 
     /// Extract atomic facts from raw `text` with a local Ollama model and store

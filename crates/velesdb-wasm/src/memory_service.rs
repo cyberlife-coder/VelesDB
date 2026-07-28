@@ -1,6 +1,6 @@
 //! WASM binding for `velesdb-memory`'s agent-memory wedge — `remember` /
 //! `recall` / `recallWhere` / `recallFused` / `relate` / `forget` / `why` /
-//! `compileContext` / `compileTranscript` / `explainCompilation` /
+//! `entity` / `compileContext` / `compileTranscript` / `explainCompilation` /
 //! `contextSavings` / `suggestBudget` / `retrieveContextSource` /
 //! `saveWorkingContext` / `loadWorkingContext` / `listWorkingContexts`,
 //! backed entirely in-memory ([`WasmStore`]): no filesystem, no network, no
@@ -50,9 +50,10 @@ use velesdb_memory::context::{
     CompileRequest, ContextCompiler, SegmentFormat, SegmentKind, SegmentationPolicy,
     WorkingContext, WorkingContextSession,
 };
+use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
-    ColumnFilter, ColumnOp, Explanation, FusionOptions, HashEmbedder, MemoryEdge, MemoryError,
-    MemoryNode, MemoryService, Metadata, Recollection,
+    ColumnFilter, ColumnOp, EntityProfile, EntityRelation, Explanation, FusionOptions,
+    HashEmbedder, MemoryEdge, MemoryError, MemoryNode, MemoryService, Metadata, Recollection,
 };
 
 use crate::memory_store::WasmStore;
@@ -288,6 +289,69 @@ impl From<MemoryEdge> for MemoryEdgeOut {
             from: id_to_string(e.from),
             to: id_to_string(e.to),
             relation: e.relation,
+        }
+    }
+}
+
+/// One typed edge leaving an entity (output of
+/// [`WasmMemoryService::entity`]). `targetId` crosses as a decimal string
+/// for the same reason every other id here does.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EntityRelationOut {
+    predicate: String,
+    target_id: String,
+    target: String,
+}
+
+impl From<EntityRelation> for EntityRelationOut {
+    fn from(r: EntityRelation) -> Self {
+        Self {
+            predicate: r.predicate,
+            target_id: id_to_string(r.target_id),
+            target: r.target,
+        }
+    }
+}
+
+/// Everything the auto-built graph knows about one named entity (output of
+/// [`WasmMemoryService::entity`]). `found` separates "known entity, no
+/// attributes yet" from "nothing has ever mentioned this name"; on a miss
+/// the other fields carry their empty values and `name` still echoes the
+/// canonicalized query, so several lookups can be told apart.
+#[derive(Serialize)]
+struct EntityProfileOut {
+    found: bool,
+    id: String,
+    name: String,
+    attributes: Value,
+    relations: Vec<EntityRelationOut>,
+}
+
+impl EntityProfileOut {
+    /// Wire form of a lookup for `queried`, hit or miss — mirroring the MCP
+    /// `entity` tool's own `EntityProfileDto::from_lookup`, canonicalized
+    /// name echo included.
+    fn from_lookup(queried: &str, profile: Option<EntityProfile>) -> Self {
+        let Some(profile) = profile else {
+            return Self {
+                found: false,
+                id: id_to_string(0),
+                name: canonical_entity_name(queried),
+                attributes: Value::Object(serde_json::Map::new()),
+                relations: Vec::new(),
+            };
+        };
+        Self {
+            found: true,
+            id: id_to_string(profile.id),
+            name: profile.name,
+            attributes: Value::Object(profile.attributes),
+            relations: profile
+                .relations
+                .into_iter()
+                .map(EntityRelationOut::from)
+                .collect(),
         }
     }
 }
@@ -633,6 +697,35 @@ impl WasmMemoryService {
             .why(decision, max_hops, filter.as_ref())
             .map_err(to_js_err)?;
         to_js(&ExplanationOut::from(explanation))
+    }
+
+    /// Look up everything the memory graph knows about a NAMED ENTITY (a
+    /// person, a place, an organisation): the attributes merged onto its hub
+    /// and the typed edges leaving it. Answers a question ABOUT a thing
+    /// ("how old is X", "who is X's father") rather than about the sentences
+    /// mentioning it, which is all [`Self::recall`] can return — entity hubs
+    /// are deliberately invisible to recall, so without this the attributes
+    /// the graph carries would be unreachable.
+    ///
+    /// `name` is matched case-insensitively (the id is content-addressed, so
+    /// it is stable). Returns `{found, id, name, attributes, relations}`,
+    /// each relation `{predicate, targetId, target}`. `found: false` means
+    /// nothing has ever mentioned that name; `name` still echoes the query
+    /// canonicalized, so several lookups can be told apart.
+    ///
+    /// **Read side of a graph this binding cannot yet write.** Entity hubs
+    /// are created exclusively by extraction (`remember_extracted`, or a
+    /// `remember` on a service carrying an autograph extractor), and this
+    /// binding deliberately exposes neither — extraction needs a generative
+    /// model (see the module docs). So today `entity` here answers
+    /// `found: false` for every name, and it exists so the read side is
+    /// already correct and uniform with Node/Python the day the documented
+    /// JS-provided extractor callback lands. It never lies: a miss is
+    /// reported as a miss.
+    #[wasm_bindgen(js_name = entity)]
+    pub fn entity(&self, name: &str) -> Result<JsValue, JsValue> {
+        let profile = self.inner.entity_profile(name).map_err(to_js_err)?;
+        to_js(&EntityProfileOut::from_lookup(name, profile))
     }
 
     /// Compile context fragments into a token-budgeted, provenance-audited
