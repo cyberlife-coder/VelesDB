@@ -150,12 +150,29 @@ impl LogPayloadStorage {
         wal_len: u64,
     ) -> io::Result<(FxHashMap<u64, u64>, u64)> {
         let snapshot_path = dir.join("payloads.snapshot");
-        if let Ok((snapshot_index, snapshot_wal_pos)) = snapshot::load_snapshot(&snapshot_path) {
-            let index = Self::replay_wal_from(log_path, snapshot_index, snapshot_wal_pos, wal_len)?;
-            Ok((index, snapshot_wal_pos))
-        } else {
-            let index = Self::replay_wal_from(log_path, FxHashMap::default(), 0, wal_len)?;
-            Ok((index, 0))
+        match snapshot::load_snapshot(&snapshot_path) {
+            Ok((snapshot_index, snapshot_wal_pos)) => {
+                let index =
+                    Self::replay_wal_from(log_path, snapshot_index, snapshot_wal_pos, wal_len)?;
+                Ok((index, snapshot_wal_pos))
+            }
+            Err(e) => {
+                // `NotFound` is the expected cold-start case (no snapshot yet).
+                // Any other error kind means a snapshot existed but failed to
+                // load (corrupt header, truncated file, bad CRC) — surface it
+                // so operators can see recovery fell back to a full WAL
+                // replay instead of the fast path, even though the fallback
+                // itself is correct.
+                if e.kind() != io::ErrorKind::NotFound {
+                    tracing::warn!(
+                        error = %e,
+                        path = %snapshot_path.display(),
+                        "payload snapshot failed to load, falling back to full WAL replay"
+                    );
+                }
+                let index = Self::replay_wal_from(log_path, FxHashMap::default(), 0, wal_len)?;
+                Ok((index, 0))
+            }
         }
     }
 
