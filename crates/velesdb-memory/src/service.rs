@@ -20,6 +20,7 @@ use crate::extract::{ExtractedAttribute, ExtractedRelation, Extractor};
 use crate::id;
 use crate::model::{
     ColumnFilter, EntityProfile, EntityRelation, Explanation, Link, MemoryNode, Recollection,
+    UnrelateOutcome,
 };
 #[cfg(feature = "persistence")]
 use crate::storage::NativeStore;
@@ -915,6 +916,61 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         self.ensure_exists(from)?;
         self.ensure_exists(to)?;
         self.store.relate(from, to, relation)
+    }
+
+    /// Remove the edge(s) `from -relation-> to`: [`Self::relate`]'s exact
+    /// undo (issue #1661), so a mistaken edge no longer costs the facts at
+    /// its endpoints. Neither the facts nor any entity hub are touched —
+    /// collecting an orphaned hub stays [`Self::forget`]'s job.
+    ///
+    /// Idempotent: an absent edge is `found: false`, not an error, so a
+    /// cleanup is replayable. It refuses exactly what `relate` refuses
+    /// (empty label, self-loop), and deliberately does NOT require the
+    /// endpoints to exist — the edge of a forgotten fact is already gone,
+    /// and reporting that as an error would break replay.
+    ///
+    /// Scope: the store does not distinguish an explicit edge from one the
+    /// autograph derived from a passage, so `unrelate` removes both alike.
+    /// To correct an autograph edge, prefer `forget` + `remember` of the
+    /// source fact — otherwise a later `remember` of the same passage can
+    /// rebuild the edge removed here.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError::InvalidRelation`] for a bad label,
+    /// [`MemoryError::SelfRelation`] if both endpoints are the same memory,
+    /// or a storage error if lookup or removal fails.
+    pub fn unrelate(
+        &self,
+        from: u64,
+        to: u64,
+        relation: &str,
+    ) -> Result<UnrelateOutcome, MemoryError> {
+        validate_relation(relation)?;
+        if from == to {
+            return Err(MemoryError::SelfRelation(from));
+        }
+        let removed = self.remove_matching_edges(from, to, relation)?;
+        Ok(UnrelateOutcome {
+            found: removed > 0,
+            removed,
+        })
+    }
+
+    /// [`Self::unrelate`]'s removal pass: resolve `from`'s outgoing edges and
+    /// delete every one matching `(to, relation)` by its id, counting them.
+    fn remove_matching_edges(
+        &self,
+        from: u64,
+        to: u64,
+        relation: &str,
+    ) -> Result<usize, MemoryError> {
+        let mut removed = 0usize;
+        for edge in self.store.relations(from)? {
+            if edge.to == to && edge.relation == relation && self.store.unrelate(edge.id)? {
+                removed += 1;
+            }
+        }
+        Ok(removed)
     }
 
     /// Forget (delete) the memory with `fact_id`. Returns whether a memory

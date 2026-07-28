@@ -653,6 +653,10 @@ macro_rules! delegate_untouched_store_methods {
             self.inner.relations(id)
         }
 
+        fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
+            self.inner.unrelate(edge_id)
+        }
+
         fn count(&self) -> usize {
             self.inner.count()
         }
