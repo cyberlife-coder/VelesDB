@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.4] — 2026-07-28
+
+### Fixed
+
+- **0.11.3 could not be packaged.** Its TTL fix reached for a
+  `store_with_metadata_and_ttl` method added to `velesdb-core` in the same
+  train. That compiles in the workspace, where core is resolved by path, but
+  `velesdb-memory` publishes independently against the *released* core — which
+  does not have it — so `cargo publish` failed to verify the tarball and
+  nothing reached crates.io or npm. The fix now uses only published core API:
+  the fact is stored with its metadata and **no expiry**, then `set_ttl_durable`
+  applies the expiry. Same guarantee — the fact cannot expire mid-write, since
+  it has no expiry until the last step — with no new core surface.
+
+  0.11.3 is **not usable**: its MCPB bundles reached the MCP registry before the
+  packaging step failed, but no crate or npm package was ever published. Use
+  0.11.4.
+
 ## [0.11.3] — 2026-07-28
 
 ### Fixed
