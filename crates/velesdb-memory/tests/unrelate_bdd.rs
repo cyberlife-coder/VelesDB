@@ -141,7 +141,8 @@ fn unrelate_also_removes_an_autograph_edge() {
     let (_dir, svc) = service();
     let ids = svc
         .remember_extracted("seed", &OneTopicExtractor, None)
-        .expect("remember_extracted");
+        .expect("remember_extracted")
+        .ids;
     let hub = svc
         .entity_profile("parser")
         .expect("entity_profile")
