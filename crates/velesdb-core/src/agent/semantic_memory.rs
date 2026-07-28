@@ -294,6 +294,37 @@ impl SemanticMemory {
         Ok(())
     }
 
+    /// Store a fact with BOTH structured metadata and a durable TTL, in one
+    /// write.
+    ///
+    /// Composing `store_with_ttl` then `update_metadata` looks equivalent but
+    /// is not: the fact is already live and expiring between the two calls, so
+    /// a short TTL can lapse in the gap and the metadata write then fails with
+    /// `NotFound(... is expired ...)` — the caller sees a valid write error
+    /// out. `store_internal` has always accepted both; this exposes that.
+    ///
+    /// `ttl_seconds == 0` deletes, exactly like [`Self::store_with_ttl`].
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::store`].
+    pub fn store_with_metadata_and_ttl(
+        &self,
+        id: u64,
+        content: &str,
+        embedding: &[f32],
+        metadata: &Map<String, Value>,
+        ttl_seconds: u64,
+    ) -> Result<(), AgentMemoryError> {
+        if ttl_seconds == 0 {
+            memory_helpers::validate_dimension(self.dimension, embedding.len())?;
+            return self.delete(id);
+        }
+        let expires_at = MemoryTtl::now().saturating_add(ttl_seconds);
+        self.store_internal(id, content, embedding, Some(metadata), Some(expires_at))?;
+        self.ttl.set_expiry(MemoryKind::Semantic, id, expires_at);
+        Ok(())
+    }
+
     /// Durably sets (or refreshes) the TTL of an existing fact.
     ///
     /// Unlike `AgentMemory::set_semantic_ttl` (in-memory map only, lost on
