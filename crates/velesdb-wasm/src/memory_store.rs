@@ -303,11 +303,16 @@ impl MemoryStore for WasmStore {
             // graph-reached fact relative to the native ranking.
             .filter(|e| e.source == id && inner.live_fact(e.target).is_some())
             .map(|e| MemoryEdge {
+                id: e.id,
                 from: e.source,
                 to: e.target,
                 relation: e.label.clone(),
             })
             .collect())
+    }
+
+    fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
+        Ok(self.inner.borrow_mut().graph.delete_edge_by_id(edge_id))
     }
 
     fn count(&self) -> usize {

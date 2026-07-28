@@ -43,7 +43,8 @@ use dto::{
     EntityParams, EntityProfileDto, ExplanationDto, FeedbackParams, FeedbackResult, ForgetParams,
     ForgetResult, RecallFusedParams, RecallFusedResult, RecallParams, RecallResult,
     RecallWhereParams, RelateParams, RelateResult, RememberExtractedParams,
-    RememberExtractedResult, RememberParams, RememberResult, WhyParams,
+    RememberExtractedResult, RememberParams, RememberResult, UnrelateParams, UnrelateResult,
+    WhyParams,
 };
 
 /// Advertised-schema counterpart of [`crate::model::deserialize_id`]: `keys`
@@ -347,6 +348,31 @@ impl McpServer {
     }
 
     #[tool(
+        name = "unrelate",
+        // Sans declaration explicite, rmcp derive un schema de sortie qui
+        // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
+        // or les SDK MCP valident structuredContent contre ce schema.
+        output_schema = crate::schema::wire_safe_output_schema::<UnrelateResult>(),
+        description = "Remove the typed link `from` -relation-> `to` — `relate`'s exact undo, so a mistaken edge no longer costs the facts at its endpoints. Only the edge is removed: the two memories, and any entity, are untouched. Idempotent: removing an absent edge answers `found: false` instead of erroring, so a cleanup can be replayed safely; `removed` counts the edges actually deleted. It refuses exactly what `relate` refuses (empty relation, `from` == `to`). Scope: the store does not distinguish a link you created with `relate` from one auto-derived from a passage, so `unrelate` removes both alike — to correct an auto-derived link, prefer `forget` + `remember` of the source fact, otherwise remembering the same passage again can rebuild the edge removed here. Same id wire contract as `relate`: pass ids as decimal strings (`id_str`) — a JSON-number id above 2^53 loses precision on float-lossy clients.",
+        input_schema = id_wire_input_schema::<UnrelateParams>(&["from", "to"])
+    )]
+    async fn unrelate(
+        &self,
+        Parameters(params): Parameters<UnrelateParams>,
+    ) -> Result<Json<UnrelateResult>, ErrorData> {
+        let service = Arc::clone(&self.service);
+        let UnrelateParams { from, to, relation } = params;
+        let outcome = tokio::task::spawn_blocking(move || service.unrelate(from, to, &relation))
+            .await
+            .map_err(join_error)?
+            .map_err(to_error)?;
+        Ok(Json(UnrelateResult {
+            found: outcome.found,
+            removed: outcome.removed,
+        }))
+    }
+
+    #[tool(
         name = "forget",
         // Sans declaration explicite, rmcp derive un schema de sortie qui
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
@@ -477,7 +503,7 @@ impl McpServer {
 /// "context")]` variant since the context-compiler tools only exist in that
 /// build.
 #[cfg(feature = "context")]
-const SERVER_INSTRUCTIONS: &str = "Local-first memory and context engineering for AI agents, three tool families: (1) durable memory — remember, recall, recall_fused, recall_where, relate, forget, feedback, and why — explainable (why returns the evidence trail) and self-improving (feedback re-ranks future recall); (2) the deterministic context compiler — compile_context, compile_transcript, explain_compilation, retrieve_context_source, context_savings, and suggest_budget — token-budgets and audits prompt context with no LLM call, ever; (3) cross-session working-context resumption — save_working_context, load_working_context, and list_working_contexts. compile_context/explain_compilation fragments accept a `path` instead of inline `content` to ingest a file by reference — disabled unless the server is started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories (compile_transcript's own `path` field uses the same allowlist). compile_transcript is a one-call shortcut over compile_context for a raw agent-session transcript: it segments plain or JSONL text into turns before compiling, so an agent no longer needs to segment a transcript by hand. Nothing ever leaves the machine.";
+const SERVER_INSTRUCTIONS: &str = "Local-first memory and context engineering for AI agents, three tool families: (1) durable memory — remember, recall, recall_fused, recall_where, relate, unrelate, forget, feedback, and why — explainable (why returns the evidence trail) and self-improving (feedback re-ranks future recall); (2) the deterministic context compiler — compile_context, compile_transcript, explain_compilation, retrieve_context_source, context_savings, and suggest_budget — token-budgets and audits prompt context with no LLM call, ever; (3) cross-session working-context resumption — save_working_context, load_working_context, and list_working_contexts. compile_context/explain_compilation fragments accept a `path` instead of inline `content` to ingest a file by reference — disabled unless the server is started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories (compile_transcript's own `path` field uses the same allowlist). compile_transcript is a one-call shortcut over compile_context for a raw agent-session transcript: it segments plain or JSONL text into turns before compiling, so an agent no longer needs to segment a transcript by hand. Nothing ever leaves the machine.";
 
 #[cfg(not(feature = "context"))]
 const SERVER_INSTRUCTIONS: &str = "Local-first memory for AI agents: remember facts, recall them \

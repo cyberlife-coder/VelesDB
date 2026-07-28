@@ -255,12 +255,28 @@ pub struct MemoryNode {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct MemoryEdge {
+    /// Stable id of the edge itself — what
+    /// [`MemoryStore::unrelate`](crate::storage::MemoryStore::unrelate)
+    /// removes by.
+    pub id: u64,
     /// Source memory id.
     pub from: u64,
     /// Target memory id.
     pub to: u64,
     /// Relationship label.
     pub relation: String,
+}
+
+/// Outcome of [`MemoryService::unrelate`](crate::service::MemoryService::unrelate):
+/// idempotent by design, so an absent edge is a `found: false` answer, not an
+/// error — a cleanup must be replayable.
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub struct UnrelateOutcome {
+    /// Whether at least one matching edge existed and was removed.
+    pub found: bool,
+    /// How many matching edges were removed (parallel duplicates included).
+    pub removed: usize,
 }
 
 /// One typed edge leaving an entity, as reported by

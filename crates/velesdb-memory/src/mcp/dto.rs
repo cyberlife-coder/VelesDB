@@ -241,6 +241,37 @@ pub(super) struct RelateResult {
     pub(super) edge_id_str: String,
 }
 
+/// Parameters for the `unrelate` tool — `relate`'s exact undo, so the two
+/// share the id wire contract (number or decimal string, issue #1468).
+#[derive(Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct UnrelateParams {
+    /// Source memory id of the link to remove — the side it points FROM.
+    /// Accepts a JSON number or a decimal string: always relay a previous
+    /// response's `id_str` here (issue #1468).
+    #[serde(deserialize_with = "deserialize_id")]
+    pub(super) from: u64,
+    /// Target memory id of the link to remove — the side it points TO. Same
+    /// string-or-number contract as `from`.
+    #[serde(deserialize_with = "deserialize_id")]
+    pub(super) to: u64,
+    /// Directional relationship label of the link to remove, exactly as it
+    /// was given to `relate`.
+    pub(super) relation: String,
+}
+
+/// Result of the `unrelate` tool — the service's
+/// [`UnrelateOutcome`](crate::model::UnrelateOutcome), flattened to the wire.
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct UnrelateResult {
+    /// Whether at least one matching edge existed and was removed. `false`
+    /// means no such edge — a replayed cleanup or a typo, not an error.
+    pub(super) found: bool,
+    /// How many matching edges were removed.
+    pub(super) removed: usize,
+}
+
 /// Parameters for the `forget` tool.
 #[derive(Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]

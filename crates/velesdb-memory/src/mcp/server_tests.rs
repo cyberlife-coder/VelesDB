@@ -1202,3 +1202,100 @@ fn test_recall_fused_params_accept_stringified_scalars_and_objects() {
         Some("velesdb")
     );
 }
+
+// ---------------------------------------------------------------------------
+// unrelate (issue #1661) and entity relations_in
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn unrelate_tool_removes_the_edge_and_is_idempotent() {
+    let (_dir, srv) = server();
+    let Json(a) = srv
+        .remember(Parameters(RememberParams {
+            fact: DECISION.to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember a");
+    let Json(b) = srv
+        .remember(Parameters(RememberParams {
+            fact: "the cause behind the decision".to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember b");
+    srv.relate(Parameters(RelateParams {
+        from: a.id,
+        to: b.id,
+        relation: "caused_by".to_owned(),
+    }))
+    .await
+    .expect("relate");
+
+    let Json(res) = srv
+        .unrelate(Parameters(UnrelateParams {
+            from: a.id,
+            to: b.id,
+            relation: "caused_by".to_owned(),
+        }))
+        .await
+        .expect("unrelate");
+    assert!(res.found, "the edge existed");
+    assert_eq!(res.removed, 1);
+
+    let Json(res) = srv
+        .unrelate(Parameters(UnrelateParams {
+            from: a.id,
+            to: b.id,
+            relation: "caused_by".to_owned(),
+        }))
+        .await
+        .expect("a second unrelate must not error — cleanups are replayable");
+    assert!(!res.found, "already removed");
+    assert_eq!(res.removed, 0);
+
+    let (_ids, edge_count) = why_one_hop(&srv).await;
+    assert_eq!(edge_count, 0, "the edge must be gone from traversal");
+}
+
+#[tokio::test]
+async fn unrelate_refuses_a_self_loop_as_invalid_params() {
+    let (_dir, srv) = server();
+    let Json(a) = srv
+        .remember(Parameters(RememberParams {
+            fact: DECISION.to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember");
+    let err = srv
+        .unrelate(Parameters(UnrelateParams {
+            from: a.id,
+            to: a.id,
+            relation: "supports".to_owned(),
+        }))
+        .await
+        .map(|_| ())
+        .expect_err("a self-loop is refused exactly like relate's");
+    assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+}
+
+/// The wire contract shared with `relate` (#1468): ids arrive as JSON numbers
+/// or decimal strings alike.
+#[test]
+fn unrelate_params_accept_string_or_number_ids_on_the_wire() {
+    let params: UnrelateParams = serde_json::from_value(serde_json::json!({
+        "from": "18446744073709551615",
+        "to": 42,
+        "relation": "caused_by"
+    }))
+    .expect("string and number ids must both deserialize");
+    assert_eq!(params.from, u64::MAX);
+    assert_eq!(params.to, 42);
+}
