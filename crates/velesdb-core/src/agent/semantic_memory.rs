@@ -378,6 +378,27 @@ impl SemanticMemory {
         )
     }
 
+    /// Returns the incoming relations of a fact (edges pointing at it).
+    ///
+    /// The mirror of [`Self::relations`]: edges whose *source* is TTL-expired
+    /// are filtered out.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn incoming_relations(
+        &self,
+        id: u64,
+    ) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
+        memory_helpers::incoming_relations_of(
+            &self.db,
+            &self.collection_name,
+            id,
+            &self.ttl,
+            MemoryKind::Semantic,
+        )
+    }
+
     /// Removes a relation edge created by [`Self::relate`].
     ///
     /// Returns `true` when the edge existed and was removed.
