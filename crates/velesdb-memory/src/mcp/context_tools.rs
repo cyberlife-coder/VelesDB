@@ -606,7 +606,7 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = wire_safe_output_schema::<SaveWorkingContextResult>(),
-        description = "Persist this session's distilled working state (goal, active constraints, verified facts, open hypotheses, decisions, exact evidence, pending actions) under a project + session id — so a LATER session (a fresh agent run, a new conversation, a resumed process) can pick up exactly where this one left off instead of re-deriving context from scratch. Call this near the end of a session, or whenever the working state changes meaningfully. Saving again under the same project+session replaces the previous state (idempotent upsert). Serialized size is capped at 1 MiB. Returns the stored fact's id.",
+        description = "Persist this session's distilled working state (goal, active constraints, verified facts, open hypotheses, decisions, exact evidence, pending actions) under a project + session id — so a LATER session (a fresh agent run, a new conversation, a resumed process) can pick up exactly where this one left off instead of re-deriving context from scratch. Call this near the end of a session, or whenever the working state changes meaningfully. Saving again under the same project+session replaces the previous state (idempotent upsert) — so an entirely empty `working` is REFUSED rather than allowed to wipe what a previous save stored; fill at least one field. Serialized size is capped at 1 MiB. Returns the stored fact's id.",
         input_schema = wire_safe_input_schema::<SaveWorkingContextParams>()
     )]
     async fn save_working_context(

@@ -697,8 +697,15 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// BEFORE anything is written, so an oversized working context is never
     /// partially stored.
     ///
+    /// An entirely empty `working` ([`WorkingContext::is_empty`]) is refused.
+    /// Because the write is an upsert, saving one would replace — destroy —
+    /// the state a previous save stored under the same project and session,
+    /// and the one tool whose job is surviving a context loss must not be
+    /// able to cause one on a call that carries nothing (issue #1654).
+    ///
     /// # Errors
-    /// Returns [`MemoryError::WorkingContextCodec`] if serialization fails,
+    /// Returns [`MemoryError::EmptyWorkingContext`] if `working` records
+    /// nothing, [`MemoryError::WorkingContextCodec`] if serialization fails,
     /// [`MemoryError::ContextOverLimit`] if the serialized `working` exceeds
     /// [`crate::limits::MAX_FACT_BYTES`], or a storage/embedding error.
     pub fn save_working_context(
@@ -707,6 +714,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         session: &str,
         working: &WorkingContext,
     ) -> Result<u64, MemoryError> {
+        if working.is_empty() {
+            return Err(MemoryError::EmptyWorkingContext);
+        }
         let content = serde_json::to_string(working)
             .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))?;
         if content.len() > crate::limits::MAX_FACT_BYTES {
