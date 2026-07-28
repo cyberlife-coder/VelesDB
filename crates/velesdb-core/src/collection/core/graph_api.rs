@@ -673,6 +673,21 @@ impl Collection {
     // Graph traversal with TraversalConfig
     // -------------------------------------------------------------------------
 
+    /// Times a traversal and records its duration/result count on the edge
+    /// store's traversal metrics.
+    fn with_traversal_metrics(
+        &self,
+        traverse: impl FnOnce() -> Vec<TraversalResult>,
+    ) -> Vec<TraversalResult> {
+        let start = std::time::Instant::now();
+        let results = traverse();
+        self.graph
+            .edge_store
+            .metrics()
+            .record_traversal(start.elapsed(), results.len() as u64);
+        results
+    }
+
     /// BFS traversal using the core `concurrent_bfs_stream` iterator.
     ///
     /// Wraps [`Self::traverse_bfs_config_inner`] with traversal metrics timing.
@@ -682,13 +697,7 @@ impl Collection {
         source_id: u64,
         config: &TraversalConfig,
     ) -> Vec<TraversalResult> {
-        let start = std::time::Instant::now();
-        let results = self.traverse_bfs_config_inner(source_id, config);
-        self.graph
-            .edge_store
-            .metrics()
-            .record_traversal(start.elapsed(), results.len() as u64);
-        results
+        self.with_traversal_metrics(|| self.traverse_bfs_config_inner(source_id, config))
     }
 
     /// Inner BFS traversal without metrics (see [`Self::traverse_bfs_config`]).
@@ -741,13 +750,7 @@ impl Collection {
         source_id: u64,
         config: &TraversalConfig,
     ) -> Vec<TraversalResult> {
-        let start = std::time::Instant::now();
-        let results = self.traverse_dfs_config_inner(source_id, config);
-        self.graph
-            .edge_store
-            .metrics()
-            .record_traversal(start.elapsed(), results.len() as u64);
-        results
+        self.with_traversal_metrics(|| self.traverse_dfs_config_inner(source_id, config))
     }
 
     /// Inner DFS traversal without metrics (see [`Self::traverse_dfs_config`]).
