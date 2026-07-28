@@ -1130,6 +1130,12 @@ fn reject_oversized_metadata(metadata: Option<&Metadata>) -> Result<(), MemoryEr
 /// [`reject_zero_ttl`]). A compile policy's `source_ttl_seconds`, on the
 /// other hand, is a knob about a whole server, where `0` reading as "no
 /// policy" is the ordinary, unsurprising meaning.
+///
+/// Gated on `context`: since `remember` stopped calling it, the compile
+/// policy in `context::memory_bridge` is its only caller, and a build
+/// without that feature saw dead code — which `-D warnings` turns into a
+/// failed build, not a warning.
+#[cfg(feature = "context")]
 pub(crate) fn positive_ttl(ttl_seconds: Option<u64>) -> Option<u64> {
     ttl_seconds.filter(|&seconds| seconds > 0)
 }
