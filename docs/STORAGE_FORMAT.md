@@ -1,7 +1,7 @@
 # VelesDB Storage Format Specification
 
 **Version**: 1.0.0  
-Last updated: 2026-06-12 · Applies to: velesdb-core 4.1.0  
+Last updated: 2026-06-12 · Applies to: velesdb-core 4.2.0  
 **Status**: Stable
 
 ## Overview
