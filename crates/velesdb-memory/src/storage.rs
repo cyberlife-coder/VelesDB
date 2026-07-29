@@ -175,6 +175,13 @@ pub trait MemoryStore {
     /// Returns [`MemoryError`] if storage access fails.
     fn relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError>;
 
+    /// Remove the edge with `edge_id`. Returns `true` when it existed —
+    /// idempotent: removing an absent edge is `Ok(false)`, never an error.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if storage access fails.
+    fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError>;
+
     /// The total number of live (non-expired) tracked facts, including
     /// internal entity hubs — used as a corpus-size proxy for idf weighting.
     fn count(&self) -> usize;
@@ -351,11 +358,19 @@ impl MemoryStore for NativeStore {
             .relations(id)?
             .into_iter()
             .map(|edge| MemoryEdge {
+                id: edge.id(),
                 from: edge.source(),
                 to: edge.target(),
                 relation: edge.label().to_owned(),
             })
             .collect())
+    }
+
+    fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
+        self.memory
+            .semantic()
+            .unrelate(edge_id)
+            .map_err(MemoryError::from)
     }
 
     fn count(&self) -> usize {

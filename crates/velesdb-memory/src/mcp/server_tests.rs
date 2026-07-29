@@ -526,6 +526,7 @@ async fn recall_fused_folds_in_a_graph_reached_fact() {
             filter: None,
             hops: None,
             graph_boost: None,
+            pool: None,
             date_field: None,
         }))
         .await
@@ -565,6 +566,7 @@ async fn recall_fused_with_date_field_returns_a_dated_timeline() {
             filter: None,
             hops: None,
             graph_boost: None,
+            pool: None,
             date_field: Some("ts".to_owned()),
         }))
         .await
@@ -601,6 +603,7 @@ async fn recall_fused_without_date_field_omits_the_timeline() {
             filter: None,
             hops: None,
             graph_boost: None,
+            pool: None,
             date_field: None,
         }))
         .await
@@ -645,6 +648,7 @@ async fn recall_fused_survives_a_non_finite_graph_boost() {
             filter: None,
             hops: None,
             graph_boost: Some(f64::NAN),
+            pool: None,
             date_field: None,
         }))
         .await
@@ -659,6 +663,8 @@ async fn recall_fused_survives_a_non_finite_graph_boost() {
 async fn recall_fused_limit_is_capped_at_max() {
     let (_dir, srv) = server();
     // The call must succeed (capped, not rejected) even with an absurd limit.
+    // `pool` joins limit/hops here because it feeds the same oversampled
+    // vector search: uncapped, it is exactly the unbounded-scan risk they are.
     let Json(result) = srv
         .recall_fused(Parameters(RecallFusedParams {
             query: "anything".to_owned(),
@@ -666,10 +672,11 @@ async fn recall_fused_limit_is_capped_at_max() {
             filter: None,
             hops: Some(usize::MAX),
             graph_boost: None,
+            pool: Some(usize::MAX),
             date_field: None,
         }))
         .await
-        .expect("recall_fused with huge limit/hops must succeed (silently capped)");
+        .expect("recall_fused with huge limit/hops/pool must succeed (silently capped)");
     let _ = result;
 }
 
@@ -1190,15 +1197,114 @@ fn test_recall_fused_params_accept_stringified_scalars_and_objects() {
         "limit": "6",
         "hops": "2",
         "graph_boost": "0.15",
+        "pool": "128",
         "filter": "{\"project\": \"velesdb\"}"
     }))
     .expect("stringified scalar/object arguments must deserialize");
     assert_eq!(params.limit, Some(6));
     assert_eq!(params.hops, Some(2));
+    assert_eq!(params.pool, Some(128));
     assert!((params.graph_boost.unwrap() - 0.15).abs() < f64::EPSILON);
     let filter = params.filter.expect("filter must parse from a JSON string");
     assert_eq!(
         filter.get("project").and_then(|v| v.as_str()),
         Some("velesdb")
     );
+}
+
+// ---------------------------------------------------------------------------
+// unrelate (issue #1661) and entity relations_in
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn unrelate_tool_removes_the_edge_and_is_idempotent() {
+    let (_dir, srv) = server();
+    let Json(a) = srv
+        .remember(Parameters(RememberParams {
+            fact: DECISION.to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember a");
+    let Json(b) = srv
+        .remember(Parameters(RememberParams {
+            fact: "the cause behind the decision".to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember b");
+    srv.relate(Parameters(RelateParams {
+        from: a.id,
+        to: b.id,
+        relation: "caused_by".to_owned(),
+    }))
+    .await
+    .expect("relate");
+
+    let Json(res) = srv
+        .unrelate(Parameters(UnrelateParams {
+            from: a.id,
+            to: b.id,
+            relation: "caused_by".to_owned(),
+        }))
+        .await
+        .expect("unrelate");
+    assert!(res.found, "the edge existed");
+    assert_eq!(res.removed, 1);
+
+    let Json(res) = srv
+        .unrelate(Parameters(UnrelateParams {
+            from: a.id,
+            to: b.id,
+            relation: "caused_by".to_owned(),
+        }))
+        .await
+        .expect("a second unrelate must not error — cleanups are replayable");
+    assert!(!res.found, "already removed");
+    assert_eq!(res.removed, 0);
+
+    let (_ids, edge_count) = why_one_hop(&srv).await;
+    assert_eq!(edge_count, 0, "the edge must be gone from traversal");
+}
+
+#[tokio::test]
+async fn unrelate_refuses_a_self_loop_as_invalid_params() {
+    let (_dir, srv) = server();
+    let Json(a) = srv
+        .remember(Parameters(RememberParams {
+            fact: DECISION.to_owned(),
+            links: Vec::new(),
+            metadata: None,
+            ttl_seconds: None,
+        }))
+        .await
+        .expect("remember");
+    let err = srv
+        .unrelate(Parameters(UnrelateParams {
+            from: a.id,
+            to: a.id,
+            relation: "supports".to_owned(),
+        }))
+        .await
+        .map(|_| ())
+        .expect_err("a self-loop is refused exactly like relate's");
+    assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+}
+
+/// The wire contract shared with `relate` (#1468): ids arrive as JSON numbers
+/// or decimal strings alike.
+#[test]
+fn unrelate_params_accept_string_or_number_ids_on_the_wire() {
+    let params: UnrelateParams = serde_json::from_value(serde_json::json!({
+        "from": "18446744073709551615",
+        "to": 42,
+        "relation": "caused_by"
+    }))
+    .expect("string and number ids must both deserialize");
+    assert_eq!(params.from, u64::MAX);
+    assert_eq!(params.to, 42);
 }

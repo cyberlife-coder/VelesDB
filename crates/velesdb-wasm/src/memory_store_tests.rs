@@ -114,6 +114,25 @@ fn test_relations_only_returns_outgoing_edges() {
 }
 
 #[test]
+fn test_unrelate_removes_the_edge_and_is_idempotent() {
+    let store = WasmStore::new(4);
+    store.store(1, "a", &[1.0, 0.0, 0.0, 0.0]).unwrap();
+    store.store(2, "b", &[0.0, 1.0, 0.0, 0.0]).unwrap();
+    let edge_id = store.relate(1, 2, "decided_in").unwrap();
+
+    assert!(store.unrelate(edge_id).unwrap(), "the edge existed");
+    assert!(store.relations(1).unwrap().is_empty(), "edge is gone");
+    assert!(
+        !store.unrelate(edge_id).unwrap(),
+        "removing an absent edge is Ok(false), never an error"
+    );
+    assert!(
+        store.get(1).unwrap().is_some() && store.get(2).unwrap().is_some(),
+        "unrelate must not touch the endpoints"
+    );
+}
+
+#[test]
 fn test_query_filtered_matches_exact_metadata() {
     let store = WasmStore::new(4);
     let m = meta(&[("project", Value::String("veles".to_string()))]);

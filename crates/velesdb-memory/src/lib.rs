@@ -135,7 +135,7 @@ pub use extract::{
 pub use mcp::McpServer;
 pub use model::{
     ColumnFilter, ColumnOp, EntityProfile, EntityRelation, Explanation, FusionOptions, Link,
-    MemoryEdge, MemoryNode, Recollection,
+    MemoryEdge, MemoryNode, Recollection, UnrelateOutcome,
 };
 pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{MemoryService, Metadata};
