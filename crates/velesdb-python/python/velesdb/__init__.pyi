@@ -2463,6 +2463,32 @@ class MemoryService:
         """
         ...
 
+    def unrelate(self, from_id: int, to_id: int, relation: str) -> dict[str, Any]:
+        """Remove the typed edge(s) ``from_id -relation-> to_id``.
+
+        ``relate``'s exact undo, so a mistaken edge no longer costs the facts
+        at its endpoints: only the edge goes, both memories and any entity hub
+        are untouched.
+
+        Args:
+            from_id: Source memory id.
+            to_id: Target memory id.
+            relation: Edge label to remove (e.g. ``"decided_in"``).
+
+        Returns:
+            ``{"found": bool, "removed": int}`` — ``removed`` counts the edges
+            actually deleted, parallel duplicates included. Idempotent: an
+            absent edge answers ``found=False`` instead of raising, so a
+            cleanup can be replayed. The endpoints are deliberately not
+            required to still exist — the edge of a forgotten fact is already
+            gone.
+
+        Raises:
+            ValueError: If ``relation`` is empty or ``from_id == to_id`` —
+                exactly what ``relate`` refuses.
+        """
+        ...
+
     def forget(self, id: int) -> bool:
         """Delete a memory by id.
 
@@ -2512,6 +2538,30 @@ class MemoryService:
         Returns:
             ``{"nodes": [{"id": int, "content": str, "hop": int}, ...],
                "edges": [{"from": int, "to": int, "relation": str}, ...]}``
+        """
+        ...
+
+    def entity(self, name: str) -> Dict[str, Any]:
+        """Everything the memory graph knows about a NAMED ENTITY.
+
+        Answers a question *about* a thing ("how old is X", "who is X's
+        father") rather than about the sentences mentioning it, which is all
+        ``recall`` can return: entity hubs are deliberately invisible to
+        ``recall``, so without this the attributes ``remember_extracted``
+        builds would be unreachable.
+
+        Args:
+            name: Entity name, matched case-insensitively (the id is
+                content-addressed, so it is stable across sessions).
+
+        Returns:
+            ``{"found": bool, "id": int, "name": str,
+               "attributes": Dict[str, Any],
+               "relations": [{"predicate": str, "target_id": int,
+                              "target": str}, ...]}``.
+            ``found`` is ``False`` when nothing has ever mentioned that name;
+            ``name`` still echoes the query in its canonical (trimmed,
+            lowercased) form, so several lookups can be told apart.
         """
         ...
 
@@ -2568,6 +2618,75 @@ class MemoryService:
         Raises:
             ValueError: If the request is malformed or the token budget
                 cannot fit any content (e.g. ``token_budget=0``).
+        """
+        ...
+
+    def compile_transcript(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """One-call shortcut over ``compile_context`` for a raw transcript.
+
+        Deterministically segments an agent-session transcript into turns
+        (plain marker-based or JSONL) and, within each turn, into code/log/body
+        sub-segments, then compiles the result exactly like
+        ``compile_context``. Pure delegation to the same ``velesdb_memory``
+        bridge the Node and WASM bindings relay.
+
+        Args:
+            request: Same JSON shape as the MCP ``compile_transcript`` tool's
+                input MINUS ``path`` — ``{query, transcript, token_budget,
+                project?, target_model?, policy?, segmentation?}``. Resolving
+                a ``path`` needs the MCP server's ingest-roots allowlist,
+                which this binding has no configuration surface for: read the
+                file yourself and pass its content as ``transcript``.
+
+        Returns:
+            ``{"context": ..., "segmentation": ...}`` — ``context`` is the
+            same shape as ``compile_context``'s output; ``segmentation`` is
+            the detected format plus one audit entry per segment (index, turn,
+            role, kind, byte range, ``fragment_id``).
+
+        Raises:
+            ValueError: If the transcript is empty, the request is malformed,
+                or a forced segmentation format fails to parse.
+        """
+        ...
+
+    def list_working_contexts(self, project: str) -> Dict[str, Any]:
+        """Every session saved under ``project``, most-recently-saved first.
+
+        Lets an agent discover what is resumable before guessing a session id
+        at ``load_working_context``, or recover from a typo.
+
+        Args:
+            project: Project key the sessions were saved under.
+
+        Returns:
+            ``{"sessions": [{"session": str, "saved_at": int}, ...]}`` — the
+            same wire shape as the MCP ``list_working_contexts`` tool and the
+            Node/WASM bindings. Empty (never an error) when the project never
+            saved anything.
+        """
+        ...
+
+    def suggest_budget(
+        self,
+        target_model: str,
+        reserve_tokens: int = 0,
+    ) -> Dict[str, Any]:
+        """Suggest a starting ``token_budget`` for ``compile_context``.
+
+        Looked up in a static, committed model-name to context-window table
+        (dated "as of"), NEVER a network call.
+
+        Args:
+            target_model: Model name, matched case-insensitively.
+            reserve_tokens: Room to reserve for the response (default 0),
+                mirroring ``compile_context``'s own
+                ``policy.response_reserve_tokens``.
+
+        Returns:
+            ``{"window": Optional[int], "suggested_budget": Optional[int],
+               "source": str}``. Both figures are ``None`` for a model absent
+            from the table — an honest "unknown", never a guess.
         """
         ...
 

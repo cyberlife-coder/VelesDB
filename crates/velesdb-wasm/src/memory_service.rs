@@ -1,6 +1,7 @@
 //! WASM binding for `velesdb-memory`'s agent-memory wedge — `remember` /
-//! `recall` / `recallWhere` / `recallFused` / `relate` / `forget` / `why` /
-//! `compileContext` / `compileTranscript` / `explainCompilation` /
+//! `recall` / `recallWhere` / `recallFused` / `relate` / `unrelate` /
+//! `forget` / `why` /
+//! `entity` / `compileContext` / `compileTranscript` / `explainCompilation` /
 //! `contextSavings` / `suggestBudget` / `retrieveContextSource` /
 //! `saveWorkingContext` / `loadWorkingContext` / `listWorkingContexts`,
 //! backed entirely in-memory ([`WasmStore`]): no filesystem, no network, no
@@ -46,13 +47,13 @@ use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
 use velesdb_memory::context::{
-    fragment_id as ctx_fragment_id, segment_transcript, suggest_token_budget, CompilePolicy,
-    CompileRequest, ContextCompiler, SegmentFormat, SegmentKind, SegmentationPolicy,
+    suggest_token_budget, CompilePolicy, CompileRequest, ContextCompiler, SegmentationReport,
     WorkingContext, WorkingContextSession,
 };
+use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
-    ColumnFilter, ColumnOp, Explanation, FusionOptions, HashEmbedder, MemoryEdge, MemoryError,
-    MemoryNode, MemoryService, Metadata, Recollection,
+    ColumnFilter, ColumnOp, EntityProfile, EntityRelation, Explanation, FusionOptions,
+    HashEmbedder, MemoryEdge, MemoryError, MemoryNode, MemoryService, Metadata, Recollection,
 };
 
 use crate::memory_store::WasmStore;
@@ -292,6 +293,80 @@ impl From<MemoryEdge> for MemoryEdgeOut {
     }
 }
 
+/// What [`WasmMemoryService::unrelate`] actually removed. Idempotent by
+/// design: an edge that was not there is reported as `found: false`, never as
+/// a thrown error, so a cleanup can be replayed. `removed` counts the edges
+/// genuinely deleted — two facts can carry several parallel edges under the
+/// same label.
+#[derive(Serialize)]
+struct UnrelateOut {
+    found: bool,
+    removed: usize,
+}
+
+/// One typed edge leaving an entity (output of
+/// [`WasmMemoryService::entity`]). `targetId` crosses as a decimal string
+/// for the same reason every other id here does.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EntityRelationOut {
+    predicate: String,
+    target_id: String,
+    target: String,
+}
+
+impl From<EntityRelation> for EntityRelationOut {
+    fn from(r: EntityRelation) -> Self {
+        Self {
+            predicate: r.predicate,
+            target_id: id_to_string(r.target_id),
+            target: r.target,
+        }
+    }
+}
+
+/// Everything the auto-built graph knows about one named entity (output of
+/// [`WasmMemoryService::entity`]). `found` separates "known entity, no
+/// attributes yet" from "nothing has ever mentioned this name"; on a miss
+/// the other fields carry their empty values and `name` still echoes the
+/// canonicalized query, so several lookups can be told apart.
+#[derive(Serialize)]
+struct EntityProfileOut {
+    found: bool,
+    id: String,
+    name: String,
+    attributes: Value,
+    relations: Vec<EntityRelationOut>,
+}
+
+impl EntityProfileOut {
+    /// Wire form of a lookup for `queried`, hit or miss — mirroring the MCP
+    /// `entity` tool's own `EntityProfileDto::from_lookup`, canonicalized
+    /// name echo included.
+    fn from_lookup(queried: &str, profile: Option<EntityProfile>) -> Self {
+        let Some(profile) = profile else {
+            return Self {
+                found: false,
+                id: id_to_string(0),
+                name: canonical_entity_name(queried),
+                attributes: Value::Object(serde_json::Map::new()),
+                relations: Vec::new(),
+            };
+        };
+        Self {
+            found: true,
+            id: id_to_string(profile.id),
+            name: profile.name,
+            attributes: Value::Object(profile.attributes),
+            relations: profile
+                .relations
+                .into_iter()
+                .map(EntityRelationOut::from)
+                .collect(),
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct ExplanationOut {
     nodes: Vec<MemoryNodeOut>,
@@ -307,50 +382,22 @@ impl From<Explanation> for ExplanationOut {
     }
 }
 
-/// Input of [`WasmMemoryService::compile_transcript`] — the same fields as
-/// the MCP `compile_transcript` tool's request MINUS `path`: this binding
-/// has no filesystem (see the module docs), so only an inline `transcript`
-/// is accepted.
-#[derive(serde::Deserialize)]
-struct CompileTranscriptInput {
-    query: String,
-    transcript: String,
-    token_budget: u64,
-    #[serde(default)]
-    project: Option<String>,
-    #[serde(default)]
-    target_model: Option<String>,
-    #[serde(default)]
-    policy: Option<CompilePolicy>,
-    #[serde(default)]
-    segmentation: Option<SegmentationPolicy>,
-}
+/// Input of [`WasmMemoryService::compile_transcript`] — the shared
+/// [`TranscriptCompileInput`](velesdb_memory::context::TranscriptCompileInput),
+/// aliased so this module keeps naming a local type. Same fields as the MCP
+/// `compile_transcript` tool's request MINUS `path`: this binding has no
+/// filesystem (see the module docs), so only an inline `transcript` is
+/// accepted.
+use velesdb_memory::context::TranscriptCompileInput as CompileTranscriptInput;
 
-/// One entry of [`SegmentationReportOut::segments`] — same shape as the MCP
-/// `compile_transcript` tool's own (private) `SegmentInfo`, rebuilt here
-/// rather than reused since that type is `pub(super)` to `velesdb_memory`'s
-/// `mcp` module. `fragment_id` is already a decimal string, so no separate
-/// stringify pass is needed for the segmentation half of the response.
-#[derive(Debug, Serialize)]
-struct SegmentInfoOut {
-    index: usize,
-    turn: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    role: Option<String>,
-    kind: SegmentKind,
-    byte_start: usize,
-    byte_end: usize,
-    fragment_id: String,
-}
-
-/// The segmentation audit trail returned alongside `context` by
-/// [`WasmMemoryService::compile_transcript`].
-#[derive(Debug, Serialize)]
-struct SegmentationReportOut {
-    format_detected: SegmentFormat,
-    segments: Vec<SegmentInfoOut>,
-    merged_segments: usize,
-}
+/// The segmentation glue this binding used to carry itself, now relayed from
+/// `velesdb_memory`'s
+/// [`transcript_bridge`](velesdb_memory::context::transcript_bridge) — the
+/// Node binding carried a byte-for-byte twin of it, each doc comment pointing
+/// at the other. Re-exported under the historical name so the tests, which
+/// exercise it directly (a `JsValue` cannot be constructed off `wasm32`; see
+/// `memory_service_tests.rs`'s module docs), keep naming it.
+use velesdb_memory::context::build_transcript_compile_request;
 
 /// Output of [`WasmMemoryService::compile_transcript`]: the compiled context
 /// (already id-stringified, byte-compatible with [`WasmMemoryService::compile_context`]'s
@@ -358,66 +405,7 @@ struct SegmentationReportOut {
 #[derive(Serialize)]
 struct CompileTranscriptOut {
     context: Value,
-    segmentation: SegmentationReportOut,
-}
-
-/// The pure-Rust half of [`WasmMemoryService::compile_transcript`]: segments
-/// `input.transcript` and assembles the [`CompileRequest`] /
-/// [`SegmentationReportOut`] pair `compile_context` then compiles — split
-/// out from the `#[wasm_bindgen]` method (which only marshals `JsValue` in
-/// and out) specifically so this glue is testable from a native `cargo test`
-/// (a `JsValue` cannot be constructed off `wasm32`; see
-/// `memory_service_tests.rs`'s module docs). Returns
-/// [`MemoryError::SegmentationError`] for an empty transcript — mirroring
-/// the MCP `compile_transcript` tool's own empty-transcript guard, since
-/// `segment_transcript` has no such check itself (an empty string is a
-/// valid, if useless, zero-turn input to it) — or whatever error
-/// `segment_transcript` itself returns (a genuine budget/cap breach, or a
-/// forced-format parse failure).
-fn build_transcript_compile_request(
-    input: CompileTranscriptInput,
-) -> Result<(CompileRequest, SegmentationReportOut), MemoryError> {
-    if input.transcript.is_empty() {
-        return Err(MemoryError::SegmentationError(
-            "the transcript is empty — `transcript` must be non-empty text".to_owned(),
-        ));
-    }
-    let segmentation_policy = input.segmentation.unwrap_or_default();
-    let outcome = segment_transcript(&input.transcript, &segmentation_policy)?;
-    let segments_info: Vec<SegmentInfoOut> = outcome
-        .segments
-        .iter()
-        .enumerate()
-        .map(|(index, segment)| SegmentInfoOut {
-            index,
-            turn: segment.turn,
-            role: segment.role.clone(),
-            kind: segment.kind,
-            byte_start: segment.byte_start,
-            byte_end: segment.byte_end,
-            fragment_id: id_to_string(ctx_fragment_id(&segment.fragment.content)),
-        })
-        .collect();
-    let format_detected = outcome.format_detected;
-    let merged_segments = outcome.merged_segments;
-    let fragments = outcome.segments.into_iter().map(|s| s.fragment).collect();
-    let request = CompileRequest {
-        query: input.query,
-        fragments,
-        project: input.project,
-        target_model: input.target_model,
-        token_budget: input.token_budget,
-        memory_scope: None,
-        policy: input.policy,
-    };
-    Ok((
-        request,
-        SegmentationReportOut {
-            format_detected,
-            segments: segments_info,
-            merged_segments,
-        },
-    ))
+    segmentation: SegmentationReport,
 }
 
 fn to_js(value: &impl Serialize) -> Result<JsValue, JsValue> {
@@ -605,6 +593,27 @@ impl WasmMemoryService {
             .map_err(to_js_err)
     }
 
+    /// Remove the typed edge(s) `from -relation-> to` — [`Self::relate`]'s
+    /// exact undo, so a mistaken edge no longer costs the facts at its
+    /// endpoints. Only the edge goes: both memories, and any entity hub, are
+    /// untouched.
+    ///
+    /// Returns `{found, removed}`. Idempotent: removing an absent edge answers
+    /// `found: false` instead of throwing, so a cleanup can be replayed. It
+    /// refuses exactly what `relate` refuses (empty relation, `from` equal to
+    /// `to`), and deliberately does NOT require the endpoints to still exist —
+    /// the edge of a forgotten fact is already gone.
+    #[wasm_bindgen(js_name = unrelate)]
+    pub fn unrelate(&self, from: &str, to: &str, relation: &str) -> Result<JsValue, JsValue> {
+        let from = parse_id(from)?;
+        let to = parse_id(to)?;
+        let outcome = self.inner.unrelate(from, to, relation).map_err(to_js_err)?;
+        to_js(&UnrelateOut {
+            found: outcome.found,
+            removed: outcome.removed,
+        })
+    }
+
     /// Delete a memory by id. Returns whether a memory actually existed
     /// under that id and was deleted — `false` means nothing was stored
     /// there (a stale id or a typo), not a second successful deletion.
@@ -633,6 +642,35 @@ impl WasmMemoryService {
             .why(decision, max_hops, filter.as_ref())
             .map_err(to_js_err)?;
         to_js(&ExplanationOut::from(explanation))
+    }
+
+    /// Look up everything the memory graph knows about a NAMED ENTITY (a
+    /// person, a place, an organisation): the attributes merged onto its hub
+    /// and the typed edges leaving it. Answers a question ABOUT a thing
+    /// ("how old is X", "who is X's father") rather than about the sentences
+    /// mentioning it, which is all [`Self::recall`] can return — entity hubs
+    /// are deliberately invisible to recall, so without this the attributes
+    /// the graph carries would be unreachable.
+    ///
+    /// `name` is matched case-insensitively (the id is content-addressed, so
+    /// it is stable). Returns `{found, id, name, attributes, relations}`,
+    /// each relation `{predicate, targetId, target}`. `found: false` means
+    /// nothing has ever mentioned that name; `name` still echoes the query
+    /// canonicalized, so several lookups can be told apart.
+    ///
+    /// **Read side of a graph this binding cannot yet write.** Entity hubs
+    /// are created exclusively by extraction (`remember_extracted`, or a
+    /// `remember` on a service carrying an autograph extractor), and this
+    /// binding deliberately exposes neither — extraction needs a generative
+    /// model (see the module docs). So today `entity` here answers
+    /// `found: false` for every name, and it exists so the read side is
+    /// already correct and uniform with Node/Python the day the documented
+    /// JS-provided extractor callback lands. It never lies: a miss is
+    /// reported as a miss.
+    #[wasm_bindgen(js_name = entity)]
+    pub fn entity(&self, name: &str) -> Result<JsValue, JsValue> {
+        let profile = self.inner.entity_profile(name).map_err(to_js_err)?;
+        to_js(&EntityProfileOut::from_lookup(name, profile))
     }
 
     /// Compile context fragments into a token-budgeted, provenance-audited

@@ -13,14 +13,16 @@ use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 
 use velesdb_memory::context::{
-    CompilePolicy, CompileRequest, CompiledContext, ContextCompiler, ContextDecision,
-    ContextSavings, ContextSource, WorkingContext,
+    build_transcript_compile_request, suggest_token_budget, CompilePolicy, CompileRequest,
+    CompiledContext, ContextCompiler, ContextDecision, ContextSavings, ContextSource,
+    TranscriptCompileInput, WorkingContext, WorkingContextSession,
 };
+use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
-    format_dated_context, limits, ColumnFilter, ColumnOp, DatedContext, DynEmbedder, ErrorCategory,
-    Explanation, FusionOptions, HashEmbedder, Link, MemoryEdge, MemoryError, MemoryNode,
-    MemoryService, Metadata, OllamaEmbedder, OllamaExtractor, Recollection, DEFAULT_DIMENSION,
-    DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    format_dated_context, limits, ColumnFilter, ColumnOp, DatedContext, DynEmbedder, EntityProfile,
+    ErrorCategory, Explanation, FusionOptions, HashEmbedder, Link, MemoryEdge, MemoryError,
+    MemoryNode, MemoryService, Metadata, OllamaEmbedder, OllamaExtractor, Recollection,
+    DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::collection::query::convert_params;
@@ -195,6 +197,50 @@ fn explanation_to_dict(py: Python<'_>, e: &Explanation) -> PyResult<Py<PyAny>> {
     out.set_item(PyString::intern(py, "nodes"), nodes)?;
     out.set_item(PyString::intern(py, "edges"), edges)?;
     Ok(out.into())
+}
+
+/// An [`EntityProfile`] lookup as `{found, id, name, attributes, relations}`,
+/// where each relation is `{predicate, target_id, target}`.
+///
+/// Takes the *queried* name, not just the outcome, because a miss carries no
+/// name of its own: echoing the query back through
+/// [`canonical_entity_name`] — the very function the service keys hubs by —
+/// lets a caller running several lookups pair each answer with its question
+/// (mirrors the MCP `entity` tool's `from_lookup`).
+///
+/// Built as a `serde_json::Value` and converted once by [`json_to_python`],
+/// rather than field-by-field: that converter already renders a `u64` past
+/// `i64::MAX` as an exact Python int (an entity id is a content hash, so it
+/// routinely is one), and going through it keeps this shaping free of the
+/// per-field fallible calls the graph-shaped helpers above still carry.
+fn entity_profile_to_value(queried: &str, profile: Option<EntityProfile>) -> serde_json::Value {
+    let Some(profile) = profile else {
+        return serde_json::json!({
+            "found": false,
+            "id": 0,
+            "name": canonical_entity_name(queried),
+            "attributes": {},
+            "relations": [],
+        });
+    };
+    let relations: Vec<serde_json::Value> = profile
+        .relations
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "predicate": r.predicate,
+                "target_id": r.target_id,
+                "target": r.target,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "found": true,
+        "id": profile.id,
+        "name": profile.name,
+        "attributes": serde_json::Value::Object(profile.attributes),
+        "relations": relations,
+    })
 }
 
 /// The shared `Vec<Recollection>` → Python list-of-dicts marshalling of every
@@ -393,6 +439,37 @@ impl PyMemoryService {
         py.detach(|| self.svc.relate(from_id, to_id, relation).map_err(to_py_err))
     }
 
+    /// Remove the typed edge(s) `from_id -relation-> to_id` — `relate`'s exact
+    /// undo, so a mistaken edge no longer costs the facts at its endpoints.
+    /// Only the edge goes: both memories, and any entity hub, are untouched.
+    ///
+    /// Idempotent: removing an absent edge returns ``found=False`` instead of
+    /// raising, so a cleanup can be replayed. It refuses exactly what `relate`
+    /// refuses (empty relation, `from_id` equal to `to_id`), and deliberately
+    /// does NOT require the endpoints to still exist — the edge of a forgotten
+    /// fact is already gone.
+    ///
+    /// Returns:
+    ///     ``{"found": bool, "removed": int}`` — `removed` counts the edges
+    ///     actually deleted, parallel duplicates included.
+    fn unrelate(
+        &self,
+        py: Python<'_>,
+        from_id: u64,
+        to_id: u64,
+        relation: &str,
+    ) -> PyResult<Py<PyAny>> {
+        let outcome = py.detach(|| {
+            self.svc
+                .unrelate(from_id, to_id, relation)
+                .map_err(to_py_err)
+        })?;
+        let out = PyDict::new(py);
+        out.set_item(PyString::intern(py, "found"), outcome.found)?;
+        out.set_item(PyString::intern(py, "removed"), outcome.removed)?;
+        Ok(out.into())
+    }
+
     /// Delete a memory by id. Returns whether a memory actually existed
     /// under that id and was deleted — `False` means nothing was stored
     /// there (a stale id or a typo), not a second successful deletion.
@@ -434,6 +511,29 @@ impl PyMemoryService {
                 .map_err(to_py_err)
         })?;
         explanation_to_dict(py, &explanation)
+    }
+
+    /// Look up everything the memory graph knows about a NAMED ENTITY (a
+    /// person, a place, an organisation): the attributes merged onto its hub
+    /// and the typed edges leaving it. Answers a question ABOUT a thing
+    /// ("how old is X", "who is X's father") rather than about the sentences
+    /// mentioning it, which is all `recall` can return — entity hubs are
+    /// deliberately invisible to `recall`, so without this the attributes
+    /// `remember_extracted` builds would be unreachable.
+    ///
+    /// Args:
+    ///     name: matched case-insensitively (the id is content-addressed, so
+    ///         it is stable across sessions).
+    ///
+    /// Returns:
+    ///     `{found, id, name, attributes, relations}`, each relation being
+    ///     `{predicate, target_id, target}`. `found` is `False` when nothing
+    ///     has ever mentioned that name; `name` still echoes the query in its
+    ///     canonical (trimmed, lowercased) form, so several lookups can be
+    ///     told apart.
+    fn entity(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
+        let profile = py.detach(|| self.svc.entity_profile(name).map_err(to_py_err))?;
+        Ok(json_to_python(py, &entity_profile_to_value(name, profile)))
     }
 
     /// Extract atomic facts from raw `text` with a local Ollama model and store
@@ -482,6 +582,77 @@ impl PyMemoryService {
                 .map_err(to_py_err)
         })?;
         Ok(serde_to_python!(py, &compiled, "compiled context"))
+    }
+
+    /// One-call shortcut over [`compile_context`](Self::compile_context) for
+    /// a raw agent-session transcript: deterministically segments it into
+    /// turns (plain marker-based — `System:`/`User:`/`Human:`/`Assistant:`/
+    /// `AI:`/`Tool:`/`### User`/`### Assistant` — or JSONL, one line per
+    /// turn) and, within each turn, into code/log/body sub-segments, then
+    /// compiles the result exactly like `compile_context`. Pure delegation to
+    /// the same `velesdb_memory` bridge the Node and WASM bindings relay, so
+    /// the same transcript segments identically on all three.
+    ///
+    /// Args:
+    ///     request: Same JSON shape as the MCP `compile_transcript` tool's
+    ///         input MINUS `path` — `{query, transcript, token_budget,
+    ///         project?, target_model?, policy?, segmentation?}`. Resolving a
+    ///         `path` needs the MCP server's ingest-roots allowlist, which
+    ///         this binding has no configuration surface for: read the file
+    ///         yourself and pass its content as `transcript`.
+    ///
+    /// Returns:
+    ///     ``{"context": ..., "segmentation": ...}`` — `context` is the same
+    ///     shape as `compile_context`'s output; `segmentation` is the
+    ///     detected format plus one audit entry per segment (index, turn,
+    ///     role, kind, byte range, `fragment_id`) so a caller can see exactly
+    ///     how the transcript was cut before trusting the compiled result.
+    ///
+    /// Raises:
+    ///     ValueError: If the transcript is empty, the request is malformed,
+    ///         or a forced segmentation format fails to parse.
+    fn compile_transcript(&self, py: Python<'_>, request: Py<PyAny>) -> PyResult<Py<PyAny>> {
+        let input: TranscriptCompileInput =
+            python_to_serde!(py, &request, "compile_transcript request");
+        let (request, segmentation) = build_transcript_compile_request(input).map_err(to_py_err)?;
+        let compiled: CompiledContext = py.detach(|| {
+            self.svc
+                .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
+                .map_err(to_py_err)
+        })?;
+        let out = PyDict::new(py);
+        let context = serde_to_python!(py, &compiled, "compiled context");
+        let report = serde_to_python!(py, &segmentation, "segmentation report");
+        out.set_item(PyString::intern(py, "context"), context)?;
+        out.set_item(PyString::intern(py, "segmentation"), report)?;
+        Ok(out.into())
+    }
+
+    /// Suggest a starting `token_budget` for
+    /// [`compile_context`](Self::compile_context), for a named target model
+    /// — looked up in a static, committed model-name to context-window table
+    /// (dated "as of", NEVER a network call).
+    ///
+    /// Args:
+    ///     target_model: Model name, matched case-insensitively.
+    ///     reserve_tokens: Room to reserve for the response (default 0),
+    ///         mirroring `compile_context`'s own
+    ///         `policy.response_reserve_tokens`.
+    ///
+    /// Returns:
+    ///     ``{"window": Optional[int], "suggested_budget": Optional[int],
+    ///        "source": str}``. Both figures are ``None`` for a model absent
+    ///     from the table — an honest "unknown", never a guess; the table is
+    ///     extended in a new release rather than worked around here.
+    #[pyo3(signature = (target_model, reserve_tokens = 0))]
+    fn suggest_budget(
+        &self,
+        py: Python<'_>,
+        target_model: &str,
+        reserve_tokens: u64,
+    ) -> PyResult<Py<PyAny>> {
+        let budget = suggest_token_budget(target_model, reserve_tokens);
+        Ok(serde_to_python!(py, &budget, "suggested budget"))
     }
 
     /// Fetch back the exact original content — and media, when the fragment
@@ -592,5 +763,25 @@ impl PyMemoryService {
             None => Ok(py.None()),
             Some(working) => Ok(serde_to_python!(py, &working, "working context")),
         }
+    }
+
+    /// Every session ever saved under `project`'s working-context index,
+    /// most-recently-saved first — so an agent can discover what is
+    /// resumable before guessing a session id at
+    /// [`load_working_context`](Self::load_working_context), or recover from
+    /// a typo.
+    ///
+    /// Returns:
+    ///     ``{"sessions": [{"session": str, "saved_at": int}, ...]}`` — the
+    ///     same wire shape as the MCP `list_working_contexts` tool and the
+    ///     Node/WASM bindings. Empty (never an error) when the project never
+    ///     saved anything.
+    fn list_working_contexts(&self, py: Python<'_>, project: &str) -> PyResult<Py<PyAny>> {
+        let sessions: Vec<WorkingContextSession> =
+            py.detach(|| self.svc.list_working_contexts(project).map_err(to_py_err))?;
+        let listed = serde_to_python!(py, &sessions, "working context sessions");
+        let out = PyDict::new(py);
+        out.set_item(PyString::intern(py, "sessions"), listed)?;
+        Ok(out.into())
     }
 }

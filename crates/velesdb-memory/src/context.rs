@@ -64,6 +64,10 @@ mod relevance;
 /// so the same transcript + policy always segments byte-identically. See
 /// [`segment::segment_transcript`].
 pub mod segment;
+/// The binding-side glue over [`segment`]: one implementation of
+/// "transcript in, `CompileRequest` + audit trail out", relayed by the
+/// Node, Python and WASM bindings instead of copied into each.
+pub mod transcript_bridge;
 /// The id wire contract (decimal-string `u64`) shared by every JS-facing
 /// binding of these types — one source of truth for [`wire::ID_KEYS`]
 /// instead of a Node/WASM copy each.
@@ -86,6 +90,9 @@ pub use relevance::DeterministicReranker;
 pub use segment::{
     segment_transcript, SegmentFormat, SegmentKind, SegmentationOutcome, SegmentationPolicy,
     TranscriptSegment,
+};
+pub use transcript_bridge::{
+    build_transcript_compile_request, SegmentInfo, SegmentationReport, TranscriptCompileInput,
 };
 
 use std::collections::BTreeMap;
