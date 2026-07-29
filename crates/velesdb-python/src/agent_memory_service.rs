@@ -19,10 +19,10 @@ use velesdb_memory::context::{
 };
 use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
-    format_dated_context, limits, ColumnFilter, ColumnOp, DynEmbedder, EntityProfile,
-    ErrorCategory, Explanation, FusionOptions, HashEmbedder, Link, MemoryError, MemoryService,
-    Metadata, OllamaEmbedder, OllamaExtractor, Recollection, DEFAULT_DIMENSION,
-    DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    format_dated_context, limits, ColumnFilter, ColumnOp, DatedContext, DynEmbedder, EntityProfile,
+    ErrorCategory, Explanation, FusionOptions, HashEmbedder, Link, MemoryEdge, MemoryError,
+    MemoryNode, MemoryService, Metadata, OllamaEmbedder, OllamaExtractor, Recollection,
+    DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::collection::query::convert_params;
@@ -82,6 +82,26 @@ fn parse_op(op: &str) -> PyResult<ColumnOp> {
     }
 }
 
+/// The Python `[(field, op, value)]` tuple list of `recall_where` as engine
+/// [`ColumnFilter`]s. The first unknown operator (or unconvertible value)
+/// aborts the whole conversion, so a typo never silently degrades into a
+/// narrower filter set.
+fn to_column_filters(
+    py: Python<'_>,
+    filters: Vec<(String, String, Py<PyAny>)>,
+) -> PyResult<Vec<ColumnFilter>> {
+    filters
+        .into_iter()
+        .map(|(field, op, value)| {
+            Ok(ColumnFilter {
+                field,
+                op: parse_op(&op)?,
+                value: python_to_json(py, &value)?,
+            })
+        })
+        .collect()
+}
+
 /// Build the requested embedder. `"hash"` is deterministic and offline;
 /// `"ollama"` calls a local embedding model (real semantic recall).
 fn build_embedder(kind: &str, url: Option<String>, model: Option<String>) -> PyResult<DynEmbedder> {
@@ -135,24 +155,44 @@ fn recollection_to_dict(py: Python<'_>, r: Recollection) -> PyResult<Py<PyAny>> 
     Ok(dict.into())
 }
 
+/// Maps `items` to a Python list, one dict per item.
+fn py_list_of<'py, T>(
+    py: Python<'py>,
+    items: &[T],
+    to_dict: impl Fn(Python<'py>, &T) -> PyResult<Bound<'py, PyDict>>,
+) -> PyResult<Bound<'py, PyList>> {
+    let list = PyList::empty(py);
+    for item in items {
+        list.append(to_dict(py, item)?)?;
+    }
+    Ok(list)
+}
+
+/// One [`MemoryNode`] of an explanation subgraph as `{id, content, hop}`.
+fn explanation_node_to_dict<'py>(py: Python<'py>, n: &MemoryNode) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item(PyString::intern(py, "id"), n.id)?;
+    d.set_item(PyString::intern(py, "content"), &n.content)?;
+    d.set_item(PyString::intern(py, "hop"), n.hop)?;
+    Ok(d)
+}
+
+/// One [`MemoryEdge`] of an explanation subgraph as `{from, to, relation}`.
+fn explanation_edge_to_dict<'py>(
+    py: Python<'py>,
+    edge: &MemoryEdge,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item(PyString::intern(py, "from"), edge.from)?;
+    d.set_item(PyString::intern(py, "to"), edge.to)?;
+    d.set_item(PyString::intern(py, "relation"), &edge.relation)?;
+    Ok(d)
+}
+
 /// An [`Explanation`] as `{nodes: [{id, content, hop}], edges: [{from, to, relation}]}`.
 fn explanation_to_dict(py: Python<'_>, e: &Explanation) -> PyResult<Py<PyAny>> {
-    let nodes = PyList::empty(py);
-    for n in &e.nodes {
-        let d = PyDict::new(py);
-        d.set_item(PyString::intern(py, "id"), n.id)?;
-        d.set_item(PyString::intern(py, "content"), &n.content)?;
-        d.set_item(PyString::intern(py, "hop"), n.hop)?;
-        nodes.append(d)?;
-    }
-    let edges = PyList::empty(py);
-    for edge in &e.edges {
-        let d = PyDict::new(py);
-        d.set_item(PyString::intern(py, "from"), edge.from)?;
-        d.set_item(PyString::intern(py, "to"), edge.to)?;
-        d.set_item(PyString::intern(py, "relation"), &edge.relation)?;
-        edges.append(d)?;
-    }
+    let nodes = py_list_of(py, &e.nodes, explanation_node_to_dict)?;
+    let edges = py_list_of(py, &e.edges, explanation_edge_to_dict)?;
     let out = PyDict::new(py);
     out.set_item(PyString::intern(py, "nodes"), nodes)?;
     out.set_item(PyString::intern(py, "edges"), edges)?;
@@ -201,6 +241,30 @@ fn entity_profile_to_value(queried: &str, profile: Option<EntityProfile>) -> ser
         "attributes": serde_json::Value::Object(profile.attributes),
         "relations": relations,
     })
+}
+
+/// The shared `Vec<Recollection>` → Python list-of-dicts marshalling of every
+/// recall path (`recall`, `recall_where`, `recall_fused`).
+fn recollections_to_list(py: Python<'_>, hits: Vec<Recollection>) -> PyResult<Bound<'_, PyList>> {
+    let list = PyList::empty(py);
+    for hit in hits {
+        list.append(recollection_to_dict(py, hit)?)?;
+    }
+    Ok(list)
+}
+
+/// The `date_field` shape of `recall_fused`: the memories plus the
+/// chronological timeline and its "now" anchor.
+fn dated_recall_to_dict(
+    py: Python<'_>,
+    memories: &Bound<'_, PyList>,
+    ctx: DatedContext,
+) -> PyResult<Py<PyAny>> {
+    let out = PyDict::new(py);
+    out.set_item(PyString::intern(py, "memories"), memories)?;
+    out.set_item(PyString::intern(py, "dated_context"), ctx.timeline)?;
+    out.set_item(PyString::intern(py, "now"), ctx.now)?;
+    Ok(out.into())
 }
 
 /// Build [`FusionOptions`] from an optional Python `{hops?, graph_boost?, pool?}`
@@ -304,11 +368,7 @@ impl PyMemoryService {
                 .recall(query, k, filter.as_ref())
                 .map_err(to_py_err)
         })?;
-        let list = PyList::empty(py);
-        for hit in hits {
-            list.append(recollection_to_dict(py, hit)?)?;
-        }
-        Ok(list.into())
+        Ok(recollections_to_list(py, hits)?.into())
     }
 
     /// Fused vector + `ColumnStore` recall: like [`recall`](Self::recall) but the
@@ -325,22 +385,9 @@ impl PyMemoryService {
         k: usize,
     ) -> PyResult<Py<PyAny>> {
         let k = limits::clamp_recall_limit(k);
-        let filters: Vec<ColumnFilter> = filters
-            .into_iter()
-            .map(|(field, op, value)| {
-                Ok(ColumnFilter {
-                    field,
-                    op: parse_op(&op)?,
-                    value: python_to_json(py, &value)?,
-                })
-            })
-            .collect::<PyResult<Vec<_>>>()?;
+        let filters = to_column_filters(py, filters)?;
         let hits = py.detach(|| self.svc.recall_where(query, k, &filters).map_err(to_py_err))?;
-        let list = PyList::empty(py);
-        for hit in hits {
-            list.append(recollection_to_dict(py, hit)?)?;
-        }
-        Ok(list.into())
+        Ok(recollections_to_list(py, hits)?.into())
     }
 
     /// Fused vector + graph recall: like [`recall`](Self::recall), but also
@@ -380,20 +427,10 @@ impl PyMemoryService {
         let dated = date_field
             .as_ref()
             .map(|field| format_dated_context(&hits, field));
-
-        let memories = PyList::empty(py);
-        for hit in hits {
-            memories.append(recollection_to_dict(py, hit)?)?;
-        }
+        let memories = recollections_to_list(py, hits)?;
         match dated {
             None => Ok(memories.into()),
-            Some(ctx) => {
-                let out = PyDict::new(py);
-                out.set_item(PyString::intern(py, "memories"), memories)?;
-                out.set_item(PyString::intern(py, "dated_context"), ctx.timeline)?;
-                out.set_item(PyString::intern(py, "now"), ctx.now)?;
-                Ok(out.into())
-            }
+            Some(ctx) => dated_recall_to_dict(py, &memories, ctx),
         }
     }
 
