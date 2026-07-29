@@ -27,3 +27,29 @@ pub fn meta(pairs: &[(&str, Value)]) -> Metadata {
         .map(|(k, v)| ((*k).to_owned(), v.clone()))
         .collect()
 }
+
+/// A canned extractor: two facts that share the topic `rust` (and nothing
+/// else), so the only path from one to the other runs through the shared
+/// hub. One definition for every suite that needs a deterministic two-fact
+/// graph — `extract_bdd` (graph liveness) and `forget_orphan_hubs_bdd`
+/// (orphan collection) used to carry byte-identical private copies.
+pub struct SharedTopicExtractor;
+
+impl velesdb_memory::extract::Extractor for SharedTopicExtractor {
+    fn extract(
+        &self,
+        _text: &str,
+    ) -> Result<Vec<velesdb_memory::extract::ExtractedFact>, velesdb_memory::extract::ExtractError>
+    {
+        Ok(vec![
+            velesdb_memory::extract::ExtractedFact {
+                text: "Alice ships the parser in Rust.".to_string(),
+                entities: vec!["rust".to_string(), "parser".to_string()],
+            },
+            velesdb_memory::extract::ExtractedFact {
+                text: "Bob maintains the Rust toolchain.".to_string(),
+                entities: vec!["rust".to_string()],
+            },
+        ])
+    }
+}

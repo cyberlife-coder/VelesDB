@@ -910,6 +910,50 @@ mod tests {
         assert!(sm.relations(1).unwrap().is_empty());
     }
 
+    /// incoming_relations() is the mirror of relations(): the edge `1 -> 2`
+    /// is visible from `2`'s side with its source intact, and only there.
+    #[test]
+    fn test_incoming_relations_exposes_the_edge_from_the_target_side() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "context", &emb).unwrap();
+        sm.store(2, "fact", &emb).unwrap();
+        let edge_id = sm.relate(1, 2, "RELATES_TO", None).unwrap();
+
+        let incoming = sm.incoming_relations(2).unwrap();
+        assert_eq!(incoming.len(), 1);
+        assert_eq!(incoming[0].id(), edge_id);
+        assert_eq!(incoming[0].source(), 1);
+        assert_eq!(incoming[0].label(), "RELATES_TO");
+        assert!(
+            sm.incoming_relations(1).unwrap().is_empty(),
+            "the source side has no incoming edge"
+        );
+    }
+
+    /// incoming_relations() drops an edge whose SOURCE is TTL-expired — the
+    /// mirror of relations() filtering expired targets: the live endpoint is
+    /// always the queried one, the filter guards the far end.
+    #[test]
+    fn test_incoming_relations_filters_expired_source() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "ephemeral", &emb).unwrap();
+        sm.store(2, "fact", &emb).unwrap();
+        sm.relate(1, 2, "RELATES_TO", None).unwrap();
+
+        sm.set_ttl_durable(1, 0).unwrap(); // source expires immediately
+
+        assert!(
+            sm.incoming_relations(2).unwrap().is_empty(),
+            "an edge from an expired source is dead and must not be reported"
+        );
+    }
+
     /// relate() refuses missing and expired endpoints (write surfaces must
     /// not resurrect or dangle).
     #[test]
@@ -1252,6 +1296,184 @@ mod tests {
         assert_eq!(
             entry.expires_at, original_expiry,
             "reserved key in updates must not clobber the durable expiry"
+        );
+    }
+
+    // ── Reserved-key carry-forward on re-store ────────────────────────────────
+
+    /// Re-storing the same id (a `remember` on an already-known fact) rewrites
+    /// the payload from scratch. Reserved `_veles_*` system keys written by
+    /// other subsystems (RL confidence, entity tags) must be carried forward
+    /// from the previous version, or a plain content refresh silently wipes
+    /// learned state.
+    #[test]
+    fn test_restore_carries_forward_reserved_system_keys() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+
+        let mut meta = meta_one("_veles_confidence", serde_json::json!(0.75));
+        meta.insert(
+            "_veles_entities".to_string(),
+            serde_json::json!(["parking_lot"]),
+        );
+        meta.insert("project".to_string(), serde_json::json!("veles"));
+        sm.store_with_metadata(1, "first version", &emb, &meta)
+            .unwrap();
+
+        sm.store(1, "second version", &emb).unwrap();
+
+        let after = sm.get_metadata(1).unwrap().expect("fact still stored");
+        assert_eq!(
+            after.get("_veles_confidence"),
+            Some(&serde_json::json!(0.75)),
+            "reserved RL confidence must survive a content re-store"
+        );
+        assert_eq!(
+            after.get("_veles_entities"),
+            Some(&serde_json::json!(["parking_lot"])),
+            "reserved entity tags must survive a content re-store"
+        );
+        assert_eq!(
+            after.get("content"),
+            Some(&serde_json::json!("second version")),
+            "the new content must win"
+        );
+        assert!(
+            !after.contains_key("project"),
+            "non-reserved user metadata is NOT carried forward (only `_veles_*` is)"
+        );
+    }
+
+    /// Carry-forward never overrides: a reserved key supplied by the caller in
+    /// the new metadata wins over the value stored under the previous version.
+    #[test]
+    fn test_restore_caller_reserved_key_wins_over_carried_forward() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+
+        sm.store_with_metadata(
+            1,
+            "first",
+            &emb,
+            &meta_one("_veles_confidence", serde_json::json!(0.10)),
+        )
+        .unwrap();
+        sm.store_with_metadata(
+            1,
+            "second",
+            &emb,
+            &meta_one("_veles_confidence", serde_json::json!(0.90)),
+        )
+        .unwrap();
+
+        let after = sm.get_metadata(1).unwrap().expect("fact still stored");
+        assert_eq!(
+            after.get("_veles_confidence"),
+            Some(&serde_json::json!(0.90)),
+            "the caller's reserved value must not be shadowed by the prior one"
+        );
+    }
+
+    /// An explicit TTL still wins over a carried-forward `_veles_expires_at`:
+    /// the durable expiry parameter is applied after the carry-forward pass.
+    #[test]
+    fn test_restore_explicit_ttl_wins_over_carried_forward_expiry() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let ttl = Arc::new(MemoryTtl::new());
+        let sm = SemanticMemory::new(Arc::clone(&db), 4, Arc::clone(&ttl)).unwrap();
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+
+        sm.store_with_ttl(1, "mortal fact", &emb, 10).unwrap();
+        let first = ttl
+            .get(MemoryKind::Semantic, 1)
+            .expect("TTL tracked at store time")
+            .expires_at;
+
+        sm.store_with_ttl(1, "mortal fact, refreshed", &emb, 9_999)
+            .unwrap();
+        let second = ttl
+            .get(MemoryKind::Semantic, 1)
+            .expect("TTL still tracked after re-store")
+            .expires_at;
+
+        assert!(
+            second > first,
+            "the explicit expiry must overwrite the carried-forward one \
+             (first={first}, second={second})"
+        );
+    }
+
+    /// Carry-forward reads the *live* prior version: an id whose fact has
+    /// expired contributes nothing, so a re-store starts from a clean payload.
+    #[test]
+    fn test_restore_after_expiry_carries_nothing_forward() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let ttl = Arc::new(MemoryTtl::new());
+        let sm = SemanticMemory::new(Arc::clone(&db), 4, Arc::clone(&ttl)).unwrap();
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+
+        let meta = meta_one("_veles_confidence", serde_json::json!(0.75));
+        sm.store_with_metadata(1, "doomed", &emb, &meta).unwrap();
+        ttl.set_ttl(MemoryKind::Semantic, 1, 0);
+        assert!(sm.get(1).unwrap().is_none(), "fact must be expired");
+
+        // `store_with_ttl` re-arms the TTL map, so the refreshed fact is live
+        // again and its payload observable.
+        sm.store_with_ttl(1, "fresh start", &emb, 9_999).unwrap();
+
+        let after = sm.get_metadata(1).unwrap().expect("fact re-stored");
+        assert!(
+            !after.contains_key("_veles_confidence"),
+            "an expired prior version must not leak its reserved keys forward"
+        );
+    }
+    /// What the `!contains_key` guard of `carry_forward_reserved_keys` actually
+    /// protects — and the reason this test exists separately from the expiry
+    /// one next to it.
+    ///
+    /// The durable expiry is guaranteed TWICE: carry-forward may copy an old
+    /// one, then `attach_expiry` overwrites it unconditionally. So no
+    /// single-fault mutation of the guard can change the expiry, and a test
+    /// phrased around it is inert by construction — mutation testing showed
+    /// exactly that.
+    ///
+    /// The learned state has no second mechanism. `_veles_confidence` is
+    /// written by reinforcement, never re-supplied by a content re-store, and
+    /// the guard is the only thing standing between it and the payload the
+    /// caller hands in. Remove the guard and a re-store that carries its own
+    /// value has it silently replaced by the stale one.
+    #[test]
+    fn test_restore_keeps_a_freshly_supplied_reserved_key_over_the_carried_one() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let ttl = Arc::new(MemoryTtl::new());
+        let sm = SemanticMemory::new(Arc::clone(&db), 4, Arc::clone(&ttl)).unwrap();
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let mut learned = serde_json::Map::new();
+        learned.insert("_veles_confidence".to_string(), serde_json::json!(0.10));
+        sm.store_with_metadata(1, "a fact the agent has doubted", &emb, &learned)
+            .unwrap();
+        // A re-store that supplies its OWN value for the same reserved key.
+        let mut refreshed = serde_json::Map::new();
+        refreshed.insert("_veles_confidence".to_string(), serde_json::json!(0.90));
+        sm.store_with_metadata(1, "the same fact, now trusted", &emb, &refreshed)
+            .unwrap();
+        let payload = sm
+            .get_metadata(1)
+            .expect("the re-stored fact is readable")
+            .expect("and it exists");
+        assert_eq!(
+            payload.get("_veles_confidence"),
+            Some(&serde_json::json!(0.90)),
+            "a value the caller supplied must not be shadowed by the carried-forward \
+             one — got {:?}",
+            payload.get("_veles_confidence")
         );
     }
 }

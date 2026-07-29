@@ -3,6 +3,7 @@
 //! Stores facts and knowledge as vectors with similarity search.
 //! Each fact has an ID, content text, embedding vector, and optional metadata.
 
+use crate::collection::Collection;
 use crate::{Database, Point};
 use parking_lot::RwLock;
 use serde_json::{Map, Value};
@@ -198,36 +199,58 @@ impl SemanticMemory {
         memory_helpers::validate_dimension(self.dimension, embedding.len())?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let mut payload = build_payload(content, metadata);
-        // Preserve reserved system keys (`_veles_*`: durable TTL, RL confidence,
-        // entity tags) from a prior version of this fact, so a content re-store
-        // (`remember`) does not silently wipe learned state. Caller metadata is
-        // already in `payload` and the explicit `expires_at` below still wins,
-        // so a carried-forward value is only used when nothing overwrites it.
-        if self.stored_ids.read().contains(&id) {
-            if let Ok(existing) = memory_helpers::ensure_live(
-                &collection,
-                &self.collection_name,
-                &self.ttl,
-                MemoryKind::Semantic,
-                id,
-            ) {
-                if let (Some(prior), Some(obj)) = (
-                    existing.payload.as_ref().and_then(Value::as_object),
-                    payload.as_object_mut(),
-                ) {
-                    for (k, v) in prior {
-                        if k.starts_with("_veles_") && !obj.contains_key(k) {
-                            obj.insert(k.clone(), v.clone());
-                        }
-                    }
-                }
-            }
-        }
+        self.carry_forward_reserved_keys(&collection, id, &mut payload);
         memory_helpers::attach_expiry(&mut payload, expires_at);
         let point = Point::new(id, embedding.to_vec(), Some(payload));
         memory_helpers::upsert_points(&collection, vec![point])?;
         self.stored_ids.write().insert(id);
         Ok(())
+    }
+
+    /// Copies the reserved system keys (`_veles_*`: durable TTL, RL confidence,
+    /// entity tags) of the live prior version of `id` into `payload`, so a
+    /// content re-store (`remember`) does not silently wipe learned state.
+    ///
+    /// Only keys `payload` does not already carry are copied — that guard,
+    /// and it alone, is what keeps a carried-forward value from shadowing
+    /// something the caller meant.
+    ///
+    /// The ordering with `attach_expiry` is deliberately NOT part of the
+    /// argument: `attach_expiry` is a no-op on `None` and an unconditional
+    /// insert on `Some`, so running it before or after this pass gives the
+    /// same payload either way. An earlier revision of this comment claimed
+    /// the explicit expiry wins *because* it is attached afterwards; mutation
+    /// testing showed the two orderings are strictly equivalent, so the
+    /// reasoning was false even though the code was right. Justifying a
+    /// correct behaviour by the wrong mechanism is how the next reader ends
+    /// up preserving the mechanism instead of the behaviour.
+    ///
+    /// An unknown, unreadable or expired prior version contributes nothing —
+    /// this is best-effort enrichment, never a failure.
+    fn carry_forward_reserved_keys(&self, collection: &Collection, id: u64, payload: &mut Value) {
+        if !self.stored_ids.read().contains(&id) {
+            return;
+        }
+        let Ok(existing) = memory_helpers::ensure_live(
+            collection,
+            &self.collection_name,
+            &self.ttl,
+            MemoryKind::Semantic,
+            id,
+        ) else {
+            return;
+        };
+        let (Some(prior), Some(obj)) = (
+            existing.payload.as_ref().and_then(Value::as_object),
+            payload.as_object_mut(),
+        ) else {
+            return;
+        };
+        for (k, v) in prior {
+            if k.starts_with("_veles_") && !obj.contains_key(k) {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
     }
 
     /// Stores a fact under `preferred_id`, or under a freshly allocated id when
@@ -358,6 +381,27 @@ impl SemanticMemory {
         id: u64,
     ) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
         memory_helpers::relations_of(
+            &self.db,
+            &self.collection_name,
+            id,
+            &self.ttl,
+            MemoryKind::Semantic,
+        )
+    }
+
+    /// Returns the incoming relations of a fact (edges pointing at it).
+    ///
+    /// The mirror of [`Self::relations`]: edges whose *source* is TTL-expired
+    /// are filtered out.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CollectionError` when the collection cannot be resolved.
+    pub fn incoming_relations(
+        &self,
+        id: u64,
+    ) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
+        memory_helpers::incoming_relations_of(
             &self.db,
             &self.collection_name,
             id,

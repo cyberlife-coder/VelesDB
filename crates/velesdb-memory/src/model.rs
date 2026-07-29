@@ -201,12 +201,12 @@ impl FusionOptions {
     /// ([`clamp_hops`](crate::limits::clamp_hops)), `graph_boost` defaulted when
     /// absent, and `pool` clamped to the recall ceiling
     /// ([`clamp_recall_limit`](crate::limits::clamp_recall_limit)) or left at the
-    /// proven default. The MCP `recall_fused` tool (which exposes no `pool`, so
-    /// passes `None`) and the Python `recall_fused` binding both build their
-    /// options here so the transports can't drift on what they accept. A
-    /// non-finite `graph_boost` is not filtered here — that guard lives in
-    /// [`Self::sanitized`], applied by fusion itself so *every* caller is
-    /// covered, not just this constructor.
+    /// proven default. The MCP `recall_fused` tool and the Python
+    /// `recall_fused` binding both build their options here — same three
+    /// knobs, same clamps — so the transports can't drift on what they
+    /// accept. A non-finite `graph_boost` is not filtered here — that guard
+    /// lives in [`Self::sanitized`], applied by fusion itself so *every*
+    /// caller is covered, not just this constructor.
     #[must_use]
     pub fn from_knobs(hops: Option<usize>, graph_boost: Option<f64>, pool: Option<usize>) -> Self {
         let defaults = Self::default();
@@ -255,12 +255,28 @@ pub struct MemoryNode {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct MemoryEdge {
+    /// Stable id of the edge itself — what
+    /// [`MemoryStore::unrelate`](crate::storage::MemoryStore::unrelate)
+    /// removes by.
+    pub id: u64,
     /// Source memory id.
     pub from: u64,
     /// Target memory id.
     pub to: u64,
     /// Relationship label.
     pub relation: String,
+}
+
+/// Outcome of [`MemoryService::unrelate`](crate::service::MemoryService::unrelate):
+/// idempotent by design, so an absent edge is a `found: false` answer, not an
+/// error — a cleanup must be replayable.
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub struct UnrelateOutcome {
+    /// Whether at least one matching edge existed and was removed.
+    pub found: bool,
+    /// How many matching edges were removed (parallel duplicates included).
+    pub removed: usize,
 }
 
 /// One typed edge leaving an entity, as reported by
@@ -274,6 +290,23 @@ pub struct EntityRelation {
     pub target_id: u64,
     /// Stored content of the far end — for an entity hub, `Entity: <name>`.
     pub target: String,
+}
+
+/// What [`crate::MemoryService::remember_extracted`] actually did with a
+/// passage: the stored fact ids, and how many extracted facts it had to drop.
+///
+/// A separate struct rather than a bare `Vec<u64>` because the drop count is
+/// part of the contract: an extracted fact past the embeddable cap is
+/// *skipped* — one unusable element must not cost the others — and a skip the
+/// caller cannot see is indistinguishable from the model simply extracting
+/// fewer facts.
+#[derive(Debug, Clone)]
+pub struct RememberedExtraction {
+    /// Stable ids of the stored facts, in extraction order.
+    pub ids: Vec<u64>,
+    /// Extracted facts dropped for exceeding
+    /// [`crate::limits::MAX_EMBEDDABLE_TEXT_BYTES`].
+    pub skipped_over_cap: usize,
 }
 
 /// Everything the auto-built graph knows about one named entity: the

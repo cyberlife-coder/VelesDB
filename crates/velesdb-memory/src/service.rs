@@ -20,6 +20,7 @@ use crate::extract::{ExtractedAttribute, ExtractedRelation, Extractor};
 use crate::id;
 use crate::model::{
     ColumnFilter, EntityProfile, EntityRelation, Explanation, Link, MemoryNode, Recollection,
+    RememberedExtraction, UnrelateOutcome,
 };
 #[cfg(feature = "persistence")]
 use crate::storage::NativeStore;
@@ -354,7 +355,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let Ok(mut extraction) = extractor.extract_graph(fact) else {
             return;
         };
-        crate::extract::orient_possessive_kinship(fact, &mut extraction.relations);
+        crate::extract::orient_kinship(fact, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64)> = HashSet::new();
         let mut seeded: HashSet<u64> = HashSet::new();
@@ -405,30 +406,36 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     ///
     /// Entity hubs are content-addressed, so the same topic seen across many
     /// calls collapses onto one hub. Returns the ids of the stored facts (entity
-    /// hubs excluded), in extraction order.
+    /// hubs excluded), in extraction order, plus how many facts were skipped
+    /// for exceeding the embeddable cap — one unusable fact must not cost the
+    /// others, the policy every other stage of this pipeline already follows
+    /// (a malformed triple is skipped, a blank entity is skipped).
     ///
     /// # Errors
     /// Returns [`MemoryError::EmptyFact`] for empty/whitespace `text`,
     /// [`MemoryError::Extract`] if extraction fails, [`MemoryError::ReservedKey`]
     /// if `metadata` names a reserved key, [`MemoryError::MetadataTooLarge`] if
     /// `metadata` exceeds [`crate::limits::MAX_METADATA_BYTES`], or a storage
-    /// error if persistence fails.
+    /// error if persistence fails. A fact past
+    /// [`crate::limits::MAX_EMBEDDABLE_TEXT_BYTES`] is NOT an error: it is
+    /// counted in [`RememberedExtraction::skipped_over_cap`] and the call
+    /// carries on.
     pub fn remember_extracted<X: Extractor>(
         &self,
         text: &str,
         extractor: &X,
         metadata: Option<&Metadata>,
-    ) -> Result<Vec<u64>, MemoryError> {
+    ) -> Result<RememberedExtraction, MemoryError> {
         let text = text.trim();
         if text.is_empty() {
             return Err(MemoryError::EmptyFact);
         }
         let mut extraction = extractor.extract_graph(text)?;
-        crate::extract::orient_possessive_kinship(text, &mut extraction.relations);
+        crate::extract::orient_kinship(text, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64)> = HashSet::new();
         let mut seeded: HashSet<u64> = HashSet::new();
-        let fact_ids = self.store_extracted_facts(
+        let outcome = self.store_extracted_facts(
             &extraction.facts,
             metadata,
             &mut entity_ids,
@@ -442,7 +449,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             &mut seeded,
         )?;
         self.wire_attributes(&extraction.attributes, &mut entity_ids)?;
-        Ok(fact_ids)
+        Ok(outcome)
     }
 
     /// Look up everything known about a named entity: the attributes merged
@@ -596,18 +603,35 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         entity_ids: &mut HashMap<String, u64>,
         edges: &mut HashSet<(u64, u64)>,
         seeded: &mut HashSet<u64>,
-    ) -> Result<Vec<u64>, MemoryError> {
-        let mut fact_ids = Vec::with_capacity(facts.len());
+    ) -> Result<RememberedExtraction, MemoryError> {
+        let mut ids = Vec::with_capacity(facts.len());
+        let mut skipped_over_cap = 0;
         for fact in facts {
             let content = fact.text.trim();
             if content.is_empty() {
                 continue;
             }
-            let fact_id = self.remember_inner(content, &[], metadata, None, false)?;
-            fact_ids.push(fact_id);
+            // An over-cap fact is skipped, not fatal: aborting here used to
+            // leave the previous iterations persisted with no rollback, no
+            // graph wiring, and no ids returned — the worst of every world.
+            // Every OTHER error still aborts: they signal bad caller input
+            // (reserved keys, oversized metadata) or a failing store, where
+            // carrying on would compound the damage.
+            let fact_id = match self.remember_inner(content, &[], metadata, None, false) {
+                Ok(id) => id,
+                Err(MemoryError::FactTooLarge { .. }) => {
+                    skipped_over_cap += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            ids.push(fact_id);
             self.wire_entities(fact_id, &fact.entities, entity_ids, edges, seeded)?;
         }
-        Ok(fact_ids)
+        Ok(RememberedExtraction {
+            ids,
+            skipped_over_cap,
+        })
     }
 
     /// Link `fact_id` to each of its topics with a deduplicated edge in *both*
@@ -917,6 +941,61 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         self.store.relate(from, to, relation)
     }
 
+    /// Remove the edge(s) `from -relation-> to`: [`Self::relate`]'s exact
+    /// undo (issue #1661), so a mistaken edge no longer costs the facts at
+    /// its endpoints. Neither the facts nor any entity hub are touched —
+    /// collecting an orphaned hub stays [`Self::forget`]'s job.
+    ///
+    /// Idempotent: an absent edge is `found: false`, not an error, so a
+    /// cleanup is replayable. It refuses exactly what `relate` refuses
+    /// (empty label, self-loop), and deliberately does NOT require the
+    /// endpoints to exist — the edge of a forgotten fact is already gone,
+    /// and reporting that as an error would break replay.
+    ///
+    /// Scope: the store does not distinguish an explicit edge from one the
+    /// autograph derived from a passage, so `unrelate` removes both alike.
+    /// To correct an autograph edge, prefer `forget` + `remember` of the
+    /// source fact — otherwise a later `remember` of the same passage can
+    /// rebuild the edge removed here.
+    ///
+    /// # Errors
+    /// Returns [`MemoryError::InvalidRelation`] for a bad label,
+    /// [`MemoryError::SelfRelation`] if both endpoints are the same memory,
+    /// or a storage error if lookup or removal fails.
+    pub fn unrelate(
+        &self,
+        from: u64,
+        to: u64,
+        relation: &str,
+    ) -> Result<UnrelateOutcome, MemoryError> {
+        validate_relation(relation)?;
+        if from == to {
+            return Err(MemoryError::SelfRelation(from));
+        }
+        let removed = self.remove_matching_edges(from, to, relation)?;
+        Ok(UnrelateOutcome {
+            found: removed > 0,
+            removed,
+        })
+    }
+
+    /// [`Self::unrelate`]'s removal pass: resolve `from`'s outgoing edges and
+    /// delete every one matching `(to, relation)` by its id, counting them.
+    fn remove_matching_edges(
+        &self,
+        from: u64,
+        to: u64,
+        relation: &str,
+    ) -> Result<usize, MemoryError> {
+        let mut removed = 0usize;
+        for edge in self.store.relations(from)? {
+            if edge.to == to && edge.relation == relation && self.store.unrelate(edge.id)? {
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
     /// Forget (delete) the memory with `fact_id`. Returns whether a memory
     /// actually existed under that id — the underlying store's `delete` is a
     /// silent no-op on an unknown id (matching most backends' idempotent
@@ -1165,13 +1244,51 @@ fn validate_fact(fact: &str) -> Result<(), MemoryError> {
     if fact.is_empty() {
         return Err(MemoryError::EmptyFact);
     }
-    if fact.len() > crate::limits::MAX_EMBEDDABLE_TEXT_BYTES {
+    validate_embeddable(fact)
+}
+
+/// Refuse a text past the size an embedding model still accepts.
+///
+/// Extracted from [`validate_fact`] so every path that embeds CALLER content
+/// answers to the same cap: `remember` refuses (this function), while the
+/// context bridge truncates via [`embeddable_prefix`] — but neither may hand
+/// the backend an oversized text and relay its raw failure, which is how
+/// issue #1654's `ollama embeddings call failed` (naming neither size nor
+/// cap) reached users.
+pub(crate) fn validate_embeddable(text: &str) -> Result<(), MemoryError> {
+    if text.len() > crate::limits::MAX_EMBEDDABLE_TEXT_BYTES {
         return Err(MemoryError::FactTooLarge {
-            bytes: fact.len(),
+            bytes: text.len(),
             max: crate::limits::MAX_EMBEDDABLE_TEXT_BYTES,
         });
     }
     Ok(())
+}
+
+/// The longest prefix of `text` that fits the embeddable cap without
+/// splitting a UTF-8 character.
+///
+/// For content that must be STORED whole but whose vector only serves
+/// similarity search (context sources: retrieval is hash-addressed, the
+/// vector is a ranking aid), truncating the *embedded* text is the correct
+/// trade — refusing would fail a legitimate compile, and a placeholder
+/// vector would remove the source from semantic recall entirely.
+///
+/// Gated on `context`: the compiler's source writer is its only caller, so a
+/// build without that feature sees dead code, which CI's `-D warnings`
+/// turns into a failed build. Same shape as `positive_ttl` — and only the
+/// per-feature ISOLATION loop catches it, never a feature combination.
+#[cfg(feature = "context")]
+pub(crate) fn embeddable_prefix(text: &str) -> &str {
+    let cap = crate::limits::MAX_EMBEDDABLE_TEXT_BYTES;
+    if text.len() <= cap {
+        return text;
+    }
+    let mut end = cap;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 /// Refuse an explicit per-call TTL of `0`.

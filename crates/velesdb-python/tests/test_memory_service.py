@@ -49,6 +49,32 @@ def test_why_returns_the_connected_subgraph(mem):
     assert any(e["relation"] == "decided_in" for e in why["edges"])
 
 
+# --- entity -----------------------------------------------------------------
+# The read path for questions ABOUT a named thing. Entity hubs are only ever
+# created by extraction (remember_extracted), which needs a running Ollama, so
+# what is exercised offline is the miss contract — the first one a caller hits,
+# and the one that must never raise.
+
+
+def test_entity_unknown_name_reports_a_miss_and_echoes_the_canonical_query(mem):
+    profile = mem.entity("  Alex Martin  ")
+    assert profile["found"] is False
+    assert profile["id"] == 0
+    # A miss carries no name of its own: the query is echoed canonicalized so
+    # several lookups can be paired with their question.
+    assert profile["name"] == "alex martin"
+    assert profile["attributes"] == {}
+    assert profile["relations"] == []
+
+
+def test_entity_does_not_surface_a_mentioning_sentence(mem):
+    # A remembered sentence mentioning a name creates NO entity hub — that is
+    # the whole distinction between recall (sentences) and entity (things).
+    mem.remember("Alex Martin shipped the parking_lot migration")
+    assert mem.recall("Alex Martin", k=5), "recall does find the sentence"
+    assert mem.entity("Alex Martin")["found"] is False
+
+
 def test_forget_removes_a_memory(mem):
     fid = mem.remember("ephemeral note about France")
     assert mem.forget(fid) is True
@@ -262,3 +288,44 @@ def test_feedback_unknown_id_raises_key_error(mem):
     # silent no-op — feedback has no result to report if the fact is gone.
     with pytest.raises(KeyError):
         mem.feedback(999_999, True)
+
+
+def test_unrelate_removes_the_edge_and_keeps_both_facts(mem):
+    # relate's exact undo: the edge stops being traversable, the two facts stay.
+    decision = mem.remember("we chose parking_lot to avoid lock poisoning")
+    ticket = mem.remember("EPIC-317 xyzzy quux frobnicate")
+    mem.relate(decision, ticket, "decided_in")
+
+    def reached():
+        why = mem.why("we chose parking_lot to avoid lock poisoning", max_hops=2)
+        return any(n["id"] == ticket for n in why["nodes"])
+
+    assert reached(), "precondition: the edge makes the ticket traversable"
+
+    outcome = mem.unrelate(decision, ticket, "decided_in")
+    assert outcome == {"found": True, "removed": 1}
+    assert not reached(), "the edge is really gone"
+
+    survivors = {h["id"] for h in mem.recall("parking_lot lock poisoning EPIC-317", k=5)}
+    assert decision in survivors and ticket in survivors
+
+
+def test_unrelate_is_idempotent_on_an_absent_edge(mem):
+    # An absent edge is an answer, never an exception — a cleanup must replay.
+    a = mem.remember("fact a for the unrelate guard")
+    b = mem.remember("fact b for the unrelate guard")
+    assert mem.unrelate(a, b, "decided_in") == {"found": False, "removed": 0}
+
+    mem.relate(a, b, "decided_in")
+    assert mem.unrelate(a, b, "decided_in") == {"found": True, "removed": 1}
+    assert mem.unrelate(a, b, "decided_in") == {"found": False, "removed": 0}
+
+
+def test_unrelate_refuses_exactly_what_relate_refuses(mem):
+    # Same taxonomy as relate: invalid input surfaces as ValueError.
+    a = mem.remember("fact a for the unrelate refusals")
+    b = mem.remember("fact b for the unrelate refusals")
+    with pytest.raises(ValueError):
+        mem.unrelate(a, b, "")
+    with pytest.raises(ValueError):
+        mem.unrelate(a, a, "decided_in")

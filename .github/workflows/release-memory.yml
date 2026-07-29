@@ -523,3 +523,48 @@ jobs:
           fi
           ls -la daemon-archives/
           gh release upload "$TAG" daemon-archives/* --clobber
+
+  # Meme raison que dans release.yml : c'est CE pipeline qui a creusé l'ecart.
+  # Les releases 0.11.3, 0.11.4 et 0.11.5 ont toutes atterri sur main sans
+  # jamais etre reportees sur develop, et la branche de release suivante a
+  # paye cinq conflits pour rien.
+  #
+  # Une PR et non un push : un back-merge peut legitimement conflicter, et
+  # cet arbitrage demande un humain. Ce que l'automatisation garantit, c'est
+  # qu'il ne soit jamais oublie.
+  back-merge:
+    name: Back-merge main into develop
+    runs-on: ubuntu-latest
+    needs: [validate, publish-crate]
+    if: needs.publish-crate.result == 'success'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Ouvrir la PR de back-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          git config user.name  "$(git log -1 --format='%an' origin/main)"
+          git config user.email "$(git log -1 --format='%ae' origin/main)"
+          if git merge-base --is-ancestor origin/main origin/develop; then
+            echo "::notice::develop contient deja main — rien a reporter."
+            exit 0
+          fi
+          ref="${GITHUB_REF_NAME}"
+          branch="chore/back-merge-${ref}"
+          git checkout -B "$branch" origin/main
+          git push -u origin "$branch" --force-with-lease
+          gh pr create --base develop --head "$branch" \
+            --title "chore: reporter la release ${ref} de main vers develop" \
+            --body "Back-merge automatique, ouvert par le pipeline de release velesdb-memory.
+
+          \`main\` porte les commits de ${ref} que \`develop\` n'a pas. Sans ce report, la prochaine branche de release rencontre des conflits sans raison d'etre — et resoudre un conflit est le moment ou l'on perd du travail sans le voir.
+
+          Des conflits ici sont reels et demandent un arbitrage humain : c'est pourquoi ce job ouvre une PR plutot que de pousser." \
+            || echo "::notice::PR de back-merge deja ouverte."
+

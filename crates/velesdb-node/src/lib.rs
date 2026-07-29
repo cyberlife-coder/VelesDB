@@ -1,9 +1,9 @@
 //! Node.js (napi-rs) binding for the `velesdb-memory` `MemoryService` — the
 //! agent-memory wedge: `remember` / `recall` / `recallWhere` / `relate` /
-//! `forget` / `why` / `feedback` / `rememberExtracted` / `compileContext` /
+//! `unrelate` / `forget` / `why` / `entity` / `feedback` / `rememberExtracted` / `compileContext` /
 //! `compileTranscript` / `contextSavings` / `explainCompilation` /
 //! `retrieveContextSource` / `saveWorkingContext` / `loadWorkingContext` /
-//! `listWorkingContexts`.
+//! `listWorkingContexts` / `suggestBudget`.
 //!
 //! It wraps the exact same hardened Rust the MCP server and the `PyO3` binding use
 //! (no logic is reimplemented), mirroring `crates/velesdb-python/src/agent_memory_service.rs`
@@ -47,15 +47,17 @@ use std::sync::Arc;
 use napi::bindgen_prelude::AsyncTask;
 use napi_derive::napi;
 use serde_json::Value;
-use velesdb_memory::context::{CompilePolicy, CompileRequest, ContextCompiler, WorkingContext};
+use velesdb_memory::context::{
+    suggest_token_budget, CompilePolicy, CompileRequest, ContextCompiler, WorkingContext,
+};
 use velesdb_memory::{
     DynEmbedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor, DEFAULT_DIMENSION,
     DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::dto::{
-    ColumnFilterJs, CompiledContextJs, DatedRecallJs, ExplanationJs, FusionOptionsJs, LinkJs,
-    RecollectionJs,
+    ColumnFilterJs, CompiledContextJs, DatedRecallJs, EntityProfileJs, ExplanationJs,
+    FusionOptionsJs, LinkJs, RecollectionJs, UnrelateJs,
 };
 use crate::error::{invalid_input, to_napi_err, CODE_INTERNAL};
 use crate::tasks::{Job, JsonOut};
@@ -268,6 +270,32 @@ impl MemoryStore {
         }))
     }
 
+    /// Remove the typed edge(s) `from -relation-> to` — [`relate`](Self::relate)'s
+    /// exact undo, so a mistaken edge no longer costs the facts at its endpoints.
+    /// Only the edge goes: both memories, and any entity hub, are untouched.
+    ///
+    /// Resolves to `{found, removed}`. Idempotent: removing an absent edge
+    /// answers `found: false` instead of rejecting, so a cleanup can be
+    /// replayed safely. It rejects exactly what `relate` rejects (empty
+    /// relation, `from` equal to `to`), and deliberately does NOT require the
+    /// endpoints to still exist — the edge of a forgotten fact is already gone.
+    #[napi(ts_return_type = "Promise<UnrelateJs>")]
+    pub fn unrelate(
+        &self,
+        from: String,
+        to: String,
+        relation: String,
+    ) -> AsyncTask<Job<UnrelateJs>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let from = convert::parse_id(&from)?;
+            let to = convert::parse_id(&to)?;
+            svc.unrelate(from, to, &relation)
+                .map(UnrelateJs::from)
+                .map_err(to_napi_err)
+        }))
+    }
+
     /// Record an outcome for a recalled fact: `success = true` reinforces it,
     /// `false` weakens it. Resolves to the fact's new learned confidence in
     /// `[0, 1]` — the signal `recall` re-ranks by and the context compiler's
@@ -311,6 +339,27 @@ impl MemoryStore {
             svc.why(&decision, max_hops, filter.as_ref())
                 .map(ExplanationJs::from)
                 .map_err(to_napi_err)
+        }))
+    }
+
+    /// Look up everything the memory graph knows about a NAMED ENTITY (a
+    /// person, a place, an organisation): the attributes merged onto its hub
+    /// and the typed edges leaving it. Use it for a question ABOUT a thing
+    /// ("how old is X", "who is X's father") rather than about the sentences
+    /// mentioning it, which is all [`recall`](Self::recall) can return —
+    /// entity hubs are deliberately invisible to recall, so without this the
+    /// attributes `rememberExtracted` builds are unreachable.
+    ///
+    /// `name` is matched case-insensitively (the id is content-addressed, so
+    /// it is stable across sessions). Resolves to `{found, id, name,
+    /// attributes, relations}`; `found: false` means nothing has ever
+    /// mentioned that name, and `name` still echoes the canonicalized query.
+    #[napi(ts_return_type = "Promise<EntityProfileJs>")]
+    pub fn entity(&self, name: String) -> AsyncTask<Job<EntityProfileJs>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let profile = svc.entity_profile(&name).map_err(to_napi_err)?;
+            Ok(EntityProfileJs::from_lookup(&name, profile))
         }))
     }
 
@@ -548,6 +597,38 @@ impl MemoryStore {
         }))
     }
 
+    /// Suggest a starting `tokenBudget` for [`Self::compile_context`], for a
+    /// named target model — looked up in a static, committed model-name to
+    /// context-window table (dated "as of", NEVER a network call).
+    /// `reserveTokens` (default 0) reserves room for the response, mirroring
+    /// `compileContext`'s own `policy.response_reserve_tokens`.
+    ///
+    /// `window`/`suggested_budget` come back `null` for a model that is not
+    /// in the table — an honest "unknown", never a guess; the table is
+    /// extended in a new release rather than worked around here.
+    ///
+    /// `reserveTokens` is a `u32` for the same reason `ttlSeconds` is: napi
+    /// marshals a `u64` as a `BigInt`, and 4 billion reserved tokens is
+    /// already three orders of magnitude past the largest window in the
+    /// table.
+    #[napi(
+        js_name = "suggestBudget",
+        ts_return_type = "Promise<{ window: number | null; suggested_budget: number | null; source: string }>"
+    )]
+    pub fn suggest_budget(
+        &self,
+        target_model: String,
+        reserve_tokens: Option<u32>,
+    ) -> AsyncTask<Job<JsonOut>> {
+        AsyncTask::new(Job::new(move || {
+            let budget =
+                suggest_token_budget(&target_model, u64::from(reserve_tokens.unwrap_or(0)));
+            let value = serde_json::to_value(&budget)
+                .map_err(|err| invalid_input(format!("suggested budget serialization: {err}")))?;
+            Ok(JsonOut(value))
+        }))
+    }
+
     /// Extract atomic facts from raw `text` with a local Ollama `model` and store
     /// them, auto-building the fact↔topic graph. Resolves to the stored ids.
     #[napi(
@@ -567,9 +648,14 @@ impl MemoryStore {
             let metadata = convert::to_metadata(metadata)?;
             let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
             let extractor = OllamaExtractor::new(url, model);
+            // The binding's return stays an id array (its published N-API
+            // shape); the skip count the service now reports has no slot
+            // here yet — an over-cap fact is simply absent from the ids,
+            // exactly as before this call could distinguish the two.
             let ids = svc
                 .remember_extracted(&text, &extractor, metadata.as_ref())
-                .map_err(to_napi_err)?;
+                .map_err(to_napi_err)?
+                .ids;
             Ok(ids.into_iter().map(convert::id_to_string).collect())
         }))
     }

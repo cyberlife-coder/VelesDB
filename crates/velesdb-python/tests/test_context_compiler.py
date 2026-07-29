@@ -212,6 +212,87 @@ def test_load_working_context_returns_none_when_absent(mem):
     assert mem.load_working_context("veles", "no-such-session") is None
 
 
+def test_list_working_contexts_lists_saved_sessions_most_recent_first(mem):
+    mem.save_working_context("veles", "session-a", {"goal": "first"})
+    mem.save_working_context("veles", "session-b", {"goal": "second"})
+    listed = mem.list_working_contexts("veles")
+    names = [s["session"] for s in listed["sessions"]]
+    assert set(names) == {"session-a", "session-b"}
+    assert all("saved_at" in s for s in listed["sessions"])
+
+
+def test_list_working_contexts_on_an_unused_project_is_empty_not_an_error(mem):
+    assert mem.list_working_contexts("never-used-project") == {"sessions": []}
+
+
+# --- compile_transcript -------------------------------------------------------
+
+
+def test_compile_transcript_segments_a_plain_transcript_and_compiles_it(mem):
+    out = mem.compile_transcript(
+        {
+            "query": "what broke the deploy",
+            "transcript": (
+                "System: you are a helpful agent.\n"
+                "User: what broke the deploy?\n"
+                "Assistant: clippy failed on main.\n"
+            ),
+            "token_budget": 5000,
+        }
+    )
+    assert out["context"]["content"]
+    seg = out["segmentation"]
+    assert seg["format_detected"] == "plain"
+    assert len(seg["segments"]) >= 1
+    assert seg["segments"][0]["role"] == "System"
+    # fragment_id is a 64-bit content hash: it crosses as a decimal STRING on
+    # every binding, so a float-lossy consumer downstream cannot round it.
+    assert all(s["fragment_id"].isdigit() for s in seg["segments"])
+
+
+def test_compile_transcript_honours_a_forced_jsonl_segmentation_policy(mem):
+    out = mem.compile_transcript(
+        {
+            "query": "deploy",
+            "transcript": (
+                '{"role": "user", "content": "what broke the deploy?"}\n'
+                '{"role": "assistant", "content": "clippy failed on main"}\n'
+            ),
+            "token_budget": 5000,
+            "segmentation": {"format": "jsonl"},
+        }
+    )
+    assert out["segmentation"]["format_detected"] == "jsonl"
+
+
+def test_compile_transcript_rejects_an_empty_transcript(mem):
+    with pytest.raises(ValueError):
+        mem.compile_transcript({"query": "q", "transcript": "", "token_budget": 1000})
+
+
+# --- suggest_budget -----------------------------------------------------------
+# A pure lookup in the committed model→window table: never a network call, and
+# an unknown model reports None rather than guessing.
+
+
+def test_suggest_budget_derives_a_budget_and_reserves_room(mem):
+    budget = mem.suggest_budget("gpt-4o", 8000)
+    assert budget["window"] == 128_000
+    assert budget["suggested_budget"] == 120_000  # window minus the reserve
+    # Provenance is dated, never "measured" or "fetched".
+    assert budget["source"].startswith("static table as of ")
+
+
+def test_suggest_budget_is_case_insensitive_and_defaults_the_reserve_to_zero(mem):
+    assert mem.suggest_budget("GPT-4O")["suggested_budget"] == 128_000
+
+
+def test_suggest_budget_reports_none_for_an_unknown_model_never_a_guess(mem):
+    budget = mem.suggest_budget("some-model-that-does-not-exist")
+    assert budget["window"] is None
+    assert budget["suggested_budget"] is None
+
+
 # --- typed errors -------------------------------------------------------------
 
 

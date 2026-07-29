@@ -303,11 +303,16 @@ impl MemoryStore for WasmStore {
             // graph-reached fact relative to the native ranking.
             .filter(|e| e.source == id && inner.live_fact(e.target).is_some())
             .map(|e| MemoryEdge {
+                id: e.id,
                 from: e.source,
                 to: e.target,
                 relation: e.label.clone(),
             })
             .collect())
+    }
+
+    fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
+        Ok(self.inner.borrow_mut().graph.delete_edge_by_id(edge_id))
     }
 
     fn count(&self) -> usize {
@@ -334,14 +339,24 @@ impl WasmStore {
     /// at scoring time — never re-fetched through the time-sensitive
     /// `live_fact` after ranking, so a TTL lapsing mid-query can't corrupt
     /// an admitted hit's content or metadata.
-    fn query_ranked<T>(
+    ///
+    /// `predicate` and `row` are named type parameters rather than
+    /// `impl Trait` arguments: the closure signatures carry commas of their
+    /// own (`Map<String, Value>`, `(u64, f32, &Fact)`), which a source-level
+    /// parameter counter reads as extra parameters and reports as an
+    /// eight-parameter overrun on a six-parameter function.
+    fn query_ranked<T, P, R>(
         &self,
         embedding: &[f32],
         k: usize,
         offset: usize,
-        predicate: impl Fn(&Map<String, Value>) -> bool,
-        row: impl Fn(u64, f32, &Fact) -> T,
-    ) -> Result<Vec<T>, MemoryError> {
+        predicate: P,
+        row: R,
+    ) -> Result<Vec<T>, MemoryError>
+    where
+        P: Fn(&Map<String, Value>) -> bool,
+        R: Fn(u64, f32, &Fact) -> T,
+    {
         let inner = self.inner.borrow();
         let mut ids = Vec::new();
         let mut data = Vec::new();

@@ -397,11 +397,13 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Size: [`crate::limits::MAX_MEDIA_BYTES`] /
     /// [`crate::limits::MAX_TOTAL_MEDIA_BYTES`] already bounded every
     /// fragment's `bytes_b64` before `compiler.compile` ever ran (see
-    /// `validate_media`, called from `compile`'s `validate`) — `augmented`
-    /// here is exactly the request that passed that check, so no separate
-    /// size guard is needed on the write path itself
-    /// ([`crate::limits::MAX_FACT_BYTES`] governs the unrelated MCP
-    /// `remember`/`extract` text ceiling, not this one).
+    /// `validate_media`, called from `compile`'s `validate`). TEXT is a
+    /// different story, and an earlier revision of this comment got it
+    /// wrong by claiming no size guard was needed on the write path: those
+    /// media caps say nothing about `content`, which a `path` ingestion can
+    /// fill up to 1 MiB — so [`Self::source_vector`] caps what it EMBEDS
+    /// (the stored content stays whole). The lesson stands: "another layer
+    /// already checked" must name which cap, over which field.
     fn store_context_sources(
         &self,
         augmented: &CompileRequest,
@@ -499,13 +501,24 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// index, never semantically meaningful. For a media fragment `hash` IS
     /// the raw-bytes hash (see `fragment_handle_hash`), so nothing is
     /// re-decoded here.
+    ///
+    /// A TEXT fragment is embedded over at most
+    /// [`crate::limits::MAX_EMBEDDABLE_TEXT_BYTES`] of its content
+    /// ([`super::embeddable_prefix`]) — a `path`-ingested file can be 1 MiB,
+    /// far past what the embedding backend accepts, and handing it over
+    /// whole surfaced the backend's raw failure (issue #1654's residue,
+    /// found on this very path). Truncating the *embedded* text, not the
+    /// stored content, is the right trade here: retrieval is hash-addressed
+    /// so the source stays whole, and the vector keeps ranking on the head
+    /// of the text instead of vanishing from semantic recall.
     fn source_vector(
         &self,
         fragment: &ContextFragment,
         hash: u64,
     ) -> Result<(Vec<f32>, Option<Value>), MemoryError> {
         let Some(media_ref) = &fragment.media else {
-            return Ok((self.embedder.embed(fragment.content.as_str())?, None));
+            let embeddable = super::embeddable_prefix(fragment.content.as_str());
+            return Ok((self.embedder.embed(embeddable)?, None));
         };
         let descriptor = serde_json::to_value(media_ref).unwrap_or(Value::Null);
         Ok((self.media_placeholder_embedding(hash), Some(descriptor)))

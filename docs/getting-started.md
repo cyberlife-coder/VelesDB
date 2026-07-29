@@ -96,7 +96,7 @@ Expected response:
 ```json
 {
   "status": "ok",
-  "version": "4.1.0"
+  "version": "4.2.0"
 }
 ```
 
@@ -301,4 +301,4 @@ curl -X POST http://localhost:8080/query \
 - **GitHub Discussions**: Ask questions and share ideas
 
 ---
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0

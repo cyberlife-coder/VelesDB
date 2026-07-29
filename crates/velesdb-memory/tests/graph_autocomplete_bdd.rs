@@ -308,7 +308,8 @@ fn a_fact_only_extractor_still_works_unchanged() {
     let (_dir, svc) = service();
     let ids = svc
         .remember_extracted("Alice works in Rust.", &LegacyExtractor, None)
-        .expect("extract and remember");
+        .expect("extract and remember")
+        .ids;
     assert_eq!(
         ids.len(),
         1,
