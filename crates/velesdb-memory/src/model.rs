@@ -310,7 +310,7 @@ pub struct RememberedExtraction {
 }
 
 /// Everything the auto-built graph knows about one named entity: the
-/// attributes merged onto its hub and the typed edges leaving it.
+/// attributes merged onto its hub and the typed edges touching it.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct EntityProfile {
@@ -320,8 +320,12 @@ pub struct EntityProfile {
     pub name: String,
     /// Attributes learned about this entity, reserved keys stripped.
     pub attributes: crate::service::Metadata,
-    /// Typed edges leaving this entity (bipartite `mentions` edges excluded).
+    /// Typed edges leaving this entity (bipartite scaffolding excluded).
     pub relations: Vec<EntityRelation>,
+    /// Typed edges pointing AT this entity (bipartite scaffolding excluded).
+    /// Here [`EntityRelation::target_id`]/[`EntityRelation::target`] name the
+    /// far end the edge comes FROM — its source.
+    pub relations_in: Vec<EntityRelation>,
 }
 
 /// The connected answer to a `why` question: the best-matching seed memory plus

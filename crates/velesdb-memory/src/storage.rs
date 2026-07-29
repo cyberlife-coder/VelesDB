@@ -175,6 +175,13 @@ pub trait MemoryStore {
     /// Returns [`MemoryError`] if storage access fails.
     fn relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError>;
 
+    /// The incoming edges of `id` — the mirror of [`Self::relations`], with
+    /// the same liveness rule applied to the far end (here the *source*).
+    ///
+    /// # Errors
+    /// Returns [`MemoryError`] if storage access fails.
+    fn incoming_relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError>;
+
     /// Remove the edge with `edge_id`. Returns `true` when it existed —
     /// idempotent: removing an absent edge is `Ok(false)`, never an error.
     ///
@@ -352,18 +359,13 @@ impl MemoryStore for NativeStore {
     }
 
     fn relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
-        Ok(self
-            .memory
-            .semantic()
-            .relations(id)?
-            .into_iter()
-            .map(|edge| MemoryEdge {
-                id: edge.id(),
-                from: edge.source(),
-                to: edge.target(),
-                relation: edge.label().to_owned(),
-            })
-            .collect())
+        Ok(to_memory_edges(self.memory.semantic().relations(id)?))
+    }
+
+    fn incoming_relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
+        Ok(to_memory_edges(
+            self.memory.semantic().incoming_relations(id)?,
+        ))
     }
 
     fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
@@ -376,6 +378,22 @@ impl MemoryStore for NativeStore {
     fn count(&self) -> usize {
         self.memory.semantic().count()
     }
+}
+
+/// Map core [`GraphEdge`](velesdb_core::collection::graph::GraphEdge)s to the
+/// wire-facing [`MemoryEdge`] shape — shared by both edge directions, so the
+/// two can never disagree on which endpoint or id they report.
+#[cfg(feature = "persistence")]
+fn to_memory_edges(edges: Vec<velesdb_core::collection::graph::GraphEdge>) -> Vec<MemoryEdge> {
+    edges
+        .into_iter()
+        .map(|edge| MemoryEdge {
+            id: edge.id(),
+            from: edge.source(),
+            to: edge.target(),
+            relation: edge.label().to_owned(),
+        })
+        .collect()
 }
 
 #[cfg(feature = "persistence")]
