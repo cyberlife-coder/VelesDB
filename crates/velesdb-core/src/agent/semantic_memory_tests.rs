@@ -1433,4 +1433,47 @@ mod tests {
             "an expired prior version must not leak its reserved keys forward"
         );
     }
+    /// What the `!contains_key` guard of `carry_forward_reserved_keys` actually
+    /// protects — and the reason this test exists separately from the expiry
+    /// one next to it.
+    ///
+    /// The durable expiry is guaranteed TWICE: carry-forward may copy an old
+    /// one, then `attach_expiry` overwrites it unconditionally. So no
+    /// single-fault mutation of the guard can change the expiry, and a test
+    /// phrased around it is inert by construction — mutation testing showed
+    /// exactly that.
+    ///
+    /// The learned state has no second mechanism. `_veles_confidence` is
+    /// written by reinforcement, never re-supplied by a content re-store, and
+    /// the guard is the only thing standing between it and the payload the
+    /// caller hands in. Remove the guard and a re-store that carries its own
+    /// value has it silently replaced by the stale one.
+    #[test]
+    fn test_restore_keeps_a_freshly_supplied_reserved_key_over_the_carried_one() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let ttl = Arc::new(MemoryTtl::new());
+        let sm = SemanticMemory::new(Arc::clone(&db), 4, Arc::clone(&ttl)).unwrap();
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        let mut learned = serde_json::Map::new();
+        learned.insert("_veles_confidence".to_string(), serde_json::json!(0.10));
+        sm.store_with_metadata(1, "a fact the agent has doubted", &emb, &learned)
+            .unwrap();
+        // A re-store that supplies its OWN value for the same reserved key.
+        let mut refreshed = serde_json::Map::new();
+        refreshed.insert("_veles_confidence".to_string(), serde_json::json!(0.90));
+        sm.store_with_metadata(1, "the same fact, now trusted", &emb, &refreshed)
+            .unwrap();
+        let payload = sm
+            .get_metadata(1)
+            .expect("the re-stored fact is readable")
+            .expect("and it exists");
+        assert_eq!(
+            payload.get("_veles_confidence"),
+            Some(&serde_json::json!(0.90)),
+            "a value the caller supplied must not be shadowed by the carried-forward \
+             one — got {:?}",
+            payload.get("_veles_confidence")
+        );
+    }
 }
