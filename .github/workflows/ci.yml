@@ -150,6 +150,25 @@ jobs:
       - name: Test the velesdb-memory extract feature
         run: cargo test -p velesdb-memory --features extract,ollama,persistence
 
+      # velesdb-memory publishes independently, and `cargo publish` verifies
+      # the tarball against velesdb-core AS PUBLISHED ON CRATES.IO — not the
+      # core sitting next to it in this workspace. Any call into a core API
+      # that is not released yet therefore compiles perfectly here and breaks
+      # the release, at tag time, with nothing left to do but revert.
+      #
+      # That is not hypothetical: 0.11.3 shipped exactly that way (its MCPB
+      # bundles reached the registry before packaging failed; no crate was
+      # ever published), and the same trap was caught by hand on a PR again
+      # on 2026-07-28. The identical dry-run existed only in
+      # `release-memory.yml` ("Validate packaging"), i.e. AFTER the tag — too
+      # late by construction. Running it per PR is what makes the invariant
+      # "develop is always publishable" enforceable instead of aspirational.
+      #
+      # `--locked` mirrors the release job and fails on any Cargo.lock drift
+      # rather than silently updating it.
+      - name: Validate velesdb-memory packaging (dry-run, publishability gate)
+        run: cargo publish -p velesdb-memory --dry-run --locked
+
       - name: Run Clippy (strict)
         run: |
           cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
@@ -162,6 +181,21 @@ jobs:
       # [lints] table already enables clippy::pedantic with the workspace allows.
       - name: Run Clippy (velesdb-node cdylib)
         run: cargo clippy -p velesdb-node --lib -- -D warnings
+
+      # velesdb-python was excluded from the workspace clippy for the same
+      # cdylib reason as velesdb-node — but unlike node it never got the
+      # dedicated `--lib` step, so it was linted by NOTHING: not this
+      # workflow, not compat-matrix (which excludes it too), not the git
+      # hooks. `cargo check` in propagation-guard compiled it; nothing
+      # linted it. That gap is what let a type change land green locally
+      # and fail here on `mismatched types`.
+      #
+      # `--lib` links cleanly (0 findings when introduced) and the crate's
+      # [lints] table already carries the workspace pedantic set.
+      - name: Run Clippy (velesdb-python cdylib)
+        env:
+          PYO3_PYTHON: python3
+        run: cargo clippy -p velesdb-python --lib -- -D warnings
 
       - name: Run Clippy undocumented unsafe blocks (core)
         run: |

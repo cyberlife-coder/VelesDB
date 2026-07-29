@@ -170,6 +170,14 @@ pub(super) struct RecallFusedParams {
     /// similarity more.
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) graph_boost: Option<f64>,
+    /// Depth of the oversampled vector candidate pool fusion re-ranks before
+    /// the `limit` cutoff (default: `limit` scaled up, floored at 64). That
+    /// default is already deep enough for a graph-reached fact to surface;
+    /// widen it to give a reranker more to work with, narrow it to confine
+    /// fusion to the strongest vector hits. Capped at the same ceiling
+    /// `limit` and `hops` carry.
+    #[serde(default, deserialize_with = "super::wire::lenient")]
+    pub(super) pool: Option<usize>,
     /// Name of the metadata field holding each fact's date as a `YYYYMMDD`
     /// integer (e.g. `"ts"`, `"occurred_at"`). When set, the result adds a
     /// `dated_context` timeline (facts date-prefixed and ordered oldest-first)
@@ -239,6 +247,37 @@ pub(super) struct RelateResult {
     /// Decimal-string twin of `edge_id` (issue #1468) — see
     /// [`RememberResult::id_str`].
     pub(super) edge_id_str: String,
+}
+
+/// Parameters for the `unrelate` tool — `relate`'s exact undo, so the two
+/// share the id wire contract (number or decimal string, issue #1468).
+#[derive(Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct UnrelateParams {
+    /// Source memory id of the link to remove — the side it points FROM.
+    /// Accepts a JSON number or a decimal string: always relay a previous
+    /// response's `id_str` here (issue #1468).
+    #[serde(deserialize_with = "deserialize_id")]
+    pub(super) from: u64,
+    /// Target memory id of the link to remove — the side it points TO. Same
+    /// string-or-number contract as `from`.
+    #[serde(deserialize_with = "deserialize_id")]
+    pub(super) to: u64,
+    /// Directional relationship label of the link to remove, exactly as it
+    /// was given to `relate`.
+    pub(super) relation: String,
+}
+
+/// Result of the `unrelate` tool — the service's
+/// [`UnrelateOutcome`](crate::model::UnrelateOutcome), flattened to the wire.
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct UnrelateResult {
+    /// Whether at least one matching edge existed and was removed. `false`
+    /// means no such edge — a replayed cleanup or a typo, not an error.
+    pub(super) found: bool,
+    /// How many matching edges were removed.
+    pub(super) removed: usize,
 }
 
 /// Parameters for the `forget` tool.
@@ -506,4 +545,10 @@ pub(super) struct RememberExtractedResult {
     /// Decimal-string twins of `ids`, same order (issue #1468) — see
     /// [`RememberResult::id_str`].
     pub(super) ids_str: Vec<String>,
+    /// Extracted facts DROPPED for exceeding the embeddable text cap
+    /// (2048 bytes). Additive and always present: a skip the caller cannot
+    /// see is indistinguishable from the model extracting fewer facts, and
+    /// this tool exists precisely so the caller does not have to verify what
+    /// it stored.
+    pub(super) skipped_over_cap: usize,
 }
