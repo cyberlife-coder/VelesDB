@@ -17,9 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the one edge asked for, so forgetting every fact `remember_extracted` wired
   to a hub could delete it while a manually-linked fact still pointed at it —
   leaving that fact's edge dangling with no signal to the caller. Fixed by
-  also checking the hub's incoming edges (`MemoryStore::incoming_relations`,
-  new on the trait, backed by `velesdb-core`'s `get_incoming_edges`) for a
-  live source. (#1662)
+  making `relate` itself maintain the invariant: whenever its target is a
+  hub and its source is a plain fact (never another hub — typed
+  hub-to-hub relations are a different kind of edge), it now guarantees the
+  hub's `mentions` edge back, the same bookkeeping `remember_extracted`
+  already did. `hub_still_mentioned` needed no change. (#1662)
 
 ## [4.1.0] — 2026-07-26
 

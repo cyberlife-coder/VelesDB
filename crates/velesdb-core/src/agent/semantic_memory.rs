@@ -366,26 +366,6 @@ impl SemanticMemory {
         )
     }
 
-    /// Returns the incoming relations of a fact (edges other facts point at
-    /// it) — the reverse of [`Self::relations`]. A caller's own [`Self::relate`]
-    /// to a fact is visible here even when nothing points back the other way.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CollectionError` when the collection cannot be resolved.
-    pub fn incoming_relations(
-        &self,
-        id: u64,
-    ) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
-        memory_helpers::incoming_relations_of(
-            &self.db,
-            &self.collection_name,
-            id,
-            &self.ttl,
-            MemoryKind::Semantic,
-        )
-    }
-
     /// Removes a relation edge created by [`Self::relate`].
     ///
     /// Returns `true` when the edge existed and was removed.

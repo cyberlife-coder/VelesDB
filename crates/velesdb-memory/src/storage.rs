@@ -175,15 +175,6 @@ pub trait MemoryStore {
     /// Returns [`MemoryError`] if storage access fails.
     fn relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError>;
 
-    /// The incoming edges of `id` — every edge another point directs at it,
-    /// regardless of which relation created it. Unlike [`Self::relations`],
-    /// this also surfaces a caller's own manual `relate` into `id`, not just
-    /// edges the service layer wired symmetrically.
-    ///
-    /// # Errors
-    /// Returns [`MemoryError`] if storage access fails.
-    fn incoming_relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError>;
-
     /// Remove the edge with `edge_id`. Returns `true` when it existed —
     /// idempotent: removing an absent edge is `Ok(false)`, never an error.
     ///
@@ -365,21 +356,6 @@ impl MemoryStore for NativeStore {
             .memory
             .semantic()
             .relations(id)?
-            .into_iter()
-            .map(|edge| MemoryEdge {
-                id: edge.id(),
-                from: edge.source(),
-                to: edge.target(),
-                relation: edge.label().to_owned(),
-            })
-            .collect())
-    }
-
-    fn incoming_relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
-        Ok(self
-            .memory
-            .semantic()
-            .incoming_relations(id)?
             .into_iter()
             .map(|edge| MemoryEdge {
                 id: edge.id(),

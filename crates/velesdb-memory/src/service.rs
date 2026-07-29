@@ -656,8 +656,11 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         Ok(())
     }
 
-    /// Wire one topic to `fact_id`: resolve its hub, then add the deduplicated
-    /// `about`/`mentions` pair (skipping a hub that is the fact itself).
+    /// Wire one topic to `fact_id`: resolve its hub, then add the `about` edge
+    /// (skipping a hub that is the fact itself). The `mentions` edge back is
+    /// not wired here — [`Self::relate`] adds it itself whenever the target
+    /// of an edge is a hub, so a manual `relate` into a hub gets the same
+    /// bookkeeping this call does.
     fn wire_entity(
         &self,
         fact_id: u64,
@@ -674,9 +677,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         // same text never creates duplicate parallel edges (core `relate` does
         // not dedup by endpoint+label, only by edge id).
         self.seed_existing_edges(fact_id, edges, seeded)?;
-        self.seed_existing_edges(entity_id, edges, seeded)?;
         self.add_edge(fact_id, entity_id, "about", edges)?;
-        self.add_edge(entity_id, fact_id, MENTIONS_RELATION, edges)?;
         Ok(())
     }
 
@@ -926,6 +927,13 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// traverses it like any other edge, so it only adds noise to the
     /// evidence trail. The same rule covers [`Self::remember`]'s `links`.
     ///
+    /// When `to` is an entity hub, this also guarantees the hub's `mentions`
+    /// edge back to `from` — the same bookkeeping [`Self::wire_entity`] relies
+    /// on — so [`Self::hub_still_mentioned`] (outgoing-only by design) sees
+    /// every fact that points at the hub, not just the ones `remember_extracted`
+    /// wired itself. Without this, [`Self::forget`] could collect a hub a
+    /// surviving fact still pointed at through a manual `relate` (issue #1662).
+    ///
     /// # Errors
     /// Returns [`MemoryError::InvalidRelation`] for a bad label,
     /// [`MemoryError::SelfRelation`] if both endpoints are the same memory,
@@ -938,7 +946,38 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         }
         self.ensure_exists(from)?;
         self.ensure_exists(to)?;
-        self.store.relate(from, to, relation)
+        let edge_id = self.store.relate(from, to, relation)?;
+        self.ensure_hub_mentions_source(to, from)?;
+        Ok(edge_id)
+    }
+
+    /// If `hub` is an entity hub, make sure it has an outgoing `mentions`
+    /// edge back to `source` — a no-op when that edge already exists (either
+    /// wired by an earlier call, or because `relation` passed to
+    /// [`Self::relate`] already *was* [`MENTIONS_RELATION`]).
+    ///
+    /// Only fires when `source` is a plain fact, never another hub:
+    /// [`Self::wire_relations`] creates typed hub-to-hub knowledge-graph edges
+    /// (e.g. `theo -[frere de]-> camille`) where `mentions` bookkeeping has no
+    /// meaning, and auto-wiring one there would land on the exact `(from, to)`
+    /// pair a *reverse* relation between the same two hubs (e.g. the matching
+    /// `camille -[soeur de]-> theo`) is about to use — the pair-only dedup
+    /// `wire_relations` seeds from persisted edges would then mistake the
+    /// stray `mentions` edge for that relation already existing and silently
+    /// skip creating it.
+    fn ensure_hub_mentions_source(&self, hub: u64, source: u64) -> Result<(), MemoryError> {
+        if hub == source || self.is_hub(source)? || !self.is_hub(hub)? {
+            return Ok(());
+        }
+        let already_wired = self
+            .store
+            .relations(hub)?
+            .iter()
+            .any(|edge| edge.to == source && edge.relation == MENTIONS_RELATION);
+        if !already_wired {
+            self.store.relate(hub, source, MENTIONS_RELATION)?;
+        }
+        Ok(())
     }
 
     /// Remove the edge(s) `from -relation-> to`: [`Self::relate`]'s exact
@@ -1053,22 +1092,10 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         Ok(())
     }
 
-    /// Whether `hub` is still reachable from a live fact — either it points
-    /// at one (the `mentions` edge [`Self::wire_entity`] wires symmetrically)
-    /// or a live fact points at it (a caller's own manual [`Self::relate`]
-    /// into the hub, which never gets a `mentions` edge back).
-    ///
-    /// Checking only the outgoing side would let [`Self::forget`] delete a
-    /// hub that a surviving fact still references by a one-way edge, leaving
-    /// that fact's edge dangling with no signal to its caller.
+    /// Whether `hub` still points at a fact that exists.
     fn hub_still_mentioned(&self, hub: u64) -> Result<bool, MemoryError> {
         for edge in self.store.relations(hub)? {
             if edge.relation == MENTIONS_RELATION && self.store.get(edge.to)?.is_some() {
-                return Ok(true);
-            }
-        }
-        for edge in self.store.incoming_relations(hub)? {
-            if self.store.get(edge.from)?.is_some() {
                 return Ok(true);
             }
         }
