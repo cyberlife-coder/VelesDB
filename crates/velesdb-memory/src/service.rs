@@ -19,8 +19,8 @@ use crate::error::MemoryError;
 use crate::extract::{ExtractedAttribute, ExtractedRelation, Extractor};
 use crate::id;
 use crate::model::{
-    ColumnFilter, EntityProfile, EntityRelation, Explanation, Link, MemoryNode, Recollection,
-    RememberedExtraction, UnrelateOutcome,
+    ColumnFilter, EntityProfile, EntityRelation, Explanation, Link, MemoryEdge, MemoryNode,
+    Recollection, RememberedExtraction, UnrelateOutcome,
 };
 #[cfg(feature = "persistence")]
 use crate::storage::NativeStore;
@@ -69,6 +69,10 @@ const HUB_ID_SALT: &str = "\u{0}_veles_entity_hub\u{0}";
 /// `why()` walk crossed a hub, so it can weight the reached fact by that
 /// hub's specificity instead of a flat constant.
 const MENTIONS_RELATION: &str = "mentions";
+/// Edge label a fact uses to point at a hub it is tagged with (the fact → hub
+/// direction) — [`MENTIONS_RELATION`]'s bipartite twin, written by
+/// [`MemoryService::remember_extracted`]'s `wire_entity`.
+const ABOUT_RELATION: &str = "about";
 
 /// Local-first agent memory backed by a single `VelesDB` instance.
 ///
@@ -487,24 +491,53 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             name: key,
             attributes: strip_reserved_keys(self.store.get_metadata(id)?).unwrap_or_default(),
             relations: self.outgoing_entity_relations(id)?,
+            relations_in: self.incoming_entity_relations(id)?,
         }))
     }
 
     /// The typed edges leaving `id`, resolved to their target's content.
     ///
-    /// `mentions` edges are dropped: they point at the facts that tagged this
-    /// entity, which is the bipartite scaffolding, not a statement *about* it.
+    /// Scaffolding edges (`mentions`, and `about` for symmetry — a hub never
+    /// has an outgoing `about`) are dropped: they point at the facts that
+    /// tagged this entity, not at a statement *about* it.
     fn outgoing_entity_relations(&self, id: u64) -> Result<Vec<EntityRelation>, MemoryError> {
+        self.resolve_entity_relations(self.store.relations(id)?, |edge| edge.to)
+    }
+
+    /// The typed edges pointing at `id`, resolved to their SOURCE's content —
+    /// for an incoming edge the far end is where it comes *from*.
+    ///
+    /// Without these, a question is only answerable from one side: the graph
+    /// holds `camille --soeur de--> theo`, so reading Theo's outgoing edges
+    /// never finds Camille. The edge exists, it simply leaves the other node.
+    ///
+    /// The scaffolding filter is the incoming mirror of
+    /// [`Self::outgoing_entity_relations`]'s: `about` edges are dropped (they
+    /// are the fact → hub half of the `about`/`mentions` pair), and `mentions`
+    /// with them for symmetry.
+    fn incoming_entity_relations(&self, id: u64) -> Result<Vec<EntityRelation>, MemoryError> {
+        self.resolve_entity_relations(self.store.incoming_relations(id)?, |edge| edge.from)
+    }
+
+    /// Shared resolver for both edge directions: skip the bipartite
+    /// scaffolding labels, resolve each edge's far end (`far_end` picks which
+    /// endpoint that is) to its stored content.
+    fn resolve_entity_relations(
+        &self,
+        edges: Vec<MemoryEdge>,
+        far_end: impl Fn(&MemoryEdge) -> u64,
+    ) -> Result<Vec<EntityRelation>, MemoryError> {
         let mut relations = Vec::new();
-        for edge in self.store.relations(id)? {
-            if edge.relation == MENTIONS_RELATION {
+        for edge in edges {
+            if edge.relation == MENTIONS_RELATION || edge.relation == ABOUT_RELATION {
                 continue;
             }
-            let target = self.store.get(edge.to)?.map(|(content, _)| content);
+            let far = far_end(&edge);
+            let content = self.store.get(far)?.map(|(content, _)| content);
             relations.push(EntityRelation {
                 predicate: edge.relation,
-                target_id: edge.to,
-                target: target.unwrap_or_default(),
+                target_id: far,
+                target: content.unwrap_or_default(),
             });
         }
         Ok(relations)
@@ -675,7 +708,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         // not dedup by endpoint+label, only by edge id).
         self.seed_existing_edges(fact_id, edges, seeded)?;
         self.seed_existing_edges(entity_id, edges, seeded)?;
-        self.add_edge(fact_id, entity_id, "about", edges)?;
+        self.add_edge(fact_id, entity_id, ABOUT_RELATION, edges)?;
         self.add_edge(entity_id, fact_id, MENTIONS_RELATION, edges)?;
         Ok(())
     }
@@ -1053,10 +1086,37 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         Ok(())
     }
 
-    /// Whether `hub` still points at a fact that exists.
+    /// Whether anything alive still needs `hub`.
+    ///
+    /// Two references count, and the second is why this reads BOTH
+    /// directions (issue #1662):
+    ///
+    /// - an outgoing `mentions` edge to a live fact — the pair
+    ///   [`Self::wire_entities`] writes, the ordinary case;
+    /// - an incoming edge from a live NON-HUB fact — what a caller's own
+    ///   `relate` writes, and it writes one direction only. Relating a fact
+    ///   to a hub is reachable (`entity()` hands out the hub id), so reading
+    ///   outgoing edges alone swept hubs from under live callers' edges,
+    ///   losing them in silence.
+    ///
+    /// Incoming edges from another HUB are deliberately ignored: hub↔hub
+    /// edges exist (`wire_relations` writes them), and counting them would
+    /// let two hubs keep each other alive forever — a leak whose outcome
+    /// depends on collection order, which is worse than the bug being fixed.
     fn hub_still_mentioned(&self, hub: u64) -> Result<bool, MemoryError> {
         for edge in self.store.relations(hub)? {
             if edge.relation == MENTIONS_RELATION && self.store.get(edge.to)?.is_some() {
+                return Ok(true);
+            }
+        }
+        self.hub_has_live_referent(hub)
+    }
+
+    /// Whether a live non-hub fact points AT `hub` — see
+    /// [`Self::hub_still_mentioned`] for why hub→hub edges do not count.
+    fn hub_has_live_referent(&self, hub: u64) -> Result<bool, MemoryError> {
+        for edge in self.store.incoming_relations(hub)? {
+            if self.store.get(edge.from)?.is_some() && !self.is_hub(edge.from)? {
                 return Ok(true);
             }
         }

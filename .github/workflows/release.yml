@@ -751,7 +751,7 @@ jobs:
   back-merge:
     name: Back-merge main into develop
     runs-on: ubuntu-latest
-    needs: [github-release]
+    needs: [validate, github-release]
     if: needs.github-release.result == 'success'
     permissions:
       contents: write
@@ -772,18 +772,34 @@ jobs:
             echo "::notice::develop contient deja main — rien a reporter."
             exit 0
           fi
-          branch="chore/back-merge-v${VERSION}"
+          branch="chore/back-merge-${VERSION:-$GITHUB_REF_NAME}"
           git checkout -B "$branch" origin/main
           git push -u origin "$branch" --force-with-lease
-          gh pr create --base develop --head "$branch" \
-            --title "chore: reporter la release v${VERSION} de main vers develop" \
+
+          # `gh pr create` echoue de DEUX facons qu'il ne faut surtout pas
+          # confondre, et un `|| echo` les avalait toutes les deux :
+          #   - la PR existe deja  -> benin, on sort vert
+          #   - Actions n'a pas le droit d'ouvrir des PR (reglage du depot)
+          #     -> la branche est poussee mais RIEN ne la reporte, et se taire
+          #        ici recreerait exactement l'oubli que ce job corrige.
+          set +e
+          out=$(gh pr create --base develop --head "$branch" \
+            --title "chore: reporter la release ${VERSION:-$GITHUB_REF_NAME} de main vers develop" \
             --body "Back-merge automatique, ouvert par le pipeline de release.
 
-          \`main\` porte les commits de la v${VERSION} que \`develop\` n'a pas. Sans ce report, la prochaine branche de release rencontre des conflits qui n'ont aucune raison d'exister — et resoudre un conflit est le moment ou l'on perd du travail sans le voir.
+          \`main\` porte des commits que \`develop\` n'a pas. Sans ce report, la prochaine branche de release rencontre des conflits sans raison d'etre — et resoudre un conflit est le moment ou l'on perd du travail sans le voir.
 
-          Si des conflits apparaissent ici, ils sont reels et demandent un arbitrage : une release corrige parfois sur \`main\` ce que \`develop\` a deja resolu autrement. C'est pour cela que ce job ouvre une PR plutot que de pousser." \
-            || echo "::notice::PR de back-merge deja ouverte."
-
+          Des conflits ici sont reels et demandent un arbitrage humain : c'est pourquoi ce job ouvre une PR plutot que de pousser." 2>&1)
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then echo "$out"; exit 0; fi
+          if printf '%s' "$out" | grep -qi 'already exists'; then
+            echo "::notice::PR de back-merge deja ouverte."
+            exit 0
+          fi
+          printf '%s\n' "$out"
+          echo "::error::La branche $branch est poussee mais la PR n'a PAS pu etre ouverte. Ouvrez-la a la main : https://github.com/${GITHUB_REPOSITORY}/compare/develop...${branch}?expand=1 — si le motif est « GitHub Actions is not permitted to create or approve pull requests », activez le reglage du meme nom dans Settings > Actions > General."
+          exit 1
   summary:
     name: Summary
     runs-on: ubuntu-latest
