@@ -966,18 +966,25 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// stray `mentions` edge for that relation already existing and silently
     /// skip creating it.
     fn ensure_hub_mentions_source(&self, hub: u64, source: u64) -> Result<(), MemoryError> {
+        if self.needs_hub_mentions_edge(hub, source)? {
+            self.store.relate(hub, source, MENTIONS_RELATION)?;
+        }
+        Ok(())
+    }
+
+    /// Whether [`Self::ensure_hub_mentions_source`] still has work to do:
+    /// `hub` is actually a hub, `source` is not (see that method's doc for
+    /// why), and the `mentions` edge back isn't already there.
+    fn needs_hub_mentions_edge(&self, hub: u64, source: u64) -> Result<bool, MemoryError> {
         if hub == source || self.is_hub(source)? || !self.is_hub(hub)? {
-            return Ok(());
+            return Ok(false);
         }
         let already_wired = self
             .store
             .relations(hub)?
             .iter()
             .any(|edge| edge.to == source && edge.relation == MENTIONS_RELATION);
-        if !already_wired {
-            self.store.relate(hub, source, MENTIONS_RELATION)?;
-        }
-        Ok(())
+        Ok(!already_wired)
     }
 
     /// Remove the edge(s) `from -relation-> to`: [`Self::relate`]'s exact
