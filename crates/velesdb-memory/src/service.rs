@@ -355,7 +355,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let Ok(mut extraction) = extractor.extract_graph(fact) else {
             return;
         };
-        crate::extract::orient_possessive_kinship(fact, &mut extraction.relations);
+        crate::extract::orient_kinship(fact, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64)> = HashSet::new();
         let mut seeded: HashSet<u64> = HashSet::new();
@@ -431,7 +431,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
             return Err(MemoryError::EmptyFact);
         }
         let mut extraction = extractor.extract_graph(text)?;
-        crate::extract::orient_possessive_kinship(text, &mut extraction.relations);
+        crate::extract::orient_kinship(text, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
         let mut edges: HashSet<(u64, u64)> = HashSet::new();
         let mut seeded: HashSet<u64> = HashSet::new();
