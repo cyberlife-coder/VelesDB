@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`velesdb-memory`**: `forget` could collect an entity hub still referenced
+  by a manual `relate`. `remember_extracted`'s automatic wiring links a fact
+  to its hub in both directions (`about` from the fact, `mentions` back from
+  the hub), and orphan-hub collection (`hub_still_mentioned`) only checked
+  that `mentions` edge. A caller's own `relate(fact, hub, ...)` writes only
+  the one edge asked for, so forgetting every fact `remember_extracted` wired
+  to a hub could delete it while a manually-linked fact still pointed at it —
+  leaving that fact's edge dangling with no signal to the caller. Fixed by
+  also checking the hub's incoming edges (`MemoryStore::incoming_relations`,
+  new on the trait, backed by `velesdb-core`'s `get_incoming_edges`) for a
+  live source. (#1662)
+
 ## [4.1.0] — 2026-07-26
 
 Mineure : 38 commits depuis la 4.0.0. Le verrou de gouvernance CORE-2 couvre

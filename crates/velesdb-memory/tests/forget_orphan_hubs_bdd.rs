@@ -82,6 +82,55 @@ fn forgetting_every_fact_leaves_no_hub_behind() {
 }
 
 #[test]
+fn forget_keeps_a_hub_a_manual_relate_still_points_at() {
+    // A manual `relate` only writes the edge the caller asked for — unlike
+    // `remember_extracted`'s `wire_entity`, it never adds the `mentions` edge
+    // back from the hub. `collect_orphan_hubs` must still see it, or `forget`
+    // deletes a hub a surviving fact's edge still targets, leaving that edge
+    // pointing at nothing with no signal to the caller (issue #1662).
+    let (_dir, svc) = service();
+    let ids = svc
+        .remember_extracted("seed", &SharedTopicExtractor, None)
+        .expect("remember_extracted")
+        .ids;
+    let parser_hub = svc
+        .entity_profile("parser")
+        .expect("entity_profile")
+        .expect("precondition: the parser hub must exist")
+        .id;
+
+    let manual_fact = svc
+        .remember("a fact wired to parser by hand", &[], None)
+        .expect("remember");
+    svc.relate(manual_fact, parser_hub, "concerne")
+        .expect("manual relate fact -> hub");
+
+    // Forgetting every fact `remember_extracted` wired to the hub leaves only
+    // the manual, one-directional edge pointing at it.
+    for id in ids {
+        svc.forget(id).expect("forget");
+    }
+
+    assert!(
+        svc.entity_profile("parser")
+            .expect("entity_profile after forgetting the extracted facts")
+            .is_some(),
+        "a hub a surviving fact still points at via a manual relate must not \
+         be collected, even with no mentions edge back from the hub"
+    );
+
+    svc.forget(manual_fact)
+        .expect("forget the last fact pointing at the hub");
+
+    assert!(
+        svc.entity_profile("parser")
+            .expect("entity_profile after forgetting the manual fact")
+            .is_none(),
+        "once the manual fact is gone too, the hub must finally be collected"
+    );
+}
+
+#[test]
 fn forget_on_a_plain_fact_without_hubs_still_reports_found() {
     let (_dir, svc) = service();
     let id = svc

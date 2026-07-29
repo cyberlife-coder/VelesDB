@@ -1053,10 +1053,22 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         Ok(())
     }
 
-    /// Whether `hub` still points at a fact that exists.
+    /// Whether `hub` is still reachable from a live fact — either it points
+    /// at one (the `mentions` edge [`Self::wire_entity`] wires symmetrically)
+    /// or a live fact points at it (a caller's own manual [`Self::relate`]
+    /// into the hub, which never gets a `mentions` edge back).
+    ///
+    /// Checking only the outgoing side would let [`Self::forget`] delete a
+    /// hub that a surviving fact still references by a one-way edge, leaving
+    /// that fact's edge dangling with no signal to its caller.
     fn hub_still_mentioned(&self, hub: u64) -> Result<bool, MemoryError> {
         for edge in self.store.relations(hub)? {
             if edge.relation == MENTIONS_RELATION && self.store.get(edge.to)?.is_some() {
+                return Ok(true);
+            }
+        }
+        for edge in self.store.incoming_relations(hub)? {
+            if self.store.get(edge.from)?.is_some() {
                 return Ok(true);
             }
         }

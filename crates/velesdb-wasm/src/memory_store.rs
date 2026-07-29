@@ -311,6 +311,24 @@ impl MemoryStore for WasmStore {
             .collect())
     }
 
+    fn incoming_relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {
+        let inner = self.inner.borrow();
+        Ok(inner
+            .graph
+            .edges()
+            .iter()
+            // Mirrors `relations`: an edge whose live source has since expired
+            // is dead and must not count as "still pointed at".
+            .filter(|e| e.target == id && inner.live_fact(e.source).is_some())
+            .map(|e| MemoryEdge {
+                id: e.id,
+                from: e.source,
+                to: e.target,
+                relation: e.label.clone(),
+            })
+            .collect())
+    }
+
     fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
         Ok(self.inner.borrow_mut().graph.delete_edge_by_id(edge_id))
     }
