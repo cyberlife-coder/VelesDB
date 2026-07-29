@@ -173,8 +173,38 @@ jobs:
       #
       # `--locked` mirrors the release job and fails on any Cargo.lock drift
       # rather than silently updating it.
+      # velesdb-memory se publie contre le velesdb-core de CRATES.IO, jamais
+      # celui de l'arbre. Une API core ajoutee et appelee depuis memory sans
+      # release de core casse donc la publication — c'est ce qui a fait rater
+      # la 0.11.3, et le controle n'existait alors qu'au moment du tag, trop
+      # tard. Ici il echoue des la PR.
+      #
+      # Une SEULE exception, et elle est reconnaissable : pendant un bump de
+      # workspace, memory reclame un velesdb-core que personne n'a encore
+      # publie. Cargo le dit precisement — « failed to select a version for
+      # the requirement velesdb-core » — alors qu'une API manquante donne un
+      # E0599 a la compilation. Deux echecs qui n'ont rien a voir, et seul le
+      # premier est transitoire : la release de core, quelques minutes plus
+      # tard, le fait disparaitre. Bloquer dessus rendrait tout bump de
+      # workspace impossible.
       - name: Validate velesdb-memory packaging (dry-run, publishability gate)
-        run: cargo publish -p velesdb-memory --dry-run --locked
+        run: |
+          set +e
+          out=$(cargo publish -p velesdb-memory --dry-run --locked 2>&1)
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "velesdb-memory se publie contre le core de crates.io."
+            exit 0
+          fi
+          if printf '%s' "$out" | grep -q 'failed to select a version for the requirement `velesdb-core'; then
+            echo "::notice::velesdb-memory demande un velesdb-core pas encore publie — bump de workspace en cours, la release de core leve ce blocage."
+            printf '%s\n' "$out" | tail -20
+            exit 0
+          fi
+          printf '%s\n' "$out"
+          echo "::error::velesdb-memory ne se publierait pas. Une API core utilisee ici doit d'abord exister sur crates.io (cf. l'echec de la 0.11.3)."
+          exit 1
 
       - name: Run Clippy (strict)
         run: |
