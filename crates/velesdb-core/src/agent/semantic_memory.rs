@@ -211,11 +211,22 @@ impl SemanticMemory {
     /// entity tags) of the live prior version of `id` into `payload`, so a
     /// content re-store (`remember`) does not silently wipe learned state.
     ///
-    /// Only keys `payload` does not already carry are copied: caller metadata
-    /// is already in `payload` and the explicit `expires_at` is attached after
-    /// this pass, so a carried-forward value is only used when nothing else
-    /// overwrites it. An unknown, unreadable or expired prior version
-    /// contributes nothing — this is best-effort enrichment, never a failure.
+    /// Only keys `payload` does not already carry are copied — that guard,
+    /// and it alone, is what keeps a carried-forward value from shadowing
+    /// something the caller meant.
+    ///
+    /// The ordering with `attach_expiry` is deliberately NOT part of the
+    /// argument: `attach_expiry` is a no-op on `None` and an unconditional
+    /// insert on `Some`, so running it before or after this pass gives the
+    /// same payload either way. An earlier revision of this comment claimed
+    /// the explicit expiry wins *because* it is attached afterwards; mutation
+    /// testing showed the two orderings are strictly equivalent, so the
+    /// reasoning was false even though the code was right. Justifying a
+    /// correct behaviour by the wrong mechanism is how the next reader ends
+    /// up preserving the mechanism instead of the behaviour.
+    ///
+    /// An unknown, unreadable or expired prior version contributes nothing —
+    /// this is best-effort enrichment, never a failure.
     fn carry_forward_reserved_keys(&self, collection: &Collection, id: u64, payload: &mut Value) {
         if !self.stored_ids.read().contains(&id) {
             return;
