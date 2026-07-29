@@ -201,12 +201,12 @@ impl FusionOptions {
     /// ([`clamp_hops`](crate::limits::clamp_hops)), `graph_boost` defaulted when
     /// absent, and `pool` clamped to the recall ceiling
     /// ([`clamp_recall_limit`](crate::limits::clamp_recall_limit)) or left at the
-    /// proven default. The MCP `recall_fused` tool (which exposes no `pool`, so
-    /// passes `None`) and the Python `recall_fused` binding both build their
-    /// options here so the transports can't drift on what they accept. A
-    /// non-finite `graph_boost` is not filtered here — that guard lives in
-    /// [`Self::sanitized`], applied by fusion itself so *every* caller is
-    /// covered, not just this constructor.
+    /// proven default. The MCP `recall_fused` tool and the Python
+    /// `recall_fused` binding both build their options here — same three
+    /// knobs, same clamps — so the transports can't drift on what they
+    /// accept. A non-finite `graph_boost` is not filtered here — that guard
+    /// lives in [`Self::sanitized`], applied by fusion itself so *every*
+    /// caller is covered, not just this constructor.
     #[must_use]
     pub fn from_knobs(hops: Option<usize>, graph_boost: Option<f64>, pool: Option<usize>) -> Self {
         let defaults = Self::default();
@@ -255,12 +255,28 @@ pub struct MemoryNode {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct MemoryEdge {
+    /// Stable id of the edge itself — what
+    /// [`MemoryStore::unrelate`](crate::storage::MemoryStore::unrelate)
+    /// removes by.
+    pub id: u64,
     /// Source memory id.
     pub from: u64,
     /// Target memory id.
     pub to: u64,
     /// Relationship label.
     pub relation: String,
+}
+
+/// Outcome of [`MemoryService::unrelate`](crate::service::MemoryService::unrelate):
+/// idempotent by design, so an absent edge is a `found: false` answer, not an
+/// error — a cleanup must be replayable.
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub struct UnrelateOutcome {
+    /// Whether at least one matching edge existed and was removed.
+    pub found: bool,
+    /// How many matching edges were removed (parallel duplicates included).
+    pub removed: usize,
 }
 
 /// One typed edge leaving an entity, as reported by
