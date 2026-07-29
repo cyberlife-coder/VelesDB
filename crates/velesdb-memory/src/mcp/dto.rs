@@ -462,6 +462,15 @@ pub(super) struct EntityProfileDto {
     pub(super) attributes: Metadata,
     /// Typed edges leaving this entity.
     pub(super) relations: Vec<EntityRelationDto>,
+    /// Typed edges pointing AT this entity, each naming its SOURCE.
+    ///
+    /// Without these, a question is only answerable from one side: the graph
+    /// holds `camille --soeur de--> theo`, so asking what Theo's outgoing
+    /// edges say never finds Camille. The edge exists, it simply leaves the
+    /// other node. Nothing is inferred here — the converse of a kinship
+    /// label needs the gender, which the graph does not hold; this reports
+    /// only what is stored.
+    pub(super) relations_in: Vec<EntityRelationDto>,
 }
 
 impl EntityProfileDto {
@@ -482,6 +491,7 @@ impl EntityProfileDto {
                 name: canonical_entity_name(queried),
                 attributes: Metadata::new(),
                 relations: Vec::new(),
+                relations_in: Vec::new(),
             };
         };
         Self {
@@ -492,6 +502,11 @@ impl EntityProfileDto {
             attributes: profile.attributes,
             relations: profile
                 .relations
+                .into_iter()
+                .map(EntityRelationDto::from)
+                .collect(),
+            relations_in: profile
+                .relations_in
                 .into_iter()
                 .map(EntityRelationDto::from)
                 .collect(),

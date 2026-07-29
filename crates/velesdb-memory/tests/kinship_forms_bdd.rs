@@ -99,6 +99,21 @@ fn outgoing(svc: &MemoryService<HashEmbedder>, name: &str) -> Vec<(String, u64)>
         .unwrap_or_default()
 }
 
+/// The predicates pointing AT `name`'s hub, each paired with the hub the edge
+/// comes FROM — the mirror of [`outgoing`], read from the other side.
+fn incoming(svc: &MemoryService<HashEmbedder>, name: &str) -> Vec<(String, u64)> {
+    svc.entity_profile(name)
+        .expect("profile lookup")
+        .map(|profile| {
+            profile
+                .relations_in
+                .into_iter()
+                .map(|r| (r.predicate, r.target_id))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The hub id of `name`, which must already exist.
 fn hub_id(svc: &MemoryService<HashEmbedder>, name: &str) -> u64 {
     svc.entity_profile(name)
@@ -466,5 +481,59 @@ fn a_coordinated_clause_after_a_genitive_is_not_an_item() {
         outgoing(&svc, "marie dupont").contains(&("mere de".to_string(), theo)),
         "the second clause states its own edge: marie -[mere de]-> theo, got {:?}",
         outgoing(&svc, "marie dupont")
+    );
+}
+
+// --- The other side of the edge ---------------------------------------------
+
+/// A kinship edge is stated once, in one direction. Reading only the edges
+/// LEAVING a hub therefore answers the question from one side only: the graph
+/// holds `camille --soeur de--> theo`, so asking what Theo's outgoing edges
+/// say never finds Camille — the edge exists, it simply leaves the other node.
+///
+/// `relations_in` closes that half. Nothing is inferred: the converse of a
+/// kinship label needs the gender, which the graph does not hold, so the
+/// incoming side reports the label AS STATED and names the source it comes
+/// from — not a guessed reciprocal.
+#[test]
+fn an_entity_sees_the_edges_that_point_at_it_not_only_the_ones_it_states() {
+    const PASSAGE: &str =
+        "Theo Durand a une sœur, Camille Durand. Bruno Durand est le père de Theo Durand.";
+    let (_dir, svc) = service();
+    svc.remember_extracted(PASSAGE, &ScriptedExtractor { script: PLURALS }, None)
+        .expect("extract and remember");
+
+    let camille = hub_id(&svc, "camille durand");
+    let bruno = hub_id(&svc, "bruno durand");
+    let theo = hub_id(&svc, "theo durand");
+
+    assert!(
+        outgoing(&svc, "camille durand").contains(&("soeur de".to_string(), theo)),
+        "precondition: the edge is stated camille -[soeur de]-> theo, got {:?}",
+        outgoing(&svc, "camille durand")
+    );
+    assert!(
+        incoming(&svc, "theo durand").contains(&("soeur de".to_string(), camille)),
+        "Theo must see the edge that points at him, naming Camille as its SOURCE, got {:?}",
+        incoming(&svc, "theo durand")
+    );
+    assert!(
+        incoming(&svc, "theo durand").contains(&("pere de".to_string(), bruno)),
+        "the copule points at Theo too and must be reported the same way, got {:?}",
+        incoming(&svc, "theo durand")
+    );
+    assert!(
+        !incoming(&svc, "camille durand")
+            .iter()
+            .any(|(predicate, _)| predicate == "soeur de"),
+        "the edge leaves Camille, so it is not one of HER incoming edges, got {:?}",
+        incoming(&svc, "camille durand")
+    );
+    assert!(
+        !incoming(&svc, "theo durand")
+            .iter()
+            .any(|(predicate, _)| predicate == "about" || predicate == "mentions"),
+        "the fact↔hub scaffolding is not a statement about the entity, got {:?}",
+        incoming(&svc, "theo durand")
     );
 }

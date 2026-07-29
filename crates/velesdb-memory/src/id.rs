@@ -110,6 +110,10 @@ mod tests {
                 *expected,
                 "stable_id({input:?}) drifted from its pre-refactor golden vector"
             );
+            // `stable_id_bytes` only exists under `context` (see its own
+            // gate above), so the assertion must carry the same gate — the
+            // golden vectors for `stable_id` are checked either way.
+            #[cfg(feature = "context")]
             assert_eq!(
                 stable_id_bytes(input.as_bytes()),
                 *expected,
