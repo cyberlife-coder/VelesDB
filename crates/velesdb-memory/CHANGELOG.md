@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`recall_fused` exposes `pool` over MCP.** The three bindings (Node
+  `{pool?}`, WASM `{pool?}`, Python `options={"pool": …}`) had long exposed
+  the depth of the oversampled vector pool fusion re-ranks; the MCP tool —
+  the server they all sit on — never did, so an MCP caller could not narrow
+  or widen it. Worse than merely absent: an undeclared argument is not
+  refused, so `{"pool": 1}` looked accepted and still returned a full-depth
+  result. The knob is now advertised (carrying a direct `type`, as every slot
+  must) and routed through the same `FusionOptions::from_knobs` as the
+  bindings, so all four transports share one default (`max(limit × 8, 64)`),
+  one floor (1 — `pool: 0` never oversamples an empty set) and one ceiling.
+
 - **`unrelate` — `relate`'s exact undo (#1661).** The graph was the only
   facet whose writes were one-way: a mistaken edge could only be removed by
   destroying the facts at its endpoints. `unrelate(from, to, relation)`
