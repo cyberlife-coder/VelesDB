@@ -15,7 +15,10 @@ categories = ["database", "science"]
 
 [lib]
 name = "velesdb"
-crate-type = ["cdylib"]
+# `rlib` alongside `cdylib` so the crate's tests have a library to link against:
+# a bare `cdylib` produces nothing a test harness can consume. maturin keeps
+# picking the cdylib for the wheel.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 velesdb-core = { workspace = true }
@@ -26,7 +29,12 @@ velesdb-core = { workspace = true }
 # zero new dependencies (`context = []` in velesdb-memory), same feature set
 # velesdb-node already builds with.
 velesdb-memory = { path = "../velesdb-memory", default-features = false, features = ["persistence", "ollama", "extract", "context"] }
-pyo3 = { version = "0.29", features = ["extension-module", "multiple-pymethods", "abi3-py39", "generate-import-lib"] }
+# `extension-module` is deliberately NOT hard-coded here: it tells PyO3 to leave
+# libpython unresolved, which is right for the wheel but makes any test binary
+# unlinkable. It moves to the `extension-module` feature below, which `default`
+# turns on — so every existing build (maturin, pip, `cargo check --workspace`)
+# is unchanged, and only `--no-default-features` opts into a linkable harness.
+pyo3 = { version = "0.29", features = ["multiple-pymethods", "abi3-py39", "generate-import-lib"] }
 serde_json = { workspace = true }
 numpy = "0.29"
 parking_lot = "0.12"
@@ -36,7 +44,11 @@ parking_lot = "0.12"
 tokio = { workspace = true }
 
 [features]
-default = ["velesdb-core/default"]
+default = ["velesdb-core/default", "extension-module"]
+# On by default so the wheel keeps its current link behaviour. Turn it OFF
+# (`--no-default-features --features velesdb-core/default`) to build a test
+# binary that links libpython and can actually run the crate's unit tests.
+extension-module = ["pyo3/extension-module"]
 gpu = ["velesdb-core/gpu"]
 update-check = ["velesdb-core/update-check"]
 loom = ["velesdb-core/loom"]
