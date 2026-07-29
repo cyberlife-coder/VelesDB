@@ -165,6 +165,7 @@ filter + graph reach).
 | `filter` | object | no | Exact-match metadata filter. |
 | `hops` | integer | no | Graph hops walked from the top vector hit (default 2, capped at 10). |
 | `graph_boost` | number | no | Weight added to a graph-reached fact's normalised vector score (default 0.15). |
+| `pool` | integer | no | Depth of the oversampled vector candidate pool fusion re-ranks before the `limit` cutoff (default `max(limit × 8, 64)`, floored at 1, capped at 1000). Same knob as the Node/WASM `pool` and the Python `options={"pool": …}`. |
 | `date_field` | string | no | Metadata key holding each fact's `YYYYMMDD` date (e.g. the automatic `_veles_date`). |
 
 Returns `{ memories, dated_context?, now? }`. `dated_context` (a

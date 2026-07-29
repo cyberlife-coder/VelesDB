@@ -526,6 +526,7 @@ async fn recall_fused_folds_in_a_graph_reached_fact() {
             filter: None,
             hops: None,
             graph_boost: None,
+            pool: None,
             date_field: None,
         }))
         .await
@@ -565,6 +566,7 @@ async fn recall_fused_with_date_field_returns_a_dated_timeline() {
             filter: None,
             hops: None,
             graph_boost: None,
+            pool: None,
             date_field: Some("ts".to_owned()),
         }))
         .await
@@ -601,6 +603,7 @@ async fn recall_fused_without_date_field_omits_the_timeline() {
             filter: None,
             hops: None,
             graph_boost: None,
+            pool: None,
             date_field: None,
         }))
         .await
@@ -645,6 +648,7 @@ async fn recall_fused_survives_a_non_finite_graph_boost() {
             filter: None,
             hops: None,
             graph_boost: Some(f64::NAN),
+            pool: None,
             date_field: None,
         }))
         .await
@@ -659,6 +663,8 @@ async fn recall_fused_survives_a_non_finite_graph_boost() {
 async fn recall_fused_limit_is_capped_at_max() {
     let (_dir, srv) = server();
     // The call must succeed (capped, not rejected) even with an absurd limit.
+    // `pool` joins limit/hops here because it feeds the same oversampled
+    // vector search: uncapped, it is exactly the unbounded-scan risk they are.
     let Json(result) = srv
         .recall_fused(Parameters(RecallFusedParams {
             query: "anything".to_owned(),
@@ -666,10 +672,11 @@ async fn recall_fused_limit_is_capped_at_max() {
             filter: None,
             hops: Some(usize::MAX),
             graph_boost: None,
+            pool: Some(usize::MAX),
             date_field: None,
         }))
         .await
-        .expect("recall_fused with huge limit/hops must succeed (silently capped)");
+        .expect("recall_fused with huge limit/hops/pool must succeed (silently capped)");
     let _ = result;
 }
 
@@ -1190,11 +1197,13 @@ fn test_recall_fused_params_accept_stringified_scalars_and_objects() {
         "limit": "6",
         "hops": "2",
         "graph_boost": "0.15",
+        "pool": "128",
         "filter": "{\"project\": \"velesdb\"}"
     }))
     .expect("stringified scalar/object arguments must deserialize");
     assert_eq!(params.limit, Some(6));
     assert_eq!(params.hops, Some(2));
+    assert_eq!(params.pool, Some(128));
     assert!((params.graph_boost.unwrap() - 0.15).abs() < f64::EPSILON);
     let filter = params.filter.expect("filter must parse from a JSON string");
     assert_eq!(

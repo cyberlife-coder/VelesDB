@@ -255,7 +255,7 @@ impl McpServer {
         // rmcp derives an output schema when none is given, and that
         // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
         output_schema = crate::schema::wire_safe_output_schema::<RecallFusedResult>(),
-        description = "Fused vector + graph recall: like `recall`, but also walks the graph from the top vector hit and folds any connected fact into the ranking — the tri-engine ranking (vector similarity + ColumnStore filter + graph reach) measured on multi-hop and temporal benchmarks. Reach for this when an answer needs a fact the query doesn't mention directly but a stored `relate`/extracted link connects (multi-hop reasoning, temporal chains). `hops`/`graph_boost` tune the graph reach; omit them for the proven defaults. Optionally narrow with an exact-match `filter`. Set `date_field` (the metadata key holding a YYYYMMDD date) to also get a `dated_context` timeline and a `now` anchor for temporal questions. Most relevant first."
+        description = "Fused vector + graph recall: like `recall`, but also walks the graph from the top vector hit and folds any connected fact into the ranking — the tri-engine ranking (vector similarity + ColumnStore filter + graph reach) measured on multi-hop and temporal benchmarks. Reach for this when an answer needs a fact the query doesn't mention directly but a stored `relate`/extracted link connects (multi-hop reasoning, temporal chains). `hops`/`graph_boost` tune the graph reach and `pool` the depth of the vector candidate pool fusion re-ranks; omit them for the proven defaults. Optionally narrow with an exact-match `filter`. Set `date_field` (the metadata key holding a YYYYMMDD date) to also get a `dated_context` timeline and a `now` anchor for temporal questions. Most relevant first."
     )]
     async fn recall_fused(
         &self,
@@ -265,7 +265,7 @@ impl McpServer {
             .limit
             .unwrap_or(DEFAULT_RECALL_LIMIT)
             .min(MAX_RECALL_LIMIT);
-        let opts = FusionOptions::from_knobs(params.hops, params.graph_boost, None);
+        let opts = FusionOptions::from_knobs(params.hops, params.graph_boost, params.pool);
         let service = Arc::clone(&self.service);
         let RecallFusedParams {
             query,
