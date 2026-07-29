@@ -170,6 +170,14 @@ pub(super) struct RecallFusedParams {
     /// similarity more.
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) graph_boost: Option<f64>,
+    /// Depth of the oversampled vector candidate pool fusion re-ranks before
+    /// the `limit` cutoff (default: `limit` scaled up, floored at 64). That
+    /// default is already deep enough for a graph-reached fact to surface;
+    /// widen it to give a reranker more to work with, narrow it to confine
+    /// fusion to the strongest vector hits. Capped at the same ceiling
+    /// `limit` and `hops` carry.
+    #[serde(default, deserialize_with = "super::wire::lenient")]
+    pub(super) pool: Option<usize>,
     /// Name of the metadata field holding each fact's date as a `YYYYMMDD`
     /// integer (e.g. `"ts"`, `"occurred_at"`). When set, the result adds a
     /// `dated_context` timeline (facts date-prefixed and ordered oldest-first)
