@@ -75,6 +75,30 @@ rather than a refusal.
   (`MemoryError::EmptyWorkingContext`) unless at least one field carries
   something.
 
+## [0.11.5] — 2026-07-28
+
+### Changed
+
+- **Documentation examples no longer name real people.** The autograph
+  examples used the names of an actual family, minors included. The most
+  exposed of them sat in the `entity` tool's own description — the text
+  every MCP client receives when it lists the tools — and the rest in both
+  `SKILL.md` files, the `service`/`extract` rustdoc that ships to docs.rs,
+  and the `graph_autocomplete_bdd` suite. Replaced throughout by wholly
+  fictional names that keep the same family shape, because that shape is
+  exactly what the tests contrast: a parent-child copula, which must stay
+  correct, and a sibling possessive, which was the construction inverting
+  the triple.
+
+  A documentation example has no reason to carry anyone's identity. No
+  behaviour changes: the names are example data, and entity ids are
+  content-addressed, so they are recomputed either way.
+
+  Note for anyone reading the registries: **0.11.3 never reached crates.io
+  or npm** — its `Validate` job failed and skipped all five downstream
+  publish jobs. Only its MCPB bundles exist.
+
+
 ## [0.11.4] — 2026-07-28
 
 ### Fixed
