@@ -94,4 +94,4 @@ Short answer: **partially yes**.
 - A latency-aware rerank controller is in place (`rerank_latency_target_us` + `adapt_rerank_k_to_latency`); a full benchmark-driven, recall-aware SLO controller is still future work.
 
 ---
-Last updated: 2026-07-25 · Applies to: velesdb-core 4.1.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 4.2.0
