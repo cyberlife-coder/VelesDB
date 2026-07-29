@@ -201,12 +201,12 @@ impl FusionOptions {
     /// ([`clamp_hops`](crate::limits::clamp_hops)), `graph_boost` defaulted when
     /// absent, and `pool` clamped to the recall ceiling
     /// ([`clamp_recall_limit`](crate::limits::clamp_recall_limit)) or left at the
-    /// proven default. The MCP `recall_fused` tool (which exposes no `pool`, so
-    /// passes `None`) and the Python `recall_fused` binding both build their
-    /// options here so the transports can't drift on what they accept. A
-    /// non-finite `graph_boost` is not filtered here — that guard lives in
-    /// [`Self::sanitized`], applied by fusion itself so *every* caller is
-    /// covered, not just this constructor.
+    /// proven default. The MCP `recall_fused` tool and the Python
+    /// `recall_fused` binding both build their options here — same three
+    /// knobs, same clamps — so the transports can't drift on what they
+    /// accept. A non-finite `graph_boost` is not filtered here — that guard
+    /// lives in [`Self::sanitized`], applied by fusion itself so *every*
+    /// caller is covered, not just this constructor.
     #[must_use]
     pub fn from_knobs(hops: Option<usize>, graph_boost: Option<f64>, pool: Option<usize>) -> Self {
         let defaults = Self::default();
