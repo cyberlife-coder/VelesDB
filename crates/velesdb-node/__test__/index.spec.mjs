@@ -904,18 +904,15 @@ test('saveWorkingContext → loadWorkingContext round-trips across processes', a
       verified_facts: [{ text: 'the MCP tools already round-trip' }],
       pending_actions: ['load this back from a fresh MemoryService'],
     }
-    // Save from a CHILD process (the store's single-writer lock is released
-    // deterministically when it exits — a block-scoped handle in this
-    // process would keep the lock until GC).
-    const script = `
-      const { MemoryService } = require(${JSON.stringify(fileURLToPath(new URL('../index.js', import.meta.url)))})
-      const store = MemoryService.open(${JSON.stringify(dir)}, 'hash')
-      store.saveWorkingContext('veles', 'session-1', ${JSON.stringify(working)}).then((id) => {
+    // Save from a CHILD process — see `inChildProcess`, which carries the
+    // reason: the store's single-writer lock is only released deterministically
+    // when the writing process exits.
+    inChildProcess(
+      dir,
+      `store.saveWorkingContext('veles', 'session-1', ${JSON.stringify(working)}).then((id) => {
         if (!/^\\d+$/.test(id)) throw new Error('id must be a decimal string, got: ' + id)
-      })
-    `
-    const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' })
-    assert.equal(child.status, 0, `child save failed: ${child.stderr}`)
+      })`,
+    )
     // A separate MemoryService in THIS process: the next session resumes.
     const reopened = MemoryService.open(dir, 'hash')
     const loaded = await reopened.loadWorkingContext('veles', 'session-1')
