@@ -174,8 +174,8 @@ pub(super) struct RecallFusedParams {
     /// the `limit` cutoff (default: `limit` scaled up, floored at 64). That
     /// default is already deep enough for a graph-reached fact to surface;
     /// widen it to give a reranker more to work with, narrow it to confine
-    /// fusion to the strongest vector hits. Capped at the same ceiling
-    /// `limit` and `hops` carry.
+    /// fusion to the strongest vector hits. Capped at 1000, the same ceiling
+    /// `limit` carries — NOT the one `hops` carries, which is 10.
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) pool: Option<usize>,
     /// Name of the metadata field holding each fact's date as a `YYYYMMDD`
