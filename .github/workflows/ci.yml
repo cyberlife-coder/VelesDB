@@ -121,8 +121,15 @@ jobs:
       # features disabled, so cross-crate feature-unification mismatches
       # (e.g. a cfg-gated call site in one crate vs. the feature state its
       # dependency actually ends up unified to) went undetected.
+      # velesdb-python est exclu ici depuis que `extension-module` est passe
+      # derriere sa feature `default` : ce gate le desactive, et
+      # `PYO3_NO_PYTHON: "1"` (env du WORKFLOW, plus haut) empeche alors
+      # build.rs de trouver un interpreteur pour emettre les lignes de lien —
+      # `attempted to link to Python shared library but config does not
+      # contain lib_name`. Le crate a ses propres etapes dediees (clippy
+      # --lib, tests Rust) qui, elles, posent l'environnement qu'il lui faut.
       - name: Check --no-default-features (workspace matrix gap, #1472)
-        run: cargo check --workspace --no-default-features
+        run: cargo check --workspace --no-default-features --exclude velesdb-python
 
       # The workspace check above unifies features across crates, so a feature
       # that only compiles because a SIBLING feature happens to be on still
@@ -372,7 +379,16 @@ jobs:
           python3 -m venv /tmp/velesdb-python-tests
           /tmp/velesdb-python-tests/bin/pip install --quiet --upgrade pip numpy
           SITE="$(/tmp/velesdb-python-tests/bin/python -c 'import numpy, os; print(os.path.dirname(os.path.dirname(numpy.__file__)))')"
-          PYO3_PYTHON=/tmp/velesdb-python-tests/bin/python PYTHONPATH="$SITE" \
+          # `env -u PYO3_NO_PYTHON` et pas `PYO3_NO_PYTHON: ""` : le workflow
+          # pose cette variable pour tous les jobs, et pyo3-build-config teste
+          # sa PRESENCE, pas sa valeur — une chaine vide reste definie, donc
+          # have_python_interpreter() renvoie false et PYO3_PYTHON n'est jamais
+          # lu. Le build tombe alors sur un config abi3 sans lib_name et
+          # echoue : « attempted to link to Python shared library but config
+          # does not contain lib_name ». La retirer de l'environnement est le
+          # seul moyen sur.
+          env -u PYO3_NO_PYTHON \
+            PYO3_PYTHON=/tmp/velesdb-python-tests/bin/python PYTHONPATH="$SITE" \
             cargo test -p velesdb-python --lib \
               --no-default-features --features velesdb-core/default
 
