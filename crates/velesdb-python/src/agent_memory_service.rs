@@ -402,6 +402,37 @@ impl PyMemoryService {
         py.detach(|| self.svc.relate(from_id, to_id, relation).map_err(to_py_err))
     }
 
+    /// Remove the typed edge(s) `from_id -relation-> to_id` — `relate`'s exact
+    /// undo, so a mistaken edge no longer costs the facts at its endpoints.
+    /// Only the edge goes: both memories, and any entity hub, are untouched.
+    ///
+    /// Idempotent: removing an absent edge returns ``found=False`` instead of
+    /// raising, so a cleanup can be replayed. It refuses exactly what `relate`
+    /// refuses (empty relation, `from_id` equal to `to_id`), and deliberately
+    /// does NOT require the endpoints to still exist — the edge of a forgotten
+    /// fact is already gone.
+    ///
+    /// Returns:
+    ///     ``{"found": bool, "removed": int}`` — `removed` counts the edges
+    ///     actually deleted, parallel duplicates included.
+    fn unrelate(
+        &self,
+        py: Python<'_>,
+        from_id: u64,
+        to_id: u64,
+        relation: &str,
+    ) -> PyResult<Py<PyAny>> {
+        let outcome = py.detach(|| {
+            self.svc
+                .unrelate(from_id, to_id, relation)
+                .map_err(to_py_err)
+        })?;
+        let out = PyDict::new(py);
+        out.set_item(PyString::intern(py, "found"), outcome.found)?;
+        out.set_item(PyString::intern(py, "removed"), outcome.removed)?;
+        Ok(out.into())
+    }
+
     /// Delete a memory by id. Returns whether a memory actually existed
     /// under that id and was deleted — `False` means nothing was stored
     /// there (a stale id or a typo), not a second successful deletion.

@@ -2463,6 +2463,32 @@ class MemoryService:
         """
         ...
 
+    def unrelate(self, from_id: int, to_id: int, relation: str) -> dict[str, Any]:
+        """Remove the typed edge(s) ``from_id -relation-> to_id``.
+
+        ``relate``'s exact undo, so a mistaken edge no longer costs the facts
+        at its endpoints: only the edge goes, both memories and any entity hub
+        are untouched.
+
+        Args:
+            from_id: Source memory id.
+            to_id: Target memory id.
+            relation: Edge label to remove (e.g. ``"decided_in"``).
+
+        Returns:
+            ``{"found": bool, "removed": int}`` — ``removed`` counts the edges
+            actually deleted, parallel duplicates included. Idempotent: an
+            absent edge answers ``found=False`` instead of raising, so a
+            cleanup can be replayed. The endpoints are deliberately not
+            required to still exist — the edge of a forgotten fact is already
+            gone.
+
+        Raises:
+            ValueError: If ``relation`` is empty or ``from_id == to_id`` —
+                exactly what ``relate`` refuses.
+        """
+        ...
+
     def forget(self, id: int) -> bool:
         """Delete a memory by id.
 

@@ -598,3 +598,67 @@ fn test_entity_serializes_to_the_documented_camel_case_wire_shape() {
         })
     );
 }
+
+// --- unrelate (binding parity: the tool shipped on MCP while this binding
+// only knew how to create edges) ---------------------------------------------
+//
+// `unrelate()` returns a `JsValue` and cannot be called natively (see the
+// module docs), so the behaviour is proven on `svc.inner.unrelate` — the exact
+// call the wrapper relays — plus the pure-Rust `UnrelateOut` shaping.
+
+#[test]
+fn test_inner_unrelate_removes_the_edge_and_is_replayable() {
+    let svc = WasmMemoryService::new(4);
+    let a = svc.inner.remember("fact a", &[], None).unwrap();
+    let b = svc.inner.remember("fact b", &[], None).unwrap();
+    svc.inner.relate(a, b, "references").unwrap();
+
+    let outcome = svc.inner.unrelate(a, b, "references").unwrap();
+    assert!(outcome.found, "the edge existed and must be reported found");
+    assert_eq!(outcome.removed, 1, "exactly the one edge was removed");
+    let explanation = svc.inner.why("fact a", 1, None).unwrap();
+    assert!(
+        !explanation.nodes.iter().any(|n| n.id == b),
+        "the edge is really gone: the neighbour is no longer traversable"
+    );
+    let survivors = svc.inner.recall("fact", 5, None).unwrap();
+    assert!(
+        survivors.iter().any(|h| h.id == a) && survivors.iter().any(|h| h.id == b),
+        "only the edge goes — both endpoint facts must survive"
+    );
+
+    // Idempotent: replaying the same cleanup is an answer, never an error.
+    let again = svc.inner.unrelate(a, b, "references").unwrap();
+    assert!(!again.found, "the second pass finds nothing left to remove");
+    assert_eq!(again.removed, 0);
+}
+
+#[test]
+fn test_inner_unrelate_refuses_exactly_what_relate_refuses() {
+    let svc = WasmMemoryService::new(4);
+    let a = svc.inner.remember("fact a", &[], None).unwrap();
+    let b = svc.inner.remember("fact b", &[], None).unwrap();
+
+    let empty = svc.inner.unrelate(a, b, "").unwrap_err();
+    assert!(
+        matches!(empty, MemoryError::InvalidRelation(_)),
+        "an empty label is refused, got {empty:?}"
+    );
+    let loop_err = svc.inner.unrelate(a, a, "references").unwrap_err();
+    assert!(
+        matches!(loop_err, MemoryError::SelfRelation(id) if id == a),
+        "a self-loop is refused, got {loop_err:?}"
+    );
+}
+
+#[test]
+fn test_unrelate_serializes_to_the_documented_wire_shape() {
+    // The JsValue step is untestable natively; the `Serialize` impl the
+    // wrapper feeds to `to_js` is what fixes the published field names.
+    let wire = serde_json::to_value(UnrelateOut {
+        found: true,
+        removed: 2,
+    })
+    .expect("UnrelateOut is serializable");
+    assert_eq!(wire, serde_json::json!({ "found": true, "removed": 2 }));
+}

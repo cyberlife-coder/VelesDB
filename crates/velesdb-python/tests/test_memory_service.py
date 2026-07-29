@@ -288,3 +288,44 @@ def test_feedback_unknown_id_raises_key_error(mem):
     # silent no-op — feedback has no result to report if the fact is gone.
     with pytest.raises(KeyError):
         mem.feedback(999_999, True)
+
+
+def test_unrelate_removes_the_edge_and_keeps_both_facts(mem):
+    # relate's exact undo: the edge stops being traversable, the two facts stay.
+    decision = mem.remember("we chose parking_lot to avoid lock poisoning")
+    ticket = mem.remember("EPIC-317 xyzzy quux frobnicate")
+    mem.relate(decision, ticket, "decided_in")
+
+    def reached():
+        why = mem.why("we chose parking_lot to avoid lock poisoning", max_hops=2)
+        return any(n["id"] == ticket for n in why["nodes"])
+
+    assert reached(), "precondition: the edge makes the ticket traversable"
+
+    outcome = mem.unrelate(decision, ticket, "decided_in")
+    assert outcome == {"found": True, "removed": 1}
+    assert not reached(), "the edge is really gone"
+
+    survivors = {h["id"] for h in mem.recall("parking_lot lock poisoning EPIC-317", k=5)}
+    assert decision in survivors and ticket in survivors
+
+
+def test_unrelate_is_idempotent_on_an_absent_edge(mem):
+    # An absent edge is an answer, never an exception — a cleanup must replay.
+    a = mem.remember("fact a for the unrelate guard")
+    b = mem.remember("fact b for the unrelate guard")
+    assert mem.unrelate(a, b, "decided_in") == {"found": False, "removed": 0}
+
+    mem.relate(a, b, "decided_in")
+    assert mem.unrelate(a, b, "decided_in") == {"found": True, "removed": 1}
+    assert mem.unrelate(a, b, "decided_in") == {"found": False, "removed": 0}
+
+
+def test_unrelate_refuses_exactly_what_relate_refuses(mem):
+    # Same taxonomy as relate: invalid input surfaces as ValueError.
+    a = mem.remember("fact a for the unrelate refusals")
+    b = mem.remember("fact b for the unrelate refusals")
+    with pytest.raises(ValueError):
+        mem.unrelate(a, b, "")
+    with pytest.raises(ValueError):
+        mem.unrelate(a, a, "decided_in")

@@ -211,12 +211,12 @@ The same wedge in the other bindings is listed in the
 
 ## API
 
-18 methods on one class, in three families:
+21 methods on one class, in three families:
 
 | Family | Methods |
 |---|---|
-| Durable memory | `remember`, `recall`, `recallWhere`, `recallFused`, `recallFusedDated`, `relate`, `forget`, `why`, `feedback`, `rememberExtracted` |
-| Context compiler | `compileContext`, `compileTranscript`, `explainCompilation`, `contextSavings`, `retrieveContextSource` |
+| Durable memory | `remember`, `recall`, `recallWhere`, `recallFused`, `recallFusedDated`, `relate`, `unrelate`, `forget`, `why`, `entity`, `feedback`, `rememberExtracted` |
+| Context compiler | `compileContext`, `compileTranscript`, `explainCompilation`, `contextSavings`, `retrieveContextSource`, `suggestBudget` |
 | Session resumption | `saveWorkingContext`, `loadWorkingContext`, `listWorkingContexts` |
 
 Three contracts hold across all of them: every method returns a `Promise` and

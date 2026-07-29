@@ -8,6 +8,7 @@ use napi_derive::napi;
 use serde_json::Value;
 use velesdb_memory::{
     EntityProfile, EntityRelation, Explanation, MemoryEdge, MemoryNode, Recollection,
+    UnrelateOutcome,
 };
 
 use crate::convert::id_to_string;
@@ -214,6 +215,31 @@ impl EntityProfileJs {
                 .into_iter()
                 .map(EntityRelationJs::from)
                 .collect(),
+        }
+    }
+}
+
+/// What `unrelate` actually removed (output). Idempotent by design: an edge
+/// that was not there is reported as `found: false`, never as a rejection, so
+/// a cleanup can be replayed. `removed` counts the edges genuinely deleted —
+/// two facts can carry several parallel edges under the same label.
+#[napi(object)]
+pub struct UnrelateJs {
+    /// Whether at least one matching edge existed and was removed.
+    pub found: bool,
+    /// How many matching edges were removed (parallel duplicates included).
+    pub removed: u32,
+}
+
+impl From<UnrelateOutcome> for UnrelateJs {
+    fn from(outcome: UnrelateOutcome) -> Self {
+        Self {
+            found: outcome.found,
+            // The count is how many parallel edges joined the same two facts
+            // under one label, so it is a handful in practice; saturating
+            // rather than wrapping keeps the report from ever reading LOW,
+            // and `found` carries the "something was removed" answer anyway.
+            removed: u32::try_from(outcome.removed).unwrap_or(u32::MAX),
         }
     }
 }

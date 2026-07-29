@@ -1,5 +1,6 @@
 //! WASM binding for `velesdb-memory`'s agent-memory wedge — `remember` /
-//! `recall` / `recallWhere` / `recallFused` / `relate` / `forget` / `why` /
+//! `recall` / `recallWhere` / `recallFused` / `relate` / `unrelate` /
+//! `forget` / `why` /
 //! `entity` / `compileContext` / `compileTranscript` / `explainCompilation` /
 //! `contextSavings` / `suggestBudget` / `retrieveContextSource` /
 //! `saveWorkingContext` / `loadWorkingContext` / `listWorkingContexts`,
@@ -292,6 +293,17 @@ impl From<MemoryEdge> for MemoryEdgeOut {
     }
 }
 
+/// What [`WasmMemoryService::unrelate`] actually removed. Idempotent by
+/// design: an edge that was not there is reported as `found: false`, never as
+/// a thrown error, so a cleanup can be replayed. `removed` counts the edges
+/// genuinely deleted — two facts can carry several parallel edges under the
+/// same label.
+#[derive(Serialize)]
+struct UnrelateOut {
+    found: bool,
+    removed: usize,
+}
+
 /// One typed edge leaving an entity (output of
 /// [`WasmMemoryService::entity`]). `targetId` crosses as a decimal string
 /// for the same reason every other id here does.
@@ -579,6 +591,27 @@ impl WasmMemoryService {
             .relate(from, to, relation)
             .map(id_to_string)
             .map_err(to_js_err)
+    }
+
+    /// Remove the typed edge(s) `from -relation-> to` — [`Self::relate`]'s
+    /// exact undo, so a mistaken edge no longer costs the facts at its
+    /// endpoints. Only the edge goes: both memories, and any entity hub, are
+    /// untouched.
+    ///
+    /// Returns `{found, removed}`. Idempotent: removing an absent edge answers
+    /// `found: false` instead of throwing, so a cleanup can be replayed. It
+    /// refuses exactly what `relate` refuses (empty relation, `from` equal to
+    /// `to`), and deliberately does NOT require the endpoints to still exist —
+    /// the edge of a forgotten fact is already gone.
+    #[wasm_bindgen(js_name = unrelate)]
+    pub fn unrelate(&self, from: &str, to: &str, relation: &str) -> Result<JsValue, JsValue> {
+        let from = parse_id(from)?;
+        let to = parse_id(to)?;
+        let outcome = self.inner.unrelate(from, to, relation).map_err(to_js_err)?;
+        to_js(&UnrelateOut {
+            found: outcome.found,
+            removed: outcome.removed,
+        })
     }
 
     /// Delete a memory by id. Returns whether a memory actually existed

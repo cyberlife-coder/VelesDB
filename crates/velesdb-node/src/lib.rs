@@ -1,6 +1,6 @@
 //! Node.js (napi-rs) binding for the `velesdb-memory` `MemoryService` — the
 //! agent-memory wedge: `remember` / `recall` / `recallWhere` / `relate` /
-//! `forget` / `why` / `entity` / `feedback` / `rememberExtracted` / `compileContext` /
+//! `unrelate` / `forget` / `why` / `entity` / `feedback` / `rememberExtracted` / `compileContext` /
 //! `compileTranscript` / `contextSavings` / `explainCompilation` /
 //! `retrieveContextSource` / `saveWorkingContext` / `loadWorkingContext` /
 //! `listWorkingContexts` / `suggestBudget`.
@@ -57,7 +57,7 @@ use velesdb_memory::{
 
 use crate::dto::{
     ColumnFilterJs, CompiledContextJs, DatedRecallJs, EntityProfileJs, ExplanationJs,
-    FusionOptionsJs, LinkJs, RecollectionJs,
+    FusionOptionsJs, LinkJs, RecollectionJs, UnrelateJs,
 };
 use crate::error::{invalid_input, to_napi_err, CODE_INTERNAL};
 use crate::tasks::{Job, JsonOut};
@@ -266,6 +266,32 @@ impl MemoryStore {
             let to = convert::parse_id(&to)?;
             svc.relate(from, to, &relation)
                 .map(convert::id_to_string)
+                .map_err(to_napi_err)
+        }))
+    }
+
+    /// Remove the typed edge(s) `from -relation-> to` — [`relate`](Self::relate)'s
+    /// exact undo, so a mistaken edge no longer costs the facts at its endpoints.
+    /// Only the edge goes: both memories, and any entity hub, are untouched.
+    ///
+    /// Resolves to `{found, removed}`. Idempotent: removing an absent edge
+    /// answers `found: false` instead of rejecting, so a cleanup can be
+    /// replayed safely. It rejects exactly what `relate` rejects (empty
+    /// relation, `from` equal to `to`), and deliberately does NOT require the
+    /// endpoints to still exist — the edge of a forgotten fact is already gone.
+    #[napi(ts_return_type = "Promise<UnrelateJs>")]
+    pub fn unrelate(
+        &self,
+        from: String,
+        to: String,
+        relation: String,
+    ) -> AsyncTask<Job<UnrelateJs>> {
+        let svc = Arc::clone(&self.inner);
+        AsyncTask::new(Job::new(move || {
+            let from = convert::parse_id(&from)?;
+            let to = convert::parse_id(&to)?;
+            svc.unrelate(from, to, &relation)
+                .map(UnrelateJs::from)
                 .map_err(to_napi_err)
         }))
     }
