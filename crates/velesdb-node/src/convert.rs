@@ -257,33 +257,58 @@ pub fn build_transcript_compile_request(
 pub fn to_compiled_js(
     compiled: &velesdb_memory::context::CompiledContext,
 ) -> napi::Result<crate::dto::CompiledContextJs> {
-    let internal =
-        |what: &str| napi::Error::from_reason(format!("[INTERNAL] compiled context: {what}"));
-    let mut value =
-        serde_json::to_value(compiled).map_err(|err| internal(&format!("serialize: {err}")))?;
+    let mut value = serde_json::to_value(compiled)
+        .map_err(|err| compiled_internal(&format!("serialize: {err}")))?;
     stringify_id_fields(&mut value);
     let Value::Object(mut map) = value else {
-        return Err(internal("not an object"));
+        return Err(compiled_internal("not an object"));
     };
-    let field = |map: &mut serde_json::Map<String, Value>, key: &str| {
-        map.remove(key)
-            .ok_or_else(|| internal(&format!("missing field {key}")))
-    };
-    let content = match field(&mut map, "content")? {
-        Value::String(text) => text,
-        _ => return Err(internal("content is not a string")),
-    };
-    let risk = match field(&mut map, "risk")? {
-        Value::String(level) => level,
-        _ => return Err(internal("risk is not a string")),
-    };
+    compiled_envelope(&mut map)
+}
+
+/// The `[INTERNAL]` error of the compiled-context marshalling: every variant
+/// signals a bug in this conversion (the wire JSON of a `CompiledContext` is
+/// always a complete object), never bad caller input.
+fn compiled_internal(what: &str) -> napi::Error {
+    napi::Error::from_reason(format!("[INTERNAL] compiled context: {what}"))
+}
+
+/// Take a top-level field out of the serialized compiled context.
+fn compiled_field(map: &mut serde_json::Map<String, Value>, key: &str) -> napi::Result<Value> {
+    map.remove(key)
+        .ok_or_else(|| compiled_internal(&format!("missing field {key}")))
+}
+
+/// [`compiled_field`] for the two fields the typed envelope declares as
+/// `String` rather than raw wire JSON.
+fn compiled_string_field(
+    map: &mut serde_json::Map<String, Value>,
+    key: &str,
+) -> napi::Result<String> {
+    match compiled_field(map, key)? {
+        Value::String(text) => Ok(text),
+        _ => Err(compiled_internal(&format!("{key} is not a string"))),
+    }
+}
+
+/// Lift the top-level fields of an id-stringified compiled context into the
+/// typed envelope. Any field not declared by [`crate::dto::CompiledContextJs`]
+/// stays behind in `map` and is dropped — the envelope is the binding's
+/// contract, not a mirror of the domain type.
+fn compiled_envelope(
+    map: &mut serde_json::Map<String, Value>,
+) -> napi::Result<crate::dto::CompiledContextJs> {
+    // The two string fields are taken first, keeping the order in which a
+    // malformed envelope surfaces its error unchanged.
+    let content = compiled_string_field(map, "content")?;
+    let risk = compiled_string_field(map, "risk")?;
     Ok(crate::dto::CompiledContextJs {
         content,
-        sections: field(&mut map, "sections")?,
-        decisions: field(&mut map, "decisions")?,
-        sources: field(&mut map, "sources")?,
-        retrieval_handles: field(&mut map, "retrieval_handles")?,
-        insights: field(&mut map, "insights")?,
+        sections: compiled_field(map, "sections")?,
+        decisions: compiled_field(map, "decisions")?,
+        sources: compiled_field(map, "sources")?,
+        retrieval_handles: compiled_field(map, "retrieval_handles")?,
+        insights: compiled_field(map, "insights")?,
         risk,
     })
 }
