@@ -674,6 +674,33 @@ pub(super) fn relations_of(
         .collect())
 }
 
+/// Returns the incoming relation edges of a memory point, filtering out edges
+/// whose source is TTL-expired in the given subsystem.
+///
+/// The mirror of [`relations_of`]: the queried endpoint is the live one, so
+/// the TTL filter guards the *far* end — here `source()`, not `target()`.
+/// Shared by `SemanticMemory::incoming_relations`,
+/// `EpisodicMemory::incoming_relations`, and
+/// `ProceduralMemory::incoming_relations`.
+///
+/// # Errors
+///
+/// Returns `CollectionError` when the collection cannot be resolved.
+pub(super) fn incoming_relations_of(
+    db: &Database,
+    collection_name: &str,
+    id: u64,
+    ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
+) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
+    let collection = get_collection(db, collection_name)?;
+    Ok(collection
+        .get_incoming_edges(id)
+        .into_iter()
+        .filter(|edge| !ttl.is_expired(kind, edge.source()))
+        .collect())
+}
+
 /// Removes a relation edge from a memory collection.
 ///
 /// Returns `true` when the edge existed and was removed. Shared by

@@ -910,6 +910,50 @@ mod tests {
         assert!(sm.relations(1).unwrap().is_empty());
     }
 
+    /// incoming_relations() is the mirror of relations(): the edge `1 -> 2`
+    /// is visible from `2`'s side with its source intact, and only there.
+    #[test]
+    fn test_incoming_relations_exposes_the_edge_from_the_target_side() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "context", &emb).unwrap();
+        sm.store(2, "fact", &emb).unwrap();
+        let edge_id = sm.relate(1, 2, "RELATES_TO", None).unwrap();
+
+        let incoming = sm.incoming_relations(2).unwrap();
+        assert_eq!(incoming.len(), 1);
+        assert_eq!(incoming[0].id(), edge_id);
+        assert_eq!(incoming[0].source(), 1);
+        assert_eq!(incoming[0].label(), "RELATES_TO");
+        assert!(
+            sm.incoming_relations(1).unwrap().is_empty(),
+            "the source side has no incoming edge"
+        );
+    }
+
+    /// incoming_relations() drops an edge whose SOURCE is TTL-expired — the
+    /// mirror of relations() filtering expired targets: the live endpoint is
+    /// always the queried one, the filter guards the far end.
+    #[test]
+    fn test_incoming_relations_filters_expired_source() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "ephemeral", &emb).unwrap();
+        sm.store(2, "fact", &emb).unwrap();
+        sm.relate(1, 2, "RELATES_TO", None).unwrap();
+
+        sm.set_ttl_durable(1, 0).unwrap(); // source expires immediately
+
+        assert!(
+            sm.incoming_relations(2).unwrap().is_empty(),
+            "an edge from an expired source is dead and must not be reported"
+        );
+    }
+
     /// relate() refuses missing and expired endpoints (write surfaces must
     /// not resurrect or dangle).
     #[test]
