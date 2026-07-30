@@ -40,17 +40,24 @@ License.
 Memory ids and fragment ids are `u64` and routinely exceed 2^53, where a JSON
 number silently loses precision in any JavaScript-based client.
 
-- Every memory tool that returns an id also returns a decimal-string twin:
-  `id_str`, `edge_id_str`, `ids_str`, `from_str`/`to_str`. **Relay the string
-  form**, not the number.
-- Every memory tool that accepts an id (`relate`/`unrelate`'s `from`/`to`,
-  `forget`'s and `feedback`'s `id`, `remember`'s `links[].target`) accepts a
-  JSON number *or*
-  a decimal string, and advertises both in its input schema.
-- The compiler tools instead take a per-request switch:
+- Every tool that returns an id also returns a decimal-string twin: `id_str`,
+  `edge_id_str`, `ids_str`, `from_str`/`to_str`, `target_id_str`. **Relay the
+  string form**, not the number.
+- Every tool that accepts an id (`relate`/`unrelate`'s `from`/`to`, `forget`'s
+  and `feedback`'s `id`, `remember`'s `links[].target`,
+  `explain_compilation`'s `fragment_id`, `save_working_context`'s nested
+  `fragment_id`/`memory_id`) accepts a JSON number *or* a decimal string. Its
+  input schema **advertises only the string**: a client harness flattens a
+  two-form `type` into "anything", which destroys the contract instead of
+  publishing it, so the schema names the one form that survives a
+  float-lossy client. The server still accepts both.
+- The compiler tools additionally take a per-request switch:
   `policy.ids_as_strings: true` rewrites every id field of that response
   (`fragment_id`, `content_hash`, `memory_id`, `fragment_ids`) into decimal
   strings. Default `false`, so existing clients see today's numeric response.
+  `load_working_context` is the exception that needs no switch: it always
+  answers in decimal strings, because it is the reading half of a round trip
+  whose writing half (`save_working_context`) advertises only that form.
 
 ---
 
@@ -389,7 +396,7 @@ with event and source recording off.
 | Parameter | Type | Required | Notes |
 |---|---|---|---|
 | `request` | `CompileRequest` | yes | The exact request to explain. |
-| `fragment_id` | integer | yes | The fragment whose decision to return. |
+| `fragment_id` | string (or integer) | yes | The fragment whose decision to return. Relay the value `compile_context` handed you — under `policy.ids_as_strings` that is a decimal string, and this tool accepts it unchanged. |
 | `fragment_index` | integer | no | 0-based position in `request.fragments`. **Takes priority** over `fragment_id` when given. |
 
 Returns one `ContextDecision`: `{ action, rule_id, reason, relevance, risk, content_hash, handle? }`.
@@ -463,10 +470,10 @@ up instead of re-deriving it.
 `WorkingContext` is
 `{ goal?, active_constraints[], verified_facts[], open_hypotheses[], decisions[], exact_evidence[], pending_actions[] }`.
 
-Returns `{ id }` — the stored system fact backing this context. Saving again
-under the same `project` + `session` replaces the previous state (idempotent
-upsert), and refreshes the entry in the project index rather than duplicating
-it.
+Returns `{ id, id_str }` — the stored system fact backing this context; relay
+`id_str` if you intend to `forget` it. Saving again under the same `project` +
+`session` replaces the previous state (idempotent upsert), and refreshes the
+entry in the project index rather than duplicating it.
 
 ## `load_working_context`
 
@@ -481,6 +488,13 @@ Returns `{ found, working, other_sessions }`. `found: false` with
 `working: null` means nothing was ever saved under that exact pair — not an
 error, but check `other_sessions`: a similarly-named entry there usually means
 `session` was a typo rather than a genuinely fresh start.
+
+Ids inside `working` (`fragment_id`, `memory_id`) come back as **decimal
+strings**, unconditionally — the exact bytes `save_working_context` accepts,
+so an agent can enrich what it loaded and save it back without converting
+anything. Relaying them as numbers would round every id past 2^53 on a
+float-lossy client, silently breaking the provenance trail of the very tool
+that exists to survive a lost session.
 
 ## `list_working_contexts`
 

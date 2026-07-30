@@ -7,11 +7,9 @@
 use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::handler::server::tool::schema_for_input;
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::{ErrorCode, Implementation, JsonObject, ServerCapabilities, ServerInfo};
+use rmcp::model::{ErrorCode, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
-use schemars::JsonSchema;
 
 use crate::limits::{DEFAULT_WHY_HOPS, MAX_FACT_BYTES, MAX_RECALL_LIMIT, MAX_WHY_HOPS};
 use crate::model::FusionOptions;
@@ -47,36 +45,20 @@ use dto::{
     WhyParams,
 };
 
-/// Advertised-schema counterpart of [`crate::model::deserialize_id`]: `keys`
-/// (e.g. `["from", "to"]`) widen from `integer` to `["integer", "string"]` so
-/// a client generating requests from the schema can discover the
-/// decimal-string form (issue #1468). Scoped per tool — each takes a
-/// different set of id-named parameters (`relate`'s `from`/`to`,
-/// `forget`/`feedback`'s `id`, `remember`'s nested `links[].target`) — unlike
-/// the context compiler's `wire_safe_input_schema` (single hardcoded `"id"`
-/// key, `context`-feature-gated). Both reuse the same underlying
-/// [`crate::schema::widen_id_properties`] tree walk.
+/// Le constructeur de schema d'ENTREE, unique pour les vingt outils :
+/// [`crate::schema::wire_safe_input_schema`].
 ///
-/// It then applies [`crate::schema::inline_ref_only_properties`], for the
-/// same reason `wire_safe_input_schema` does: `schemars` emits a nested
-/// object or array-of-objects as a bare `$ref` into `$defs`, and a harness
-/// that does not dereference `$defs` degrades that to "untyped" — so
-/// `remember`'s `links[]` (a `Vec<Link>`) and `recall_where`'s `filters[]`
-/// (a `Vec<ColumnFilter>`) advertised an array of anything, hiding both
-/// their required fields. Order matters: widen FIRST so the copies the
-/// inliner makes inherit the widened id types.
-fn id_wire_input_schema<T: JsonSchema + std::any::Any>(keys: &[&str]) -> Arc<JsonObject> {
-    let schema = schema_for_input::<Parameters<T>>().unwrap_or_else(|e| {
-        panic!(
-            "Invalid input schema for {}: {e}",
-            std::any::type_name::<T>()
-        )
-    });
-    let mut map = (*schema).clone();
-    crate::schema::widen_id_properties(&mut map, keys);
-    crate::schema::inline_ref_only_properties(&mut map);
-    Arc::new(map)
-}
+/// `keys` nomme les proprietes que CET outil accepte en chaine decimale
+/// (`relate`/`unrelate` : `from`/`to` ; `forget`/`feedback` : `id` ;
+/// `remember` : le `links[].target` imbrique) — la tolerance d'un id est une
+/// connaissance de l'outil, jamais une regle globale :
+/// `explain_compilation.fragment_id` est un `u64` STRICT et reste annonce
+/// `integer`.
+///
+/// Il y avait deux constructeurs, celui-ci et un `wire_safe_input_schema`
+/// gate sur `context` a cle `"id"` figee ; ils appliquaient la meme suite de
+/// passes a une virgule pres. Il n'y en a plus qu'un.
+use crate::schema::wire_safe_input_schema as id_wire_input_schema;
 
 // --- The server ------------------------------------------------------------
 
@@ -119,15 +101,33 @@ impl McpServer {
     /// The full tool router: the memory tools, plus the context compiler's
     /// tools when that feature is on. Combined here — rmcp routers add — so
     /// there is exactly ONE server whichever features are enabled.
+    ///
+    /// **Et le point de passage unique du durcissement d'entree.** Mesure du
+    /// 2026-07-29 : 10 outils sur 20 ne declaraient AUCUN `input_schema`
+    /// (`recall`, `recall_fused`, `entity`, `why`, `remember_extracted`,
+    /// `context_savings`, `retrieve_context_source`, `load_working_context`,
+    /// `list_working_contexts`, `suggest_budget`) — leur schema etait celui
+    /// derive par rmcp, que rien ne post-traitait. Un durcissement declare
+    /// outil par outil laisse donc chaque route future non protegee, et rien
+    /// ne le signale : c'est une omission, pas une erreur. Ici, une route
+    /// nouvelle est couverte parce qu'elle EXISTE.
+    ///
+    /// L'attribut `#[tool(input_schema = …)]` garde ce qui, lui, est
+    /// vraiment per-outil : les cles d'id que l'outil accepte en chaine.
     fn combined_router() -> ToolRouter<McpServer> {
         #[cfg(feature = "context")]
-        {
-            Self::tool_router() + Self::context_tool_router()
-        }
+        let mut router = Self::tool_router() + Self::context_tool_router();
         #[cfg(not(feature = "context"))]
-        {
-            Self::tool_router()
+        let mut router = Self::tool_router();
+
+        // `reharden_tool_input` prend l'outil, pas un schema : `Tool` type
+        // ses deux schemas identiquement, donc c'est la signature — et non
+        // une convention de nommage — qui rend la sortie inatteignable ici.
+        for route in router.map.values_mut() {
+            crate::schema::reharden_tool_input(&mut route.attr);
         }
+        assert_every_input_slot_is_typed(&router);
+        router
     }
 
     /// Attach an extraction backend, enabling the `remember_extracted` tool.
@@ -518,6 +518,36 @@ impl ServerHandler for McpServer {
         info.instructions = Some(SERVER_INSTRUCTIONS.to_owned());
         info
     }
+}
+
+/// La post-condition du point de passage, verifiee SUR PLACE.
+///
+/// Un test lointain constate ; ici on refuse. Les schemas annonces sont
+/// statiques — ils ne dependent ni du store, ni de l'horloge, ni d'une
+/// entree — donc une violation est deterministe : elle ne peut pas se
+/// produire chez un utilisateur sans se produire aussi au premier
+/// `McpServer::new` de la suite de tests. Echouer a la construction dit ou
+/// est le probleme ; laisser passer un slot intypable le fait ressortir
+/// plusieurs jours plus tard, dans un aller-retour de deserialisation chez
+/// un agent.
+///
+/// # Panics
+/// Si une route publie un slot d'entree qui n'annonce ni `type`, ni `enum`,
+/// ni `const`.
+fn assert_every_input_slot_is_typed(router: &ToolRouter<McpServer>) {
+    let mut offenders: Vec<String> = Vec::new();
+    for route in router.map.values() {
+        for slot in crate::schema::untyped_input_slots(&route.attr.input_schema) {
+            offenders.push(format!("  {}: {slot}", route.attr.name));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "{} slot(s) d'entree n'annoncent aucun type — un harnais client les rend `{{}}`, le \
+         client envoie ce qu'il devine, et le serveur le refuse :\n{}",
+        offenders.len(),
+        offenders.join("\n")
+    );
 }
 
 /// Map a `spawn_blocking` join failure (a panicked or cancelled tool task) to an

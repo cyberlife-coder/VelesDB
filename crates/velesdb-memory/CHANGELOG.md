@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`explain_compilation` refused the `fragment_id` it had just emitted.**
+  `compile_context` rewrites every id of its response into a decimal string
+  when the request carries `policy.ids_as_strings` — the option that exists
+  so a float-lossy JSON client keeps its ids intact. `explain_compilation`,
+  whose whole job is to explain the decision behind one of those ids, took
+  `fragment_id` as a strict `u64` and rejected the string with
+  `invalid type: string "…", expected u64`. The fallback was no better: a
+  `fragment_id` is an FNV-1a 64 content hash, so it is past 2^53 in ~99.95 %
+  of cases and a JavaScript client has already rounded it on arrival. Both
+  forms failed, which made the tool unreachable by its own documented
+  selector on exactly the clients the id contract was written for. It now
+  accepts a number or a decimal string, and advertises the string.
+
+- **The two halves of a working-context round trip disagreed.**
+  `save_working_context` advertises its nested `fragment_id`/`memory_id` as
+  decimal strings (an input schema may announce only one form), while
+  `load_working_context` answered with JSON numbers. An agent that resumed a
+  session, enriched what it loaded and saved it back therefore had to
+  convert — and on a float-lossy client the value was already rounded at read
+  time, so it stored a corrupted id with the apparent exactness of a string.
+  `load_working_context` now answers in decimal strings, the exact bytes its
+  writing half accepts. The advertised output schema already typed those
+  fields `["integer", "string"]`, so no SDK-side validation changes.
+
+### Added
+
+- **`save_working_context` returns `id_str`.** It was the one tool handing
+  back an id without its decimal-string twin, while `forget`/`feedback`
+  advertise only the string form — leaving no way to relay the id it had just
+  returned. A test now derives the rule from the published surface (a name
+  the input side wants as a string and the output side answers as an
+  `integer` must carry an `_str` twin) instead of relying on the convention
+  being remembered.
+
 ## [0.11.6] — 2026-07-29
 
 ### Added

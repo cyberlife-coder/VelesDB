@@ -427,8 +427,25 @@ pub struct SourceReference {
     pub fragment_id: u64,
     /// Recoverable address of the original content (`ctx://source/<id>`).
     pub handle: String,
+    // Un doc-comment de CHAMP est publie tel quel dans la description du
+    // schema annonce (`docs/reference/mcp-tools.json`) : l'archeologie va donc
+    // ici, en commentaire ordinaire, et le contrat seul va au-dessus.
+    //
+    // Aller-retour casse jusqu'au 2026-07-29, trouve en interrogeant le
+    // serveur plutot qu'en relisant le code : `memory_id` fait partie des
+    // `super::wire::ID_KEYS`, donc une reponse sous
+    // `CompilePolicy::ids_as_strings` l'emet en CHAINE — et
+    // `save_working_context` la refusait, alors que c'est precisement la forme
+    // qu'un client a en main lorsqu'il resoumet une `SourceReference` recue
+    // d'un contexte compile.
     /// The memory backing this source, when it came from recall (US-002).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Accepts a JSON number OR a decimal string on input, exactly like
+    /// `fragment_id` just above.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::wire::deserialize_optional_id"
+    )]
     pub memory_id: Option<u64>,
 }
 
