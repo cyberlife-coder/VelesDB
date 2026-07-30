@@ -191,6 +191,13 @@ def scanned_doc_files(root: Path) -> "list[Path]":
     root_readme = root / "README.md"
     if root_readme.is_file():
         out.append(root_readme)
+    # A crate's own README is the page a user lands on from crates.io, npm or
+    # PyPI — its version claim is the FIRST one anybody reads, and it was
+    # outside every sweep. Measured on 4.2.0: seven of the nine stamped READMEs
+    # still announced `Applies to: velesdb-core 4.1.0`, one two minors behind.
+    # `check-version-sync.py` pins exactly two of them (:43, :46), which is why
+    # those two were the only correct ones.
+    out.extend(sorted((root / "crates").glob("*/README.md")))
     return out
 
 
