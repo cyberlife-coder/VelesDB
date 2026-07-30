@@ -1,16 +1,11 @@
 name: Promise Contract
 
+# Called by ci.yml on pull requests (see the note in gate-contracts.yml): the
+# `pull_request` trigger is gone so the gate reports inside the only required
+# check instead of beside it. The `push` path filter below still applies to
+# direct pushes on main/develop.
 on:
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - 'README.md'
-      - 'crates/velesdb-core/README.md'
-      - 'crates/velesdb-core/src/quantization/mod.rs'
-      - 'docs/guides/QUANTIZATION.md'
-      - 'docs/VELESQL_SPEC.md'
-      - 'docs/reference/promise-contract.json'
-      - 'scripts/check-promise-contract.py'
+  workflow_call:
   push:
     branches: [main, develop]
     paths:

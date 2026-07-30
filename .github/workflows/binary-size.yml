@@ -11,19 +11,12 @@ name: Binary Size Gate
 # absorb the Linux x86_64 build delta this CI runner produces. They catch a
 # real regression (a multi-MB dependency, a bundled asset), not exact bytes.
 
+# Called by ci.yml on pull requests (see the note in gate-contracts.yml). The
+# `pull_request` trigger is gone so the ceiling reports inside `CI Success`, the
+# only required check. The `push` filter below still applies on develop/main.
 on:
+  workflow_call:
   push:
-    branches: [develop, main]
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/velesdb-core/**"
-      - "crates/velesdb-server/**"
-      - "crates/velesdb-cli/**"
-      - "crates/velesdb-migrate/**"
-      - "scripts/check_binary_size.py"
-      - ".github/workflows/binary-size.yml"
-  pull_request:
     branches: [develop, main]
     paths:
       - "Cargo.toml"

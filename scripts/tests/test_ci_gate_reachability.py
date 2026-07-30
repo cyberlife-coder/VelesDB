@@ -167,6 +167,32 @@ def script_mentions_in_job(workflow_text: str, job: str, script: str) -> "list[s
     return [line.strip() for line in block.split("\n") if script in line]
 
 
+def trigger_block(text: str, trigger: str) -> str:
+    """The `on:` sub-block of one trigger, up to the next trigger or top key."""
+    on_match = re.search(r"^on:$", strip_comments(text), re.MULTILINE)
+    if on_match is None:
+        raise AssertionError("no top-level `on:` block found")
+    rest = strip_comments(text)[on_match.end():]
+    end = re.search(r"^[a-z]", rest, re.MULTILINE)
+    on_block = rest[: end.start()] if end else rest
+    start = re.search(rf"^  {re.escape(trigger)}:", on_block, re.MULTILINE)
+    if start is None:
+        raise AssertionError(f"ci.yml has no `{trigger}:` trigger")
+    tail = on_block[start.end():]
+    following = re.search(r"^  [a-z_]+:", tail, re.MULTILINE)
+    return tail[: following.start()] if following else tail
+
+
+def called_workflow(ci_text: str, job: str) -> "str | None":
+    """The workflow a ci.yml job delegates to via ``uses: ./…``, if any."""
+    match = re.search(
+        r"^\s*uses:\s*\./(\.github/workflows/[\w.-]+)\s*$",
+        strip_comments(job_block(ci_text, job)),
+        re.MULTILINE,
+    )
+    return match.group(1) if match else None
+
+
 def required_ci_jobs() -> "set[str]":
     """ci.yml jobs whose failure actually fails the one required check.
 
@@ -278,6 +304,23 @@ class RealWorkflowTests(unittest.TestCase):
 
     def test_the_needs_list_is_not_empty(self) -> None:
         self.assertTrue(self.needs, "`CI Success` needs nothing — it gates nothing")
+
+    def test_ci_runs_on_every_pull_request(self) -> None:
+        # Load-bearing since the gate fold: six guards gave up their own
+        # `pull_request` triggers to report inside `CI Success`. A `paths:`
+        # filter here would silently stop ALL of them — plus the thirteen jobs
+        # that were already required — on any PR touching only unlisted files.
+        # The `push` trigger keeps its filter; each folded workflow kept its own.
+        block = trigger_block(CI_WORKFLOW.read_text(encoding="utf-8"), "pull_request")
+        for key in ("paths:", "paths-ignore:"):
+            with self.subTest(key=key):
+                self.assertNotIn(
+                    key,
+                    block,
+                    "ci.yml's pull_request trigger must stay unfiltered: every "
+                    "required gate now reports through it. Filter individual "
+                    "jobs instead, never the workflow.",
+                )
 
 
 class BlockingBehaviourTests(unittest.TestCase):
@@ -501,20 +544,38 @@ class GuardWiringTests(unittest.TestCase):
                 )
 
     def test_a_required_guard_lives_in_a_job_that_blocks_the_merge(self) -> None:
+        ci_text = CI_WORKFLOW.read_text(encoding="utf-8")
         for entry in self.guards:
             if not entry["required"]:
                 continue
+            caller = entry.get("required_via")
             with self.subTest(script=entry["script"]):
-                self.assertEqual(
-                    entry["workflow"],
-                    ".github/workflows/ci.yml",
-                    "only ci.yml feeds the single required check (CI Success)",
-                )
+                if caller is None:
+                    # Invoked directly by a ci.yml job.
+                    self.assertEqual(
+                        entry["workflow"],
+                        ".github/workflows/ci.yml",
+                        "a guard required without `required_via` must live in ci.yml",
+                    )
+                    self.assertIn(
+                        entry["job"],
+                        self.required_jobs,
+                        f"`{entry['job']}` is not both in CI Success's needs and "
+                        "read by its chain, so this guard cannot block a merge",
+                    )
+                    continue
+                # Invoked in its own workflow, made required by a caller job.
+                # Both links are checked: pointing `required_via` at some
+                # unrelated required job would otherwise pass.
                 self.assertIn(
-                    entry["job"],
+                    caller,
                     self.required_jobs,
-                    f"`{entry['job']}` is not both in CI Success's needs and read "
-                    "by its chain, so this guard cannot block a merge",
+                    f"caller job `{caller}` is not required by CI Success",
+                )
+                self.assertEqual(
+                    called_workflow(ci_text, caller),
+                    entry["workflow"],
+                    f"ci.yml job `{caller}` does not call {entry['workflow']}",
                 )
 
     def test_a_strict_guard_is_not_disarmed_at_its_invocation(self) -> None:
@@ -531,19 +592,37 @@ class GuardWiringTests(unittest.TestCase):
                             f"strict guard disarmed at its invocation: {line!r}",
                         )
 
+    def _required_test_surface(self) -> str:
+        """Everything a required job can run, including through a called workflow.
+
+        A caller job's own block is three lines of `uses:`; the suites it runs
+        live in the callee. Reading only ci.yml would report every folded gate's
+        self-test as unreached.
+        """
+        ci_text = CI_WORKFLOW.read_text(encoding="utf-8")
+        parts = []
+        for job in sorted(self.required_jobs):
+            parts.append(job_block(ci_text, job))
+            callee = called_workflow(ci_text, job)
+            if callee:
+                parts.append((REPO_ROOT / callee).read_text(encoding="utf-8"))
+        return "\n".join(parts)
+
     def test_the_self_test_declaration_is_true(self) -> None:
         # Both directions: a `true` that is not backed by a required job
         # overstates coverage, and a `false` that IS backed understates it and
         # goes stale the day the wiring improves.
-        ci_text = CI_WORKFLOW.read_text(encoding="utf-8")
-        required_blocks = "\n".join(
-            job_block(ci_text, job) for job in sorted(self.required_jobs)
+        surface = self._required_test_surface()
+        # `unittest discover -s scripts/tests` runs every module under that
+        # directory, so it covers each one by name without naming any.
+        discovers_all = bool(
+            re.search(r"unittest\s+discover\s+-s\s+scripts/tests", surface)
         )
         for entry in self.guards:
             module = entry.get("self_test")
             if not module:
                 continue
-            actually_required = module in required_blocks
+            actually_required = discovers_all or module in surface
             with self.subTest(script=entry["script"], module=module):
                 self.assertEqual(
                     entry.get("self_test_required"),

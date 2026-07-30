@@ -1,22 +1,11 @@
 name: Propagation Guard
 
+# Called by ci.yml on pull requests (see the note in gate-contracts.yml). The
+# `pull_request` trigger is gone so this guard reports inside `CI Success`, the
+# only required check. The `push` filter below still applies on main/develop.
 on:
+  workflow_call:
   push:
-    branches: [main, develop]
-    paths:
-      - "crates/**"
-      - "sdks/typescript/**"
-      - "integrations/**"
-      - "demos/**"
-      - "examples/**"
-      - "conformance/**"
-      - "docs/**"
-      - "scripts/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".cargo/config.toml"
-      - ".github/workflows/propagation-guard.yml"
-  pull_request:
     branches: [main, develop]
     paths:
       - "crates/**"

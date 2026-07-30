@@ -22,7 +22,8 @@
     "exit_condition": "mandatory when mode is warn: what has to happen for it to become strict",
     "self_test": "unittest module that proves the guard refuses; null when none exists",
     "self_test_required": "true when that module runs inside a required job",
-    "blind_spot": "known limit of the guard's reach, with the issue tracking it"
+    "blind_spot": "known limit of the guard's reach, with the issue tracking it",
+    "required_via": "when the guard lives outside ci.yml: the ci.yml job that calls its workflow, and through which it becomes required"
   },
   "_json_not_yaml": [
     "gate-contracts.yml runs these suites with a bare actions/setup-python and",
@@ -30,7 +31,6 @@
     "guard that cannot run. json is stdlib everywhere. Same reasoning that keeps",
     "the workflow parsers in test_ci_gate_reachability.py regex-based."
   ],
-
   "guards": [
     {
       "script": "scripts/check_prod_unwraps.py",
@@ -82,10 +82,10 @@
       "required": true,
       "mode": "strict",
       "self_test": "scripts.tests.test_check_version_sync",
-      "self_test_required": false,
+      "self_test_required": true,
       "blind_spot": {
         "issue": null,
-        "summary": "Its self-test runs only via gate-contracts.yml's unittest discover, which is NOT in CI Success's needs — so the proof that this guard refuses does not block a merge. Fixed by the fold of #1698."
+        "summary": "None known. Its self-test is reached by gate-contracts.yml's `unittest discover`, which the fold made required through the `gate-contracts` caller job."
       }
     },
     {
@@ -135,89 +135,94 @@
       "purpose": "Every runtime route of the server is documented in the root README.",
       "workflow": ".github/workflows/doc-contract.yml",
       "job": "contract",
-      "required": false,
+      "required": true,
       "mode": "warn",
-      "exit_condition": "Document the four routes named in the script header (/collections/{name}/compact, points/raw, stream/enable, vacuum) in README.md, then flip DOC_CONTRACT_MODE's default to strict in the same commit. Tracked by #1707.",
+      "exit_condition": "Document the four routes named in the script header (/collections/{name}/compact, points/raw, stream/enable, vacuum) in README.md, then flip DOC_CONTRACT_MODE's default to strict in the same commit. Tracked by #1707. The fold made this gate required, so the flip now has teeth.",
       "self_test": null,
       "self_test_required": false,
       "blind_spot": {
         "issue": 1707,
         "summary": "Measured: exit 0 in the default warn mode with 4 undocumented routes, exit 1 under DOC_CONTRACT_MODE=strict. The guard works; nothing asks it to."
-      }
+      },
+      "required_via": "doc-contract"
     },
     {
       "script": "scripts/check-doc-freshness.py",
       "purpose": "Doc stamps, index and version references stay fresh (three guards).",
       "workflow": ".github/workflows/doc-contract.yml",
       "job": "freshness",
-      "required": false,
+      "required": true,
       "mode": "warn",
       "exit_condition": "The `stamp` and `versions` guards already run with --mode strict; only `index` runs with --mode warn (doc-contract.yml:94). Either bring `index` to strict or record here why it cannot be. The whole job is unrequired until the fold of #1698.",
       "self_test": "scripts.tests.test_check_doc_freshness",
-      "self_test_required": false,
+      "self_test_required": true,
       "blind_spot": {
-        "issue": 1698,
-        "summary": "Lives in doc-contract.yml, which is not in CI Success's needs: all three guards can be red while the merge button stays green."
-      }
+        "issue": null,
+        "summary": "None known. Folded into CI Success's needs and chain via the `doc-contract` caller job, so a failure now blocks the merge."
+      },
+      "required_via": "doc-contract"
     },
     {
       "script": "scripts/check-promise-contract.py",
       "purpose": "The promise-contract registry stays valid.",
       "workflow": ".github/workflows/promise-contract.yml",
       "job": "contract",
-      "required": false,
+      "required": true,
       "mode": "strict",
       "self_test": "scripts.tests.test_check_promise_contract",
-      "self_test_required": false,
+      "self_test_required": true,
       "blind_spot": {
-        "issue": 1698,
-        "summary": "promise-contract.yml is not in CI Success's needs, and its self-test is reachable only from gate-contracts.yml, which is not either."
-      }
+        "issue": null,
+        "summary": "None known. Folded into CI Success's needs and chain via the `promise-contract` caller job, so a failure now blocks the merge."
+      },
+      "required_via": "promise-contract"
     },
     {
       "script": "scripts/check-python.sh",
       "purpose": "Python integration checks (dangerous hash(), bandit, mypy).",
       "workflow": ".github/workflows/propagation-guard.yml",
       "job": "integrations-python",
-      "required": false,
+      "required": true,
       "mode": "strict",
       "self_test": null,
       "self_test_required": false,
       "blind_spot": {
-        "issue": 1698,
-        "summary": "propagation-guard.yml is not in CI Success's needs."
-      }
+        "issue": null,
+        "summary": "None known. Folded into CI Success's needs and chain via the `propagation-guard` caller job, so a failure now blocks the merge."
+      },
+      "required_via": "propagation-guard"
     },
     {
       "script": "scripts/check_binary_size.py",
       "purpose": "Release binaries stay within their size ceilings.",
       "workflow": ".github/workflows/binary-size.yml",
       "job": "binary-size",
-      "required": false,
+      "required": true,
       "mode": "strict",
       "self_test": null,
       "self_test_required": false,
       "blind_spot": {
-        "issue": 1698,
-        "summary": "binary-size.yml is not in CI Success's needs."
-      }
+        "issue": null,
+        "summary": "None known. Folded into CI Success's needs and chain via the `binary-size` caller job, so a failure now blocks the merge."
+      },
+      "required_via": "binary-size"
     },
     {
       "script": "scripts/run-production-gates.sh",
       "purpose": "Meta-runner chaining the production gates.",
       "workflow": ".github/workflows/production-gates.yml",
       "job": "gates",
-      "required": false,
+      "required": true,
       "mode": "strict",
       "self_test": null,
       "self_test_required": false,
       "blind_spot": {
-        "issue": 1698,
-        "summary": "production-gates.yml is not in CI Success's needs. It re-invokes check-doc-contract.sh, which is warn by default, so part of this chain is advisory too."
-      }
+        "issue": null,
+        "summary": "None known. Folded into CI Success's needs and chain via the `production-gates` caller job, so a failure now blocks the merge."
+      },
+      "required_via": "production-gates"
     }
   ],
-
   "unwired": [
     {
       "script": "scripts/check-crates-io-versions.sh",
