@@ -365,6 +365,17 @@ fn retrieve_context_source_round_trips_a_media_source() {
     );
 }
 
+/// The `code` carried by a structured rejection. Every error assertion in
+/// this file goes through this one reader: a rejection that crossed as a bare
+/// string (or with a non-string `code`) fails here rather than in each test
+/// with its own copy of the idiom.
+fn error_code(err: &JsValue) -> String {
+    js_sys::Reflect::get(err, &"code".into())
+        .unwrap()
+        .as_string()
+        .expect("a rejection must carry a string `code`")
+}
+
 /// An unknown handle rejects with a structured `{code: "NOT_FOUND"}` error,
 /// mirroring the Node binding's contract, never panicking across the
 /// boundary.
@@ -374,11 +385,7 @@ fn retrieve_context_source_unknown_handle_rejects_with_not_found() {
     let err = svc
         .retrieve_context_source("ctx://source/999999999999999999")
         .unwrap_err();
-    let code = js_sys::Reflect::get(&err, &"code".into())
-        .unwrap()
-        .as_string()
-        .unwrap();
-    assert_eq!(code, "NOT_FOUND");
+    assert_eq!(error_code(&err), "NOT_FOUND");
 }
 
 // --- saveWorkingContext / loadWorkingContext / listWorkingContexts (#1517) --
@@ -645,11 +652,7 @@ fn compile_transcript_rejects_an_empty_transcript() {
     let request =
         js_sys::JSON::parse(r#"{"query": "q", "transcript": "", "token_budget": 1000}"#).unwrap();
     let err = svc.compile_transcript(request).unwrap_err();
-    let code = js_sys::Reflect::get(&err, &"code".into())
-        .unwrap()
-        .as_string()
-        .unwrap();
-    assert_eq!(code, "INVALID_INPUT");
+    assert_eq!(error_code(&err), "INVALID_INPUT");
 }
 
 /// `contextSavings` aggregates a `compileTranscript` call exactly like a
@@ -719,4 +722,125 @@ fn suggest_budget_looks_up_known_and_unknown_models() {
         window.is_null(),
         "an unknown model must report window: null, never a guess"
     );
+}
+
+// --- unrelate / entity ------------------------------------------------------
+//
+// Both surfaces shipped with native coverage only, so nothing observed the
+// shape they hand to a JS caller. "It did not panic" says nothing about that
+// shape: a `usize` can cross as a BigInt no arithmetic accepts, a `bool` as a
+// truthy string, an empty `Vec` as `undefined` no `.map()` survives, and a
+// `serde_json::Map` as an ES2015 `Map` whose keys `JSON.stringify` drops.
+// Only a real JS runtime can tell those apart.
+
+/// `{found, removed}` read off an `unrelate` result, asserting on the way that
+/// the envelope is a plain object and that BOTH keys crossed as their JS
+/// primitive type. `as_bool`/`as_f64` return `None` for anything else — a
+/// truthy string, a BigInt, a missing key — so a drift fails here.
+///
+/// Shared by the removal and its replay: two copies could assert two
+/// different shapes of the same contract without either saying so.
+fn unrelate_outcome(result: &JsValue) -> (bool, f64) {
+    assert!(
+        !result.is_instance_of::<js_sys::Map>(),
+        "unrelate must resolve to a plain object, not an ES2015 Map"
+    );
+    let found = js_sys::Reflect::get(result, &"found".into()).unwrap();
+    let removed = js_sys::Reflect::get(result, &"removed".into()).unwrap();
+    (
+        found
+            .as_bool()
+            .expect("`found` must be present and cross as a real JS boolean, never undefined"),
+        removed
+            .as_f64()
+            .expect("`removed` must be present and cross as a JS number, never a BigInt or string"),
+    )
+}
+
+/// `unrelate` marshalling: the outcome envelope crosses as a plain object
+/// whose `found` is a genuine boolean and whose `removed` is a genuine number,
+/// and the documented idempotence marshals as KEYS PRESENT AND FALSE on the
+/// replay — `{found: false, removed: 0}`, not two `undefined`s a caller would
+/// read as a successful removal. A self-edge still rejects with a structured
+/// code instead of resolving to a silent no-op.
+#[wasm_bindgen_test]
+fn unrelate_marshals_a_plain_object_with_a_boolean_found_and_a_numeric_removed() {
+    let svc = WasmMemoryService::new(16);
+    let remember = |fact: &str| {
+        svc.remember(fact, JsValue::UNDEFINED, JsValue::UNDEFINED, None)
+            .unwrap()
+    };
+    let cause = remember("the canary deploy shipped an unbounded query");
+    let effect = remember("the error rate spiked at 14:02");
+    svc.relate(&cause, &effect, "causes").unwrap();
+
+    let (found, removed) = unrelate_outcome(&svc.unrelate(&cause, &effect, "causes").unwrap());
+    assert!(found, "removing the edge just created must report found");
+    assert_eq!(removed, 1.0, "exactly one edge was removed");
+
+    let (found, removed) = unrelate_outcome(&svc.unrelate(&cause, &effect, "causes").unwrap());
+    assert!(!found, "the replay must report found: false, not throw");
+    assert_eq!(removed, 0.0, "the replay removed nothing");
+
+    let err = svc.unrelate(&cause, &cause, "causes").unwrap_err();
+    assert_eq!(error_code(&err), "INVALID_INPUT", "a self-edge is refused");
+}
+
+/// `entity` marshalling on a MISS — the only answer this binding can give
+/// today (entity hubs are written by extraction, which WASM does not expose),
+/// and therefore the shape every JS caller meets first. The empty profile must
+/// still be fully typed on the wire: `id` a decimal STRING (the repository's
+/// id contract, so no id ever passes through a JS number), `attributes` a
+/// plain empty object rather than an ES2015 `Map` or `undefined`, and
+/// `relations` a real `[]` — a `Vec` that crossed as `undefined` would break
+/// `profile.relations.map(...)` in the caller, which no native test can see.
+#[wasm_bindgen_test]
+fn entity_miss_marshals_an_empty_profile_with_a_string_id() {
+    let svc = WasmMemoryService::new(16);
+    let profile = svc.entity("Ada Lovelace").unwrap();
+    assert!(
+        !profile.is_instance_of::<js_sys::Map>(),
+        "the entity profile must be a plain object, not an ES2015 Map"
+    );
+
+    let found = js_sys::Reflect::get(&profile, &"found".into()).unwrap();
+    assert_eq!(
+        found.as_bool(),
+        Some(false),
+        "a miss reports a real boolean false, never a falsy stand-in"
+    );
+    let id = js_sys::Reflect::get(&profile, &"id".into()).unwrap();
+    assert_eq!(
+        id.as_string().as_deref(),
+        Some("0"),
+        "ids cross as decimal strings on every path, misses included"
+    );
+    let name = js_sys::Reflect::get(&profile, &"name".into()).unwrap();
+    assert_eq!(
+        name.as_string().as_deref(),
+        Some("ada lovelace"),
+        "a miss echoes the canonicalized query so lookups stay pairable"
+    );
+
+    let attributes = js_sys::Reflect::get(&profile, &"attributes".into()).unwrap();
+    assert!(
+        !attributes.is_instance_of::<js_sys::Map>(),
+        "attributes must be a plain object: JSON.stringify drops a Map's keys"
+    );
+    let attributes: js_sys::Object = attributes
+        .dyn_into()
+        .expect("attributes must be an object, never undefined");
+    assert_eq!(
+        js_sys::Object::keys(&attributes).length(),
+        0,
+        "a miss carries no attributes"
+    );
+
+    let relations = js_sys::Reflect::get(&profile, &"relations".into()).unwrap();
+    assert!(
+        js_sys::Array::is_array(&relations),
+        "an empty Vec must cross as [], not undefined"
+    );
+    let relations: js_sys::Array = relations.unchecked_into();
+    assert_eq!(relations.length(), 0, "a miss carries no relations");
 }
