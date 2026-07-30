@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""Reject commits attributed to an AI assistant — identity or trailer.
+
+The rule this enforces predates the guard by a long way (CLAUDE.md #5, no AI
+attribution anywhere). What did not exist was a guard that could be handed a
+case and asked its verdict: the check lived twice, once as inline shell in
+``.githooks/commit-msg`` and once as inline shell in
+``.github/workflows/pr-governance.yml``, and both spelled the same two words —
+``claude|anthropic``. Every other assistant identity walked straight through:
+Codex, Copilot, Cursor, Devin, a bare ``[bot]`` suffix (#1699).
+
+Two compartments, and the second is why a naive blocklist is wrong:
+
+  * **REFUSED** — assistant identities, and attribution trailers in the
+    message. Matched on whole words so ``Claudette`` is a person, not a
+    violation, and ``anthropicist`` is a word.
+  * **ADMITTED** — infrastructure automation that legitimately authors
+    commits here. ``dependabot[bot]`` has 149 of them in this repository. A
+    guard that refuses every ``[bot]`` would reject the entire dependency
+    flow, which is how a guard gets switched off for good.
+
+The identity is read RAW (``%an <%ae>``, never ``%aN``): a ``.mailmap`` line
+maps `anthropic` to the maintainer in this very repository, so a mailmapped
+identity would launder exactly the case being looked for.
+
+Exit 0 = clean, 1 = an attributed commit was found, 2 = the guard could not
+run (which is not a refusal — see scripts/tests/test_guard_refusal_vectors.py).
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+
+#: Assistant identities. Whole-word, case-insensitive.
+ASSISTANT_IDENTITIES = (
+    "claude",
+    "anthropic",
+    "codex",
+    "copilot",
+    "cursor",
+    "devin",
+    "chatgpt",
+    "openai",
+    "gemini",
+    "gpt-4",
+    "gpt-5",
+    "llm",
+    "ai-assistant",
+    "assistant",
+)
+
+#: Automation admitted to author commits. Matched on the WHOLE identity, not
+#: as a substring: `evil-dependabot[bot]` is not `dependabot[bot]`.
+ADMITTED_AUTOMATION = (
+    "dependabot[bot]",
+    "dependabot-preview[bot]",
+    "github-actions[bot]",
+    "renovate[bot]",
+)
+
+#: Any other `[bot]` identity is refused: a bot that authors commits here is
+#: either infrastructure we listed above, or something nobody decided on.
+BOT_SUFFIX_RE = re.compile(r"\[bot\]", re.IGNORECASE)
+
+#: Attribution trailers, anchored at the start of a line — a real trailer sits
+#: in column 0 of the last paragraph. Anchoring is what lets this file, and
+#: the documentation of the rule, describe the patterns without tripping it.
+TRAILER_PATTERNS = (
+    r"^\s*Co[-_ ]?Authored[-_ ]?By:.*(?:{assistants})",
+    r"^\s*(?:Claude|Codex|Copilot|Cursor|Devin)[-_ ]Session:",
+    r"^\s*Signed-off-by:.*(?:{assistants})",
+    r"^\s*Assisted[-_ ]by:.*(?:{assistants})",
+    r"^\s*Generated[-_ ]with:?.*(?:{assistants})",
+    r"🤖\s*Generated with",
+    r"claude\.ai/code",
+)
+
+
+def _assistant_alternation() -> str:
+    return "|".join(re.escape(name) for name in ASSISTANT_IDENTITIES)
+
+
+def identity_is_admitted(identity: str) -> bool:
+    """True when `identity` is automation this repository decided to admit."""
+    lowered = identity.lower()
+    return any(admitted in lowered for admitted in ADMITTED_AUTOMATION)
+
+
+def identity_is_refused(identity: str) -> "str | None":
+    """The reason `identity` is refused, or None when it passes.
+
+    Admission is checked FIRST: `github-actions[bot]` must not be refused by
+    the `[bot]` rule it is explicitly exempt from.
+    """
+    if identity_is_admitted(identity):
+        return None
+    lowered = identity.lower()
+    for name in ASSISTANT_IDENTITIES:
+        if re.search(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", lowered):
+            return f"assistant identity `{name}`"
+    if BOT_SUFFIX_RE.search(identity):
+        return "an unlisted `[bot]` identity"
+    return None
+
+
+def message_is_refused(message: str) -> "str | None":
+    """The reason a commit message is refused, or None."""
+    assistants = _assistant_alternation()
+    for pattern in TRAILER_PATTERNS:
+        compiled = re.compile(
+            pattern.format(assistants=assistants), re.IGNORECASE | re.MULTILINE
+        )
+        found = compiled.search(message)
+        if found:
+            return f"attribution trailer {found.group(0).strip()!r}"
+    return None
+
+
+def commits_in_range(commit_range: str, cwd: "str | None" = None) -> "list[tuple[str, str, str]]":
+    """`(sha, raw identity, message)` for each commit in `commit_range`.
+
+    `%an <%ae>` and `%cn <%ce>`, never their mailmapped `%aN`/`%cN` twins:
+    a `.mailmap` entry in this repository already rewrites `anthropic` to the
+    maintainer, and reading the mapped name would hide the very case the
+    guard exists to catch.
+    """
+    separator = "\x1e"
+    output = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        [
+            "git",
+            "log",
+            commit_range,
+            f"--format=%H%x1f%an <%ae>%x1f%cn <%ce>%x1f%B{separator}",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=cwd,
+    ).stdout
+    commits = []
+    for record in output.split(separator):
+        if not record.strip():
+            continue
+        sha, author, committer, message = record.strip("\n").split("\x1f", 3)
+        commits.append((sha, f"{author} | {committer}", message))
+    return commits
+
+
+def audit(commit_range: str, cwd: "str | None" = None) -> "list[str]":
+    """Every violation in `commit_range`, as printable lines."""
+    violations = []
+    for sha, identity, message in commits_in_range(commit_range, cwd):
+        for part in identity.split(" | "):
+            reason = identity_is_refused(part.strip())
+            if reason:
+                violations.append(f"{sha[:12]}: {reason} in `{part.strip()}`")
+        reason = message_is_refused(message)
+        if reason:
+            violations.append(f"{sha[:12]}: {reason}")
+    return violations
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "range",
+        nargs="?",
+        default="HEAD~1..HEAD",
+        help="commit range to audit (default: HEAD~1..HEAD)",
+    )
+    parser.add_argument(
+        "--root",
+        default=None,
+        help="repository to audit, instead of the current directory. What "
+        "lets a refusal vector hand this guard a repository of its own.",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        violations = audit(args.range, args.root)
+    except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+        print(f"ERROR: cannot read {args.range}: {exc}", file=sys.stderr)
+        return 2
+
+    if violations:
+        print(f"FAILED: {len(violations)} AI-attributed commit(s):")
+        for violation in violations:
+            print(f"  - {violation}")
+        print(
+            "\nRe-author as the maintainer and strip the trailer. "
+            "Infrastructure automation is admitted by name in "
+            "ADMITTED_AUTOMATION, never by a wildcard.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print("PASSED: no AI attribution in the audited range.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
