@@ -63,15 +63,23 @@ jobs:
       - name: Date stamp on every root doc (blocking)
         run: python3 scripts/check-doc-freshness.py --guard stamp --mode strict
 
-      # WARNING ONLY for now. 11 root docs are not reachable from
+      # Was `--mode warn` for eleven root docs said to be unreachable from
       # docs/README.md (ANN_SOTA_AUDIT, ARCHITECTURE, BUSINESS_MODEL,
       # CONCURRENCY_MODEL, CORE_WIRING_DEBT, FAQ, FUZZING, GPU_ACCELERATION,
-      # LICENSING, SOUNDNESS, STORAGE_FORMAT). Flip `--mode warn` to
-      # `--mode strict` in the same commit that finishes the docs/README.md
-      # index — do NOT flip it before, or every PR turns red on debt it did
-      # not create.
-      - name: Every root doc linked from docs/README.md (warning)
-        run: python3 scripts/check-doc-freshness.py --guard index --mode warn
+      # LICENSING, SOUNDNESS, STORAGE_FORMAT). Measured: all eleven ARE linked
+      # today, and `--guard index --mode strict` exits 0 on this tree. The debt
+      # was paid and nobody flipped the switch, so a stale comment kept a
+      # working guard disarmed — the very defect this campaign is about.
+      - name: Every root doc linked from docs/README.md
+        run: python3 scripts/check-doc-freshness.py --guard index --mode strict
+
+      # Every document an entry document designates must be reachable from a
+      # clone. `CLAUDE.md`, `AGENTS.md` and `docs/CORE_PREMIUM_SPLIT.md` — the
+      # self-declared single source of truth for the open-core boundary — were
+      # excluded, two of them through `.git/info/exclude`, which is not
+      # versioned and which no reviewer can see.
+      - name: Every designated document is tracked
+        run: python3 scripts/check-doc-freshness.py --guard tracked --mode strict
 
       # The five stale claims this guard was warning about are fixed, so it
       # blocks from here on: a doc pin that contradicts the Cargo manifests is

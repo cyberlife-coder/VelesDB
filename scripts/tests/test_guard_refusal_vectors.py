@@ -26,6 +26,13 @@ control is what tells "it can say no" apart from "it can only say no". Same
 reason ``dependabot[bot]`` has to keep passing the attribution guard of #1699:
 149 legitimate commits are the positive control there.
 
+A vector may also declare ``repo``, which turns the materialised tree into a
+git work tree and tracks the paths it names — ``{"files": [...], "accepts":
+[...]}``, keyed like the trees themselves. Some guards do not ask the
+filesystem but **git**: is this path tracked, who authored this commit. A plain
+temp directory erases exactly the distinction they exist to make, so those
+guards had no vector at all (#1715).
+
 The vectors live in the registry rather than here so that adding a guard and
 declaring what it refuses are one act, in one file, confronted by
 ``test_ci_gate_reachability.py``'s shape rule.
@@ -64,6 +71,30 @@ def materialise(tree: "dict[str, str]", root: Path) -> None:
         path.write_text(content, encoding="utf-8")
 
 
+def make_repository(root: Path, tracked: "list[str]") -> None:
+    """Turn the materialised tree into a git work tree, tracking `tracked`.
+
+    Some guards do not ask the filesystem, they ask **git** — is this path
+    tracked, who authored this commit. A plain file tree cannot answer either,
+    so those guards had no vector at all and carried a `refusal_untested`
+    (#1715). The distinction they test is precisely the one a temp directory
+    erases: a file that exists and a file a clone would receive are not the
+    same file.
+
+    The commit identity is fixed and local to the tree, so the harness never
+    depends on the machine's git configuration.
+    """
+    run = lambda *args: subprocess.run(  # noqa: E731 - local shorthand
+        ["git", "-C", str(root), *args], capture_output=True, text=True, check=True
+    )
+    run("init", "-q")
+    run("config", "user.email", "harness@velesdb.invalid")
+    run("config", "user.name", "refusal-vector-harness")
+    for relative in tracked:
+        run("add", "--", relative)
+    run("commit", "-q", "-m", "vector")
+
+
 def run_guard(script: str, argv: "list[str]", root: Path) -> "subprocess.CompletedProcess[str]":
     """Invoke ``script`` on the materialised tree.
 
@@ -88,6 +119,11 @@ class RefusalVectorTests(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp(prefix="guard-vector-"))
         self.addCleanup(shutil.rmtree, tmp, True)
         materialise(vector[key], tmp)
+        # `repo` names the paths git must TRACK; everything else stays
+        # untracked, which is the whole point for a guard that asks git.
+        repo = vector.get("repo")
+        if repo is not None:
+            make_repository(tmp, repo.get(key, []))
         return run_guard(entry["script"], vector["argv"], tmp)
 
     def test_every_declared_vector_is_refused(self) -> None:
@@ -118,17 +154,26 @@ class RefusalVectorTests(unittest.TestCase):
                         f"PR.\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}",
                     )
 
-    def test_the_refused_and_accepted_trees_differ(self) -> None:
-        # Two identical trees cannot both be refused and accepted, so a pair
-        # that is equal means one of them was pasted over the other and the
-        # vector proves nothing.
+    def test_the_refused_and_accepted_states_differ(self) -> None:
+        # Two identical STATES cannot both be refused and accepted, so a pair
+        # that is equal means one was pasted over the other and the vector
+        # proves nothing.
+        #
+        # The state is the tree AND what git tracks of it. For a `repo`
+        # vector the two file trees are legitimately byte-identical — the
+        # whole point is that one path is tracked and the other is not.
+        # Comparing trees alone rejected the first such vector written.
         for entry in guards_with_vectors():
             for vector in entry["must_refuse"]:
                 with self.subTest(script=entry["script"], vector=vector["vector"]):
+                    repo = vector.get("repo") or {}
+                    refused = (vector["files"], sorted(repo.get("files", [])))
+                    accepted = (vector["accepts"], sorted(repo.get("accepts", [])))
                     self.assertNotEqual(
-                        vector["files"],
-                        vector["accepts"],
-                        "a vector whose two trees are identical asserts nothing",
+                        refused,
+                        accepted,
+                        "a vector whose refused and accepted states are identical "
+                        "asserts nothing — neither the tree nor the tracked set differs",
                     )
 
 

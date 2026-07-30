@@ -684,6 +684,37 @@ class GuardWiringTests(unittest.TestCase):
                     f"ci.yml job `{caller}` does not call {entry['workflow']}",
                 )
 
+    def test_every_declared_subguard_is_actually_selected(self) -> None:
+        # One level below the invocation. `check-doc-freshness.py` is named
+        # four times in its job, once per `--guard <name>`; the wiring test
+        # above only asks whether the SCRIPT is mentioned, so deleting the
+        # `--guard tracked` line left it mentioned three times and green.
+        # A sub-guard that can vanish while the registry announces it is the
+        # registry lying about its own coverage, one level down.
+        for entry in self.guards:
+            selectors = entry.get("subguards")
+            if not selectors:
+                continue
+            lines = script_mentions_in_job(
+                self._workflow_text(entry), entry["job"], entry["script"]
+            )
+            joined = "\n".join(lines)
+            # An invocation carrying no `--guard` at all runs every sub-guard
+            # (both scripts default to `all`), so it satisfies each selector.
+            # Only a job that names selectors explicitly can silently lose one.
+            runs_all = any("--guard" not in line for line in lines)
+            for selector in selectors:
+                with self.subTest(script=entry["script"], subguard=selector):
+                    if runs_all:
+                        continue
+                    self.assertRegex(
+                        joined,
+                        rf"--guard\s+{re.escape(selector)}\b",
+                        f"`--guard {selector}` is declared in the registry but "
+                        f"never selected in {entry['workflow']} job "
+                        f"`{entry['job']}` — the sub-guard does not run.",
+                    )
+
     def test_a_strict_guard_is_not_disarmed_at_its_invocation(self) -> None:
         for entry in self.guards:
             if entry["mode"] != "strict":
