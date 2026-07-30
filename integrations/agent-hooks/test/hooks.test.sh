@@ -17,6 +17,36 @@ FAILED=0
 pass() { printf 'ok - %s\n' "$1"; }
 fail() { printf 'not ok - %s\n' "$1"; FAILED=1; }
 
+# Assert that a block of text injected into a MODEL's context describes
+# load_working_context's return value correctly.
+#
+# Asserting only that the text mentions the tool NAME — which is all this
+# harness did while every one of these three scripts still carried the stale
+# "if it returns null, nothing was saved yet" instruction — cannot catch the
+# defect that matters here. The tool never returns null: its output schema is
+# an object whose only required key is 'found'. A model told to look for null
+# never detects a miss, never reads other_sessions, and starts fresh on top of
+# work that a one-character typo in the session id hid from it.
+#
+# So the check has two halves, and the negative one is what survives a revert:
+# the envelope's fields must be named, AND the null instruction must be gone.
+assert_envelope_contract() {
+  label="$1"
+  text="$2"
+  for field in found working other_sessions; do
+    if printf '%s' "$text" | grep -q "$field"; then
+      pass "$label: names '$field'"
+    else
+      fail "$label: names '$field'"
+    fi
+  done
+  if printf '%s' "$text" | grep -qi "returns null"; then
+    fail "$label: must not tell the model a null result means nothing was saved"
+  else
+    pass "$label: does not tell the model to expect a null result"
+  fi
+}
+
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required to run this test harness" >&2
   exit 1
@@ -59,6 +89,9 @@ if printf '%s' "$session_start_out" | jq -e '.hookSpecificOutput.additionalConte
 else
   fail "SessionStart: additionalContext mentions load_working_context"
 fi
+
+assert_envelope_contract "SessionStart: additionalContext" \
+  "$(printf '%s' "$session_start_out" | jq -r '.hookSpecificOutput.additionalContext')"
 
 if printf '%s' "$session_start_out" | jq -e '.hookSpecificOutput.additionalContext | contains("test-project")' >/dev/null; then
   pass "SessionStart: additionalContext uses project from .velesdb-hooks.json"
@@ -186,6 +219,8 @@ else
   fail "Windsurf pre_user_prompt: first call mentions load_working_context"
 fi
 
+assert_envelope_contract "Windsurf pre_user_prompt: first call" "$windsurf_out_1"
+
 if printf '%s' "$windsurf_out_1" | grep -q "save_working_context"; then
   pass "Windsurf pre_user_prompt: first call also mentions save_working_context (no separate Stop event)"
 else
@@ -236,6 +271,9 @@ if printf '%s' "$codex_session_start_out" | jq -e '.hookSpecificOutput.additiona
 else
   fail "Codex SessionStart: additionalContext asks for load_working_context on the configured project"
 fi
+
+assert_envelope_contract "Codex SessionStart: additionalContext" \
+  "$(printf '%s' "$codex_session_start_out" | jq -r '.hookSpecificOutput.additionalContext')"
 
 if printf '%s' "$codex_session_start_out" | jq -e '.hookSpecificOutput.additionalContext | contains("COMPACTION") | not' >/dev/null; then
   pass "Codex SessionStart: source=startup does not mention compaction"
@@ -506,6 +544,27 @@ if command -v shellcheck >/dev/null 2>&1; then
   fi
 else
   echo "note - shellcheck not installed, skipping static analysis check"
+fi
+
+# No model-facing text anywhere in this directory may describe
+# load_working_context as returning null.
+# ---------------------------------------------------------------------------
+# The three hook scripts are not the only text this directory injects into a
+# model's context: codex/README.md ships a ready-made AGENTS.md block that
+# users are told to paste verbatim, and it is the documented fallback for
+# anyone who cannot install hooks. It carried the stale "a null result means
+# nothing was saved yet" instruction for its whole life, because the checks
+# above only ever read what the SCRIPTS printed. Scanning the tree — prose
+# included — is what makes the next model-facing surface arrive covered
+# instead of arriving stale.
+# `--exclude-dir=test` keeps this harness from matching its own explanation
+# above; nothing under test/ is ever injected into a model's context.
+stale_null_claims="$(grep -rniE 'null result|returns null' "$ROOT" \
+  --include='*.sh' --include='*.md' --exclude-dir=test || true)"
+if [ -z "$stale_null_claims" ]; then
+  pass "no agent-facing text tells a model load_working_context can return null"
+else
+  fail "agent-facing text still promises a null result: $stale_null_claims"
 fi
 
 if [ "$FAILED" -ne 0 ]; then

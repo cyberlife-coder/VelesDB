@@ -212,15 +212,14 @@ fn compile_context_memory_scope_pulls_stored_memories() {
 const PNG_1X1_B64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
-/// Regression this attrapes: `WasmStore`'s `MemoryStore` impl diverges from
-/// the native file-backed one (different metadata batch/get paths) — a
-/// media-specific bug there (e.g. the atomic-packing rule never matching, or
-/// the media source never getting a handle) would show up only on wasm,
-/// never in the native `context_memory_bdd` suite.
-#[wasm_bindgen_test]
-fn compile_context_with_media_fragment_decides_atomic_preserve_and_mints_a_handle() {
-    let svc = WasmMemoryService::new(16);
-    let request = js_sys::JSON::parse(&format!(
+/// The one media-carrying compile request every media test starts from.
+///
+/// Shared rather than repeated so the tests below differ only in what they
+/// ASSERT: a caption or a byte payload that drifted between two copies would
+/// silently turn two tests of the same behaviour into tests of two different
+/// ones, and neither would say so.
+fn media_compile_request() -> JsValue {
+    js_sys::JSON::parse(&format!(
         r#"{{
             "query": "a screenshot of the failing build",
             "token_budget": 4000,
@@ -230,9 +229,28 @@ fn compile_context_with_media_fragment_decides_atomic_preserve_and_mints_a_handl
             ]
         }}"#
     ))
-    .unwrap();
+    .expect("the media compile request is valid JSON")
+}
 
-    let compiled = svc.compile_context(request).unwrap();
+/// The `ctx://source/` handle minted for a compiled context's first source.
+fn first_source_handle(compiled: &JsValue) -> String {
+    let sources = js_sys::Reflect::get(compiled, &"sources".into()).unwrap();
+    let source = js_sys::Reflect::get(&sources, &0.into()).unwrap();
+    js_sys::Reflect::get(&source, &"handle".into())
+        .unwrap()
+        .as_string()
+        .expect("every compiled source gets an addressable ctx://source/ handle")
+}
+
+/// Regression this attrapes: `WasmStore`'s `MemoryStore` impl diverges from
+/// the native file-backed one (different metadata batch/get paths) — a
+/// media-specific bug there (e.g. the atomic-packing rule never matching, or
+/// the media source never getting a handle) would show up only on wasm,
+/// never in the native `context_memory_bdd` suite.
+#[wasm_bindgen_test]
+fn compile_context_with_media_fragment_decides_atomic_preserve_and_mints_a_handle() {
+    let svc = WasmMemoryService::new(16);
+    let compiled = svc.compile_context(media_compile_request()).unwrap();
     let decisions = js_sys::Reflect::get(&compiled, &"decisions".into()).unwrap();
     let first = js_sys::Reflect::get(&decisions, &0.into()).unwrap();
     let rule_id = js_sys::Reflect::get(&first, &"rule_id".into()).unwrap();
@@ -244,12 +262,7 @@ fn compile_context_with_media_fragment_decides_atomic_preserve_and_mints_a_handl
     let action = js_sys::Reflect::get(&first, &"action".into()).unwrap();
     assert_eq!(action.as_string().as_deref(), Some("preserve"));
 
-    let sources = js_sys::Reflect::get(&compiled, &"sources".into()).unwrap();
-    let source = js_sys::Reflect::get(&sources, &0.into()).unwrap();
-    let handle = js_sys::Reflect::get(&source, &"handle".into())
-        .unwrap()
-        .as_string()
-        .expect("the media fragment gets an addressable ctx://source/ handle");
+    let handle = first_source_handle(&compiled);
     assert!(handle.starts_with("ctx://source/"));
 }
 
@@ -294,12 +307,7 @@ fn retrieve_context_source_resolves_a_text_only_source() {
     ))
     .unwrap();
     let compiled = svc.compile_context(request).unwrap();
-    let sources = js_sys::Reflect::get(&compiled, &"sources".into()).unwrap();
-    let source = js_sys::Reflect::get(&sources, &0.into()).unwrap();
-    let handle = js_sys::Reflect::get(&source, &"handle".into())
-        .unwrap()
-        .as_string()
-        .unwrap();
+    let handle = first_source_handle(&compiled);
     assert!(handle.starts_with("ctx://source/"));
 
     let resolved = svc.retrieve_context_source(&handle).unwrap();
@@ -333,24 +341,8 @@ fn retrieve_context_source_resolves_a_text_only_source() {
 #[wasm_bindgen_test]
 fn retrieve_context_source_round_trips_a_media_source() {
     let svc = WasmMemoryService::new(16);
-    let request = js_sys::JSON::parse(&format!(
-        r#"{{
-            "query": "a screenshot of the failing build",
-            "token_budget": 4000,
-            "fragments": [
-                {{"content": "the failing build, before the fix",
-                  "media": {{"mime": "image/png", "bytes_b64": "{PNG_1X1_B64}"}}}}
-            ]
-        }}"#
-    ))
-    .unwrap();
-    let compiled = svc.compile_context(request).unwrap();
-    let sources = js_sys::Reflect::get(&compiled, &"sources".into()).unwrap();
-    let source = js_sys::Reflect::get(&sources, &0.into()).unwrap();
-    let handle = js_sys::Reflect::get(&source, &"handle".into())
-        .unwrap()
-        .as_string()
-        .unwrap();
+    let compiled = svc.compile_context(media_compile_request()).unwrap();
+    let handle = first_source_handle(&compiled);
 
     let resolved = svc.retrieve_context_source(&handle).unwrap();
     let media = js_sys::Reflect::get(&resolved, &"media".into()).unwrap();
@@ -428,15 +420,25 @@ fn save_then_load_working_context_round_trips_within_session() {
     let loaded = svc.load_working_context("veles", "session-a").unwrap();
     assert!(
         !loaded.is_instance_of::<js_sys::Map>(),
-        "loaded working context must be a plain object"
+        "the load envelope must be a plain object"
     );
-    let goal = js_sys::Reflect::get(&loaded, &"goal".into())
+    assert_eq!(
+        js_sys::Reflect::get(&loaded, &"found".into())
+            .unwrap()
+            .as_bool(),
+        Some(true),
+        "the envelope reports the hit"
+    );
+    let working_back = js_sys::Reflect::get(&loaded, &"working".into()).unwrap();
+    let goal = js_sys::Reflect::get(&working_back, &"goal".into())
         .unwrap()
         .as_string()
         .unwrap();
     assert_eq!(goal, "ship the canary fix");
 
-    let decisions = js_sys::Reflect::get(&loaded, &"decisions".into()).unwrap();
+    // `stringifyIdFields` runs at the ROOT of the envelope, so it must still
+    // reach this id one level deeper, under `working`.
+    let decisions = js_sys::Reflect::get(&working_back, &"decisions".into()).unwrap();
     let first = js_sys::Reflect::get(&decisions, &0.into()).unwrap();
     let fragment_id = js_sys::Reflect::get(&first, &"fragment_id".into())
         .unwrap()
@@ -444,26 +446,107 @@ fn save_then_load_working_context_round_trips_within_session() {
         .expect("fragment_id must cross back as a decimal string, not a number");
     assert_eq!(fragment_id, "18446744073709551615", "u64::MAX round-trips");
 
-    let pending = js_sys::Reflect::get(&loaded, &"pending_actions".into()).unwrap();
+    let pending = js_sys::Reflect::get(&working_back, &"pending_actions".into()).unwrap();
     let first_action = js_sys::Reflect::get(&pending, &0.into())
         .unwrap()
         .as_string()
         .unwrap();
     assert_eq!(first_action, "roll back if error rate spikes");
+
+    let others = js_sys::Reflect::get(&loaded, &"other_sessions".into()).unwrap();
+    assert_eq!(
+        js_sys::Reflect::get(&others, &"length".into())
+            .unwrap()
+            .as_f64(),
+        Some(0.0),
+        "the only saved session is the requested one, which is never echoed back"
+    );
 }
 
-/// Nothing saved under a project + session pair loads back as `null` in JS —
-/// mirroring the Node binding's `loadWorkingContext` contract — never an
-/// error, and never a forged/leaked value from an unrelated slot.
+/// Nothing saved under a project + session pair loads back as
+/// `{found: false, working: null, other_sessions: []}` — mirroring the Node
+/// binding's `loadWorkingContext` contract — never an error, and never a
+/// forged/leaked value from an unrelated slot.
 #[wasm_bindgen_test]
-fn load_working_context_returns_null_when_nothing_saved() {
+fn load_working_context_reports_found_false_when_nothing_saved() {
     let svc = WasmMemoryService::new(16);
     let loaded = svc
         .load_working_context("veles", "never-saved-session")
         .unwrap();
+    assert_eq!(
+        js_sys::Reflect::get(&loaded, &"found".into())
+            .unwrap()
+            .as_bool(),
+        Some(false),
+        "an unsaved project+session pair is found:false, not an error"
+    );
     assert!(
-        loaded.is_null(),
-        "an unsaved project+session pair must load back as null"
+        js_sys::Reflect::get(&loaded, &"working".into())
+            .unwrap()
+            .is_null(),
+        "and its `working` member is null"
+    );
+}
+
+/// The whole reason the bare `WorkingContext | null` return was replaced: a
+/// miss and a TYPO look identical from the outside, and only
+/// `other_sessions` tells them apart. Without it a caller silently starts
+/// fresh on top of work sitting right there under a neighbouring id.
+#[wasm_bindgen_test]
+fn load_working_context_surfaces_the_sibling_sessions_a_typo_missed() {
+    let svc = WasmMemoryService::new(16);
+    let minimal = js_sys::JSON::parse(r#"{"goal":"the real session"}"#).unwrap();
+    svc.save_working_context("veles", "task-1234", minimal)
+        .unwrap();
+
+    let typo = svc.load_working_context("veles", "task-1235").unwrap();
+    assert_eq!(
+        js_sys::Reflect::get(&typo, &"found".into())
+            .unwrap()
+            .as_bool(),
+        Some(false)
+    );
+    let others = js_sys::Reflect::get(&typo, &"other_sessions".into()).unwrap();
+    let first = js_sys::Reflect::get(&others, &0.into())
+        .unwrap()
+        .as_string()
+        .expect("the near-miss session is what makes the typo recoverable");
+    assert_eq!(first, "task-1234");
+}
+
+/// Populated on a HIT as well: a typo landing on another REAL session
+/// returns `found: true`, the case a caller can least detect on its own.
+/// The requested session is never echoed back.
+#[wasm_bindgen_test]
+fn load_working_context_lists_other_sessions_on_a_hit_too() {
+    let svc = WasmMemoryService::new(16);
+    let minimal = js_sys::JSON::parse(r#"{"goal":"resume me"}"#).unwrap();
+    svc.save_working_context("veles", "session-a", minimal.clone())
+        .unwrap();
+    svc.save_working_context("veles", "session-b", minimal)
+        .unwrap();
+
+    let loaded = svc.load_working_context("veles", "session-a").unwrap();
+    assert_eq!(
+        js_sys::Reflect::get(&loaded, &"found".into())
+            .unwrap()
+            .as_bool(),
+        Some(true)
+    );
+    let others = js_sys::Reflect::get(&loaded, &"other_sessions".into()).unwrap();
+    assert_eq!(
+        js_sys::Reflect::get(&others, &"length".into())
+            .unwrap()
+            .as_f64(),
+        Some(1.0),
+        "exactly the OTHER session, never the requested one"
+    );
+    assert_eq!(
+        js_sys::Reflect::get(&others, &0.into())
+            .unwrap()
+            .as_string()
+            .unwrap(),
+        "session-b"
     );
 }
 

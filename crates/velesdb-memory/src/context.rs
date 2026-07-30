@@ -81,9 +81,9 @@ pub use insights::{CompilationInsights, ModelPricing, PricingTable};
 pub use model::{
     CompilePolicy, CompileRequest, CompiledContext, CompiledSection, ContextAction,
     ContextDecision, ContextDecisionRef, ContextFact, ContextFragment, ContextSavings,
-    ContextSource, ContextWarning, FidelityRisk, ImportanceWeights, MediaRef, MemoryScope,
-    RetrievalHandle, SectionKind, SourceReference, WorkingContext, WorkingContextIndex,
-    WorkingContextSession,
+    ContextSource, ContextWarning, FidelityRisk, ImportanceWeights, LoadedWorkingContext, MediaRef,
+    MemoryScope, RetrievalHandle, SectionKind, SourceReference, WorkingContext,
+    WorkingContextIndex, WorkingContextSession,
 };
 pub use model_windows::{model_window, suggest_token_budget, SuggestedBudget};
 pub use relevance::DeterministicReranker;

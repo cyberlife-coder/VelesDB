@@ -505,14 +505,20 @@ a cryptographic signature and does not by itself prove the archive's
 *authenticity*: anyone who could tamper with the archive could regenerate a
 matching checksum next to it.
 
-**This path only becomes active from the first release published after the
-change.** `release-memory.yml`'s `build-daemon-archive` job produces these
-archives, but the `velesdb-memory-v0.11.6` release (and everything before it)
-predates it and carries no such asset, so `--from-release` against `v0.11.0`
-fails with a clear 404-explaining message rather than a bare `curl` /
+**Releases from 0.11.1 onwards carry the archive; 0.11.0 and earlier do
+not.** `release-memory.yml`'s `build-daemon-archive` job was added on
+2026-07-23 and has run for every memory release cut since, so `--from-release`
+resolves against 0.11.1 and later. Point it at 0.11.0 or earlier and it fails
+with a clear 404-explaining message rather than a bare `curl` /
 `Invoke-WebRequest` error. This is a **different artifact** than the `.mcpb`
 bundles on the same release: those are built with default features (stdio
 only) for MCP-registry clients and cannot run as this daemon.
+
+The boundary above is a fact about the PAST, so it is deliberately written
+without a `velesdb-memory-vX.Y.Z` tag literal. That form is policed by
+`scripts/check-doc-freshness.py` as a claim about the CURRENT version, and it
+rewrote this very sentence at each release bump — turning a true statement
+about 0.11.0 into a false one about whichever version shipped last.
 
 ## Embedding backend
 
@@ -568,4 +574,4 @@ pass it to `MemoryService::remember_extracted` from Rust.
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-memory 0.11.6
+Last updated: 2026-07-25 · Applies to: velesdb-memory 0.12.0

@@ -64,8 +64,8 @@ use serde_json::{Map, Number, Value};
 use super::{positive_ttl, MemoryService, Metadata, HUB_FIELD};
 use crate::context::model::{
     CompilePolicy, CompileRequest, CompiledContext, ContextDecision, ContextFragment,
-    ContextSavings, ContextSource, ImportanceWeights, MediaRef, MemoryScope, WorkingContext,
-    WorkingContextIndex, WorkingContextSession,
+    ContextSavings, ContextSource, ImportanceWeights, LoadedWorkingContext, MediaRef, MemoryScope,
+    WorkingContext, WorkingContextIndex, WorkingContextSession,
 };
 use crate::context::{media, provenance, ContextCompiler};
 use crate::embedder::Embedder;
@@ -834,6 +834,91 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         serde_json::from_str(&content)
             .map(Some)
             .map_err(|err| MemoryError::WorkingContextCodec(err.to_string()))
+    }
+
+    /// The full resumption envelope for `project` + `session`: what
+    /// [`Self::load_working_context`] found, plus the OTHER sessions saved
+    /// under the same project so a typo in `session` is recoverable.
+    ///
+    /// This is the ONE place the three policy rules live:
+    ///
+    /// 1. `other_sessions` is listed on a HIT too, not just on a miss — a
+    ///    typo that lands on another REAL session returns `found: true`, and
+    ///    the caller has no other way to notice it resumed the wrong work.
+    ///    Costs one extra O(1) index read per successful load.
+    /// 2. The requested `session` is never echoed back: the field is named
+    ///    `other_sessions`, so returning the requested id would be a
+    ///    contradiction the caller cannot act on.
+    /// 3. An unreadable index is fatal on a MISS and survivable on a HIT —
+    ///    see [`Self::other_sessions_for`].
+    ///
+    /// Every surface (the `load_working_context` MCP tool and the Node,
+    /// Python and WASM bindings) calls this rather than recomposing the
+    /// envelope from [`Self::load_working_context`] +
+    /// [`Self::list_working_contexts`]: four recompositions are four copies
+    /// of those rules, and a copy that stops matching the others fails
+    /// silently — the caller still gets a well-formed envelope, just a
+    /// different one.
+    ///
+    /// # Errors
+    /// Propagates [`Self::load_working_context`]'s errors (a corrupt or
+    /// unparseable stored payload), and [`Self::list_working_contexts`]'s (a
+    /// corrupt index, or a storage failure) **on a miss only** — rule 3.
+    pub fn resume_working_context(
+        &self,
+        project: &str,
+        session: &str,
+    ) -> Result<LoadedWorkingContext, MemoryError> {
+        let working = self.load_working_context(project, session)?;
+        let other_sessions = self.other_sessions_for(project, session, working.is_some())?;
+        Ok(LoadedWorkingContext {
+            found: working.is_some(),
+            working,
+            other_sessions,
+        })
+    }
+
+    /// The project's OTHER sessions, and what to do when the index that holds
+    /// them cannot be read.
+    ///
+    /// The two answers differ because `other_sessions` plays a different part
+    /// on each path:
+    ///
+    /// - **On a hit** it is a HINT — "you asked for `alpha`, note that
+    ///   `alpha-2` also exists, you may have resumed the wrong one". The
+    ///   answer the caller actually asked for is already in hand and intact.
+    ///   Failing the whole call here would turn a fault in one auxiliary fact
+    ///   into a total loss of resumption for EVERY session of the project,
+    ///   including the many that read back perfectly — which is why an
+    ///   unreadable index degrades to an empty hint instead. Nothing is
+    ///   swallowed: the corruption stays loudly reachable through
+    ///   [`Self::list_working_contexts`], published on every surface.
+    /// - **On a miss** it is the ONLY signal there is. `[]` then reads as the
+    ///   positive assertion "nothing else was ever saved under this project",
+    ///   and an agent told that starts over on top of work sitting right next
+    ///   to where it looked — the exact failure this envelope exists to
+    ///   prevent. An assertion we cannot support must not be manufactured, so
+    ///   the error propagates.
+    ///
+    /// # Errors
+    /// Propagates [`Self::list_working_contexts`]'s errors when `found` is
+    /// false.
+    fn other_sessions_for(
+        &self,
+        project: &str,
+        session: &str,
+        found: bool,
+    ) -> Result<Vec<String>, MemoryError> {
+        let listed = match self.list_working_contexts(project) {
+            Ok(listed) => listed,
+            Err(_) if found => return Ok(Vec::new()),
+            Err(err) => return Err(err),
+        };
+        Ok(listed
+            .into_iter()
+            .map(|entry| entry.session)
+            .filter(|candidate| candidate != session)
+            .collect())
     }
 
     /// The sessions of `sessions` whose working-context fact is still there,

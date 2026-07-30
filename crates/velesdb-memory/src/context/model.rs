@@ -611,6 +611,40 @@ impl WorkingContext {
     }
 }
 
+/// What a working-context lookup returns, on every surface: the MCP
+/// `load_working_context` tool AND the Node/Python/WASM bindings.
+///
+/// An envelope (not a bare `Option<WorkingContext>`): the MCP spec requires
+/// the output schema's root to be an object, so a nullable root is rejected
+/// by rmcp.
+///
+/// It lives here — in the shared model — rather than in the `mcp` module
+/// because the `mcp` module is a Cargo feature the bindings do not enable:
+/// a type declared there is unreachable from them, and each binding would
+/// have to re-declare the envelope AND re-derive its two policy rules ("list
+/// on a hit too", "never re-emit the requested session"). Four copies of a
+/// rule is four chances for it to diverge in silence. Built once, by
+/// [`MemoryService::resume_working_context`](crate::MemoryService::resume_working_context).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub struct LoadedWorkingContext {
+    /// `true` when a working context was found under this exact project +
+    /// session. Wire-additive alongside `working` (added V2a-1): a client
+    /// that only reads `working` sees no change.
+    pub found: bool,
+    /// The previously saved working context, or `null` when nothing was ever
+    /// saved under that project + session (a fresh start, not an error).
+    pub working: Option<WorkingContext>,
+    /// The OTHER sessions saved under this SAME project (never the requested
+    /// one) — helps recover from a typo in `session` instead of silently
+    /// starting fresh (e.g. `"task-1234"` saved, `"task-1235"` requested by
+    /// mistake). Populated on a hit as well as on a miss: a typo that lands
+    /// on another real session is the case the caller can least detect on its
+    /// own. Empty only when the project has no other session.
+    #[serde(default)]
+    pub other_sessions: Vec<String>,
+}
+
 /// One session recorded in a project's working-context index (V2a-1's
 /// `list_working_contexts` quick win).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -21,9 +21,9 @@ use super::{join_error, to_error, McpServer};
 use crate::context::wire::stringify_id_fields;
 use crate::context::{
     fragment_id, segment_transcript, suggest_token_budget, CompilePolicy, CompileRequest,
-    CompiledContext, ContextCompiler, ContextDecision, ContextFragment, ContextSavings, MediaRef,
-    SegmentFormat, SegmentKind, SegmentationPolicy, SuggestedBudget, WorkingContext,
-    WorkingContextSession,
+    CompiledContext, ContextCompiler, ContextDecision, ContextFragment, ContextSavings,
+    LoadedWorkingContext, MediaRef, SegmentFormat, SegmentKind, SegmentationPolicy,
+    SuggestedBudget, WorkingContext, WorkingContextSession,
 };
 
 /// Serialize `payload`, opt-in rewriting every id field into decimal-string
@@ -183,29 +183,6 @@ pub(super) struct LoadWorkingContextParams {
     pub project: String,
     /// Session identifier the working context was saved under.
     pub session: String,
-}
-
-/// Output of the `load_working_context` tool. An envelope (not a bare
-/// `Option<WorkingContext>`): the MCP spec requires the output schema's
-/// root to be an object, so a nullable root is rejected by rmcp.
-#[derive(Debug, serde::Serialize, Deserialize, JsonSchema)]
-#[schemars(transform = crate::schema::strip_int_formats)]
-pub(super) struct LoadWorkingContextResult {
-    /// `true` when a working context was found under this exact project +
-    /// session. Wire-additive alongside `working` (added V2a-1): a client
-    /// that only reads `working` sees no change.
-    pub found: bool,
-    /// The previously saved working context, or `null` when nothing was ever
-    /// saved under that project + session (a fresh start, not an error).
-    pub working: Option<WorkingContext>,
-    /// The OTHER sessions saved under this SAME project (never the requested
-    /// one) — helps recover from a typo in `session` instead of silently
-    /// starting fresh (e.g. `"task-1234"` saved, `"task-1235"` requested by
-    /// mistake). Populated on a hit as well as on a miss: a typo that lands
-    /// on another real session is the case the caller can least detect on its
-    /// own. Empty only when the project has no other session.
-    #[serde(default)]
-    pub other_sessions: Vec<String>,
 }
 
 /// Input of the `list_working_contexts` tool.
@@ -665,7 +642,7 @@ impl McpServer {
         // Sans declaration explicite, rmcp derive un schema de sortie qui
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
-        output_schema = wire_safe_output_schema::<LoadWorkingContextResult>(),
+        output_schema = wire_safe_output_schema::<LoadedWorkingContext>(),
         description = "Resume a session: load back the working context previously saved by save_working_context under the same project + session id — the goal, constraints, verified facts, open hypotheses, decisions, exact evidence, and pending actions a PRIOR session left off with. Call this at the START of a new session before doing anything else, so work continues instead of restarting. `found: false` (with `working: null`) means nothing was ever saved under that exact project + session — not an error, but check `other_sessions`: if it lists a similarly-named session, `session` was likely a typo, not a genuinely fresh start. `other_sessions` is always filled in, on a hit too: if it lists a session that looks more like the one you meant, you may have just resumed the WRONG session. Use `list_working_contexts` to browse a project's sessions up front."
     )]
     async fn load_working_context(
@@ -674,33 +651,16 @@ impl McpServer {
     ) -> Result<Json<Value>, ErrorData> {
         let LoadWorkingContextParams { project, session } = params;
         let service = Arc::clone(&self.service);
-        let lookup_project = project.clone();
-        let lookup_session = session.clone();
-        let working = tokio::task::spawn_blocking(move || {
-            service.load_working_context(&lookup_project, &lookup_session)
-        })
-        .await
-        .map_err(join_error)?
-        .map_err(to_error)?;
-        let found = working.is_some();
-        // Listed on a HIT too, not just on a miss: a typo that lands on
-        // another REAL session returns `found: true`, and the caller has no
-        // other way to notice it resumed the wrong work. Costs one extra
-        // O(1) index read per successful load.
-        let other_sessions: Vec<String> = {
-            let service = Arc::clone(&self.service);
-            tokio::task::spawn_blocking(move || service.list_working_contexts(&project))
+        // L'enveloppe entiere — `found`, `working`, `other_sessions` — est
+        // composee par le pont, pas ici : les deux regles de politique
+        // ("lister meme sur un hit", "ne jamais reemettre la session
+        // demandee") sont les memes pour cet outil et pour les trois
+        // bindings, et une regle recopiee par surface diverge en silence.
+        let loaded =
+            tokio::task::spawn_blocking(move || service.resume_working_context(&project, &session))
                 .await
                 .map_err(join_error)?
-                .map_err(to_error)?
-                .into_iter()
-                .map(|s| s.session)
-                // Never propose the session just requested: the field is
-                // named `other_sessions`, so echoing the requested id back is
-                // a contradiction the caller cannot act on.
-                .filter(|candidate| candidate != &session)
-                .collect()
-        };
+                .map_err(to_error)?;
         // Les ids sortent en CHAINE decimale, sans option, contrairement au
         // compilateur ou `ids_as_strings` est un choix de l'appelant.
         //
@@ -718,12 +678,7 @@ impl McpServer {
         // Le schema de sortie annonce deja `["integer", "string"]` sur ces
         // champs (`widen_id_properties`), donc emettre la branche chaine est
         // valide au sens du schema publie : aucun SDK ne rejette la reponse.
-        let mut value = serde_json::to_value(LoadWorkingContextResult {
-            found,
-            working,
-            other_sessions,
-        })
-        .map_err(|err| {
+        let mut value = serde_json::to_value(loaded).map_err(|err| {
             ErrorData::internal_error(
                 format!("Failed to serialize structured content: {err}"),
                 None,

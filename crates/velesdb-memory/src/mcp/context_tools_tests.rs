@@ -79,8 +79,8 @@ fn decision_of(value: serde_json::Value) -> ContextDecision {
 /// the round trip is checked on the WIRE in `tests/mcp_schema_bdd.rs` as
 /// well: `serde_json` decodes a `u64` exactly, the float-lossy client this
 /// contract exists for does not.
-fn loaded_working_of(value: serde_json::Value) -> LoadWorkingContextResult {
-    serde_json::from_value(value).expect("valid LoadWorkingContextResult wire value")
+fn loaded_working_of(value: serde_json::Value) -> LoadedWorkingContext {
+    serde_json::from_value(value).expect("valid LoadedWorkingContext wire value")
 }
 
 #[tokio::test]

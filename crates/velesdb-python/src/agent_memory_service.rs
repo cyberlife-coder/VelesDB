@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use velesdb_memory::context::{
     build_transcript_compile_request, suggest_token_budget, CompilePolicy, CompileRequest,
     CompiledContext, ContextCompiler, ContextDecision, ContextSavings, ContextSource,
-    TranscriptCompileInput, WorkingContext, WorkingContextSession,
+    LoadedWorkingContext, TranscriptCompileInput, WorkingContext, WorkingContextSession,
 };
 use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
@@ -745,24 +745,41 @@ impl PyMemoryService {
         })
     }
 
-    /// The working context previously saved under `project` + `session` (see
-    /// [`save_working_context`](Self::save_working_context)), or `None` when
-    /// there is none.
+    /// The resumption envelope for `project` + `session` (see
+    /// [`save_working_context`](Self::save_working_context)) — the same
+    /// wire shape as the MCP `load_working_context` tool and the Node/WASM
+    /// bindings.
+    ///
+    /// **BREAKING (0.12.0)**: this used to return the bare working context
+    /// (or `None`), which collapsed two different answers into one — a
+    /// project that never saved anything, and a typo in `session` that
+    /// missed a session which does exist. `other_sessions` is what tells
+    /// them apart, and it is filled in on a HIT too: a typo landing on
+    /// another REAL session returns `found=True`, the case a caller can
+    /// least detect on its own. Read `["working"]` for the previous return
+    /// value.
+    ///
+    /// Returns:
+    ///     ``{"found": bool, "working": dict | None, "other_sessions":
+    ///     [str]}``. Ids stay native Python ints here (unlimited precision),
+    ///     unlike the JS bindings' decimal strings.
     fn load_working_context(
         &self,
         py: Python<'_>,
         project: &str,
         session: &str,
     ) -> PyResult<Py<PyAny>> {
-        let working = py.detach(|| {
+        // Annotated, not inferred: `binding_parity_bdd` reads this type name
+        // to prove the binding relays the SERVER's own envelope rather than a
+        // shape it recomposed by hand — and the compiler makes that proof
+        // real. The doc comment above describes the envelope; only this
+        // enforces it.
+        let loaded: LoadedWorkingContext = py.detach(|| {
             self.svc
-                .load_working_context(project, session)
+                .resume_working_context(project, session)
                 .map_err(to_py_err)
         })?;
-        match working {
-            None => Ok(py.None()),
-            Some(working) => Ok(serde_to_python!(py, &working, "working context")),
-        }
+        Ok(serde_to_python!(py, &loaded, "loaded working context"))
     }
 
     /// Every session ever saved under `project`'s working-context index,

@@ -2787,18 +2787,38 @@ class MemoryService:
         """
         ...
 
-    def load_working_context(
-        self, project: str, session: str
-    ) -> Optional[Dict[str, Any]]:
-        """The working context previously saved under ``project`` + ``session``.
+    def load_working_context(self, project: str, session: str) -> Dict[str, Any]:
+        """The resumption envelope for ``project`` + ``session``.
+
+        **BREAKING** (``velesdb-memory`` 0.12.0, relayed by the next
+        ``velesdb`` wheel): returns the three-field envelope instead of the
+        bare working context (or ``None``). The bare form collapsed two
+        different answers into one — a project that never saved anything, and
+        a typo in ``session`` that missed a session which does exist. Read
+        ``["working"]`` for the previous return value.
+
+        Deliberately NOT written as ``.. versionchanged:: 0.12.0``: Sphinx and
+        IDE tooltips render that directive as "Changed in version 0.12.0" of
+        THIS package, and this package is ``velesdb``, on the 4.x line. A
+        reader pinned to 4.2.0 would compare 4.2.0 > 0.12.0, conclude the
+        change was already behind them, keep an ``is None`` check that can
+        never fire again, and restart on top of live work. 0.12.0 is the
+        memory crate's version; the wheel has no such release.
 
         Args:
             project: Project facet.
             session: Session identifier.
 
         Returns:
-            The same dict shape passed to :meth:`save_working_context`, or
-            ``None`` when nothing was saved under this ``project``/``session``.
+            ``{"found": bool, "working": dict | None, "other_sessions":
+            [str]}``. ``working`` is the same dict shape passed to
+            :meth:`save_working_context`, or ``None`` when nothing was saved
+            under this exact ``project``/``session``. ``other_sessions``
+            lists the OTHER sessions of the same project — never the
+            requested one — and is filled in on a HIT too: a typo that lands
+            on another real session is the case a caller can least detect on
+            its own. Ids stay native Python ints, unlike the JS bindings'
+            decimal strings.
         """
         ...
 

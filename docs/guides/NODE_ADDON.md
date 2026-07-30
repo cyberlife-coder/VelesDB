@@ -223,13 +223,23 @@ await store.saveWorkingContext('veles', 'session-1', {
   pending_actions: ['load this back from a fresh MemoryService'],
 })
 
-const resumed = await store.loadWorkingContext('veles', 'session-1') // null when nothing was saved
+// `{found, working, other_sessions}` — the same envelope the MCP tool serves.
+const resumed = await store.loadWorkingContext('veles', 'session-1')
 const { sessions } = await store.listWorkingContexts('veles')        // [] when the project never saved
 ```
 
+**Breaking in 0.12.0**: `loadWorkingContext` used to resolve the bare working
+context, or `null`. Read `resumed.working` for that value. The bare form
+collapsed two different answers into one — a project that never saved
+anything, and a typo in `session` that missed a session which *does* exist.
+`resumed.other_sessions` is what tells them apart, and it is filled in on a
+hit too: a typo landing on another real session returns `found: true`, the
+case a caller can least detect on its own.
+
 Saving again under the same `project` + `session` replaces the previous state
 (idempotent upsert). Id fields nested inside the working context follow the
-same decimal-string contract in both directions.
+same decimal-string contract in both directions — including the ones under
+`resumed.working`, one level deeper than before.
 
 ## Bundled agent skills
 

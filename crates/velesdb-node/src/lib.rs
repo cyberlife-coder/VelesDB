@@ -48,7 +48,8 @@ use napi::bindgen_prelude::AsyncTask;
 use napi_derive::napi;
 use serde_json::Value;
 use velesdb_memory::context::{
-    suggest_token_budget, CompilePolicy, CompileRequest, ContextCompiler, WorkingContext,
+    suggest_token_budget, CompilePolicy, CompileRequest, ContextCompiler, LoadedWorkingContext,
+    WorkingContext,
 };
 use velesdb_memory::{
     DynEmbedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor, DEFAULT_DIMENSION,
@@ -499,12 +500,23 @@ impl MemoryStore {
         }))
     }
 
-    /// The working context previously saved under `project` + `session`,
-    /// `null` when there is none — the start-of-session mirror of
-    /// [`Self::save_working_context`].
+    /// The resumption envelope for `project` + `session` — the
+    /// start-of-session mirror of [`Self::save_working_context`], same shape
+    /// as the MCP `load_working_context` tool: `{found, working,
+    /// other_sessions}`.
+    ///
+    /// **BREAKING (0.12.0)**: this used to resolve the bare working context
+    /// (or `null`), which collapsed two different answers into one — a
+    /// project that never saved anything, and a typo in `session` that
+    /// missed a session which does exist. `other_sessions` is what tells
+    /// them apart, and it is filled in on a HIT too: a typo landing on
+    /// another REAL session returns `found: true`, the case a caller can
+    /// least detect on its own. Read `.working` for the previous return
+    /// value. Pure delegation to [`velesdb_memory`]'s bridge — the envelope
+    /// is composed by `resume_working_context`, zero logic in the binding.
     #[napi(
         js_name = "loadWorkingContext",
-        ts_return_type = "Promise<object | null>"
+        ts_return_type = "Promise<{ found: boolean; working: object | null; other_sessions: Array<string> }>"
     )]
     pub fn load_working_context(
         &self,
@@ -513,19 +525,22 @@ impl MemoryStore {
     ) -> AsyncTask<Job<JsonOut>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
-            let loaded = svc
-                .load_working_context(&project, &session)
+            // Annotated, not inferred: `binding_parity_bdd` reads this type
+            // name to prove the binding relays the SERVER's own envelope
+            // rather than a shape it recomposed by hand — and the compiler
+            // makes that proof real. A doc comment describing `{found,
+            // working, other_sessions}` proves nothing; this does.
+            let loaded: LoadedWorkingContext = svc
+                .resume_working_context(&project, &session)
                 .map_err(to_napi_err)?;
-            match loaded {
-                Some(working) => {
-                    let mut value = serde_json::to_value(working).map_err(|err| {
-                        invalid_input(format!("working context serialization: {err}"))
-                    })?;
-                    convert::stringify_id_fields(&mut value);
-                    Ok(JsonOut(value))
-                }
-                None => Ok(JsonOut(Value::Null)),
-            }
+            let mut value = serde_json::to_value(loaded)
+                .map_err(|err| invalid_input(format!("working context serialization: {err}")))?;
+            // Applied at the ROOT of the envelope, not to `working` alone:
+            // the walk descends by KEY NAME, so it still reaches
+            // `working.decisions[].fragment_id` and
+            // `working.exact_evidence[].fragment_id` one level deeper.
+            convert::stringify_id_fields(&mut value);
+            Ok(JsonOut(value))
         }))
     }
 

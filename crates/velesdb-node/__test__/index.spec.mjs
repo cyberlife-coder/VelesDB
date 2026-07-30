@@ -1055,23 +1055,72 @@ test('saveWorkingContext → loadWorkingContext round-trips across processes', a
     // A separate MemoryService in THIS process: the next session resumes.
     const reopened = MemoryService.open(dir, 'hash')
     const loaded = await reopened.loadWorkingContext('veles', 'session-1')
-    assert.ok(loaded, 'the saved working context must survive the process boundary')
-    assert.equal(loaded.goal, working.goal)
+    assert.equal(loaded.found, true, 'the envelope reports the hit')
+    assert.ok(loaded.working, 'the saved working context must survive the process boundary')
+    assert.equal(loaded.working.goal, working.goal)
     assert.deepEqual(
-      loaded.active_constraints.map((f) => f.text),
+      loaded.working.active_constraints.map((f) => f.text),
       ['never merge without green gates'],
     )
-    assert.deepEqual(loaded.pending_actions, working.pending_actions)
+    assert.deepEqual(loaded.working.pending_actions, working.pending_actions)
+    assert.deepEqual(
+      loaded.other_sessions,
+      [],
+      'the only saved session is the requested one, which is never echoed back',
+    )
   } finally {
     rmStoreDir(dir)
   }
 })
 
-test('loadWorkingContext resolves null when nothing was saved', async () => {
+test('loadWorkingContext resolves found:false with a null working when nothing was saved', async () => {
   const { store, cleanup } = freshStore()
   try {
     const loaded = await store.loadWorkingContext('veles', 'never-saved')
-    assert.equal(loaded, null, 'a fresh start reads as null, not an error')
+    assert.equal(loaded.found, false, 'a fresh start is found:false, not an error')
+    assert.equal(loaded.working, null)
+    assert.deepEqual(loaded.other_sessions, [], 'nothing else was saved under this project')
+  } finally {
+    cleanup()
+  }
+})
+
+// The whole reason the bare `WorkingContext | null` return was replaced: a
+// miss and a TYPO look identical from the outside, and only `other_sessions`
+// tells them apart. Without it the caller silently starts fresh on top of
+// work that is sitting right there under a neighbouring id.
+test('loadWorkingContext surfaces the sibling sessions a typo missed', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await store.saveWorkingContext('veles', 'task-1234', { goal: 'the real session' })
+    const typo = await store.loadWorkingContext('veles', 'task-1235')
+    assert.equal(typo.found, false)
+    assert.equal(typo.working, null)
+    assert.deepEqual(
+      typo.other_sessions,
+      ['task-1234'],
+      'the near-miss session is what turns a silent fresh start into a recoverable typo',
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+// Listed on a HIT too: a typo that lands on another REAL session returns
+// found:true, and that is the case a caller can least detect on its own.
+test('loadWorkingContext lists the other sessions on a hit as well, never the requested one', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await store.saveWorkingContext('veles', 'session-a', { goal: 'a' })
+    await store.saveWorkingContext('veles', 'session-b', { goal: 'b' })
+    const loaded = await store.loadWorkingContext('veles', 'session-a')
+    assert.equal(loaded.found, true)
+    assert.equal(loaded.working.goal, 'a')
+    assert.deepEqual(
+      loaded.other_sessions,
+      ['session-b'],
+      'the requested session is never echoed back into other_sessions',
+    )
   } finally {
     cleanup()
   }
@@ -1083,7 +1132,7 @@ test('saveWorkingContext replaces the previous state (idempotent upsert)', async
     await store.saveWorkingContext('veles', 's', { goal: 'first' })
     await store.saveWorkingContext('veles', 's', { goal: 'second' })
     const loaded = await store.loadWorkingContext('veles', 's')
-    assert.equal(loaded.goal, 'second', 'the latest save wins')
+    assert.equal(loaded.working.goal, 'second', 'the latest save wins')
   } finally {
     cleanup()
   }
@@ -1281,9 +1330,19 @@ test('working context id fields cross as decimal strings in both directions', as
       decisions: [{ fragment_id: bigId, rule_id: 'preserve.default' }],
       exact_evidence: [{ fragment_id: bigId, handle: 'ctx://source/1' }],
     })
+    // stringifyIdFields runs at the ROOT of the envelope, so it must still
+    // reach these ids one level deeper, under `working`.
     const loaded = await store.loadWorkingContext('veles', 'ids')
-    assert.equal(loaded.decisions[0].fragment_id, bigId, 'decision ids survive as strings')
-    assert.equal(loaded.exact_evidence[0].fragment_id, bigId, 'evidence ids survive as strings')
+    assert.equal(
+      loaded.working.decisions[0].fragment_id,
+      bigId,
+      'decision ids survive as strings under the envelope',
+    )
+    assert.equal(
+      loaded.working.exact_evidence[0].fragment_id,
+      bigId,
+      'evidence ids survive as strings under the envelope',
+    )
   } finally {
     cleanup()
   }

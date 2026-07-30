@@ -47,7 +47,8 @@ use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
 use velesdb_memory::context::{
-    suggest_token_budget, CompilePolicy, CompileRequest, ContextCompiler, SegmentationReport,
+    suggest_token_budget, CompilePolicy, CompileRequest, CompiledContext, ContextCompiler,
+    ContextDecision, ContextSavings, LoadedWorkingContext, SegmentationReport, SuggestedBudget,
     WorkingContext, WorkingContextSession,
 };
 use velesdb_memory::service::canonical_entity_name;
@@ -689,7 +690,11 @@ impl WasmMemoryService {
         parse_fragment_id_strings(&mut request)?;
         let request: CompileRequest = serde_json::from_value(request)
             .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
-        let compiled = self
+        // Annotated, not inferred: this binding relays the SERVER'S own
+        // `CompiledContext` untouched, and naming the type is what makes that
+        // checkable — `tests/binding_parity_bdd.rs` reads it to know the
+        // shape cannot lose a field, now or when the type grows one.
+        let compiled: CompiledContext = self
             .inner
             .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
             .map_err(to_js_err)?;
@@ -746,7 +751,9 @@ impl WasmMemoryService {
     /// events live only in this session's [`WasmStore`].
     #[wasm_bindgen(js_name = contextSavings)]
     pub fn context_savings(&self, project: Option<String>) -> Result<JsValue, JsValue> {
-        let savings = self
+        // Type annotated for the same reason as `compile_context`: the
+        // relayed shape is the server's own `ContextSavings`.
+        let savings: ContextSavings = self
             .inner
             .context_savings(project.as_deref())
             .map_err(to_js_err)?;
@@ -778,7 +785,9 @@ impl WasmMemoryService {
         let request: CompileRequest = serde_json::from_value(request)
             .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
         let fragment_id = parse_id(fragment_id)?;
-        let decision = self
+        // Type annotated for the same reason as `compile_context`: the
+        // relayed shape is the server's own `ContextDecision`.
+        let decision: ContextDecision = self
             .inner
             .explain_compilation(&request, fragment_id, fragment_index)
             .map_err(to_js_err)?;
@@ -802,7 +811,10 @@ impl WasmMemoryService {
         target_model: &str,
         reserve_tokens: Option<u64>,
     ) -> Result<JsValue, JsValue> {
-        let budget = suggest_token_budget(target_model, reserve_tokens.unwrap_or(0));
+        // Type annotated for the same reason as `compile_context`: the
+        // relayed shape is the server's own `SuggestedBudget`.
+        let budget: SuggestedBudget =
+            suggest_token_budget(target_model, reserve_tokens.unwrap_or(0));
         to_js(&budget)
     }
 
@@ -869,28 +881,42 @@ impl WasmMemoryService {
             .map_err(to_js_err)
     }
 
-    /// The working context previously saved under `project` + `session` —
-    /// `null` in JS when there is none, the start-of-session mirror of
-    /// [`Self::save_working_context`] (#1517, option 2).
+    /// The resumption envelope for `project` + `session` — the
+    /// start-of-session mirror of [`Self::save_working_context`] (#1517,
+    /// option 2), same shape as the MCP `load_working_context` tool:
+    /// `{found, working, other_sessions}`.
+    ///
+    /// **BREAKING (0.12.0)**: this used to resolve the bare working context
+    /// (or `null`), which collapsed two different answers into one — a
+    /// project that never saved anything, and a typo in `session` that
+    /// missed a session which does exist. `other_sessions` is what tells
+    /// them apart, and it is filled in on a HIT too: a typo landing on
+    /// another REAL session returns `found: true`, the case a caller can
+    /// least detect on its own. Read `.working` for the previous return
+    /// value.
     ///
     /// **In-memory semantics**: see [`Self::save_working_context`]'s doc
     /// comment — this only ever resolves what THIS session's [`WasmStore`]
     /// still holds; nothing persists across a page reload.
     #[wasm_bindgen(js_name = loadWorkingContext)]
     pub fn load_working_context(&self, project: &str, session: &str) -> Result<JsValue, JsValue> {
-        let loaded = self
+        // Annotated, not inferred: `binding_parity_bdd` reads this type name
+        // to prove the binding relays the SERVER's own envelope rather than a
+        // shape it recomposed by hand — and the compiler makes that proof
+        // real. The doc comment above describes the envelope; only this
+        // enforces it.
+        let loaded: LoadedWorkingContext = self
             .inner
-            .load_working_context(project, session)
+            .resume_working_context(project, session)
             .map_err(to_js_err)?;
-        match loaded {
-            Some(working) => {
-                let mut value = serde_json::to_value(&working)
-                    .map_err(|e| structured_js_error(CODE_INTERNAL, &format!("serialize: {e}")))?;
-                stringify_id_fields(&mut value);
-                to_js(&value)
-            }
-            None => Ok(JsValue::NULL),
-        }
+        let mut value = serde_json::to_value(&loaded)
+            .map_err(|e| structured_js_error(CODE_INTERNAL, &format!("serialize: {e}")))?;
+        // Applied at the ROOT of the envelope, not to `working` alone: the
+        // walk descends by KEY NAME, so it still reaches
+        // `working.decisions[].fragment_id` and
+        // `working.exact_evidence[].fragment_id` one level deeper.
+        stringify_id_fields(&mut value);
+        to_js(&value)
     }
 
     /// Every session ever saved under `project`'s working-context index,

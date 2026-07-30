@@ -318,6 +318,38 @@ export interface WorkingContextSession {
   saved_at: number;
 }
 
+/**
+ * What {@link MemoryService.loadWorkingContext} resolves to — the same
+ * three-field envelope the MCP `load_working_context` tool serves.
+ *
+ * **BREAKING (`velesdb-memory` 0.12.0, relayed by the next
+ * `@wiscale/velesdb-sdk` release)**: `loadWorkingContext` used to resolve
+ * `WorkingContext | null`. That bare form collapsed two different answers
+ * into one — a project that never saved anything, and a typo in `session`
+ * that missed a session which does exist. Read {@link working} for the
+ * previous return value.
+ *
+ * The version named is the memory crate's. This package is on the 4.x line
+ * and will never have a 0.12.0, so "breaking in 0.12.0" unqualified would
+ * read to anyone pinned at 4.x as a change already behind them.
+ */
+export interface LoadedWorkingContext {
+  /** `true` when a working context was found under this exact project + session. */
+  found: boolean;
+  /**
+   * The previously saved working context, or `null` when nothing was ever
+   * saved under that project + session (a fresh start, not an error).
+   */
+  working: WorkingContext | null;
+  /**
+   * The OTHER sessions saved under this SAME project — never the requested
+   * one. Filled in on a HIT as well as on a miss: a typo that lands on
+   * another real session is the case a caller can least detect on its own.
+   * Empty only when the project has no other session.
+   */
+  other_sessions: string[];
+}
+
 /** Result of {@link MemoryService.listWorkingContexts}. */
 export interface ListWorkingContextsResult {
   /** Every session saved under this project, most-recently-saved first. */
@@ -892,18 +924,30 @@ export class MemoryService {
   }
 
   /**
-   * The working context previously saved under `project` + `session` —
-   * `null` when there is none, the start-of-session mirror of
-   * {@link saveWorkingContext} (#1517, option 2).
+   * The resumption envelope for `project` + `session` — the start-of-session
+   * mirror of {@link saveWorkingContext} (#1517, option 2): `{found,
+   * working, other_sessions}`, the same shape the MCP `load_working_context`
+   * tool serves.
+   *
+   * **BREAKING (`velesdb-memory` 0.12.0, relayed by the next
+   * `@wiscale/velesdb-sdk` release)**: this used to resolve
+   * `WorkingContext | null`. Read `.working` for the previous value, and
+   * `.other_sessions` for what the bare form could not express — that
+   * `session` may have been a typo which missed a session that does exist.
+   * See {@link LoadedWorkingContext}.
+   *
+   * **Rejects** with a {@link ConnectionError} when the resolved
+   * `@wiscale/velesdb-wasm` build predates the envelope and hands back the
+   * bare form. The floor in `package.json` admits such builds, and the
+   * method exists on them, so nothing else would notice.
    *
    * **In-memory semantics**: see {@link saveWorkingContext}'s doc comment —
    * this only ever resolves what THIS session's in-memory store still
    * holds; nothing persists across a page reload.
    */
-  loadWorkingContext(project: string, session: string): Promise<WorkingContext | null> {
-    return wrapWasmCall(
-      () =>
-        this.ensureInitialized().loadWorkingContext(project, session) as WorkingContext | null
+  loadWorkingContext(project: string, session: string): Promise<LoadedWorkingContext> {
+    return wrapWasmCall(() =>
+      asLoadedWorkingContext(this.ensureInitialized().loadWorkingContext(project, session))
     );
   }
 
@@ -921,6 +965,38 @@ export class MemoryService {
       () => this.ensureInitialized().listWorkingContexts(project) as ListWorkingContextsResult
     );
   }
+}
+
+/**
+ * Narrow what the wasm build actually returned to {@link
+ * LoadedWorkingContext}, or fail loudly saying why.
+ *
+ * This exists because `ensureCapability` cannot help here. It checks that a
+ * method is PRESENT, and a `@wiscale/velesdb-wasm` build predating the
+ * envelope has `loadWorkingContext` — it just returns the bare working
+ * context (or `null`). That is a shape drift across a package boundary, and
+ * this SDK's floor on `@wiscale/velesdb-wasm` admits published builds on the
+ * wrong side of it, so the skew is reachable by an ordinary `npm install`.
+ *
+ * A bare `as LoadedWorkingContext` cast would let it through silently: `found`
+ * reads as `undefined`, which is falsy, so a caller doing the documented
+ * `if (loaded.found)` concludes "fresh start" and restarts on top of work that
+ * was sitting right there — the exact loss the envelope was introduced to
+ * prevent, reintroduced by a version skew. `found`'s type is the discriminator
+ * because it is the one field present on every envelope and on no bare working
+ * context.
+ */
+function asLoadedWorkingContext(value: unknown): LoadedWorkingContext {
+  if (typeof (value as LoadedWorkingContext | null)?.found === 'boolean') {
+    return value as LoadedWorkingContext;
+  }
+  throw new ConnectionError(
+    'The resolved @wiscale/velesdb-wasm build predates the {found, working, ' +
+      'other_sessions} envelope that loadWorkingContext() now returns — it handed back ' +
+      'the bare working context instead. Reading `.found` on that value yields undefined, ' +
+      'so a resumable session would look like a fresh start. Upgrade ' +
+      '@wiscale/velesdb-wasm to a release matching this SDK.'
+  );
 }
 
 /**

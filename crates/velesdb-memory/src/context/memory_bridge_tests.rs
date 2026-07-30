@@ -795,6 +795,71 @@ fn test_working_index_with_marker_but_no_body_is_an_error_not_an_empty_list() {
     );
 }
 
+/// A service whose project index is corrupt but whose per-session facts are
+/// intact — the state both tests below start from.
+fn service_with_torn_index(
+    dir: &tempfile::TempDir,
+    project: &str,
+) -> MemoryService<HashEmbedder, TornBodyStore> {
+    let native = NativeStore::open(dir.path(), DIM).expect("open native store");
+    MemoryService::with_store(
+        TornBodyStore {
+            inner: native,
+            torn: working_index_id(project),
+        },
+        HashEmbedder::new(DIM),
+    )
+}
+
+#[test]
+fn test_resume_returns_an_intact_context_even_when_the_project_index_is_corrupt() {
+    // Given a project whose index body is gone but whose saved session is fine
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let svc = service_with_torn_index(&dir, "veles");
+    svc.save_working_context("veles", "alpha", &minimal_working())
+        .expect("save_working_context");
+
+    // When resuming that very session
+    let resumed = svc.resume_working_context("veles", "alpha");
+
+    // Then the caller gets what it asked for. `other_sessions` is a HINT for
+    // spotting a typo, not the answer: letting its index deny an intact
+    // payload turns a fault in an auxiliary fact into a total loss of
+    // resumption for EVERY session of the project, including the ones that
+    // read back perfectly. The corruption stays loudly reachable through
+    // `list_working_contexts`, which every surface publishes.
+    let resumed = resumed.expect("a corrupt index must not deny an intact working context");
+    assert!(resumed.found, "the session's own fact is intact");
+    assert!(resumed.working.is_some(), "and must be handed back");
+    assert!(
+        resumed.other_sessions.is_empty(),
+        "the hint is unavailable, so it is empty — not fabricated"
+    );
+}
+
+#[test]
+fn test_resume_still_fails_on_a_miss_when_the_project_index_is_corrupt() {
+    // Given the same corrupt index, and a session id that was never saved
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let svc = service_with_torn_index(&dir, "veles");
+    svc.save_working_context("veles", "alpha", &minimal_working())
+        .expect("save_working_context");
+
+    // When resuming a session that does not exist
+    let resumed = svc.resume_working_context("veles", "typo");
+
+    // Then it is an ERROR, and must stay one. On a miss `other_sessions` is
+    // the ONLY signal the caller has: an empty list is the positive assertion
+    // "nothing else was ever saved here", and an agent told that starts over
+    // on top of `alpha`. Degrading a miss the way a hit degrades would
+    // manufacture exactly the silent restart this envelope exists to prevent.
+    assert!(
+        resumed.is_err(),
+        "a miss must never assert 'no other session' from an index it could \
+         not read; got {resumed:?}"
+    );
+}
+
 #[test]
 fn test_load_working_context_does_not_mutate_the_index() {
     // Given a project with two saved sessions, one of whose facts is gone

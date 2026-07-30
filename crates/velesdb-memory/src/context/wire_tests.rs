@@ -89,6 +89,53 @@ fn round_trip_stringify_then_parse_is_identity_for_id_keys() {
     assert_eq!(value, original);
 }
 
+/// The claim the three JS bindings rely on when they call
+/// [`stringify_id_fields`] at the ROOT of the `load_working_context`
+/// envelope instead of on `working` alone: the walk descends by KEY NAME, so
+/// wrapping the working context one level deeper cannot hide its ids.
+///
+/// Checked rather than assumed — the previous code stringified `working`
+/// directly, and "it still works one level down" is exactly the kind of
+/// property a refactor breaks without any compiler complaint.
+#[test]
+fn stringify_id_fields_reaches_ids_nested_under_the_load_envelope() {
+    let mut envelope = json!({
+        "found": true,
+        "other_sessions": ["task-1234"],
+        "working": {
+            "goal": "ship the envelope",
+            "decisions": [
+                {"fragment_id": 18_446_744_073_709_551_615u64, "rule_id": "media.atomic"},
+            ],
+            "exact_evidence": [
+                {"fragment_id": 42, "memory_id": 7, "handle": "ctx://source/42"},
+            ],
+        },
+    });
+
+    stringify_id_fields(&mut envelope);
+
+    assert_eq!(
+        envelope["working"]["decisions"][0]["fragment_id"],
+        json!("18446744073709551615"),
+        "a decision id two levels under the envelope root must still be stringified"
+    );
+    assert_eq!(
+        envelope["working"]["exact_evidence"][0]["fragment_id"],
+        json!("42")
+    );
+    assert_eq!(
+        envelope["working"]["exact_evidence"][0]["memory_id"],
+        json!("7")
+    );
+    assert_eq!(
+        envelope["found"],
+        json!(true),
+        "the envelope's own scalars pass through untouched"
+    );
+    assert_eq!(envelope["other_sessions"], json!(["task-1234"]));
+}
+
 // --- deserialize_optional_id (`ContextFragment.id` on the typed wire) -------
 
 use crate::context::ContextFragment;

@@ -266,6 +266,13 @@ Full surface, as enumerated from `MemoryService.prototype` in the published
 
 Contract details:
 
+- `loadWorkingContext` resolves `{found, working, other_sessions}` — the same
+  envelope the MCP tool serves. **Breaking (`velesdb-memory` 0.12.0, relayed
+  by the next `@wiscale/velesdb-wasm` release — the package is on the 4.x
+  line and has no 0.12.0)**: it used to resolve the
+  bare working context or `null`; read `.working` for that value, and
+  `.other_sessions` (filled in on a hit too) to tell a genuine fresh start
+  from a typo in `session` that missed a session which does exist.
 - Ids are **decimal strings**.
 - Every method is **synchronous** — no `Promise` to await.
 - Failures throw a JS `Error` carrying a `.code` field: `INVALID_INPUT`,

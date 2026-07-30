@@ -41,6 +41,9 @@ TARGETS: "list[tuple[str, str]]" = [
     # Was a shields.io `version-X.Y.Z-blue` badge; the refactor replaced it with
     # the canonical `Applies to: velesdb-core X.Y.Z` footer, as in 60 other docs.
     ("crates/velesdb-python/README.md", "applies_to_stamp"),
+    # Same footer, same reason, on the README npm publishes with the node
+    # binding. Its core stamp was found at 4.1.0 against a 4.2.0 workspace.
+    ("crates/velesdb-node/README.md", "applies_to_stamp"),
     ("demos/rag-pdf-demo/pyproject.toml", "toml"),
     ("sdks/typescript/package.json", "json"),
     # The TS SDK's npm lockfile carries its own root "version" string that
@@ -173,6 +176,21 @@ MEMORY_TARGETS: "list[tuple[str, str]]" = [
     ("crates/velesdb-node/package.json", "json"),
     ("crates/velesdb-node/package-lock.json", "json"),
     ("crates/velesdb-node/package-lock.json", "npm_lock_pkg"),
+    # The README SHIPS: package.json lists it in `files`, so it is the page
+    # npmjs.com renders for the version being published. Its footer was found
+    # announcing `velesdb-node v0.11.2` / `@wiscale/velesdb-memory-node@0.11.1`
+    # in a tree already bumped to 0.12.0 — a published page telling readers to
+    # install a version older than the one they are reading about. Neither
+    # gate saw it: check-doc-freshness only sweeps `docs/**` plus the root
+    # README, and this file had no entry here.
+    ("crates/velesdb-node/README.md", "node_readme_stamp"),
+    # The parity matrix's header names TWO versions —
+    # `Last updated: YYYY-MM-DD (vA.B.C; velesdb-memory X.Y.Z)`. Only the
+    # first was ever read: `doc_last_updated_version` captures `(v4.2.0` and
+    # stops, so the memory half sat at 0.11.0 while the body of the same file
+    # documented a 0.12.0 change. The document contradicted itself about which
+    # release it describes, and passed both gates doing it.
+    ("docs/reference/ECOSYSTEM_PARITY.md", "doc_last_updated_memory_version"),
 ]
 
 
@@ -293,6 +311,48 @@ def _read_doc_toml_header(path: Path) -> str:
     if not match:
         raise RuntimeError(f'No `# Version: X.Y.Z` line in {path}')
     return match.group(1)
+
+
+def _read_doc_last_updated_memory_version(path: Path) -> str:
+    """The `velesdb-memory X.Y.Z` half of a `Last updated: ... (vA.B.C;
+    velesdb-memory X.Y.Z)` header.
+
+    Separate from `_read_doc_last_updated_version`, which stops at the
+    workspace version in the same parenthetical: one reader can only return
+    one value, and the unread half is the one that drifts.
+    """
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"Last updated:[^\n]*velesdb-memory\s+(\d+\.\d+\.\d+)", text)
+    if not match:
+        raise RuntimeError(
+            f"No `Last updated: ... (v...; velesdb-memory X.Y.Z)` header in {path}"
+        )
+    return match.group(1)
+
+
+def _read_node_readme_stamp(path: Path) -> str:
+    """Both versions the velesdb-node README footer announces:
+    `velesdb-node vX.Y.Z` and the npm `@wiscale/velesdb-memory-node@X.Y.Z`.
+
+    They name the same artifact and must therefore agree with each other AND
+    with the crate. Disagreement is reported here rather than returned,
+    because the caller compares a single value: returning either one alone
+    would let the other drift unseen — which is exactly how the footer came to
+    advertise `v0.11.2` of a package it called `@0.11.1`.
+    """
+    text = path.read_text(encoding="utf-8")
+    crate = re.search(r"`velesdb-node v(\d+\.\d+\.\d+)`", text)
+    npm = re.search(r"@wiscale/velesdb-memory-node@(\d+\.\d+\.\d+)", text)
+    if not crate or not npm:
+        raise RuntimeError(
+            f"No `velesdb-node vX.Y.Z` + `@wiscale/velesdb-memory-node@X.Y.Z` footer in {path}"
+        )
+    if crate.group(1) != npm.group(1):
+        raise RuntimeError(
+            f"{path}: the footer announces velesdb-node v{crate.group(1)} but npm package "
+            f"@{npm.group(1)} — one artifact, two versions"
+        )
+    return crate.group(1)
 
 
 def _read_applies_to_stamp(path: Path) -> str:
@@ -506,6 +566,8 @@ _READERS = {
     "yaml_openapi": _read_yaml_openapi_version,
     "doc_health_snippet": _read_doc_health_snippet,
     "applies_to_stamp": _read_applies_to_stamp,
+    "node_readme_stamp": _read_node_readme_stamp,
+    "doc_last_updated_memory_version": _read_doc_last_updated_memory_version,
     "dockerfile_label": _read_dockerfile_label,
     "py_init_version": _read_py_init_version,
     "wasm_cdn_url": _read_wasm_cdn_url,
