@@ -14,7 +14,8 @@
     "is still on disk, so the suite demands an accounting for it."
   ],
   "_schema": {
-    "script": "repo-relative path, the identity of the guard",
+    "script": "repo-relative path, the identity of the guard — the workflow itself when the guard is inline steps (see `inline_steps`)",
+    "inline_steps": "present when the guard is written as steps inside `workflow` rather than as a script under scripts/: the exact `- name:` of each step that must exist in `job`. The wiring test then reads those steps instead of hunting for a `run:` line naming a script. Without it, the three checks of pr-governance.yml — Git Flow, branch freshness, AI attribution — were real guards that the declared set simply did not mention.",
     "workflow": "the workflow file whose job invokes it",
     "job": "the job key inside that workflow",
     "required": "true when a failure of `job` must fail the single required check (CI Success)",
@@ -221,6 +222,27 @@
         "summary": "None known. Folded into CI Success's needs and chain via the `production-gates` caller job, so a failure now blocks the merge."
       },
       "required_via": "production-gates"
+    },
+    {
+      "script": ".github/workflows/pr-governance.yml",
+      "inline_steps": [
+        "Block archive branches as PR source",
+        "Enforce Git Flow branch rules",
+        "Verify branch includes latest base branch",
+        "Reject AI-attributed commits"
+      ],
+      "purpose": "Git Flow branch rules, freshness of the branch against its base, and no AI-attributed commit.",
+      "workflow": ".github/workflows/pr-governance.yml",
+      "job": "governance",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": 1699,
+        "summary": "No self-test materialises a PR these steps must reject, so none of the three is known to refuse. The attribution step greps identities for `claude|anthropic` only, so Codex, Copilot and other assistant identities pass; #1699 replaces it with a two-compartment allowlist (dependabot[bot] has 149 legitimate commits and must keep passing)."
+      },
+      "required_via": "pr-governance"
     }
   ],
   "unwired": [
