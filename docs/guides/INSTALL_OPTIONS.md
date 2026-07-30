@@ -48,8 +48,13 @@ equivalent for "one command, no toolchain."
 
 ## Known gap
 
-`scripts/setup-hooks.ps1` (Windows: configures `git config core.hooksPath
-.githooks` for local CI validation) has **no shell-script counterpart** —
-`scripts/setup-hooks.sh` does not exist in this repository. This is a
-contributor-tooling gap, not an end-user installation path, so it is not
-represented in the table above; it is called out here so it is not lost.
+`scripts/setup-hooks.ps1` (Windows) and `scripts/setup-hooks.sh` (Linux /
+macOS) both configure `git config core.hooksPath .githooks` so the pre-commit
+and pre-push validation runs locally, before CI has to say no. This is
+contributor tooling, not an end-user installation path, so it is not
+represented in the table above.
+
+The shell counterpart landed in `4c089789`; this page went on saying it "does
+not exist in this repository" for every contributor who read it afterwards, and
+cost them their local hooks. Nothing confronts a documented path against the
+filesystem yet — tracked by #1705.

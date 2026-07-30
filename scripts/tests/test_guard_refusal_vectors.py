@@ -139,6 +139,18 @@ class RefusalVectorTests(unittest.TestCase):
                         f"could not run, which is not the same thing.\n"
                         f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}",
                     )
+                    # An uncaught Python exception ALSO exits 1, so the code
+                    # alone cannot tell a refusal from a crash. Measured while
+                    # writing the compare_perf vector: a malformed benchmark
+                    # shape raised ValueError, exited 1, and would have passed
+                    # the assertion above as a refusal that never happened.
+                    self.assertNotIn(
+                        "Traceback (most recent call last)",
+                        result.stderr,
+                        f"{entry['script']} exited 1 by CRASHING on this vector, not by "
+                        f"refusing it. The vector is malformed, or the guard is.\n"
+                        f"--- stderr ---\n{result.stderr}",
+                    )
 
     def test_every_vector_declares_a_tree_the_guard_accepts(self) -> None:
         for entry in guards_with_vectors():

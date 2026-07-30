@@ -155,6 +155,47 @@ def discovered_guard_scripts() -> "set[str]":
     return found
 
 
+#: A repo-relative script path as a workflow spells it.
+WORKFLOW_SCRIPT_RE = re.compile(r"(?<![\w./-])(scripts/[\w./-]+\.(?:py|sh|ps1))")
+
+
+def scripts_invoked_by_workflows() -> "dict[str, list[str]]":
+    """Every `scripts/…` path any workflow runs, to `file:line` sites.
+
+    The mirror of :func:`discovered_guard_scripts`, and the half that closes
+    the class. That one asks the filesystem "which files LOOK like guards?",
+    through a name pattern (:44) — and a name pattern is forever guessable.
+    Measured: `scripts/compare_perf.py` exits 1 on a performance regression,
+    runs in the required `perf-smoke` job, and matched no pattern, so the
+    registry never knew it existed.
+
+    Lines inside the `on:` block are skipped: a `paths:` filter NAMES scripts
+    it never runs, and reading those would demand registry entries for files
+    the workflow only watches.
+    """
+    found: "dict[str, list[str]]" = {}
+    for workflow in sorted(WORKFLOW_DIR.glob("*.yml")):
+        inside_triggers = False
+        for number, line in enumerate(
+            workflow.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if COMMENT_LINE_RE.match(line):
+                continue
+            if re.match(r"^on:", line):
+                inside_triggers = True
+                continue
+            if inside_triggers:
+                if re.match(r"^[a-z]", line):
+                    inside_triggers = False
+                else:
+                    continue
+            for match in WORKFLOW_SCRIPT_RE.finditer(line):
+                found.setdefault(match.group(1), []).append(
+                    f"{workflow.name}:{number}"
+                )
+    return found
+
+
 def script_mentions_in_job(workflow_text: str, job: str, script: str) -> "list[str]":
     """Live (comment-stripped) lines of ``job`` that name ``script``.
 
@@ -566,6 +607,51 @@ class GuardRegistryShapeTests(unittest.TestCase):
                     r"#\d+",
                     "an untested refusal must name the issue that will close it, "
                     "else the gap has no owner",
+                )
+
+    def test_every_script_a_workflow_runs_is_accounted_for(self) -> None:
+        # The sweep in the other direction, and the one that closes the class.
+        # `test_every_guard_shaped_script_on_disk_is_accounted_for` asks the
+        # filesystem which files LOOK like guards, through a name pattern —
+        # forever guessable. This one starts from what CI actually RUNS, which
+        # cannot be guessed wrong.
+        #
+        # It found `scripts/compare_perf.py`: exits 1 on a performance
+        # regression, runs in the required `perf-smoke` job, matched no
+        # pattern, and was therefore a required guard the registry did not
+        # know existed.
+        declared = {entry["script"] for entry in self.guards}
+        declared |= {entry["script"] for entry in self.unwired}
+        declared |= {entry["script"] for entry in self.registry.get("not_a_gate", [])}
+        invoked = scripts_invoked_by_workflows()
+        unaccounted = sorted(set(invoked) - declared)
+        self.assertEqual(
+            unaccounted,
+            [],
+            "script(s) a workflow runs and the registry never mentions: "
+            + ", ".join(f"{name} ({', '.join(invoked[name][:2])})" for name in unaccounted)
+            + ". Add each under `guards`, `unwired` or `not_a_gate`.",
+        )
+
+    def test_a_not_a_gate_entry_says_why_it_cannot_refuse(self) -> None:
+        # The escape hatch has to cost something, or every awkward script ends
+        # up in it. A script declared here must have no failure path at all —
+        # the claim is checkable, so it is checked.
+        for entry in self.registry.get("not_a_gate", []):
+            with self.subTest(script=entry["script"]):
+                self.assertTrue(
+                    (entry.get("reason") or "").strip(),
+                    "a `not_a_gate` entry must say why it cannot refuse",
+                )
+                source = (REPO_ROOT / entry["script"]).read_text(
+                    encoding="utf-8", errors="replace"
+                )
+                self.assertNotRegex(
+                    source,
+                    r"sys\.exit\(\s*[1-9]|raise SystemExit\(\s*[1-9]|^\s*exit 1\b",
+                    f"{entry['script']} is declared as unable to refuse, but it "
+                    "carries a non-zero exit path — it is a guard, and it belongs "
+                    "under `guards`.",
                 )
 
     def test_no_guard_is_declared_twice(self) -> None:
