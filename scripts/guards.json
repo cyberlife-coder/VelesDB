@@ -28,7 +28,8 @@
     "must_refuse": "executable refusal vectors, run by scripts/tests/test_guard_refusal_vectors.py: each materialises `files` under a temp dir, invokes the guard with `argv` (`{root}` is substituted), and demands exit 1 — then demands exit 0 on `accepts`, the same tree repaired. Exit 1 and not merely non-zero: a guard that crashes exits 2, and a crash is not a refusal.",
     "refusal_untested": "mandatory when a strict, required guard declares no `must_refuse`: why no vector exists yet, and the issue tracking it. A guard nobody has seen refuse is the defect of this campaign; this field keeps that visible instead of absent.",
     "repo": "optional inside a must_refuse vector: turns the materialised tree into a git work tree and tracks the paths it names, keyed like the trees (`files`, `accepts`). For guards that ask git rather than the filesystem — is this path tracked, who authored this commit — where a plain temp directory erases the very distinction they exist to make.",
-    "subguards": "for a guard exposing a `--guard <name>` selector: every selector that must actually be invoked in `job`. Without it, a script cited once for another selector satisfies the wiring test, and a sub-guard can be dropped from CI while the registry keeps announcing it — measured, that disarm stayed green."
+    "subguards": "for a guard exposing a `--guard <name>` selector: every selector that must actually be invoked in `job`. Without it, a script cited once for another selector satisfies the wiring test, and a sub-guard can be dropped from CI while the registry keeps announcing it — measured, that disarm stayed green.",
+    "not_a_gate": "scripts a workflow runs that CANNOT refuse — no non-zero exit path. Surfaced by the reverse sweep (workflows -> registry) and kept out of `guards` so the registry never overstates what it covers. The `reason` is mandatory and the no-failure-path claim is verified against the source."
   },
   "_json_not_yaml": [
     "gate-contracts.yml runs these suites with a bare actions/setup-python and",
@@ -397,6 +398,41 @@
         "summary": "Reads the RAW identity (%an <%ae>, never %aN): a .mailmap line in this repository already maps anthropic to the maintainer, and the mapped name would launder the case being looked for. Admission is by whole identity, so an impostor of an admitted bot does not inherit it."
       },
       "required_via": "pr-governance"
+    },
+    {
+      "script": "scripts/compare_perf.py",
+      "purpose": "A benchmark that regresses past its threshold fails the build (perf-smoke).",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "perf-smoke",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "must_refuse": [
+        {
+          "vector": "a benchmark 3x slower than its baseline, past the declared threshold",
+          "files": {
+            "current.json": "{\n  \"benchmarks\": {\n    \"hnsw_search_k10\": {\n      \"mean_ns\": 120000\n    }\n  }\n}\n",
+            "baseline.json": "{\n  \"benchmarks\": {\n    \"hnsw_search_k10\": {\n      \"mean_ns\": 38600\n    }\n  },\n  \"threshold_percent\": 15\n}\n"
+          },
+          "accepts": {
+            "current.json": "{\n  \"benchmarks\": {\n    \"hnsw_search_k10\": {\n      \"mean_ns\": 39000\n    }\n  }\n}\n",
+            "baseline.json": "{\n  \"benchmarks\": {\n    \"hnsw_search_k10\": {\n      \"mean_ns\": 38600\n    }\n  },\n  \"threshold_percent\": 15\n}\n"
+          },
+          "argv": [
+            "--current",
+            "{root}/current.json",
+            "--baseline",
+            "{root}/baseline.json",
+            "--threshold",
+            "15"
+          ]
+        }
+      ],
+      "blind_spot": {
+        "issue": null,
+        "summary": "Found by the reverse sweep, not by the name pattern: it exits 1 on a regression and runs in the required perf-smoke job, yet matched no guard-shaped name and was absent from this registry entirely. A benchmark absent from `current` is not compared — an empty result set exits 0 (compare_perf.py:119)."
+      }
     }
   ],
   "unwired": [
@@ -409,6 +445,19 @@
       "script": "scripts/perf_phase_gate.py",
       "reason": "Invoked by no workflow. QUALITY_BAR.md:220 and docs/contributing/BENCHMARKING_GUIDE.md:274-289 describe it as if it were active, which is the defect: either wire it or say in both documents that it is a manual tool.",
       "issue": 1708
+    },
+    {
+      "script": "scripts/bump_version.py",
+      "reason": "Release-time only, by design: release.yml:124 runs it to rewrite the version stamps before publishing. There is nothing for it to assert on a pull request. Same class as check-crates-io-versions.sh.",
+      "issue": null
+    }
+  ],
+  "not_a_gate": [
+    {
+      "script": "scripts/export_smoke_criterion.py",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "perf-smoke",
+      "reason": "Produces the artefact compare_perf.py then judges (ci.yml:1108, one step before). It has no non-zero exit path at all — measured — so it cannot refuse anything, and declaring it a guard would overstate the registry. The claim is checked: the suite reads its source and fails this entry if a failure path ever appears."
     }
   ]
 }
