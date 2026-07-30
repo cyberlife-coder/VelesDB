@@ -168,13 +168,35 @@ def read_memory_version(root: Path) -> str:
 
 
 def root_docs(root: Path) -> "list[Path]":
-    """Markdown files directly under docs/, excluding structural exemptions."""
+    """TRACKED markdown files directly under docs/, minus structural exemptions.
+
+    Tracked, not on disk — and that distinction is the arbitration of the
+    guard-against-guard conflict on `docs/CORE_PREMIUM_SPLIT.md`.
+
+    This guard used to glob the filesystem. It therefore demanded that
+    `docs/README.md` link a document that existed on exactly one machine: for
+    every clone and every CI run, obeying it meant publishing a BROKEN LINK.
+    A guard that reasons about untracked files reasons about a state nobody
+    else can observe, and it was actively enforcing the lie that
+    `--guard tracked` correctly refused.
+
+    So `index` yields: existence precedes navigation. A document has to be in
+    the repository before there is any sense in demanding it be in the table
+    of contents. Fall back to the filesystem outside a work tree, where the
+    question has no answer — an empty sweep would pass vacuously.
+    """
     docs_dir = root / DOCS_DIRNAME
-    return sorted(
-        p
-        for p in docs_dir.glob("*.md")
-        if p.name not in ROOT_DOC_EXEMPTIONS
+    on_disk = sorted(
+        path for path in docs_dir.glob("*.md")
+        if path.name not in ROOT_DOC_EXEMPTIONS
     )
+    tracked = tracked_files(root)
+    if tracked is None:
+        return on_disk
+    return [
+        path for path in on_disk
+        if path.relative_to(root).as_posix() in tracked
+    ]
 
 
 def scanned_doc_files(root: Path) -> "list[Path]":
@@ -337,7 +359,17 @@ def guard_versions(root: Path) -> "tuple[list[str], list[str]]":
 #:
 #: Root-level, not under docs/: these are the entry points a reader meets
 #: before any documentation index.
-ENTRY_DOCUMENTS = ("AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "README.md")
+#: `docs/README.md` is here for the other half of the same arbitration: it is
+#: the index `guard_index` fills, so it is the document most likely to be
+#: pointed at an untracked file by someone obeying that guard. Leaving it out
+#: is what let the original conflict exist at all.
+ENTRY_DOCUMENTS = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "README.md",
+    "docs/README.md",
+)
 
 #: A relative markdown link, minus anchors, mail and network schemes.
 ENTRY_LINK_RE = re.compile(r"\[[^\]]*\]\((?!https?://|mailto:|#)([^)#\s]+)")
