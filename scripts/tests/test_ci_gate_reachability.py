@@ -167,6 +167,42 @@ def script_mentions_in_job(workflow_text: str, job: str, script: str) -> "list[s
     return [line.strip() for line in block.split("\n") if script in line]
 
 
+def inline_step_blocks(workflow_text: str, job: str, steps: "list[str]") -> "dict[str, str]":
+    """The live YAML of each named step of ``job``, keyed by step name.
+
+    A guard need not be a script: pr-governance.yml writes Git Flow, branch
+    freshness and the AI-attribution check as steps. They were real guards that
+    the registry could not even name, because every wiring test looked for a
+    `run:` line mentioning a path under scripts/. Missing steps are simply
+    absent from the mapping, which is what makes their removal detectable.
+    """
+    block = strip_comments(job_block(workflow_text, job))
+    found = {}
+    for step in steps:
+        start = block.find(f"- name: {step}\n")
+        if start == -1:
+            continue
+        rest = block[start:]
+        following = re.search(r"^      - name: ", rest[1:], re.MULTILINE)
+        found[step] = rest if following is None else rest[: 1 + following.start()]
+    return found
+
+
+def step_attributes(step_block: str) -> str:
+    """A step's own YAML keys, without the shell body of its `run:`.
+
+    Where a step can be disarmed. Scanning the whole block instead would read
+    the shell too, and `ident=$(git log … | grep -iE … || true)` is a `grep`
+    that found nothing, not a guard that gave up — DISARM_TOKENS applied to the
+    body flagged it, which is a false positive on a line doing its job.
+    """
+    return "\n".join(
+        line
+        for line in step_block.split("\n")
+        if re.match(r"^ {8}[A-Za-z][\w-]*:", line)
+    )
+
+
 def trigger_block(text: str, trigger: str) -> str:
     """The `on:` sub-block of one trigger, up to the next trigger or top key."""
     on_match = re.search(r"^on:$", strip_comments(text), re.MULTILINE)
@@ -322,6 +358,20 @@ class RealWorkflowTests(unittest.TestCase):
                     "jobs instead, never the workflow.",
                 )
 
+    def test_ci_still_runs_when_a_draft_becomes_ready(self) -> None:
+        # pr-governance.yml declared `ready_for_review` before it was folded
+        # into ci.yml. The default type set is [opened, synchronize, reopened],
+        # so folding without spelling the types out here would have narrowed
+        # that guard's reach without a single line saying so — exactly the
+        # class of silent coverage loss this campaign exists to close.
+        block = trigger_block(CI_WORKFLOW.read_text(encoding="utf-8"), "pull_request")
+        self.assertIn(
+            "ready_for_review",
+            block,
+            "ci.yml's pull_request types must keep `ready_for_review`: it is not "
+            "in the default set, and pr-governance now runs only from here.",
+        )
+
 
 class BlockingBehaviourTests(unittest.TestCase):
     """Presence is not blocking, and only blocking blocks.
@@ -475,6 +525,20 @@ class GuardRegistryShapeTests(unittest.TestCase):
                     "a `warn` guard must declare its exit_condition",
                 )
 
+    def test_an_inline_guard_names_the_steps_that_are_the_guard(self) -> None:
+        # `inline_steps: []` would satisfy the wiring test vacuously — an entry
+        # claiming a guard while pointing at nothing.
+        for entry in self.guards:
+            if "inline_steps" not in entry:
+                continue
+            with self.subTest(script=entry["script"]):
+                self.assertIsInstance(entry["inline_steps"], list)
+                self.assertTrue(
+                    entry["inline_steps"],
+                    "an inline guard must name at least one step, else it "
+                    "declares a guard the wiring test cannot read",
+                )
+
     def test_no_guard_is_declared_twice(self) -> None:
         scripts = [entry["script"] for entry in self.guards]
         duplicates = sorted({s for s in scripts if scripts.count(s) > 1})
@@ -533,6 +597,19 @@ class GuardWiringTests(unittest.TestCase):
     def test_every_guard_is_invoked_in_the_job_the_registry_names(self) -> None:
         for entry in self.guards:
             with self.subTest(script=entry["script"]):
+                steps = entry.get("inline_steps")
+                if steps:
+                    present = inline_step_blocks(
+                        self._workflow_text(entry), entry["job"], steps
+                    )
+                    self.assertEqual(
+                        sorted(present),
+                        sorted(steps),
+                        f"{entry['workflow']} job `{entry['job']}` no longer has "
+                        f"step(s) {sorted(set(steps) - set(present))} — the check "
+                        "was removed or renamed, or the registry entry is stale.",
+                    )
+                    continue
                 mentions = script_mentions_in_job(
                     self._workflow_text(entry), entry["job"], entry["script"]
                 )
@@ -583,7 +660,16 @@ class GuardWiringTests(unittest.TestCase):
             if entry["mode"] != "strict":
                 continue
             text = self._workflow_text(entry)
-            for line in script_mentions_in_job(text, entry["job"], entry["script"]):
+            steps = entry.get("inline_steps")
+            invocations = (
+                [
+                    step_attributes(block)
+                    for block in inline_step_blocks(text, entry["job"], steps).values()
+                ]
+                if steps
+                else script_mentions_in_job(text, entry["job"], entry["script"])
+            )
+            for line in invocations:
                 for token in DISARM_TOKENS:
                     with self.subTest(script=entry["script"], token=token):
                         self.assertNotIn(
@@ -693,6 +779,65 @@ class GuardRegistryDisarmTests(unittest.TestCase):
             if "--mode warn" in candidate
         ]
         self.assertTrue(disarmed, "the disarm must be visible on the invocation line")
+
+    def _inline_entry(self) -> dict:
+        for entry in self.registry["guards"]:
+            if entry.get("inline_steps"):
+                return entry
+        raise AssertionError("no inline guard in the registry to mutate")
+
+    def test_deleting_an_inline_step_from_its_workflow_is_detected(self) -> None:
+        entry = self._inline_entry()
+        text = (REPO_ROOT / entry["workflow"]).read_text(encoding="utf-8")
+        steps = entry["inline_steps"]
+        self.assertEqual(
+            sorted(inline_step_blocks(text, entry["job"], steps)),
+            sorted(steps),
+            "fixture precondition: every declared step is there today",
+        )
+        victim = steps[-1]
+        broken = text.replace(f"- name: {victim}\n", "- name: Something else\n")
+        self.assertNotIn(
+            victim,
+            inline_step_blocks(broken, entry["job"], steps),
+            "renaming a declared step away must leave the wiring test nothing to find",
+        )
+
+    def test_continue_on_error_on_an_inline_step_is_detected(self) -> None:
+        # The inline equivalent of `--mode warn`: the step still runs, still
+        # exits 1, and the job stays green.
+        entry = self._inline_entry()
+        text = (REPO_ROOT / entry["workflow"]).read_text(encoding="utf-8")
+        victim = entry["inline_steps"][-1]
+        today = [
+            step_attributes(block)
+            for block in inline_step_blocks(
+                text, entry["job"], entry["inline_steps"]
+            ).values()
+        ]
+        self.assertEqual(
+            [token for attrs in today for token in DISARM_TOKENS if token in attrs],
+            [],
+            "fixture precondition: no declared step is disarmed today",
+        )
+        broken = text.replace(
+            f"- name: {victim}\n", f"- name: {victim}\n        continue-on-error: true\n"
+        )
+        attributes = step_attributes(
+            inline_step_blocks(broken, entry["job"], [victim])[victim]
+        )
+        self.assertTrue(
+            any(token in attributes for token in DISARM_TOKENS),
+            "a disarmed inline step must be visible among the step's own YAML keys",
+        )
+
+    def test_dropping_ready_for_review_from_ci_is_detected(self) -> None:
+        text = CI_WORKFLOW.read_text(encoding="utf-8")
+        broken = text.replace(
+            "    types: [opened, synchronize, reopened, ready_for_review]\n", "", 1
+        )
+        self.assertIn("ready_for_review", trigger_block(text, "pull_request"))
+        self.assertNotIn("ready_for_review", trigger_block(broken, "pull_request"))
 
     def test_moving_a_required_guard_to_an_unrequired_job_is_detected(self) -> None:
         # The subtler disarm: the guard still runs, still strict, still in
