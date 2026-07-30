@@ -189,9 +189,12 @@ def test_save_and_load_working_context_round_trips(mem):
     assert isinstance(wid, int)
 
     loaded = mem.load_working_context("veles", "session-1")
-    assert loaded["goal"] == "ship the release"
-    assert loaded["pending_actions"] == ["run smoke tests"]
-    assert loaded["active_constraints"][0]["text"] == "never restart during rebalance"
+    assert loaded["found"] is True
+    assert loaded["other_sessions"] == []
+    working_back = loaded["working"]
+    assert working_back["goal"] == "ship the release"
+    assert working_back["pending_actions"] == ["run smoke tests"]
+    assert working_back["active_constraints"][0]["text"] == "never restart during rebalance"
 
 
 def test_save_working_context_is_an_idempotent_upsert(mem):
@@ -205,11 +208,40 @@ def test_save_working_context_is_an_idempotent_upsert(mem):
     id2 = mem.save_working_context("veles", "session-2", second)
     assert id1 == id2
     loaded = mem.load_working_context("veles", "session-2")
-    assert loaded["goal"] == "second goal"
+    assert loaded["working"]["goal"] == "second goal"
 
 
-def test_load_working_context_returns_none_when_absent(mem):
-    assert mem.load_working_context("veles", "no-such-session") is None
+def test_load_working_context_reports_found_false_when_absent(mem):
+    loaded = mem.load_working_context("veles", "no-such-session")
+    assert loaded["found"] is False
+    assert loaded["working"] is None
+    assert loaded["other_sessions"] == []
+
+
+def test_load_working_context_surfaces_the_sibling_sessions_a_typo_missed(mem):
+    """A miss and a TYPO are indistinguishable without ``other_sessions``.
+
+    That is the whole reason the bare ``WorkingContext | None`` return was
+    replaced: told only "nothing saved", a caller starts fresh on top of work
+    sitting right there under a neighbouring session id.
+    """
+    mem.save_working_context("veles", "task-1234", {"goal": "the real session"})
+    typo = mem.load_working_context("veles", "task-1235")
+    assert typo["found"] is False
+    assert typo["working"] is None
+    assert typo["other_sessions"] == ["task-1234"]
+
+
+def test_load_working_context_lists_other_sessions_on_a_hit_too(mem):
+    """Populated on a HIT as well: a typo landing on another REAL session
+    returns ``found=True``, the case a caller can least detect on its own.
+    The requested session is never echoed back."""
+    mem.save_working_context("veles", "session-a", {"goal": "a"})
+    mem.save_working_context("veles", "session-b", {"goal": "b"})
+    loaded = mem.load_working_context("veles", "session-a")
+    assert loaded["found"] is True
+    assert loaded["working"]["goal"] == "a"
+    assert loaded["other_sessions"] == ["session-b"]
 
 
 def test_list_working_contexts_lists_saved_sessions_most_recent_first(mem):

@@ -193,12 +193,18 @@ Compression keeps one prompt small; `save_working_context` /
 `load_working_context` keep the *session itself* resumable:
 
 - **At the START of a session**, call `load_working_context` with the
-  project and a stable session id (e.g. the conversation/task id). If it
-  returns a non-null `working`, a prior session left off here: adopt its
-  `goal`, re-assert `active_constraints`, trust `verified_facts` (re-fetch
-  `exact_evidence` handles with `retrieve_context_source` when you need the
-  bytes), and continue from `pending_actions` instead of re-deriving
-  everything. A `null` means a fresh start, not an error.
+  project and a stable session id (e.g. the conversation/task id). It returns
+  `{found, working, other_sessions}`. When `found` is true, a prior session
+  left off here: adopt `working.goal`, re-assert `active_constraints`, trust
+  `verified_facts` (re-fetch `exact_evidence` handles with
+  `retrieve_context_source` when you need the bytes), and continue from
+  `pending_actions` instead of re-deriving everything. `found: false` (with
+  `working: null`) is not an error — but do not call it a fresh start until
+  you have read `other_sessions`: a similarly-named session listed there
+  means the id was a typo and the work is sitting right next to where you
+  looked. `other_sessions` is filled in on a HIT too, so if one of them
+  looks more like the session you meant, you may have just resumed the
+  WRONG one.
 - **At the END of a session** (or whenever the state changes meaningfully),
   call `save_working_context` with the distilled state: `goal`,
   `active_constraints`, `verified_facts` (with sources), `open_hypotheses`,

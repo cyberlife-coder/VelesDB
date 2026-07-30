@@ -9,6 +9,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-30
+
+### Changed
+
+- **BREAKING — `load_working_context` returns the same three-field envelope on
+  every surface.** The MCP tool has served `{found, working, other_sessions}`
+  since V2a-1. The three bindings — Node `loadWorkingContext`, Python
+  `load_working_context`, WASM `loadWorkingContext` — and the TypeScript SDK
+  returned only the working context, or `null`/`None`. They now return the
+  whole envelope.
+
+  **Migration**: read `.working` (JS/Rust) or `["working"]` (Python) where you
+  used the returned value directly. A `null`/`None` check becomes a `found`
+  check.
+
+  Why this is worth a breaking change rather than a new method: the bare form
+  gave one answer to two different questions. "Nothing was ever saved here"
+  and "you typed `task-1235`, and `task-1234` is right there" arrived
+  identical, so an agent resuming a session silently started over on top of
+  work that existed. `other_sessions` names the near-misses, and it is filled
+  in on a **hit** as well — a typo that lands on another real session returns
+  `found: true`, which is the case a caller can least detect on its own.
+
+  The drift was pre-existing, not introduced here: the bindings, the declared
+  type stubs, the guides, the READMEs, the LangGraph tool docstring rendered
+  to a model, the three agent-hook scripts injected into a model's context,
+  and the ready-made `AGENTS.md` block in `integrations/agent-hooks/codex/`
+  all announced `WorkingContext | null`. Every one found is corrected — that
+  `AGENTS.md` block last, because the first sweep listed only files naming the
+  tool and missed prose describing its RESULT.
+
+  A count is not a guard, so two of those surfaces are now swept mechanically:
+  `integrations/agent-hooks/test/hooks.test.sh` fails on any `.sh` or `.md`
+  under that tree that still tells a model to expect a null result, and
+  asserts the three envelope field names inside each injected context. It
+  previously asserted only that the tool's NAME appeared — which the stale
+  wording satisfied exactly as well as the correct one.
+
+### Added
+
+- **`MemoryService::resume_working_context(project, session)`** — composes
+  `load_working_context` + `list_working_contexts` and owns the three policy
+  rules in one place: list on a hit too, never re-emit the requested session,
+  and treat an unreadable index as fatal on a MISS but survivable on a HIT.
+  Every surface calls it; nothing recomposes the envelope.
+
+  That third rule matters because reading the index is new work on this path
+  for the three bindings, which previously only read the session's own fact.
+  Propagating its failure unconditionally would have made a corrupt project
+  index deny resumption for **every** session of that project, including the
+  many that read back perfectly — a fault in an auxiliary hint costing the
+  answer the caller actually asked for. On a hit the hint therefore degrades
+  to an empty list; the corruption stays reachable through
+  `list_working_contexts`, published on every surface. On a **miss** it stays
+  fatal: there, `other_sessions: []` is the positive claim "nothing else was
+  ever saved here", and an agent told that starts over on top of live work.
+- **`LoadedWorkingContext`** in `velesdb_memory::context`, re-exported from
+  `context.rs`. The envelope type used to be `pub(super)` inside the
+  `mcp` module — a Cargo feature the bindings do not enable — so it could not
+  be relayed at all.
+- **Shape parity is now guarded, not just method-name parity.**
+  `tests/binding_parity_bdd.rs` reads each tool's `output_schema` ROOT KEYS
+  off the LIVE server and requires every binding to relay them — by naming the
+  server's own output type, by naming the field, or by declaring the drop in
+  the new `SHAPE_DIVERGENCES` table (twin of `EXEMPTIONS`, with the same
+  staleness check). The old guard compared method NAMES only, which is why
+  this defect lived: the method was there, under the right name, and nothing
+  looked at what it returned. The guard's limit is written in the file's
+  header — it is a text search over source, so it proves DECLARATION, never
+  MARSHALLING.
+
+  It found three further divergences on its first run, declared as known gaps
+  (six entries, since two of them span more than one binding): all three
+  bindings drop `entity.relations_in` (added server-side by #1681), the Node
+  binding's `CompiledContextJs` drops `compile_context.warnings`, and both the
+  Node and Python bindings drop `remember_extracted.skipped_over_cap`. None is
+  a deliberate unwrap — each one really does lose the field.
+
+  For `load_working_context` the text search is **not** accepted as proof.
+  Every one of the three bindings satisfied it through prose alone — two
+  doc comments and a `ts_return_type` string — on the one tool whose silent
+  shape drift is the reason the guard exists; each of those bindings carried
+  such a comment throughout the months it was broken, so a text search would
+  have been green the entire time. `envelope_tools_are_relayed_by_type_never_
+  by_prose_alone` now requires the strong route for it: each binding binds the
+  relayed value as `let loaded: LoadedWorkingContext = …`, which the compiler
+  enforces and prose cannot fake.
+
+- **Shape-drift detection across package boundaries.** Presence checks
+  (`ensureCapability` in the TS SDK, `hasattr` in the LangGraph toolkit) prove
+  a method EXISTS; they cannot see that an older resolved build returns the
+  pre-envelope shape. Both dependency floors admit exactly such builds, so the
+  skew is reachable by an ordinary install. Each surface now inspects the
+  returned value and fails loudly — a `ConnectionError` naming the cause in
+  the SDK, an `{"error": …}` tool payload in LangGraph — instead of casting
+  the bare form into the new type, where `found` reads as `undefined`/`None`,
+  is falsy, and sends the agent back to a fresh start on top of live work.
+
+
 ### Fixed
 
 - **`explain_compilation` refused the `fragment_id` it had just emitted.**

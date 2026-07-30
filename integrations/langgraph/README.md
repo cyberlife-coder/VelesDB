@@ -108,6 +108,21 @@ empty for auto-dating until you upgrade. `forget` works on 3.12.0 too, but
 returns `None` instead of a `True`/`False` existed-or-not signal. The floor
 will be bumped again once a `velesdb` release past 3.12.0 ships.
 
+**A second failure mode, which no version floor can express.**
+`load_working_context` returns `{found, working, other_sessions}` — the
+envelope this toolkit's docstring describes to the model. Wheels published
+*before* that change have the method and return the **bare** working context
+(or `None`), so the presence check above passes and the description becomes
+false: the model reads `found` as `None`, treats a resumable session as a
+fresh start, and restarts on top of live work. The tool therefore inspects
+what it got back and reports the drift as a normal error payload:
+
+```json
+{"error": "load_working_context returned the pre-envelope shape: the installed velesdb has the method but predates the {found, working, other_sessions} envelope this package documents. ..."}
+```
+
+Presence is not shape, and `hasattr` only ever proved presence.
+
 `list_working_contexts` (browse saved sessions for a project) is not exposed
 here: it exists on the WASM and MCP surfaces but not yet on the `velesdb`
 Python binding (`MemoryService`), and this package only ever calls the

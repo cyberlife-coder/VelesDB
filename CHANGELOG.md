@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (`velesdb-memory` 0.12.0, and the Node/Python/WASM bindings +
+  TypeScript SDK that relay it)**: `load_working_context` /
+  `loadWorkingContext` now returns the `{found, working, other_sessions}`
+  envelope the MCP server has served since V2a-1, instead of the bare working
+  context (or `null`/`None`). Read `.working` / `["working"]` for the previous
+  value; replace a null check with a `found` check. The bare form could not
+  express the difference between "nothing was ever saved" and "a typo in
+  `session` missed a session that exists", so an agent resuming a run silently
+  started over on top of work sitting right next to where it looked. Full
+  rationale and the parity guard that now enforces return SHAPE (not just
+  method names) in `crates/velesdb-memory/CHANGELOG.md`.
+
+  **Read this before cutting the next workspace release.** Only the two 0.x
+  packages are bumped here (`velesdb-memory`, `@wiscale/velesdb-memory-node`,
+  both to 0.12.0). The break also reaches three packages on the **4.x** line —
+  `velesdb` (PyPI), `@wiscale/velesdb-sdk` and `@wiscale/velesdb-wasm`, all
+  currently 4.2.0 and all published — because they relay the same return
+  value. So:
+
+  1. **The next workspace release must be a MAJOR (5.0.0), not a minor.** The
+     `0.12.0` in the heading above is the memory crate's version and says
+     nothing about the 4.x line; taking it as the whole story would ship a
+     breaking change as 4.3.0, and every consumer pinned `>=4.2,<5` would take
+     it silently. `check-version-sync.py` cannot catch this — it compares
+     version strings to each other and has no notion of a breaking change.
+  2. **Raise `sdks/typescript/package.json`'s `@wiscale/velesdb-wasm` floor to
+     that release.** It sits at `^4.1.0`, which resolves to builds that still
+     return the bare form; it cannot be raised in advance because the version
+     that carries the envelope does not exist yet. Until then the SDK detects
+     the skew at runtime and rejects with an actionable `ConnectionError`
+     rather than handing back an object whose `found` is `undefined` — but
+     that guard is a net, not a substitute for the floor.
+  3. **Raise `integrations/langgraph/pyproject.toml`'s `velesdb>=3.12.0`
+     floor** for the same reason and with the same constraint; the toolkit
+     likewise reports the drift at call time in the meantime.
+
 ## [4.1.0] — 2026-07-26
 
 Mineure : 38 commits depuis la 4.0.0. Le verrou de gouvernance CORE-2 couvre

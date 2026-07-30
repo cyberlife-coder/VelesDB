@@ -143,8 +143,13 @@ session, not just when asked:
 - **At the start of a session**, before doing anything else, call
   `load_working_context(project="<project>", session="<session>")` to
   resume the prior distilled state (goal, decisions, verified facts,
-  pending actions). A null result means nothing was saved yet — proceed
-  normally.
+  pending actions). It returns `{found, working, other_sessions}` — read
+  `working` for the state. If `found` is false, nothing was saved under
+  that EXACT project + session, but check `other_sessions` before starting
+  fresh: a similarly-named session listed there means the session id was a
+  typo, not a new task. `other_sessions` is filled in on a hit too, so if
+  one of them looks more like the session you meant, you may have just
+  resumed the wrong work.
 - **Whenever the working state changes meaningfully**, and always
   **before ending a session**, call
   `save_working_context(project="<project>", session="<session>")` with

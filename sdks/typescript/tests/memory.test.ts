@@ -98,10 +98,17 @@ class MockWasmMemoryService {
     content: 'the original fragment text',
   }));
   saveWorkingContext = vi.fn(() => '42');
+  // The mock returns the THREE-field envelope the wasm binding now serves,
+  // not the bare working context — a mock that keeps the old shape would let
+  // this suite stay green over a binding it no longer describes.
   loadWorkingContext = vi.fn(() => ({
-    goal: 'ship the canary fix',
-    decisions: [{ fragment_id: '18446744073709551615', rule_id: 'media.atomic' }],
-    pending_actions: ['roll back if error rate spikes'],
+    found: true,
+    working: {
+      goal: 'ship the canary fix',
+      decisions: [{ fragment_id: '18446744073709551615', rule_id: 'media.atomic' }],
+      pending_actions: ['roll back if error rate spikes'],
+    },
+    other_sessions: ['session-b'],
   }));
   listWorkingContexts = vi.fn(() => ({
     sessions: [{ session: 'session-a', saved_at: 1731000000 }],
@@ -467,18 +474,65 @@ describe('MemoryService', () => {
       expect(id).toBe('42');
     });
 
-    it('loadWorkingContext() returns the mocked working context, decimal ids intact', async () => {
+    it('loadWorkingContext() returns the envelope, decimal ids intact under working', async () => {
       const loaded = await memory.loadWorkingContext('veles', 'session-a');
       expect(lastMockInstance!.loadWorkingContext).toHaveBeenCalledWith('veles', 'session-a');
-      expect(loaded?.goal).toBe('ship the canary fix');
-      const decisions = loaded?.decisions as Array<{ fragment_id: string }>;
+      expect(loaded.found).toBe(true);
+      expect(loaded.working?.goal).toBe('ship the canary fix');
+      const decisions = loaded.working?.decisions as Array<{ fragment_id: string }>;
       expect(decisions[0].fragment_id).toBe('18446744073709551615');
     });
 
-    it('loadWorkingContext() returns null when nothing was saved', async () => {
-      lastMockInstance!.loadWorkingContext.mockReturnValueOnce(null);
+    it('loadWorkingContext() surfaces other_sessions on a hit, so a typo is detectable', async () => {
+      // Populated on a HIT too: a typo landing on another REAL session
+      // returns found:true, the case a caller can least detect on its own.
+      const loaded = await memory.loadWorkingContext('veles', 'session-a');
+      expect(loaded.other_sessions).toEqual(['session-b']);
+    });
+
+    it('loadWorkingContext() reports found:false with a null working when nothing was saved', async () => {
+      lastMockInstance!.loadWorkingContext.mockReturnValueOnce({
+        found: false,
+        working: null,
+        other_sessions: ['task-1234'],
+      });
       const loaded = await memory.loadWorkingContext('veles', 'never-saved-session');
-      expect(loaded).toBeNull();
+      expect(loaded.found).toBe(false);
+      expect(loaded.working).toBeNull();
+      // A miss and a TYPO are indistinguishable without this — the whole
+      // reason the bare `WorkingContext | null` return was replaced.
+      expect(loaded.other_sessions).toEqual(['task-1234']);
+    });
+
+    // The SDK's dependency floor on `@wiscale/velesdb-wasm` admits published
+    // builds that predate the envelope. On those, `loadWorkingContext` EXISTS
+    // — so `ensureCapability`, which only checks presence, passes — and hands
+    // back the bare working context. A blind `as LoadedWorkingContext` cast
+    // would then give the caller `found: undefined`, falsy, and the agent
+    // starts over on top of work that was sitting right there: precisely the
+    // silent loss this envelope exists to prevent, reintroduced by a version
+    // skew rather than by a missing field. Presence is not shape.
+    it('loadWorkingContext() rejects when the resolved wasm build returns the BARE working context', async () => {
+      const bare = { goal: 'ship the canary fix', decisions: [] };
+      lastMockInstance!.loadWorkingContext.mockReturnValueOnce(bare);
+      await expect(memory.loadWorkingContext('veles', 'session-a')).rejects.toThrow(
+        ConnectionError
+      );
+      // The message must name the CAUSE — a wasm build older than this SDK —
+      // because the caller's only remedy is to upgrade that dependency.
+      lastMockInstance!.loadWorkingContext.mockReturnValueOnce(bare);
+      await expect(memory.loadWorkingContext('veles', 'session-a')).rejects.toThrow(
+        /predates the .*envelope/
+      );
+    });
+
+    it('loadWorkingContext() rejects when the resolved wasm build returns bare null', async () => {
+      // The pre-envelope MISS: `null`, which a cast turns into a crash on the
+      // caller's first property read instead of an actionable error.
+      lastMockInstance!.loadWorkingContext.mockReturnValueOnce(null);
+      await expect(memory.loadWorkingContext('veles', 'never-saved-session')).rejects.toThrow(
+        ConnectionError
+      );
     });
 
     it('listWorkingContexts() delegates the project and returns the sessions', async () => {
