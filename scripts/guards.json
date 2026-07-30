@@ -26,7 +26,9 @@
     "blind_spot": "known limit of the guard's reach, with the issue tracking it",
     "required_via": "when the guard lives outside ci.yml: the ci.yml job that calls its workflow, and through which it becomes required",
     "must_refuse": "executable refusal vectors, run by scripts/tests/test_guard_refusal_vectors.py: each materialises `files` under a temp dir, invokes the guard with `argv` (`{root}` is substituted), and demands exit 1 — then demands exit 0 on `accepts`, the same tree repaired. Exit 1 and not merely non-zero: a guard that crashes exits 2, and a crash is not a refusal.",
-    "refusal_untested": "mandatory when a strict, required guard declares no `must_refuse`: why no vector exists yet, and the issue tracking it. A guard nobody has seen refuse is the defect of this campaign; this field keeps that visible instead of absent."
+    "refusal_untested": "mandatory when a strict, required guard declares no `must_refuse`: why no vector exists yet, and the issue tracking it. A guard nobody has seen refuse is the defect of this campaign; this field keeps that visible instead of absent.",
+    "repo": "optional inside a must_refuse vector: turns the materialised tree into a git work tree and tracks the paths it names, keyed like the trees (`files`, `accepts`). For guards that ask git rather than the filesystem — is this path tracked, who authored this commit — where a plain temp directory erases the very distinction they exist to make.",
+    "subguards": "for a guard exposing a `--guard <name>` selector: every selector that must actually be invoked in `job`. Without it, a script cited once for another selector satisfies the wiring test, and a sub-guard can be dropped from CI while the registry keeps announcing it — measured, that disarm stayed green."
   },
   "_json_not_yaml": [
     "gate-contracts.yml runs these suites with a bare actions/setup-python and",
@@ -223,7 +225,10 @@
         "issue": 1695,
         "summary": "POLICED_TOOLS holds 1 of the 20 published tools, and SURFACE_GLOBS misses the Python and WASM binding sources. Attribution rests on alias proximity within 500 characters."
       },
-      "refusal_untested": "Takes --root, so a vector is possible; not written yet because the tree it needs is a whole tools capture plus a policed surface. Tracked by #1715."
+      "refusal_untested": "Takes --root, so a vector is possible; not written yet because the tree it needs is a whole tools capture plus a policed surface. Tracked by #1715.",
+      "subguards": [
+        "return-shape"
+      ]
     },
     {
       "script": "scripts/check-doc-contract.sh",
@@ -243,19 +248,54 @@
     },
     {
       "script": "scripts/check-doc-freshness.py",
-      "purpose": "Doc stamps, index and version references stay fresh (three guards).",
+      "purpose": "Doc stamps, index, version references and the tracked-contract rule stay honest (four guards).",
       "workflow": ".github/workflows/doc-contract.yml",
       "job": "freshness",
       "required": true,
-      "mode": "warn",
-      "exit_condition": "The `stamp` and `versions` guards already run with --mode strict; only `index` runs with --mode warn (doc-contract.yml:94). Either bring `index` to strict or record here why it cannot be. The whole job is unrequired until the fold of #1698.",
+      "mode": "strict",
       "self_test": "scripts.tests.test_check_doc_freshness",
       "self_test_required": true,
       "blind_spot": {
         "issue": null,
-        "summary": "None known. Folded into CI Success's needs and chain via the `doc-contract` caller job, so a failure now blocks the merge."
+        "summary": "None known. The `index` guard ran in warn mode over eleven root docs a comment called unreachable; measured, all eleven are linked and strict exits 0, so the comment had kept a working guard disarmed. All four guards are strict from here. `tracked` reads git, not the filesystem: a path that exists and a path a clone receives are not the same path."
       },
-      "required_via": "doc-contract"
+      "required_via": "doc-contract",
+      "must_refuse": [
+        {
+          "vector": "an entry document designating a file that exists but is NOT tracked — the shape that hid CLAUDE.md, AGENTS.md and CORE_PREMIUM_SPLIT.md behind .git/info/exclude",
+          "files": {
+            "AGENTS.md": "# Entry\n\nRead the [boundary contract](docs/BOUNDARY.md) before any change.\n",
+            "docs/BOUNDARY.md": "# Boundary\n\nvelesdb-core must never reference any premium crate.\n"
+          },
+          "accepts": {
+            "AGENTS.md": "# Entry\n\nRead the [boundary contract](docs/BOUNDARY.md) before any change.\n",
+            "docs/BOUNDARY.md": "# Boundary\n\nvelesdb-core must never reference any premium crate.\n"
+          },
+          "repo": {
+            "files": [
+              "AGENTS.md"
+            ],
+            "accepts": [
+              "AGENTS.md",
+              "docs/BOUNDARY.md"
+            ]
+          },
+          "argv": [
+            "--guard",
+            "tracked",
+            "--mode",
+            "strict",
+            "--root",
+            "{root}"
+          ]
+        }
+      ],
+      "subguards": [
+        "stamp",
+        "index",
+        "versions",
+        "tracked"
+      ]
     },
     {
       "script": "scripts/check-promise-contract.py",

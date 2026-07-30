@@ -324,10 +324,114 @@ def guard_versions(root: Path) -> "tuple[list[str], list[str]]":
     return failures, info
 
 
+#: Documents an agent or a contributor is told to read FIRST. Everything they
+#: designate as normative has to be reachable from a clone, or the instruction
+#: is unfollowable.
+#:
+#: Root-level, not under docs/: these are the entry points a reader meets
+#: before any documentation index.
+ENTRY_DOCUMENTS = ("AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "README.md")
+
+#: A relative markdown link, minus anchors, mail and network schemes.
+ENTRY_LINK_RE = re.compile(r"\[[^\]]*\]\((?!https?://|mailto:|#)([^)#\s]+)")
+
+
+def tracked_files(root: Path) -> "set[str] | None":
+    """Paths git tracks under `root`, or None when `root` is not a work tree.
+
+    None is not an empty set. An empty set would make the guard refuse every
+    link at once, on a tree where the question has no meaning — which is how a
+    guard learns to be ignored.
+    """
+    import subprocess
+
+    try:
+        listing = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            ["git", "-C", str(root), "ls-files"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return {line for line in listing.splitlines() if line}
+
+
+def _is_tracked(relative: str, resolved: Path, tracked: "set[str]") -> bool:
+    """Whether a link target is reachable from a clone.
+
+    A DIRECTORY is satisfied by any tracked file under it: `git ls-files`
+    lists files, never directories, so comparing a directory path against that
+    set reports every `[the memory crate](crates/velesdb-memory)` as missing.
+    Seven of them, on the first run of this guard — a false positive, not a
+    finding, and exactly the shape that teaches a reader to ignore a guard.
+    """
+    if resolved.is_dir():
+        prefix = relative.rstrip("/") + "/"
+        return any(path.startswith(prefix) for path in tracked)
+    return relative in tracked
+
+
+def guard_tracked(root: Path) -> "tuple[list[str], list[str]]":
+    """Every document an entry document designates is itself tracked.
+
+    The defect this closes, measured on this repository: `CLAUDE.md`,
+    `AGENTS.md` and `docs/CORE_PREMIUM_SPLIT.md` — which calls itself the
+    "single source of truth" for the open-core boundary — were excluded, two
+    of them through `.git/info/exclude`, a file that is not versioned and that
+    no reviewer can see. The rule "velesdb-core must never reference any
+    premium crate" appeared ZERO times in tracked markdown, while twelve
+    tracked files (the commit-msg hook, the guard registry, a workflow) sent
+    the reader to a document no clone has.
+
+    A contract only its author can read is not a contract.
+    """
+    failures: "list[str]" = []
+    info: "list[str]" = []
+    tracked = tracked_files(root)
+    if tracked is None:
+        info.append("  (skipped -- not a git work tree)")
+        return failures, info
+
+    present = [name for name in ENTRY_DOCUMENTS if (root / name).is_file()]
+    if not present:
+        failures.append(
+            "no entry document found at the root: this guard would sweep "
+            f"nothing. Expected one of {', '.join(ENTRY_DOCUMENTS)}."
+        )
+        return failures, info
+
+    for name in present:
+        if name not in tracked:
+            failures.append(
+                f"{name}: an entry document that is NOT tracked. Every reader "
+                "is told to start here, and no clone has it."
+            )
+            continue
+        text = (root / name).read_text(encoding="utf-8", errors="replace")
+        targets = sorted({match.group(1) for match in ENTRY_LINK_RE.finditer(text)})
+        for target in targets:
+            resolved = (root / name).parent / target
+            try:
+                relative = resolved.resolve().relative_to(root.resolve()).as_posix()
+            except ValueError:
+                continue  # Escapes the tree; another repository's business.
+            if not resolved.exists():
+                failures.append(f"{name}: links `{target}`, which does not exist.")
+            elif not _is_tracked(relative, resolved, tracked):
+                failures.append(
+                    f"{name}: links `{target}`, which exists but is NOT tracked "
+                    "— absent from every clone, every CI run and every worktree."
+                )
+        info.append(f"  ok  {name} ({len(targets)} relative link(s))")
+    return failures, info
+
+
 GUARDS = {
     "stamp": (guard_stamp, "every doc at the root of docs/ carries a `Last updated: YYYY-MM-DD` stamp"),
     "index": (guard_index, "every doc at the root of docs/ is linked from docs/README.md"),
     "versions": (guard_versions, "no hardcoded doc version contradicts the Cargo manifests"),
+    "tracked": (guard_tracked, "every document an entry document designates is itself tracked"),
 }
 
 
@@ -384,7 +488,13 @@ def main(argv: "list[str] | None" = None) -> int:
     names = sorted(GUARDS) if "all" in selected else sorted(set(selected))
 
     root = Path(args.root).resolve()
-    if not (root / DOCS_DIRNAME / DOCS_INDEX).is_file():
+    # The docs index is a precondition of the `index` and `stamp` guards, which
+    # read it; it is NOT one of `tracked`, which reads the entry documents at
+    # the root. Enforcing it globally made `--guard tracked --root <tree>`
+    # answer 2 on a tree that had no reason to carry a docs index — and 2 is a
+    # guard that COULD NOT RUN, not a refusal. A refusal vector must be able to
+    # exercise one guard without staging the preconditions of the others.
+    if {"index", "stamp"} & set(names) and not (root / DOCS_DIRNAME / DOCS_INDEX).is_file():
         print(f"ERROR: {root}/{DOCS_DIRNAME}/{DOCS_INDEX} not found", file=sys.stderr)
         return 2
     try:

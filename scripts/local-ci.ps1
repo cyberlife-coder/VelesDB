@@ -55,7 +55,12 @@ try {
 # ============================================================================
 Write-Step "Check 2: Linting (clippy)"
 try {
-    cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic 2>&1 | Out-Host
+    # Mot pour mot ci.yml:217-219. La forme --all-features sans exclusion
+    # divergeait : elle rend rc=101 sur velesdb-node, que la CI lint
+    # separement (ci.yml:226) avec ses propres regles.
+    cargo clippy --workspace --all-targets --features persistence,gpu,update-check `
+        --exclude velesdb-python --exclude velesdb-node `
+        -- -D warnings -D clippy::pedantic 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Clippy failed" }
     Write-Success "Clippy OK"
 } catch {
@@ -262,7 +267,10 @@ if ($Quick) {
     if (-not $SkipTests) {
         Write-Step "Check 6: Tests"
         try {
-            cargo test --all-features --workspace 2>&1 | Out-Host
+            # --test-threads=1 : plusieurs suites de ce depot partagent un
+            # store sous flock et se declarent mutuellement en echec en
+            # parallele. La CI le passe, cette copie ne le passait pas.
+            cargo test --all-features --workspace -- --test-threads=1 2>&1 | Out-Host
             if ($LASTEXITCODE -ne 0) { throw "Tests failed" }
             Write-Success "Tests OK"
         } catch {
