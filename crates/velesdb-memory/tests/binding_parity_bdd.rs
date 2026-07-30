@@ -577,6 +577,91 @@ fn method_regions(binding: &Binding) -> BTreeMap<String, String> {
     regions
 }
 
+/// `region` with the declared method's PARAMETER LIST cut out — the window
+/// route 2 must read.
+///
+/// A region runs from the end of the previous method to this one's closing
+/// brace, so it carries the signature, and the signature carries the
+/// parameter NAMES. Route 2 is a text search: an output field called `handle`
+/// was therefore satisfied by an INPUT parameter called `handle`, which
+/// proves the binding accepts that name, not that it relays it (#1704). The
+/// return type sits outside the parentheses and is deliberately kept.
+///
+/// Falls back to the whole region when the declaration cannot be located —
+/// a parser that silently narrows its own window would be the same class of
+/// defect one level up.
+fn output_window(region: &str, method: &str) -> String {
+    cut_parameter_list(&cut_signature_attribute(region), method)
+}
+
+/// `region` without the parameter echo of a `#[pyo3(signature = (...))]`
+/// attribute.
+///
+/// The same defect by another road: the attribute sits BEFORE the `fn` line,
+/// so cutting the parentheses of the declaration alone leaves every parameter
+/// name spelled a second time, and route 2 reads it just as happily.
+fn cut_signature_attribute(region: &str) -> String {
+    let mut text = region.to_owned();
+    while let Some(at) = text.find("signature = (") {
+        let open = at + "signature = ".len();
+        let Some(close) = matching_paren(&text[open..]).map(|offset| open + offset) else {
+            break;
+        };
+        text.replace_range(open..=close, "");
+    }
+    text
+}
+
+/// `region` with the parameter list of `method`'s declaration cut out.
+fn cut_parameter_list(region: &str, method: &str) -> String {
+    let mut at = 0usize;
+    let mut declaration = None;
+    for line in region.split_inclusive('\n') {
+        // The same parser that built the regions, not a text search: a doc
+        // comment mentioning `fn recall(` must not be taken for the header.
+        if method_name(line.trim()).as_deref() == Some(method) {
+            declaration = Some(at);
+            break;
+        }
+        at += line.len();
+    }
+    let Some(header) = declaration else {
+        return region.to_owned();
+    };
+    let Some(open) = region[header..].find('(').map(|offset| header + offset) else {
+        return region.to_owned();
+    };
+    let Some(close) = matching_paren(&region[open..]).map(|offset| open + offset) else {
+        return region.to_owned();
+    };
+    let mut window = region[..open].to_owned();
+    window.push_str(&region[close + 1..]);
+    window
+}
+
+/// The offset, within `text`, of the `)` closing the `(` that `text` opens
+/// with — `None` when it never closes.
+///
+/// Depth-counted, not `find(')')`: a parameter typed `Wrapped<(u8, u8)>`
+/// closes an inner pair first, and cutting there would leave half a
+/// parameter list in the window.
+fn matching_paren(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (offset, character) in text.char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// The ROOT property names of `tool`'s advertised `output_schema`, empty
 /// when the tool advertises none.
 fn output_root_fields(tool: &rmcp::model::Tool) -> BTreeSet<String> {
@@ -836,7 +921,12 @@ async fn every_output_field_is_relayed_or_divergence_is_declared_in_every_bindin
             {
                 continue; // Relays the server's own type: shape-complete by construction.
             }
-            let declared = region_with_named_structs(region, &structs);
+            // Route 2 reads the region MINUS the parameter list: an input
+            // named like an output field is not a relay of it (#1704).
+            // Route 1 above keeps the whole region — it matches a type name,
+            // and a type named only in the parameters is an input type.
+            let window = output_window(region, name);
+            let declared = region_with_named_structs(&window, &structs);
             for field in output_root_fields(tool) {
                 if names_identifier(&declared, &field)
                     || shape_divergence_for(binding.name, name, &field).is_some()
@@ -984,7 +1074,88 @@ fn stale_shape_reason(tools: &[rmcp::model::Tool], divergence: &ShapeDivergence)
             server_type.unwrap_or_default()
         ));
     }
-    let declared = region_with_named_structs(region, &binding_structs(binding));
+    // The SAME window route 2 reads. Without it the two halves disagree: a
+    // divergence would be called stale because a PARAMETER names the field,
+    // while the guard that reads the window still demands the relay (#1704).
+    let window = output_window(region, divergence.tool);
+    let declared = region_with_named_structs(&window, &binding_structs(binding));
     names_identifier(&declared, divergence.field)
         .then(|| format!("the binding now names `{}`", divergence.field))
+}
+
+// ===========================================================================
+// The window of #1704, pinned on synthetic text.
+//
+// Measured on develop and again after the cut: NO binding is green today on
+// the strength of a parameter name alone, so the bindings cannot demonstrate
+// this refusal. That is a reason to pin it here, not a reason to skip it —
+// the channel is open until something closes it, and a guard nobody has seen
+// refuse is the defect this whole campaign is about.
+// ===========================================================================
+
+/// A region shaped like the real ones: doc comment, `#[pyo3(signature)]`
+/// echo, declaration with a nested-paren parameter type, body, closing brace.
+const SYNTHETIC_REGION: &str = "\
+    /// Fetch the source back.
+    #[pyo3(signature = (handle, media = None))]
+    fn retrieve_context_source(&self, py: Python<'_>, handle: &str, media: Option<(u8, u8)>) -> PyResult<Py<PyAny>> {
+        let source: ContextSource = fetch();
+        Ok(source)
+    }
+";
+
+#[test]
+fn the_raw_region_is_satisfied_by_a_parameter_name() {
+    // The false green of #1704, stated before it is fixed: `handle` is a root
+    // field of `retrieve_context_source`'s output_schema, and the region
+    // names it three times without relaying it once.
+    assert!(
+        names_identifier(SYNTHETIC_REGION, "handle"),
+        "fixture precondition: the raw region names `handle`",
+    );
+}
+
+#[test]
+fn the_output_window_refuses_a_field_named_only_by_an_input() {
+    let window = output_window(SYNTHETIC_REGION, "retrieve_context_source");
+    assert!(
+        !names_identifier(&window, "handle"),
+        "an input named `handle` still satisfies the window:\n{window}",
+    );
+    assert!(
+        !names_identifier(&window, "media"),
+        "the `signature` attribute still spells the parameters:\n{window}",
+    );
+}
+
+#[test]
+fn the_output_window_keeps_everything_that_describes_the_return() {
+    let window = output_window(SYNTHETIC_REGION, "retrieve_context_source");
+    for kept in ["PyResult", "ContextSource", "Fetch"] {
+        assert!(
+            names_identifier(&window, kept),
+            "the cut swallowed `{kept}`, which describes the return:\n{window}",
+        );
+    }
+}
+
+#[test]
+fn the_cut_falls_back_to_the_whole_region_when_the_declaration_is_absent() {
+    // A cut that narrowed silently on a parse miss would be the defect one
+    // level up: the guard would stop seeing relays it used to see. Only the
+    // parameter-list cut can miss — the `signature` echo is cut either way,
+    // since finding it does not depend on finding the declaration.
+    let missed = cut_parameter_list(SYNTHETIC_REGION, "a_method_that_is_not_here");
+    assert_eq!(missed, SYNTHETIC_REGION);
+}
+
+#[test]
+fn the_cut_stops_at_the_paren_that_closes_the_parameter_list() {
+    // `Option<(u8, u8)>` closes an inner pair first; a `find(')')` would cut
+    // there and leave `-> PyResult<…>` amputated of everything before it.
+    let window = output_window(SYNTHETIC_REGION, "retrieve_context_source");
+    assert!(
+        window.contains("fn retrieve_context_source -> PyResult<Py<PyAny>> {"),
+        "the declaration did not survive the cut intact:\n{window}",
+    );
 }
