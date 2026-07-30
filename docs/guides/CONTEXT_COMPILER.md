@@ -353,8 +353,9 @@ caption, often empty for a bare screenshot.
   — never the caption, so two different images always get two distinct,
   independently resolving handles even when both captions are blank, and
   byte-identical images share one handle. With `policy.store_sources` (the
-  default), `retrieve_context_source(handle)` returns `{content, media?}` with
-  `media` present whenever the original fragment carried one. Media is embedded
+  default), `retrieve_context_source(handle)` returns `{content, handle,
+  media}` — `handle` echoing back the one resolved, `media` non-null whenever
+  the original fragment carried one. Media is embedded
   with a deterministic placeholder vector derived from its bytes' hash, never
   through the text embedder: resolution is by content-addressed hash only,
   never by vector search. The bare `ContextCompiler` (no memory attached) still

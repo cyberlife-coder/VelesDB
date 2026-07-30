@@ -37,7 +37,7 @@ compiled["insights"]   # {"tokens_in", "tokens_out", "tokens_saved", ...} -- loc
 
 # What did not fit stays recoverable, byte for byte:
 handle = compiled["sources"][0]["handle"]        # "ctx://source/18021940868160883968"
-mem.retrieve_context_source(handle)              # -> {"content": str, "media"?: ...}
+mem.retrieve_context_source(handle)              # -> {"content": str, "handle": str, "media": ... | None}
 
 # Aggregate savings across every compile_context call (optionally per project):
 mem.context_savings(project="veles")             # {"events", "tokens_saved", ...}

@@ -8,10 +8,23 @@ on:
       - 'docs/**'
       - 'Cargo.toml'
       - 'crates/velesdb-memory/Cargo.toml'
+      # The MCP tools themselves. Editing context_tools.rs alone triggered
+      # NOTHING here, which is exactly how a return contract changes while
+      # every page describing it stays behind.
+      - 'crates/velesdb-memory/src/**'
+      - 'crates/velesdb-node/README.md'
+      - 'crates/velesdb-node/skills/**'
       - 'crates/velesdb-server/src/**'
+      # Surfaces that republish the same contract to the same model, and
+      # were outside this filter entirely.
+      - 'sdks/**'
+      - 'integrations/**'
+      - 'skills/**'
       - 'scripts/check-doc-contract.sh'
       - 'scripts/check-doc-freshness.py'
+      - 'scripts/check-mcp-doc-contract.py'
       - 'scripts/tests/test_check_doc_freshness.py'
+      - 'scripts/tests/test_check_mcp_doc_contract.py'
       - '.github/workflows/doc-contract.yml'
   pull_request:
     branches: [main, develop]
@@ -20,10 +33,23 @@ on:
       - 'docs/**'
       - 'Cargo.toml'
       - 'crates/velesdb-memory/Cargo.toml'
+      # The MCP tools themselves. Editing context_tools.rs alone triggered
+      # NOTHING here, which is exactly how a return contract changes while
+      # every page describing it stays behind.
+      - 'crates/velesdb-memory/src/**'
+      - 'crates/velesdb-node/README.md'
+      - 'crates/velesdb-node/skills/**'
       - 'crates/velesdb-server/src/**'
+      # Surfaces that republish the same contract to the same model, and
+      # were outside this filter entirely.
+      - 'sdks/**'
+      - 'integrations/**'
+      - 'skills/**'
       - 'scripts/check-doc-contract.sh'
       - 'scripts/check-doc-freshness.py'
+      - 'scripts/check-mcp-doc-contract.py'
       - 'scripts/tests/test_check_doc_freshness.py'
+      - 'scripts/tests/test_check_mcp_doc_contract.py'
       - '.github/workflows/doc-contract.yml'
 
 permissions:

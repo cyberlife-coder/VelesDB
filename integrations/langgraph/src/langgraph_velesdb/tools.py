@@ -200,8 +200,9 @@ class _MemoryToolkit:
         Call this at the very start of a new run, before doing anything else,
         to resume a prior session instead of restarting from scratch.
 
-        Returns ``{"found": bool, "working": dict | None, "other_sessions":
-        [str]}``. ``found: false`` (with ``working: null``) means nothing was
+        ``load_working_context`` returns ``{"found": bool, "working": dict |
+        None, "other_sessions": [str]}``. ``found: false`` (with
+        ``working: null``) means nothing was
         ever saved under that EXACT project + session — not an error, but do
         not conclude "fresh start" yet: check ``other_sessions``. If it lists
         a similarly-named session, ``session`` was a typo and the work you
