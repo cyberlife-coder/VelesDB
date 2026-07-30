@@ -45,10 +45,37 @@
       "self_test": "scripts.tests.test_check_prod_unwraps",
       "self_test_required": true,
       "blind_spot": {
-        "issue": 1700,
-        "summary": "scan_file() stops at the first #[cfg(test)] marker, and does so BEFORE block-comment tracking: 33914 lines are never read, and a marker quoted inside /* */ blinds the whole file."
+        "issue": null,
+        "summary": "None known. #1700 is closed: a #[cfg(test)] gate now skips ITS item by following braces instead of stopping the file, and block-comment tracking runs first so a marker quoted in /* */ no longer blinds it. Measured after the fix: the 33 914 formerly unread lines contain zero production unwrap/expect."
       },
-      "refusal_untested": "No CLI surface: the scan is rooted at REPO_ROOT derived from the script path, so no tree can be handed to it as a process. Its self-test exercises the internal functions, which leaves everything between main() and the exit code unproven. Tracked by #1715."
+      "must_refuse": [
+        {
+          "vector": "a production unwrap AFTER a #[cfg(test)] module — the 33 914-line blindness of #1700",
+          "files": {
+            "crates/velesdb-core/src/lib.rs": "#[cfg(test)]\nmod tests {\n    fn t() { x.unwrap(); }\n}\npub fn prod() { y.unwrap(); }\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/src/lib.rs": "#[cfg(test)]\nmod tests {\n    fn t() { x.unwrap(); }\n}\npub fn prod() { y.unwrap_or_default(); }\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "a marker merely QUOTED in a /* */ comment must not blind the file",
+          "files": {
+            "crates/velesdb-core/src/lib.rs": "/*\n * #[cfg(test)]\n */\npub fn prod() { y.unwrap(); }\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/src/lib.rs": "/*\n * #[cfg(test)]\n */\npub fn prod() { y.unwrap_or_default(); }\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
     },
     {
       "script": "scripts/verify_unsafe_safety_template.py",
@@ -158,13 +185,30 @@
       "job": "lint",
       "required": true,
       "mode": "strict",
-      "self_test": null,
-      "self_test_required": false,
+      "self_test": "scripts.tests.test_check_perf_claims",
+      "self_test_required": true,
       "blind_spot": {
-        "issue": 1701,
-        "summary": "Cannot go red as wired: the grouping label contains the measured value, so two claims never share a group and the only exit-1 path is unreachable. The Criterion front is disabled by --no-criterion and never feeds the exit code."
+        "issue": null,
+        "summary": "Can reach exit 1 again (#1701 closed): the grouping key no longer contains its own value, so two documents claiming different numbers for one benchmark collide and are compared. Measured limit, not a defect: this repository's corpus yields ZERO comparable groups, so a green run here says nothing about the guard — which is exactly why its refusal is proven below on a corpus of its own. The Criterion front stays out of the exit code by design."
       },
-      "refusal_untested": "No CLI surface AND, per #1701, structurally unable to reach its own exit 1: a vector would be refused by the guard for the wrong reason, or not at all. Fix #1701 first, then #1715."
+      "must_refuse": [
+        {
+          "vector": "two documents claiming 38.6 us and 120.0 us for the same benchmark",
+          "files": {
+            "README.md": "## HNSW Search\n\n| Benchmark | Latency |\n|---|---|\n| **HNSW search k=10** | 38.6 µs |\n",
+            "docs/BENCHMARKS.md": "## HNSW Search\n\n| Benchmark | Latency |\n|---|---|\n| **HNSW search k=10** | 120.0 µs |\n"
+          },
+          "accepts": {
+            "README.md": "## HNSW Search\n\n| Benchmark | Latency |\n|---|---|\n| **HNSW search k=10** | 38.6 µs |\n",
+            "docs/BENCHMARKS.md": "## HNSW Search\n\n| Benchmark | Latency |\n|---|---|\n| **HNSW search k=10** | 39.0 µs |\n"
+          },
+          "argv": [
+            "--no-criterion",
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
     },
     {
       "script": "scripts/check-mcp-doc-contract.py",
@@ -282,8 +326,7 @@
       "inline_steps": [
         "Block archive branches as PR source",
         "Enforce Git Flow branch rules",
-        "Verify branch includes latest base branch",
-        "Reject AI-attributed commits"
+        "Verify branch includes latest base branch"
       ],
       "purpose": "Git Flow branch rules, freshness of the branch against its base, and no AI-attributed commit.",
       "workflow": ".github/workflows/pr-governance.yml",
@@ -293,11 +336,27 @@
       "self_test": null,
       "self_test_required": false,
       "blind_spot": {
-        "issue": 1699,
-        "summary": "No self-test materialises a PR these steps must reject, so none of the three is known to refuse. The attribution step greps identities for `claude|anthropic` only, so Codex, Copilot and other assistant identities pass; #1699 replaces it with a two-compartment allowlist (dependabot[bot] has 149 legitimate commits and must keep passing)."
+        "issue": null,
+        "summary": "No self-test materialises a PR these steps must reject: Git Flow and branch freshness read a pull_request payload no local tree reproduces. The attribution check is no longer inline — it moved to scripts/check-ai-attribution.py, which is tested (#1699 closed)."
       },
       "required_via": "pr-governance",
-      "refusal_untested": "An inline guard: its steps run in a GitHub runner against a pull_request payload, which no local tree reproduces. #1699 replaces the attribution step and brings its own vectors, including the positive control (dependabot[bot] must keep passing)."
+      "refusal_untested": "Git Flow and branch freshness read a pull_request payload that no local tree reproduces, so neither can be handed a vector. Tracked by #1715."
+    },
+    {
+      "script": "scripts/check-ai-attribution.py",
+      "purpose": "No commit is authored by, or attributed to, an AI assistant (CLAUDE.md #5).",
+      "workflow": ".github/workflows/pr-governance.yml",
+      "job": "governance",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_ai_attribution",
+      "self_test_required": true,
+      "refusal_untested": "Its vectors need a git repository with authored commits, which `must_refuse`'s file-tree shape cannot materialise. scripts/tests/test_check_ai_attribution.py pins 21 cases in-process instead, refusals AND the admissions that decide (dependabot[bot], a person named Claudette, prose describing a trailer). Giving the harness a `repo` vector shape is tracked by #1715.",
+      "blind_spot": {
+        "issue": null,
+        "summary": "Reads the RAW identity (%an <%ae>, never %aN): a .mailmap line in this repository already maps anthropic to the maintainer, and the mapped name would launder the case being looked for. Admission is by whole identity, so an impostor of an admitted bot does not inherit it."
+      },
+      "required_via": "pr-governance"
     }
   ],
   "unwired": [

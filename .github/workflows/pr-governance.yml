@@ -134,14 +134,10 @@ jobs:
         run: |
           # Commits introduced by this PR must be authored as the human
           # maintainer, with no AI/assistant identity or attribution trailers.
+          # The rule lives in ONE place, tested: the two inline copies knew
+          # `claude|anthropic` and nothing else, so Codex, Copilot, Cursor
+          # and unlisted bots walked through (#1699). Infrastructure
+          # automation is admitted by name there, never by a wildcard —
+          # dependabot[bot] has 149 legitimate commits here.
           git fetch origin "${BASE_REF}" --depth=200
-          range="origin/${BASE_REF}..HEAD"
-          ident=$(git log "$range" --format='%H %an <%ae> | %cn <%ce>' | grep -iE 'claude|anthropic' || true)
-          trailers=$(git log "$range" --format='%B' | grep -iE 'co-authored-by:.*(claude|anthropic)|generated with.*claude|claude\.ai/code|🤖' || true)
-          if [ -n "$ident" ] || [ -n "$trailers" ]; then
-            echo "::error::AI attribution is not allowed. Re-author commits as the maintainer and strip any Co-Authored-By / Generated-with / 🤖 trailers."
-            [ -n "$ident" ] && { echo "Offending author/committer identity:"; echo "$ident"; }
-            [ -n "$trailers" ] && { echo "Offending message lines:"; echo "$trailers"; }
-            exit 1
-          fi
-          echo "OK: no AI attribution in PR commits."
+          python3 scripts/check-ai-attribution.py "origin/${BASE_REF}..HEAD"

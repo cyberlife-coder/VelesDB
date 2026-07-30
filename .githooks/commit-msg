@@ -20,8 +20,42 @@ NC='\033[0m'
 
 msg_file="$1"
 
-# 1. Identité de l'auteur (nom <email> timestamp)
+# 1. Identité de l'auteur (nom <email> timestamp).
+# La liste des identités refusées et des automates admis vit dans
+# scripts/check-ai-attribution.py — un seul endroit, testé. Ce hook ne la
+# recopie plus : les deux copies inline ne connaissaient que « claude » et
+# « anthropic », et Codex, Copilot, Cursor et les bots passaient (#1699).
 author="$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)"
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
+guard="$repo_root/scripts/check-ai-attribution.py"
+if [ -f "$guard" ] && command -v python3 >/dev/null 2>&1; then
+    if ! python3 - "$guard" "$author" "$msg_file" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("caa", sys.argv[1])
+caa = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(caa)
+identity = sys.argv[2].rsplit(">", 1)[0] + ">" if ">" in sys.argv[2] else sys.argv[2]
+reason = caa.identity_is_refused(identity)
+if reason:
+    print(f"auteur : {reason} -> {identity}", file=sys.stderr)
+    sys.exit(1)
+with open(sys.argv[3], encoding="utf-8") as handle:
+    reason = caa.message_is_refused(handle.read())
+if reason:
+    print(f"message : {reason}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+    then
+        echo -e "${RED}❌ Commit refusé : attribution IA (règle CLAUDE.md #5).${NC}" >&2
+        echo    "   Corrige l'auteur :" >&2
+        echo    "     git config user.name  'cyberlife-coder'" >&2
+        echo    "     git config user.email '174732281+cyberlife-coder@users.noreply.github.com'" >&2
+        exit 1
+    fi
+    exit 0
+fi
+
+# Repli si python3 manque : l'ancienne paire de motifs, mieux que rien.
 if printf '%s' "$author" | grep -qiE 'anthropic|claude'; then
     echo -e "${RED}❌ Commit refusé : auteur attribué à une IA → ${author}${NC}" >&2
     echo -e "${RED}   Règle CLAUDE.md #5 (aucune attribution IA). Corrige l'auteur :${NC}" >&2

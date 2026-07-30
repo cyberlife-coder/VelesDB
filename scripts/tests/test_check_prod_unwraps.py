@@ -111,6 +111,82 @@ class TestScanFileStopsAtCompositeTestGate(unittest.TestCase):
         self._tmpdir.cleanup()
 
 
+class TestGatedBlockIsSkippedNotTheRestOfTheFile(unittest.TestCase):
+    """The two causes of #1700, each pinned on the shape that exposed it.
+
+    The old scanner did `break` on the first ``#[cfg(test)]`` marker: 33 914
+    production lines across 51 files were never read, and the break sat
+    BEFORE comment tracking, so a marker merely QUOTED in a ``/* */`` comment
+    blinded the whole file. Measured after the fix: those lines contain zero
+    production unwrap/expect — the blindness was real, the pile was not.
+    """
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def _hits(self, content: str) -> "list[tuple[int, str]]":
+        tmp = Path(self._tmpdir.name) / "case.rs"
+        tmp.write_text(content, encoding="utf-8")
+        return cpu.scan_file(tmp)
+
+    def test_production_code_after_a_gated_mod_is_read(self) -> None:
+        # Cause 1, the 33 914-line blindness itself.
+        hits = self._hits(
+            "fn a() {}\n"
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            "    fn t() { x.unwrap(); }\n"
+            "}\n"
+            "pub fn b() { y.unwrap(); }\n"
+        )
+        self.assertEqual([line for line, _ in hits], [6])
+
+    def test_a_marker_quoted_in_a_block_comment_does_not_blind_the_file(self) -> None:
+        # Cause 2: the break ran before comment tracking.
+        hits = self._hits("/*\n * #[cfg(test)]\n */\npub fn b() { y.unwrap(); }\n")
+        self.assertEqual([line for line, _ in hits], [4])
+
+    def test_unwrap_inside_the_gated_mod_stays_invisible(self) -> None:
+        # The positive control: the fix must not start flagging test code.
+        hits = self._hits("#[cfg(test)]\nmod tests {\n    fn t() { x.unwrap(); }\n}\n")
+        self.assertEqual(hits, [])
+
+    def test_an_attribute_stack_between_gate_and_item_is_followed(self) -> None:
+        hits = self._hits(
+            "#[cfg(test)]\n#[allow(dead_code)]\nmod tests {\n"
+            "    fn t() { x.unwrap(); }\n}\npub fn b() { y.unwrap(); }\n"
+        )
+        self.assertEqual([line for line, _ in hits], [6])
+
+    def test_a_gated_mod_declaration_without_body_swallows_nothing(self) -> None:
+        hits = self._hits("#[cfg(test)]\nmod tests;\npub fn b() { y.unwrap(); }\n")
+        self.assertEqual([line for line, _ in hits], [3])
+
+    def test_braces_inside_strings_do_not_derail_the_depth(self) -> None:
+        hits = self._hits(
+            "#[cfg(test)]\nmod tests {\n"
+            '    const S: &str = "{{{";\n'
+            "    fn t() { x.unwrap(); }\n}\npub fn b() { y.unwrap(); }\n"
+        )
+        self.assertEqual([line for line, _ in hits], [6])
+
+    def test_production_between_two_gated_mods_is_read(self) -> None:
+        # A one-line gated item opens AND closes its braces on the same line:
+        # net depth 0, but the item is over — the first fix draft kept
+        # waiting and swallowed everything after it.
+        hits = self._hits(
+            "#[cfg(test)]\nmod t1 { fn a() { x.unwrap(); } }\n"
+            "pub fn mid() { y.unwrap(); }\n"
+            "#[cfg(test)]\nmod t2 { fn b() { z.unwrap(); } }\n"
+        )
+        self.assertEqual([line for line, _ in hits], [3])
+
+
 class TestScanDirsCoverage(unittest.TestCase):
     def test_bindings_are_in_scan_set(self) -> None:
         scanned = {str(p) for p in cpu.SCAN_DIRS}
