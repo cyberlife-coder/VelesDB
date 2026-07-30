@@ -539,6 +539,35 @@ class GuardRegistryShapeTests(unittest.TestCase):
                     "declares a guard the wiring test cannot read",
                 )
 
+    def test_a_strict_required_guard_has_been_seen_refusing_or_says_why_not(self) -> None:
+        # The question under this whole registry. `guards.json` answered
+        # "which guards exist" (#1702), and the fold of #1698 made them block a
+        # merge; neither answers "can this one refuse at all?".
+        # `check-perf-claims.py` satisfies both today and is structurally
+        # unable to reach its own `exit 1` (#1701). So a strict, required guard
+        # either carries executable vectors — run by
+        # scripts/tests/test_guard_refusal_vectors.py — or states in writing
+        # why it has none yet, naming the issue that will give it one.
+        for entry in self.guards:
+            if entry["mode"] != "strict" or not entry["required"]:
+                continue
+            with self.subTest(script=entry["script"]):
+                if entry.get("must_refuse"):
+                    continue
+                reason = (entry.get("refusal_untested") or "").strip()
+                self.assertTrue(
+                    reason,
+                    "declares no `must_refuse` vector and no `refusal_untested` "
+                    "reason: nothing has ever seen this guard refuse, and nothing "
+                    "says why not",
+                )
+                self.assertRegex(
+                    reason,
+                    r"#\d+",
+                    "an untested refusal must name the issue that will close it, "
+                    "else the gap has no owner",
+                )
+
     def test_no_guard_is_declared_twice(self) -> None:
         scripts = [entry["script"] for entry in self.guards]
         duplicates = sorted({s for s in scripts if scripts.count(s) > 1})
