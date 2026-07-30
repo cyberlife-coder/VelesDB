@@ -26,12 +26,27 @@ below before being pointed at the real file.
 
 from __future__ import annotations
 
+import json
 import re
 import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
+GUARDS_REGISTRY = REPO_ROOT / "scripts" / "guards.json"
+
+# Which scripts count as guards for the exhaustiveness check below. Deliberately
+# a name pattern over the filesystem and not a list: a list is the thing that
+# was missing, so bootstrapping the fix from another list would reproduce the
+# defect one level up. Adding `scripts/check-foo.py` makes this suite red until
+# the registry accounts for it.
+GUARD_SCRIPT_RE = re.compile(r"^scripts/[^/]*(?:check|verify|gate)[^/]*\.(?:py|sh)$")
+
+# Tokens that turn a finding into a report. Only ever applied to entries whose
+# declared mode is `strict` — a `warn` entry declares its own leniency and
+# carries an `exit_condition` instead.
+DISARM_TOKENS = ("--mode warn", "|| true", "continue-on-error")
 
 # Jobs allowed in `needs` without being read by the chain, and why. Keep this
 # as short as it is: each entry is a job whose failure cannot block a merge.
@@ -118,6 +133,49 @@ def job_block(text: str, job: str) -> str:
 def guard_invocations(text: str, script: str) -> "list[str]":
     """Every `run:` line invoking ``script``."""
     return [line for line in GUARD_INVOCATION_RE.findall(text) if script in line]
+
+
+def load_guard_registry() -> dict:
+    """``scripts/guards.json`` — the declared set of repository guards."""
+    return json.loads(GUARDS_REGISTRY.read_text(encoding="utf-8"))
+
+
+def discovered_guard_scripts() -> "set[str]":
+    """Guard-shaped scripts present on disk, repo-relative.
+
+    The filesystem, not the registry, answers "what guards exist". That is what
+    makes the registry unable to shrink quietly: dropping an entry leaves the
+    script on disk, and the script still has to be accounted for.
+    """
+    found = set()
+    for path in sorted((REPO_ROOT / "scripts").glob("*")):
+        rel = f"scripts/{path.name}"
+        if path.is_file() and GUARD_SCRIPT_RE.match(rel):
+            found.add(rel)
+    return found
+
+
+def script_mentions_in_job(workflow_text: str, job: str, script: str) -> "list[str]":
+    """Live (comment-stripped) lines of ``job`` that name ``script``.
+
+    Not GUARD_INVOCATION_RE: that one only matches a single-line
+    ``run: python3 scripts/…``, and two required guards are invoked from inside
+    a multi-line ``run: |`` block (ci.yml:271 and :296). A guard whose
+    invocation shape the regex cannot see would have looked unwired.
+    """
+    block = strip_comments(job_block(workflow_text, job))
+    return [line.strip() for line in block.split("\n") if script in line]
+
+
+def required_ci_jobs() -> "set[str]":
+    """ci.yml jobs whose failure actually fails the one required check.
+
+    Both halves are needed: `needs` makes the job run, the chain makes its
+    failure count. CHAIN_EXEMPT jobs are in `needs` and deliberately unread,
+    so they are NOT required.
+    """
+    text = CI_WORKFLOW.read_text(encoding="utf-8")
+    return set(ci_success_needs(text)) & chain_checked_jobs(text)
 
 
 SYNTHETIC = """\
@@ -334,6 +392,237 @@ class DisarmTests(unittest.TestCase):
         broken = self.text.replace(invocation, invocation + " --mode warn")
         self.assertIn(
             "--mode warn", guard_invocations(broken, "check-mcp-doc-contract.py")[0]
+        )
+
+
+class GuardRegistryShapeTests(unittest.TestCase):
+    """``scripts/guards.json`` is well-formed and exhaustive.
+
+    Everything below this class checks that each declared guard is wired. This
+    class checks the prior question the repository had no answer to: *which
+    guards are we even claiming to have?* The set used to live only in the YAML
+    text and in GitHub's branch-protection settings, so removing an invocation
+    was invisible (#1702) and a guard nobody required was decorative (#1698).
+    """
+
+    def setUp(self) -> None:
+        self.registry = load_guard_registry()
+        self.guards = self.registry["guards"]
+        self.unwired = self.registry["unwired"]
+
+    def test_every_guard_declares_the_fields_the_wiring_tests_read(self) -> None:
+        required_fields = ("script", "purpose", "workflow", "job", "required", "mode")
+        for entry in self.guards:
+            with self.subTest(script=entry.get("script")):
+                for field in required_fields:
+                    self.assertIn(field, entry, f"missing `{field}`")
+                self.assertIn(entry["mode"], ("strict", "warn"))
+                self.assertIsInstance(entry["required"], bool)
+
+    def test_a_warn_guard_states_what_would_make_it_strict(self) -> None:
+        # A `warn` without a way out is not a guard, it is a log. This is the
+        # rule check-doc-contract.sh needed and did not have: its own header
+        # prescribed the flip to strict, and nothing carried the obligation.
+        for entry in self.guards:
+            if entry["mode"] != "warn":
+                continue
+            with self.subTest(script=entry["script"]):
+                self.assertTrue(
+                    (entry.get("exit_condition") or "").strip(),
+                    "a `warn` guard must declare its exit_condition",
+                )
+
+    def test_no_guard_is_declared_twice(self) -> None:
+        scripts = [entry["script"] for entry in self.guards]
+        duplicates = sorted({s for s in scripts if scripts.count(s) > 1})
+        self.assertEqual(duplicates, [], f"duplicate registry entries: {duplicates}")
+
+    def test_every_declared_script_exists_on_disk(self) -> None:
+        for entry in self.guards + self.unwired:
+            with self.subTest(script=entry["script"]):
+                self.assertTrue(
+                    (REPO_ROOT / entry["script"]).is_file(),
+                    "registry names a script that is not there",
+                )
+
+    def test_every_guard_shaped_script_on_disk_is_accounted_for(self) -> None:
+        # The anti-shrink half. A registry that only had to agree with itself
+        # could be emptied one entry at a time; this makes the filesystem the
+        # source of truth for the SET, and the registry answerable to it.
+        declared = {entry["script"] for entry in self.guards}
+        declared |= {entry["script"] for entry in self.unwired}
+        unaccounted = sorted(discovered_guard_scripts() - declared)
+        self.assertEqual(
+            unaccounted,
+            [],
+            f"guard-shaped script(s) missing from scripts/guards.json: {unaccounted}. "
+            "Add each one under `guards` with its workflow and job, or under "
+            "`unwired` with a written reason.",
+        )
+
+    def test_an_unwired_guard_states_why(self) -> None:
+        for entry in self.unwired:
+            with self.subTest(script=entry["script"]):
+                self.assertTrue(
+                    (entry.get("reason") or "").strip(),
+                    "an unwired guard must say why it is not wired",
+                )
+
+    def test_at_least_one_guard_is_required(self) -> None:
+        self.assertTrue(
+            [entry for entry in self.guards if entry["required"]],
+            "no guard in the registry is required at merge — the registry gates nothing",
+        )
+
+
+class GuardWiringTests(unittest.TestCase):
+    """Each declared guard is invoked where the registry says it is."""
+
+    def setUp(self) -> None:
+        self.guards = load_guard_registry()["guards"]
+        self.required_jobs = required_ci_jobs()
+
+    def _workflow_text(self, entry: dict) -> str:
+        path = REPO_ROOT / entry["workflow"]
+        self.assertTrue(path.is_file(), f"no such workflow: {entry['workflow']}")
+        return path.read_text(encoding="utf-8")
+
+    def test_every_guard_is_invoked_in_the_job_the_registry_names(self) -> None:
+        for entry in self.guards:
+            with self.subTest(script=entry["script"]):
+                mentions = script_mentions_in_job(
+                    self._workflow_text(entry), entry["job"], entry["script"]
+                )
+                self.assertTrue(
+                    mentions,
+                    f"{entry['workflow']} job `{entry['job']}` never runs "
+                    f"{entry['script']} — the invocation was removed, or the "
+                    "registry entry is stale.",
+                )
+
+    def test_a_required_guard_lives_in_a_job_that_blocks_the_merge(self) -> None:
+        for entry in self.guards:
+            if not entry["required"]:
+                continue
+            with self.subTest(script=entry["script"]):
+                self.assertEqual(
+                    entry["workflow"],
+                    ".github/workflows/ci.yml",
+                    "only ci.yml feeds the single required check (CI Success)",
+                )
+                self.assertIn(
+                    entry["job"],
+                    self.required_jobs,
+                    f"`{entry['job']}` is not both in CI Success's needs and read "
+                    "by its chain, so this guard cannot block a merge",
+                )
+
+    def test_a_strict_guard_is_not_disarmed_at_its_invocation(self) -> None:
+        for entry in self.guards:
+            if entry["mode"] != "strict":
+                continue
+            text = self._workflow_text(entry)
+            for line in script_mentions_in_job(text, entry["job"], entry["script"]):
+                for token in DISARM_TOKENS:
+                    with self.subTest(script=entry["script"], token=token):
+                        self.assertNotIn(
+                            token,
+                            line,
+                            f"strict guard disarmed at its invocation: {line!r}",
+                        )
+
+    def test_the_self_test_declaration_is_true(self) -> None:
+        # Both directions: a `true` that is not backed by a required job
+        # overstates coverage, and a `false` that IS backed understates it and
+        # goes stale the day the wiring improves.
+        ci_text = CI_WORKFLOW.read_text(encoding="utf-8")
+        required_blocks = "\n".join(
+            job_block(ci_text, job) for job in sorted(self.required_jobs)
+        )
+        for entry in self.guards:
+            module = entry.get("self_test")
+            if not module:
+                continue
+            actually_required = module in required_blocks
+            with self.subTest(script=entry["script"], module=module):
+                self.assertEqual(
+                    entry.get("self_test_required"),
+                    actually_required,
+                    f"`self_test_required` for {module} says "
+                    f"{entry.get('self_test_required')}, the workflow says "
+                    f"{actually_required}",
+                )
+
+
+class GuardRegistryDisarmTests(unittest.TestCase):
+    """Every way to quietly widen the hole, replayed — each must be RED.
+
+    Same discipline as DisarmTests above: the registry is worth exactly what it
+    refuses. These mutate in-memory copies, so nothing on disk changes.
+    """
+
+    def setUp(self) -> None:
+        self.registry = load_guard_registry()
+        self.ci_text = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    def _required_entry(self) -> dict:
+        for entry in self.registry["guards"]:
+            if entry["required"] and entry["workflow"] == ".github/workflows/ci.yml":
+                return entry
+        raise AssertionError("no required ci.yml guard to mutate")
+
+    def test_removing_an_invocation_from_ci_yml_is_detected(self) -> None:
+        entry = self._required_entry()
+        before = script_mentions_in_job(self.ci_text, entry["job"], entry["script"])
+        self.assertTrue(before, "fixture precondition: the guard is invoked today")
+        broken = self.ci_text.replace(entry["script"], "scripts/removed-guard.py")
+        self.assertEqual(
+            script_mentions_in_job(broken, entry["job"], entry["script"]),
+            [],
+            "dropping the invocation must leave nothing for the wiring test to find",
+        )
+
+    def test_deleting_a_registry_entry_is_detected_by_the_disk_sweep(self) -> None:
+        entry = self._required_entry()
+        declared = {
+            e["script"] for e in self.registry["guards"] if e["script"] != entry["script"]
+        }
+        declared |= {e["script"] for e in self.registry["unwired"]}
+        self.assertIn(
+            entry["script"],
+            discovered_guard_scripts() - declared,
+            "a deleted entry must resurface as an unaccounted script on disk",
+        )
+
+    def test_an_unregistered_new_guard_script_is_detected(self) -> None:
+        declared = {e["script"] for e in self.registry["guards"]}
+        declared |= {e["script"] for e in self.registry["unwired"]}
+        self.assertNotIn("scripts/check-newcomer.py", declared)
+        self.assertRegex(
+            "scripts/check-newcomer.py",
+            GUARD_SCRIPT_RE,
+            "a check-*.py file must be seen as guard-shaped, else the sweep is blind",
+        )
+
+    def test_warn_mode_on_a_strict_guard_is_detected(self) -> None:
+        entry = self._required_entry()
+        line = script_mentions_in_job(self.ci_text, entry["job"], entry["script"])[0]
+        broken = self.ci_text.replace(line, line + " --mode warn")
+        disarmed = [
+            candidate
+            for candidate in script_mentions_in_job(broken, entry["job"], entry["script"])
+            if "--mode warn" in candidate
+        ]
+        self.assertTrue(disarmed, "the disarm must be visible on the invocation line")
+
+    def test_moving_a_required_guard_to_an_unrequired_job_is_detected(self) -> None:
+        # The subtler disarm: the guard still runs, still strict, still in
+        # ci.yml — just in a job whose result the chain does not read.
+        exempt = sorted(CHAIN_EXEMPT)[0]
+        self.assertNotIn(
+            exempt,
+            required_ci_jobs(),
+            f"`{exempt}` is chain-exempt, so a guard parked there blocks nothing",
         )
 
 

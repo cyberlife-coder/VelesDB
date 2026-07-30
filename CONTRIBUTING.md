@@ -102,8 +102,15 @@ All new/modified code must satisfy these limits (enforced by Codacy and CI):
 | Code duplication | **< 2%** | jscpd |
 | Unsafe blocks | Must have `// SAFETY:` comment | CI (`verify_unsafe_safety_template.py`) |
 | TODO format | Must carry an issue tag: `[EPIC-XXX/US-YYY]`, `(PREFIX-NNN)`, `#123`, or `#issue` | CI (`check-todo-annotations.py`) |
-| `.unwrap()` | Forbidden in production code | Code review |
+| `.unwrap()` | Forbidden in production code | CI (`check_prod_unwraps.py`) |
 | Recall@10 | **>= 0.95** (if search path modified) | CI + local validation |
+
+Every guard script this repository runs is declared in
+[`scripts/guards.json`](scripts/guards.json): which workflow and job invokes it,
+whether its failure blocks a merge, and whether it runs strict or advisory. Adding
+a `scripts/check-*.py` (or `verify-`/`gate-`) without an entry there fails
+`scripts/tests/test_ci_gate_reachability.py` — the registry is checked against the
+workflows *and* against the filesystem, so it cannot quietly shrink.
 
 ### Concurrency Rules
 

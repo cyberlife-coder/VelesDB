@@ -1,0 +1,233 @@
+{
+  "_purpose": [
+    "The declared set of repository guards. Before this file existed, the set was",
+    "implicit in the YAML text of .github/workflows/ and in GitHub's branch",
+    "protection settings, and the two were never confronted: removing a guard's",
+    "`run:` line from ci.yml turned nothing red (issue #1702), and a guard that",
+    "runs in a workflow nobody requires is decorative at merge time (#1698).",
+    "",
+    "scripts/tests/test_ci_gate_reachability.py confronts this file with the",
+    "workflows AND with the filesystem. The filesystem half is what makes the",
+    "registry impossible to shrink silently: every guard-shaped script under",
+    "scripts/ must appear here, either under `guards` or under `unwired` with a",
+    "written reason. Deleting an entry does not remove the obligation — the script",
+    "is still on disk, so the suite demands an accounting for it."
+  ],
+  "_schema": {
+    "script": "repo-relative path, the identity of the guard",
+    "workflow": "the workflow file whose job invokes it",
+    "job": "the job key inside that workflow",
+    "required": "true when a failure of `job` must fail the single required check (CI Success)",
+    "mode": "strict = a finding fails the build; warn = it does not (see exit_condition)",
+    "exit_condition": "mandatory when mode is warn: what has to happen for it to become strict",
+    "self_test": "unittest module that proves the guard refuses; null when none exists",
+    "self_test_required": "true when that module runs inside a required job",
+    "blind_spot": "known limit of the guard's reach, with the issue tracking it"
+  },
+  "_json_not_yaml": [
+    "gate-contracts.yml runs these suites with a bare actions/setup-python and",
+    "installs nothing, so importing PyYAML here would be an ImportError in CI — a",
+    "guard that cannot run. json is stdlib everywhere. Same reasoning that keeps",
+    "the workflow parsers in test_ci_gate_reachability.py regex-based."
+  ],
+
+  "guards": [
+    {
+      "script": "scripts/check_prod_unwraps.py",
+      "purpose": "No .unwrap()/.expect() in production code (QUALITY_BAR Gate 3).",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_prod_unwraps",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": 1700,
+        "summary": "scan_file() stops at the first #[cfg(test)] marker, and does so BEFORE block-comment tracking: 33914 lines are never read, and a marker quoted inside /* */ blinds the whole file."
+      }
+    },
+    {
+      "script": "scripts/verify_unsafe_safety_template.py",
+      "purpose": "Every unsafe block carries a // SAFETY: comment (Gate 4).",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "Runs only on production .rs files changed by the PR, so it never re-reads unsafe blocks that predate it."
+      }
+    },
+    {
+      "script": "scripts/check-todo-annotations.py",
+      "purpose": "TODO/FIXME/HACK follow the // TODO(EPIC-XXX): governance format.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "Diff-scoped to changed velesdb-core production files, like the unsafe guard."
+      }
+    },
+    {
+      "script": "scripts/check-version-sync.py",
+      "purpose": "Version equality across policed manifests (REL-07), at PR time.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_version_sync",
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": null,
+        "summary": "Its self-test runs only via gate-contracts.yml's unittest discover, which is NOT in CI Success's needs — so the proof that this guard refuses does not block a merge. Fixed by the fold of #1698."
+      }
+    },
+    {
+      "script": "scripts/check-feature-claims.py",
+      "purpose": "Documented feature claims match real exports.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_feature_claims",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "Breaks (reports column_store MISSING) if any string literal in velesdb-python/src uses a backslash line-continuation."
+      }
+    },
+    {
+      "script": "scripts/check-perf-claims.py",
+      "purpose": "Performance numbers stay consistent across documents.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": 1701,
+        "summary": "Cannot go red as wired: the grouping label contains the measured value, so two claims never share a group and the only exit-1 path is unreachable. The Criterion front is disabled by --no-criterion and never feeds the exit code."
+      }
+    },
+    {
+      "script": "scripts/check-mcp-doc-contract.py",
+      "purpose": "Documented MCP return shapes match the published outputSchema.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "mcp-doc-contract",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_mcp_doc_contract",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": 1695,
+        "summary": "POLICED_TOOLS holds 1 of the 20 published tools, and SURFACE_GLOBS misses the Python and WASM binding sources. Attribution rests on alias proximity within 500 characters."
+      }
+    },
+    {
+      "script": "scripts/check-doc-contract.sh",
+      "purpose": "Every runtime route of the server is documented in the root README.",
+      "workflow": ".github/workflows/doc-contract.yml",
+      "job": "contract",
+      "required": false,
+      "mode": "warn",
+      "exit_condition": "Document the four routes named in the script header (/collections/{name}/compact, points/raw, stream/enable, vacuum) in README.md, then flip DOC_CONTRACT_MODE's default to strict in the same commit. Tracked by #1707.",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": 1707,
+        "summary": "Measured: exit 0 in the default warn mode with 4 undocumented routes, exit 1 under DOC_CONTRACT_MODE=strict. The guard works; nothing asks it to."
+      }
+    },
+    {
+      "script": "scripts/check-doc-freshness.py",
+      "purpose": "Doc stamps, index and version references stay fresh (three guards).",
+      "workflow": ".github/workflows/doc-contract.yml",
+      "job": "freshness",
+      "required": false,
+      "mode": "warn",
+      "exit_condition": "The `stamp` and `versions` guards already run with --mode strict; only `index` runs with --mode warn (doc-contract.yml:94). Either bring `index` to strict or record here why it cannot be. The whole job is unrequired until the fold of #1698.",
+      "self_test": "scripts.tests.test_check_doc_freshness",
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": 1698,
+        "summary": "Lives in doc-contract.yml, which is not in CI Success's needs: all three guards can be red while the merge button stays green."
+      }
+    },
+    {
+      "script": "scripts/check-promise-contract.py",
+      "purpose": "The promise-contract registry stays valid.",
+      "workflow": ".github/workflows/promise-contract.yml",
+      "job": "contract",
+      "required": false,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_promise_contract",
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": 1698,
+        "summary": "promise-contract.yml is not in CI Success's needs, and its self-test is reachable only from gate-contracts.yml, which is not either."
+      }
+    },
+    {
+      "script": "scripts/check-python.sh",
+      "purpose": "Python integration checks (dangerous hash(), bandit, mypy).",
+      "workflow": ".github/workflows/propagation-guard.yml",
+      "job": "integrations-python",
+      "required": false,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": 1698,
+        "summary": "propagation-guard.yml is not in CI Success's needs."
+      }
+    },
+    {
+      "script": "scripts/check_binary_size.py",
+      "purpose": "Release binaries stay within their size ceilings.",
+      "workflow": ".github/workflows/binary-size.yml",
+      "job": "binary-size",
+      "required": false,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": 1698,
+        "summary": "binary-size.yml is not in CI Success's needs."
+      }
+    },
+    {
+      "script": "scripts/run-production-gates.sh",
+      "purpose": "Meta-runner chaining the production gates.",
+      "workflow": ".github/workflows/production-gates.yml",
+      "job": "gates",
+      "required": false,
+      "mode": "strict",
+      "self_test": null,
+      "self_test_required": false,
+      "blind_spot": {
+        "issue": 1698,
+        "summary": "production-gates.yml is not in CI Success's needs. It re-invokes check-doc-contract.sh, which is warn by default, so part of this chain is advisory too."
+      }
+    }
+  ],
+
+  "unwired": [
+    {
+      "script": "scripts/check-crates-io-versions.sh",
+      "reason": "Release-time only, by design: it checks a version collision on crates.io before publishing (release.yml:345, release-memory.yml:187). There is nothing for it to assert on a pull request.",
+      "issue": null
+    },
+    {
+      "script": "scripts/perf_phase_gate.py",
+      "reason": "Invoked by no workflow. QUALITY_BAR.md:220 and docs/contributing/BENCHMARKING_GUIDE.md:274-289 describe it as if it were active, which is the defect: either wire it or say in both documents that it is a manual tool.",
+      "issue": 1708
+    }
+  ]
+}
