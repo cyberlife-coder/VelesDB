@@ -312,7 +312,11 @@ the fact↔topic graph, so `why` can connect them with no manual `relate`.
 | `text` | string | yes | Raw text. Capped at 1 MiB (`MAX_FACT_BYTES`). |
 | `metadata` | object | no | Applied to every extracted fact. |
 
-Returns `{ ids, ids_str }` in extraction order.
+Returns `{ ids, ids_str, skipped_over_cap }`, the ids in extraction order.
+`skipped_over_cap` counts facts the extractor produced and this tool DROPPED
+for exceeding the 2048-byte embeddable-text cap. It is always present, and it
+is the only way to tell a drop from the model simply extracting fewer facts —
+read it, or you will believe you stored a passage you stored only part of.
 
 **Opt-in.** The server must be built with `--features extract` *and* started
 with `VELESDB_MEMORY_EXTRACTOR` set. Without a backend the tool returns an
