@@ -24,7 +24,9 @@
     "self_test": "unittest module that proves the guard refuses; null when none exists",
     "self_test_required": "true when that module runs inside a required job",
     "blind_spot": "known limit of the guard's reach, with the issue tracking it",
-    "required_via": "when the guard lives outside ci.yml: the ci.yml job that calls its workflow, and through which it becomes required"
+    "required_via": "when the guard lives outside ci.yml: the ci.yml job that calls its workflow, and through which it becomes required",
+    "must_refuse": "executable refusal vectors, run by scripts/tests/test_guard_refusal_vectors.py: each materialises `files` under a temp dir, invokes the guard with `argv` (`{root}` is substituted), and demands exit 1 — then demands exit 0 on `accepts`, the same tree repaired. Exit 1 and not merely non-zero: a guard that crashes exits 2, and a crash is not a refusal.",
+    "refusal_untested": "mandatory when a strict, required guard declares no `must_refuse`: why no vector exists yet, and the issue tracking it. A guard nobody has seen refuse is the defect of this campaign; this field keeps that visible instead of absent."
   },
   "_json_not_yaml": [
     "gate-contracts.yml runs these suites with a bare actions/setup-python and",
@@ -45,7 +47,8 @@
       "blind_spot": {
         "issue": 1700,
         "summary": "scan_file() stops at the first #[cfg(test)] marker, and does so BEFORE block-comment tracking: 33914 lines are never read, and a marker quoted inside /* */ blinds the whole file."
-      }
+      },
+      "refusal_untested": "No CLI surface: the scan is rooted at REPO_ROOT derived from the script path, so no tree can be handed to it as a process. Its self-test exercises the internal functions, which leaves everything between main() and the exit code unproven. Tracked by #1715."
     },
     {
       "script": "scripts/verify_unsafe_safety_template.py",
@@ -56,6 +59,21 @@
       "mode": "strict",
       "self_test": null,
       "self_test_required": false,
+      "must_refuse": [
+        {
+          "vector": "an unsafe block with no SAFETY comment in front of it",
+          "files": {
+            "src/lib.rs": "pub fn write(target: *mut u8) {\n    unsafe {\n        *target = 1;\n    }\n}\n"
+          },
+          "accepts": {
+            "src/lib.rs": "pub fn write(target: *mut u8) {\n    // SAFETY: the caller upholds the invariants below.\n    // - `target` is non-null, aligned and valid for one byte of writes\n    // - no other reference aliases `target` for the duration of this call\n    // Reason: the caller owns the allocation and cannot express that in the type.\n    unsafe {\n        *target = 1;\n    }\n}\n"
+          },
+          "argv": [
+            "--files",
+            "{root}/src/lib.rs"
+          ]
+        }
+      ],
       "blind_spot": {
         "issue": null,
         "summary": "Runs only on production .rs files changed by the PR, so it never re-reads unsafe blocks that predate it."
@@ -70,6 +88,34 @@
       "mode": "strict",
       "self_test": null,
       "self_test_required": false,
+      "must_refuse": [
+        {
+          "vector": "a TODO carrying no EPIC/US tag and no issue number",
+          "files": {
+            "src/lib.rs": "// TODO: rewrite this once the index lands\npub fn f() {}\n"
+          },
+          "accepts": {
+            "src/lib.rs": "// TODO(EPIC-042): rewrite this once the index lands\npub fn f() {}\n"
+          },
+          "argv": [
+            "--files",
+            "{root}/src/lib.rs"
+          ]
+        },
+        {
+          "vector": "a FIXME carrying no tag — the verb changes, the obligation does not",
+          "files": {
+            "src/lib.rs": "// FIXME: the cast overflows above 2^53\npub fn f() {}\n"
+          },
+          "accepts": {
+            "src/lib.rs": "// FIXME(#1468): the cast overflows above 2^53\npub fn f() {}\n"
+          },
+          "argv": [
+            "--files",
+            "{root}/src/lib.rs"
+          ]
+        }
+      ],
       "blind_spot": {
         "issue": null,
         "summary": "Diff-scoped to changed velesdb-core production files, like the unsafe guard."
@@ -87,7 +133,8 @@
       "blind_spot": {
         "issue": null,
         "summary": "None known. Its self-test is reached by gate-contracts.yml's `unittest discover`, which the fold made required through the `gate-contracts` caller job."
-      }
+      },
+      "refusal_untested": "No CLI surface: same rooted-at-REPO_ROOT shape. Its self-test proves the comparison in-process, never the process. Tracked by #1715."
     },
     {
       "script": "scripts/check-feature-claims.py",
@@ -101,7 +148,8 @@
       "blind_spot": {
         "issue": null,
         "summary": "Breaks (reports column_store MISSING) if any string literal in velesdb-python/src uses a backslash line-continuation."
-      }
+      },
+      "refusal_untested": "No CLI surface: same rooted-at-REPO_ROOT shape. Tracked by #1715."
     },
     {
       "script": "scripts/check-perf-claims.py",
@@ -115,7 +163,8 @@
       "blind_spot": {
         "issue": 1701,
         "summary": "Cannot go red as wired: the grouping label contains the measured value, so two claims never share a group and the only exit-1 path is unreachable. The Criterion front is disabled by --no-criterion and never feeds the exit code."
-      }
+      },
+      "refusal_untested": "No CLI surface AND, per #1701, structurally unable to reach its own exit 1: a vector would be refused by the guard for the wrong reason, or not at all. Fix #1701 first, then #1715."
     },
     {
       "script": "scripts/check-mcp-doc-contract.py",
@@ -129,7 +178,8 @@
       "blind_spot": {
         "issue": 1695,
         "summary": "POLICED_TOOLS holds 1 of the 20 published tools, and SURFACE_GLOBS misses the Python and WASM binding sources. Attribution rests on alias proximity within 500 characters."
-      }
+      },
+      "refusal_untested": "Takes --root, so a vector is possible; not written yet because the tree it needs is a whole tools capture plus a policed surface. Tracked by #1715."
     },
     {
       "script": "scripts/check-doc-contract.sh",
@@ -176,7 +226,8 @@
         "issue": null,
         "summary": "None known. Folded into CI Success's needs and chain via the `promise-contract` caller job, so a failure now blocks the merge."
       },
-      "required_via": "promise-contract"
+      "required_via": "promise-contract",
+      "refusal_untested": "No CLI surface: the registry path is rooted at REPO_ROOT. Tracked by #1715."
     },
     {
       "script": "scripts/check-python.sh",
@@ -191,7 +242,8 @@
         "issue": null,
         "summary": "None known. Folded into CI Success's needs and chain via the `propagation-guard` caller job, so a failure now blocks the merge."
       },
-      "required_via": "propagation-guard"
+      "required_via": "propagation-guard",
+      "refusal_untested": "No CLI surface: the shell guard cds to the repository root itself. Tracked by #1715."
     },
     {
       "script": "scripts/check_binary_size.py",
@@ -206,7 +258,8 @@
         "issue": null,
         "summary": "None known. Folded into CI Success's needs and chain via the `binary-size` caller job, so a failure now blocks the merge."
       },
-      "required_via": "binary-size"
+      "required_via": "binary-size",
+      "refusal_untested": "No CLI surface, and a vector would have to produce real release binaries to weigh. Tracked by #1715."
     },
     {
       "script": "scripts/run-production-gates.sh",
@@ -221,7 +274,8 @@
         "issue": null,
         "summary": "None known. Folded into CI Success's needs and chain via the `production-gates` caller job, so a failure now blocks the merge."
       },
-      "required_via": "production-gates"
+      "required_via": "production-gates",
+      "refusal_untested": "A meta-runner: it chains the other guards, so its refusal is theirs. It gets a vector once the guards it chains have one. Tracked by #1715."
     },
     {
       "script": ".github/workflows/pr-governance.yml",
@@ -242,7 +296,8 @@
         "issue": 1699,
         "summary": "No self-test materialises a PR these steps must reject, so none of the three is known to refuse. The attribution step greps identities for `claude|anthropic` only, so Codex, Copilot and other assistant identities pass; #1699 replaces it with a two-compartment allowlist (dependabot[bot] has 149 legitimate commits and must keep passing)."
       },
-      "required_via": "pr-governance"
+      "required_via": "pr-governance",
+      "refusal_untested": "An inline guard: its steps run in a GitHub runner against a pull_request payload, which no local tree reproduces. #1699 replaces the attribution step and brings its own vectors, including the positive control (dependabot[bot] must keep passing)."
     }
   ],
   "unwired": [

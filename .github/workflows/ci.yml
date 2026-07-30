@@ -549,17 +549,22 @@ jobs:
   # captured in docs/reference/mcp-tools.json.
   #
   # It lives HERE, in ci.yml, and not in doc-contract.yml or
-  # gate-contracts.yml, for one reason: neither of those is in "CI Success"'s
-  # needs, and "CI Success" is the only required check on develop and main —
-  # so nothing they find can block a merge. doc-contract.yml's path filter
-  # was ALSO blind to crates/velesdb-memory/src, sdks/, integrations/ and
-  # skills/, the very directories this guard reads. A gate that is never
-  # triggered, or triggered but not required, protects nothing. (That filter
-  # is widened in the same change, so the doc-contract workflow stops missing
-  # those paths on push too.)
+  # gate-contracts.yml, for a reason that WAS decisive and no longer is:
+  # neither of those was in "CI Success"'s needs, and "CI Success" is the only
+  # required check on develop and main — so nothing they found could block a
+  # merge. doc-contract.yml's path filter was ALSO blind to
+  # crates/velesdb-memory/src, sdks/, integrations/ and skills/, the very
+  # directories this guard reads. A gate that is never triggered, or triggered
+  # but not required, protects nothing. (That filter is widened in the same
+  # change, so the doc-contract workflow stops missing those paths on push
+  # too.)
   #
-  # Every python suite this job runs is therefore run HERE and not only under
-  # gate-contracts.yml's `unittest discover`, which is not required.
+  # Since the fold of #1698 and #1710, BOTH of those workflows are called from
+  # ci.yml and read by the "CI Success" chain, so `gate-contracts.yml`'s
+  # `unittest discover -s scripts/tests` IS required — every suite under that
+  # directory now blocks a merge, including the ones no job names. This job
+  # stays as it is: naming its suites explicitly costs seconds and survives
+  # someone narrowing the discover.
   #
   # No toolchain, no build: pure Python over committed text, seconds.
   # ===========================================================================
