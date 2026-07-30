@@ -441,13 +441,20 @@ fn is_rust_int_format(format: &str) -> bool {
 mod tests;
 
 /// Les champs d'id qui traversent le fil sous forme entiere OU chaine
-/// decimale. Definis ici et non dans `context::wire` : `schema.rs` est gate
-/// sur `mcp`, alors que `context::wire` l'est sur `context` — et les outils
-/// de `mcp.rs` en ont besoin meme quand `context` est absente, ce qui est le
-/// cas de `--features http`.
-#[cfg(feature = "mcp")]
-pub(crate) const WIRE_ID_KEYS: &[&str] =
-    &["fragment_id", "content_hash", "memory_id", "fragment_ids"];
+/// decimale.
+///
+/// Seule declaration (#1685) : [`crate::context::wire::ID_KEYS`] la
+/// reexporte telle quelle plutot que de la redeclarer. Vit ici et non dans
+/// `context::wire` parce que `schema.rs` n'est jamais gate par une feature
+/// (voir `mod schema;` dans `lib.rs`), alors que le module `context` entier
+/// l'est sur `context` — et les outils de `mcp.rs` en ont besoin meme quand
+/// `context` est absente, ce qui est le cas de `--features http`. Gatee sur
+/// `any(mcp, context)` et non laissee inconditionnelle : un build
+/// `--features persistence` seule (verifie en isolation par la CI, voir
+/// `ci.yml`) n'a besoin d'aucune des deux, et `-D warnings` transformerait
+/// la constante alors inutilisee en echec de build.
+#[cfg(any(feature = "mcp", feature = "context"))]
+pub const WIRE_ID_KEYS: &[&str] = &["fragment_id", "content_hash", "memory_id", "fragment_ids"];
 
 /// Le schema de sortie ANNONCE d'un outil : ids elargis, puis `$ref` inlines
 /// et `$defs` inatteignables elagues.
