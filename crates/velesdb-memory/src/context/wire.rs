@@ -19,7 +19,14 @@ use serde_json::Value;
 /// Object keys whose `u64` values (or arrays of them) must cross to JS as
 /// decimal strings. Token counts stay numbers: they are bounded far below
 /// 2^53 by the budget caps.
-pub const ID_KEYS: &[&str] = &["fragment_id", "content_hash", "memory_id", "fragment_ids"];
+///
+/// Re-exported from [`crate::schema::WIRE_ID_KEYS`] rather than redeclared
+/// (#1685): the two used to be independent constants with identical
+/// contents, so a future id field added to one could silently miss the
+/// other. `schema.rs` holds the single declaration because it compiles
+/// unconditionally, while this module only compiles under the `context`
+/// feature.
+pub use crate::schema::WIRE_ID_KEYS as ID_KEYS;
 
 /// Recursively rewrite every [`ID_KEYS`] field of a serialized `context`
 /// wire value into its decimal-string form.
