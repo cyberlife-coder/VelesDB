@@ -1,16 +1,11 @@
 name: Production Gates
 
+# Called by ci.yml on pull requests (see the note in gate-contracts.yml). The
+# `pull_request` trigger is gone: this gate now reports inside `CI Success`,
+# the only required check, instead of beside it.
 on:
+  workflow_call:
   workflow_dispatch:
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - 'scripts/run-production-gates.sh'
-      - 'scripts/check-doc-contract.sh'
-      - 'scripts/check-promise-contract.py'
-      - 'crates/velesdb-core/tests/velesql_planner_golden.rs'
-      - 'crates/velesdb-core/tests/crash_recovery/**'
-      - 'crates/velesdb-core/src/storage/wal_recovery_tests.rs'
 
 permissions:
   contents: read

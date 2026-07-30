@@ -1179,12 +1179,53 @@ jobs:
           SONAR_HOST_URL: https://sonarcloud.io
 
   # ===========================================================================
+  # Gates folded in from their own workflows
+  #
+  # These six ran as standalone workflows on `pull_request`, and `CI Success` is
+  # the ONLY required check on develop — so each could be red while the merge
+  # button stayed green. Requiring them through GitHub's branch-protection list
+  # instead would keep the required set unversioned and unreadable by any guard,
+  # which is the defect one level up. Calling them from here puts the required
+  # set in reviewable YAML, and scripts/guards.json holds them to it.
+  #
+  # `workflow_call` ignores the callee's own `paths:` filters, so these now run
+  # on every PR. Measured cost: 0.2 to 5.5 min each, against CI's ~29 min
+  # critical path — they finish long before this job can start, so the wait is
+  # unchanged. Filtering them conditionally instead would make a skipped job
+  # report `skipped`, forcing the chain below to accept anything other than
+  # `success` — the "skipped = green" ambiguity this fold exists to remove.
+  # ===========================================================================
+  gate-contracts:
+    name: Gate Contracts
+    uses: ./.github/workflows/gate-contracts.yml
+
+  doc-contract:
+    name: Doc Contract
+    uses: ./.github/workflows/doc-contract.yml
+
+  promise-contract:
+    name: Promise Contract
+    uses: ./.github/workflows/promise-contract.yml
+
+  production-gates:
+    name: Production Gates
+    uses: ./.github/workflows/production-gates.yml
+
+  propagation-guard:
+    name: Propagation Guard
+    uses: ./.github/workflows/propagation-guard.yml
+
+  binary-size:
+    name: Binary Size Gate
+    uses: ./.github/workflows/binary-size.yml
+
+  # ===========================================================================
   # Summary (léger)
   # ===========================================================================
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, wasm-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, sonarcloud]
+    needs: [lint, test, security, wasm-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, bench-sift1m-compile, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, sonarcloud]
     if: always()
     steps:
       # sonarcloud is intentionally absent from the gate below: it is an
@@ -1204,5 +1245,11 @@ jobs:
           [[ "${{ needs.python-integrations.result }}" == "success" ]] && \
           [[ "${{ needs.node-binding-tests.result }}" == "success" ]] && \
           [[ "${{ needs.node-binding-tests-windows.result }}" == "success" ]] && \
+          [[ "${{ needs.gate-contracts.result }}" == "success" ]] && \
+          [[ "${{ needs.doc-contract.result }}" == "success" ]] && \
+          [[ "${{ needs.promise-contract.result }}" == "success" ]] && \
+          [[ "${{ needs.production-gates.result }}" == "success" ]] && \
+          [[ "${{ needs.propagation-guard.result }}" == "success" ]] && \
+          [[ "${{ needs.binary-size.result }}" == "success" ]] && \
           [[ "${{ needs.security.result }}" == "success" ]] && \
           echo "✅ CI passed" || { echo "❌ CI failed"; exit 1; }
