@@ -24,15 +24,18 @@ It also only sees *literal* shape declarations (``Returns `{a, b, c}` ``) —
 a TypeScript ``interface`` or a Rust ``struct`` is a type declaration, left to
 the binding-parity gate.
 
-**Second written limit: the registry is ONE tool, and that is not an
-oversight.** ``load_working_context`` is policed; the other nineteen tools
-the capture publishes are NOT. Policing them was measured, not assumed:
-attribution by proximity collapses inside ``docs/reference/MCP_TOOLS.md``,
-where every tool's section sits within 500 characters of its neighbours', and
-the sweep produced 68 "non-conformances" of which almost all were code
-braces, error payloads and neighbouring sections. Widening the registry needs
-a section-aware extractor, not a bigger constant. Say "this guard polices
-``load_working_context``", never "every MCP tool".
+**Second written limit: the registry is TEN tools of the twenty published,
+and the other ten are held out for a measured reason.** The structure-aware
+attribution described below is what made widening possible at all — under
+proximity alone, 13 of ``docs/reference/MCP_TOOLS.md``'s 19 declarations were
+charged to a neighbouring section, which is the "68 non-conformances" this
+header used to record. It is not enough for the rest: each tool still out
+carries literals this guard would report as drift that are really a sibling's
+shape, an input schema, an MCP client config file or another API's dict.
+``entity`` alone has twelve, six of them LangChain dictionaries in files
+saturated with the word. They go in by batches, and #1695 says how: each batch
+verified by a mutation that must make the guard refuse. Say "this guard
+polices ten of the twenty published tools", never "every MCP tool".
 
 **Third: what the sweep reads is a measured list, not every file.** Adding
 ``crates/velesdb-memory/src/**/*.rs``, ``crates/velesdb-wasm/src`` or the
@@ -55,8 +58,15 @@ tools, unrelated JSON):
      140 characters before it, or a shape noun within 40 characters after it
      — the tree uses both phrasings ("returns `{a, b}`" and "the `{a, b}`
      envelope"). No other brace may sit between the anchor and the literal,
-  3. ATTRIBUTED to the tool whose alias is NEAREST, among the aliases of
-     EVERY tool the capture publishes, within 500 characters.
+  3. ATTRIBUTED by ``owning_tool`` to the tool most SPECIFICALLY named for
+     it: by the line the literal sits on, failing that by the section heading
+     above it, failing that by the nearest alias within 500 characters —
+     among the aliases of EVERY tool the capture publishes.
+
+Root keys are compared with their CASE folded, because ``datedContext`` and
+``dated_context`` are one key rendered for two bindings and the rendered
+spelling is ``binding_parity_bdd.rs``'s question, not this one's. Only the
+case: a renamed key is still a different key, and still fails.
 
 Then the rule: for a policed tool, the declared key set must EQUAL the
 published root key set.
@@ -142,6 +152,42 @@ class PolicedTool:
 
 POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
     PolicedTool(
+        "compile_transcript",
+        (),
+        (
+            "crates/velesdb-node/src/lib.rs",
+            "docs/reference/MCP_TOOLS.md",
+            "sdks/typescript/src/memory.ts",
+        ),
+    ),
+    PolicedTool(
+        "context_savings",
+        (),
+        ("docs/reference/MCP_TOOLS.md",),
+    ),
+    PolicedTool(
+        "explain_compilation",
+        (),
+        (
+            "crates/velesdb-node/src/lib.rs",
+            "docs/reference/MCP_TOOLS.md",
+        ),
+    ),
+    PolicedTool(
+        "forget",
+        (),
+        ("docs/reference/MCP_TOOLS.md",),
+    ),
+    PolicedTool(
+        "list_working_contexts",
+        (),
+        (
+            "crates/velesdb-node/src/lib.rs",
+            "docs/guides/NODE_ADDON.md",
+            "docs/reference/MCP_TOOLS.md",
+        ),
+    ),
+    PolicedTool(
         "load_working_context",
         ("loadWorkingContext", "LoadedWorkingContext"),
         (
@@ -168,6 +214,39 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
             "integrations/langgraph/src/langgraph_velesdb/tools.py",
             "sdks/typescript/src/memory.ts",
             "skills/velesdb-context-optimizer/SKILL.md",
+        ),
+    ),
+    PolicedTool(
+        "recall_fused",
+        (),
+        (
+            "crates/velesdb-node/src/lib.rs",
+            "docs/reference/MCP_TOOLS.md",
+            "integrations/langgraph/README.md",
+        ),
+    ),
+    PolicedTool(
+        "retrieve_context_source",
+        (),
+        (
+            "crates/velesdb-node/src/lib.rs",
+            "docs/guides/CONTEXT_COMPILER.md",
+            "docs/guides/NODE_ADDON.md",
+            "docs/guides/PYTHON_CONTEXT_COMPILER.md",
+            "docs/reference/MCP_TOOLS.md",
+        ),
+    ),
+    PolicedTool(
+        "save_working_context",
+        (),
+        ("docs/reference/MCP_TOOLS.md",),
+    ),
+    PolicedTool(
+        "suggest_budget",
+        (),
+        (
+            "crates/velesdb-node/src/lib.rs",
+            "docs/reference/MCP_TOOLS.md",
         ),
     ),
 )
@@ -235,9 +314,36 @@ MAX_LITERAL = 3000
 # is still seen and still fails.
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# …and it is not enough on its own: `AsyncTask` IS identifier-shaped, so
+# `-> AsyncTask<…> {` survived the test above and was read as a declaration of
+# `{AsyncTask}` (measured at crates/velesdb-node/src/lib.rs:646). A literal
+# whose tokens are ALL PascalCase names a TYPE, never a shape: every root key
+# the capture publishes is snake_case, and every binding renders them
+# camelCase, so neither form can be lost to this rule.
+TYPE_NAME_RE = re.compile(r"^[A-Z][A-Za-z0-9_]*$")
+
+# `datedContext` and `dated_context` are the SAME root key, rendered for two
+# bindings: napi and wasm publish camelCase because that is their contract.
+# Comparing the rendered spelling made this guard call a correct binding a
+# liar (measured at crates/velesdb-node/src/lib.rs:229, docs/guides/WASM_API.md:271).
+# Only the CASING is folded — a key that was renamed is still a different key,
+# so a rename still fails. Which spelling each binding must actually ship is
+# binding_parity_bdd.rs's question, not this one's.
+CAMEL_BOUNDARY_RE = re.compile(r"(?<!^)(?=[A-Z])")
+
 # `{"error": "…"}` is the documented error payload integrations/langgraph
 # returns instead of raising. Exactly one key wide.
 ERROR_PAYLOAD_KEYS = frozenset({"error"})
+
+# `{"tool": …, "arguments": …}` is the JSON-RPC CALL envelope — an input, the
+# mirror of the payload above, and no published tool has those root keys. Every
+# skill page shows one, and prose about what a tool `returns` routinely sits a
+# few dozen characters above the example of how to call it, which is enough for
+# the return anchor to claim it (measured at
+# skills/velesdb-context-optimizer/SKILL.md:340, both copies). Exactly two keys
+# wide, for the same reason the one above is exactly one: an exemption that can
+# grow can hide a rename.
+CALL_ENVELOPE_KEYS = frozenset({"tool", "arguments"})
 
 # `{@link Foo}` is a JSDoc cross-reference, not a shape. Masked (length
 # preserved, so every offset below stays valid against the raw text) before
@@ -358,6 +464,11 @@ def camel_case(name: str) -> str:
     return head + "".join(word.capitalize() for word in rest)
 
 
+def snake_case(key: str) -> str:
+    """``datedContext`` -> ``dated_context``: one root key, two renderings."""
+    return CAMEL_BOUNDARY_RE.sub("_", key).lower()
+
+
 def build_alias_index(
     tool_names: "list[str]",
     policed: "tuple[PolicedTool, ...]" = (),
@@ -392,6 +503,50 @@ def alias_positions(text: str, index: "dict[str, str]") -> "list[tuple[int, str]
     return found
 
 
+# A page that documents twenty tools in a row is the case proximity cannot
+# handle: every section sits within ANCHOR_WINDOW of its neighbours, so a
+# sentence lands on whichever alias happens to be nearer rather than on the
+# tool the section is about. Measured on docs/reference/MCP_TOOLS.md: 13 of its
+# 19 declarations were charged to a sibling — `recall`'s `{memories}` to
+# `feedback`, `suggest_budget`'s `{window, suggested_budget, source}` to
+# `save_working_context`.
+#
+# A heading is the document's own statement of what it is describing, so it
+# answers wherever the literal's own line does not. It does NOT replace
+# proximity either: guides, READMEs and source comments have no per-tool
+# sections, and a section-only rule was measured to lose 17 attributions that
+# are correct today. See ``owning_tool`` for the three tiers and their order.
+#
+# Only `#` and `##` delimit a tool section — a `###` inside one is a
+# subsection of it, not a new owner — and a heading that names no tool closes
+# the previous one instead of extending it, which is what stops a trailing
+# "Error model" section from inheriting the last tool documented above it.
+SECTION_HEADING_RE = re.compile(r"^#{1,2}[ \t]+(.*)$", re.MULTILINE)
+SECTION_TOOL_RE = re.compile(r"^`([A-Za-z_][A-Za-z0-9_]*)`")
+
+
+def section_positions(
+    text: str,
+    tool_names: "set[str]",
+) -> "list[tuple[int, str | None]]":
+    """``(offset, tool)`` per top-level heading; ``None`` when it names none."""
+    found: "list[tuple[int, str | None]]" = []
+    for match in SECTION_HEADING_RE.finditer(text):
+        named = SECTION_TOOL_RE.match(match.group(1).strip())
+        tool = named.group(1) if named else None
+        found.append((match.start(), tool if tool in tool_names else None))
+    return found
+
+
+def section_tool(
+    sections: "list[tuple[int, str | None]]",
+    offset: int,
+) -> "str | None":
+    """The tool named by the section ``offset`` falls in, if it names one."""
+    pivot = bisect.bisect_right([position for position, _tool in sections], offset)
+    return sections[pivot - 1][1] if pivot else None
+
+
 def _candidate(
     positions: "list[tuple[int, str]]",
     index: int,
@@ -420,6 +575,79 @@ def nearest_tool(positions: "list[tuple[int, str]]", offset: int) -> "str | None
     return min(candidates)[1] if candidates else None
 
 
+def _closer(
+    best: "tuple[int, str] | None",
+    candidate: "tuple[int, str]",
+) -> "tuple[int, str]":
+    return candidate if best is None or candidate < best else best
+
+
+def naming_tool(
+    text: str,
+    positions: "list[tuple[int, str]]",
+    offset: int,
+) -> "str | None":
+    """The tool named ON THE SAME LINE as the literal — its subject, if any.
+
+    The line is the whole discriminator, and direction is deliberately NOT.
+    Prose puts its subject first (``sibling_tool` resolves `{found,
+    removed}``) while a destructuring assignment puts it last (``const {
+    sessions } = await store.listWorkingContexts(…)``); either way the subject
+    shares the literal's line. What does NOT share it is the cross-reference,
+    which is where reading one line further was measured to go wrong four
+    times in ``docs/reference/MCP_TOOLS.md`` alone — "Returns `{id, id_str}` …
+    relay `id_str` if you intend to `forget` it" names `forget` on the next
+    line and means nothing of the sort.
+    """
+    offsets = [position for position, _tool in positions]
+    pivot = bisect.bisect_left(offsets, offset)
+    best: "tuple[int, str] | None" = None
+    for index in range(pivot - 1, -1, -1):
+        position, tool = positions[index]
+        if "\n" in text[position:offset]:
+            break
+        best = _closer(best, (offset - position, tool))
+    for index in range(pivot, len(positions)):
+        position, tool = positions[index]
+        if "\n" in text[offset:position]:
+            break
+        best = _closer(best, (position - offset, tool))
+    return best[1] if best else None
+
+
+def owning_tool(
+    text: str,
+    sections: "list[tuple[int, str | None]]",
+    positions: "list[tuple[int, str]]",
+    offset: int,
+) -> "str | None":
+    """The tool a literal is ABOUT: the one most SPECIFICALLY named for it.
+
+    One question, read off three structures in order of how narrowly each
+    speaks for this literal, stopping at the first that answers:
+
+      1. the STATEMENT it sits in — a sentence that names a tool right beside
+         the literal is describing that tool, even in the middle of another
+         tool's section. This is what keeps `unrelate`'s correct
+         ``{found, removed}``, documented under a neighbour's heading, from
+         being read as the neighbour drifting;
+      2. the SECTION it sits in — a heading is the document's own statement of
+         what the part below it describes, and it is the only signal available
+         on a page that documents twenty tools in a row;
+      3. the PAGE around it — the nearest alias within ANCHOR_WINDOW, which is
+         all there is in a guide, a README or a source comment, none of which
+         carry per-tool headings.
+
+    Each tier is narrower than the next, so a more precise statement always
+    overrides a vaguer one; that ordering is the whole rule.
+    """
+    return (
+        naming_tool(text, positions, offset)
+        or section_tool(sections, offset)
+        or nearest_tool(positions, offset)
+    )
+
+
 # --------------------------------------------------------------------------
 # Extraction
 # --------------------------------------------------------------------------
@@ -433,8 +661,10 @@ def _is_return_declaration(text: str, start: int, end: int) -> bool:
 
 
 def _is_shape_literal(keys: "list[str]") -> bool:
-    """Non-empty, all identifier-shaped, and not the `{error}` payload."""
-    if not keys or set(keys) == ERROR_PAYLOAD_KEYS:
+    """Non-empty, all identifier-shaped, not a type name, not a known envelope."""
+    if not keys or set(keys) in (ERROR_PAYLOAD_KEYS, CALL_ENVELOPE_KEYS):
+        return False
+    if all(TYPE_NAME_RE.match(key) for key in keys):
         return False
     return all(IDENTIFIER_RE.match(key) for key in keys)
 
@@ -454,12 +684,13 @@ def find_declarations(
     text: str,
     tool_name: str,
     positions: "list[tuple[int, str]]",
+    sections: "list[tuple[int, str | None]]",
 ) -> "list[tuple[int, list[str]]]":
     """Every return-shape declaration ATTRIBUTED to ``tool_name`` in ``text``."""
     found: "list[tuple[int, list[str]]]" = []
     for match in BRACE_RE.finditer(text):
         start = match.start()
-        if nearest_tool(positions, start) != tool_name:
+        if owning_tool(text, sections, positions, start) != tool_name:
             continue
         keys = _declaration_at(text, start)
         if keys is not None:
@@ -490,8 +721,13 @@ def _drift_message(
     schema_keys: "list[str]",
 ) -> str:
     declared = sorted(set(keys))
-    missing = sorted(set(schema_keys) - set(declared))
-    extra = sorted(set(declared) - set(schema_keys))
+    # The diff is computed on the case-folded form, so a camelCase binding is
+    # not accused of a rename it did not make; the message still shows both
+    # sides as they are actually written.
+    folded = {snake_case(key) for key in declared}
+    published = {snake_case(key) for key in schema_keys}
+    missing = sorted(published - folded)
+    extra = sorted(folded - published)
     parts = []
     if missing:
         parts.append(f"missing {', '.join(missing)}")
@@ -583,13 +819,15 @@ def _check_tool(
     failures: "list[str]" = []
     info: "list[str]" = []
     seen: "set[str]" = set()
+    published = sorted(snake_case(key) for key in schema_keys)
     for name, raw in texts:
         text = mask_jsdoc_links(raw)
         positions = alias_positions(text, index)
-        for offset, keys in find_declarations(text, tool.name, positions):
+        sections = section_positions(text, set(index.values()))
+        for offset, keys in find_declarations(text, tool.name, positions, sections):
             seen.add(name)
             where = f"{name}:{line_of(raw, offset)}"
-            if sorted(set(keys)) == schema_keys:
+            if sorted({snake_case(key) for key in keys}) == published:
                 info.append(f"  ok  {where} [{tool.name}] {{{', '.join(keys)}}}")
                 continue
             failures.append(_drift_message(where, tool, keys, schema_keys))

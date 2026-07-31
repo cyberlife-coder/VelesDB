@@ -249,6 +249,72 @@ class AntiDisarmTests(DocContractTestCase):
             cmdc.guard_return_shape(self.tmp)
 
 
+class OwnershipTests(DocContractTestCase):
+    """Which tool a literal is ABOUT — the three tiers of ``owning_tool``,
+    each pinned by the case that made it necessary. Every fixture here is
+    reduced from a site measured on the real tree while widening the registry
+    for #1695. Distinct from ``AttributionTests`` below, which pins the alias
+    index those tiers read."""
+
+    def test_a_neighbours_name_in_the_prose_does_not_steal_a_sections_declaration(
+        self,
+    ) -> None:
+        # `sibling_tool`'s own section, whose prose mentions `demo_tool`
+        # CLOSER to the literal than its own heading sits. Proximity alone
+        # read this as `demo_tool` drifting: on docs/reference/MCP_TOOLS.md
+        # that mistake accounted for 13 of 19 declarations.
+        self.write(
+            "docs/reference/DEMO_TOOLS.md",
+            REFERENCE_CLEAN
+            + "\n## `sibling_tool`\n\nThe exact undo of `demo_tool`'s edge.\n\n"
+            + "Returns `{ found, removed }`.\n",
+        )
+        self.assertGuardPasses()
+
+    def test_a_subject_on_the_literals_own_line_overrides_the_section(self) -> None:
+        # The reverse mistake, and why the section cannot simply win: a
+        # sibling documented INSIDE another tool's section names itself right
+        # beside its literal. The narrower statement has to prevail, or the
+        # section rule turns a correct tree red the way proximity did.
+        self.write(
+            "docs/reference/DEMO_TOOLS.md",
+            REFERENCE_CLEAN + "\n`sibling_tool` resolves `{found, removed}`.\n",
+        )
+        self.assertGuardPasses()
+
+    def test_a_heading_that_names_no_tool_closes_the_section_above_it(self) -> None:
+        # A trailing "Error model" section must not inherit the last tool
+        # documented above it. The padding puts the literal out of proximity
+        # range, so the section is the ONLY thing that could attribute it.
+        self.write(
+            "docs/reference/DEMO_TOOLS.md",
+            REFERENCE_CLEAN
+            + "\n## Error model\n\n"
+            + "Filler with no alias in it at all. " * 20
+            + "\n\nEvery call resolves `{ code, message }` on failure.\n",
+        )
+        self.assertGuardPasses()
+
+    def test_a_camel_case_rendering_of_the_same_keys_is_not_drift(self) -> None:
+        # napi and wasm publish camelCase because that IS their contract.
+        # Comparing the rendered spelling accused a correct binding of lying
+        # (crates/velesdb-node/src/lib.rs:229, docs/guides/WASM_API.md:271).
+        self.write(
+            "skills/demo/SKILL.md",
+            SKILL_CLEAN.replace("other_sessions", "otherSessions"),
+        )
+        self.assertGuardPasses()
+
+    def test_a_renamed_key_is_still_refused_under_the_casing_fold(self) -> None:
+        # The control that keeps the fold honest: only the CASE is folded, so
+        # a key that was renamed is still a different key and still fails.
+        self.write(
+            "skills/demo/SKILL.md",
+            SKILL_CLEAN.replace("other_sessions", "sessions"),
+        )
+        self.assertGuardFails("missing other_sessions", "unknown sessions")
+
+
 class ExtractionTests(unittest.TestCase):
     """The narrow definition of "declaration", on real shapes from this tree."""
 
@@ -256,7 +322,49 @@ class ExtractionTests(unittest.TestCase):
         masked = cmdc.mask_jsdoc_links(text)
         index = cmdc.build_alias_index(["demo_tool", "sibling_tool"])
         positions = cmdc.alias_positions(masked, index)
-        return [keys for _offset, keys in cmdc.find_declarations(masked, "demo_tool", positions)]
+        sections = cmdc.section_positions(masked, set(index.values()))
+        return [
+            keys
+            for _offset, keys in cmdc.find_declarations(
+                masked, "demo_tool", positions, sections
+            )
+        ]
+
+    def test_a_type_name_literal_is_not_a_shape(self) -> None:
+        # `-> AsyncTask<…> {` cleared IDENTIFIER_RE because `AsyncTask` IS an
+        # identifier, and was read as a declaration of `{AsyncTask}`
+        # (crates/velesdb-node/src/lib.rs:646). Every published root key is
+        # snake_case and every binding renders them camelCase, so refusing
+        # all-PascalCase literals cannot lose a real one.
+        self.assertEqual(self._declarations("`demo_tool` -> {AsyncTask}"), [])
+
+    def test_the_mcp_call_envelope_is_not_a_return_shape(self) -> None:
+        # A skill page shows how to CALL a tool a few dozen characters after
+        # prose about what it `returns`, which is enough for the return anchor
+        # to claim the example (skills/velesdb-context-optimizer/SKILL.md:340).
+        self.assertEqual(
+            self._declarations(
+                "`demo_tool` returns the state.\n\n"
+                '{"tool": "demo_tool", "arguments": {"project": "veles"}}'
+            ),
+            [],
+        )
+
+    def test_a_destructuring_belongs_to_the_call_on_its_own_line(self) -> None:
+        # A destructuring names its subject AFTER the literal, and a nearer
+        # mention of a different tool sits on the line above — the shape of
+        # docs/guides/NODE_ADDON.md:226-228. Proximity picks the neighbour
+        # because it is closer in characters, and so does the backwards-only
+        # reading that prose alone suggests ("X returns Y" names X first),
+        # since it finds no alias before the literal and falls through. Only
+        # the line the literal sits on gets this right.
+        self.assertEqual(
+            self._declarations(
+                "// The envelope `demoTool` resolves.\n"
+                "const { sessions } = await store.backend().siblingTool('veles')\n"
+            ),
+            [],
+        )
 
     def test_plain_prose_literal(self) -> None:
         self.assertEqual(
@@ -473,29 +581,65 @@ class RealRepositoryTests(unittest.TestCase):
         #
         # Adding a surface is a one-line edit here. Removing one has to be
         # argued for in a diff that says so.
+        #
+        # Pinned for EVERY policed tool, not just the first one: a registry
+        # that grows by batches (#1695) needs the counter to grow with it, or
+        # nine of the ten are back to being deletable one sentence at a time.
         expected = {
-            "crates/velesdb-node/README.md",
-            "crates/velesdb-node/skills/velesdb-context-optimizer/SKILL.md",
-            "crates/velesdb-node/src/lib.rs",
-            "docs/guides/NODE_ADDON.md",
-            "docs/guides/PYTHON_CONTEXT_COMPILER.md",
-            "docs/guides/WASM_API.md",
-            "docs/reference/ECOSYSTEM_PARITY.md",
-            "docs/reference/MCP_TOOLS.md",
-            "integrations/agent-hooks/claude-code/hooks/session-start.sh",
-            "integrations/agent-hooks/codex/README.md",
-            "integrations/agent-hooks/codex/hooks/session-start.sh",
-            "integrations/agent-hooks/windsurf/hooks/pre-user-prompt.sh",
-            "integrations/langgraph/README.md",
-            "integrations/langgraph/src/langgraph_velesdb/tools.py",
-            "sdks/typescript/src/memory.ts",
-            "skills/velesdb-context-optimizer/SKILL.md",
+            "compile_transcript": {
+                "crates/velesdb-node/src/lib.rs",
+                "docs/reference/MCP_TOOLS.md",
+                "sdks/typescript/src/memory.ts",
+            },
+            "context_savings": {"docs/reference/MCP_TOOLS.md"},
+            "explain_compilation": {
+                "crates/velesdb-node/src/lib.rs",
+                "docs/reference/MCP_TOOLS.md",
+            },
+            "forget": {"docs/reference/MCP_TOOLS.md"},
+            "list_working_contexts": {
+                "crates/velesdb-node/src/lib.rs",
+                "docs/guides/NODE_ADDON.md",
+                "docs/reference/MCP_TOOLS.md",
+            },
+            "load_working_context": {
+                "crates/velesdb-node/README.md",
+                "crates/velesdb-node/skills/velesdb-context-optimizer/SKILL.md",
+                "crates/velesdb-node/src/lib.rs",
+                "docs/guides/NODE_ADDON.md",
+                "docs/guides/PYTHON_CONTEXT_COMPILER.md",
+                "docs/guides/WASM_API.md",
+                "docs/reference/ECOSYSTEM_PARITY.md",
+                "docs/reference/MCP_TOOLS.md",
+                "integrations/agent-hooks/claude-code/hooks/session-start.sh",
+                "integrations/agent-hooks/codex/README.md",
+                "integrations/agent-hooks/codex/hooks/session-start.sh",
+                "integrations/agent-hooks/windsurf/hooks/pre-user-prompt.sh",
+                "integrations/langgraph/README.md",
+                "integrations/langgraph/src/langgraph_velesdb/tools.py",
+                "sdks/typescript/src/memory.ts",
+                "skills/velesdb-context-optimizer/SKILL.md",
+            },
+            "recall_fused": {
+                "crates/velesdb-node/src/lib.rs",
+                "docs/reference/MCP_TOOLS.md",
+                "integrations/langgraph/README.md",
+            },
+            "retrieve_context_source": {
+                "crates/velesdb-node/src/lib.rs",
+                "docs/guides/CONTEXT_COMPILER.md",
+                "docs/guides/NODE_ADDON.md",
+                "docs/guides/PYTHON_CONTEXT_COMPILER.md",
+                "docs/reference/MCP_TOOLS.md",
+            },
+            "save_working_context": {"docs/reference/MCP_TOOLS.md"},
+            "suggest_budget": {
+                "crates/velesdb-node/src/lib.rs",
+                "docs/reference/MCP_TOOLS.md",
+            },
         }
         pinned = {
-            surface
-            for tool in cmdc.POLICED_TOOLS
-            if tool.name == "load_working_context"
-            for surface in tool.pinned_surfaces
+            tool.name: set(tool.pinned_surfaces) for tool in cmdc.POLICED_TOOLS
         }
         self.assertEqual(pinned, expected)
 
@@ -526,7 +670,10 @@ class RealRepositoryTests(unittest.TestCase):
         declared = [
             sorted(set(keys))
             for _offset, keys in cmdc.find_declarations(
-                text, "load_working_context", cmdc.alias_positions(text, index)
+                text,
+                "load_working_context",
+                cmdc.alias_positions(text, index),
+                cmdc.section_positions(text, set(index.values())),
             )
         ]
         self.assertIn(["found", "other_sessions", "working"], declared)
