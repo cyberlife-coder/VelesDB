@@ -29,13 +29,26 @@ Three independent gates run here:
 
 from __future__ import annotations
 
+import argparse
 import json
 import pathlib
 import re
 import subprocess
+import sys
 
+#: Default tree to check. `--root` overrides it so the guard can be pointed at a
+#: fixture tree and be SEEN refusing (#1715); the default keeps CI byte-identical.
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-REGISTRY = ROOT / "docs/reference/promise-contract.json"
+REGISTRY_REL = "docs/reference/promise-contract.json"
+
+
+def registry_path(root: pathlib.Path) -> pathlib.Path:
+    """The claims registry inside `root`.
+
+    This used to be a module constant derived from `ROOT` and frozen at import,
+    which is precisely why no `--root` could reach it.
+    """
+    return root / REGISTRY_REL
 
 # Docs that document the storage/quantization modes at the point of choice.
 # These are the surfaces pinned by Requirement 10 (see design section 10).
@@ -103,19 +116,20 @@ def _scan_line(line: str) -> bool:
     return False
 
 
-def check_registry() -> list[str]:
+def check_registry(root: pathlib.Path) -> list[str]:
     """Validate every registry claim still appears in its target file."""
-    if not REGISTRY.exists():
-        return [f"Missing registry file: {REGISTRY}"]
+    registry = registry_path(root)
+    if not registry.exists():
+        return [f"Missing registry file: {registry}"]
 
-    data = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    data = json.loads(registry.read_text(encoding="utf-8"))
     claims = data.get("claims", [])
     if not claims:
         return ["Registry has no claims"]
 
     failed = []
     for claim in claims:
-        file_path = ROOT / claim["file"]
+        file_path = root / claim["file"]
         needle = claim["must_contain"]
         claim_id = claim["id"]
 
@@ -206,9 +220,9 @@ def stale_claims(claims: list[dict], workspace_version: str) -> list[str]:
     return stale
 
 
-def workspace_version() -> str:
+def workspace_version(root: pathlib.Path) -> str:
     """The `[workspace.package]` version, the single source of truth."""
-    manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    manifest = (root / "Cargo.toml").read_text(encoding="utf-8")
     match = re.search(
         r'(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"', manifest
     )
@@ -226,11 +240,11 @@ def unsourced_claims(claims: list[dict]) -> list[str]:
     ]
 
 
-def check_capacity_mode_overclaim() -> list[str]:
+def check_capacity_mode_overclaim(root: pathlib.Path) -> list[str]:
     """Requirement 10.4: sq8/binary docs must not promise search throughput."""
     failed = []
     for rel_path in CAPACITY_MODE_DOCS:
-        file_path = ROOT / rel_path
+        file_path = root / rel_path
         if not file_path.exists():
             failed.append(f"[capacity-mode] missing file: {rel_path}")
             continue
@@ -247,6 +261,7 @@ def check_capacity_mode_overclaim() -> list[str]:
 
 def run_validation_commands(
     claims: list[dict],
+    root: pathlib.Path,
 ) -> tuple[list[str], list[str], list[str]]:
     """Execute ``validation_command`` for every claim marked executable.
 
@@ -283,7 +298,7 @@ def run_validation_commands(
             result = subprocess.run(
                 command,
                 shell=True,
-                cwd=ROOT,
+                cwd=root,
                 capture_output=True,
                 text=True,
                 timeout=EXECUTABLE_CLAIM_TIMEOUT_SECONDS,
@@ -309,52 +324,46 @@ def run_validation_commands(
     return executed, skipped, failures
 
 
-def main() -> int:
-    registry_failures = check_registry()
-    overclaim_failures = check_capacity_mode_overclaim()
+def _report(title: str, messages: "list[str]") -> None:
+    """Print a findings block, or nothing when there is nothing to say.
 
-    data = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    Seven copies of this three-line shape are what pushed the caller past the
+    complexity ceiling; the output is byte-identical to what they printed.
+    """
+    if not messages:
+        return
+    print(title)
+    for msg in messages:
+        print(f"  - {msg}")
+
+
+def run(root: pathlib.Path) -> int:
+    registry_failures = check_registry(root)
+    overclaim_failures = check_capacity_mode_overclaim(root)
+
+    # Read the registry only if it is there. This used to be an unconditional
+    # `json.loads(REGISTRY.read_text())`, which raised FileNotFoundError before
+    # check_registry's own "Missing registry file" line could ever be printed —
+    # so its graceful path at the top was unreachable, and a missing registry
+    # exited 1 through a traceback. Exit 1 by crashing is not a refusal.
+    registry = registry_path(root)
+    data = json.loads(registry.read_text(encoding="utf-8")) if registry.exists() else {}
     claims = data.get("claims", [])
     provenance_failures = check_provenance(claims)
-    executed, skipped, execution_failures = run_validation_commands(claims)
+    executed, skipped, execution_failures = run_validation_commands(claims, root)
 
-    if provenance_failures:
-        print("Provenance check failed — every claim must record its measurement:")
-        for msg in provenance_failures:
-            print(f"  - {msg}")
-
-    if registry_failures:
-        print("Promise contract check failed:")
-        for msg in registry_failures:
-            print(f"  - {msg}")
-
-    if overclaim_failures:
-        print("Anti-overclaim check failed (Requirement 10.4):")
-        for msg in overclaim_failures:
-            print(f"  - {msg}")
-
-    if execution_failures:
-        print("Executable validation_command check failed:")
-        for msg in execution_failures:
-            print(f"  - {msg}")
-
-    if skipped:
-        print("Documentary claims not auto-verified:")
-        for msg in skipped:
-            print(f"  - {msg}")
+    _report("Provenance check failed — every claim must record its measurement:", provenance_failures)
+    _report("Promise contract check failed:", registry_failures)
+    _report("Anti-overclaim check failed (Requirement 10.4):", overclaim_failures)
+    _report("Executable validation_command check failed:", execution_failures)
+    _report("Documentary claims not auto-verified:", skipped)
 
     unsourced = unsourced_claims(claims)
-    if unsourced:
-        print("Claims with no sourced measurement (honest debt, not a failure):")
-        for msg in unsourced:
-            print(f"  - {msg}")
+    _report("Claims with no sourced measurement (honest debt, not a failure):", unsourced)
 
-    version = workspace_version()
+    version = workspace_version(root)
     stale = stale_claims(claims, version)
-    if stale:
-        print(f"Claims measured on an older release than {version} (re-measure):")
-        for msg in stale:
-            print(f"  - {msg}")
+    _report(f"Claims measured on an older release than {version} (re-measure):", stale)
 
     if (
         registry_failures
@@ -372,6 +381,21 @@ def main() -> int:
         f"{len(CAPACITY_MODE_DOCS)} capacity-mode docs clean)."
     )
     return 0
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    parser = argparse.ArgumentParser(description="Check the promise contract registry.")
+    parser.add_argument("--root", default=str(ROOT), help="repository root to scan")
+    args = parser.parse_args(argv)
+    # A tree this guard cannot read answers 2, never 1: `Cargo.toml` is read
+    # unguarded by workspace_version, and a malformed registry raises a
+    # ValueError. Both exit 1 through a traceback otherwise, which the refusal
+    # harness cannot tell apart from a refusal.
+    try:
+        return run(pathlib.Path(args.root).resolve())
+    except (OSError, RuntimeError, ValueError, KeyError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

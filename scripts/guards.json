@@ -27,7 +27,7 @@
     "required_via": "when the guard lives outside ci.yml: the ci.yml job that calls its workflow, and through which it becomes required",
     "must_refuse": "executable refusal vectors, run by scripts/tests/test_guard_refusal_vectors.py: each materialises `files` under a temp dir, invokes the guard with `argv` (`{root}` is substituted), and demands exit 1 — then demands exit 0 on `accepts`, the same tree repaired. Exit 1 and not merely non-zero: a guard that crashes exits 2, and a crash is not a refusal.",
     "refusal_untested": "mandatory when a strict, required guard declares no `must_refuse`: why no vector exists yet, and the issue tracking it. A guard nobody has seen refuse is the defect of this campaign; this field keeps that visible instead of absent.",
-    "repo": "optional inside a must_refuse vector: turns the materialised tree into a git work tree and tracks the paths it names, keyed like the trees (`files`, `accepts`). For guards that ask git rather than the filesystem — is this path tracked, who authored this commit — where a plain temp directory erases the very distinction they exist to make.",
+    "repo": "optional inside a must_refuse vector: turns the materialised tree into a git work tree and tracks the paths it names, keyed like the trees (`files`, `accepts`). For guards that ask git rather than the filesystem — is this path tracked, who authored this commit — where a plain temp directory erases the very distinction they exist to make. Two further keys, both optional and both keyed like the trees: `author` (`Name <email>`) and `message`. Without them a guard that reads WHO authored a commit could not be handed two trees differing in the only field it looks at; they default to the harness identity, so vectors written before they existed are unchanged.",
     "subguards": "for a guard exposing a `--guard <name>` selector: every selector that must actually be invoked in `job`. Without it, a script cited once for another selector satisfies the wiring test, and a sub-guard can be dropped from CI while the registry keeps announcing it — measured, that disarm stayed green.",
     "not_a_gate": "scripts a workflow runs that CANNOT refuse — no non-zero exit path. Surfaced by the reverse sweep (workflows -> registry) and kept out of `guards` so the registry never overstates what it covers. The `reason` is mandatory and the no-failure-path claim is verified against the source."
   },
@@ -164,7 +164,25 @@
         "issue": null,
         "summary": "None known. Its self-test is reached by gate-contracts.yml's `unittest discover`, which the fold made required through the `gate-contracts` caller job."
       },
-      "refusal_untested": "No CLI surface: same rooted-at-REPO_ROOT shape. Its self-test proves the comparison in-process, never the process. Tracked by #1715."
+      "must_refuse": [
+        {
+          "vector": "a manifest stamped 9.9.9 against a 1.0.0 workspace — the drift this guard exists for",
+          "files": {
+            "Cargo.toml": "[workspace.package]\nversion = \"1.0.0\"\n\n[workspace.dependencies]\nvelesdb-core = { path = \"crates/velesdb-core\", version = \"1.0.0\" }\n",
+            "crates/velesdb-memory/Cargo.toml": "version = \"1.0.0\"\n",
+            "crates/velesdb-python/pyproject.toml": "[project]\nversion = \"9.9.9\"\n"
+          },
+          "accepts": {
+            "Cargo.toml": "[workspace.package]\nversion = \"1.0.0\"\n\n[workspace.dependencies]\nvelesdb-core = { path = \"crates/velesdb-core\", version = \"1.0.0\" }\n",
+            "crates/velesdb-memory/Cargo.toml": "version = \"1.0.0\"\n",
+            "crates/velesdb-python/pyproject.toml": "[project]\nversion = \"1.0.0\"\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
     },
     {
       "script": "scripts/check-feature-claims.py",
@@ -179,7 +197,21 @@
         "issue": null,
         "summary": "Breaks (reports column_store MISSING) if any string literal in velesdb-python/src uses a backslash line-continuation."
       },
-      "refusal_untested": "No CLI surface: same rooted-at-REPO_ROOT shape. Tracked by #1715."
+      "must_refuse": [
+        {
+          "vector": "a roadmap entry still marked in-progress, which the audit must not let a README present as shipped",
+          "files": {
+            "ROADMAP.md": "## EPIC-010 Agent Memory SDK — in progress\n"
+          },
+          "accepts": {
+            "ROADMAP.md": "## EPIC-010 Agent Memory SDK — delivered\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
     },
     {
       "script": "scripts/check-perf-claims.py",
@@ -312,11 +344,33 @@
         "summary": "None known. Folded into CI Success's needs and chain via the `promise-contract` caller job, so a failure now blocks the merge."
       },
       "required_via": "promise-contract",
-      "refusal_untested": "No CLI surface: the registry path is rooted at REPO_ROOT. Tracked by #1715."
+      "must_refuse": [
+        {
+          "vector": "a capacity-mode doc promising sq8 buys search throughput — the overclaim Requirement 10.4 exists to refuse",
+          "files": {
+            "Cargo.toml": "[workspace.package]\nversion = \"1.0.0\"\n",
+            "docs/guides/QUANTIZATION.md": "# Quantization\n\nsq8 delivers higher throughput.\n",
+            "docs/VELESQL_SPEC.md": "# VelesQL\n",
+            "crates/velesdb-core/src/quantization/mod.rs": "//! Quantization.\n",
+            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ]\n}\n"
+          },
+          "accepts": {
+            "Cargo.toml": "[workspace.package]\nversion = \"1.0.0\"\n",
+            "docs/guides/QUANTIZATION.md": "# Quantization\n\nsq8 delivers no higher throughput.\n",
+            "docs/VELESQL_SPEC.md": "# VelesQL\n",
+            "crates/velesdb-core/src/quantization/mod.rs": "//! Quantization.\n",
+            "docs/reference/promise-contract.json": "{\n  \"claims\": [\n    {\n      \"id\": \"quantization-is-documented\",\n      \"file\": \"docs/guides/QUANTIZATION.md\",\n      \"must_contain\": \"# Quantization\",\n      \"executable\": false,\n      \"measured_on\": \"2026-07-31\",\n      \"measured_machine\": \"fixture\",\n      \"measured_version\": \"1.0.0\"\n    }\n  ]\n}\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
     },
     {
       "script": "scripts/check-python.sh",
-      "purpose": "Python integration checks (dangerous hash(), bandit, mypy).",
+      "purpose": "Python integration checks (dangerous hash(), non-determinism, bandit, flake8 complexity).",
       "workflow": ".github/workflows/propagation-guard.yml",
       "job": "integrations-python",
       "required": true,
@@ -325,10 +379,21 @@
       "self_test_required": false,
       "blind_spot": {
         "issue": null,
-        "summary": "None known. Folded into CI Success's needs and chain via the `propagation-guard` caller job, so a failure now blocks the merge."
+        "summary": "Entirely cwd-relative (PYTHON_DIRS) with no --root and no cd of its own: run from a subdirectory it scans nothing and exits 0 — measured from docs/. Harmless in CI, which runs it from the root, and it is what lets the refusal harness drive it with an empty argv. Only checks 1, 3 and 4 can raise ERRORS; 2 and 5 warn and can never refuse."
       },
       "required_via": "propagation-guard",
-      "refusal_untested": "No CLI surface: the shell guard cds to the repository root itself. Tracked by #1715."
+      "must_refuse": [
+        {
+          "vector": "a builtin hash() used to derive a token — non-deterministic across processes, which is the whole point of check 1",
+          "files": {
+            "integrations/langchain/src/velesdb_langchain/store.py": "def token_for(doc):\n    return hash(doc)\n"
+          },
+          "accepts": {
+            "integrations/langchain/src/velesdb_langchain/store.py": "import hashlib\n\n\ndef token_for(doc):\n    return hashlib.sha256(doc).hexdigest()\n"
+          },
+          "argv": []
+        }
+      ]
     },
     {
       "script": "scripts/check_binary_size.py",
@@ -341,10 +406,27 @@
       "self_test_required": false,
       "blind_spot": {
         "issue": null,
-        "summary": "None known. Folded into CI Success's needs and chain via the `binary-size` caller job, so a failure now blocks the merge."
+        "summary": "The vector below proves the MISSING half only. The OVER-CEILING half is not vector-testable: the smallest ceiling is 9 MiB, so a fixture exceeding one would mean carrying 9 MiB of literal bytes in this registry. That half is exercised for real on every release, against the binaries the release build produced."
       },
       "required_via": "binary-size",
-      "refusal_untested": "No CLI surface, and a vector would have to produce real release binaries to weigh. Tracked by #1715."
+      "must_refuse": [
+        {
+          "vector": "a release that built only two of its three binaries — the gate must not pass on a binary it never weighed",
+          "files": {
+            "velesdb-server": "stub\n",
+            "velesdb": "stub\n"
+          },
+          "accepts": {
+            "velesdb-server": "stub\n",
+            "velesdb": "stub\n",
+            "velesdb-migrate": "stub\n"
+          },
+          "argv": [
+            "--target-dir",
+            "{root}"
+          ]
+        }
+      ]
     },
     {
       "script": "scripts/run-production-gates.sh",
@@ -360,7 +442,7 @@
         "summary": "None known. Folded into CI Success's needs and chain via the `production-gates` caller job, so a failure now blocks the merge."
       },
       "required_via": "production-gates",
-      "refusal_untested": "A meta-runner: it chains the other guards, so its refusal is theirs. It gets a vector once the guards it chains have one. Tracked by #1715."
+      "refusal_untested": "Measured, and NOT for the reason previously written here. Under the harness (cwd = a temp tree) its first line, `bash scripts/check-doc-contract.sh`, cannot be found and the runner exits 127 — not 1, so it would fail the vector contract even though it did stop. And the positive control is out of reach in principle: gates 3 to 5 are `cargo test` invocations against velesdb-core (velesql_planner_golden, crash_recovery_tests, wal_recovery_tests), so exit 0 requires a real crate and a full build, not a materialised tree. Its refusal is genuinely its members'; each of those now carries its own vector. Tracked by #1715."
     },
     {
       "script": ".github/workflows/pr-governance.yml",
@@ -381,7 +463,7 @@
         "summary": "No self-test materialises a PR these steps must reject: Git Flow and branch freshness read a pull_request payload no local tree reproduces. The attribution check is no longer inline — it moved to scripts/check-ai-attribution.py, which is tested (#1699 closed)."
       },
       "required_via": "pr-governance",
-      "refusal_untested": "Git Flow and branch freshness read a pull_request payload that no local tree reproduces, so neither can be handed a vector. Tracked by #1715."
+      "refusal_untested": "Not a script but three inline steps, and the two that remain here read a `pull_request` payload — the source branch name and its merge-base with the base branch — that no materialised tree reproduces: there is no pull request to describe. The third check, AI attribution, is no longer inline (it moved to scripts/check-ai-attribution.py) and now carries an executable vector of its own. Tracked by #1715."
     },
     {
       "script": "scripts/check-ai-attribution.py",
@@ -392,7 +474,34 @@
       "mode": "strict",
       "self_test": "scripts.tests.test_check_ai_attribution",
       "self_test_required": true,
-      "refusal_untested": "Its vectors need a git repository with authored commits, which `must_refuse`'s file-tree shape cannot materialise. scripts/tests/test_check_ai_attribution.py pins 21 cases in-process instead, refusals AND the admissions that decide (dependabot[bot], a person named Claudette, prose describing a trailer). Giving the harness a `repo` vector shape is tracked by #1715.",
+      "must_refuse": [
+        {
+          "vector": "a commit whose author identity is an assistant, against the same tree authored by a person whose name merely starts the same way",
+          "files": {
+            "NOTES.md": "placeholder\n"
+          },
+          "accepts": {
+            "NOTES.md": "placeholder\n"
+          },
+          "repo": {
+            "files": [
+              "NOTES.md"
+            ],
+            "accepts": [
+              "NOTES.md"
+            ],
+            "author": {
+              "files": "Claude <claude@anthropic.com>",
+              "accepts": "Claudette <claudette@example.com>"
+            }
+          },
+          "argv": [
+            "HEAD",
+            "--root",
+            "{root}"
+          ]
+        }
+      ],
       "blind_spot": {
         "issue": null,
         "summary": "Reads the RAW identity (%an <%ae>, never %aN): a .mailmap line in this repository already maps anthropic to the maintainer, and the mapped name would launder the case being looked for. Admission is by whole identity, so an impostor of an admitted bot does not inherit it."

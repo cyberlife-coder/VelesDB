@@ -71,7 +71,24 @@ def materialise(tree: "dict[str, str]", root: Path) -> None:
         path.write_text(content, encoding="utf-8")
 
 
-def make_repository(root: Path, tracked: "list[str]") -> None:
+#: Identity and message a `repo` vector gets unless it names its own. Local to
+#: the tree, so the harness never depends on the machine's git configuration.
+DEFAULT_IDENTITY = "refusal-vector-harness <harness@velesdb.invalid>"
+DEFAULT_MESSAGE = "vector"
+
+
+def split_identity(identity: str) -> "tuple[str, str]":
+    """`Name <email>` -> `(name, email)`, the form git config wants."""
+    name, _, email = identity.partition("<")
+    return name.strip(), email.rstrip(">").strip()
+
+
+def make_repository(
+    root: Path,
+    tracked: "list[str]",
+    identity: str = DEFAULT_IDENTITY,
+    message: str = DEFAULT_MESSAGE,
+) -> None:
     """Turn the materialised tree into a git work tree, tracking `tracked`.
 
     Some guards do not ask the filesystem, they ask **git** — is this path
@@ -81,18 +98,23 @@ def make_repository(root: Path, tracked: "list[str]") -> None:
     erases: a file that exists and a file a clone would receive are not the
     same file.
 
-    The commit identity is fixed and local to the tree, so the harness never
-    depends on the machine's git configuration.
+    `identity` and `message` were hardcoded here, which left one whole class of
+    guard still unable to receive a vector: the ones that read WHO authored a
+    commit, or WHAT the message says, cannot be handed a tree that differs in
+    the only field they look at. A vector names them per tree, like the tracked
+    paths; both default to the values this harness always used, so every vector
+    written before this stays byte-identical.
     """
     run = lambda *args: subprocess.run(  # noqa: E731 - local shorthand
         ["git", "-C", str(root), *args], capture_output=True, text=True, check=True
     )
+    name, email = split_identity(identity)
     run("init", "-q")
-    run("config", "user.email", "harness@velesdb.invalid")
-    run("config", "user.name", "refusal-vector-harness")
+    run("config", "user.email", email)
+    run("config", "user.name", name)
     for relative in tracked:
         run("add", "--", relative)
-    run("commit", "-q", "-m", "vector")
+    run("commit", "-q", "-m", message)
 
 
 def run_guard(script: str, argv: "list[str]", root: Path) -> "subprocess.CompletedProcess[str]":
@@ -123,7 +145,12 @@ class RefusalVectorTests(unittest.TestCase):
         # untracked, which is the whole point for a guard that asks git.
         repo = vector.get("repo")
         if repo is not None:
-            make_repository(tmp, repo.get(key, []))
+            make_repository(
+                tmp,
+                repo.get(key, []),
+                repo.get("author", {}).get(key, DEFAULT_IDENTITY),
+                repo.get("message", {}).get(key, DEFAULT_MESSAGE),
+            )
         return run_guard(entry["script"], vector["argv"], tmp)
 
     def test_every_declared_vector_is_refused(self) -> None:
@@ -179,8 +206,24 @@ class RefusalVectorTests(unittest.TestCase):
             for vector in entry["must_refuse"]:
                 with self.subTest(script=entry["script"], vector=vector["vector"]):
                     repo = vector.get("repo") or {}
-                    refused = (vector["files"], sorted(repo.get("files", [])))
-                    accepted = (vector["accepts"], sorted(repo.get("accepts", [])))
+                    author = repo.get("author", {})
+                    message = repo.get("message", {})
+                    # The state is the tree, what git tracks of it, AND who
+                    # authored it — a vector for the attribution guard differs
+                    # in the identity alone, and comparing trees and tracked
+                    # sets only would have rejected it as "identical".
+                    refused = (
+                        vector["files"],
+                        sorted(repo.get("files", [])),
+                        author.get("files"),
+                        message.get("files"),
+                    )
+                    accepted = (
+                        vector["accepts"],
+                        sorted(repo.get("accepts", [])),
+                        author.get("accepts"),
+                        message.get("accepts"),
+                    )
                     self.assertNotEqual(
                         refused,
                         accepted,

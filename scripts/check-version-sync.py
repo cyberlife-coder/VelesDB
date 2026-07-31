@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify that all package manifests share the same version as the Cargo workspace."""
 
+import argparse
 import json
 import re
 import sys
@@ -194,8 +195,8 @@ MEMORY_TARGETS: "list[tuple[str, str]]" = [
 ]
 
 
-def _read_memory_crate_version() -> str:
-    cargo_toml = (REPO_ROOT / "crates/velesdb-memory/Cargo.toml").read_text(encoding="utf-8")
+def _read_memory_crate_version(root: Path) -> str:
+    cargo_toml = (root / "crates/velesdb-memory/Cargo.toml").read_text(encoding="utf-8")
     match = re.search(r"^version\s*=\s*\"([^\"]+)\"", cargo_toml, re.MULTILINE)
     if not match:
         raise RuntimeError("Could not find version field in crates/velesdb-memory/Cargo.toml")
@@ -216,8 +217,8 @@ def _read_mcp_server_json_versions(path: Path) -> str:
     return versions[0] if len(uniq) == 1 else "/".join(versions)
 
 
-def _read_cargo_version() -> str:
-    cargo_toml = (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
+def _read_cargo_version(root: Path) -> str:
+    cargo_toml = (root / "Cargo.toml").read_text(encoding="utf-8")
     section_idx = cargo_toml.find("[workspace.package]")
     if section_idx == -1:
         raise RuntimeError("Could not find [workspace.package] section in Cargo.toml")
@@ -590,13 +591,23 @@ _READERS = {
 }
 
 
-def main() -> int:
-    expected = _read_cargo_version()
-    print(f"Workspace version (Cargo.toml): {expected}")
+def _compare_targets(
+    root: Path,
+    targets: "list[tuple[str, str]]",
+    expected: str,
+    mismatches: "list[str]",
+) -> None:
+    """Compare every stamp in `targets` against `expected`, appending findings.
 
-    mismatches: list[str] = []
-    for rel_path, fmt in TARGETS:
-        path = REPO_ROOT / rel_path
+    The two sweeps were the same loop written twice, which is how they drifted:
+    the workspace sweep resolved its reader through `_READERS.get` and raised a
+    RuntimeError on an unknown format, while the memory sweep indexed
+    `_READERS[fmt]` directly and raised a KeyError — an uncaught KeyError exits
+    1 through a traceback, which is indistinguishable from a refusal. One loop,
+    one behaviour.
+    """
+    for rel_path, fmt in targets:
+        path = root / rel_path
         if not path.exists():
             print(f"  SKIP  {rel_path} (file not found)")
             continue
@@ -614,20 +625,17 @@ def main() -> int:
                 f"{rel_path} [{fmt}]: expected {expected}, found {actual}"
             )
 
-    memory_expected = _read_memory_crate_version()
+
+def run(root: Path) -> int:
+    expected = _read_cargo_version(root)
+    print(f"Workspace version (Cargo.toml): {expected}")
+
+    mismatches: list[str] = []
+    _compare_targets(root, TARGETS, expected, mismatches)
+
+    memory_expected = _read_memory_crate_version(root)
     print(f"\nvelesdb-memory version (crates/velesdb-memory/Cargo.toml): {memory_expected}")
-    for rel_path, fmt in MEMORY_TARGETS:
-        path = REPO_ROOT / rel_path
-        if not path.exists():
-            print(f"  SKIP  {rel_path} (file not found)")
-            continue
-        actual = _READERS[fmt](path)
-        status = "OK   " if actual == memory_expected else "MISMATCH"
-        print(f"  {status}  {rel_path} [{fmt}]: {actual}")
-        if actual != memory_expected:
-            mismatches.append(
-                f"{rel_path} [{fmt}]: expected {memory_expected}, found {actual}"
-            )
+    _compare_targets(root, MEMORY_TARGETS, memory_expected, mismatches)
 
     if mismatches:
         print("\nVersion mismatch(es) detected:")
@@ -637,6 +645,21 @@ def main() -> int:
 
     print("\nAll versions match.")
     return 0
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    parser = argparse.ArgumentParser(description="Check version stamps stay in sync.")
+    parser.add_argument("--root", default=str(REPO_ROOT), help="repository root to scan")
+    args = parser.parse_args(argv)
+    # A tree this guard cannot read answers 2, never 1. Both anchor files are
+    # read unguarded (`Cargo.toml`, the memory crate manifest), and a missing
+    # one used to surface as a FileNotFoundError traceback — which also exits 1
+    # and would have passed for a refusal it never made.
+    try:
+        return run(Path(args.root).resolve())
+    except (OSError, RuntimeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

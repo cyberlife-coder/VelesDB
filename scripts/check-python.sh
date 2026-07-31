@@ -75,7 +75,11 @@ echo -e "\n${YELLOW}3️⃣  Running security checks...${NC}"
 
 if command -v bandit &> /dev/null; then
     for dir in $PYTHON_DIRS; do
-        if [ -d "$dir" ]; then
+        # Guard the directory bandit is actually GIVEN. The test was on "$dir"
+        # while the scan was on "$dir/src", so an integration laid out without a
+        # src/ made bandit error out and counted as a finding — a refusal the
+        # tree never earned.
+        if [ -d "$dir/src" ]; then
             echo -e "   Scanning $dir..."
             if ! bandit -r "$dir/src" -ll -q 2>/dev/null; then
                 ERRORS=$((ERRORS + 1))
@@ -93,8 +97,24 @@ fi
 # =============================================================================
 echo -e "\n${YELLOW}4️⃣  Checking cyclomatic complexity (CC <= 8)...${NC}"
 
-if command -v flake8 &> /dev/null; then
-    COMPLEXITY_ISSUES=$(flake8 $PYTHON_DIRS integrations/common --select=C901 --max-complexity=8 2>/dev/null || true)
+# Only hand flake8 directories that exist. `integrations/common` used to be
+# passed unconditionally, and on a tree without it flake8 answers E902 on
+# stdout — which --select=C901 does not suppress, so it counted as a complexity
+# finding no function had caused.
+COMPLEXITY_TARGETS=""
+for dir in $PYTHON_DIRS integrations/common; do
+    if [ -d "$dir" ]; then
+        COMPLEXITY_TARGETS="$COMPLEXITY_TARGETS $dir"
+    fi
+done
+
+if ! command -v flake8 &> /dev/null; then
+    echo -e "${YELLOW}⚠️  flake8 not installed, skipping complexity check${NC}"
+    echo -e "   Install with: pip install flake8 mccabe"
+elif [ -z "$COMPLEXITY_TARGETS" ]; then
+    echo -e "${YELLOW}⚠️  no Python integration directory present, nothing to measure${NC}"
+else
+    COMPLEXITY_ISSUES=$(flake8 $COMPLEXITY_TARGETS --select=C901 --max-complexity=8 2>/dev/null || true)
     if [ -n "$COMPLEXITY_ISSUES" ]; then
         echo -e "${RED}❌ Functions exceeding complexity threshold (CC > 8):${NC}"
         echo "$COMPLEXITY_ISSUES"
@@ -102,9 +122,6 @@ if command -v flake8 &> /dev/null; then
     else
         echo -e "${GREEN}✅ All functions within complexity limit (CC <= 8)${NC}"
     fi
-else
-    echo -e "${YELLOW}⚠️  flake8 not installed, skipping complexity check${NC}"
-    echo -e "   Install with: pip install flake8 mccabe"
 fi
 
 # =============================================================================
