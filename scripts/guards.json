@@ -269,14 +269,27 @@
       "workflow": ".github/workflows/doc-contract.yml",
       "job": "contract",
       "required": true,
-      "mode": "warn",
-      "exit_condition": "Document the four routes named in the script header (/collections/{name}/compact, points/raw, stream/enable, vacuum) in README.md, then flip DOC_CONTRACT_MODE's default to strict in the same commit. Tracked by #1707. The fold made this gate required, so the flip now has teeth.",
+      "mode": "strict",
       "self_test": null,
       "self_test_required": false,
       "blind_spot": {
-        "issue": 1707,
-        "summary": "Measured: exit 0 in the default warn mode with 4 undocumented routes, exit 1 under DOC_CONTRACT_MODE=strict. The guard works; nothing asks it to."
+        "issue": null,
+        "summary": "None known. #1707 is closed: the four routes (/collections/{name}/compact, points/raw, stream/enable, vacuum) are now documented in README.md, and DOC_CONTRACT_MODE's default flipped to strict in the same commit, so a full-sweep finding fails the build like the pinned routes always did."
       },
+      "must_refuse": [
+        {
+          "vector": "a route added under the server crate without a matching README backtick entry — the four-route gap of #1707",
+          "files": {
+            "crates/velesdb-server/src/routes.rs": "pub fn build_router() {\n    Router::new()\n        .route(\"/query/explain\", post(explain))\n        .route(\"/aggregate\", post(aggregate))\n        .route(\"/collections/{name}/vacuum\", post(vacuum_collection));\n}\n",
+            "README.md": "# Test fixture\n\nAPI: `/query/explain`, `/aggregate`\n"
+          },
+          "accepts": {
+            "crates/velesdb-server/src/routes.rs": "pub fn build_router() {\n    Router::new()\n        .route(\"/query/explain\", post(explain))\n        .route(\"/aggregate\", post(aggregate))\n        .route(\"/collections/{name}/vacuum\", post(vacuum_collection));\n}\n",
+            "README.md": "# Test fixture\n\nAPI: `/query/explain`, `/aggregate`, `/collections/{name}/vacuum`\n"
+          },
+          "argv": []
+        }
+      ],
       "required_via": "doc-contract"
     },
     {

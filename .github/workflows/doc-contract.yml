@@ -41,9 +41,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Blocking on the pinned endpoints (/query/explain, /aggregate); the
-      # full 34-route sweep reports as warnings until the four routes named in
-      # the script header are documented, then set DOC_CONTRACT_MODE=strict.
+      # Blocking on the pinned endpoints (/query/explain, /aggregate) and,
+      # since #1707, on the full 34-route sweep too (DOC_CONTRACT_MODE
+      # defaults to strict in the script).
       - name: Check README/runtime contract
         run: bash scripts/check-doc-contract.sh
 

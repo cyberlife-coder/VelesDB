@@ -16,14 +16,14 @@
 #     main.rs, so restoring the full sweep cannot change the verdict on any
 #     tree that was green yesterday.
 #   * FULL sweep of every `.route("...")` in the server crate — governed by
-#     DOC_CONTRACT_MODE, default `warn`. It is red on develop today (4 routes
-#     were added without a README entry while the sweep was disarmed). Flip
-#     the default to `strict` in the same commit that documents them:
+#     DOC_CONTRACT_MODE, default `strict` since #1707. The four routes that
+#     were previously undocumented while the sweep was disarmed are now in
+#     README.md:
 #       /collections/{name}/compact  /collections/{name}/points/raw
 #       /collections/{name}/stream/enable  /collections/{name}/vacuum
 set -euo pipefail
 
-DOC_CONTRACT_MODE="${DOC_CONTRACT_MODE:-warn}"
+DOC_CONTRACT_MODE="${DOC_CONTRACT_MODE:-strict}"
 if [[ "$DOC_CONTRACT_MODE" != "strict" && "$DOC_CONTRACT_MODE" != "warn" ]]; then
   echo "ERROR: DOC_CONTRACT_MODE must be 'strict' or 'warn' (got '$DOC_CONTRACT_MODE')"
   exit 2
