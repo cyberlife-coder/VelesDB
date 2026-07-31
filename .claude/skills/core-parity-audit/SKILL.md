@@ -77,11 +77,11 @@ Each finding: `severity info|smell|concern`, `divergence_risk` bool, `file:line`
 
 ### Phase 5 — Verify concerns + synthesize
 Adversarially re-check every `concern` (and `smell` with `divergence_risk`) — many "concerns" are justified design (feature-gating, pure-client wire-building, idiomatic enrichment). Then synthesize:
-- **Parity matrix** — run `scripts/gen_matrix.py` over the Phase 2/3 JSON results → cell-level markdown matrix + per-component scorecard + gap buckets (user-facing vs core-internal/ops). Exclude core-internal domains (observability counters, durability/WAL tuning, registry generations, column-store kernels) from the "should expose" denominator — they were never meant to cross the binding boundary.
+- **Parity matrix** — run `.claude/skills/core-parity-audit/scripts/gen_matrix.py` over the Phase 2/3 JSON results → cell-level markdown matrix + per-component scorecard + gap buckets (user-facing vs core-internal/ops). Exclude core-internal domains (observability counters, durability/WAL tuning, registry generations, column-store kernels) from the "should expose" denominator — they were never meant to cross the binding boundary.
 - **Architecture verdict** — per-child cleanliness + the 4 probe verdicts + the dependency-direction result, each concern with its verification status and a **license-aware** remediation.
 
 ### Orchestration
-Drive Phases 1–5 with the **Workflow tool** (`parallel` for the catalog barrier and the architecture fan-out; `pipeline` for component map→verify). Save each workflow's structured result, feed Phase-2/3 JSON to `scripts/gen_matrix.py`. If agents get rate-limited (it happens at ~25+ concurrent), re-run only the failed components in a small follow-up workflow reusing the existing catalog — do **not** resume-cache the failed nulls.
+Drive Phases 1–5 with the **Workflow tool** (`parallel` for the catalog barrier and the architecture fan-out; `pipeline` for component map→verify). Save each workflow's structured result, feed Phase-2/3 JSON to `.claude/skills/core-parity-audit/scripts/gen_matrix.py`. If agents get rate-limited (it happens at ~25+ concurrent), re-run only the failed components in a small follow-up workflow reusing the existing catalog — do **not** resume-cache the failed nulls.
 
 ## Outputs
 

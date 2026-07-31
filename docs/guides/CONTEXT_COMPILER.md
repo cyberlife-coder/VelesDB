@@ -61,9 +61,9 @@ Per compilation:
 |---|---|
 | **MCP server** | the full set: `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `suggest_budget`, `save_working_context`, `load_working_context`, `list_working_contexts` |
 | **Rust** (`velesdb_memory::context`) | the full set, plus the Rust-only `compile_context_reranked`; `compile_transcript` is composed by hand from `context::segment_transcript` + `ContextCompiler` / `MemoryService::compile_context` |
-| **Node** (`@wiscale/velesdb-memory-node`) | `compileContext`, `retrieveContextSource`, `save`/`loadWorkingContext`, `feedback` — no `context_savings`, no `explain_compilation`, no one-call `compileTranscript` yet |
-| **Python** (`from velesdb import MemoryService`) | `compile_context`, `retrieve_context_source`, `context_savings`, `save`/`load_working_context`, `feedback` merged on `develop` (no `explain_compilation`, no one-call transcript helper) — **the published PyPI wheel predates all of it** |
-| **WASM** | `compileContext` (media fragments compile, dedup, and cost correctly on the in-memory `WasmStore`); `retrieveContextSource` is not exposed, and `path` ingestion is compiled out entirely |
+| **Node** (`@wiscale/velesdb-memory-node`) | the full set: `compileContext`, `compileTranscript`, `explainCompilation`, `retrieveContextSource`, `contextSavings`, `suggestBudget`, `save`/`load`/`listWorkingContexts` |
+| **Python** (`from velesdb import MemoryService`) | the full set: `compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `suggest_budget`, `save`/`load`/`list_working_contexts` — check the published wheel's version before assuming it carries the newest of these |
+| **WASM** | the full set: `compileContext`, `compileTranscript`, `explainCompilation`, `retrieveContextSource`, `contextSavings`, `suggestBudget`, `save`/`load`/`listWorkingContexts`. Media fragments compile, dedup and cost correctly on the in-memory `WasmStore`; `path` ingestion is compiled out entirely |
 
 Until the next PyPI release, Python agents reach the compiler through the MCP
 server. Any MCP-speaking client gets the full surface regardless of language.
@@ -374,9 +374,9 @@ caption, often empty for a bare screenshot.
   optional `media` on the retrieve result are both *advertised* in the schemas,
   not merely accepted), the Python binding, the Node binding
   ([`compileContext` / `retrieveContextSource`](../../crates/velesdb-node/README.md),
-  same `{handle, content, media?}` shape), and WASM's `compileContext`
-  (`retrieveContextSource` is not exposed on WASM, so resolving a media handle
-  back to bytes *within* a wasm session is Node/Python/MCP-only for now).
+  same `{handle, content, media?}` shape), and WASM — which exposes
+  `retrieveContextSource` too (`crates/velesdb-wasm/src/memory_service.rs:831`),
+  so resolving a media handle back to bytes works in a wasm session as well.
 
 Minimal end-to-end example — the exact calls
 [`mcp_e2e.py`](../../crates/velesdb-memory/examples/context_savings/real_measures/mcp_e2e.py)
