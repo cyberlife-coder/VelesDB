@@ -844,3 +844,81 @@ fn entity_miss_marshals_an_empty_profile_with_a_string_id() {
     let relations: js_sys::Array = relations.unchecked_into();
     assert_eq!(relations.length(), 0, "a miss carries no relations");
 }
+
+// --- rememberExtracted, the write side `entity` was missing -------------------
+//
+// This binding used to be EXEMPTED from `remember_extracted` in the parity
+// guard, on the grounds that `OllamaExtractor` was the crate's only
+// `Extractor` and would put a network call in the bundle. A deterministic,
+// dependency-free backend annulled that reason (issues #1690, #1692), so the
+// method is here — and with it, the first `entity` HIT this binding can
+// produce.
+
+/// The whole point of the field: an edge LEAVES camille, so it is invisible
+/// from theo's outgoing list and visible only in `relationsIn`. A binding
+/// that relayed `relationsIn` by copying `relations` would pass a miss test
+/// and fail this one.
+#[wasm_bindgen_test]
+fn remember_extracted_marshals_the_envelope_and_makes_an_entity_hit_reachable() {
+    let svc = WasmMemoryService::new(16);
+    let outcome = svc
+        .remember_extracted(
+            "edge: Camille | sister of | Theo",
+            JsValue::NULL,
+            Some("outline".to_owned()),
+        )
+        .expect("the outline backend needs no model");
+
+    let skipped = js_sys::Reflect::get(&outcome, &"skippedOverCap".into()).unwrap();
+    assert_eq!(
+        skipped.as_f64(),
+        Some(0.0),
+        "the skip count crosses as a real number under its camelCase name"
+    );
+    let ids = js_sys::Reflect::get(&outcome, &"ids".into()).unwrap();
+    assert!(
+        ids.is_instance_of::<js_sys::Array>(),
+        "`ids` stays an array inside the envelope"
+    );
+
+    let profile = svc.entity("Theo").unwrap();
+    let found = js_sys::Reflect::get(&profile, &"found".into()).unwrap();
+    assert_eq!(
+        found.as_bool(),
+        Some(true),
+        "extraction created the hub, so this binding can finally report a hit"
+    );
+    let incoming = js_sys::Reflect::get(&profile, &"relationsIn".into()).unwrap();
+    let incoming: js_sys::Array = incoming.unchecked_into();
+    assert_eq!(
+        incoming.length(),
+        1,
+        "the edge points AT theo, so it can only be seen here"
+    );
+    let outgoing = js_sys::Reflect::get(&profile, &"relations".into()).unwrap();
+    let outgoing: js_sys::Array = outgoing.unchecked_into();
+    assert_eq!(
+        outgoing.length(),
+        0,
+        "and it must NOT be duplicated into the outgoing list"
+    );
+}
+
+/// A backend this bundle does not carry is refused BY NAME. Silently falling
+/// back would let a caller who asked for a generative model believe they got
+/// one, and quietly get something else.
+#[wasm_bindgen_test]
+fn remember_extracted_refuses_a_backend_this_bundle_does_not_carry() {
+    let svc = WasmMemoryService::new(16);
+    let err = svc
+        .remember_extracted("fact: anything", JsValue::NULL, Some("ollama".to_owned()))
+        .expect_err("ollama is not available in the WASM bundle");
+    let message = js_sys::Reflect::get(&err, &"message".into())
+        .ok()
+        .and_then(|m| m.as_string())
+        .unwrap_or_default();
+    assert!(
+        message.contains("unknown extractor 'ollama'"),
+        "the refusal names the backend that was asked for, got: {message}"
+    );
+}

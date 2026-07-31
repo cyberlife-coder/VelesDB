@@ -259,13 +259,36 @@ Full surface, as enumerated from `MemoryService.prototype` in the published
 
 | Group | Methods |
 |---|---|
-| Write | `remember(fact, links, metadata, ttlSeconds?)`, `relate(from, to, relation)`, `forget(id)` |
-| Read | `recall(query, k?, filter)`, `recallWhere`, `recallFused`, `recallFusedDated`, `why(query, depth, filter)` |
+| Write | `remember(fact, links, metadata, ttlSeconds?)`, `relate(from, to, relation)`, `unrelate(from, to, relation)`, `forget(id)`, `rememberExtracted(text, metadata?, extractor?)` |
+| Read | `recall(query, k?, filter)`, `recallWhere`, `recallFused`, `recallFusedDated`, `why(query, depth, filter)`, `entity(name)` |
 | Context compiler | `compileContext`, `compileTranscript`, `contextSavings`, `explainCompilation`, `suggestBudget`, `retrieveContextSource` |
 | Working context | `saveWorkingContext`, `loadWorkingContext`, `listWorkingContexts` |
 
 Contract details:
 
+- `entity(name)` answers a question ABOUT a named thing — a person, a place,
+  an organisation — rather than about the sentences mentioning it. It returns
+  `{found, id, name, attributes, relations, relationsIn}`, each edge
+  `{predicate, targetId, target}`. `relations` LEAVE the entity;
+  `relationsIn` point AT it, and there `targetId`/`target` name the far end
+  the edge comes FROM. Reading only the first makes the graph look half
+  empty: it holds `camille --sister of--> theo`, so Theo's own outgoing edges
+  never mention Camille.
+- `rememberExtracted(text, metadata?, extractor?)` returns
+  `{ids, skippedOverCap}` and is the WRITE side of `entity` — entity hubs are
+  born only of extraction. `extractor` defaults to `"outline"`, the
+  deterministic, network-free backend: it reads the structure the passage
+  STATES, one directive per line (`edge: subject | predicate | object`,
+  `attr: entity | key | json`, `fact: text | topic, topic`). It is the ONLY
+  backend this bundle carries — a generative one would put a network call in
+  the very bundle this binding exists to avoid — and any other name is
+  refused by name rather than silently substituted. `skippedOverCap` counts
+  facts dropped for exceeding the embeddable cap; a shorter `ids` on its own
+  could not tell you that happened.
+- `unrelate(from, to, relation)` removes a typed edge and returns
+  `{found, removed}`. Idempotent: an edge that was not there reports
+  `found: false` rather than throwing, so a cleanup can be replayed. Not to
+  be confused with `WasmDatabase`'s graph `unrelate` — a different store.
 - `loadWorkingContext` resolves `{found, working, other_sessions}` — the same
   envelope the MCP tool serves. **Breaking (`velesdb-memory` 0.12.0, relayed
   by the next `@wiscale/velesdb-wasm` release — the package is on the 4.x

@@ -211,9 +211,15 @@ fn compiled_string_field(
 }
 
 /// Lift the top-level fields of an id-stringified compiled context into the
-/// typed envelope. Any field not declared by [`crate::dto::CompiledContextJs`]
-/// stays behind in `map` and is dropped — the envelope is the binding's
-/// contract, not a mirror of the domain type.
+/// typed envelope.
+///
+/// This used to say that a field the envelope does not declare "stays behind
+/// in `map` and is dropped — the envelope is the binding's contract, not a
+/// mirror of the domain type". That reading is what cost Node
+/// `compile_context.warnings` (issue #1691): the envelope IS meant to mirror
+/// the domain type, and a hand-written mirror silently loses every field the
+/// server later grows. So the contract is now the opposite one — every
+/// top-level field is taken, and the drain below is what says so.
 fn compiled_envelope(
     map: &mut serde_json::Map<String, Value>,
 ) -> napi::Result<crate::dto::CompiledContextJs> {
@@ -221,7 +227,7 @@ fn compiled_envelope(
     // malformed envelope surfaces its error unchanged.
     let content = compiled_string_field(map, "content")?;
     let risk = compiled_string_field(map, "risk")?;
-    Ok(crate::dto::CompiledContextJs {
+    let envelope = crate::dto::CompiledContextJs {
         content,
         sections: compiled_field(map, "sections")?,
         decisions: compiled_field(map, "decisions")?,
@@ -229,5 +235,20 @@ fn compiled_envelope(
         retrieval_handles: compiled_field(map, "retrieval_handles")?,
         insights: compiled_field(map, "insights")?,
         risk,
-    })
+        warnings: compiled_field(map, "warnings")?,
+    };
+    // `compiled_field` REMOVES, so an empty map means nothing was left behind.
+    // A `debug_assert` and not an error on purpose: this fires for the
+    // DEVELOPER who grew the server without growing the mirror, which is a
+    // build-time mistake, and it must never turn a caller's successful
+    // compilation into a failure in the release profile npm ships. The
+    // release-profile blind spot is real and is exactly why the guard in
+    // `binding_parity_bdd.rs` exists on top of it.
+    debug_assert!(
+        map.is_empty(),
+        "the server grew {:?} on compile_context and this mirror dropped it — add the field to \
+         CompiledContextJs",
+        map.keys().collect::<Vec<_>>(),
+    );
+    Ok(envelope)
 }

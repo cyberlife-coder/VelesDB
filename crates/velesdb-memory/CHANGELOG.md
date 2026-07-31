@@ -9,6 +9,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`OutlineExtractor`: a deterministic, network-free extraction backend.**
+  Until now `OllamaExtractor` was the crate's only `Extractor`, so every
+  contract `remember_extracted` publishes was reachable only through a
+  network call — which is why `skipped_over_cap` and the incoming half of an
+  entity profile had no test on any binding, and were declared known gaps
+  instead. This backend reads the structure a passage STATES rather than
+  inferring it, one directive per line:
+
+  ```text
+  edge: Camille | sister of | Theo
+  attr: Theo Durand | age | 15
+  fact: Camille ships the parser. | camille
+  ```
+
+  It stands to `OllamaExtractor` exactly as `HashEmbedder` does to
+  `OllamaEmbedder`: a public, documented, offline choice — not a test double.
+  A malformed directive is an `ExtractError::Parse`, never a silently dropped
+  line. Selected by name through the new `extractor` parameter on the
+  bindings' `remember_extracted` (`"ollama"` by default, `"outline"` for this
+  one); an unknown name is refused rather than silently substituted.
+
+- **WASM gains `rememberExtracted`.** Its exemption in the parity guard was
+  justified by `OllamaExtractor` being the crate's only `Extractor` — a
+  reason the backend above annuls. Note that nothing mechanical caught this:
+  the stale-exemption check asks whether a binding started publishing the
+  tool, never whether the exemption's REASON is still true.
+
+- **TypeScript SDK gains `entity`, `unrelate` and `rememberExtracted`**, the
+  methods it had been missing for its whole life (#1721), and enters a
+  guard's perimeter for the first time.
+
+### Changed
+
+- **BREAKING — `remember_extracted` returns an envelope**, `{ids,
+  skipped_over_cap}` (`{ids, skippedOverCap}` on the JS surfaces), where Node
+  returned `Array<string>` and Python `List[int]`. **Migration**: read
+  `.ids` / `["ids"]`. A bare list could not say why it was short — nothing
+  distinguished a passage holding three facts from one holding twelve of
+  which nine were dropped for exceeding the embeddable cap. That is a silence
+  about lost data, not a missing convenience (#1692).
+
+- **BREAKING (Python) — `model` is now optional** on `remember_extracted`,
+  since it configures the `"ollama"` backend only. Selecting `"ollama"`
+  without one raises `ValueError` naming the alternative.
+
+- **`entity` relays `relations_in` on all three bindings** (#1690). Without
+  it a question was only answerable from one side: the graph holds
+  `camille --sister of--> theo`, so reading Theo's outgoing edges never found
+  Camille. WASM's `EntityProfileOut` gained `rename_all = "camelCase"` in the
+  same change — a no-op on its five single-word fields, and the only way
+  `relationsIn` does not cross as a snake_case key beside the `targetId` of
+  the object inside it.
+
+- **The Node binding relays `compile_context.warnings`** (#1691), and
+  `compiled_envelope` now drains its input and asserts nothing was left
+  behind. The comment that used to bless the loss — "the envelope is the
+  binding's contract, not a mirror of the domain type" — was the reading that
+  caused it, and is rewritten.
+
+- **All six `KNOWN_GAP` entries are gone** from `SHAPE_DIVERGENCES`, deleted
+  by the fixes above; it now holds deliberate unwraps only. The constant
+  itself is kept, unused, so the next honest admission has wording to reach
+  for. Worth stating plainly: nothing caps how many gaps may be declared, and
+  adding a seventh would have been exactly as green as fixing six.
+
 ## [0.12.0] - 2026-07-30
 
 ### Changed

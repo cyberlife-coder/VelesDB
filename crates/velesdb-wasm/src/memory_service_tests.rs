@@ -581,6 +581,11 @@ fn test_entity_serializes_to_the_documented_camel_case_wire_shape() {
             target_id: "42".to_owned(),
             target: "Entity: robin martin".to_owned(),
         }],
+        relations_in: vec![EntityRelationOut {
+            predicate: "sister of".to_owned(),
+            target_id: "43".to_owned(),
+            target: "Entity: camille martin".to_owned(),
+        }],
     };
     let wire = serde_json::to_value(&out).expect("EntityProfileOut is serializable");
     assert_eq!(
@@ -594,10 +599,65 @@ fn test_entity_serializes_to_the_documented_camel_case_wire_shape() {
                 "predicate": "child of",
                 "targetId": "42",
                 "target": "Entity: robin martin"
+            }],
+            // The reason `EntityProfileOut` had to gain `rename_all`: without
+            // it this key crossed as `relations_in`, snake_case, sitting
+            // beside the `targetId` of the very object inside it.
+            "relationsIn": [{
+                "predicate": "sister of",
+                "targetId": "43",
+                "target": "Entity: camille martin"
             }]
         })
     );
 }
+
+/// The envelope of `rememberExtracted`, for the same reason: a bare id array
+/// cannot say that a fact was dropped for its size.
+#[test]
+fn test_remembered_extraction_serializes_its_skip_count_in_camel_case() {
+    let wire = serde_json::to_value(RememberedExtractionOut {
+        ids: vec!["7".to_owned()],
+        skipped_over_cap: 2,
+    })
+    .expect("RememberedExtractionOut is serializable");
+    assert_eq!(
+        wire,
+        serde_json::json!({ "ids": ["7"], "skippedOverCap": 2 })
+    );
+}
+
+/// The write side this binding gained with [`OutlineExtractor`], and the whole
+/// reason its `entity` read side can now answer anything but a miss.
+#[test]
+fn test_remember_extracted_wires_the_graph_the_outline_states() {
+    let svc = WasmMemoryService::new(8);
+    let outcome = svc
+        .inner
+        .remember_extracted(
+            "edge: Camille | sister of | Theo",
+            &velesdb_memory::OutlineExtractor,
+            None,
+        )
+        .expect("an outlined passage needs no model");
+    assert_eq!(outcome.skipped_over_cap, 0);
+
+    let theo = svc
+        .inner
+        .entity_profile("Theo")
+        .expect("read the profile")
+        .expect("the outlined object is a known entity");
+    let out = EntityProfileOut::from_lookup("Theo", Some(theo));
+    assert_eq!(
+        out.relations_in.len(),
+        1,
+        "the edge leaves camille, so theo can only see it as incoming"
+    );
+    assert!(out.relations.is_empty());
+}
+// The refusal of an unavailable backend needs a real `JsValue`, which aborts
+// on non-wasm32 — it lives in `tests/memory_wedge_web.rs` with the other
+// `wasm_bindgen_test`s.
 
 // --- unrelate (binding parity: the tool shipped on MCP while this binding
 // only knew how to create edges) ---------------------------------------------

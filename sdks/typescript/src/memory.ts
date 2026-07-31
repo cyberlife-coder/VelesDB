@@ -421,6 +421,61 @@ export interface MemoryExplanation {
   edges: MemoryEdge[];
 }
 
+/** What {@link MemoryService.unrelate} actually removed. */
+export interface MemoryUnrelateOutcome {
+  /** Whether at least one matching edge existed and was removed. */
+  found: boolean;
+  /** How many matching edges were removed (parallel duplicates included). */
+  removed: number;
+}
+
+/**
+ * One typed edge touching an entity. Which end `targetId`/`target` name
+ * depends on the list it came from: in {@link MemoryEntityProfile.relations}
+ * it is the far end the edge points AT, in
+ * {@link MemoryEntityProfile.relationsIn} the far end it comes FROM.
+ */
+export interface MemoryEntityRelation {
+  /** The edge label the passage stated, e.g. `"sister of"`. */
+  predicate: string;
+  /** Decimal-string id of the entity (or fact) on the far end. */
+  targetId: string;
+  /** Stored content of the far end — for an entity hub, `Entity: <name>`. */
+  target: string;
+}
+
+/** Everything the auto-built graph knows about one named entity. */
+export interface MemoryEntityProfile {
+  /** Whether an entity is known under that name at all. */
+  found: boolean;
+  /** Decimal-string, content-addressed id of the entity (`"0"` on a miss). */
+  id: string;
+  /** Canonical (trimmed, lowercased) entity name — filled in hit or miss. */
+  name: string;
+  /** Attributes learned about this entity, reserved keys stripped. */
+  attributes: Record<string, unknown>;
+  /** Typed edges LEAVING this entity. */
+  relations: MemoryEntityRelation[];
+  /**
+   * Typed edges pointing AT this entity. Without them a question is only
+   * answerable from one side: the graph holds `camille --sister of--> theo`,
+   * so reading Theo's outgoing edges never finds Camille.
+   */
+  relationsIn: MemoryEntityRelation[];
+}
+
+/** Outcome of {@link MemoryService.rememberExtracted}. */
+export interface RememberedExtraction {
+  /** Decimal-string ids of the stored facts, in extraction order. */
+  ids: string[];
+  /**
+   * How many extracted facts were dropped for exceeding the embeddable cap.
+   * Without it a shorter `ids` cannot say why it is short — a silence about
+   * lost data, not a missing convenience.
+   */
+  skippedOverCap: number;
+}
+
 // ---------------------------------------------------------------------------
 // Raw wasm-bindgen surface — just the shape memory.ts needs, kept local
 // rather than extending backends/wasm-types.ts (WasmBackend's own typed
@@ -441,6 +496,9 @@ interface WasmMemoryServiceInstance {
     opts: unknown
   ): unknown;
   relate(from: string, to: string, relation: string): string;
+  unrelate(from: string, to: string, relation: string): unknown;
+  entity(name: string): unknown;
+  rememberExtracted(text: string, metadata: unknown, extractor?: string | null): unknown;
   forget(id: string): boolean;
   why(decision: string, maxHops: number | null | undefined, filter: unknown): unknown;
   compileContext(request: unknown): unknown;
@@ -596,26 +654,30 @@ export class MemoryService {
 
   /**
    * Runtime capability guard for a `WasmMemoryService` method that shipped
-   * AFTER the class's own base floor (`runInit()`'s `MemoryService`
-   * presence check, >= 3.8.0): `compileTranscript`, `explainCompilation`,
-   * `contextSavings`, and `suggestBudget` need a @wiscale/velesdb-wasm
-   * release newer than 3.12.0. A resolved build that has the `MemoryService`
-   * class but not yet this specific method would otherwise fail with a raw,
-   * unhelpful `TypeError: x is not a function` from deep inside
-   * `wrapWasmCall` — this throws with the same actionable-cause contract
-   * `runInit()`'s own capability check uses instead, so every version-floor
-   * failure in this file reads the same way regardless of which method hit
-   * it.
+   * AFTER the class's own base floor (`runInit()`'s `MemoryService` presence
+   * check). A resolved build that has the `MemoryService` class but not this
+   * specific method would otherwise fail with a raw, unhelpful
+   * `TypeError: x is not a function` from deep inside `wrapWasmCall` — this
+   * throws with the same actionable-cause contract `runInit()`'s own
+   * capability check uses, so every version-floor failure in this file reads
+   * the same way regardless of which method hit it.
+   *
+   * `since` is the CALLER's floor rather than a constant in here. It used to
+   * be one message naming a fixed group of four methods and a fixed version,
+   * which was true when written and became false the moment a fifth method
+   * needed a later release. A guard whose explanation drifts away from what
+   * it guards is worse than none — it sends the reader to the wrong version.
    */
-  private ensureCapability(method: keyof WasmMemoryServiceInstance): WasmMemoryServiceInstance {
+  private ensureCapability(
+    method: keyof WasmMemoryServiceInstance,
+    since: string
+  ): WasmMemoryServiceInstance {
     const svc = this.ensureInitialized();
     if (typeof svc[method] !== 'function') {
       throw new ConnectionError(
         `The resolved @wiscale/velesdb-wasm build does not implement ${method}() — ` +
-          'this method needs a @wiscale/velesdb-wasm release newer than 3.12.0 ' +
-          '(the compileTranscript/explainCompilation/contextSavings/suggestBudget ' +
-          'surface ships in the next @wiscale/velesdb-wasm release after 3.12.0; ' +
-          'update the dependency once it is available)'
+          `this method needs a @wiscale/velesdb-wasm release newer than ${since}; ` +
+          'update the dependency to one that carries it'
       );
     }
     return svc;
@@ -743,6 +805,82 @@ export class MemoryService {
   }
 
   /**
+   * Remove a typed edge between two memories — the inverse of
+   * {@link relate}. Resolves to `{found, removed}`.
+   *
+   * Idempotent by design: an edge that was not there reports
+   * `found: false` rather than throwing, so a cleanup can be replayed.
+   * `removed` counts the edges genuinely deleted, since two facts can carry
+   * several parallel edges under one label.
+   *
+   * Not to be confused with `VelesDBClient.unrelate`, which deletes a GRAPH
+   * edge inside a collection — a different store and a different shape. The
+   * name collision is the same one that kept this class standalone rather
+   * than folded into `IVelesDBBackend`.
+   */
+  unrelate(from: string, to: string, relation: string): Promise<MemoryUnrelateOutcome> {
+    return wrapWasmCall(
+      () =>
+        this.ensureCapability('unrelate', '4.2.0').unrelate(
+          from,
+          to,
+          relation
+        ) as MemoryUnrelateOutcome
+    );
+  }
+
+  /**
+   * Look up everything the memory graph knows about a NAMED ENTITY (a
+   * person, a place, an organisation): the attributes merged onto its hub
+   * and the typed edges touching it, in BOTH directions.
+   *
+   * Answers a question ABOUT a thing ("how old is X", "who is X's father")
+   * rather than about the sentences mentioning it, which is all
+   * {@link recall} can return — entity hubs are deliberately invisible to
+   * recall, so without this the attributes {@link rememberExtracted} builds
+   * are unreachable.
+   *
+   * `name` is matched case-insensitively; `found: false` means nothing has
+   * ever mentioned that name, and `name` still echoes the canonicalized
+   * query so several lookups can be told apart.
+   */
+  entity(name: string): Promise<MemoryEntityProfile> {
+    return wrapWasmCall(
+      () => this.ensureCapability('entity', '4.2.0').entity(name) as MemoryEntityProfile
+    );
+  }
+
+  /**
+   * Extract atomic facts from `text` and store them, auto-building the
+   * entity graph they state. Resolves to `{ids, skippedOverCap}`.
+   *
+   * `extractor` defaults to `"outline"`, the deterministic, network-free
+   * backend: it reads the structure the passage STATES, one directive per
+   * line (`edge: subject | predicate | object`, `attr: entity | key | json`,
+   * `fact: text | topic, topic`). It is the only backend the WASM bundle
+   * carries — a generative one would mean a network call in the bundle this
+   * binding exists to avoid — and any other name is refused rather than
+   * silently substituted.
+   *
+   * This is the WRITE side of {@link entity}: entity hubs are born only of
+   * extraction.
+   */
+  rememberExtracted(
+    text: string,
+    metadata?: Record<string, unknown>,
+    extractor?: string
+  ): Promise<RememberedExtraction> {
+    return wrapWasmCall(
+      () =>
+        this.ensureCapability('rememberExtracted', '4.2.0').rememberExtracted(
+          text,
+          metadata,
+          extractor
+        ) as RememberedExtraction
+    );
+  }
+
+  /**
    * Delete a memory by id. Resolves to whether a memory actually existed
    * under that id and was deleted — `false` means nothing was stored there
    * (a stale id or a typo), not a second successful deletion.
@@ -802,7 +940,7 @@ export class MemoryService {
   compileTranscript(request: CompileTranscriptRequest): Promise<CompileTranscriptResult> {
     return wrapWasmCall(
       () =>
-        this.ensureCapability('compileTranscript').compileTranscript(
+        this.ensureCapability('compileTranscript', '3.12.0').compileTranscript(
           request
         ) as CompileTranscriptResult
     );
@@ -826,7 +964,7 @@ export class MemoryService {
   ): Promise<ContextDecision> {
     return wrapWasmCall(
       () =>
-        this.ensureCapability('explainCompilation').explainCompilation(
+        this.ensureCapability('explainCompilation', '3.12.0').explainCompilation(
           request,
           fragmentId,
           fragmentIndex
@@ -843,7 +981,7 @@ export class MemoryService {
    */
   contextSavings(project?: string): Promise<ContextSavings> {
     return wrapWasmCall(
-      () => this.ensureCapability('contextSavings').contextSavings(project) as ContextSavings
+      () => this.ensureCapability('contextSavings', '3.12.0').contextSavings(project) as ContextSavings
     );
   }
 
@@ -857,7 +995,7 @@ export class MemoryService {
    */
   suggestBudget(targetModel: string, reserveTokens?: number): Promise<SuggestedBudget> {
     return wrapWasmCall(() => {
-      const svc = this.ensureCapability('suggestBudget');
+      const svc = this.ensureCapability('suggestBudget', '3.12.0');
       // Same validation as remember()'s ttlSeconds (see that method's
       // comment for the full rationale): BigInt(1.5) throws a raw
       // RangeError, a negative value dies as an opaque wasm-bindgen u64
