@@ -567,6 +567,17 @@ impl Collection {
         self.graph.edge_store.contains_edge(edge_id)
     }
 
+    /// Returns the edge with `edge_id`, if any.
+    ///
+    /// `edge_exists` above answers whether the id is taken; this answers BY
+    /// WHAT. The agent layer derives relation edge ids from `(source, target,
+    /// label)`, so a taken id is either the very relation being written — the
+    /// idempotent case — or a hash collision, and only the edge itself tells
+    /// the two apart.
+    pub(crate) fn get_edge(&self, edge_id: u64) -> Option<GraphEdge> {
+        self.graph.edge_store.get_edge(edge_id)
+    }
+
     /// Rebuilds edge property indexes from edges already in the store.
     ///
     /// Called on open AFTER the edge snapshot is loaded and BEFORE the edge

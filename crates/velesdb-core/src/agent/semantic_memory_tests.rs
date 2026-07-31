@@ -6,6 +6,7 @@ mod tests {
     use super::super::semantic_memory::SemanticMemory;
     use super::super::ttl::{MemoryKind, MemoryTtl};
     use crate::Database;
+    use std::collections::HashSet;
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -1475,5 +1476,120 @@ mod tests {
              one — got {:?}",
             payload.get("_veles_confidence")
         );
+    }
+
+    // ── Idempotence of relate (DC-1, issue #1703) ─────────────────────────
+
+    /// `relate` publishes "Idempotent per (from, relation, to)" and now IS.
+    ///
+    /// Before this, every call allocated a fresh id from an atomic counter, so
+    /// an agent replaying the same link across sessions accumulated parallel
+    /// edges: `why()` returned the same edge N times and `unrelate` answered
+    /// `removed: N` for what the caller believed was one link.
+    #[test]
+    fn test_relate_is_idempotent_per_from_relation_to() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "decision", &emb).unwrap();
+        sm.store(2, "incident", &emb).unwrap();
+
+        let first = sm.relate(1, 2, "caused_by", None).unwrap();
+        for _ in 0..4 {
+            assert_eq!(
+                sm.relate(1, 2, "caused_by", None).unwrap(),
+                first,
+                "a repeated relation must answer the id already there"
+            );
+        }
+
+        let rels = sm.relations(1).unwrap();
+        assert_eq!(rels.len(), 1, "five identical calls, one edge");
+        assert_eq!(rels[0].id(), first);
+    }
+
+    /// The dedup key is the TRIPLE, not the endpoint pair.
+    ///
+    /// The application-level dedup in `velesdb-memory` keyed on `(from, to)`
+    /// alone, which silently dropped a second, differently-labelled relation
+    /// between the same two facts. Keying on the label too is what keeps
+    /// `unrelate(from, to, "supports")` from touching `"contradicts"`.
+    #[test]
+    fn test_relate_distinguishes_two_labels_between_the_same_pair() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "claim", &emb).unwrap();
+        sm.store(2, "evidence", &emb).unwrap();
+
+        let supports = sm.relate(1, 2, "supports", None).unwrap();
+        let contradicts = sm.relate(1, 2, "contradicts", None).unwrap();
+
+        assert_ne!(
+            supports, contradicts,
+            "a different label is a different edge"
+        );
+        assert_eq!(sm.relations(1).unwrap().len(), 2);
+    }
+
+    /// Idempotence must read the LIVE graph, never a remembered decision.
+    ///
+    /// A persistent `(from, relation, to) -> edge_id` memo would pass the test
+    /// above and still break here: after `unrelate`, the relation genuinely no
+    /// longer exists and `relate` must write it again.
+    #[test]
+    fn test_relate_after_unrelate_recreates_the_edge() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "a", &emb).unwrap();
+        sm.store(2, "b", &emb).unwrap();
+
+        let first = sm.relate(1, 2, "supports", None).unwrap();
+        assert!(sm.unrelate(first).unwrap(), "the edge must be gone");
+        assert!(sm.relations(1).unwrap().is_empty());
+
+        let again = sm.relate(1, 2, "supports", None).unwrap();
+        assert_eq!(
+            again, first,
+            "the id is derived, so it comes back identical"
+        );
+        assert_eq!(sm.relations(1).unwrap().len(), 1);
+    }
+
+    /// Concurrent identical `relate` calls converge on ONE edge.
+    ///
+    /// This is what a lookup-then-write could not have delivered at this
+    /// layer: nothing here can hold the edge store's locks, so a scan of the
+    /// source node's out-edges would leave a window in which every thread
+    /// reads "absent" and every thread writes. Deriving the id moves the
+    /// decision inside the `edge_ids` write guard the store already holds
+    /// across its whole check-and-insert.
+    #[test]
+    fn test_concurrent_identical_relate_calls_create_one_edge() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = Arc::new(make_semantic(Arc::clone(&db)));
+        let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
+        sm.store(1, "decision", &emb).unwrap();
+        sm.store(2, "incident", &emb).unwrap();
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let sm = Arc::clone(&sm);
+                std::thread::spawn(move || sm.relate(1, 2, "caused_by", None).unwrap())
+            })
+            .collect();
+        let ids: Vec<u64> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        assert_eq!(
+            ids.iter().collect::<HashSet<_>>().len(),
+            1,
+            "one id: {ids:?}"
+        );
+        assert_eq!(sm.relations(1).unwrap().len(), 1, "eight threads, one edge");
     }
 }
