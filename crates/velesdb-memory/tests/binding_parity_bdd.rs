@@ -597,12 +597,12 @@ fn sdk_methods(opening: &str) -> BTreeSet<String> {
     methods
 }
 
-/// A snake_case tool name as every JavaScript surface spells it.
+/// A `snake_case` tool name as every JavaScript surface spells it.
 ///
 /// The Rust bindings name their methods after the tool verbatim and rename in
 /// an attribute (`#[napi(js_name = ...)]`, `#[wasm_bindgen(js_name = ...)]`);
-/// the SDK is written in the target language, so the camelCase happens in the
-/// identifier itself and the comparison has to cross that gap.
+/// the SDK is written in the target language, so the `camelCase` happens in
+/// the identifier itself and the comparison has to cross that gap.
 fn js_name(tool: &str) -> String {
     let mut out = String::with_capacity(tool.len());
     let mut capitalize = false;
