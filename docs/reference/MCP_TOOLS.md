@@ -252,16 +252,20 @@ attributes merged onto its node and the typed edges leaving it.
 |---|---|---|---|
 | `name` | string | yes | Matched case-insensitively (trimmed, lowercased). |
 
-Returns `{ found, id, id_str, name, attributes, relations }`. `found: false`
-means nothing has ever mentioned that entity; `name` always echoes the
-canonicalized queried name so parallel lookups stay pairable. `relations` are
-the typed edges **leaving** the entity, with the bipartite `mentions`
-scaffolding excluded.
+Returns `{ found, id, id_str, name, attributes, relations, relations_in }`.
+`found: false` means nothing has ever mentioned that entity; `name` always
+echoes the canonicalized queried name so parallel lookups stay pairable.
+`relations` are the typed edges **leaving** the entity; `relations_in` those
+**pointing at** it, each naming its source. Both matter, and reading only one
+loses half the graph: the store holds `camille --soeur de--> theo`, so "who is
+Theo's sister?" is answered by his `relations_in`, never by his `relations`.
+The bipartite `mentions` scaffolding is excluded from both.
 
 ```jsonc
 entity { "name": "Theo Durand" }
 → { "found": true, "name": "theo durand", "attributes": { "age": 15 },
-    "relations": [ { "predicate": "frere de", … } ] }
+    "relations": [ { "predicate": "frere de", … } ],
+    "relations_in": [ { "predicate": "soeur de", "source": "camille", … } ] }
 ```
 
 ## `why`
@@ -403,7 +407,10 @@ with event and source recording off.
 | `fragment_id` | string (or integer) | yes | The fragment whose decision to return. Relay the value `compile_context` handed you — under `policy.ids_as_strings` that is a decimal string, and this tool accepts it unchanged. |
 | `fragment_index` | integer | no | 0-based position in `request.fragments`. **Takes priority** over `fragment_id` when given. |
 
-Returns one `ContextDecision`: `{ action, rule_id, reason, relevance, risk, content_hash, handle? }`.
+Returns one `ContextDecision`: `{ fragment_id, memory_id, action, rule_id, reason, relevance, risk, content_hash, handle? }`.
+`fragment_id` is the content-derived id the decision was recorded under, and
+`memory_id` is set only when the fragment was pulled from memory rather than
+supplied inline.
 
 Pass `fragment_index` when fragments may be byte-identical: they share a
 content-addressed `fragment_id`, so a plain id lookup always resolves to the
@@ -437,7 +444,9 @@ Aggregate the recorded savings of past `compile_context` calls.
 |---|---|---|---|
 | `project` | string | no | Restrict the aggregation to one project facet. |
 
-Returns `{ events, tokens_in, tokens_out, tokens_saved, truncated, … }`.
+Returns `{ events, tokens_in, tokens_out, tokens_saved, cost_saved_micros_by_currency, truncated }`.
+`cost_saved_micros_by_currency` totals the saving per currency, in millionths
+of a unit, so no rounding happens before you read it.
 `truncated: true` means the sweep hit the recall cap. Figures are **local
 estimates** recorded per compilation — metadata only, never content — not a
 provider's billed count.
