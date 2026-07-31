@@ -58,8 +58,9 @@ Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB
      `_veles_date` — today's date as a `YYYYMMDD` integer — unless you already set
      it, so `recall_fused(date_field="_veles_date")` gives you a chronological
      `dated_context` timeline (plus a `now` anchor) with zero setup on your part
-     (Node binding: the dated variant is its own method,
-     `recallFusedDated(query, k, filter, opts, "_veles_date")`).
+     (Node binding: the dated variant is its own method, and it takes the date
+     field SECOND, not last:
+     `recallFusedDated(query, "_veles_date", k, filter, opts)`).
      Set `_veles_date` explicitly only to override the default — e.g. to date a
      fact by when an incident actually happened, not when you recorded it; once
      set, the server never overwrites it. Store any OTHER comparable value
