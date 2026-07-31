@@ -39,10 +39,16 @@ fragments first: `{query, token_budget, transcript}` (or `path`, same
 `path`, capped at 8 MiB). It deterministically segments the transcript into
 turns and sub-turns (fenced code stays atomic, log runs collapse, the system
 turn is cache-tagged automatically) and compiles the result exactly like
-`compile_context` — same `content`/`decisions`/`insights`/`risk`/`warnings`
-output, plus a `segmentation` audit report (`format_detected`, one entry per
-segment with turn/role/kind/byte range/`fragment_id`, `merged_segments`).
-Steps 4-10 below apply unchanged to its output. Force
+`compile_context`. **It returns two top-level keys, `{context, segmentation}` —
+not the compiled fields directly.** The `content`/`decisions`/`insights`/
+`risk`/`warnings`/`retrieval_handles` of `compile_context` all live one level
+down, under `context`; `segmentation` is the audit report beside it
+(`format_detected`, one entry per segment with turn/role/kind/byte
+range/`fragment_id`, `merged_segments`).
+Steps 4-10 below are written for a `compile_context` result, so when you
+apply them to a `compile_transcript` result read every one of those fields
+under `context` — `context.warnings`, `context.content`,
+`context.retrieval_handles`, `context.insights.tokens_saved`. Force
 `segmentation.format: "plain"` or `"jsonl"` when auto-detection would guess
 wrong (e.g. a transcript that happens to also parse as JSONL, or prose that
 cites `"User:"` and would otherwise falsely open a turn); a forced format
