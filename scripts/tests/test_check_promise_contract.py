@@ -56,7 +56,7 @@ class RunValidationCommandsTests(unittest.TestCase):
                 "validation_command": "true",
             }
         ]
-        executed, skipped, failures = cpc.run_validation_commands(claims)
+        executed, skipped, failures = cpc.run_validation_commands(claims, cpc.ROOT)
         self.assertEqual(executed, ["fake_passing_claim"])
         self.assertEqual(skipped, [])
         self.assertEqual(failures, [])
@@ -73,7 +73,7 @@ class RunValidationCommandsTests(unittest.TestCase):
                 "validation_command": "grep -qF 'this-string-does-not-exist' /dev/null",
             }
         ]
-        executed, skipped, failures = cpc.run_validation_commands(claims)
+        executed, skipped, failures = cpc.run_validation_commands(claims, cpc.ROOT)
         self.assertEqual(executed, ["fake_failing_claim"])
         self.assertEqual(skipped, [])
         self.assertEqual(len(failures), 1)
@@ -87,7 +87,7 @@ class RunValidationCommandsTests(unittest.TestCase):
                 "validation_command": "cargo bench -p velesdb-core --bench some_bench",
             }
         ]
-        executed, skipped, failures = cpc.run_validation_commands(claims)
+        executed, skipped, failures = cpc.run_validation_commands(claims, cpc.ROOT)
         self.assertEqual(executed, [])
         self.assertEqual(failures, [])
         self.assertEqual(len(skipped), 1)
@@ -105,7 +105,7 @@ class RunValidationCommandsTests(unittest.TestCase):
                 "validation_command": "true",
             }
         ]
-        executed, skipped, failures = cpc.run_validation_commands(claims)
+        executed, skipped, failures = cpc.run_validation_commands(claims, cpc.ROOT)
         self.assertEqual(executed, [])
         self.assertEqual(len(skipped), 1)
         self.assertEqual(failures, [])
@@ -122,9 +122,9 @@ class RealRegistryExecutableClaimsTests(unittest.TestCase):
         """
         import json
 
-        data = json.loads(cpc.REGISTRY.read_text(encoding="utf-8"))
+        data = json.loads(cpc.registry_path(cpc.ROOT).read_text(encoding="utf-8"))
         claims = data.get("claims", [])
-        executed, _skipped, failures = cpc.run_validation_commands(claims)
+        executed, _skipped, failures = cpc.run_validation_commands(claims, cpc.ROOT)
         self.assertGreater(
             len(executed), 0, "expected at least one claim to be marked executable"
         )
@@ -133,7 +133,7 @@ class RealRegistryExecutableClaimsTests(unittest.TestCase):
     def test_real_registry_has_both_executable_and_documentary_claims(self) -> None:
         import json
 
-        data = json.loads(cpc.REGISTRY.read_text(encoding="utf-8"))
+        data = json.loads(cpc.registry_path(cpc.ROOT).read_text(encoding="utf-8"))
         claims = data.get("claims", [])
         executable_count = sum(1 for c in claims if c.get("executable") is True)
         documentary_count = sum(1 for c in claims if c.get("executable") is False)
