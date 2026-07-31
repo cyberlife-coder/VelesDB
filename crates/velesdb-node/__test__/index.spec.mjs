@@ -366,7 +366,11 @@ test('entity on an unknown name reports a miss and echoes the canonicalized quer
       'a miss still echoes the query trimmed + lowercased, so parallel lookups stay pairable',
     )
     assert.deepEqual(profile.attributes, {})
+    // BOTH edge lists are present on a miss, empty. A shape that changed with
+    // the outcome would force every caller to branch — and no Rust guard can
+    // catch it here, since this binding has no `cargo test` anywhere in CI.
     assert.deepEqual(profile.relations, [])
+    assert.deepEqual(profile.relationsIn, [])
   } finally {
     cleanup()
   }
@@ -617,6 +621,72 @@ test('rememberExtracted surfaces but errors without a backend (INTERNAL)', async
   }
 })
 
+// The three assertions below are the only functional proof this binding has
+// for issues #1690/#1691/#1692: `binding_parity_bdd.rs` proves DECLARATION and
+// says so verbatim, and there is no `cargo test -p velesdb-node` anywhere in
+// CI (the crate is a cdylib, excluded from `cargo test --workspace` in four
+// places). If the marshalling is wrong, only this file notices.
+
+test('rememberExtracted returns the {ids, skippedOverCap} envelope, not a bare id array', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const outcome = await store.rememberExtracted(
+      // The oversized fact comes from the INPUT, so this proves the counter,
+      // not a fabricated backend.
+      `fact: Camille ships the parser. | camille\nfact: ${'x'.repeat(4096)}`,
+      null,
+      null,
+      null,
+      'outline',
+    )
+    assert.ok(Array.isArray(outcome.ids), '`ids` stays an array inside the envelope')
+    assert.equal(outcome.ids.length, 1, 'the sound fact is stored')
+    assert.equal(
+      outcome.skippedOverCap,
+      1,
+      'and the caller is told the other was dropped for its size — a bare array could not',
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test('entity relays the INCOMING edges, which are invisible from the other end', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await store.rememberExtracted(
+      'edge: Camille | sister of | Theo',
+      null,
+      null,
+      null,
+      'outline',
+    )
+    const theo = await store.entity('Theo')
+    assert.equal(theo.found, true, 'extraction created the hub')
+    assert.deepEqual(
+      theo.relationsIn.map((r) => r.predicate),
+      ['sister of'],
+      'the edge LEAVES camille, so theo can only see it here',
+    )
+    assert.deepEqual(theo.relations, [], 'and it must NOT be duplicated into the outgoing list')
+  } finally {
+    cleanup()
+  }
+})
+
+test('rememberExtracted refuses an unknown extractor by name', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(
+      () => store.rememberExtracted('fact: anything', null, null, null, 'nope'),
+      (err) => /unknown extractor 'nope'/.test(err.message),
+      'a caller who asked for a backend that does not exist is told which one',
+    )
+  } finally {
+    cleanup()
+  }
+})
+
 // --- suggestBudget -----------------------------------------------------------
 // A pure lookup in the committed model→window table: never a network call, and
 // an unknown model reports null rather than guessing.
@@ -667,6 +737,12 @@ test('compileContext compiles fragments under a budget with provenance', async (
     assert.equal(typeof dup.fragment_id, 'string', 'ids cross as decimal strings')
     assert.equal(typeof dup.content_hash, 'string', 'hashes cross as decimal strings')
     assert.ok(out.insights.tokens_saved > 0, 'the duplicate saves tokens')
+    // The field this binding silently dropped for its whole life (#1691): a
+    // caller compiling under a tight budget received no warning at all and
+    // believed their context complete. An EMPTY list is not a clean bill of
+    // health either — `warnings_for` only reports retrieved fragments above a
+    // relevance floor — but its ABSENCE was a lie.
+    assert.ok(Array.isArray(out.warnings), '`warnings` reaches the caller as a real array')
     for (const source of out.sources) {
       assert.ok(source.handle.startsWith('ctx://source/'), 'sources stay addressable')
     }

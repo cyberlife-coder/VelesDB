@@ -10,6 +10,13 @@
 //! decision from an oversight, since both looked identical from the outside:
 //! a method that isn't there.
 //!
+//! The `remember_extracted` half of that pair is gone: its reason named
+//! `OllamaExtractor` as the crate's only `Extractor`, and a deterministic,
+//! dependency-free one annulled it (issue #1692). Worth recording, because
+//! the exemption check never read that prose — it only asks whether the
+//! binding started publishing the tool. An exemption whose REASON has become
+//! false can therefore sit green indefinitely; only a reader catches it.
+//!
 //! The invariant is therefore not "every binding implements every tool" — it
 //! is "every (tool, binding) pair is either implemented or explicitly
 //! exempted with a reason". A new MCP tool added without touching the
@@ -89,11 +96,18 @@
 //! ### `SHAPE_DIVERGENCES` holds two different things, on purpose
 //!
 //! Most entries are deliberate unwraps (`recall` → a bare array, `forget` →
-//! a bare bool, an id twin collapsing to one form). A few carry
+//! a bare bool, an id twin collapsing to one form). A few carried
 //! [`KNOWN_GAP`]: fields a binding really does lose. Writing a real gap down
 //! is not blessing it — it is the only way the guard can be green on the 19
 //! other tools while the gap stays visible in one place instead of being
 //! rediscovered by a user. An entry is deleted by the fix, never renewed.
+//!
+//! As of issues #1690/#1691/#1692 the second kind is EMPTY: every entry left
+//! is a deliberate unwrap. That is the state this list is meant to reach, so
+//! [`KNOWN_GAP`] now sits unused on purpose — see its own doc comment. Note
+//! what it does NOT mean: nothing here caps how many gaps may be declared,
+//! and adding a seventh would have been exactly as green as fixing six. The
+//! pressure to close them was never mechanical.
 
 #![cfg(all(feature = "mcp", feature = "context", feature = "persistence"))]
 
@@ -148,23 +162,14 @@ struct Exemption {
     reason: &'static str,
 }
 
-const EXEMPTIONS: &[Exemption] = &[
-    Exemption {
-        binding: "velesdb-wasm",
-        tool: "feedback",
-        reason: "a durable learned confidence is meaningless on the in-memory WASM backend: \
+const EXEMPTIONS: &[Exemption] = &[Exemption {
+    binding: "velesdb-wasm",
+    tool: "feedback",
+    reason: "a durable learned confidence is meaningless on the in-memory WASM backend: \
                  MemoryService::feedback lives in the `persistence`-gated `reinforce` module and \
                  is not compiled for wasm32 at all — exposing it would mean pulling \
                  NativeStore/filesystem code into the very bundle this binding exists to avoid",
-    },
-    Exemption {
-        binding: "velesdb-wasm",
-        tool: "remember_extracted",
-        reason: "extraction needs a generative model (OllamaExtractor is the crate's only \
-                 Extractor impl), i.e. a network dependency in the WASM bundle by default; a \
-                 JS-provided extractor callback is the natural v2 addition",
-    },
-];
+}];
 
 /// One `output_schema` root field a binding deliberately does NOT relay.
 ///
@@ -206,6 +211,18 @@ const DATED_SPLIT: &str = "deliberate split, not a drop: the dated half of fused
 /// deliberate unwrap — an entry here is an admission, kept honest by
 /// [`no_shape_divergence_is_stale`], and it must be deleted by the fix, not
 /// renewed.
+///
+/// **Currently unused, and that is the point.** The six entries that carried
+/// it were deleted by their fixes (issues #1690, #1691, #1692): every field
+/// the server publishes now reaches every binding, or is a declared,
+/// motivated unwrap. The constant stays so the next honest admission has this
+/// exact wording to reach for — deleting it would leave the next author to
+/// invent a looser reason of their own, which is how a gap stops being
+/// visible.
+#[allow(
+    dead_code,
+    reason = "zero known gaps is the target state, not a reason to drop the word"
+)]
 const KNOWN_GAP: &str = "KNOWN GAP — NOT a deliberate unwrap: this binding really does lose \
      the field, and the loss predates the guard that found it. Declared so the guard can be \
      green on everything else while the gap stays visible in one place; delete this entry \
@@ -214,21 +231,9 @@ const KNOWN_GAP: &str = "KNOWN GAP — NOT a deliberate unwrap: this binding rea
 const SHAPE_DIVERGENCES: &[ShapeDivergence] = &[
     ShapeDivergence {
         binding: "velesdb-node",
-        tool: "compile_context",
-        field: "warnings",
-        reason: KNOWN_GAP,
-    },
-    ShapeDivergence {
-        binding: "velesdb-node",
         tool: "entity",
         field: "id_str",
         reason: ID_TWIN,
-    },
-    ShapeDivergence {
-        binding: "velesdb-node",
-        tool: "entity",
-        field: "relations_in",
-        reason: KNOWN_GAP,
     },
     ShapeDivergence {
         binding: "velesdb-node",
@@ -292,12 +297,6 @@ const SHAPE_DIVERGENCES: &[ShapeDivergence] = &[
     },
     ShapeDivergence {
         binding: "velesdb-node",
-        tool: "remember_extracted",
-        field: "skipped_over_cap",
-        reason: KNOWN_GAP,
-    },
-    ShapeDivergence {
-        binding: "velesdb-node",
         tool: "save_working_context",
         field: "id_str",
         reason: ID_TWIN,
@@ -307,12 +306,6 @@ const SHAPE_DIVERGENCES: &[ShapeDivergence] = &[
         tool: "entity",
         field: "id_str",
         reason: ID_TWIN,
-    },
-    ShapeDivergence {
-        binding: "velesdb-python",
-        tool: "entity",
-        field: "relations_in",
-        reason: KNOWN_GAP,
     },
     ShapeDivergence {
         binding: "velesdb-python",
@@ -364,12 +357,6 @@ const SHAPE_DIVERGENCES: &[ShapeDivergence] = &[
     },
     ShapeDivergence {
         binding: "velesdb-python",
-        tool: "remember_extracted",
-        field: "skipped_over_cap",
-        reason: KNOWN_GAP,
-    },
-    ShapeDivergence {
-        binding: "velesdb-python",
         tool: "save_working_context",
         field: "id_str",
         reason: ID_TWIN,
@@ -382,9 +369,9 @@ const SHAPE_DIVERGENCES: &[ShapeDivergence] = &[
     },
     ShapeDivergence {
         binding: "velesdb-wasm",
-        tool: "entity",
-        field: "relations_in",
-        reason: KNOWN_GAP,
+        tool: "remember_extracted",
+        field: "ids_str",
+        reason: ID_TWIN,
     },
     ShapeDivergence {
         binding: "velesdb-wasm",
@@ -536,6 +523,137 @@ fn method_name(trimmed: &str) -> Option<String> {
         .or_else(|| trimmed.strip_prefix("fn "))?;
     let (name, _) = rest.split_once('(')?;
     (!name.is_empty()).then(|| name.to_owned())
+}
+
+// --- The one published surface that is not Rust ------------------------------
+//
+// The TypeScript SDK wraps the WASM binding and shipped 17 of its methods for
+// its whole life, missing `entity` and `unrelate` (issue #1721). Nothing saw
+// it: `BINDINGS` holds three Rust crates and the reader above is a Rust
+// parser — `surface_impl` looks for `impl X {`, `method_name` for `pub fn`,
+// and `published_methods` asserts its way out of a scan that finds nothing.
+// Handing it a `.ts` file would PANIC, not report, so "just add a fourth
+// BINDINGS entry" is not available.
+//
+// What IS available is the chain. The SDK cannot expose a tool the WASM
+// binding does not — it calls into it. So the invariant is not "the SDK
+// implements every MCP tool" (that would duplicate wasm's `feedback`
+// exemption into a second list, and a duplicated decision is a decision that
+// will drift); it is "the SDK relays every tool that REACHES the WASM
+// binding". Composed with the guard above, which holds wasm against the live
+// tool list, the two links prove the whole path from server to SDK.
+
+/// Where the TypeScript SDK declares what it publishes.
+///
+/// Two blocks in one file, and BOTH matter: `ensureCapability` is typed
+/// `keyof WasmMemoryServiceInstance`, so a method added to the class without
+/// the interface does not compile, and one added to the interface alone is a
+/// promise no caller can reach.
+const SDK_SOURCE: &str = "sdks/typescript/src/memory.ts";
+const SDK_CLASS: &str = "export class MemoryService {";
+const SDK_INTERFACE: &str = "interface WasmMemoryServiceInstance {";
+
+/// The identifier of a TypeScript method declaration, if the line is one.
+///
+/// Deliberately shallow: exactly one indent level (so a call inside a body
+/// never counts) and not `private`. It over-collects — `init`, `close` and
+/// `constructor` are not tools — which is harmless, because every caller
+/// below iterates over TOOL names and asks whether the SDK has them, never
+/// the reverse.
+fn typescript_method(line: &str) -> Option<&str> {
+    let declaration = line.strip_prefix("  ")?;
+    if declaration.starts_with(' ') || declaration.starts_with("private ") {
+        return None;
+    }
+    let (name, _) = declaration.split_once('(')?;
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(name)
+}
+
+/// The methods declared between `opening` and the next column-0 `}`.
+fn sdk_methods(opening: &str) -> BTreeSet<String> {
+    let path = workspace_root().join(SDK_SOURCE);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("read {SDK_SOURCE} ({}): {err}", path.display()));
+    let mut lines = source.lines().skip_while(|l| l.trim() != opening);
+    assert!(
+        lines.next().is_some(),
+        "{SDK_SOURCE} no longer contains `{opening}` — the SDK parity check reads that block to \
+         know what the SDK publishes; point the constant at the renamed block",
+    );
+    let methods: BTreeSet<String> = lines
+        .take_while(|l| *l != "}")
+        .filter_map(typescript_method)
+        .map(str::to_owned)
+        .collect();
+    assert!(
+        methods.contains("remember"),
+        "{SDK_SOURCE} `{opening}` parsed to {} method(s) and none of them is `remember` — the \
+         scan is broken, not the SDK",
+        methods.len(),
+    );
+    methods
+}
+
+/// A `snake_case` tool name as every JavaScript surface spells it.
+///
+/// The Rust bindings name their methods after the tool verbatim and rename in
+/// an attribute (`#[napi(js_name = ...)]`, `#[wasm_bindgen(js_name = ...)]`);
+/// the SDK is written in the target language, so the `camelCase` happens in
+/// the identifier itself and the comparison has to cross that gap.
+fn js_name(tool: &str) -> String {
+    let mut out = String::with_capacity(tool.len());
+    let mut capitalize = false;
+    for c in tool.chars() {
+        if c == '_' {
+            capitalize = true;
+        } else if capitalize {
+            out.extend(c.to_uppercase());
+            capitalize = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Tools the WASM binding publishes that the SDK never declares, named.
+///
+/// Pure, so the refusal itself is testable without a server: see
+/// [`the_sdk_check_names_the_method_a_stripped_sdk_lost`].
+fn sdk_gaps(
+    tools: &BTreeSet<String>,
+    upstream: &BTreeSet<String>,
+    class: &BTreeSet<String>,
+    interface: &BTreeSet<String>,
+) -> Vec<String> {
+    let mut gaps = Vec::new();
+    for tool in tools {
+        if !upstream.contains(tool) {
+            // The tool does not reach the WASM binding either. That is the
+            // first guard's business, and wasm's exemption governs both.
+            continue;
+        }
+        let published = js_name(tool);
+        let in_class = class.contains(&published);
+        let in_interface = interface.contains(&published);
+        if in_class && in_interface {
+            continue;
+        }
+        let where_missing = match (in_class, in_interface) {
+            (false, false) => "neither the class nor the interface",
+            (true, false) => "the class but NOT the interface (`ensureCapability` keys off it)",
+            (false, true) => "the interface but NOT the class (no caller can reach it)",
+            (true, true) => unreachable!("handled above"),
+        };
+        gaps.push(format!(
+            "  `{tool}` reaches velesdb-wasm and the SDK declares `{published}` in \
+             {where_missing}"
+        ));
+    }
+    gaps
 }
 
 /// The source region publishing each method of `binding`, keyed by method
@@ -1158,4 +1276,134 @@ fn the_cut_stops_at_the_paren_that_closes_the_parameter_list() {
         window.contains("fn retrieve_context_source -> PyResult<Py<PyAny>> {"),
         "the declaration did not survive the cut intact:\n{window}",
     );
+}
+
+// --- The SDK link of the chain (issue #1721) ---------------------------------
+
+/// THE guard for the one surface written in the target language: every tool
+/// that reaches the WASM binding must reach the SDK that wraps it.
+///
+/// The SDK shipped 17 of 19 for its whole life. The reason nothing caught it
+/// is the same one that let `entity` go missing from three bindings: the list
+/// of what is checked did not include it. Widening a guard's declared
+/// perimeter is the fix; writing a second, parallel one would only move the
+/// blind spot.
+#[tokio::test]
+async fn the_typescript_sdk_relays_every_tool_that_reaches_the_wasm_binding() {
+    let (_store, client) = connected().await;
+    let tools: BTreeSet<String> = client
+        .list_all_tools()
+        .await
+        .expect("list tools")
+        .iter()
+        .map(|t| t.name.to_string())
+        .collect();
+    let wasm = BINDINGS
+        .iter()
+        .find(|b| b.name == "velesdb-wasm")
+        .expect("velesdb-wasm is a declared binding");
+
+    let gaps = sdk_gaps(
+        &tools,
+        &published_methods(wasm),
+        &sdk_methods(SDK_CLASS),
+        &sdk_methods(SDK_INTERFACE),
+    );
+
+    assert!(
+        gaps.is_empty(),
+        "{} tool(s) reach velesdb-wasm but stop at the TypeScript SDK:\n{}\n\nThe SDK calls \
+         into the WASM binding, so it can never publish more than that binding does — but it \
+         can publish LESS, silently, and it did: `entity` and `unrelate` were absent for the \
+         SDK's whole life while wasm exposed both. Add the method to BOTH the class and the \
+         `WasmMemoryServiceInstance` interface in {}.",
+        gaps.len(),
+        gaps.join("\n"),
+        SDK_SOURCE,
+    );
+    client.cancel().await.expect("close the MCP session");
+}
+
+/// The refusal vector issue #1721 asks for, on a synthetic SDK so it can be
+/// replayed without editing the real one: a method the wasm binding publishes
+/// and the SDK dropped must be REPORTED BY NAME, never merely counted.
+#[test]
+fn the_sdk_check_names_the_method_a_stripped_sdk_lost() {
+    let tools = ["remember", "unrelate", "recall_fused_dated"]
+        .map(str::to_owned)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let upstream = tools.clone();
+    let stripped = ["remember", "recallFusedDated"]
+        .map(str::to_owned)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+
+    let gaps = sdk_gaps(&tools, &upstream, &stripped, &stripped);
+
+    assert_eq!(
+        gaps.len(),
+        1,
+        "exactly the dropped tool is reported: {gaps:?}"
+    );
+    assert!(
+        gaps[0].contains("`unrelate`"),
+        "the refusal names the missing tool, got: {}",
+        gaps[0],
+    );
+}
+
+/// The positive control the refusal above is worthless without: the SAME
+/// inputs, complete, must produce nothing. Without it, a `sdk_gaps` that
+/// returned a finding for every tool would pass the test above.
+#[test]
+fn the_sdk_check_is_silent_when_every_tool_is_relayed() {
+    let tools = ["remember", "unrelate", "recall_fused_dated"]
+        .map(str::to_owned)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let complete = ["remember", "unrelate", "recallFusedDated"]
+        .map(str::to_owned)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+
+    assert!(
+        sdk_gaps(&tools, &tools, &complete, &complete).is_empty(),
+        "a complete SDK must produce no finding",
+    );
+}
+
+/// A tool the WASM binding does not publish is NOT the SDK's problem: wasm's
+/// own exemption governs, and duplicating it into a second list is how two
+/// records of one decision start disagreeing.
+#[test]
+fn the_sdk_check_ignores_a_tool_that_never_reaches_wasm() {
+    let tools = ["remember", "feedback"]
+        .map(str::to_owned)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let upstream = ["remember"].map(str::to_owned).into_iter().collect();
+    let sdk = ["remember"].map(str::to_owned).into_iter().collect();
+
+    assert!(
+        sdk_gaps(&tools, &upstream, &sdk, &sdk).is_empty(),
+        "`feedback` is exempted on wasm; the SDK must not be asked for it",
+    );
+}
+
+/// Declaring a method in one of the two blocks and not the other is its own
+/// failure, and the report must say WHICH — the two have different
+/// consequences (`ensureCapability` keys off the interface; a caller reaches
+/// the class).
+#[test]
+fn the_sdk_check_distinguishes_the_class_from_the_interface() {
+    let tools = ["entity"].map(str::to_owned).into_iter().collect();
+    let upstream = ["entity"].map(str::to_owned).into_iter().collect();
+    let present: BTreeSet<String> = ["entity"].map(str::to_owned).into_iter().collect();
+    let absent = BTreeSet::new();
+
+    let gaps = sdk_gaps(&tools, &upstream, &present, &absent);
+    assert!(gaps[0].contains("NOT the interface"), "got: {}", gaps[0]);
+    let gaps = sdk_gaps(&tools, &upstream, &absent, &present);
+    assert!(gaps[0].contains("NOT the class"), "got: {}", gaps[0]);
 }

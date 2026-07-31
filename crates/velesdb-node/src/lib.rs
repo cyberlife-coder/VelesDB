@@ -52,13 +52,13 @@ use velesdb_memory::context::{
     WorkingContext,
 };
 use velesdb_memory::{
-    DynEmbedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor, DEFAULT_DIMENSION,
-    DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    DynEmbedder, HashEmbedder, MemoryService, OllamaEmbedder, OllamaExtractor, OutlineExtractor,
+    DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
 };
 
 use crate::dto::{
     ColumnFilterJs, CompiledContextJs, DatedRecallJs, EntityProfileJs, ExplanationJs,
-    FusionOptionsJs, LinkJs, RecollectionJs, UnrelateJs,
+    FusionOptionsJs, LinkJs, RecollectionJs, RememberedExtractionJs, UnrelateJs,
 };
 use crate::error::{invalid_input, to_napi_err, CODE_INTERNAL};
 use crate::tasks::{Job, JsonOut};
@@ -345,16 +345,25 @@ impl MemoryStore {
 
     /// Look up everything the memory graph knows about a NAMED ENTITY (a
     /// person, a place, an organisation): the attributes merged onto its hub
-    /// and the typed edges leaving it. Use it for a question ABOUT a thing
-    /// ("how old is X", "who is X's father") rather than about the sentences
-    /// mentioning it, which is all [`recall`](Self::recall) can return —
-    /// entity hubs are deliberately invisible to recall, so without this the
-    /// attributes `rememberExtracted` builds are unreachable.
+    /// and the typed edges touching it, in BOTH directions. Use it for a
+    /// question ABOUT a thing ("how old is X", "who is X's father") rather
+    /// than about the sentences mentioning it, which is all
+    /// [`recall`](Self::recall) can return — entity hubs are deliberately
+    /// invisible to recall, so without this the attributes
+    /// `rememberExtracted` builds are unreachable.
     ///
     /// `name` is matched case-insensitively (the id is content-addressed, so
     /// it is stable across sessions). Resolves to `{found, id, name,
-    /// attributes, relations}`; `found: false` means nothing has ever
-    /// mentioned that name, and `name` still echoes the canonicalized query.
+    /// attributes, relations, relationsIn}`; `found: false` means nothing has
+    /// ever mentioned that name, and `name` still echoes the canonicalized
+    /// query.
+    ///
+    /// `relations` are the typed edges LEAVING the entity, `relationsIn`
+    /// those pointing AT it — each naming, in `targetId`/`target`, the far
+    /// end it comes FROM. Without the second list a question is only
+    /// answerable from one side: the graph holds
+    /// `camille --sister of--> theo`, so reading Theo's outgoing edges never
+    /// finds Camille.
     #[napi(ts_return_type = "Promise<EntityProfileJs>")]
     pub fn entity(&self, name: String) -> AsyncTask<Job<EntityProfileJs>> {
         let svc = Arc::clone(&self.inner);
@@ -644,34 +653,64 @@ impl MemoryStore {
         }))
     }
 
-    /// Extract atomic facts from raw `text` with a local Ollama `model` and store
-    /// them, auto-building the fact↔topic graph. Resolves to the stored ids.
+    /// Extract atomic facts from raw `text` and store them, auto-building the
+    /// entity graph they state. Resolves to `{ids, skippedOverCap}`.
+    ///
+    /// `extractor` names the backend, defaulting to `"ollama"`:
+    ///
+    /// - `"ollama"` calls the local generative `model` (required for this
+    ///   backend) at `url`, and reads structure out of prose.
+    /// - `"outline"` is deterministic and network-free: it reads the
+    ///   structure the passage STATES, one directive per line (`edge:`,
+    ///   `attr:`, `fact:`), and ignores `model`/`url`. Same relationship as
+    ///   the `"hash"` embedder has to `"ollama"` on
+    ///   [`open`](Self::open) — an offline, reproducible choice, so the whole
+    ///   contract of this method is reachable without a model running.
+    ///
+    /// This used to resolve to a bare `Array<string>` of ids, and that array
+    /// could not say why it was short: nothing distinguished a passage that
+    /// held three facts from one that held twelve of which nine were dropped
+    /// for exceeding the embeddable cap. The envelope is the breaking change
+    /// that ends that silence (issue #1692).
     #[napi(
         js_name = "rememberExtracted",
-        ts_return_type = "Promise<Array<string>>"
+        ts_return_type = "Promise<RememberedExtractionJs>"
     )]
     pub fn remember_extracted(
         &self,
         text: String,
-        model: String,
+        model: Option<String>,
         url: Option<String>,
         metadata: Option<Value>,
-    ) -> AsyncTask<Job<Vec<String>>> {
+        extractor: Option<String>,
+    ) -> AsyncTask<Job<RememberedExtractionJs>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             guards::check_fact(&text)?;
             let metadata = convert::to_metadata(metadata)?;
-            let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
-            let extractor = OllamaExtractor::new(url, model);
-            // The binding's return stays an id array (its published N-API
-            // shape); the skip count the service now reports has no slot
-            // here yet — an over-cap fact is simply absent from the ids,
-            // exactly as before this call could distinguish the two.
-            let ids = svc
-                .remember_extracted(&text, &extractor, metadata.as_ref())
-                .map_err(to_napi_err)?
-                .ids;
-            Ok(ids.into_iter().map(convert::id_to_string).collect())
+            let outcome = match extractor.as_deref().unwrap_or("ollama") {
+                "outline" => svc.remember_extracted(&text, &OutlineExtractor, metadata.as_ref()),
+                "ollama" => {
+                    let model = model.ok_or_else(|| {
+                        invalid_input(
+                            "the 'ollama' extractor needs a `model` (or pass \
+                                       extractor: 'outline' for the offline backend)",
+                        )
+                    })?;
+                    let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
+                    svc.remember_extracted(
+                        &text,
+                        &OllamaExtractor::new(url, model),
+                        metadata.as_ref(),
+                    )
+                }
+                other => {
+                    return Err(invalid_input(format!(
+                        "unknown extractor '{other}' (expected 'ollama' or 'outline')"
+                    )))
+                }
+            };
+            Ok(RememberedExtractionJs::from(outcome.map_err(to_napi_err)?))
         }))
     }
 }

@@ -2558,35 +2558,59 @@ class MemoryService:
             ``{"found": bool, "id": int, "name": str,
                "attributes": Dict[str, Any],
                "relations": [{"predicate": str, "target_id": int,
-                              "target": str}, ...]}``.
+                              "target": str}, ...],
+               "relations_in": [...the same shape...]}``.
             ``found`` is ``False`` when nothing has ever mentioned that name;
             ``name`` still echoes the query in its canonical (trimmed,
             lowercased) form, so several lookups can be told apart.
+
+            ``relations`` are the edges LEAVING the entity, ``relations_in``
+            those pointing AT it — there, ``target_id``/``target`` name the
+            far end the edge comes FROM. Without the second list a question
+            is only answerable from one side: the graph holds
+            ``camille --sister of--> theo``, so reading Theo's outgoing edges
+            never finds Camille. Both are present on a miss too, empty.
         """
         ...
 
     def remember_extracted(
         self,
         text: str,
-        model: str,
+        model: Optional[str] = None,
         url: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> List[int]:
-        """Extract atomic facts from ``text`` via Ollama and store them.
+        extractor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Extract atomic facts from ``text`` and store them.
 
-        Automatically builds the fact↔topic graph. Requires a running Ollama
-        server with ``model`` available.
+        Automatically builds the entity graph the passage states.
 
         Args:
             text: Raw text to extract facts from.
-            model: Ollama model to use for extraction.
+            model: Ollama model, required by the ``"ollama"`` backend and
+                ignored by ``"outline"``.
             url: Ollama server URL (default: ``http://localhost:11434``).
             metadata: Optional metadata applied to every extracted fact.
+            extractor: Which backend to use, ``"ollama"`` (default) or
+                ``"outline"``. ``"outline"`` is deterministic and
+                network-free — it reads the structure the passage STATES, one
+                directive per line (``edge:``, ``attr:``, ``fact:``) — and
+                stands to ``"ollama"`` exactly as the ``"hash"`` embedder
+                does, so this method's whole contract is reachable with no
+                model running.
 
         Returns:
-            List of stable ids for the stored facts.
+            ``{"ids": List[int], "skipped_over_cap": int}``.
+
+            This used to return a bare list of ids, which could not say why
+            it was short: nothing distinguished a passage holding three facts
+            from one holding twelve of which nine were dropped for exceeding
+            the embeddable cap. The dict is the breaking change that ends
+            that silence (issue #1692).
 
         Raises:
+            ValueError: If ``extractor`` names an unknown backend, or the
+                ``"ollama"`` backend was selected without a ``model``.
             RuntimeError: If Ollama is unreachable or extraction fails.
         """
         ...

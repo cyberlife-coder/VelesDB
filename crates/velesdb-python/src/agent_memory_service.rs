@@ -20,9 +20,10 @@ use velesdb_memory::context::{
 use velesdb_memory::service::canonical_entity_name;
 use velesdb_memory::{
     format_dated_context, limits, ColumnFilter, ColumnOp, DatedContext, DynEmbedder, EntityProfile,
-    ErrorCategory, Explanation, FusionOptions, HashEmbedder, Link, MemoryEdge, MemoryError,
-    MemoryNode, MemoryService, Metadata, OllamaEmbedder, OllamaExtractor, Recollection,
-    DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    EntityRelation, ErrorCategory, Explanation, FusionOptions, HashEmbedder, Link, MemoryEdge,
+    MemoryError, MemoryNode, MemoryService, Metadata, OllamaEmbedder, OllamaExtractor,
+    OutlineExtractor, Recollection, RememberedExtraction, DEFAULT_DIMENSION, DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OLLAMA_URL,
 };
 
 use crate::collection::query::convert_params;
@@ -120,6 +121,49 @@ fn build_embedder(kind: &str, url: Option<String>, model: Option<String>) -> PyR
     }
 }
 
+/// Build the requested extractor and run it, releasing the GIL for the call.
+///
+/// Same contract as [`build_embedder`], including the `ValueError` on an
+/// unknown name: a caller who asked for a backend that does not exist must be
+/// told so, never handed a different one. `"outline"` is deterministic and
+/// network-free and ignores `model`/`url`; `"ollama"` needs a `model`.
+///
+/// A free function rather than a method, so it stays out of the `impl` block
+/// the binding-parity guard reads as this binding's published surface.
+fn extract_with(
+    py: Python<'_>,
+    svc: &MemoryService<DynEmbedder>,
+    text: &str,
+    model: Option<String>,
+    url: Option<String>,
+    extractor: Option<String>,
+    metadata: Option<Metadata>,
+) -> PyResult<RememberedExtraction> {
+    match extractor.as_deref().unwrap_or("ollama") {
+        "outline" => py.detach(|| {
+            svc.remember_extracted(text, &OutlineExtractor, metadata.as_ref())
+                .map_err(to_py_err)
+        }),
+        "ollama" => {
+            let model = model.ok_or_else(|| {
+                PyValueError::new_err(
+                    "the 'ollama' extractor needs a model (or pass extractor='outline' for \
+                     the offline backend)",
+                )
+            })?;
+            let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
+            let backend = OllamaExtractor::new(url, model);
+            py.detach(|| {
+                svc.remember_extracted(text, &backend, metadata.as_ref())
+                    .map_err(to_py_err)
+            })
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unknown extractor '{other}' (expected 'ollama' or 'outline')"
+        ))),
+    }
+}
+
 /// Convert a Python metadata/filter dict into the engine's [`Metadata`] map,
 /// reusing the crate's `Py` → `serde_json::Value` conversion.
 fn to_metadata(
@@ -199,8 +243,16 @@ fn explanation_to_dict(py: Python<'_>, e: &Explanation) -> PyResult<Py<PyAny>> {
     Ok(out.into())
 }
 
-/// An [`EntityProfile`] lookup as `{found, id, name, attributes, relations}`,
-/// where each relation is `{predicate, target_id, target}`.
+/// An [`EntityProfile`] lookup as
+/// `{found, id, name, attributes, relations, relations_in}`, where each edge
+/// is `{predicate, target_id, target}`.
+///
+/// `relations` are the edges LEAVING the entity, `relations_in` those
+/// pointing AT it — in that list, `target_id`/`target` name the far end the
+/// edge comes FROM. Both are present on a MISS too, as empty lists: a shape
+/// that changed with the outcome would force every caller to branch, and the
+/// parity guard cannot catch it, since it reads a declaration and never an
+/// execution path.
 ///
 /// Takes the *queried* name, not just the outcome, because a miss carries no
 /// name of its own: echoing the query back through
@@ -221,10 +273,26 @@ fn entity_profile_to_value(queried: &str, profile: Option<EntityProfile>) -> ser
             "name": canonical_entity_name(queried),
             "attributes": {},
             "relations": [],
+            "relations_in": [],
         });
     };
-    let relations: Vec<serde_json::Value> = profile
-        .relations
+    serde_json::json!({
+        "found": true,
+        "id": profile.id,
+        "name": profile.name,
+        "attributes": serde_json::Value::Object(profile.attributes),
+        "relations": entity_relations_to_value(profile.relations),
+        "relations_in": entity_relations_to_value(profile.relations_in),
+    })
+}
+
+/// One side of an entity's edges, as `[{predicate, target_id, target}, …]`.
+///
+/// Shared by both directions so the two lists can never drift into different
+/// shapes — the failure a caller would meet as "the same edge looks different
+/// depending on which end I asked from".
+fn entity_relations_to_value(relations: Vec<EntityRelation>) -> Vec<serde_json::Value> {
+    relations
         .into_iter()
         .map(|r| {
             serde_json::json!({
@@ -233,14 +301,7 @@ fn entity_profile_to_value(queried: &str, profile: Option<EntityProfile>) -> ser
                 "target": r.target,
             })
         })
-        .collect();
-    serde_json::json!({
-        "found": true,
-        "id": profile.id,
-        "name": profile.name,
-        "attributes": serde_json::Value::Object(profile.attributes),
-        "relations": relations,
-    })
+        .collect()
 }
 
 /// The shared `Vec<Recollection>` → Python list-of-dicts marshalling of every
@@ -515,51 +576,78 @@ impl PyMemoryService {
 
     /// Look up everything the memory graph knows about a NAMED ENTITY (a
     /// person, a place, an organisation): the attributes merged onto its hub
-    /// and the typed edges leaving it. Answers a question ABOUT a thing
-    /// ("how old is X", "who is X's father") rather than about the sentences
-    /// mentioning it, which is all `recall` can return — entity hubs are
-    /// deliberately invisible to `recall`, so without this the attributes
-    /// `remember_extracted` builds would be unreachable.
+    /// and the typed edges touching it, in BOTH directions. Answers a
+    /// question ABOUT a thing ("how old is X", "who is X's father") rather
+    /// than about the sentences mentioning it, which is all `recall` can
+    /// return — entity hubs are deliberately invisible to `recall`, so
+    /// without this the attributes `remember_extracted` builds would be
+    /// unreachable.
     ///
     /// Args:
     ///     name: matched case-insensitively (the id is content-addressed, so
     ///         it is stable across sessions).
     ///
     /// Returns:
-    ///     `{found, id, name, attributes, relations}`, each relation being
-    ///     `{predicate, target_id, target}`. `found` is `False` when nothing
-    ///     has ever mentioned that name; `name` still echoes the query in its
-    ///     canonical (trimmed, lowercased) form, so several lookups can be
-    ///     told apart.
+    ///     `{found, id, name, attributes, relations, relations_in}`, each
+    ///     edge being `{predicate, target_id, target}`. `found` is `False`
+    ///     when nothing has ever mentioned that name; `name` still echoes the
+    ///     query in its canonical (trimmed, lowercased) form, so several
+    ///     lookups can be told apart.
+    ///
+    ///     `relations` are the edges LEAVING the entity, `relations_in` those
+    ///     pointing AT it — there, `target_id`/`target` name the far end the
+    ///     edge comes FROM. Without the second list a question is only
+    ///     answerable from one side: the graph holds
+    ///     `camille --sister of--> theo`, so reading Theo's outgoing edges
+    ///     never finds Camille.
     fn entity(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
         let profile = py.detach(|| self.svc.entity_profile(name).map_err(to_py_err))?;
         Ok(json_to_python(py, &entity_profile_to_value(name, profile)))
     }
 
-    /// Extract atomic facts from raw `text` with a local Ollama model and store
-    /// them, auto-building the fact↔topic graph. Returns the stored facts' ids.
-    #[pyo3(signature = (text, model, url = None, metadata = None))]
+    /// Extract atomic facts from raw `text` and store them, auto-building the
+    /// entity graph they state.
+    ///
+    /// Args:
+    ///     text: the passage to extract from.
+    ///     model: the local generative model, required by the `"ollama"`
+    ///         backend and ignored by `"outline"`.
+    ///     url: the Ollama base URL (`"ollama"` only).
+    ///     metadata: merged onto every stored fact.
+    ///     extractor: which backend to use, `"ollama"` (default) or
+    ///         `"outline"`. `"outline"` is deterministic and network-free —
+    ///         it reads the structure the passage STATES, one directive per
+    ///         line (`edge:`, `attr:`, `fact:`) — and stands to `"ollama"`
+    ///         exactly as the `"hash"` embedder does, so the whole contract
+    ///         of this method is reachable with no model running.
+    ///
+    /// Returns:
+    ///     `{"ids": [int, ...], "skipped_over_cap": int}`.
+    ///
+    ///     This used to return a bare list of ids, and that list could not
+    ///     say why it was short: nothing distinguished a passage that held
+    ///     three facts from one that held twelve of which nine were dropped
+    ///     for exceeding the embeddable cap. The dict is the breaking change
+    ///     that ends that silence (issue #1692).
+    #[pyo3(signature = (text, model = None, url = None, metadata = None, extractor = None))]
     fn remember_extracted(
         &self,
         py: Python<'_>,
         text: &str,
-        model: String,
+        model: Option<String>,
         url: Option<String>,
         metadata: Option<HashMap<String, Py<PyAny>>>,
-    ) -> PyResult<Vec<u64>> {
+        extractor: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
         let metadata = to_metadata(py, metadata)?;
-        let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
-        let extractor = OllamaExtractor::new(url, model);
-        // The binding's return stays a plain id list (its published Python
-        // signature); the skip count the service now reports has no slot
-        // here — an over-cap fact is simply absent from the ids, exactly as
-        // before, when it aborted the whole call instead.
-        py.detach(|| {
-            self.svc
-                .remember_extracted(text, &extractor, metadata.as_ref())
-                .map(|outcome| outcome.ids)
-                .map_err(to_py_err)
-        })
+        let outcome = extract_with(py, &self.svc, text, model, url, extractor, metadata)?;
+        Ok(json_to_python(
+            py,
+            &serde_json::json!({
+                "ids": outcome.ids,
+                "skipped_over_cap": outcome.skipped_over_cap,
+            }),
+        ))
     }
 
     /// Compile context fragments into a token-budgeted, provenance-audited

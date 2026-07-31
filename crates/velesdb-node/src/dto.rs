@@ -8,7 +8,7 @@ use napi_derive::napi;
 use serde_json::Value;
 use velesdb_memory::{
     EntityProfile, EntityRelation, Explanation, MemoryEdge, MemoryNode, Recollection,
-    UnrelateOutcome,
+    RememberedExtraction, UnrelateOutcome,
 };
 
 use crate::convert::id_to_string;
@@ -151,7 +151,11 @@ impl From<Explanation> for ExplanationJs {
     }
 }
 
-/// One typed edge leaving an entity (output of `entity`).
+/// One typed edge touching an entity (output of `entity`).
+///
+/// Which end `targetId`/`target` name depends on the list it came from: in
+/// `relations` it is the far end the edge points AT, in `relationsIn` it is
+/// the far end the edge comes FROM.
 #[napi(object)]
 pub struct EntityRelationJs {
     /// The edge label the passage stated, e.g. `"father_of"`.
@@ -189,6 +193,15 @@ pub struct EntityProfileJs {
     pub attributes: Value,
     /// Typed edges leaving this entity (`mentions` scaffolding excluded).
     pub relations: Vec<EntityRelationJs>,
+    /// Typed edges pointing AT this entity (`mentions` scaffolding excluded).
+    /// Here each edge's `targetId`/`target` name the far end it comes FROM.
+    ///
+    /// Without these, a question is only answerable from one side: the graph
+    /// holds `camille --sister of--> theo`, so reading Theo's outgoing edges
+    /// never finds Camille. The edge exists, it simply leaves the other node.
+    /// Nothing is inferred — the converse of a kinship label would need a
+    /// gender the graph does not hold; this reports only what is stored.
+    pub relations_in: Vec<EntityRelationJs>,
 }
 
 impl EntityProfileJs {
@@ -203,6 +216,7 @@ impl EntityProfileJs {
                 name: velesdb_memory::service::canonical_entity_name(queried),
                 attributes: Value::Object(serde_json::Map::new()),
                 relations: Vec::new(),
+                relations_in: Vec::new(),
             };
         };
         Self {
@@ -215,6 +229,39 @@ impl EntityProfileJs {
                 .into_iter()
                 .map(EntityRelationJs::from)
                 .collect(),
+            relations_in: profile
+                .relations_in
+                .into_iter()
+                .map(EntityRelationJs::from)
+                .collect(),
+        }
+    }
+}
+
+/// Outcome of `rememberExtracted` (output): the ids stored, and how many
+/// facts were dropped for exceeding the embeddable cap.
+///
+/// An envelope rather than the bare id array this binding used to return,
+/// because a shorter list cannot say WHY it is shorter: nothing distinguished
+/// "the passage held three facts" from "it held twelve and nine were dropped
+/// for their size". That is a silence about lost data, not a missing
+/// convenience (issue #1692).
+#[napi(object)]
+pub struct RememberedExtractionJs {
+    /// Decimal-string ids of the stored facts, in extraction order.
+    pub ids: Vec<String>,
+    /// How many extracted facts were skipped for exceeding the cap.
+    pub skipped_over_cap: u32,
+}
+
+impl From<RememberedExtraction> for RememberedExtractionJs {
+    fn from(outcome: RememberedExtraction) -> Self {
+        Self {
+            ids: outcome.ids.into_iter().map(id_to_string).collect(),
+            // A passage yielding more than u32::MAX skipped facts is not
+            // reachable through any call this binding can make; saturating
+            // keeps the report from ever reading LOW if that ever changes.
+            skipped_over_cap: u32::try_from(outcome.skipped_over_cap).unwrap_or(u32::MAX),
         }
     }
 }
@@ -264,4 +311,14 @@ pub struct CompiledContextJs {
     pub insights: Value,
     /// Overall fidelity risk: "low" | "medium" | "high".
     pub risk: String,
+    /// Mechanical, low-noise heads-up over `decisions`, wire shape: every
+    /// externalized fragment relevant enough to the query that the caller
+    /// should double-check it was not needed.
+    ///
+    /// Not cosmetic — it is the signal that a compilation degraded something.
+    /// A caller compiling under a tight budget saw none of it and believed
+    /// their context complete. An EMPTY list is not a clean bill of health
+    /// either: `warnings_for` only reports retrieved fragments above a
+    /// relevance floor, so `decisions` remains the exhaustive record.
+    pub warnings: Value,
 }

@@ -31,6 +31,22 @@ class MockWasmMemoryService {
     now: '2026-01-03',
   }));
   relate = vi.fn(() => '5');
+  unrelate = vi.fn(() => ({ found: true, removed: 1 }));
+  // The camelCase wire shape the wasm binding actually serves: `relationsIn`
+  // beside `targetId`, never a snake_case key next to a camelCase one. A mock
+  // spelling it `relations_in` would keep this suite green over a binding it
+  // no longer describes.
+  entity = vi.fn(() => ({
+    found: true,
+    id: '12297829382473034410',
+    name: 'theo durand',
+    attributes: { age: 15 },
+    relations: [],
+    relationsIn: [
+      { predicate: 'sister of', targetId: '43', target: 'Entity: camille durand' },
+    ],
+  }));
+  rememberExtracted = vi.fn(() => ({ ids: ['1'], skippedOverCap: 0 }));
   forget = vi.fn(() => true);
   why = vi.fn(() => ({
     nodes: [{ id: '1', content: 'we chose parking_lot', hop: 0 }],
@@ -286,6 +302,52 @@ describe('MemoryService', () => {
       await expect(memory.forget('1')).resolves.toBe(true);
       lastMockInstance!.forget.mockReturnValueOnce(false);
       await expect(memory.forget('999')).resolves.toBe(false);
+    });
+
+    // The three below were absent from this SDK for its whole life while the
+    // wasm binding exposed them (issue #1721). Nothing caught it because the
+    // parity guard's declared perimeter held three Rust crates and no
+    // TypeScript surface at all.
+    it('unrelate() returns what was actually removed', async () => {
+      await expect(memory.unrelate('1', '2', 'decided_in')).resolves.toEqual({
+        found: true,
+        removed: 1,
+      });
+      expect(lastMockInstance!.unrelate).toHaveBeenCalledWith('1', '2', 'decided_in');
+    });
+
+    it('entity() relays BOTH edge directions under their camelCase names', async () => {
+      const profile = await memory.entity('Theo Durand');
+      expect(profile.found).toBe(true);
+      // The assertion that matters: an edge LEAVING camille is invisible from
+      // theo's outgoing list and reachable only here. Reading `relations`
+      // alone is the exact question this field exists to answer.
+      expect(profile.relationsIn).toEqual([
+        { predicate: 'sister of', targetId: '43', target: 'Entity: camille durand' },
+      ]);
+      expect(profile.relations).toEqual([]);
+      expect(lastMockInstance!.entity).toHaveBeenCalledWith('Theo Durand');
+    });
+
+    it('rememberExtracted() returns the envelope, not a bare id array', async () => {
+      await expect(memory.rememberExtracted('edge: Camille | sister of | Theo')).resolves.toEqual({
+        ids: ['1'],
+        skippedOverCap: 0,
+      });
+      // `extractor` reaches the binding as `undefined`, which the binding
+      // reads as its documented default — the SDK does not second-guess it.
+      expect(lastMockInstance!.rememberExtracted).toHaveBeenCalledWith(
+        'edge: Camille | sister of | Theo',
+        undefined,
+        undefined
+      );
+    });
+
+    it('a wasm build too old to carry a method is named, not left to TypeError', async () => {
+      // The capability guard's whole reason for existing: without it this
+      // surfaces as `x is not a function` from inside wrapWasmCall.
+      delete (lastMockInstance as unknown as Record<string, unknown>).entity;
+      await expect(memory.entity('Theo Durand')).rejects.toThrow(/does not implement entity\(\)/);
     });
 
     it('compileContext() delegates the request and returns the wire shape', async () => {

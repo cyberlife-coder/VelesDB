@@ -129,13 +129,13 @@ pub use error::{ErrorCategory, MemoryError};
 pub use extract::OllamaExtractor;
 pub use extract::{
     DynExtractor, ExtractError, ExtractedAttribute, ExtractedFact, ExtractedRelation, Extraction,
-    Extractor,
+    Extractor, OutlineExtractor,
 };
 #[cfg(feature = "mcp")]
 pub use mcp::McpServer;
 pub use model::{
     ColumnFilter, ColumnOp, EntityProfile, EntityRelation, Explanation, FusionOptions, Link,
-    MemoryEdge, MemoryNode, Recollection, UnrelateOutcome,
+    MemoryEdge, MemoryNode, Recollection, RememberedExtraction, UnrelateOutcome,
 };
 pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{MemoryService, Metadata};

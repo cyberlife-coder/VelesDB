@@ -155,7 +155,10 @@ get wrong. Entity nodes are deliberately invisible to `recall` and
 and evict a real fact from your results. So:
 
 - *"What does the memory say about Theo?"* → `entity("Theo Durand")` — returns his
-  attributes and every typed edge leaving him.
+  attributes and every typed edge touching him, in BOTH directions:
+  `relations` leave him, `relations_in` point AT him. Ask only the first and
+  the graph looks half empty — it holds `camille --sister of--> theo`, so
+  Theo's outgoing edges never mention Camille.
 - *"Which notes mention Theo?"* → `recall("Theo Durand")` — returns sentences.
 
 Use `entity` for questions **about a thing**, `recall` for questions **about what
