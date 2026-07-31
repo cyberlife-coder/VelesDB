@@ -499,6 +499,41 @@ test('recallFusedDated leaves now unset and the timeline undated when no fact ca
   }
 })
 
+// The bundled skill (skills/velesdb-memory/SKILL.md) promises zero-setup dating:
+// remember auto-stamps `_veles_date`, so the dated variant works with no metadata
+// of your own. It shipped on npm with the arguments in the WRONG ORDER — the core
+// Rust order (date field last) transcribed onto the JS name, where the field comes
+// SECOND. Nothing caught it because the tests above pass their own `ts` field, so
+// neither the auto-stamp nor the documented call was ever executed. This test is
+// the documented call, verbatim.
+test('recallFusedDated dates a plain remember through the auto-stamped _veles_date', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await store.remember('the invoice service started rejecting refunds')
+
+    const res = await store.recallFusedDated(
+      'invoice service refunds',
+      '_veles_date',
+      10,
+    )
+
+    assert.ok(res.memories.length >= 1, 'the recall half returns the memory')
+    assert.match(
+      res.now ?? '',
+      /^\d{4}-\d{2}-\d{2}$/,
+      'a plain remember must carry a date the timeline can anchor on, with no metadata from the caller',
+    )
+    assert.ok(
+      res.datedContext.includes(
+        `- [${res.now}] the invoice service started rejecting refunds`,
+      ),
+      `the timeline must date the fact with the stamp itself, got: ${res.datedContext}`,
+    )
+  } finally {
+    cleanup()
+  }
+})
+
 test('feedback reinforces a fact, weakens on failure, NOT_FOUND on unknown id', async () => {
   const { store, cleanup } = freshStore()
   try {
