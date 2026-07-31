@@ -275,7 +275,11 @@ pub struct MemoryEdge {
 pub struct UnrelateOutcome {
     /// Whether at least one matching edge existed and was removed.
     pub found: bool,
-    /// How many matching edges were removed (parallel duplicates included).
+    /// How many matching edges were removed.
+    ///
+    /// `relate` is idempotent per (from, relation, to), so anything it wrote
+    /// removes as 0 or 1. Higher counts mean parallel edges predating that
+    /// guarantee, or a direct graph write that bypassed `relate`.
     pub removed: usize,
 }
 

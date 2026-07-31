@@ -23,8 +23,6 @@ pub struct EpisodicMemory {
     dimension: usize,
     ttl: Arc<MemoryTtl>,
     temporal_index: Arc<TemporalIndex>,
-    /// Edge-id allocator for [`Self::relate`] (seeded past existing edges).
-    next_edge_id: std::sync::atomic::AtomicU64,
 }
 
 impl EpisodicMemory {
@@ -71,18 +69,12 @@ impl EpisodicMemory {
             MemoryKind::Episodic,
         )?;
 
-        let next_edge_id = memory_helpers::seed_edge_counter(&memory_helpers::get_collection(
-            &db,
-            &collection_name,
-        )?);
-
         Ok(Self {
             collection_name,
             db,
             dimension: actual_dimension,
             ttl,
             temporal_index,
-            next_edge_id,
         })
     }
     fn rebuild_temporal_index(
@@ -233,7 +225,6 @@ impl EpisodicMemory {
                 collection_name: &self.collection_name,
                 ttl: &self.ttl,
                 kind: MemoryKind::Episodic,
-                next_edge_id: &self.next_edge_id,
             },
             from_id,
             to_id,

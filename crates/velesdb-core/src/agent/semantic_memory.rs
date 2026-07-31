@@ -24,8 +24,6 @@ pub struct SemanticMemory {
     dimension: usize,
     ttl: Arc<MemoryTtl>,
     stored_ids: RwLock<HashSet<u64>>,
-    /// Edge-id allocator for [`Self::relate`] (seeded past existing edges).
-    next_edge_id: std::sync::atomic::AtomicU64,
 }
 
 impl SemanticMemory {
@@ -68,18 +66,12 @@ impl SemanticMemory {
             MemoryKind::Semantic,
         )?;
 
-        let next_edge_id = memory_helpers::seed_edge_counter(&memory_helpers::get_collection(
-            &db,
-            &collection_name,
-        )?);
-
         Ok(Self {
             collection_name,
             db,
             dimension,
             ttl,
             stored_ids,
-            next_edge_id,
         })
     }
 
@@ -362,7 +354,6 @@ impl SemanticMemory {
                 collection_name: &self.collection_name,
                 ttl: &self.ttl,
                 kind: MemoryKind::Semantic,
-                next_edge_id: &self.next_edge_id,
             },
             from_id,
             to_id,

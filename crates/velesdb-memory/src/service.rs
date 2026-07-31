@@ -361,7 +361,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         };
         crate::extract::orient_kinship(fact, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
-        let mut edges: HashSet<(u64, u64)> = HashSet::new();
+        let mut edges: HashSet<(u64, u64, String)> = HashSet::new();
         let mut seeded: HashSet<u64> = HashSet::new();
         // The caller's fact is the node the topics attach to — the extracted
         // facts are NOT stored as separate memories here, which is what
@@ -437,7 +437,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         let mut extraction = extractor.extract_graph(text)?;
         crate::extract::orient_kinship(text, &mut extraction.relations);
         let mut entity_ids: HashMap<String, u64> = HashMap::new();
-        let mut edges: HashSet<(u64, u64)> = HashSet::new();
+        let mut edges: HashSet<(u64, u64, String)> = HashSet::new();
         let mut seeded: HashSet<u64> = HashSet::new();
         let outcome = self.store_extracted_facts(
             &extraction.facts,
@@ -564,7 +564,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         &self,
         relations: &[ExtractedRelation],
         entity_ids: &mut HashMap<String, u64>,
-        edges: &mut HashSet<(u64, u64)>,
+        edges: &mut HashSet<(u64, u64, String)>,
         seeded: &mut HashSet<u64>,
     ) -> Result<(), MemoryError> {
         for relation in relations {
@@ -634,7 +634,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         facts: &[crate::extract::ExtractedFact],
         metadata: Option<&Metadata>,
         entity_ids: &mut HashMap<String, u64>,
-        edges: &mut HashSet<(u64, u64)>,
+        edges: &mut HashSet<(u64, u64, String)>,
         seeded: &mut HashSet<u64>,
     ) -> Result<RememberedExtraction, MemoryError> {
         let mut ids = Vec::with_capacity(facts.len());
@@ -676,7 +676,7 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         fact_id: u64,
         entities: &[String],
         entity_ids: &mut HashMap<String, u64>,
-        edges: &mut HashSet<(u64, u64)>,
+        edges: &mut HashSet<(u64, u64, String)>,
         seeded: &mut HashSet<u64>,
     ) -> Result<(), MemoryError> {
         for entity in entities {
@@ -696,16 +696,19 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         fact_id: u64,
         entity: &str,
         entity_ids: &mut HashMap<String, u64>,
-        edges: &mut HashSet<(u64, u64)>,
+        edges: &mut HashSet<(u64, u64, String)>,
         seeded: &mut HashSet<u64>,
     ) -> Result<(), MemoryError> {
         let entity_id = self.entity_hub(entity, entity_ids)?;
         if entity_id == fact_id {
             return Ok(());
         }
-        // Fold already-persisted edges into the dedup set so re-ingesting the
-        // same text never creates duplicate parallel edges (core `relate` does
-        // not dedup by endpoint+label, only by edge id).
+        // Fold already-persisted edges into the dedup set, which saves the
+        // lookup `relate` would otherwise do per edge. Core IS idempotent per
+        // (from, relation, to) now, so this set is an optimisation — but it
+        // has to key on the label too, or a typed relation extracted between
+        // two facts that already share an edge is dropped before it ever
+        // reaches core.
         self.seed_existing_edges(fact_id, edges, seeded)?;
         self.seed_existing_edges(entity_id, edges, seeded)?;
         self.add_edge(fact_id, entity_id, ABOUT_RELATION, edges)?;
@@ -720,9 +723,9 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         from: u64,
         to: u64,
         label: &str,
-        edges: &mut HashSet<(u64, u64)>,
+        edges: &mut HashSet<(u64, u64, String)>,
     ) -> Result<(), MemoryError> {
-        if edges.insert((from, to)) {
+        if edges.insert((from, to, label.to_string())) {
             self.relate(from, to, label)?;
         }
         Ok(())
@@ -734,14 +737,14 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     fn seed_existing_edges(
         &self,
         node: u64,
-        edges: &mut HashSet<(u64, u64)>,
+        edges: &mut HashSet<(u64, u64, String)>,
         seeded: &mut HashSet<u64>,
     ) -> Result<(), MemoryError> {
         if !seeded.insert(node) {
             return Ok(());
         }
         for edge in self.store.relations(node)? {
-            edges.insert((node, edge.to));
+            edges.insert((node, edge.to, edge.relation));
         }
         Ok(())
     }

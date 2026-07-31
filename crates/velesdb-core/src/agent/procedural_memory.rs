@@ -97,8 +97,6 @@ pub struct ProceduralMemory {
     /// ACT-R decay exponent `d` for passive confidence decay at recall time.
     /// `None` disables decay (default — backward-compatible behaviour).
     activation_decay_exponent: Option<f32>,
-    /// Edge-id allocator for [`Self::relate`] (seeded past existing edges).
-    next_edge_id: std::sync::atomic::AtomicU64,
 }
 
 impl ProceduralMemory {
@@ -139,11 +137,6 @@ impl ProceduralMemory {
             MemoryKind::Procedural,
         )?;
 
-        let next_edge_id = memory_helpers::seed_edge_counter(&memory_helpers::get_collection(
-            &db,
-            &collection_name,
-        )?);
-
         Ok(Self {
             collection_name,
             db,
@@ -152,7 +145,6 @@ impl ProceduralMemory {
             reinforcement_strategy: Arc::new(FixedRate::default()),
             stored_ids,
             activation_decay_exponent: None,
-            next_edge_id,
         })
     }
 
@@ -320,7 +312,6 @@ impl ProceduralMemory {
                 collection_name: &self.collection_name,
                 ttl: &self.ttl,
                 kind: MemoryKind::Procedural,
-                next_edge_id: &self.next_edge_id,
             },
             from_id,
             to_id,

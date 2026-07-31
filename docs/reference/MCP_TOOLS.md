@@ -190,7 +190,7 @@ Create a typed, directional edge between two existing memories.
 | `to` | integer or decimal string | yes | The memory the link points **to**. |
 | `relation` | string | yes | Label, read as `from` *relation* `to` (`caused_by`, `depends_on`, `authored_by`, `supersedes`, …). |
 
-Returns `{ edge_id, edge_id_str }`. Idempotent per `(from, relation, to)`.
+Returns `{ edge_id, edge_id_str }`. Idempotent per `(from, relation, to)`: the id is derived from the triple, so a repeated call answers the edge already there rather than adding a parallel one.
 
 **Direction matters.** Traversal follows OUTGOING edges only: point `from` at
 the memory you will later ask `why` about, and `to` at its evidence
