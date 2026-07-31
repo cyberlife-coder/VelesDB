@@ -258,7 +258,7 @@
         "issue": 1695,
         "summary": "POLICED_TOOLS holds 1 of the 20 published tools, and SURFACE_GLOBS misses the Python and WASM binding sources. Attribution rests on alias proximity within 500 characters."
       },
-      "refusal_untested": "Takes --root, so a vector is possible; not written yet because the tree it needs is a whole tools capture plus a policed surface. Tracked by #1715.",
+      "refusal_untested": "Takes --root, so a vector is possible, and the shape is known: _structural_failures short-circuits before the drift check, so the tree must carry the tools capture PLUS all 16 pinned surfaces, each with a declaration the attribution rule credits to the tool — 17 files. It is deliberately NOT written here: #1695 replaces that attribution rule (nearest-alias within 500 characters, measured at 6 percent precision when widened) with attribution by section title, which changes what counts as a credited declaration in every one of the 16 fixture files. Writing the fixture against the rule being replaced means writing it twice. It lands with the rule, in #1695. Tracked by #1715.",
       "subguards": [
         "return-shape"
       ]
