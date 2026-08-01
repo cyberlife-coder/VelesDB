@@ -386,20 +386,46 @@ const LOCK_RETRY_DELAY: Duration = Duration::from_millis(500);
 /// (#1448).
 fn open_store_with_actionable_lock_error(
     store_path: &str,
-    embedder: DynEmbedder,
+    configured: ConfiguredEmbedder,
 ) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
     use velesdb_memory::MemoryError;
 
+    let ConfiguredEmbedder { embedder, model } = configured;
     let dimension = embedder.dimension();
+    // Read BEFORE the store is opened, so a mismatch is refused instead of
+    // being reported after the daemon has taken the store's single-writer
+    // `flock` — and so `recorded` below genuinely means "recorded before this
+    // process touched anything".
+    let store_dir = std::path::Path::new(store_path);
+    let recorded = velesdb_memory::embedding_provenance::read(store_dir)?;
+    velesdb_memory::embedding_provenance::check(recorded.as_ref(), &model, dimension)?;
+    let unrecorded = recorded.is_none();
+
     let mut last_locked_path: Option<String> = None;
     for attempt in 0..LOCK_RETRY_ATTEMPTS {
         match NativeStore::open(store_path, dimension) {
-            Ok(store) => return Ok(MemoryService::with_store(store, embedder)),
+            Ok(store) => {
+                if unrecorded {
+                    record_embedding_model(store_dir, &store, &model, dimension);
+                }
+                return Ok(MemoryService::with_store(store, embedder));
+            }
             Err(MemoryError::Storage(velesdb_core::Error::DatabaseLocked(locked_path))) => {
                 last_locked_path = Some(locked_path);
                 if attempt + 1 < LOCK_RETRY_ATTEMPTS {
                     std::thread::sleep(LOCK_RETRY_DELAY);
                 }
+            }
+            // A dimension mismatch surfaces here, from the core. When the store
+            // carries no model record, that dimension was the ONLY thing that
+            // could be compared, and saying so is what stops a caller reading
+            // the core's message as a full compatibility verdict.
+            Err(other) if unrecorded => {
+                return Err(format!(
+                    "{other}\n{}",
+                    velesdb_memory::embedding_provenance::unrecorded_model_note(&model)
+                )
+                .into())
             }
             Err(other) => return Err(other.into()),
         }
@@ -411,6 +437,44 @@ fn open_store_with_actionable_lock_error(
          kill it (pkill velesdb-memory) or point VELESDB_MEMORY_PATH elsewhere"
     );
     std::process::exit(1);
+}
+
+/// Record which embedding model filled this store — **only when it holds no
+/// facts**.
+///
+/// The emptiness test is what makes the record trustworthy, and it is
+/// semantic rather than filesystem-shaped on purpose: "the directory looks
+/// new" is defeated by a config file sitting beside the store, or by a
+/// `.DS_Store` a file browser dropped in it. "No fact is stored" is the thing
+/// that actually matters — with zero vectors, there is nothing that could have
+/// come from a different model, so writing the record states something true.
+/// Over existing data it would not: one open with the wrong model would carve
+/// a false provenance that every later check would trust.
+///
+/// A failed write is a warning, never fatal. The daemon runs perfectly without
+/// the record — it only loses the model half of the check — and refusing to
+/// start because a metadata file could not be written would cost more than the
+/// gap it guards.
+fn record_embedding_model(
+    store_dir: &std::path::Path,
+    store: &NativeStore,
+    model: &str,
+    dimension: usize,
+) {
+    use velesdb_memory::embedding_provenance::{write, EmbeddingProvenance};
+    use velesdb_memory::MemoryStore as _;
+
+    if store.count() != 0 {
+        return;
+    }
+    if let Err(err) = write(store_dir, &EmbeddingProvenance::new(model, dimension)) {
+        if std::env::var_os("VELESDB_MEMORY_QUIET").is_none() {
+            eprintln!(
+                "[velesdb-memory] could not record the embedding model ({err}) — the store works, \
+                 but a later model change will only be checked against the vector dimension"
+            );
+        }
+    }
 }
 
 /// Default store location when `VELESDB_MEMORY_PATH` is unset: `~/.velesdb-memory`
@@ -431,11 +495,25 @@ fn build_configured_service(
 ) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
     apply_config_file(args)?;
     let store_path = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
-    let embedder = build_embedder()?;
+    let configured = build_embedder()?;
     apply_autograph(open_store_with_actionable_lock_error(
         &store_path,
-        embedder,
+        configured,
     )?)
+}
+
+/// An embedder together with the identifier of the model behind it.
+///
+/// The model travels with the embedder because only the code that *built* it
+/// knows its name: the [`velesdb_memory::Embedder`] trait exposes a dimension
+/// and nothing else, deliberately — a trait implemented by callers should not
+/// have to answer questions about a configuration it may not have. Carrying
+/// the name here keeps [`velesdb_memory::embedding_provenance`] usable without
+/// widening that trait for every implementor, in this crate and out of it.
+struct ConfiguredEmbedder {
+    embedder: DynEmbedder,
+    /// As configured: `bge-m3`, `all-minilm`, or `hash` for the built-in.
+    model: String,
 }
 
 /// Cancel `ct` on the signals a supervisor actually sends.
@@ -893,7 +971,7 @@ fn build_openai_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std:
 /// `.ok()` maps an unset variable to `None`, which the library reads as "no
 /// preference". A variable that IS set keeps its value — including an empty
 /// one, which stays a caller error rather than collapsing into the default.
-fn build_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
+fn build_embedder() -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
     let backend = std::env::var("VELESDB_MEMORY_EMBEDDER");
     // The library message is transport-neutral; the daemon adds the name of the
     // thing the reader actually has to edit.
@@ -905,9 +983,17 @@ fn build_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
         // must not inherit it silently.
         velesdb_memory::EmbedderSelection::Ready("hash", embedder) => {
             warn_hash_embedder_not_semantic();
-            Ok(embedder)
+            Ok(ConfiguredEmbedder {
+                embedder,
+                model: "hash".to_owned(),
+            })
         }
-        velesdb_memory::EmbedderSelection::Ready(_, embedder) => Ok(embedder),
+        // For a backend that needs no configuration, the backend name IS the
+        // model: there is no separate identifier to carry.
+        velesdb_memory::EmbedderSelection::Ready(name, embedder) => Ok(ConfiguredEmbedder {
+            embedder,
+            model: name.to_owned(),
+        }),
         // The name, not a wildcard — see `attach_extractor` for the defect
         // this shape removes on the extraction side. The embedding side never
         // had a second backend to get wrong, which is exactly why it was the
@@ -925,7 +1011,7 @@ fn build_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
 /// to one and not the other must say so rather than fall back to whichever
 /// client happens to be first.
 #[cfg(feature = "ollama")]
-fn build_remote_embedder(backend: &str) -> Result<DynEmbedder, Box<dyn std::error::Error>> {
+fn build_remote_embedder(backend: &str) -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
     match backend {
         "ollama" => build_ollama_embedder(),
         "openai" => build_openai_embedder(),
@@ -938,7 +1024,7 @@ fn build_remote_embedder(backend: &str) -> Result<DynEmbedder, Box<dyn std::erro
 /// split and now under-describes what it carries — it is this crate's HTTP
 /// dependency for the embedding role, not a vendor.
 #[cfg(not(feature = "ollama"))]
-fn build_remote_embedder(backend: &str) -> Result<DynEmbedder, Box<dyn std::error::Error>> {
+fn build_remote_embedder(backend: &str) -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
     Err(format!(
         "the '{backend}' embedder requires building with `--features ollama` \
          (that feature carries the HTTP dependency for both remote embedding \
@@ -970,7 +1056,7 @@ fn warn_hash_embedder_not_semantic() {
 /// unchanged behaviour, now reached through the role-named variables with the
 /// `VELESDB_MEMORY_OLLAMA_*` pair kept working as aliases.
 #[cfg(feature = "ollama")]
-fn build_ollama_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
+fn build_ollama_embedder() -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
     use velesdb_memory::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
 
     let endpoint = embedder_endpoint()?;
@@ -980,17 +1066,23 @@ fn build_ollama_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
     let model = endpoint
         .model
         .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned());
-    Ok(Box::new(OllamaEmbedder::new(url, model)?))
+    Ok(ConfiguredEmbedder {
+        embedder: Box::new(OllamaEmbedder::new(&url, &model)?),
+        model,
+    })
 }
 
 /// Build the OpenAI-compatible embedder. Both the URL and the model are
 /// required — see [`RemoteEndpoint::require`].
 #[cfg(feature = "ollama")]
-fn build_openai_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
+fn build_openai_embedder() -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
     use velesdb_memory::OpenAiEmbedder;
 
     let (url, model, auth) = embedder_endpoint()?.require("VELESDB_MEMORY_EMBEDDER")?;
-    Ok(Box::new(OpenAiEmbedder::new(url, model, auth)?))
+    Ok(ConfiguredEmbedder {
+        embedder: Box::new(OpenAiEmbedder::new(url, &model, auth)?),
+        model,
+    })
 }
 
 /// Default token budget of `compile-stdin` when `--budget` is omitted.
