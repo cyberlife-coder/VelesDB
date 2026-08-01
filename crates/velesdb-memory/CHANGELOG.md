@@ -11,6 +11,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`openai`: an OpenAI-compatible backend for BOTH roles (#1751).** Set
+  `VELESDB_MEMORY_EMBEDDER=openai` or `VELESDB_MEMORY_EXTRACTOR=openai` to
+  reach oMLX, llama.cpp's server, LM Studio, vLLM or a hosted provider. The
+  value names a **protocol, not a vendor**: reaching a different server is a
+  different URL, never a new backend name — which is what stops the selector
+  from growing a vendor list.
+
+  Neither the URL nor the model has a default here, deliberately: guessing
+  either would pick one of those servers for the operator. Both roles are
+  configured independently — embedding on a local Ollama while extracting on
+  an OpenAI-compatible server is a supported combination.
+
+  The daemon now dispatches on the backend name the library hands it. It
+  previously matched `NeedsRemoteConfig(_)` and built an Ollama client
+  regardless, in **two** places (`attach_extractor` and the autograph path),
+  so a second backend would have been selected and then silently ignored —
+  asking for `openai` answered `VELESDB_MEMORY_EXTRACTOR=ollama requires …`.
+
+- **Role-named configuration for the embedding role.** `VELESDB_MEMORY_EMBEDDER_URL`,
+  `_MODEL` and `_API_TOKEN` mirror the extraction role's variables, which were
+  role-named from the start. `VELESDB_MEMORY_OLLAMA_URL` / `_MODEL` keep
+  working as aliases, so no existing setup changes; when both names are set to
+  **different** values the role-named one wins and the daemon says so **once**
+  at startup. `velesdb-memory.toml`'s `[embedder]` section now writes the
+  role-named variables.
+
+- **API tokens, environment-only.** `VELESDB_MEMORY_EMBEDDER_API_TOKEN` /
+  `VELESDB_MEMORY_EXTRACTOR_API_TOKEN`. No token means **no `Authorization`
+  header at all** — not an empty one, which a server rejects as a bad
+  credential rather than a missing one; a token set to an empty string is
+  refused at startup for the same reason. There is deliberately **no
+  `api_token` field in the config file**, and one written there is refused:
+  a credential at rest in a versionable file is one `git add .` away from a
+  public history. The refusal is rewritten rather than passed through, because
+  the TOML parser quotes the offending line back — which would have printed
+  the secret to stderr.
+
+- **The store records which embedding model filled it.**
+  `embedding-provenance.json`, beside the store. `velesdb-core` already refuses
+  a collection whose dimension differs, which catches the loud half of the
+  problem; two different models of the **same** width open fine and return
+  noise (this crate's `hash` embedder is 384-dimensional, and so is
+  `all-minilm`). The **backend is not recorded** — it is a transport, and the
+  same model served by Ollama, oMLX or a hosted API produces the same vectors,
+  so refusing on it would block a valid migration. The record is written only
+  for a store holding **no facts**, never over existing data where one open
+  with the wrong model would carve a provenance every later check would trust.
+  A store created before this stays unrecorded, and its check degrades to the
+  dimension alone — saying so explicitly rather than letting a successful open
+  read as a verified match. Deleting the file is safe; the store is untouched.
+
 - **`OutlineExtractor`: a deterministic, network-free extraction backend.**
   Until now `OllamaExtractor` was the crate's only `Extractor`, so every
   contract `remember_extracted` publishes was reachable only through a
@@ -41,6 +92,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **TypeScript SDK gains `entity`, `unrelate` and `rememberExtracted`**, the
   methods it had been missing for its whole life (#1721), and enters a
   guard's perimeter for the first time.
+
+### Fixed
+
+- **A base URL carrying the `/v1` prefix no longer doubles it (#1751).**
+  Servers advertise their OpenAI-compatible endpoint *with* the version prefix
+  — oMLX's console shows `http://127.0.0.1:8019/v1` beside a copy button — and
+  concatenating `/v1/embeddings` onto that produced `/v1/v1/embeddings` and a
+  `404` whose cause was invisible from the message. Both spellings now reach
+  the same endpoint. A trailing `/v1` is stripped only when something precedes
+  it, so a host genuinely named `v1` is not truncated to `http:/`.
 
 ### Changed
 
