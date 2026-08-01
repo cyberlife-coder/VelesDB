@@ -59,7 +59,12 @@ mod memory_bridge;
 /// and rejected from caller-supplied metadata/filters (see [`is_reserved_key`]).
 /// Hubs are internal graph scaffolding — they connect facts that share a topic —
 /// so they are excluded from unfiltered recall and from `why` seeds.
-const HUB_FIELD: &str = "_veles_hub";
+///
+/// Re-exported from [`crate::storage`] rather than spelled out again here: it
+/// is one of the five markers [`crate::storage::INTERNAL_MARKER_FIELDS`]
+/// excludes from `recall_where`, and a second literal could drift from that
+/// list without any test noticing.
+use crate::storage::HUB_FIELD;
 /// Salt mixed into a hub's stable id so the hub id space is disjoint from
 /// natural fact ids: a caller fact whose text happens to equal a hub's display
 /// content (`Entity: rust`) can never collide with, or overwrite, the hub.
@@ -924,6 +929,20 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
     /// Filter *values* are bound as query parameters (never interpolated), so
     /// they cannot inject; filter *field names* are validated to be plain
     /// identifiers. Results come back in similarity order.
+    ///
+    /// **Caller memories only.** The store also holds internal scaffolding —
+    /// the entity hubs of [`Self::remember_extracted`] and the context
+    /// compiler's four artefact classes (stored sources, compilation events,
+    /// working contexts, and the per-project working-context index). They sit
+    /// in the same collection as caller facts and are excluded from every
+    /// result here, whatever the predicate.
+    ///
+    /// That exclusion is applied by the backend against
+    /// [`crate::storage::INTERNAL_MARKER_FIELDS`]; it is NOT a consequence of
+    /// those facts being unfilterable. A caller cannot write a filter naming a
+    /// reserved key, but `field ne value` MATCHES a fact that has no such
+    /// field at all — and scaffolding has none of the caller's columns, so
+    /// before #1737 every `ne` predicate returned all of it.
     ///
     /// # Errors
     /// Returns [`MemoryError::InvalidFilter`] if a filter field is not a plain

@@ -338,10 +338,14 @@ impl MemoryStore for NativeStore {
         // Field names are validated by `build_fused_query`; ensure each one is
         // indexed so the planner uses a bitmap prefilter instead of an O(n)
         // post-filter scan. Idempotent and incrementally maintained thereafter.
-        for filter in filters {
+        for field in filters
+            .iter()
+            .map(|filter| filter.field.as_str())
+            .chain(INTERNAL_MARKER_FIELDS.iter().copied())
+        {
             self.memory
                 .semantic()
-                .ensure_index(&filter.field)
+                .ensure_index(field)
                 .map_err(MemoryError::from)?;
         }
         let results = self
@@ -423,6 +427,23 @@ impl NativeStore {
             );
             params.insert(key, filter.value.clone());
         }
+        // Exclude internal scaffolding INSIDE the query rather than after it:
+        // the engine applies `LIMIT k`, so a post-filter would quietly return
+        // fewer than `k` caller facts whenever artefacts crowd the ranking.
+        //
+        // `!=` is what excludes here, and it works for the same reason the
+        // leak existed: `Condition::Neq` is `is_none_or`, so a fact that has
+        // no such column at all MATCHES. Applied to a marker, that keeps every
+        // caller fact (none carries one) and drops exactly the class that
+        // does. These names are compile-time constants, never caller input,
+        // so they go straight into the text without passing through
+        // `validate_column_filter` — whose job is to reject a CALLER filter
+        // naming a reserved key.
+        for (index, marker) in INTERNAL_MARKER_FIELDS.iter().enumerate() {
+            let key = format!("m{index}");
+            let _ = write!(predicate, " AND {marker} != ${key}");
+            params.insert(key, json!(true));
+        }
         let sql = format!(
             "SELECT * FROM {} WHERE {predicate} LIMIT {k}",
             self.memory.semantic().collection_name()
@@ -458,6 +479,50 @@ pub const AUTO_DATE_FIELD: &str = "_veles_date";
 /// and every backend enforce it through this one predicate.
 pub(crate) fn is_reserved_key(key: &str) -> bool {
     key != AUTO_DATE_FIELD && (key == "content" || key.starts_with("_veles_"))
+}
+
+/// Marks an entity hub minted by `remember_extracted` — graph scaffolding,
+/// never a fact the caller stored.
+pub const HUB_FIELD: &str = "_veles_hub";
+/// Marks a compilation event recorded for `context_savings`.
+pub const CTX_EVENT_FIELD: &str = "_veles_ctx_event";
+/// Marks a stored compilation source, served back by `retrieve_context_source`.
+pub const CTX_SOURCE_FIELD: &str = "_veles_ctx_source";
+/// Marks a saved working context, served back by `load_working_context`.
+pub const CTX_WORKING_FIELD: &str = "_veles_ctx_working";
+/// Marks a project's working-context index, read by `list_working_contexts`.
+pub const CTX_WORKING_INDEX_FIELD: &str = "_veles_ctx_working_index";
+
+/// Every marker that identifies a stored fact as internal scaffolding rather
+/// than a caller memory. Facts of these five classes live in the same
+/// collection as caller facts and are written by exactly one path each; the
+/// markers are declared here, and imported by those paths, so the write and
+/// the exclusion cannot drift apart.
+///
+/// The discriminant is the PRESENCE of one of these keys — deliberately NOT
+/// the `_veles_` prefix. [`AUTO_DATE_FIELD`] (`_veles_date`) is reserved too
+/// and is stamped onto ordinary CALLER facts, so a prefix test would hide the
+/// entire store instead of the scaffolding.
+pub const INTERNAL_MARKER_FIELDS: &[&str] = &[
+    HUB_FIELD,
+    CTX_EVENT_FIELD,
+    CTX_SOURCE_FIELD,
+    CTX_WORKING_FIELD,
+    CTX_WORKING_INDEX_FIELD,
+];
+
+/// Whether a raw payload belongs to one of the five internal classes.
+///
+/// `pub` and shared for the same reason as [`validate_column_filter`]: a
+/// caller-facing recall path must not depend on which backend answered it.
+/// A backend that can test the payload directly should use this; one that
+/// pushes the predicate into a query builds the equivalent there — the
+/// authority on *which* markers count is this list either way.
+#[must_use]
+pub fn is_internal_scaffolding(payload: &Metadata) -> bool {
+    INTERNAL_MARKER_FIELDS
+        .iter()
+        .any(|marker| payload.contains_key(*marker))
 }
 
 /// Drop reserved system keys from a raw payload, and collapse an

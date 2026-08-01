@@ -270,7 +270,16 @@ impl MemoryStore for WasmStore {
             embedding,
             k,
             0,
-            |payload| columnar_matches(payload, filters),
+            // Internal scaffolding is excluded by the PRESENCE of its marker,
+            // checked on the raw payload before it is stripped. This backend
+            // cannot express the exclusion as a `ColumnFilter` the way the
+            // native one does: `columnar_matches` is `is_some_and`, so a
+            // `marker != true` predicate would demand the field be present
+            // and black out every caller fact instead.
+            |payload| {
+                !velesdb_memory::storage::is_internal_scaffolding(payload)
+                    && columnar_matches(payload, filters)
+            },
             |id, score, fact| Recollection {
                 id,
                 score,

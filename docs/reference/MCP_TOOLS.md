@@ -153,6 +153,15 @@ comparisons, not just equality.
 "20230601"}` (a JSON string) — same value, different JSON type, no match and
 no error. Store comparable values numerically at `remember` time.
 
+**Your own memories only.** The store also holds internal scaffolding in the
+same collection: the entity hubs behind `entity`/`why`, and the context
+compiler's artefacts (stored sources, compilation events, working contexts
+and their per-project index). None of it is ever returned here, whatever the
+predicate. This is enforced by the engine, not implied by those facts being
+unfilterable: `ne` matches a fact that has no such field **at all**, and
+scaffolding carries none of your columns, so every `ne` predicate used to
+sweep all of it in.
+
 ```jsonc
 recall_where { "query": "incidents",
                "filters": [ { "field": "_veles_date", "op": "ge", "value": 20260101 },

@@ -440,6 +440,12 @@ impl PyMemoryService {
     /// queryable. `filters` is a list of `(field, op, value)` tuples where `op`
     /// is one of `eq`/`ne`/`lt`/`le`/`gt`/`ge`. Returns `{id, score, content, metadata}`
     /// (`metadata` is the fact's stored dict, or `None` if it carried none).
+    ///
+    /// Returns your own stored facts ONLY: entity hubs and the context compiler's
+    /// artefacts (stored sources, compilation events, working contexts and
+    /// their index) are internal scaffolding and never come back, whatever the
+    /// predicate — including a `ne` one, which matches facts lacking the field
+    /// entirely.
     #[pyo3(signature = (query, filters, k = 10))]
     fn recall_where(
         &self,

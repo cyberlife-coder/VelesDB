@@ -2388,6 +2388,12 @@ class MemoryService:
             descending similarity score. ``metadata`` is the fact's stored
             metadata dict, or ``None`` if it carried none.
 
+            Your own stored facts ONLY: entity hubs and the context compiler's
+            artefacts (stored sources, compilation events, working contexts
+            and their index) are internal scaffolding and never come back,
+            whatever the predicate — including a ``"ne"`` one, which matches
+            facts lacking the field entirely.
+
         Raises:
             ValueError: If an unknown filter ``op`` is given.
         """
