@@ -530,24 +530,56 @@ quality, and `why`'s seed match, depend on it.
 |---|---|---|---|
 | `hash` (default) | keyword-ish, deterministic | tiny, **fully offline, zero-dep** | nothing |
 | `ollama` | real semantic | tiny binary + your local model | a running Ollama; build `--features ollama` |
+| `openai` | real semantic | tiny binary + whatever serves the model | any OpenAI-compatible server; build `--features ollama` |
 
 The default keeps the *single tiny offline binary* promise intact. For real
 semantic recall, build with the `ollama` feature and point it at a local model
-— the model runs in your own Ollama, so memory still never leaves the machine:
+— the model runs on your own machine, so memory still never leaves it:
 
 ```bash
 cargo build --release -p velesdb-memory --features ollama
 ollama pull all-minilm
 VELESDB_MEMORY_EMBEDDER=ollama \
-VELESDB_MEMORY_OLLAMA_MODEL=all-minilm \
+VELESDB_MEMORY_EMBEDDER_MODEL=all-minilm \
   /path/to/velesdb-memory
 ```
 
-Env vars: `VELESDB_MEMORY_OLLAMA_URL` (default `http://localhost:11434`),
-`VELESDB_MEMORY_OLLAMA_MODEL` (default `all-minilm`).
+Env vars: `VELESDB_MEMORY_EMBEDDER_URL` (default `http://localhost:11434` for
+`ollama`, **required** for `openai`), `VELESDB_MEMORY_EMBEDDER_MODEL` (default
+`all-minilm` for `ollama`, **required** for `openai`),
+`VELESDB_MEMORY_EMBEDDER_API_TOKEN` (optional; when unset, **no**
+`Authorization` header is sent).
+
+`VELESDB_MEMORY_OLLAMA_URL` and `VELESDB_MEMORY_OLLAMA_MODEL` remain supported
+as aliases of the two role-named variables above, so an existing setup keeps
+working unchanged. If both names are set to *different* values, the role-named
+one wins and the daemon says so once at startup.
+
+### `openai` is a protocol, not a vendor
+
+The `openai` value selects the OpenAI-compatible HTTP shape (`/v1/embeddings`,
+`/v1/chat/completions`), which oMLX, llama.cpp's server, LM Studio, vLLM and
+the hosted providers all speak. Reaching a different server is a **different
+URL**, never a new backend name — which is why neither the URL nor the model
+has a default here: guessing either would pick one of those servers for you.
+
+```bash
+VELESDB_MEMORY_EMBEDDER=openai \
+VELESDB_MEMORY_EMBEDDER_URL=http://localhost:8020 \
+VELESDB_MEMORY_EMBEDDER_MODEL=bge-m3 \
+  /path/to/velesdb-memory
+```
+
+**API tokens are read from the environment only.** There is deliberately no
+`api_token` field in `velesdb-memory.toml`, and putting one there is refused at
+startup: a credential at rest in a versionable file is one `git add .` away
+from a public history.
 
 **The embedding dimension is probed from the model, so a store is fixed to one
-embedder** — do not switch embedders on an existing store.
+embedder** — do not switch embedding *models* on an existing store. Switching
+the *transport* is safe: the same model served by Ollama or by an
+OpenAI-compatible server produces the same vectors, and the daemon compares the
+model and the dimension rather than which backend served them.
 
 ## Auto-extraction backend (opt-in)
 
@@ -564,11 +596,28 @@ VELESDB_MEMORY_EXTRACTOR_MODEL=qwen3.6:35b-mlx \
   /path/to/velesdb-memory
 ```
 
-Env vars: `VELESDB_MEMORY_EXTRACTOR` (`ollama` or `outline`),
-`VELESDB_MEMORY_EXTRACTOR_URL` (default `http://localhost:11434`, `ollama`
-only), `VELESDB_MEMORY_EXTRACTOR_MODEL` (a generative model — required for
-`ollama`, unused by `outline`). Without a backend the tool returns a clear
-"not configured" error.
+Env vars: `VELESDB_MEMORY_EXTRACTOR` (`outline`, `ollama` or `openai`),
+`VELESDB_MEMORY_EXTRACTOR_URL` (default `http://localhost:11434` for `ollama`,
+**required** for `openai`, unused by `outline`),
+`VELESDB_MEMORY_EXTRACTOR_MODEL` (a generative model — required for `ollama`
+and `openai`, unused by `outline`), `VELESDB_MEMORY_EXTRACTOR_API_TOKEN`
+(optional; when unset, **no** `Authorization` header is sent). Without a
+backend the tool returns a clear "not configured" error.
+
+`openai` is the same OpenAI-compatible protocol described under
+[Embedding backend](#embedding-backend), reached over
+`/v1/chat/completions`:
+
+```bash
+VELESDB_MEMORY_EXTRACTOR=openai \
+VELESDB_MEMORY_EXTRACTOR_URL=http://localhost:8028 \
+VELESDB_MEMORY_EXTRACTOR_MODEL=your-model \
+  /path/to/velesdb-memory
+```
+
+**The two roles are configured independently** — nothing requires them to share
+a backend, a server or a token. Embedding on a local Ollama while extracting on
+an OpenAI-compatible server is a supported combination, not an accident.
 
 The two backends are **not** interchangeable:
 
