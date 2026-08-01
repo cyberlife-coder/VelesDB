@@ -229,6 +229,97 @@ impl Embedder for OllamaEmbedder {
     }
 }
 
+/// Embeds through any **OpenAI-compatible** `/v1/embeddings` endpoint — oMLX,
+/// llama.cpp's server, LM Studio, vLLM, or a hosted provider.
+///
+/// A sibling of [`OllamaEmbedder`], not a layer over it: each sits directly on
+/// its own protocol, both over the same transport. Reaching a new server is a
+/// different base URL, never a new backend name.
+///
+/// Gated on `feature = "ollama"` because that feature carries this crate's
+/// HTTP dependency for the embedding role. The name predates the protocol
+/// split and now under-describes what it enables.
+#[cfg(feature = "ollama")]
+#[derive(Debug)]
+pub struct OpenAiEmbedder {
+    client: crate::http_client::HttpJsonClient,
+    model: String,
+    dimension: usize,
+}
+
+#[cfg(feature = "ollama")]
+impl OpenAiEmbedder {
+    /// Connect to the server at `base_url` using `model`, probing the
+    /// embedding dimension once so it adapts to whatever model is configured.
+    ///
+    /// `base_url` is the server's origin, port included and path excluded
+    /// (`http://localhost:8020`): the `/v1/embeddings` suffix belongs to the
+    /// protocol, not to the caller.
+    ///
+    /// # Errors
+    /// [`EmbedError`] if the server is unreachable, refuses the request, or
+    /// answers with no vector.
+    pub fn new(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        auth: crate::http_client::Auth,
+    ) -> Result<Self, EmbedError> {
+        let client = crate::http_client::HttpJsonClient::new(
+            base_url,
+            auth,
+            embed_agent(std::time::Duration::from_secs(EMBED_TIMEOUT_SECS)),
+        );
+        let probing = Self {
+            client,
+            model: model.into(),
+            dimension: 0,
+        };
+        let dimension = probing.request("dimension probe")?.len();
+        if dimension == 0 {
+            return Err(EmbedError::Empty);
+        }
+        Ok(Self {
+            dimension,
+            ..probing
+        })
+    }
+
+    /// One embeddings call. The protocol layer builds the body and reads the
+    /// answer back; this method supplies only the model and renders the
+    /// failure — the two things the protocol has no business knowing.
+    fn request(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
+        let body = crate::openai::embeddings_body(&self.model, text);
+        let payload = self
+            .client
+            .post_json(crate::openai::EMBEDDINGS_PATH, &body)
+            .map_err(|failure| {
+                EmbedError::Backend(crate::http_retry::actionable_openai_failure(
+                    "embeddings",
+                    &failure.url,
+                    &self.model,
+                    failure.attempts,
+                    &failure.cause,
+                    Some(
+                        "fall back to the fully-offline embedder with \
+                         VELESDB_MEMORY_EMBEDDER=hash",
+                    ),
+                ))
+            })?;
+        crate::openai::parse_embeddings_response(&payload).map_err(EmbedError::Backend)
+    }
+}
+
+#[cfg(feature = "ollama")]
+impl Embedder for OpenAiEmbedder {
+    fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    fn embed(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
+        self.request(text)
+    }
+}
+
 /// Build the JSON request body for the embeddings endpoint.
 /// How long Ollama keeps a model resident after a request. `-1` means "for as
 /// long as the server runs", which is what a daemon wants: the model loads once
@@ -374,20 +465,19 @@ enum OllamaCall {
 #[cfg(feature = "ollama")]
 fn call_is_retryable(err: &OllamaCall) -> bool {
     match err {
-        OllamaCall::Transport(inner) => crate::ollama_retry::is_retryable(inner),
-        OllamaCall::Body(inner) => crate::ollama_retry::io_is_retryable(inner),
+        OllamaCall::Transport(inner) => crate::http_retry::is_retryable(inner),
+        OllamaCall::Body(inner) => crate::http_retry::io_is_retryable(inner),
         OllamaCall::Payload(_) => false,
     }
 }
 
 /// The knobs that actually configure this backend, named in its failures.
 #[cfg(feature = "ollama")]
-const EMBED_LEVERS: crate::ollama_retry::OllamaLevers<'static> =
-    crate::ollama_retry::OllamaLevers {
-        url_var: "VELESDB_MEMORY_OLLAMA_URL",
-        model_var: "VELESDB_MEMORY_OLLAMA_MODEL",
-        fallback: Some("fall back to the fully-offline embedder with VELESDB_MEMORY_EMBEDDER=hash"),
-    };
+const EMBED_LEVERS: crate::http_retry::FailureLevers<'static> = crate::http_retry::FailureLevers {
+    url_var: "VELESDB_MEMORY_OLLAMA_URL",
+    model_var: "VELESDB_MEMORY_OLLAMA_MODEL",
+    fallback: Some("fall back to the fully-offline embedder with VELESDB_MEMORY_EMBEDDER=hash"),
+};
 
 /// Perform one embeddings request against a local Ollama, replaying it when the
 /// failure is transient.
@@ -422,15 +512,15 @@ fn request_embedding(
         parse_embedding_response(&payload).map_err(OllamaCall::Payload)
     };
 
-    match crate::ollama_retry::with_retry(
-        &crate::ollama_retry::OLLAMA_RETRIES,
+    match crate::http_retry::with_retry(
+        &crate::http_retry::HTTP_RETRIES,
         call_is_retryable,
         attempt,
     ) {
         Ok(vector) => Ok(vector),
         Err((OllamaCall::Payload(err), _)) => Err(err),
         Err((OllamaCall::Transport(err), attempts)) => Err(EmbedError::Backend(
-            crate::ollama_retry::actionable_failure(
+            crate::http_retry::actionable_ollama_failure(
                 "embeddings",
                 &url,
                 model,
@@ -440,7 +530,7 @@ fn request_embedding(
             ),
         )),
         Err((OllamaCall::Body(err), attempts)) => Err(EmbedError::Backend(
-            crate::ollama_retry::actionable_failure(
+            crate::http_retry::actionable_ollama_failure(
                 "embeddings",
                 &url,
                 model,

@@ -45,7 +45,7 @@ pub(crate) struct RetryConfig {
 /// is already struggling, and would inflate the worst case of
 /// `remember_extracted`, which issues one embed per fact *and* one per entity
 /// hub. Total added latency on a hard failure: ~300 ms.
-pub(crate) const OLLAMA_RETRIES: RetryConfig = RetryConfig {
+pub(crate) const HTTP_RETRIES: RetryConfig = RetryConfig {
     max_retries: 2,
     initial_delay: Duration::from_millis(100),
     max_delay: Duration::from_secs(1),
@@ -159,7 +159,7 @@ pub(crate) fn with_retry<T, E>(
 /// `VELESDB_MEMORY_EXTRACTOR_URL`/`_MODEL` (see `main.rs`). Naming the wrong
 /// pair would send the user to edit a setting that has no effect — worse than
 /// saying nothing.
-pub(crate) struct OllamaLevers<'a> {
+pub(crate) struct FailureLevers<'a> {
     /// Variable that repoints the base URL.
     pub url_var: &'a str,
     /// Variable that selects the model.
@@ -172,13 +172,13 @@ pub(crate) struct OllamaLevers<'a> {
 /// model, how many times it was tried, why it failed, and which knobs change
 /// the outcome. Modelled on `main.rs`'s hash-embedder notice, which already
 /// states a trade-off and points at its opt-in.
-pub(crate) fn actionable_failure(
+pub(crate) fn actionable_ollama_failure(
     endpoint: &str,
     url: &str,
     model: &str,
     attempts: u32,
     cause: &str,
-    levers: &OllamaLevers<'_>,
+    levers: &FailureLevers<'_>,
 ) -> String {
     let plural = if attempts == 1 { "attempt" } else { "attempts" };
     let mut message = format!(
@@ -190,6 +190,40 @@ pub(crate) fn actionable_failure(
     if let Some(fallback) = levers.fallback {
         message.push_str(", or ");
         message.push_str(fallback);
+    }
+    message.push('.');
+    message
+}
+
+/// The same job for an OpenAI-compatible server, with none of the Ollama
+/// advice.
+///
+/// A separate function rather than a flag on [`actionable_ollama_failure`],
+/// because that one does not merely *name* Ollama — it tells the reader to run
+/// `ollama pull`. Pointed at an oMLX or llama.cpp server, its remedy would be
+/// confidently wrong, which costs more than no remedy at all. Renaming this
+/// module to `http_retry` is what made the hard-coded text visible.
+///
+/// `hint` is the caller's escape hatch (e.g. the fully-offline embedder), or
+/// `None` when it has none to offer.
+#[cfg_attr(not(any(feature = "ollama", feature = "extract")), allow(dead_code))]
+pub(crate) fn actionable_openai_failure(
+    endpoint: &str,
+    url: &str,
+    model: &str,
+    attempts: u32,
+    cause: &str,
+    hint: Option<&str>,
+) -> String {
+    let plural = if attempts == 1 { "attempt" } else { "attempts" };
+    let mut message = format!(
+        "openai-compatible {endpoint} call failed after {attempts} {plural}: \
+         POST {url} (model '{model}'): {cause}. Check a server is listening at \
+         that base URL and serves that model"
+    );
+    if let Some(hint) = hint {
+        message.push_str(", or ");
+        message.push_str(hint);
     }
     message.push('.');
     message
@@ -293,7 +327,7 @@ mod tests {
     fn with_retry_stops_early_on_a_non_retryable_error() {
         let mut calls = 0_u32;
         let outcome: Result<(), (&str, u32)> = with_retry(
-            &OLLAMA_RETRIES,
+            &HTTP_RETRIES,
             |_| false,
             || {
                 calls += 1;
@@ -307,7 +341,7 @@ mod tests {
     #[test]
     fn with_retry_reports_the_attempt_count() {
         let outcome: Result<(), (&str, u32)> =
-            with_retry(&OLLAMA_RETRIES, |_| true, || Err("transient"));
+            with_retry(&HTTP_RETRIES, |_| true, || Err("transient"));
         assert!(
             matches!(outcome, Err((_, 3))),
             "one attempt plus two replays, and the count must reach the caller"
@@ -316,31 +350,31 @@ mod tests {
 
     #[test]
     fn the_backoff_grows_and_stays_capped() {
-        assert_eq!(OLLAMA_RETRIES.delay_for_attempt(0), Duration::ZERO);
+        assert_eq!(HTTP_RETRIES.delay_for_attempt(0), Duration::ZERO);
         assert_eq!(
-            OLLAMA_RETRIES.delay_for_attempt(1),
+            HTTP_RETRIES.delay_for_attempt(1),
             Duration::from_millis(100)
         );
         assert_eq!(
-            OLLAMA_RETRIES.delay_for_attempt(2),
+            HTTP_RETRIES.delay_for_attempt(2),
             Duration::from_millis(200)
         );
         assert_eq!(
-            OLLAMA_RETRIES.delay_for_attempt(99),
-            OLLAMA_RETRIES.max_delay,
+            HTTP_RETRIES.delay_for_attempt(99),
+            HTTP_RETRIES.max_delay,
             "the schedule must not drift into a long sleep"
         );
     }
 
     #[test]
     fn the_failure_message_names_the_levers_of_its_own_call_site() {
-        let message = actionable_failure(
+        let message = actionable_ollama_failure(
             "embeddings",
             "http://localhost:11434/api/embeddings",
             "all-minilm",
             3,
             "Network Error: Connection reset by peer (os error 54)",
-            &OllamaLevers {
+            &FailureLevers {
                 url_var: "VELESDB_MEMORY_OLLAMA_URL",
                 model_var: "VELESDB_MEMORY_OLLAMA_MODEL",
                 fallback: Some(
