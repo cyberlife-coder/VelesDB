@@ -380,7 +380,10 @@ impl PyMemoryService {
     /// Store a fact; returns its stable id. `links` is a list of `(target_id,
     /// relation)` tuples; `metadata` is an optional dict for later filtering.
     /// `ttl_seconds` makes the fact expire after that many seconds (a durable TTL
-    /// that survives restarts); omit it (or `0`) for a permanent memory.
+    /// that survives restarts); omit it for a permanent memory, including when
+    /// re-storing a fact that already had an expiry — only what this call
+    /// supplies is applied. An explicit `0` is REFUSED, because a caller
+    /// writing `0` means "expire now", not "never".
     #[pyo3(signature = (fact, links = None, metadata = None, ttl_seconds = None))]
     fn remember(
         &self,

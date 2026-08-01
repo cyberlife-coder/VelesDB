@@ -206,8 +206,13 @@ fragment — stability wins over relevance, but only for cache-marked fragments.
 
 `warnings` is a mechanical, low-noise shortlist over `decisions`: every
 externalized fragment relevant enough to the query that it is worth a second
-look. Reading `decisions` by hand is only needed when `warnings` is non-empty
-and still ambiguous.
+look.
+
+An **empty `warnings` is not a clean bill of health.** Only `retrieve`
+decisions at or above a relevance floor ever qualify, so two real losses never
+show up there: a `preserve` fragment the packer could only fit partially, and
+an abstracted one. `decisions` stays the exhaustive record; `risk` is the cheap
+second signal when you do not want to read it entry by entry.
 
 `insights.tokens_saved` is a **local estimate**. It is calibrated against a
 real BPE (cl100k) to deliberately over-count every measured content class
@@ -423,8 +428,10 @@ disables the field entirely: every `path` fragment then fails with
 
 Every `path` fragment runs the same ordered, short-circuiting pipeline:
 
-1. A fragment may set exactly one of `path`, non-empty `content`, or `media` —
-   checked first, independent of whether ingestion is enabled.
+1. `path` is **exclusive** — it is resolved *into* `content`, so a fragment
+   setting both is rejected — while `content` and `media` **may** travel
+   together (an image and its caption). A fragment carrying none of the three
+   is rejected too. Checked first, independent of whether ingestion is enabled.
 2. The path must be **absolute**; an MCP server's working directory is not
    something a caller can rely on. A relative path is rejected outright.
 3. [`std::fs::canonicalize`](https://doc.rust-lang.org/std/fs/fn.canonicalize.html)

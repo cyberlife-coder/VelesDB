@@ -687,7 +687,10 @@ export class MemoryService {
    * Store a fact; resolves to its decimal-string id (idempotent on
    * identical content). `links` are edges to existing memories; `metadata`
    * is optional structured data for later filtering; `ttlSeconds` makes the
-   * fact expire after that many seconds (omit, or `0`, for permanent).
+   * fact expire after that many seconds. Omit it for a permanent memory,
+   * including when re-storing a fact that already had an expiry — only what
+   * this call supplies is applied. An explicit `0` is REFUSED, because a
+   * caller writing `0` means "expire now", not "never".
    */
   remember(
     fact: string,
