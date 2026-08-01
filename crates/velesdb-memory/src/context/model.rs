@@ -119,9 +119,12 @@ pub struct ContextFragment {
     #[serde(default)]
     pub content: String,
     /// Read this file's content from disk in place of an inline `content`
-    /// (V2b-1 path ingestion): exactly one of `path`, non-empty `content`,
-    /// or `media` is accepted — a fragment carrying `path` together with
-    /// `content` or `media` is rejected. Requires the server to be started
+    /// (V2b-1 path ingestion). `path` is EXCLUSIVE — it is resolved into
+    /// `content` before the compiler core runs, so a fragment carrying
+    /// `path` together with `content` or `media` is rejected. `content` and
+    /// `media` together are fine, and are the intended shape for an image
+    /// and its caption. A fragment carrying none of the three is rejected
+    /// as well. Requires the server to be started
     /// with `VELESDB_MEMORY_INGEST_ROOTS` set (a colon/semicolon-separated
     /// allowlist of directories, platform `PATH`-list syntax); otherwise
     /// every `path` fragment fails with an explicit "ingestion disabled"
@@ -493,10 +496,16 @@ pub struct ContextDecision {
 /// [`CompiledContext::warnings`] so a caller can check "was anything
 /// relevant cut?" without scanning every entry of `decisions` by hand
 /// (V2a-2 quick win). Only [`ContextAction::Retrieve`] decisions at or
-/// above the relevance threshold qualify — a [`ContextAction::Drop`] in
-/// this compiler is always a byte-identical duplicate whose content
-/// survives through its kept twin (see `dup_verdict`), so it is never a
-/// real loss and never warns.
+/// above the relevance threshold qualify.
+///
+/// **An empty list is not a clean bill of health** (#1703 DC-4). Several
+/// real losses never warn: a [`ContextAction::Preserve`] the packer could
+/// only fit partially, an [`ContextAction::Abstract`], and two of
+/// `dup_verdict`'s [`ContextAction::Drop`] shapes — a media duplicate whose
+/// caption diverges from its twin's, and a duplicate whose twin was itself
+/// not fully emitted. Both say so in their own reason strings. `decisions`
+/// remains the exhaustive record; this list is a low-noise shortcut over it,
+/// not a substitute for it.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct ContextWarning {
