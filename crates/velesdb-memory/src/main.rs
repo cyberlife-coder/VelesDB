@@ -33,7 +33,9 @@ use std::time::Duration;
 
 use rmcp::ServiceExt;
 use velesdb_memory::mcp::McpServer;
-use velesdb_memory::{DynEmbedder, HashEmbedder, MemoryService, NativeStore, DEFAULT_DIMENSION};
+use velesdb_memory::{
+    DynEmbedder, ExtractorSelection, HashEmbedder, MemoryService, NativeStore, DEFAULT_DIMENSION,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -475,39 +477,29 @@ fn spawn_shutdown_signals(ct: tokio_util::sync::CancellationToken) {
 /// a silent no-op: the operator turned on a feature, and a daemon that
 /// answers by doing nothing is how you spend a week wondering why the graph
 /// is empty.
-#[cfg(feature = "extract")]
 fn apply_autograph(
     service: MemoryService<DynEmbedder>,
 ) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
     if std::env::var("VELESDB_MEMORY_AUTOGRAPH").as_deref() != Ok("1") {
         return Ok(service);
     }
-    if std::env::var("VELESDB_MEMORY_EXTRACTOR").as_deref() != Ok("ollama") {
-        return Err(
+    let backend = std::env::var("VELESDB_MEMORY_EXTRACTOR").unwrap_or_default();
+    // Same gate as `attach_extractor`, and it must accept the same names: a
+    // build where `remember_extracted` works with `outline` but autograph
+    // refuses to start would be a contradiction the operator cannot resolve.
+    match velesdb_memory::select_extractor(&backend)? {
+        ExtractorSelection::Disabled => Err(
             "autograph is on ([graph] autograph = true / VELESDB_MEMORY_AUTOGRAPH=1) but no \
-             extraction backend is configured — set [extractor] backend = \"ollama\" (and a \
-             model), or turn autograph off"
+             extraction backend is configured — set [extractor] backend = \"outline\" for the \
+             offline deterministic reader (no rebuild, no model to run), or \"ollama\" with a \
+             model, or turn autograph off"
                 .into(),
-        );
+        ),
+        ExtractorSelection::Ready(extractor) => Ok(service.with_autograph(extractor)),
+        ExtractorSelection::NeedsRemoteConfig(_) => {
+            Ok(service.with_autograph(build_ollama_extractor()?))
+        }
     }
-    Ok(service.with_autograph(build_ollama_extractor()?))
-}
-
-/// Without the `extract` feature there is no backend to attach. A request for
-/// autograph still fails loudly rather than being ignored — the binary was
-/// built without the code to honour it, exactly like `--http` without `http`.
-#[cfg(not(feature = "extract"))]
-fn apply_autograph(
-    service: MemoryService<DynEmbedder>,
-) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
-    if std::env::var("VELESDB_MEMORY_AUTOGRAPH").as_deref() == Ok("1") {
-        return Err(
-            "autograph is on but this binary was built without --features extract, so no \
-             extraction backend exists"
-                .into(),
-        );
-    }
-    Ok(service)
 }
 
 /// Locate and apply the optional `velesdb-memory.toml`.
@@ -605,31 +597,47 @@ fn apply_ingest_roots(server: McpServer) -> Result<McpServer, Box<dyn std::error
     Ok(server)
 }
 
-/// Build the MCP server, attaching an extraction backend from
-/// `VELESDB_MEMORY_EXTRACTOR` (`ollama`) when built with `--features extract`.
-#[cfg(feature = "extract")]
+/// Build the MCP server, attaching the extraction backend named by
+/// `VELESDB_MEMORY_EXTRACTOR`.
+///
+/// This function is now a thin read of the environment on top of
+/// [`attach_extractor`]; the choice itself lives in the library so the daemon
+/// and the tests run the same code. See [`attach_extractor`] for why that
+/// matters here in particular.
 fn build_server(
     service: MemoryService<DynEmbedder>,
 ) -> Result<McpServer, Box<dyn std::error::Error>> {
-    let server = McpServer::new(service);
-    match std::env::var("VELESDB_MEMORY_EXTRACTOR").as_deref() {
-        Ok("ollama") => Ok(server.with_extractor(build_ollama_extractor()?)),
-        Ok("none") | Err(_) => Ok(server),
-        Ok(other) => {
-            Err(format!("unknown VELESDB_MEMORY_EXTRACTOR '{other}' (expected 'ollama')").into())
-        }
-    }
+    let backend = std::env::var("VELESDB_MEMORY_EXTRACTOR").unwrap_or_default();
+    attach_extractor(McpServer::new(service), &backend)
 }
 
-/// Without the `extract` feature there is no extraction backend to attach. The
-/// `Result` return mirrors the `extract` variant's signature so the caller is
-/// identical for both builds.
-#[cfg(not(feature = "extract"))]
-#[allow(clippy::unnecessary_wraps)]
-fn build_server(
-    service: MemoryService<DynEmbedder>,
+/// Attach the extraction backend named `backend` to `server`.
+///
+/// **There is deliberately no `#[cfg(feature = "extract")]` on this function.**
+/// That gate used to sit on the whole selection, which is what made
+/// `OutlineExtractor` unreachable from the MCP server (#1734): the extractor
+/// needs no dependency and is linked into every build, but the only code that
+/// could choose it was compiled away unless an unrelated HTTP feature was on.
+/// Two of the twenty published tools were dead by default as a result —
+/// `remember_extracted` refused outright, and `entity` answered `found: false`
+/// for every name, entity hubs being born only of extraction.
+///
+/// Only the arm that genuinely needs the optional dependency stays gated.
+///
+/// # Errors
+/// An unknown backend name, or a network-backed backend whose required
+/// configuration is missing or whose feature was not compiled in.
+fn attach_extractor(
+    server: McpServer,
+    backend: &str,
 ) -> Result<McpServer, Box<dyn std::error::Error>> {
-    Ok(McpServer::new(service))
+    match velesdb_memory::select_extractor(backend)? {
+        ExtractorSelection::Disabled => Ok(server),
+        ExtractorSelection::Ready(extractor) => Ok(server.with_extractor(extractor)),
+        ExtractorSelection::NeedsRemoteConfig(_) => {
+            Ok(server.with_extractor(build_ollama_extractor()?))
+        }
+    }
 }
 
 /// Build the Ollama-backed extractor from `VELESDB_MEMORY_EXTRACTOR_URL`
@@ -647,6 +655,20 @@ fn build_ollama_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std:
          (e.g. qwen3.6:35b-mlx)"
     })?;
     Ok(Arc::new(OllamaExtractor::new(url, model)))
+}
+
+/// Without the `extract` feature there is no HTTP backend to build. The error
+/// names the offline alternative rather than only what is missing: since
+/// #1734, `outline` is a real answer in **every** build, so a user who only
+/// wanted a graph is one setting away instead of one rebuild away.
+#[cfg(not(feature = "extract"))]
+fn build_ollama_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std::error::Error>> {
+    Err(
+        "VELESDB_MEMORY_EXTRACTOR=ollama needs a build with `--features extract`; \
+         for an offline deterministic graph with no rebuild, set \
+         VELESDB_MEMORY_EXTRACTOR=outline instead"
+            .into(),
+    )
 }
 
 /// Select the embedding backend from `VELESDB_MEMORY_EMBEDDER`: `hash`

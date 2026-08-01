@@ -470,7 +470,9 @@ impl McpServer {
             return Err(ErrorData::new(
                 ErrorCode::INTERNAL_ERROR,
                 "extraction backend not configured: start the server with \
-                 VELESDB_MEMORY_EXTRACTOR set (built with --features extract)",
+                 VELESDB_MEMORY_EXTRACTOR=outline for the offline deterministic \
+                 reader — it needs no model and no extra build feature — or \
+                 =ollama with a local generative model",
                 None,
             ));
         };
