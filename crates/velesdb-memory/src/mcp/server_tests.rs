@@ -1157,6 +1157,85 @@ fn test_recall_where_description_documents_type_strict_comparisons() {
     );
 }
 
+/// Whether `haystack` names `field` as a WORD, not as an accidental substring.
+///
+/// A plain `contains` is not enough, and the measurement says so: across the
+/// twenty published tools it lets `feedback`'s `id` pass on the strength of
+/// "con-f-**id**-ence", and `entity`'s `relations` on "relation-ships". A
+/// guard weaker than its own statement is worse than none, because it reads
+/// as coverage.
+///
+/// Backticks, spaces and punctuation are all boundaries here; only ASCII
+/// alphanumerics and `_` continue a word — so `ids` does NOT match inside
+/// `ids_str`, and each field has to be named on its own.
+fn description_names_field(haystack: &str, field: &str) -> bool {
+    let continues_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let bytes = haystack.as_bytes();
+    haystack.match_indices(field).any(|(start, _)| {
+        let end = start + field.len();
+        let opens = start == 0 || !continues_word(bytes[start - 1]);
+        let closes = end == bytes.len() || !continues_word(bytes[end]);
+        opens && closes
+    })
+}
+
+/// #1747. `remember_extracted`'s published `outputSchema` carries three root
+/// fields, and one of them — `skipped_over_cap` — exists PRECISELY to make a
+/// silent loss visible: facts the extractor produced and this tool dropped for
+/// exceeding the per-fact text cap. Its own doc-comment argues the point: "a
+/// skip the caller cannot see is indistinguishable from the model extracting
+/// fewer facts".
+///
+/// The description used to say only "Returns the stored facts' ids". So the
+/// one surface a model reads BEFORE deciding to call never mentioned the field
+/// whose whole purpose is to be read — the omission defeated the reason the
+/// field was added (#1692).
+///
+/// The field names are DERIVED from the published schema rather than kept as a
+/// second hard-coded list here: a root field added tomorrow is caught without
+/// anyone remembering this test exists.
+///
+/// Scope, stated so it is not overclaimed: this pins ONE tool. Fourteen of the
+/// twenty published tools would fail the same check today, and closing that
+/// class is its own piece of work (#1695).
+#[test]
+fn test_remember_extracted_description_names_every_published_output_field() {
+    let tool = McpServer::remember_extracted_tool_attr();
+    let description = tool
+        .description
+        .clone()
+        .expect("remember_extracted must declare a description");
+    let schema = tool
+        .output_schema
+        .as_ref()
+        .expect("remember_extracted declares an explicit output_schema");
+    let properties = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .expect("its output schema is an object schema carrying `properties`");
+
+    assert!(
+        !properties.is_empty(),
+        "the published output schema must expose root properties, else this \
+         test would pass vacuously"
+    );
+
+    let missing: Vec<&str> = properties
+        .keys()
+        .filter(|field| !description_names_field(&description, field))
+        .map(String::as_str)
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "remember_extracted's description must name every root field of its \
+         published outputSchema. Missing: {missing:?}. A field the description \
+         omits is a field the model never learns to read, and `skipped_over_cap` \
+         omitted is a silent data loss — the caller believes everything it sent \
+         was stored. Description was: {description}"
+    );
+}
+
 /// Issue: real MCP client harnesses (observed 2026-07-24 with Claude Code)
 /// degrade a parameter whose advertised schema carries no DIRECT `type`
 /// keyword — `anyOf`-wrapped optionals and `$ref`-only structs both come out
