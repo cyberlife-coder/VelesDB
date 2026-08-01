@@ -950,8 +950,8 @@ const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// is no offline fallback to offer either: extraction is opt-in, and running
 /// without it is simply not passing an extractor.
 #[cfg(feature = "extract")]
-const EXTRACT_LEVERS: crate::ollama_retry::OllamaLevers<'static> =
-    crate::ollama_retry::OllamaLevers {
+const EXTRACT_LEVERS: crate::http_retry::FailureLevers<'static> =
+    crate::http_retry::FailureLevers {
         url_var: "VELESDB_MEMORY_EXTRACTOR_URL",
         model_var: "VELESDB_MEMORY_EXTRACTOR_MODEL",
         fallback: None,
@@ -972,8 +972,8 @@ enum GenerateCall {
 #[cfg(feature = "extract")]
 fn generate_is_retryable(err: &GenerateCall) -> bool {
     match err {
-        GenerateCall::Transport(inner) => crate::ollama_retry::is_retryable(inner),
-        GenerateCall::Body(inner) => crate::ollama_retry::io_is_retryable(inner),
+        GenerateCall::Transport(inner) => crate::http_retry::is_retryable(inner),
+        GenerateCall::Body(inner) => crate::http_retry::io_is_retryable(inner),
     }
 }
 
@@ -985,7 +985,7 @@ fn describe_generate_failure(url: &str, model: &str, err: &GenerateCall, attempt
         GenerateCall::Transport(inner) => inner.to_string(),
         GenerateCall::Body(inner) => format!("reading the response failed: {inner}"),
     };
-    crate::ollama_retry::actionable_failure(
+    crate::http_retry::actionable_ollama_failure(
         "generate",
         url,
         model,
@@ -1038,20 +1038,107 @@ impl OllamaExtractor {
     }
 }
 
+/// Read a model's reply as the flat fact list [`Extractor::extract`] promises.
+///
+/// A free function because every generative backend produces the same reply
+/// and reads it the same way — only the transport differs. Leaving a copy in
+/// each `impl` would let two backends drift on what counts as a valid answer.
+#[cfg(feature = "extract")]
+fn facts_from_reply(reply: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+    let raw =
+        json_slice::<Vec<RawFact>>(reply).ok_or_else(|| ExtractError::Parse(truncate(reply)))?;
+    Ok(raw.into_iter().filter_map(RawFact::into_fact).collect())
+}
+
+/// [`facts_from_reply`]'s counterpart for [`Extractor::extract_graph`].
+#[cfg(feature = "extract")]
+fn extraction_from_reply(reply: &str) -> Result<Extraction, ExtractError> {
+    let raw = json_slice_object::<RawExtraction>(reply)
+        .ok_or_else(|| ExtractError::Parse(truncate(reply)))?;
+    Ok(raw.into_extraction())
+}
+
 #[cfg(feature = "extract")]
 impl Extractor for OllamaExtractor {
     fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
-        let reply = self.generate(&build_prompt(text))?;
-        let raw = json_slice::<Vec<RawFact>>(&reply)
-            .ok_or_else(|| ExtractError::Parse(truncate(&reply)))?;
-        Ok(raw.into_iter().filter_map(RawFact::into_fact).collect())
+        facts_from_reply(&self.generate(&build_prompt(text))?)
     }
 
     fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
-        let reply = self.generate(&build_graph_prompt(text))?;
-        let raw = json_slice_object::<RawExtraction>(&reply)
-            .ok_or_else(|| ExtractError::Parse(truncate(&reply)))?;
-        Ok(raw.into_extraction())
+        extraction_from_reply(&self.generate(&build_graph_prompt(text))?)
+    }
+}
+
+/// Extracts through any **OpenAI-compatible** `/v1/chat/completions` endpoint.
+///
+/// A sibling of [`OllamaExtractor`], not a layer over it — the same shape the
+/// embedding role takes. The prompt stays here, on the role side: it is what
+/// this crate wants said, not something the protocol knows about.
+#[cfg(feature = "extract")]
+#[derive(Debug)]
+pub struct OpenAiExtractor {
+    client: crate::http_client::HttpJsonClient,
+    model: String,
+}
+
+#[cfg(feature = "extract")]
+impl OpenAiExtractor {
+    /// Build an extractor targeting `model` on the server at `base_url`
+    /// (origin and port, no path).
+    ///
+    /// Bounded on the same four axes as [`OllamaExtractor::new`], with the
+    /// same generous [`REQUEST_TIMEOUT_SECS`]: generation is slow wherever it
+    /// runs, and the ceiling belongs to the role, not to the transport.
+    #[must_use]
+    pub fn new(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        auth: crate::http_client::Auth,
+    ) -> Self {
+        let timeout = std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS);
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(CONNECT_TIMEOUT)
+            .timeout_write(WRITE_TIMEOUT)
+            .timeout_read(timeout)
+            .timeout(timeout)
+            .build();
+        Self {
+            client: crate::http_client::HttpJsonClient::new(base_url, auth, agent),
+            model: model.into(),
+        }
+    }
+
+    /// POST one prompt and return the assistant's reply.
+    fn generate(&self, prompt: &str) -> Result<String, ExtractError> {
+        let body = crate::openai::chat_body(&self.model, prompt);
+        let payload = self
+            .client
+            .post_json(crate::openai::CHAT_COMPLETIONS_PATH, &body)
+            .map_err(|failure| {
+                ExtractError::Backend(crate::http_retry::actionable_openai_failure(
+                    "chat/completions",
+                    &failure.url,
+                    &self.model,
+                    failure.attempts,
+                    &failure.cause,
+                    Some(
+                        "use the offline deterministic reader with \
+                         VELESDB_MEMORY_EXTRACTOR=outline",
+                    ),
+                ))
+            })?;
+        crate::openai::parse_chat_response(&payload).map_err(ExtractError::Backend)
+    }
+}
+
+#[cfg(feature = "extract")]
+impl Extractor for OpenAiExtractor {
+    fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        facts_from_reply(&self.generate(&build_prompt(text))?)
+    }
+
+    fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
+        extraction_from_reply(&self.generate(&build_graph_prompt(text))?)
     }
 }
 
@@ -1090,8 +1177,8 @@ impl OllamaExtractor {
             response.into_string().map_err(GenerateCall::Body)
         };
 
-        let payload = crate::ollama_retry::with_retry(
-            &crate::ollama_retry::OLLAMA_RETRIES,
+        let payload = crate::http_retry::with_retry(
+            &crate::http_retry::HTTP_RETRIES,
             generate_is_retryable,
             attempt,
         )

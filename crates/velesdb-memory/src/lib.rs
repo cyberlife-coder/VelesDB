@@ -58,6 +58,11 @@ mod fusion;
 /// the crate README's "HTTP transport (multi-client)" section.
 #[cfg(feature = "http")]
 pub mod http;
+/// Synchronous retry + actionable failure reporting shared by the two blocking
+/// Ollama call sites ([`embedder`] and [`extract`]). Internal: it exists to make
+/// those two backends resilient, not to be a general-purpose retry API.
+#[cfg(any(feature = "ollama", feature = "extract"))]
+mod http_retry;
 /// Content-addressed memory ids — internal; ids surface through the service API.
 pub(crate) mod id;
 /// Resource caps (DoS limits) shared by every adapter — the single source of
@@ -72,11 +77,16 @@ pub mod mcp;
 /// (`Link`, `Recollection`, `ColumnFilter`, `Explanation`, …), separate from the
 /// service that computes them.
 pub mod model;
-/// Synchronous retry + actionable failure reporting shared by the two blocking
-/// Ollama call sites ([`embedder`] and [`extract`]). Internal: it exists to make
-/// those two backends resilient, not to be a general-purpose retry API.
+
+/// Authenticated JSON over HTTP: the transport under every remote inference
+/// backend, with no knowledge of role or vendor.
 #[cfg(any(feature = "ollama", feature = "extract"))]
-mod ollama_retry;
+pub mod http_client;
+
+/// The OpenAI-compatible protocol — paths, bodies, responses — over
+/// [`http_client`].
+#[cfg(any(feature = "ollama", feature = "extract"))]
+mod openai;
 /// Optional second-stage re-scoring of a fused recall pool (bring your own
 /// cross-encoder/LLM). Never wired in by default — see [`rerank::Reranker`].
 pub mod rerank;
@@ -125,14 +135,16 @@ pub use embedder::{
     select_embedder, DynEmbedder, EmbedError, Embedder, EmbedderSelection, HashEmbedder,
 };
 #[cfg(feature = "ollama")]
-pub use embedder::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
+pub use embedder::{OllamaEmbedder, OpenAiEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
 pub use error::{ErrorCategory, MemoryError};
-#[cfg(feature = "extract")]
-pub use extract::OllamaExtractor;
 pub use extract::{
     select_extractor, DynExtractor, ExtractError, ExtractedAttribute, ExtractedFact,
     ExtractedRelation, Extraction, Extractor, ExtractorSelection, OutlineExtractor,
 };
+#[cfg(feature = "extract")]
+pub use extract::{OllamaExtractor, OpenAiExtractor};
+#[cfg(any(feature = "ollama", feature = "extract"))]
+pub use http_client::{Auth, HttpJsonClient};
 #[cfg(feature = "mcp")]
 pub use mcp::McpServer;
 pub use model::{
