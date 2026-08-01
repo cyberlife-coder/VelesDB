@@ -235,6 +235,33 @@ launched with:
 - **`ollama`:** real on-device semantic recall. Requires a build with
   `--features ollama`, a running Ollama, and `ollama pull all-minilm`; set
   `VELESDB_MEMORY_EMBEDDER=ollama`.
+- **`openai`:** any OpenAI-compatible server — oMLX, llama.cpp, LM Studio,
+  vLLM, or a hosted provider. Same `--features ollama` build (that feature
+  carries the HTTP dependency for the embedding role, and its name predates
+  the protocol split). `openai` names a **protocol, not a vendor**: reaching a
+  different server is a different URL, never a new backend name. It therefore
+  has **no default URL and no default model** — set
+  `VELESDB_MEMORY_EMBEDDER_URL` and `_MODEL` yourself.
+
+The extraction role takes the same three-way choice — `outline`, `ollama`,
+`openai` — under `VELESDB_MEMORY_EXTRACTOR`, and **the two roles are
+configured independently**: nothing requires them to share a backend, a server
+or a token. Embedding on a local Ollama while extracting on an
+OpenAI-compatible server is a supported combination.
+
+The base URL may be written **with or without** the `/v1` suffix. Server
+consoles advertise the version-prefixed form (`http://127.0.0.1:8019/v1`)
+beside a copy button, so pasting it works instead of producing
+`/v1/v1/embeddings` and a `404`.
+
+**A store is fixed to one embedding MODEL, not to one backend.** The store
+records the model that filled it (`embedding-provenance.json`) and refuses to
+open under a different one — including a different model of the same width,
+which the dimension check alone cannot see. Changing only the *transport* is
+safe: the same model over Ollama or over an OpenAI-compatible API produces the
+same vectors, so the backend is deliberately not part of the record. A store
+created before this recording existed stays unrecorded and is checked on the
+dimension alone, and says so.
 
 ### Configure it in a file, not in a plist
 
@@ -249,10 +276,18 @@ default_ttl = 0                # seconds; 0 = permanent
 [embedder]
 backend = "ollama"             # `hash` is lexical, not semantic — see above
 model = "bge-m3"
+# url = "http://127.0.0.1:8019"  # required by "openai"; defaulted by "ollama"
 
 [extractor]
-backend = "ollama"             # or "outline" — infers vs reads directives, see above
-model = "qwen3.6:35b-mlx"      # "ollama" only; "outline" needs no model
+backend = "ollama"             # or "outline"/"openai" — see above
+model = "qwen3.6:35b-mlx"      # required by "ollama" and "openai"; "outline" needs none
+# url = "http://127.0.0.1:8019"  # required by "openai"; defaulted by "ollama"
+
+# There is deliberately NO api_token field, in either section. A token is read
+# from VELESDB_MEMORY_EMBEDDER_API_TOKEN / VELESDB_MEMORY_EXTRACTOR_API_TOKEN
+# and from nowhere else — a credential at rest in a versionable file is one
+# `git add .` away from a public history. Writing one here is refused at
+# startup, and the refusal does not echo the line back.
 
 [graph]
 autograph = false              # true = every `remember` also wires entities

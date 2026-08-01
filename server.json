@@ -26,7 +26,7 @@
         },
         {
           "name": "VELESDB_MEMORY_EMBEDDER",
-          "description": "Embedding backend: 'hash' (default, offline, zero-dep) or 'ollama' (real semantic recall via a local model; binary must be built --features ollama).",
+          "description": "Embedding backend: 'hash' (default, offline, zero-dep), 'ollama' (real semantic recall via a local model), or 'openai' (any OpenAI-compatible server — oMLX, llama.cpp, LM Studio, vLLM, a hosted provider — set VELESDB_MEMORY_EMBEDDER_URL and _MODEL). Both remote backends need a binary built --features ollama.",
           "isRequired": false,
           "default": "hash"
         }

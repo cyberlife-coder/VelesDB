@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`velesdb-memory`: an OpenAI-compatible backend for both inference roles
+  (#1751).** `VELESDB_MEMORY_EMBEDDER=openai` and
+  `VELESDB_MEMORY_EXTRACTOR=openai` reach oMLX, llama.cpp's server, LM Studio,
+  vLLM or a hosted provider. The value names a **protocol, not a vendor** — a
+  different server is a different URL, never a new backend name — and the two
+  roles are configured independently, so embedding on a local Ollama while
+  extracting on an OpenAI-compatible server is a supported combination.
+  Tokens live in the environment only (`..._API_TOKEN`); no token means no
+  `Authorization` header at all, and an `api_token` written into
+  `velesdb-memory.toml` is refused at startup. The MCP daemon is the only
+  surface that changes here — Python, Node and WASM keep their current
+  enumeration, and their parity is a lot of its own. Full detail in
+  `crates/velesdb-memory/CHANGELOG.md`.
+
 ### Changed
 
 - **BREAKING (`velesdb-memory` 0.12.0, and the Node/Python/WASM bindings +

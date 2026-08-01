@@ -47,6 +47,17 @@ fn ollama_defers_to_the_caller_for_url_and_model() {
 }
 
 #[test]
+fn openai_defers_to_the_caller_for_url_and_model() {
+    let selection = select_embedder(Some("openai")).expect("`openai` is an accepted backend");
+    assert!(
+        matches!(selection, EmbedderSelection::NeedsRemoteConfig("openai")),
+        "the name must reach the caller intact: it is what the daemon dispatches \
+         on, and a backend that came back as `ollama` would be silently served by \
+         the wrong protocol"
+    );
+}
+
+#[test]
 fn an_empty_value_is_refused_like_any_other_unknown_name() {
     // Distinct from `None` ON PURPOSE, and preserved from the behaviour that
     // predates this seam: an *unset* variable means "no preference" and takes
@@ -59,20 +70,24 @@ fn an_empty_value_is_refused_like_any_other_unknown_name() {
     // is a real choice, "no embedder" is not.
     let err = select_embedder(Some("")).expect_err("an empty backend name is not a selection");
     assert!(
-        err.contains("hash") && err.contains("ollama"),
+        err.contains("hash") && err.contains("ollama") && err.contains("openai"),
         "the refusal must name the accepted forms, got: {err}"
     );
 }
 
 #[test]
 fn an_unknown_backend_names_the_accepted_forms() {
-    let err = select_embedder(Some("openai")).expect_err("`openai` is not wired yet");
+    // A vendor name on purpose. `openai` is now a real backend, and the point
+    // of the whole protocol split is that reaching a new server is a different
+    // URL rather than a new name here — so the refusal must steer a user who
+    // typed their vendor towards the protocol they actually speak.
+    let err = select_embedder(Some("lmstudio")).expect_err("`lmstudio` is not a backend name");
     assert!(
-        err.contains("openai"),
+        err.contains("lmstudio"),
         "the refusal must quote what was asked for, got: {err}"
     );
     assert!(
-        err.contains("hash") && err.contains("ollama"),
+        err.contains("hash") && err.contains("ollama") && err.contains("openai"),
         "the refusal must name the accepted forms, got: {err}"
     );
 }

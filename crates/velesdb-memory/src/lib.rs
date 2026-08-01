@@ -45,6 +45,12 @@ pub mod context;
 /// question answering, shipped as product behavior rather than a harness prompt.
 pub mod dated_context;
 pub mod embedder;
+/// Which embedding model filled a store, and whether the configured one can
+/// still read it. Gated on `persistence` because an unrecorded store is a
+/// directory on disk — see the module docs for why the *backend* is
+/// deliberately not part of the record.
+#[cfg(feature = "persistence")]
+pub mod embedding_provenance;
 pub mod error;
 pub mod extract;
 /// Vector+graph score fusion — the ranking layer behind

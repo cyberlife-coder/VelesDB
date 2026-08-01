@@ -905,11 +905,17 @@ pub fn select_extractor(backend: &str) -> Result<ExtractorSelection, String> {
             OutlineExtractor,
         ))),
         "ollama" => Ok(ExtractorSelection::NeedsRemoteConfig("ollama")),
+        // A protocol, not a vendor — see [`crate::select_embedder`]'s own
+        // `openai` arm. The two roles accept the same names on purpose: an
+        // operator who learned one has learned the other.
+        "openai" => Ok(ExtractorSelection::NeedsRemoteConfig("openai")),
         "none" | "" => Ok(ExtractorSelection::Disabled),
         other => Err(format!(
             "unknown extraction backend '{other}' (expected 'outline' for the \
              offline deterministic reader, 'ollama' for a local generative \
-             model, or 'none')"
+             model, 'openai' for any OpenAI-compatible server — oMLX, \
+             llama.cpp, LM Studio, vLLM or a hosted provider, selected by URL \
+             rather than by name — or 'none')"
         )),
     }
 }
@@ -1103,7 +1109,11 @@ impl OpenAiExtractor {
             .timeout(timeout)
             .build();
         Self {
-            client: crate::http_client::HttpJsonClient::new(base_url, auth, agent),
+            client: crate::http_client::HttpJsonClient::new(
+                crate::openai::base_url(&base_url.into()),
+                auth,
+                agent,
+            ),
             model: model.into(),
         }
     }
@@ -1503,6 +1513,10 @@ fn step_string(escaped: &mut bool, byte: u8) -> bool {
         (false, _) => true,
     }
 }
+
+#[cfg(test)]
+#[path = "extractor_selection_tests.rs"]
+mod selection_tests;
 
 #[cfg(all(test, feature = "extract"))]
 mod tests {

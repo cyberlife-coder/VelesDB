@@ -102,3 +102,48 @@ fn a_long_payload_is_previewed_not_pasted_whole() {
     );
     assert!(err.contains('…'), "the preview must say it was cut: {err}");
 }
+
+// --- The base URL an operator actually copies --------------------------------
+
+#[test]
+fn a_base_url_carrying_the_version_prefix_is_not_doubled() {
+    // The exact string oMLX's console shows beside a copy button. Left as-is,
+    // it would produce `/v1/v1/embeddings` and a 404 the operator cannot
+    // explain — they pasted the vendor's own URL.
+    assert_eq!(
+        base_url("http://127.0.0.1:8019/v1"),
+        "http://127.0.0.1:8019"
+    );
+    assert_eq!(
+        base_url("http://127.0.0.1:8019/v1/"),
+        "http://127.0.0.1:8019",
+        "a trailing slash on the copied URL must not defeat it either"
+    );
+}
+
+#[test]
+fn a_bare_origin_is_left_alone() {
+    assert_eq!(base_url("http://localhost:8020"), "http://localhost:8020");
+    assert_eq!(
+        base_url("  http://localhost:8020/  "),
+        "http://localhost:8020",
+        "surrounding whitespace comes free with a shell variable"
+    );
+}
+
+#[test]
+fn a_server_mounted_under_a_path_keeps_its_path() {
+    assert_eq!(
+        base_url("https://gateway.example/models/v1"),
+        "https://gateway.example/models",
+        "stripping the protocol's own prefix must not eat the mount point"
+    );
+}
+
+#[test]
+fn a_host_genuinely_named_v1_is_not_truncated() {
+    // Edge case with a sharp failure mode: a blind `strip_suffix("/v1")` turns
+    // `http://v1` into `http:/`, which fails as a malformed URL rather than as
+    // an unreachable host.
+    assert_eq!(base_url("http://v1"), "http://v1");
+}

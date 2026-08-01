@@ -4,11 +4,19 @@
 //! Cline, Zed, …) can use it locally. The store never leaves the machine.
 //! Configure the store directory with `VELESDB_MEMORY_PATH` (default
 //! `~/.velesdb-memory`) and the embedding
-//! backend with `VELESDB_MEMORY_EMBEDDER` (`hash` | `ollama`). Set
+//! backend with `VELESDB_MEMORY_EMBEDDER` (`hash` | `ollama` | `openai`). Set
 //! `VELESDB_MEMORY_EXTRACTOR` to enable the `remember_extracted` tool (text →
 //! fact↔topic graph): `outline` reads directives you write explicitly and needs
-//! no model and no extra feature, while `ollama` infers them with a local
-//! generative model and needs `--features extract`. Set
+//! no model and no extra feature, while `ollama` and `openai` infer them with a
+//! generative model and need `--features extract`.
+//!
+//! Each role carries its own `_URL`, `_MODEL` and `_API_TOKEN`, and the two are
+//! configured independently — embedding on a local Ollama while extracting on
+//! an OpenAI-compatible server is a supported combination. `openai` names a
+//! *protocol* (oMLX, llama.cpp, LM Studio, vLLM, hosted providers all speak
+//! it), so it has no default URL and no default model: reaching a different
+//! server is a different URL, never a new backend name. Tokens are read from
+//! the environment only, never from the config file. Set
 //! `VELESDB_MEMORY_DEFAULT_TTL` (seconds) to expire remembered facts by default.
 //! Set `VELESDB_MEMORY_INGEST_ROOTS` (a `PATH`-list of directories) to let
 //! `compile_context`/`explain_compilation` fragments reference a file by
@@ -378,20 +386,46 @@ const LOCK_RETRY_DELAY: Duration = Duration::from_millis(500);
 /// (#1448).
 fn open_store_with_actionable_lock_error(
     store_path: &str,
-    embedder: DynEmbedder,
+    configured: ConfiguredEmbedder,
 ) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
     use velesdb_memory::MemoryError;
 
+    let ConfiguredEmbedder { embedder, model } = configured;
     let dimension = embedder.dimension();
+    // Read BEFORE the store is opened, so a mismatch is refused instead of
+    // being reported after the daemon has taken the store's single-writer
+    // `flock` — and so `recorded` below genuinely means "recorded before this
+    // process touched anything".
+    let store_dir = std::path::Path::new(store_path);
+    let recorded = velesdb_memory::embedding_provenance::read(store_dir)?;
+    velesdb_memory::embedding_provenance::check(recorded.as_ref(), &model, dimension)?;
+    let unrecorded = recorded.is_none();
+
     let mut last_locked_path: Option<String> = None;
     for attempt in 0..LOCK_RETRY_ATTEMPTS {
         match NativeStore::open(store_path, dimension) {
-            Ok(store) => return Ok(MemoryService::with_store(store, embedder)),
+            Ok(store) => {
+                if unrecorded {
+                    record_embedding_model(store_dir, &store, &model, dimension);
+                }
+                return Ok(MemoryService::with_store(store, embedder));
+            }
             Err(MemoryError::Storage(velesdb_core::Error::DatabaseLocked(locked_path))) => {
                 last_locked_path = Some(locked_path);
                 if attempt + 1 < LOCK_RETRY_ATTEMPTS {
                     std::thread::sleep(LOCK_RETRY_DELAY);
                 }
+            }
+            // A dimension mismatch surfaces here, from the core. When the store
+            // carries no model record, that dimension was the ONLY thing that
+            // could be compared, and saying so is what stops a caller reading
+            // the core's message as a full compatibility verdict.
+            Err(other) if unrecorded => {
+                return Err(format!(
+                    "{other}\n{}",
+                    velesdb_memory::embedding_provenance::unrecorded_model_note(&model)
+                )
+                .into())
             }
             Err(other) => return Err(other.into()),
         }
@@ -403,6 +437,44 @@ fn open_store_with_actionable_lock_error(
          kill it (pkill velesdb-memory) or point VELESDB_MEMORY_PATH elsewhere"
     );
     std::process::exit(1);
+}
+
+/// Record which embedding model filled this store — **only when it holds no
+/// facts**.
+///
+/// The emptiness test is what makes the record trustworthy, and it is
+/// semantic rather than filesystem-shaped on purpose: "the directory looks
+/// new" is defeated by a config file sitting beside the store, or by a
+/// `.DS_Store` a file browser dropped in it. "No fact is stored" is the thing
+/// that actually matters — with zero vectors, there is nothing that could have
+/// come from a different model, so writing the record states something true.
+/// Over existing data it would not: one open with the wrong model would carve
+/// a false provenance that every later check would trust.
+///
+/// A failed write is a warning, never fatal. The daemon runs perfectly without
+/// the record — it only loses the model half of the check — and refusing to
+/// start because a metadata file could not be written would cost more than the
+/// gap it guards.
+fn record_embedding_model(
+    store_dir: &std::path::Path,
+    store: &NativeStore,
+    model: &str,
+    dimension: usize,
+) {
+    use velesdb_memory::embedding_provenance::{write, EmbeddingProvenance};
+    use velesdb_memory::MemoryStore as _;
+
+    if store.count() != 0 {
+        return;
+    }
+    if let Err(err) = write(store_dir, &EmbeddingProvenance::new(model, dimension)) {
+        if std::env::var_os("VELESDB_MEMORY_QUIET").is_none() {
+            eprintln!(
+                "[velesdb-memory] could not record the embedding model ({err}) — the store works, \
+                 but a later model change will only be checked against the vector dimension"
+            );
+        }
+    }
 }
 
 /// Default store location when `VELESDB_MEMORY_PATH` is unset: `~/.velesdb-memory`
@@ -423,11 +495,25 @@ fn build_configured_service(
 ) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
     apply_config_file(args)?;
     let store_path = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
-    let embedder = build_embedder()?;
+    let configured = build_embedder()?;
     apply_autograph(open_store_with_actionable_lock_error(
         &store_path,
-        embedder,
+        configured,
     )?)
+}
+
+/// An embedder together with the identifier of the model behind it.
+///
+/// The model travels with the embedder because only the code that *built* it
+/// knows its name: the [`velesdb_memory::Embedder`] trait exposes a dimension
+/// and nothing else, deliberately — a trait implemented by callers should not
+/// have to answer questions about a configuration it may not have. Carrying
+/// the name here keeps [`velesdb_memory::embedding_provenance`] usable without
+/// widening that trait for every implementor, in this crate and out of it.
+struct ConfiguredEmbedder {
+    embedder: DynEmbedder,
+    /// As configured: `bge-m3`, `all-minilm`, or `hash` for the built-in.
+    model: String,
 }
 
 /// Cancel `ct` on the signals a supervisor actually sends.
@@ -496,8 +582,13 @@ fn apply_autograph(
                 .into(),
         ),
         ExtractorSelection::Ready(extractor) => Ok(service.with_autograph(extractor)),
-        ExtractorSelection::NeedsRemoteConfig(_) => {
-            Ok(service.with_autograph(build_ollama_extractor()?))
+        // Dispatches on the NAME, exactly like `attach_extractor`. This arm
+        // used to ignore it and build Ollama unconditionally; leaving it that
+        // way would mean autograph silently talked to a different server than
+        // `remember_extracted` on the very same daemon — the contradiction the
+        // comment above says an operator cannot resolve.
+        ExtractorSelection::NeedsRemoteConfig(backend) => {
+            Ok(service.with_autograph(build_remote_extractor(backend)?))
         }
     }
 }
@@ -634,10 +725,205 @@ fn attach_extractor(
     match velesdb_memory::select_extractor(backend)? {
         ExtractorSelection::Disabled => Ok(server),
         ExtractorSelection::Ready(extractor) => Ok(server.with_extractor(extractor)),
-        ExtractorSelection::NeedsRemoteConfig(_) => {
-            Ok(server.with_extractor(build_ollama_extractor()?))
+        // **This is the seam #1751 turns on.** The arm used to read
+        // `NeedsRemoteConfig(_)` and call `build_ollama_extractor()`: the
+        // library named the backend the operator asked for, and the daemon
+        // threw the name away and built the only client it knew. Adding a
+        // second protocol to `select_extractor` would have changed nothing
+        // observable — the wrong client would have been built, silently, for
+        // every name.
+        ExtractorSelection::NeedsRemoteConfig(backend) => {
+            Ok(server.with_extractor(build_remote_extractor(backend)?))
         }
     }
+}
+
+/// Build the remote extraction backend named `backend`.
+///
+/// The `other` arm is not decoration. `select_extractor` is the single place
+/// that knows which names exist, and it lives in the library while this
+/// dispatch lives in the binary — so the two CAN drift. When they do, the
+/// operator gets a message naming the gap instead of an Ollama client quietly
+/// pointed at a server that speaks something else.
+#[cfg(feature = "extract")]
+fn build_remote_extractor(
+    backend: &str,
+) -> Result<velesdb_memory::DynExtractor, Box<dyn std::error::Error>> {
+    match backend {
+        "ollama" => build_ollama_extractor(),
+        "openai" => build_openai_extractor(),
+        other => Err(unwired_backend("extraction", other).into()),
+    }
+}
+
+/// Without the `extract` feature there is no HTTP backend to build, whichever
+/// one was asked for. The error names the offline alternative rather than only
+/// what is missing: since #1734, `outline` is a real answer in **every** build,
+/// so a user who only wanted a graph is one setting away instead of one
+/// rebuild away.
+#[cfg(not(feature = "extract"))]
+fn build_remote_extractor(
+    backend: &str,
+) -> Result<velesdb_memory::DynExtractor, Box<dyn std::error::Error>> {
+    Err(format!(
+        "VELESDB_MEMORY_EXTRACTOR={backend} needs a build with `--features extract`; \
+         for an offline deterministic graph with no rebuild, set \
+         VELESDB_MEMORY_EXTRACTOR=outline instead"
+    )
+    .into())
+}
+
+// --- Where a remote backend's URL, model and credential come from -----------
+//
+// One shape for both roles, on purpose. The two were configured differently
+// for historical reasons only — extraction by role, embedding by product —
+// and an operator who has configured one should not have to learn the other
+// (#1751, arbitration C1).
+
+/// A remote backend's configuration, read from one role's environment.
+#[cfg(any(feature = "ollama", feature = "extract"))]
+struct RemoteEndpoint {
+    /// Server origin and port, no path. `None` when unset.
+    url: Option<String>,
+    /// Model identifier the server expects. `None` when unset.
+    model: Option<String>,
+    /// The credential, already resolved to what the transport puts on the wire.
+    auth: velesdb_memory::Auth,
+}
+
+#[cfg(any(feature = "ollama", feature = "extract"))]
+impl RemoteEndpoint {
+    /// The URL and model, both **required** — the `openai` shape.
+    ///
+    /// Neither has a default, and that is the design rather than an omission:
+    /// `openai` names a *protocol*, spoken by oMLX, llama.cpp, LM Studio, vLLM
+    /// and a dozen hosted providers. Guessing a URL would pick one of them for
+    /// the operator, and guessing a model would send a name no server on that
+    /// list is obliged to know. Ollama keeps its defaults because it genuinely
+    /// has one canonical local address.
+    ///
+    /// # Errors
+    /// A message naming the exact variable that is missing, per role.
+    fn require(self, prefix: &str) -> Result<(String, String, velesdb_memory::Auth), String> {
+        let url = self.url.ok_or_else(|| {
+            format!(
+                "{prefix}=openai requires {prefix}_URL — the server's origin and port, \
+                 no path (e.g. http://localhost:8020). There is no default: `openai` \
+                 is a protocol, and only you know which server speaks it here."
+            )
+        })?;
+        let model = self.model.ok_or_else(|| {
+            format!(
+                "{prefix}=openai requires {prefix}_MODEL — the model identifier the server expects"
+            )
+        })?;
+        Ok((url, model, self.auth))
+    }
+}
+
+/// The embedding role's endpoint, honouring the legacy
+/// `VELESDB_MEMORY_OLLAMA_*` aliases (C1).
+///
+/// # Errors
+/// An `_API_TOKEN` that is set but empty.
+#[cfg(feature = "ollama")]
+fn embedder_endpoint() -> Result<RemoteEndpoint, Box<dyn std::error::Error>> {
+    use velesdb_memory::config::{alias_conflict_notice, resolve_alias};
+
+    let url = resolve_alias(
+        env_opt("VELESDB_MEMORY_EMBEDDER_URL").as_deref(),
+        env_opt("VELESDB_MEMORY_OLLAMA_URL").as_deref(),
+    );
+    let model = resolve_alias(
+        env_opt("VELESDB_MEMORY_EMBEDDER_MODEL").as_deref(),
+        env_opt("VELESDB_MEMORY_OLLAMA_MODEL").as_deref(),
+    );
+    let mut conflicts = Vec::new();
+    if url.conflicting {
+        conflicts.push(("VELESDB_MEMORY_EMBEDDER_URL", "VELESDB_MEMORY_OLLAMA_URL"));
+    }
+    if model.conflicting {
+        conflicts.push((
+            "VELESDB_MEMORY_EMBEDDER_MODEL",
+            "VELESDB_MEMORY_OLLAMA_MODEL",
+        ));
+    }
+    // Once, at startup, and only when the two genuinely disagree. Called from
+    // `build_remote_embedder`, which runs exactly once per process.
+    if let Some(notice) = alias_conflict_notice(&conflicts) {
+        if std::env::var_os("VELESDB_MEMORY_QUIET").is_none() {
+            eprintln!("{notice}");
+        }
+    }
+    Ok(RemoteEndpoint {
+        url: url.value,
+        model: model.value,
+        auth: role_auth("VELESDB_MEMORY_EMBEDDER_API_TOKEN")?,
+    })
+}
+
+/// The extraction role's endpoint. No aliases to resolve: these variables were
+/// role-named from the start, which is the naming the embedding side is being
+/// brought in line with.
+///
+/// # Errors
+/// An `_API_TOKEN` that is set but empty.
+#[cfg(feature = "extract")]
+fn extractor_endpoint() -> Result<RemoteEndpoint, Box<dyn std::error::Error>> {
+    Ok(RemoteEndpoint {
+        url: env_opt("VELESDB_MEMORY_EXTRACTOR_URL"),
+        model: env_opt("VELESDB_MEMORY_EXTRACTOR_MODEL"),
+        auth: role_auth("VELESDB_MEMORY_EXTRACTOR_API_TOKEN")?,
+    })
+}
+
+/// A variable's value, or `None` when it is unset.
+#[cfg(any(feature = "ollama", feature = "extract"))]
+fn env_opt(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+/// Read a role's API token and turn it into what the transport will send.
+///
+/// The token lives in the environment and **nowhere else** — never in the TOML
+/// (arbitration B1, enforced by `velesdb_memory::config`'s
+/// `deny_unknown_fields` and its redacted refusal).
+///
+/// Note for the Ollama backends: they take no credential, so a token set
+/// alongside `backend = "ollama"` is read here and then goes unused. That is
+/// harmless — Ollama authenticates nothing — and refusing it would reject a
+/// configuration that works.
+///
+/// # Errors
+/// A variable that is set to an empty or blank value. That is not the same as
+/// unset: unset means "send no credential", while empty is a caller whose
+/// shell expansion produced nothing, and silently sending no credential would
+/// surface as a `401` they cannot explain.
+#[cfg(any(feature = "ollama", feature = "extract"))]
+fn role_auth(name: &str) -> Result<velesdb_memory::Auth, Box<dyn std::error::Error>> {
+    match env_opt(name) {
+        None => Ok(velesdb_memory::Auth::None),
+        Some(token) if token.trim().is_empty() => Err(format!(
+            "{name} is set but empty — unset it entirely to send no credential. An \
+             empty token would go out as `Authorization: Bearer `, which a server \
+             rejects as a bad credential rather than a missing one."
+        )
+        .into()),
+        Some(token) => Ok(velesdb_memory::Auth::Bearer(token)),
+    }
+}
+
+/// A backend name the library accepts but this binary has no builder for.
+///
+/// Reachable only if `select_*` gains a name and the dispatch below is not
+/// updated with it — the exact drift a wildcard arm used to hide.
+#[cfg(any(feature = "ollama", feature = "extract"))]
+fn unwired_backend(role: &str, backend: &str) -> String {
+    format!(
+        "the {role} backend '{backend}' is accepted by velesdb-memory's selector but \
+         the daemon has no builder wired for it — this is a bug in velesdb-memory, \
+         not a configuration error; please report it quoting this message"
+    )
 }
 
 /// Build the Ollama-backed extractor from `VELESDB_MEMORY_EXTRACTOR_URL`
@@ -648,27 +934,28 @@ fn build_ollama_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std:
     use velesdb_memory::extract::DEFAULT_OLLAMA_URL;
     use velesdb_memory::OllamaExtractor;
 
-    let url = std::env::var("VELESDB_MEMORY_EXTRACTOR_URL")
-        .unwrap_or_else(|_| DEFAULT_OLLAMA_URL.to_owned());
-    let model = std::env::var("VELESDB_MEMORY_EXTRACTOR_MODEL").map_err(|_| {
+    let endpoint = extractor_endpoint()?;
+    // A default URL is right HERE and wrong for `openai`: Ollama has one
+    // canonical local address, an OpenAI-compatible server has none.
+    let url = endpoint
+        .url
+        .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
+    let model = endpoint.model.ok_or(
         "VELESDB_MEMORY_EXTRACTOR=ollama requires VELESDB_MEMORY_EXTRACTOR_MODEL \
-         (e.g. qwen3.6:35b-mlx)"
-    })?;
+         (e.g. qwen3.6:35b-mlx)",
+    )?;
     Ok(Arc::new(OllamaExtractor::new(url, model)))
 }
 
-/// Without the `extract` feature there is no HTTP backend to build. The error
-/// names the offline alternative rather than only what is missing: since
-/// #1734, `outline` is a real answer in **every** build, so a user who only
-/// wanted a graph is one setting away instead of one rebuild away.
-#[cfg(not(feature = "extract"))]
-fn build_ollama_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std::error::Error>> {
-    Err(
-        "VELESDB_MEMORY_EXTRACTOR=ollama needs a build with `--features extract`; \
-         for an offline deterministic graph with no rebuild, set \
-         VELESDB_MEMORY_EXTRACTOR=outline instead"
-            .into(),
-    )
+/// Build the OpenAI-compatible extractor from the extraction role's own
+/// `VELESDB_MEMORY_EXTRACTOR_URL`, `_MODEL` and optional `_API_TOKEN`.
+#[cfg(feature = "extract")]
+fn build_openai_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std::error::Error>> {
+    use std::sync::Arc;
+    use velesdb_memory::OpenAiExtractor;
+
+    let (url, model, auth) = extractor_endpoint()?.require("VELESDB_MEMORY_EXTRACTOR")?;
+    Ok(Arc::new(OpenAiExtractor::new(url, model, auth)))
 }
 
 /// Select the embedding backend from `VELESDB_MEMORY_EMBEDDER`: `hash`
@@ -684,7 +971,7 @@ fn build_ollama_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std:
 /// `.ok()` maps an unset variable to `None`, which the library reads as "no
 /// preference". A variable that IS set keeps its value — including an empty
 /// one, which stays a caller error rather than collapsing into the default.
-fn build_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
+fn build_embedder() -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
     let backend = std::env::var("VELESDB_MEMORY_EMBEDDER");
     // The library message is transport-neutral; the daemon adds the name of the
     // thing the reader actually has to edit.
@@ -696,11 +983,54 @@ fn build_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
         // must not inherit it silently.
         velesdb_memory::EmbedderSelection::Ready("hash", embedder) => {
             warn_hash_embedder_not_semantic();
-            Ok(embedder)
+            Ok(ConfiguredEmbedder {
+                embedder,
+                model: "hash".to_owned(),
+            })
         }
-        velesdb_memory::EmbedderSelection::Ready(_, embedder) => Ok(embedder),
-        velesdb_memory::EmbedderSelection::NeedsRemoteConfig(_) => build_ollama_embedder(),
+        // For a backend that needs no configuration, the backend name IS the
+        // model: there is no separate identifier to carry.
+        velesdb_memory::EmbedderSelection::Ready(name, embedder) => Ok(ConfiguredEmbedder {
+            embedder,
+            model: name.to_owned(),
+        }),
+        // The name, not a wildcard — see `attach_extractor` for the defect
+        // this shape removes on the extraction side. The embedding side never
+        // had a second backend to get wrong, which is exactly why it was the
+        // easier of the two to leave broken.
+        velesdb_memory::EmbedderSelection::NeedsRemoteConfig(backend) => {
+            build_remote_embedder(backend)
+        }
     }
+}
+
+/// Build the remote embedding backend named `backend`.
+///
+/// Mirrors [`build_remote_extractor`], down to the `other` arm: the selector
+/// lives in the library and this dispatch lives in the binary, so a name added
+/// to one and not the other must say so rather than fall back to whichever
+/// client happens to be first.
+#[cfg(feature = "ollama")]
+fn build_remote_embedder(backend: &str) -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
+    match backend {
+        "ollama" => build_ollama_embedder(),
+        "openai" => build_openai_embedder(),
+        other => Err(unwired_backend("embedding", other).into()),
+    }
+}
+
+/// Without the `ollama` feature this crate has no HTTP embedding backend at
+/// all, whichever one was asked for. The feature's name predates the protocol
+/// split and now under-describes what it carries — it is this crate's HTTP
+/// dependency for the embedding role, not a vendor.
+#[cfg(not(feature = "ollama"))]
+fn build_remote_embedder(backend: &str) -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
+    Err(format!(
+        "the '{backend}' embedder requires building with `--features ollama` \
+         (that feature carries the HTTP dependency for both remote embedding \
+         backends); VELESDB_MEMORY_EMBEDDER=hash needs no rebuild"
+    )
+    .into())
 }
 
 /// Warn (on **stderr**, never stdout — that carries the MCP JSON-RPC stream)
@@ -722,20 +1052,37 @@ fn warn_hash_embedder_not_semantic() {
     );
 }
 
+/// Build the Ollama-backed embedder, defaulting both the URL and the model —
+/// unchanged behaviour, now reached through the role-named variables with the
+/// `VELESDB_MEMORY_OLLAMA_*` pair kept working as aliases.
 #[cfg(feature = "ollama")]
-fn build_ollama_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
+fn build_ollama_embedder() -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
     use velesdb_memory::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
 
-    let url = std::env::var("VELESDB_MEMORY_OLLAMA_URL")
-        .unwrap_or_else(|_| DEFAULT_OLLAMA_URL.to_owned());
-    let model = std::env::var("VELESDB_MEMORY_OLLAMA_MODEL")
-        .unwrap_or_else(|_| DEFAULT_OLLAMA_MODEL.to_owned());
-    Ok(Box::new(OllamaEmbedder::new(url, model)?))
+    let endpoint = embedder_endpoint()?;
+    let url = endpoint
+        .url
+        .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
+    let model = endpoint
+        .model
+        .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned());
+    Ok(ConfiguredEmbedder {
+        embedder: Box::new(OllamaEmbedder::new(&url, &model)?),
+        model,
+    })
 }
 
-#[cfg(not(feature = "ollama"))]
-fn build_ollama_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
-    Err("the 'ollama' embedder requires building with `--features ollama`".into())
+/// Build the OpenAI-compatible embedder. Both the URL and the model are
+/// required — see [`RemoteEndpoint::require`].
+#[cfg(feature = "ollama")]
+fn build_openai_embedder() -> Result<ConfiguredEmbedder, Box<dyn std::error::Error>> {
+    use velesdb_memory::OpenAiEmbedder;
+
+    let (url, model, auth) = embedder_endpoint()?.require("VELESDB_MEMORY_EMBEDDER")?;
+    Ok(ConfiguredEmbedder {
+        embedder: Box::new(OpenAiEmbedder::new(url, &model, auth)?),
+        model,
+    })
 }
 
 /// Default token budget of `compile-stdin` when `--budget` is omitted.

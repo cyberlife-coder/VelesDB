@@ -14,6 +14,32 @@
 
 use serde_json::{json, Value};
 
+/// The base URL to concatenate this protocol's paths onto, from whatever the
+/// operator configured.
+///
+/// **Both spellings of the same endpoint are accepted**, and that is not
+/// leniency for its own sake: servers advertise their OpenAI-compatible
+/// endpoint WITH the version prefix. oMLX's own console shows
+/// `http://127.0.0.1:8019/v1` beside a copy button, and LM Studio and vLLM do
+/// the same. Concatenating [`EMBEDDINGS_PATH`] onto a copied URL would produce
+/// `/v1/v1/embeddings` and a `404` whose cause is invisible from the message —
+/// the operator sees a URL they copied from the vendor's own UI being refused.
+///
+/// The `/v1` prefix belongs to this protocol, so recognising it in the base
+/// URL belongs here too, and nowhere else: [`crate::http_client`] must keep
+/// concatenating a path onto a string it knows nothing about.
+///
+/// A trailing `/v1` is stripped only when something precedes it, so a host
+/// genuinely called `v1` (`http://v1`) is left alone.
+#[cfg(any(feature = "ollama", feature = "extract"))]
+pub(crate) fn base_url(configured: &str) -> String {
+    let trimmed = configured.trim().trim_end_matches('/');
+    match trimmed.strip_suffix("/v1") {
+        Some(base) if !base.is_empty() && !base.ends_with('/') => base.to_owned(),
+        _ => trimmed.to_owned(),
+    }
+}
+
 /// Embeddings endpoint, relative to the caller's base URL.
 #[cfg(feature = "ollama")]
 pub(crate) const EMBEDDINGS_PATH: &str = "/v1/embeddings";

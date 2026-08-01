@@ -160,9 +160,17 @@ pub fn select_embedder(backend: Option<&str>) -> Result<EmbedderSelection, Strin
             Box::new(HashEmbedder::new(crate::DEFAULT_DIMENSION)),
         )),
         Some("ollama") => Ok(EmbedderSelection::NeedsRemoteConfig("ollama")),
+        // A protocol, not a vendor: oMLX, llama.cpp's server, LM Studio, vLLM
+        // and the hosted providers all speak it. Reaching a new one is a
+        // different URL — never a new name here. That is what stops this
+        // `match` from growing a vendor list (#1730).
+        Some("openai") => Ok(EmbedderSelection::NeedsRemoteConfig("openai")),
         Some(other) => Err(format!(
             "unknown embedding backend '{other}' (expected 'hash' for the \
-             offline deterministic embedder, or 'ollama' for a local model)"
+             offline deterministic embedder, 'ollama' for a local model, or \
+             'openai' for any OpenAI-compatible server — oMLX, llama.cpp, LM \
+             Studio, vLLM or a hosted provider, selected by URL rather than by \
+             name)"
         )),
     }
 }
@@ -265,7 +273,7 @@ impl OpenAiEmbedder {
         auth: crate::http_client::Auth,
     ) -> Result<Self, EmbedError> {
         let client = crate::http_client::HttpJsonClient::new(
-            base_url,
+            crate::openai::base_url(&base_url.into()),
             auth,
             embed_agent(std::time::Duration::from_secs(EMBED_TIMEOUT_SECS)),
         );

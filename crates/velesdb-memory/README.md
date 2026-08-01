@@ -102,7 +102,7 @@ agent can read the full thing whenever the summary is not enough.
 |---|---|---|
 | Rust | 1.90 | Only to install or build. The binary itself has no runtime dependency. |
 | An MCP client | — | Claude Code, Claude Desktop, Codex CLI, Cursor, Cline, Zed, opencode, Windsurf, Devin CLI. |
-| Ollama | any | **Optional** — only for real semantic recall (`--features ollama`). The default embedder is offline and dependency-free. |
+| Ollama, **or any OpenAI-compatible server** | any | **Optional** — only for real semantic recall and for model-based extraction (`--features ollama` / `--features extract`). The default embedder is offline and dependency-free. `openai` names a protocol, not a vendor: oMLX, llama.cpp, LM Studio, vLLM and hosted providers all speak it, and each is reached by URL rather than by a backend name of its own. See [MCP_SERVER_SETUP.md](../../docs/guides/MCP_SERVER_SETUP.md#embedding-backend). |
 | Node.js | any LTS | **Optional** — only for the Claude Desktop stdio→HTTPS bridge. |
 
 ## Installation

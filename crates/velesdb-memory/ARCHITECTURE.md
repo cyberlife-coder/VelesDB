@@ -184,8 +184,12 @@ scaffolding: marked with the reserved `_veles_hub` key and **excluded from
 - **Feature gates** keep the default build tiny:
   - `ollama` → real semantic recall via a local embedding model.
   - `extract` → the `OllamaExtractor` backend for `remember_extracted` (HTTP).
-- **Env config**: `VELESDB_MEMORY_PATH`, `VELESDB_MEMORY_EMBEDDER` (`hash`|`ollama`),
-  `VELESDB_MEMORY_EXTRACTOR` (`ollama`) + model/URL vars. The `Extractor` trait
+- **Env config**: `VELESDB_MEMORY_PATH`, `VELESDB_MEMORY_EMBEDDER`
+  (`hash`|`ollama`|`openai`), `VELESDB_MEMORY_EXTRACTOR`
+  (`outline`|`ollama`|`openai`) + role-named `_URL`/`_MODEL`/`_API_TOKEN` vars
+  (`VELESDB_MEMORY_OLLAMA_URL`/`_MODEL` stay supported as aliases of the
+  embedding role's). `openai` names a protocol, not a vendor: a different
+  server is a different URL, never a new backend name. The `Extractor` trait
   is dependency-free, so the tool is always present and reports "not configured"
   when no backend is attached.
 
