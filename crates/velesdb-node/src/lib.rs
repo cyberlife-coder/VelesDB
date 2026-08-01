@@ -132,8 +132,10 @@ impl MemoryStore {
     /// Store a fact; resolves to its decimal-string id. `links` are
     /// `{target, relation}` edges to existing memories; `metadata` is an optional
     /// object for later filtering. `ttlSeconds` makes the fact expire after that
-    /// many seconds (a durable TTL that survives restarts); omit it (or `0`) for
-    /// a permanent memory.
+    /// many seconds (a durable TTL that survives restarts); omit it for a
+    /// permanent memory, including when re-storing a fact that already had an
+    /// expiry — only what this call supplies is applied. An explicit `0` is
+    /// REFUSED, because a caller writing `0` means "expire now", not "never".
     #[napi(ts_return_type = "Promise<string>")]
     pub fn remember(
         &self,

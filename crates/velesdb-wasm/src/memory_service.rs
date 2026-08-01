@@ -498,7 +498,10 @@ impl WasmMemoryService {
     /// Store a fact; resolves to its decimal-string id. `links` is an array
     /// of `{target, relation}` edges to existing memories; `metadata` is an
     /// optional plain object; `ttlSeconds` makes the fact expire after that
-    /// many seconds (omit, or `0`, for a permanent memory).
+    /// many seconds. Omit it for a permanent memory, including when re-storing
+    /// a fact that already had an expiry — only what this call supplies is
+    /// applied. An explicit `0` is REFUSED, because a caller writing `0` means
+    /// "expire now", not "never".
     #[wasm_bindgen(js_name = remember)]
     pub fn remember(
         &self,
