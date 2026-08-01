@@ -163,6 +163,23 @@ jobs:
       - name: Test the velesdb-memory extract feature
         run: cargo test -p velesdb-memory --features extract,ollama,persistence
 
+      # Same hole as the step above, left open for the whole HTTP transport:
+      # six `[[test]]` targets declare `required-features = ["http"]` and no
+      # `cargo test` anywhere passed it, so fourteen tests had never run on CI
+      # — TLS termination, the graceful SIGTERM drain, the store-lock `flock`
+      # guard and a twenty-way concurrency stress among them.
+      #
+      # That is not a peripheral build: `--http` is how a daemon serves
+      # several MCP clients from ONE process instead of each fighting over the
+      # store's single-writer lock, so it is what a multi-client setup
+      # actually runs.
+      #
+      # `scripts/tests/test_test_target_reachability.py` now fails when any
+      # gated target is reachable by no command here, so this cannot silently
+      # reopen — for `http` or for the next feature.
+      - name: Test the velesdb-memory http transport
+        run: cargo test -p velesdb-memory --features http
+
       # velesdb-memory publishes independently, and `cargo publish` verifies
       # the tarball against velesdb-core AS PUBLISHED ON CRATES.IO — not the
       # core sitting next to it in this workspace. Any call into a core API
