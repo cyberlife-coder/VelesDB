@@ -18,10 +18,12 @@
 //! (`VELESDB_MEMORY_INGEST_ROOTS`, platform `PATH`-list syntax). Every
 //! `path` fragment then runs this ordered, short-circuiting pipeline:
 //!
-//! 1. Shape: a fragment may set exactly one of `path`, non-empty `content`,
-//!    or `media` — checked first, independent of whether ingestion is even
-//!    enabled (a malformed request is a malformed request regardless of
-//!    server configuration).
+//! 1. Shape: `path` is exclusive — it is resolved INTO `content`, so a
+//!    fragment setting both is refused — while `content` and `media` MAY
+//!    travel together (an image and its caption). A fragment carrying none
+//!    of the three is refused too. Checked first, independent of whether
+//!    ingestion is even enabled (a malformed request is a malformed
+//!    request regardless of server configuration).
 //! 2. At least one configured root, else [`MemoryError::IngestDisabled`].
 //! 3. The number of `path` fragments in the request is bounded
 //!    ([`crate::limits::MAX_INGEST_FILES`]).
@@ -134,13 +136,29 @@ pub fn resolve_fragments(
     fragments: &mut [ContextFragment],
     roots: Option<&IngestRoots>,
 ) -> Result<(), MemoryError> {
-    // Step 1 (shape): exactly one of `path`, non-empty `content`, `media` —
-    // checked for every fragment up front, independent of whether
-    // ingestion is enabled at all.
+    // Step 1 (shape), checked for every fragment up front, independent of
+    // whether ingestion is enabled at all. Two rules, and they are NOT the
+    // same rule read twice:
+    //
+    // (a) `path` is EXCLUSIVE. It is resolved into `content` below, so a
+    //     fragment carrying both would have its inline text silently
+    //     overwritten by the file's.
+    // (b) a fragment must carry SOMETHING. `content` + `media` together is
+    //     the supported shape, not a violation — the caption is the only
+    //     text lexical relevance can read for an image, and the packer
+    //     bills both (`image_tokens` + the caption's estimate). What is
+    //     refused is the fragment that carries none of the three: it can
+    //     only ever contribute an empty section, and letting it through
+    //     turns a caller's typo into a silent no-op.
     for fragment in fragments.iter() {
         if fragment.path.is_some() && (!fragment.content.is_empty() || fragment.media.is_some()) {
             return Err(MemoryError::IngestPath(
-                "a fragment may set `path`, or `content`, or `media` — never more than one"
+                "a fragment may set `path`, or inline `content`/`media` — never both".to_owned(),
+            ));
+        }
+        if fragment.path.is_none() && fragment.content.is_empty() && fragment.media.is_none() {
+            return Err(MemoryError::IngestPath(
+                "a fragment must carry `path`, non-empty `content`, or `media` — this one carries none"
                     .to_owned(),
             ));
         }
