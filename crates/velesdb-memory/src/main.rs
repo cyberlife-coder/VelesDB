@@ -35,9 +35,7 @@ use std::time::Duration;
 
 use rmcp::ServiceExt;
 use velesdb_memory::mcp::McpServer;
-use velesdb_memory::{
-    DynEmbedder, ExtractorSelection, HashEmbedder, MemoryService, NativeStore, DEFAULT_DIMENSION,
-};
+use velesdb_memory::{DynEmbedder, ExtractorSelection, MemoryService, NativeStore};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -676,17 +674,32 @@ fn build_ollama_extractor() -> Result<velesdb_memory::DynExtractor, Box<dyn std:
 /// Select the embedding backend from `VELESDB_MEMORY_EMBEDDER`: `hash`
 /// (default) is deterministic and fully offline; `ollama` gives real on-device
 /// semantic recall and requires building with `--features ollama`.
+///
+/// A thin read of the environment on top of
+/// [`velesdb_memory::select_embedder`], mirroring what [`build_server`] does
+/// for the extraction side. The choice itself lives in the library so the
+/// daemon and the tests exercise the same function instead of a seam written
+/// for the test.
+///
+/// `.ok()` maps an unset variable to `None`, which the library reads as "no
+/// preference". A variable that IS set keeps its value — including an empty
+/// one, which stays a caller error rather than collapsing into the default.
 fn build_embedder() -> Result<DynEmbedder, Box<dyn std::error::Error>> {
-    match std::env::var("VELESDB_MEMORY_EMBEDDER").as_deref() {
-        Ok("ollama") => build_ollama_embedder(),
-        Ok("hash") | Err(_) => {
+    let backend = std::env::var("VELESDB_MEMORY_EMBEDDER");
+    // The library message is transport-neutral; the daemon adds the name of the
+    // thing the reader actually has to edit.
+    let selection = velesdb_memory::select_embedder(backend.as_deref().ok())
+        .map_err(|err| format!("VELESDB_MEMORY_EMBEDDER: {err}"))?;
+    match selection {
+        // Matched by name rather than by "ready implies hash": the startup
+        // notice belongs to this one backend, and a future offline backend
+        // must not inherit it silently.
+        velesdb_memory::EmbedderSelection::Ready("hash", embedder) => {
             warn_hash_embedder_not_semantic();
-            Ok(Box::new(HashEmbedder::new(DEFAULT_DIMENSION)))
+            Ok(embedder)
         }
-        Ok(other) => Err(format!(
-            "unknown VELESDB_MEMORY_EMBEDDER '{other}' (expected 'hash' or 'ollama')"
-        )
-        .into()),
+        velesdb_memory::EmbedderSelection::Ready(_, embedder) => Ok(embedder),
+        velesdb_memory::EmbedderSelection::NeedsRemoteConfig(_) => build_ollama_embedder(),
     }
 }
 

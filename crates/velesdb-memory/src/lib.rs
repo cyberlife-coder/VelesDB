@@ -121,7 +121,9 @@ const _: () = assert!(
 #[cfg(feature = "context")]
 pub use context::ContextCompiler;
 pub use dated_context::{format_dated_context, DatedContext};
-pub use embedder::{DynEmbedder, EmbedError, Embedder, HashEmbedder};
+pub use embedder::{
+    select_embedder, DynEmbedder, EmbedError, Embedder, EmbedderSelection, HashEmbedder,
+};
 #[cfg(feature = "ollama")]
 pub use embedder::{OllamaEmbedder, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL};
 pub use error::{ErrorCategory, MemoryError};

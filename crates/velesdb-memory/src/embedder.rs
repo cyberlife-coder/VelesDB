@@ -89,6 +89,84 @@ impl<T: Embedder + ?Sized> Embedder for Box<T> {
     }
 }
 
+// --- Backend selection -------------------------------------------------------
+
+/// What a caller must do about a named embedding backend.
+///
+/// Two variants, not three: unlike [`crate::ExtractorSelection`] there is no
+/// `Disabled`. "No extraction" is a real choice — the graph simply does not
+/// build — while a memory store cannot exist without an embedder. Every
+/// accepted name therefore resolves to something usable.
+pub enum EmbedderSelection {
+    /// Ready to use as-is: needs no configuration, no network, and no optional
+    /// dependency.
+    ///
+    /// Carries the backend's name, which [`ExtractorSelection::Ready`] does
+    /// not. The daemon prints a startup notice that belongs to one specific
+    /// backend (`hash` is deterministic but not semantic), and a library must
+    /// not write to stderr on a caller's behalf. Naming the backend here lets
+    /// the binary decide, instead of inferring "ready implies hash" — an
+    /// inference a second offline backend would silently break.
+    ///
+    /// [`ExtractorSelection::Ready`]: crate::ExtractorSelection::Ready
+    Ready(&'static str, DynEmbedder),
+    /// A network-backed backend the caller must build itself, because only the
+    /// caller knows its URL and model. Carries the backend's name so the caller
+    /// can dispatch without re-parsing the string.
+    NeedsRemoteConfig(&'static str),
+}
+
+/// Hand-written because [`DynEmbedder`] is a trait object and [`Embedder`] does
+/// not require `Debug` — a backend is identified by its shape here, never by
+/// dumping its innards (an HTTP-backed one holds a URL, and a panic message is
+/// not the place for it). Mirrors [`crate::ExtractorSelection`]'s own impl.
+impl std::fmt::Debug for EmbedderSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ready(name, _) => write!(f, "Ready({name}, <embedder>)"),
+            Self::NeedsRemoteConfig(name) => write!(f, "NeedsRemoteConfig({name})"),
+        }
+    }
+}
+
+/// Resolve an embedding backend name to what the caller must do about it.
+///
+/// `backend` is `None` when the selecting variable is **unset**, and
+/// `Some(value)` for whatever it was set to. The distinction is load-bearing
+/// and predates this seam: an unset variable means "no preference" and takes
+/// the offline default, while an empty or misspelled value is a caller who
+/// asked for something and got it wrong. Reading both as "unset" — the shape
+/// an `unwrap_or_default()` at the call site would produce — would turn that
+/// mistake into a silent default.
+///
+/// # Why this exists, and why it is in the library rather than the binary
+///
+/// The embedding selection used to be a bare `match` inside `main.rs`, so
+/// nothing could exercise it without starting the daemon and reading its
+/// stderr. Its counterpart [`crate::select_extractor`] already lives here for
+/// the reasons #1734 made expensive; keeping the two apart meant only one of
+/// the two roles was testable, and only one could gain a backend without
+/// touching the binary.
+///
+/// # Errors
+/// A human-readable message naming the accepted forms, for an unknown backend.
+pub fn select_embedder(backend: Option<&str>) -> Result<EmbedderSelection, String> {
+    match backend {
+        // No `#[cfg]` on this arm, deliberately: `hash` is linked into every
+        // build, including the published one that has no HTTP backend at all,
+        // and it is what an unconfigured daemon runs on.
+        None | Some("hash") => Ok(EmbedderSelection::Ready(
+            "hash",
+            Box::new(HashEmbedder::new(crate::DEFAULT_DIMENSION)),
+        )),
+        Some("ollama") => Ok(EmbedderSelection::NeedsRemoteConfig("ollama")),
+        Some(other) => Err(format!(
+            "unknown embedding backend '{other}' (expected 'hash' for the \
+             offline deterministic embedder, or 'ollama' for a local model)"
+        )),
+    }
+}
+
 // --- Optional real-recall backend: a local Ollama embeddings endpoint --------
 //
 // Enabled with `--features ollama`. The default build omits this backend (and
@@ -377,3 +455,7 @@ fn request_embedding(
 #[cfg(all(test, feature = "ollama"))]
 #[path = "embedder_tests.rs"]
 mod ollama_tests;
+
+#[cfg(test)]
+#[path = "embedder_selection_tests.rs"]
+mod selection_tests;
