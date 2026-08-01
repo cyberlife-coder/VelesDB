@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 use velesdb_core::agent::AgentMemory;
-use velesdb_core::{velesql::Parser, Database, SearchResult};
+use velesdb_core::{velesql::Parser, Database, SearchResult, EXPIRES_AT_KEY};
 
 // ============================================================================
 // Helpers
@@ -348,5 +348,141 @@ fn test_expired_ttl_is_reclaimed_by_auto_expire_after_reopen() {
         collection.len(),
         0,
         "the expired point's storage must be physically reclaimed"
+    );
+}
+
+// ============================================================================
+// A re-store applies only what the CURRENT call supplies
+// ============================================================================
+//
+// The rule, stated once for the three tests below: on a re-store, only the
+// properties the current call supplies are applied. A historical expiry is
+// never inherited implicitly.
+//
+// An RL confidence and an entity tag are state the SYSTEM learned, and
+// `carry_forward_reserved_keys` rightly preserves them. An expiry is an intent
+// the CALLER expressed, and it must not outlive the call that expressed it.
+//
+// Carrying it forward left no published way to promote a TTL'd fact back to
+// permanent: the very call five binding surfaces document as "omit it for a
+// permanent memory" quietly reinstated the old expiry, and the only escape was
+// delete-and-recreate, which mints a new id and breaks every edge pointing at
+// it.
+//
+// These assert on the reserved `_veles_expires_at` payload key rather than
+// waiting for a TTL to lapse: the claim is about what the write PERSISTS, and
+// a sleeping test would pin the clock instead of the contract.
+
+/// Case 1 — existing TTL + re-store WITHOUT a TTL must become permanent.
+/// This is the one that used to fail: the expiry was carried forward.
+#[test]
+fn restoring_without_a_ttl_clears_an_existing_expiry() {
+    let dir = TempDir::new().expect("test: create temp dir");
+    let db = Arc::new(Database::open(dir.path()).expect("test: open database"));
+    let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).expect("test: create AgentMemory");
+
+    // GIVEN a fact stored with a durable TTL
+    memory
+        .semantic()
+        .store_with_ttl(1, "temporary at first", &[1.0, 0.0, 0.0, 0.0], 3600)
+        .expect("store with ttl");
+    let before = memory
+        .semantic()
+        .get_metadata(1)
+        .expect("read metadata")
+        .expect("the fact exists");
+    assert!(
+        before.contains_key(EXPIRES_AT_KEY),
+        "precondition: the fact must actually carry an expiry, else this test proves nothing"
+    );
+
+    // WHEN it is re-stored without any TTL
+    memory
+        .semantic()
+        .store(1, "temporary at first", &[1.0, 0.0, 0.0, 0.0])
+        .expect("re-store without ttl");
+
+    // THEN it is permanent
+    let after = memory
+        .semantic()
+        .get_metadata(1)
+        .expect("read metadata")
+        .expect("the fact still exists");
+    assert!(
+        !after.contains_key(EXPIRES_AT_KEY),
+        "a re-store without a TTL must clear the expiry — five binding surfaces \
+         document this exact call as storing a permanent memory, and inheriting \
+         the old expiry silently overrides the caller's intent"
+    );
+}
+
+/// Case 2 — existing TTL + re-store WITH a TTL must take the NEW one.
+/// Guards the other direction: clearing must not have become unconditional.
+#[test]
+fn restoring_with_a_ttl_replaces_the_previous_expiry() {
+    let dir = TempDir::new().expect("test: create temp dir");
+    let db = Arc::new(Database::open(dir.path()).expect("test: open database"));
+    let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).expect("test: create AgentMemory");
+
+    memory
+        .semantic()
+        .store_with_ttl(1, "short lived", &[1.0, 0.0, 0.0, 0.0], 60)
+        .expect("store with a short ttl");
+    let first = memory
+        .semantic()
+        .get_metadata(1)
+        .expect("read metadata")
+        .expect("the fact exists");
+    let first_expiry = first
+        .get(EXPIRES_AT_KEY)
+        .and_then(serde_json::Value::as_u64)
+        .expect("the first write persisted an expiry");
+
+    memory
+        .semantic()
+        .store_with_ttl(1, "short lived", &[1.0, 0.0, 0.0, 0.0], 86_400)
+        .expect("re-store with a longer ttl");
+
+    let second = memory
+        .semantic()
+        .get_metadata(1)
+        .expect("read metadata")
+        .expect("the fact still exists");
+    let second_expiry = second
+        .get(EXPIRES_AT_KEY)
+        .and_then(serde_json::Value::as_u64)
+        .expect("an explicit TTL must still persist an expiry");
+    assert!(
+        second_expiry > first_expiry,
+        "the NEW ttl must win: expected an expiry later than {first_expiry}, got {second_expiry}"
+    );
+}
+
+/// Case 3 — already permanent + re-store WITHOUT a TTL stays permanent.
+/// The unremarkable case, pinned so a future "helpful" default cannot make a
+/// plain re-store start expiring things.
+#[test]
+fn restoring_a_permanent_fact_without_a_ttl_keeps_it_permanent() {
+    let dir = TempDir::new().expect("test: create temp dir");
+    let db = Arc::new(Database::open(dir.path()).expect("test: open database"));
+    let memory = AgentMemory::with_dimension(Arc::clone(&db), 4).expect("test: create AgentMemory");
+
+    memory
+        .semantic()
+        .store(1, "permanent from the start", &[1.0, 0.0, 0.0, 0.0])
+        .expect("store permanently");
+    memory
+        .semantic()
+        .store(1, "permanent from the start", &[1.0, 0.0, 0.0, 0.0])
+        .expect("re-store permanently");
+
+    let after = memory
+        .semantic()
+        .get_metadata(1)
+        .expect("read metadata")
+        .expect("the fact exists");
+    assert!(
+        !after.contains_key(EXPIRES_AT_KEY),
+        "a permanent fact re-stored without a TTL must stay permanent"
     );
 }

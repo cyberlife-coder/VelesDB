@@ -2329,7 +2329,10 @@ class MemoryService:
                 Keys starting with ``_veles_`` are reserved.
             ttl_seconds: Optional durable time-to-live in seconds. The fact
                 expires (and stops being recalled) after this delay, surviving a
-                restart. Omit (or ``0``) for a permanent memory.
+                restart. Omit for a permanent memory, including when re-storing a
+                fact that already had an expiry — only what this call supplies is
+                applied. An explicit ``0`` is REFUSED, because a caller writing
+                ``0`` means "expire now", not "never".
 
         Returns:
             Stable integer id for the stored fact.

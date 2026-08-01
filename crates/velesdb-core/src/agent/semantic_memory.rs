@@ -199,13 +199,34 @@ impl SemanticMemory {
         Ok(())
     }
 
-    /// Copies the reserved system keys (`_veles_*`: durable TTL, RL confidence,
-    /// entity tags) of the live prior version of `id` into `payload`, so a
-    /// content re-store (`remember`) does not silently wipe learned state.
+    /// Copies the reserved system keys (`_veles_*`: RL confidence, entity
+    /// tags) of the live prior version of `id` into `payload`, so a content
+    /// re-store (`remember`) does not silently wipe LEARNED state.
     ///
     /// Only keys `payload` does not already carry are copied — that guard,
     /// and it alone, is what keeps a carried-forward value from shadowing
     /// something the caller meant.
+    ///
+    /// # The durable TTL is deliberately NOT carried forward
+    ///
+    /// [`EXPIRES_AT_KEY`] is excluded, and that exclusion is the whole point
+    /// of the distinction this function draws. An RL confidence and an entity
+    /// tag are state the SYSTEM learned; an expiry is an intent the CALLER
+    /// expressed. Only the properties the current call supplies are applied,
+    /// so a historical expiry is never inherited implicitly.
+    ///
+    /// It used to be carried forward, which left no published way to promote
+    /// a TTL'd fact back to permanent: `remember` without `ttl_seconds` — the
+    /// exact call five binding surfaces document as "omit it for a permanent
+    /// memory" — quietly reinstated the old expiry, and the only escape was
+    /// `forget` plus a re-create, which mints a new id and breaks every edge
+    /// pointing at it.
+    ///
+    /// That is the same betrayal of intent [`crate::agent`]'s zero-TTL refusal
+    /// was introduced to stop, read in the other direction: there, an explicit
+    /// `0` silently became permanent; here, an omitted TTL silently stayed
+    /// temporary. Both are the caller's stated intent being overridden without
+    /// a signal.
     ///
     /// The ordering with `attach_expiry` is deliberately NOT part of the
     /// argument: `attach_expiry` is a no-op on `None` and an unconditional
@@ -239,6 +260,13 @@ impl SemanticMemory {
             return;
         };
         for (k, v) in prior {
+            // The expiry is a caller intent, not learned state: see this
+            // function's docs. Excluding it here is what makes `remember`
+            // without a TTL mean "permanent" on an existing fact, exactly as
+            // every binding surface documents it.
+            if k == memory_helpers::EXPIRES_AT_KEY {
+                continue;
+            }
             if k.starts_with("_veles_") && !obj.contains_key(k) {
                 obj.insert(k.clone(), v.clone());
             }
