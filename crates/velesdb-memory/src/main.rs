@@ -4,9 +4,11 @@
 //! Cline, Zed, …) can use it locally. The store never leaves the machine.
 //! Configure the store directory with `VELESDB_MEMORY_PATH` (default
 //! `~/.velesdb-memory`) and the embedding
-//! backend with `VELESDB_MEMORY_EMBEDDER` (`hash` | `ollama`). When built with
-//! `--features extract`, set `VELESDB_MEMORY_EXTRACTOR=ollama` to enable the
-//! `remember_extracted` tool (auto text → fact↔topic graph). Set
+//! backend with `VELESDB_MEMORY_EMBEDDER` (`hash` | `ollama`). Set
+//! `VELESDB_MEMORY_EXTRACTOR` to enable the `remember_extracted` tool (text →
+//! fact↔topic graph): `outline` reads directives you write explicitly and needs
+//! no model and no extra feature, while `ollama` infers them with a local
+//! generative model and needs `--features extract`. Set
 //! `VELESDB_MEMORY_DEFAULT_TTL` (seconds) to expire remembered facts by default.
 //! Set `VELESDB_MEMORY_INGEST_ROOTS` (a `PATH`-list of directories) to let
 //! `compile_context`/`explain_compilation` fragments reference a file by

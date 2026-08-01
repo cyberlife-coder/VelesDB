@@ -170,9 +170,21 @@ age stored as `"15"` will never match `age >= 15` — no error, just silence. Th
 is the same trap as the date field in step 2, and it is the single most common
 way a memory system looks like it is working while returning nothing.
 
-`remember_extracted` needs an extraction backend
-(`[extractor] backend = "ollama"`); without one the tool reports itself as
-unconfigured rather than silently storing less.
+`remember_extracted` needs an extraction backend; without one the tool reports
+itself as unconfigured rather than silently storing less. Two exist, and they
+are **not** interchangeable:
+
+- `"ollama"` runs a local generative model that **infers** the facts, entity
+  edges and attributes a passage states. It needs that model running, and a
+  binary built with `--features extract`.
+- `"outline"` is deterministic and fully offline — no model, no network, and no
+  extra build feature. But it only reads structure you write out **explicitly**,
+  one directive per line (`fact:`, `edge:`, `attr:`). Hand it free prose and you
+  get plain facts with no graph around them.
+
+Pick `"outline"` when you control the input format, or to get a graph at all
+without running a model. Pick `"ollama"` when the input is prose nobody is
+going to reformat.
 
 ## Concrete scenarios
 
@@ -239,8 +251,8 @@ backend = "ollama"             # `hash` is lexical, not semantic — see above
 model = "bge-m3"
 
 [extractor]
-backend = "ollama"             # required for remember_extracted / entities
-model = "qwen3.6:35b-mlx"
+backend = "ollama"             # or "outline" — infers vs reads directives, see above
+model = "qwen3.6:35b-mlx"      # "ollama" only; "outline" needs no model
 
 [graph]
 autograph = false              # true = every `remember` also wires entities
