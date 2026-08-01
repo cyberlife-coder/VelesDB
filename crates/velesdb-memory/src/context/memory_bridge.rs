@@ -659,8 +659,22 @@ impl<E: Embedder, S: MemoryStore> MemoryService<E, S> {
         }
         let mut request = request.clone();
         let mut policy = request.policy.take().unwrap_or_default();
+        // Three options neutralised for one reason: an explanation must not
+        // inherit the side effects, nor the presentation, of the compilation it
+        // explains. The caller asked "why this fragment?", not "compile this".
         policy.record_events = false;
         policy.store_sources = false;
+        // `slim_response` empties `sections` and `decisions` to save tokens
+        // (see `apply_slim`). Applied here it would not trim the answer, it
+        // would DELETE it: `decisions` is cleared, the lookup below finds
+        // nothing, and the caller is told `FragmentNotFound` about a fragment
+        // that compiled perfectly well (#1745).
+        //
+        // The option exists to save tokens, so a caller under a tight budget
+        // turns it on by default — and lost the audit tool exactly when they
+        // most needed it, with a message that sent them looking for a typo in
+        // an id that was correct.
+        policy.slim_response = false;
         request.policy = Some(policy);
         let compiled =
             self.compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)?;

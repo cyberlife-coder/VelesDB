@@ -455,6 +455,91 @@ fn test_explain_compilation_fragment_index_out_of_bounds_is_rejected() {
     ));
 }
 
+/// #1745. `slim_response` empties `sections` and `decisions` from a
+/// `compile_context` response — a PRESENTATION option, for a caller who wants
+/// the compiled content without its audit trail.
+///
+/// `explain_compilation` asks for exactly ONE decision. Letting that option
+/// through does not trim its answer, it deletes it: `apply_slim` clears
+/// `decisions`, the lookup then finds nothing, and the caller gets
+/// `FragmentNotFound` for a fragment that was compiled perfectly well.
+///
+/// The message is what makes this worse than a limitation. A caller told
+/// "fragment not found" reasonably concludes they passed the wrong id and
+/// goes looking in the wrong place.
+///
+/// And the option exists to SAVE TOKENS, so a caller under a tight budget
+/// turns it on by default — losing the audit tool exactly when they most need
+/// it.
+#[test]
+fn test_explain_compilation_ignores_slim_response() {
+    let (_dir, svc) = open_service();
+    let wanted = fragment_id("a fact");
+    let slim = CompilePolicy {
+        slim_response: true,
+        ..CompilePolicy::default()
+    };
+    let req = explain_request(vec![fragment("a fact"), fragment("other")], Some(slim));
+
+    let decision = svc
+        .explain_compilation(&req, wanted, None)
+        .expect("slim_response is a presentation option; it must not hide the decision");
+
+    // Not merely "no error": the decision must be the one that was ASKED for,
+    // and it must carry the explanation. An empty reason or a neighbour's
+    // decision would satisfy `is_ok()` while telling the caller nothing.
+    assert_eq!(
+        decision.fragment_id, wanted,
+        "the decision must belong to the fragment that was asked about"
+    );
+    assert!(matches!(decision.action, ContextAction::Preserve));
+    assert!(
+        !decision.reason.is_empty(),
+        "an explanation with no reason explains nothing"
+    );
+    assert!(
+        !decision.rule_id.is_empty(),
+        "the rule that produced the decision is half the explanation"
+    );
+}
+
+/// The other half of the same guard. The fix works by FORCING a policy field,
+/// so this pins that the nominal path — the one every caller already uses —
+/// is untouched: same decision, same action, same rule, whether the option is
+/// absent or explicitly off.
+#[test]
+fn test_explain_compilation_without_slim_response_is_unchanged() {
+    let (_dir, svc) = open_service();
+    let wanted = fragment_id("a fact");
+    let explicit_off = CompilePolicy {
+        slim_response: false,
+        ..CompilePolicy::default()
+    };
+
+    let baseline = svc
+        .explain_compilation(
+            &explain_request(vec![fragment("a fact"), fragment("other")], None),
+            wanted,
+            None,
+        )
+        .expect("explain_compilation with no policy at all");
+    let with_flag_off = svc
+        .explain_compilation(
+            &explain_request(
+                vec![fragment("a fact"), fragment("other")],
+                Some(explicit_off),
+            ),
+            wanted,
+            None,
+        )
+        .expect("explain_compilation with slim_response explicitly false");
+
+    assert_eq!(with_flag_off.fragment_id, baseline.fragment_id);
+    assert_eq!(with_flag_off.action, baseline.action);
+    assert_eq!(with_flag_off.rule_id, baseline.rule_id);
+    assert_eq!(with_flag_off.reason, baseline.reason);
+}
+
 #[test]
 fn test_explain_compilation_fragment_index_disambiguates_byte_identical_twins() {
     // Two byte-identical fragments share the same content-addressed
