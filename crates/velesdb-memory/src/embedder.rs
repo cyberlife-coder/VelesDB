@@ -273,7 +273,7 @@ impl OpenAiEmbedder {
         auth: crate::http_client::Auth,
     ) -> Result<Self, EmbedError> {
         let client = crate::http_client::HttpJsonClient::new(
-            base_url,
+            crate::openai::base_url(&base_url.into()),
             auth,
             embed_agent(std::time::Duration::from_secs(EMBED_TIMEOUT_SECS)),
         );

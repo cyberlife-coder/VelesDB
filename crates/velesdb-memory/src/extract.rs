@@ -1109,7 +1109,11 @@ impl OpenAiExtractor {
             .timeout(timeout)
             .build();
         Self {
-            client: crate::http_client::HttpJsonClient::new(base_url, auth, agent),
+            client: crate::http_client::HttpJsonClient::new(
+                crate::openai::base_url(&base_url.into()),
+                auth,
+                agent,
+            ),
             model: model.into(),
         }
     }

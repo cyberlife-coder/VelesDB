@@ -565,10 +565,15 @@ has a default here: guessing either would pick one of those servers for you.
 
 ```bash
 VELESDB_MEMORY_EMBEDDER=openai \
-VELESDB_MEMORY_EMBEDDER_URL=http://localhost:8020 \
+VELESDB_MEMORY_EMBEDDER_URL=http://127.0.0.1:8019 \
 VELESDB_MEMORY_EMBEDDER_MODEL=bge-m3 \
   /path/to/velesdb-memory
 ```
+
+The URL may be written **with or without** the `/v1` suffix — both reach the
+same endpoint. Server consoles advertise the version-prefixed form
+(`http://127.0.0.1:8019/v1`) next to a copy button, so pasting it must work
+rather than silently produce `/v1/v1/embeddings` and a `404`.
 
 **API tokens are read from the environment only.** There is deliberately no
 `api_token` field in `velesdb-memory.toml`, and putting one there is refused at
@@ -610,14 +615,23 @@ backend the tool returns a clear "not configured" error.
 
 ```bash
 VELESDB_MEMORY_EXTRACTOR=openai \
-VELESDB_MEMORY_EXTRACTOR_URL=http://localhost:8028 \
+VELESDB_MEMORY_EXTRACTOR_URL=http://127.0.0.1:8019 \
 VELESDB_MEMORY_EXTRACTOR_MODEL=your-model \
   /path/to/velesdb-memory
 ```
 
 **The two roles are configured independently** — nothing requires them to share
 a backend, a server or a token. Embedding on a local Ollama while extracting on
-an OpenAI-compatible server is a supported combination, not an accident.
+an OpenAI-compatible server is a supported combination, not an accident:
+
+```bash
+VELESDB_MEMORY_EMBEDDER=ollama \
+VELESDB_MEMORY_EMBEDDER_MODEL=bge-m3 \
+VELESDB_MEMORY_EXTRACTOR=openai \
+VELESDB_MEMORY_EXTRACTOR_URL=http://127.0.0.1:8019 \
+VELESDB_MEMORY_EXTRACTOR_MODEL=your-model \
+  /path/to/velesdb-memory
+```
 
 The two backends are **not** interchangeable:
 

@@ -258,3 +258,46 @@ fn debug_never_prints_the_secret() {
          provider is still diagnosable: {custom}"
     );
 }
+
+// --- The request LINE, not just its headers ---------------------------------
+
+#[test]
+fn a_base_url_copied_with_its_version_prefix_still_hits_the_right_path() {
+    // Byte-level, for the same reason the header tests are: only the socket
+    // shows whether the path was doubled. The URL under test is the literal
+    // string an oMLX console offers to copy — `http://127.0.0.1:8019/v1` —
+    // which a naive concatenation turns into `/v1/v1/chat/completions`.
+    let (addr, server) = capture_one_request(CHAT_RESPONSE);
+    let extractor = OpenAiExtractor::new(format!("http://{addr}/v1"), "ornith-35b", Auth::None);
+    let _ = extractor.extract("peu importe le texte");
+    let captured = server.join().expect("stub thread");
+    let request_line = captured.lines().next().unwrap_or_default();
+
+    assert!(
+        request_line.contains("/v1/chat/completions"),
+        "the protocol path must be reached exactly once, got: {request_line}"
+    );
+    assert!(
+        !request_line.contains("/v1/v1/"),
+        "a base URL that already carries the version prefix must not double it \
+         — that is a 404 whose cause is invisible. Got: {request_line}"
+    );
+}
+
+#[test]
+fn an_origin_without_the_prefix_reaches_the_same_path() {
+    // The control: both spellings must land on one identical request line, or
+    // the normalisation above traded one surprise for another.
+    let (addr, server) = capture_one_request(CHAT_RESPONSE);
+    let extractor = OpenAiExtractor::new(format!("http://{addr}"), "ornith-35b", Auth::None);
+    let _ = extractor.extract("peu importe le texte");
+    let captured = server.join().expect("stub thread");
+    assert!(
+        captured
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .contains("/v1/chat/completions"),
+        "got: {captured}"
+    );
+}
