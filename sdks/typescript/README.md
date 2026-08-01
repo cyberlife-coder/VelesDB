@@ -13,6 +13,23 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 - **Compiler read tools in the browser**: `retrieveContextSource` retrieves the exact original content behind a compiled fragment (externalized sources included), directly from the WASM engine.
 - **Since 3.6.0 (3.7–3.11 recap)**: `compileContext` on the `MemoryService` (deterministic context compression, media fragments included), working-context `save`/`load`/`list` for cross-session resumption, `bulkDelete` over `POST points/delete`, and automatic retry with exponential backoff on 429/503 (idempotent methods only, capped `Retry-After`).
 
+### What a fragment carries, and the one field that is daemon-only
+
+`CompileContextFragment` accepts `id`, `content`, `kind`, `priority`,
+`metadata` and `media`. **`priority` is the knob that decides what survives a
+tight budget** — relevance ordering anchors on the query, and a higher
+`priority` packs a fragment ahead of it.
+
+The MCP wire also accepts a **`path`** field, reading a fragment's content from
+a file instead of sending it inline. **No SDK declares it, and that is
+deliberate**: resolving a path is a server-side I/O pre-pass gated on
+`VELESDB_MEMORY_INGEST_ROOTS`, an operator-configured allowlist of directories.
+This SDK runs on the WASM binding, which has neither a filesystem nor that
+setting — and neither `@wiscale/velesdb-memory-node` nor the Python binding
+resolves paths either. Path ingestion is a capability of the `velesdb-memory`
+**daemon**, reachable over MCP; from an SDK, read the file yourself and pass
+its text as `content`.
+
 ## What's New in v3.6.0
 
 - **Memory wedge, running in-browser via WASM**: new `MemoryService` class (`remember`/`recall`/`recallWhere`/`recallFused`/`relate`/`forget`/`why`) — the same local-first agent memory as `@wiscale/velesdb-memory-node` and the Python binding, now reachable without a server. In-memory only in this release (no filesystem access under WASM); see [Memory Wedge](#memory-wedge-agent-memory) below. Requires `@wiscale/velesdb-wasm` >= 3.6.0 — fresh installs resolve it automatically; on an upgrade, refresh the dependency in your lockfile (`init()` reports the exact cause otherwise).

@@ -95,6 +95,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeScript SDK: `CompileContextFragment` gains `priority`.** The wire has
+  accepted it since the context compiler shipped, and this SDK never declared
+  it — so a TypeScript caller could reach `compileContext` and not express the
+  one input that controls what a tight budget drops. Found by deriving both
+  field lists from source rather than reading either one.
+
+  A new parity check in `tests/binding_parity_bdd.rs` holds the SDK's fragment
+  against the canonical `ContextFragment`, so a field added to one and not the
+  other turns red. Method parity already proved a tool was *reachable*; this
+  proves its *input* can be expressed.
+
+  **`path` stays undeclared, on every binding, by decision.** Resolving a path
+  fragment is a server-side I/O pre-pass gated on `VELESDB_MEMORY_INGEST_ROOTS`,
+  an operator-configured allowlist — the WASM binding has neither a filesystem
+  nor that setting, and neither `velesdb-node` nor `velesdb-python` resolves
+  paths. Declaring it would publish a field that always fails. The exemption is
+  written down next to the check, with its reason, because an absence by
+  decision and an absence by oversight look identical from the outside.
+
 - **A base URL carrying the `/v1` prefix no longer doubles it (#1751).**
   Servers advertise their OpenAI-compatible endpoint *with* the version prefix
   — oMLX's console shows `http://127.0.0.1:8019/v1` beside a copy button — and
