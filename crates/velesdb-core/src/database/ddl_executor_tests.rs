@@ -5,7 +5,7 @@ use crate::velesql::{
     AlterCollectionStatement, CompareOp, Comparison, Condition, CreateCollectionKind,
     CreateCollectionStatement, DdlStatement, DeleteEdgeStatement, DeleteStatement, DmlStatement,
     DropCollectionStatement, GraphCollectionParams, GraphSchemaMode, InCondition,
-    InsertEdgeStatement, Query, SchemaDefinition, SelectEdgesStatement, Value,
+    InsertEdgeStatement, Query, SchemaDefinition, SelectEdgesStatement, TruncateStatement, Value,
     VectorCollectionParams,
 };
 use crate::wire::hash_edge_id;
@@ -513,6 +513,49 @@ fn test_delete_edge_nonexistent_reports_false() {
     let payload = results[0].point.payload.as_ref().expect("payload");
     assert_eq!(payload["deleted"], false);
     assert_eq!(payload["edge_id"], 999);
+}
+
+#[test]
+fn test_truncate_graph_reports_actual_removed_edge_count() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+
+    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "truncate_g".to_string(),
+        kind: CreateCollectionKind::Graph(GraphCollectionParams {
+            dimension: None,
+            metric: None,
+            schema_mode: GraphSchemaMode::Schemaless,
+        }),
+    });
+    execute_ddl(&db, create).expect("create graph");
+
+    let gc = db.get_graph_collection("truncate_g").expect("get");
+    for id in [10, 20, 30] {
+        gc.upsert_node_payload(id, &serde_json::json!({}))
+            .expect("store node");
+    }
+    gc.add_edge(crate::GraphEdge::new(1, 10, 20, "A").expect("edge"))
+        .expect("add 1");
+    gc.add_edge(crate::GraphEdge::new(2, 20, 30, "B").expect("edge"))
+        .expect("add 2");
+    assert_eq!(gc.edge_count(), 2);
+
+    let ddl = DdlStatement::Truncate(TruncateStatement {
+        collection: "truncate_g".to_string(),
+    });
+    let results = execute_ddl(&db, ddl).expect("truncate");
+    assert_eq!(results.len(), 1);
+    let payload = results[0].point.payload.as_ref().expect("payload");
+
+    // `deleted_edges` must reflect edges actually removed, not just the
+    // size of the pre-truncate snapshot — the two diverge whenever
+    // `remove_edge` fails on an individual edge.
+    assert_eq!(payload["deleted_edges"], 2);
+    assert_eq!(payload["deleted_nodes"], 3);
+    assert_eq!(payload["deleted_count"], 5);
+    assert_eq!(gc.edge_count(), 0);
+    assert_eq!(gc.get_edges(None).len(), 0);
 }
 
 // =========================================================================

@@ -204,12 +204,15 @@ impl Database {
 
     /// Truncates a graph collection: removes all edges then all nodes.
     fn truncate_graph(gc: &crate::collection::GraphCollection) -> Result<Vec<SearchResult>> {
-        // Remove all edges first (edges reference nodes).
+        // Remove all edges first (edges reference nodes). Count only edges
+        // `remove_edge` actually removed — it can report `false` (e.g. a WAL
+        // append failure), and the response must not claim more deletions
+        // than really happened.
         let edges = gc.get_edges(None);
-        let edge_count = edges.len();
-        for edge in &edges {
-            let _ = gc.remove_edge(edge.id());
-        }
+        let edge_count = edges
+            .iter()
+            .filter(|edge| gc.remove_edge(edge.id()))
+            .count();
         // Remove all node payloads.
         let node_ids = gc.all_node_ids();
         let node_count = node_ids.len();
