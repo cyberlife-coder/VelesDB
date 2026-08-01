@@ -128,8 +128,8 @@ pub use error::{ErrorCategory, MemoryError};
 #[cfg(feature = "extract")]
 pub use extract::OllamaExtractor;
 pub use extract::{
-    DynExtractor, ExtractError, ExtractedAttribute, ExtractedFact, ExtractedRelation, Extraction,
-    Extractor, OutlineExtractor,
+    select_extractor, DynExtractor, ExtractError, ExtractedAttribute, ExtractedFact,
+    ExtractedRelation, Extraction, Extractor, ExtractorSelection, OutlineExtractor,
 };
 #[cfg(feature = "mcp")]
 pub use mcp::McpServer;

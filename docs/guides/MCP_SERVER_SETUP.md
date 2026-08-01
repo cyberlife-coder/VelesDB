@@ -564,13 +564,29 @@ VELESDB_MEMORY_EXTRACTOR_MODEL=qwen3.6:35b-mlx \
   /path/to/velesdb-memory
 ```
 
-Env vars: `VELESDB_MEMORY_EXTRACTOR` (`ollama` to enable),
-`VELESDB_MEMORY_EXTRACTOR_URL` (default `http://localhost:11434`),
-`VELESDB_MEMORY_EXTRACTOR_MODEL` (required, a generative model). Without a
-backend the tool returns a clear "not configured" error.
+Env vars: `VELESDB_MEMORY_EXTRACTOR` (`ollama` or `outline`),
+`VELESDB_MEMORY_EXTRACTOR_URL` (default `http://localhost:11434`, `ollama`
+only), `VELESDB_MEMORY_EXTRACTOR_MODEL` (a generative model — required for
+`ollama`, unused by `outline`). Without a backend the tool returns a clear
+"not configured" error.
 
-To plug a different model, implement the dependency-free `Extractor` trait and
-pass it to `MemoryService::remember_extracted` from Rust.
+The two backends are **not** interchangeable:
+
+- **`ollama`** runs a local generative model that **infers** the facts, entity
+  edges and attributes a passage states. It needs that model running, and a
+  binary built with `--features extract`.
+- **`outline`** is deterministic and fully offline — no model, no network, and
+  **no extra build feature**, so it works in the default binary. But it only
+  reads structure written out **explicitly**, one directive per line (`fact:`,
+  `edge:`, `attr:`). Free prose handed to it becomes plain facts with no graph
+  around them.
+
+Choose `outline` when you control the input format, or to get a graph at all
+without running a model; choose `ollama` when the input is prose nobody is
+going to reformat.
+
+To plug a different backend entirely, implement the dependency-free `Extractor`
+trait and pass it to `MemoryService::remember_extracted` from Rust.
 
 ---
 

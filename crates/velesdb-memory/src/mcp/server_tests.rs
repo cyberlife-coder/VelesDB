@@ -1387,3 +1387,97 @@ fn unrelate_params_accept_string_or_number_ids_on_the_wire() {
     assert_eq!(params.from, u64::MAX);
     assert_eq!(params.to, 42);
 }
+
+/// #1734, and this is the test that has to cross the REAL wiring rather than a
+/// seam written for it.
+///
+/// The defect was never in the library: `OutlineExtractor` always worked, and
+/// `McpServer::with_extractor` always accepted it. What was broken is that the
+/// only code able to CHOOSE `outline` sat inside the daemon's
+/// `#[cfg(feature = "extract")]` block, so on a default build two of the twenty
+/// published tools were dead — `remember_extracted` refused outright, and
+/// `entity` answered `found: false` for every name, entity hubs being born only
+/// of extraction.
+///
+/// So this test deliberately calls [`crate::select_extractor`] — the same
+/// function `main.rs` now calls — instead of constructing `OutlineExtractor`
+/// directly. Building the extractor by hand here would prove only that the
+/// library works, which was never in doubt. The one step it does not cover is
+/// `std::env::var` itself, which is a process-global read the daemon does once.
+#[tokio::test]
+async fn an_outline_configured_server_builds_a_hub_that_entity_finds() {
+    let dir = TempDir::new().expect("create tempdir");
+    let embedder: DynEmbedder = Box::new(HashEmbedder::new(crate::DEFAULT_DIMENSION));
+    let service = MemoryService::open(dir.path(), embedder).expect("open memory store");
+
+    // The selection, through the real function. `Ready` is the whole point:
+    // outline needs no configuration, no network and no optional dependency,
+    // which is why it can be chosen in a build that has none of them.
+    let crate::ExtractorSelection::Ready(extractor) =
+        crate::select_extractor("outline").expect("`outline` must be an accepted backend name")
+    else {
+        panic!("`outline` must be usable as-is, with no remote configuration");
+    };
+    let srv = McpServer::new(service).with_extractor(extractor);
+
+    // Tool 1 of the two that were dead: it used to answer "extraction backend
+    // not configured" no matter what the operator set.
+    let Json(stored) = srv
+        .remember_extracted(Parameters(RememberExtractedParams {
+            text: "fact: Theo has a sister called Camille | Theo, Camille\n\
+                   edge: Camille | soeur de | Theo\n\
+                   attr: Theo | age | 15"
+                .to_owned(),
+            metadata: None,
+        }))
+        .await
+        .expect("remember_extracted must work on an outline-configured server");
+    assert_eq!(
+        stored.ids.len(),
+        1,
+        "the passage carries exactly one `fact:` directive, so exactly one \
+         fact must be stored (`edge:` and `attr:` build the graph around it, \
+         they are not facts of their own)"
+    );
+
+    // Tool 2: `entity` answered `found: false` for EVERY name, because hubs are
+    // salted so that no caller fact can create one — they are born only of
+    // extraction. If this passes, the cascade is closed.
+    let Json(theo) = srv
+        .entity(Parameters(EntityParams {
+            name: "Theo".to_owned(),
+        }))
+        .await
+        .expect("entity");
+    assert!(
+        theo.found,
+        "entity must find the hub that remember_extracted just created — \
+         this is the second of the two behaviours #1734 reported dead"
+    );
+    let outgoing: Vec<&str> = theo
+        .relations
+        .iter()
+        .map(|r| r.predicate.as_str())
+        .collect();
+    let incoming: Vec<&str> = theo
+        .relations_in
+        .iter()
+        .map(|r| r.predicate.as_str())
+        .collect();
+    // Asserted on EITHER side on purpose, and the reason is written here so the
+    // looseness is not mistaken for carelessness. What #1734 is about is that
+    // the edge reaches the graph at all: before the fix no extractor could be
+    // selected, so there was no edge on either side.
+    //
+    // Which side it lands on is a SEPARATE question, and an open one: measured
+    // here, `edge: Camille | soeur de | Theo` lands in Theo's OUTGOING edges
+    // and leaves his incoming empty, while `incoming_entity_relations`'s own
+    // doc uses this exact example to say the opposite. Pinning either direction
+    // in this test would freeze an answer nobody has established yet — so it is
+    // tracked on its own instead.
+    assert!(
+        incoming.contains(&"soeur de") || outgoing.contains(&"soeur de"),
+        "the `edge:` directive must reach the graph — outgoing {outgoing:?}, \
+         incoming {incoming:?}"
+    );
+}
