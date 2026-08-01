@@ -1407,3 +1407,140 @@ fn the_sdk_check_distinguishes_the_class_from_the_interface() {
     let gaps = sdk_gaps(&tools, &upstream, &absent, &present);
     assert!(gaps[0].contains("NOT the class"), "got: {}", gaps[0]);
 }
+
+// --- Field parity: the context compiler's fragment ---------------------------
+//
+// Method parity, above, proves a tool is REACHABLE from the SDK. It says
+// nothing about whether the SDK can express the tool's input — and that is a
+// second way to publish a promise nobody can use.
+//
+// Measured on 2026-08-02: `CompileContextFragment` in the TypeScript SDK was
+// missing `path` (file ingestion, V2b-1 — advertised by the server and by both
+// SKILL.md copies) and `priority` ("higher packs first", the knob that decides
+// what survives a token budget). A TypeScript caller could reach
+// `compileContext` and still not use half of what it accepts.
+//
+// Both lists are read from source, never written down here: adding a field to
+// the canonical fragment without adding it to the SDK turns this red on the
+// spot, which a hard-coded expectation could not do.
+
+/// Where the canonical wire shape of a context fragment is declared.
+const FRAGMENT_SOURCE: &str = "crates/velesdb-memory/src/context/model.rs";
+const FRAGMENT_STRUCT: &str = "pub struct ContextFragment {";
+
+/// Where the TypeScript SDK declares the same fragment.
+const SDK_FRAGMENT: &str = "export interface CompileContextFragment {";
+
+/// Field names of the `struct` opened by `opening`, up to the next column-0 `}`.
+fn rust_struct_fields(source_path: &str, opening: &str) -> BTreeSet<String> {
+    let path = workspace_root().join(source_path);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("read {source_path} ({}): {err}", path.display()));
+    let mut lines = source.lines().skip_while(|l| l.trim() != opening);
+    assert!(
+        lines.next().is_some(),
+        "{source_path} no longer contains `{opening}` — point the constant at the renamed struct",
+    );
+    lines
+        .take_while(|l| *l != "}")
+        .filter_map(|line| {
+            let declaration = line.trim().strip_prefix("pub ")?;
+            let (name, _) = declaration.split_once(':')?;
+            name.chars()
+                .all(|c| c.is_alphanumeric() || c == '_')
+                .then(|| name.to_owned())
+        })
+        .collect()
+}
+
+/// Field names of the TypeScript interface opened by `opening`.
+fn typescript_interface_fields(opening: &str) -> BTreeSet<String> {
+    let path = workspace_root().join(SDK_SOURCE);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("read {SDK_SOURCE} ({}): {err}", path.display()));
+    let mut lines = source.lines().skip_while(|l| l.trim() != opening);
+    assert!(
+        lines.next().is_some(),
+        "{SDK_SOURCE} no longer contains `{opening}` — point the constant at the renamed interface",
+    );
+    lines
+        .take_while(|l| *l != "}")
+        .filter_map(|line| {
+            let declaration = line.trim();
+            let (name, _) = declaration.split_once(':')?;
+            let name = name.trim_end_matches('?');
+            name.chars()
+                .all(|c| c.is_alphanumeric() || c == '_')
+                .then(|| name.to_owned())
+        })
+        .collect()
+}
+
+#[test]
+fn the_fragment_scans_read_something_on_both_sides() {
+    // Guard the guard: an empty scan on either side would make the parity
+    // assertion below pass (or fail) for reasons that have nothing to do with
+    // the SDK.
+    let canonical = rust_struct_fields(FRAGMENT_SOURCE, FRAGMENT_STRUCT);
+    assert!(
+        canonical.contains("content") && canonical.contains("id"),
+        "the canonical fragment scan parsed {canonical:?} — the scan is broken, not the struct",
+    );
+    let sdk = typescript_interface_fields(SDK_FRAGMENT);
+    assert!(
+        sdk.contains("content") && sdk.contains("id"),
+        "the SDK fragment scan parsed {sdk:?} — the scan is broken, not the SDK",
+    );
+}
+
+/// Fields the SDK deliberately does NOT declare, each with the reason.
+///
+/// Same shape as this file's tool-level exemptions, and for the same reason: a
+/// field that is absent by decision and a field that is absent by oversight
+/// look identical from the outside, and only a written reason tells them
+/// apart.
+const SDK_FRAGMENT_EXEMPTIONS: &[(&str, &str)] = &[(
+    "path",
+    "resolving a `path` fragment is a server-side I/O pre-pass gated on \
+     VELESDB_MEMORY_INGEST_ROOTS, an operator-configured allowlist of \
+     directories. This SDK runs on the WASM binding, which has neither a \
+     filesystem nor that setting. NO binding declares it — velesdb-node and \
+     velesdb-python do not resolve paths either; the MCP daemon is the only \
+     surface that can honour one, so declaring it here would be a field that \
+     always fails.",
+)];
+
+#[test]
+fn every_fragment_exemption_names_a_field_that_actually_exists() {
+    // An exemption for a field the canonical fragment no longer has would sit
+    // here forever, silently excusing nothing — and would hide the day a real
+    // field takes that name.
+    let canonical = rust_struct_fields(FRAGMENT_SOURCE, FRAGMENT_STRUCT);
+    for (field, _) in SDK_FRAGMENT_EXEMPTIONS {
+        assert!(
+            canonical.contains(*field),
+            "`{field}` is exempted from the SDK fragment but is not a field of the canonical \
+             fragment any more — delete the exemption",
+        );
+    }
+}
+
+#[test]
+fn the_typescript_fragment_declares_every_field_the_wire_accepts() {
+    let canonical = rust_struct_fields(FRAGMENT_SOURCE, FRAGMENT_STRUCT);
+    let mut sdk = typescript_interface_fields(SDK_FRAGMENT);
+    sdk.extend(
+        SDK_FRAGMENT_EXEMPTIONS
+            .iter()
+            .map(|(field, _)| (*field).to_owned()),
+    );
+    let missing: Vec<&String> = canonical.difference(&sdk).collect();
+    assert!(
+        missing.is_empty(),
+        "the TypeScript SDK's `CompileContextFragment` is missing {missing:?}, so a TypeScript \
+         caller cannot express input the server accepts. The tool is reachable and half of its \
+         contract is not — declare the field in {SDK_SOURCE}, or, if it is deliberately withheld, \
+         say so where a reader will see it rather than leaving the absence to look like an \
+         oversight.",
+    );
+}

@@ -79,6 +79,26 @@ export interface CompileContextFragment {
   content: string;
   /** Classification hint (`"code"`, `"log"`, `"screenshot"`, …). */
   kind?: string;
+  /**
+   * Caller priority; higher packs first. Defaults to `0`.
+   *
+   * The knob that decides what survives a tight budget: relevance ordering
+   * anchors on the query, and this overrides it for fragments the caller
+   * already knows must be kept ahead of the rest.
+   *
+   * The wire has accepted it since the compiler shipped; this SDK simply never
+   * declared it, so a TypeScript caller could reach `compileContext` and not
+   * express the one input that controls what it drops.
+   */
+  priority?: number;
+  // No `path` here, and its absence is a DECISION, not an oversight — see the
+  // note on the canonical fragment in
+  // `crates/velesdb-memory/src/context/model.rs`. Resolving a `path` fragment
+  // is a server-side I/O pre-pass gated on `VELESDB_MEMORY_INGEST_ROOTS`, an
+  // operator-configured allowlist of directories. This SDK runs on the WASM
+  // binding, which has neither a filesystem nor that setting, so a declared
+  // `path` would be a field that always fails. No binding declares it — the
+  // MCP daemon is the only surface that can honour one.
   /** Fragment flags, e.g. `{ verbatim: true }` or `{ cache: true }`. */
   metadata?: Record<string, unknown>;
   /**
