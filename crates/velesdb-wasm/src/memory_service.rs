@@ -550,6 +550,12 @@ impl WasmMemoryService {
 
     /// Fused vector + `ColumnStore` recall: like [`Self::recall`] but
     /// `filters` support ranges/comparisons (`gt`, `le`, …).
+    ///
+    /// Returns your own stored facts ONLY: entity hubs and the context compiler's
+    /// artefacts (stored sources, compilation events, working contexts and
+    /// their index) are internal scaffolding and never come back, whatever the
+    /// predicate — including a `ne` one, which matches facts lacking the field
+    /// entirely.
     #[wasm_bindgen(js_name = recallWhere)]
     pub fn recall_where(
         &self,

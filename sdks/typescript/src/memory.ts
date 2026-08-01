@@ -745,6 +745,12 @@ export class MemoryService {
    * Fused vector + `ColumnStore` recall: like {@link recall} but `filters`
    * support ranges/comparisons (`gt`, `le`, …), so temporal/numeric facets
    * become queryable.
+   *
+   * Returns your own stored facts ONLY: entity hubs and the context compiler's
+   * artefacts (stored sources, compilation events, working contexts and their
+   * index) are internal scaffolding and never come back, whatever the
+   * predicate — including a `ne` one, which matches facts lacking the field
+   * entirely.
    */
   recallWhere(
     query: string,

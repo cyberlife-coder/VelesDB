@@ -178,6 +178,12 @@ impl MemoryStore {
     /// Fused vector + `ColumnStore` recall: like [`recall`](Self::recall) but the
     /// `filters` support ranges/comparisons (`gt`, `le`, …), so temporal/numeric
     /// facets become queryable. Mirrors the `PyO3` `recall_where` surface.
+    ///
+    /// Returns your own stored facts ONLY: entity hubs and the context compiler's
+    /// artefacts (stored sources, compilation events, working contexts and
+    /// their index) are internal scaffolding and never come back, whatever
+    /// the predicate — including a `ne` one, which matches facts lacking the
+    /// field entirely.
     #[napi(
         js_name = "recallWhere",
         ts_return_type = "Promise<Array<RecollectionJs>>"

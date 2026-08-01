@@ -93,14 +93,26 @@ const WORKING_INDEX_ID_SALT: &str = "veles-ctx-working-index:";
 const EVENT_ANCHOR: &str = "veles context compilation event";
 
 /// Reserved metadata keys of the bridge's system facts. Reserved (`_veles_`)
-/// on purpose: callers can neither set them (forgery) nor filter on them, so
-/// system facts are invisible to every caller-facing recall path and
+/// on purpose: callers can neither set them (forgery) nor filter on them, and
 /// [`MemoryService::context_savings`] aggregates only genuine events (it
 /// filters at the storage layer, below the caller-facing validation).
-const CTX_EVENT_FIELD: &str = "_veles_ctx_event";
+///
+/// Being unfilterable was once claimed here to make these facts "invisible to
+/// every caller-facing recall path". It did not (#1737). A caller cannot
+/// filter ON a reserved key, but `field != value` MATCHES a fact that has no
+/// such field — and a system fact has none of the caller's columns, so every
+/// `!=` predicate swept all of them in. Invisibility is now an exclusion
+/// [`crate::storage::INTERNAL_MARKER_FIELDS`] states and each backend
+/// applies, not a side effect of the naming rule.
+///
+/// The four markers below are therefore imported rather than redeclared: they
+/// ARE entries of that list, and a local copy could drift from it silently.
+use crate::storage::{
+    CTX_EVENT_FIELD, CTX_SOURCE_FIELD, CTX_WORKING_FIELD, CTX_WORKING_INDEX_FIELD,
+};
+
 const CTX_PROJECT_FIELD: &str = "_veles_ctx_project";
 const CTX_MODEL_FIELD: &str = "_veles_ctx_model";
-const CTX_SOURCE_FIELD: &str = "_veles_ctx_source";
 /// A stored source's media payload (US-009, PR2): `{"mime", "bytes_b64"}`,
 /// the exact [`MediaRef`] shape, set only when the source fragment carried
 /// one. Reserved like every other `_veles_ctx_*` key — a caller can neither
@@ -112,10 +124,6 @@ const CTX_SOURCE_MEDIA_FIELD: &str = "_veles_ctx_source_media";
 /// and this module (unlike `NativeStore`) must keep compiling under `context`
 /// alone (e.g. `velesdb-wasm`, which never enables `persistence`).
 const EXPIRES_AT_FIELD: &str = "_veles_expires_at";
-const CTX_WORKING_FIELD: &str = "_veles_ctx_working";
-/// Marks a project's working-context index fact (V2a-1's
-/// `list_working_contexts`), symmetric to [`CTX_WORKING_FIELD`].
-const CTX_WORKING_INDEX_FIELD: &str = "_veles_ctx_working_index";
 const CTX_SESSION_FIELD: &str = "_veles_ctx_session";
 const CTX_TOKENS_IN_FIELD: &str = "_veles_ctx_tokens_in";
 const CTX_TOKENS_OUT_FIELD: &str = "_veles_ctx_tokens_out";

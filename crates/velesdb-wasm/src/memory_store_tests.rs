@@ -191,6 +191,54 @@ fn test_query_columnar_applies_range_predicate() {
 }
 
 #[test]
+fn test_query_columnar_excludes_internal_scaffolding() {
+    // #1737. Seeded with an EMPTY filter set on purpose: `columnar_matches`
+    // is then vacuously true for every payload, so the marker check is the
+    // only thing that can exclude anything — the assertion cannot pass by
+    // accident of the predicate.
+    let store = WasmStore::new(4);
+    let caller = meta(&[("status", Value::from("active"))]);
+    store
+        .store_with_metadata(1, "a real fact", &[1.0, 0.0, 0.0, 0.0], &caller)
+        .unwrap();
+    // Reserved but NOT a scaffolding marker: a TTL'd caller fact must survive,
+    // which is why the discriminant is the marker list and not the `_veles_`
+    // prefix.
+    store
+        .store_with_ttl(2, "a TTL'd real fact", &[1.0, 0.0, 0.0, 0.0], 3600)
+        .unwrap();
+    for (offset, marker) in velesdb_memory::storage::INTERNAL_MARKER_FIELDS
+        .iter()
+        .enumerate()
+    {
+        let id = 10 + u64::try_from(offset).expect("marker index fits a u64");
+        store
+            .store_with_metadata(
+                id,
+                "internal scaffolding",
+                &[1.0, 0.0, 0.0, 0.0],
+                &meta(&[(marker, Value::Bool(true))]),
+            )
+            .unwrap();
+    }
+
+    let hits = store
+        .query_columnar(&[1.0, 0.0, 0.0, 0.0], 50, &[])
+        .unwrap();
+    let ids: Vec<u64> = hits.iter().map(|hit| hit.id).collect();
+
+    assert!(
+        ids.contains(&1) && ids.contains(&2),
+        "both caller facts must come back, or the exclusion below proves \
+         nothing; got {ids:?}"
+    );
+    assert!(
+        ids.iter().all(|id| *id < 10),
+        "every marker in INTERNAL_MARKER_FIELDS must be excluded, got {ids:?}"
+    );
+}
+
+#[test]
 fn test_query_columnar_strips_reserved_keys_from_metadata() {
     // Regression: the raw payload (which carries the reserved `content` key,
     // and `_veles_expires_at` for TTL'd facts) used to be returned verbatim
