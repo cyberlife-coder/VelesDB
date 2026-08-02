@@ -7,11 +7,11 @@ description: >
   repeated context, long logs, or accumulated conversation turns; when token
   costs need to drop measurably; or when the user says "compress my context",
   "optimize my prompt", "reduce token usage", "context is too big", or asks
-  why part of their context was dropped; or when a session should be
-  resumable later (save the working context at the end, load it back at the
-  start of the next one). Requires the velesdb-memory MCP server (tools:
-  compile_context, compile_transcript, context_savings, explain_compilation,
-  retrieve_context_source, save_working_context, load_working_context).
+  why part of their context was dropped. Requires the velesdb-memory MCP
+  server (tools: compile_context, compile_transcript, context_savings,
+  explain_compilation, retrieve_context_source). Making a session RESUMABLE is
+  a different job and belongs to the velesdb-memory skill, which owns the
+  working-context tools; this one hands a distilled context over to it.
 ---
 
 # VelesDB context optimizer
@@ -193,46 +193,23 @@ tokens — `content`, `insights`, `risk`, `warnings`, `sources`, and
 `retrieval_handles` are unaffected, and the full audit trail is one
 re-compile away (deterministic, so nothing is actually lost).
 
-## Inter-session resumption (save at the end, load at the start)
+## A distilled context can outlive the prompt — see the memory skill
 
-Compression keeps one prompt small; `save_working_context` /
-`load_working_context` keep the *session itself* resumable:
+Compression keeps one prompt small. It does not make the *session* resumable,
+and the two are different mechanisms: the compiler is a pure function that
+keeps nothing, while a working context is a fact that is embedded and stored.
 
-- **At the START of a session**, call `load_working_context` with the
-  project and a stable session id (e.g. the conversation/task id). It returns
-  `{found, working, other_sessions}`. When `found` is true, a prior session
-  left off here: adopt `working.goal`, re-assert `active_constraints`, trust
-  `verified_facts` (re-fetch `exact_evidence` handles with
-  `retrieve_context_source` when you need the bytes), and continue from
-  `pending_actions` instead of re-deriving everything. `found: false` (with
-  `working: null`) is not an error — but do not call it a fresh start until
-  you have read `other_sessions`: a similarly-named session listed there
-  means the id was a typo and the work is sitting right next to where you
-  looked. `other_sessions` is filled in on a HIT too, so if one of them
-  looks more like the session you meant, you may have just resumed the
-  WRONG one.
-- **At the END of a session** (or whenever the state changes meaningfully),
-  call `save_working_context` with the distilled state: `goal`,
-  `active_constraints`, `verified_facts` (with sources), `open_hypotheses`,
-  `decisions`, `exact_evidence`, `pending_actions`. Keep it small — this is
-  the hand-off note, not the transcript. Saving again under the same
-  project + session replaces the previous state (idempotent upsert).
+So when you have just distilled a context worth surviving the session — the
+goal, what is settled, what is next — hand it to the memory side rather than
+re-deriving it tomorrow. `save_working_context` is the handoff;
+`load_working_context` reads it back at the start of the next session, and
+neither is documented here: the **`velesdb-memory` skill** owns the
+working-context tools, the field shapes, and the discovery step that keeps an
+unknown session name from being mistaken for an absence of prior work.
 
-```json
-{"tool": "save_working_context", "arguments": {
-  "project": "veles", "session": "task-1234",
-  "working": {
-    "goal": "fix the failing canary deploy",
-    "active_constraints": [{"text": "never restart the primary during a rebalance"}],
-    "verified_facts": [{"text": "the canary fails only on arm64 runners"}],
-    "pending_actions": ["bisect the arm64-only failure", "re-run the canary"]
-  }
-}}
-```
-
-```json
-{"tool": "load_working_context", "arguments": {"project": "veles", "session": "task-1234"}}
-```
+One rule is worth repeating rather than looking up: **an empty load is not
+proof of a fresh start.** Ask the memory skill's discovery step before you
+conclude anything from it.
 
 ## Screenshots and images
 

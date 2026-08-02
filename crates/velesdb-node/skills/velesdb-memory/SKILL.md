@@ -12,6 +12,12 @@ description: >
   Use remember_extracted when a passage states relationships or properties of
   named people/places/things, and entity(name) to answer a question ABOUT such a
   thing rather than about the sentences that mention it.
+  Use it ACROSS sessions too: list_working_contexts to discover what a project
+  already has, load_working_context to pick up a previous session's hand-off,
+  and save_working_context to leave one. When a load returns found:false, or
+  when you do not know the exact session name, list the project's contexts
+  before concluding that no earlier work exists — a mistyped id looks exactly
+  like a fresh start.
   Especially relevant for: multi-session projects, architecture/config decisions,
   incident postmortems, "why is this value/setting like this", onboarding to an
   unfamiliar codebase, and any place a fact learned now must survive to a later
@@ -126,6 +132,77 @@ Server setup: [velesdb-memory README](https://github.com/cyberlife-coder/VelesDB
    confidence, so over time useful facts rise and noise sinks — the memory
    improves without any retraining. Give feedback on the memory you actually
    used, not on everything.
+
+## Resuming a session: list → load → work → save
+
+The loop above runs *inside* one session. A **working context** is what crosses
+between them: a distilled hand-off — goal, active constraints, verified facts,
+open hypotheses, decisions, evidence handles, pending actions — stored under a
+`project` and a `session` id and read back by whoever comes next, which is
+usually you, tomorrow, with none of today's context.
+
+This is memory, not compression. `save_working_context` embeds and stores; it
+returns a fact id. The compression skill (`velesdb-context-optimizer`) shrinks
+one prompt with a pure function and keeps nothing — a different mechanism for a
+different problem. It points here when a distilled context deserves to survive.
+
+**1. `list_working_contexts` — discover before you assume.**
+Run it when you do not know the exact session name, and whenever a load comes
+back empty. Session ids are chosen by hand (`"rolling"`, a task id, a
+conversation id), which means they are mistyped by hand too.
+
+**2. `load_working_context(project, session)` — read the hand-off.**
+It returns `{found, working, other_sessions}`.
+
+- `found: true` — adopt `working.goal`, re-assert `active_constraints`, trust
+  `verified_facts`, and continue from `pending_actions` instead of re-deriving
+  them. Fetch `exact_evidence` handles with `retrieve_context_source` when you
+  need the actual bytes.
+- `found: false` (with `working: null`) — **this is not proof that no earlier
+  work exists.** It says nothing was ever saved under *that exact pair*. Read
+  `other_sessions`, or call `list_working_contexts`, before you say "fresh
+  start": a similarly-named session in that list means the id was a typo and
+  the work is sitting one character away from where you looked.
+- `other_sessions` is filled in **on a hit too**. If one of them looks more
+  like the session you meant, you may have just resumed the *wrong* one — the
+  failure that reads as success.
+
+**3. Work**, running the loop above: recall, remember, relate, feedback.
+
+**4. `save_working_context(project, session, working)` — leave a hand-off.**
+Near the end of a session, or whenever the state changes meaningfully. Keep it
+distilled: this is the note, not the transcript. Saving again under the same
+project and session **replaces** the previous state, so a resumed session
+should re-save rather than accumulate. An entirely empty `working` is refused
+instead of being allowed to wipe what the last save stored.
+
+```json
+{"tool": "list_working_contexts", "arguments": {"project": "veles"}}
+```
+
+```json
+{"tool": "load_working_context", "arguments": {"project": "veles", "session": "task-1234"}}
+```
+
+```json
+{"tool": "save_working_context", "arguments": {
+  "project": "veles", "session": "task-1234",
+  "working": {
+    "goal": "fix the failing canary deploy",
+    "active_constraints": [{"text": "never restart the primary during a rebalance"}],
+    "verified_facts": [{"text": "the canary fails only on arm64 runners"}],
+    "pending_actions": ["bisect the arm64-only failure", "re-run the canary"]
+  }
+}}
+```
+
+**Field shapes are not uniform, and guessing costs a confusing error.**
+`active_constraints`, `verified_facts` and `open_hypotheses` are lists of
+`{text, source?}` objects; `decisions` and `exact_evidence` are typed structs
+where `fragment_id` is required; **`pending_actions` is a plain list of
+strings.** Sending `pending_actions: [{"text": "..."}]` fails with a `missing
+field fragment_id` that never names the field actually at fault. Follow the
+example above literally rather than inventing one shape for every field.
 
 ## Entities: let the graph build itself
 

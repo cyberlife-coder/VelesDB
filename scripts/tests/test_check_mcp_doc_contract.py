@@ -341,7 +341,7 @@ class ExtractionTests(unittest.TestCase):
     def test_the_mcp_call_envelope_is_not_a_return_shape(self) -> None:
         # A skill page shows how to CALL a tool a few dozen characters after
         # prose about what it `returns`, which is enough for the return anchor
-        # to claim the example (skills/velesdb-context-optimizer/SKILL.md:340).
+        # to claim the example (skills/velesdb-context-optimizer/SKILL.md:317).
         self.assertEqual(
             self._declarations(
                 "`demo_tool` returns the state.\n\n"
@@ -603,8 +603,13 @@ class RealRepositoryTests(unittest.TestCase):
                 "docs/reference/MCP_TOOLS.md",
             },
             "load_working_context": {
+                # The two `velesdb-context-optimizer` copies used to be here.
+                # Resumption moved to the memory skill, and the pin moved with
+                # the declaration rather than being dropped — same count, same
+                # coverage, different owner.
+                "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
                 "crates/velesdb-node/README.md",
-                "crates/velesdb-node/skills/velesdb-context-optimizer/SKILL.md",
+                "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
                 "crates/velesdb-node/src/lib.rs",
                 "docs/guides/NODE_ADDON.md",
                 "docs/guides/PYTHON_CONTEXT_COMPILER.md",
@@ -618,7 +623,6 @@ class RealRepositoryTests(unittest.TestCase):
                 "integrations/langgraph/README.md",
                 "integrations/langgraph/src/langgraph_velesdb/tools.py",
                 "sdks/typescript/src/memory.ts",
-                "skills/velesdb-context-optimizer/SKILL.md",
             },
             "recall_fused": {
                 "crates/velesdb-node/src/lib.rs",
