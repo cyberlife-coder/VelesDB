@@ -376,6 +376,17 @@ With `autograph = true` you stop having to choose the right tool: a plain
 it is opt-in — and if the model is down the write still succeeds, losing only
 the enrichment, never the fact.
 
+That degradation is silent **in flight**, on purpose. It is no longer silent
+**forever**: at startup the daemon asks the configured extraction backend
+whether it is there, and prints one line naming the role, the URL and the model
+when it is not — unreachable, credential refused, or answering without that
+model in its listing, which are three different mornings. It never refuses to
+boot over it (an unreachable server is transient, and a daemon that will not
+start because a model server came up second is worse than the silence), never
+falls back to another backend, and says nothing at all when everything is fine.
+The probe reads the server's model listing, so it costs milliseconds and loads
+no model.
+
 Precedence is **command line > environment > file > default**, so a value pinned
 in the file can still be overridden for one run
 (`VELESDB_MEMORY_EMBEDDER=hash velesdb-memory`). Every setting also remains

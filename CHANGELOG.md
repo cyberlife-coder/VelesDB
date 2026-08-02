@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A startup signal when the configured extraction backend cannot be reached
+  (#1751).** `autograph` degrading in flight is the correct default — losing
+  the enrichment beats losing the fact — but it degraded silently *forever*:
+  an extractor broken by a migration looked exactly like a product that does
+  not build a graph, with nothing said at startup or at the hundredth degraded
+  write. The daemon now asks the backend once, at startup, and prints one line
+  naming the role, the URL and the model. Four verdicts, because they lead to
+  four different actions: unreachable, credential refused, answering without
+  that model in its listing, or serving no listing at all. It **never refuses
+  to boot** over it (unreachable is transient — a service manager can start
+  this daemon before the model server) and **never falls back** to another
+  backend. Silent when everything is fine. The probe reads the server's model
+  listing (`GET /v1/models`, served by Ollama and by every OpenAI-compatible
+  server), so it costs milliseconds and loads no model — asking a generation
+  endpoint would have pulled a 35-billion-parameter model to answer "are you
+  there".
+
 - **`scripts/sync-agent-hooks.py` — an installer and a drift check for the
   Claude Code agent hooks.** The hooks a session actually runs live in
   `~/.claude/hooks/velesdb-memory/`, outside any repository, and they had

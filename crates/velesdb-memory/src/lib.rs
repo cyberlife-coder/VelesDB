@@ -93,6 +93,15 @@ pub mod http_client;
 /// [`http_client`].
 #[cfg(any(feature = "ollama", feature = "extract"))]
 mod openai;
+/// Is a configured remote inference backend actually reachable? (#1751 D2)
+///
+/// Gated exactly like [`openai`], which it builds its URL with, and like the
+/// `ureq` agent it probes through: without either role's feature there is no
+/// remote backend to be unreachable, and no transport to ask with. Declaring
+/// it unconditionally compiled here and nowhere else — the default build has
+/// neither dependency.
+#[cfg(any(feature = "ollama", feature = "extract"))]
+pub mod reachability;
 /// Optional second-stage re-scoring of a fused recall pool (bring your own
 /// cross-encoder/LLM). Never wired in by default — see [`rerank::Reranker`].
 pub mod rerank;
