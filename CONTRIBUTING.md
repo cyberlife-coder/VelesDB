@@ -212,8 +212,8 @@ cargo bench -p velesdb-core --features internal-bench -- --noplot
 
 ### Agent Skills — installing, checking, re-syncing
 
-This repository is the source of truth for two agent skills:
-`skills/velesdb-context-optimizer` and
+This repository is the source of truth for three agent skills:
+`skills/velesdb-context-optimizer`, `skills/velesdb-learning-loop` and
 `crates/velesdb-memory/skill/velesdb-memory`. An agent does not load them from
 here — it loads a copy installed under `~/.claude/skills`.
 
@@ -224,7 +224,7 @@ lines behind and stated the **wrong argument order** for the Node binding's
 stale instructions.
 
 ```bash
-# Install (or re-sync) the two skills into ~/.claude/skills
+# Install (or re-sync) the managed skills into ~/.claude/skills
 python3 scripts/sync-skills.py --install
 
 # Report drift; exits non-zero when an installed copy differs
@@ -232,6 +232,9 @@ python3 scripts/sync-skills.py --check
 
 # Same, but an ABSENT managed skill also fails (what the post-merge hook runs)
 python3 scripts/sync-skills.py --check --strict
+
+# Regenerate the copies bundled into the npm package after editing a source
+python3 scripts/sync-skills.py --bundle
 ```
 
 Each managed skill is reported as one of **three** states, never two:
@@ -242,9 +245,16 @@ Each managed skill is reported as one of **three** states, never two:
 | `drifted` | l'agent lit la **mauvaise** chose | **exit 1** | **exit 1** |
 | `absent` | l'agent ne lit **rien** | rapporté, exit 0 | **exit 1** |
 
-- **Only those two skills are touched.** Any other skill installed in that
+- **Only the managed skills are touched.** Any other skill installed in that
   directory is left exactly as it is — the tool works from an explicit pair
   list, never a scan.
+- **`LOCAL.md` is yours.** A managed skill may hold a machine-local layer under
+  that name: never committed, never a copy of the shipped `SKILL.md`. It is
+  preserved across an `--install` and never reported as drift. Nothing else
+  extra is forgiven — a stale file from an older version is still `unexpected`.
+- **The npm copies are generated.** `crates/velesdb-node/skills/` ships inside
+  the package; `--bundle` rewrites it from the same registry. Two byte-identity
+  guards stay red until you run it.
 - **`--strict` widens what ABSENCE costs, and nothing else.** Plain `--check`
   forgives it because a contributor who never installed these must not have
   their work refused over a machine-local state; it still says so, since

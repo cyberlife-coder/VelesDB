@@ -1,11 +1,14 @@
 """The bundled copies of a skill must stay byte-identical to their source.
 
 ``skills/velesdb-context-optimizer/SKILL.md`` and
-``crates/velesdb-node/skills/velesdb-context-optimizer/SKILL.md`` are
-hand-copied duplicates — no build step, no symlink. Both are surfaces the
-MCP return-contract guard polices (``scripts/check-mcp-doc-contract.py``), so
-letting them drift means fixing a contract in one and leaving the npm
-package shipping the other.
+``crates/velesdb-node/skills/velesdb-context-optimizer/SKILL.md`` are committed
+duplicates — no symlink, and nothing regenerates them on build. They are
+*produced* by ``python3 scripts/sync-skills.py --bundle``, which is what makes
+the fix one command instead of a remembered ``cp -r``; running it is still a
+deliberate act, so the copies can be stale between the edit and the run. Both
+are surfaces the MCP return-contract guard polices
+(``scripts/check-mcp-doc-contract.py``), so letting them drift means fixing a
+contract in one and leaving the npm package shipping the other.
 
 **A guard for this already exists, and it does block.** An earlier version of
 this header claimed a napi build failure would "take the skill comparison
@@ -58,6 +61,10 @@ SKILL_PAIRS: "tuple[tuple[str, str], ...]" = (
     (
         "skills/velesdb-context-optimizer",
         "crates/velesdb-node/skills/velesdb-context-optimizer",
+    ),
+    (
+        "skills/velesdb-learning-loop",
+        "crates/velesdb-node/skills/velesdb-learning-loop",
     ),
     (
         "crates/velesdb-memory/skill/velesdb-memory",
@@ -161,7 +168,7 @@ class RealSkillCopyTests(unittest.TestCase):
                     problems,
                     [],
                     f"{copy_rel} has drifted from {source_rel}: {'; '.join(problems)}. "
-                    f"Resync with: cp -r {source_rel}/. {copy_rel}/",
+                    "Resync with: python3 scripts/sync-skills.py --bundle",
                 )
 
     def test_the_registry_is_not_empty(self) -> None:

@@ -237,14 +237,17 @@ compiler surface, media fragments, working contexts, resource caps) is in the
 ## Bundled agent skills
 
 Wiring the API gives your agent the *methods*; it does not tell it *when* to
-use them. Two skills ship inside the package for that — `velesdb-memory` (the
-recall → remember → relate → why → feedback loop) and
-`velesdb-context-optimizer` (the compression workflow, including when *not* to
-compress):
+use them. Three skills ship inside the package for that — `velesdb-memory` (the
+recall → remember → relate → why → feedback loop), `velesdb-context-optimizer`
+(the compression workflow, including when *not* to compress) and
+`velesdb-learning-loop` (the discipline that makes those two compound: recall
+before designing, check recurrence before storing a fix, and never write to
+memory by reflex):
 
 ```bash
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-memory ~/.claude/skills/
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-context-optimizer ~/.claude/skills/
+cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-learning-loop ~/.claude/skills/
 ```
 
 That `cp` is a snapshot, not a live link: re-run it after every `npm update`.

@@ -253,14 +253,22 @@ jobs:
         # One folder per skill at the archive root, so
         # `tar -xz -C ~/.claude/skills/` drops each skill straight into
         # place — the one-line install README documents. Staged in a temp
-        # dir first (the two skills live under different source trees) so
-        # the tar entries carry no leading path noise.
+        # dir first (the skills live under different source trees) so the
+        # tar entries carry no leading path noise.
+        #
+        # This list is held against `SKILLS` in scripts/sync-skills.py by
+        # `scripts.tests.test_sync_skills.ReleaseArchive`. It was the fifth
+        # hand-written copy of that registry and the only one pinned against
+        # nothing: a skill could be versioned, installed, bundled into npm and
+        # guarded twice while silently missing from the archive the README
+        # tells people to install from.
         run: |
           set -euo pipefail
           stage="$(mktemp -d)"
           cp -r crates/velesdb-memory/skill/velesdb-memory "$stage/"
           cp -r skills/velesdb-context-optimizer "$stage/"
-          tar -czf velesdb-skills.tar.gz -C "$stage" velesdb-memory velesdb-context-optimizer
+          cp -r skills/velesdb-learning-loop "$stage/"
+          tar -czf velesdb-skills.tar.gz -C "$stage" velesdb-memory velesdb-context-optimizer velesdb-learning-loop
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

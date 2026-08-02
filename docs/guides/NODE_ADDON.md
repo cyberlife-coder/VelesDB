@@ -250,10 +250,12 @@ methods — wiring the API alone gives it the verbs, not the loop:
 |---|---|
 | `skills/velesdb-memory` | recall before acting → remember decisions with metadata **and** links → `relate` as relationships appear → `why` to explain → `feedback` to reinforce |
 | `skills/velesdb-context-optimizer` | the full compression workflow, including when *not* to compress |
+| `skills/velesdb-learning-loop` | the discipline over both: recall before designing, check recurrence before storing a fix, correct a wrong memory instead of adding beside it, and never write by reflex |
 
 ```bash
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-memory ~/.claude/skills/
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-context-optimizer ~/.claude/skills/
+cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-learning-loop ~/.claude/skills/
 ```
 
 **Keep them fresh.** That `cp` is a snapshot, not a live link — re-run it
