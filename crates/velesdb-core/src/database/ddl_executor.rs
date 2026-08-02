@@ -206,10 +206,9 @@ impl Database {
     fn truncate_graph(gc: &crate::collection::GraphCollection) -> Result<Vec<SearchResult>> {
         // Remove all edges first (edges reference nodes).
         let edges = gc.get_edges(None);
-        let edge_count = edges.len();
-        for edge in &edges {
-            let _ = gc.remove_edge(edge.id());
-        }
+        let edge_count = count_successful_removals(edges.iter().map(crate::GraphEdge::id), |id| {
+            gc.remove_edge(id)
+        });
         // Remove all node payloads.
         let node_ids = gc.all_node_ids();
         let node_count = node_ids.len();
@@ -377,6 +376,17 @@ fn build_typed_schema(definitions: &[SchemaDefinition]) -> GraphSchema {
     }
 
     schema
+}
+
+/// Counts how many `ids` the injected `remove` closure reports as actually
+/// removed. Every id is attempted — `filter` + `count` never short-circuits —
+/// so a failure partway through still lets the remaining ids be tried and
+/// counted correctly.
+pub(super) fn count_successful_removals(
+    ids: impl Iterator<Item = u64>,
+    mut remove: impl FnMut(u64) -> bool,
+) -> usize {
+    ids.filter(|&id| remove(id)).count()
 }
 
 /// Parses and validates a single `ALTER COLLECTION SET` option into a typed

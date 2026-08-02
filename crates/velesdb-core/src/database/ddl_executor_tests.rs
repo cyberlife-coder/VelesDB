@@ -5,7 +5,7 @@ use crate::velesql::{
     AlterCollectionStatement, CompareOp, Comparison, Condition, CreateCollectionKind,
     CreateCollectionStatement, DdlStatement, DeleteEdgeStatement, DeleteStatement, DmlStatement,
     DropCollectionStatement, GraphCollectionParams, GraphSchemaMode, InCondition,
-    InsertEdgeStatement, Query, SchemaDefinition, SelectEdgesStatement, Value,
+    InsertEdgeStatement, Query, SchemaDefinition, SelectEdgesStatement, TruncateStatement, Value,
     VectorCollectionParams,
 };
 use crate::wire::hash_edge_id;
@@ -513,6 +513,72 @@ fn test_delete_edge_nonexistent_reports_false() {
     let payload = results[0].point.payload.as_ref().expect("payload");
     assert_eq!(payload["deleted"], false);
     assert_eq!(payload["edge_id"], 999);
+}
+
+#[test]
+fn test_truncate_graph_reports_actual_removed_edge_count() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+
+    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "truncate_g".to_string(),
+        kind: CreateCollectionKind::Graph(GraphCollectionParams {
+            dimension: None,
+            metric: None,
+            schema_mode: GraphSchemaMode::Schemaless,
+        }),
+    });
+    execute_ddl(&db, create).expect("create graph");
+
+    let gc = db.get_graph_collection("truncate_g").expect("get");
+    for id in [10, 20, 30] {
+        gc.upsert_node_payload(id, &serde_json::json!({}))
+            .expect("store node");
+    }
+    gc.add_edge(crate::GraphEdge::new(1, 10, 20, "A").expect("edge"))
+        .expect("add 1");
+    gc.add_edge(crate::GraphEdge::new(2, 20, 30, "B").expect("edge"))
+        .expect("add 2");
+    assert_eq!(gc.edge_count(), 2);
+
+    let ddl = DdlStatement::Truncate(TruncateStatement {
+        collection: "truncate_g".to_string(),
+    });
+    let results = execute_ddl(&db, ddl).expect("truncate");
+    assert_eq!(results.len(), 1);
+    let payload = results[0].point.payload.as_ref().expect("payload");
+
+    // Nominal-path coverage: no prior execution-level test existed for
+    // TRUNCATE on a graph collection. The counting invariant under a
+    // `remove_edge` failure is proven separately, deterministically, by
+    // `test_count_successful_removals_counts_only_successes_without_short_circuiting`
+    // below — that failure mode can't be triggered from this black-box path.
+    assert_eq!(payload["deleted_edges"], 2);
+    assert_eq!(payload["deleted_nodes"], 3);
+    assert_eq!(payload["deleted_count"], 5);
+    assert_eq!(gc.edge_count(), 0);
+    assert_eq!(gc.get_edges(None).len(), 0);
+}
+
+#[test]
+fn test_count_successful_removals_counts_only_successes_without_short_circuiting() {
+    // Regression test for the TRUNCATE edge-count bug: the previous
+    // implementation used `edges.len()` regardless of whether each
+    // `remove_edge` call actually succeeded. This drives the extracted
+    // counting logic directly with an injected, deterministic failure —
+    // no fault injection into the graph storage layer required.
+    let attempted = std::cell::RefCell::new(Vec::new());
+    let count = super::ddl_executor::count_successful_removals([1, 2, 3, 4].into_iter(), |id| {
+        attempted.borrow_mut().push(id);
+        id % 2 == 0 // fails on odd ids, as if `remove_edge` reported them missing
+    });
+
+    assert_eq!(count, 2, "only ids the removal succeeded on should count");
+    assert_eq!(
+        *attempted.borrow(),
+        vec![1, 2, 3, 4],
+        "every id must be attempted — a failure must not skip the rest"
+    );
 }
 
 // =========================================================================
