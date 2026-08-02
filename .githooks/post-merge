@@ -34,11 +34,11 @@ done
 # No Python, nothing to say. A merge must not look broken over a notice.
 [ -z "${PYTHON_CMD:-}" ] && exit 0
 
-if ! "$PYTHON_CMD" "$(git rev-parse --show-toplevel)/scripts/sync-skills.py" --check >/dev/null 2>&1; then
+if ! "$PYTHON_CMD" "$(git rev-parse --show-toplevel)/scripts/sync-skills.py" --check --strict >/dev/null 2>&1; then
     echo ""
     echo "⚠️  Installed skills are behind this repository."
     echo "    An agent loading them reads the OLD instructions — silently."
-    echo "    Details:  python3 scripts/sync-skills.py --check"
+    echo "    Details:  python3 scripts/sync-skills.py --check --strict"
     echo "    Re-sync:  python3 scripts/sync-skills.py --install"
     echo ""
 fi

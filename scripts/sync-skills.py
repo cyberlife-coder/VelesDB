@@ -24,16 +24,23 @@ makes the globally installed skills follow whatever branch the working tree is
 on, unmerged edits included. The repo stays the source of truth; the install is
 an explicit, deliberate act.
 
-## What `--check` does NOT do
+## Three states, never two
 
-**A skill that is not installed at all is not drift.** You cannot drift from
-something you never had, and a contributor who has never installed these skills
-must not have their commit refused over it. Only an installed copy whose
-CONTENT differs is a failure.
+`in step`, `drifted` and `absent` are reported separately, because they lead to
+different actions: an absent skill means the agent loads NOTHING, a drifted one
+means it loads the WRONG thing. Collapsing them into "not ok" throws away which
+of the two you are looking at.
+
+`--strict` decides only what `absent` costs. Plain `--check` reports it and
+exits 0 — you cannot drift from something you never had, and a contributor who
+never installed these must not have their work refused over a machine-local
+state. The post-merge hook passes `--strict`, where absence is precisely what
+the reader needs told.
 
 Usage:
-    python3 scripts/sync-skills.py --check     # exit 1 on drift, naming it
-    python3 scripts/sync-skills.py --install   # repo -> ~/.claude/skills
+    python3 scripts/sync-skills.py --check            # drift fails; absent is reported
+    python3 scripts/sync-skills.py --check --strict   # absent fails too
+    python3 scripts/sync-skills.py --install          # repo -> ~/.claude/skills
 """
 
 from __future__ import annotations
@@ -117,30 +124,54 @@ def install_one(source: Path, target: Path) -> None:
         shutil.rmtree(previous, ignore_errors=True)
 
 
-def run_check(root: Path) -> int:
-    failures = []
+def run_check(root: Path, strict: bool) -> int:
+    """Report each managed skill as one of THREE states, never two.
+
+    `in step`, `drifted` and `absent` lead to different actions, and collapsing
+    the last two into "not ok" loses which one you are looking at — an absent
+    skill means the agent loads NOTHING, a drifted one means it loads the wrong
+    thing. Both deserve their own word.
+
+    `strict` decides only what `absent` costs. By default it is reported and
+    forgiven, because a contributor who never installed these must not have
+    their work refused over a machine-local state. The hook passes `--strict`,
+    where absence is exactly what the reader needs told.
+    """
+    drifted, absent, failures = [], [], []
     for source_rel, name in SKILLS:
         source, installed = REPO / source_rel, root / name
         if not source.is_dir():
             failures.append(f"{name}: {source_rel} is missing from the repository")
             continue
         if not installed.exists():
-            print(f"  {name}: not installed — nothing to drift from, skipped")
+            absent.append(f"{name}: absent — nothing is installed at {installed}")
+            print(f"  {name}: absent (not installed)")
             continue
         problems = drift(source, installed)
         if problems:
-            failures.append(f"{name} ({installed}):\n      " + "\n      ".join(problems))
+            drifted.append(f"{name} ({installed}):\n      " + "\n      ".join(problems))
+            print(f"  {name}: drifted")
         else:
             print(f"  {name}: in step with {source_rel}")
-    if failures:
+
+    report = list(failures)
+    report += drifted
+    if strict:
+        report += absent
+    if report:
         print(
-            "\nInstalled skill(s) no longer match the repository:\n\n    "
-            + "\n\n    ".join(failures)
-            + "\n\nThe repository is the source of truth. Re-sync with:\n"
+            "\nManaged skill(s) are not in step with the repository:\n\n    "
+            + "\n\n    ".join(report)
+            + "\n\nThe repository is the source of truth. Install or re-sync with:\n"
             "    python3 scripts/sync-skills.py --install\n",
             file=sys.stderr,
         )
         return 1
+    if absent:
+        print(
+            "\n  (absent skills are not treated as drift here; "
+            "run with --strict to make them fail)"
+        )
     return 0
 
 
@@ -160,9 +191,14 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="report drift, exit 1 if any")
     mode.add_argument("--install", action="store_true", help="copy repo skills into place")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="with --check: a managed skill that is absent also exits non-zero",
+    )
     args = parser.parse_args()
     root = installed_root()
-    return run_check(root) if args.check else run_install(root)
+    return run_check(root, args.strict) if args.check else run_install(root)
 
 
 if __name__ == "__main__":

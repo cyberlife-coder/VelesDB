@@ -60,6 +60,7 @@ declare -a described=()
 [ -f .githooks/commit-msg ] && described+=("   - commit-msg  : rejects AI-attributed authors and AI attribution trailers")
 [ -f .githooks/pre-commit ] && described+=("   - pre-commit  : validates the change before each commit")
 [ -f .githooks/pre-push ]   && described+=("   - pre-push    : full local validation before pushing to origin")
+[ -f .githooks/post-merge ] && described+=("   - post-merge  : warns when a merge left the installed agent skills behind")
 if [ ${#described[@]} -eq 0 ]; then
   printf '%s\n' "${RED}   (none found in .githooks/ — nothing will run)${RESET}"
   exit 1
