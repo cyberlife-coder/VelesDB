@@ -210,6 +210,67 @@ cargo run --bin velesdb-server -- --data-dir ./data
 cargo bench -p velesdb-core --features internal-bench -- --noplot
 ```
 
+### Agent Skills — installing, checking, re-syncing
+
+This repository is the source of truth for two agent skills:
+`skills/velesdb-context-optimizer` and
+`crates/velesdb-memory/skill/velesdb-memory`. An agent does not load them from
+here — it loads a copy installed under `~/.claude/skills`.
+
+That third copy is invisible to CI, which cannot read your home directory, and
+it drifted: measured on 2026-08-02, the installed `velesdb-memory` skill was 67
+lines behind and stated the **wrong argument order** for the Node binding's
+`recallFusedDated`. Nothing anywhere reported a fault; an agent simply read
+stale instructions.
+
+```bash
+# Install (or re-sync) the two skills into ~/.claude/skills
+python3 scripts/sync-skills.py --install
+
+# Report drift; exits non-zero when an installed copy differs
+python3 scripts/sync-skills.py --check
+
+# Same, but an ABSENT managed skill also fails (what the post-merge hook runs)
+python3 scripts/sync-skills.py --check --strict
+```
+
+Each managed skill is reported as one of **three** states, never two:
+
+| état | signification | `--check` | `--check --strict` |
+|---|---|---|---|
+| `in step` | l'agent lit la bonne chose | vert | vert |
+| `drifted` | l'agent lit la **mauvaise** chose | **exit 1** | **exit 1** |
+| `absent` | l'agent ne lit **rien** | rapporté, exit 0 | **exit 1** |
+
+- **Only those two skills are touched.** Any other skill installed in that
+  directory is left exactly as it is — the tool works from an explicit pair
+  list, never a scan.
+- **`--strict` widens what ABSENCE costs, and nothing else.** Plain `--check`
+  forgives it because a contributor who never installed these must not have
+  their work refused over a machine-local state; it still says so, since
+  silence would leave you unable to tell "installed and correct" from "not
+  there at all".
+- **The copy is atomic.** The new tree is built beside the target and moved
+  into place by rename, so an agent reading a SKILL.md during an install sees
+  the whole old version or the whole new one — never half of each.
+- `.githooks/post-merge` runs `--check --strict` and prints a notice when a
+  merge has just moved the repository ahead of your install. It deliberately
+  does **not** block: `--check` compares against the working tree, so gating a
+  commit would force you to install unmerged work into your global skills.
+  Hooks are also bypassable, which is why the command stays runnable by hand —
+  and why `scripts/tests/test_sync_skills.py` exercises the mechanism in CI.
+- **A versioned hook is not a protection until git is pointed at it.** Run
+  `./scripts/setup-hooks.sh` (or `.\scripts\setup-hooks.ps1`) once per clone;
+  it sets `core.hooksPath` and restores the executable bit a fresh checkout can
+  drop. Verify with `git rev-parse --git-path hooks`, which prints the path git
+  actually uses. A test now holds both activation scripts against the contents
+  of `.githooks/`, so a hook added without being described there turns red —
+  that check found `setup-hooks.ps1` had never mentioned `commit-msg`, the hook
+  enforcing the no-AI-attribution rule.
+
+Set `CLAUDE_SKILLS_DIR` to point both commands at a different directory (the
+test suite uses it to run without touching a real install).
+
 ## Pull Request Process
 
 1. **Ensure all tests pass** - Run `cargo test --workspace --features persistence,gpu,update-check --exclude velesdb-python -- --test-threads=1` before submitting

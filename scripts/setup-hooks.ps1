@@ -1,7 +1,8 @@
 # =============================================================================
 # VelesDB - Git Hooks Setup Script
 # =============================================================================
-# Configure git to use the project's custom hooks (pre-commit, pre-push)
+# Configure git to use the project's custom hooks (commit-msg, pre-commit,
+# pre-push, post-merge)
 # for local CI validation before pushing to origin.
 #
 # Usage: .\scripts\setup-hooks.ps1
@@ -26,11 +27,17 @@ if ($hooksPath -eq ".githooks") {
     Write-Host ""
     Write-Host "📌 Active hooks:" -ForegroundColor Cyan
     
+    if (Test-Path ".githooks/commit-msg") {
+        Write-Host "   - commit-msg  : Rejects AI-attributed authors and AI attribution trailers" -ForegroundColor White
+    }
     if (Test-Path ".githooks/pre-commit") {
         Write-Host "   - pre-commit  : Validates code before each commit" -ForegroundColor White
     }
     if (Test-Path ".githooks/pre-push") {
         Write-Host "   - pre-push    : Full CI validation before push to origin" -ForegroundColor White
+    }
+    if (Test-Path ".githooks/post-merge") {
+        Write-Host "   - post-merge  : Warns when a merge left the installed agent skills behind" -ForegroundColor White
     }
     
     Write-Host ""
