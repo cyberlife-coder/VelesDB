@@ -37,10 +37,30 @@ never installed these must not have their work refused over a machine-local
 state. The post-merge hook passes `--strict`, where absence is precisely what
 the reader needs told.
 
+## The one file the repository does not own
+
+A machine may keep a personal layer beside an installed skill, in `LOCAL.md`:
+never committed, never a copy of the shipped skill, complementing it. That
+file only survives if this tool knows about it — the install swaps whole
+directories, so anything the source lacks is gone, and the check lists
+everything it did not put there. Left alone, the first silently destroyed the
+only copy of a file the design invites you to write, and the second went red
+over it, which is how a reader learns to stop reading a guard.
+
+## The npm copies are generated, not maintained
+
+`crates/velesdb-node/skills/` ships inside the npm package (`package.json`
+"files"), so those copies leave the machine. They used to be hand-copied, with
+a comment asking the next person to remember — which is how a source moves and
+its artefact stays behind. `--bundle` regenerates them from the same source
+list this tool already owns, and the two byte-identity guards stay red until it
+has been run.
+
 Usage:
     python3 scripts/sync-skills.py --check            # drift fails; absent is reported
     python3 scripts/sync-skills.py --check --strict   # absent fails too
     python3 scripts/sync-skills.py --install          # repo -> ~/.claude/skills
+    python3 scripts/sync-skills.py --bundle           # repo -> the npm-bundled copies
 """
 
 from __future__ import annotations
@@ -62,8 +82,20 @@ REPO = Path(__file__).resolve().parents[1]
 #: in its lane.
 SKILLS: tuple[tuple[str, str], ...] = (
     ("skills/velesdb-context-optimizer", "velesdb-context-optimizer"),
+    ("skills/velesdb-learning-loop", "velesdb-learning-loop"),
     ("crates/velesdb-memory/skill/velesdb-memory", "velesdb-memory"),
 )
+
+#: Files an installed skill may hold that no source ships: the machine-local
+#: layer. Preserved across an install and never reported as drift.
+#:
+#: One name, not a rule of thumb. Widening this to "anything the source does
+#: not have" would retire the `unexpected` state, which is what catches a
+#: half-deleted install and a stale file from an older version of a skill.
+#: `scripts/tests/test_sync_skills.py` pins that no versioned skill ships a
+#: file by these names — otherwise the exemption would blind the check to a
+#: real one.
+LOCAL_FILES: tuple[str, ...] = ("LOCAL.md",)
 
 
 def installed_root() -> Path:
@@ -71,6 +103,14 @@ def installed_root() -> Path:
     is what lets this tool be tested without writing into a real install."""
     override = os.environ.get("CLAUDE_SKILLS_DIR")
     return Path(override) if override else Path.home() / ".claude" / "skills"
+
+
+def bundle_root() -> Path:
+    """Where the npm package's bundled copies live. `VELESDB_BUNDLE_DIR`
+    overrides it, so the regeneration can be exercised without rewriting the
+    committed artefact the guards are reading."""
+    override = os.environ.get("VELESDB_BUNDLE_DIR")
+    return Path(override) if override else REPO / "crates" / "velesdb-node" / "skills"
 
 
 def digest(root: Path) -> dict[str, str]:
@@ -87,17 +127,35 @@ def digest(root: Path) -> dict[str, str]:
 
 
 def drift(source: Path, installed: Path) -> list[str]:
-    """What differs between the two trees, in reader-facing terms."""
+    """What differs between the two trees, in reader-facing terms.
+
+    `LOCAL_FILES` present only on the installed side are the machine-local
+    layer, not drift: the design invites them, so reporting them would make
+    this guard red on a correct install.
+    """
     want, have = digest(source), digest(installed)
     problems = []
     for name in sorted(set(want) - set(have)):
         problems.append(f"missing: {name}")
-    for name in sorted(set(have) - set(want)):
+    for name in sorted(set(have) - set(want) - set(LOCAL_FILES)):
         problems.append(f"unexpected: {name}")
     for name in sorted(set(want) & set(have)):
         if want[name] != have[name]:
             problems.append(f"differs: {name}")
     return problems
+
+
+def carry_local_layer(installed: Path, staging: Path) -> None:
+    """Move the machine-local layer of `installed` into the tree replacing it.
+
+    Copied rather than left in place because the replacement is a rename of a
+    whole directory: whatever is not inside `staging` when the rename happens
+    does not exist afterwards.
+    """
+    for name in LOCAL_FILES:
+        current = installed / name
+        if current.is_file():
+            shutil.copy2(current, staging / name)
 
 
 def install_one(source: Path, target: Path) -> None:
@@ -108,6 +166,10 @@ def install_one(source: Path, target: Path) -> None:
     plain recursive copy over a live directory is what leaves a skill whose
     first half is new and second half is old — and a SKILL.md is read by an
     agent at arbitrary moments, including during an install.
+
+    The machine-local layer is carried across before the swap. Without that,
+    the atomicity that protects the shipped files is exactly what destroys the
+    one file nothing else holds a copy of.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = target.parent / f".{target.name}.staging-{os.getpid()}"
@@ -116,6 +178,7 @@ def install_one(source: Path, target: Path) -> None:
     shutil.rmtree(previous, ignore_errors=True)
     try:
         shutil.copytree(source, staging)
+        carry_local_layer(target, staging)
         if target.exists():
             os.replace(target, previous)
         os.replace(staging, target)
@@ -175,15 +238,29 @@ def run_check(root: Path, strict: bool) -> int:
     return 0
 
 
-def run_install(root: Path) -> int:
+def deploy(root: Path, verb: str) -> int:
+    """Write every managed skill into `root`, one atomic swap each.
+
+    Shared by `--install` and `--bundle` so the two destinations can never be
+    fed different source lists — the whole point of the second one is that the
+    artefact is derived from the same declaration as the install.
+    """
     for source_rel, name in SKILLS:
         source = REPO / source_rel
         if not source.is_dir():
             print(f"{source_rel} is missing from the repository", file=sys.stderr)
             return 1
         install_one(source, root / name)
-        print(f"  {name} <- {source_rel}")
+        print(f"  {verb} {name} <- {source_rel}")
     return 0
+
+
+def dispatch(args: argparse.Namespace) -> int:
+    if args.check:
+        return run_check(installed_root(), args.strict)
+    if args.bundle:
+        return deploy(bundle_root(), "bundled")
+    return deploy(installed_root(), "installed")
 
 
 def main() -> int:
@@ -191,14 +268,17 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="report drift, exit 1 if any")
     mode.add_argument("--install", action="store_true", help="copy repo skills into place")
+    mode.add_argument(
+        "--bundle",
+        action="store_true",
+        help="regenerate the npm-bundled copies under crates/velesdb-node/skills",
+    )
     parser.add_argument(
         "--strict",
         action="store_true",
         help="with --check: a managed skill that is absent also exits non-zero",
     )
-    args = parser.parse_args()
-    root = installed_root()
-    return run_check(root, args.strict) if args.check else run_install(root)
+    return dispatch(parser.parse_args())
 
 
 if __name__ == "__main__":

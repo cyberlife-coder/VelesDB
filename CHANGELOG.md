@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A third versioned agent skill, `velesdb-learning-loop`.** It ships in
+  `skills/`, in the npm package and in `velesdb-skills.tar.gz`, and it is the
+  discipline over the other two: recall before designing, check whether a fix
+  is a *recurrence* before storing it, correct a wrong memory instead of adding
+  one beside it, and treat writing to memory as a decision rather than a
+  reflex. `sync-skills.py --bundle` now **generates** the npm-bundled copies
+  from the same registry the installer uses, and the release archive's skill
+  list is held against that registry by a test — it was the fifth hand-written
+  copy of the list and the only one pinned against nothing.
+- **`scripts/check-skill-private-references.py`** — a versioned skill may not
+  point at something only the closed repository holds. A skill is loaded on
+  machines that have the open core and nothing else, so such a passage is
+  unactionable where it is read. Strict and required, with three executed
+  refusal vectors.
+- **A machine-local layer for installed skills.** `LOCAL.md` beside an
+  installed `SKILL.md` is preserved across `--install` and never reported as
+  drift. It used to be deleted by the atomic swap and flagged `unexpected` by
+  the check — silently destroying the only copy of a file the design invites
+  you to write.
+
 - **`velesdb-memory`: an OpenAI-compatible backend for both inference roles
   (#1751).** `VELESDB_MEMORY_EMBEDDER=openai` and
   `VELESDB_MEMORY_EXTRACTOR=openai` reach oMLX, llama.cpp's server, LM Studio,

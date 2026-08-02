@@ -621,6 +621,17 @@ jobs:
       - name: Bundled skill copies are byte-identical
         run: python3 -m unittest scripts.tests.test_skill_copies_are_identical
 
+      # A skill ships twice: in this repository and inside the npm package.
+      # Whoever loads it has the open core and nothing else, so a passage
+      # pointing at something only the closed repository holds is unactionable
+      # where it is read. Self-test first, RED-then-GREEN on a synthetic tree,
+      # same order as the guard above it.
+      - name: Self-test the private-reference guard
+        run: python3 -m unittest scripts.tests.test_check_skill_private_references
+
+      - name: Versioned skills carry no private reference
+        run: python3 scripts/check-skill-private-references.py
+
       # BLOCKING. Verified green on the whole tree (16 pinned surfaces, 20
       # declarations of load_working_context's envelope — including the three
       # agent session hooks and the napi `ts_return_type` shipped as the

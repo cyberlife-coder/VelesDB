@@ -264,6 +264,62 @@
       ]
     },
     {
+      "script": "scripts/check-skill-private-references.py",
+      "purpose": "No versioned skill points at something only the private repository holds.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "mcp-doc-contract",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_skill_private_references",
+      "self_test_required": true,
+      "must_refuse": [
+        {
+          "vector": "a versioned skill sending the reader to a standard held in the closed repository",
+          "files": {
+            "skills/demo/SKILL.md": "# Demo\n\nBefore declaring premium coverage done, cross-check the axes.\n"
+          },
+          "accepts": {
+            "skills/demo/SKILL.md": "# Demo\n\nBefore declaring coverage done, cross-check the axes.\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "the bundled npm copy naming the private repository — that copy is the one that leaves the machine",
+          "files": {
+            "crates/velesdb-node/skills/demo/SKILL.md": "# Demo\n\nSee velesdb-private for the enforcing policy.\n"
+          },
+          "accepts": {
+            "crates/velesdb-node/skills/demo/SKILL.md": "# Demo\n\nSee the architecture reference for the boundary.\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "a tree holding no versioned skill at all — deleting skills/ is the cheapest way to retire this guard while leaving it in the workflow",
+          "files": {
+            "docs/README.md": "nothing to scan here\n"
+          },
+          "accepts": {
+            "docs/README.md": "nothing to scan here\n",
+            "skills/demo/SKILL.md": "# Demo\n\nUse recall before proposing an approach.\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ],
+      "blind_spot": {
+        "issue": null,
+        "summary": "Reads the two declared markers and nothing else. It does NOT catch a bare issue or pull-request number belonging to the closed repository: the learning-loop skill arrived citing one three times, and no property of the text separates it from the public `#1455` and `#1473` two other skills cite usefully — a guess would either block those or catch nothing. That half was closed by rewriting the passages, not by this guard. Scope is the skill directories only, by design: docs/CORE_PREMIUM_SPLIT.md documents the split on purpose."
+      }
+    },
+    {
       "script": "scripts/check-doc-contract.sh",
       "purpose": "Every runtime route of the server is documented in the root README.",
       "workflow": ".github/workflows/doc-contract.yml",

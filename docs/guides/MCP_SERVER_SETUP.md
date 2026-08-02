@@ -181,9 +181,20 @@ cp -r skills/velesdb-context-optimizer ~/.claude/skills/
 → [`skills/velesdb-context-optimizer/SKILL.md`](../../skills/velesdb-context-optimizer/SKILL.md)
 and the [Context compiler guide](CONTEXT_COMPILER.md).
 
+A third, **`velesdb-learning-loop`**, is the discipline over the other two —
+recall before designing, check whether a fix is a *recurrence* before storing
+it, correct a wrong memory rather than adding beside it, and treat writing to
+memory as a decision, never a reflex:
+
+```bash
+cp -r skills/velesdb-learning-loop ~/.claude/skills/
+```
+
+→ [`skills/velesdb-learning-loop/SKILL.md`](../../skills/velesdb-learning-loop/SKILL.md)
+
 **No repo clone needed.** Every
 [GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
-attaches `velesdb-skills.tar.gz` — both skills, one folder per skill at the
+attaches `velesdb-skills.tar.gz` — every skill, one folder per skill at the
 archive root — so a one-liner installs them straight from the release:
 
 ```bash
