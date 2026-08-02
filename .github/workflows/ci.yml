@@ -640,6 +640,17 @@ jobs:
       - name: Resumption is owned by the memory skill
         run: python3 -m unittest scripts.tests.test_skill_resumption_ownership
 
+      # The agent-hook installer, and — finally — the hook harness itself.
+      # `hooks.test.sh` was referenced by six documents and executed by ZERO
+      # workflows: the exact shape of #1698, a gate nobody invokes. The suite
+      # above it holds the wiring, so deleting this step turns that suite red
+      # rather than turning the harness silent.
+      - name: Self-test the agent-hook installer
+        run: python3 -m unittest scripts.tests.test_sync_agent_hooks
+
+      - name: Agent hook harness
+        run: bash integrations/agent-hooks/test/hooks.test.sh
+
       # BLOCKING. Verified green on the whole tree (16 pinned surfaces, 20
       # declarations of load_working_context's envelope — including the three
       # agent session hooks and the napi `ts_return_type` shipped as the
