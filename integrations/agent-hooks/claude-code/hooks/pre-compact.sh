@@ -27,8 +27,8 @@ source "$SCRIPT_DIR/lib/common.sh"
 require_jq
 
 payload="$(read_stdin_payload)"
-session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty')"
-cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty')"
+session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)"
+cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
 
 if [ -z "$cwd" ]; then
   cwd="$PWD"

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`scripts/sync-agent-hooks.py` — an installer and a drift check for the
+  Claude Code agent hooks.** The hooks a session actually runs live in
+  `~/.claude/hooks/velesdb-memory/`, outside any repository, and they had
+  diverged in *both* directions at once: the repository was ahead on the
+  model-facing text (`session-start.sh` carried the corrected
+  `{found, working, other_sessions}` guidance while the installed copy still
+  said *"if it returns null, nothing was saved yet"* — an instruction that
+  makes a model start fresh on top of work a mistyped session id hid from it),
+  and the install was ahead on function (`lib/freshness.sh`,
+  `update-daemon.sh`, and `jq` hardening that existed nowhere in the repo). The
+  source absorbed the local layer first, so the installer is not destructive;
+  both are now versioned, with no path from any one contributor's machine.
+  Modes: `--check`, `--check --strict`, `--install`, `--install --dry-run`,
+  `--uninstall`. It reports three states per artefact, merges at *hook*
+  granularity because a foreign hook can share a group with ours, backs
+  `settings.json` up before writing, replaces it atomically, and never prints
+  its contents.
+- **`integrations/agent-hooks/test/hooks.test.sh` runs in CI.** It was
+  referenced by six documents and executed by zero workflows. It now runs in
+  the required `mcp-doc-contract` job, with a reachability guard that fails if
+  the step is removed *or* disarmed.
+
 ### Changed
 
 - **Cross-session resumption belongs to the `velesdb-memory` skill.**

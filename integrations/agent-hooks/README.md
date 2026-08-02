@@ -104,7 +104,31 @@ Both variants need `bash` and `jq` on `PATH` — the hooks refuse to run
 without `jq` rather than silently emitting malformed JSON.
 
 **Global (recommended for continuous CLI usage — every project, one-time
-setup):**
+setup).** One command does both halves — the scripts and the four
+`settings.json` entries:
+
+```bash
+python3 scripts/sync-agent-hooks.py --install
+```
+
+It touches only entries whose command contains `.claude/hooks/velesdb-memory/`,
+merges at hook granularity (a foreign hook may share a group with ours), backs
+`settings.json` up before writing, replaces it atomically, and never prints its
+contents. Three more modes are worth knowing:
+
+```bash
+python3 scripts/sync-agent-hooks.py --check --strict   # in step / drifted / absent, per artefact
+python3 scripts/sync-agent-hooks.py --install --dry-run # say what would change, write nothing
+python3 scripts/sync-agent-hooks.py --uninstall         # remove ours, and only ours
+```
+
+An installed copy that drifts from this repository is the failure mode this
+exists for: the hooks a session runs live outside any repository, and measured
+on 2026-08-02 they had diverged in *both* directions at once — the repository
+ahead on the model-facing text, the install ahead on function.
+
+<details>
+<summary>Doing it by hand</summary>
 
 ```bash
 mkdir -p ~/.claude/hooks/velesdb-memory
@@ -121,20 +145,22 @@ be relative to for a global install):
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "bash /Users/you/.claude/hooks/velesdb-memory/session-start.sh" }] }
+      { "hooks": [{ "type": "command", "command": "bash \"/Users/you/.claude/hooks/velesdb-memory/session-start.sh\"" }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "bash /Users/you/.claude/hooks/velesdb-memory/stop.sh" }] }
+      { "hooks": [{ "type": "command", "command": "bash \"/Users/you/.claude/hooks/velesdb-memory/stop.sh\"" }] }
     ],
     "PreCompact": [
-      { "hooks": [{ "type": "command", "command": "bash /Users/you/.claude/hooks/velesdb-memory/pre-compact.sh" }] }
+      { "hooks": [{ "type": "command", "command": "bash \"/Users/you/.claude/hooks/velesdb-memory/pre-compact.sh\"" }] }
     ],
     "PostToolUse": [
-      { "hooks": [{ "type": "command", "command": "bash /Users/you/.claude/hooks/velesdb-memory/post-tool-use.sh" }] }
+      { "hooks": [{ "type": "command", "command": "bash \"/Users/you/.claude/hooks/velesdb-memory/post-tool-use.sh\"" }] }
     ]
   }
 }
 ```
+
+</details>
 
 `PostToolUse` additionally needs a `velesdb-memory` binary on `PATH` that
 knows the `compile-stdin` subcommand. Until you have one, the hook is
