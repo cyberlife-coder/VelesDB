@@ -595,6 +595,16 @@ fn apply_autograph(
     }
 }
 
+/// Without the `extract` feature there is no remote extraction backend in this
+/// build, so there is nothing to be unreachable and no transport to ask with.
+///
+/// A no-op rather than a `cfg` at the call site, matching how
+/// `build_remote_extractor` is paired a few lines below: the one arm that
+/// reaches both is easier to read with the condition next to the reason than
+/// wrapped around the code that uses it.
+#[cfg(not(feature = "extract"))]
+fn warn_if_extraction_backend_is_unreachable(_backend: &str) {}
+
 /// How long startup may spend asking whether the extraction backend is there.
 ///
 /// Short on purpose: this runs before the daemon serves anything, and the
