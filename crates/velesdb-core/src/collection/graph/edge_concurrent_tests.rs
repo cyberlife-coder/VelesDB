@@ -1534,3 +1534,58 @@ fn test_metrics_empty_batch_records_nothing() {
     assert_eq!(store.metrics().edge_inserts_total(), 0);
     assert_eq!(store.metrics().edge_insert_latency.count(), 0);
 }
+
+// =============================================================================
+// Removal outcome (#1749): a `false` must not hide a real failure
+// =============================================================================
+
+#[test]
+fn test_remove_edge_detailed_reports_absent_for_an_unknown_edge() {
+    let store = ConcurrentEdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "A").expect("edge"))
+        .expect("add");
+
+    assert_eq!(
+        store.remove_edge_detailed(999),
+        super::edge_outcome::EdgeRemoval::Absent,
+        "removing an edge that was never there is benign, not a failure"
+    );
+    assert_eq!(
+        store.remove_edge_detailed(1),
+        super::edge_outcome::EdgeRemoval::Removed
+    );
+    assert_eq!(
+        store.remove_edge_detailed(1),
+        super::edge_outcome::EdgeRemoval::Absent,
+        "removing the same edge twice stays benign"
+    );
+}
+
+#[test]
+fn test_remove_edge_detailed_reports_failure_on_index_desync() {
+    // The id index and the shards can disagree. Before #1749 this was reported
+    // as a plain `false`, indistinguishable from "the edge was not there" —
+    // even though the edge is still in storage and a dangling incoming
+    // half-edge may survive on the target shard.
+    let store = ConcurrentEdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(1, 10, 20, "A").expect("edge"))
+        .expect("add");
+    assert!(
+        store.desync_edge_index_for_test(1),
+        "fault injection must apply, otherwise this test proves nothing"
+    );
+
+    let outcome = store.remove_edge_detailed(1);
+    let super::edge_outcome::EdgeRemoval::Failed(reason) = outcome else {
+        panic!("an index desynchronisation must be reported as a failure, got {outcome:?}");
+    };
+    assert!(
+        reason.contains("missing from its source shard"),
+        "the reason must say what actually went wrong, got: {reason}"
+    );
+
+    // The historical `bool` API still folds this to `false` — unchanged.
+    assert!(!store.remove_edge(1));
+}

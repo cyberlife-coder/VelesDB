@@ -5,7 +5,9 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::collection::graph::{GraphEdge, GraphSchema, TraversalConfig, TraversalResult};
+use crate::collection::graph::{
+    EdgeRemoval, GraphEdge, GraphSchema, TraversalConfig, TraversalResult,
+};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::index::VectorIndex;
@@ -517,20 +519,38 @@ impl Collection {
     ///
     /// # Returns
     ///
-    /// `true` if the edge existed and was removed, `false` if it didn't exist.
+    /// `true` if the edge existed and was removed, `false` otherwise.
+    ///
+    /// A `false` does NOT mean "the edge didn't exist": it also covers a failed
+    /// WAL append and an index desynchronisation, which are real failures. Use
+    /// [`Self::remove_edge_detailed`] when the caller must not silently ignore
+    /// those.
     #[must_use]
     pub fn remove_edge(&self, edge_id: u64) -> bool {
+        self.remove_edge_detailed(edge_id).removed()
+    }
+
+    /// Removes an edge from the graph by ID, reporting WHY when it does not
+    /// happen.
+    ///
+    /// Separates the one benign outcome (the edge was not there) from the two
+    /// genuine failures this path can hit: the WAL refusing the remove — which
+    /// leaves the store unmutated and durability broken — and an index
+    /// desynchronisation inside the store.
+    pub(crate) fn remove_edge_detailed(&self, edge_id: u64) -> EdgeRemoval {
         // Cheap pre-check: a remove of a non-existent id must not create or
         // grow the WAL with junk tombstones (a racing remove between this
         // check and the append still replays as a harmless no-op).
         if !self.graph.edge_store.contains_edge(edge_id) {
-            return false;
+            return EdgeRemoval::Absent;
         }
         // WAL-before-apply (crash durability): log the remove intent before
         // mutating the store. Fail-closed: if the WAL append fails we do NOT
-        // mutate the store and report `false` (no panic — matches the
-        // no-unwrap policy and the bool return contract). Unconditional for
-        // the same reason as add_edge; the WAL lock spans append + apply.
+        // mutate the store (no panic — matches the no-unwrap policy). The
+        // failure is REPORTED rather than merely logged: the edge is still
+        // there, and a caller that treats this as "already gone" would be
+        // silently wrong. Unconditional for the same reason as add_edge; the
+        // WAL lock spans append + apply.
         let _wal_guard = self.graph.edge_wal_lock.lock();
         #[cfg(feature = "persistence")]
         if let Err(e) = crate::collection::graph::edge_wal::wal_append_remove(
@@ -538,17 +558,37 @@ impl Collection {
             edge_id,
         ) {
             tracing::error!("Edge WAL append remove failed for edge {edge_id}: {e}");
-            return false;
+            return EdgeRemoval::Failed(format!(
+                "write-ahead log refused the removal of edge {edge_id}: {e}; the edge was left in \
+                 place"
+            ));
         }
 
         // Atomic check-and-remove — no TOCTOU race.
-        let removed = self.graph.edge_store.remove_edge(edge_id);
-        if removed {
+        let outcome = self.graph.edge_store.remove_edge_detailed(edge_id);
+        if outcome.removed() {
             self.generations
                 .write_generation
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        removed
+        outcome
+    }
+
+    /// Test-only fault injection: makes the edge write-ahead log impossible to
+    /// append to, by replacing its path with a directory (opening a directory
+    /// for writing fails with `EISDIR` on every Unix, including as root — a
+    /// read-only `chmod` would not).
+    ///
+    /// This is the failure mode a full disk or a revoked permission produces:
+    /// the edge is perfectly healthy and listed, but the removal cannot be
+    /// made durable, so the store is deliberately left unmutated.
+    #[cfg(all(test, feature = "persistence"))]
+    pub(crate) fn break_edge_wal_for_test(&self) -> std::io::Result<()> {
+        let path = crate::collection::graph::edge_wal::wal_path_for_edges(&self.storage.path);
+        if path.is_file() {
+            std::fs::remove_file(&path)?;
+        }
+        std::fs::create_dir_all(&path)
     }
 
     /// Returns the total number of edges in the graph.
