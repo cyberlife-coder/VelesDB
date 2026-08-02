@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Tell the developer when a merge just moved the repository ahead of the
+# skills installed under ~/.claude/skills (#1712).
+#
+# WHY HERE, AND NOT IN pre-commit
+#
+# `--check` compares the installed copy against the repository's. On a branch
+# where you are editing a SKILL.md, those two legitimately differ — and a
+# pre-commit gate would refuse the commit until you ran `--install`, which
+# would push UNMERGED work into your global skills. That is precisely the
+# outcome the installer was chosen over a symlink to avoid.
+#
+# A merge is the moment the repository genuinely moves ahead of the install,
+# and it is the drift that hurt: the repo advanced across many commits while
+# `~/.claude/skills` stayed where it was, until an installed SKILL.md was 67
+# lines behind and stated the wrong argument order for a published method.
+#
+# This hook cannot block anything — git ignores post-merge's exit status — and
+# it is not trying to. It reports, at the one moment the information is
+# actionable. The gate is the command itself: `--check` exits non-zero, so a
+# script or a person can enforce it anywhere. Hooks are bypassable; that is
+# why the command stays runnable by hand.
+
+set -u
+
+for _py in python3 python py; do
+    _bin=$(command -v "$_py" 2>/dev/null || true)
+    if [ -n "${_bin:-}" ] && "$_bin" -c "import sys; sys.exit(0)" 2>/dev/null; then
+        PYTHON_CMD="$_bin"
+        break
+    fi
+done
+
+# No Python, nothing to say. A merge must not look broken over a notice.
+[ -z "${PYTHON_CMD:-}" ] && exit 0
+
+if ! "$PYTHON_CMD" "$(git rev-parse --show-toplevel)/scripts/sync-skills.py" --check >/dev/null 2>&1; then
+    echo ""
+    echo "⚠️  Installed skills are behind this repository."
+    echo "    An agent loading them reads the OLD instructions — silently."
+    echo "    Details:  python3 scripts/sync-skills.py --check"
+    echo "    Re-sync:  python3 scripts/sync-skills.py --install"
+    echo ""
+fi
+
+exit 0

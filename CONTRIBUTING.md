@@ -210,6 +210,46 @@ cargo run --bin velesdb-server -- --data-dir ./data
 cargo bench -p velesdb-core --features internal-bench -- --noplot
 ```
 
+### Agent Skills — installing, checking, re-syncing
+
+This repository is the source of truth for two agent skills:
+`skills/velesdb-context-optimizer` and
+`crates/velesdb-memory/skill/velesdb-memory`. An agent does not load them from
+here — it loads a copy installed under `~/.claude/skills`.
+
+That third copy is invisible to CI, which cannot read your home directory, and
+it drifted: measured on 2026-08-02, the installed `velesdb-memory` skill was 67
+lines behind and stated the **wrong argument order** for the Node binding's
+`recallFusedDated`. Nothing anywhere reported a fault; an agent simply read
+stale instructions.
+
+```bash
+# Install (or re-sync) the two skills into ~/.claude/skills
+python3 scripts/sync-skills.py --install
+
+# Report drift; exits non-zero when an installed copy differs
+python3 scripts/sync-skills.py --check
+```
+
+- **Only those two skills are touched.** Any other skill installed in that
+  directory is left exactly as it is — the tool works from an explicit pair
+  list, never a scan.
+- **A skill that is not installed is not drift.** You cannot drift from
+  something you never had, so `--check` skips it and stays green. Only an
+  installed copy whose bytes differ is a failure.
+- **The copy is atomic.** The new tree is built beside the target and moved
+  into place by rename, so an agent reading a SKILL.md during an install sees
+  the whole old version or the whole new one — never half of each.
+- `.githooks/post-merge` runs `--check` and prints a notice when a merge has
+  just moved the repository ahead of your install. It deliberately does **not**
+  block: `--check` compares against the working tree, so gating a commit would
+  force you to install unmerged work into your global skills. Hooks are also
+  bypassable, which is why the command stays runnable by hand — and why
+  `scripts/tests/test_sync_skills.py` exercises the mechanism in CI.
+
+Set `CLAUDE_SKILLS_DIR` to point both commands at a different directory (the
+test suite uses it to run without touching a real install).
+
 ## Pull Request Process
 
 1. **Ensure all tests pass** - Run `cargo test --workspace --features persistence,gpu,update-check --exclude velesdb-python -- --test-threads=1` before submitting
