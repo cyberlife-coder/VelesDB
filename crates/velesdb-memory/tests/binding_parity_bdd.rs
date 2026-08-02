@@ -757,6 +757,24 @@ fn cut_parameter_list(region: &str, method: &str) -> String {
     window
 }
 
+/// `region` with every `///` doc-comment line removed.
+///
+/// Route 2's window keeps doc comments — deliberately, per the module
+/// header's "What this guard does NOT prove": a field named only in prose is
+/// an accepted weak pass for "is the field DECLARED". The stale check (below)
+/// asks a different question, "did the RENDERED form change", which prose
+/// cannot answer either way — so it reads this stricter window instead
+/// (#1760: documenting `recall_where`'s contract as "Returns caller memories
+/// ONLY" made a still-true [`ShapeDivergence`] for the field `memories` look
+/// stale, because the sentence, not the return value, named it).
+fn without_doc_comments(region: &str) -> String {
+    region
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("///"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The offset, within `text`, of the `)` closing the `(` that `text` opens
 /// with — `None` when it never closes.
 ///
@@ -1192,10 +1210,12 @@ fn stale_shape_reason(tools: &[rmcp::model::Tool], divergence: &ShapeDivergence)
             server_type.unwrap_or_default()
         ));
     }
-    // The SAME window route 2 reads. Without it the two halves disagree: a
-    // divergence would be called stale because a PARAMETER names the field,
-    // while the guard that reads the window still demands the relay (#1704).
-    let window = output_window(region, divergence.tool);
+    // Route 2's window, minus doc comments (#1760) — the parameter-list cut
+    // is still shared with route 2 for the #1704 reason (a divergence must
+    // not go stale because a PARAMETER names the field), but doc comments
+    // are stripped ON TOP of that here, not in route 2: see
+    // `without_doc_comments`.
+    let window = without_doc_comments(&output_window(region, divergence.tool));
     let declared = region_with_named_structs(&window, &binding_structs(binding));
     names_identifier(&declared, divergence.field)
         .then(|| format!("the binding now names `{}`", divergence.field))
@@ -1276,6 +1296,59 @@ fn the_cut_stops_at_the_paren_that_closes_the_parameter_list() {
         window.contains("fn retrieve_context_source -> PyResult<Py<PyAny>> {"),
         "the declaration did not survive the cut intact:\n{window}",
     );
+}
+
+// ===========================================================================
+// The false stale of #1760, pinned on synthetic text.
+//
+// Reproduced on develop before the fix: documenting `recall_where`'s
+// contract as "Returns caller memories ONLY" in the three bindings' doc
+// comments made `no_shape_divergence_is_stale` report their real,
+// still-needed `memories` `ShapeDivergence` entries as stale — the sentence
+// explaining what the binding does NOT return was read as proof that it now
+// does.
+// ===========================================================================
+
+/// A region shaped like the real regression: a doc comment that spells a
+/// field name in prose, on a method whose body never returns it.
+const PROSE_ONLY_REGION: &str = "\
+    /// Returns caller memories ONLY: entity hubs and the context compiler's\n\
+    /// artefacts are internal scaffolding and never come back through this call.\n\
+    fn recall_where(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {\n\
+        Ok(vec![])\n\
+    }\n\
+";
+
+#[test]
+fn the_raw_window_is_satisfied_by_prose_alone() {
+    // The false green this fixture exists to state before it is fixed:
+    // `memories` never appears outside the doc comment, and route 2's window
+    // (which keeps doc comments, by design) matches it anyway.
+    let window = output_window(PROSE_ONLY_REGION, "recall_where");
+    assert!(
+        names_identifier(&window, "memories"),
+        "fixture precondition: the raw window names `memories` only in prose",
+    );
+}
+
+#[test]
+fn stripping_doc_comments_refuses_a_field_named_only_in_prose() {
+    let window = without_doc_comments(&output_window(PROSE_ONLY_REGION, "recall_where"));
+    assert!(
+        !names_identifier(&window, "memories"),
+        "a field named only in a doc comment must not survive the strip:\n{window}",
+    );
+}
+
+#[test]
+fn stripping_doc_comments_keeps_everything_that_describes_the_return() {
+    let window = without_doc_comments(&output_window(PROSE_ONLY_REGION, "recall_where"));
+    for kept in ["PyResult", "PyObject", "recall_where"] {
+        assert!(
+            names_identifier(&window, kept),
+            "the strip swallowed `{kept}`, which is not a doc comment:\n{window}",
+        );
+    }
 }
 
 // --- The SDK link of the chain (issue #1721) ---------------------------------
