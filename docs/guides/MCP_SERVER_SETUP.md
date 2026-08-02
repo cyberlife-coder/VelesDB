@@ -267,7 +267,45 @@ the same CA and is trusted automatically after that.
 | `VELESDB_MEMORY_HTTP_ALLOW_REMOTE=1` | Required before a non-loopback bind host is accepted at all. |
 | `VELESDB_MEMORY_HTTP_MAX_BODY_BYTES` | Max size of a single `/mcp` request body (default 16 MiB). An oversized request is rejected instead of being buffered into memory unbounded. |
 | `VELESDB_MEMORY_HTTP_MAX_SESSIONS` | Max concurrent MCP sessions (default 64). Each session holds a worker task and a couple of small bounded channels — cheap individually, but a client that opens sessions without closing them could otherwise grow that without bound. |
+| `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS` | How long a session may sit idle before it is retired (default 3600 — 60 minutes). See [Idle sessions, and why a timeout is not a failed write](#idle-sessions-and-why-a-timeout-is-not-a-failed-write). |
 | `GET /health` | Plain 200 OK liveness probe, no MCP handshake needed — what the installer and CI use to confirm the daemon is up (over HTTPS too, once TLS is the transport). |
+
+### Idle sessions, and why a timeout is not a failed write
+
+A session that goes quiet is eventually retired. The next request carrying its
+id then gets a `404`, and the client is expected to answer that by
+re-initializing — which is cheap and invisible when the client does it.
+
+**A client that mishandles the `404` surfaces it as a timeout instead.** The
+call never reaches the tool, so nothing is written, while the caller sees only
+"request timed out". Measured against this daemon: it answered the retired
+session in **48 ms** with a clean `404`, and the client still reported a
+timeout. That mishandling is a client-side defect — it is not something the
+daemon can correct, and it should be reported to the client concerned.
+
+The default idle timeout is **60 minutes** rather than the 5 minutes the
+underlying transport library uses, because five minutes is shorter than the
+ordinary silences of an agent that compiles, waits on CI, or thinks — a CI wait
+alone already approaches 30 minutes. Sixty minutes puts the timeout beyond
+those normal pauses. Lower it with `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS` if
+your clients are chattier and you would rather reclaim sessions sooner.
+
+**This is a mitigation, not a fix, and two things stay true regardless:**
+
+- a session can still expire — a silence longer than the configured timeout
+  will retire it, whatever that timeout is;
+- **a timeout never proves the write succeeded**, and never proves it failed
+  either.
+
+So after any timeout on `save_working_context`, do not treat the save as done.
+Call `list_working_contexts` and check that the session's `saved_at` actually
+advanced; re-send the identical call if it did not. Re-sending is safe: the
+write is an upsert on `project` + `session`, so it replaces the stored state
+rather than adding a duplicate.
+
+Do not use the returned id, or the mere absence of an error, as proof of a
+write — only `saved_at` moving is proof. Use `load_working_context` when the
+stored *content* itself has to be verified.
 
 **The transport has no authentication.** Anyone who can reach the socket gets
 full `remember` / `recall` / `relate` access to the store. HTTPS-by-default

@@ -94,6 +94,63 @@ pub fn http_max_sessions_from_env() -> usize {
         .unwrap_or(DEFAULT_HTTP_MAX_SESSIONS)
 }
 
+/// Default idle timeout before a session is retired — 60 minutes, where
+/// `rmcp`'s own default is 5.
+///
+/// This is a MITIGATION, and it is worth being exact about what it does and
+/// does not fix (#1727).
+///
+/// When a session is retired, the next request carrying its id gets a `404`,
+/// which a client is expected to answer by re-initializing. A client that
+/// mishandles that `404` instead surfaces it as a timeout, and the call never
+/// reaches the tool — so a `save_working_context` on that call writes NOTHING
+/// while the caller sees only "timed out". That client-side mishandling is the
+/// actual defect behind #1727; it lives outside this repository, and no server
+/// change can correct it.
+///
+/// What the server CAN do is stop presenting the client with the situation it
+/// mishandles. Five minutes is shorter than the ordinary silences of an agent
+/// that compiles, waits on CI, or thinks — a CI wait alone already approaches
+/// 30 minutes — so the old default let a routine pause expire the session.
+/// Sixty minutes puts the timeout beyond those normal silences.
+///
+/// It does not eliminate the case: a longer silence still expires, and a
+/// timeout STILL never proves the write succeeded. After any timeout, confirm
+/// with `list_working_contexts` that `saved_at` actually advanced before
+/// treating the save as done, and re-send if it did not. `save_working_context`
+/// upserts on `project` + `session`, so re-sending replaces rather than
+/// duplicates.
+pub const DEFAULT_HTTP_KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Resolve the session idle timeout from
+/// `VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS`. Unset, unparseable, or `0` falls
+/// back to [`DEFAULT_HTTP_KEEP_ALIVE`] — `0` would retire every session
+/// instantly, bricking the daemon.
+///
+/// Configurable rather than hard-coded because the right value depends on how
+/// long the clients on this machine actually go quiet, which the daemon cannot
+/// know.
+#[must_use]
+pub fn http_keep_alive_from_env() -> std::time::Duration {
+    keep_alive_from_raw(
+        std::env::var("VELESDB_MEMORY_HTTP_KEEP_ALIVE_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// The parsing half of [`http_keep_alive_from_env`], taking the raw value
+/// instead of reading it.
+///
+/// Split out so the rules can be tested without setting a process-wide env
+/// var: `cargo test` runs a crate's tests in parallel, so a test that mutated
+/// the environment would race every other test in the same process.
+fn keep_alive_from_raw(raw: Option<&str>) -> std::time::Duration {
+    raw.and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&secs| secs > 0)
+        .map_or(DEFAULT_HTTP_KEEP_ALIVE, std::time::Duration::from_secs)
+}
+
 /// Build the axum [`Router`] serving the MCP streamable-HTTP transport at
 /// `/mcp` and a plain liveness probe at `/health` (used by the installer
 /// script and CI to confirm the daemon is up without speaking MCP itself).
@@ -116,12 +173,18 @@ pub fn http_max_sessions_from_env() -> usize {
 ///   ([`http_max_body_bytes_from_env`]).
 /// - [`BoundedSessionManager`] bounds concurrent sessions
 ///   ([`http_max_sessions_from_env`]).
+///
+/// Sessions are retired after [`http_keep_alive_from_env`] of silence — 60
+/// minutes by default rather than rmcp's 5, so an agent's normal pauses do not
+/// expire the session out from under it. See [`DEFAULT_HTTP_KEEP_ALIVE`] for
+/// what that mitigates and, just as importantly, what it does not.
 pub fn router(server: McpServer, cancellation_token: CancellationToken) -> Router {
-    router_with_limits(
+    router_with_limits_and_keep_alive(
         server,
         cancellation_token,
         http_max_body_bytes_from_env(),
         http_max_sessions_from_env(),
+        Some(http_keep_alive_from_env()),
     )
 }
 
@@ -133,6 +196,10 @@ pub fn router(server: McpServer, cancellation_token: CancellationToken) -> Route
 /// wants a tiny `max_body_bytes`/`max_sessions` to actually exercise a
 /// rejection would otherwise race every other test reading the same
 /// variables in the same process.
+///
+/// Uses [`DEFAULT_HTTP_KEEP_ALIVE`] directly — the constant, not the env var,
+/// for the same no-shared-global reason. Tests that need a different idle
+/// timeout call [`router_with_limits_and_keep_alive`].
 #[doc(hidden)]
 pub fn router_with_limits(
     server: McpServer,
@@ -145,7 +212,7 @@ pub fn router_with_limits(
         cancellation_token,
         max_body_bytes,
         max_sessions,
-        None,
+        Some(DEFAULT_HTTP_KEEP_ALIVE),
     )
 }
 
@@ -262,4 +329,46 @@ fn spawn_tls_connection(
             .serve_connection_with_upgrades(io, hyper_service)
             .await;
     });
+}
+
+#[cfg(test)]
+mod keep_alive_tests {
+    use super::{keep_alive_from_raw, DEFAULT_HTTP_KEEP_ALIVE};
+    use std::time::Duration;
+
+    #[test]
+    fn unset_falls_back_to_the_sixty_minute_default() {
+        assert_eq!(keep_alive_from_raw(None), DEFAULT_HTTP_KEEP_ALIVE);
+        assert_eq!(
+            DEFAULT_HTTP_KEEP_ALIVE,
+            Duration::from_secs(3600),
+            "the default must stay well beyond an agent's normal silences — a CI \
+             wait alone already approaches 30 minutes"
+        );
+    }
+
+    #[test]
+    fn a_valid_value_is_honoured() {
+        assert_eq!(
+            keep_alive_from_raw(Some("900")),
+            Duration::from_secs(900),
+            "the timeout must be configurable, not hard-coded"
+        );
+        assert_eq!(
+            keep_alive_from_raw(Some("  120  ")),
+            Duration::from_secs(120)
+        );
+    }
+
+    #[test]
+    fn unparseable_or_zero_falls_back_instead_of_bricking_the_daemon() {
+        // Zero would retire every session the instant it was created, so the
+        // daemon would answer 404 to every second request. Falling back is the
+        // only safe reading of a nonsense value.
+        assert_eq!(keep_alive_from_raw(Some("0")), DEFAULT_HTTP_KEEP_ALIVE);
+        assert_eq!(keep_alive_from_raw(Some("")), DEFAULT_HTTP_KEEP_ALIVE);
+        assert_eq!(keep_alive_from_raw(Some("soon")), DEFAULT_HTTP_KEEP_ALIVE);
+        assert_eq!(keep_alive_from_raw(Some("-30")), DEFAULT_HTTP_KEEP_ALIVE);
+        assert_eq!(keep_alive_from_raw(Some("1.5")), DEFAULT_HTTP_KEEP_ALIVE);
+    }
 }
