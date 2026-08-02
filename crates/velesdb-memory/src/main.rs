@@ -588,9 +588,77 @@ fn apply_autograph(
         // `remember_extracted` on the very same daemon — the contradiction the
         // comment above says an operator cannot resolve.
         ExtractorSelection::NeedsRemoteConfig(backend) => {
-            Ok(service.with_autograph(build_remote_extractor(backend)?))
+            let extractor = build_remote_extractor(backend)?;
+            warn_if_extraction_backend_is_unreachable(backend);
+            Ok(service.with_autograph(extractor))
         }
     }
+}
+
+/// How long startup may spend asking whether the extraction backend is there.
+///
+/// Short on purpose: this runs before the daemon serves anything, and the
+/// answer is worth having only if getting it costs nothing. A stalled server
+/// is itself an answer, delivered by this timeout.
+#[cfg(feature = "extract")]
+const EXTRACTION_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Say once, at startup, when the configured extraction backend cannot be
+/// reached (#1751, decision D2).
+///
+/// A **signal, never a refusal.** Autograph degrading in flight is the correct
+/// default — losing the enrichment beats losing the fact — and the arbitration
+/// on #1751 forbids turning a successful `remember` into an error. What was
+/// wrong is that the degradation was silent *forever*: an extractor broken by
+/// a migration looked exactly like a product that does not build a graph.
+/// Unreachable is also transient, so refusing to boot over it would replace a
+/// silence with an outage.
+///
+/// Never falls back to another backend. A daemon that quietly answered with a
+/// different engine than the one configured is the defect #1751's own gate
+/// comment calls a contradiction the operator cannot resolve.
+#[cfg(feature = "extract")]
+fn warn_if_extraction_backend_is_unreachable(backend: &str) {
+    use velesdb_memory::reachability::{probe_openai, warning_line, Reachability};
+
+    // `outline` is offline and deterministic: there is nothing to reach, and a
+    // probe would invent a failure mode it does not have.
+    if std::env::var_os("VELESDB_MEMORY_QUIET").is_some() {
+        return;
+    }
+    let Some((url, model)) = extraction_endpoint_for_probe(backend) else {
+        return;
+    };
+    let token = env_opt("VELESDB_MEMORY_EXTRACTOR_API_TOKEN");
+    let outcome = probe_openai(&url, &model, token.as_deref(), EXTRACTION_PROBE_TIMEOUT);
+    if outcome == Reachability::Reachable {
+        return;
+    }
+    if let Some(line) = warning_line("extraction", &url, &model, &outcome) {
+        eprintln!("{line}");
+    }
+}
+
+/// The URL and model the extraction role will actually talk to, or `None` when
+/// there is nothing to probe.
+///
+/// Resolves the same way the builders do — including Ollama's canonical local
+/// default — because a probe of a different address than the one that will be
+/// used answers a question nobody asked.
+#[cfg(feature = "extract")]
+fn extraction_endpoint_for_probe(backend: &str) -> Option<(String, String)> {
+    let endpoint = extractor_endpoint().ok()?;
+    let url = match backend {
+        "ollama" => Some(
+            endpoint
+                .url
+                .unwrap_or_else(|| velesdb_memory::extract::DEFAULT_OLLAMA_URL.to_owned()),
+        ),
+        "openai" => endpoint.url,
+        // An unwired name: `build_remote_extractor` has already refused it.
+        _ => None,
+    }?;
+    Some((url, endpoint.model?))
 }
 
 /// Locate and apply the optional `velesdb-memory.toml`.

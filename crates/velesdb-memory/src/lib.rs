@@ -93,6 +93,8 @@ pub mod http_client;
 /// [`http_client`].
 #[cfg(any(feature = "ollama", feature = "extract"))]
 mod openai;
+/// Is a configured remote inference backend actually reachable? (#1751 D2)
+pub mod reachability;
 /// Optional second-stage re-scoring of a fused recall pool (bring your own
 /// cross-encoder/LLM). Never wired in by default — see [`rerank::Reranker`].
 pub mod rerank;
