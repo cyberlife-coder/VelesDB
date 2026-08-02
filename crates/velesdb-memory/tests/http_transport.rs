@@ -408,3 +408,167 @@ async fn audit_shared_session_concurrent_calls_are_bounded() {
         .await
         .expect("shared-session server shutdown exceeded five seconds");
 }
+
+// ===========================================================================
+// Session lifecycle: an idle-expired session must return its slot (#1778)
+// ===========================================================================
+
+/// [`spawn_http_server_with_limits`], but with the session idle timeout
+/// injected — so an expire-and-reuse cycle takes milliseconds instead of the
+/// five minutes rmcp defaults to.
+async fn spawn_http_server_with_keep_alive(
+    max_sessions: usize,
+    keep_alive: std::time::Duration,
+) -> TestServer {
+    let store_dir = tempfile::tempdir().expect("create scratch store dir");
+    let embedder: DynEmbedder = Box::new(HashEmbedder::new(DEFAULT_DIMENSION));
+    let service =
+        MemoryService::open(store_dir.path(), embedder).expect("open scratch memory store");
+    let server = McpServer::new(service);
+
+    let ct = CancellationToken::new();
+    let app = velesdb_memory::http::router_with_limits_and_keep_alive(
+        server,
+        ct.child_token(),
+        velesdb_memory::http::DEFAULT_HTTP_MAX_BODY_BYTES,
+        max_sessions,
+        Some(keep_alive),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral loopback port");
+    let addr = listener.local_addr().expect("read bound local addr");
+
+    let shutdown_ct = ct.clone();
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app)
+            .with_graceful_shutdown(async move { shutdown_ct.cancelled_owned().await })
+            .await;
+    });
+
+    TestServer {
+        addr,
+        handle,
+        ct,
+        _store_dir: store_dir,
+    }
+}
+
+const INITIALIZE_BODY: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"slot-probe","version":"0"}}}"#;
+
+/// `initialize` over raw HTTP, returning the new session id, or `None` when
+/// the server refused to create one.
+///
+/// Deliberately NOT rmcp's client: that one keeps a stream open and sends an
+/// explicit `DELETE` when dropped, which is precisely the well-behaved close
+/// this test must avoid — the defect under test is what happens when a
+/// session dies of pure inactivity instead.
+async fn try_raw_initialize(addr: SocketAddr) -> Option<String> {
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(INITIALIZE_BODY)
+        .send()
+        .await
+        .expect("initialize POST reaches the server");
+    if !response.status().is_success() {
+        return None;
+    }
+    response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(std::borrow::ToOwned::to_owned)
+}
+
+/// Status code the server answers for a `tools/list` carrying `session_id`.
+async fn status_for_session(addr: SocketAddr, session_id: &str) -> u16 {
+    reqwest::Client::new()
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("Mcp-Session-Id", session_id)
+        .body(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
+        .send()
+        .await
+        .expect("tools/list POST reaches the server")
+        .status()
+        .as_u16()
+}
+
+#[tokio::test]
+async fn an_idle_expired_session_returns_its_slot() {
+    // `max_sessions = 1` makes the accounting observable: whether the slot
+    // came back is exactly whether a second session can be created.
+    let server = spawn_http_server_with_keep_alive(1, std::time::Duration::from_millis(150)).await;
+
+    let first = try_raw_initialize(server.addr)
+        .await
+        .expect("the first session must be created");
+    assert!(
+        try_raw_initialize(server.addr).await.is_none(),
+        "the cap must hold while the only slot is genuinely occupied"
+    );
+
+    // Let it die of pure inactivity — no DELETE, no close, just silence.
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+
+    assert_eq!(
+        status_for_session(server.addr, &first).await,
+        404,
+        "an expired session must be gone, and say so"
+    );
+    let second = try_raw_initialize(server.addr).await;
+    assert!(
+        second.is_some(),
+        "a session that died of inactivity must return its slot — otherwise the \
+         daemon locks itself out after `max_sessions` idle expiries"
+    );
+    assert_ne!(second, Some(first), "the reused slot must be a NEW session");
+
+    shutdown(server).await;
+}
+
+/// Explicitly terminate `session_id` the way a well-behaved client does.
+async fn delete_session(addr: SocketAddr, session_id: &str) -> u16 {
+    reqwest::Client::new()
+        .delete(format!("http://{addr}/mcp"))
+        .header("Mcp-Session-Id", session_id)
+        .send()
+        .await
+        .expect("DELETE reaches the server")
+        .status()
+        .as_u16()
+}
+
+#[tokio::test]
+async fn closing_one_session_frees_exactly_one_slot() {
+    // Two slots, and a keep_alive long enough that nothing expires during the
+    // test — the only thing that may free a slot here is the explicit DELETE.
+    let server = spawn_http_server_with_keep_alive(2, std::time::Duration::from_secs(30)).await;
+
+    let a = try_raw_initialize(server.addr).await.expect("session A");
+    let _b = try_raw_initialize(server.addr).await.expect("session B");
+    assert!(
+        try_raw_initialize(server.addr).await.is_none(),
+        "with both slots occupied the third session must be refused"
+    );
+
+    // Close A explicitly. The session worker ALSO finishes and closes the
+    // session on its own — so the accounting sees two closes for one session.
+    delete_session(server.addr, &a).await;
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+    assert!(
+        try_raw_initialize(server.addr).await.is_some(),
+        "closing A must free A's slot"
+    );
+    assert!(
+        try_raw_initialize(server.addr).await.is_none(),
+        "closing ONE session must free exactly ONE slot — B still holds the other, \
+         so this fourth session must be refused"
+    );
+
+    shutdown(server).await;
+}
