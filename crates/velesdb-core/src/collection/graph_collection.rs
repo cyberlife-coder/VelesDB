@@ -10,7 +10,9 @@
 
 use std::path::PathBuf;
 
-use crate::collection::graph::{GraphEdge, GraphSchema, TraversalConfig, TraversalResult};
+use crate::collection::graph::{
+    EdgeRemoval, GraphEdge, GraphSchema, TraversalConfig, TraversalResult,
+};
 use crate::collection::types::Collection;
 use crate::distance::DistanceMetric;
 use crate::error::Result;
@@ -283,10 +285,26 @@ impl GraphCollection {
 
     /// Removes an edge from the graph by ID.
     ///
-    /// Returns `true` if the edge existed and was removed, `false` otherwise.
+    /// Returns `true` if the edge existed and was removed, `false` otherwise —
+    /// including on the genuine failure paths. Use
+    /// [`Self::remove_edge_detailed`] when a failure must not pass for
+    /// "already gone".
     #[must_use]
     pub fn remove_edge(&self, edge_id: u64) -> bool {
         self.inner.remove_edge(edge_id)
+    }
+
+    /// Removes an edge from the graph by ID, reporting WHY when it does not
+    /// happen.
+    pub(crate) fn remove_edge_detailed(&self, edge_id: u64) -> EdgeRemoval {
+        self.inner.remove_edge_detailed(edge_id)
+    }
+
+    /// Test-only fault injection — makes the edge write-ahead log unwritable so
+    /// edge removals fail while the edges themselves stay healthy.
+    #[cfg(all(test, feature = "persistence"))]
+    pub(crate) fn break_edge_wal_for_test(&self) -> std::io::Result<()> {
+        self.inner.break_edge_wal_for_test()
     }
 
     /// Returns `true` if an edge with `edge_id` exists in the graph.

@@ -45,6 +45,7 @@ mod clustered_index;
 mod csr_snapshot;
 mod edge;
 mod edge_concurrent;
+mod edge_outcome;
 mod edge_persistence;
 mod edge_removal;
 #[cfg(feature = "persistence")]
@@ -96,6 +97,7 @@ pub(crate) use node::Element;
 #[allow(unused_imports)]
 pub(crate) use csr_snapshot::SnapshotBuilder;
 pub use edge_concurrent::ConcurrentEdgeStore;
+pub(crate) use edge_outcome::EdgeRemoval;
 pub use label_index::LabelIndex;
 pub use label_table::{LabelId, LabelTable};
 pub use metrics::{GraphMetrics, LatencyHistogram};

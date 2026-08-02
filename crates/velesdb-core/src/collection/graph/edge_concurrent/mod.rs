@@ -18,6 +18,7 @@ mod snapshot;
 use super::clustered_index::ClusteredIndex;
 use super::csr_snapshot::{CsrSnapshot, SnapshotBuilder};
 use super::edge::{EdgeStore, GraphEdge};
+use super::edge_outcome::EdgeRemoval;
 use super::label_table::LabelTable;
 use super::metrics::GraphMetrics;
 use crate::error::{Error, Result};
@@ -348,16 +349,36 @@ impl ConcurrentEdgeStore {
 
     /// Removes an edge by ID using optimized 2-shard lookup.
     ///
+    /// Returns `true` only if the edge was actually removed. A `false` here
+    /// conflates "absent" with "index desynchronised" — use
+    /// [`Self::remove_edge_detailed`] when the difference matters.
+    ///
     /// # Concurrency Safety
     ///
     /// Lock ordering: edge_ids FIRST, then shards in ascending order.
     pub fn remove_edge(&self, edge_id: u64) -> bool {
+        self.remove_edge_detailed(edge_id).removed()
+    }
+
+    /// Removes an edge by ID, reporting WHY when it does not happen.
+    ///
+    /// The `bool` returned by [`Self::remove_edge`] cannot distinguish "the
+    /// edge was not there" (benign) from "the index and the shard disagree" (a
+    /// real failure that can strand a dangling incoming half-edge). Both leave
+    /// the edge absent from the index and from the source shard, so they are
+    /// indistinguishable to the caller *after* the call — only this function,
+    /// holding the locks, can tell them apart.
+    ///
+    /// # Concurrency Safety
+    ///
+    /// Lock ordering: edge_ids FIRST, then shards in ascending order.
+    pub(crate) fn remove_edge_detailed(&self, edge_id: u64) -> EdgeRemoval {
         let start = Instant::now();
         {
             let mut ids = self.edge_ids.write();
 
             let Some(&source_id) = ids.get(&edge_id) else {
-                return false;
+                return EdgeRemoval::Absent;
             };
 
             let source_shard_idx = self.shard_index(source_id);
@@ -366,8 +387,17 @@ impl ConcurrentEdgeStore {
                 if let Some(edge) = guard.get_edge(edge_id) {
                     edge.target()
                 } else {
+                    // The id was live in `edge_ids` but its source shard holds
+                    // no such edge: the two indices disagree. Repair what we
+                    // can, then report a FAILURE — `target_id` is unreachable
+                    // on this path, so an incoming half-edge on the target
+                    // shard cannot be cleaned up and may survive as an orphan.
                     ids.remove(&edge_id);
-                    return false;
+                    return EdgeRemoval::Failed(format!(
+                        "edge {edge_id} was indexed under source node {source_id} but is missing \
+                         from its source shard; the edge index has been repaired, but a dangling \
+                         incoming half-edge may remain"
+                    ));
                 }
             };
 
@@ -397,8 +427,35 @@ impl ConcurrentEdgeStore {
         } // All locks dropped here.
         self.invalidate_snapshot();
         self.rebuild_snapshot_best_effort();
-        // Record after all shard locks drop (true path only).
+        // Record after all shard locks drop (removed path only).
         self.metrics.record_edge_delete(start.elapsed());
+        EdgeRemoval::Removed
+    }
+
+    /// Test-only fault injection: desynchronises the edge id index from the
+    /// shards, exactly as a lost update would.
+    ///
+    /// Repoints `edge_id` to a source node that hashes to a DIFFERENT shard,
+    /// leaving the edge itself untouched in storage — so the edge is still
+    /// listed by `get_edges`, but `remove_edge_detailed` looks for it in the
+    /// wrong shard and cannot find it. That is the state described by #1749;
+    /// without this hook it is unreachable from any public API, which is why
+    /// the failure previously had no end-to-end test.
+    ///
+    /// Returns `false` if the store has a single shard (no "different shard"
+    /// exists) or if `edge_id` is not indexed.
+    #[cfg(test)]
+    pub(crate) fn desync_edge_index_for_test(&self, edge_id: u64) -> bool {
+        if self.num_shards < 2 {
+            return false;
+        }
+        let mut ids = self.edge_ids.write();
+        let Some(&source_id) = ids.get(&edge_id) else {
+            return false;
+        };
+        // shard = id % num_shards, so with num_shards >= 2 the successor of any
+        // node id always lands on a different shard.
+        ids.insert(edge_id, source_id.wrapping_add(1));
         true
     }
 
