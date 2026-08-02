@@ -13,25 +13,36 @@
 //!
 //! [`BoundedSessionManager`] wraps any [`SessionManager`] and refuses
 //! `create_session`/`restore_session` once `max_sessions` sessions are
-//! outstanding. It tracks the count itself (an [`AtomicUsize`]) rather than
-//! reaching into a specific implementation's internals, so it works for
+//! outstanding. It tracks the live session ids itself rather than reaching
+//! into a specific implementation's internals, so it works for
 //! `LocalSessionManager` today and for any future custom `SessionManager`
 //! (e.g. a Redis-backed one) the same way.
 //!
-//! # Caveat inherited from `rmcp`
+//! # Session lifetime, and why the bound tracks IDS rather than a count
 //!
-//! A session that goes idle past its `SessionConfig::keep_alive` timeout has
-//! its worker task exit — but nothing calls [`SessionManager::close_session`]
-//! for it (confirmed against rmcp 2.2.0: `LocalSessionManager`'s `sessions`
-//! map is touched only by `create_session`, `close_session`, and
-//! `restore_session`; there is no reaper). So our counter, like the
-//! underlying map, only shrinks on an explicit close (an HTTP DELETE from a
-//! well-behaved client) — pure inactivity never frees a slot. In this
-//! daemon's actual deployment (a handful of local, cooperating MCP clients)
-//! that only matters over very long uptimes; a full fix belongs upstream in
-//! `rmcp`, not here.
+//! An earlier version of this comment claimed that a session going idle past
+//! `SessionConfig::keep_alive` never frees its slot, because nothing calls
+//! [`SessionManager::close_session`] for it. **That is wrong**, and it is
+//! worth stating plainly because it sent one investigation down the wrong
+//! path: rmcp's `StreamableHttpService` spawns a task per session that awaits
+//! the service and then calls `close_session` (rmcp 2.2.0,
+//! `streamable_http_server/tower.rs`), so an idle-expired session IS closed
+//! and its slot IS returned. `tests/http_transport.rs` pins that down.
+//!
+//! The real hazard is the opposite one. A session is routinely closed
+//! **twice**: once by the `DELETE` a well-behaved client sends, and once by
+//! that per-session task when the service finishes. `LocalSessionManager`'s
+//! `close_session` is idempotent and answers `Ok` either way, so a wrapper
+//! counting closes cannot tell the second from a first — and an anonymous
+//! counter decremented twice for one session drifts BELOW reality, letting
+//! more than `max_sessions` run at once and quietly weakening the bound this
+//! module exists to enforce.
+//!
+//! Hence the set of live session ids: a release is matched to the session it
+//! belongs to, removing an absent id is a no-op, and the count cannot
+//! underflow.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::HashSet;
 
 use futures::Stream;
 use rmcp::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
@@ -39,13 +50,27 @@ use rmcp::transport::streamable_http_server::session::{
     RestoreOutcome, ServerSseMessage, SessionId, SessionManager,
 };
 use thiserror::Error;
+use tokio::sync::Mutex;
 
 /// Wraps `inner: SM`, refusing new sessions once `max_sessions` are live.
+///
+/// The bound is enforced against the SET of session ids this wrapper has
+/// created and not yet seen closed, rather than against a bare count. That
+/// distinction is the whole point: a count is anonymous, so nothing ties a
+/// decrement to the session it belongs to, and one session closed twice
+/// decrements twice. Sessions ARE closed twice in normal operation — a
+/// well-behaved client sends `DELETE`, and rmcp's own session worker calls
+/// `close_session` again when the service finishes — so an anonymous count
+/// drifts below reality and lets more than `max_sessions` run at once.
+///
+/// With a set, releasing is idempotent by construction (removing an id that
+/// is not there does nothing), the count can never underflow, and
+/// `live.len()` is exactly the set of sessions believed to be alive.
 #[derive(Debug)]
 pub struct BoundedSessionManager<SM> {
     inner: SM,
     max_sessions: usize,
-    live: AtomicUsize,
+    live: Mutex<HashSet<SessionId>>,
 }
 
 impl<SM> BoundedSessionManager<SM> {
@@ -53,39 +78,14 @@ impl<SM> BoundedSessionManager<SM> {
         Self {
             inner,
             max_sessions,
-            live: AtomicUsize::new(0),
+            live: Mutex::new(HashSet::new()),
         }
     }
 
-    /// Reserve one slot, or refuse if `max_sessions` is already reached.
-    /// CAS loop (not load-then-store) so two concurrent callers can't both
-    /// observe room for the last slot and overshoot the bound.
-    fn try_reserve(&self) -> bool {
-        loop {
-            let current = self.live.load(Ordering::Acquire);
-            if current >= self.max_sessions {
-                return false;
-            }
-            if self
-                .live
-                .compare_exchange_weak(current, current + 1, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                return true;
-            }
-        }
-    }
-
-    /// Release a slot reserved by [`try_reserve`](Self::try_reserve) that
-    /// turned out not to correspond to a real live session (creation
-    /// failed, or `restore_session` didn't actually create one). Saturating:
-    /// never underflows even if called more than its matching reserve.
-    fn release(&self) {
-        let _ = self
-            .live
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                Some(n.saturating_sub(1))
-            });
+    /// Number of sessions currently believed to be alive.
+    #[cfg(test)]
+    pub(crate) async fn live_count(&self) -> usize {
+        self.live.lock().await.len()
     }
 }
 
@@ -109,18 +109,18 @@ where
     type Transport = SM::Transport;
 
     async fn create_session(&self) -> Result<(SessionId, Self::Transport), Self::Error> {
-        if !self.try_reserve() {
+        // The lock spans the check AND the creation, so two concurrent
+        // callers cannot both see room for the last slot. A failed creation
+        // records nothing, so there is no reservation left to leak.
+        let mut live = self.live.lock().await;
+        if live.len() >= self.max_sessions {
             return Err(BoundedSessionManagerError::TooManySessions(
                 self.max_sessions,
             ));
         }
-        match self.inner.create_session().await {
-            Ok(created) => Ok(created),
-            Err(e) => {
-                self.release();
-                Err(e.into())
-            }
-        }
+        let (id, transport) = self.inner.create_session().await?;
+        live.insert(id.clone());
+        Ok((id, transport))
     }
 
     async fn initialize_session(
@@ -139,9 +139,14 @@ where
     }
 
     async fn close_session(&self, id: &SessionId) -> Result<(), Self::Error> {
+        // Removing an id that is not in the set does nothing, so the second
+        // close of the same session — the routine case, `DELETE` from the
+        // client plus rmcp's own close when the session worker finishes —
+        // cannot free a slot that belongs to a still-live session.
+        let mut live = self.live.lock().await;
         let result = self.inner.close_session(id).await;
         if result.is_ok() {
-            self.release();
+            live.remove(id);
         }
         result.map_err(Into::into)
     }
@@ -193,23 +198,22 @@ where
         &self,
         id: SessionId,
     ) -> Result<RestoreOutcome<Self::Transport>, Self::Error> {
-        if !self.try_reserve() {
+        let mut live = self.live.lock().await;
+        if live.len() >= self.max_sessions {
             return Err(BoundedSessionManagerError::TooManySessions(
                 self.max_sessions,
             ));
         }
-        match self.inner.restore_session(id).await {
-            Ok(outcome @ RestoreOutcome::Restored(_)) => Ok(outcome),
-            // `AlreadyPresent`/`NotSupported` (and any future variant): no
-            // new session was actually created, release the reservation.
-            Ok(other) => {
-                self.release();
-                Ok(other)
+        match self.inner.restore_session(id.clone()).await {
+            // Only a genuine restore adds a live session. `AlreadyPresent` /
+            // `NotSupported` (and any future variant) created nothing, so
+            // nothing is recorded and no slot is consumed.
+            Ok(outcome @ RestoreOutcome::Restored(_)) => {
+                live.insert(id);
+                Ok(outcome)
             }
-            Err(e) => {
-                self.release();
-                Err(e.into())
-            }
+            Ok(other) => Ok(other),
+            Err(e) => Err(e.into()),
         }
     }
 }
@@ -292,12 +296,13 @@ mod tests {
         }
 
         async fn close_session(&self, id: &SessionId) -> Result<(), Self::Error> {
+            // Modelled on `LocalSessionManager::close_session`, which answers
+            // `Ok` whether or not the id was there. That idempotence is not
+            // incidental — it is exactly what makes a close-counting wrapper
+            // unable to tell a second close from a first, so a fake that
+            // errored here would hide the defect these tests exist to pin.
             let mut sessions = self.sessions.lock().expect("lock");
-            let before = sessions.len();
             sessions.retain(|existing| existing != id);
-            if sessions.len() == before {
-                return Err(FakeError(format!("no such session: {id}")));
-            }
             Ok(())
         }
 
@@ -337,7 +342,7 @@ mod tests {
     }
 
     fn uuid_like() -> u64 {
-        use std::sync::atomic::AtomicU64;
+        use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         COUNTER.fetch_add(1, Ordering::Relaxed)
     }
@@ -464,5 +469,66 @@ mod tests {
             !err.is_too_many_sessions(),
             "a failed create must not leak its reservation: {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn closing_the_same_session_twice_frees_exactly_one_slot() {
+        // The routine double close: the client's DELETE, then rmcp's own
+        // close when the session worker finishes. An anonymous counter
+        // decremented twice here would drift below reality.
+        let manager = BoundedSessionManager::new(FakeSessionManager::default(), 2);
+        let (a, _ta) = manager.create_session().await.expect("session A");
+        let (_b, _tb) = manager.create_session().await.expect("session B");
+        assert_eq!(manager.live_count().await, 2);
+
+        manager.close_session(&a).await.expect("first close");
+        manager.close_session(&a).await.expect("second close");
+
+        assert_eq!(
+            manager.live_count().await,
+            1,
+            "closing ONE session twice must still free exactly one slot"
+        );
+        manager
+            .create_session()
+            .await
+            .expect("the freed slot must be reusable");
+        manager
+            .create_session()
+            .await
+            .expect_err("but only ONE slot was freed, so the next must be refused");
+    }
+
+    #[tokio::test]
+    async fn closing_an_unknown_session_frees_nothing() {
+        let manager = BoundedSessionManager::new(FakeSessionManager::default(), 1);
+        let (_a, _ta) = manager.create_session().await.expect("session A");
+
+        let stranger: SessionId = "never-created".to_string().into();
+        manager
+            .close_session(&stranger)
+            .await
+            .expect("closing an unknown id is a no-op, not an error");
+
+        assert_eq!(manager.live_count().await, 1);
+        manager
+            .create_session()
+            .await
+            .expect_err("an unknown id must not free the live session's slot");
+    }
+
+    #[tokio::test]
+    async fn many_create_then_close_cycles_never_exhaust_the_bound() {
+        // The guarantee that matters in production: a daemon cycling sessions
+        // far more times than `max_sessions` must never lock itself out.
+        let manager = BoundedSessionManager::new(FakeSessionManager::default(), 2);
+        for cycle in 0..64 {
+            let (id, _t) = manager
+                .create_session()
+                .await
+                .unwrap_or_else(|_| panic!("cycle {cycle} must still be able to open a session"));
+            manager.close_session(&id).await.expect("close");
+        }
+        assert_eq!(manager.live_count().await, 0);
     }
 }

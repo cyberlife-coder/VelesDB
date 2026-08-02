@@ -140,7 +140,37 @@ pub fn router_with_limits(
     max_body_bytes: usize,
     max_sessions: usize,
 ) -> Router {
-    let session_manager = BoundedSessionManager::new(LocalSessionManager::default(), max_sessions);
+    router_with_limits_and_keep_alive(
+        server,
+        cancellation_token,
+        max_body_bytes,
+        max_sessions,
+        None,
+    )
+}
+
+/// [`router_with_limits`], but with the session idle timeout passed explicitly.
+///
+/// `keep_alive` is how long a session may sit with no traffic before rmcp
+/// retires it; `None` keeps rmcp's own default. A session that is retired this
+/// way is gone: the next request carrying its id gets a `404`, which a client
+/// is expected to answer by re-initializing.
+///
+/// Exposed so tests can inject a very short timeout (~100–200 ms) and observe
+/// a full expire-and-reuse cycle without waiting minutes of wall-clock time.
+#[doc(hidden)]
+pub fn router_with_limits_and_keep_alive(
+    server: McpServer,
+    cancellation_token: CancellationToken,
+    max_body_bytes: usize,
+    max_sessions: usize,
+    keep_alive: Option<std::time::Duration>,
+) -> Router {
+    let mut inner = LocalSessionManager::default();
+    if let Some(keep_alive) = keep_alive {
+        inner.session_config.keep_alive = Some(keep_alive);
+    }
+    let session_manager = BoundedSessionManager::new(inner, max_sessions);
     let mcp_service: StreamableHttpService<McpServer, BoundedSessionManager<LocalSessionManager>> =
         StreamableHttpService::new(
             move || Ok(server.clone()),
